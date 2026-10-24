@@ -194,6 +194,70 @@ class FeatureUpdateTests(unittest.TestCase):
                              if row["kind"] == "import" and row["target"] == "rustc_apfloat::Float")
         self.assertEqual("pinned_component_path_unresolved", pinned_import["resolution"])
 
+    def test_import_candidates_include_all_same_name_symbols_and_preserve_falsy_globs(self):
+        other_path = "upstream/miri/src/other.rs"
+        symbol_rows = [
+            {
+                "id": "callable_shared", "path": self.path, "component": "miri",
+                "kind": "function", "name": "shared", "symbol": "module::shared",
+                "span": {"line": 3, "column": 0, "end_line": 3, "end_column": 10},
+            },
+            {
+                "id": "noncallable_shared", "path": self.path, "component": "miri",
+                "kind": "struct", "name": "shared", "symbol": "Shared",
+                "span": {"line": 4, "column": 0, "end_line": 4, "end_column": 12},
+            },
+            {
+                "id": "other_path_shared", "path": other_path, "component": "miri",
+                "kind": "enum_variant", "name": "shared", "symbol": "Other::shared",
+                "span": {"line": 5, "column": 0, "end_line": 5, "end_column": 12},
+            },
+            {
+                "id": "empty_name", "path": self.path, "component": "miri",
+                "kind": "struct", "name": "", "symbol": "EmptyName",
+                "span": {"line": 6, "column": 0, "end_line": 6, "end_column": 14},
+            },
+        ]
+        self.inventory["symbols"] = symbol_rows
+        self.inventory["imports"] = [
+            {
+                "id": "import_shared", "path": self.path, "component": "miri",
+                "imported_path": "miri::shared", "terminal_name": "shared", "is_glob": False,
+                "span": {"line": 7, "column": 0, "end_line": 7, "end_column": 20},
+            },
+            {
+                "id": "import_empty", "path": self.path, "component": "miri",
+                "imported_path": "miri::empty", "terminal_name": "", "is_glob": False,
+                "span": {"line": 8, "column": 0, "end_line": 8, "end_column": 20},
+            },
+            {
+                "id": "import_glob", "path": self.path, "component": "miri",
+                "imported_path": "miri::shared", "terminal_name": "shared", "is_glob": True,
+                "span": {"line": 9, "column": 0, "end_line": 9, "end_column": 20},
+            },
+        ]
+        source_by_path = validate_inventory(self.root, self.inventory)
+        source_by_path[other_path] = {"component": "miri", "source_sha256": self.digest}
+        graph = build_dependency_inventory(self.inventory, source_by_path)
+        imports_by_site = {
+            row["source_refs"][0]["id"]: row
+            for row in graph["dependencies"]
+            if row["kind"] == "import"
+        }
+
+        self.assertEqual(
+            ["other_path_shared", "callable_shared", "noncallable_shared"],
+            [ref["id"] for ref in imports_by_site["import_shared"]["candidate_refs"]],
+        )
+        self.assertEqual([], imports_by_site["import_empty"]["candidate_refs"])
+        self.assertEqual([], imports_by_site["import_glob"]["candidate_refs"])
+        self.assertEqual("pinned_component_path_unresolved", imports_by_site["import_glob"]["resolution"])
+
+    def test_dependency_symbols_reject_non_objects(self):
+        self.inventory["symbols"].append("invalid symbol")
+        with self.assertRaisesRegex(FeatureUpdateError, "symbols contains a non-object row"):
+            build_dependency_inventory(self.inventory, validate_inventory(self.root, self.inventory))
+
     def test_new_mir_variant_gets_unclassified_dispatch_obligation(self):
         variant = {
             "id": "v_mir", "path": self.path, "component": "rustc_middle_mir",
