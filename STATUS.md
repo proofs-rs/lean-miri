@@ -94,6 +94,14 @@ budget of OPEN exploration does not resolve the proofs above.
 
 ### Automated regression scope
 
+Run [40192012725](https://github.com/proofs-rs/lean-miri/actions/runs/40192012725)
+on `3d55eace` stopped the broad regression suite at
+`tests/memory_state/run_lifecycle_differential.sh` because the hosted runner
+lacked `rg` (ripgrep). Later phases of `check.sh`, including exporter and fresh
+input/execution comparisons, were not executed in that lane. Explicit dependency
+installation and an early setup check address the infrastructure defect; a new
+successful run is still required to establish those results.
+
 The Miri regression workflow selects the existing broad regression checks,
 additional component comparisons, saved connected/ordering/SC/large-TB replay,
 and fresh math/timezone/vtable identity controls. Its commands and result format

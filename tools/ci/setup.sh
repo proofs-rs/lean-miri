@@ -4,6 +4,10 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 lane="${1:?usage: setup.sh regression|extended|replay}"
 case "$lane" in regression|extended|replay) ;; *) exit 2 ;; esac
+if [[ "$lane" != replay ]] && ! command -v rg >/dev/null 2>&1; then
+  echo "Missing rg (ripgrep); install ripgrep before running $lane setup." >&2
+  exit 1
+fi
 export ELAN_HOME="$PWD/.elan" CARGO_HOME="$PWD/.cargo" RUSTUP_HOME="$PWD/.rustup"
 export PATH="$ELAN_HOME/bin:$CARGO_HOME/bin:$PATH"
 export MIRI_SYSROOT="$PWD/scratch/miri-sysroot"
