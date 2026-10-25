@@ -68,7 +68,7 @@ class TrackerIOTests(unittest.TestCase):
         features = self.root/'tracking/features.json'
         tracker_io.write_json(features, {'schema_version': 1, 'features': []})
         dependency_path = self.root/'tracking/dependencies.json.gz'
-        generated = {'schema_version': 1, 'dependencies': [], 'scope': 'current'}
+        generated = {'schema_version': 1, 'dependencies': [], 'scope': 'current', 'flag': True}
         patches = [patch.object(update_features, 'load_inventory', return_value={'symbols': []}),
                    patch.object(update_features, 'validate_inventory', return_value={}),
                    patch.object(update_features, 'build_ast_features', return_value=[]),
@@ -84,6 +84,12 @@ class TrackerIOTests(unittest.TestCase):
             self.assertEqual(update_features.main(['--root', str(self.root), '--write']), 0)
             self.assertEqual(update_features.main(['--root', str(self.root), '--check']), 0)
             self.assertEqual(tracker_io.read_json(dependency_path), generated)
+            # Python equality treats True, 1 and 1.0 as equal; freshness checks
+            # must still reject changes to the JSON representation's types.
+            for value in (1, 1.0):
+                tracker_io.write_json(dependency_path, {**generated, 'flag': value})
+                self.assertEqual(update_features.main(['--root', str(self.root), '--check']), 1)
+            tracker_io.write_json(dependency_path, generated)
             dependency_path.write_bytes(dependency_path.read_bytes()[:-1])
             self.assertEqual(update_features.main(['--root', str(self.root), '--check']), 2)
 

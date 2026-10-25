@@ -39,8 +39,8 @@ class FeatureUpdateError(Exception):
     pass
 
 
-def _json_bytes(value: Any) -> bytes:
-    return (json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+def _json_bytes(value: Any, *, indent: int | None = 2) -> bytes:
+    return (json.dumps(value, ensure_ascii=False, indent=indent, sort_keys=True) + "\n").encode("utf-8")
 
 
 def load_inventory(path: Path) -> dict[str, Any]:
@@ -400,9 +400,13 @@ def build_dependency_inventory(inventory: dict[str, Any], source_by_path: dict[s
     selected_namespaces = _selected_crate_namespaces(source_by_path)
     symbol_by_id = {row.get("id"): row for row in symbols if isinstance(row, dict)}
     defs_by_name: dict[str, list[dict[str, Any]]] = {}
+    symbols_by_name: dict[Any, list[dict[str, Any]]] = {}
     callable_kinds = {"function", "method", "trait_method"}
     for symbol in symbols:
-        if isinstance(symbol, dict) and symbol.get("kind") in callable_kinds:
+        if not isinstance(symbol, dict):
+            raise FeatureUpdateError("symbols contains a non-object row")
+        symbols_by_name.setdefault(symbol.get("name"), []).append(symbol)
+        if symbol.get("kind") in callable_kinds:
             defs_by_name.setdefault(symbol.get("name", ""), []).append(symbol)
     for candidates in defs_by_name.values():
         candidates.sort(key=lambda row: row["id"])
@@ -470,7 +474,7 @@ def build_dependency_inventory(inventory: dict[str, Any], source_by_path: dict[s
             raise FeatureUpdateError("imports contains a non-object row")
         target = imported.get("imported_path", "<unknown-import>")
         terminal = imported.get("terminal_name")
-        candidates = [row for row in symbols if terminal and row.get("name") == terminal]
+        candidates = symbols_by_name.get(terminal, []) if terminal else []
         if imported.get("is_glob"):
             candidates = []
         resolution = _namespace_resolution(target, len(candidates), selected_namespaces)
@@ -714,18 +718,20 @@ def main(argv: list[str] | None = None) -> int:
         except TrackerIOError as exc:
             raise FeatureUpdateError(f"cannot read dependency tracker {dependencies_path}: {exc}") from exc
         merged_dependencies, dependency_stats = merge_dependency_reviews(old_dependencies, generated_dependencies)
-        current = _json_bytes(feature_doc)
-        proposed = _json_bytes(result)
         if args.check:
-            dependency_current = _json_bytes(old_dependencies) if old_dependencies is not None else b""
-            dependency_proposed = _json_bytes(merged_dependencies)
+            # Check canonical JSON without pretty-printing megabytes of temporary
+            # text. Keep JSON's type distinctions (e.g. true vs 1), unlike dict ==.
+            current = _json_bytes(feature_doc, indent=None)
+            proposed = _json_bytes(result, indent=None)
+            dependency_current = _json_bytes(old_dependencies, indent=None) if old_dependencies is not None else b""
+            dependency_proposed = _json_bytes(merged_dependencies, indent=None)
             if current != proposed or dependency_current != dependency_proposed:
                 print(json.dumps(stats, sort_keys=True))
                 print(json.dumps(dependency_stats, sort_keys=True))
                 print("feature or dependency tracker differs from the syntax inventory; run tools/update_features.py --refresh-inventory --write", file=sys.stderr)
                 return 1
         elif args.write:
-            features_path.write_bytes(proposed)
+            features_path.write_bytes(_json_bytes(result))
             try:
                 write_json(dependencies_path, merged_dependencies)
             except TrackerIOError as exc:
