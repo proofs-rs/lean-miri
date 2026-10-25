@@ -578,12 +578,54 @@ native control matched the complete tape, choice events and terminal result.
 The full `check.sh`, full miri_tests runtime registry and a fresh same-TyCtxt
 reference-Miri comparison have not been rerun for this revision.
 
-The same-input large catch workload comparison is still pending. Its first
-baseline attempt reached the 1,200-second timeout during guest execution and
-is not a completed timing sample. The immutable input and runners are retained;
-four alternating trials are being retried with a 3,600-second per-run limit.
-Raw logs, including the failed attempt, and immutable artifact manifests belong
-in ignored `scratch/node-id-typed/`.
+The combined change was measured against the previous hash-only PR head
+`77f60e8489f0152d2b33eb00af36f7bddb29e942`, with candidate source
+`267f46a09b67e0c0e4fe2fa57243fc127f44d589`. Two alternating sequential pairs
+used CPU2, one Lean thread, native `--profile` runners, and the same immutable
+278,817,280-byte schema3 catch input as the preceding experiment (SHA256
+`005614751be65ee4c8f0d1571bfd323fec262a537e481afedff1e22ca5027821`).
+No export, compilation or tests overlapped these timed trials. Runner hashes:
+baseline `594bdde92fd2536a3833022c5276c2074cd4c293c36cd2a195a4fc39f9d59305`,
+candidate `029043353625bfc08555c711d065952be2793a473f0cf4f54fc7e2d0cdd29f98`.
+Input, runner and candidate source hashes were checked before and after.
+
+| Metric | Previous hash-only head | Shared IDs + typed metadata |
+| --- | ---: | ---: |
+| Whole-process wall, trials (s) | 365.478 / 372.885 | 274.444 / 278.184 |
+| Whole-process wall median (s) | 369.181 | 276.314 |
+| Process CPU, trials (s) | 360.993 / 371.207 | 272.981 / 276.577 |
+| Same-CPU steal delta, trials (s) | 127.25 / 131.83 | 79.95 / 80.19 |
+| Cgroup throttling delta, trials (s) | 9.202939 / 0.026710 | 0.000021 / 0.818928 |
+| Sampled peak RSS (decimal GB) | 3.849–3.850 | 3.848 |
+| Read/decode wall median (s) | 157.649 | 125.394 |
+| Preparation wall median (s) | 80.989 | 37.257 |
+| Combined read/decode + preparation (s) | 238.638 | 162.652 |
+| Runtime-value internal span median (s) | 26.100 | 22.700 |
+| Call-resolution internal span median (s) | 37.850 | 0.865 |
+
+The observed whole-process median reduction is 92.867 seconds (25.15%, about
+1.34 times throughput for this case). These are shared-host observations from
+two pairs, not a precise general speedup guarantee or attribution of every saved
+second. Unchanged guest execution also varied (median 103.906 to 90.225 seconds,
+including bootstrap), and the first baseline's cgroup throttling was substantial.
+The body-validation span varied 52.2/20.9 seconds before versus 16.7/18.1 after.
+Import-time typing moves some work out of preparation: candidate FnAbi query
+and compiler-value preparation spans had medians 0.742/3.215 seconds. Compare
+whole-process or combined decoding/preparation rather than preparation alone.
+JSON parsing medians were 5.675/6.385 seconds, so replacing the wire encoding
+alone still addresses little of this measured runtime.
+
+All four trials passed strict readiness with zero obligations and finalized
+exit0/cursor2640, with byte-identical consumed tapes, choice events and terminal
+output. All leak walks reported live39/roots22/edges17. This is one bounded
+execution comparison, not all-choice safety or whole-machine equivalence.
+The first attempted baseline reached the 1,200-second timeout during guest
+execution and is excluded from completed samples; its JSON parse alone took
+50.9 seconds. The successful retry used a 3,600-second limit per run. The earlier
+approximately 550-second hash-only median came from a different host interval
+and is not the baseline for this comparison. Raw logs, including the timed-out
+attempt, counters, results and immutable manifests remain in ignored
+`scratch/node-id-typed/`.
 
 ## Feature support outside the current acceptance scope
 
