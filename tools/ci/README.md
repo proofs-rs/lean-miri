@@ -1,7 +1,7 @@
 # Miri regression CI
 
-`.github/workflows/miri-regression.yml` runs on every `main` push, pull request,
-and manual dispatch. Main runs are not cancelled by later pushes. The matrix
+`.github/workflows/miri-regression.yml` runs only on `main` pushes.
+Main runs are not cancelled by later pushes. The matrix
 does not fail fast: a failure in one lane does not cancel the other lanes.
 All lanes use independent Linux x86_64 `ubuntu-24.04` runners. The public runner's
 16 GB RAM is needed by the existing connected replay guards (up to 15.5 GB).
@@ -12,9 +12,17 @@ with another runner.
 
 | Lane | Checks |
 | --- | --- |
-| `regression` | `check-quick.sh` and `check.sh`: source/fixture integrity, Python tools, source-analyzer Rust tests, Lean proofs/assertions/axioms, source-extracted component comparisons, the exporter's current Cargo test entry point, fresh input/frontend/runtime-metadata and arithmetic/call/global execution comparisons. |
-| `extended` | Build/axiom baseline; decoder, structural, optimization and connected-proof scripts; intrinsic float/AES/random-memory comparisons; scheduler and SC prefixes; detached join ordering; source-extracted selector; fresh primitive-range producer/Lean decoder contract; native math ABI. Then a separate reference-feature release exporter for fresh powi-zero, math capability, timezone and three vtable identity controls. |
-| `replay` | Build/axiom baseline, all canonical12 saved exports, four ordering controls, large Tree Borrows and SC diagnostic seeds 0–11 with negative-log checks. |
+| `regression` | Two fixture hash manifests and `check.sh`: source/fixture integrity, Python tools, source-analyzer Rust tests, Lean proofs/assertions/axioms, source-extracted component comparisons, the exporter's current Cargo test entry point, fresh input/frontend/runtime-metadata and arithmetic/call/global execution comparisons. |
+| `extended` | Build prerequisites; decoder, structural, optimization and connected-proof scripts; intrinsic float/AES/random-memory comparisons; scheduler and SC prefixes; detached join ordering; source-extracted selector; fresh primitive-range producer/Lean decoder contract; native math ABI. Then a separate reference-feature release exporter for fresh powi-zero, math capability, timezone and three vtable identity controls. |
+| `replay` | Build prerequisites, all canonical12 saved exports, four ordering controls, large Tree Borrows and SC diagnostic seeds 0–11 with negative-log checks. |
+
+`check.sh` owns the common `miri_tests` runtime registry and axiom audit. Other
+lanes build their own prerequisites without rerunning that registry. Their
+specialized scripts retain their own assertions and audits. The workflow requires
+all three lanes to pass, so this removes duplicate runs without dropping checks.
+Similarly, quick/full audit and Python checks run once through `check.sh`; the
+two hash manifests unique to `check-quick.sh` remain separate suites. Replay needs
+no Rust/reference build and therefore skips the SDK disk cleanup step.
 
 `python3 tools/ci/run.py LANE --list` prints the exact commands. The runner invokes
 existing assertions and comparisons without changing their expected outcomes.

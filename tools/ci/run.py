@@ -25,12 +25,17 @@ class Suite:
 
 def suites(lane):
     if lane == 'regression':
-        return [Suite('quick', ('bash', 'tools/check-quick.sh')),
+        # check.sh already contains quick's audit/Python/inventory checks.
+        # Only the two fixture hash manifests are unique to check-quick.sh.
+        return [Suite('connected-fixture-hashes', ('bash', '-c',
+                      'cd tests/connected/fixtures && sha256sum --check SHA256SUMS')),
+                Suite('input-fixture-hashes', ('bash', '-c',
+                      'cd tests/input/fixtures && sha256sum --check SHA256SUMS')),
                 Suite('full', ('bash', 'tools/check.sh'), 14400)]
     if lane == 'replay':
         # Freeze the full library closure before immutable-fixture replay.
         return [
-            Suite('build', ('bash', 'tools/check-build.sh'), 7200),
+            Suite('build', ('bash', 'tools/ci/build.sh'), 7200),
             Suite('canonical12', ('python3', 'tools/check-connected.py'), 14400),
             Suite('ordering', ('python3', 'tools/check-connected.py', '--ordering'), 7200),
             Suite('large-tb', ('python3', 'tools/check-connected.py', '--large-tb', '--timeout', '1800')),
@@ -39,7 +44,7 @@ def suites(lane):
     if lane != 'extended':
         raise ValueError(lane)
     result = [
-        Suite('build', ('bash', 'tools/check-build.sh'), 7200),
+        Suite('build', ('bash', 'tools/ci/build.sh'), 7200),
         Suite('exporter-build', ('cargo', '+miri-exporter-8144389c895d', 'build', '--locked', '--offline',
                                  '--manifest-path', 'exporter/Cargo.toml')),
         Suite('decoder', ('bash', 'tools/check-decoder.sh')),
