@@ -60,6 +60,12 @@ reference toolchain or source audit generator.
 
 ## Check commands
 
+The [Miri regression workflow](../.github/workflows/miri-regression.yml) runs the
+maintained regression, extended comparison and saved-replay lanes on every
+`main` push and PR. See [CI coverage and reproduction](../tools/ci/README.md) for
+the exact scope, setup, timing records and retained logs. This workflow uses the
+current exporter Cargo test entry point and does not reorganize test ownership.
+
 Self-contained Lean checks have two stages: `lake build MiriTests` and
 `lake exe miri_tests`. The latter reruns source assertions regardless of cached
 builds; `--list` and `--case MODULE` support focused execution. `check-build.sh`

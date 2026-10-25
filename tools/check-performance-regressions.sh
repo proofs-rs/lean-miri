@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 export ELAN_HOME="${LEAN_MIRI_ELAN_HOME:-$PWD/.elan}"
 export PATH="$ELAN_HOME/bin:$PATH"
 export LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-1}"
-flock --no-fork /tmp/lean-miri-lake-build.lock lake build +Miri:olean +OperationalSafety:olean +Miri.Frontend.ImportMIR:olean +Miri.Input.ExecutionChoicePolicy:olean +NativeRunner:olean
+flock --no-fork /tmp/lean-miri-lake-build.lock lake build +Miri:olean +Miri.OperationalSafety:olean +Miri.Frontend.ImportMIR:olean +Miri.Input.ExecutionChoicePolicy:olean +NativeRunner:olean
 python3 tests/input/build_id_fixtures.py
 for test in DefinitionLookup2026 DecoderProfile2026 PreparationProfile2026 RuntimeStartupProfileIdentity2026 FinalizationProfileIdentity2026 CompilerForeignSymbolTables; do
   lake env lean "MiriTests/Input/$test.lean"
