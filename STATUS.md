@@ -92,6 +92,19 @@ budget of OPEN exploration does not resolve the proofs above.
 
 ## Validation gaps and pending checks within scope
 
+### Automated regression scope
+
+The Miri regression workflow selects the existing broad regression checks,
+additional component comparisons, saved connected/ordering/SC/large-TB replay,
+and fresh math/timezone/vtable identity controls. Its commands and result format
+are documented in [CI coverage](tools/ci/README.md). Adding the workflow is not a
+record of a successful run; use each commit's Actions results and artifacts.
+Fresh regeneration/comparison of every canonical and focused guest, the complete
+argument-driven query-demand suite, and standalone unregistered harnesses are
+not yet covered by this workflow. Saved replay cannot validate changed producer
+behavior. The selected finite checks do not close the general proof or source
+correspondence gaps below.
+
 ### Compiler query closure and prepared allocation identity
 
 General query closure remains unproved for the [exporter](exporter/src/main.rs),
@@ -434,8 +447,20 @@ A future typed DAG/ID-based traversal could also remove structural work after
 parsing, but requires separate validation of its schema, diagnostics and adapters.
 No format migration or whole-guest performance claim is included here.
 
-Validation is in progress. Frozen artifacts, hashes, raw counters, internal
-profiles and all attempted check logs are in ignored `scratch/runtime-value-cache/`.
+Validation: `tools/check-performance-regressions.sh` passed, including native
+cached/reference comparisons of readiness, ordered obligations and ABI/body
+payloads, shared/inline duplicates, context changes and rebased escaped paths.
+Its axiom audit passed 69,676 declarations using only the three permitted axioms.
+The independent decoder goldens passed 16 cases plus 4 shared-ID cases natively;
+quick checks passed all 70 Python tests plus source/audit/fixture checks. Native
+profiling and parity targets built successfully. Earlier VM golden/parity
+attempts were interrupted and the same assertions completed natively. The
+initial stale-module regression invocation was corrected; all attempted logs
+are retained. Full `check.sh`, fresh producer/Miri comparisons and whole-guest
+timings were not run. The tested implementation, harness, build and toolchain
+files were hash-checked unchanged after integrating the concurrent CI changes
+from main. Frozen artifacts, hashes, raw counters and internal profiles are in
+ignored `scratch/runtime-value-cache/`.
 
 ## Feature support outside the current acceptance scope
 
