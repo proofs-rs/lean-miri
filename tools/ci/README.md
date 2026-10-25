@@ -45,7 +45,7 @@ test contracts.
 ## Setup and local reproduction
 
 On a fresh Linux x86_64 checkout with Python 3.12, curl, bash, util-linux/flock,
-a C/C++ compiler, make and normal Rust build dependencies available:
+a C/C++ compiler, make, ripgrep (`rg`) and normal Rust build dependencies available:
 
 ```bash
 bash tools/ci/setup.sh regression
@@ -61,7 +61,10 @@ the exact pinned rustc-dev compiler, prefetch locked Cargo dependencies, and run
 the existing reference Miri/sysroot setup. Setup needs network access. Fresh
 checks deliberately require new output paths: use a fresh checkout or move
 previous `scratch/ci-fresh` output before repeating the extended lane. Setup
-does not delete previous evidence.
+does not delete previous evidence. Non-replay setup checks for ripgrep before
+installing toolchains; the workflow installs Ubuntu's `ripgrep` package explicitly.
+Several source-comparison shell drivers invoke `rg`, so it is a test prerequisite,
+not an optional convenience.
 
 ## Logs and timing
 
