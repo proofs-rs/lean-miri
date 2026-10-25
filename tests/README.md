@@ -357,3 +357,14 @@ not executed. Normal termination for selected programs/seeds is finite evidence.
 UB freedom requires excluding UB on every reachable permitted finite prefix;
 local proofs, open graph exploration and source inventories do not establish that
 whole-machine claim.
+
+## Upstream UI sources
+
+[`upstream_ui/`](upstream_ui/README.md) documents the full pinned pass/fail
+inventory and `python3 tools/check-upstream-ui.py`. It expands revisions,
+compares genuine prepared reference runs with the native Lean runner, and
+rejects unrelated failures for expected-UB cases. The separate
+`.github/workflows/upstream-ui.yml` workflow runs every compatible case across
+16 shards; unsupported profiles remain in each shard's inventory. Full sweep
+completion and remaining blockers must be checked in its artifacts, not inferred
+from Python oracle tests or the existence of this command.

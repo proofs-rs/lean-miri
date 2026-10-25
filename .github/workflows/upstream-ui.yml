@@ -1,0 +1,68 @@
+name: Upstream Miri UI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - '.github/workflows/upstream-ui.yml'
+      - 'tests/upstream_ui/**'
+      - 'tests/test_upstream_ui.py'
+      - 'tools/check-upstream-ui.py'
+      - 'tools/NativeRunner.lean'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    name: UI shard ${{ matrix.shard }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    env:
+      LEAN_NUM_THREADS: '1'
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install source comparison dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y ripgrep
+      - name: Free unused SDK disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Prepare pinned toolchains and MIR sysroot
+        run: bash tools/ci/setup.sh upstream-ui
+      - name: Build prepared reference exporter
+        run: bash tools/build-exporter.sh --features miri-reference
+      - name: Test acceptance oracle
+        run: python3 -m unittest discover -s tests -p test_upstream_ui.py -v
+      - name: Compare every compatible case in this shard
+        run: >-
+          python3 tools/check-upstream-ui.py
+          --shard-index '${{ matrix.shard }}' --shard-count 16
+          --export-timeout 600 --timeout 600
+          --output scratch/upstream-ui/ci
+      - name: Retain inventory, reference diagnostics and all outcomes
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: upstream-ui-${{ matrix.shard }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            scratch/upstream-ui/ci/**/*.json
+            scratch/upstream-ui/ci/**/*.jsonl
+            scratch/upstream-ui/ci/**/*.log
+            scratch/logs/

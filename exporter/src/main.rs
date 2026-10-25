@@ -503,7 +503,8 @@ fn run_prepared_miri_reference_entry(
             implicit_writes: false,
         },
     ));
-    config.env = env::vars_os().collect();
+    let empty_environment = env::var_os("LEAN_MIRI_REFERENCE_EMPTY_ENV").is_some();
+    config.env = if empty_environment { Vec::new() } else { env::vars_os().collect() };
     let file_name = tcx.sess.io.input.file_name(tcx.sess);
     let mut args = vec![file_name.prefer_local_unconditionally().to_string()];
     args.extend_from_slice(extra_args);
@@ -539,7 +540,7 @@ fn run_prepared_miri_reference_entry(
         "float_rounding_error_mode":format!("{:?}",config.float_rounding_error),
         "short_fd_operations":config.short_fd_operations,
         "collect_leak_backtraces":config.collect_leak_backtraces,
-        "environment_policy":"host snapshot used; variable names and values are not serialized",
+        "environment_policy":if empty_environment { "empty" } else { "host snapshot used; variable names and values are not serialized" },
         "args":args,
     });
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1419,6 +1420,8 @@ impl Callbacks for ExportCallbacks {
             intrinsic_type_names,
             caller_location_constants,
         ) = loop {
+            let trace_export = env::var_os("LEAN_MIRI_TRACE_EXPORT").is_some();
+            if trace_export { eprintln!("export closure: instances={} types={} allocations={} pending={}", export_context.instance_ids.len(), export_context.type_ids.len(), export_context.allocation_ids.len(), export_context.pending_instances.len()); }
             // Most accumulated domains are insertion-only, so cardinalities
             // prove that their keys did not change. These identity sets can
             // also lose members on upgrade; their exact net membership delta
@@ -1460,14 +1463,17 @@ impl Callbacks for ExportCallbacks {
                 export_context.runtime_type_query_demands.len(),
                 processed_runtime_type_queries.len(),
             ];
+            if trace_export { eprintln!("export phase: cast_queries"); }
             let cast_queries = cast_queries::export(tcx, &mut export_context);
             let (vtable_queries, vtable_query_ids) =
                 compiler_vtable_queries_json(tcx, &mut export_context);
+            if trace_export { eprintln!("export phase: runtime_foreign_symbols"); }
             let runtime_foreign_symbols = foreign_symbols::export(tcx, &mut export_context);
             let runtime_virtual_queries =
                 compiler_runtime_virtual_queries_json(tcx, &mut export_context);
             register_fn_pointer_call_transfers(&mut export_context, tcx);
             register_runtime_callback_transfers(&mut export_context, tcx);
+            if trace_export { eprintln!("export phase: runtime_type_query_wave"); }
             let runtime_type_query_wave = compiler_runtime_type_queries_json(
                 tcx,
                 &mut export_context,
@@ -1485,7 +1491,9 @@ impl Callbacks for ExportCallbacks {
                 symbol_identity_instances_json(tcx, &mut export_context);
             let instance_abis = compiler_instance_abis_json(tcx, &mut export_context);
             let covariance_queries = covariance_queries::export(tcx, &mut export_context);
+            if trace_export { eprintln!("export phase: function_facts"); }
             let function_facts = compiler_function_facts_json(tcx, &mut export_context);
+            if trace_export { eprintln!("export phase: predicate_queries"); }
             let predicate_queries = compiler_predicate_queries_json(tcx, &mut export_context);
             let native_signature_queries =
                 native_signature_queries::export(tcx, &mut export_context);
@@ -1494,6 +1502,7 @@ impl Callbacks for ExportCallbacks {
                 intrinsic_value_queries::type_names(tcx, &mut export_context);
             let caller_location_constants =
                 intrinsic_value_queries::caller_locations(tcx, &mut export_context);
+            if trace_export { eprintln!("export phase: instances.extend(export_reachable_instances"); }
             instances.extend(export_reachable_instances(tcx, &mut export_context));
             if self.prepared_allocator_world {
                 register_backtrace_frame_pointer_demands(tcx, &mut export_context);

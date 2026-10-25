@@ -543,3 +543,26 @@ To rerun, follow README setup/fetch, then
 Start individual genuine re-exports with `tools/export-connected.py`.
 Out-of-scope Windows/native validation and the general proofs above were
 also not completed in this run.
+
+## Pinned upstream UI sweep
+
+`tools/check-upstream-ui.py` now enumerates the entire pinned pass/fail source
+snapshot, including revisions, with explicit profile exclusions. See
+`tests/upstream_ui/README.md` for the acceptance contract and separate sharded
+workflow. Registration and acceptance-oracle unit tests do not establish that
+these Rust inputs pass Lean execution. Full-sweep results are pending; do not
+claim coverage from incomplete shards or count Unsupported/timeout as agreement.
+
+Initial investigation found a shared cost before guest execution: even a std
+`miri_start` returning zero pulls thousands of compiler instances through the
+exporter's panic/helper/callback query closure. A local prepared export/reference
+completed, but does not establish Lean agreement or a bound for larger guests.
+Keep the original sources and their std startup; do not hide this cost by
+rewriting tests. The opt-in `LEAN_MIRI_TRACE_EXPORT` diagnostic exposes closure
+sizes and phases without changing query selection.
+
+The upstream `pass/no_core.rs` reference completed locally, but Lean rejected
+its missing structural/compiler obligations before execution, including retained
+catalog obligations. This is an unresolved import/bootstrap capability, not a
+passed normal-exit comparison. Preserve the strict readiness gate while
+investigating the demanded dependencies and absent core language items.

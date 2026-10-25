@@ -5,7 +5,7 @@ import Miri.Input.NativeMathHost
 /-! Standalone source run harness draft. It enters through
 EvalSourceRunFinalization.runFromSourceAndFinalize. Host operations that this
 fixture cannot perform remain demand-local Unsupported outcomes. -/
-open Miri Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
+open Lean Miri Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
 
 private abbrev Os := ByteArray
 private abbrev R := Unit
@@ -91,7 +91,7 @@ private def unavailableIoError (os : String) : IoError.Hooks S Unit := {
   writeInt := fun _ _ => unavailable "sync errno memory write" }
 
 private def sourceLeaves (dummy : SpanRef) (geometry : Input.InitialMachine.Geometry)
-    (pageSize : UInt64) (numCpus hostPid : UInt32) : Input.EvalConfigurationCore.SourceLeaves
+    (pageSize : UInt64) (numCpus hostPid : UInt32) (uiProfile : Bool) : Input.EvalConfigurationCore.SourceLeaves
     Os R Payload H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error
     Unit Unit ByteArray Miri.MIR.Place Unit Instant Payload Unit := {
   hostConfiguration := {
@@ -105,7 +105,7 @@ private def sourceLeaves (dummy : SpanRef) (geometry : Input.InitialMachine.Geom
   storage := fun size _ => some (Array.replicate size.bytes.toNat 0)
   spans := ⟨dummy, false⟩
   foreignSource := {
-    shortFdOperations := false
+    shortFdOperations := uiProfile
     varArgsBudget := 256
     host := {
       hostOverflowChecks := true
@@ -269,10 +269,40 @@ private def summarize (result : Input.EvalSourceRunFinalization.Result OuterStat
   | .failed state error => s!"failed {reprStr error}; {stateInfo state}"
   | .pending state cause => s!"pending {reprStr cause}; {stateInfo state}"
 
+/-- Diagnostics use the stopped frames' exact MIR source spans. This is separate
+from the allocation span hooks and does not change interpreter execution. -/
+private def terminalDiagnostic (prepared : Input.EvalPreparation.Prepared)
+    (result : Input.EvalSourceRunFinalization.Result OuterState) : Lean.Json := Id.run do
+  let (kind, error, state) := match result with
+    | .finished state code => ("exit", toString code, state)
+    | .undefinedBehavior state error => ("ub", reprStr error, state)
+    | .unsupported state error => ("unsupported", reprStr error, state)
+    | .failed state error => ("failed", reprStr error, state)
+    | .pending state cause => ("pending", reprStr cause, state)
+  let frames := state.stack.frames.map fun frame => Id.run do
+    let span? : Option SpanRef := match frame.location with
+      | .unwinding span => some span
+      | .mir location => do
+        let block ← frame.body.basicBlocks[location.block]?
+        if location.statementIndex == block.statements.size then
+          some block.terminator.sourceInfo.span
+        else do
+          let statement ← block.statements[location.statementIndex]?
+          pure statement.sourceInfo.span
+    let source? := span?.bind fun span => prepared.compiler.program.bundle.spans[span.id]?
+    return match source? with
+    | none => Lean.Json.null
+    | some source => Lean.Json.mkObj [
+        ("file", toJson source.file), ("line", toJson source.start.line),
+        ("end_line", toJson source.«end».line), ("column", toJson source.start.column),
+        ("lo", toJson source.lo), ("hi", toJson source.hi)]
+  return Lean.Json.mkObj [("kind", toJson kind), ("detail", toJson error),
+    ("frames", .arr frames)]
+
 private def prepareRun (prepared : Input.EvalPreparation.Prepared)
     (initialMemory : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind)
     (pageSize : UInt64) (numCpus hostPid : UInt32) (diagnosticSeed : Option UInt64)
-    (profile : Lean.Options) :
+    (profile : Lean.Options) (argument0 : String) (uiProfile : Bool) :
     Except String ((Array ExecutionChoices.Input → Except StepError
       (Input.EvalSourceRunFinalization.Result OuterState)) ×
       (Array ExecutionChoices.Input → Except String String)) := do
@@ -290,7 +320,9 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
       arch == "x86_64" && targetBits == 64 do
     throw s!"fixture requires x86_64-unknown-linux-gnu; got triple={compiler.program.input.producer.targetTriple}, arch={arch}, bits={targetBits}"
   let geometry ← (Input.InitialMachine.geometry targetBits arch false none).mapError reprStr
-  let sourceLeaves := sourceLeaves dummy geometry pageSize numCpus hostPid
+  let sourceLeaves := sourceLeaves dummy geometry pageSize numCpus hostPid uiProfile
+  let options := if uiProfile then { options with floatNondeterministic := true, weakFailureRate := 0x3fe999999999999a }
+    else options
   let machineConfig : Input.InitialMachine.Configuration Aff B := {
     geometry, dummySpan := dummy, provenance := .default, addressMode := .managed
     addressStop := 18446744073709551615, addressReuse := ⟨0.5, 0.1⟩
@@ -298,7 +330,7 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
     backend := .vclocks, trackedTags := some #[], validation := .Shallow
     alignment := .Int, affinity := none, muteOutput := true, hostUsizeBits := 64 }
   let bootstrap : Input.EvalBootstrap.Configuration Os := {
-    arguments := #["/workspace/lean-miri/scratch/main31.rs"], entry := definition, entryType := .rustcMain sigpipe
+    arguments := #[argument0], entry := definition, entryType := .rustcMain sigpipe
     communicate := false, forwarded := #[], environment := #[], overrides := #[] }
   let targetFacts ← compiler.externStatics.targetFacts.mapError id
   let startupFacts ← (Input.EvalStartupRuntimeConstruction.prepare compiler).mapError id
@@ -418,14 +450,15 @@ def main (args : List String) : IO Unit := do
   let profile := if profileEnabled then
     (({} : Lean.Options).setBool `profiler true).set `profiler.threshold (0 : Nat)
     else ({} : Lean.Options)
-  let some path := args.head? | throw (IO.userError "usage: NativeRunner <untouched-export.json|/dev/stdin> [--seed <u64>] [--profile] (gzip streamed externally)")
-  let diagnosticSeed ← match args.drop 1 with
-    | [] => pure none
+  let some path := args.head? | throw (IO.userError "usage: NativeRunner <untouched-export.json|/dev/stdin> [--seed <u64> | --ui-source SOURCE.rs] [--profile] (gzip streamed externally)")
+  let (diagnosticSeed, uiSource) ← match args.drop 1 with
+    | [] => pure (none, none)
+    | ["--ui-source", source] => pure (none, some source)
     | ["--seed", raw] => do
       let some value := raw.toNat? | throw (IO.userError "--seed expects an unsigned decimal u64")
       if value >= 2^64 then throw (IO.userError "--seed is outside the u64 range")
-      pure (some (UInt64.ofNat value))
-    | _ => throw (IO.userError "usage: NativeRunner <untouched-export.json|/dev/stdin> [--seed <u64>] [--profile] (gzip streamed externally)")
+      pure (some (UInt64.ofNat value), none)
+    | _ => throw (IO.userError "usage: NativeRunner <untouched-export.json|/dev/stdin> [--seed <u64> | --ui-source SOURCE.rs] [--profile] (gzip streamed externally)")
   boundary s!"choice_mode={choiceMode diagnosticSeed}; generated_budget=65536; byte_budget=4096; supplied_prefix=preserved"
   boundary "raw_host_poll: finite source initialization replay; no live poll capability"
   boundary "decode: start"
@@ -455,7 +488,9 @@ def main (args : List String) : IO Unit := do
   let hostPid ← IO.Process.getPID
   boundary "run: start"
   let (execute, checkValidationMismatch) ← must
-    (prepareRun prepared attempt.memory pageSize numCpus hostPid diagnosticSeed profile)
+    (prepareRun prepared attempt.memory pageSize (if uiSource.isSome then 1 else numCpus)
+      hostPid diagnosticSeed profile
+      (uiSource.getD "/workspace/lean-miri/scratch/main31.rs") uiSource.isSome)
   let mismatch ← match checkValidationMismatch initialInputs with
     | .ok report => pure report
     | .error error => throw (IO.userError s!"validation preflight regression failed: {error}")
@@ -470,6 +505,7 @@ def main (args : List String) : IO Unit := do
       boundary s!"consumed_tape={reprStr state.machine.user.user.payload.payload.choices.inputs}"
       boundary s!"choice_events={reprStr state.machine.user.user.payload.payload.choices.events}"
       boundary s!"run: {summarize result}"
+      IO.println s!"upstream_result: {(terminalDiagnostic prepared result).compress}"
     match result with
     | .failed state (.callback message) =>
       let some repair := choiceRepair message | return ← finish state
