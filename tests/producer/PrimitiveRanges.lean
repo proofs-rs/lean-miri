@@ -33,10 +33,15 @@ private def rangeOf (document : ImportDocument) (id : Nat) : Except String (Nat 
 
 def main (args : List String) : IO Unit := do
   let path::_ := args | throw (IO.userError "missing exported JSON")
-  let original ← must (Json.parse (← IO.FS.readFile path))
+  let source ← IO.FS.readFile path
+  -- Inspect and mutate semantic values after resolving shared transport. Keep
+  -- an empty catalog so edited documents reach the scalar/niche validators.
+  let original ← must (SharedPayloads.resolveCatalog (← must (Json.parse source)))
+  let original ← must (replace original "shared_payloads"
+    (Json.mkObj [("schema_version", toJson (2 : Nat)), ("nodes", toJson (#[] : Array Json))]))
   let primitive ← must (field (← must (field original "compiler_runtime_primitives")) "u128")
   let id ← must ((← must (field primitive "type_id")).getNat?)
-  let decoded ← must (decodeJson original.compress)
+  let decoded ← must (decodeJson source)
   let range ← must (rangeOf decoded.document id)
   check (range == (0,2^128-1)) "actual compiler u128 range was clipped"
   let metadata ← must ((RuntimeMetadata.ofDocument decoded.document).mapError toString)
