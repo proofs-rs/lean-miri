@@ -92,6 +92,19 @@ budget of OPEN exploration does not resolve the proofs above.
 
 ## Validation gaps and pending checks within scope
 
+### Automated regression scope
+
+The Miri regression workflow selects the existing broad regression checks,
+additional component comparisons, saved connected/ordering/SC/large-TB replay,
+and fresh math/timezone/vtable identity controls. Its commands and result format
+are documented in [CI coverage](tools/ci/README.md). Adding the workflow is not a
+record of a successful run; use each commit's Actions results and artifacts.
+Fresh regeneration/comparison of every canonical and focused guest, the complete
+argument-driven query-demand suite, and standalone unregistered harnesses are
+not yet covered by this workflow. Saved replay cannot validate changed producer
+behavior. The selected finite checks do not close the general proof or source
+correspondence gaps below.
+
 ### Compiler query closure and prepared allocation identity
 
 General query closure remains unproved for the [exporter](exporter/src/main.rs),
