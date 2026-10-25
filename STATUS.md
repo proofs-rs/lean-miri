@@ -414,13 +414,13 @@ does not replace first-run improvements or justify reusing allocation identities
 
 ### Runtime-value structural-hash reuse
 
-Runtime-value decoding now carries the existing validated
-[JsonTraversalCache](Miri/Input/JsonTraversalCache.lean) nodes through array and
-object children. Its memo key reuses the structural hash while retaining full
-JSON equality, all decoding context flags and per-occurrence diagnostic rebasing.
-A kernel-checked key-comparison identity relates it to the original full-value
-key. The uncached reference decoder remains available; validation order and the
-full-value decoder are unchanged. This is not a general decoder equivalence proof.
+The first optimization carried the existing validated
+[JsonTraversalCache](Miri/Input/JsonTraversalCache.lean) nodes through runtime-value
+array and object children. Its key reused the structural hash while retaining
+full JSON equality, decoding context flags and per-occurrence diagnostic rebasing.
+A kernel-checked comparison identity related that key to the original full-value
+key. The shared-node changes below supersede that key; the uncached reference
+decoder remains available. This was not a general decoder equivalence proof.
 
 The native [decode-only profiler](tools/ProfileRuntimeDecoder.lean) separates JSON
 parsing from runtime-value decoding without executing the guest. Two alternating
@@ -443,11 +443,10 @@ versions, with 2.963/2.584 seconds baseline/candidate wall time; this is one pai
 
 JSON parsing took 0.883–1.06 seconds in the four large trials. Replacing the wire
 encoding alone therefore targets a small fraction of this input's measured cost.
-A future typed DAG/ID-based traversal could also remove structural work after
-parsing, but requires separate validation of its schema, diagnostics and adapters.
-The external format can remain JSON: retain document-local node IDs internally
-and include decoding context in memo keys, preserving validation and diagnostic
-rebasing. No format migration is implemented here.
+This motivated the shared-node and typed-metadata work described below. The
+external format remains JSON; retaining document-local node IDs internally and
+including decoding context in memo keys removes further structural work without
+a format migration. Validation and diagnostic rebasing remain required.
 
 Validation: `tools/check-performance-regressions.sh` passed, including native
 cached/reference comparisons of readiness, ordered obligations and ABI/body
@@ -568,9 +567,23 @@ not claim that key-comparison identity or whole-decoder equivalence. New local
 kernel-checked identities preserve both the old full-value key comparison and
 hash exactly in the uncached Raw fallback.
 
-Validation and the same-input large catch workload measurements are pending.
-Raw logs and immutable artifact manifests belong in ignored
-`scratch/node-id-typed/`.
+Validation on source revision `267f46a09b67e0c0e4fe2fa57243fc127f44d589`:
+`tools/check-performance-regressions.sh` passed, including the native build,
+frontend reflection, cached/reference diagnostics and obligation ordering,
+compiler ABI/value comparisons, runtime ABI rejection checks and the transitive
+axiom audit (69,823 Miri declarations; only the three allowed axioms).
+`tools/check-quick.sh` passed all 70 Python tests. Selected LowerContext,
+ProviderContext and PrimitiveRebinding structural checks also passed. A small
+native control matched the complete tape, choice events and terminal result.
+The full `check.sh`, full miri_tests runtime registry and a fresh same-TyCtxt
+reference-Miri comparison have not been rerun for this revision.
+
+The same-input large catch workload comparison is still pending. Its first
+baseline attempt reached the 1,200-second timeout during guest execution and
+is not a completed timing sample. The immutable input and runners are retained;
+four alternating trials are being retried with a 3,600-second per-run limit.
+Raw logs, including the failed attempt, and immutable artifact manifests belong
+in ignored `scratch/node-id-typed/`.
 
 ## Feature support outside the current acceptance scope
 

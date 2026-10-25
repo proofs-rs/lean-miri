@@ -106,11 +106,24 @@ from application benchmarks, with the same CPU/thread controls. It demonstrates
 hash traversal scaling; it does not measure the fraction of decoder time spent
 in hashing or establish an application speedup.
 
-The decoder reuses structural JSON hashes computed from the validated transport
-DAG, including runtime-value memo keys; full JSON comparisons, decoding context,
-diagnostic rebasing and all validation phases remain. Noncanonical Raw
-objects fall back to ordinary hashing. `decodeRuntimeJsonReference` and
-`decodeJsonReference` run the uncached path for regression checks. Caller-location
-queries reuse a span index within each demand; runtime Location roots remain
-fresh per intrinsic evaluation. See [STATUS.md](../STATUS.md) for the measured input, limits and
-remaining costs, and `tools/check-performance-regressions.sh` for parity checks.
+The decoder retains the exporter's document-local shared-node IDs. Runtime-value
+memoization and validation visits use those IDs; inline values and cheap scalars
+are traversed directly. Context flags and diagnostic rebasing remain per
+occurrence. Structural hashes remain for value-based ABI deduplication, and
+noncanonical Raw objects retain the original full-value key comparison/hash.
+`decodeRuntimeJsonReference` and `decodeJsonReference` run the uncached traversal
+path for regression checks; neither bypasses validation.
+
+Import-time `decoder.compiler_abi_queries` and `decoder.compiler_values` spans
+prepare complete typed FnAbi/generic-argument/span projections for the native
+runtime input. Preparation still converts and validates ABI results against the
+current runtime. `prepare.typed_abi_index` replaces per-call linear scans of
+source ABI payloads. Since work moves from preparation into decoding, compare
+whole-process and combined decode/preparation costs rather than interpreting a
+shorter preparation span alone as a speedup. Diagnostic/reflected imports retain
+the schema-only document and use the compatibility path.
+
+Caller-location queries reuse a span index within each demand; runtime Location
+roots remain fresh per intrinsic evaluation. See [STATUS.md](../STATUS.md) for
+measured inputs, limits and remaining costs, and
+`tools/check-performance-regressions.sh` for parity checks.
