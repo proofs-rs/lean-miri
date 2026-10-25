@@ -30,7 +30,7 @@ case "$1" in
       VALIDATOR=validate_selected_static_typeid162.py
     fi
     LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1 "$EXPORTER" --output "$OUT" --root root -- \
-      "$ROOT/exporter/fixtures/$FIXTURE.rs" \
+      "$ROOT/tests/fixtures/$FIXTURE.rs" \
       --crate-type=lib --crate-name="$FIXTURE" -Cpanic=abort --edition=2021 \
       -Zmir-opt-level=0 --sysroot "$MIRI_SYSROOT" --cfg=miri -Zalways-encode-mir
     python3 "$ROOT/exporter/tests/$VALIDATOR" "$OUT"

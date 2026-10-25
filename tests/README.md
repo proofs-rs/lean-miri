@@ -254,7 +254,8 @@ collect every feature test in the directories above.
 [exporter/tests/](../exporter/tests/) holds Python schema/contract validators,
 transport unit tests and the Cargo integration test entry point.
 [exporter/fixtures/](../exporter/fixtures/) holds Rust inputs and small Cargo
-projects, including the fixtures shared with Lean input checks.
+projects. The allocator-world Rust fixtures shared by exporter and Lean input
+checks live under `tests/fixtures/`.
 
 Pinned `cargo test --locked --offline --manifest-path exporter/Cargo.toml` runs
 Rust unit tests, Python unittest discovery, the four top-level shell fixture
@@ -265,9 +266,9 @@ setup, focused invocations and standalone scripts.
 
 `tests/producer/primitive_ranges.py` retains the Lean decoder/runtime boundary
 checks and obtains its input from the exporter-owned primitive-range check.
-`tests/input/run.sh` reuses the exporter-owned allocator-world fixtures and
-validators before testing their Lean consumers. These consumer checks remain
-separate from Cargo's exporter suite.
+`tests/input/run.sh` uses the shared allocator-world fixtures in `tests/fixtures/`
+and the exporter validators before testing their Lean consumers. These consumer
+checks remain separate from Cargo's exporter suite.
 
 ## Standalone checks that need explicit selection
 

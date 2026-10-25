@@ -91,7 +91,8 @@ scripts can also use this override. Each fixture uses temporary output directori
 
 The producer checks cover input settings and consumed artifact hashes, exact
 u128/niche ranges, function/vtable allocator-world crosswalks, and static/TypeId
-crosswalks. Their validators and Rust fixtures live under `exporter/`. Run one
+crosswalks. Their validators live under `exporter/`. The allocator-world Rust
+fixtures shared with Lean input checks live under `tests/fixtures/`. Run one
 with `--test suites producer_settings`, `primitive_ranges`, `selected_alloc_world`
 or `selected_static_typeid`. For standalone use, after building the exporter,
 run `bash exporter/tests/run-producer.sh NAME` (`settings` selects the settings
