@@ -64,3 +64,5 @@ jobs:
             scratch/sc-schedules/**/*.log
             scratch/sc-schedules/**/seed-*.json
             scratch/ci-fresh/**/*.log
+            scratch/connected-libc-target/build.jsonl
+            scratch/connected-libc-target/libc-rlib.path

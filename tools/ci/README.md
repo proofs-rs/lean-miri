@@ -81,3 +81,7 @@ fixture generation performed by their existing scripts; `setup.log` measures
 installation/reference preparation separately. Timings on shared runners are
 diagnostic, not a controlled interpreter benchmark. No speed threshold determines
 correctness. Use `tools/PROFILING.md` for performance claims.
+
+The connected-libc build records Cargo's reported archive in
+`scratch/connected-libc-target/libc-rlib.path`. Timezone consumes that exact path;
+missing or ambiguous artifacts and stale records after a failed rebuild fail.
