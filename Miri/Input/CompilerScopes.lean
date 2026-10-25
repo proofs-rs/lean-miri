@@ -21,7 +21,7 @@ private def decodeEntry (ctx : LowerContext) (tables : CompilerTables) (j : Json
     pure (⟨⟨none,parent⟩,none⟩,tables)
   else
     let (fnInstance,tables) ← CompilerInstance.decode ctx tables inlined
-    let span ← decodeCompilerValue (← inlined.getObjVal? "callsite_span")
+    let span ← ctx.decodeCompilerValue (← inlined.getObjVal? "callsite_span")
     let (span,tables) ← lowerCompilerSpan tables span
     let track ← (← inlined.getObjVal? "requires_caller_location").getBool?
     pure (⟨⟨some (fnInstance,span),parent⟩,some track⟩,tables)

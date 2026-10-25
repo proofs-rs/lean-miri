@@ -13,7 +13,7 @@ def get (p : CompilerProviders.Prepared) (frame : Frame P L E) :
     | throw (.invalidProgram "unwind body identity absent from canonical compilation")
   unless body.body == frame.body do
     throw (.invalidProgram "unwind body identity/content mismatch")
-  let source ← ((body.input.payload.getObjVal? "span").bind decodeCompilerValue).mapError StepError.unsupported
+  let source ← ((body.input.payload.getObjVal? "span").bind p.loweringContext.decodeCompilerValue).mapError StepError.unsupported
   let (span,tables) ← lowerCompilerSpan p.program.compilerTables source |>.mapError StepError.unsupported
   unless tables.spans == p.program.compilerTables.spans do
     throw (.unsupported "compiler body span absent from final shared span table")

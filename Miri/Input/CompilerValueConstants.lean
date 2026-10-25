@@ -20,7 +20,7 @@ private def decode (p : CompilerProviders.Prepared) (record : Json) :
   let ty ← ref (← record.getObjVal? "result_type")
   let _ ← p.runtime.node ty |>.mapError toString
   let value ← lowerCompilerConstValue p.loweringContext ty
-    (← decodeCompilerValue (← record.getObjVal? "value"))
+    (← p.loweringContext.decodeCompilerValue (← record.getObjVal? "value"))
   pure (ty,value)
 
 def typeName (p : CompilerProviders.Prepared) (ty : MIR.TyId) :
@@ -38,7 +38,7 @@ def callerLocationReference (p : CompilerProviders.Prepared) (span : MIR.SpanRef
   let mut matching := #[]
   for record in ← records p "compiler_caller_location_constants" do
     let (actual,tables) ← lowerCompilerSpan p.program.compilerTables
-      (← decodeCompilerValue (← record.getObjVal? "span"))
+      (← p.loweringContext.decodeCompilerValue (← record.getObjVal? "span"))
     if tables.spans == p.program.compilerTables.spans && actual == span then
       matching := matching.push record
   decode p (← unique matching)
@@ -55,7 +55,7 @@ def callerLocation (p : CompilerProviders.Prepared) (span : MIR.SpanRef) :
   let mut matching := #[]
   for record in entries do
     let (actual,next) ← lowerCompilerSpanWithInterner base
-      (← decodeCompilerValue (← record.getObjVal? "span"))
+      (← p.loweringContext.decodeCompilerValue (← record.getObjVal? "span"))
     if next.sameSpansAs base && actual == span then
       matching := matching.push record
   decode p (← unique matching)

@@ -40,10 +40,10 @@ private def decodeChecks (ctx : LowerContext) (interner : CompilerSpanInterner)
       let normalized ← result.getObjVal? "normalized_operand"
       unless (← normalized.getObjVal? "span") == (← source.getObjVal? "span") do
         throw "required constant normalization changed source span"
-      let (source,nextInterner) ← lowerCompilerConstOperandWithInterner ctx interner (← decodeCompilerValue source)
-      let (normal,nextInterner) ← lowerCompilerConstOperandWithInterner ctx nextInterner (← decodeCompilerValue normalized)
+      let (source,nextInterner) ← lowerCompilerConstOperandWithInterner ctx interner (← ctx.decodeCompilerValue source)
+      let (normal,nextInterner) ← lowerCompilerConstOperandWithInterner ctx nextInterner (← ctx.decodeCompilerValue normalized)
       let ty ← (← normalized.getObjVal? "type").getObjValAs? Nat "type_id"
-      let value ← lowerCompilerConstValue ctx ty (← decodeCompilerValue (← result.getObjVal? "value"))
+      let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue (← result.getObjVal? "value"))
       interner := nextInterner
       evidence := evidence.push (.ok ⟨callee,source.value,normal.value,normal.span,value⟩)
     else
@@ -61,7 +61,7 @@ def prepare (program : LoweredProgram) : Prepared := Id.run do
   let mut entries := #[]
   for body in program.bundle.bodies do
     let preamble := do
-      lowerCompilerSpanWithInterner interner (← decodeCompilerValue (← body.input.payload.getObjVal? "preamble_def_span"))
+      lowerCompilerSpanWithInterner interner (← ctx.decodeCompilerValue (← body.input.payload.getObjVal? "preamble_def_span"))
     let preamble ← match preamble with
       | .error error => pure (.error error)
       | .ok (span,next) =>

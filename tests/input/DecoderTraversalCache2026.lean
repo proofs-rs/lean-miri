@@ -35,4 +35,24 @@ def main (args : List String) : IO Unit := do
   compare "early-vtable-error" (set (set document "a_first" bad) "z_later" bad).compress
   let malformedAbi := Json.mkObj [("fn_abi",Json.mkObj [("status",.str "supported")])]
   compare "first-abi-error" (set (set document "a_first" malformedAbi) "z_later" malformedAbi).compress
+  -- Equal inline and shared nodes must retain path/context-sensitive decoding
+  -- and rebase every diagnostic to the occurrence that produced it.
+  let issue := Json.mkObj [("kind", .str "synthetic_unknown"),
+    ("status", .str "unsupported")]
+  let .ok catalog := document.getObjVal? "shared_payloads" | throw (IO.userError "missing catalog")
+  let .ok nodes := (catalog.getObjVal? "nodes").bind Json.getArr? | throw (IO.userError "missing nodes")
+  let reference := Json.mkObj [("$lean_miri_shared_ref", toJson nodes.size)]
+  let withNode := set document "shared_payloads" (set catalog "nodes" (.arr (nodes.push issue)))
+  let contexts := Json.mkObj [("plain", reference), ("region", reference),
+    ("hir_id", reference), ("coverage", reference),
+    ("cast_kind", Json.mkObj [("coercion", reference)]),
+    ("operand", reference), ("rvalue", reference), ("projection", reference),
+    ("inline", issue), ("array", .arr #[reference, issue, reference])]
+  let repeated := set (set withNode "synthetic_a" contexts) "synthetic_z.%[" contexts
+  compare "shared-runtime-contexts-and-rebased-paths" repeated.compress
+  let .ok result := decodeRuntimeJson repeated.compress | throw (IO.userError "runtime context fixture failed")
+  for pathPrefix in ["synthetic_a", "synthetic_z%2E%25%5B"] do
+    unless result.document.obligations.any (fun issue => issue.path.startsWith pathPrefix ||
+        issue.path.startsWith ("$." ++ pathPrefix)) do
+      throw (IO.userError s!"missing rebased diagnostics for {pathPrefix}")
   IO.println "cached/uncached decoder diagnostics and ordered ABI/body results: PASS"

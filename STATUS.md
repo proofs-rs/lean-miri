@@ -429,6 +429,221 @@ pointer cache or skip checks to remove it. Prepared-input reuse can amortize
 multiple seeds only with input/version/config binding and fresh guest state; it
 does not replace first-run improvements or justify reusing allocation identities.
 
+### Runtime-value structural-hash reuse
+
+The first optimization carried the existing validated
+[JsonTraversalCache](Miri/Input/JsonTraversalCache.lean) nodes through runtime-value
+array and object children. Its key reused the structural hash while retaining
+full JSON equality, decoding context flags and per-occurrence diagnostic rebasing.
+A kernel-checked comparison identity related that key to the original full-value
+key. The shared-node changes below supersede that key; the uncached reference
+decoder remains available. This was not a general decoder equivalence proof.
+
+The native [decode-only profiler](tools/ProfileRuntimeDecoder.lean) separates JSON
+parsing from runtime-value decoding without executing the guest. Two alternating
+candidate/baseline pairs used the retained 31,718,745-byte large-TB input, frozen
+native binaries, CPU2 and one Lean thread. All passed strict decode readiness.
+
+| Trial | Baseline wall / CPU / steal (seconds) | Candidate wall / CPU / steal (seconds) |
+| --- | --- | --- |
+| 1 | 47.588 / 46.790 / 31.200 | 32.280 / 32.181 / 18.760 |
+| 2 | 25.677 / 25.603 / 10.800 | 24.658 / 24.600 / 11.850 |
+
+The internal runtime-value spans were 8.86/9.52 seconds baseline and 5.33/4.56
+seconds candidate. Other phases varied substantially, and baseline trial1 had
+1.048 seconds of cgroup throttling (the other three had none). These shared-host
+samples do not establish a small whole-decoder speedup. Steal is the raw
+same-CPU observation, not process CPU time. Sampled peak process-group RSS rose
+from 475–476 MB to 526–529 MB; retaining traversal nodes through runtime-value
+decoding extends the cache lifetime. The small input passed readiness in both
+versions, with 2.963/2.584 seconds baseline/candidate wall time; this is one pair.
+
+JSON parsing took 0.883–1.06 seconds in the four large trials. Replacing the wire
+encoding alone therefore targets a small fraction of this input's measured cost.
+This motivated the shared-node and typed-metadata work described below. The
+external format remains JSON; retaining document-local node IDs internally and
+including decoding context in memo keys removes further structural work without
+a format migration. Validation and diagnostic rebasing remain required.
+
+Validation: `tools/check-performance-regressions.sh` passed, including native
+cached/reference comparisons of readiness, ordered obligations and ABI/body
+payloads, shared/inline duplicates, context changes and rebased escaped paths.
+Its axiom audit passed 69,676 declarations using only the three permitted axioms.
+The independent decoder goldens passed 16 cases plus 4 shared-ID cases natively;
+quick checks passed all 70 Python tests plus source/audit/fixture checks. Native
+profiling and parity targets built successfully. Earlier VM golden/parity
+attempts were interrupted and the same assertions completed natively. The
+initial stale-module regression invocation was corrected; all attempted logs
+are retained. At this stage, full `check.sh`, fresh producer/Miri comparisons and
+whole-guest timings had not been run; the large-input follow-up is below.
+The tested implementation, harness, build and toolchain
+files were hash-checked unchanged after integrating the concurrent CI changes
+from main. Frozen artifacts, hashes, raw counters and internal profiles are in
+ignored `scratch/runtime-value-cache/`.
+
+### Large catch-panic measurement follow-up
+
+The same [catch guest](tests/repro/unwind/catch_guest.rs) was freshly exported
+with the pinned compiler, `LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1`, `--root main`
+and crate name `catch_guest`. The schema3/shared-payload-v2 input is 278,817,280
+bytes, 736 bytes smaller than the historical 278,818,016-byte artifact. Its SHA256
+is `005614751be65ee4c8f0d1571bfd323fec262a537e481afedff1e22ca5027821`;
+it is a re-export of the same source, not the historical byte-identical input.
+It contains 1 selected body, 9,991 instances, 26,625 types, 180,133 allocations,
+43,827 caller-location rows and 1,574,011 shared nodes.
+
+Frozen full native runners shared all harness/dependency objects; only the
+Decoder object was replaced with the pre-change source from `21f163b1`, using
+the same Lean package/module setup and C compiler flags. Generated consumers
+call the decoder entry point and contain none of the changed private runtime-
+value implementation symbols. The small control matched terminal/tape/events
+before the large trials. Builds and exports were excluded from timing and did
+not overlap the four sequential baseline/candidate/baseline/candidate runs on
+CPU2 with one Lean thread, `--profile` and the unchanged no-seed diagnostic policy.
+
+| Trial | Baseline wall / CPU / steal (seconds) | Candidate wall / CPU / steal (seconds) |
+| --- | --- | --- |
+| 1 | 641.527 / 635.650 / 333.180 | 573.440 / 568.635 / 295.350 |
+| 2 | 665.373 / 650.205 / 362.950 | 527.109 / 520.578 / 259.370 |
+
+| Metric | Baseline | Candidate |
+| --- | ---: | ---: |
+| Full process wall median (seconds) | 653.450 | 550.274 |
+| Read/decode wall median (seconds) | 302.814 | 212.698 |
+| Internal runtime-value median (seconds) | 103.850 | 42.600 |
+| Internal JSON parse median (seconds) | 9.430 | 11.045 |
+| Sampled peak process-group RSS (GB, decimal) | 3.338–3.354 | 3.849 |
+
+The observed whole-process median difference is 103.176 seconds. Runtime-value
+spans were 95.7/112.0 seconds baseline and 42.4/42.8 seconds candidate. Unchanged
+phases also varied; do not attribute the entire whole-process difference to this
+change or infer a precise general speedup from these two shared-host pairs.
+Baseline trial2 had 9.231 seconds of cgroup throttling; the other trials had
+0.002/0.068/0.079 seconds. Steal is recorded raw, without a CPU-time correction.
+These values must not be compared directly with the historical 205-second run.
+
+All four runs passed strict readiness and finalized exit0/cursor2640, with
+byte-identical consumed tapes, choice events and terminal output. All leak walks
+reported live39/root22/edges17. Input and frozen binary hashes remained unchanged
+afterward. This is finite execution evidence, not safety over all choices or
+a new same-prepared-TyCtxt comparison with reference Miri.
+
+Preparation attempts remain visible: the previously cached debug exporter emitted
+schema2 and was not measured; a schema3 unscoped export was rejected at readiness
+with 9,247 blocking obligations and is not counted as successful execution. The
+corrected export selects main, retaining runtime checks for demanded queries.
+Raw artifacts, compiler/link manifests, all attempted logs, per-run counters and
+the structured `results.json` are in ignored `scratch/catch-runtime-value/`.
+
+### Node identities and import-time compiler metadata
+
+The traversal builder now retains the exporter's existing document-local node
+IDs and reference edges. Repeated shared references keep the same identity;
+inline values are traversed directly, without new IDs or independent memo
+entries. Runtime-value memoization and successful validation visits compare
+shared IDs plus the existing context flags, avoiding structural JSON comparisons.
+Scalars are decoded directly, including shared scalar strings.
+Structural keys remain for the public FnAbi sequence's value-based deduplication.
+Noncanonical manually constructed JSON still uses the uncached fallback. No
+additional Lean interning or external encoding change is introduced.
+
+FnAbi queries are decoded into an immutable typed table during import, reusing
+the already prepared layout memo. Its private constructor binds all entries to
+the exact shared-node table and decoder build. Query failures are stored, not
+raised for unused catalog entries. Preparation consumes these typed outcomes
+and still converts/validates the physical ABI against the current runtime.
+Manual documents without the table retain the original path. Source-node table
+updates cannot silently reuse a table indexed by the old source array. Call-site
+lookup uses one index over the typed ABI records instead of scanning their JSON
+payloads for every call. Noncanonical manual values keep the original linear
+lookup and first-match behavior.
+
+Complete compiler values for generic arguments and source spans are also
+prepared once from shared nodes and reused by instance, scope, lifecycle,
+backtrace, main, constant and intrinsic adapters. Their memo stores exact JSON
+keys and full typed values rather than the runtime decoder's shallow summaries;
+missing keys decode directly, and malformed raw keys bypass memo lookup.
+This is selective import-time typing, not elimination of every JSON field read:
+query envelopes, layout extras and several specialized adapters still inspect
+source payloads. Guest pointers, allocation identity and fresh guest state are
+not memoized.
+
+To carry the checked projections in the document without a circular import,
+model node definitions moved to `Miri/Input/Model/Types.lean`, value decoders to
+`Miri/Input/DecoderValues.lean`, and document/validation entrypoints remain in
+`Model.lean`/`Decoder.lean`. Existing public decoder names remain available.
+The caches belong only to native runtime `ImportDocumentCore` values. Diagnostic
+and reflected `ImportDocument` values retain their original schema fields;
+conversion from those values uses the uncached compatibility path. Frontend
+reflection still emits typed constructor data, without quoting private caches
+or inserting an opaque decoder call. Temporary decode memos are existential
+proof witnesses and are erased rather than retained in the document.
+The earlier structural-key equality lemma describes the initial hash-only
+implementation; ID-based memoization has a different cache partition and does
+not claim that key-comparison identity or whole-decoder equivalence. New local
+kernel-checked identities preserve both the old full-value key comparison and
+hash exactly in the uncached Raw fallback.
+
+Validation on source revision `267f46a09b67e0c0e4fe2fa57243fc127f44d589`:
+`tools/check-performance-regressions.sh` passed, including the native build,
+frontend reflection, cached/reference diagnostics and obligation ordering,
+compiler ABI/value comparisons, runtime ABI rejection checks and the transitive
+axiom audit (69,823 Miri declarations; only the three allowed axioms).
+`tools/check-quick.sh` passed all 70 Python tests. Selected LowerContext,
+ProviderContext and PrimitiveRebinding structural checks also passed. A small
+native control matched the complete tape, choice events and terminal result.
+The full `check.sh`, full miri_tests runtime registry and a fresh same-TyCtxt
+reference-Miri comparison have not been rerun for this revision.
+
+The combined change was measured against the previous hash-only PR head
+`77f60e8489f0152d2b33eb00af36f7bddb29e942`, with candidate source
+`267f46a09b67e0c0e4fe2fa57243fc127f44d589`. Two alternating sequential pairs
+used CPU2, one Lean thread, native `--profile` runners, and the same immutable
+278,817,280-byte schema3 catch input as the preceding experiment (SHA256
+`005614751be65ee4c8f0d1571bfd323fec262a537e481afedff1e22ca5027821`).
+No export, compilation or tests overlapped these timed trials. Runner hashes:
+baseline `594bdde92fd2536a3833022c5276c2074cd4c293c36cd2a195a4fc39f9d59305`,
+candidate `029043353625bfc08555c711d065952be2793a473f0cf4f54fc7e2d0cdd29f98`.
+Input, runner and candidate source hashes were checked before and after.
+
+| Metric | Previous hash-only head | Shared IDs + typed metadata |
+| --- | ---: | ---: |
+| Whole-process wall, trials (s) | 365.478 / 372.885 | 274.444 / 278.184 |
+| Whole-process wall median (s) | 369.181 | 276.314 |
+| Process CPU, trials (s) | 360.993 / 371.207 | 272.981 / 276.577 |
+| Same-CPU steal delta, trials (s) | 127.25 / 131.83 | 79.95 / 80.19 |
+| Cgroup throttling delta, trials (s) | 9.202939 / 0.026710 | 0.000021 / 0.818928 |
+| Sampled peak RSS (decimal GB) | 3.849–3.850 | 3.848 |
+| Read/decode wall median (s) | 157.649 | 125.394 |
+| Preparation wall median (s) | 80.989 | 37.257 |
+| Combined read/decode + preparation (s) | 238.638 | 162.652 |
+| Runtime-value internal span median (s) | 26.100 | 22.700 |
+| Call-resolution internal span median (s) | 37.850 | 0.865 |
+
+The observed whole-process median reduction is 92.867 seconds (25.15%, about
+1.34 times throughput for this case). These are shared-host observations from
+two pairs, not a precise general speedup guarantee or attribution of every saved
+second. Unchanged guest execution also varied (median 103.906 to 90.225 seconds,
+including bootstrap), and the first baseline's cgroup throttling was substantial.
+The body-validation span varied 52.2/20.9 seconds before versus 16.7/18.1 after.
+Import-time typing moves some work out of preparation: candidate FnAbi query
+and compiler-value preparation spans had medians 0.742/3.215 seconds. Compare
+whole-process or combined decoding/preparation rather than preparation alone.
+JSON parsing medians were 5.675/6.385 seconds, so replacing the wire encoding
+alone still addresses little of this measured runtime.
+
+All four trials passed strict readiness with zero obligations and finalized
+exit0/cursor2640, with byte-identical consumed tapes, choice events and terminal
+output. All leak walks reported live39/roots22/edges17. This is one bounded
+execution comparison, not all-choice safety or whole-machine equivalence.
+The first attempted baseline reached the 1,200-second timeout during guest
+execution and is excluded from completed samples; its JSON parse alone took
+50.9 seconds. The successful retry used a 3,600-second limit per run. The earlier
+approximately 550-second hash-only median came from a different host interval
+and is not the baseline for this comparison. Raw logs, including the timed-out
+attempt, counters, results and immutable manifests remain in ignored
+`scratch/node-id-typed/`.
+
 ## Feature support outside the current acceptance scope
 
 The following support and integration work remains in the backlog, even though

@@ -77,7 +77,7 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
     let (parent,next) ← definition tables (← query.getObjVal? "parent_trait")
     tables := next
     let concrete ← typeId ctx (← query.getObjVal? "concrete_type")
-    let args ← decodeCompilerValue (← query.getObjVal? "rebased_args")
+    let args ← ctx.decodeCompilerValue (← query.getObjVal? "rebased_args")
     let (args,next) ← lowerCompilerGenericArgs ctx tables args
     tables := next
     let outcome := do CompilerInstance.decode ctx tables (← value query "resolved")

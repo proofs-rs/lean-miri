@@ -92,12 +92,12 @@ private def normalizedOperand (body : Json) (site : Site) : Except String Json :
 private def evidenceAt (ctx : LowerContext) (interner : CompilerSpanInterner) (fnInstance : CallInstance)
     (site : Site) (original normalized : Json) : Except String (Evidence × CompilerSpanInterner) := do
   unless (← field original "span") == (← field normalized "span") do throw "normalization changed constant source span"
-  let (source,interner) ← lowerCompilerConstOperandWithInterner ctx interner (← decodeCompilerValue original)
-  let (normal,interner) ← lowerCompilerConstOperandWithInterner ctx interner (← decodeCompilerValue normalized)
+  let (source,interner) ← lowerCompilerConstOperandWithInterner ctx interner (← ctx.decodeCompilerValue original)
+  let (normal,interner) ← lowerCompilerConstOperandWithInterner ctx interner (← ctx.decodeCompilerValue normalized)
   let evaluated ← field normalized "constant"
   unless (← evaluated.getObjValAs? String "status") == "supported" do throw "compiler Const::eval did not produce a value"
   let ty ← natural (← field normalized "type") "type_id"
-  let value ← lowerCompilerConstValue ctx ty (← decodeCompilerValue (← field evaluated "value"))
+  let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue (← field evaluated "value"))
   pure (⟨site, ⟨fnInstance,source.value,normal.value,normal.span,value⟩, original, normalized⟩,
     interner)
 

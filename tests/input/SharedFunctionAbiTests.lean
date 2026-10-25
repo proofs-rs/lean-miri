@@ -32,7 +32,7 @@ def main (args : List String) : IO Unit := do
     ("calling_convention", Json.null), ("can_unwind", toJson false),
     ("c_variadic", toJson false), ("fixed_count", toJson (0 : Nat))]
   let runtime := { runtime with source := {
-      runtime.source with sharedNodes := runtime.source.sharedNodes.push malformed } }
+      runtime.source with sharedNodes := runtime.source.sharedNodes.push malformed, compilerFunctionAbiTable := none } }
   let cache := CallResolution.prepareFunctionAbiCache runtime
   let expected := CallResolution.functionAbiJson runtime malformed
   unless !expected.isOk && CallResolution.functionAbiJson runtime malformed (some cache) == expected do

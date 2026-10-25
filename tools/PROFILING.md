@@ -21,6 +21,17 @@ readiness and preparation completed; it does not execute the guest, so
 `terminal_observed` and `finalized_exit_observed` remain false. Distinguish
 internal profiler spans from wall/CPU intervals observed by the parent process.
 
+For native decode-only measurements, build `lake build profile_runtime_decoder`,
+freeze `.lake/build/bin/profile_runtime_decoder` under the build lock, then pass
+that snapshot to `measure.py --executable`. It accepts only the input path and
+always enables decoder profiling, including separate `decoder.json_parse` and
+`decoder.runtime_value` spans. Strict readiness must pass; `decode_only: complete`
+reports decoding only, without lowering, preparation or guest execution. The
+collector records raw wall/CPU and host counters, but neither `terminal_observed`
+nor `preparation_only_observed` should be true for this entry point. Use the same
+alternating artifact/input/CPU protocol as a full run. This isolates decoder
+costs; it does not measure a whole-program speedup or a different wire format.
+
 To profile a complete execution, use
 `bash tools/run.sh INPUT.json --profile` (after any `--seed U64`),
 or pass `--profile` to `tools/measure.py`. This enables the existing
@@ -65,6 +76,20 @@ records execution mode, artifact hash and any build-log path. Both modes accept
 `--seed U64` and `--profile`; omitting the seed preserves the existing bounded
 diagnostic zero policy. Explicit Lean runners require a prebuilt module closure.
 
+To regenerate the large catch-panic workload after Rust/sysroot setup, build the
+current exporter and select main explicitly:
+
+```bash
+bash tools/build-exporter.sh
+LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1 bash tools/export-mir.sh \
+  --output scratch/catch-fresh.json --root main -- \
+  tests/repro/unwind/catch_guest.rs --crate-name catch_guest
+```
+
+Unscoped exports also emit generic closure templates as independent roots and
+can fail readiness. Use one unchanged export across every paired trial; a fresh
+export of the same Rust source need not match a historical artifact's bytes.
+
 For hotspot attribution, `--profile` additionally reports complete scheduler
 iterations taking at least 10ms as `execution.iteration_N.*`. The label records
 the starting canonical body index as well as definition ID and MIR/unwind
@@ -81,10 +106,24 @@ from application benchmarks, with the same CPU/thread controls. It demonstrates
 hash traversal scaling; it does not measure the fraction of decoder time spent
 in hashing or establish an application speedup.
 
-The decoder reuses structural JSON hashes computed from the validated transport
-DAG; full JSON comparisons and all validation phases remain. Noncanonical Raw
-objects fall back to ordinary hashing. `decodeRuntimeJsonReference` and
-`decodeJsonReference` run the uncached path for regression checks. Caller-location
-queries reuse a span index within each demand; runtime Location roots remain
-fresh per intrinsic evaluation. See [STATUS.md](../STATUS.md) for the measured input, limits and
-remaining costs, and `tools/check-performance-regressions.sh` for parity checks.
+The decoder retains the exporter's document-local shared-node IDs. Runtime-value
+memoization and validation visits use those IDs; inline values and cheap scalars
+are traversed directly. Context flags and diagnostic rebasing remain per
+occurrence. Structural hashes remain for value-based ABI deduplication, and
+noncanonical Raw objects retain the original full-value key comparison/hash.
+`decodeRuntimeJsonReference` and `decodeJsonReference` run the uncached traversal
+path for regression checks; neither bypasses validation.
+
+Import-time `decoder.compiler_abi_queries` and `decoder.compiler_values` spans
+prepare complete typed FnAbi/generic-argument/span projections for the native
+runtime input. Preparation still converts and validates ABI results against the
+current runtime. `prepare.typed_abi_index` replaces per-call linear scans of
+source ABI payloads. Since work moves from preparation into decoding, compare
+whole-process and combined decode/preparation costs rather than interpreting a
+shorter preparation span alone as a speedup. Diagnostic/reflected imports retain
+the schema-only document and use the compatibility path.
+
+Caller-location queries reuse a span index within each demand; runtime Location
+roots remain fresh per intrinsic evaluation. See [STATUS.md](../STATUS.md) for
+measured inputs, limits and remaining costs, and
+`tools/check-performance-regressions.sh` for parity checks.

@@ -61,11 +61,16 @@ structure LowerContext where
   /-- Raw source document used only to revalidate exact source-path roles while
   lowering. A bare caller-supplied path never discharges an obligation. -/
   sourceDocument : Option Lean.Json := none
+  compilerValueMemo : Option CompilerValueMemo := none
   /-- Optional exact-array certificates; hand-built contexts default to the
   original linear lookup behavior. -/
   typeIndex : Option (LowerContextTypeIndex typeIds) := none
   allocationIndex : Option (LowerContextAllocationIndex allocationIds) := none
   scalarIndex : Option (LowerContextScalarIndex scalarSizes) := none
+
+/-- Consume complete import-time compiler values; manual contexts decode directly. -/
+def LowerContext.decodeCompilerValue (ctx : LowerContext) (raw : Lean.Json) : Except String TypedValue :=
+  decodeCompilerValueWithMemo raw ctx.compilerValueMemo
 
 def LowerContext.containsTypeId (ctx : LowerContext) (id : TypeId) : Bool :=
   match ctx.typeIndex with
@@ -118,7 +123,7 @@ def LowerContext.ofTypes (types : Array TypeNode) : LowerContext := Id.run do
 semantics remain independent from syntax lowering and its obligations. -/
 def LowerContext.ofDocument (document : ImportDocumentCore) : LowerContext :=
   let ctx := (ofTypes document.types).withAllocationIds (document.allocations.map (·.id))
-  { ctx with sourceDocument := some document.raw }
+  { ctx with sourceDocument := some document.raw, compilerValueMemo := document.compilerValueMemo }
 
 set_option autoImplicit false in
 /-- A prepared lowering context tied to one exact decoded source document.

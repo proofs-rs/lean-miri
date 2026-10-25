@@ -26,6 +26,18 @@ def main : IO Unit := do
     let nodes := #[leaf, leaf, .arr #[reference 0, reference 1],
       Json.mkObj [("left",reference 2), ("right",reference 2)]]
     check (document nodes [("root",reference 3), ("inline",leaf)])
+  let leaf := Json.mkObj [("status", .str "unsupported")]
+  let input := document #[leaf, leaf] [("a",reference 0), ("b",reference 0),
+    ("c",reference 1), ("d",leaf)]
+  let .ok (_,root) := JsonTraversalCache.resolve input | throw (IO.userError "ID fixture failed")
+  let a := root.field "a" leaf
+  let b := root.field "b" leaf
+  let c := root.field "c" leaf
+  let d := root.field "d" leaf
+  unless a.identity == b.identity && !(a.identity == c.identity) &&
+      !(a.identity == d.identity) && a.key == c.key && a.key == d.key &&
+      a.shouldMemo && !d.shouldMemo do
+    throw (IO.userError "reference identity or distinct equal-node IDs were lost")
   let bad := document #[malformedObject] [("root",reference 0)]
   let .ok (_,node) := JsonTraversalCache.resolve bad | throw (IO.userError "malformed raw resolver failed")
   match node with

@@ -91,7 +91,7 @@ private def castType (context : CompilerFacts.Context) (tables : CompilerTables)
     let definition ← sourceDefinition node
     let tables := ensureDefinition tables definition
     let (args,tables) ← lowerCompilerGenericArgs context.loweringContext tables
-      (← decodeCompilerValue (← field value "generic_args"))
+      (← context.loweringContext.decodeCompilerValue (← field value "generic_args"))
     let definition ← lookupDefinitionId tables.definitions definition
     if node.shapeKind == .functionDefinition then pure (.fnDefinition definition args,tables)
     else pure (.closure definition args (← natural value "upvar_count"),tables)

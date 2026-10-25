@@ -9,7 +9,7 @@ private def source (program : LoweredProgram) : Except String TypedValue := do
   let session ← program.input.raw.getObjVal? "compiler_session_queries"
   let span ← session.getObjVal? "root_span"
   unless (← (← span.getObjVal? "is_dummy").getBool?) do throw "compiler root_span is not DUMMY_SP"
-  decodeCompilerValue span
+  decodeCompilerValueWithMemo span program.input.compilerValueMemo
 
 def prepare (program : LoweredProgram) : Except String LoweredProgram := do
   let (_,tables) ← lowerCompilerSpan program.compilerTables (← source program)
