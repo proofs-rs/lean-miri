@@ -13,18 +13,18 @@ entry=next(x for x in lock['files'] if x['path']==path)
 assert hashlib.sha256((ROOT/path).read_bytes()).hexdigest()==entry['sha256']
 block=(ROOT/path).read_text().split('pub const MIRI_DEFAULT_ARGS: &[&str] = &[',1)[1].split('];',1)[0]
 defaults=re.findall(r'^\s*"([^"]+)"',block,re.M)
-env={**os.environ,'RUSTUP_HOME':str(ROOT/'.rustup'),'CARGO_HOME':str(ROOT/'.cargo')}
-env['PATH']=str(ROOT/'.rustup/toolchains/miri-exporter-8144389c895d/bin')+':'+env['PATH']
-env['LD_LIBRARY_PATH']=str(ROOT/'.rustup/toolchains/miri-exporter-8144389c895d/lib')
+env=dict(os.environ)
+sysroot=Path(env['MIRI_SYSROOT'])
+exporter=env.get('EXPORTER_BIN', str(ROOT/'exporter/target/debug/lean-miri-mir-exporter'))
 canonical=lambda value:json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False)
 with tempfile.TemporaryDirectory() as tmp:
     output=Path(tmp)/'scope.json'
-    command=[str(ROOT/'exporter/target/debug/lean-miri-mir-exporter'),'--output',str(output),'--root','add_one','exporter/fixtures/scope/simple.rs','--crate-type=lib','--crate-name=producer_check']
+    command=[exporter,'--output',str(output),'--root','add_one','exporter/fixtures/scope/simple.rs','--crate-type=lib','--crate-name=producer_check']
     absent={k:v for k,v in env.items() if k!='MIRI_SYSROOT'}
     rejected=subprocess.run(command,cwd=ROOT,env=absent,text=True,capture_output=True)
     assert rejected.returncode!=0 and 'requires explicit --sysroot or MIRI_SYSROOT' in rejected.stderr
     assert not output.exists()
-    env['MIRI_SYSROOT']=str(ROOT/'scratch/miri-sysroot')
+    env['MIRI_SYSROOT']=str(sysroot)
     subprocess.run(command,cwd=ROOT,env=env,check=True)
     doc=load_mir_document(output);settings=doc['producer']['input_settings']
     assert settings['status']=='supported'
@@ -34,7 +34,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert settings['mir_opt_level']==0
     assert settings['mir_preserve_ub'] and settings['extra_const_ub_checks'] and settings['always_encode_mir']
     assert settings['deduplicate_diagnostics'] is False
-    assert Path(settings['sysroot_path']).resolve()==(ROOT/'scratch/miri-sysroot').resolve()
+    assert Path(settings['sysroot_path']).resolve()==sysroot.resolve()
     artifacts=settings['artifacts'];assert artifacts
     for artifact in artifacts:
         actual=Path(artifact['path'])

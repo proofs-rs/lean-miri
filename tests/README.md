@@ -151,8 +151,9 @@ The ordered list is maintained in [the script](../tools/check.sh). Its phases ar
    runtime registry, build frontend and choice policy; audit axioms and source links.
 3. Explicitly run selected control-flow, call/stack, layout/value, memory,
    Tree Borrows, atomic, synchronization and data-structure tests.
-4. Run `exporter/test-fixture.sh` and `exporter/test-instance-mir-ctfe-fixture.sh`.
-   **The first script also calls the variadic and call-transfer fixture scripts.**
+4. Run pinned `cargo test --locked --offline --manifest-path exporter/Cargo.toml`
+   for exporter Rust/Python unit tests, all four fixture scripts and four producer checks. See the
+   [exporter test instructions](../exporter/README.md#tests).
 5. Run `input/run.sh`, `eval_core/run.sh`, `frontend/run.sh`,
    `runtime_metadata/run.py` and `execution/run{,_calls,_globals}.py`.
 6. Compare the extracted obligation inventory with the checked-in fixture.
@@ -250,24 +251,24 @@ collect every feature test in the directories above.
 
 ### Exporter tests live outside `tests/`
 
-[exporter/tests/](../exporter/tests/) holds Python schema/contract validators and
-transport tests; [exporter/fixtures/](../exporter/fixtures/) holds Rust inputs and
-small Cargo projects. The four `exporter/test-*.sh` scripts drive compiler builds,
-exports and validation. All four are reached directly or indirectly by
-`tools/check.sh`; the standalone transport/auxiliary Python tools are not thereby
-all discovered.
+[exporter/tests/](../exporter/tests/) holds Python schema/contract validators,
+transport unit tests and the Cargo integration test entry point.
+[exporter/fixtures/](../exporter/fixtures/) holds Rust inputs and small Cargo
+projects. The allocator-world Rust fixtures shared by exporter and Lean input
+checks live under `tests/fixtures/`.
 
-`cargo test --manifest-path exporter/Cargo.toml` does not run these shell/Python
-fixture suites. It runs Rust unit tests, including the payload-sharing tests in
-`exporter/src/payload_sharing.rs`, using the pinned rustc toolchain. Those Rust
-unit tests are also not run by `check.sh`, which builds the exporter for its
-fixture drivers. Cargo's Rust test harness and these integration drivers currently
-have separate entry points. Use the two top-level fixture scripts documented in
-the [exporter guide](../exporter/README.md), plus relevant standalone checks.
+Pinned `cargo test --locked --offline --manifest-path exporter/Cargo.toml` runs
+Rust unit tests, Python unittest discovery, the four top-level shell fixture
+scripts and four producer checks: settings/artifact hashes, primitive ranges,
+function/vtable AllocId crosswalks, and static/TypeId crosswalks. `tools/check.sh`
+uses this entry point. See the [exporter guide](../exporter/README.md#tests) for
+setup, focused invocations and standalone scripts.
 
-The producer tests under `tests/producer/` cross that boundary: they inspect
-actual compiler evidence and sometimes invoke Lean. Conversely, a test that uses
-the exporter to generate input may primarily test the Lean consumer or interpreter.
+`tests/producer/primitive_ranges.py` retains the Lean decoder/runtime boundary
+checks and obtains its input from the exporter-owned primitive-range check.
+`tests/input/run.sh` uses the shared allocator-world fixtures in `tests/fixtures/`
+and the exporter validators before testing their Lean consumers. These consumer
+checks remain separate from Cargo's exporter suite.
 
 ## Standalone checks that need explicit selection
 
@@ -282,8 +283,7 @@ when changing it.
 | `python3 tests/aes/source_compare.py` | Compare pinned AES fixslice bodies; requires offline vendor configuration at `scratch/cargo-vendor.toml` and matching crates. |
 | `python3 tests/random_memory/source_compare.py` | Extracted gen_random outer-body ordering and failure propagation; RNG/host/write leaves are fixtures. |
 | `python3 tests/producer/primitive_ranges.py` | Genuine u128/niche metadata and Lean decoder boundaries; requires built debug exporter and MIR sysroot. |
-| `python3 tests/producer/settings.py` | Compiler settings, consumed artifact hashes and rejection of missing sysroot; requires built debug exporter and MIR sysroot. |
-| `cargo +miri-exporter-8144389c895d test --manifest-path exporter/Cargo.toml --locked --offline` | Rust exporter unit tests; needs the pinned toolchain environment and offline dependencies. |
+| `cargo +miri-exporter-8144389c895d test --manifest-path exporter/Cargo.toml --locked --offline` | Rust/Python exporter tests, four fixture scripts and four producer checks; included in `check.sh`. Requires pinned toolchain, MIR sysroot and offline dependencies. |
 | `python3 -m unittest discover -s exporter/tests -p 'test_*.py' -v` | Python shared-transport loader unit tests, outside the main discovery root. |
 | `lake env lean MiriTests/Cast/Typed.lean` | Cast dispatcher, check order and size-mismatch cases; now included in `lake build MiriTests`. |
 | `lake env lean --run MiriTests/Native/BytesOwnership.lean` | Included in `lake exe miri_tests`: host-byte ownership, release and copy-failure cleanup using fixture hosts. “Native” here names the boundary, not an execution mode. |

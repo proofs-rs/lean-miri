@@ -29,7 +29,7 @@ fn main() {
         .unwrap_or_else(|| panic!("build rustc did not report commit-hash: {version}"));
     assert_eq!(
         commit, PINNED_COMMIT,
-        "exporter must be built by the exact pinned rustc"
+        "exporter must be built by the exact pinned rustc; from the repository root run bash tools/setup-rustc-exporter.sh, then cargo +miri-exporter-8144389c895d test --locked --manifest-path exporter/Cargo.toml (see docs/development.md)"
     );
     let sysroot = output(
         Command::new(&rustc).arg("--print").arg("sysroot"),

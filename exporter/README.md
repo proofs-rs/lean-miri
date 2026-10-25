@@ -12,7 +12,7 @@ export MIRI_SYSROOT="$PWD/scratch/miri-sysroot"
 toolchain="$RUSTUP_HOME/toolchains/miri-exporter-8144389c895d"
 export PATH="$toolchain/bin:$CARGO_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$toolchain/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-cargo +miri-exporter-8144389c895d build --locked --manifest-path exporter/Cargo.toml
+"$CARGO_HOME/bin/cargo" +miri-exporter-8144389c895d build --locked --manifest-path exporter/Cargo.toml
 mkdir -p scratch/exports
 exporter/target/debug/lean-miri-mir-exporter --output scratch/exports/add-one.json \
   --root add_one -- exporter/fixtures/scope/simple.rs --crate-type=lib --crate-name=scoped_closure
@@ -64,6 +64,40 @@ can record SHA-256 of adjacent inputs, but it does not prove a fully hermetic
 build including macros, includes and environment. FNV fingerprints check
 consistency and are not cryptographic hashes.
 
-Fixture checks are `bash exporter/test-fixture.sh` and
-`bash exporter/test-instance-mir-ctfe-fixture.sh`. Their prerequisites are the
-same as the root full checks.
+## Tests
+
+After the toolchain and MIR-enabled sysroot setup above, run from the repository
+root with the same environment:
+
+```bash
+"$CARGO_HOME/bin/cargo" +miri-exporter-8144389c895d test --locked --offline --manifest-path exporter/Cargo.toml
+```
+
+This runs the Rust unit tests, Python unittest discovery under `exporter/tests/`,
+all four `test-*.sh` fixture scripts, and four producer checks, using Cargo's
+executable for the selected
+profile and target directory. Failures include the child process output. Fixture
+tests require bash, Python 3, the pinned toolchain and a matching MIR-enabled
+sysroot; missing prerequisites fail with setup instructions rather than skip.
+Run `bash tools/setup-rustc-exporter.sh` and `bash tools/setup-miri-reference.sh`
+from the repository root to prepare them (see the development guide).
+
+The shell scripts remain available for focused checks. `test-fixture.sh` also
+calls the variadic and call-transfer scripts, preserving its standalone coverage;
+Cargo additionally exposes those two as individually selectable tests. For example,
+append `--test suites call_transfer_fixture` to the Cargo command above. Cargo
+passes `EXPORTER_BIN` so fixture scripts do not rebuild the exporter; standalone
+scripts can also use this override. Each fixture uses temporary output directories.
+
+The producer checks cover input settings and consumed artifact hashes, exact
+u128/niche ranges, function/vtable allocator-world crosswalks, and static/TypeId
+crosswalks. Their validators live under `exporter/`. The allocator-world Rust
+fixtures shared with Lean input checks live under `tests/fixtures/`. Run one
+with `--test suites producer_settings`, `primitive_ranges`, `selected_alloc_world`
+or `selected_static_typeid`. For standalone use, after building the exporter,
+run `bash exporter/tests/run-producer.sh NAME` (`settings` selects the settings
+check). An optional second argument supplies an output JSON path; the Lean
+primitive-range driver uses this to consume the same checked export.
+
+Lean decoder, frontend and execution comparisons under root `tests/` remain
+separate integration checks; this command does not run the entire repository suite.
