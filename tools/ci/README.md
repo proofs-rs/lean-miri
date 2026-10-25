@@ -75,12 +75,47 @@ each suite; `complete: false` indicates an interrupted run. The GitHub step
 summary shows a suite table after completion. Setup has its own `/usr/bin/time`
 record and machine/toolchain details in `environment.txt`.
 
-This first CI uses fresh builds without restored toolchain, Cargo or Lake caches,
-so cache state is consistent across runs. Suite timings include the builds and
-fixture generation performed by their existing scripts; `setup.log` measures
-installation/reference preparation separately. Timings on shared runners are
-diagnostic, not a controlled interpreter benchmark. No speed threshold determines
-correctness. Use `tools/PROFILING.md` for performance claims.
+`check.sh` records each of its 66 commands separately when `CI_TIMING_FILE` is
+set. This separates the main Lean build, the runtime registry, axiom audit,
+individual component drivers, exporter Cargo tests and fresh execution drivers.
+Setup, independent-lane builds and fresh exporter/libc builds also record their
+commands. Normal local execution without that variable invokes the original
+commands directly and retains the script's fail-fast behavior.
+
+Each `*.steps.jsonl` contains a start and finish event with exact arguments,
+category, wall seconds, child user/system CPU seconds, exit code and maximum
+child RSS (KiB on Linux). A start without a finish is marked interrupted rather
+than successful. The runner includes these records in `results.json`, along with
+setup substeps, and adds expandable command tables to the GitHub summary. The
+RSS value is the largest child measurement, not summed process-tree memory.
+Component-driver times still include any internal builds and fixture generation;
+they are not pure interpreter execution times.
+
+## Lean build reuse
+
+The workflow restores `.lake/build` into each independent job's own checkout.
+It never restores successful test logs/results, generated guest exports, Rust
+toolchains or the reference sysroot. Keys separate lanes, OS/architecture, runner
+image and C compiler/linker identity, Lean/Lake configuration and native sources.
+An exact key also includes the Lean source hashes. A compatible older source
+snapshot can be restored as an incremental-build starting point; Lake is always
+invoked to validate dependency traces and rebuild changed modules.
+
+Every test command still executes on an exact cache hit, including
+`lake exe miri_tests`, external comparisons and the axiom audit. Only successful
+lanes save a new cache; failed or interrupted lanes do not publish their build
+directories. GitHub caches are immutable snapshots copied into isolated jobs,
+not shared writable build directories. Missing/evicted caches are normal cold
+builds. Native executables built during a successful lane are retained as well.
+
+`results.json` records the requested/restored cache keys and exact-hit state.
+Compare timings with the same cache state: cold compilation and warm execution
+are different measurements. Cache restore/save are separate workflow steps, so
+their transfer cost is visible. Rust/Miri/sysroot setup still runs each time.
+Actual cache savings and transfer/storage costs need post-merge measurements;
+no speedup is claimed from configuration alone. Timings on shared runners remain
+diagnostic. No speed threshold determines correctness; use `tools/PROFILING.md`
+for performance claims.
 
 The connected-libc build records Cargo's reported archive in
 `scratch/connected-libc-target/libc-rlib.path`. Timezone consumes that exact path;

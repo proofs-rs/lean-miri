@@ -41,12 +41,35 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ripgrep
+      - name: Compute compatible Lean cache key
+        id: lean-cache-key
+        run: |
+          abi=$( { cc --version; ld --version; printf '%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"; } | sha256sum | cut -d ' ' -f 1)
+          echo "prefix=lean-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.lane }}-${abi}-${{ hashFiles('lean-toolchain', 'lakefile.lean', 'lake-manifest.json', 'native/**') }}-" >> "$GITHUB_OUTPUT"
+      - name: Restore Lean build artifacts
+        id: lean-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .lake/build
+          key: ${{ steps.lean-cache-key.outputs.prefix }}${{ hashFiles('Miri.lean', 'Miri/**/*.lean', 'MiriTests.lean', 'MiriTests/**/*.lean', 'tools/*.lean') }}
+          restore-keys: ${{ steps.lean-cache-key.outputs.prefix }}
       - name: Prepare pinned tools and reference
         run: |
           mkdir -p scratch/ci
+          export CI_TIMING_FILE="$PWD/scratch/ci/setup.steps.jsonl"
           /usr/bin/time -v bash tools/ci/setup.sh '${{ matrix.lane }}' 2>&1 | tee scratch/ci/setup.log
       - name: Run comparisons and assertions
+        env:
+          CI_LEAN_CACHE_HIT: ${{ steps.lean-cache.outputs.cache-hit }}
+          CI_LEAN_CACHE_KEY: ${{ steps.lean-cache.outputs.cache-primary-key }}
+          CI_LEAN_CACHE_RESTORED_KEY: ${{ steps.lean-cache.outputs.cache-matched-key }}
         run: python3 tools/ci/run.py '${{ matrix.lane }}'
+      - name: Save successful Lean build artifacts
+        if: success() && steps.lean-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .lake/build
+          key: ${{ steps.lean-cache.outputs.cache-primary-key }}
       - name: Retain results and diagnostic logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
