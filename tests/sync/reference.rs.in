@@ -1,0 +1,216 @@
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
+use std::marker::PhantomData;
+use std::ops::Not;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::rc::Rc;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ThreadId(usize);
+
+type FxHashMap<K, V> = HashMap<K, V>;
+
+#[derive(Clone, Debug, Default)]
+struct VClock(Vec<u32>);
+
+impl VClock {
+    fn join(&self, other: &Self) -> Self {
+        let len = self.0.len().max(other.0.len());
+        let mut values = vec![0; len];
+        for (index, value) in self.0.iter().enumerate() { values[index] = *value; }
+        for (index, value) in other.0.iter().enumerate() {
+            values[index] = values[index].max(*value);
+        }
+        Self(values)
+    }
+}
+
+macro_rules! trace { ($($argument:tt)*) => {{}}; }
+
+// @MIRI_MUTEX_STATE@
+
+struct MutexRef(Rc<RefCell<Mutex>>);
+
+// @MIRI_RWLOCK_STATE@
+
+impl RwLock {
+    // @MIRI_RWLOCK_IS_LOCKED@
+
+    // @MIRI_RWLOCK_IS_WRITE_LOCKED@
+}
+
+struct RwLockRef(Rc<RefCell<RwLock>>);
+
+#[derive(Clone, Copy)]
+enum BlockReason { Mutex }
+
+struct DummyThreads {
+    active: ThreadId,
+    unblocked: RefCell<Vec<ThreadId>>,
+}
+
+impl DummyThreads {
+    fn active_thread(&self) -> ThreadId { self.active }
+}
+
+struct DummyMachine { threads: DummyThreads }
+
+#[derive(Debug)]
+struct InterpError<'tcx>(PhantomData<&'tcx ()>);
+
+type InterpResult<'tcx, T = ()> = Result<T, InterpError<'tcx>>;
+
+fn interp_ok<'tcx, T>(value: T) -> InterpResult<'tcx, T> { Ok(value) }
+
+struct DummyContext<'tcx> {
+    machine: DummyMachine,
+    clock: RefCell<VClock>,
+    _lifetime: PhantomData<&'tcx ()>,
+}
+
+impl<'tcx> DummyContext<'tcx> {
+    fn active_thread(&self) -> ThreadId { self.machine.threads.active_thread() }
+
+    fn acquire_clock(&self, clock: &VClock) -> InterpResult<'tcx> {
+        let joined = self.clock.borrow().join(clock);
+        *self.clock.borrow_mut() = joined;
+        Ok(())
+    }
+
+    fn release_clock<R>(&self, callback: impl FnOnce(&VClock) -> R)
+        -> InterpResult<'tcx, Option<R>> {
+        let mut current = self.clock.borrow_mut();
+        let result = callback(&current);
+        if current.0.is_empty() { current.0.push(1); }
+        else { current.0[0] += 1; }
+        Ok(Some(result))
+    }
+
+    fn unblock_thread(&self, thread: ThreadId, _reason: BlockReason)
+        -> InterpResult<'tcx> {
+        self.machine.threads.unblocked.borrow_mut().push(thread);
+        Ok(())
+    }
+}
+
+struct DummyInterp<'tcx> { context: DummyContext<'tcx> }
+
+impl<'tcx> DummyInterp<'tcx> {
+    fn eval_context_ref(&self) -> &DummyContext<'tcx> { &self.context }
+
+    fn eval_context_mut(&mut self) -> &mut DummyContext<'tcx> { &mut self.context }
+
+    // @MIRI_MUTEX_LOCK@
+
+    // @MIRI_MUTEX_UNLOCK@
+
+    // @MIRI_RWLOCK_READER_LOCK@
+
+    // @MIRI_RWLOCK_WRITER_LOCK@
+}
+
+fn main() {
+    let interpreter = DummyInterp { context: DummyContext {
+        machine: DummyMachine { threads: DummyThreads {
+            active: ThreadId(0), unblocked: RefCell::new(Vec::new()),
+        }},
+        clock: RefCell::new(VClock::default()),
+        _lifetime: PhantomData,
+    }};
+    let lock = MutexRef(Rc::new(RefCell::new(Mutex {
+        owner: None,
+        lock_count: 0,
+        queue: VecDeque::new(),
+        clock: VClock(vec![0, 3]),
+    })));
+    interpreter.mutex_lock(&lock).unwrap();
+    interpreter.mutex_lock(&lock).unwrap();
+    let state = lock.0.borrow();
+    let owner = match state.owner {
+        Some(thread) => format!("some {}", thread.0),
+        None => "none".to_owned(),
+    };
+    let acquired = match interpreter.context.clock.borrow().0.get(1).copied() {
+        Some(time) => format!("some {time}"),
+        None => "none".to_owned(),
+    };
+    println!("sync:mutex-lock owner={} count={} acquired={}", owner,
+        state.lock_count, acquired);
+    drop(state);
+
+    let mut other = DummyInterp { context: DummyContext {
+        machine: DummyMachine { threads: DummyThreads {
+            active: ThreadId(1), unblocked: RefCell::new(Vec::new()),
+        }},
+        clock: RefCell::new(VClock::default()),
+        _lifetime: PhantomData,
+    }};
+    let owner_check = catch_unwind(AssertUnwindSafe(|| other.mutex_lock(&lock)));
+    println!("sync:mutex-owner-check={}", if owner_check.is_err() { "reject" } else { "accept" });
+    let wrong_unlock = other.mutex_unlock(&lock).unwrap();
+    println!("sync:mutex-wrong-owner-unlock={}", if wrong_unlock.is_none() { "none" } else { "some" });
+
+    let overflow = MutexRef(Rc::new(RefCell::new(Mutex {
+        owner: Some(ThreadId(0)), lock_count: usize::MAX,
+        queue: VecDeque::new(), clock: VClock::default(),
+    })));
+    let overflow_result = catch_unwind(AssertUnwindSafe(|| interpreter.mutex_lock(&overflow)));
+    println!("sync:mutex-overflow={}", if overflow_result.is_err() { "reject" } else { "accept" });
+
+    let mut unlock_interpreter = DummyInterp { context: DummyContext {
+        machine: DummyMachine { threads: DummyThreads {
+            active: ThreadId(0), unblocked: RefCell::new(Vec::new()),
+        }},
+        clock: RefCell::new(VClock(vec![4])),
+        _lifetime: PhantomData,
+    }};
+    let unlock_lock = MutexRef(Rc::new(RefCell::new(Mutex {
+        owner: Some(ThreadId(0)), lock_count: 2,
+        queue: VecDeque::new(), clock: VClock::default(),
+    })));
+    let inner = unlock_interpreter.mutex_unlock(&unlock_lock).unwrap();
+    let inner_state = unlock_lock.0.borrow();
+    println!("sync:mutex-unlock-inner={}:{}:some {}", inner.map(|count| format!("some {count}")).unwrap_or("none".to_owned()),
+        inner_state.lock_count, unlock_interpreter.context.clock.borrow().0[0]);
+    drop(inner_state);
+    let outer = unlock_interpreter.mutex_unlock(&unlock_lock).unwrap();
+    let outer_state = unlock_lock.0.borrow();
+    println!("sync:mutex-unlock-outer={}:{}:{}:{}", outer.map(|count| format!("some {count}")).unwrap_or("none".to_owned()),
+        outer_state.owner.map(|thread| thread.0).map(|id| format!("some {id}")).unwrap_or("none".to_owned()),
+        outer_state.clock.0.get(0).copied().unwrap_or(0),
+        format!("some {}", unlock_interpreter.context.clock.borrow().0[0]));
+
+    let reader_interp = DummyInterp { context: DummyContext {
+        machine: DummyMachine { threads: DummyThreads {
+            active: ThreadId(0), unblocked: RefCell::new(Vec::new()),
+        }},
+        clock: RefCell::new(VClock::default()), _lifetime: PhantomData,
+    }};
+    let reader_lock = RwLockRef(Rc::new(RefCell::new(RwLock {
+        writer: None, readers: HashMap::new(), writer_queue: VecDeque::new(),
+        reader_queue: VecDeque::new(), clock_unlocked: VClock(vec![0, 4]),
+        clock_current_readers: VClock::default(),
+    })));
+    reader_interp.rwlock_reader_lock(&reader_lock).unwrap();
+    let reader_state = reader_lock.0.borrow();
+    println!("sync:rwlock-reader-lock readers={} acquired=some {}",
+        reader_state.readers.get(&ThreadId(0)).copied().unwrap_or(0),
+        reader_interp.context.clock.borrow().0.get(1).copied().unwrap_or(0));
+
+    let writer_interp = DummyInterp { context: DummyContext {
+        machine: DummyMachine { threads: DummyThreads {
+            active: ThreadId(0), unblocked: RefCell::new(Vec::new()),
+        }},
+        clock: RefCell::new(VClock::default()), _lifetime: PhantomData,
+    }};
+    let writer_lock = RwLockRef(Rc::new(RefCell::new(RwLock {
+        writer: None, readers: HashMap::new(), writer_queue: VecDeque::new(),
+        reader_queue: VecDeque::new(), clock_unlocked: VClock(vec![0, 5]),
+        clock_current_readers: VClock::default(),
+    })));
+    writer_interp.rwlock_writer_lock(&writer_lock).unwrap();
+    let writer_state = writer_lock.0.borrow();
+    println!("sync:rwlock-writer-lock owner=some {} acquired=some {}",
+        writer_state.writer.map(|thread| thread.0).unwrap_or(0),
+        writer_interp.context.clock.borrow().0.get(1).copied().unwrap_or(0));
+}

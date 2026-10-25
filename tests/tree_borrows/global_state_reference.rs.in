@@ -1,0 +1,96 @@
+//! Standalone shim for selected exact GlobalStateInner declarations/methods.
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
+use std::num::NonZero;
+use std::fmt;
+
+mod source_global {
+    use super::{fmt, Hash, HashMap, HashSet, NonZero, RefCell};
+
+    // @PINNED_BOR_TAG@
+
+    #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+    pub struct AllocId(pub u64);
+
+    // @PINNED_PROTECTOR_KIND@
+
+    pub struct FxHashMap<K, V>(HashMap<K, V>);
+    impl<K, V> Default for FxHashMap<K, V> {
+        fn default() -> Self { Self(HashMap::new()) }
+    }
+    impl<K: Eq + Hash, V> FxHashMap<K, V> {
+        fn get(&self, key: &K) -> Option<&V> { self.0.get(key) }
+        fn remove(&mut self, key: &K) -> Option<V> { self.0.remove(key) }
+        fn try_insert(&mut self, key: K, value: V) -> Result<(), ()> {
+            if self.0.contains_key(&key) { Err(()) }
+            else { self.0.insert(key, value); Ok(()) }
+        }
+    }
+
+    pub struct BorrowTrackerFrame {
+        protected_tags: Vec<(AllocId, BorTag)>,
+    }
+
+    pub mod machine {
+        use super::BorrowTrackerFrame;
+        pub struct FrameExtra<'a> {
+            pub borrow_tracker: Option<&'a BorrowTrackerFrame>,
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub enum NonHaltingDiagnostic {
+        CreatedPointerTag(NonZero<u64>, Option<()>, Option<()>),
+    }
+
+    pub struct MiriMachine<'a> {
+        events: RefCell<&'a mut Vec<NonHaltingDiagnostic>>,
+    }
+    impl MiriMachine<'_> {
+        fn emit_diagnostic(&self, event: NonHaltingDiagnostic) { self.events.borrow_mut().push(event); }
+    }
+
+    macro_rules! trace { ($($arg:tt)*) => {{}} }
+
+    pub struct GlobalStateInner {
+        next_ptr_tag: BorTag,
+        root_ptr_tags: FxHashMap<AllocId, BorTag>,
+        protected_tags: FxHashMap<BorTag, ProtectorKind>,
+        tracked_pointer_tags: HashSet<BorTag>,
+    }
+
+    impl GlobalStateInner {
+        // @PINNED_NEW_PTR_END_CALL_ROOT_TAG@
+    }
+
+    pub fn global_state_rows() {
+        let mut state = GlobalStateInner {
+            next_ptr_tag: BorTag::one(),
+            root_ptr_tags: FxHashMap::default(),
+            protected_tags: FxHashMap::default(),
+            tracked_pointer_tags: HashSet::new(),
+        };
+        let first = state.new_ptr();
+        let second = state.new_ptr();
+        let alloc = AllocId(11);
+        let mut events = Vec::new();
+        let machine = MiriMachine { events: RefCell::new(&mut events) };
+        let root = state.root_ptr_tag(alloc, &machine);
+        let same_root = state.root_ptr_tag(alloc, &machine);
+        state.protected_tags.0.insert(first, ProtectorKind::StrongProtector);
+        state.protected_tags.0.insert(second, ProtectorKind::WeakProtector);
+        let frame = BorrowTrackerFrame {
+            protected_tags: vec![(alloc, first)],
+        };
+        let frame_extra = machine::FrameExtra { borrow_tracker: Some(&frame) };
+        state.end_call(&frame_extra);
+        let first_protected = state.protected_tags.get(&first).is_some();
+        let second_protected = state.protected_tags.get(&second).is_some();
+        println!("global-tags {} {} {} {}", first.get(), second.get(), root.get(), same_root.get());
+        println!("global-end-call {} {}", first_protected, second_protected);
+        println!("global-root-count {}", state.root_ptr_tags.0.len());
+    }
+}
+
+fn main() { source_global::global_state_rows(); }

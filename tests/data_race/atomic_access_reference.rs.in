@@ -1,0 +1,116 @@
+use std::marker::PhantomData;
+
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+struct Size(u64);
+impl Size { fn bytes(self) -> u64 { self.0 } }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Align(u8);
+impl Align {
+    fn from_bytes(bytes: u64) -> Result<Self, &'static str> {
+        if bytes == 0 { return Ok(Align(0)); }
+        if !bytes.is_power_of_two() { return Err("not power of two"); }
+        let pow2 = bytes.trailing_zeros() as u8;
+        if pow2 > 29 { return Err("too large"); }
+        Ok(Align(pow2))
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AtomicReadOrd { Relaxed, Acquire, SeqCst }
+#[derive(Clone, Copy)]
+enum AtomicAccessType { Load(AtomicReadOrd), Store, Rmw }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mutability { Not, Mut }
+
+#[derive(Clone, Debug)]
+enum Failure { Alignment, Pointer, Mutability, Ub }
+type InterpResult<'tcx, T = ()> = Result<T, Failure>;
+fn interp_ok<T>(value: T) -> InterpResult<'static, T> { Ok(value) }
+
+macro_rules! throw_ub_format { ($($argument:tt)*) => {{ return Err(Failure::Ub); }}; }
+
+#[derive(Clone, Copy)]
+struct Layout { size: Size }
+struct MPlaceTy<'tcx> { layout: Layout, _marker: PhantomData<&'tcx ()> }
+impl MPlaceTy<'_> { fn ptr(&self) -> usize { 0 } }
+
+struct DataLayout { pointer_size: Size }
+impl DataLayout { fn pointer_size(&self) -> Size { self.pointer_size } }
+struct TyCtxt { layout: DataLayout }
+impl TyCtxt { fn data_layout(&self) -> &DataLayout { &self.layout } }
+
+struct MiriInterpCx {
+    tcx: TyCtxt,
+    alignment: Result<(), Failure>,
+    allocation: Option<u32>,
+    mutability: Result<Mutability, Failure>,
+}
+impl MiriInterpCx {
+    fn eval_context_ref(&self) -> &Self { self }
+    fn check_ptr_align(&self, _ptr: usize, _align: Align) -> InterpResult<'static> {
+        self.alignment.clone()
+    }
+    fn ptr_try_get_alloc_id(&self, _ptr: usize, _size: u64) -> Option<(u32, u64, ())> {
+        self.allocation.map(|id| (id, 0, ()))
+    }
+    fn get_alloc_mutability(&self, _alloc_id: u32) -> InterpResult<'static, Mutability> {
+        self.mutability.clone()
+    }
+}
+
+trait MiriInterpCxExt {
+    fn eval_context_ref(&self) -> &MiriInterpCx;
+}
+impl MiriInterpCxExt for MiriInterpCx {
+    fn eval_context_ref(&self) -> &MiriInterpCx { self }
+}
+
+trait EvalContextExt<'tcx>: MiriInterpCxExt {
+    // @MIRI_ATOMIC_ACCESS_CHECK@
+}
+impl EvalContextExt<'_> for MiriInterpCx {}
+
+fn code(result: std::thread::Result<InterpResult<'static>>) -> &'static str {
+    match result {
+        Ok(Ok(())) => "ok",
+        Ok(Err(Failure::Alignment)) => "alignment",
+        Ok(Err(Failure::Pointer)) => "pointer",
+        Ok(Err(Failure::Mutability)) => "mutability",
+        Ok(Err(Failure::Ub)) => "ub",
+        Err(_) => "panic",
+    }
+}
+
+fn run(name: &str, size: u64, pointer_size: u64, access: AtomicAccessType,
+    mutability: Mutability, alignment: Result<(), Failure>, allocation: Option<u32>) {
+    let cx = MiriInterpCx {
+        tcx: TyCtxt { layout: DataLayout { pointer_size: Size(pointer_size) } },
+        alignment,
+        allocation,
+        mutability: Ok(mutability),
+    };
+    let place = MPlaceTy { layout: Layout { size: Size(size) }, _marker: PhantomData };
+    let result = std::panic::catch_unwind(|| cx.atomic_access_check(&place, access));
+    println!("atomic:{name}:{}", code(result));
+}
+
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+    run("readonly-small-relaxed", 4, 8, AtomicAccessType::Load(AtomicReadOrd::Relaxed),
+        Mutability::Not, Ok(()), Some(1));
+    run("readonly-large-relaxed", 16, 8, AtomicAccessType::Load(AtomicReadOrd::Relaxed),
+        Mutability::Not, Ok(()), Some(1));
+    run("readonly-small-acquire", 4, 8, AtomicAccessType::Load(AtomicReadOrd::Acquire),
+        Mutability::Not, Ok(()), Some(1));
+    run("readonly-store", 4, 8, AtomicAccessType::Store,
+        Mutability::Not, Ok(()), Some(1));
+    run("readonly-rmw", 4, 8, AtomicAccessType::Rmw,
+        Mutability::Not, Ok(()), Some(1));
+    run("mutable-large-relaxed", 16, 8, AtomicAccessType::Load(AtomicReadOrd::Relaxed),
+        Mutability::Mut, Ok(()), Some(1));
+    run("alignment-before-resolution", 4, 8, AtomicAccessType::Load(AtomicReadOrd::Relaxed),
+        Mutability::Mut, Err(Failure::Alignment), None);
+    run("allocation-expect", 4, 8, AtomicAccessType::Load(AtomicReadOrd::Relaxed),
+        Mutability::Mut, Ok(()), None);
+}

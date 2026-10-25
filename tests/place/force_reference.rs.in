@@ -1,0 +1,49 @@
+#![allow(dead_code, unused_variables)]
+type R<T> = Result<T, &'static str>;
+#[derive(Clone, Copy)] enum Immediate { Uninit, Scalar(u32) }
+#[derive(Clone, Copy)] enum Operand { Immediate(Immediate), Indirect(MemPlace) }
+#[derive(Clone, Copy)] struct MemPlace { offset: u64, meta: u64 }
+#[derive(Clone, Copy)] struct Layout { size: u64 }
+impl Layout { fn is_sized(&self)->bool {true} }
+#[derive(Clone, Copy)] struct MPlaceTy { mplace: MemPlace, layout: Layout }
+#[derive(Clone, Copy)] enum Place { Local { local: usize, offset: Option<u64>, locals_addr: usize }, Ptr(MemPlace) }
+struct PlaceTy { place: Place, layout: Layout }
+struct Local(Operand);
+impl Local {fn access_mut(&mut self)->R<&mut Operand> {Ok(&mut self.0)}}
+struct Frame {locals: Vec<Local>}
+impl Frame {fn locals_addr(&self)->usize {0}}
+enum MemoryKind {Stack}
+enum OffsetMode {Wrapping}
+enum MemPlaceMeta {None}
+struct Ec {frame: Frame, events: Vec<&'static str>, fail: bool}
+struct M;
+impl M {fn after_local_moved_to_memory(ecx:&mut Ec, local:usize, place:&MPlaceTy)->R<()> {
+ ecx.events.push("moved"); if ecx.fail {Err("moved")} else {Ok(())}
+}}
+impl MemPlace {fn offset_with_meta_(self, offset:u64, _:OffsetMode, _:MemPlaceMeta, ecx:&mut Ec)->R<Self> {
+ ecx.events.push("offset"); Ok(Self {offset:self.offset+offset,meta:0})
+}}
+impl Ec {
+ fn frame(&self)->&Frame {&self.frame}
+ fn frame_mut(&mut self)->&mut Frame {&mut self.frame}
+ fn layout_of_local(&self, _: &Frame, _:usize, _:Option<Layout>)->R<Layout> {Ok(Layout{size:8})}
+ fn allocate(&mut self, layout:Layout, _:MemoryKind)->R<MPlaceTy> {
+  self.events.push("allocate"); Ok(MPlaceTy{mplace:MemPlace{offset:0,meta:7},layout})
+ }
+ fn write_immediate_to_mplace_no_validate(&mut self,_:Immediate,_:Layout,_:MemPlace)->R<()> {
+  self.events.push("write"); Ok(())
+ }
+ fn force(&mut self, place:&PlaceTy)->R<MPlaceTy> {
+/* EXTRACTED_BODY */
+ }
+}
+fn main() {
+ for initial in 0..3 {for fail in [false,true] {for projected in [false,true] {
+  let operand=match initial {0=>Operand::Immediate(Immediate::Uninit),1=>Operand::Immediate(Immediate::Scalar(42)),_=>Operand::Indirect(MemPlace{offset:0,meta:7})};
+  let mut ec=Ec{frame:Frame{locals:vec![Local(operand)]},events:vec![],fail};
+  let result=ec.force(&PlaceTy{place:Place::Local{local:0,offset:if projected {Some(4)} else {None},locals_addr:0},layout:Layout{size:4}});
+  let indirect=matches!(ec.frame.locals[0].0,Operand::Indirect(_));
+  let meta=result.as_ref().ok().map(|p|p.mplace.meta).unwrap_or(99);
+  println!("{} {} {} {} {} {} {}",initial,fail,projected,result.is_ok(),indirect,meta,ec.events.join(","));
+ }}}
+}

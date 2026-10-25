@@ -1,0 +1,371 @@
+//! Standalone shim around exact pinned `Tree::new` code.
+use std::collections::HashMap;
+use std::cmp;
+use std::hash::Hash;
+use std::ops::Range;
+use std::marker::PhantomData;
+
+extern crate self as rustc_abi;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Size { bytes: u64 }
+impl Size {
+    pub fn from_bytes(bytes: u64) -> Self { Self { bytes } }
+    pub fn bytes(self) -> u64 { self.bytes }
+}
+
+mod source_tree {
+use super::{cmp, Hash, HashMap, PhantomData, Range};
+
+impl std::ops::Add for Size {
+    type Output = Size;
+    fn add(self, right: Size) -> Size { Size { bytes: self.bytes + right.bytes } }
+}
+
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct BorTag(u64);
+impl BorTag { fn one() -> Self { Self(1) } }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Permission { Cell, ReservedFrz(bool), ReservedIM, Unique, Frozen, Disabled }
+impl Permission {
+    fn new_disabled() -> Self { Self::Disabled }
+    fn new_unique() -> Self { Self::Unique }
+    fn new_reserved_frz() -> Self { Self::ReservedFrz(false) }
+    fn new_reserved_im() -> Self { Self::ReservedIM }
+    fn new_frozen() -> Self { Self::Frozen }
+    fn new_cell() -> Self { Self::Cell }
+    fn is_initial(self) -> bool { !matches!(self, Self::ReservedFrz(true) | Self::Disabled) }
+    fn is_unique(self) -> bool { self == Self::Unique }
+    fn strongest_idempotent_foreign_access(self, protected: bool) -> IdempotentForeignAccess {
+        match self {
+            Self::Cell | Self::Disabled => IdempotentForeignAccess::Write,
+            Self::ReservedFrz(false) if protected => IdempotentForeignAccess::None,
+            Self::ReservedFrz(false) => IdempotentForeignAccess::Read,
+            Self::ReservedFrz(true) | Self::Frozen => IdempotentForeignAccess::Read,
+            Self::ReservedIM if protected => IdempotentForeignAccess::None,
+            Self::ReservedIM => IdempotentForeignAccess::Write,
+            Self::Unique => IdempotentForeignAccess::None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum IdempotentForeignAccess { None, Read, Write }
+impl IdempotentForeignAccess {
+    fn ensure_no_stronger_than(&mut self, allowed: Self) -> bool {
+        if *self > allowed { *self = allowed; true } else { false }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProtectorKind { WeakProtector, StrongProtector }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RetagMode { None, Default, TwoPhase, FnEntry, Raw }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mutability { Not, Mut }
+
+#[derive(Clone, Copy)]
+struct TypeContext { rustc_no_writable: bool }
+
+#[derive(Clone, Copy)]
+struct Ty<'tcx> {
+    is_unpin: bool,
+    is_unsafe_unpin: bool,
+    is_freeze: bool,
+    _marker: PhantomData<&'tcx ()>,
+}
+impl Ty<'_> {
+    fn is_unpin(&self, _tcx: TypeContext, _env: ()) -> bool { self.is_unpin }
+    fn is_unsafe_unpin(&self, _tcx: TypeContext, _env: ()) -> bool { self.is_unsafe_unpin }
+    fn is_freeze(&self, _tcx: TypeContext, _env: ()) -> bool { self.is_freeze }
+}
+
+#[derive(Clone, Copy)]
+struct TreeBorrowsParams { implicit_writes: bool }
+struct Instance;
+impl Instance { fn def_id(&self) -> u8 { 0 } }
+struct Frame;
+impl Frame { fn instance(&self) -> Instance { Instance } }
+struct MiriInterpCx<'tcx> {
+    tcx: &'tcx TypeContext,
+    params: TreeBorrowsParams,
+    _marker: PhantomData<&'tcx ()>,
+}
+impl MiriInterpCx<'_> {
+    fn get_tree_borrows_params(&self) -> TreeBorrowsParams { self.params }
+    fn frame(&self) -> Frame { Frame }
+    fn typing_env(&self) -> () { () }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct NewPermission {
+    freeze_perm: Permission,
+    nonfreeze_perm: Permission,
+    outside_perm: Permission,
+    protector: Option<ProtectorKind>,
+}
+
+macro_rules! find_attr {
+    ($tcx:expr, $def_id:expr, RustcNoWritable) => {{
+        let _ = $def_id;
+        $tcx.rustc_no_writable
+    }};
+}
+
+impl<'tcx> NewPermission {
+    // @PINNED_NEW_PERMISSION_NEW@
+}
+
+enum ProvenanceExtra { Concrete(BorTag), Wildcard }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LocationState { permission: Permission, accessed: bool, idempotent_foreign_access: IdempotentForeignAccess }
+impl LocationState {
+    fn new_accessed(permission: Permission, idempotent_foreign_access: IdempotentForeignAccess) -> Self {
+        Self { permission, accessed: true, idempotent_foreign_access }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ExposedCache;
+
+struct Span;
+#[derive(Debug)]
+struct NodeDebugInfo { tag: BorTag, permission: Permission, named: bool }
+impl NodeDebugInfo {
+    fn new(tag: BorTag, permission: Permission, _span: Span) -> Self {
+        Self { tag, permission, named: false }
+    }
+    fn add_name(&mut self, _name: &str) { self.named = true; }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct UniIndex { idx: u32 }
+
+trait SmallVecArray { type Item; }
+impl<T, const N: usize> SmallVecArray for [T; N] { type Item = T; }
+#[derive(Debug)]
+struct SmallVec<A: SmallVecArray> { items: Vec<A::Item> }
+impl<T, const N: usize> Default for SmallVec<[T; N]> {
+    fn default() -> Self { Self { items: Vec::new() } }
+}
+impl<T: Clone, const N: usize> SmallVec<[T; N]> {
+    fn from_slice(items: &[T]) -> Self { Self { items: items.to_vec() } }
+    fn push(&mut self, value: T) { self.items.push(value); }
+    fn iter(&self) -> std::slice::Iter<'_, T> { self.items.iter() }
+}
+
+struct UniKeyMap<K> { mapping: HashMap<K, u32> }
+impl<K> Default for UniKeyMap<K> { fn default() -> Self { Self { mapping: HashMap::new() } } }
+impl<K: Eq + Hash> UniKeyMap<K> {
+    fn insert(&mut self, key: K) -> UniIndex {
+        let index = self.mapping.len() as u32;
+        self.mapping.insert(key, index);
+        UniIndex { idx: index }
+    }
+    fn get(&self, key: &K) -> Option<UniIndex> {
+        self.mapping.get(key).copied().map(|idx| UniIndex { idx })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct UniValMap<V> { data: Vec<Option<V>> }
+impl<V> Default for UniValMap<V> { fn default() -> Self { Self { data: Vec::new() } } }
+impl<V> UniValMap<V> {
+    fn insert(&mut self, index: UniIndex, value: V) {
+        self.data.resize_with(index.idx as usize + 1, || None);
+        self.data[index.idx as usize] = Some(value);
+    }
+    fn get(&self, index: UniIndex) -> Option<&V> {
+        self.data.get(index.idx as usize).and_then(Option::as_ref)
+    }
+    fn get_mut(&mut self, index: UniIndex) -> Option<&mut V> {
+        self.data.get_mut(index.idx as usize).and_then(Option::as_mut)
+    }
+}
+
+// @PINNED_DEDUP_RANGE_MAP_BODY@
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LocationTree {
+    perms: UniValMap<LocationState>,
+    exposed_cache: ExposedCache,
+}
+
+#[derive(Debug)]
+struct Node {
+    tag: BorTag,
+    parent: Option<UniIndex>,
+    children: SmallVec<[UniIndex; 4]>,
+    default_initial_perm: Permission,
+    default_initial_idempotent_foreign_access: IdempotentForeignAccess,
+    is_exposed: bool,
+    debug_info: NodeDebugInfo,
+}
+
+struct Tree {
+    tag_mapping: UniKeyMap<BorTag>,
+    nodes: UniValMap<Node>,
+    locations: DedupRangeMap<LocationTree>,
+    roots: SmallVec<[UniIndex; 2]>,
+}
+
+#[derive(Debug)]
+struct InterpError<'tcx>(PhantomData<&'tcx ()>);
+type InterpResult<'tcx, T = ()> = Result<T, InterpError<'tcx>>;
+fn interp_ok<'tcx, T>(value: T) -> InterpResult<'tcx, T> { Ok(value) }
+
+// @PINNED_TREE_NEW_IMPL@
+
+impl<'tcx> Tree {
+    // @PINNED_TREE_NEW_CHILD_AND_SIFA@
+}
+
+fn emit(size: u64) {
+    let tree = Tree::new(BorTag::one(), Size::from_bytes(size), Span);
+    let root = tree.roots.items[0];
+    let node = tree.nodes.get(root).unwrap();
+    let location = tree.locations.iter_all().next().map(|(_, location)| location);
+    let root_state = location.and_then(|location| location.perms.get(root));
+    println!("tree-new {} {} {} {:?} {:?} {} {}", size,
+        tree.roots.items.len(), node.tag.0, node.default_initial_perm,
+        root_state.map(|state| state.permission),
+        root_state.map(|state| state.accessed).unwrap_or(false),
+        tree.locations.iter_all().count());
+}
+
+fn permission_name(permission: Permission) -> &'static str {
+    match permission {
+        Permission::Cell => "Cell",
+        Permission::ReservedFrz(false) => "ReservedFrz(false)",
+        Permission::ReservedFrz(true) => "ReservedFrz(true)",
+        Permission::ReservedIM => "ReservedIM",
+        Permission::Unique => "Unique",
+        Permission::Frozen => "Frozen",
+        Permission::Disabled => "Disabled",
+    }
+}
+
+fn protector_name(protector: Option<ProtectorKind>) -> &'static str {
+    match protector {
+        None => "none",
+        Some(ProtectorKind::WeakProtector) => "weak",
+        Some(ProtectorKind::StrongProtector) => "strong",
+    }
+}
+
+fn emit_new_permission_policies() {
+    let modes = [RetagMode::None, RetagMode::Default, RetagMode::TwoPhase,
+        RetagMode::FnEntry, RetagMode::Raw];
+    let kinds = [
+        ("shared", Some(Mutability::Not)),
+        ("mutable", Some(Mutability::Mut)),
+        ("box", None),
+    ];
+    for mode in modes {
+        let mode_name = match mode {
+            RetagMode::None => "none",
+            RetagMode::Default => "default",
+            RetagMode::TwoPhase => "two-phase",
+            RetagMode::FnEntry => "fn-entry",
+            RetagMode::Raw => "raw",
+        };
+        for (kind_name, mutability) in kinds {
+            for is_unpin in [false, true] {
+                for is_unsafe_unpin in [false, true] {
+                    for is_freeze in [false, true] {
+                        for implicit_writes in [false, true] {
+                            for rustc_no_writable in [false, true] {
+                                let type_context = TypeContext { rustc_no_writable };
+                                let cx = MiriInterpCx {
+                                    tcx: &type_context,
+                                    params: TreeBorrowsParams { implicit_writes },
+                                    _marker: PhantomData,
+                                };
+                                let pointee = Ty {
+                                    is_unpin,
+                                    is_unsafe_unpin,
+                                    is_freeze,
+                                    _marker: PhantomData,
+                                };
+                                let result = NewPermission::new(pointee, mutability, mode, &cx);
+                                let output = match result {
+                                    None => "none".to_owned(),
+                                    Some(permission) => format!(
+                                        "Some({},{},{},{})",
+                                        permission_name(permission.freeze_perm),
+                                        permission_name(permission.nonfreeze_perm),
+                                        permission_name(permission.outside_perm),
+                                        protector_name(permission.protector),
+                                    ),
+                                };
+                                println!(
+                                    "retag-policy {mode_name} {kind_name} {} {} {} {} {} {output}",
+                                    is_unpin,
+                                    is_unsafe_unpin,
+                                    is_freeze,
+                                    implicit_writes,
+                                    rustc_no_writable,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn emit_all() {
+    emit(0);
+    emit(1);
+    let mut tree = Tree::new(BorTag::one(), Size::from_bytes(1), Span);
+    let ignored_inside = LocationState::new_accessed(
+        Permission::Cell, IdempotentForeignAccess::Write);
+    tree.new_child(Size::from_bytes(0), ProvenanceExtra::Concrete(BorTag::one()),
+        BorTag(2), DedupRangeMap::new(Size::from_bytes(0), ignored_inside),
+        Permission::ReservedFrz(false), false, Span).unwrap();
+    tree.new_child(Size::from_bytes(0), ProvenanceExtra::Concrete(BorTag(2)),
+        BorTag(3), DedupRangeMap::new(Size::from_bytes(0), ignored_inside),
+        Permission::ReservedFrz(false), true, Span).unwrap();
+    let root = tree.nodes.get(UniIndex { idx: 0 }).unwrap();
+    let parent = tree.nodes.get(UniIndex { idx: 1 }).unwrap();
+    let child = tree.nodes.get(UniIndex { idx: 2 }).unwrap();
+    println!("tree-child {} {} {} {:?} {:?} {}", root.children.items.len(),
+        parent.parent.unwrap().idx, child.parent.unwrap().idx,
+        parent.default_initial_idempotent_foreign_access,
+        child.default_initial_idempotent_foreign_access,
+        tree.roots.items.len());
+
+    let mut ranged_tree = Tree::new(BorTag(1), Size::from_bytes(5), Span);
+    let initial_inside = LocationState::new_accessed(
+        Permission::ReservedFrz(false), IdempotentForeignAccess::Read);
+    let center_inside = LocationState::new_accessed(
+        Permission::ReservedIM, IdempotentForeignAccess::Write);
+    let mut inside = DedupRangeMap::new(Size::from_bytes(3), initial_inside);
+    for (_, state) in inside.iter_mut(Size::from_bytes(1), Size::from_bytes(1)) {
+        *state = center_inside;
+    }
+    ranged_tree.new_child(Size::from_bytes(1), ProvenanceExtra::Concrete(BorTag(1)),
+        BorTag(2), inside, Permission::Frozen, false, Span).unwrap();
+    let ranges = ranged_tree.locations.iter_all().map(|(range, location)| {
+        let child_state = location.perms.get(UniIndex { idx: 1 }).map(|state|
+            format!("{:?}/{}", state.permission,
+                if state.accessed { "accessed" } else { "future" }))
+            .unwrap_or_else(|| "default".to_owned());
+        format!("{}:{}={child_state}", range.start, range.end)
+    }).collect::<Vec<_>>().join("|");
+    let root = ranged_tree.nodes.get(UniIndex { idx: 0 }).unwrap();
+    let child = ranged_tree.nodes.get(UniIndex { idx: 1 }).unwrap();
+    println!("tree-retag-range {:?} {:?} {ranges}",
+        root.default_initial_idempotent_foreign_access,
+        child.default_initial_idempotent_foreign_access);
+    emit_new_permission_policies();
+}
+}
+
+fn main() { source_tree::emit_all(); }

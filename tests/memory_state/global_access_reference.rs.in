@@ -1,0 +1,192 @@
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+type AllocId = u64;
+type DefId = u64;
+type InterpResult<'tcx, T> = Result<T, String>;
+
+#[derive(Clone)]
+struct CtfeProvenance;
+#[derive(Clone)]
+struct UnitExtra;
+#[derive(Clone)]
+struct Bytes;
+#[derive(Clone)]
+struct Allocation<P = CtfeProvenance, E = UnitExtra, B = Bytes> {
+    label: &'static str,
+    _marker: std::marker::PhantomData<(P, E, B)>,
+}
+#[derive(Copy, Clone)]
+struct ConstAllocation { allocation: &'static Allocation }
+impl ConstAllocation { fn inner(&self) -> &'static Allocation { self.allocation } }
+
+#[derive(Copy, Clone)]
+enum GlobalAlloc {
+    Memory(ConstAllocation),
+    Function { instance: () },
+    VTable(()),
+    TypeId { ty: () },
+    Static(DefId),
+}
+
+struct StaticFacts { is_static: bool, thread_local: bool, foreign: bool }
+struct Tcx {
+    globals: HashMap<AllocId, GlobalAlloc>,
+    static_facts: HashMap<DefId, StaticFacts>,
+    initializers: HashMap<DefId, ConstAllocation>,
+    events: Rc<RefCell<Vec<String>>>,
+}
+impl Tcx {
+    fn try_get_global_alloc(&self, id: AllocId) -> Option<GlobalAlloc> {
+        self.globals.get(&id).copied()
+    }
+    fn is_static(&self, id: DefId) -> bool {
+        self.static_facts.get(&id).map(|facts| facts.is_static).unwrap_or(false)
+    }
+    fn is_thread_local_static(&self, id: DefId) -> bool {
+        self.static_facts.get(&id).map(|facts| facts.thread_local).unwrap_or(false)
+    }
+    fn is_foreign_item(&self, id: DefId) -> bool {
+        self.static_facts.get(&id).map(|facts| facts.foreign).unwrap_or(false)
+    }
+    fn eval_static_initializer(&self, id: DefId) -> Result<ConstAllocation, String> {
+        self.events.borrow_mut().push(format!("eval:{id}"));
+        self.initializers.get(&id).copied().ok_or_else(|| "initializer missing".into())
+    }
+}
+
+struct TestMachine {
+    events: Rc<RefCell<Vec<String>>>,
+    owned: bool,
+    fail_before: bool,
+    fail_adjust: bool,
+}
+macro_rules! throw_ub {
+    (DerefFunctionPointer($id:expr)) => {{ return Err(format!("function:{}", $id)); }};
+    (DerefVTablePointer($id:expr)) => {{ return Err(format!("vtable:{}", $id)); }};
+    (DerefTypeIdPointer($id:expr)) => {{ return Err(format!("typeid:{}", $id)); }};
+    (PointerUseAfterFree($id:expr, $message:expr)) => {{ return Err(format!("unknown:{}", $id)); }};
+}
+macro_rules! throw_unsup {
+    (ExternStatic($id:expr)) => {{ return Err(format!("extern:{}", $id)); }};
+}
+trait Machine: Sized {
+    type Provenance: Clone;
+    type AllocExtra: Clone;
+    type Bytes: Clone;
+    fn before_access_global(
+        tcx: &Tcx, machine: &Self, id: AllocId, allocation: ConstAllocation,
+        static_def: Option<DefId>, is_write: bool,
+    ) -> Result<(), String>;
+    fn adjust_global_allocation<'tcx>(
+        ecx: &InterpCx<'tcx, Self>, id: AllocId, alloc: &'tcx Allocation,
+    ) -> InterpResult<'tcx, Cow<'tcx, Allocation<Self::Provenance, Self::AllocExtra, Self::Bytes>>>;
+}
+impl Machine for TestMachine {
+    type Provenance = CtfeProvenance;
+    type AllocExtra = UnitExtra;
+    type Bytes = Bytes;
+    fn before_access_global(
+        _tcx: &Tcx, machine: &Self, id: AllocId, _allocation: ConstAllocation,
+        static_def: Option<DefId>, is_write: bool,
+    ) -> Result<(), String> {
+        let def = static_def.map(|value| value.to_string()).unwrap_or_else(|| "none".into());
+        machine.events.borrow_mut().push(format!("before:{id}:{def}:{is_write}"));
+        if machine.fail_before { Err("global access rejected".into()) } else { Ok(()) }
+    }
+    fn adjust_global_allocation<'tcx>(
+        ecx: &InterpCx<'tcx, Self>, id: AllocId, alloc: &'tcx Allocation,
+    ) -> InterpResult<'tcx, Cow<'tcx, Allocation<Self::Provenance, Self::AllocExtra, Self::Bytes>>> {
+        ecx.machine.events.borrow_mut().push(format!("adjust:{id}"));
+        if ecx.machine.fail_adjust { return Err("adjust rejected".into()); }
+        if ecx.machine.owned { Ok(Cow::Owned(alloc.clone())) } else { Ok(Cow::Borrowed(alloc)) }
+    }
+}
+
+struct InterpCx<'tcx, M: Machine> { tcx: &'tcx Tcx, machine: M }
+impl<'tcx, M: Machine> InterpCx<'tcx, M> {
+    fn ctfe_query<T>(&self, f: impl FnOnce(&Tcx) -> Result<T, String>) -> Result<T, String> {
+        f(self.tcx)
+    }
+    /* EXTRACTED_GET_GLOBAL_ALLOC */
+}
+
+fn source_allocation(label: &'static str) -> &'static Allocation {
+    Box::leak(Box::new(Allocation { label, _marker: std::marker::PhantomData }))
+}
+fn make_ecx(
+    id: AllocId,
+    global: Option<GlobalAlloc>,
+    static_def: Option<(DefId, StaticFacts)>,
+    initializer: Option<(DefId, ConstAllocation)>,
+    owned: bool,
+    fail_before: bool,
+    fail_adjust: bool,
+) -> InterpCx<'static, TestMachine> {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mut globals = HashMap::new();
+    if let Some(global) = global { globals.insert(id, global); }
+    let mut static_facts = HashMap::new();
+    if let Some((def, facts)) = static_def { static_facts.insert(def, facts); }
+    let mut initializers = HashMap::new();
+    if let Some((def, allocation)) = initializer { initializers.insert(def, allocation); }
+    let tcx = Box::leak(Box::new(Tcx { globals, static_facts, initializers, events: events.clone() }));
+    InterpCx { tcx, machine: TestMachine { events, owned, fail_before, fail_adjust } }
+}
+fn outcome_text(outcome: &Result<Cow<'_, Allocation>, String>) -> &'static str {
+    match outcome {
+        Ok(Cow::Borrowed(_)) => "borrowed",
+        Ok(Cow::Owned(_)) => "owned",
+        Err(message) if message.starts_with("function:") => "error:function",
+        Err(message) if message.starts_with("vtable:") => "error:vtable",
+        Err(message) if message.starts_with("typeid:") => "error:typeid",
+        Err(message) if message.starts_with("unknown:") => "error:unknown",
+        Err(message) if message.starts_with("extern:") => "error:extern",
+        Err(message) if message == "global access rejected" => "error:before",
+        Err(message) if message == "adjust rejected" => "error:adjust",
+        Err(message) if message == "initializer missing" => "error:initializer",
+        Err(_) => "error:other",
+    }
+}
+fn print_row(label: &str, outcome: &str, events: &Rc<RefCell<Vec<String>>>) {
+    println!("global {label} outcome={outcome} events={}", events.borrow().join(","));
+}
+
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+    let memory = ConstAllocation { allocation: source_allocation("memory") };
+    let initializer = ConstAllocation { allocation: source_allocation("static") };
+    let cases = [
+        ("memory-read", 1, Some(GlobalAlloc::Memory(memory)), None, None, false, false, false, false),
+        ("static-write", 2, Some(GlobalAlloc::Static(22)), Some((22, StaticFacts { is_static: true, thread_local: false, foreign: false })), Some((22, initializer)), true, false, false, true),
+        ("function", 3, Some(GlobalAlloc::Function { instance: () }), None, None, false, false, false, false),
+        ("vtable", 4, Some(GlobalAlloc::VTable(())), None, None, false, false, false, false),
+        ("typeid", 5, Some(GlobalAlloc::TypeId { ty: () }), None, None, false, false, false, false),
+        ("thread-local", 6, Some(GlobalAlloc::Static(66)), Some((66, StaticFacts { is_static: true, thread_local: true, foreign: false })), None, false, false, false, false),
+        ("not-static", 11, Some(GlobalAlloc::Static(11)), Some((11, StaticFacts { is_static: false, thread_local: false, foreign: false })), None, false, false, false, false),
+        ("extern", 7, Some(GlobalAlloc::Static(77)), Some((77, StaticFacts { is_static: true, thread_local: false, foreign: true })), None, false, false, false, false),
+        ("initializer-failure", 2, Some(GlobalAlloc::Static(22)), Some((22, StaticFacts { is_static: true, thread_local: false, foreign: false })), None, false, false, false, false),
+        ("before-failure", 1, Some(GlobalAlloc::Memory(memory)), None, None, false, true, false, false),
+        ("adjust-failure", 1, Some(GlobalAlloc::Memory(memory)), None, None, false, false, true, false),
+        ("unknown", 10, None, None, None, false, false, false, false),
+    ];
+    for (label, id, global, static_def, initializer, owned, fail_before, fail_adjust, is_write) in cases {
+        let ecx = make_ecx(id, global, static_def, initializer, owned, fail_before, fail_adjust);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ecx.get_global_alloc(id, is_write)
+        }));
+        match result {
+            Ok(outcome) => print_row(label, outcome_text(&outcome), &ecx.machine.events),
+            Err(_) => {
+                let tag = match label {
+                    "thread-local" => "error:thread-local",
+                    "not-static" => "error:not-static",
+                    _ => "error:assert",
+                };
+                print_row(label, tag, &ecx.machine.events);
+            }
+        }
+    }
+}

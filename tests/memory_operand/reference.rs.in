@@ -1,0 +1,307 @@
+#![feature(rustc_private)]
+extern crate rustc_driver;
+extern crate rustc_abi;
+extern crate rustc_middle;
+extern crate rustc_ast;
+
+use rustc_abi::{
+    AddressSpace, BackendRepr, Endian, HasDataLayout, Integer, Primitive,
+    Scalar as AbiScalar, Size, TargetDataLayout, WrappingRange,
+};
+use rustc_ast::Mutability;
+use rustc_middle::mir::interpret::{
+    alloc_range, AllocError, AllocInit, AllocRange, Allocation, CtfeProvenance,
+    Pointer, Provenance, Scalar,
+};
+use std::cell::RefCell;
+use std::fmt;
+
+mod abi { pub use rustc_abi::{Primitive, Scalar}; }
+
+type InterpResult<'tcx, T> = Result<T, AllocError>;
+type TyAndLayout<'tcx> = &'tcx Layout;
+enum Either<L, R> { Left(L), Right(R) }
+use Either::{Left, Right};
+
+fn interp_ok<'tcx, T>(value: T) -> InterpResult<'tcx, T> { Ok(value) }
+
+#[derive(Clone, Copy, Debug)]
+struct Layout {
+    size: Size,
+    backend_repr: BackendRepr,
+}
+
+impl Layout {
+    fn is_unsized(&self) -> bool { self.backend_repr.is_unsized() }
+    fn is_sized(&self) -> bool { self.backend_repr.is_sized() }
+}
+
+#[derive(Clone, Copy)]
+struct MPlace<Prov: Provenance> {
+    base: Size,
+    _prov: std::marker::PhantomData<Prov>,
+}
+
+#[derive(Clone, Copy)]
+struct MPlaceTy<'tcx, Prov: Provenance> {
+    mplace: MPlace<Prov>,
+    layout: TyAndLayout<'tcx>,
+}
+
+#[derive(Clone)]
+enum Operand<'tcx, Prov: Provenance> {
+    Immediate(Immediate<Prov>),
+    Indirect(MPlaceTy<'tcx, Prov>),
+}
+
+#[derive(Clone)]
+struct OpTy<'tcx, Prov: Provenance> {
+    op: Operand<'tcx, Prov>,
+    layout: TyAndLayout<'tcx>,
+}
+
+impl<'tcx, Prov: Provenance> OpTy<'tcx, Prov> {
+    fn as_mplace_or_imm(&self) -> Either<MPlaceTy<'tcx, Prov>, ImmTy<'tcx, Prov>> {
+        match self.op {
+            Operand::Immediate(value) => Right(ImmTy::from_immediate(value, self.layout)),
+            Operand::Indirect(place) => Left(place),
+        }
+    }
+}
+
+trait Projectable<'tcx, Prov: Provenance> {
+    fn to_op<M: Machine<'tcx, Provenance = Prov>>(
+        &self,
+        ecx: &InterpCx<'tcx, M>,
+    ) -> InterpResult<'tcx, OpTy<'tcx, Prov>>;
+}
+
+impl<'tcx, Prov: Provenance> Projectable<'tcx, Prov> for OpTy<'tcx, Prov> {
+    fn to_op<M: Machine<'tcx, Provenance = Prov>>(
+        &self,
+        _ecx: &InterpCx<'tcx, M>,
+    ) -> InterpResult<'tcx, OpTy<'tcx, Prov>> {
+        Ok(self.clone())
+    }
+}
+
+struct AllocRef<'a, Prov: Provenance> {
+    allocation: &'a Allocation<Prov>,
+    base: Size,
+    layout: &'a TargetDataLayout,
+}
+
+impl<Prov: Provenance> AllocRef<'_, Prov> {
+    fn read_scalar(
+        &self,
+        range: AllocRange,
+        read_provenance: bool,
+    ) -> Result<Scalar<Prov>, AllocError> {
+        let start = Size::from_bytes(self.base.bytes() + range.start.bytes());
+        self.allocation.read_scalar(
+            self.layout,
+            alloc_range(start, range.size),
+            read_provenance,
+        )
+    }
+}
+
+trait Machine<'tcx> {
+    type Provenance: Provenance;
+    fn data_layout(&self) -> &TargetDataLayout;
+    fn allocation(&self) -> Option<&Allocation<Self::Provenance>>;
+    fn record(&self, event: &'static str);
+}
+
+struct TestMachine<'a, Prov: Provenance> {
+    layout: &'a TargetDataLayout,
+    allocation: Option<&'a Allocation<Prov>>,
+    calls: RefCell<Vec<&'static str>>,
+}
+
+impl<'tcx, 'a, Prov: Provenance> Machine<'tcx> for TestMachine<'a, Prov> {
+    type Provenance = Prov;
+    fn data_layout(&self) -> &TargetDataLayout { self.layout }
+    fn allocation(&self) -> Option<&Allocation<Prov>> { self.allocation }
+    fn record(&self, event: &'static str) { self.calls.borrow_mut().push(event); }
+}
+
+struct InterpCx<'tcx, M: Machine<'tcx>> {
+    machine: M,
+    _tcx: std::marker::PhantomData<&'tcx ()>,
+}
+
+impl<'tcx, M: Machine<'tcx>> HasDataLayout for InterpCx<'tcx, M> {
+    fn data_layout(&self) -> &TargetDataLayout { self.machine.data_layout() }
+}
+
+impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
+    fn get_place_alloc<'a>(
+        &'a self,
+        mplace: &MPlaceTy<'tcx, M::Provenance>,
+    ) -> InterpResult<'tcx, Option<AllocRef<'a, M::Provenance>>> {
+        self.machine.record("get_place_alloc");
+        Ok(self.machine.allocation().map(|allocation| AllocRef {
+            allocation,
+            base: mplace.mplace.base,
+            layout: self.machine.data_layout(),
+        }))
+    }
+}
+
+@ORIGINAL_ITEMS@
+
+fn range(start: u64, finish: u64) -> AllocRange {
+    alloc_range(Size::from_bytes(start), Size::from_bytes(finish - start))
+}
+
+fn initialized(value: Primitive, size: Size) -> AbiScalar {
+    AbiScalar::Initialized { value, valid_range: WrappingRange::full(size) }
+}
+
+fn make_layout(size: u64, backend_repr: BackendRepr) -> Layout {
+    Layout { size: Size::from_bytes(size), backend_repr }
+}
+
+fn show_scalar(value: Scalar<CtfeProvenance>) -> String {
+    match value {
+        Scalar::Int(integer) => format!("i{}:{}", integer.size().bytes(), integer.to_bits_unchecked()),
+        Scalar::Ptr(pointer, pointer_size) => {
+            let (_, offset) = pointer.into_raw_parts();
+            format!("p{}:{}", pointer_size.get(), offset.bytes())
+        }
+    }
+}
+
+fn show_immediate(value: Immediate<CtfeProvenance>) -> String {
+    match value {
+        Immediate::Uninit => "uninit".into(),
+        Immediate::Scalar(scalar) => show_scalar(scalar),
+        Immediate::ScalarPair(a, b) => format!("pair({}, {})", show_scalar(a), show_scalar(b)),
+    }
+}
+
+fn emit_read(
+    tag: &str,
+    cx: &InterpCx<'_, TestMachine<'_, CtfeProvenance>>,
+    layout: &Layout,
+    base: u64,
+) {
+    let place = MPlaceTy {
+        mplace: MPlace { base: Size::from_bytes(base), _prov: std::marker::PhantomData },
+        layout,
+    };
+    let result = cx.read_immediate_from_mplace_raw(&place);
+    let printed = match result {
+        Ok(None) => "none".into(),
+        Ok(Some(value)) => show_immediate(value.imm),
+        Err(AllocError::InvalidUninitBytes(Some(bad))) => {
+            format!("uninit:{}:{}", bad.bad.start.bytes(), bad.bad.end().bytes())
+        }
+        Err(AllocError::ReadPointerAsInt(_)) => "pointer-as-int".into(),
+        Err(AllocError::ReadPartialPointer(offset)) => format!("partial-pointer:{}", offset.bytes()),
+        Err(error) => format!("other:{error:?}"),
+    };
+    println!("R {tag} {printed}");
+    cx.machine.calls.borrow_mut().clear();
+}
+
+fn emit_raw_operand(
+    tag: &str,
+    cx: &InterpCx<'_, TestMachine<'_, CtfeProvenance>>,
+    op: &OpTy<'_, CtfeProvenance>,
+) {
+    match cx.read_immediate_raw(op) {
+        Ok(Left(_)) => println!("O {tag} place"),
+        Ok(Right(value)) => println!("O {tag} immediate:{}", show_immediate(value.imm)),
+        Err(error) => println!("O {tag} error:{error:?}"),
+    }
+}
+
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+    let data_layout = TargetDataLayout::parse_from_llvm_datalayout_string(
+        "e-p:64:64", AddressSpace::ZERO,
+    ).unwrap_or_else(|_| panic!("layout parse"));
+    let scalar_i64 = initialized(Primitive::Int(Integer::I64, false), Size::from_bytes(8));
+    let scalar_ptr = initialized(Primitive::Pointer(AddressSpace::ZERO), Size::from_bytes(8));
+    let mut allocation = Allocation::<CtfeProvenance>::new(
+        Size::from_bytes(24), rustc_abi::Align::ONE, AllocInit::Zero, (),
+    );
+    allocation.write_scalar(
+        &data_layout, range(0, 8), Scalar::from_uint(0x123456789abcdef0u128, Size::from_bytes(8)),
+    ).unwrap();
+    let ptr = Pointer::new(
+        CtfeProvenance::from(rustc_middle::mir::interpret::AllocId(std::num::NonZero::new(1).unwrap())),
+        Size::from_bytes(0x1234),
+    );
+    allocation.write_scalar(&data_layout, range(8, 16), Scalar::from_pointer(ptr, &data_layout)).unwrap();
+    allocation.write_scalar(
+        &data_layout, range(16, 24), Scalar::from_uint(99u128, Size::from_bytes(8)),
+    ).unwrap();
+
+    let int_layout = make_layout(8, BackendRepr::Scalar(scalar_i64));
+    let ptr_layout = make_layout(8, BackendRepr::Scalar(scalar_ptr));
+    let pair_layout = make_layout(16, BackendRepr::ScalarPair {
+        a: scalar_i64,
+        b: scalar_ptr,
+        b_offset: Size::from_bytes(8),
+    });
+    let union_layout = make_layout(8, BackendRepr::Scalar(AbiScalar::Union {
+        value: Primitive::Int(Integer::I64, false),
+    }));
+    let memory_layout = make_layout(8, BackendRepr::Memory { sized: true });
+    let unsized_layout = make_layout(0, BackendRepr::Memory { sized: false });
+    let zst_layout = make_layout(0, BackendRepr::Memory { sized: true });
+
+    let machine = TestMachine { layout: &data_layout, allocation: Some(&allocation), calls: RefCell::new(Vec::new()) };
+    let cx = InterpCx { machine, _tcx: std::marker::PhantomData };
+    emit_read("scalar", &cx, &int_layout, 0);
+    emit_read("pointer", &cx, &ptr_layout, 8);
+    emit_read("pointer_as_integer", &cx, &int_layout, 8);
+    emit_read("pair", &cx, &pair_layout, 0);
+    emit_read("union", &cx, &union_layout, 0);
+    emit_read("memory", &cx, &memory_layout, 0);
+    emit_read("unsized", &cx, &unsized_layout, 0);
+
+    let scalar_op = OpTy {
+        op: Operand::Indirect(MPlaceTy {
+            mplace: MPlace { base: Size::from_bytes(0), _prov: std::marker::PhantomData },
+            layout: &int_layout,
+        }),
+        layout: &int_layout,
+    };
+    let u8_layout = make_layout(1, BackendRepr::Scalar(initialized(
+        Primitive::Int(Integer::I8, false), Size::from_bytes(1),
+    )));
+    let immediate_op = OpTy {
+        op: Operand::Immediate(Immediate::Scalar(Scalar::from_uint(
+            7u128, Size::from_bytes(1),
+        ))),
+        layout: &u8_layout,
+    };
+    emit_raw_operand("memory_fallback", &cx, &OpTy {
+        op: Operand::Indirect(MPlaceTy {
+            mplace: MPlace { base: Size::from_bytes(0), _prov: std::marker::PhantomData },
+            layout: &memory_layout,
+        }),
+        layout: &memory_layout,
+    });
+    emit_raw_operand("indirect_scalar", &cx, &scalar_op);
+    emit_raw_operand("already_immediate", &cx, &immediate_op);
+
+    let uninitialized = Allocation::<CtfeProvenance>::new(
+        Size::from_bytes(8), rustc_abi::Align::ONE, AllocInit::Uninit, (),
+    );
+    let uninit_machine = TestMachine {
+        layout: &data_layout, allocation: Some(&uninitialized), calls: RefCell::new(Vec::new()),
+    };
+    let uninit_cx = InterpCx { machine: uninit_machine, _tcx: std::marker::PhantomData };
+    emit_read("uninitialized", &uninit_cx, &int_layout, 0);
+
+    let missing = TestMachine::<CtfeProvenance> {
+        layout: &data_layout, allocation: None, calls: RefCell::new(Vec::new()),
+    };
+    let missing_cx = InterpCx { machine: missing, _tcx: std::marker::PhantomData };
+    emit_read("zero_sized_allocation", &missing_cx, &zst_layout, 0);
+}

@@ -1,0 +1,214 @@
+#![allow(dead_code, unused_imports, non_snake_case)]
+use std::fmt;
+use std::num::NonZero;
+use std::ops::{Add, Mul, Sub};
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Debug)]
+struct Size { raw: u64 }
+
+impl Size {
+    fn from_bits(bits: u64) -> Size { Size { raw: bits.div_ceil(8) } }
+    fn from_bytes(bytes: u64) -> Size { Size { raw: bytes } }
+    fn bytes(self) -> u64 { self.raw }
+    fn bits(self) -> u64 {
+        self.bytes().checked_mul(8).unwrap_or_else(|| panic!("Size::bits overflow"))
+    }
+    fn unsigned_int_max(&self) -> u128 { u128::MAX >> (128 - self.bits()) }
+    fn truncate(self, value: u128) -> u128 {
+        let bits = self.bits();
+        if bits == 0 { 0 } else { value << (128 - bits) >> (128 - bits) }
+    }
+    fn sign_extend(self, value: u128) -> i128 {
+        let bits = self.bits();
+        if bits == 0 { 0 } else { ((value << (128 - bits)) as i128) >> (128 - bits) }
+    }
+    fn align_to(self, align: Align) -> Size {
+        let mask = align.bytes() - 1;
+        Size::from_bytes((self.bytes() + mask) & !mask)
+    }
+}
+
+impl Add for Size {
+    type Output = Size;
+    fn add(self, rhs: Size) -> Size { Size::from_bytes(self.bytes().checked_add(rhs.bytes()).unwrap()) }
+}
+impl Sub for Size {
+    type Output = Size;
+    fn sub(self, rhs: Size) -> Size { Size::from_bytes(self.bytes().checked_sub(rhs.bytes()).unwrap()) }
+}
+impl Mul<u64> for Size {
+    type Output = Size;
+    fn mul(self, rhs: u64) -> Size { Size::from_bytes(self.bytes().checked_mul(rhs).unwrap()) }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+struct Align { pow2: u8 }
+impl Align {
+    const ONE: Align = Align { pow2: 0 };
+    const EIGHT: Align = Align { pow2: 3 };
+    const MAX: Align = Align { pow2: 29 };
+    fn from_bits(bits: u64) -> Result<Align, ()> { Self::from_bytes(Size::from_bits(bits).bytes()) }
+    fn from_bytes(bytes: u64) -> Result<Align, ()> {
+        if bytes == 0 { return Ok(Self::ONE); }
+        if !bytes.is_power_of_two() { return Err(()); }
+        let pow2 = bytes.trailing_zeros() as u8;
+        if pow2 > Self::MAX.pow2 { return Err(()); }
+        Ok(Align { pow2 })
+    }
+    fn bytes(self) -> u64 { 1_u64 << self.pow2 }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+struct AbiAlign { abi: Align }
+impl AbiAlign {
+    fn new(abi: Align) -> AbiAlign { AbiAlign { abi } }
+    fn min(self, other: AbiAlign) -> AbiAlign { AbiAlign { abi: self.abi.min(other.abi) } }
+    fn max(self, other: AbiAlign) -> AbiAlign { AbiAlign { abi: self.abi.max(other.abi) } }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum Endian { Little, Big }
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct AddressSpace(u32);
+impl AddressSpace {
+    const ZERO: Self = AddressSpace(0);
+    const GPU_CONSTANT: Self = AddressSpace(4);
+    const GPU_WORKGROUP: Self = AddressSpace(3);
+}
+
+struct PointerSpec {
+    pointer_size: Size,
+    pointer_align: Align,
+    pointer_offset: Size,
+    _is_fat: bool,
+}
+
+struct TargetDataLayout {
+    endian: Endian,
+    i1_align: Align,
+    i8_align: Align,
+    i16_align: Align,
+    i32_align: Align,
+    i64_align: Align,
+    i128_align: Align,
+    f16_align: Align,
+    f32_align: Align,
+    f64_align: Align,
+    f128_align: Align,
+    aggregate_align: Align,
+    vector_align: Vec<(Size, Align)>,
+    default_address_space: AddressSpace,
+    default_address_space_pointer_spec: PointerSpec,
+    address_space_info: Vec<(AddressSpace, PointerSpec)>,
+    instruction_address_space: AddressSpace,
+    c_enum_min_size: Integer,
+}
+
+trait HasDataLayout { fn data_layout(&self) -> &TargetDataLayout; }
+impl HasDataLayout for TargetDataLayout { fn data_layout(&self) -> &TargetDataLayout { self } }
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+enum Integer { I8, I16, I32, I64, I128 }
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+enum Float { F16, F16B, F32, F64, F128, PpcF128 }
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum IntegerType { Pointer(bool), Fixed(Integer, bool) }
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+enum Numeric { Int(Integer, bool), Float(Float) }
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+enum Primitive { Int(Integer, bool), Float(Float), Pointer(AddressSpace) }
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+enum RegKind {
+    Integer,
+    Float,
+    PpcF128,
+    Vector { hint_vector_elem: Primitive },
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+struct Reg { kind: RegKind, size: Size }
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+enum Scalar {
+    Initialized { value: Primitive, valid_range: WrappingRange },
+    Union { value: Primitive },
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+enum BackendRepr {
+    Scalar(Scalar),
+    ScalarPair { a: Scalar, b: Scalar, b_offset: Size },
+    SimdScalableVector { element: Scalar, count: BackendLaneCount, number_of_vectors: NumScalableVectors },
+    SimdVector { element: Scalar, count: BackendLaneCount },
+    Memory { sized: bool },
+}
+
+const MAX_SIMD_LANES: u16 = 1 << 0xF;
+#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
+struct BackendLaneCount(NonZero<u16>);
+#[derive(Debug)]
+enum LayoutCalculatorError<N> {
+    ZeroLengthSimdType,
+    OversizedSimdType { max_lanes: u16 },
+    Marker(std::marker::PhantomData<N>),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+struct NumScalableVectors(pub u8);
+
+const _: () = ();
+
+// SOURCE_METHODS
+
+#[path = "UPSTREAM_WRAPPING_RANGE_PATH"]
+mod wrapping_range;
+use wrapping_range::WrappingRange;
+
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+    let layout = TargetDataLayout::default();
+    println!("integer_sizes={},{},{},{},{}", Integer::I8.size().bytes(), Integer::I16.size().bytes(), Integer::I32.size().bytes(), Integer::I64.size().bytes(), Integer::I128.size().bytes());
+    println!("integer_names={},{}", Integer::I64.int_ty_str(), Integer::I128.uint_ty_str());
+    println!("integer_attr_pointer={:?}", Integer::from_attr(&layout, IntegerType::Pointer(false)));
+    println!("integer_align_i64={}", Integer::I64.align(&layout).abi.bytes());
+    println!("integer_fit={:?},{:?},{:?}", Integer::fit_signed(-129), Integer::fit_signed(2147483648), Integer::fit_unsigned(1_u128 << 64));
+    println!("integer_for_align={:?}", Integer::for_align(&layout, Align::from_bytes(4).unwrap()));
+    println!("integer_approx_align={:?}", Integer::approximate_align(&layout, Align::EIGHT));
+    println!("integer_from_size={:?},{:?}", Integer::from_size(Size::from_bytes(16)), Integer::from_size(Size::from_bytes(3)));
+    println!("float_info={},{},{}", Float::PpcF128.size().bytes(), Float::F16B.ty_str(), Float::F64.align(&layout).abi.bytes());
+    println!("pointer_info={},{},{:?}", Primitive::Pointer(AddressSpace::ZERO).size(&layout).bytes(), Primitive::Pointer(AddressSpace::ZERO).default_align(&layout).abi.bytes(), RegKind::from_primitive(Primitive::Pointer(AddressSpace::ZERO)));
+    let bool_scalar = Scalar::Initialized { value: Primitive::Int(Integer::I8, false), valid_range: WrappingRange { start: 0, end: 1 } };
+    let full_scalar = Scalar::Initialized { value: Primitive::Int(Integer::I8, false), valid_range: WrappingRange { start: 0, end: 255 } };
+    let union_scalar = Scalar::Union { value: Primitive::Int(Integer::I8, false) };
+    println!("scalar_checks={},{},{},{}", bool_scalar.is_bool(), bool_scalar.is_signed(), full_scalar.is_always_valid(&layout), union_scalar.is_uninit_valid());
+    println!("scalar_union_range={}:{}", union_scalar.valid_range(&layout).start, union_scalar.valid_range(&layout).end);
+    let pair = BackendRepr::ScalarPair { a: bool_scalar, b: full_scalar, b_offset: Size::from_bytes(1) };
+    println!("backend_pair={:?},{}", pair.scalar_platform_align(&layout).map(Align::bytes), pair.scalar_size(&layout).unwrap().bytes());
+    println!("backend_equiv={}", BackendRepr::Scalar(bool_scalar).eq_up_to_validity(&BackendRepr::Scalar(full_scalar)));
+    println!("backend_union_memory={}", matches!(BackendRepr::Memory { sized: false }.to_union(), BackendRepr::Memory { sized: true }));
+    println!("lane_count={},{},{},{}", BackendLaneCount::new::<()>(0).is_err(), BackendLaneCount::new::<()>(32768).unwrap().as_u64(), BackendLaneCount::new::<()>(32768).unwrap().is_power_of_two(), BackendLaneCount::new::<()>(32769).is_err());
+    println!("scalable_fields={:?},{:?},{:?}", NumScalableVectors::from_field_count(2), NumScalableVectors::from_field_count(7), NumScalableVectors::from_field_count(8));
+    println!("vector_align={}", layout.rust_vector_align(Size::from_bytes(3)).bytes());
+    println!("register_align={},{},{},{},{}",
+        Reg { kind: RegKind::Integer, size: Size::from_bytes(1) }.align(&layout).bytes(),
+        Reg { kind: RegKind::Integer, size: Size::from_bytes(8) }.align(&layout).bytes(),
+        Reg { kind: RegKind::Float, size: Size::from_bytes(8) }.align(&layout).bytes(),
+        Reg { kind: RegKind::PpcF128, size: Size::from_bytes(16) }.align(&layout).bytes(),
+        Reg { kind: RegKind::Vector { hint_vector_elem: Primitive::Int(Integer::I8, true) }, size: Size::from_bytes(3) }.align(&layout).bytes());
+    println!("register_width_error={}", std::panic::catch_unwind(|| Reg { kind: RegKind::Integer, size: Size::from_bytes(17) }.align(&layout)).is_err());
+    println!("vector_align_zero={}", layout.rust_vector_align(Size::from_bytes(0)).bytes());
+    println!("vector_align_overflow={}", std::panic::catch_unwind(|| layout.rust_vector_align(Size::from_bytes((1_u64 << 63) + 1))).is_err());
+    let mut address_spaces = TargetDataLayout::default();
+    address_spaces.address_space_info.push((AddressSpace(1), PointerSpec { pointer_size: Size::from_bytes(8), pointer_align: Align::EIGHT, pointer_offset: Size::from_bytes(4), _is_fat: false }));
+    address_spaces.address_space_info.push((AddressSpace(2), PointerSpec { pointer_size: Size::from_bytes(8), pointer_align: Align::EIGHT, pointer_offset: Size::from_bytes(3), _is_fat: false }));
+    println!("address_space={},{},{:?}", Primitive::Pointer(AddressSpace(1)).size(&address_spaces).bytes(), address_spaces.pointer_offset_in(AddressSpace(1)).bytes(), address_spaces.ptr_sized_integer_in(AddressSpace(1)));
+    println!("unknown_address_space={}", std::panic::catch_unwind(|| address_spaces.pointer_size_in(AddressSpace(3))).is_err());
+    println!("offset_width_error={}", std::panic::catch_unwind(|| address_spaces.ptr_sized_integer_in(AddressSpace(2))).is_err());
+    println!("signed_non_scalar_error={}", std::panic::catch_unwind(|| BackendRepr::Memory { sized: true }.is_signed()).is_err());
+}

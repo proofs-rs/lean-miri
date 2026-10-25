@@ -1,0 +1,238 @@
+#![feature(rustc_private)]
+extern crate rustc_driver;
+extern crate rustc_abi;
+extern crate rustc_middle;
+extern crate rustc_ast;
+
+use rustc_abi::{Align, HasDataLayout, Size, TargetDataLayout};
+use rustc_ast::Mutability;
+use rustc_middle::mir::interpret::{AllocError, AllocInit, AllocRange, Allocation, CtfeProvenance, Pointer, Provenance, Scalar, AllocId, alloc_range, interp_ok};
+use std::cell::RefCell;
+use std::fmt;
+use std::num::NonZero;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+fn bytes_text(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| b.to_string()).collect::<Vec<_>>().join(",")
+}
+
+fn range(start: u64, finish: u64) -> AllocRange {
+    alloc_range(Size::from_bytes(start), Size::from_bytes(finish - start))
+}
+
+fn show_read(result: Result<&[u8], AllocError>) -> String {
+    match result {
+        Ok(bytes) => format!("O{}", bytes_text(bytes)),
+        Err(AllocError::InvalidUninitBytes(Some(bad))) => format!(
+            "U{}:{}", bad.bad.start.bytes(), bad.bad.end().bytes()
+        ),
+        Err(AllocError::InvalidUninitBytes(None)) => "U-".into(),
+        Err(AllocError::ReadPointerAsInt(Some(bad))) => format!(
+            "P{}:{}", bad.bad.start.bytes(), bad.bad.end().bytes()
+        ),
+        Err(AllocError::ReadPointerAsInt(None)) => "P-".into(),
+        Err(AllocError::ReadPartialPointer(offset)) => format!("R{}", offset.bytes()),
+    }
+}
+
+fn inspect(tag: &str, allocation: &Allocation<CtfeProvenance>, layout: &TargetDataLayout) {
+    println!("A {tag} {} {}", allocation.len(), allocation.align.bytes());
+    let len = allocation.len() as u64;
+    println!("W {tag} {}", bytes_text(allocation.get_bytes_unchecked(range(0, len))));
+    let mut ranges = vec![(0, 0), (0, len), (len, len)];
+    if len > 0 {
+        ranges.push((0, 1));
+        ranges.push((len - 1, len));
+        ranges.push((0, len + 1));
+        ranges.push((len, len + 1));
+    }
+    if len >= 2 {
+        ranges.push((1, 2));
+        ranges.push((1, len));
+    }
+    for (start, finish) in ranges {
+        let result = allocation.get_bytes_strip_provenance(layout, range(start, finish));
+        println!("R {tag} {start} {finish} {}", show_read(result));
+    }
+}
+
+fn show_scalar(value: Scalar<CtfeProvenance>) -> String {
+    match value {
+        Scalar::Int(integer) => format!("I:{}:{}", integer.size().bytes(), integer.to_bits_unchecked()),
+        Scalar::Ptr(pointer, pointer_size) => {
+            let (provenance, offset) = pointer.into_raw_parts();
+            format!("P:{}:{}:{}", pointer_size.get(), offset.bytes(), provenance.alloc_id().0.get())
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum WildProv { Concrete(u64), Wild }
+
+impl Provenance for WildProv {
+    const OFFSET_IS_ADDR: bool = true;
+    const WILDCARD: Option<Self> = Some(Self::Wild);
+
+    fn fmt(_pointer: &Pointer<Self>, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("wild-provenance")
+    }
+
+    fn get_alloc_id(self) -> Option<AllocId> { None }
+}
+
+fn inspect_wildcard_fragments(tag: &str, allocation: &Allocation<WildProv>, len: u64, layout: &TargetDataLayout) {
+    let mut values = Vec::new();
+    for position in 0..len {
+        let fragment = allocation.provenance().get_byte(Size::from_bytes(position), layout);
+        values.push(match fragment {
+            Some(fragment) => format!("{}:{:?}", fragment.idx, fragment.prov),
+            None => "-".into(),
+        });
+    }
+    println!("N {tag} {}", values.join(","));
+    println!("N {tag}_merge {}", allocation.provenance().get_range(range(0, len), layout).count());
+}
+
+fn exercise_native_write(layout: &TargetDataLayout) {
+    let mut allocation = Allocation::<WildProv>::new(
+        Size::from_bytes(8), Align::from_bytes(8).unwrap(), AllocInit::Uninit, ()
+    );
+    let pointer = Pointer::new(WildProv::Concrete(7), Size::from_bytes(0x0102030405060708u64));
+    allocation.write_scalar(layout, range(0, 8), Scalar::from_pointer(pointer, layout)).unwrap();
+    let before = bytes_text(allocation.get_bytes_unchecked(range(0, 8)));
+    allocation.process_native_write(layout, Some(range(3, 5)));
+    let initialized = allocation.init_mask().is_range_initialized(range(0, 8)).is_ok();
+    println!("N native {}:{}:{}", before, initialized,
+        bytes_text(allocation.get_bytes_unchecked(range(0, 8))));
+    inspect_wildcard_fragments("native", &allocation, 8, layout);
+    let merged = allocation.provenance_merge_bytes(layout);
+    println!("N native_merge_result {merged}");
+    inspect_wildcard_fragments("native_after_merge", &allocation, 8, layout);
+
+    let mut zero = Allocation::<WildProv>::new(
+        Size::from_bytes(0), Align::ONE, AllocInit::Uninit, ()
+    );
+    zero.process_native_write(layout, Some(range(9, 9)));
+    println!("N native_zero {}:{}", zero.len(),
+        zero.init_mask().is_range_initialized(range(0, 0)).is_ok());
+    inspect_wildcard_fragments("native_zero", &zero, 0, layout);
+    let merged = zero.provenance_merge_bytes(layout);
+    println!("N native_zero_merge {merged}");
+
+    let mut no_wildcard = Allocation::<CtfeProvenance>::new(
+        Size::from_bytes(8), Align::ONE, AllocInit::Uninit, ()
+    );
+    let failed = catch_unwind(AssertUnwindSafe(|| {
+        no_wildcard.process_native_write(layout, Some(range(0, 1)));
+    })).is_err();
+    let initialized = no_wildcard.init_mask().is_range_initialized(range(0, 1)).is_ok();
+    println!("N native_missing_wildcard {failed}:{initialized}");
+}
+
+fn exercise_adjust_from_tcx(layout: &TargetDataLayout) {
+    let source_id = AllocId(NonZero::new(1).unwrap());
+    let target_id = AllocId(NonZero::new(2).unwrap());
+    let mut source = Allocation::<CtfeProvenance>::new(
+        Size::from_bytes(8), Align::from_bytes(8).unwrap(), AllocInit::Uninit, ()
+    );
+    let pointer = Pointer::new(CtfeProvenance::from(source_id), Size::from_bytes(0x1234));
+    source.write_scalar(layout, range(0, 8), Scalar::from_pointer(pointer, layout)).unwrap();
+    let callback_order = RefCell::new(Vec::new());
+    let adjusted = source.adjust_from_tcx(
+        layout,
+        |bytes, align| {
+            callback_order.borrow_mut().push(format!("B{}:{}", bytes.len(), align.bytes()));
+            interp_ok(bytes.to_vec().into_boxed_slice())
+        },
+        |pointer| {
+            let (old_provenance, old_offset) = pointer.into_raw_parts();
+            callback_order.borrow_mut().push(format!("P{}:{}", old_provenance.alloc_id().0.get(), old_offset.bytes()));
+            interp_ok(Pointer::new(
+                CtfeProvenance::from(target_id),
+                Size::from_bytes(old_offset.bytes() + 0x20),
+            ))
+        },
+    ).unwrap();
+    println!("T adjust_callbacks {}", callback_order.into_inner().join(","));
+    println!("T adjust_bytes {}", bytes_text(adjusted.get_bytes_unchecked(range(0, 8))));
+    println!("T adjust_read {}", show_scalar(adjusted.read_scalar(layout, range(0, 8), true).unwrap()));
+    println!("T adjust_meta {}:{}:{:?}:{}", adjusted.len(), adjusted.align.bytes(), adjusted.mutability,
+        adjusted.init_mask().is_range_initialized(range(0, 8)).is_ok());
+
+    let empty_source = Allocation::<CtfeProvenance>::from_bytes(
+        vec![9, 8, 7], Align::ONE, Mutability::Not, ()
+    );
+    let empty_calls = RefCell::new(Vec::new());
+    let empty_adjusted: Allocation<CtfeProvenance> = empty_source.adjust_from_tcx(
+        layout,
+        |bytes, align| {
+            empty_calls.borrow_mut().push(format!("B{}:{}", bytes.len(), align.bytes()));
+            interp_ok(bytes.to_vec().into_boxed_slice())
+        },
+        |_pointer| panic!("pointer adjustment must not run for an allocation without relocations"),
+    ).unwrap();
+    println!("T adjust_no_ptrs {}:{}", empty_calls.into_inner().join(","), bytes_text(empty_adjusted.get_bytes_unchecked(range(0, 3))));
+
+    let mut fragment_source = Allocation::<CtfeProvenance>::new(
+        Size::from_bytes(8), Align::ONE, AllocInit::Uninit, ()
+    );
+    fragment_source.write_scalar(layout, range(0, 8), Scalar::from_pointer(pointer, layout)).unwrap();
+    fragment_source.get_bytes_unchecked_for_overwrite(layout, range(3, 4))[0] = 0xaa;
+    let fragment_calls = RefCell::new(Vec::new());
+    let rejected = catch_unwind(AssertUnwindSafe(|| {
+        let _ = fragment_source.adjust_from_tcx::<CtfeProvenance, Box<[u8]>>(
+            layout,
+            |bytes, align| {
+                fragment_calls.borrow_mut().push(format!("B{}:{}", bytes.len(), align.bytes()));
+                interp_ok(bytes.to_vec().into_boxed_slice())
+            },
+            |_pointer| panic!("pointer adjustment must not run for fragment provenance"),
+        );
+    })).is_err();
+    println!("T adjust_fragments {}:{}", rejected, fragment_calls.into_inner().join(","));
+}
+
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+    let layout = TargetDataLayout::default();
+    let raw = Allocation::<CtfeProvenance>::from_bytes(
+        vec![3, 1, 4, 1, 5], Align::ONE, Mutability::Not, ()
+    );
+    inspect("raw", &raw, &layout);
+
+    for (tag, init) in [("uninit0", AllocInit::Uninit), ("zero0", AllocInit::Zero)] {
+        let allocation = Allocation::<CtfeProvenance>::new(Size::from_bytes(0), Align::ONE, init, ());
+        inspect(tag, &allocation, &layout);
+    }
+    for (tag, init) in [("uninit5", AllocInit::Uninit), ("zero5", AllocInit::Zero)] {
+        let allocation = Allocation::<CtfeProvenance>::new(Size::from_bytes(5), Align::ONE, init, ());
+        inspect(tag, &allocation, &layout);
+    }
+    for len in [63u64, 64, 65] {
+        let allocation = Allocation::<CtfeProvenance>::new(Size::from_bytes(len), Align::ONE, AllocInit::Uninit, ());
+        println!("B {len} {}", show_read(allocation.get_bytes_strip_provenance(&layout, range(len.saturating_sub(1), len))));
+    }
+
+    let mut pointer_scalar = Allocation::<CtfeProvenance>::new(
+        Size::from_bytes(8), Align::ONE, AllocInit::Uninit, ()
+    );
+    let alloc_id = AllocId(NonZero::new(1).unwrap());
+    let pointer = Pointer::new(CtfeProvenance::from(alloc_id), Size::from_bytes(0x1234));
+    let scalar = Scalar::from_pointer(pointer, &layout);
+    pointer_scalar.write_scalar(&layout, range(0, 8), scalar).unwrap();
+    inspect("pointer_scalar", &pointer_scalar, &layout);
+
+    let mut byte_ops = Allocation::<CtfeProvenance>::new(
+        Size::from_bytes(8), Align::ONE, AllocInit::Uninit, ()
+    );
+    byte_ops.write_scalar(&layout, range(0, 8), scalar).unwrap();
+    byte_ops.get_bytes_unchecked_for_overwrite(&layout, range(3, 4))[0] = 0xaa;
+    println!("X write_bytes {}", show_read(byte_ops.get_bytes_strip_provenance(&layout, range(0, 8))));
+    byte_ops.clear_provenance(&layout, range(0, 8));
+    println!("X clear_provenance {}", show_read(byte_ops.get_bytes_strip_provenance(&layout, range(0, 8))));
+    byte_ops.write_uninit(&layout, range(2, 4));
+    println!("X write_uninit {}", show_read(byte_ops.get_bytes_strip_provenance(&layout, range(1, 5))));
+
+    exercise_adjust_from_tcx(&layout);
+    exercise_native_write(&layout);
+}

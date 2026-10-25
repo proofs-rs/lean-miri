@@ -1,0 +1,446 @@
+use std::cell::{Ref, RefCell};
+use std::cmp::Ordering;
+use std::collections::{HashMap, VecDeque};
+use std::hash::Hash;
+use std::ops::Index;
+
+type Scalar = i32;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct VectorIdx(u32);
+
+impl From<u32> for VectorIdx {
+    fn from(value: u32) -> Self { Self(value) }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct VTimestamp { raw: u32 }
+
+impl VTimestamp {
+    const ZERO: Self = Self { raw: 0 };
+    fn new(time: u32) -> Self { Self { raw: time * 2 } }
+    fn time(&self) -> u32 { self.raw >> 1 }
+}
+
+impl PartialEq for VTimestamp {
+    fn eq(&self, other: &Self) -> bool { self.time() == other.time() }
+}
+impl Eq for VTimestamp {}
+impl PartialOrd for VTimestamp {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
+}
+impl Ord for VTimestamp {
+    fn cmp(&self, other: &Self) -> Ordering { self.time().cmp(&other.time()) }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct VClock(Vec<VTimestamp>);
+
+impl Index<VectorIdx> for VClock {
+    type Output = VTimestamp;
+    fn index(&self, index: VectorIdx) -> &Self::Output {
+        static ZERO: VTimestamp = VTimestamp::ZERO;
+        match self.0.get(index.0 as usize) {
+            Some(timestamp) => timestamp,
+            None => &ZERO,
+        }
+    }
+}
+
+fn clock_at(index: VectorIdx, time: u32) -> VClock {
+    let mut clock = vec![VTimestamp::ZERO; index.0 as usize + 1];
+    clock[index.0 as usize] = VTimestamp::new(time);
+    VClock(clock)
+}
+
+fn clock_pair(main: u32, worker: u32) -> VClock {
+    VClock(vec![VTimestamp::new(main), VTimestamp::new(worker)])
+}
+
+#[derive(Clone, Debug, Default)]
+struct ThreadClockSet {
+    clock: VClock,
+    write_seqcst: VClock,
+    read_seqcst: VClock,
+}
+
+struct ThreadManager<'a>(std::marker::PhantomData<&'a ()>);
+struct DataRaceState {
+    index: VectorIdx,
+    clocks: RefCell<ThreadClockSet>,
+    ongoing_action_data_race_free: bool,
+}
+impl DataRaceState {
+    fn active_thread_state(&self, _threads: &ThreadManager<'_>) -> (VectorIdx, ThreadClockSet) {
+        (self.index, self.clocks.borrow().clone())
+    }
+    fn ongoing_action_data_race_free(&self) -> bool { self.ongoing_action_data_race_free }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AllocRange { start: u64, size: u64 }
+impl AllocRange { fn end(self) -> u64 { self.start + self.size } }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AccessType {
+    PerfectlyOverlapping(usize),
+    Empty(usize),
+    ImperfectlyOverlapping(std::ops::Range<usize>),
+}
+
+#[derive(Clone, Debug)]
+struct RangeElem<T> { range: AllocRange, data: T }
+#[derive(Clone, Debug)]
+struct RangeObjectMap<T> { v: Vec<RangeElem<T>> }
+
+impl<T> RangeObjectMap<T> {
+    fn new() -> Self { Self { v: Vec::new() } }
+    fn find_offset(&self, offset: u64) -> Result<usize, usize> {
+        for (index, elem) in self.v.iter().enumerate() {
+            if offset < elem.range.start { return Err(index); }
+            if offset < elem.range.end() { return Ok(index); }
+        }
+        Err(self.v.len())
+    }
+    fn access_type(&self, range: AllocRange) -> AccessType {
+        match self.find_offset(range.start) {
+            Ok(position) => {
+                let elem = &self.v[position];
+                if elem.range.start == range.start && elem.range.size == range.size {
+                    AccessType::PerfectlyOverlapping(position)
+                } else {
+                    let end_position = match self.find_offset(range.end() - 1) {
+                        Ok(position) => position + 1,
+                        Err(position) => position,
+                    };
+                    AccessType::ImperfectlyOverlapping(position..end_position)
+                }
+            }
+            Err(position) => match self.find_offset(range.end() - 1) {
+                Err(end_position) if position == end_position => AccessType::Empty(position),
+                Err(end_position) => AccessType::ImperfectlyOverlapping(position..end_position),
+                Ok(end_position) => AccessType::ImperfectlyOverlapping(position..end_position + 1),
+            },
+        }
+    }
+    fn insert_at_pos(&mut self, position: usize, range: AllocRange, data: T) {
+        self.v.insert(position, RangeElem { range, data });
+        if position > 0 { assert!(self.v[position - 1].range.end() <= range.start); }
+        if position < self.v.len() - 1 { assert!(range.end() <= self.v[position + 1].range.start); }
+    }
+    fn remove_pos_range(&mut self, positions: std::ops::Range<usize>) {
+        self.v.drain(positions);
+    }
+    fn remove_from_pos(&mut self, position: usize) { self.v.remove(position); }
+}
+
+impl<T> Index<usize> for RangeObjectMap<T> {
+    type Output = T;
+    fn index(&self, position: usize) -> &Self::Output { &self.v[position].data }
+}
+impl<T> std::ops::IndexMut<usize> for RangeObjectMap<T> {
+    fn index_mut(&mut self, position: usize) -> &mut Self::Output { &mut self.v[position].data }
+}
+
+#[derive(Clone)]
+struct FxHashMap<K, V>(HashMap<K, V>);
+
+impl<K, V> Default for FxHashMap<K, V> {
+    fn default() -> Self { Self(HashMap::new()) }
+}
+
+impl<K: Eq + Hash, V> FxHashMap<K, V> {
+    fn iter(&self) -> std::collections::hash_map::Iter<'_, K, V> { self.0.iter() }
+    fn try_insert(&mut self, key: K, value: V) -> Result<&mut V, ()> {
+        if self.0.contains_key(&key) { Err(()) } else { Ok(self.0.entry(key).or_insert(value)) }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct LoadInfo {
+    timestamps: FxHashMap<VectorIdx, VTimestamp>,
+    sc_loaded: bool,
+}
+
+impl<K, V> std::fmt::Debug for FxHashMap<K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("FxHashMap") }
+}
+impl<K, V> PartialEq for FxHashMap<K, V> {
+    fn eq(&self, other: &Self) -> bool { self.0.len() == other.0.len() }
+}
+impl<K, V> Eq for FxHashMap<K, V> {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StoreElement {
+    store_thread: VectorIdx,
+    store_timestamp: VTimestamp,
+    sync_clock: VClock,
+    is_seqcst: bool,
+    val: Option<i32>,
+    load_info: RefCell<LoadInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StoreBuffer { buffer: VecDeque<StoreElement> }
+
+struct StoreBufferAlloc { store_buffers: RefCell<RangeObjectMap<StoreBuffer>> }
+
+type InterpResult<'tcx, T = ()> = Result<T, &'tcx ()>;
+fn interp_ok<'tcx, T>(value: T) -> InterpResult<'tcx, T> { Ok(value) }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoadRecency { Latest, Outdated }
+
+const STORE_BUFFER_LIMIT: usize = 128;
+
+mod rand {
+    pub trait Rng { fn choose_index(&mut self, length: usize) -> usize; }
+    pub mod seq {
+        use super::Rng;
+        pub trait IteratorRandom: Iterator + Sized {
+            fn choose<R: Rng + ?Sized>(self, rng: &mut R) -> Option<Self::Item>
+            where Self::Item: Clone {
+                let values: Vec<_> = self.collect();
+                if values.is_empty() { None }
+                else { values.get(rng.choose_index(values.len())).cloned() }
+            }
+        }
+        impl<I: Iterator> IteratorRandom for I where I::Item: Clone {}
+    }
+}
+
+use rand::Rng;
+
+struct ControlledRng { rank: usize }
+impl Rng for ControlledRng {
+    fn choose_index(&mut self, length: usize) -> usize { self.rank % length }
+}
+
+impl<'tcx> StoreBuffer {
+@MIRI_STORE_BUFFER_NEW@
+@MIRI_READ_FROM_LAST_STORE@
+@MIRI_BUFFERED_READ@
+@MIRI_BUFFERED_WRITE@
+@MIRI_FETCH_STORE@
+@MIRI_STORE_IMPL@
+}
+
+impl StoreElement {
+@MIRI_LOAD_IMPL@
+}
+
+impl StoreBufferAlloc {
+@MIRI_STORE_BUFFER_ALLOC_NEW@
+@MIRI_STORE_BUFFER_ALLOC_NON_ATOMIC_WRITE@
+@MIRI_STORE_BUFFER_ALLOC_GET@
+@MIRI_STORE_BUFFER_ALLOC_GET_OR_CREATE@
+}
+
+fn store(buffer: &mut StoreBuffer, value: i32, thread: u32, time: u32, is_seqcst: bool) {
+    let index = VectorIdx::from(thread);
+    buffer.store_impl(value, index, &clock_at(index, time), is_seqcst, VClock::default());
+}
+
+fn store_with_sync(buffer: &mut StoreBuffer, value: i32, thread: u32, time: u32,
+    is_seqcst: bool, sync_clock: VClock) {
+    let index = VectorIdx::from(thread);
+    buffer.store_impl(value, index, &clock_at(index, time), is_seqcst, sync_clock);
+}
+
+fn value_label(value: Option<i32>) -> String {
+    match value { Some(value) => value.to_string(), None => "U".to_owned() }
+}
+
+fn emit_choices(label: &str, buffer: &StoreBuffer, is_seqcst: bool, clocks: &ThreadClockSet) {
+    let mut support = Vec::new();
+    for rank in 0..STORE_BUFFER_LIMIT {
+        let mut rng = ControlledRng { rank };
+        let (element, recency) = buffer.fetch_store(is_seqcst, clocks, &mut rng);
+        let text = format!("{}{}@{}:{}", value_label(element.val), match recency {
+            LoadRecency::Latest => "L",
+            LoadRecency::Outdated => "O",
+        }, element.sync_clock[VectorIdx::from(1)].raw,
+           element.sync_clock[VectorIdx::from(2)].raw);
+        if !support.contains(&text) { support.push(text); }
+    }
+    println!("choices:{label}:{}", support.join(","));
+}
+
+fn element_mut_by_value(buffer: &mut StoreBuffer, value: i32) -> Option<&mut StoreElement> {
+    buffer.buffer.iter_mut().find(|element| element.val == Some(value))
+}
+
+fn main() {
+    let mut base = StoreBuffer::new(Some(0));
+    store(&mut base, 1, 0, 1, false);
+    store(&mut base, 2, 0, 2, false);
+    emit_choices("all", &base, false, &ThreadClockSet::default());
+
+    let rmw_global = DataRaceState {
+        index: VectorIdx::from(1),
+        clocks: RefCell::new(ThreadClockSet { clock: clock_at(VectorIdx::from(1), 2),
+            ..ThreadClockSet::default() }),
+        ongoing_action_data_race_free: false,
+    };
+    let rmw_threads = ThreadManager(std::marker::PhantomData);
+    let mut rmw_buffer = base.clone();
+    rmw_buffer.read_from_last_store(&rmw_global, &rmw_threads, true);
+    let rmw_last = rmw_buffer.buffer.back();
+    if let Some(element) = rmw_last {
+        let first = element.load_info.borrow().timestamps.iter().next().map(|(_, ts)| ts.time());
+        println!("rmw-last:{}:{}:{}", value_label(element.val), first.unwrap_or(0),
+            element.load_info.borrow().sc_loaded as u8);
+    }
+
+    let mut sync_clocks = StoreBuffer::new(Some(0));
+    store_with_sync(&mut sync_clocks, 1, 0, 1, false,
+        clock_at(VectorIdx::from(1), 1));
+    store_with_sync(&mut sync_clocks, 2, 0, 2, false,
+        clock_at(VectorIdx::from(2), 2));
+    emit_choices("sync-clocks", &sync_clocks, false, &ThreadClockSet::default());
+
+    let mut co_wr = ThreadClockSet::default();
+    co_wr.clock = clock_at(VectorIdx::from(0), 1);
+    emit_choices("cowr", &base, false, &co_wr);
+
+    let mut co_rr = base.clone();
+    if let Some(element) = element_mut_by_value(&mut co_rr, 1) {
+        let _ = element.load_info.borrow_mut().timestamps.try_insert(
+            VectorIdx::from(1), VTimestamp::new(1));
+    }
+    let mut co_rr_clock = ThreadClockSet::default();
+    co_rr_clock.clock = clock_at(VectorIdx::from(1), 1);
+    emit_choices("corr", &co_rr, false, &co_rr_clock);
+
+    let mut write_sc_buffer = base.clone();
+    if let Some(element) = element_mut_by_value(&mut write_sc_buffer, 1) { element.is_seqcst = true; }
+    let mut write_sc_clock = ThreadClockSet::default();
+    write_sc_clock.write_seqcst = clock_at(VectorIdx::from(0), 1);
+    emit_choices("write-sc", &write_sc_buffer, false, &write_sc_clock);
+
+    let mut read_sc_clock = ThreadClockSet::default();
+    read_sc_clock.read_seqcst = clock_at(VectorIdx::from(0), 1);
+    emit_choices("read-sc", &base, true, &read_sc_clock);
+
+    let mut sc_loaded_buffer = base.clone();
+    if let Some(element) = element_mut_by_value(&mut sc_loaded_buffer, 1) {
+        element.load_info.borrow_mut().sc_loaded = true;
+    }
+    emit_choices("sc-loaded", &sc_loaded_buffer, true, &ThreadClockSet::default());
+
+    let mut sc_filter = StoreBuffer::new(Some(0));
+    store(&mut sc_filter, 1, 0, 1, false);
+    store(&mut sc_filter, 2, 1, 1, true);
+    store(&mut sc_filter, 3, 2, 1, true);
+    emit_choices("sc-filter", &sc_filter, true, &ThreadClockSet::default());
+
+    let mut load_effect = base.clone();
+    if let Some(element) = element_mut_by_value(&mut load_effect, 1) {
+        let mut first_clock = ThreadClockSet::default();
+        first_clock.clock = clock_at(VectorIdx::from(1), 2);
+        let _ = element.load_impl(VectorIdx::from(1), &first_clock, false);
+        let mut second_clock = ThreadClockSet::default();
+        second_clock.clock = clock_at(VectorIdx::from(1), 4);
+        let _ = element.load_impl(VectorIdx::from(1), &second_clock, true);
+        let first = element.load_info.borrow().timestamps.iter().next().map(|(_, ts)| ts.time());
+        println!("load-info:first:{}:sc:{}", first.unwrap_or(0), element.load_info.borrow().sc_loaded as u8);
+    }
+
+    let mut limited = StoreBuffer::new(Some(0));
+    for value in 1..=140 { store(&mut limited, value, 0, 1, false); }
+    let first = limited.buffer.front().and_then(|element| element.val);
+    let last = limited.buffer.back().and_then(|element| element.val);
+    println!("limit:{}:{}:{}:{}", limited.buffer.len(), value_label(first), value_label(last), STORE_BUFFER_LIMIT);
+
+    // Exercise the exact buffered_read and buffered_write methods in source
+    // order, with the validation callback updating the active thread clock.
+    let thread_mgr = ThreadManager(std::marker::PhantomData);
+    let writer = DataRaceState {
+        index: VectorIdx::from(0),
+        clocks: RefCell::new(ThreadClockSet { clock: clock_at(VectorIdx::from(0), 2),
+            ..ThreadClockSet::default() }),
+        ongoing_action_data_race_free: false,
+    };
+    let mut integrated = StoreBuffer::new(Some(0));
+    integrated.buffered_write(11, &writer, &thread_mgr, false,
+        clock_at(VectorIdx::from(0), 1)).unwrap();
+
+    let reader = DataRaceState {
+        index: VectorIdx::from(1),
+        clocks: RefCell::new(ThreadClockSet { clock: clock_pair(1, 1),
+            ..ThreadClockSet::default() }),
+        ongoing_action_data_race_free: false,
+    };
+    let mut rng = ControlledRng { rank: 0 };
+    let (read_value, read_recency) = integrated.buffered_read(
+        &reader, &thread_mgr, false, &mut rng, |sync_clock| {
+            if sync_clock.map(|clock| clock[VectorIdx::from(0)].time()) != Some(1) {
+                return Err(&());
+            }
+            *reader.clocks.borrow_mut() = ThreadClockSet {
+                clock: clock_pair(2, 2), ..ThreadClockSet::default()
+            };
+            Ok(())
+        }).unwrap();
+    let read_element = element_mut_by_value(&mut integrated, 11).unwrap();
+    let read_timestamp = read_element.load_info.borrow().timestamps
+        .0.get(&VectorIdx::from(1)).map(|timestamp| timestamp.time()).unwrap_or(0);
+    println!("dispatch:read:{}:{}:{}:{}", value_label(read_value),
+        match read_recency { LoadRecency::Latest => "Latest", LoadRecency::Outdated => "Outdated" },
+        read_timestamp, reader.clocks.borrow().clock[VectorIdx::from(1)].time());
+
+    *reader.clocks.borrow_mut() = ThreadClockSet {
+        clock: clock_pair(2, 3), ..ThreadClockSet::default()
+    };
+    integrated.read_from_last_store(&reader, &thread_mgr, false);
+    integrated.buffered_write(12, &reader, &thread_mgr, false, clock_pair(2, 2)).unwrap();
+    let rmw_loaded = element_mut_by_value(&mut integrated, 11).unwrap();
+    let rmw_timestamp = rmw_loaded.load_info.borrow().timestamps
+        .0.get(&VectorIdx::from(1)).map(|timestamp| timestamp.time()).unwrap_or(0);
+    let rmw_sc_loaded = rmw_loaded.load_info.borrow().sc_loaded;
+    println!("dispatch:rmw:{}:load-ts{}:sc{}", integrated.buffer.iter()
+        .map(|element| value_label(element.val)).collect::<Vec<_>>().join(","),
+        rmw_timestamp, rmw_sc_loaded as u8);
+
+    let sc_writer = DataRaceState {
+        index: VectorIdx::from(0),
+        clocks: RefCell::new(ThreadClockSet { clock: clock_at(VectorIdx::from(0), 3),
+            ..ThreadClockSet::default() }),
+        ongoing_action_data_race_free: false,
+    };
+    integrated.buffered_write(13, &sc_writer, &thread_mgr, true,
+        clock_at(VectorIdx::from(0), 2)).unwrap();
+    let sc_element = element_mut_by_value(&mut integrated, 13).unwrap();
+    println!("dispatch:store:{}:{}:{}", value_label(sc_element.val),
+        sc_element.store_timestamp.time(),
+        format!("{}:{}", sc_element.is_seqcst as u8,
+            sc_element.sync_clock[VectorIdx::from(0)].time()));
+
+    let allocation = StoreBufferAlloc::new_allocation();
+    let first_range = AllocRange { start: 4, size: 4 };
+    let empty_read = allocation.get_store_buffer(AllocRange { start: 4, size: 4 }).unwrap();
+    println!("lookup:empty:{}", if empty_read.is_none() { "none" } else { "some" });
+    drop(empty_read);
+    let mut allocation = allocation;
+    let first = allocation.get_or_create_store_buffer_mut(first_range, Some(7)).unwrap();
+    println!("create:some:0:{}:{}:{}", first.buffer.len(), value_label(first.buffer.back().and_then(|elem| elem.val)), allocation.store_buffers.borrow().v.len());
+    let exact_read = allocation.get_store_buffer(first_range).unwrap();
+    let exact = exact_read.as_ref().map(|buffer| format!("some:0:{}:{}", buffer.buffer.len(), value_label(buffer.buffer.back().and_then(|elem| elem.val)))).unwrap_or_else(|| "none".to_owned());
+    drop(exact_read);
+    println!("lookup:exact:{exact}");
+    let partial = allocation.get_store_buffer(AllocRange { start: 5, size: 1 }).unwrap();
+    println!("lookup:partial:{}", if partial.is_none() { "none" } else { "some" });
+    drop(partial);
+    let protected = DataRaceState { index: VectorIdx::from(0), clocks: RefCell::new(ThreadClockSet::default()), ongoing_action_data_race_free: true };
+    allocation.non_atomic_write(first_range, &protected);
+    println!("non-atomic:protected:{}", allocation.store_buffers.borrow().v.len());
+    let race_state = DataRaceState { index: VectorIdx::from(0), clocks: RefCell::new(ThreadClockSet::default()), ongoing_action_data_race_free: false };
+    allocation.non_atomic_write(first_range, &race_state);
+    println!("non-atomic:perfect:{}", allocation.store_buffers.borrow().v.len());
+    let seed = allocation.get_or_create_store_buffer_mut(first_range, Some(9)).unwrap();
+    drop(seed);
+    let overlap = allocation.get_or_create_store_buffer_mut(AllocRange { start: 3, size: 2 }, Some(11)).unwrap();
+    println!("overlap:replace:some:0:{}:{}:{}", overlap.buffer.len(), value_label(overlap.buffer.back().and_then(|elem| elem.val)), allocation.store_buffers.borrow().v.len());
+    allocation.non_atomic_write(AllocRange { start: 2, size: 3 }, &race_state);
+    println!("non-atomic:partial:{}", allocation.store_buffers.borrow().v.len());
+}

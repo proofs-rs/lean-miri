@@ -1,0 +1,16 @@
+error: Undefined Behavior: memory access failed: attempting to access 4 bytes, but got null pointer
+  --> /workspace/lean-miri/docs/verification/tls-drain197/negative-001/source.rs:41:17
+   |
+41 |         let _ = core::ptr::read_volatile(core::ptr::null::<u32>());
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Undefined Behavior occurred here
+   |
+   = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
+   = help: see https://doc.rust-lang.org/nightly/reference/behavior-considered-undefined.html for further information
+   = note: this is on thread `unnamed-1`
+note: the current function got called indirectly due to this code
+  --> /workspace/lean-miri/docs/verification/tls-drain197/negative-001/source.rs:68:12
+   |
+68 |         if libc::pthread_key_create(&mut key_a, Some(destructor_a)) != 0 {
+   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace

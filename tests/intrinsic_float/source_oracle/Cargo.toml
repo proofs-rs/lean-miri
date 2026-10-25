@@ -1,0 +1,7 @@
+[package]
+name = "lean-miri-float-source-oracle"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rustc_apfloat = { path = "../../../upstream/rustc-apfloat-source" }

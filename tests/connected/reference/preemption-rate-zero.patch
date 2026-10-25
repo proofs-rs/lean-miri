@@ -1,0 +1,70 @@
+diff --git a/exporter/src/main.rs b/scratch/sc264-seeded-exporter/src/main.rs
+index 429dc7fe..c21f4e72 100644
+--- a/exporter/src/main.rs
++++ b/scratch/sc264-seeded-exporter/src/main.rs
+@@ -488,6 +488,35 @@ fn prepared_miri_reference_arguments() -> Result<Vec<String>, String> {
+     }
+ }
+ 
++#[cfg(feature = "miri-reference")]
++fn prepared_miri_reference_seed() -> Result<Option<u64>, String> {
++    match env::var("LEAN_MIRI_REFERENCE_SEED") {
++        Ok(value) => value
++            .parse::<u64>()
++            .map(Some)
++            .map_err(|_| "LEAN_MIRI_REFERENCE_SEED must be an unsigned 64-bit integer".into()),
++        Err(env::VarError::NotPresent) => Ok(None),
++        Err(error) => Err(format!("cannot read prepared Miri seed: {error}")),
++    }
++}
++
++#[cfg(feature = "miri-reference")]
++fn prepared_miri_reference_preemption_rate() -> Result<Option<f64>, String> {
++    match env::var("LEAN_MIRI_REFERENCE_PREEMPTION_RATE") {
++        Ok(value) => {
++            let rate = value
++                .parse::<f64>()
++                .map_err(|_| "LEAN_MIRI_REFERENCE_PREEMPTION_RATE must be a finite number in [0,1]".to_owned())?;
++            if !rate.is_finite() || !(0.0..=1.0).contains(&rate) {
++                return Err("LEAN_MIRI_REFERENCE_PREEMPTION_RATE must be a finite number in [0,1]".into());
++            }
++            Ok(Some(rate))
++        }
++        Err(env::VarError::NotPresent) => Ok(None),
++        Err(error) => Err(format!("cannot read prepared Miri preemption rate: {error}")),
++    }
++}
++
+ #[cfg(feature = "miri-reference")]
+ fn run_prepared_miri_reference_entry(
+     tcx: TyCtxt<'_>,
+@@ -495,7 +524,29 @@ fn run_prepared_miri_reference_entry(
+     entry_type: miri::MiriEntryFnType,
+     extra_args: &[String],
+ ) -> Value {
++    let seed = match prepared_miri_reference_seed() {
++        Ok(seed) => seed,
++        Err(error) => {
++            return json!({
++                "status":"failed",
++                "outcome":{"kind":"invalid_configuration","error":error},
++            });
++        }
++    };
++    let preemption_rate = match prepared_miri_reference_preemption_rate() {
++        Ok(rate) => rate,
++        Err(error) => {
++            return json!({
++                "status":"failed",
++                "outcome":{"kind":"invalid_configuration","error":error},
++            });
++        }
++    };
+     let mut config = miri::MiriConfig::default();
++    config.seed = seed;
++    if let Some(rate) = preemption_rate {
++        config.preemption_rate = rate;
++    }
+     config.borrow_tracker = Some(miri::BorrowTrackerMethod::TreeBorrows(
+         miri::TreeBorrowsParams {
+             precise_interior_mut: true,

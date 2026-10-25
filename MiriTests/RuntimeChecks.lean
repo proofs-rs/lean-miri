@@ -1,0 +1,56 @@
+import Init.System.IO
+
+namespace MiriTests
+
+/-- Source checks rerun even when their build artifacts are cached. -/
+def runtimeChecks : Array (String × Bool) := #[
+  ("MiriTests/Aggregate/Memory.lean", true),
+  ("MiriTests/Aggregate/Order.lean", true),
+  ("MiriTests/Allocation/LeanTests.lean", true),
+  ("MiriTests/Allocation/Operations.lean", true),
+  ("MiriTests/AtomicScalar/AtomicScalar.lean", true),
+  ("MiriTests/AtomicScalar/CompareExchangeFailureTail.lean", true),
+  ("MiriTests/Connected/Focused/KeyedArray166QA.lean", true),
+  ("MiriTests/Connected/Focused/MemoryState166QA.lean", true),
+  ("MiriTests/Constant/EvidenceTests.lean", true),
+  ("MiriTests/DataRace/ThreadClockReuseReachability.lean", true),
+  ("MiriTests/FunctionPointers/PersistentReservations.lean", false),
+  ("MiriTests/Input/AllocationImageIndexed2026.lean", true),
+  ("MiriTests/Input/CompilerSpanInterner2026.lean", true),
+  ("MiriTests/Input/JsonNumberRepresentation.lean", true),
+  ("MiriTests/Input/JsonReflexivityCache.lean", true),
+  ("MiriTests/Input/JsonTraversalCache2026.lean", true),
+  ("MiriTests/Input/MiriWriteAllHost.lean", true),
+  ("MiriTests/Input/SharedPayloadArrayRegression.lean", true),
+  ("MiriTests/Input/WindowsHostIoDemand.lean", true),
+  ("MiriTests/LocalAccess/Basic.lean", true),
+  ("MiriTests/MachineHooks/Connected.lean", true),
+  ("MiriTests/Memory112/RawMemory112.lean", true),
+  ("MiriTests/MemoryState/AllocatorIds.lean", true),
+  ("MiriTests/MemoryState/CoherentCallbacks.lean", true),
+  ("MiriTests/MemoryState/CoherentDeallocation.lean", true),
+  ("MiriTests/MemoryState/ConfiguredExtrasAllocation.lean", true),
+  ("MiriTests/MemoryState/CopyBridge.lean", true),
+  ("MiriTests/MemoryState/DetachedNativeOwner.lean", true),
+  ("MiriTests/MemoryState/GlobalMutationPrefixes.lean", true),
+  ("MiriTests/MemoryState/KeyedArrayProfiles.lean", true),
+  ("MiriTests/MemoryState/MemoryState.lean", true),
+  ("MiriTests/MemoryState/MemoryStateKeyedTableProfiles.lean", true),
+  ("MiriTests/Native/BytesOwnership.lean", true),
+  ("MiriTests/Place/Actual.lean", true),
+  ("MiriTests/Regression/ChoicePolicy.lean", false),
+  ("MiriTests/Regression/DeadlineMachine.lean", true),
+  ("MiriTests/Regression/MapValues.lean", true),
+  ("MiriTests/Regression/ZeroWidth.lean", true),
+  ("MiriTests/Rvalue/Homogeneity.lean", true),
+  ("MiriTests/Rvalue/Rvalue.lean", false),
+  ("MiriTests/Scalar/LeanTests.lean", true),
+  ("MiriTests/Stack/Lifecycle.lean", true),
+  ("MiriTests/TreeBorrows/DeallocationOrdering.lean", true),
+  ("MiriTests/TreeBorrows/MachineMemoryHooks.lean", true),
+  ("MiriTests/Validity/ConnectedPointerAlignment.lean", true),
+  ("MiriTests/Validity/LeanTests.lean", true),
+  ("MiriTests/Validity/RetagErrorMapping.lean", true)
+]
+
+end MiriTests

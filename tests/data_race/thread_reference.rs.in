@@ -1,0 +1,162 @@
+use std::marker::PhantomData;
+use std::ops::{Index, IndexMut};
+
+type InterpResult<'tcx, T = ()> = Result<T, ()>;
+struct Callback<'tcx> { token: u64, _marker: PhantomData<&'tcx ()> }
+impl<'tcx> Callback<'tcx> { fn new(token: u64) -> Self { Self { token, _marker: PhantomData } } }
+type StackEmptyCallback<'tcx> = Callback<'tcx>;
+type DynUnblockCallback<'tcx> = Callback<'tcx>;
+
+macro_rules! trace { ($($argument:tt)*) => {{}}; }
+macro_rules! info { ($($argument:tt)*) => {{}}; }
+macro_rules! throw_ub_format { ($($argument:tt)*) => {{ return Err(()); }}; }
+fn interp_ok<T>(value: T) -> Result<T, ()> { Ok(value) }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ThreadId(u32);
+impl ThreadId {
+    const MAIN_THREAD: ThreadId = ThreadId(0);
+    fn new_unchecked(id: u32) -> Self { Self(id) }
+}
+
+trait Idx: Sized { fn new(index: usize) -> Self; fn index(self) -> usize; }
+impl Idx for ThreadId {
+    fn new(index: usize) -> Self { ThreadId(u32::try_from(index).unwrap()) }
+    fn index(self) -> usize { usize::try_from(self.0).unwrap() }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum BlockReason {
+    Join(ThreadId), Sleep, Mutex, Condvar, RwLock, Semaphore, Futex, InitOnce,
+    Readiness, Eventfd, VirtualSocket, IO,
+}
+#[derive(Clone, Copy, Debug)]
+enum Deadline { Monotonic(u64), RealTime(u64) }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnblockKind { Ready, TimedOut }
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum ThreadJoinStatus { Joinable, Detached, Joined }
+enum ThreadState<'tcx> {
+    Enabled,
+    Blocked { reason: BlockReason, deadline: Option<Deadline>, callback: DynUnblockCallback<'tcx> },
+    Terminated,
+}
+impl ThreadState<'_> {
+    fn is_terminated(&self) -> bool { matches!(self, ThreadState::Terminated) }
+    fn is_enabled(&self) -> bool { matches!(self, ThreadState::Enabled) }
+}
+
+const DUMMY_SP: u64 = 0;
+struct Thread<'tcx> {
+    state: ThreadState<'tcx>,
+    thread_name: Option<Vec<u8>>,
+    stack: Vec<u64>,
+    origin_span: u64,
+    on_stack_empty: Option<StackEmptyCallback<'tcx>>,
+    top_user_relevant_frame: Option<usize>,
+    join_status: ThreadJoinStatus,
+    unwind_payloads: Vec<u64>,
+    last_error: Option<u64>,
+}
+impl<'tcx> Thread<'tcx> {
+    // @MIRI_THREAD_NEW@
+}
+
+struct IndexVec<I, T> { values: Vec<T>, _marker: PhantomData<I> }
+impl<I: Idx, T> IndexVec<I, T> {
+    fn new() -> Self { Self { values: Vec::new(), _marker: PhantomData } }
+    fn len(&self) -> usize { self.values.len() }
+    fn push(&mut self, value: T) -> I {
+        let index = I::new(self.values.len());
+        self.values.push(value);
+        index
+    }
+    fn iter(&self) -> std::slice::Iter<'_, T> { self.values.iter() }
+}
+impl<I: Idx, T> Index<I> for IndexVec<I, T> {
+    type Output = T;
+    fn index(&self, id: I) -> &Self::Output { &self.values[id.index()] }
+}
+impl<I: Idx, T> IndexMut<I> for IndexVec<I, T> {
+    fn index_mut(&mut self, id: I) -> &mut Self::Output { &mut self.values[id.index()] }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ThreadLookupError { InvalidId, Terminated(ThreadId) }
+
+struct ThreadManager<'tcx> {
+    active_thread: ThreadId,
+    threads: IndexVec<ThreadId, Thread<'tcx>>,
+    thread_local_allocs: Vec<(u64, ThreadId, u64)>,
+    yield_active_thread: bool,
+    fixed_scheduling: bool,
+}
+
+impl<'tcx> ThreadManager<'tcx> {
+    // @MIRI_THREAD_LOOKUP@
+    // @MIRI_CREATE_THREAD@
+    // @MIRI_SET_ACTIVE@
+    // @MIRI_LIVE_COUNT@
+    // @MIRI_DETACH@
+    // @MIRI_BLOCK@
+}
+
+fn new_manager<'tcx>() -> ThreadManager<'tcx> {
+    let mut threads = IndexVec::new();
+    threads.push(Thread::new(Some("main"), None));
+    ThreadManager {
+        active_thread: ThreadId::MAIN_THREAD,
+        threads,
+        thread_local_allocs: Vec::new(),
+        yield_active_thread: false,
+        fixed_scheduling: false,
+    }
+}
+
+fn state_code(state: &ThreadState<'_>) -> String {
+    match state {
+        ThreadState::Enabled => "enabled".to_owned(),
+        ThreadState::Terminated => "terminated".to_owned(),
+        ThreadState::Blocked { reason: BlockReason::Join(id), callback, .. } =>
+            format!("blocked-join-{}-cb-{}", id.0, callback.token),
+        ThreadState::Blocked { callback, .. } => format!("blocked-cb-{}", callback.token),
+    }
+}
+
+fn main() {
+    let mut created = new_manager();
+    let child = created.create_thread(Callback::new(42));
+    println!("create:{}:{}:{}:{}", child.0, state_code(&created.threads[child].state),
+        format!("{:?}", created.threads[child].join_status), created.get_live_thread_count());
+
+    let mut lookup = new_manager();
+    lookup.create_thread(Callback::new(1));
+    let dead = lookup.create_thread(Callback::new(2));
+    lookup.threads[dead].state = ThreadState::Terminated;
+    for raw in [0u64, 1, 2, 3, 4_294_967_296] {
+        let code = match lookup.thread_id_try_from(raw) {
+            Ok(id) => format!("ok-{}", id.0),
+            Err(ThreadLookupError::InvalidId) => "invalid".to_owned(),
+            Err(ThreadLookupError::Terminated(id)) => format!("terminated-{}", id.0),
+        };
+        println!("lookup:{raw}:{code}");
+    }
+    println!("live:{}", lookup.get_live_thread_count());
+
+    let mut active = new_manager();
+    let child = active.create_thread(Callback::new(3));
+    let old = active.set_active_thread(child);
+    println!("active:{}:{}", old.0, active.active_thread.0);
+
+    let mut blocked = new_manager();
+    let joiner = blocked.create_thread(Callback::new(4));
+    blocked.block_thread(BlockReason::Join(joiner), None, Callback::new(77));
+    println!("block:{}", state_code(&blocked.threads[ThreadId::MAIN_THREAD].state));
+
+    let mut detached = new_manager();
+    let child = detached.create_thread(Callback::new(5));
+    let first = detached.detach_thread(child, false).is_ok();
+    let first_status = format!("{:?}", detached.threads[child].join_status);
+    let second = detached.detach_thread(child, false).is_ok();
+    println!("detach:{first}:{first_status}:{second}");
+}

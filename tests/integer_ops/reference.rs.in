@@ -1,0 +1,115 @@
+#![feature(rustc_private)]
+extern crate rustc_driver;
+extern crate rustc_abi;
+extern crate rustc_middle;
+extern crate rustc_span;
+use rustc_abi::Size;
+use rustc_middle::{mir, ty::ScalarInt};
+use rustc_span::sym;
+
+macro_rules! throw_ub {
+    ($name:ident $({$($fields:tt)*})?) => { return Err(stringify!($name).to_string()) }
+}
+macro_rules! span_bug { ($($args:tt)*) => { panic!("invalid operator or asymmetric types") } }
+macro_rules! bug { ($($args:tt)*) => { panic!("invalid operator") } }
+fn interp_ok<T>(value:T)->Result<T,String> { Ok(value) }
+#[derive(Clone,Copy,PartialEq,Eq,Debug)]
+struct Type { size:Size, signed:bool, target_sized:bool }
+impl std::fmt::Display for Type {
+    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result { write!(f,"{:?}",self) }
+}
+#[derive(Clone,Copy,Debug)]
+struct Backend { signed:bool }
+impl Backend { fn is_signed(self)->bool { self.signed } }
+#[derive(Clone,Copy,Debug)]
+struct Layout { size:Size, ty:Type, backend_repr:Backend }
+#[derive(Clone,Debug)]
+enum Value { Scalar(ScalarInt), Boolean(bool), Pair(ScalarInt,bool), Ordering(std::cmp::Ordering) }
+#[derive(Clone,Debug)]
+struct ImmTy { value:Value, layout:Layout }
+impl ImmTy {
+    fn from_scalar_int(value:ScalarInt,layout:Layout)->Self { Self{value:Value::Scalar(value),layout} }
+    fn from_bool(value:bool,_tcx:())->Self { Self{value:Value::Boolean(value),layout:layout(1,false)} }
+    fn from_ordering(value:std::cmp::Ordering,_tcx:())->Self { Self{value:Value::Ordering(value),layout:layout(1,true)} }
+    fn from_uint(value:u128,layout:Layout)->Self { Self::from_scalar_int(ScalarInt::try_from_uint(value,layout.size).unwrap(),layout) }
+    fn from_pair(value:Self,overflow:Self,_cx:&Cx)->Self {
+        let (Value::Scalar(scalar),Value::Boolean(flag))=(value.value,overflow.value) else {panic!()};
+        Self{value:Value::Pair(scalar,flag),layout:value.layout}
+    }
+    fn to_scalar_int(&self)->Result<ScalarInt,String> {
+        let Value::Scalar(value)=self.value else { return Err("not scalar".into()) };
+        value.to_bits(self.layout.size);
+        Ok(value)
+    }
+}
+struct Cx { tcx:&'static () }
+impl Cx {
+    fn cur_span(&self) {}
+    fn three_way_compare<T:Ord>(&self,l:T,r:T)->ImmTy { ImmTy::from_ordering(l.cmp(&r),()) }
+    fn binary_int_op(&self, bin_op:mir::BinOp, left:&ImmTy, right:&ImmTy)->Result<ImmTy,String>
+    @BINARY_INT_OP_BODY@
+    fn binary_bool_op(&self, bin_op:mir::BinOp, l:bool, r:bool)->ImmTy
+    @BINARY_BOOL_OP_BODY@
+    fn binary_char_op(&self, bin_op:mir::BinOp, l:char, r:char)->ImmTy
+    @BINARY_CHAR_OP_BODY@
+}
+fn layout(size:u64,signed:bool)->Layout {
+    let size=Size::from_bytes(size);
+    Layout{size,ty:Type{size,signed,target_sized:false},backend_repr:Backend{signed}}
+}
+fn operand(raw:u128,size:u64,signed:bool)->ImmTy {
+    ImmTy::from_scalar_int(ScalarInt::truncate_from_uint(raw,Size::from_bytes(size)).0,layout(size,signed))
+}
+fn show(value:Result<ImmTy,String>)->String {
+    match value {
+        Err(reason)=>format!("E{reason}"),
+        Ok(value)=>match value.value {
+            Value::Scalar(s)=>format!("S{}",s.to_bits(s.size())),
+            Value::Pair(s,b)=>format!("P{}:{}",s.to_bits(s.size()),u8::from(b)),
+            Value::Boolean(b)=>format!("B{}",u8::from(b)),
+            Value::Ordering(o)=>format!("O{}",match o {std::cmp::Ordering::Less=>-1,std::cmp::Ordering::Equal=>0,std::cmp::Ordering::Greater=>1}),
+        }
+    }
+}
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+    use mir::BinOp::*;
+    let cx=Cx{tcx:&()};
+    for size in [1,2,4,8,16] {
+        let bits=size*8;
+        let mask=if bits==128 {u128::MAX} else {(1u128<<bits)-1};
+        let vals=[0,1,2,(1u128<<(bits-1))-1,1u128<<(bits-1),mask-1,mask];
+        for signed in [false,true] {
+            for l in vals { for r in vals {
+                for op in [Add,AddUnchecked,AddWithOverflow,Sub,SubUnchecked,SubWithOverflow,Mul,MulUnchecked,MulWithOverflow,Div,Rem,BitXor,BitAnd,BitOr,Eq,Lt,Le,Ne,Ge,Gt,Cmp] {
+                    println!("{size} {} {l} {r} {op:?} {}",u8::from(signed),show(cx.binary_int_op(op,&operand(l,size,signed),&operand(r,size,signed))));
+                }
+            }}
+            for rsize in [1,2,16] { for rsigned in [false,true] {
+                for l in vals { for r in [0,1,bits-1,bits,bits+1,255,65535] {
+                    for op in [Shl,ShlUnchecked,Shr,ShrUnchecked] {
+                        println!("H{size} {} {l} {rsize} {} {r} {op:?} {}",u8::from(signed),u8::from(rsigned),show(cx.binary_int_op(op,&operand(l,size,signed),&operand(r.into(),rsize,rsigned))));
+                    }
+                }}
+            }}
+        }
+    }
+    for op in [Add,Shl] {
+        let mut left=operand(1,8,false);
+        left.layout.ty.target_sized=true;
+        let result=std::panic::catch_unwind(|| cx.binary_int_op(op,&left,&operand(2,8,false)));
+        let output=match result { Ok(value)=>show(value),Err(_)=>"EAsymmetricTypes".into() };
+        println!("CROSS {op:?} {output}");
+    }
+    let all_ops=[Add,AddUnchecked,AddWithOverflow,Sub,SubUnchecked,SubWithOverflow,Mul,MulUnchecked,MulWithOverflow,Div,Rem,BitXor,BitAnd,BitOr,Shl,ShlUnchecked,Shr,ShrUnchecked,Eq,Lt,Le,Ne,Ge,Gt,Cmp,Offset];
+    for l in [false,true] { for r in [false,true] { for op in all_ops {
+        let result=std::panic::catch_unwind(|| cx.binary_bool_op(op,l,r));
+        let output=match result { Ok(value)=>show(Ok(value)),Err(_)=>"EInvalidBinaryOperator".into() };
+        println!("B {} {} {op:?} {output}",u8::from(l),u8::from(r));
+    }}}
+    for l in ['\0','a','\u{d7ff}','\u{e000}','\u{10ffff}'] { for r in ['\0','a','\u{d7ff}','\u{e000}','\u{10ffff}'] { for op in all_ops {
+        let result=std::panic::catch_unwind(|| cx.binary_char_op(op,l,r));
+        let output=match result { Ok(value)=>show(Ok(value)),Err(_)=>"EInvalidBinaryOperator".into() };
+        println!("C {} {} {op:?} {output}",l as u32,r as u32);
+    }}}
+}

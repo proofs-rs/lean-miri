@@ -1,0 +1,195 @@
+[
+  {
+    "compiler_facts": {
+      "adt": null,
+      "boolean_queries": {
+        "has_erasable_regions": {
+          "status": "supported",
+          "value": false
+        },
+        "is_box": {
+          "status": "supported",
+          "value": false
+        },
+        "is_c_void": {
+          "status": "supported",
+          "value": false
+        },
+        "is_dynamic": {
+          "status": "supported",
+          "value": false
+        },
+        "is_freeze": {
+          "status": "supported",
+          "value": true
+        },
+        "is_global_box": {
+          "status": "supported",
+          "value": false
+        },
+        "is_like_maybe_dangling": {
+          "status": "supported",
+          "value": false
+        },
+        "is_monomorphic": {
+          "status": "supported",
+          "value": true
+        },
+        "is_monomorphic_enough": {
+          "status": "supported",
+          "value": true
+        },
+        "is_simd": {
+          "status": "supported",
+          "value": false
+        },
+        "is_sized": {
+          "status": "supported",
+          "value": true
+        },
+        "is_too_generic": {
+          "status": "supported",
+          "value": false
+        },
+        "is_unpin": {
+          "status": "supported",
+          "value": true
+        },
+        "is_unsafe_cell": {
+          "status": "supported",
+          "value": false
+        },
+        "is_unsafe_unpin": {
+          "status": "supported",
+          "value": true
+        },
+        "needs_drop": {
+          "status": "supported",
+          "value": false
+        },
+        "opsem_inhabited": {
+          "status": "supported",
+          "value": true
+        }
+      },
+      "capture_names": {
+        "status": "supported",
+        "value": null
+      },
+      "definition": null,
+      "discriminants": {
+        "status": "supported",
+        "value": {
+          "adt_variant_count": null,
+          "has_discriminants": false,
+          "values": []
+        }
+      },
+      "input_type": {
+        "type_id": 1
+      },
+      "projection_queries": {
+        "status": "supported",
+        "value": null
+      },
+      "query_input_type": {
+        "type_id": 1
+      },
+      "simd_size_and_type": {
+        "status": "supported",
+        "value": null
+      },
+      "type_id_hash": {
+        "status": "supported",
+        "value": "276071223028967638390450091604807375909"
+      },
+      "type_queries": {
+        "boxed_type": {
+          "status": "supported",
+          "value": null
+        },
+        "builtin_deref_explicit": {
+          "status": "supported",
+          "value": null
+        },
+        "builtin_deref_implicit": {
+          "status": "supported",
+          "value": null
+        },
+        "discriminant_type": {
+          "status": "supported",
+          "value": {
+            "type_id": 1
+          }
+        },
+        "metadata_tail": {
+          "status": "supported",
+          "value": {
+            "type_id": 1
+          }
+        },
+        "normalized": {
+          "status": "supported",
+          "value": {
+            "type_id": 1
+          }
+        },
+        "pointer_metadata_type": {
+          "status": "supported",
+          "value": {
+            "type_id": 0
+          }
+        },
+        "unsafe_binder_erased": {
+          "status": "supported",
+          "value": null
+        }
+      },
+      "typing_env": "fully_monomorphized"
+    },
+    "display": "u8",
+    "layout": {
+      "abi_align_bytes": 1,
+      "backend_repr": {
+        "kind": "scalar",
+        "scalar": {
+          "kind": "initialized",
+          "primitive": {
+            "integer_kind": "i8",
+            "kind": "integer",
+            "signed": false,
+            "size_bytes": 1
+          },
+          "valid_range": {
+            "end": "255",
+            "start": "0"
+          }
+        }
+      },
+      "field_offsets_bytes": [],
+      "fields": {
+        "field_count": 0,
+        "kind": "primitive"
+      },
+      "largest_niche": null,
+      "max_repr_align_bytes": null,
+      "randomization_seed": 71776127651151873,
+      "repr_c": false,
+      "size_bytes": 1,
+      "status": "supported",
+      "unadjusted_abi_align_bytes": 1,
+      "uninhabited": false,
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      }
+    },
+    "layout_query_input_type": null,
+    "shape": {
+      "kind": "uint",
+      "status": "supported",
+      "unsigned_kind": "u8"
+    },
+    "type_id": 1
+  }
+]

@@ -1,0 +1,7 @@
+scheduler:candidates:2,0
+scheduler:fixed:execute:2:choices=2,0
+scheduler:choice1:execute:0:choices=2,0
+scheduler:choice-error:error
+scheduler:deadline:sleep:17
+scheduler:host-io:sleep:indefinite
+scheduler:deadlock:deadlock

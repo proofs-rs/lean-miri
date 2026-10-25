@@ -1,0 +1,253 @@
+use std::cell::{Cell, RefCell, RefMut};
+use std::collections::HashSet;
+use std::ops::{Index, IndexMut};
+use std::marker::PhantomData;
+
+type Span = u8;
+type InterpResult<'tcx, T = ()> = Result<T, ()>;
+type FxHashSet<T> = HashSet<T>;
+
+macro_rules! trace { ($($argument:tt)*) => {{}}; }
+
+fn interp_ok<T>(value: T) -> Result<T, ()> { Ok(value) }
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct VectorIdx(u32);
+
+#[derive(Clone, Debug, Default)]
+struct VClock([u32; 8]);
+
+impl VClock {
+    fn join(&mut self, other: &VClock) {
+        for index in 0..8 {
+            self.0[index] = self.0[index].max(other.0[index]);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AllocRange { start: u64, size: u64 }
+
+#[derive(Clone, Debug, Default)]
+struct AtomicMemoryCellClocks { sync_vector: VClock }
+
+#[derive(Clone, Debug, Default)]
+struct MemoryCellClocks { atomic_ops: Option<AtomicMemoryCellClocks> }
+impl MemoryCellClocks {
+    fn atomic(&self) -> Option<&AtomicMemoryCellClocks> { self.atomic_ops.as_ref() }
+}
+
+struct DedupRangeMap { cells: Vec<MemoryCellClocks> }
+impl DedupRangeMap {
+    fn iter(&self, start: u64, size: u64) -> impl Iterator<Item = (u64, &MemoryCellClocks)> {
+        self.cells.iter().enumerate().skip(start as usize).take(size as usize)
+            .map(|(offset, cell)| (offset as u64, cell))
+    }
+}
+
+struct VClockAlloc { alloc_ranges: RefCell<DedupRangeMap> }
+impl VClockAlloc {
+    // @MIRI_SYNC_CLOCK@
+}
+
+impl Index<VectorIdx> for VClock {
+    type Output = u32;
+    fn index(&self, index: VectorIdx) -> &Self::Output { &self.0[index.0 as usize] }
+}
+
+#[derive(Clone, Debug, Default)]
+struct ThreadClockSet {
+    clock: VClock,
+    fence_acquire: VClock,
+    fence_release: VClock,
+    write_seqcst: VClock,
+    read_seqcst: VClock,
+}
+
+impl ThreadClockSet {
+    fn apply_acquire_fence(&mut self) { self.clock.join(&self.fence_acquire); }
+    fn apply_release_fence(&mut self) { self.fence_release = self.clock.clone(); }
+    fn increment_clock(&mut self, index: VectorIdx, _span: Span) {
+        self.clock.0[index.0 as usize] += 1;
+    }
+}
+
+struct IndexVec<T>(Vec<T>);
+
+impl<T> IndexVec<T> {
+    fn iter_enumerated(&self) -> impl Iterator<Item = (VectorIdx, &T)> {
+        self.0.iter().enumerate().map(|(index, value)| (VectorIdx(index as u32), value))
+    }
+}
+
+impl<T> Index<VectorIdx> for IndexVec<T> {
+    type Output = T;
+    fn index(&self, index: VectorIdx) -> &Self::Output { &self.0[index.0 as usize] }
+}
+
+impl<T> IndexMut<VectorIdx> for IndexVec<T> {
+    fn index_mut(&mut self, index: VectorIdx) -> &mut Self::Output {
+        &mut self.0[index.0 as usize]
+    }
+}
+
+impl<T> Index<usize> for IndexVec<T> {
+    type Output = T;
+    fn index(&self, index: usize) -> &Self::Output { &self.0[index] }
+}
+
+impl<T> IndexMut<usize> for IndexVec<T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output { &mut self.0[index] }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AtomicFenceOrd { Acquire, Release, AcqRel, SeqCst }
+
+struct ThreadManager<'tcx>(PhantomData<&'tcx ()>);
+
+struct MiriMachine<'tcx> { threads: ThreadManager<'tcx>, _marker: PhantomData<&'tcx ()> }
+impl MiriMachine<'_> { fn current_user_relevant_span(&self) -> Span { 0 } }
+
+struct GlobalState {
+    multi_threaded: Cell<bool>,
+    vector_clocks: RefCell<IndexVec<ThreadClockSet>>,
+    reuse_candidates: RefCell<FxHashSet<VectorIdx>>,
+    last_sc_fence: RefCell<VClock>,
+    last_sc_write_per_thread: RefCell<VClock>,
+}
+
+impl GlobalState {
+    // @MIRI_FIND_REUSE_CANDIDATE@
+    // @MIRI_ATOMIC_FENCE@
+    // @MIRI_MAYBE_SYNC@
+
+    fn active_thread_state_mut(
+        &self, _threads: &ThreadManager,
+    ) -> (VectorIdx, RefMut<'_, ThreadClockSet>) {
+        let clocks = self.vector_clocks.borrow_mut();
+        let indexed = RefMut::map(clocks, |clocks| &mut clocks.0[0]);
+        (VectorIdx(0), indexed)
+    }
+}
+
+fn clock(c0: u32, c1: u32) -> VClock {
+    let mut result = VClock::default();
+    result.0[0] = c0;
+    result.0[1] = c1;
+    result
+}
+
+fn pair(clock0: VClock, clock1: VClock) -> IndexVec<ThreadClockSet> {
+    IndexVec(vec![
+        ThreadClockSet { clock: clock0, ..Default::default() },
+        ThreadClockSet { clock: clock1, ..Default::default() },
+    ])
+}
+
+fn two(clock: &VClock) -> String { format!("{},{}", clock.0[0], clock.0[1]) }
+
+fn main() {
+    let safe = GlobalState {
+        multi_threaded: Cell::new(false),
+        vector_clocks: RefCell::new(pair(clock(0, 2), clock(0, 2))),
+        reuse_candidates: RefCell::new([VectorIdx(1)].into_iter().collect()),
+        last_sc_fence: RefCell::new(VClock::default()),
+        last_sc_write_per_thread: RefCell::new(VClock::default()),
+    };
+    println!("reuse:safe:{}", safe.find_vector_index_reuse_candidate()
+        .map(|index| index.0.to_string()).unwrap_or_else(|| "none".to_owned()));
+
+    let blocked = GlobalState {
+        multi_threaded: Cell::new(false),
+        vector_clocks: RefCell::new(pair(clock(0, 1), clock(0, 2))),
+        reuse_candidates: RefCell::new([VectorIdx(1)].into_iter().collect()),
+        last_sc_fence: RefCell::new(VClock::default()),
+        last_sc_write_per_thread: RefCell::new(VClock::default()),
+    };
+    println!("reuse:blocked:{}", blocked.find_vector_index_reuse_candidate()
+        .map(|index| index.0.to_string()).unwrap_or_else(|| "none".to_owned()));
+
+    let mut current = ThreadClockSet::default();
+    current.clock = clock(1, 0);
+    current.fence_acquire = clock(0, 1);
+    current.write_seqcst = clock(0, 0);
+    let state = GlobalState {
+        multi_threaded: Cell::new(true),
+        vector_clocks: RefCell::new(IndexVec(vec![current])),
+        reuse_candidates: RefCell::new(HashSet::new()),
+        last_sc_fence: RefCell::new(clock(0, 2)),
+        last_sc_write_per_thread: RefCell::new(clock(0, 1)),
+    };
+    let machine = MiriMachine { threads: ThreadManager(PhantomData), _marker: PhantomData };
+    state.atomic_fence(&machine, AtomicFenceOrd::SeqCst).expect("source fence shim result");
+    let clocks = state.vector_clocks.borrow();
+    let thread = &clocks[0];
+    println!("sc:fence:clock=[{}]:release=[{}]:write=[{}]:last=[{}]",
+        two(&thread.clock), two(&thread.fence_release), two(&thread.write_seqcst),
+        two(&state.last_sc_fence.borrow()));
+
+    let allocation = VClockAlloc { alloc_ranges: RefCell::new(DedupRangeMap { cells: vec![
+        MemoryCellClocks { atomic_ops: Some(AtomicMemoryCellClocks { sync_vector: clock(2, 0) }) },
+        MemoryCellClocks { atomic_ops: Some(AtomicMemoryCellClocks { sync_vector: clock(0, 3) }) },
+        MemoryCellClocks::default(),
+        MemoryCellClocks::default(),
+    ] }) };
+    let joined = allocation.sync_clock(AllocRange { start: 0, size: 2 });
+    println!("sync:join:{}", two(&joined));
+    let empty = allocation.sync_clock(AllocRange { start: 4, size: 0 });
+    println!("sync:empty:{}", two(&empty));
+
+    let enabled = GlobalState {
+        multi_threaded: Cell::new(true),
+        vector_clocks: RefCell::new(pair(clock(1, 0), clock(0, 0))),
+        reuse_candidates: RefCell::new(HashSet::new()),
+        last_sc_fence: RefCell::new(VClock::default()),
+        last_sc_write_per_thread: RefCell::new(VClock::default()),
+    };
+    enabled.maybe_perform_sync_operation(&machine.threads, 0, |index, mut clocks| {
+        clocks.increment_clock(index, 0);
+        interp_ok(true)
+    }).expect("sync operation");
+    println!("sync-op:enabled:{}", two(&enabled.vector_clocks.borrow()[0].clock));
+
+    let skipped = GlobalState {
+        multi_threaded: Cell::new(false),
+        vector_clocks: RefCell::new(pair(clock(0, 0), clock(0, 0))),
+        reuse_candidates: RefCell::new(HashSet::new()),
+        last_sc_fence: RefCell::new(VClock::default()),
+        last_sc_write_per_thread: RefCell::new(VClock::default()),
+    };
+    let called = Cell::new(false);
+    skipped.maybe_perform_sync_operation(&machine.threads, 0, |_, _clocks| {
+        called.set(true);
+        interp_ok(true)
+    }).expect("skipped sync operation");
+    println!("sync-op:single:called:{}:clock:{}", called.get() as u8,
+        two(&skipped.vector_clocks.borrow()[0].clock));
+
+    let no_increment = GlobalState {
+        multi_threaded: Cell::new(true),
+        vector_clocks: RefCell::new(pair(clock(1, 0), clock(0, 0))),
+        reuse_candidates: RefCell::new(HashSet::new()),
+        last_sc_fence: RefCell::new(VClock::default()),
+        last_sc_write_per_thread: RefCell::new(VClock::default()),
+    };
+    no_increment.maybe_perform_sync_operation(&machine.threads, 0, |_index, _clocks| {
+        interp_ok(false)
+    }).expect("non-incrementing sync operation");
+    println!("sync-op:no-increment:{}", two(&no_increment.vector_clocks.borrow()[0].clock));
+
+    let failed = GlobalState {
+        multi_threaded: Cell::new(true),
+        vector_clocks: RefCell::new(pair(clock(1, 0), clock(0, 0))),
+        reuse_candidates: RefCell::new(HashSet::new()),
+        last_sc_fence: RefCell::new(VClock::default()),
+        last_sc_write_per_thread: RefCell::new(VClock::default()),
+    };
+    let failure = failed.maybe_perform_sync_operation(&machine.threads, 0, |index, mut clocks| {
+        clocks.increment_clock(index, 0);
+        Err(())
+    });
+    println!("sync-op:error:{}:{}", if failure.is_err() { "error" } else { "ok" },
+        two(&failed.vector_clocks.borrow()[0].clock));
+}

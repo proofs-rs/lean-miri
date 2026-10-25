@@ -1,0 +1,3 @@
+[workspace]
+members = ["producer-types", "consumer"]
+resolver = "2"

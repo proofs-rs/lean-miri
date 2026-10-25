@@ -1,0 +1,316 @@
+use std::cmp::Ordering;
+use std::fmt::Debug;
+use std::ops::Index;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Span(bool);
+
+impl Span {
+    fn is_dummy(&self) -> bool {
+        self.0
+    }
+
+    fn substitute_dummy(self, other: Span) -> Span {
+        if self.is_dummy() { other } else { self }
+    }
+}
+
+const DUMMY_SP: Span = Span(true);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AtomicOrdering {
+    Relaxed,
+    Acquire,
+    Release,
+    AcqRel,
+    SeqCst,
+}
+
+type Size = u64;
+
+macro_rules! trace {
+    ($($argument:tt)*) => {{}};
+}
+
+trait ToUsize {
+    fn to_usize(self) -> usize;
+}
+
+impl ToUsize for u32 {
+    fn to_usize(self) -> usize {
+        usize::try_from(self).unwrap()
+    }
+}
+
+mod reference {
+    use super::{AtomicOrdering, Debug, DUMMY_SP, Index, Ordering, Size, Span, ToUsize};
+    use std::ops::Shr;
+
+    // @DATA_RACE_DECLARATIONS@
+
+    trait Idx: Sized {
+        fn new(index: usize) -> Self;
+        fn index(self) -> usize;
+    }
+
+    #[allow(dead_code)]
+    const SMALL_VECTOR: usize = 4;
+
+    // @VECTOR_IDX@
+
+    // @VTIMESTAMP@
+
+    // @VCLOCK_AND_IMPL@
+
+    // @CLONE_IMPL@
+
+    // @PARTIAL_ORD_IMPL@
+
+    // @INDEX_IMPL@
+
+    // @DATA_RACE_IMPLEMENTATIONS@
+
+    pub(super) fn make_timestamp(time: u32, read_type: NaReadType) -> VTimestamp {
+        VTimestamp::new(time, read_type, DUMMY_SP)
+    }
+
+    pub(super) fn timestamp_raw(timestamp: &VTimestamp) -> u32 {
+        timestamp.time_and_read_type
+    }
+
+    pub(super) fn timestamp_time(timestamp: &VTimestamp) -> u32 {
+        timestamp.time()
+    }
+
+    pub(super) fn timestamp_read_type(timestamp: &VTimestamp) -> NaReadType {
+        timestamp.read_type()
+    }
+
+    pub(super) fn clock_from_timestamps(timestamps: Vec<VTimestamp>) -> VClock {
+        let mut values = timestamps;
+        while values.last().is_some_and(|timestamp| timestamp.time() == 0) {
+            values.pop();
+        }
+        VClock(values)
+    }
+
+    pub(super) fn clock_values(clock: &VClock) -> Vec<(u32, NaReadType)> {
+        clock.as_slice().iter().map(|timestamp| (timestamp.time(), timestamp.read_type())).collect()
+    }
+
+    pub(super) fn index_from_usize(index: usize) -> VectorIdx {
+        <VectorIdx as Idx>::new(index)
+    }
+
+    pub(super) fn index_from_u32(index: u32) -> VectorIdx {
+        VectorIdx::from(index)
+    }
+
+    pub(super) fn index_value(index: VectorIdx) -> u32 {
+        index.to_u32()
+    }
+
+    pub(super) fn apply_read_type(clock: &mut VClock, index: VectorIdx, read_type: NaReadType) {
+        clock.index_mut(index).set_read_type(read_type);
+    }
+
+    pub(super) fn clear(clock: &mut VClock) {
+        clock.set_zero_vector();
+    }
+
+    pub(super) fn timestamp_equal(left: &VTimestamp, right: &VTimestamp) -> bool {
+        left == right
+    }
+}
+
+use reference::{NaReadType, VClock, VTimestamp};
+
+fn stamp(time: u32, read_type: NaReadType) -> VTimestamp {
+    reference::make_timestamp(time, read_type)
+}
+
+fn from_times(times: &[u32]) -> VClock {
+    reference::clock_from_timestamps(times.iter().map(|&time| stamp(time, NaReadType::Read)).collect())
+}
+
+fn from_timestamps(times: &[(u32, NaReadType)]) -> VClock {
+    reference::clock_from_timestamps(times.iter().map(|&(time, read_type)| stamp(time, read_type)).collect())
+}
+
+fn timestamp_code(timestamp: &VTimestamp) -> String {
+    let suffix = match reference::timestamp_read_type(timestamp) {
+        NaReadType::Read => "r",
+        NaReadType::Retag => "t",
+    };
+    format!("{}{}", reference::timestamp_time(timestamp), suffix)
+}
+
+fn clock_code(clock: &VClock) -> String {
+    format!(
+        "[{}]",
+        reference::clock_values(clock)
+            .iter()
+            .map(|&(time, read_type)| timestamp_code(&stamp(time, read_type)))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
+fn order_code(order: Option<Ordering>) -> &'static str {
+    match order {
+        None => "N",
+        Some(Ordering::Less) => "L",
+        Some(Ordering::Equal) => "E",
+        Some(Ordering::Greater) => "G",
+    }
+}
+
+fn read_type_code(read_type: NaReadType) -> &'static str {
+    match read_type {
+        NaReadType::Read => "read",
+        NaReadType::Retag => "retag",
+    }
+}
+
+fn timestamp_order_code(order: Ordering) -> &'static str {
+    match order {
+        Ordering::Less => "L",
+        Ordering::Equal => "E",
+        Ordering::Greater => "G",
+    }
+}
+
+fn bool_code(value: bool) -> u8 {
+    if value { 1 } else { 0 }
+}
+
+fn emit_comparison(label: &str, left: &VClock, right: &VClock) {
+    println!(
+        "cmp:{label}:{}:{}:{}:{}:{}:{}",
+        order_code(left.partial_cmp(right)),
+        bool_code(left < right),
+        bool_code(left <= right),
+        bool_code(left > right),
+        bool_code(left >= right),
+        bool_code(left == right),
+    );
+}
+
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+
+    let max_read = stamp(2_147_483_647, NaReadType::Read);
+    let max_retag = stamp(2_147_483_647, NaReadType::Retag);
+    println!("timestamp:max-read:{}:{}:{}", reference::timestamp_raw(&max_read), reference::timestamp_time(&max_read), read_type_code(reference::timestamp_read_type(&max_read)));
+    println!("timestamp:max-retag:{}:{}:{}", reference::timestamp_raw(&max_retag), reference::timestamp_time(&max_retag), read_type_code(reference::timestamp_read_type(&max_retag)));
+    println!("timestamp:tie-equal:{}:{}", bool_code(reference::timestamp_equal(&max_read, &max_retag)), timestamp_order_code(max_read.cmp(&max_retag)));
+    let mut changed = max_read;
+    changed.set_read_type(NaReadType::Retag);
+    println!("timestamp:set-read-type:{}:{}:{}", reference::timestamp_raw(&changed), reference::timestamp_time(&changed), read_type_code(reference::timestamp_read_type(&changed)));
+    let overflow = catch_unwind(|| reference::make_timestamp(2_147_483_648, NaReadType::Read)).is_err();
+    println!("timestamp:overflow:{}", bool_code(overflow));
+
+    let max_index = reference::index_from_u32(u32::MAX);
+    println!("index:max:{}", reference::index_value(max_index));
+    let index_overflow = catch_unwind(|| reference::index_from_usize(4_294_967_296)).is_err();
+    println!("index:overflow:{}", bool_code(index_overflow));
+
+    let empty = VClock::default();
+    let zero_retag = stamp(0, NaReadType::Retag);
+    println!("clock:zero:{}", clock_code(&empty));
+    println!("clock:new-zero-retag:{}", clock_code(&VClock::new_with_index(reference::index_from_u32(3), zero_retag)));
+    println!("clock:new-at:{}", clock_code(&VClock::new_with_index(reference::index_from_u32(3), stamp(2, NaReadType::Retag))));
+    println!("clock:trim-trailing-retag:{}", clock_code(&from_timestamps(&[(2, NaReadType::Read), (0, NaReadType::Retag), (0, NaReadType::Retag)])));
+    println!("clock:missing-index:{}", timestamp_code(&empty[reference::index_from_u32(9)]));
+
+    let interior_retag = from_timestamps(&[(1, NaReadType::Read), (0, NaReadType::Retag), (2, NaReadType::Read)]);
+    let mut incremented = interior_retag.clone();
+    incremented.increment_index(reference::index_from_u32(1), DUMMY_SP);
+    println!("clock:increment-interior:{}", clock_code(&incremented));
+    let mut incremented_tail = interior_retag.clone();
+    incremented_tail.increment_index(reference::index_from_u32(4), DUMMY_SP);
+    println!("clock:increment-tail:{}", clock_code(&incremented_tail));
+    let mut overflow_clock = VClock::new_with_index(reference::index_from_u32(0), max_read);
+    let increment_overflow = catch_unwind(AssertUnwindSafe(|| overflow_clock.increment_index(reference::index_from_u32(0), DUMMY_SP))).is_err();
+    println!("clock:increment-overflow:{}", if increment_overflow { "overflow" } else { "ok" });
+
+    let mut join_left = from_timestamps(&[(1, NaReadType::Read), (3, NaReadType::Read), (0, NaReadType::Retag), (6, NaReadType::Read)]);
+    let join_right = from_timestamps(&[(1, NaReadType::Retag), (2, NaReadType::Retag), (0, NaReadType::Read), (6, NaReadType::Retag)]);
+    join_left.join(&join_right);
+    println!("clock:join-ties:{}", clock_code(&join_left));
+    let mut join_zero = empty.clone();
+    join_zero.join(&join_left);
+    println!("clock:join-zero:{}", clock_code(&join_zero));
+
+    let mut set_left = from_times(&[1, 2]);
+    let set_right = from_timestamps(&[(1, NaReadType::Retag), (3, NaReadType::Retag), (4, NaReadType::Read), (5, NaReadType::Retag)]);
+    set_left.set_at_index(&set_right, reference::index_from_u32(3));
+    println!("clock:set-extend:{}", clock_code(&set_left));
+    let mut set_zero_tail = from_times(&[1, 2]);
+    set_zero_tail.set_at_index(&empty, reference::index_from_u32(8));
+    println!("clock:set-zero-outside:{}", clock_code(&set_zero_tail));
+    let mut set_interior = interior_retag.clone();
+    let same_values = from_timestamps(&[(1, NaReadType::Read), (0, NaReadType::Retag), (2, NaReadType::Read)]);
+    set_interior.set_at_index(&same_values, reference::index_from_u32(1));
+    println!("clock:set-interior-retag:{}", clock_code(&set_interior));
+    let mut decrease = from_times(&[2]);
+    let one = from_times(&[1]);
+    let decrease_panics = catch_unwind(AssertUnwindSafe(|| decrease.set_at_index(&one, reference::index_from_u32(0)))).is_err();
+    println!("clock:set-decrease:{}", if decrease_panics { "assert" } else { "ok" });
+    let mut applied = interior_retag.clone();
+    reference::apply_read_type(&mut applied, reference::index_from_u32(1), NaReadType::Retag);
+    println!("clock:apply-read-type:{}", clock_code(&applied));
+    let mut apply_oob_clock = empty.clone();
+    let apply_oob_panics = catch_unwind(AssertUnwindSafe(|| reference::apply_read_type(&mut apply_oob_clock, reference::index_from_u32(0), NaReadType::Retag))).is_err();
+    println!("clock:apply-read-type-oob:{}", if apply_oob_panics { "oob" } else { "ok" });
+    reference::clear(&mut join_left);
+    println!("clock:clear:{}", clock_code(&join_left));
+
+    emit_comparison("equal", &from_times(&[1]), &from_times(&[1]));
+    emit_comparison("less", &from_times(&[1]), &from_times(&[2]));
+    emit_comparison("greater", &from_times(&[2]), &from_times(&[1]));
+    emit_comparison("prefix-less", &from_times(&[1]), &from_times(&[1, 2]));
+    emit_comparison("incomparable-prefix", &from_times(&[2]), &from_times(&[1, 2]));
+    emit_comparison("incomparable-cross", &from_times(&[400]), &from_times(&[0, 1]));
+    emit_comparison("long-equal", &from_times(&(0..11).collect::<Vec<_>>()), &from_times(&(0..11).chain([0, 0, 0]).collect::<Vec<_>>()));
+    emit_comparison("long-less", &from_times(&(0..11).collect::<Vec<_>>()), &from_times(&(0..11).chain([0, 1]).collect::<Vec<_>>()));
+    emit_comparison("long-greater", &from_times(&(0..10).chain([11]).collect::<Vec<_>>()), &from_times(&(0..11).chain([0, 0, 0]).collect::<Vec<_>>()));
+    emit_comparison("long-incomparable", &from_times(&(0..10).chain([11]).collect::<Vec<_>>()), &from_times(&(0..11).chain([0, 1]).collect::<Vec<_>>()));
+    emit_comparison("long-less-tail", &from_times(&(0..10).chain([9]).collect::<Vec<_>>()), &from_times(&(0..11).chain([0, 1]).collect::<Vec<_>>()));
+    emit_comparison("retag-tie", &from_timestamps(&[(5, NaReadType::Read)]), &from_timestamps(&[(5, NaReadType::Retag)]));
+
+    let all_timestamps = [
+        stamp(0, NaReadType::Read),
+        stamp(0, NaReadType::Retag),
+        stamp(1, NaReadType::Read),
+        stamp(1, NaReadType::Retag),
+        stamp(2, NaReadType::Read),
+        stamp(2, NaReadType::Retag),
+    ];
+    let nonzero_timestamps = [
+        stamp(1, NaReadType::Read),
+        stamp(1, NaReadType::Retag),
+        stamp(2, NaReadType::Read),
+        stamp(2, NaReadType::Retag),
+    ];
+    let mut small_clocks = vec![VClock::default()];
+    for tail in nonzero_timestamps {
+        small_clocks.push(reference::clock_from_timestamps(vec![tail]));
+    }
+    for head in all_timestamps {
+        for tail in nonzero_timestamps {
+            small_clocks.push(reference::clock_from_timestamps(vec![head, tail]));
+        }
+    }
+    for (left_index, left) in small_clocks.iter().enumerate() {
+        for (right_index, right) in small_clocks.iter().enumerate() {
+            emit_comparison(&format!("small:{left_index}:{right_index}"), left, right);
+            let mut joined = left.clone();
+            joined.join(right);
+            println!("join:small:{left_index}:{right_index}:{}", clock_code(&joined));
+        }
+    }
+
+    // @DATA_RACE_TESTS@
+}

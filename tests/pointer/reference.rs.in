@@ -1,0 +1,66 @@
+use engine::{Pointer, PointerArithmetic};
+use machine::Provenance;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+fn checked<T: fmt::Display>(f: impl FnOnce()->T) -> String {
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(value) => value.to_string(), Err(_) => "panic".into()
+    }
+}
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+    let values: [u64; 11] = [0,1,127,128,255,256,65535,65536,2147483648,9223372036854775808,u64::MAX];
+    let id = AllocId(NonZero::new(3).unwrap());
+    let tag = BorTag::new(5).unwrap();
+    for size in [0u64,1,2,3,4,7,8,9,16,17] {
+        let cx = DataLayout { size: Size::from_bytes(size) };
+        println!("bounds {size} {} {} {}", checked(||cx.target_usize_max()),checked(||cx.target_isize_min()),checked(||cx.target_isize_max()));
+        for value in values {
+            println!("arithmetic {size} {value} {} {}",checked(||cx.truncate_to_target_usize(value)),checked(||cx.sign_extend_to_target_isize(value)));
+            for prov in [Provenance::Concrete {alloc_id:id, tag}, Provenance::Wildcard] {
+                let code = if matches!(prov,Provenance::Wildcard) {"w"} else {"c"};
+                let ptr = Pointer::new(prov,Size::from_bytes(value));
+                for delta in [0u64,1,2,u64::MAX] {
+                    let outcome = checked(||ptr.wrapping_offset(Size::from_bytes(delta),&cx).offset.bytes());
+                    println!("unsigned {size} {value} {code} {delta} {outcome}");
+                }
+                for delta in [i64::MIN,-65536,-1,0,1,i64::MAX] {
+                    let outcome = checked(||ptr.wrapping_signed_offset(delta,&cx).offset.bytes());
+                    println!("signed {size} {value} {code} {delta} {outcome}");
+                }
+            }
+        }
+    }
+    for value in [0u64,1,2,255,u64::MAX-1,u64::MAX] {
+        let created = BorTag::new(value);
+        println!("tag {value} {} {}",created.map(|t|t.get().to_string()).unwrap_or("none".into()),created.and_then(|t|t.succ()).map(|t|t.get().to_string()).unwrap_or("none".into()));
+    }
+    println!("default_tag {}",BorTag::one().get());
+    for value in values {
+        let ptr = Pointer::<Option<Provenance>>::without_provenance(value);
+        let outcome = match ptr.into_pointer_or_addr() { Ok(_)=>"pointer".into(),Err(addr)=>format!("address:{}",addr.bytes()) };
+        println!("no_provenance {value} {outcome}");
+        for prov in [Provenance::Concrete {alloc_id:id, tag}, Provenance::Wildcard] {
+            let code = if matches!(prov,Provenance::Wildcard) {"w"} else {"c"};
+            let ptr = Pointer::new(prov,Size::from_bytes(value));
+            let optional: Pointer<Option<Provenance>> = ptr.into();
+            let allocation = engine::Provenance::get_alloc_id(prov).map(|x|x.0.get().to_string()).unwrap_or("none".into());
+            println!("provenance {value} {code} {allocation} {} {}",optional.addr().bytes(),ptr.map_provenance(|_|Provenance::Wildcard).offset.bytes());
+        }
+    }
+    for extra in [machine::ProvenanceExtra::Concrete(tag),machine::ProvenanceExtra::Wildcard] {
+        println!("extra {}",extra.and_then(|tag|Some(tag.get())).map(|x|x.to_string()).unwrap_or("none".into()));
+    }
+    for id in [1u64,2,4611686018427387903,4611686018427387904,9223372036854775808,u64::MAX] {
+        for immutable in [false,true] {
+            for shared in [false,true] {
+                let code=checked(|| {
+                    let p=engine::CtfeProvenance::from_parts((AllocId(NonZero::new(id).unwrap()),immutable,shared));
+                    let (a,i,s)=p.into_parts();
+                    format!("{}:{}:{}:{}:{}:{}",p.raw_for_test(),a.0.get(),i as u8,s as u8,p.as_immutable().raw_for_test(),p.as_shared_ref().raw_for_test())
+                });
+                println!("ctfe {id} {} {} {code}",immutable as u8,shared as u8);
+            }
+        }
+    }
+}

@@ -1,0 +1,266 @@
+#![allow(dead_code)]
+
+use std::ops::Range;
+use std::{iter, marker::PhantomData, panic::{catch_unwind, AssertUnwindSafe}};
+
+type Block = u64;
+type Size = u64;
+
+trait SizeShim {
+    const ZERO: Self;
+    fn from_bytes(bytes: u64) -> Self;
+    fn bytes(self) -> u64;
+}
+impl SizeShim for u64 {
+    const ZERO: Self = 0;
+    fn from_bytes(bytes: u64) -> Self { bytes }
+    fn bytes(self) -> u64 { self }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AllocRange { start: Size, size: Size }
+fn alloc_range(start: Size, size: Size) -> AllocRange { AllocRange { start, size } }
+impl AllocRange {
+    fn end(self) -> Size { self.start + self.size }
+}
+impl From<Range<Size>> for AllocRange {
+    fn from(range: Range<Size>) -> Self {
+        alloc_range(range.start, range.end - range.start)
+    }
+}
+
+#[derive(Clone)]
+struct InitMask { blocks: InitMaskBlocks, len: Size }
+#[derive(Clone)]
+enum InitMaskBlocks {
+    Lazy { state: bool },
+    Materialized(InitMaskMaterialized),
+}
+#[derive(Clone, Debug)]
+struct InitMaskMaterialized { blocks: Vec<Block> }
+enum InitChunk {
+    Init(Range<Size>),
+    Uninit(Range<Size>),
+}
+#[derive(Clone)]
+struct InitChunkIter<'a> {
+    init_mask: &'a InitMask,
+    is_init: bool,
+    start: Size,
+    end: Size,
+}
+
+macro_rules! bug {
+    ($($arg:tt)*) => { panic!($($arg)*) };
+}
+
+mod smallvec {
+    use super::PhantomData;
+    pub struct SmallVec<A> { values: Vec<u64>, marker: PhantomData<A> }
+    impl<A> SmallVec<A> {
+        pub fn new() -> Self { Self { values: Vec::new(), marker: PhantomData } }
+        pub fn push(&mut self, value: u64) { self.values.push(value); }
+        pub fn len(&self) -> usize { self.values.len() }
+        pub fn iter(&self) -> std::slice::Iter<'_, u64> { self.values.iter() }
+    }
+    impl<'a, A> IntoIterator for &'a SmallVec<A> {
+        type Item = &'a u64;
+        type IntoIter = std::slice::Iter<'a, u64>;
+        fn into_iter(self) -> Self::IntoIter { self.values.iter() }
+    }
+}
+
+fn emit_snapshot(tag: &str, mask: &InitMask) {
+    let (mode, words) = match mask.blocks {
+        InitMaskBlocks::Lazy { state } => (format!("L{}", if state { 1 } else { 0 }), "-".to_owned()),
+        InitMaskBlocks::Materialized(ref blocks) => (
+            "M".to_owned(),
+            blocks.blocks.iter().map(|word| word.to_string()).collect::<Vec<_>>().join(","),
+        ),
+    };
+    let bits = (0..mask.len).map(|index| if mask.get(index) { '1' } else { '0' }).collect::<String>();
+    println!("S {} {} {} {} {}", tag, mask.len, mode, words, bits);
+}
+
+fn emit_query(tag: &str, mask: &InitMask, start: Size, finish: Size) {
+    let result = match mask.is_range_initialized(alloc_range(start, finish - start)) {
+        Ok(()) => "O".to_owned(),
+        Err(range) => format!("E{}:{}", range.start, range.end()),
+    };
+    println!("R {} {} {} {}", tag, start, finish, result);
+}
+
+fn emit_chunks(tag: &str, mask: &InitMask, start: Size, finish: Size) {
+    let chunks = mask.range_as_init_chunks(alloc_range(start, finish - start))
+        .map(|chunk| {
+            let is_init = chunk.is_init();
+            let range = chunk.range();
+            format!("{}:{}-{}", if is_init { 1 } else { 0 }, range.start, range.end)
+        })
+        .collect::<Vec<_>>().join(",");
+    println!("C {} {} {} {}", tag, start, finish, chunks);
+}
+
+// @PINNED_INIT_MASK_IMPLS@
+
+fn clone_copy_for_test(defined: &InitCopy) -> InitCopy {
+    let mut ranges = smallvec::SmallVec::<[u64; 1]>::new();
+    for range in defined.ranges.iter() {
+        ranges.push(*range);
+    }
+    InitCopy { initial: defined.initial, ranges }
+}
+
+fn make_pattern(len: Size, initial: bool, pattern: u64) -> InitMask {
+    let mut mask = InitMask::new(Size::from_bytes(len), initial);
+    for index in 0..len {
+        let wanted = pattern & (1 << index) != 0;
+        if wanted != initial {
+            mask.set_range(alloc_range(index, 1), wanted);
+        }
+    }
+    mask
+}
+
+fn exhaustive_small() {
+    let mut tag_id = 0u64;
+    for len in 0..=5u64 {
+        for initial in [false, true] {
+            for pattern in 0..(1u64 << len) {
+                let mask = make_pattern(len, initial, pattern);
+                let tag = format!("b{}", tag_id);
+                tag_id += 1;
+                emit_snapshot(&tag, &mask);
+                for start in 0..=len + 2 {
+                    for finish in start..=len + 3 {
+                        emit_query(&tag, &mask, start, finish);
+                        if finish <= len {
+                            emit_chunks(&tag, &mask, start, finish);
+                        }
+                    }
+                }
+
+                for start in 0..=len + 2 {
+                    for size in 0..=4u64 {
+                        for new_state in [false, true] {
+                            let mut changed = mask.clone();
+                            changed.set_range(alloc_range(start, size), new_state);
+                            let op_tag = format!("o{}:{}:{}:{}", tag_id, start, size, if new_state { 1 } else { 0 });
+                            emit_snapshot(&op_tag, &changed);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn boundary_cases() {
+    let ranges = [(0, 0), (1, 64), (62, 65), (63, 64), (64, 65), (64, 128), (60, 130), (130, 132)];
+    let mut id = 0u64;
+    for len in [63u64, 64, 65] {
+        for initial in [false, true] {
+            for (start, finish) in ranges {
+                for new_state in [false, true] {
+                    let mut mask = InitMask::new(Size::from_bytes(len), initial);
+                    mask.set_range(alloc_range(start, finish - start), new_state);
+                    let tag = format!("x{}", id);
+                    id += 1;
+                    emit_snapshot(&tag, &mask);
+                    for (qstart, qfinish) in [(0, 1), (62, 63), (62, 65), (63, 64), (63, 65), (64, 65), (64, 66), (0, 65), (65, 66), (129, 132)] {
+                        emit_query(&tag, &mask, qstart, qfinish);
+                    }
+                    for (cstart, cfinish) in [(0, 0), (0, len), (60.min(len), 63.min(len)), (63.min(len), 65.min(len)), (64.min(len), 65.min(len))] {
+                        emit_chunks(&tag, &mask, cstart, cfinish);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn caught_panic<F: FnOnce()>(f: F) -> &'static str {
+    if catch_unwind(AssertUnwindSafe(f)).is_err() { "panic" } else { "returned" }
+}
+
+fn invalid_cases() {
+    let malformed = InitMask {
+        blocks: InitMaskBlocks::Materialized(InitMaskMaterialized { blocks: vec![] }),
+        len: 2,
+    };
+    let malformed_get = caught_panic(|| { let _ = malformed.get(0); });
+    println!("V malformed-get {}", if malformed_get == "panic" { "block-index-error" } else { malformed_get });
+    let mut malformed_write = malformed.clone();
+    let malformed_set = caught_panic(|| {
+        malformed_write.set_range(alloc_range(0, 1), true);
+    });
+    println!("V malformed-set {}", if malformed_set == "panic" { "block-index-error" } else { malformed_set });
+
+    let short = InitMask::new(1, true);
+    let oob_chunks = caught_panic(|| {
+        let _ = short.range_as_init_chunks(alloc_range(0, 2));
+    });
+    println!("V oob-chunks {}", if oob_chunks == "panic" { "range-assertion" } else { oob_chunks });
+    let empty = InitMask::new(1, false);
+    let empty_copy = caught_panic(|| {
+        let _ = empty.prepare_copy(alloc_range(0, 0));
+    });
+    println!("V empty-copy {}", if empty_copy == "panic" { "empty-copy-assertion" } else { empty_copy });
+
+    let oob_query = match short.is_range_initialized(alloc_range(0, 2)) {
+        Err(_) => "range-result",
+        Ok(()) => "initialized",
+    };
+    println!("V oob-query {}", oob_query);
+
+    let max = u64::MAX;
+    let huge = InitMask::new(max, true);
+    let size_overflow = caught_panic(|| {
+        let _ = huge.is_range_initialized(alloc_range(max, 1));
+    });
+    println!("V size-overflow {}", if size_overflow == "panic" { "size-error" } else { size_overflow });
+}
+
+fn copy_cases() {
+    let mut sources = Vec::new();
+    sources.push(("lazy0", InitMask::new(Size::from_bytes(4), false), 0, 4));
+    sources.push(("lazy1", InitMask::new(Size::from_bytes(4), true), 0, 4));
+
+    let mut mixed = InitMask::new(Size::from_bytes(8), true);
+    mixed.set_range(alloc_range(1, 2), false);
+    mixed.set_range(alloc_range(5, 1), false);
+    sources.push(("mixed", mixed, 0, 8));
+
+    let mut boundary = InitMask::new(Size::from_bytes(65), true);
+    boundary.set_range(alloc_range(63, 2), false);
+    sources.push(("boundary", boundary, 60, 5));
+
+    for (source_name, source, source_start, source_len) in sources {
+        let defined = source.prepare_copy(alloc_range(source_start, source_len));
+        let run_text = defined.ranges.iter().map(|run| run.to_string()).collect::<Vec<_>>().join(",");
+        println!("I {} {} {} {}", source_name, if defined.initial { 1 } else { 0 },
+            if defined.no_bytes_init() { 1 } else { 0 }, run_text);
+        for destination_initial in [false, true] {
+            for repeat_count in 0..=4u64 {
+                let dest_len = 3 + source_len * repeat_count.max(1);
+                let destination = InitMask::new(Size::from_bytes(dest_len), destination_initial);
+                let mut updated = destination.clone();
+                updated.apply_copy(
+                    clone_copy_for_test(&defined),
+                    alloc_range(3, source_len),
+                    repeat_count,
+                );
+                let tag = format!("p{}:{}:{}", source_name, if destination_initial { 1 } else { 0 }, repeat_count);
+                emit_snapshot(&tag, &updated);
+            }
+        }
+    }
+}
+
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+    exhaustive_small();
+    boundary_cases();
+    copy_cases();
+    invalid_cases();
+}

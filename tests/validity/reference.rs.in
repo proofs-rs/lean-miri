@@ -1,0 +1,230 @@
+#![feature(rustc_private)]
+extern crate rustc_driver;
+extern crate rustc_abi;
+extern crate rustc_middle;
+extern crate rustc_data_structures;
+
+use rustc_abi::{AddressSpace, HasDataLayout, Integer, Primitive, Scalar as ScalarAbi, Size, TargetDataLayout, WrappingRange};
+use rustc_middle::mir::interpret::{AllocId, CtfeProvenance, Pointer, Provenance, Scalar};
+use rustc_data_structures::range_set::RangeSet;
+use std::cell::Cell;
+use std::collections::HashSet;
+use std::fmt::Debug;
+use std::fmt::Write;
+use std::hash::Hash;
+use std::num::NonZero;
+
+type FxHashSet<T> = HashSet<T>;
+macro_rules! trace { ($($arg:tt)*) => {{ let _ = format_args!($($arg)*); }} }
+
+#[derive(Debug)]
+enum ValidityError {
+    Invalid(String),
+    Machine(String),
+}
+
+fn interp_ok<T>(value: T) -> Result<T, ValidityError> { Ok(value) }
+
+macro_rules! throw_validation_failure {
+    ($path:expr, $message:expr) => {{
+        let _ = &$path;
+        return Err(ValidityError::Invalid($message));
+    }};
+}
+
+// @FMT_RANGE_SOURCE@
+
+#[derive(Clone, Debug)]
+struct VariantIdx(usize);
+impl VariantIdx { fn index(&self) -> usize { self.0 } }
+
+enum PathElem<'a> {
+    Field(&'a str),
+    EnumTag,
+    Variant(&'a str),
+    CoroutineTag,
+    CoroutineState(VariantIdx),
+    CapturedVar(&'a str),
+    TupleElem(usize),
+    ArrayElem(usize),
+    Deref,
+    DynDowncast(&'a str),
+    Vtable,
+}
+
+// @WRITE_PATH_SOURCE@
+
+struct TestEcx {
+    layout: TargetDataLayout,
+    may_be_null: Result<bool, String>,
+    null_checks: Cell<usize>,
+}
+
+impl HasDataLayout for TestEcx {
+    fn data_layout(&self) -> &TargetDataLayout { &self.layout }
+}
+
+impl TestEcx {
+    fn scalar_may_be_null<Prov: Provenance>(
+        &self,
+        _scalar: Scalar<Prov>,
+    ) -> Result<bool, ValidityError> {
+        self.null_checks.set(self.null_checks.get() + 1);
+        self.may_be_null.clone().map_err(ValidityError::Machine)
+    }
+}
+
+struct TestVisitor<'a> {
+    ecx: &'a TestEcx,
+    path: (),
+}
+
+impl TestVisitor<'_> {
+    fn extracted_visit_scalar<Prov: Provenance>(
+        &self,
+        scalar: Scalar<Prov>,
+        scalar_layout: ScalarAbi,
+    ) -> Result<(), ValidityError> {
+        // @VISIT_SCALAR_BODY@
+    }
+}
+
+struct RefTracking<T, PATH> {
+    seen: FxHashSet<T>,
+    todo: Vec<(T, PATH)>,
+}
+
+impl<T: Clone + Eq + Hash + Debug, PATH> RefTracking<T, PATH> {
+    // @REF_TRACKING_EMPTY@
+    // @REF_TRACKING_NEXT@
+    // @REF_TRACKING_TRACK@
+}
+
+type Ty<'tcx> = &'tcx str;
+struct Path<'tcx> { ty: Ty<'tcx> }
+impl<'tcx> Path<'tcx> { fn new(ty: Ty<'tcx>) -> Self { Self { ty } } }
+
+impl<'tcx, T: Clone + Eq + Hash + Debug> RefTracking<T, Path<'tcx>> {
+    // @REF_TRACKING_NEW@
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct AddrProv;
+
+impl Provenance for AddrProv {
+    const OFFSET_IS_ADDR: bool = true;
+    const WILDCARD: Option<Self> = None;
+    fn fmt(_pointer: &Pointer<Self>, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("addr")
+    }
+    fn get_alloc_id(self) -> Option<AllocId> { None }
+}
+
+fn scalar_layout(start: u128, end: u128) -> ScalarAbi {
+    ScalarAbi::Initialized {
+        value: Primitive::Int(Integer::I8, false),
+        valid_range: WrappingRange { start, end },
+    }
+}
+
+fn pointer_layout(start: u128, end: u128) -> ScalarAbi {
+    ScalarAbi::Initialized {
+        value: Primitive::Pointer(AddressSpace::ZERO),
+        valid_range: WrappingRange { start, end },
+    }
+}
+
+fn show_result(result: Result<(), ValidityError>, calls: usize) -> String {
+    match result {
+        Ok(()) => format!("OK:{calls}"),
+        Err(ValidityError::Invalid(message)) => format!("INVALID:{message}:{calls}"),
+        Err(ValidityError::Machine(message)) => format!("MACHINE:{message}:{calls}"),
+    }
+}
+
+fn run<Prov: Provenance>(
+    tag: &str,
+    scalar: Scalar<Prov>,
+    abi: ScalarAbi,
+    null_result: Result<bool, String>,
+) {
+    let ecx = TestEcx {
+        layout: TargetDataLayout::default(),
+        may_be_null: null_result,
+        null_checks: Cell::new(0),
+    };
+    let visitor = TestVisitor { ecx: &ecx, path: () };
+    let result = visitor.extracted_visit_scalar(scalar, abi);
+    println!("V {tag} {}", show_result(result, ecx.null_checks.get()));
+}
+
+fn main() {
+    let mut data = RangeSet::new();
+    data.add_range(Size::from_bytes(8), Size::from_bytes(4));
+    data.add_range(Size::from_bytes(0), Size::from_bytes(4));
+    data.add_range(Size::from_bytes(4), Size::from_bytes(4));
+    data.add_range(Size::from_bytes(10), Size::from_bytes(3));
+    data.add_range(Size::from_bytes(20), Size::from_bytes(2));
+    data.add_range(Size::from_bytes(100), Size::from_bytes(0));
+    let ranges = data.0.iter().map(|(start, size)| format!("{}:{}", start.bytes(), size.bytes())).collect::<Vec<_>>().join(",");
+    println!("R {ranges}");
+
+    let path = [
+        PathElem::Field("field"), PathElem::EnumTag, PathElem::Variant("Variant"),
+        PathElem::CoroutineTag, PathElem::CoroutineState(VariantIdx(7)),
+        PathElem::CapturedVar("capture"), PathElem::TupleElem(2),
+        PathElem::ArrayElem(3), PathElem::Deref,
+        PathElem::DynDowncast("Concrete"), PathElem::Vtable,
+    ];
+    let mut rendered_path = String::new();
+    write_path(&mut rendered_path, &path);
+    println!("P {rendered_path}");
+
+    let seeded = RefTracking::<u32, Path<'_>>::new(11, "root");
+    let first = seeded.todo.last().unwrap();
+    println!("T_SEED {}:{}:{}:{}", first.0, first.1.ty, seeded.seen.contains(&11), seeded.todo.len());
+
+    let mut tracking = RefTracking::<u32, String>::empty();
+    let path_calls = Cell::new(0usize);
+    tracking.track(2, || { path_calls.set(path_calls.get() + 1); "two".into() });
+    tracking.track(2, || { path_calls.set(path_calls.get() + 1); "duplicate".into() });
+    tracking.track(5, || { path_calls.set(path_calls.get() + 1); "five".into() });
+    let first = tracking.next().unwrap();
+    let second = tracking.next().unwrap();
+    let empty = tracking.next().is_none();
+    tracking.track(2, || { path_calls.set(path_calls.get() + 1); "again".into() });
+    println!("T {}:{}:{}:{}:{}", first.0, first.1, second.0, second.1, path_calls.get());
+    println!("T_EMPTY {}:{}", empty, tracking.todo.len());
+
+    let default_layout = TargetDataLayout::default();
+    let restricted = scalar_layout(1, 255);
+    let pointer_restricted = pointer_layout(1, u64::MAX as u128);
+    run("int_valid", Scalar::<CtfeProvenance>::from_uint(17u128, Size::from_bytes(1)), restricted, Ok(false));
+    run("int_invalid", Scalar::<CtfeProvenance>::from_uint(0u128, Size::from_bytes(1)), restricted, Ok(false));
+    let id = AllocId(NonZero::new(1).unwrap());
+    let relative = Scalar::from_pointer(
+        Pointer::new(CtfeProvenance::from(id), Size::from_bytes(17)),
+        &default_layout,
+    );
+    run("relative_nonnull", relative, pointer_restricted, Ok(false));
+    run("relative_maybe_null", relative, pointer_restricted, Ok(true));
+    run("relative_null_error", relative, pointer_restricted, Err("null-query failed".into()));
+    run("relative_unknown_range", relative, pointer_layout(2, u64::MAX as u128), Ok(false));
+    run("relative_full_range", relative, pointer_layout(0, u64::MAX as u128), Ok(false));
+    let wrapped = scalar_layout(254, 2);
+    run("wrapped_contains", Scalar::<CtfeProvenance>::from_uint(0u128, Size::from_bytes(1)), wrapped, Ok(false));
+    run("wrapped_rejects", Scalar::<CtfeProvenance>::from_uint(3u128, Size::from_bytes(1)), wrapped, Ok(false));
+    let absolute = Scalar::from_pointer(Pointer::new(AddrProv, Size::from_bytes(17)), &default_layout);
+    run("absolute_valid", absolute, pointer_restricted, Ok(false));
+    let absolute_null = Scalar::from_pointer(Pointer::new(AddrProv, Size::from_bytes(0)), &default_layout);
+    run("absolute_invalid", absolute_null, pointer_restricted, Ok(false));
+    for (tag, range) in [
+        ("range_wrapping", WrappingRange { start: 254, end: 2 }),
+        ("range_single", WrappingRange { start: 8, end: 8 }),
+        ("range_lower", WrappingRange { start: 0, end: 9 }),
+        ("range_upper", WrappingRange { start: 10, end: 255 }),
+        ("range_middle", WrappingRange { start: 10, end: 20 }),
+    ] {
+        println!("F {tag} {}", fmt_range(range, 255));
+    }
+}

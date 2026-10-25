@@ -1,0 +1,16 @@
+error: Undefined Behavior: Data race detected between (1) non-atomic write on thread `unnamed-1` and (2) non-atomic read on thread `main` at alloc1
+  --> /workspace/lean-miri/docs/verification/rmw-release193/input/negative.rs:45:29
+   |
+45 |     let observed = unsafe { core::ptr::addr_of!(SHARED).read() };
+   |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (2) just happened here
+   |
+help: and (1) occurred earlier here
+  --> /workspace/lean-miri/docs/verification/rmw-release193/input/negative.rs:13:14
+   |
+13 |     unsafe { core::ptr::addr_of_mut!(SHARED).write(42); }
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = help: this indicates a bug in the program: it performed an invalid operation, and caused Undefined Behavior
+   = help: see https://doc.rust-lang.org/nightly/reference/behavior-considered-undefined.html for further information
+   = note: this is on thread `main`
+
+note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace

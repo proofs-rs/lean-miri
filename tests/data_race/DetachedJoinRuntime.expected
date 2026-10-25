@@ -1,0 +1,14 @@
+joined:rejected-before-effects
+self:rejected-before-effects
+waiter:rejected-before-effects
+detached:rejected-before-effects
+reuse:no-candidates:no-draw:created
+reuse:two-safe-candidates:index-1:reused-second
+reuse:bad-index:rejected-before-consumption
+reuse:explicit-index:preserved:no-draw
+reuse:unsafe-explicit-index:rejected:no-fallback
+reuse:no-data-race-state:no-draw
+reuse:unix-thread-create:bound-choice:two-safe-candidates:index-1
+reuse:unix-thread-create:empty-support:no-draw
+reuse:unix-thread-create:bad-index:rejected-before-consumption
+reuse:unix-thread-create:explicit-clock:no-draw

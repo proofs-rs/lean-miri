@@ -1,0 +1,12 @@
+{
+  "exclusions": [
+    {
+      "path": "upstream/miri-source/src/concurrency/genmc",
+      "reason": "GenMC port removed at project owner request; optional upstream implementation remains in the immutable Miri reference snapshot.",
+      "reviewed": true,
+      "reviewed_by": "project owner scope request",
+      "scope": "directory"
+    }
+  ],
+  "schema_version": 1
+}

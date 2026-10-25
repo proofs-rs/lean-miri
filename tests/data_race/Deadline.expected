@@ -1,0 +1,6 @@
+sweep:queued=1:minimum=(some 6):before=(some false):expired=(some true):future=(some false)
+duplicate:rejected=true:unchanged=(some true):queued=0
+callback:target=1:previous=0:reason=Mutex:timedout=true:token=51:remaining=0:minimum=(some 6)
+callback-kind-mismatch:rejected=true
+callback-failure:active=1:remaining=0
+isolation-panic:main-expired=(some true):later-still-blocked=(some true):queued=1:error=true

@@ -1,0 +1,151 @@
+#![feature(rustc_private)]
+extern crate rustc_driver;
+extern crate rustc_abi;
+extern crate rustc_middle;
+extern crate rustc_ast;
+
+use rustc_abi::{HasDataLayout, Size, TargetDataLayout};
+use rustc_ast::Mutability;
+use rustc_middle::mir::interpret::{
+    AllocError, AllocId, AllocInit, AllocRange, Allocation, CtfeProvenance,
+    Pointer, Provenance, Scalar, alloc_range,
+};
+use rustc_middle::ty::{AtomicOrdering, ScalarInt, SimdAlign};
+use std::fmt;
+use std::num::NonZero;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+fn size(bytes: u64) -> Size { Size::from_bytes(bytes) }
+fn range(start: u64, end: u64) -> AllocRange { alloc_range(size(start), size(end - start)) }
+
+fn show_int(value: ScalarInt) -> String {
+    format!("{}:{}", value.size().bytes(), value.to_bits_unchecked())
+}
+
+fn emit_uint(tag: &str, value: u128, bytes: u64) {
+    let scalar = ScalarInt::try_from_uint(value, size(bytes));
+    match scalar {
+        Some(scalar) => println!("U {tag} {}", show_int(scalar)),
+        None => println!("U {tag} -"),
+    }
+}
+
+fn emit_truncated_uint(tag: &str, value: u128, bytes: u64) {
+    let (scalar, overflow) = ScalarInt::truncate_from_uint(value, size(bytes));
+    println!("T {tag} {} {overflow}", show_int(scalar));
+}
+
+fn emit_int(tag: &str, value: i128, bytes: u64) {
+    match ScalarInt::try_from_int(value, size(bytes)) {
+        Some(scalar) => println!("I {tag} {}", show_int(scalar)),
+        None => println!("I {tag} -"),
+    }
+}
+
+fn emit_truncated_int(tag: &str, value: i128, bytes: u64) {
+    let (scalar, overflow) = ScalarInt::truncate_from_int(value, size(bytes));
+    println!("J {tag} {} {overflow}", show_int(scalar));
+}
+
+fn show_scalar(value: Scalar<CtfeProvenance>) -> String {
+    match value {
+        Scalar::Int(integer) => format!("I:{}", show_int(integer)),
+        Scalar::Ptr(pointer, pointer_size) => {
+            let (provenance, offset) = pointer.into_raw_parts();
+            format!("P:{}:{}:{}", pointer_size.get(), offset.bytes(), provenance.alloc_id().0.get())
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AddrProv;
+
+impl Provenance for AddrProv {
+    const OFFSET_IS_ADDR: bool = true;
+    const WILDCARD: Option<Self> = None;
+    fn fmt(_ptr: &Pointer<Self>, _f: &mut fmt::Formatter<'_>) -> fmt::Result { Ok(()) }
+    fn get_alloc_id(self) -> Option<AllocId> { None }
+}
+
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+    for (tag, value, bytes) in [
+        ("zero8", 0u128, 1u64), ("one8", 1, 1), ("max8", 255, 1),
+        ("overflow8", 256, 1), ("max16", u128::MAX, 16),
+        ("wideTruncate", 0x123456789abcdef0u128, 4),
+    ] { emit_uint(tag, value, bytes); }
+    emit_truncated_uint("wide", 0x123456789abcdef0u128, 4);
+    emit_truncated_uint("maxTo16", u128::MAX, 16);
+
+    for (tag, value, bytes) in [
+        ("minusOne8", -1i128, 1), ("min8", -128, 1), ("under8", -129, 1),
+        ("min128", i128::MIN, 16), ("max128", i128::MAX, 16),
+    ] { emit_int(tag, value, bytes); }
+    emit_truncated_int("minus129", -129, 1);
+    emit_truncated_int("plus255", 255, 1);
+
+    let valid_bool = ScalarInt::try_from_uint(1u128, size(1)).unwrap();
+    let invalid_bool = ScalarInt::try_from_uint(2u128, size(1)).unwrap();
+    println!("Q bool_true {}", valid_bool.try_to_bool().unwrap());
+    println!("Q bool_invalid {}", invalid_bool.try_to_bool().is_err());
+    for (tag, code) in [("letter", 65u128), ("surrogate", 0xd800), ("pastUnicode", 0x110000)] {
+        let int = ScalarInt::try_from_uint(code, size(4)).unwrap();
+        let ch = char::try_from(int);
+        println!("C {tag} {}", ch.map(|value| value as u32).map_or_else(|_| "-".into(), |v| v.to_string()));
+    }
+    let ordering = ScalarInt::from(AtomicOrdering::AcqRel as u32);
+    let simd = ScalarInt::from(SimdAlign::Vector as u32);
+    println!("E atomic {}", ordering.to_atomic_ordering() as u8);
+    println!("E simd {}", simd.to_simd_alignment() as u8);
+    println!("P mismatch {}", catch_unwind(AssertUnwindSafe(|| valid_bool.to_bits(size(2)))).is_err());
+    println!("P zero_size {}", catch_unwind(AssertUnwindSafe(|| ScalarInt::null(size(0)))).is_err());
+
+    let layout = TargetDataLayout::default();
+    let scalar = Scalar::<CtfeProvenance>::from_uint(0x1234u128, size(2));
+    println!("S from_uint {} {}", scalar.size().bytes(), scalar.to_uint(size(2)).unwrap());
+    println!("S signed {}", Scalar::<CtfeProvenance>::from_int(-129i128, size(2)).to_int(size(2)).unwrap());
+    println!("S bool {}", Scalar::<CtfeProvenance>::from_bool(true).to_bool().unwrap());
+    println!("S char {}", Scalar::<CtfeProvenance>::from_char('A').to_char().unwrap() as u32);
+    let alloc_id = AllocId(NonZero::new(1).unwrap());
+    let provenance = CtfeProvenance::from(alloc_id);
+    let pointer_scalar = Scalar::from_pointer(Pointer::new(provenance, size(0x1234)), &layout);
+    println!("S rel_cast {}", pointer_scalar.try_to_scalar_int().is_err());
+    println!("S rel_read_bits {}", pointer_scalar.to_bits(size(8)).report_err().is_err());
+    let address_scalar = Scalar::<AddrProv>::from_pointer(Pointer::new(AddrProv, size(0x1234)), &layout);
+    println!("S addr_cast {}", show_int(address_scalar.try_to_scalar_int().unwrap()));
+    let maybe_pointer = Scalar::<AddrProv>::from_uint(0x1234u128, size(8)).to_pointer(&layout);
+    let (maybe_provenance, maybe_offset) = maybe_pointer.into_raw_parts();
+    println!("S to_pointer {} {}", maybe_provenance.is_none(), maybe_offset.bytes());
+    let optional_relative = Scalar::<CtfeProvenance>::from_maybe_pointer(
+        Pointer::new(Some(provenance), size(0x1234)), &layout,
+    );
+    let optional_integer = Scalar::<CtfeProvenance>::from_maybe_pointer(
+        Pointer::without_provenance(0x1234), &layout,
+    );
+    println!("S maybe_relative {}", show_scalar(optional_relative));
+    println!("S maybe_integer {}", show_scalar(optional_integer));
+    let (roundtrip_provenance, roundtrip_offset) = pointer_scalar.to_pointer(&layout).into_raw_parts();
+    println!("S to_pointer_relative {} {}", roundtrip_provenance.is_some(), roundtrip_offset.bytes());
+
+    let mut initialized = Allocation::<CtfeProvenance>::new(size(4), rustc_abi::Align::ONE, AllocInit::Zero, ());
+    initialized.write_scalar(&layout, range(0, 4), Scalar::from_uint(0x12345678u128, size(4))).unwrap();
+    match initialized.read_scalar(&layout, range(0, 4), false) {
+        Ok(value) => println!("A int {}", show_scalar(value)),
+        Err(error) => println!("A int_error {error:?}"),
+    }
+    let mut pointer_allocation = Allocation::<CtfeProvenance>::new(size(8), rustc_abi::Align::ONE, AllocInit::Uninit, ());
+    pointer_allocation.write_scalar(&layout, range(0, 8), pointer_scalar).unwrap();
+    match pointer_allocation.read_scalar(&layout, range(0, 8), true) {
+        Ok(value) => println!("A pointer {}", show_scalar(value)),
+        Err(error) => println!("A pointer_error {error:?}"),
+    }
+    println!("A pointer_as_int {}", matches!(
+        pointer_allocation.read_scalar(&layout, range(0, 8), false),
+        Err(AllocError::ReadPointerAsInt(None))
+    ));
+    let uninit = Allocation::<CtfeProvenance>::new(size(2), rustc_abi::Align::ONE, AllocInit::Uninit, ());
+    println!("A uninit {}", matches!(
+        uninit.read_scalar(&layout, range(0, 1), false),
+        Err(AllocError::InvalidUninitBytes(Some(_)))
+    ));
+}

@@ -1,0 +1,26 @@
+error: Undefined Behavior: write access through <24> at alloc12389[0x0] is forbidden
+  --> /workspace/lean-miri/docs/verification/large-tb-retry-20261023/source.rs:14:9
+   |
+14 |         *ptr = 0; // Expected Tree Borrows UB.
+   |         ^^^^^^^^ Undefined Behavior occurred here
+   |
+   = help: this indicates a potential bug in the program: it performed an invalid operation, but the Tree Borrows rules it violated are still experimental
+   = help: see https://github.com/rust-lang/unsafe-code-guidelines/blob/master/wip/tree-borrows.md for further information
+   = help: the accessed tag <24> has state Frozen which forbids this child write access
+help: the accessed tag <24> was created here, in the initial state Reserved
+  --> /workspace/lean-miri/docs/verification/large-tb-retry-20261023/source.rs:10:20
+   |
+10 |         let mref = &mut root;
+   |                    ^^^^^^^^^
+help: the accessed tag <24> later transitioned to Unique due to a child write access at offsets [0x0..0x1]
+  --> /workspace/lean-miri/docs/verification/large-tb-retry-20261023/source.rs:12:9
+   |
+12 |         *ptr = 0; // Write through the derived raw pointer.
+   |         ^^^^^^^^
+   = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
+help: the accessed tag <24> later transitioned to Frozen due to a reborrow (acting as a foreign read access) at offsets [0x0..0x1]
+  --> /workspace/lean-miri/docs/verification/large-tb-retry-20261023/source.rs:13:9
+   |
+13 |         assert_eq!(root, 0); // Parent read freezes the raw-mut child under TB.
+   |         ^^^^^^^^^^^^^^^^^^^
+   = help: this transition corresponds to a loss of write permissions

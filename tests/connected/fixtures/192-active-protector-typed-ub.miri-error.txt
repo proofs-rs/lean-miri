@@ -1,0 +1,33 @@
+error: Undefined Behavior: write access through <23> (root of the allocation) at alloc696[0x0] is forbidden
+  --> /workspace/lean-miri/docs/verification/tb-protector192/export-active-001/source.rs:15:14
+   |
+15 |     unsafe { *parent = 2 };
+   |              ^^^^^^^^^^^ Undefined Behavior occurred here
+   |
+   = help: this indicates a potential bug in the program: it performed an invalid operation, but the Tree Borrows rules it violated are still experimental
+   = help: see https://github.com/rust-lang/unsafe-code-guidelines/blob/master/wip/tree-borrows.md for further information
+   = help: the accessed tag <23> (root of the allocation) is foreign to the protected tag <26> (i.e., it is not a child)
+   = help: this foreign write access would cause the protected tag <26> (currently Unique) to become Disabled
+   = help: protected tags must never be Disabled
+help: the accessed tag <23> was created here
+  --> /workspace/lean-miri/docs/verification/tb-protector192/export-active-001/source.rs:7:18
+   |
+ 7 |     let parent = core::ptr::addr_of_mut!(value);
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: the protected tag <26> was created here, in the initial state Reserved
+  --> /workspace/lean-miri/docs/verification/tb-protector192/export-active-001/source.rs:13:20
+   |
+13 | fn protected_write(argument: &mut u8, parent: *mut u8) {
+   |                    ^^^^^^^^
+help: the protected tag <26> later transitioned to Unique due to a child write access at offsets [0x0..0x1]
+  --> /workspace/lean-miri/docs/verification/tb-protector192/export-active-001/source.rs:14:5
+   |
+14 |     *argument = 1;
+   |     ^^^^^^^^^^^^^
+   = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
+   = note: stack backtrace:
+           0: protected_write
+               at /workspace/lean-miri/docs/verification/tb-protector192/export-active-001/source.rs:15:14: 15:25
+           1: miri_start
+               at /workspace/lean-miri/docs/verification/tb-protector192/export-active-001/source.rs:8:14: 8:51
+   = note: this error originates in the macro `core::ptr::addr_of_mut` (in Nightly builds, run with -Z macro-backtrace for more info)

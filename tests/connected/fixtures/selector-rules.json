@@ -1,0 +1,75 @@
+{
+  "miri_commit": "7fa591d7d4dd9af8154becbc8332f8096f8323b1",
+  "rustc_commit": "8144389c895da997dbdecaa635e41d6a50be6ffd",
+  "sources": [
+    {
+      "path": "upstream/miri-source/src/concurrency/weak_memory.rs",
+      "sha256": "dce36b34e8efe44a44d67c111697fb2e00313cb3a252f865385942e03f24d554",
+      "ranges": [
+        {"lines": "339-418", "rule": "StoreBuffer::fetch_store searches newest-to-oldest, stops at the CoWR/CoRR and SC-clock bounds, disallows stores marked sc_loaded for later SC reads, and retains only the newest SC-marked store while preserving unmarked candidates. It chooses among the resulting permitted candidates with the Miri RNG."},
+        {"lines": "480-490", "rule": "StoreElement::load_impl records the earliest per-thread load timestamp and whether any SC load observed this store."},
+        {"lines": "555-580", "rule": "buffered_atomic_read applies global.sc_read before selecting a value for an SC load, calls the store-buffer choice path, and records outdated-load diagnostics only when configured."},
+        {"lines": "621-636", "rule": "buffered_atomic_write calls global.sc_write for an SC store and marks the buffered write as SeqCst."}
+      ]
+    },
+    {
+      "path": "upstream/miri-source/src/concurrency/data_race.rs",
+      "sha256": "68a585d9d3d96d87b857142ed82ffe5006e7c6c1b0492a7b60534348d1d83baa",
+      "ranges": [
+        {"lines": "1998-2008", "rule": "sc_write updates the per-thread last-SC-write clock; sc_read joins the last-SC-fence clock into the active thread's SC-read clock."}
+      ]
+    },
+    {
+      "path": "upstream/miri-source/src/shims/unix/thread.rs",
+      "sha256": "d096374c2352938c2c9ce5390ce69ad0d899a47deb6287118a97082361ee67e3",
+      "ranges": [
+        {"lines": "161-167", "rule": "sched_yield only calls yield_active_thread and returns; it adds no synchronization clock or atomic memory operation."}
+      ]
+    },
+    {
+      "path": "upstream/miri-source/src/shims/unix/foreign_items.rs",
+      "sha256": "98a5e6b627658908784f55f13e8cb777211fdf99ac9d0927d3fe2de255406b6c",
+      "ranges": [
+        {"lines": "1156-1162", "rule": "The libc sched_yield shim checks the zero-argument i32 signature, invokes sched_yield, then writes the return value."}
+      ]
+    },
+    {
+      "path": "upstream/miri-source/tests/pass/concurrency/data_race.rs",
+      "sha256": "add446c1e2b70d6c8f02442a7f54b3781440b9597e968fab8e2acb020b6f60d0",
+      "role": "Pinned Miri concurrency regression source included in each export/run provenance record; it is not itself the SC store-buffering integration test."
+    },
+    {
+      "path": "tests/weak_memory/test_sc_prefix.py",
+      "sha256": "814a1359c953fdda39452fb600a107013bc3ca1a10d9694bae6ce1345dacf25d",
+      "role": "Existing SHA-locked comparison extracts buffered_atomic_read and compares six payload/SeqCst-prefix cases against Lean. Its boundary deliberately stops before store selection and does not execute the threaded fixture or enumerate schedules."
+    },
+    {
+      "path": "tests/weak_memory/ScPrefix.lean",
+      "sha256": "4ff65aa6a09e4c875cb563cfeaa4090873e6b83cc0d834bb2fa93e98bc41460c",
+      "role": "Lean side of the existing six-case source-extracted boundary comparison."
+    },
+    {
+      "path": "tests/weak_memory/WeakMemory.lean",
+      "sha256": "74b2112c4354d54ae0a95c33b1f936dae754cd06d5eb9db5d301495c2dcbb055",
+      "role": "Component model for store-buffer choice and SeqCst metadata; not a full threaded execution proof."
+    },
+    {
+      "path": "Miri/Interpreter/UnixThread.lean",
+      "sha256": "e653d8c65d59c2909ae730bc9d6ac434dbe7f907f11ed6d31744f2bfba5f8add",
+      "ranges": [
+        {"lines": "95-97", "rule": "The connected Lean schedYield operation only sets ThreadManager.yieldActiveThread."}
+      ]
+    },
+    {
+      "path": "Miri/Concurrency/WeakMemory.lean",
+      "sha256": "9e0c6263446a78435ee1791aae6080efea9ede037b983cb4f6d2c6f1b1399722",
+      "role": "Integrated Lean store-buffer choice implementation included in the immutable 679-source closure recorded by each run."
+    },
+    {
+      "path": "Miri/Concurrency/GlobalState.lean",
+      "sha256": "6aa48faf3916c9a750c7352ab5983502b96495249309712fe3552acc71758da2",
+      "role": "Integrated Lean global vector-clock SeqCst bookkeeping included in the immutable 679-source closure recorded by each run."
+    }
+  ],
+  "interpretation": "The source rules motivate this finite integration case. They do not by themselves establish the complete C++/Rust memory model or exclude forbidden outcomes on all schedules."
+}

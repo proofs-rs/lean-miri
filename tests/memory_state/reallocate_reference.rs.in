@@ -1,0 +1,162 @@
+use std::marker::PhantomData;
+
+#[derive(Clone, Copy, Debug)]
+struct Size(u64);
+impl Size {
+    fn bytes(self) -> u64 { self.0 }
+    fn min(self, other: Self) -> Self { Size(self.0.min(other.0)) }
+}
+#[derive(Clone, Copy, Debug)]
+struct Align(u64);
+#[derive(Clone, Copy, Debug)]
+struct MemoryKind<K>(K);
+#[derive(Clone, Copy, Debug)]
+enum AllocInit { Uninit, Zero }
+
+trait Machine<'tcx> {
+    type Provenance: Copy;
+    type MemoryKind: Copy;
+}
+struct TestMachine;
+impl<'tcx> Machine<'tcx> for TestMachine {
+    type Provenance = u64;
+    type MemoryKind = u64;
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Pointer<P: Copy> { id: u64, offset: Size, provenance: P }
+impl<P: Copy> From<Pointer<P>> for Pointer<Option<P>> {
+    fn from(pointer: Pointer<P>) -> Self {
+        Pointer { id: pointer.id, offset: pointer.offset, provenance: Some(pointer.provenance) }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Failure { Offset, Resolve, Host, Reserve, Init, Root, OldSize, Copy, Before, Release, Layout }
+type InterpResult<'tcx, T> = Result<T, Failure>;
+macro_rules! throw_ub_format {
+    ($($ignored:tt)*) => {{ return Err(Failure::Offset); }};
+}
+fn interp_ok<'tcx, T>(value: T) -> InterpResult<'tcx, T> { Ok(value) }
+
+struct Allocation { size: Size }
+impl Allocation { fn size(&self) -> Size { self.size } }
+
+struct InterpCx<'tcx, M: Machine<'tcx>> {
+    events: Vec<&'static str>,
+    live: Vec<(u64, Size)>,
+    dead: Vec<u64>,
+    next_id: u64,
+    fail: &'static str,
+    resolve_count: usize,
+    _machine: PhantomData<(&'tcx (), M)>,
+}
+
+impl<'tcx, M: Machine<'tcx, Provenance = u64, MemoryKind = u64>> InterpCx<'tcx, M> {
+    fn ptr_get_alloc_id(
+        &mut self,
+        ptr: Pointer<Option<M::Provenance>>,
+        _size: u64,
+    ) -> InterpResult<'tcx, (u64, Size, M::Provenance)> {
+        self.events.push("resolve");
+        self.resolve_count += 1;
+        if (self.resolve_count == 1 && self.fail == "resolve1")
+            || (self.resolve_count == 2 && self.fail == "resolve2") {
+            return Err(Failure::Resolve);
+        }
+        match ptr.provenance {
+            Some(prov) => Ok((ptr.id, ptr.offset, prov)),
+            None => Err(Failure::Resolve),
+        }
+    }
+
+    fn allocate_ptr(
+        &mut self,
+        size: Size,
+        _align: Align,
+        _kind: MemoryKind<M::MemoryKind>,
+        _init: AllocInit,
+    ) -> InterpResult<'tcx, Pointer<M::Provenance>> {
+        if self.fail == "host" { return Err(Failure::Host); }
+        let id = self.next_id;
+        self.next_id += 1;
+        self.events.push(if self.fail == "init" { "init-fail" } else { "init" });
+        if self.fail == "init" { return Err(Failure::Init); }
+        self.live.push((id, size));
+        self.events.push(if self.fail == "root" { "root-fail" } else { "root" });
+        if self.fail == "root" { return Err(Failure::Root); }
+        Ok(Pointer { id, offset: Size(0), provenance: id })
+    }
+
+    fn get_alloc_raw(&self, id: u64) -> InterpResult<'tcx, Allocation> {
+        if self.fail == "oldsize" { return Err(Failure::OldSize); }
+        self.live.iter().find(|entry| entry.0 == id)
+            .map(|entry| Allocation { size: entry.1 }).ok_or(Failure::OldSize)
+    }
+
+    fn mem_copy(
+        &mut self,
+        _src: Pointer<Option<M::Provenance>>,
+        _dest: Pointer<Option<M::Provenance>>,
+        _size: Size,
+        _nonoverlapping: bool,
+    ) -> InterpResult<'tcx, ()> {
+        self.events.push(if self.fail == "copy" { "copy-fail" } else { "copy" });
+        if self.fail == "copy" { Err(Failure::Copy) } else { Ok(()) }
+    }
+
+    fn deallocate_ptr(
+        &mut self,
+        ptr: Pointer<Option<M::Provenance>>,
+        old_layout: Option<(Size, Align)>,
+        _kind: MemoryKind<M::MemoryKind>,
+    ) -> InterpResult<'tcx, ()> {
+        let (id, offset, _) = self.ptr_get_alloc_id(ptr, 0)?;
+        if offset.bytes() != 0 { return Err(Failure::Offset); }
+        let Some(index) = self.live.iter().position(|entry| entry.0 == id) else {
+            return Err(Failure::OldSize);
+        };
+        let (_, actual_size) = self.live.remove(index);
+        if let Some((size, _align)) = old_layout {
+            if size.bytes() != actual_size.bytes() { return Err(Failure::Layout); }
+        }
+        self.events.push(if self.fail == "before" { "before-fail" } else { "before" });
+        if self.fail == "before" { return Err(Failure::Before); }
+        self.dead.push(id);
+        Ok(())
+    }
+
+    /* EXTRACTED_METHOD */
+}
+
+fn show(tag: &str, fail: &'static str, offset: u64, old_size: Option<u64>, initial: bool) {
+    let mut ecx = InterpCx::<TestMachine> {
+        events: Vec::new(),
+        live: if initial { vec![(1, Size(4))] } else { vec![] },
+        dead: vec![],
+        next_id: 2,
+        fail,
+        resolve_count: 0,
+        _machine: PhantomData,
+    };
+    let ptr = Pointer { id: 1, offset: Size(offset), provenance: Some(1) };
+    let old_layout = old_size.map(|size| (Size(size), Align(1)));
+    let result = ecx.reallocate_ptr(ptr, old_layout, Size(8), Align(1), MemoryKind(0), AllocInit::Zero);
+    println!("R {tag} error={} live={} dead={} events={}",
+        result.is_err(), ecx.live.len(), ecx.dead.len(), ecx.events.join(","));
+}
+
+fn main() {
+    show("success-layout", "", 0, Some(4), true);
+    show("success-looked-up", "", 0, None, true);
+    show("non-base", "", 1, Some(4), true);
+    show("host-failure", "host", 0, Some(4), true);
+    show("init-failure", "init", 0, Some(4), true);
+    show("root-failure", "root", 0, Some(4), true);
+    show("copy-failure", "copy", 0, Some(4), true);
+    show("before-failure", "before", 0, Some(4), true);
+    show("old-size-failure", "oldsize", 0, None, false);
+    show("resolve-failure", "resolve1", 0, Some(4), true);
+    show("dealloc-resolve-failure", "resolve2", 0, Some(4), true);
+    show("layout-failure", "", 0, Some(3), true);
+}

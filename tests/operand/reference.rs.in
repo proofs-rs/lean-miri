@@ -1,0 +1,29 @@
+fn show_scalar(s:Scalar<CtfeProvenance>)->String {
+    match s { Scalar::Int(i)=>format!("i{}",i.to_bits_unchecked()),Scalar::Ptr(p,_)=>format!("p{}",p.into_raw_parts().1.bytes()) }
+}
+fn show_imm(i:Immediate<CtfeProvenance>)->String {
+    match i {Immediate::Uninit=>"u".into(),Immediate::Scalar(s)=>show_scalar(s),Immediate::ScalarPair(a,b)=>format!("{},{}",show_scalar(a),show_scalar(b))}
+}
+fn ghost(local:&LocalState<'_,CtfeProvenance>)->String {
+    match local.as_mplace_or_imm_ghost() {
+        None=>"dead".into(),Some(Left((ptr,meta)))=>format!("mem{}:{}",ptr.into_raw_parts().1.bytes(),meta.has_meta()),
+        Some(Right(i))=>show_imm(i),
+    }
+}
+fn main(){
+    let prov=CtfeProvenance::from(AllocId(NonZero::new(1).unwrap()));
+    let m=MemPlace{ptr:Pointer::new(Some(prov),Size::from_bytes(17)),meta:MemPlaceMeta::Meta(Scalar::from_u32(99)),misaligned:None};
+    let values=[LocalValue::Dead,LocalValue::Live(Operand::Immediate(Immediate::Uninit)),LocalValue::Live(Operand::Immediate(Scalar::from_u8(7).into())),LocalValue::Live(Operand::Indirect(m))];
+    for (index,value) in values.into_iter().enumerate(){for cached in [false,true]{
+        let mut local=LocalState{value,layout:Cell::new(if cached{Some("layout")}else{None})};
+        let access=local.access().report_err().is_ok();
+        println!("L {index} {cached} {} {access}",ghost(&local));
+        match local.access_mut().report_err(){Ok(value)=>*value=Operand::Immediate(Scalar::from_u8(11).into()),Err(_)=>{}}
+        println!("W {} {}",ghost(&local),local.layout.get().is_some());
+        local.make_live_uninit();
+        println!("U {} {}",ghost(&local),local.layout.get().is_some());
+    }}
+    let mapped=m.map_provenance(|p|p.as_immutable());
+    println!("MAP {} {} {}",mapped.ptr.into_raw_parts().0.unwrap().immutable(),mapped.meta.has_meta(),mapped.misaligned.is_some());
+    println!("REF {}",show_imm(mapped.to_ref(&TargetDataLayout::default())));
+}

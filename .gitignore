@@ -1,0 +1,16 @@
+.elan/
+.lake/
+*.olean
+.toolchains/
+.rustup/
+.cargo/
+__pycache__/
+*.pyc
+upstream/**/*.tar.gz
+upstream/**/*.tar.xz
+upstream/**/*.tar.zst
+scratch/
+**/target/
+exporter/target-*/
+
+upstream/**/*.crate

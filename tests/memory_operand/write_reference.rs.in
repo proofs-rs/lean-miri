@@ -1,0 +1,176 @@
+#![feature(rustc_private)]
+extern crate rustc_driver;
+extern crate rustc_abi;
+extern crate rustc_middle;
+extern crate rustc_ast;
+
+use rustc_abi::{BackendRepr, HasDataLayout, Integer, Primitive, Scalar as AbiScalar,
+    Size, TargetDataLayout, WrappingRange};
+use rustc_ast::Mutability;
+use rustc_middle::mir::interpret::{alloc_range, AllocError, AllocInit, AllocRange,
+    Allocation, CtfeProvenance, Pointer, Provenance, Scalar};
+use std::cell::{RefCell, RefMut};
+use std::fmt::Write;
+
+mod abi { pub use rustc_abi::{Primitive, Scalar}; }
+
+type InterpResult<'tcx, T = ()> = Result<T, AllocError>;
+type TyAndLayout<'tcx> = &'tcx Layout;
+
+fn interp_ok<'tcx, T>(value: T) -> InterpResult<'tcx, T> { Ok(value) }
+
+#[derive(Clone, Copy, Debug)]
+struct Layout { size: Size, backend_repr: BackendRepr }
+
+impl Layout {
+    fn is_unsized(&self) -> bool { self.backend_repr.is_unsized() }
+    fn is_sized(&self) -> bool { self.backend_repr.is_sized() }
+}
+
+#[derive(Clone, Copy)]
+struct MPlace<Prov: Provenance> { base: Size, _prov: std::marker::PhantomData<Prov> }
+
+#[derive(Clone, Copy)]
+struct MPlaceTy<'tcx, Prov: Provenance> { mplace: MPlace<Prov>, layout: TyAndLayout<'tcx> }
+
+type MemPlace<Prov> = MPlace<Prov>;
+
+macro_rules! bug { ($($arg:tt)*) => {{ panic!($($arg)*) }} }
+macro_rules! span_bug { ($span:expr, $($arg:tt)*) => {{ let _ = stringify!($span); panic!($($arg)*) }} }
+
+struct AllocRefMut<'a, Prov: Provenance> {
+    allocation: RefMut<'a, Allocation<Prov>>,
+    base: Size,
+    size: Size,
+    layout: &'a TargetDataLayout,
+}
+
+impl<Prov: Provenance> AllocRefMut<'_, Prov> {
+    fn write_scalar(&mut self, range: AllocRange, value: Scalar<Prov>) -> Result<(), AllocError> {
+        let start = Size::from_bytes(self.base.bytes() + range.start.bytes());
+        self.allocation.write_scalar(self.layout, alloc_range(start, range.size), value)
+    }
+
+    fn write_uninit_full(&mut self) {
+        self.allocation.write_uninit(self.layout, alloc_range(self.base, self.size));
+    }
+}
+
+trait Machine<'tcx> {
+    type Provenance: Provenance;
+    fn data_layout(&self) -> &TargetDataLayout;
+    fn allocation_mut(&self) -> Option<RefMut<'_, Allocation<Self::Provenance>>>;
+    fn record(&self, event: &'static str);
+    fn enforce_validity(cx: &InterpCx<'tcx, Self>, layout: &Layout) -> bool where Self: Sized;
+}
+
+struct TestMachine<'a> {
+    layout: &'a TargetDataLayout,
+    allocation: RefCell<Option<Allocation<CtfeProvenance>>>,
+    calls: RefCell<Vec<&'static str>>,
+    enforce_validity: bool,
+}
+
+impl<'tcx, 'a> Machine<'tcx> for TestMachine<'a> {
+    type Provenance = CtfeProvenance;
+    fn data_layout(&self) -> &TargetDataLayout { self.layout }
+    fn allocation_mut(&self) -> Option<RefMut<'_, Allocation<CtfeProvenance>>> {
+        RefMut::filter_map(self.allocation.borrow_mut(), |value| value.as_mut()).ok()
+    }
+    fn record(&self, event: &'static str) { self.calls.borrow_mut().push(event); }
+    fn enforce_validity(cx: &InterpCx<'tcx, Self>, _layout: &Layout) -> bool {
+        cx.machine.enforce_validity
+    }
+}
+
+struct InterpCx<'tcx, M: Machine<'tcx>> { machine: M, _tcx: std::marker::PhantomData<&'tcx ()> }
+
+impl<'tcx, M: Machine<'tcx>> HasDataLayout for InterpCx<'tcx, M> {
+    fn data_layout(&self) -> &TargetDataLayout { self.machine.data_layout() }
+}
+
+impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
+    fn get_place_alloc_mut<'a>(
+        &'a mut self,
+        mplace: &MPlaceTy<'tcx, M::Provenance>,
+    ) -> InterpResult<'tcx, Option<AllocRefMut<'a, M::Provenance>>> {
+        self.machine.record("get_place_alloc_mut");
+        Ok(self.machine.allocation_mut().map(|allocation| AllocRefMut {
+            allocation,
+            base: mplace.mplace.base,
+            size: mplace.layout.size,
+            layout: self.machine.data_layout(),
+        }))
+    }
+}
+
+@ORIGINAL_ITEMS@
+
+fn range(start: u64, finish: u64) -> AllocRange {
+    alloc_range(Size::from_bytes(start), Size::from_bytes(finish - start))
+}
+
+fn initialized(value: Primitive, size: Size) -> AbiScalar {
+    AbiScalar::Initialized { value, valid_range: WrappingRange::full(size) }
+}
+
+fn layout(size: u64, backend_repr: BackendRepr) -> Layout {
+    Layout { size: Size::from_bytes(size), backend_repr }
+}
+
+fn show_allocation(allocation: &Allocation<CtfeProvenance>, data_layout: &TargetDataLayout) -> String {
+    let mut out = String::new();
+    for byte in allocation.get_bytes_unchecked(range(0, allocation.len() as u64)) {
+        write!(&mut out, "{byte:02x}").unwrap();
+    }
+    let all = allocation.init_mask().is_range_initialized(range(0, allocation.len() as u64)).is_ok();
+    let gap = allocation.init_mask().is_range_initialized(range(8, 16)).is_ok();
+    let ptrs = allocation.provenance().ptrs().iter().map(|(offset, _)| offset.bytes().to_string())
+        .collect::<Vec<_>>().join(",");
+    let _ = data_layout;
+    format!("bytes={out} all_init={all} gap_init={gap} ptrs={ptrs}")
+}
+
+fn main() {
+    let data_layout = TargetDataLayout::parse_from_llvm_datalayout_string(
+        "e-p:64:64", rustc_abi::AddressSpace::ZERO,
+    ).unwrap_or_else(|_| panic!("layout parse"));
+    let u64_abi = initialized(Primitive::Int(Integer::I64, false), Size::from_bytes(8));
+    let ptr_abi = initialized(Primitive::Pointer(rustc_abi::AddressSpace::ZERO), Size::from_bytes(8));
+    let padded_pair = layout(24, BackendRepr::ScalarPair {
+        a: u64_abi, b: ptr_abi, b_offset: Size::from_bytes(16),
+    });
+    let mut allocation = Allocation::<CtfeProvenance>::new(
+        Size::from_bytes(24), rustc_abi::Align::ONE, AllocInit::Zero, (),
+    );
+    allocation.write_scalar(&data_layout, range(8, 16),
+        Scalar::from_uint(0xfeedfaceu128, Size::from_bytes(8))).unwrap();
+    allocation.write_scalar(&data_layout, range(16, 24),
+        Scalar::from_uint(0x1122334455667788u128, Size::from_bytes(8))).unwrap();
+
+    let machine = TestMachine {
+        layout: &data_layout,
+        allocation: RefCell::new(Some(allocation)),
+        calls: RefCell::new(Vec::new()),
+        enforce_validity: false,
+    };
+    let mut cx = InterpCx { machine, _tcx: std::marker::PhantomData };
+    let ptr = Pointer::new(
+        CtfeProvenance::from(rustc_middle::mir::interpret::AllocId(
+            std::num::NonZero::new(7).unwrap(),
+        )),
+        Size::from_bytes(0x1234),
+    );
+    let value = Immediate::ScalarPair(
+        Scalar::from_uint(0xaabbccddu128, Size::from_bytes(8)),
+        Scalar::from_pointer(ptr, &data_layout),
+    );
+    let place = MPlaceTy {
+        mplace: MPlace { base: Size::from_bytes(0), _prov: std::marker::PhantomData },
+        layout: &padded_pair,
+    };
+    let result = cx.write_immediate_to_mplace_no_validate(value, place.layout, place.mplace);
+    let status = if result.is_ok() { "ok" } else { "error" };
+    let state = cx.machine.allocation.borrow();
+    println!("W padded_pair {status} {}", show_allocation(state.as_ref().unwrap(), &data_layout));
+}

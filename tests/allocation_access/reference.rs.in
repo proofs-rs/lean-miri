@@ -1,0 +1,273 @@
+use std::borrow::{Borrow, Cow};
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::marker::PhantomData;
+
+mod reference {
+use super::*;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] struct AllocId(u64);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)] struct Size(u64);
+impl Size { fn bytes(self) -> u64 { self.0 } }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)] struct Align(u64);
+impl Align { fn bytes(self) -> u64 { self.0 } }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)] enum Mutability { Mut, Not }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)] enum CheckInAllocMsg { MemoryAccess }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)] struct AllocRange { start: Size, size: Size }
+fn alloc_range(start: Size, size: Size) -> AllocRange { AllocRange { start, size } }
+
+trait Provenance: Copy { const OFFSET_IS_ADDR: bool; }
+#[derive(Clone, Copy, Debug)] struct Relative;
+impl Provenance for Relative { const OFFSET_IS_ADDR: bool = false; }
+
+#[derive(Clone, Copy)]
+struct Pointer<P: Copy> {
+    provenance: P,
+    offset: Size,
+    resolution: Result<(AllocId, Size, u8), u64>,
+}
+impl<P: Provenance> Pointer<Option<P>> {
+    fn addr(self) -> Size { assert!(P::OFFSET_IS_ADDR); self.offset }
+}
+
+#[derive(Clone)]
+struct Allocation<P, E, B> {
+    size: Size,
+    align: Align,
+    mutability: Mutability,
+    extra: E,
+    _provenance: PhantomData<P>,
+    _bytes: PhantomData<B>,
+}
+impl<P, E, B> Allocation<P, E, B> {
+    fn size(&self) -> Size { self.size }
+}
+
+#[derive(Clone, Copy)] enum MemoryKind<K> { Machine(K) }
+struct Memory<K, P, E, B> {
+    ghost_mode: Cell<bool>,
+    alloc_map: HashMap<AllocId, (MemoryKind<K>, Allocation<P, E, B>)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)] enum RefErrorKind {
+    Dangling { addr: u64, size: i64 },
+    OutOfBounds { id: AllocId, alloc_size: Size, offset: i64, size: i64 },
+    Dead(AllocId),
+    ReadOnly(AllocId),
+    Hook(&'static str),
+}
+#[derive(Debug, PartialEq, Eq)] struct RefError { kind: RefErrorKind }
+impl RefError { fn new(kind: RefErrorKind) -> Self { Self { kind } } }
+type InterpResult<'tcx, T> = Result<T, RefError>;
+fn interp_ok<'tcx, T>(value: T) -> InterpResult<'tcx, T> { Ok(value) }
+
+macro_rules! throw_ub {
+    (DanglingIntPointer { $addr:ident, inbounds_size: $size:expr, msg $(,)? }) => {
+        return Err(RefError::new(RefErrorKind::Dangling { addr: $addr, size: $size }))
+    };
+    (PointerOutOfBounds { $id:ident, $alloc_size:ident, ptr_offset: $offset:expr, inbounds_size: $size:expr, msg $(,)? }) => {
+        return Err(RefError::new(RefErrorKind::OutOfBounds { id: $id, alloc_size: $alloc_size, offset: $offset, size: $size }))
+    };
+    (WriteToReadOnly($id:ident)) => {
+        return Err(RefError::new(RefErrorKind::ReadOnly($id)))
+    };
+}
+
+#[derive(Clone, Copy)] struct Tcx<'tcx>(PhantomData<&'tcx ()>);
+impl Tcx<'_> { fn sign_extend_to_target_isize(self, offset: u64) -> i64 { offset as i64 } }
+
+trait Machine<'tcx>: Sized {
+    type Provenance: Provenance;
+    type ProvenanceExtra: Copy;
+    type AllocExtra: Clone;
+    type Bytes: Clone;
+    type MemoryKind: Copy;
+    const GLOBAL_KIND: Option<Self::MemoryKind>;
+    fn trace(&self, event: String);
+    fn before_alloc_access(tcx: &Tcx<'tcx>, machine: &Self, id: AllocId) -> InterpResult<'tcx, ()>;
+    fn before_memory_read(tcx: &Tcx<'tcx>, machine: &Self, extra: &Self::AllocExtra,
+        ptr: Pointer<Option<Self::Provenance>>, access: (AllocId, Self::ProvenanceExtra),
+        range: AllocRange) -> InterpResult<'tcx, ()>;
+    fn before_memory_write(tcx: &Tcx<'tcx>, machine: &mut Self, extra: &mut Self::AllocExtra,
+        ptr: Pointer<Option<Self::Provenance>>, access: (AllocId, Self::ProvenanceExtra),
+        range: AllocRange) -> InterpResult<'tcx, ()>;
+    fn before_access_global(tcx: &Tcx<'tcx>, machine: &Self, id: AllocId,
+        allocation: &Allocation<Self::Provenance, Self::AllocExtra, Self::Bytes>,
+        def_id: Option<u64>, is_write: bool) -> InterpResult<'tcx, ()>;
+    fn adjust_global_allocation<'a>(tcx: &Tcx<'tcx>, machine: &Self, id: AllocId,
+        allocation: &'a Allocation<Self::Provenance, Self::AllocExtra, Self::Bytes>)
+        -> InterpResult<'tcx, Cow<'a, Allocation<Self::Provenance, Self::AllocExtra, Self::Bytes>>>;
+}
+
+struct TestMachine {
+    events: RefCell<Vec<String>>,
+    fail_access: bool,
+    fail_read: bool,
+    fail_write: bool,
+}
+impl TestMachine {
+    fn event(&self, item: impl Into<String>) { self.events.borrow_mut().push(item.into()); }
+}
+impl<'tcx> Machine<'tcx> for TestMachine {
+    type Provenance = Relative;
+    type ProvenanceExtra = u8;
+    type AllocExtra = Cell<u8>;
+    type Bytes = ();
+    type MemoryKind = ();
+    const GLOBAL_KIND: Option<()> = Some(());
+    fn trace(&self, event: String) { self.event(event); }
+    fn before_alloc_access(_: &Tcx<'tcx>, machine: &Self, id: AllocId) -> InterpResult<'tcx, ()> {
+        machine.event(format!("alloc:{}", id.0));
+        if machine.fail_access { Err(RefError::new(RefErrorKind::Hook("alloc"))) } else { Ok(()) }
+    }
+    fn before_memory_read(_: &Tcx<'tcx>, machine: &Self, extra: &Cell<u8>,
+        _: Pointer<Option<Relative>>, access: (AllocId, u8), _: AllocRange) -> InterpResult<'tcx, ()> {
+        machine.event(format!("read:{}", access.0.0));
+        extra.set(extra.get().wrapping_add(3));
+        if machine.fail_read { Err(RefError::new(RefErrorKind::Hook("read"))) } else { Ok(()) }
+    }
+    fn before_memory_write(_: &Tcx<'tcx>, machine: &mut Self, extra: &mut Cell<u8>,
+        _: Pointer<Option<Relative>>, access: (AllocId, u8), _: AllocRange) -> InterpResult<'tcx, ()> {
+        machine.event(format!("write:{}", access.0.0));
+        extra.set(extra.get().wrapping_add(7));
+        if machine.fail_write { Err(RefError::new(RefErrorKind::Hook("write"))) } else { Ok(()) }
+    }
+    fn before_access_global(_: &Tcx<'tcx>, machine: &Self, id: AllocId,
+        _: &Allocation<Relative, Cell<u8>, ()>, _: Option<u64>, is_write: bool) -> InterpResult<'tcx, ()> {
+        machine.event(format!("global:{}:{}", if is_write { "write" } else { "read" }, id.0));
+        Ok(())
+    }
+    fn adjust_global_allocation<'a>(_: &Tcx<'tcx>, machine: &Self, id: AllocId,
+        allocation: &'a Allocation<Relative, Cell<u8>, ()>)
+        -> InterpResult<'tcx, Cow<'a, Allocation<Relative, Cell<u8>, ()>>> {
+        machine.event(format!("adjust:{}", id.0));
+        Ok(Cow::Owned(allocation.clone()))
+    }
+}
+
+struct AccessCx<'tcx, M: Machine<'tcx, ProvenanceExtra = u8>> {
+    tcx: &'tcx Tcx<'tcx>,
+    machine: M,
+    memory: Memory<M::MemoryKind, M::Provenance, M::AllocExtra, M::Bytes>,
+    globals: HashMap<AllocId, Allocation<M::Provenance, M::AllocExtra, M::Bytes>>,
+    resolve_count: Cell<usize>,
+    fail_resolve_at: usize,
+    _lt: PhantomData<&'tcx ()>,
+}
+
+impl<'tcx, M: Machine<'tcx, ProvenanceExtra = u8>> AccessCx<'tcx, M> {
+    fn ptr_try_get_alloc_id(&self, ptr: Pointer<Option<M::Provenance>>, size: i64)
+        -> Result<(AllocId, Size, M::ProvenanceExtra), u64> {
+        self.machine.trace(format!("resolve:{size}"));
+        let count = self.resolve_count.get() + 1;
+        self.resolve_count.set(count);
+        if count == self.fail_resolve_at { return Err(ptr.offset.bytes()); }
+        ptr.resolution
+    }
+    fn get_alloc_raw(&self, id: AllocId)
+        -> InterpResult<'tcx, &Allocation<M::Provenance, M::AllocExtra, M::Bytes>> {
+        if let Some((_, allocation)) = self.memory.alloc_map.get(&id) { return Ok(allocation); }
+        let allocation = self.globals.get(&id).ok_or_else(|| RefError::new(RefErrorKind::Dead(id)))?;
+        M::before_access_global(&self.tcx, &self.machine, id, allocation, None, false)?;
+        M::adjust_global_allocation(&self.tcx, &self.machine, id, allocation)?;
+        Ok(allocation)
+    }
+    fn get_alloc_raw_mut(&mut self, id: AllocId)
+        -> InterpResult<'tcx, (&mut Allocation<M::Provenance, M::AllocExtra, M::Bytes>, &mut M)> {
+        if !self.memory.alloc_map.contains_key(&id) {
+            let allocation = self.globals.get(&id)
+                .ok_or_else(|| RefError::new(RefErrorKind::Dead(id)))?.clone();
+            M::before_access_global(&self.tcx, &self.machine, id, &allocation, None, true)?;
+            let adjusted = M::adjust_global_allocation(&self.tcx, &self.machine, id, &allocation)?;
+            let owned = adjusted.into_owned();
+            let kind = M::GLOBAL_KIND.expect("test machine has a global kind");
+            self.memory.alloc_map.insert(id, (MemoryKind::Machine(kind), owned));
+        }
+        let (_, allocation) = self.memory.alloc_map.get_mut(&id).expect("inserted or present");
+        if allocation.mutability == Mutability::Not {
+            throw_ub!(WriteToReadOnly(id))
+        }
+        Ok((allocation, &mut self.machine))
+    }
+}
+
+struct AllocRef<'a, 'tcx, P, E, B> {
+    alloc: &'a Allocation<P, E, B>, range: AllocRange, tcx: Tcx<'tcx>, alloc_id: AllocId,
+}
+struct AllocRefMut<'a, 'tcx, P, E, B> {
+    alloc: &'a mut Allocation<P, E, B>, range: AllocRange, tcx: Tcx<'tcx>, alloc_id: AllocId,
+}
+
+impl<'tcx, M: Machine<'tcx, ProvenanceExtra = u8>> AccessCx<'tcx, M> {
+// @PINNED_ACCESS_FUNCTIONS@
+}
+
+fn show_error(error: &RefError) -> String {
+    match error.kind {
+        RefErrorKind::Dangling { addr, size } => format!("D{addr}:{size}"),
+        RefErrorKind::OutOfBounds { id, alloc_size, offset, size } =>
+            format!("B{}:{}:{}:{}", id.0, alloc_size.bytes(), offset, size),
+        RefErrorKind::Dead(id) => format!("F{}", id.0),
+        RefErrorKind::ReadOnly(id) => format!("R{}", id.0),
+        RefErrorKind::Hook(name) => format!("H{name}"),
+    }
+}
+
+fn run_case(tag: &str, write: bool, size: u64, offset: u64, ghost: bool,
+    local: Option<Mutability>, global: Option<Mutability>, fail_access: bool,
+    fail_read: bool, fail_write: bool, fail_resolve_at: usize) {
+    let id = AllocId(1);
+    let alloc = |mutability| Allocation::<Relative, Cell<u8>, ()> {
+        size: Size(8), align: Align(8), mutability, extra: Cell::new(5),
+        _provenance: PhantomData, _bytes: PhantomData,
+    };
+    let mut alloc_map = HashMap::new();
+    if let Some(mutability) = local {
+        alloc_map.insert(id, (MemoryKind::Machine(()), alloc(mutability)));
+    }
+    let mut globals = HashMap::new();
+    if let Some(mutability) = global { globals.insert(id, alloc(mutability)); }
+    let tcx = Tcx(PhantomData);
+    let mut cx = AccessCx {
+        tcx: &tcx,
+        machine: TestMachine { events: RefCell::new(Vec::new()), fail_access, fail_read, fail_write },
+        memory: Memory { ghost_mode: Cell::new(ghost), alloc_map },
+        globals,
+        resolve_count: Cell::new(0), fail_resolve_at,
+        _lt: PhantomData,
+    };
+    let pointer = Pointer { provenance: Some(Relative), offset: Size(offset),
+        resolution: Ok((id, Size(offset), 9)) };
+    let result = if write {
+        let result = cx.get_ptr_alloc_mut(pointer, Size(size));
+        let summary = match &result { Ok(Some(_)) => "S".to_owned(), Ok(None) => "N".to_owned(), Err(e) => show_error(e) };
+        drop(result);
+        summary
+    } else {
+        let result = cx.get_ptr_alloc(pointer, Size(size));
+        let summary = match &result { Ok(Some(_)) => "S".to_owned(), Ok(None) => "N".to_owned(), Err(e) => show_error(e) };
+        drop(result);
+        summary
+    };
+    let events = cx.machine.events.borrow().join(",");
+    let extra = cx.memory.alloc_map.get(&id).map(|(_, allocation)| allocation.extra.get());
+    println!("A {tag} {result} [{events}] {}", extra.map(|x| x.to_string()).unwrap_or_else(|| "-".into()));
+}
+
+pub fn run() {
+    run_case("zero_read", false, 0, 1, false, Some(Mutability::Mut), None, false, false, false, 0);
+    run_case("zero_read_second_dangling", false, 0, 1, false, None, None, false, false, false, 1);
+    run_case("zero_write", true, 0, 1, false, Some(Mutability::Mut), None, false, false, false, 0);
+    run_case("ghost_read", false, 2, 2, true, Some(Mutability::Mut), None, false, false, false, 0);
+    run_case("ghost_write", true, 2, 2, true, Some(Mutability::Mut), None, false, false, false, 0);
+    run_case("readonly_oob_write", true, 2, 7, false, Some(Mutability::Not), None, false, false, false, 0);
+    run_case("global_readonly_oob_write", true, 2, 7, false, None, Some(Mutability::Not), false, false, false, 0);
+    run_case("global_oob_write", true, 2, 7, false, None, Some(Mutability::Mut), false, false, false, 0);
+    run_case("partial_read_failure", false, 2, 2, false, Some(Mutability::Mut), None, false, true, false, 0);
+    run_case("partial_write_failure", true, 2, 2, false, Some(Mutability::Mut), None, false, false, true, 0);
+    run_case("allocation_hook_failure", false, 2, 2, false, Some(Mutability::Mut), None, true, false, false, 0);
+    run_case("read_second_resolve_dangling", false, 2, 2, false, Some(Mutability::Mut), None, false, false, false, 2);
+}
+}
+
+fn main() { reference::run(); }

@@ -1,0 +1,55 @@
+use source::AddressGenerator;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+#[derive(Clone)]
+struct ChoiceRng(u64);
+impl Rng for ChoiceRng {
+    fn random_range(&mut self, range: std::ops::Range<u64>) -> u64 {
+        assert!(range.contains(&self.0));
+        self.0
+    }
+}
+
+fn observe(tag: &str, generator: &mut AddressGenerator, size: u64, align: u64, slack: u64) {
+    let mut rng = ChoiceRng(slack);
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        generator.generate(Size(size), Align(align), &mut rng)
+    }));
+    let outcome = match result {
+        Err(_) => "P".to_owned(),
+        Ok(Err(_)) => "E".to_owned(),
+        Ok(Ok(address)) => format!("O {address}"),
+    };
+    let remaining = generator.get_remaining();
+    println!("G {tag} {outcome} {}:{}", remaining.start, remaining.end);
+}
+
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+
+    let mut generator = AddressGenerator::new(100..1000);
+    observe("generator-1", &mut generator, 5, 4, 0);
+    observe("generator-2", &mut generator, 3, 8, 5);
+    observe("zero-sized", &mut generator, 0, 1, 0);
+
+    let mut exact_end = AddressGenerator::new(100..105);
+    observe("exact-fit", &mut exact_end, 5, 1, 0);
+    observe("past-end", &mut exact_end, 1, 1, 0);
+
+    let mut slack_overflow = AddressGenerator::new(u64::MAX - 8..u64::MAX);
+    observe("slack-overflow", &mut slack_overflow, 1, 1, 15);
+
+    let mut align_overflow = AddressGenerator::new(u64::MAX - 3..u64::MAX);
+    observe("align-overflow", &mut align_overflow, 1, 8, 0);
+
+    let mut allocation_overflow = AddressGenerator::new(u64::MAX - 1..u64::MAX);
+    observe("allocation-overflow", &mut allocation_overflow, 4, 1, 0);
+
+    let mut aligned_past_end = AddressGenerator::new(100..102);
+    observe("aligned-past-end", &mut aligned_past_end, 1, 8, 0);
+
+    let mut zero_gap = AddressGenerator::new(1..3);
+    observe("zero-gap-1", &mut zero_gap, 0, 1, 0);
+    observe("zero-gap-2", &mut zero_gap, 0, 1, 0);
+    observe("zero-gap-3", &mut zero_gap, 0, 1, 0);
+}

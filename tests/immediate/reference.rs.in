@@ -1,0 +1,56 @@
+#![feature(rustc_private,try_trait_v2)]
+extern crate rustc_driver;
+extern crate rustc_abi;
+extern crate rustc_middle;
+use rustc_abi::{AddressSpace,HasDataLayout,TargetDataLayout,Size};
+use rustc_middle::mir::interpret::{Provenance,CtfeProvenance,AllocId,Pointer,Scalar,InterpResult,interp_ok};
+use rustc_middle::ty::ScalarInt;
+use std::{fmt,num::NonZero,panic::{catch_unwind,AssertUnwindSafe}};
+macro_rules! bug {($($args:tt)*)=>{panic!("source invariant")}}
+@ORIGINAL_ITEMS@
+#[derive(Clone,Copy,Debug,PartialEq)]
+struct AddressProvenance;
+impl Provenance for AddressProvenance {
+    const OFFSET_IS_ADDR:bool=true;
+    const WILDCARD:Option<Self>=None;
+    fn fmt(_: &Pointer<Self>,_:&mut fmt::Formatter<'_>)->fmt::Result{Ok(())}
+    fn get_alloc_id(self)->Option<AllocId>{None}
+}
+fn scalar<Prov:Provenance>(s:Scalar<Prov>)->String {
+    match s { Scalar::Int(i)=>format!("i{}:{}",i.size().bytes(),i.to_bits_unchecked()),
+        Scalar::Ptr(p,size)=>format!("p{}:{}",size.get(),p.into_raw_parts().1.bytes()) }
+}
+fn snapshot<Prov:Provenance>(i:Immediate<Prov>)->String {
+    match i { Immediate::Scalar(s)=>scalar(s), Immediate::ScalarPair(a,b)=>format!("({},{} )",scalar(a),scalar(b)),Immediate::Uninit=>"u".into() }
+}
+fn normal(f:impl FnOnce()->String)->String {catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|_|"internal".into())}
+fn inspect<Prov:Provenance>(tag:&str,width:u64,index:usize,mut i:Immediate<Prov>) {
+    println!("I {tag} {width} {index} {} {}",snapshot(i),i.has_provenance());
+    println!("S {}",normal(||scalar(i.to_scalar())));
+    println!("N {}",normal(||{let x=i.to_scalar_int();format!("{}:{}",x.size().bytes(),x.to_bits_unchecked())}));
+    println!("P {}",normal(||{let(a,b)=i.to_scalar_pair();format!("{},{}",scalar(a),scalar(b))}));
+    println!("M {}",normal(||{let(a,b)=i.to_scalar_and_meta();format!("{},{}",scalar(a),match b{MemPlaceMeta::None=>"n".into(),MemPlaceMeta::Meta(b)=>scalar(b)})}));
+    let result=i.clear_provenance().report_err();
+    println!("C {} {}",result.is_ok(),snapshot(i));
+}
+fn run<Prov:Provenance>(tag:&str,prov:Prov){
+    for width in [16,32,64] {
+        let text=format!("e-p:{width}:{width}");
+        let cx=TargetDataLayout::parse_from_llvm_datalayout_string(&text,AddressSpace(0)).unwrap_or_else(|_|panic!("layout"));
+        let ptr=Pointer::new(Some(prov),Size::from_bytes(17));
+        let no_ptr=Pointer::<Option<Prov>>::without_provenance(23);
+        let meta=Scalar::from_u32(99);
+        let items=[Immediate::Uninit,Immediate::from(Scalar::from_u8(7)),
+            Immediate::new_pointer_with_meta(ptr,MemPlaceMeta::None,&cx),
+            Immediate::new_pointer_with_meta(ptr,MemPlaceMeta::Meta(meta),&cx),
+            Immediate::new_slice(ptr,8,&cx),Immediate::new_slice(no_ptr,10,&cx),
+            Immediate::new_dyn_trait(ptr,no_ptr,&cx),
+            Immediate::ScalarPair(Scalar::from_u8(1),Scalar::from_pointer(Pointer::new(prov,Size::from_bytes(29)),&cx))];
+        for(index,i) in items.into_iter().enumerate(){inspect(tag,width,index,i)}
+    }
+}
+fn main(){
+    std::panic::set_hook(Box::new(|_|{}));
+    run("ctfe",CtfeProvenance::from(AllocId(NonZero::new(1).unwrap())));
+    run("addr",AddressProvenance);
+}

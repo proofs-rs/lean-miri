@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "semantics": {
+    "aliasing": "tree-borrows",
+    "seed": 0,
+    "target": "x86_64-unknown-linux-gnu"
+  },
+  "cases": [
+    {
+      "id": "union",
+      "source": "upstream/miri-source/tests/pass/union-overwrite.rs",
+      "sha256": "356c82f24d58e744b3aab7e1f633fd464f70db77ec288520a55d14f850457ae8",
+      "expected": "returned",
+      "flags": []
+    },
+    {
+      "id": "pointer-offset",
+      "source": "upstream/miri-source/tests/pass/ptr_offset.rs",
+      "sha256": "b037f59d1ff40ac46496db7e405449f79fe1b2ee7de65df003e02e560187cce7",
+      "expected": "returned",
+      "flags": [
+        "-Zmiri-permissive-provenance"
+      ]
+    },
+    {
+      "id": "atomics",
+      "source": "upstream/miri-source/tests/pass/atomic.rs",
+      "sha256": "cadfa0134f72648e2cf75b1d4796dc005b6ffe8dd9d85f3d7d7142bb9484ccc6",
+      "expected": "returned",
+      "flags": [
+        "-Zmiri-strict-provenance"
+      ]
+    },
+    {
+      "id": "synchronization",
+      "source": "upstream/miri-source/tests/pass/concurrency/sync_singlethread.rs",
+      "sha256": "d353d4329419ecfd74c1dfd3f2f0cae0680400f38b43054f7b4dd838e0ef4ef1",
+      "expected": "returned",
+      "flags": []
+    },
+    {
+      "id": "uninitialized",
+      "source": "upstream/miri-source/tests/fail/validity/uninit_integer.rs",
+      "sha256": "399eaf4ea78c07eb9de72c982cb961818bc40f711e354095be8c70ca6582e03c",
+      "expected": "undefined_behavior",
+      "flags": []
+    },
+    {
+      "id": "tree-wildcard",
+      "source": "upstream/miri-source/tests/fail/tree_borrows/wildcard/multi_exposed_child.rs",
+      "sha256": "0209dd3e4b4d7f72eff13b6158dad10435199997d530bb13bcbfce3511c2e4ef",
+      "expected": "undefined_behavior",
+      "flags": [
+        "-Zmiri-permissive-provenance"
+      ]
+    },
+    {
+      "id": "data-race",
+      "source": "upstream/miri-source/tests/fail/data_race/read_write_race.rs",
+      "sha256": "bf9a1cc62c6b9ec0f1df5063b84e2eaa9c3dea0fec264b28a8c94ac9036cbed0",
+      "expected": "undefined_behavior",
+      "flags": [
+        "-Zmiri-deterministic-concurrency"
+      ]
+    },
+    {
+      "id": "foreign",
+      "source": "upstream/miri-source/tests/fail/unsupported_foreign_function.rs",
+      "sha256": "fc16e90082a6faa317b9416fc9a27909f5aac2f4daf1cdb227f54ad495570d2a",
+      "expected": "unsupported",
+      "flags": []
+    },
+    {
+      "id": "panic",
+      "source": "upstream/miri-source/tests/panic/panic1.rs",
+      "sha256": "d5958780da8b833446c377b51a6e76b7bbfc4d7b64cdc4b7c22a0b7d7ef39493",
+      "expected": "panic",
+      "flags": []
+    }
+  ]
+}

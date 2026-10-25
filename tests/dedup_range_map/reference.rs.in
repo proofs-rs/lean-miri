@@ -1,0 +1,123 @@
+use source::DedupRangeMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+fn caught<T>(f: impl FnOnce() -> T) -> Result<T, ()> {
+    catch_unwind(AssertUnwindSafe(f)).map_err(|_| ())
+}
+
+fn all(map: &DedupRangeMap<i32>) -> String {
+    map.iter_all()
+        .map(|(range, data)| format!("{}:{}={}", range.start, range.end, data))
+        .collect::<Vec<_>>().join(",")
+}
+
+fn emit_iter(tag: &str, map: &DedupRangeMap<i32>, offset: u64, len: u64) {
+    let result = caught(|| map.iter(Size::from_bytes(offset), Size::from_bytes(len))
+        .map(|(range, data)| format!("{}:{}={}", range.start, range.end, data))
+        .collect::<Vec<_>>().join(","));
+    println!("R {tag} {}", result.unwrap_or("P".into()));
+}
+
+fn emit_mut_set(tag: &str, map: &mut DedupRangeMap<i32>, offset: u64, len: u64, value: i32) {
+    let result = caught(|| {
+        map.iter_mut(Size::from_bytes(offset), Size::from_bytes(len)).map(|(range, data)| {
+            *data = value;
+            format!("{}:{}={}", range.start, range.end, *data)
+        }).collect::<Vec<_>>().join(",")
+    });
+    let selected = result.unwrap_or("P".into());
+    println!("M {tag} {} {} {}", if selected == "P" { "P" } else { "O" }, selected, all(map));
+}
+
+fn emit_mut_below(tag: &str, map: &mut DedupRangeMap<i32>, offset: u64, len: u64,
+                  threshold: i32, value: i32) {
+    let result = caught(|| {
+        map.iter_mut(Size::from_bytes(offset), Size::from_bytes(len)).map(|(range, data)| {
+            if *data < threshold { *data = value; }
+            format!("{}:{}={}", range.start, range.end, *data)
+        }).collect::<Vec<_>>().join(",")
+    });
+    let selected = result.unwrap_or("P".into());
+    println!("M {tag} {} {} {}", if selected == "P" { "P" } else { "O" }, selected, all(map));
+}
+
+fn emit_mut_noop(tag: &str, map: &mut DedupRangeMap<i32>, offset: u64, len: u64) {
+    let result = caught(|| {
+        map.iter_mut(Size::from_bytes(offset), Size::from_bytes(len))
+            .map(|(range, data)| format!("{}:{}={}", range.start, range.end, *data))
+            .collect::<Vec<_>>().join(",")
+    });
+    let selected = result.unwrap_or("P".into());
+    println!("M {tag} {} {} {}", if selected == "P" { "P" } else { "O" }, selected, all(map));
+}
+
+fn emit_merge(tag: &str, map: &mut DedupRangeMap<i32>) {
+    let result = caught(|| map.merge_adjacent_thorough());
+    println!("M {tag} {} {}", if result.is_ok() { "O" } else { "P" }, all(map));
+}
+
+struct CloneOnSplit(i32);
+
+impl Clone for CloneOnSplit {
+    fn clone(&self) -> Self { CloneOnSplit(self.0 + 100) }
+}
+
+impl PartialEq for CloneOnSplit {
+    fn eq(&self, other: &Self) -> bool { self.0 == other.0 }
+}
+
+fn clone_map(map: &DedupRangeMap<CloneOnSplit>) -> String {
+    map.iter_all().map(|(range, data)|
+        format!("{}:{}={}", range.start, range.end, data.0))
+        .collect::<Vec<_>>().join(",")
+}
+
+fn emit_clone_semantics() {
+    let mut map = DedupRangeMap::new(Size::from_bytes(10), CloneOnSplit(1));
+    let selected = map.iter_mut(Size::from_bytes(3), Size::from_bytes(2))
+        .map(|(range, data)| format!("{}:{}={}", range.start, range.end, data.0))
+        .collect::<Vec<_>>().join(",");
+    println!("M clone-on-split O {} {}", selected, clone_map(&map));
+}
+
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+    let mut basic = DedupRangeMap::<i32>::new(Size::from_bytes(20), -1);
+    println!("S initial {}", basic.size().bytes());
+    emit_iter("initial-overlap", &basic, 10, 1);
+    emit_iter("initial-empty", &basic, 10, 0);
+    emit_iter("initial-at-end", &basic, 20, 0);
+    emit_iter("initial-past-end-zero", &basic, 21, 0);
+    emit_iter("initial-past-end", &basic, 11, 11);
+    emit_mut_set("basic-one", &mut basic, 10, 1, 42);
+    emit_iter("basic-values", &basic, 10, 1);
+    emit_mut_set("zero-in-middle", &mut basic, 10, 0, 19);
+    emit_mut_set("zero-at-map-end", &mut basic, 20, 0, 19);
+
+    let mut gaps = DedupRangeMap::<i32>::new(Size::from_bytes(20), -1);
+    emit_mut_set("gap-a", &mut gaps, 11, 1, 42);
+    emit_mut_set("gap-b", &mut gaps, 15, 1, 43);
+    emit_mut_below("gap-fill", &mut gaps, 10, 10, 42, 23);
+    emit_mut_set("gap-tail", &mut gaps, 15, 5, 19);
+    emit_iter("two-19s", &gaps, 15, 2);
+    emit_mut_noop("gap-nop-merges", &mut gaps, 15, 5);
+    emit_merge("thorough-merge", &mut gaps);
+
+    let mut empty = DedupRangeMap::<i32>::new(Size::from_bytes(0), -1);
+    println!("S empty {}", empty.size().bytes());
+    emit_iter("empty-zero", &empty, 0, 0);
+    emit_iter("empty-past-zero", &empty, 1, 0);
+    emit_mut_set("empty-mut-zero", &mut empty, 999, 0, 3);
+    emit_mut_set("empty-mut-nonzero", &mut empty, 0, 1, 4);
+
+    let mut out_of_range = DedupRangeMap::<i32>::new(Size::from_bytes(20), -1);
+    emit_mut_set("mut-out-of-range", &mut out_of_range, 11, 11, 7);
+    emit_iter("after-failed-mut", &out_of_range, 10, 10);
+    emit_mut_set("mut-start-out-of-range", &mut out_of_range, 20, 1, 8);
+
+    let mut max_size = DedupRangeMap::<i32>::new(Size::from_bytes(u64::MAX), 5);
+    emit_iter("u64-end-overflow", &max_size, u64::MAX - 1, 2);
+    emit_mut_set("u64-mut-overflow", &mut max_size, u64::MAX - 1, 2, 6);
+    println!("V max-after-error {}", all(&max_size));
+    emit_clone_semantics();
+}

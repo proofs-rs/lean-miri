@@ -1,0 +1,292 @@
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::num::NonZeroU64;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Size(u64);
+impl Size {
+    fn bytes(self) -> u64 { self.0 }
+    fn min(self, other: Self) -> Self { Size(self.0.min(other.0)) }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Align(u64);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct AllocId(NonZeroU64);
+impl AllocId {
+    fn new(value: u64) -> Self { Self(NonZeroU64::new(value).unwrap()) }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MemoryKind<K: Copy> { Stack, CallerLocation, Machine(K) }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AllocInit { Uninit, Zero }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mutability { Mut, Not }
+impl Mutability { fn is_not(self) -> bool { self == Mutability::Not } }
+
+trait AllocParams { fn fails(&self) -> bool; }
+#[derive(Clone, Copy)]
+struct TestParams { fail: bool }
+impl AllocParams for TestParams { fn fails(&self) -> bool { self.fail } }
+trait AllocBytes { type AllocParams: AllocParams; }
+#[derive(Clone, Copy)]
+struct TestBytes;
+impl AllocBytes for TestBytes { type AllocParams = TestParams; }
+
+#[derive(Clone, Copy, Debug)]
+enum Failure { Host, Init, Root, Resolve, Before, Ub }
+type InterpResult<'tcx, T = ()> = Result<T, Failure>;
+fn interp_ok<'tcx, T>(value: T) -> InterpResult<'tcx, T> { Ok(value) }
+
+macro_rules! throw_ub_format { ($($ignored:tt)*) => {{ return Err(Failure::Ub); }}; }
+macro_rules! err_ub_format { ($($ignored:tt)*) => {{ Failure::Ub }}; }
+macro_rules! err_ub { ($($ignored:tt)*) => {{ Failure::Ub }}; }
+macro_rules! trace { ($($ignored:tt)*) => {{}}; }
+macro_rules! bug { ($($ignored:tt)*) => {{ panic!("source bug assertion"); }}; }
+
+struct Allocation<P, E = (), B = TestBytes> {
+    size: Size,
+    align: Align,
+    mutability: Mutability,
+    extra: E,
+    _marker: PhantomData<(P, B)>,
+}
+impl<P, E: Default, B: AllocBytes> Allocation<P, E, B> {
+    fn new<'tcx>(size: Size, align: Align, _init: AllocInit,
+        _params: B::AllocParams) -> Self {
+        Self { size, align, mutability: Mutability::Mut, extra: E::default(), _marker: PhantomData }
+    }
+    fn try_new<'tcx>(size: Size, align: Align, init: AllocInit,
+        params: B::AllocParams) -> InterpResult<'tcx, Self> {
+        if params.fails() { return Err(Failure::Host); }
+        Ok(Self::new(size, align, init, params))
+    }
+}
+impl<P, E, B> Allocation<P, E, B> {
+    fn size(&self) -> Size { self.size }
+    fn align(&self) -> Align { self.align }
+    fn with_extra<E2>(self, extra: E2) -> Allocation<P, E2, B> {
+        Allocation { size: self.size, align: self.align, mutability: self.mutability,
+            extra, _marker: PhantomData }
+    }
+}
+impl<P: Copy, E: Clone, B: Copy> Clone for Allocation<P, E, B> {
+    fn clone(&self) -> Self {
+        Self { size: self.size, align: self.align, mutability: self.mutability,
+            extra: self.extra.clone(), _marker: PhantomData }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Pointer<P: Copy = AllocId> { id: AllocId, offset: Size, provenance: P }
+impl<P: Copy> From<Pointer<P>> for Pointer<Option<P>> {
+    fn from(pointer: Pointer<P>) -> Self {
+        Pointer { id: pointer.id, offset: pointer.offset, provenance: Some(pointer.provenance) }
+    }
+}
+impl<P: Copy + From<AllocId>> From<AllocId> for Pointer<P> {
+    fn from(id: AllocId) -> Self { Pointer { id, offset: Size(0), provenance: id.into() } }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum GlobalAlloc { Function {}, VTable(()), TypeId {}, Static(()), Memory(()) }
+
+struct TcxData { next_id: Cell<u64>, issued: RefCell<Vec<AllocId>>, globals: RefCell<HashMap<AllocId, GlobalAlloc>> }
+#[derive(Clone, Copy)]
+struct TyCtxt(&'static TcxData);
+impl TyCtxt {
+    fn reserve_alloc_id(self) -> AllocId {
+        let id = self.0.next_id.get();
+        self.0.next_id.set(id.wrapping_add(1));
+        let id = AllocId::new(id);
+        self.0.issued.borrow_mut().push(id);
+        id
+    }
+    fn try_get_global_alloc(self, id: AllocId) -> Option<GlobalAlloc> {
+        self.0.globals.borrow().get(&id).copied()
+    }
+}
+
+struct AllocMap<K: Copy, P: Copy, E, B> {
+    entries: Vec<(AllocId, (MemoryKind<K>, Allocation<P, E, B>))>,
+}
+impl<K: Copy, P: Copy, E, B> AllocMap<K, P, E, B> {
+    fn new() -> Self { Self { entries: Vec::new() } }
+    fn insert(&mut self, id: AllocId, entry: (MemoryKind<K>, Allocation<P, E, B>)) {
+        self.entries.retain(|old| old.0 != id);
+        self.entries.push((id, entry));
+    }
+    fn remove(&mut self, id: &AllocId) -> Option<(MemoryKind<K>, Allocation<P, E, B>)> {
+        let index = self.entries.iter().position(|old| &old.0 == id)?;
+        Some(self.entries.remove(index).1)
+    }
+}
+struct DeadMap(Vec<(AllocId, (Size, Align))>);
+impl DeadMap {
+    fn new() -> Self { Self(Vec::new()) }
+    fn len(&self) -> usize { self.0.len() }
+    fn insert(&mut self, id: AllocId, layout: (Size, Align)) -> Option<(Size, Align)> {
+        if let Some(index) = self.0.iter().position(|old| old.0 == id) {
+            return Some(std::mem::replace(&mut self.0[index].1, layout));
+        }
+        self.0.push((id, layout));
+        None
+    }
+}
+struct MemoryData<K: Copy, P: Copy, E, B> {
+    alloc_map: AllocMap<K, P, E, B>,
+    dead_alloc_map: DeadMap,
+}
+impl<K: Copy, P: Copy, E, B> MemoryData<K, P, E, B> {
+    fn new() -> Self { Self { alloc_map: AllocMap::new(), dead_alloc_map: DeadMap::new() } }
+}
+
+trait Machine<'tcx>: Sized {
+    type Provenance: Copy + From<AllocId>;
+    type MemoryKind: Copy + PartialEq + std::fmt::Debug;
+    type AllocExtra: Default + Clone;
+    type Bytes: AllocBytes + Copy;
+    const PANIC_ON_ALLOC_FAIL: bool;
+    const GLOBAL_KIND: Option<Self::MemoryKind>;
+    fn get_default_alloc_params(&self) -> <Self::Bytes as AllocBytes>::AllocParams;
+    fn init_local_allocation(ecx: &mut InterpCx<'tcx, Self>, id: AllocId,
+        kind: MemoryKind<Self::MemoryKind>, size: Size, align: Align)
+        -> InterpResult<'tcx, Self::AllocExtra>;
+    fn adjust_alloc_root_pointer(ecx: &mut InterpCx<'tcx, Self>, ptr: Pointer<AllocId>,
+        kind: Option<MemoryKind<Self::MemoryKind>>) -> InterpResult<'tcx, Pointer<Self::Provenance>>;
+    fn before_memory_deallocation(tcx: TyCtxt, machine: &mut Self,
+        alloc_extra: &mut Self::AllocExtra, ptr: Pointer<Option<Self::Provenance>>,
+        prov: (AllocId, ()), size: Size, align: Align, kind: MemoryKind<Self::MemoryKind>)
+        -> InterpResult<'tcx, ()>;
+    fn event_log(&mut self) -> &mut Vec<&'static str>;
+    fn failing_stage(&self) -> &'static str;
+}
+
+struct InterpCx<'tcx, M: Machine<'tcx>> {
+    tcx: TyCtxt,
+    machine: M,
+    memory: MemoryData<M::MemoryKind, M::Provenance, M::AllocExtra, M::Bytes>,
+    resolve_count: usize,
+    _lifetime: PhantomData<&'tcx ()>,
+}
+
+struct TestMachine { events: Vec<&'static str>, fail: &'static str }
+impl<'tcx> Machine<'tcx> for TestMachine {
+    type Provenance = AllocId;
+    type MemoryKind = u8;
+    type AllocExtra = ();
+    type Bytes = TestBytes;
+    const PANIC_ON_ALLOC_FAIL: bool = false;
+    const GLOBAL_KIND: Option<u8> = Some(0);
+    fn get_default_alloc_params(&self) -> TestParams { TestParams { fail: self.fail == "host" } }
+    fn init_local_allocation(ecx: &mut InterpCx<'tcx, Self>, _id: AllocId,
+        _kind: MemoryKind<u8>, _size: Size, _align: Align) -> InterpResult<'tcx, ()> {
+        ecx.machine.events.push(if ecx.machine.fail == "init" { "init-fail" } else { "init" });
+        if ecx.machine.fail == "init" { Err(Failure::Init) } else { Ok(()) }
+    }
+    fn adjust_alloc_root_pointer(ecx: &mut InterpCx<'tcx, Self>, ptr: Pointer<AllocId>,
+        _kind: Option<MemoryKind<u8>>) -> InterpResult<'tcx, Pointer<AllocId>> {
+        ecx.machine.events.push(if ecx.machine.fail == "root" { "root-fail" } else { "root" });
+        if ecx.machine.fail == "root" { Err(Failure::Root) }
+        else { Ok(Pointer { id: ptr.id, offset: Size(0), provenance: ptr.id }) }
+    }
+    fn before_memory_deallocation(_tcx: TyCtxt, machine: &mut Self,
+        _alloc_extra: &mut (), _ptr: Pointer<Option<AllocId>>, _prov: (AllocId, ()),
+        _size: Size, _align: Align, _kind: MemoryKind<u8>) -> InterpResult<'tcx, ()> {
+        machine.events.push(if machine.fail == "before" { "before-fail" } else { "before" });
+        if machine.fail == "before" { Err(Failure::Before) } else { Ok(()) }
+    }
+    fn event_log(&mut self) -> &mut Vec<&'static str> { &mut self.events }
+    fn failing_stage(&self) -> &'static str { self.fail }
+}
+
+impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
+    fn max_size_of_val(&self) -> Size { Size(32) }
+    fn ptr_get_alloc_id(&mut self, ptr: Pointer<Option<M::Provenance>>,
+        _size: u64) -> InterpResult<'tcx, (AllocId, Size, ())> {
+        self.machine.event_log().push("resolve");
+        self.resolve_count += 1;
+        if self.machine.failing_stage() == "resolve" { return Err(Failure::Resolve); }
+        match ptr.provenance { Some(_) => Ok((ptr.id, ptr.offset, ())), None => Err(Failure::Resolve) }
+    }
+}
+
+impl<'tcx, M: Machine<'tcx>> InterpCx<'tcx, M> {
+/* EXTRACTED_ALLOCATE_PTR */
+/* EXTRACTED_INSERT_ALLOCATION */
+/* EXTRACTED_DEALLOCATE_PTR */
+}
+
+fn make(fail: &'static str) -> InterpCx<'static, TestMachine> {
+    let data = Box::leak(Box::new(TcxData { next_id: Cell::new(1),
+        issued: RefCell::new(Vec::new()), globals: RefCell::new(HashMap::new()) }));
+    InterpCx { tcx: TyCtxt(data), machine: TestMachine { events: Vec::new(), fail },
+        memory: MemoryData::new(), resolve_count: 0, _lifetime: PhantomData }
+}
+fn summary(ecx: &InterpCx<'static, TestMachine>, failed: bool) {
+    println!("live={} dead={} issued={} error={} events={}", ecx.memory.alloc_map.entries.len(),
+        ecx.memory.dead_alloc_map.len(), ecx.tcx.0.issued.borrow().len(), failed,
+        ecx.machine.events.join(","));
+}
+fn pointer(id: AllocId, offset: u64) -> Pointer<Option<AllocId>> {
+    Pointer { id, offset: Size(offset), provenance: Some(id) }
+}
+
+fn main() {
+    {
+        let mut ecx = make("");
+        let result = ecx.allocate_ptr(Size(4), Align(1), MemoryKind::Stack, AllocInit::Zero);
+        let id = result.as_ref().map(|ptr| ptr.provenance.0.get()).unwrap_or(0);
+        print!("allocate {id} "); summary(&ecx, result.is_err());
+    }
+
+    for (tag, fail) in [("root-failure", "root"), ("init-failure", "init")] {
+        let mut ecx = make(fail);
+        let result = ecx.allocate_ptr(Size(4), Align(1), MemoryKind::Stack, AllocInit::Zero);
+        print!("{tag} "); summary(&ecx, result.is_err());
+    }
+
+    {
+        let mut ecx = make("");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(||
+            ecx.allocate_ptr(Size(40), Align(1), MemoryKind::Stack, AllocInit::Zero)));
+        print!("oversized "); summary(&ecx, result.is_err());
+    }
+    {
+        let mut ecx = make("");
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(||
+            ecx.allocate_ptr(Size(4), Align(1), MemoryKind::Machine(0), AllocInit::Zero)));
+        print!("global-kind-assert "); summary(&ecx, result.is_err());
+    }
+    {
+        let mut ecx = make("host");
+        let result = ecx.allocate_ptr(Size(4), Align(1), MemoryKind::Stack, AllocInit::Zero);
+        print!("host-exhaustion "); summary(&ecx, result.is_err());
+    }
+
+    for (tag, fail, kind, layout, offset) in [
+        ("kind-failure", "", MemoryKind::Machine(0), None, 0),
+        ("layout-failure", "", MemoryKind::Stack, Some((Size(8), Align(1))), 0),
+        ("dealloc-hook-failure", "before", MemoryKind::Stack, None, 0),
+        ("deallocated", "", MemoryKind::Stack, None, 0),
+        ("non-base-free", "", MemoryKind::Stack, None, 1),
+    ] {
+        let mut ecx = make("");
+        let root = ecx.allocate_ptr(Size(4), Align(1), MemoryKind::Stack, AllocInit::Zero).unwrap();
+        ecx.machine.fail = fail;
+        let ptr = Pointer { id: root.id, offset: Size(offset), provenance: Some(root.provenance) };
+        let result = ecx.deallocate_ptr(ptr, layout, kind);
+        print!("{tag} "); summary(&ecx, result.is_err());
+        if tag == "deallocated" {
+            let second = ecx.deallocate_ptr(Pointer::from(root), None, MemoryKind::Stack);
+            print!("double-free "); summary(&ecx, second.is_err());
+        }
+    }
+
+    let mut ecx = make("");
+    let global_id = ecx.tcx.reserve_alloc_id();
+    ecx.tcx.0.globals.borrow_mut().insert(global_id, GlobalAlloc::Static(()));
+    let base_pointer: Pointer<AllocId> = Pointer::from(global_id);
+    let result = ecx.deallocate_ptr(base_pointer.into(), None, MemoryKind::Stack);
+    print!("global-deallocation "); summary(&ecx, result.is_err());
+}

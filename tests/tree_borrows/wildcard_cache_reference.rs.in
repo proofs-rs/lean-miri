@@ -1,0 +1,90 @@
+//! Standalone shim around exact wildcard-cache code from pinned Miri.
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AccessKind { Read, Write }
+
+mod source_wildcard {
+    use super::AccessKind;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    struct UniIndex { idx: usize }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct UniValMap<V> { data: Vec<Option<V>> }
+    impl<V> UniValMap<V> {
+        fn get(&self, index: UniIndex) -> Option<&V> {
+            self.data.get(index.idx).and_then(Option::as_ref)
+        }
+        fn get_mut(&mut self, index: UniIndex) -> Option<&mut V> {
+            self.data.get_mut(index.idx).and_then(Option::as_mut)
+        }
+        fn entry(&mut self, index: UniIndex) -> UniEntry<'_, V> {
+            if self.data.len() < index.idx + 1 {
+                self.data.resize_with(index.idx + 1, || None);
+            }
+            UniEntry { inner: &mut self.data[index.idx] }
+        }
+        fn remove(&mut self, index: UniIndex) {
+            if let Some(slot) = self.data.get_mut(index.idx) { *slot = None; }
+        }
+        fn insert(&mut self, index: UniIndex, value: V) {
+            if self.data.len() < index.idx + 1 {
+                self.data.resize_with(index.idx + 1, || None);
+            }
+            self.data[index.idx] = Some(value);
+        }
+    }
+    impl<V> Default for UniValMap<V> {
+        fn default() -> Self { Self { data: Vec::new() } }
+    }
+
+    struct UniEntry<'a, V> { inner: &'a mut Option<V> }
+    impl<V> UniEntry<'_, V> {
+        fn or_insert(&mut self, default: V) -> &mut V {
+            if self.inner.is_none() { *self.inner = Some(default); }
+            self.inner.as_mut().unwrap()
+        }
+    }
+
+    #[derive(Clone)]
+    struct Node { parent: Option<UniIndex> }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum AccessRelatedness { LocalAccess, ForeignAccess }
+
+    // @PINNED_WILDCARD_LEVEL_AND_RELATEDNESS@
+
+    // @PINNED_EXPOSED_CACHE_TYPES@
+
+    impl ExposedCache {
+        // @PINNED_ACCESS_RELATEDNESS_BODY@
+        // @PINNED_UPDATE_EXPOSURE_BODY@
+    }
+
+    pub fn emit_rows() {
+        let root = UniIndex { idx: 0 };
+        let first = UniIndex { idx: 1 };
+        let second = UniIndex { idx: 2 };
+        let mut nodes = UniValMap::default();
+        nodes.insert(root, Node { parent: None });
+        nodes.insert(first, Node { parent: Some(root) });
+        nodes.insert(second, Node { parent: Some(root) });
+        let mut cache = ExposedCache::default();
+        cache.update_exposure(&nodes, first, WildcardAccessLevel::None, WildcardAccessLevel::Read);
+        println!("wild-cache-one {} {}", cache.0.get(root).unwrap().local_reads,
+            cache.0.get(first).unwrap().local_reads);
+        cache.update_exposure(&nodes, second, WildcardAccessLevel::None, WildcardAccessLevel::Read);
+        let mixed = cache.access_relatedness(root, first, AccessKind::Read, false, false);
+        let mixed_foreign = cache.access_relatedness(root, first, AccessKind::Read, false, true);
+        println!("wild-relation-mixed {:?} {:?}", mixed, mixed_foreign);
+        let virtual_foreign = ExposedCache::default().access_relatedness(
+            root, root, AccessKind::Read, true, false);
+        println!("wild-relation-virtual {:?}", virtual_foreign);
+        cache.update_exposure(&nodes, first, WildcardAccessLevel::Read, WildcardAccessLevel::None);
+        let remaining = cache.access_relatedness(root, second, AccessKind::Read, false, true);
+        println!("wild-cache-release {} {} {:?}", cache.0.get(root).unwrap().local_reads,
+            cache.0.get(first).unwrap().local_reads, remaining);
+    }
+}
+
+fn main() { source_wildcard::emit_rows(); }

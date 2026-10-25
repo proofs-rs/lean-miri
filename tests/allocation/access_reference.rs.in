@@ -1,0 +1,158 @@
+use std::borrow::Borrow;
+use std::collections::HashMap;
+use std::marker::PhantomData;
+
+mod reference {
+use super::*;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] struct AllocId(u64);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)] struct Size(u64);
+impl Size { fn bytes(self) -> u64 { self.0 } fn from_bytes(n:u64)->Self{Self(n)} }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)] struct Align(u64);
+impl Align {
+    fn bytes(self)->u64{self.0}
+    fn from_bytes(n:u64)->Result<Self,()> { if n.is_power_of_two() && n <= (1<<29) {Ok(Self(n))} else {Err(())} }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)] struct Misalignment { has:Align, required:Align }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)] enum AllocationKind { LiveData, Function, VaList, VTable, TypeId, Dead }
+#[derive(Clone, Copy, Debug)] struct AllocInfo { size:Size, align:Align, kind:AllocationKind }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)] enum CheckInAllocMsg { MemoryAccess }
+trait Provenance: Copy { const OFFSET_IS_ADDR:bool; }
+#[derive(Clone,Copy)] struct Relative;
+impl Provenance for Relative { const OFFSET_IS_ADDR:bool=false; }
+#[derive(Clone,Copy)] struct Absolute;
+impl Provenance for Absolute { const OFFSET_IS_ADDR:bool=true; }
+#[derive(Clone,Copy)] struct Pointer<P:Copy> { provenance:P, offset:Size, result:Result<(AllocId,Size,u8),u64> }
+impl<P:Provenance> Pointer<Option<P>> {
+    fn addr(self)->Size { assert!(P::OFFSET_IS_ADDR); self.offset }
+}
+
+#[derive(Debug,PartialEq,Eq)] enum RefErrorKind {
+    Dangling{addr:u64,size:i64},
+    OutOfBounds{id:AllocId,size:Size,offset:i64,inbounds:i64},
+    Dead(AllocId),
+}
+#[derive(Debug)] struct RefError<'tcx>{kind:RefErrorKind,_lt:PhantomData<&'tcx ()>}
+impl<'tcx> RefError<'tcx>{fn new(kind:RefErrorKind)->Self{Self{kind,_lt:PhantomData}}}
+type InterpResult<'tcx,T> = Result<T,RefError<'tcx>>;
+fn interp_ok<'tcx,T>(value:T)->InterpResult<'tcx,T>{Ok(value)}
+
+macro_rules! throw_ub {
+    (DanglingIntPointer { $addr:ident, inbounds_size: $size:expr, msg $(,)? }) => {
+        return Err(RefError::new(RefErrorKind::Dangling{addr:$addr,size:$size}))
+    };
+    (PointerOutOfBounds { $id:ident, $alloc_size:ident, ptr_offset: $offset:expr, inbounds_size: $size:expr, msg $(,)? }) => {
+        return Err(RefError::new(RefErrorKind::OutOfBounds{id:$id,size:$alloc_size,offset:$offset,inbounds:$size}))
+    };
+}
+
+#[derive(Clone,Copy)] struct Tcx;
+impl Tcx { fn sign_extend_to_target_isize(self, offset:u64)->i64 { offset as i64 } }
+trait Machine<'tcx>:Sized {
+    type Provenance:Provenance;
+    type ProvenanceExtra:Copy;
+    fn enforce_alignment(ecx:&AccessCx<'tcx,Self>)->bool;
+    fn alignment_check(_ecx:&AccessCx<'tcx,Self>,_id:AllocId,_align:Align,_kind:AllocationKind,_offset:Size,_required:Align)->Option<Misalignment>{None}
+}
+struct TestMachine;
+impl<'tcx> Machine<'tcx> for TestMachine {
+    type Provenance=Relative;
+    type ProvenanceExtra=u8;
+    fn enforce_alignment(ecx:&AccessCx<'tcx,Self>)->bool{ecx.enforce}
+}
+struct AbsoluteMachine;
+impl<'tcx> Machine<'tcx> for AbsoluteMachine {
+    type Provenance=Absolute;
+    type ProvenanceExtra=u8;
+    fn enforce_alignment(ecx:&AccessCx<'tcx,Self>)->bool{ecx.enforce}
+}
+
+struct AccessCx<'tcx,M:Machine<'tcx>> {
+    tcx:Tcx,
+    resolutions:HashMap<u64,Result<(AllocId,Size,u8),u64>>,
+    allocations:HashMap<AllocId,AllocInfo>,
+    enforce:bool,
+    _marker:PhantomData<(&'tcx (),M)>,
+}
+impl<'tcx,M:Machine<'tcx,ProvenanceExtra=u8>> AccessCx<'tcx,M> {
+    fn ptr_try_get_alloc_id(&self,ptr:Pointer<Option<M::Provenance>>,_size:i64)->Result<(AllocId,Size,M::ProvenanceExtra),u64>{
+        self.resolutions.get(&ptr.offset.bytes()).copied().unwrap_or(Err(ptr.offset.bytes()))
+    }
+    fn get_live_alloc_size_and_align(&self,id:AllocId,_msg:CheckInAllocMsg)->InterpResult<'tcx,(Size,Align)>{
+        let info=self.allocations.get(&id).ok_or_else(||RefError::new(RefErrorKind::Dead(id)))?;
+        if info.kind==AllocationKind::Dead{return Err(RefError::new(RefErrorKind::Dead(id)))}
+        Ok((info.size,info.align))
+    }
+    fn get_alloc_info(&self,id:AllocId)->AllocInfo{*self.allocations.get(&id).unwrap()}
+    // @PINNED_ACCESS_FUNCTIONS@
+}
+
+fn show_bounds<M:Machine<'static,ProvenanceExtra=u8>>(cx:&AccessCx<'static,M>,ptr:Pointer<Option<M::Provenance>>,size:i64)->String{
+    let result=AccessCx::<'static,M>::check_and_deref_ptr(cx,ptr,size,CheckInAllocMsg::MemoryAccess,
+        |this,id,offset,_prov|{let (alloc_size,align)=this.borrow().get_live_alloc_size_and_align(id,CheckInAllocMsg::MemoryAccess)?;interp_ok((alloc_size,align,(id,offset,alloc_size,align))) });
+    match result {
+        Ok(None)=>"N".into(),
+        Ok(Some((id,offset,alloc_size,align)))=>format!("O{}:{}:{}:{}",id.0,offset.bytes(),alloc_size.bytes(),align.bytes()),
+        Err(error)=>match error.kind {
+            RefErrorKind::Dangling{addr,size}=>format!("D{addr}:{size}"),
+            RefErrorKind::Dead(id)=>format!("F{}",id.0),
+            RefErrorKind::OutOfBounds{id,size,offset,inbounds}=>format!("B{}:{}:{}:{}",id.0,size.bytes(),offset,inbounds),
+        }
+    }
+}
+
+fn show_misalignment<M:Machine<'static,ProvenanceExtra=u8>>(cx:&AccessCx<'static,M>,ptr:Pointer<Option<M::Provenance>>,required:Align)->String{
+    match cx.is_ptr_misaligned(ptr,required){
+        None=>"N".into(),
+        Some(m)=>format!("M{}:{}",m.has.bytes(),m.required.bytes()),
+    }
+}
+
+fn fixture<M:Machine<'static,ProvenanceExtra=u8>>(enforce:bool,offset:u64,resolution:Result<(AllocId,Size,u8),u64>,info:Option<AllocInfo>)->AccessCx<'static,M>{
+    let mut resolutions=HashMap::new();resolutions.insert(offset,resolution);
+    let mut allocations=HashMap::new();if let Some(info)=info{allocations.insert(AllocId(1),info);}
+    AccessCx{tcx:Tcx,resolutions,allocations,enforce,_marker:PhantomData}
+}
+
+pub fn run(){
+    let live=AllocInfo{size:Size(8),align:Align(8),kind:AllocationKind::LiveData};
+    let pointer=|offset:u64,result|Pointer{provenance:Some(Relative),offset:Size(offset),result};
+    let cases=[
+      ("zero",0,Err(77),None,0),
+      ("positive_ok",2,Ok((AllocId(1),Size(2),0)),Some(live),3),
+      ("positive_oob",7,Ok((AllocId(1),Size(7),0)),Some(live),2),
+      ("negative_ok",5,Ok((AllocId(1),Size(5),0)),Some(live),-3),
+      ("negative_underflow",2,Ok((AllocId(1),Size(2),0)),Some(live),-3),
+      ("negative_end_oob",9,Ok((AllocId(1),Size(9),0)),Some(live),-1),
+      ("offset_high_oob",u64::MAX,Ok((AllocId(1),Size(u64::MAX),0)),Some(live),1),
+      ("dangling",4,Err(77),None,1),
+    ];
+    for (tag,offset,resolution,info,size) in cases{
+      let cx=fixture::<TestMachine>(true,offset,resolution,info);
+      println!("B {tag} {}",show_bounds(&cx,pointer(offset,resolution),size));
+    }
+    let mut dead=live;dead.kind=AllocationKind::Dead;
+    let cx=fixture::<TestMachine>(true,1,Ok((AllocId(1),Size(1),0)),Some(dead));
+    println!("B dead {}",show_bounds(&cx,pointer(1,Ok((AllocId(1),Size(1),0))),1));
+
+    for (tag,enforce,offset,allocation_align,required,resolved) in [
+      ("disabled",false,3,8,8,false),
+      ("one",true,3,8,1,false),
+      ("address",true,3,8,8,false),
+      ("relative_offset",true,3,8,4,true),
+      ("allocation_align",true,8,4,8,true),
+      ("aligned",true,8,8,8,true),
+    ]{
+      let info=AllocInfo{size:Size(16),align:Align(allocation_align),kind:AllocationKind::LiveData};
+      let result=if resolved{Ok((AllocId(1),Size(offset),0))}else{Err(offset)};
+      let cx=fixture::<TestMachine>(enforce,offset,result,Some(info));
+      println!("M {tag} {}",show_misalignment(&cx,pointer(offset,result),Align(required)));
+    }
+    let abs_ptr=|offset:u64|Pointer{provenance:Some(Absolute),offset:Size(offset),result:Ok((AllocId(1),Size(offset),0))};
+    let info=AllocInfo{size:Size(16),align:Align(16),kind:AllocationKind::LiveData};
+    let cx=fixture::<AbsoluteMachine>(true,3,Ok((AllocId(1),Size(3),0)),Some(info));
+    println!("M absolute {}",show_misalignment(&cx,abs_ptr(3),Align(8)));
+}
+}
+
+fn main(){reference::run()}

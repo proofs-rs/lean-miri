@@ -1,0 +1,1495 @@
+//! Standalone harness around byte-exact permission helpers extracted from the
+//! pinned Miri source. See `extract_reference.py` for all source hash checks.
+
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::collections::HashMap;
+
+extern crate self as rustc_abi;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Size { bytes: u64 }
+
+impl Size {
+    pub fn from_bytes(bytes: u64) -> Self { Self { bytes } }
+    pub fn bytes(self) -> u64 { self.bytes }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct BorTag(u64);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Event;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NodeDebugInfo { history: Vec<Event> }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AllocRange { start: Size, size: Size }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Span;
+
+type AllocId = u64;
+
+struct MiriMachine<'tcx> { _marker: std::marker::PhantomData<&'tcx ()> }
+impl MiriMachine<'_> {
+    fn current_user_relevant_span(&self) -> Span { Span }
+}
+
+type VisitWith<'a> = dyn FnMut(Option<AllocId>, Option<BorTag>) + 'a;
+trait VisitProvenance {
+    fn visit_provenance(&self, visit: &mut VisitWith<'_>);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AccessCause { Dealloc, FnExit(AccessKind), Test }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProvenanceExtra { Concrete(BorTag), Wildcard }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProtectorKind { WeakProtector, StrongProtector }
+
+struct DiagnosticInfo {
+    alloc_id: AllocId,
+    span: Span,
+    transition_range: std::ops::Range<u64>,
+    access_range: Option<AllocRange>,
+    access_cause: AccessCause,
+}
+impl DiagnosticInfo {
+    fn create_event(
+        &self,
+        _transition: source_permissions::PermTransition,
+        _foreign: bool,
+    ) -> Event { Event }
+
+    fn fixture() -> Self {
+        Self {
+            alloc_id: 0,
+            span: Span,
+            transition_range: 0..1,
+            access_range: None,
+            access_cause: AccessCause::Test,
+        }
+    }
+}
+
+#[allow(unused_lifetimes)]
+type InterpResult<'tcx, T = ()> = Result<T, String>;
+
+fn interp_ok<T>(value: T) -> InterpResult<'static, T> { Ok(value) }
+
+fn no_valid_exposed_references_error(_diagnostics: &DiagnosticInfo) -> String {
+    "no-valid-exposed-references".to_owned()
+}
+
+struct GlobalState { protected_tags: HashMap<BorTag, ProtectorKind> }
+impl GlobalState {
+    fn borrow(&self) -> &Self { self }
+}
+
+type FxHashSet<T> = std::collections::HashSet<T>;
+
+struct TbError<'a> {
+    error_kind: source_location::TransitionError,
+    access_info: &'a DiagnosticInfo,
+    conflicting_node_info: &'a NodeDebugInfo,
+    accessed_node_info: Option<&'a NodeDebugInfo>,
+}
+impl TbError<'_> {
+    fn build(self) -> String { "tree-borrows-transition-error".to_owned() }
+}
+
+// @PINNED_ACCESS_KIND@
+use AccessKind::*;
+
+pub mod tree {
+    // @PINNED_ACCESS_RELATEDNESS@
+    use super::unimap::UniIndex;
+    use super::source_permissions::Permission;
+    use super::foreign_access_skipping::IdempotentForeignAccess;
+    use super::{BorTag, NodeDebugInfo};
+
+    pub struct Node {
+        pub tag: BorTag,
+        pub parent: Option<UniIndex>,
+        pub children: Vec<UniIndex>,
+        pub default_initial_perm: Permission,
+        pub default_initial_idempotent_foreign_access: IdempotentForeignAccess,
+        pub is_exposed: bool,
+        pub debug_info: NodeDebugInfo,
+    }
+    impl Node {
+        pub fn for_visitor(parent: Option<UniIndex>, children: Vec<UniIndex>) -> Self {
+            Self {
+                tag: BorTag(0), parent, children,
+                default_initial_perm: Permission::new_reserved_frz(),
+                default_initial_idempotent_foreign_access: IdempotentForeignAccess::None,
+                is_exposed: false,
+                debug_info: NodeDebugInfo { history: Vec::new() },
+            }
+        }
+    }
+    use AccessRelatedness::*;
+}
+use tree::AccessRelatedness;
+use AccessRelatedness::*;
+
+pub mod unimap {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct UniIndex {
+        pub idx: usize,
+    }
+
+    #[derive(Clone, Debug, Eq)]
+    pub struct UniValMap<V> {
+        data: Vec<Option<V>>,
+    }
+
+    // Extracted byte-for-byte from pinned unimap.rs; this is the equality
+    // consulted by the exact DedupRangeMap code during adjacent-range merging.
+    // @PINNED_UNIMAP_EQUIVALITY@
+
+    impl<V> UniValMap<V> {
+        pub fn from_vec(data: Vec<Option<V>>) -> Self {
+            Self { data }
+        }
+
+        pub fn get(&self, idx: UniIndex) -> Option<&V> {
+            self.data.get(idx.idx).and_then(Option::as_ref)
+        }
+
+        pub fn get_mut(&mut self, idx: UniIndex) -> Option<&mut V> {
+            self.data.get_mut(idx.idx).and_then(Option::as_mut)
+        }
+
+        pub fn iter(&self) -> impl Iterator<Item=(UniIndex, &V)> {
+            self.data.iter().enumerate().filter_map(|(idx, value)| {
+                value.as_ref().map(|value| (UniIndex { idx }, value))
+            })
+        }
+
+        pub fn len(&self) -> usize { self.data.len() }
+
+        pub fn insert(&mut self, idx: UniIndex, value: V) {
+            if self.data.len() <= idx.idx { self.data.resize_with(idx.idx + 1, || None); }
+            self.data[idx.idx] = Some(value);
+        }
+
+        pub fn remove(&mut self, idx: UniIndex) -> Option<V> {
+            self.data.get_mut(idx.idx).and_then(Option::take)
+        }
+
+        pub fn truncate_for_fixture(&mut self, len: usize) { self.data.truncate(len); }
+
+        pub fn entry(&mut self, idx: UniIndex) -> UniEntry<'_, V> {
+            if self.data.len() <= idx.idx { self.data.resize_with(idx.idx + 1, || None); }
+            UniEntry { inner: &mut self.data[idx.idx] }
+        }
+    }
+
+    pub struct UniEntry<'a, V> { inner: &'a mut Option<V> }
+    impl<V> UniEntry<'_, V> {
+        pub fn or_insert(&mut self, default: V) -> &mut V {
+            if self.inner.is_none() { *self.inner = Some(default); }
+            self.inner.as_mut().unwrap()
+        }
+    }
+
+    impl<V> Default for UniValMap<V> {
+        fn default() -> Self { Self { data: Vec::new() } }
+    }
+}
+
+// These are the complete pinned helper modules, inserted byte-for-byte by the
+// extractor. The local shims above provide their surrounding Miri types.
+pub mod foreign_access_skipping {
+    // @PINNED_FOREIGN_ACCESS_SKIPPING@
+}
+
+pub mod wildcard {
+    use super::AccessKind;
+    // @PINNED_WILDCARD_PERMISSION_HELPERS@
+}
+
+pub mod tree_visitor {
+    use super::tree::{AccessRelatedness, Node};
+    use super::unimap::{UniIndex, UniValMap};
+    use std::marker::PhantomData;
+    // @PINNED_TREE_VISITOR_BODY@
+}
+
+pub mod source_wildcard {
+    use super::tree::{AccessRelatedness, Node};
+    use super::unimap::{UniIndex, UniValMap};
+    use super::AccessKind;
+    use super::BorTag;
+    use super::wildcard::WildcardAccessLevel;
+    // @PINNED_WILDCARD_LEVEL_AND_RELATEDNESS@
+    // @PINNED_EXPOSED_CACHE_TYPES@
+    impl ExposedCache {
+        // @PINNED_ACCESS_RELATEDNESS_BODY@
+        // @PINNED_UPDATE_EXPOSURE_BODY@
+        // @PINNED_EXPOSED_CACHE_REMOVE@
+    }
+}
+
+pub mod source_range_map {
+    // @PINNED_DEDUP_RANGE_MAP_BODY@
+}
+
+pub mod source_permissions {
+    use std::cmp::{Ordering, PartialOrd};
+    use super::{AccessKind, AccessRelatedness};
+    use super::foreign_access_skipping::IdempotentForeignAccess;
+    use super::wildcard::WildcardAccessLevel;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    enum PermissionPriv {
+        Cell,
+        ReservedFrz { conflicted: bool },
+        ReservedIM,
+        Unique,
+        Frozen,
+        Disabled,
+    }
+    use self::PermissionPriv::*;
+
+    // These blocks are copied byte-for-byte from pinned `perms.rs` after the
+    // extractor checks the entire file's Git blob hash.
+    // @PINNED_PERMISSION_IMPLS@
+    impl PermTransition {
+        // @PINNED_TRANSITION_ENDPOINT@
+    }
+
+    // Test-only accessors stay in this module so the source's private
+    // transition invariant and endpoints can be compared without changing
+    // the extracted public API.
+    pub(super) fn transition_facts(
+        transition: PermTransition,
+        starting_point: Permission,
+    ) -> Option<(Permission, bool, bool, bool)> {
+        let _ = transition.applied(starting_point)?;
+        Some((
+            transition.endpoint(),
+            transition.is_noop(),
+            transition.produces_disabled(),
+            transition.is_possible(),
+        ))
+    }
+}
+
+pub mod source_location {
+    use super::AccessKind;
+    use super::tree::AccessRelatedness;
+    use super::tree_visitor::{ChildrenVisitMode, ContinueTraversal, NodeAppArgs};
+    use super::foreign_access_skipping::IdempotentForeignAccess;
+    use super::source_permissions::{PermTransition, Permission};
+    use super::source_wildcard::ExposedCache;
+    use super::wildcard::WildcardAccessLevel;
+    use super::tree::Node;
+    use super::tree_visitor::TreeVisitor;
+    use super::unimap::{UniIndex, UniValMap};
+    use super::{AccessCause, AllocId, AllocRange, DiagnosticInfo, GlobalState, InterpResult,
+        MiriMachine, ProtectorKind, ProvenanceExtra, Span, TbError, BorTag, FxHashSet,
+        VisitProvenance, VisitWith, interp_ok,
+        no_valid_exposed_references_error};
+    use std::collections::HashMap;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::mem;
+    use std::collections::HashSet;
+
+    // Exact diagnostics error variants consumed by LocationState's access method.
+    // @PINNED_TRANSITION_ERROR@
+    // @PINNED_LOCATION_STATE_DECL@
+    impl LocationState {
+        // @PINNED_LOCATION_STATE_CONSTRUCTORS@
+        // @PINNED_LOCATION_STATE_TRANSITION@
+        // @PINNED_LOCATION_STATE_ACCESS@
+        // @PINNED_LOCATION_STATE_SKIP_AND_RECORD@
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct LocationTree {
+        pub perms: super::unimap::UniValMap<LocationState>,
+        pub exposed_cache: ExposedCache,
+    }
+
+    // @PINNED_NODE_DEFAULT_LOCATION_STATE@
+
+    impl<'tcx> LocationTree {
+        // @PINNED_MIN_EXPOSED_CHILD@
+        // @PINNED_LOCATION_TREE_ACCESS@
+        // @PINNED_LOCATION_TREE_NORMAL_ACCESS@
+        // @PINNED_WILDCARD_ACCESS@
+    }
+
+    struct TagMapping(HashMap<BorTag, UniIndex>);
+    impl TagMapping {
+        fn get(&self, tag: &BorTag) -> Option<UniIndex> { self.0.get(tag).copied() }
+        fn remove(&mut self, tag: &BorTag) { self.0.remove(tag); }
+    }
+
+    pub struct ActualTree {
+        tag_mapping: TagMapping,
+        nodes: UniValMap<Node>,
+        locations: super::source_range_map::DedupRangeMap<LocationTree>,
+        roots: Vec<UniIndex>,
+    }
+
+    impl<'tcx> ActualTree {
+        // @PINNED_TREE_DEALLOC@
+        // @PINNED_TREE_PERFORM_ACCESS@
+        // @PINNED_TREE_PROTECTOR_END_ACCESS@
+        // @PINNED_TREE_GC@
+        // @PINNED_TREE_EXPOSE_TAG@
+        // @PINNED_TREE_PROTECTOR_RELEASE_CACHE@
+        // @PINNED_TREE_RELEASE_PROTECTOR@
+    }
+
+    impl VisitProvenance for ActualTree {
+        // @PINNED_TREE_VISIT_PROVENANCE@
+    }
+
+    pub fn make_location_tree() -> LocationTree {
+        LocationTree {
+            perms: super::unimap::UniValMap::from_vec(Vec::new()),
+            exposed_cache: ExposedCache::default(),
+        }
+    }
+
+    pub fn put_state(location: &mut LocationTree, idx: usize, state: LocationState) {
+        location.perms.insert(super::unimap::UniIndex { idx }, state);
+    }
+
+    pub fn put_exposure(
+        location: &mut LocationTree,
+        nodes: &super::unimap::UniValMap<super::tree::Node>,
+        idx: usize,
+        level: super::wildcard::WildcardAccessLevel,
+    ) {
+        location.exposed_cache.update_exposure(
+            nodes,
+            super::unimap::UniIndex { idx },
+            super::wildcard::WildcardAccessLevel::None,
+            level,
+        );
+    }
+
+    pub fn location_tree_snapshot(location: &LocationTree, nodes: &super::unimap::UniValMap<super::tree::Node>) -> String {
+        let mut values = Vec::new();
+        for idx in 0..nodes.len() {
+            let index = super::unimap::UniIndex { idx };
+            let state = location.perms.get(index).copied().or_else(|| nodes.get(index).map(|node| node.default_location_state()));
+            values.push(match state {
+                None => "-".to_owned(),
+                Some(state) => super::location_snapshot_code(state, super::permissions()),
+            });
+        }
+        values.join("|")
+    }
+
+    pub fn nodes_for_fixture(
+        specs: &[(Option<usize>, &[usize])],
+        tags: &[u64],
+        defaults: &[Permission],
+        exposed: &[bool],
+    ) -> super::unimap::UniValMap<super::tree::Node> {
+        let mut nodes = super::unimap::UniValMap::from_vec(Vec::new());
+        for idx in 0..specs.len() {
+            let (parent, children) = specs[idx];
+            nodes.insert(super::unimap::UniIndex { idx }, super::tree::Node {
+                tag: BorTag(tags[idx]),
+                parent: parent.map(|idx| super::unimap::UniIndex { idx }),
+                children: children.iter().map(|idx| super::unimap::UniIndex { idx: *idx }).collect(),
+                default_initial_perm: defaults[idx],
+                default_initial_idempotent_foreign_access: IdempotentForeignAccess::None,
+                is_exposed: exposed[idx],
+                debug_info: super::NodeDebugInfo { history: Vec::new() },
+            });
+        }
+        nodes
+    }
+
+    pub fn access_fixture(
+        name: &str,
+        nodes: &mut super::unimap::UniValMap<super::tree::Node>,
+        root: usize,
+        kind: AccessKind,
+        is_wildcard_tree: bool,
+        location: &mut LocationTree,
+    ) {
+        let diagnostics = DiagnosticInfo::fixture();
+        let global = GlobalState { protected_tags: HashMap::new() };
+        let result = location.perform_wildcard_access(
+            super::unimap::UniIndex { idx: root },
+            None,
+            None,
+            nodes,
+            kind,
+            &global,
+            &diagnostics,
+            is_wildcard_tree,
+        );
+        let status = match result {
+            Ok(()) => "ok".to_owned(),
+            Err(error) => error,
+        };
+        println!("wild-access {name} {status} {}", location_tree_snapshot(location, nodes));
+    }
+
+    pub fn tree_access_fixture(
+        name: &str,
+        nodes: &mut super::unimap::UniValMap<super::tree::Node>,
+        roots: &[usize],
+        source: Option<usize>,
+        kind: AccessKind,
+        visit_children: bool,
+        location: &mut LocationTree,
+    ) {
+        let diagnostics = DiagnosticInfo::fixture();
+        let global = GlobalState { protected_tags: HashMap::new() };
+        let roots = roots.iter().copied().map(|idx| super::unimap::UniIndex { idx });
+        let source = source.map(|idx| super::unimap::UniIndex { idx });
+        let mode = if visit_children {
+            ChildrenVisitMode::VisitChildrenOfAccessed
+        } else {
+            ChildrenVisitMode::SkipChildrenOfAccessed
+        };
+        let attempt = catch_unwind(AssertUnwindSafe(|| location.perform_access(
+            roots, nodes, source, kind, &global, mode, &diagnostics, None,
+        )));
+        let status = match attempt {
+            Ok(Ok(())) => "ok".to_owned(),
+            Ok(Err(error)) => error,
+            Err(_) => "panic".to_owned(),
+        };
+        println!("multi-root {name} {status} {}", location_tree_snapshot(location, nodes));
+    }
+
+    pub fn lifecycle_fixtures() {
+        let specs = [(None, &[1][..]), (Some(0), &[][..])];
+        let tags = [1, 2];
+        let defaults = [Permission::new_disabled(), Permission::new_reserved_frz()];
+
+        let mut release_nodes = nodes_for_fixture(&specs, &tags, &defaults, &[false, true]);
+        let conflicted_reserved = super::permissions()[2].1;
+        let mut release_location = make_location_tree();
+        put_state(&mut release_location, 0,
+            new_accessed(Permission::new_unique(), IdempotentForeignAccess::None));
+        put_state(&mut release_location, 1,
+            new_accessed(conflicted_reserved, IdempotentForeignAccess::Read));
+        put_exposure(&mut release_location, &release_nodes, 1,
+            super::wildcard::WildcardAccessLevel::Read);
+        let mut release_tree = ActualTree {
+            tag_mapping: TagMapping(HashMap::from([
+                (BorTag(1), UniIndex { idx: 0 }), (BorTag(2), UniIndex { idx: 1 }),
+            ])),
+            nodes: release_nodes,
+            locations: super::source_range_map::DedupRangeMap::new(
+                super::Size::from_bytes(1), release_location),
+            roots: vec![UniIndex { idx: 0 }],
+        };
+        let global = GlobalState { protected_tags: HashMap::from([
+            (BorTag(1), super::ProtectorKind::StrongProtector),
+        ]) };
+        let machine = MiriMachine { _marker: std::marker::PhantomData };
+        let before_relation = release_tree.locations.iter_all().next().map(|(_, location)|
+            location.exposed_cache.access_relatedness(
+                UniIndex { idx: 0 }, UniIndex { idx: 1 }, AccessKind::Write, false, false));
+        let release = release_tree.release_protector(&machine, &global, BorTag(2), 7);
+        let release_status = match release {
+            Ok(()) => "ok",
+            Err(_) => "tree-borrows-transition-error",
+        };
+        let release_location = release_tree.locations.iter_all().next().map(|(_, loc)| loc);
+        let release_state = release_location
+            .map(|loc| location_tree_snapshot(loc, &release_tree.nodes)).unwrap_or_default();
+        let after_relation = release_location.map(|location| location.exposed_cache.access_relatedness(
+            UniIndex { idx: 0 }, UniIndex { idx: 1 }, AccessKind::Write, false, false));
+        let relation_code = |relation| match relation {
+            None => "None",
+            Some(super::source_wildcard::WildcardAccessRelatedness::LocalAccess) => "Some(LocalAccess)",
+            Some(super::source_wildcard::WildcardAccessRelatedness::ForeignAccess) => "Some(ForeignAccess)",
+            Some(super::source_wildcard::WildcardAccessRelatedness::EitherAccess) => "Some(EitherAccess)",
+        };
+        println!("protector-release skip-children {release_status} {release_state} {} {}",
+            relation_code(before_relation.flatten()), relation_code(after_relation.flatten()));
+
+        for (name, permission) in [
+            ("strong-write", Permission::new_unique()),
+            ("cell-exempt", Permission::new_cell()),
+        ] {
+            let nodes = nodes_for_fixture(&specs, &tags, &defaults, &[false, false]);
+            let mut location = make_location_tree();
+            put_state(&mut location, 0, new_accessed(permission, IdempotentForeignAccess::None));
+            let mut tree = ActualTree {
+                tag_mapping: TagMapping(HashMap::from([
+                    (BorTag(1), UniIndex { idx: 0 }), (BorTag(2), UniIndex { idx: 1 }),
+                ])),
+                nodes,
+                locations: super::source_range_map::DedupRangeMap::new(
+                    super::Size::from_bytes(1), location),
+                roots: vec![UniIndex { idx: 0 }],
+            };
+            let global = GlobalState { protected_tags: HashMap::from([
+                (BorTag(1), super::ProtectorKind::StrongProtector),
+            ]) };
+            let result = tree.dealloc(
+                super::ProvenanceExtra::Concrete(BorTag(1)),
+                super::AllocRange { start: super::Size::from_bytes(0), size: super::Size::from_bytes(1) },
+                &global, 7, super::Span,
+            );
+            let status = match result {
+                Ok(()) => "ok",
+                Err(_) => "tree-borrows-transition-error",
+            };
+            println!("dealloc {name} {status}");
+        }
+    }
+
+    pub fn gc_fixtures() {
+        let leaf_specs = [(None, &[1][..]), (Some(0), &[][..])];
+        let tags = [1, 2];
+        let defaults = [Permission::new_disabled(), Permission::new_frozen()];
+        let nodes = nodes_for_fixture(&leaf_specs, &tags, &defaults, &[false, false]);
+        let mut first_location = make_location_tree();
+        put_state(&mut first_location, 0,
+            new_accessed(Permission::new_unique(), IdempotentForeignAccess::None));
+        put_state(&mut first_location, 1,
+            new_non_accessed(Permission::new_frozen(), IdempotentForeignAccess::Read));
+        let mut locations = super::source_range_map::DedupRangeMap::new(
+            super::Size::from_bytes(2), first_location);
+        locations.iter_mut(super::Size::from_bytes(1), super::Size::from_bytes(1))
+            .for_each(|(_, location)| {
+                location.perms.remove(UniIndex { idx: 1 });
+                // Construct a semantically identical map with a shorter raw
+                // Vec, exercising pinned UniValMap::PartialEq's trailing-None rule.
+                location.perms.truncate_for_fixture(1);
+            });
+        let mut tree = ActualTree {
+            tag_mapping: TagMapping(HashMap::from([
+                (BorTag(1), UniIndex { idx: 0 }), (BorTag(2), UniIndex { idx: 1 }),
+            ])),
+            nodes,
+            locations,
+            roots: vec![UniIndex { idx: 0 }],
+        };
+        tree.remove_unreachable_tags(&FxHashSet::from([BorTag(1)]));
+        let root_children = tree.nodes.get(UniIndex { idx: 0 }).unwrap().children.len();
+        println!("gc dead-leaf {} {root_children} {} {}",
+            tree.nodes.get(UniIndex { idx: 1 }).is_none(),
+            tree.locations.iter_all().count(),
+            tree.tag_mapping.get(&BorTag(2)).is_none());
+
+        let chain = [(None, &[1][..]), (Some(0), &[2][..]), (Some(1), &[][..])];
+        let tags = [1, 2, 3];
+        let defaults = [Permission::new_disabled(); 3];
+        let nodes = nodes_for_fixture(&chain, &tags, &defaults, &[false, false, false]);
+        let locations = super::source_range_map::DedupRangeMap::new(
+            super::Size::from_bytes(1), make_location_tree());
+        let mut tree = ActualTree {
+            tag_mapping: TagMapping(HashMap::from([
+                (BorTag(1), UniIndex { idx: 0 }),
+                (BorTag(2), UniIndex { idx: 1 }),
+                (BorTag(3), UniIndex { idx: 2 }),
+            ])),
+            nodes,
+            locations,
+            roots: vec![UniIndex { idx: 0 }],
+        };
+        tree.remove_unreachable_tags(&FxHashSet::from([BorTag(1), BorTag(3)]));
+        let root_child = tree.nodes.get(UniIndex { idx: 0 }).unwrap().children[0].idx;
+        let child_parent = tree.nodes.get(UniIndex { idx: 2 }).unwrap().parent.unwrap().idx;
+        println!("gc collapse {} {root_child} {child_parent}",
+            tree.nodes.get(UniIndex { idx: 1 }).is_none());
+
+        let protected_defaults = [
+            Permission::new_disabled(),
+            Permission::new_frozen(),
+            Permission::new_reserved_im(),
+        ];
+        let nodes = nodes_for_fixture(&chain, &tags, &protected_defaults, &[false, false, false]);
+        let locations = super::source_range_map::DedupRangeMap::new(
+            super::Size::from_bytes(1), make_location_tree());
+        let mut tree = ActualTree {
+            tag_mapping: TagMapping(HashMap::from([
+                (BorTag(1), UniIndex { idx: 0 }),
+                (BorTag(2), UniIndex { idx: 1 }),
+                (BorTag(3), UniIndex { idx: 2 }),
+            ])),
+            nodes,
+            locations,
+            roots: vec![UniIndex { idx: 0 }],
+        };
+        tree.remove_unreachable_tags(&FxHashSet::from([BorTag(1), BorTag(3)]));
+        let child_parent = tree.nodes.get(UniIndex { idx: 2 }).unwrap().parent.unwrap().idx;
+        println!("gc preserve-permission {} {child_parent}",
+            tree.nodes.get(UniIndex { idx: 1 }).is_some());
+    }
+
+    pub fn provenance_fixture() {
+        let specs = [
+            (None, &[1, 2][..]),
+            (Some(0), &[][..]),
+            (Some(0), &[3][..]),
+            (Some(2), &[][..]),
+        ];
+        let tags = [10, 11, 12, 13];
+        let defaults = [Permission::new_disabled(); 4];
+        let nodes = nodes_for_fixture(&specs, &tags, &defaults, &[false, true, true, true]);
+        let mut tree = ActualTree {
+            tag_mapping: TagMapping(HashMap::from([
+                (BorTag(10), UniIndex { idx: 0 }),
+                (BorTag(11), UniIndex { idx: 1 }),
+                (BorTag(12), UniIndex { idx: 2 }),
+                (BorTag(13), UniIndex { idx: 3 }),
+            ])),
+            nodes,
+            locations: super::source_range_map::DedupRangeMap::new(
+                super::Size::from_bytes(0), make_location_tree()),
+            roots: vec![UniIndex { idx: 0 }, UniIndex { idx: 2 }],
+        };
+        let mut visited = Vec::new();
+        tree.visit_provenance(&mut |_alloc_id, tag| {
+            if let Some(tag) = tag { visited.push(tag.0); }
+        });
+        let output = visited.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
+        println!("tree-provenance {output}");
+    }
+
+    // The test harness needs to inspect the source's private fields and call
+    // its private mutation methods, so expose only these harness adapters.
+    pub(super) fn raw_state(
+        permission: Permission,
+        accessed: bool,
+        idempotent_foreign_access: IdempotentForeignAccess,
+    ) -> LocationState {
+        LocationState { permission, accessed, idempotent_foreign_access }
+    }
+
+    pub(super) fn snapshot(
+        state: LocationState,
+    ) -> (Permission, bool, IdempotentForeignAccess, bool) {
+        (state.permission, state.accessed, state.idempotent_foreign_access, state.possible())
+    }
+
+    pub(super) fn perform(
+        state: &mut LocationState,
+        kind: AccessKind,
+        relation: AccessRelatedness,
+        protected: bool,
+    ) -> Result<PermTransition, TransitionError> {
+        state.perform_access(kind, relation, protected)
+    }
+
+    pub(super) fn skip(
+        state: &LocationState,
+        kind: AccessKind,
+        relation: AccessRelatedness,
+    ) -> ContinueTraversal {
+        state.skip_if_known_noop(kind, relation)
+    }
+
+    pub(super) fn record(
+        state: &mut LocationState,
+        kind: AccessKind,
+        relation: AccessRelatedness,
+    ) {
+        state.record_new_access(kind, relation)
+    }
+
+    pub(super) fn new_non_accessed(
+        permission: Permission,
+        sifa: IdempotentForeignAccess,
+    ) -> LocationState {
+        LocationState::new_non_accessed(permission, sifa)
+    }
+
+    pub(super) fn new_accessed(
+        permission: Permission,
+        sifa: IdempotentForeignAccess,
+    ) -> LocationState {
+        LocationState::new_accessed(permission, sifa)
+    }
+}
+
+use source_permissions::Permission;
+use foreign_access_skipping::IdempotentForeignAccess;
+use wildcard::WildcardAccessLevel;
+
+// Permission's fields are private in the source, so enumerate the canonical
+// constructors together with their stable comparison labels.
+fn permissions() -> [(&'static str, Permission); 7] {
+    [
+        ("c", Permission::new_cell()),
+        ("r0", Permission::new_reserved_frz()),
+        // The second ReservedFrz value is obtained by applying a protected
+        // foreign read to an unconflicted reservation.
+        ("r1", Permission::perform_access(
+            Read,
+            ForeignAccess,
+            Permission::new_reserved_frz(),
+            true,
+        ).unwrap().applied(Permission::new_reserved_frz()).unwrap()),
+        ("ri", Permission::new_reserved_im()),
+        ("u", Permission::new_unique()),
+        ("f", Permission::new_frozen()),
+        ("d", Permission::new_disabled()),
+    ]
+}
+
+fn access_code(access: Option<AccessKind>) -> &'static str {
+    match access {
+        None => "none",
+        Some(Read) => "r",
+        Some(Write) => "w",
+    }
+}
+
+fn idempotent_code(access: IdempotentForeignAccess) -> &'static str {
+    match access {
+        IdempotentForeignAccess::None => "n",
+        IdempotentForeignAccess::Read => "r",
+        IdempotentForeignAccess::Write => "w",
+    }
+}
+
+fn relatedness_code(relatedness: AccessRelatedness) -> &'static str {
+    match relatedness {
+        LocalAccess => "l",
+        ForeignAccess => "x",
+    }
+}
+
+fn location_snapshot_code(
+    state: source_location::LocationState,
+    permission_list: [(&'static str, Permission); 7],
+) -> String {
+    let (permission, accessed, sifa, possible) = source_location::snapshot(state);
+    format!(
+        "{} {} {} {}",
+        permission_list.iter().find(|(_, p)| *p == permission).unwrap().0,
+        accessed,
+        idempotent_code(sifa),
+        possible,
+    )
+}
+
+#[derive(Clone)]
+struct VisitorSpec {
+    parent: Option<usize>,
+    children: Vec<usize>,
+}
+
+fn visitor_spec(parent: Option<usize>, children: &[usize]) -> VisitorSpec {
+    VisitorSpec { parent, children: children.to_vec() }
+}
+
+fn check_visitor_tree(name: &str, specs: Vec<VisitorSpec>) {
+    let count = specs.len();
+    for start in 0..count {
+        for visit_children in [false, true] {
+            for skip_mask in 0..(1usize << count) {
+                let mut nodes = unimap::UniValMap::from_vec(
+                    specs
+                        .iter()
+                        .map(|spec| Some(tree::Node::for_visitor(
+                            spec.parent.map(|idx| unimap::UniIndex { idx }),
+                            spec.children.iter().copied()
+                                .map(|idx| unimap::UniIndex { idx }).collect(),
+                        )))
+                        .collect(),
+                );
+                let mut events = Vec::new();
+                let root = if visit_children {
+                    tree_visitor::TreeVisitor { nodes: &mut nodes, data: &mut events }
+                        .traverse_this_parents_children_other(
+                            unimap::UniIndex { idx: start },
+                            |args| {
+                                if skip_mask & (1usize << args.idx.idx) != 0 {
+                                    tree_visitor::ContinueTraversal::SkipSelfAndChildren
+                                } else {
+                                    tree_visitor::ContinueTraversal::Recurse
+                                }
+                            },
+                            |args| {
+                                args.data.push((args.idx.idx, args.rel_pos));
+                                Ok::<(), ()>(())
+                            },
+                        )
+                        .unwrap()
+                } else {
+                    tree_visitor::TreeVisitor { nodes: &mut nodes, data: &mut events }
+                        .traverse_nonchildren(
+                            unimap::UniIndex { idx: start },
+                            |args| {
+                                if skip_mask & (1usize << args.idx.idx) != 0 {
+                                    tree_visitor::ContinueTraversal::SkipSelfAndChildren
+                                } else {
+                                    tree_visitor::ContinueTraversal::Recurse
+                                }
+                            },
+                            |args| {
+                                args.data.push((args.idx.idx, args.rel_pos));
+                                Ok::<(), ()>(())
+                            },
+                        )
+                        .unwrap()
+                };
+                let trace = events
+                    .iter()
+                    .map(|(idx, relatedness)| {
+                        format!("{}{}", idx, if relatedness.is_foreign() { "x" } else { "l" })
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                println!(
+                    "tree-walk {name} {start} {} {skip_mask} {} {trace}",
+                    if visit_children { "children" } else { "nonchildren" },
+                    root.idx,
+                );
+            }
+        }
+    }
+}
+
+fn check_visitor_schedules() {
+    check_visitor_tree(
+        "chain3",
+        vec![
+            visitor_spec(None, &[1]),
+            visitor_spec(Some(0), &[2]),
+            visitor_spec(Some(1), &[]),
+        ],
+    );
+    check_visitor_tree(
+        "branch6",
+        vec![
+            visitor_spec(None, &[1, 2]),
+            visitor_spec(Some(0), &[3, 4]),
+            visitor_spec(Some(0), &[5]),
+            visitor_spec(Some(1), &[]),
+            visitor_spec(Some(1), &[]),
+            visitor_spec(Some(2), &[]),
+        ],
+    );
+}
+
+fn check_normal_tree_access(
+    name: &str,
+    specs: Vec<VisitorSpec>,
+    defaults: Vec<source_location::LocationState>,
+    mut states: Vec<Option<source_location::LocationState>>,
+    protected_nodes: &[usize],
+    start: usize,
+    kind: AccessKind,
+    visit_children: bool,
+    emit_output: bool,
+    permission_list: [(&'static str, Permission); 7],
+) -> (Vec<Option<source_location::LocationState>>, usize, String, Vec<String>) {
+    let mut nodes = unimap::UniValMap::from_vec(
+        specs
+            .iter()
+            .map(|spec| Some(tree::Node::for_visitor(
+                spec.parent.map(|idx| unimap::UniIndex { idx }),
+                spec.children.iter().copied()
+                    .map(|idx| unimap::UniIndex { idx }).collect(),
+            )))
+            .collect(),
+    );
+    let get_state = |idx: usize, states: &[Option<source_location::LocationState>]| {
+        states.get(idx).copied().flatten().or_else(|| defaults.get(idx).copied())
+    };
+    let skipped: Vec<bool> = (0..specs.len())
+        .map(|idx| {
+            get_state(idx, &states)
+                .map(|state| {
+                    matches!(
+                        source_location::skip(&state, kind, AccessRelatedness::ForeignAccess),
+                        tree_visitor::ContinueTraversal::SkipSelfAndChildren
+                    )
+                })
+                .unwrap_or(false)
+        })
+        .collect();
+    let mut events = Vec::new();
+    let root = if visit_children {
+        tree_visitor::TreeVisitor { nodes: &mut nodes, data: &mut events }
+            .traverse_this_parents_children_other(
+                unimap::UniIndex { idx: start },
+                |args| if skipped[args.idx.idx] {
+                    tree_visitor::ContinueTraversal::SkipSelfAndChildren
+                } else {
+                    tree_visitor::ContinueTraversal::Recurse
+                },
+                |args| {
+                    args.data.push((args.idx.idx, args.rel_pos));
+                    Ok::<(), ()>(())
+                },
+            )
+            .unwrap()
+    } else {
+        tree_visitor::TreeVisitor { nodes: &mut nodes, data: &mut events }
+            .traverse_nonchildren(
+                unimap::UniIndex { idx: start },
+                |args| if skipped[args.idx.idx] {
+                    tree_visitor::ContinueTraversal::SkipSelfAndChildren
+                } else {
+                    tree_visitor::ContinueTraversal::Recurse
+                },
+                |args| {
+                    args.data.push((args.idx.idx, args.rel_pos));
+                    Ok::<(), ()>(())
+                },
+            )
+            .unwrap()
+    };
+
+    let mut visited = Vec::new();
+    let mut status = "completed".to_owned();
+    for (idx, relatedness) in events {
+        let Some(old_state) = get_state(idx, &states) else {
+            status = format!("missing-{idx}");
+            break;
+        };
+        let mut recorded_state = old_state;
+        if std::panic::catch_unwind(AssertUnwindSafe(|| {
+            source_location::record(&mut recorded_state, kind, relatedness)
+        })).is_err() {
+            status = format!("record-assert-{idx}");
+            break;
+        }
+        let is_protected = protected_nodes.contains(&idx);
+        let access = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            source_location::perform(&mut recorded_state, kind, relatedness, is_protected)
+        }));
+        states[idx] = Some(recorded_state);
+        visited.push(format!("{idx}{}", if relatedness.is_foreign() { "x" } else { "l" }));
+        match access {
+            Err(_) => {
+                status = format!("assert-{idx}");
+                break;
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(source_location::TransitionError::ChildAccessForbidden(_))) => {
+                status = format!("child-forbidden-{idx}");
+                break;
+            }
+            Ok(Err(source_location::TransitionError::ProtectedDisabled(_))) => {
+                status = format!("protected-disabled-{idx}");
+                break;
+            }
+            Ok(Err(source_location::TransitionError::ProtectedDealloc)) => {
+                status = format!("protected-dealloc-{idx}");
+                break;
+            }
+        }
+    }
+    let state_output = states.iter().map(|state| match state {
+        None => "-".to_owned(),
+        Some(state) => location_snapshot_code(*state, permission_list),
+    }).collect::<Vec<_>>().join("|");
+    if emit_output {
+        println!(
+            "normal-access {name} {start} {} {} {} {} {} {state_output}",
+            if visit_children { "children" } else { "nonchildren" },
+            if matches!(kind, Read) { "r" } else { "w" },
+            root.idx,
+            status,
+            visited.join(","),
+        );
+    }
+    (states, root.idx, status, visited)
+}
+
+fn check_normal_tree_accesses(permission_list: [(&'static str, Permission); 7]) {
+    let specs = vec![
+        visitor_spec(None, &[1, 2]),
+        visitor_spec(Some(0), &[3, 4]),
+        visitor_spec(Some(0), &[5]),
+        visitor_spec(Some(1), &[]),
+        visitor_spec(Some(1), &[]),
+        visitor_spec(Some(2), &[]),
+    ];
+    let reserved = source_location::new_non_accessed(Permission::new_reserved_frz(), IdempotentForeignAccess::None);
+    let unique = source_location::new_accessed(Permission::new_unique(), IdempotentForeignAccess::None);
+    let frozen = source_location::new_accessed(Permission::new_frozen(), IdempotentForeignAccess::None);
+    let branch_defaults = || vec![unique, reserved, reserved, reserved, reserved, reserved];
+
+    let mut child_forbidden = vec![None; 6];
+    child_forbidden[1] = Some(frozen);
+    check_normal_tree_access(
+        "child-forbidden", specs.clone(), branch_defaults(), child_forbidden,
+        &[], 3, Write, true, true, permission_list,
+    );
+
+    let mut protected_disable = vec![None; 6];
+    protected_disable[4] = Some(unique);
+    check_normal_tree_access(
+        "protected-disabled", specs.clone(), branch_defaults(), protected_disable,
+        &[4], 3, Write, true, true, permission_list,
+    );
+
+    check_normal_tree_access(
+        "latent-disabled", specs.clone(), branch_defaults(), vec![None; 6],
+        &[4], 3, Write, true, true, permission_list,
+    );
+
+    let mut skipped_frozen = vec![None; 6];
+    skipped_frozen[2] = Some(frozen);
+    check_normal_tree_access(
+        "skip-frozen-read", specs, branch_defaults(), skipped_frozen,
+        &[], 3, Read, true, true, permission_list,
+    );
+
+    let two_node_specs = vec![
+        visitor_spec(None, &[1]),
+        visitor_spec(Some(0), &[]),
+    ];
+    let root_unique = source_location::new_accessed(
+        Permission::new_unique(), IdempotentForeignAccess::None);
+    let child_frozen = source_location::new_non_accessed(
+        Permission::new_frozen(), IdempotentForeignAccess::Read);
+    check_normal_tree_access(
+        "actual-tree-write-frozen-child", two_node_specs,
+        vec![root_unique, child_frozen], vec![None, None],
+        &[], 0, Write, true, true, permission_list,
+    );
+}
+
+fn check_ranged_normal_tree_access(permission_list: [(&'static str, Permission); 7]) {
+    let specs = vec![
+        visitor_spec(None, &[1, 2]),
+        visitor_spec(Some(0), &[3, 4]),
+        visitor_spec(Some(0), &[5]),
+        visitor_spec(Some(1), &[]),
+        visitor_spec(Some(1), &[]),
+        visitor_spec(Some(2), &[]),
+    ];
+    let reserved = source_location::new_non_accessed(Permission::new_reserved_frz(), IdempotentForeignAccess::None);
+    let unique = source_location::new_accessed(Permission::new_unique(), IdempotentForeignAccess::None);
+    let defaults = vec![unique, reserved, reserved, reserved, reserved, reserved];
+    let mut locations = source_range_map::DedupRangeMap::new(
+        Size::from_bytes(3),
+        vec![None; 6],
+    );
+    let mut processed = Vec::new();
+    locations.iter_mut(Size::from_bytes(1), Size::from_bytes(1)).for_each(|(range, states)| {
+        let (next, root, status, events) = check_normal_tree_access(
+            "ranged-inner", specs.clone(), defaults.clone(), states.clone(),
+            &[], 3, Write, true, false, permission_list,
+        );
+        *states = next;
+        let state_output = states.iter().map(|state| match state {
+            None => "-".to_owned(),
+            Some(state) => location_snapshot_code(*state, permission_list),
+        }).collect::<Vec<_>>().join("|");
+        processed.push(format!(
+            "{}:{}:{root}:{status}:{}:{state_output}",
+            range.start, range.end, events.join(","),
+        ));
+    });
+    let segments = locations.iter_all().map(|(range, states)| {
+        let state_output = states.iter().map(|state| match state {
+            None => "-".to_owned(),
+            Some(state) => location_snapshot_code(*state, permission_list),
+        }).collect::<Vec<_>>().join("|");
+        format!("{}:{}={state_output}", range.start, range.end)
+    }).collect::<Vec<_>>().join("|");
+    println!("ranged-access one-byte 1 1 completed {} {segments}", processed.join("|"));
+}
+
+fn check_ranged_error_stops_suffix(permission_list: [(&'static str, Permission); 7]) {
+    let specs = vec![
+        visitor_spec(None, &[1, 2]),
+        visitor_spec(Some(0), &[3, 4]),
+        visitor_spec(Some(0), &[5]),
+        visitor_spec(Some(1), &[]),
+        visitor_spec(Some(1), &[]),
+        visitor_spec(Some(2), &[]),
+    ];
+    let reserved = source_location::new_non_accessed(Permission::new_reserved_frz(), IdempotentForeignAccess::None);
+    let unique = source_location::new_accessed(Permission::new_unique(), IdempotentForeignAccess::None);
+    let defaults = vec![unique, reserved, reserved, reserved, reserved, reserved];
+    let mut locations = source_range_map::DedupRangeMap::new(
+        Size::from_bytes(3),
+        vec![None; 6],
+    );
+    let frozen = source_location::new_accessed(Permission::new_frozen(), IdempotentForeignAccess::None);
+    locations.iter_mut(Size::from_bytes(1), Size::from_bytes(1)).for_each(|(_, states)| {
+        states[3] = Some(frozen);
+    });
+
+    let mut processed = Vec::new();
+    let mut access_failure = "completed".to_owned();
+    for (range, states) in locations.iter_mut(Size::from_bytes(0), Size::from_bytes(3)) {
+        let range_start = range.start;
+        let range_end = range.end;
+        let (next, root, status, events) = check_normal_tree_access(
+            "ranged-error-inner", specs.clone(), defaults.clone(), states.clone(),
+            &[], 3, Write, true, false, permission_list,
+        );
+        *states = next;
+        let state_output = states.iter().map(|state| match state {
+            None => "-".to_owned(),
+            Some(state) => location_snapshot_code(*state, permission_list),
+        }).collect::<Vec<_>>().join("|");
+        processed.push(format!(
+            "{range_start}:{range_end}:{root}:{status}:{}:{state_output}",
+            events.join(","),
+        ));
+        if status != "completed" {
+            access_failure = format!("access-failure:{range_start}:{range_end}:{status}");
+            break;
+        }
+    }
+    let segments = locations.iter_all().map(|(range, states)| {
+        let state_output = states.iter().map(|state| match state {
+            None => "-".to_owned(),
+            Some(state) => location_snapshot_code(*state, permission_list),
+        }).collect::<Vec<_>>().join("|");
+        format!("{}:{}={state_output}", range.start, range.end)
+    }).collect::<Vec<_>>().join("|");
+    println!(
+        "ranged-access failure-stop 0 3 {access_failure} {} {segments}",
+        processed.join("|"),
+    );
+}
+
+fn wildcard_code(level: WildcardAccessLevel) -> &'static str {
+    match level {
+        WildcardAccessLevel::None => "n",
+        WildcardAccessLevel::Read => "r",
+        WildcardAccessLevel::Write => "w",
+    }
+}
+
+fn check_source_wildcard_accesses(permission_list: [(&'static str, Permission); 7]) {
+    use source_location::{LocationTree, access_fixture, make_location_tree, nodes_for_fixture,
+        gc_fixtures, lifecycle_fixtures, new_accessed, put_exposure, put_state, tree_access_fixture};
+    use wildcard::WildcardAccessLevel as Level;
+
+    let root_only = [(None, &[][..])];
+    let mut nodes = nodes_for_fixture(&root_only, &[1], &[Permission::new_frozen()], &[false]);
+    let mut location = make_location_tree();
+    access_fixture("no-exposed-main", &mut nodes, 0, Read, false, &mut location);
+
+    let mut nodes = nodes_for_fixture(
+        &root_only, &[1], &[Permission::new_reserved_frz()], &[false]);
+    let mut location = make_location_tree();
+    access_fixture("wildcard-virtual-foreign", &mut nodes, 0, Read, true, &mut location);
+
+    let parent_child = [(None, &[1][..]), (Some(0), &[][..])];
+    let mut nodes = nodes_for_fixture(
+        &parent_child,
+        &[1, 2],
+        &[Permission::new_frozen(), Permission::new_reserved_im()],
+        &[false, true],
+    );
+    let mut location = make_location_tree();
+    put_state(&mut location, 1, new_accessed(Permission::new_unique(), IdempotentForeignAccess::None));
+    put_exposure(&mut location, &nodes, 1, Level::Write);
+    access_fixture("child-exposed-write", &mut nodes, 0, Write, false, &mut location);
+
+    let mut nodes = nodes_for_fixture(
+        &parent_child,
+        &[1, 2],
+        &[Permission::new_frozen(), Permission::new_frozen()],
+        &[true, true],
+    );
+    let mut location = make_location_tree();
+    put_exposure(&mut location, &nodes, 0, Level::Read);
+    put_exposure(&mut location, &nodes, 1, Level::Read);
+    access_fixture("either-read", &mut nodes, 0, Read, false, &mut location);
+
+    let two_roots = [(None, &[][..]), (None, &[][..])];
+    let mut nodes = nodes_for_fixture(
+        &two_roots,
+        &[1, 2],
+        &[Permission::new_disabled(), Permission::new_reserved_frz()],
+        &[false, true],
+    );
+    let mut location = make_location_tree();
+    put_state(&mut location, 0, new_accessed(Permission::new_unique(), IdempotentForeignAccess::None));
+    put_exposure(&mut location, &nodes, 1, Level::Read);
+    tree_access_fixture("concrete-to-wildcard", &mut nodes, &[0, 1], Some(0),
+        Read, true, &mut location);
+
+    let mut nodes = nodes_for_fixture(
+        &two_roots,
+        &[1, 2],
+        &[Permission::new_frozen(), Permission::new_reserved_frz()],
+        &[true, true],
+    );
+    let mut location = make_location_tree();
+    put_exposure(&mut location, &nodes, 0, Level::Read);
+    put_exposure(&mut location, &nodes, 1, Level::Read);
+    tree_access_fixture("wildcard-provenance", &mut nodes, &[0, 1], None,
+        Read, true, &mut location);
+    lifecycle_fixtures();
+    gc_fixtures();
+    source_location::provenance_fixture();
+    let _ = permission_list;
+}
+
+fn ordering_code(ordering: Option<std::cmp::Ordering>) -> &'static str {
+    match ordering {
+        None => "incomparable",
+        Some(std::cmp::Ordering::Less) => "less",
+        Some(std::cmp::Ordering::Equal) => "equal",
+        Some(std::cmp::Ordering::Greater) => "greater",
+    }
+}
+
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+    let permission_list = permissions();
+
+    check_source_wildcard_accesses(permission_list);
+
+    for (code, permission) in permission_list {
+        println!(
+            "meta {code} {} {} {} {} {} {}",
+            permission.is_initial(),
+            permission.is_disabled(),
+            permission.is_frozen(),
+            permission.is_cell(),
+            permission.is_unique(),
+            access_code(permission.associated_access()),
+        );
+        for protected in [false, true] {
+            let local = permission.strongest_allowed_local_access(protected);
+            let foreign = catch_unwind(AssertUnwindSafe(|| {
+                permission.strongest_idempotent_foreign_access(protected)
+            }));
+            let foreign = match foreign {
+                Ok(access) => idempotent_code(access).to_owned(),
+                Err(_) => "assert".to_owned(),
+            };
+            println!(
+                "strong {code} {} {} {foreign}",
+                if protected { 1 } else { 0 },
+                wildcard_code(local),
+            );
+        }
+    }
+
+    for (left_code, left) in permission_list {
+        for (right_code, right) in permission_list {
+            println!(
+                "compare {left_code} {right_code} {}",
+                ordering_code(left.partial_cmp(&right)),
+            );
+        }
+    }
+
+    for (parent_code, parent) in permission_list {
+        for (child_code, child) in permission_list {
+            println!(
+                "replace {parent_code} {child_code} {}",
+                parent.can_be_replaced_by_child(child),
+            );
+        }
+    }
+
+    let accesses = [IdempotentForeignAccess::None, IdempotentForeignAccess::Read, IdempotentForeignAccess::Write];
+    for recorded in accesses {
+        for happening_next in accesses {
+            let can_skip = catch_unwind(AssertUnwindSafe(|| {
+                recorded.can_skip_foreign_access(happening_next)
+            }));
+            let can_skip = match can_skip {
+                Ok(value) => value.to_string(),
+                Err(_) => "assert".to_owned(),
+            };
+            println!("skip {} {} {can_skip}", idempotent_code(recorded), idempotent_code(happening_next));
+            let mut recorded_value = recorded;
+            recorded_value.record_new(happening_next);
+            println!("record {} {} {}", idempotent_code(recorded), idempotent_code(happening_next), idempotent_code(recorded_value));
+            let mut weakened_value = recorded;
+            let was_weakened = weakened_value.ensure_no_stronger_than(happening_next);
+            println!(
+                "weaken {} {} {} {}",
+                idempotent_code(recorded),
+                idempotent_code(happening_next),
+                idempotent_code(weakened_value),
+                was_weakened,
+            );
+        }
+    }
+
+    for access in accesses {
+        println!("flags {} {} {}", idempotent_code(access), access.is_local(), access.is_foreign());
+    }
+    for kind in [Read, Write] {
+        println!(
+            "from-foreign {} {}",
+            if matches!(kind, Read) { "r" } else { "w" },
+            idempotent_code(IdempotentForeignAccess::from_foreign(kind)),
+        );
+    }
+    for kind in [Read, Write] {
+        for level in [WildcardAccessLevel::None, WildcardAccessLevel::Read, WildcardAccessLevel::Write] {
+            println!("allows {} {} {}", wildcard_code(level), if matches!(kind, Read) { "r" } else { "w" }, level.allows(kind));
+        }
+    }
+    for kind in [Read, Write] {
+        for relation in [LocalAccess, ForeignAccess] {
+            println!(
+                "from-access {} {} {}",
+                if matches!(kind, Read) { "r" } else { "w" },
+                if matches!(relation, LocalAccess) { "l" } else { "x" },
+                idempotent_code(IdempotentForeignAccess::from_acc_and_rel(kind, relation)),
+            );
+        }
+    }
+
+    let kinds = [Read, Write];
+    let relatednesses = [LocalAccess, ForeignAccess];
+    for (code, permission) in permission_list {
+        for kind in kinds {
+            for rel_pos in relatednesses {
+                for protected in [false, true] {
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        Permission::perform_access(kind, rel_pos, permission, protected)
+                    }));
+                    let outcome = match result {
+                        Ok(Some(transition)) => {
+                            let (next, is_noop, produces_disabled, is_possible) = source_permissions::transition_facts(transition, permission).unwrap();
+                            let mut applied = String::new();
+                            for (_, start) in permission_list {
+                                let value = transition.applied(start).map(|p| {
+                                    permission_list.iter().find(|(_, q)| *q == p).unwrap().0
+                                }).unwrap_or("-");
+                                applied.push_str(value);
+                                applied.push(',');
+                            }
+                            format!(
+                                "s:{}:{}:{}:{}:{}",
+                                permission_list.iter().find(|(_, p)| *p == next).unwrap().0,
+                                is_noop,
+                                produces_disabled,
+                                is_possible,
+                                applied,
+                            )
+                        }
+                        Ok(None) => "ub".to_owned(),
+                        Err(_) => "assert".to_owned(),
+                    };
+                    println!(
+                        "transition {code} {} {} {} {outcome}",
+                        if matches!(kind, Read) { "r" } else { "w" },
+                        if matches!(rel_pos, LocalAccess) { "l" } else { "x" },
+                        if protected { 1 } else { 0 },
+                    );
+                }
+            }
+        }
+    }
+
+    for (permission_code, permission) in permission_list {
+        for accessed in [false, true] {
+            for sifa in accesses {
+                let state = source_location::raw_state(permission, accessed, sifa);
+                println!("location {permission_code} {accessed} {} {}", idempotent_code(sifa), source_location::snapshot(state).3);
+            }
+        }
+    }
+
+    for (permission_code, permission) in permission_list {
+        for sifa in accesses {
+            let non_accessed = catch_unwind(AssertUnwindSafe(|| {
+                source_location::new_non_accessed(permission, sifa)
+            }));
+            let non_accessed = match non_accessed {
+                Ok(state) => location_snapshot_code(state, permission_list),
+                Err(_) if !permission.is_initial() && !permission.is_disabled() => "assert_initial".to_owned(),
+                Err(_) => "assert_unique".to_owned(),
+            };
+            println!("new-non-accessed {permission_code} {} {non_accessed}", idempotent_code(sifa));
+            let accessed = source_location::new_accessed(permission, sifa);
+            println!("new-accessed {permission_code} {} {}", idempotent_code(sifa), location_snapshot_code(accessed, permission_list));
+        }
+    }
+
+    for (permission_code, permission) in permission_list {
+        for accessed in [false, true] {
+            for sifa in accesses {
+                for kind in [Read, Write] {
+                    for relatedness in [LocalAccess, ForeignAccess] {
+                        let state = source_location::raw_state(permission, accessed, sifa);
+                        let skip = source_location::skip(&state, kind, relatedness);
+                        let skip_code = match skip {
+                            tree_visitor::ContinueTraversal::Recurse => "recurse",
+                            tree_visitor::ContinueTraversal::SkipSelfAndChildren => "skip",
+                        };
+                        println!(
+                            "location-skip {permission_code} {accessed} {} {} {} {skip_code}",
+                            idempotent_code(sifa),
+                            if matches!(kind, Read) { "r" } else { "w" },
+                            relatedness_code(relatedness),
+                        );
+
+                        let mut record_state = state;
+                        let record_result = catch_unwind(AssertUnwindSafe(|| {
+                            source_location::record(&mut record_state, kind, relatedness)
+                        }));
+                        let record_code = if record_result.is_err() {
+                            "assert".to_owned()
+                        } else {
+                            location_snapshot_code(record_state, permission_list)
+                        };
+                        println!(
+                            "location-record {permission_code} {accessed} {} {} {} {record_code}",
+                            idempotent_code(sifa),
+                            if matches!(kind, Read) { "r" } else { "w" },
+                            relatedness_code(relatedness),
+                        );
+
+                        for protected in [false, true] {
+                            let mut access_state = state;
+                            let result = catch_unwind(AssertUnwindSafe(|| {
+                                source_location::perform(&mut access_state, kind, relatedness, protected)
+                            }));
+                            let result_code = match result {
+                                Ok(Ok(transition)) => {
+                                    let facts = source_permissions::transition_facts(transition, permission).unwrap();
+                                    format!(
+                                        "ok:{}:{}:{}:{}",
+                                        permission_list.iter().find(|(_, p)| *p == facts.0).unwrap().0,
+                                        facts.1,
+                                        facts.2,
+                                        facts.3,
+                                    )
+                                }
+                                Ok(Err(source_location::TransitionError::ChildAccessForbidden(old))) => {
+                                    format!("child-forbidden:{}", permission_list.iter().find(|(_, p)| *p == old).unwrap().0)
+                                }
+                                Ok(Err(source_location::TransitionError::ProtectedDisabled(old))) => {
+                                    format!("protected-disabled:{}", permission_list.iter().find(|(_, p)| *p == old).unwrap().0)
+                                }
+                                Ok(Err(source_location::TransitionError::ProtectedDealloc)) => "protected-dealloc".to_owned(),
+                                Err(_) => "assert".to_owned(),
+                            };
+                            println!(
+                                "location-perform {permission_code} {accessed} {} {} {} {} {result_code} {}",
+                                idempotent_code(sifa),
+                                if matches!(kind, Read) { "r" } else { "w" },
+                                relatedness_code(relatedness),
+                                if protected { 1 } else { 0 },
+                                location_snapshot_code(access_state, permission_list),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    check_visitor_schedules();
+    check_normal_tree_accesses(permission_list);
+    check_ranged_normal_tree_access(permission_list);
+    check_ranged_error_stops_suffix(permission_list);
+}

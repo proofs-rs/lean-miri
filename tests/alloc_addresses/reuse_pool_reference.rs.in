@@ -1,0 +1,100 @@
+use concurrency::VClock;
+use source::ReusePool;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+struct ChoiceRng {
+    booleans: Vec<bool>,
+    indices: Vec<usize>,
+    bool_index: usize,
+    range_index: usize,
+}
+impl ChoiceRng {
+    fn new(booleans: Vec<bool>, indices: Vec<usize>) -> Self {
+        Self { booleans, indices, bool_index: 0, range_index: 0 }
+    }
+}
+impl Rng for ChoiceRng {
+    fn random_bool(&mut self, probability: f64) -> bool {
+        let choice = self.booleans[self.bool_index];
+        self.bool_index += 1;
+        assert!((choice && probability > 0.0) || (!choice && probability < 1.0));
+        choice
+    }
+    fn random_range(&mut self, range: std::ops::Range<usize>) -> usize {
+        let choice = self.indices[self.range_index];
+        self.range_index += 1;
+        assert!(range.contains(&choice));
+        choice
+    }
+}
+
+fn config(reuse: f64, cross: f64) -> MiriConfig {
+    MiriConfig { address_reuse_rate: reuse, address_reuse_cross_thread_rate: cross }
+}
+fn emit_add(pool: &mut ReusePool, tag: &str, choice: bool, address: u64, size: u64,
+            align: u64, kind: MemoryKind, thread: u32, clock: u64) {
+    let mut rng = ChoiceRng::new(vec![choice], vec![]);
+    pool.add_addr(&mut rng, address, Size(size), Align(align), kind, thread,
+        || VClock(clock));
+    println!("A {tag} {} {}", pool.rate_snapshot(), pool.snapshot());
+}
+fn emit_take(pool: &mut ReusePool, tag: &str, bools: Vec<bool>, index: usize,
+             size: u64, align: u64, kind: MemoryKind, thread: u32) {
+    let mut rng = ChoiceRng::new(bools, vec![index]);
+    let caught = catch_unwind(AssertUnwindSafe(||
+        pool.take_addr(&mut rng, Size(size), Align(align), kind, thread)));
+    let result = match caught {
+        Err(_) => "P".to_owned(),
+        Ok(None) => "none".to_owned(),
+        Ok(Some((address, None))) => format!("{address}:same"),
+        Ok(Some((address, Some(clock)))) => format!("{address}:clock{}", clock.0),
+    };
+    println!("T {tag} {result} {}", pool.snapshot());
+}
+
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+    let mut pool = ReusePool::new(&config(0.5, 0.5));
+    emit_add(&mut pool, "size8-thread0", true, 100, 8, 4, MemoryKind::Other, 0, 11);
+    emit_add(&mut pool, "size8-thread1", true, 200, 8, 4, MemoryKind::Other, 1, 22);
+    emit_add(&mut pool, "size4-thread0", true, 300, 4, 4, MemoryKind::Other, 0, 33);
+    emit_add(&mut pool, "align8-thread0", true, 400, 8, 8, MemoryKind::Other, 0, 44);
+    emit_add(&mut pool, "stack-ignored", true, 500, 8, 4, MemoryKind::Stack, 0, 55);
+
+    emit_take(&mut pool, "cross-thread", vec![true, true], 2,
+        8, 4, MemoryKind::Other, 2);
+    emit_take(&mut pool, "same-thread", vec![true, false], 1,
+        8, 4, MemoryKind::Other, 0);
+    emit_take(&mut pool, "wrong-size", vec![true, true], 0,
+        16, 4, MemoryKind::Other, 0);
+    emit_take(&mut pool, "empty-subpool", vec![true, true], 0,
+        8, 16, MemoryKind::Other, 0);
+    emit_take(&mut pool, "stack-take", vec![], 0,
+        8, 4, MemoryKind::Stack, 0);
+
+    let mut skipped = ReusePool::new(&config(0.5, 0.5));
+    emit_add(&mut skipped, "random-skip", false, 600, 8, 4,
+        MemoryKind::Other, 0, 66);
+
+    let mut bad_alignment = ReusePool::new(&config(1.0, 0.0));
+    emit_add(&mut bad_alignment, "bad-alignment-add", true, 101, 8,
+        2, MemoryKind::Other, 0, 77);
+    emit_take(&mut bad_alignment, "bad-alignment-take", vec![true, false], 0,
+        8, 2, MemoryKind::Other, 0);
+
+    let mut shortage = ReusePool::new(&config(0.5, 0.1));
+    println!("S before-shortage {}", shortage.rate_snapshot());
+    shortage.address_space_shortage();
+    println!("S after-shortage {}", shortage.rate_snapshot());
+    let mut disabled = ReusePool::new(&config(0.0, 0.1));
+    disabled.address_space_shortage();
+    println!("S disabled-shortage {}", disabled.rate_snapshot());
+
+    let mut capped = ReusePool::new(&config(1.0, 0.0));
+    for size in 1..=65 {
+        let mut rng = ChoiceRng::new(vec![true], vec![]);
+        capped.add_addr(&mut rng, 1000 + size, Size(size), Align(1),
+            MemoryKind::Other, 0, || VClock(0));
+    }
+    println!("C cap-final {}", capped.snapshot());
+}

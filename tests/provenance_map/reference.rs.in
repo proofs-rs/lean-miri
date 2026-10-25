@@ -1,0 +1,82 @@
+use std::{fmt,num::NonZero,panic::{catch_unwind,AssertUnwindSafe}};
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+enum MiriProv {Concrete(u64), Wildcard}
+impl Provenance for MiriProv {
+    const OFFSET_IS_ADDR:bool=true;
+    const WILDCARD:Option<Self>=Some(Self::Wildcard);
+    fn get_alloc_id(self)->Option<AllocId>{match self{Self::Concrete(id)=>Some(AllocId(NonZero::new(id).unwrap())),Self::Wildcard=>None}}
+    fn fmt(_: &Pointer<Self>,f:&mut fmt::Formatter<'_>)->fmt::Result{write!(f,"test-pointer")}
+}
+trait Code: Provenance {fn code(self)->String;}
+impl Code for MiriProv {fn code(self)->String{match self{Self::Concrete(id)=>format!("c{id}"),Self::Wildcard=>"w".into()}}}
+impl Code for CtfeProvenance {fn code(self)->String{format!("c{}",self.alloc_id().0.get())}}
+fn normal<T:ToString>(f:impl FnOnce()->T)->String{
+    match catch_unwind(AssertUnwindSafe(f)){Ok(x)=>x.to_string(),Err(_)=>"panic".into()}
+}
+fn snapshot<Prov:Code>(map:&source::ProvenanceMap<Prov>)->String{
+    let (ptrs,frags)=source::snapshot(map);
+    let ptrs=ptrs.into_iter().map(|(s,p)|format!("{s}:{}",p.code())).collect::<Vec<_>>().join(",");
+    let frags=match frags{None=>"none".into(),Some(values)=>format!("some[{}]",values.into_iter().map(|(s,i,p,b)|format!("{s}:{i}:{}:{}",p.code(),b.iter().map(|b|b.to_string()).collect::<Vec<_>>().join("."))).collect::<Vec<_>>().join(","))};
+    format!("p[{ptrs}]b[{frags}]")
+}
+fn run<Prov:Code>(flavor:&str,mk:impl Fn(u64)->Prov){
+    let cx=TargetDataLayout::default();
+    assert_eq!(cx.pointer_size().bytes(),8);
+    for scenario in 0..11u64{
+        let mut ptrs=Vec::new();
+        let mut frags=None;
+        if scenario==1 || scenario==2 || scenario==10 {ptrs.push((8,mk(1)));}
+        if scenario==2{ptrs.push((24,mk(2)));}
+        if (3..=9).contains(&scenario){
+            let mut values=Vec::new();
+            for idx in 0..8u8{
+                if scenario==4 && idx>=4{break;}
+                let mut prov=if scenario==5 && idx==3 {mk(2)}else{mk(1)};
+                if scenario==8 || (scenario==9 && idx%2==0){if let Some(w)=Prov::WILDCARD{prov=w;}}
+                let index=if scenario==6 && idx==4 {0}else{idx};
+                let mut bytes=[0u8;8];
+                if scenario==7 && idx==2{bytes[0]=1;}
+                values.push((8+u64::from(idx),index,prov,bytes));
+            }
+            frags=Some(values);
+        }
+        if scenario==10{frags=Some(vec![(0,0,mk(2),[0;8])]);}
+        let map=source::fixture(ptrs,frags);
+        for offset in [0u64,7,8,9,15,16,24,25]{
+            let read=normal(|| match map.read_ptr(Size::from_bytes(offset),&cx){Ok(Some(p))=>p.code(),Ok(None)=>"none".into(),Err(_)=>"partial".into()});
+            println!("read {flavor} {scenario} {offset} {read}");
+            for len in [0u64,1,7,8,9]{
+                let range=alloc_range(Size::from_bytes(offset),Size::from_bytes(len));
+                let empty=normal(||map.range_empty(range,&cx));
+                let entries=normal(||map.get_range(range,&cx).map(|(r,p)|format!("{}:{}:{}",r.start.bytes(),r.size.bytes(),p.code())).collect::<Vec<_>>().join(","));
+                println!("range {flavor} {scenario} {offset} {len} {empty} {entries}");
+            }
+        }
+        let data=(0..64u8).collect::<Vec<_>>();
+        let mut merged=map.clone();
+        let result=normal(||merged.merge_bytes(&cx));
+        println!("merge {flavor} {scenario} {result} {}",snapshot(&merged));
+        for offset in [0u64,7,8,9,15,16,24,25]{
+            for len in [0u64,1,7,8,9]{
+                for operation in ["clear","wildcard"]{
+                    let mut next=map.clone();
+                    let range=alloc_range(Size::from_bytes(offset),Size::from_bytes(len));
+                    let result=normal(||{if operation=="clear"{next.clear(range,&data,&cx)}else{next.write_wildcards(&cx,&data,range)};"ok"});
+                    println!("mutate {flavor} {scenario} {operation} {offset} {len} {result} {}",snapshot(&next));
+                }
+                for repeats in [0u64,1,2]{
+                    let mut next=source::ProvenanceMap::<Prov>::new();
+                    let range=alloc_range(Size::from_bytes(offset),Size::from_bytes(len));
+                    let target=alloc_range(Size::from_bytes(40),Size::from_bytes(len));
+                    let result=normal(||{let copy=map.prepare_copy(range,&data,&cx);next.apply_copy(copy,target,repeats);"ok"});
+                    println!("copy {flavor} {scenario} {offset} {len} {repeats} {result} {}",snapshot(&next));
+                }
+            }
+        }
+    }
+}
+fn main(){
+    std::panic::set_hook(Box::new(|_|{}));
+    run("m",MiriProv::Concrete);
+    run("c",|id|CtfeProvenance::from(AllocId(NonZero::new(id).unwrap())));
+}

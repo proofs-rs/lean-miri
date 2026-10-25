@@ -1,0 +1,135 @@
+use source::{AccessType, RangeObjectMap};
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+fn caught<T>(f: impl FnOnce() -> T) -> Result<T, ()> {
+    catch_unwind(AssertUnwindSafe(f)).map_err(|_| ())
+}
+
+fn values(map: &RangeObjectMap<u8>) -> String {
+    map.iter().map(|value| value.to_string()).collect::<Vec<_>>().join(",")
+}
+
+fn emit_access(tag: &str, map: &RangeObjectMap<u8>, start: u64, size: u64) {
+    let range = alloc_range(Size::from_bytes(start), Size::from_bytes(size));
+    let result = caught(|| map.access_type(range));
+    let value = match result {
+        Err(()) => "P".to_owned(),
+        Ok(AccessType::PerfectlyOverlapping(position)) => format!("P{position}"),
+        Ok(AccessType::Empty(position)) => format!("E{position}"),
+        Ok(AccessType::ImperfectlyOverlapping(positions)) =>
+            format!("I{}:{}", positions.start, positions.end),
+    };
+    println!("A {tag} {value}");
+}
+
+fn emit_search(tag: &str, map: &RangeObjectMap<u8>, offset: u64) {
+    let result = caught(|| map.find_offset(Size::from_bytes(offset)));
+    let value = match result {
+        Err(()) => "P".to_owned(),
+        Ok(Ok(position)) => format!("F{position}"),
+        Ok(Err(position)) => format!("I{position}"),
+    };
+    println!("Q {tag} {value}");
+}
+
+fn emit_values(tag: &str, map: &RangeObjectMap<u8>) {
+    println!("V {tag} {}", values(map));
+}
+
+fn emit_insert(tag: &str, map: &mut RangeObjectMap<u8>, pos: usize, start: u64, size: u64, data: u8) {
+    let outcome = caught(|| map.insert_at_pos(pos, alloc_range(Size::from_bytes(start), Size::from_bytes(size)), data));
+    println!("M {tag} {} {}", if outcome.is_ok() { "O" } else { "P" }, values(map));
+}
+
+fn emit_remove_pos(tag: &str, map: &mut RangeObjectMap<u8>, pos: usize) {
+    let outcome = caught(|| map.remove_from_pos(pos));
+    println!("M {tag} {} {}", if outcome.is_ok() { "O" } else { "P" }, values(map));
+}
+
+fn emit_drain(tag: &str, map: &mut RangeObjectMap<u8>, start: usize, stop: usize) {
+    let outcome = caught(|| map.remove_pos_range(start..stop));
+    println!("M {tag} {} {}", if outcome.is_ok() { "O" } else { "P" }, values(map));
+}
+
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+
+    let mut empty = RangeObjectMap::<u8>::new();
+    emit_search("empty-left", &empty, 3);
+    emit_access("empty-access", &empty, 0, 4);
+    emit_access("empty-zero-at-zero", &empty, 0, 0);
+    emit_insert("first", &mut empty, 0, 4, 4, 1);
+    emit_search("before-first", &empty, 3);
+    emit_search("at-first", &empty, 4);
+    emit_search("at-end-first", &empty, 8);
+    emit_access("left-straddle", &empty, 2, 4);
+    emit_access("right-straddle", &empty, 6, 4);
+    emit_access("full-straddle", &empty, 2, 8);
+    emit_access("exact-first", &empty, 4, 4);
+    emit_access("touch-after-first", &empty, 8, 4);
+    emit_access("zero-inside-first", &empty, 4, 0);
+
+    emit_insert("second", &mut empty, 1, 10, 2, 2);
+    emit_access("two-object-straddle", &empty, 6, 8);
+    emit_search("gap", &empty, 9);
+    emit_search("second-start", &empty, 10);
+    emit_access("touch-gap", &empty, 8, 2);
+    emit_values("two-values", &empty);
+
+    let mut bad_next = RangeObjectMap::<u8>::new();
+    emit_insert("bad-next-seed", &mut bad_next, 0, 4, 4, 1);
+    emit_insert("bad-next", &mut bad_next, 0, 1, 4, 2);
+    emit_values("bad-next-state", &bad_next);
+    emit_access("bad-next-class", &bad_next, 1, 4);
+
+    let mut bad_prev = RangeObjectMap::<u8>::new();
+    emit_insert("bad-prev-seed", &mut bad_prev, 0, 1, 4, 1);
+    emit_insert("bad-prev", &mut bad_prev, 1, 2, 1, 2);
+    emit_values("bad-prev-state", &bad_prev);
+
+    let mut edits = RangeObjectMap::<u8>::new();
+    emit_insert("edit-a", &mut edits, 0, 0, 1, 3);
+    emit_insert("edit-b", &mut edits, 1, 2, 1, 4);
+    let got = caught(|| edits[0]);
+    println!("G read-valid {}", got.map(|v| v.to_string()).unwrap_or("P".into()));
+    let got = caught(|| edits[8]);
+    println!("G read-invalid {}", got.map(|v| v.to_string()).unwrap_or("P".into()));
+    let set = caught(|| edits[0] = 7);
+    println!("M set-valid {} {}", if set.is_ok() { "O" } else { "P" }, values(&edits));
+    let set = caught(|| edits[8] = 9);
+    println!("M set-invalid {} {}", if set.is_ok() { "O" } else { "P" }, values(&edits));
+    emit_remove_pos("remove-valid", &mut edits, 0);
+    emit_remove_pos("remove-invalid", &mut edits, 8);
+    emit_drain("drain-valid", &mut edits, 0, 1);
+    emit_drain("drain-empty-at-end", &mut edits, 0, 0);
+    emit_insert("edit-c", &mut edits, 0, 5, 1, 5);
+    emit_drain("drain-reversed", &mut edits, 2, 1);
+    emit_drain("drain-oob", &mut edits, 0, 2);
+    emit_insert("insert-oob", &mut edits, 8, 7, 1, 9);
+
+    let mut edge = RangeObjectMap::<u8>::new();
+    emit_insert("edge-seed", &mut edge, 0, u64::MAX - 1, 1, 1);
+    emit_search("edge-max", &edge, u64::MAX);
+    emit_access("overflow-access", &edge, u64::MAX, 1);
+
+    let mut overflow_entry = RangeObjectMap::<u8>::new();
+    emit_insert("overflow-tail-insert", &mut overflow_entry, 0, u64::MAX, 1, 9);
+    emit_search("overflow-entry-search", &overflow_entry, u64::MAX);
+
+    let mut multi = RangeObjectMap::<u8>::new();
+    emit_insert("multi-0", &mut multi, 0, 2, 2, 10);
+    emit_insert("multi-1", &mut multi, 1, 6, 2, 11);
+    emit_insert("multi-2", &mut multi, 2, 10, 2, 12);
+    emit_insert("multi-3", &mut multi, 3, 14, 2, 13);
+    for offset in 0..18 {
+        emit_search(&format!("multi-{offset}"), &multi, offset);
+    }
+    emit_access("multi-all", &multi, 0, 18);
+    emit_access("multi-two-middle", &multi, 4, 10);
+    emit_access("multi-empty-one", &multi, 4, 2);
+    emit_access("multi-straddle-two", &multi, 3, 4);
+    emit_access("multi-empty-two", &multi, 8, 2);
+    emit_access("multi-end-in-three", &multi, 8, 3);
+    emit_access("multi-empty-before", &multi, 0, 2);
+    emit_access("multi-empty-after", &multi, 16, 2);
+}

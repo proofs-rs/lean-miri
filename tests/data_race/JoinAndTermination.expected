@@ -1,0 +1,17 @@
+report:exit:exit:7:leaks=true:ub=false
+report:abort:abort:ub=false
+report:interrupt:interrupted:ub=false
+report:isolation:unsupported:ub=false
+report:sb:ub:ub=true
+report:tb:ub:ub=true
+report:strict-provenance:unsupported:ub=false
+report:global:global-deadlock:ub=false
+report:local:local-deadlock:ub=false
+report:symbols:other-machine-stop:ub=false
+report:shim:other-machine-stop:ub=false
+report:race:ub:ub=true
+report:foreign:unsupported:ub=false
+wait:true:joined=true:capture=700:12
+wake:0:1:gone=1:reason=true:remaining=0:ready=true:capture=700
+immediate:true:handler=true:place=12
+exclusive-self:ub

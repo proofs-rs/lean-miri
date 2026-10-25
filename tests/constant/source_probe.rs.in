@@ -1,0 +1,35 @@
+use std::cell::RefCell;
+type InterpResult<'a,T> = Result<T,String>;
+#[derive(Clone,Copy)] struct CtfeProvenance { id:u64, immutable:bool, shared:bool }
+impl From<u64> for CtfeProvenance { fn from(id:u64)->Self {Self{id,immutable:false,shared:false}} }
+impl CtfeProvenance { fn as_immutable(self)->Self {Self{immutable:true,shared:true,..self}} }
+#[derive(Clone,Copy)] struct Pointer { provenance:CtfeProvenance, offset:u64 }
+impl Pointer { fn new(provenance:CtfeProvenance,offset:u64)->Self{Self{provenance,offset}} }
+#[derive(Clone,Copy)] enum Scalar { Ptr(Pointer,u64), Int(u128) }
+enum Immediate { Scalar(Scalar), Pair(Scalar,Scalar), Uninit }
+impl From<Scalar> for Immediate { fn from(value:Scalar)->Self {Self::Scalar(value)} }
+impl Immediate { fn new_slice(pointer:Pointer,meta:u64,_cx:&Cx)->Self {Self::Pair(Scalar::Ptr(pointer,8),Scalar::Int(meta as u128))} }
+mod mir { use super::Scalar; pub enum ConstValue { Indirect{alloc_id:u64,offset:u64}, Scalar(Scalar), ZeroSized, Slice{alloc_id:u64,meta:u64} } }
+#[derive(Clone,Copy)] struct Layout {ty:u8}
+enum Operand { Immediate(Immediate), Indirect(Pointer) }
+struct OpTy {op:Operand, layout:Layout}
+struct Cx<'a> {tcx:(),events:RefCell<Vec<String>>,marker:std::marker::PhantomData<&'a ()>}
+fn interp_ok<T>(value:T)->Result<T,String>{Ok(value)}
+struct Size; impl Size { const ZERO:u64=0; }
+fn from_known_layout<F:FnOnce()->Result<Layout,String>>(_tcx:(),_env:(),known:Option<Layout>,query:F)->Result<Layout,String> {match known {Some(l)=>Ok(l),None=>query()}}
+impl<'tcx> Cx<'tcx> {
+fn typing_env(&self){}
+fn layout_of(&self,ty:u8)->Result<Layout,String>{Ok(Layout{ty})}
+fn global_root_pointer(&self,pointer:Pointer)->Result<Pointer,String>{self.events.borrow_mut().push(format!("root:{}:{}:{}:{}",pointer.provenance.id,pointer.offset,pointer.provenance.immutable,pointer.provenance.shared));Ok(pointer)}
+fn ptr_to_mplace(&self,pointer:Pointer,layout:Layout)->OpTy{OpTy{op:Operand::Indirect(pointer),layout}}
+__SOURCE_METHOD__
+}
+fn scalar(s:Scalar)->String {match s {Scalar::Int(i)=>format!("int:{i}"),Scalar::Ptr(p,_)=>format!("ptr:{}:{}:{}:{}",p.provenance.id,p.offset,p.provenance.immutable,p.provenance.shared)}}
+fn main(){
+let cases=[("integer",mir::ConstValue::Scalar(Scalar::Int(7))),
+("pointer",mir::ConstValue::Scalar(Scalar::Ptr(Pointer::new(CtfeProvenance::from(100),6),8))),
+("zst",mir::ConstValue::ZeroSized),
+("slice",mir::ConstValue::Slice{alloc_id:100,meta:11}),
+("indirect",mir::ConstValue::Indirect{alloc_id:100,offset:6})];
+for(name,value)in cases {let cx=Cx{tcx:(),events:RefCell::new(vec![]),marker:std::marker::PhantomData};let op=cx.const_val_to_op(value,0,None).unwrap();let result=match op.op {Operand::Immediate(Immediate::Scalar(s))=>scalar(s),Operand::Immediate(Immediate::Pair(a,b))=>format!("pair:{}:{}",scalar(a),scalar(b)),Operand::Immediate(Immediate::Uninit)=>"uninit".into(),Operand::Indirect(p)=>format!("indirect:{}:{}:{}:{}",p.provenance.id,p.offset,p.provenance.immutable,p.provenance.shared)};println!("{name}={result};{}",cx.events.borrow().join(","));}
+}

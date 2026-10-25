@@ -1,0 +1,172 @@
+use std::collections::{HashMap, HashSet};
+use std::marker::PhantomData;
+
+type AllocId = u64;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Mutability { Not, Mut }
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct Size(u64);
+impl Size { const ZERO: Self = Self(0); }
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct Align(u64);
+impl Align { const ONE: Self = Self(1); }
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum AllocKind { LiveData, Function, VaList, VTable, TypeId, Dead }
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct AllocInfo { size: Size, align: Align, kind: AllocKind, mutbl: Mutability }
+impl AllocInfo {
+    fn new(size: Size, align: Align, kind: AllocKind, mutbl: Mutability) -> Self {
+        Self { size, align, kind, mutbl }
+    }
+}
+
+#[derive(Copy, Clone)]
+struct Allocation { size: Size, align: Align, mutability: Mutability }
+impl Allocation { fn size(&self) -> Size { self.size } }
+#[derive(Copy, Clone)]
+struct StaticInfo { size: Size, align: Align, mutability: Mutability }
+#[derive(Copy, Clone)]
+struct InstanceVal<'tcx> { id: usize, _lifetime: PhantomData<&'tcx ()> }
+#[derive(Copy, Clone)]
+enum GlobalAlloc<'tcx> {
+    Memory(Allocation),
+    Function { instance: InstanceVal<'tcx> },
+    VTable,
+    TypeId,
+    Static(StaticInfo),
+}
+#[derive(Copy, Clone)]
+struct Tcx<'tcx> { globals: &'tcx HashMap<AllocId, GlobalAlloc<'tcx>> }
+impl<'tcx> Tcx<'tcx> {
+    fn try_get_global_alloc(&self, id: AllocId) -> Option<GlobalAlloc<'tcx>> {
+        self.globals.get(&id).copied()
+    }
+}
+impl GlobalAlloc<'_> {
+    fn mutability(&self, _tcx: Tcx, _typing_env: ()) -> Mutability {
+        match *self {
+            Self::Static(info) => info.mutability,
+            Self::Memory(alloc) => alloc.mutability,
+            Self::TypeId | Self::Function { .. } | Self::VTable => Mutability::Not,
+        }
+    }
+    fn size_and_align(&self, _tcx: Tcx, _typing_env: ()) -> (Size, Align) {
+        match *self {
+            Self::Static(info) => (info.size, info.align),
+            Self::Memory(alloc) => (alloc.size, alloc.align),
+            Self::Function { .. } => (Size(0), Align(1)),
+            Self::VTable => (Size(0), Align(8)),
+            Self::TypeId => (Size(0), Align(1)),
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+enum MemoryKind { Stack, CallerLocation, Machine }
+#[derive(Copy, Clone)]
+enum FnVal<'tcx, Other> { Instance(InstanceVal<'tcx>), Other(Other) }
+trait Machine { type ExtraFnVal: Copy; }
+struct TestMachine;
+impl Machine for TestMachine { type ExtraFnVal = usize; }
+struct AllocMap<K, V>(HashMap<K, V>);
+impl<K: Eq + std::hash::Hash, V> AllocMap<K, V> {
+    fn get(&self, key: K) -> Option<&V> { self.0.get(&key) }
+    fn insert(&mut self, key: K, value: V) -> Option<V> { self.0.insert(key, value) }
+    fn contains_key_ref(&self, key: &K) -> bool { self.0.contains_key(key) }
+}
+struct Memory<M: Machine> {
+    alloc_map: AllocMap<AllocId, (MemoryKind, Allocation)>,
+    extra_fn_ptr_map: HashMap<AllocId, M::ExtraFnVal>,
+    va_list_map: HashMap<AllocId, ()>,
+    dead_alloc_map: HashMap<AllocId, (Size, Align)>,
+    _machine: PhantomData<M>,
+}
+struct InterpCx<'tcx, M: Machine> {
+    memory: Memory<M>,
+    tcx: &'tcx Tcx<'tcx>,
+    typing_env: (),
+    _machine: PhantomData<M>,
+}
+trait ContainsKeyRef<K> { fn contains_key_ref(&self, key: &K) -> bool; }
+impl<K: Eq + std::hash::Hash, V> ContainsKeyRef<K> for HashMap<K, V> {
+    fn contains_key_ref(&self, key: &K) -> bool { self.contains_key(key) }
+}
+
+macro_rules! bug { ($($ignored:tt)*) => {{ panic!("source bug assertion"); }}; }
+
+impl<'tcx, M: Machine> InterpCx<'tcx, M> {
+    /* EXTRACTED_GET_FN_ALLOC */
+    /* EXTRACTED_IS_ALLOC_LIVE */
+    /* EXTRACTED_GET_ALLOC_INFO */
+}
+
+fn kind_text(kind: AllocKind) -> &'static str {
+    match kind {
+        AllocKind::LiveData => "liveData",
+        AllocKind::Function => "function",
+        AllocKind::VaList => "vaList",
+        AllocKind::VTable => "vtable",
+        AllocKind::TypeId => "typeId",
+        AllocKind::Dead => "dead",
+    }
+}
+fn mut_text(mutbl: Mutability) -> &'static str {
+    match mutbl { Mutability::Not => "Not", Mutability::Mut => "Mut" }
+}
+fn print_info<M: Machine>(ecx: &InterpCx<'_, M>, label: &str, id: AllocId) {
+    let info = ecx.get_alloc_info(id);
+    println!("info {label} size={} align={} kind={} mut={}",
+        info.size.0, info.align.0, kind_text(info.kind), mut_text(info.mutbl));
+}
+
+fn main() {
+    let mut globals = HashMap::new();
+    globals.insert(4, GlobalAlloc::Memory(Allocation {
+        size: Size(3), align: Align(1), mutability: Mutability::Mut,
+    }));
+    globals.insert(5, GlobalAlloc::Static(StaticInfo {
+        size: Size(3), align: Align(2), mutability: Mutability::Not,
+    }));
+    globals.insert(6, GlobalAlloc::Function { instance: InstanceVal {
+        id: 1, _lifetime: PhantomData,
+    }});
+    globals.insert(7, GlobalAlloc::VTable);
+    globals.insert(8, GlobalAlloc::TypeId);
+    let globals = Box::leak(Box::new(globals));
+    let tcx = Tcx { globals };
+    let mut ecx = InterpCx::<TestMachine> {
+        memory: Memory {
+            alloc_map: AllocMap(HashMap::new()),
+            extra_fn_ptr_map: HashMap::new(),
+            va_list_map: HashMap::new(),
+            dead_alloc_map: HashMap::new(),
+            _machine: PhantomData,
+        },
+        tcx: &tcx,
+        typing_env: (),
+        _machine: PhantomData,
+    };
+    ecx.memory.alloc_map.insert(1, (MemoryKind::Stack, Allocation {
+        size: Size(3), align: Align(1), mutability: Mutability::Mut,
+    }));
+    ecx.memory.extra_fn_ptr_map.insert(2, 42);
+    ecx.memory.va_list_map.insert(3, ());
+    ecx.memory.alloc_map.insert(4, (MemoryKind::Machine, Allocation {
+        size: Size(3), align: Align(1), mutability: Mutability::Mut,
+    }));
+    ecx.memory.dead_alloc_map.insert(9, (Size(3), Align(1)));
+
+    print_info(&ecx, "local", 1);
+    print_info(&ecx, "extra-fn", 2);
+    print_info(&ecx, "va-list", 3);
+    print_info(&ecx, "cached-global", 4);
+    print_info(&ecx, "global-static", 5);
+    print_info(&ecx, "global-function", 6);
+    print_info(&ecx, "vtable", 7);
+    print_info(&ecx, "typeid", 8);
+    print_info(&ecx, "dead", 9);
+    println!("live local={} extra-fn={} va-list={} global={} dead={} unknown={}",
+        ecx.is_alloc_live(1), ecx.is_alloc_live(2), ecx.is_alloc_live(3),
+        ecx.is_alloc_live(5), ecx.is_alloc_live(9), ecx.is_alloc_live(10));
+}

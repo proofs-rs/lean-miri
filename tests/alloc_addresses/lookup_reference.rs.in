@@ -1,0 +1,40 @@
+fn make(mode: ProvenanceMode, exposed: bool) -> InterpCx {
+    let mut exposed_ids = HashSet::new();
+    if exposed { exposed_ids.insert(1); }
+    InterpCx {
+        machine: Machine {
+            alloc_addresses: RefCell::new(AddressGlobalState {
+                int_to_ptr_map: vec![(1000, 1)],
+                exposed: exposed_ids,
+                provenance_mode: mode,
+            }),
+        },
+        sizes: HashMap::from([(1, Size(8))]),
+        live: HashSet::from([1]),
+    }
+}
+
+fn show(result: Option<AllocId>) -> String {
+    result.map(|id| id.to_string()).unwrap_or_else(|| "none".into())
+}
+
+fn main() {
+    std::panic::set_hook(Box::new(|_| {}));
+    let ecx = make(ProvenanceMode::Default, true);
+    for (label, addr, size) in [
+        ("exact", 1000, 0),
+        ("interior", 1003, 0),
+        ("end", 1008, 0),
+        ("negative-end", 1008, -1),
+        ("negative-base", 1000, -1),
+    ] {
+        println!("L {label} {}", show(ecx.alloc_id_from_addr(addr, size)));
+    }
+    let unexposed = make(ProvenanceMode::Default, false);
+    println!("L unexposed {}", show(unexposed.alloc_id_from_addr(1003, 1)));
+
+    let strict = make(ProvenanceMode::Strict, true);
+    let strict_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(||
+        strict.alloc_id_from_addr(1000, 0)));
+    println!("L strict {}", if strict_result.is_err() { "P" } else { "O" });
+}

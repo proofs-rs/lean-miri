@@ -1,0 +1,2031 @@
+{
+  "schema": "sc264-guided-choice-prefix-v1",
+  "policy": "preserve preceding observed typed inputs; set first two atomicStale indices to count-1; stop after second target; bounded diagnostic fallback follows",
+  "candidate_order": "newest-to-oldest after pinned weak-memory filtering; count-1 is oldest among eligible candidates",
+  "target_events": [
+    {
+      "event_index": 159,
+      "prefix_index": 159,
+      "support": 2,
+      "observed_value": 0,
+      "guided_value": 1,
+      "meaning": "oldest candidate"
+    },
+    {
+      "event_index": 199,
+      "prefix_index": 199,
+      "support": 2,
+      "observed_value": 0,
+      "guided_value": 1,
+      "meaning": "oldest candidate"
+    }
+  ],
+  "observed_event_count": 534,
+  "input_count": 200,
+  "requests": [
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "globalSalt",
+      "support": 32
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "globalSalt",
+      "support": 32
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "index",
+      "site": "scheduler",
+      "support": 2
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "index",
+      "site": "scheduler",
+      "support": 2
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "index",
+      "site": "scheduler",
+      "support": 2
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "atomicStale",
+      "support": 2
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "addressReuse",
+      "rate_bits": 4602678819172646912
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "scheduler",
+      "support": 2
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "support": 16
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "bernoulli",
+      "site": "preemption",
+      "rate_bits": 4576918229304087675
+    },
+    {
+      "kind": "index",
+      "site": "atomicStale",
+      "support": 2
+    }
+  ],
+  "inputs": [
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "globalSalt",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "globalSalt",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "index",
+      "site": "scheduler",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "index",
+      "site": "scheduler",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "index",
+      "site": "scheduler",
+      "value": 0
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "atomicStale",
+      "value": 1
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "addressReuse",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "scheduler",
+      "value": 0
+    },
+    {
+      "kind": "index",
+      "site": "addressSlack",
+      "value": 0
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "boolean",
+      "site": "preemption",
+      "value": false
+    },
+    {
+      "kind": "index",
+      "site": "atomicStale",
+      "value": 1
+    }
+  ],
+  "source_events": "tests/connected/fixtures/fence-acqrel.observed.json",
+  "source_events_sha256": "fb3d94d94251cb5cedd4c91b0d130021b3ff082de13c5dd5481b6fbd4b4b5a54"
+}

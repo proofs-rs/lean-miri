@@ -1,0 +1,7 @@
+[package]
+name = "exporter-cargo-app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+exporter-helper = { path = "../helper" }

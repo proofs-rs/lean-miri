@@ -1,0 +1,18 @@
+[package]
+name = "lean-miri-rustc-mir-exporter"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+build = "build.rs"
+
+[[bin]]
+name = "lean-miri-mir-exporter"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1.0"
+miri = { path = "../upstream/miri-source", default-features = false, optional = true }
+
+[features]
+default = []
+miri-reference = ["dep:miri"]

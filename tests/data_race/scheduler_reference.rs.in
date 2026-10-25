@@ -1,0 +1,35 @@
+#[derive(Clone, Copy)]
+struct ThreadId(usize);
+impl ThreadId { fn index(self) -> usize { self.0 } }
+
+struct Thread { enabled: bool }
+impl Thread { fn is_enabled(&self) -> bool { self.enabled } }
+
+struct ThreadManager { active: ThreadId, threads: Vec<Thread> }
+impl ThreadManager {
+    fn active_thread(&self) -> ThreadId { self.active }
+    fn all_threads(&self) -> impl Iterator<Item = (ThreadId, &Thread)> {
+        self.threads.iter().enumerate().map(|(id, thread)| (ThreadId(id), thread))
+    }
+}
+
+fn candidate_order(thread_manager: &ThreadManager) -> Vec<usize> {
+    // @MIRI_SCHEDULER_CANDIDATE_ITERATOR@
+    threads_iter.map(|(id, _thread)| id.0).collect()
+}
+
+fn print_candidates(name: &str, manager: &ThreadManager) {
+    let ids = candidate_order(manager).iter().map(usize::to_string).collect::<Vec<_>>().join(",");
+    println!("scheduler:{name}:{ids}");
+}
+
+fn main() {
+    print_candidates("candidates", &ThreadManager {
+        active: ThreadId(0),
+        threads: vec![
+            Thread { enabled: true },
+            Thread { enabled: false },
+            Thread { enabled: true },
+        ],
+    });
+}

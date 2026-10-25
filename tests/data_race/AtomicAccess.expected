@@ -1,0 +1,9 @@
+atomic:readonly-small-relaxed:ok
+atomic:readonly-large-relaxed:ub
+atomic:readonly-small-acquire:ub
+atomic:readonly-store:ub
+atomic:readonly-rmw:ub
+atomic:mutable-large-relaxed:ok
+atomic:alignment-before-resolution:alignment
+atomic:allocation-expect:panic
+atomic-access: source ordering, alignment, read-only, and fence checks pass
