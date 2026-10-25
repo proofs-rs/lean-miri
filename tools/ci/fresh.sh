@@ -8,10 +8,14 @@ case "${1:?usage: fresh.sh prepare|timezone}" in
     bash tools/build-connected-libc.sh
     ;;
   timezone)
-    shopt -s nullglob
-    libraries=(scratch/connected-libc-target/x86_64-unknown-linux-gnu/debug/deps/liblibc-*.rlib)
-    if [[ ${#libraries[@]} != 1 ]]; then
-      echo 'Expected exactly one freshly built libc rlib' >&2
+    record=scratch/connected-libc-target/libc-rlib.path
+    if [[ ! -f "$record" ]]; then
+      echo 'Missing Cargo libc artifact record; run fresh.sh prepare first' >&2
+      exit 1
+    fi
+    mapfile -t libraries < "$record"
+    if [[ ${#libraries[@]} != 1 || ! -f "${libraries[0]}" ]]; then
+      echo 'Invalid Cargo libc artifact record; rerun fresh.sh prepare' >&2
       exit 1
     fi
     python3 tools/check-timezone.py scratch/ci-fresh/timezone \

@@ -105,6 +105,14 @@ not yet covered by this workflow. Saved replay cannot validate changed producer
 behavior. The selected finite checks do not close the general proof or source
 correspondence gaps below.
 
+In run [40192012725](https://github.com/proofs-rs/lean-miri/actions/runs/40192012725),
+21 of 22 extended suites passed, but timezone stopped before guest execution
+because the CI wrapper's libc filename glob did not identify exactly one archive.
+The number and paths of those glob matches were not logged. Record and consume
+Cargo's actual compiler-artifact path rather than assuming the output layout;
+a successful timezone rerun is still required. This failure is not a guest
+behavior comparison result.
+
 ### Compiler query closure and prepared allocation identity
 
 General query closure remains unproved for the [exporter](exporter/src/main.rs),

@@ -61,7 +61,11 @@ the exact pinned rustc-dev compiler, prefetch locked Cargo dependencies, and run
 the existing reference Miri/sysroot setup. Setup needs network access. Fresh
 checks deliberately require new output paths: use a fresh checkout or move
 previous `scratch/ci-fresh` output before repeating the extended lane. Setup
-does not delete previous evidence.
+does not delete previous evidence. The connected-libc build records Cargo's
+reported archive in `scratch/connected-libc-target/libc-rlib.path`; the timezone
+check consumes that exact path instead of guessing a filename. Missing or
+ambiguous Cargo artifacts remain failures, and a failed rebuild cannot reuse an
+old successful path record.
 
 ## Logs and timing
 
