@@ -866,7 +866,38 @@ private structure RuntimeValueDecode where
   summary : TypedValue
   obligations : Option RuntimeObligationSequence
 
-private abbrev RuntimeDecodeCache := Std.HashMap DecodeValueKey (String × RuntimeValueDecode)
+/-- The traversal key retains full JSON equality, but reuses the transport DAG's
+structural hash. Context flags stay identical to the full-value decoder's key;
+path rebasing remains per occurrence. No hash or transport ID implies equality. -/
+private structure RuntimeValueKey where
+  json : JsonTraversalCache.Key
+  domain : Domain
+  tagCategory : Option TypedEnumTag
+  isRegionPath : Bool
+  isHirIdPath : Bool
+  isCoveragePath : Bool
+  isCastCoercionPath : Bool
+  deriving BEq, Hashable
+
+private def runtimeValueKey (node : JsonTraversalCache.Node) (path : String)
+    (domain : Domain) (tagCategory : Option TypedEnumTag) : RuntimeValueKey := {
+  json := node.key
+  domain := domain
+  tagCategory := tagCategory
+  isRegionPath := path.endsWith ".region"
+  isHirIdPath := path.endsWith ".hir_id"
+  isCoveragePath := path.endsWith ".coverage"
+  isCastCoercionPath := path.endsWith ".cast_kind.coercion"
+}
+
+private theorem runtimeValueKey_beq_eq (a b : JsonTraversalCache.Node)
+    (pathA pathB : String) (domainA domainB : Domain)
+    (tagA tagB : Option TypedEnumTag) :
+    (runtimeValueKey a pathA domainA tagA == runtimeValueKey b pathB domainB tagB) =
+    (decodeValueKey a.value pathA domainA tagA == decodeValueKey b.value pathB domainB tagB) := by
+  cases a <;> cases b <;> rfl
+
+private abbrev RuntimeDecodeCache := Std.HashMap RuntimeValueKey (String × RuntimeValueDecode)
 
 private def runtimeLocalObligations (value : TypedValue) (path : String)
     (children : Option RuntimeObligationSequence := none) : Option RuntimeObligationSequence :=
@@ -900,18 +931,19 @@ private def runtimeSummaryChild (key : String) (value : TypedValue) : TypedValue
 private abbrev RuntimeDecodeM := StateT RuntimeDecodeCache (Except String)
 
 mutual
-private partial def decodeRuntimeValueM (j : Json) (path : String) (domain : Domain)
+private partial def decodeRuntimeValueM (node : JsonTraversalCache.Node) (path : String) (domain : Domain)
     (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : RuntimeDecodeM RuntimeValueDecode := do
-  let key := decodeValueKey j path domain tagCategory
+  let key := runtimeValueKey node path domain tagCategory
   if let some (oldPath, decoded) := (← get).get? key then
     if oldPath == path then return decoded
     return { decoded with obligations := decoded.obligations.map fun issues => .rebase oldPath path issues }
-  let decoded ← decodeRuntimeValueBody j path domain tagCategory memo
+  let decoded ← decodeRuntimeValueBody node path domain tagCategory memo
   modify fun cache => cache.insert key (path, decoded)
   return decoded
 
-private partial def decodeRuntimeValueBody (j : Json) (path : String) (domain : Domain)
+private partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : String) (domain : Domain)
     (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : RuntimeDecodeM RuntimeValueDecode := do
+  let j := node.value
   if let some id := isTypeRef j then
     let value := TypedValue.typeRef id
     return ⟨value, runtimeLocalObligations value path⟩
@@ -926,7 +958,7 @@ private partial def decodeRuntimeValueBody (j : Json) (path : String) (domain : 
     let mut obligations : Option RuntimeObligationSequence := none
     let mut index := 0
     for value in values do
-      let child ← decodeRuntimeValueM value s!"{path}[{index}]" domain tagCategory memo
+      let child ← decodeRuntimeValueM (node.child index value) s!"{path}[{index}]" domain tagCategory memo
       obligations := appendRuntimeObligations obligations child.obligations
       index := index + 1
     let summary := TypedValue.array #[]
@@ -947,7 +979,7 @@ private partial def decodeRuntimeValueBody (j : Json) (path : String) (domain : 
       | _ => none
     let mut summaries := #[]
     let mut obligations : Option RuntimeObligationSequence := none
-    for (key, value) in fields do
+    for ((key, value), index) in fields.toList.zipIdx do
       let childPath := joinPath path key
       let nextDomain := childDomain effectiveDomain key
       let child ← if key == "user_type_projection" && parentTag == some "AscribeUserType" then do
@@ -966,7 +998,7 @@ private partial def decodeRuntimeValueBody (j : Json) (path : String) (domain : 
             | some op => TypedValue.unOperator op status
             | none => TypedValue.unknownUnOperator tag status
           pure ⟨decoded, runtimeLocalObligations decoded childPath⟩
-        else decodeRuntimeValueM value childPath nextDomain (typedEnumCategory? key path parentTag value) memo
+        else decodeRuntimeValueM (node.child index value) childPath nextDomain (typedEnumCategory? key path parentTag value) memo
       let isTagField := match effectiveDomain with
         | .statement | .terminator | .rvalue | .operand | .projection => key == "status" || key == "variant" || key == "kind"
         | _ => false
@@ -1041,9 +1073,9 @@ private partial def decodeRuntimeValueBody (j : Json) (path : String) (domain : 
     return ⟨value, runtimeLocalObligations value path⟩
 end
 
-private def decodeRuntimeValue (j : Json) (path : String) (domain : Domain := .any)
+private def decodeRuntimeValue (node : JsonTraversalCache.Node) (path : String) (domain : Domain := .any)
     (tagCategory : Option TypedEnumTag := none) (memo : DecodeMemo := {}) : Except String RuntimeValueDecode := do
-  (decodeRuntimeValueM j path domain tagCategory memo).run' {}
+  (decodeRuntimeValueM node path domain tagCategory memo).run' {}
 
 private def jsonArray (j : Json) (path : String) : Except String (Array Json) :=
   j.getArr? |>.mapError fun e => s!"{path}: expected array ({e})"
@@ -4218,7 +4250,7 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     validateReferences traversal "$" types.size allocations.size instances.size
   let (typedTree?, valueIssues) ← if runtimeOnly then
       let decoded ← profileit "decoder.runtime_value" profile fun _ =>
-        decodeRuntimeValue j "$" .any .none memo
+        decodeRuntimeValue traversal "$" .any .none memo
       pure (none, flattenRuntimeObligations decoded.obligations)
     else
       let typedTree ← decodeValue j "$" .any .none memo

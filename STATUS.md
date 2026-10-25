@@ -399,6 +399,44 @@ pointer cache or skip checks to remove it. Prepared-input reuse can amortize
 multiple seeds only with input/version/config binding and fresh guest state; it
 does not replace first-run improvements or justify reusing allocation identities.
 
+### Runtime-value structural-hash reuse
+
+Runtime-value decoding now carries the existing validated
+[JsonTraversalCache](Miri/Input/JsonTraversalCache.lean) nodes through array and
+object children. Its memo key reuses the structural hash while retaining full
+JSON equality, all decoding context flags and per-occurrence diagnostic rebasing.
+A kernel-checked key-comparison identity relates it to the original full-value
+key. The uncached reference decoder remains available; validation order and the
+full-value decoder are unchanged. This is not a general decoder equivalence proof.
+
+The native [decode-only profiler](tools/ProfileRuntimeDecoder.lean) separates JSON
+parsing from runtime-value decoding without executing the guest. Two alternating
+candidate/baseline pairs used the retained 31,718,745-byte large-TB input, frozen
+native binaries, CPU2 and one Lean thread. All passed strict decode readiness.
+
+| Trial | Baseline wall / CPU / steal (seconds) | Candidate wall / CPU / steal (seconds) |
+| --- | --- | --- |
+| 1 | 47.588 / 46.790 / 31.200 | 32.280 / 32.181 / 18.760 |
+| 2 | 25.677 / 25.603 / 10.800 | 24.658 / 24.600 / 11.850 |
+
+The internal runtime-value spans were 8.86/9.52 seconds baseline and 5.33/4.56
+seconds candidate. Other phases varied substantially, and baseline trial1 had
+1.048 seconds of cgroup throttling (the other three had none). These shared-host
+samples do not establish a small whole-decoder speedup. Steal is the raw
+same-CPU observation, not process CPU time. Sampled peak process-group RSS rose
+from 475–476 MB to 526–529 MB; retaining traversal nodes through runtime-value
+decoding extends the cache lifetime. The small input passed readiness in both
+versions, with 2.963/2.584 seconds baseline/candidate wall time; this is one pair.
+
+JSON parsing took 0.883–1.06 seconds in the four large trials. Replacing the wire
+encoding alone therefore targets a small fraction of this input's measured cost.
+A future typed DAG/ID-based traversal could also remove structural work after
+parsing, but requires separate validation of its schema, diagnostics and adapters.
+No format migration or whole-guest performance claim is included here.
+
+Validation is in progress. Frozen artifacts, hashes, raw counters, internal
+profiles and all attempted check logs are in ignored `scratch/runtime-value-cache/`.
+
 ## Feature support outside the current acceptance scope
 
 The following support and integration work remains in the backlog, even though

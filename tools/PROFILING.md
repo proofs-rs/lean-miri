@@ -21,6 +21,17 @@ readiness and preparation completed; it does not execute the guest, so
 `terminal_observed` and `finalized_exit_observed` remain false. Distinguish
 internal profiler spans from wall/CPU intervals observed by the parent process.
 
+For native decode-only measurements, build `lake build profile_runtime_decoder`,
+freeze `.lake/build/bin/profile_runtime_decoder` under the build lock, then pass
+that snapshot to `measure.py --executable`. It accepts only the input path and
+always enables decoder profiling, including separate `decoder.json_parse` and
+`decoder.runtime_value` spans. Strict readiness must pass; `decode_only: complete`
+reports decoding only, without lowering, preparation or guest execution. The
+collector records raw wall/CPU and host counters, but neither `terminal_observed`
+nor `preparation_only_observed` should be true for this entry point. Use the same
+alternating artifact/input/CPU protocol as a full run. This isolates decoder
+costs; it does not measure a whole-program speedup or a different wire format.
+
 To profile a complete execution, use
 `bash tools/run.sh INPUT.json --profile` (after any `--seed U64`),
 or pass `--profile` to `tools/measure.py`. This enables the existing
@@ -82,7 +93,8 @@ hash traversal scaling; it does not measure the fraction of decoder time spent
 in hashing or establish an application speedup.
 
 The decoder reuses structural JSON hashes computed from the validated transport
-DAG; full JSON comparisons and all validation phases remain. Noncanonical Raw
+DAG, including runtime-value memo keys; full JSON comparisons, decoding context,
+diagnostic rebasing and all validation phases remain. Noncanonical Raw
 objects fall back to ordinary hashing. `decodeRuntimeJsonReference` and
 `decodeJsonReference` run the uncached path for regression checks. Caller-location
 queries reuse a span index within each demand; runtime Location roots remain
