@@ -62,7 +62,7 @@ reference toolchain or source audit generator.
 
 The [Miri regression workflow](../.github/workflows/miri-regression.yml) runs the
 maintained regression, extended comparison and saved-replay lanes on every
-`main` push and PR. See [CI coverage and reproduction](../tools/ci/README.md) for
+`main` push. See [CI coverage and reproduction](../tools/ci/README.md) for
 the exact scope, setup, timing records and retained logs. This workflow uses the
 current exporter Cargo test entry point and does not reorganize test ownership.
 
