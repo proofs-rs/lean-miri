@@ -48,6 +48,19 @@ class RunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             self.assertEqual(ci.run_all([ci.Suite('ok', (sys.executable, '-c', 'pass'))], Path(temp), {}), 0)
 
+    def test_command_timings_reach_results_and_summary(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp)
+            helper = Path(__file__).with_name('time_command.py').resolve()
+            selected = [ci.Suite('timed', (sys.executable, str(helper), 'build:example', '--',
+                                           sys.executable, '-c', 'pass'))]
+            self.assertEqual(ci.run_all(selected, output, {}), 0)
+            row = json.loads((output / 'results.json').read_text())['results'][0]
+            self.assertEqual(row['timing_errors'], [])
+            self.assertEqual(row['steps'][0]['label'], 'build:example')
+            self.assertEqual(row['steps'][0]['status'], 'passed')
+            self.assertIn('build:example', (output / 'summary.md').read_text())
+
 
 if __name__ == '__main__':
     unittest.main()

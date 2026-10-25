@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import time
+from time_command import read_steps
 
 ROOT = Path(__file__).resolve().parents[2]
 REFERENCE_EXPORTER = 'exporter/target/release/lean-miri-mir-exporter'
@@ -100,6 +101,9 @@ def stop(child):
 
 def execute(suite, output, root=ROOT):
     log = output / (suite.name + '.log')
+    timing = (output / (suite.name + '.steps.jsonl')).resolve()
+    timing.unlink(missing_ok=True)
+    env = dict(os.environ, CI_TIMING_FILE=str(timing))
     start = time.monotonic()
     status, code = 'failed', None
     with log.open('w') as stream:
@@ -107,7 +111,7 @@ def execute(suite, output, root=ROOT):
         stream.flush()
         try:
             child = subprocess.Popen(suite.command, cwd=root, stdout=stream,
-                                     stderr=subprocess.STDOUT, start_new_session=True)
+                                     stderr=subprocess.STDOUT, start_new_session=True, env=env)
             try:
                 code = child.wait(timeout=suite.timeout)
                 status = 'passed' if code == 0 else 'failed'
@@ -120,9 +124,11 @@ def execute(suite, output, root=ROOT):
                 raise
         except OSError as error:
             stream.write(str(error) + '\n')
+    steps, timing_errors = read_steps(timing)
     return dict(name=suite.name, command=list(suite.command), status=status,
                 exit_code=code, seconds=round(time.monotonic() - start, 3),
-                timeout_seconds=suite.timeout, log=str(log))
+                timeout_seconds=suite.timeout, log=str(log), steps=steps,
+                timing_errors=timing_errors)
 
 
 def run_all(selected, output, metadata, root=ROOT):
@@ -145,6 +151,15 @@ def run_all(selected, output, metadata, root=ROOT):
     path.write_text(json.dumps(report, indent=2) + '\n')
     summary = '| Suite | Result | Seconds |\n| --- | --- | ---: |\n'
     summary += ''.join(f"| {r['name']} | {r['status']} | {r['seconds']} |\n" for r in rows)
+    for row in rows:
+        if not row['steps']:
+            continue
+        summary += f"\n<details><summary>{row['name']}: command timings</summary>\n\n"
+        summary += '| Command | Result | Wall seconds | CPU seconds |\n| --- | --- | ---: | ---: |\n'
+        for step in row['steps']:
+            cpu = round(step.get('user_seconds', 0) + step.get('system_seconds', 0), 3)
+            summary += f"| {step['label']} | {step['status']} | {step.get('seconds', 'incomplete')} | {cpu} |\n"
+        summary += '\n</details>\n'
     (output / 'summary.md').write_text(summary)
     if os.environ.get('GITHUB_STEP_SUMMARY'):
         with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
@@ -165,9 +180,14 @@ def main():
     metadata = dict(lane=args.lane, commit=os.environ.get('GITHUB_SHA'),
                     started_at=datetime.now(timezone.utc).isoformat(),
                     platform=platform.platform(), python=sys.version,
+                    cache=dict(exact_hit=os.environ.get('CI_LEAN_CACHE_HIT'),
+                               requested_key=os.environ.get('CI_LEAN_CACHE_KEY'),
+                               restored_key=os.environ.get('CI_LEAN_CACHE_RESTORED_KEY')),
                     lean_toolchain=(ROOT / 'lean-toolchain').read_text().strip(),
                     rustc_commit=(ROOT / 'upstream/.pins/rustc.commit').read_text().strip(),
                     miri_commit=(ROOT / 'upstream/.pins/miri.commit').read_text().strip())
+    setup_steps, setup_errors = read_steps(ROOT / 'scratch/ci/setup.steps.jsonl')
+    metadata.update(setup_steps=setup_steps, setup_timing_errors=setup_errors)
     return run_all(selected, ROOT / 'scratch/ci' / args.lane, metadata)
 
 

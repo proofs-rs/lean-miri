@@ -13,21 +13,22 @@ export PATH="$ELAN_HOME/bin:$CARGO_HOME/bin:$PATH"
 export MIRI_SYSROOT="$PWD/scratch/miri-sysroot"
 export LEAN_NUM_THREADS=1
 mkdir -p scratch/ci
-bash tools/setup-lean.sh
+source tools/ci/timing.sh
+ci_step 'setup:lean' bash tools/setup-lean.sh
 
 if [[ "$lane" != replay ]]; then
   # Existing scripts expect repository-local rustup, including its stable compiler.
   installer="$(mktemp)"
   trap 'rm -f "$installer"' EXIT
-  curl --fail --location --silent --show-error https://sh.rustup.rs --output "$installer"
-  sh "$installer" -y --no-modify-path --profile minimal --default-toolchain stable
-  bash tools/setup-rustc-exporter.sh
-  cargo +stable fetch --locked --manifest-path tools/source-analysis/Cargo.toml
-  cargo +miri-exporter-8144389c895d fetch --locked --manifest-path exporter/Cargo.toml
-  cargo +stable fetch --locked --manifest-path tests/float_ops/source_oracle/Cargo.toml
-  cargo +stable fetch --locked --manifest-path tests/intrinsic_float/source_oracle/Cargo.toml
-  cargo +miri-exporter-8144389c895d fetch --locked --manifest-path tests/connected/libc/Cargo.toml
-  bash tools/setup-miri-reference.sh
+  ci_step 'setup:rustup-download' curl --fail --location --silent --show-error https://sh.rustup.rs --output "$installer"
+  ci_step 'setup:rustup' sh "$installer" -y --no-modify-path --profile minimal --default-toolchain stable
+  ci_step 'setup:rustc-exporter' bash tools/setup-rustc-exporter.sh
+  ci_step 'setup:fetch-source-analysis' cargo +stable fetch --locked --manifest-path tools/source-analysis/Cargo.toml
+  ci_step 'setup:fetch-exporter' cargo +miri-exporter-8144389c895d fetch --locked --manifest-path exporter/Cargo.toml
+  ci_step 'setup:fetch-float-oracle' cargo +stable fetch --locked --manifest-path tests/float_ops/source_oracle/Cargo.toml
+  ci_step 'setup:fetch-intrinsic-oracle' cargo +stable fetch --locked --manifest-path tests/intrinsic_float/source_oracle/Cargo.toml
+  ci_step 'setup:fetch-connected-libc' cargo +miri-exporter-8144389c895d fetch --locked --manifest-path tests/connected/libc/Cargo.toml
+  ci_step 'setup:reference-miri-sysroot' bash tools/setup-miri-reference.sh
 fi
 
 # GitHub starts each subsequent step with a fresh shell.
