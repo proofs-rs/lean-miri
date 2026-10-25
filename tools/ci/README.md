@@ -45,7 +45,7 @@ test contracts.
 ## Setup and local reproduction
 
 On a fresh Linux x86_64 checkout with Python 3.12, curl, bash, util-linux/flock,
-a C/C++ compiler, make and normal Rust build dependencies available:
+a C/C++ compiler, make, ripgrep (`rg`) and normal Rust build dependencies available:
 
 ```bash
 bash tools/ci/setup.sh regression
@@ -61,11 +61,10 @@ the exact pinned rustc-dev compiler, prefetch locked Cargo dependencies, and run
 the existing reference Miri/sysroot setup. Setup needs network access. Fresh
 checks deliberately require new output paths: use a fresh checkout or move
 previous `scratch/ci-fresh` output before repeating the extended lane. Setup
-does not delete previous evidence. The connected-libc build records Cargo's
-reported archive in `scratch/connected-libc-target/libc-rlib.path`; the timezone
-check consumes that exact path instead of guessing a filename. Missing or
-ambiguous Cargo artifacts remain failures, and a failed rebuild cannot reuse an
-old successful path record.
+does not delete previous evidence. Non-replay setup checks for ripgrep before
+installing toolchains; the workflow installs Ubuntu's `ripgrep` package explicitly.
+Several source-comparison shell drivers invoke `rg`, so it is a test prerequisite,
+not an optional convenience.
 
 ## Logs and timing
 
@@ -82,3 +81,7 @@ fixture generation performed by their existing scripts; `setup.log` measures
 installation/reference preparation separately. Timings on shared runners are
 diagnostic, not a controlled interpreter benchmark. No speed threshold determines
 correctness. Use `tools/PROFILING.md` for performance claims.
+
+The connected-libc build records Cargo's reported archive in
+`scratch/connected-libc-target/libc-rlib.path`. Timezone consumes that exact path;
+missing or ambiguous artifacts and stale records after a failed rebuild fail.
