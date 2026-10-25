@@ -9,21 +9,54 @@ on:
       - 'tests/upstream_ui/**'
       - 'tests/test_upstream_ui.py'
       - 'tools/check-upstream-ui.py'
+      - 'tools/collect-upstream-ui.py'
+      - 'tests/test_upstream_ui_collection.py'
       - 'tools/NativeRunner.lean'
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: upstream-ui-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  cancel-previous:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Cancel superseded runs of this PR workflow
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UI_BRANCH: ${{ github.head_ref }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs?event=pull_request&per_page=100" > "$RUNNER_TEMP/ui-runs.json"
+          python3 - <<'PYTHON'
+          import json, os, pathlib, subprocess
+          runs = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'ui-runs.json').read_text())
+          for run in runs['workflow_runs']:
+              if (run.get('path', '').split('@')[0] == '.github/workflows/upstream-ui.yml'
+                      and run['head_branch'] == os.environ['UI_BRANCH']
+                      and run['id'] < int(os.environ['GITHUB_RUN_ID'])
+                      and run['status'] != 'completed'):
+                  subprocess.run(['gh', 'api', '--method', 'POST',
+                                  f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run['id']}/cancel"], check=False)
+          PYTHON
   compare:
+    needs: cancel-previous
+    if: always()
     name: UI shard ${{ matrix.shard }}
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
     env:
       LEAN_NUM_THREADS: '1'
       CARGO_BUILD_JOBS: '2'
@@ -47,11 +80,11 @@ jobs:
       - name: Build prepared reference exporter
         run: bash tools/build-exporter.sh --features miri-reference
       - name: Test acceptance oracle
-        run: python3 -m unittest discover -s tests -p test_upstream_ui.py -v
+        run: python3 -m unittest discover -s tests -p 'test_upstream_ui*.py' -v
       - name: Compare every compatible case in this shard
         run: >-
           python3 tools/check-upstream-ui.py
-          --shard-index '${{ matrix.shard }}' --shard-count 16
+          --shard-index '${{ matrix.shard }}' --shard-count 32
           --export-timeout 600 --timeout 600
           --output scratch/upstream-ui/ci
       - name: Retain inventory, reference diagnostics and all outcomes
@@ -66,3 +99,27 @@ jobs:
             scratch/upstream-ui/ci/**/*.jsonl
             scratch/upstream-ui/ci/**/*.log
             scratch/logs/
+
+  inventory-coverage:
+    needs: compare
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        continue-on-error: true
+        with:
+          pattern: upstream-ui-*
+          path: scratch/upstream-artifacts
+      - name: Require complete inventory and successful compatible cases
+        run: >-
+          python3 tools/collect-upstream-ui.py scratch/upstream-artifacts
+          --shards 32 --output scratch/upstream-summary.json
+      - name: Retain full-sweep summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: upstream-ui-summary
+          path: scratch/upstream-summary.json

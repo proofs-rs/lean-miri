@@ -18,7 +18,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tests/upstream_ui'))
-from suite import SOURCES, compare, discover, reference_oracle
+from suite import SOURCES, compare, discover, reference_oracle, source_fingerprint
 from run_guarded import run as guarded_run
 
 
@@ -48,13 +48,14 @@ def run_case(case, args, env, output):
     entry_root = 'miri_start' if b'#![no_main]' in source.read_bytes() else 'main'
     command += ['--root', entry_root]
     command += ['--', str(source),
-               '--edition=' + case.edition, '--crate-name=upstream_ui', '--sysroot', str(args.sysroot),
+               '--edition=' + case.edition, '--crate-name=upstream_ui', '--sysroot', str(args.sysroot), '--color=never',
                '-o', str(directory / 'guest'), *case.flags]
     if case.revision:
         command.extend(['--cfg', case.revision])
     record['command'] = command
     started = time.monotonic()
-    export_code = invoke(command, env, directory / 'export.log', args.export_timeout)
+    case_env = env | {'LEAN_MIRI_REFERENCE_UI_FLAGS_JSON': json.dumps(case.runtime_flags)}
+    export_code = invoke(command, case_env, directory / 'export.log', args.export_timeout)
     record['export_exit'] = export_code
     record['export_seconds'] = time.monotonic() - started
     sidecar_path = Path(str(snapshot) + '.miri-reference.json')
@@ -73,17 +74,29 @@ def run_case(case, args, env, output):
         if sha256(SOURCES / case.path) != record['source_sha256']:
             raise ValueError('Rust source changed during export')
         record['snapshot_sha256'] = sha256(snapshot)
+        fingerprint = subprocess.run([str(args.runner), '--fingerprint', str(snapshot)],
+                                     cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+        prefix = 'upstream_fingerprint: '
+        lines = [line[len(prefix):] for line in fingerprint.stdout.splitlines() if line.startswith(prefix)]
+        if fingerprint.returncode != 0 or len(lines) != 1:
+            raise ValueError('snapshot fingerprint process failed')
+        observed_fingerprint = json.loads(lines[0])
+        if (observed_fingerprint.get('byte_length') != snapshot.stat().st_size or
+                observed_fingerprint.get('fnv1a64') != int(sidecar['snapshot_fnv1a64'], 16)):
+            raise ValueError('reference snapshot FNV/length mismatch')
+
         record['reference'] = sidecar
         status, category = reference_oracle(case, sidecar, (directory / 'export.log').read_text(errors='replace'))
         record['category'] = category
-        # A negative reference normally makes the exporter process exit 1.
-        # Reject any other process failure even if a sidecar was written.
-        if export_code not in (0, 1) or (not case.fail and export_code != 0):
+        # This exporter's main returns 2 for a rustc diagnostic, including
+        # expected Miri UB. Accept it only after the independent UB/site oracle
+        # above succeeded; a failed process alone never satisfies a negative.
+        if export_code != (2 if case.fail else 0):
             status = 'export_failed'
         record['status'] = status
         if status == 'ready':
             started = time.monotonic()
-            code = invoke([str(args.runner), str(snapshot), '--ui-source', str(source)], env, directory / 'lean.log', args.timeout)
+            code = invoke([str(args.runner), str(snapshot), '--ui-source', str(source), '--ui-flags', json.dumps(case.runtime_flags)], env, directory / 'lean.log', args.timeout)
             record['lean_exit'] = code
             record['lean_seconds'] = time.monotonic() - started
             if code != 0:
@@ -166,8 +179,11 @@ def main():
     for path in (args.exporter, args.runner):
         if not path.is_file():
             parser.error(f'missing executable: {path}')
+    source_hash = source_fingerprint()
     exporter_hash, runner_hash = sha256(args.exporter), sha256(args.runner)
     (output / 'provenance.json').write_text(json.dumps({
+        'project_source_sha256': source_hash,
+        'shard_index': args.shard_index, 'shard_count': args.shard_count,
         'source_lock_sha256': sha256(ROOT / 'upstream/source-lock.json'),
         'exporter_sha256': exporter_hash, 'runner_sha256': runner_hash,
         'timeout': args.timeout, 'export_timeout': args.export_timeout,
@@ -189,6 +205,8 @@ def main():
             stream.write(json.dumps(record) + '\n')
             stream.flush()
             print(f'{record["status"]}: {case.id}', flush=True)
+    if source_fingerprint() != source_hash:
+        raise RuntimeError('project sources changed during comparisons; run is invalid')
     if sha256(args.exporter) != exporter_hash or sha256(args.runner) != runner_hash:
         raise RuntimeError('exporter or runner changed during comparisons; run is invalid')
     counts = dict(Counter(r['status'] for r in records))

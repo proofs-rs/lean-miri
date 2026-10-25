@@ -547,9 +547,11 @@ also not completed in this run.
 ## Pinned upstream UI sweep
 
 `tools/check-upstream-ui.py` now enumerates the entire pinned pass/fail source
-snapshot, including revisions, with explicit profile exclusions. See
+snapshot, including revisions, with explicit profile exclusions (1,118 cases,
+809 candidates with the supported settings). See
 `tests/upstream_ui/README.md` for the acceptance contract and separate sharded
-workflow. Registration and acceptance-oracle unit tests do not establish that
+workflow. A collector rejects incomplete or stale shards independently of
+comparison success. Registration and acceptance-oracle unit tests do not establish that
 these Rust inputs pass Lean execution. Full-sweep results are pending; do not
 claim coverage from incomplete shards or count Unsupported/timeout as agreement.
 

@@ -365,6 +365,6 @@ inventory and `python3 tools/check-upstream-ui.py`. It expands revisions,
 compares genuine prepared reference runs with the native Lean runner, and
 rejects unrelated failures for expected-UB cases. The separate
 `.github/workflows/upstream-ui.yml` workflow runs every compatible case across
-16 shards; unsupported profiles remain in each shard's inventory. Full sweep
+32 shards; unsupported profiles remain in each shard's inventory. Full sweep
 completion and remaining blockers must be checked in its artifacts, not inferred
 from Python oracle tests or the existence of this command.
