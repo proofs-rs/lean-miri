@@ -50,7 +50,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
           unless ctx.containsTypeId ty do throw "named constant references missing compiler type"
           let evaluated ← query.getObjVal? "evaluation"
           supported evaluated
-          let value ← lowerCompilerConstValue ctx ty (← decodeCompilerValue (← evaluated.getObjVal? "value"))
+          let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue (← evaluated.getObjVal? "value"))
           pure (⟨sourceInstance,ty,value⟩ : Value))
     entries := entries.push ⟨name,result,record⟩
   pure ⟨program.withCompilerTables tables,runtime,entries⟩

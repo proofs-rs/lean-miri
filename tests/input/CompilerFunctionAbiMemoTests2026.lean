@@ -111,6 +111,13 @@ def main (args : List String) : IO Unit := do
   let decoded ← must (decodeRuntimeJson (← IO.FS.readFile path))
   let nodes := decoded.document.sharedNodes
   let memo := prepareCompilerFunctionAbiMemo nodes
+  let some importedAbis := decoded.document.compilerFunctionAbiTable |
+    throw (IO.userError "import omitted typed compiler ABI queries")
+  for (raw, result) in importedAbis.entries do
+    match result, decodeCompilerFunctionAbi raw with
+    | .ok a, .ok b => check (sameAbiProjection a b) "import-time typed ABI differs"
+    | .error a, .error b => check (a == b) "import-time deferred ABI error differs"
+    | _, _ => throw (IO.userError "import-time ABI result class differs")
   let mut candidateCount := 0
   let mut sample? : Option Json := none
   for raw in nodes do
@@ -126,6 +133,32 @@ def main (args : List String) : IO Unit := do
       | _, _ => throw (IO.userError "cached and direct ABI decoders disagree on success")
       candidateCount := candidateCount + 1
   check (candidateCount > 0 && sample?.isSome) "fixture has no usable FnAbi candidate"
+  -- The import-time complete-value memo must agree with the independent
+  -- demand decoder, including failures and fallback on a changed source value.
+  let some valueMemo := decoded.document.compilerValueMemo |
+    throw (IO.userError "import omitted the compiler value memo")
+  let mut valueCount := 0
+  for node in nodes do
+    if let .obj fields := node then
+      for (key, raw) in fields.toList do
+        if ["generic_args", "rebased_args", "span", "preamble_def_span", "callsite_span"].contains key then
+          let direct := decodeCompilerValue raw
+          let cached := decodeCompilerValueWithMemo raw (some valueMemo)
+          let agrees := match direct, cached with
+            | .ok a, .ok b => a == b
+            | .error a, .error b => a == b
+            | _, _ => false
+          check agrees s!"import-time compiler value differs at {key}"
+          valueCount := valueCount + 1
+  check (valueCount > 0) "fixture has no compiler values"
+  let malformedSpan := Json.mkObj [("lo", .str "bad"), ("hi", toJson (0 : Nat)),
+    ("start", .null), ("end", .null), ("context", .str "x"), ("file", .str "x")]
+  let fallback := decodeCompilerValueWithMemo malformedSpan (some valueMemo)
+  let sameFallback := match fallback, decodeCompilerValue malformedSpan with
+    | .ok a, .ok b => a == b
+    | .error a, .error b => a == b
+    | _, _ => false
+  check sameFallback "compiler value fallback diagnostic changed"
   let sample := sample?.get!
 
   let malformedKey := duplicateStatusLayout
@@ -195,7 +228,7 @@ def main (args : List String) : IO Unit := do
   let args ← must argsJson.getArr?
   let malformedArity ← must (set sample "fixed_count" (toJson (args.size + 1)))
   let manualWithBadArity : RuntimeMetadata := { manual with source :=
-    { manual.source with sharedNodes := manual.source.sharedNodes.push malformedArity } }
+    { manual.source with sharedNodes := manual.source.sharedNodes.push malformedArity, compilerFunctionAbiTable := none } }
   let arityCache := CallResolution.prepareFunctionAbiCache manualWithBadArity
   let arityDirect := CallResolution.functionAbiJson manualWithBadArity malformedArity
   let arityCached := CallResolution.functionAbiJson manualWithBadArity malformedArity (some arityCache)
@@ -205,6 +238,14 @@ def main (args : List String) : IO Unit := do
   check (arityErrorMatches && arityCached == arityDirect)
     "memoized ABI path bypassed fixed-count arity validation"
 
+  let arityTable := DecoderValues.prepareCompilerFunctionAbiTableUsing manualWithBadArity.source.sharedNodes
+    (DecoderValues.sharedDecodeMemo manualWithBadArity.source.sharedNodes)
+  let typedArity : RuntimeMetadata := { manualWithBadArity with source :=
+    { manualWithBadArity.source with compilerFunctionAbiTable := some arityTable } }
+  let typedArityCache := CallResolution.prepareFunctionAbiCache typedArity
+  check (CallResolution.functionAbiJson typedArity malformedArity (some typedArityCache) == arityDirect)
+    "import-time ABI projection bypassed runtime arity validation"
+
   let returnJson ← must (sample.getObjVal? "return")
   let returnLayout ← must (returnJson.getObjVal? "layout")
   let oversizedLayout ← must (set returnLayout "size_bytes" (toJson (2^64 : Nat)))
@@ -213,7 +254,7 @@ def main (args : List String) : IO Unit := do
   sizeNodes := sizeNodes.push oversizedLayout
   sizeNodes := sizeNodes.push oversizedAbi
   let manualWithOversizedLayout : RuntimeMetadata := { manual with source :=
-    { manual.source with sharedNodes := sizeNodes } }
+    { manual.source with sharedNodes := sizeNodes, compilerFunctionAbiTable := none } }
   let sizeCache := CallResolution.prepareFunctionAbiCache manualWithOversizedLayout
   let sizeDirect := CallResolution.functionAbiJson manualWithOversizedLayout oversizedAbi
   let sizeCached := CallResolution.functionAbiJson manualWithOversizedLayout oversizedAbi (some sizeCache)
@@ -222,4 +263,11 @@ def main (args : List String) : IO Unit := do
     | .ok _ => false
   check (sizeErrorMatches && sizeCached == sizeDirect)
     "memoized ABI path bypassed manual-runtime physical layout size validation"
+  let sizeTable := DecoderValues.prepareCompilerFunctionAbiTableUsing sizeNodes
+    (DecoderValues.sharedDecodeMemo sizeNodes)
+  let typedSize : RuntimeMetadata := { manualWithOversizedLayout with source :=
+    { manualWithOversizedLayout.source with compilerFunctionAbiTable := some sizeTable } }
+  let typedSizeCache := CallResolution.prepareFunctionAbiCache typedSize
+  check (CallResolution.functionAbiJson typedSize oversizedAbi (some typedSizeCache) == sizeDirect)
+    "import-time ABI projection bypassed runtime layout-size validation"
   IO.println s!"CompilerFunctionAbiMemoTests: {candidateCount} candidates; collision safety, exact sizes, error paths, manual metadata, and arity validation passed"

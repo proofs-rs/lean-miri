@@ -125,7 +125,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
         let name ← (← record.getObjVal? "section").getStr?
         let decoded := do
           let (definition,next) ← intern tables (← record.getObjVal? "definition")
-          let (span,next) ← lowerCompilerSpan next (← decodeCompilerValue (← record.getObjVal? "span"))
+          let (span,next) ← lowerCompilerSpan next (← ctx.decodeCompilerValue (← record.getObjVal? "span"))
           let value ← supported (← record.getObjVal? "global_query")
           let ty ← typeId ctx (← value.getObjVal? "type")
           let allocation ← (← (← value.getObjVal? "allocation").getObjVal? "allocation_id").getNat?

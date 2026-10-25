@@ -12,7 +12,7 @@ private def scan (ctx : LowerContext) (requested : MIR.Place) :
   | fuel+1,source,normalized => do
     let mut found := #[]
     if (source.getObjVal? "local").isOk && (source.getObjVal? "projection").isOk then
-      let key ← lowerCompilerPlace ctx (← decodeCompilerValue source)
+      let key ← lowerCompilerPlace ctx (← ctx.decodeCompilerValue source)
       if key == requested then
         found := found.push (← (← normalized.getObjVal? "type").getObjValAs? Nat "type_id")
     match source with

@@ -519,6 +519,59 @@ corrected export selects main, retaining runtime checks for demanded queries.
 Raw artifacts, compiler/link manifests, all attempted logs, per-run counters and
 the structured `results.json` are in ignored `scratch/catch-runtime-value/`.
 
+### Node identities and import-time compiler metadata
+
+The traversal builder now retains the exporter's existing document-local node
+IDs and reference edges. Repeated shared references keep the same identity;
+inline values are traversed directly, without new IDs or independent memo
+entries. Runtime-value memoization and successful validation visits compare
+shared IDs plus the existing context flags, avoiding structural JSON comparisons.
+Scalars are decoded directly, including shared scalar strings.
+Structural keys remain for the public FnAbi sequence's value-based deduplication.
+Noncanonical manually constructed JSON still uses the uncached fallback. No
+additional Lean interning or external encoding change is introduced.
+
+FnAbi queries are decoded into an immutable typed table during import, reusing
+the already prepared layout memo. Its private constructor binds all entries to
+the exact shared-node table and decoder build. Query failures are stored, not
+raised for unused catalog entries. Preparation consumes these typed outcomes
+and still converts/validates the physical ABI against the current runtime.
+Manual documents without the table retain the original path. Source-node table
+updates cannot silently reuse a table indexed by the old source array. Call-site
+lookup uses one index over the typed ABI records instead of scanning their JSON
+payloads for every call. Noncanonical manual values keep the original linear
+lookup and first-match behavior.
+
+Complete compiler values for generic arguments and source spans are also
+prepared once from shared nodes and reused by instance, scope, lifecycle,
+backtrace, main, constant and intrinsic adapters. Their memo stores exact JSON
+keys and full typed values rather than the runtime decoder's shallow summaries;
+missing keys decode directly, and malformed raw keys bypass memo lookup.
+This is selective import-time typing, not elimination of every JSON field read:
+query envelopes, layout extras and several specialized adapters still inspect
+source payloads. Guest pointers, allocation identity and fresh guest state are
+not memoized.
+
+To carry the checked projections in the document without a circular import,
+model node definitions moved to `Miri/Input/Model/Types.lean`, value decoders to
+`Miri/Input/DecoderValues.lean`, and document/validation entrypoints remain in
+`Model.lean`/`Decoder.lean`. Existing public decoder names remain available.
+The caches belong only to native runtime `ImportDocumentCore` values. Diagnostic
+and reflected `ImportDocument` values retain their original schema fields;
+conversion from those values uses the uncached compatibility path. Frontend
+reflection still emits typed constructor data, without quoting private caches
+or inserting an opaque decoder call. Temporary decode memos are existential
+proof witnesses and are erased rather than retained in the document.
+The earlier structural-key equality lemma describes the initial hash-only
+implementation; ID-based memoization has a different cache partition and does
+not claim that key-comparison identity or whole-decoder equivalence. New local
+kernel-checked identities preserve both the old full-value key comparison and
+hash exactly in the uncached Raw fallback.
+
+Validation and the same-input large catch workload measurements are pending.
+Raw logs and immutable artifact manifests belong in ignored
+`scratch/node-id-typed/`.
+
 ## Feature support outside the current acceptance scope
 
 The following support and integration work remains in the backlog, even though

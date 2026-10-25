@@ -28,14 +28,14 @@ private def position (j : Json) : Except String Position := do
   unless offset < 2^32 do throw "compiler BytePos exceeds u32"
   return ⟨UInt32.ofNat offset,← natural j "line",← natural j "zero_based_char_column",
     ← (← j.getObjVal? "filename").getStr?⟩
-private def spans (interner : CompilerSpanInterner) (payload : Json) :
+private def spans (ctx : LowerContext) (interner : CompilerSpanInterner) (payload : Json) :
     Except String (Array SpanEntry × CompilerSpanInterner) := do
   let records ← (← payload.getObjVal? "backtrace_spans").getArr?
   let mut interner := interner
   let mut entries := #[]
   for record in records do
     let (span,next) ← lowerCompilerSpanWithInterner interner
-      (← decodeCompilerValue (← record.getObjVal? "span"))
+      (← ctx.decodeCompilerValue (← record.getObjVal? "span"))
     interner := next
     let location ← position (← record.getObjVal? "source_position")
     unless (← natural record "collapsed_lo") == location.bytePosition.toNat do
@@ -46,12 +46,13 @@ private def spans (interner : CompilerSpanInterner) (payload : Json) :
   return (entries,interner)
 
 def prepare (program : LoweredProgram) : Except String Prepared := do
+  let ctx := LowerContext.ofDocument program.input
   let mut interner := CompilerSpanInterner.ofTables program.compilerTables
   let mut bodySpans := #[]
   let mut positions := #[]
   let mut positionIndex : Std.HashMap UInt32 Position := {}
   for body in program.bundle.bodies do
-    match spans interner body.input.payload with
+    match spans ctx interner body.input.payload with
     | .error error => bodySpans := bodySpans.push (.error error)
     | .ok (entries,next) =>
       interner := next

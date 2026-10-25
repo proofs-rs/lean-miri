@@ -73,12 +73,18 @@ retain their failed decode/conversion outcome and cannot fail unused metadata. -
 private def buildFunctionAbiCache (runtime : RuntimeMetadata) :
     Std.HashMap Json (Except String (FnAbi TypeId)) := Id.run do
   let mut entries : Std.HashMap Json (Except String (FnAbi TypeId)) := {}
-  let abiMemo := prepareCompilerFunctionAbiMemo runtime.source.sharedNodes
-  for raw in runtime.source.sharedNodes do
-    if isFunctionAbiCandidate raw && !(entries.contains raw) then
-      let result := do
-        functionAbi runtime (← decodeFunctionAbiJsonWithMemo raw abiMemo)
-      entries := entries.insert raw result
+  match runtime.source.compilerFunctionAbiTable with
+  | some typed =>
+    for (raw, decoded) in typed.entries do
+      if !(entries.contains raw) then
+        entries := entries.insert raw (decoded >>= functionAbi runtime)
+  | none =>
+    let abiMemo := prepareCompilerFunctionAbiMemo runtime.source.sharedNodes
+    for raw in runtime.source.sharedNodes do
+      if isFunctionAbiCandidate raw && !(entries.contains raw) then
+        let result := do
+          functionAbi runtime (← decodeFunctionAbiJsonWithMemo raw abiMemo)
+        entries := entries.insert raw result
   return entries
 
 /-- Immutable conversion memo tied to the exact runtime value and its exact
@@ -146,8 +152,27 @@ structure Prepared where
   obligations : Array Obligation
   indirect : Array Indirect := #[]
 
+/-- Preserve first-match lookup, including the linear fallback for malformed
+manual JSON whose equality/hash behavior is not canonical. Build this once,
+instead of scanning every typed ABI for every call site. -/
+private def typedFunctionAbiIndex (values : Array FunctionAbi) : Option (Std.HashMap Json FunctionAbi) := Id.run do
+  let mut entries := {}
+  for value in values do
+    if !DecoderValues.hasCanonicalJsonObjectKeys value.payload then return none
+    if !entries.contains value.payload then entries := entries.insert value.payload value
+  return some entries
+
+private def findTypedFunctionAbi (values : Array FunctionAbi)
+    (index : Option (Std.HashMap Json FunctionAbi)) (raw : Json) : Option FunctionAbi :=
+  match index with
+  | some entries =>
+    if DecoderValues.hasCanonicalJsonObjectKeys raw then entries[raw]?
+    else values.find? (·.payload == raw)
+  | none => values.find? (·.payload == raw)
+
 private def decodeResolution (runtime : RuntimeMetadata) (ctx : LowerContext)
-    (abiCache : FunctionAbiCache runtime) (tables : CompilerTables)
+    (abiCache : FunctionAbiCache runtime) (typedAbis : Option (Std.HashMap Json FunctionAbi))
+    (tables : CompilerTables)
     (function : MIR.Operand) (source : Json) :
     Result (Resolution × CompilerTables) := do
   let status ← text source "status"
@@ -164,7 +189,7 @@ private def decodeResolution (runtime : RuntimeMetadata) (ctx : LowerContext)
   | _ => unless !virtual do throw "virtual dispatch query did not return a Virtual instance"
   let sourceInstanceId ← natural source "instance_id"
   let sourceAbi ← field source "fn_abi"
-  let sourceAbi ← require (runtime.source.functionAbis.find? (·.payload == sourceAbi)) "missing typed compiler FnAbi record"
+  let sourceAbi ← require (findTypedFunctionAbi runtime.source.functionAbis typedAbis sourceAbi) "missing typed compiler FnAbi record"
   return (⟨callee,sourceInstanceId,function,
     functionAbiJson runtime sourceAbi.payload (some abiCache),source⟩,tables)
 
@@ -174,6 +199,7 @@ private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgr
     (sourceEquality : RuntimeMetadata.JsonReflexivity runtime.source.raw) :
     Result Prepared := do
   let functionAbiCache := prepareFunctionAbiCacheProfiled profile runtime
+  let typedAbis := profileit "prepare.typed_abi_index" profile fun _ => typedFunctionAbiIndex runtime.source.functionAbis
   let ctx := LowerContext.ofDocument program.input
   let mut tables := program.compilerTables
   let mut bodies := #[]
@@ -215,7 +241,7 @@ private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgr
         let result := do
           let block ← require blocks[blockIndex]? "missing source block"
           let source ← field block "terminator" >>= fun term => field term "kind" >>= fun kind => field kind "resolution"
-          decodeResolution runtime ctx functionAbiCache tables function source
+          decodeResolution runtime ctx functionAbiCache typedAbis tables function source
         let outcome ← match result with
           | .error message =>
             obligations := obligations.push ⟨s!"body[{index}].block[{blockIndex}].resolution",message⟩

@@ -64,7 +64,7 @@ private def kind (ctx : LowerContext) (j : Json) : M CallInstanceKind := do
 def decode (ctx : LowerContext) (tables : CompilerTables) (j : Json) :
     Except String (CallInstance × CompilerTables) := do
   let (instanceKind, tables) ← (kind ctx (← field j "instance_kind")).run tables
-  let args ← decodeCompilerValue (← field j "generic_args")
+  let args ← ctx.decodeCompilerValue (← field j "generic_args")
   let (args, tables) ← lowerCompilerGenericArgs ctx tables args
   pure (⟨instanceKind, args⟩, tables)
 
