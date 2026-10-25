@@ -2,13 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-export RUSTUP_HOME="${RUSTUP_HOME:-$ROOT/.rustup}"
-export CARGO_HOME="${CARGO_HOME:-$ROOT/.cargo}"
-export MIRI_SYSROOT="${MIRI_SYSROOT:-$ROOT/scratch/miri-sysroot}"
-TOOLCHAIN="miri-exporter-8144389c895d"
-SYSROOT="$("$CARGO_HOME/bin/rustup" run "$TOOLCHAIN" rustc --print sysroot)"
-export PATH="$SYSROOT/bin:$CARGO_HOME/bin:$PATH"
-export LD_LIBRARY_PATH="$SYSROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+source "$ROOT/exporter/tests/fixture-env.sh"
 EXPORTER="${EXPORTER_BIN:-$ROOT/exporter/target/debug/lean-miri-mir-exporter}"
 OUT="$(mktemp "${TMPDIR:-/tmp}/lean-miri-variadic-XXXXXX.json")"
 ERR="$(mktemp "${TMPDIR:-/tmp}/lean-miri-variadic-XXXXXX.err")"

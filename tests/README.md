@@ -151,8 +151,9 @@ The ordered list is maintained in [the script](../tools/check.sh). Its phases ar
    runtime registry, build frontend and choice policy; audit axioms and source links.
 3. Explicitly run selected control-flow, call/stack, layout/value, memory,
    Tree Borrows, atomic, synchronization and data-structure tests.
-4. Run `exporter/test-fixture.sh` and `exporter/test-instance-mir-ctfe-fixture.sh`.
-   **The first script also calls the variadic and call-transfer fixture scripts.**
+4. Run pinned `cargo test --locked --offline --manifest-path exporter/Cargo.toml`
+   for exporter Rust/Python unit tests and all four fixture scripts. See the
+   [exporter test instructions](../exporter/README.md#tests).
 5. Run `input/run.sh`, `eval_core/run.sh`, `frontend/run.sh`,
    `runtime_metadata/run.py` and `execution/run{,_calls,_globals}.py`.
 6. Compare the extracted obligation inventory with the checked-in fixture.

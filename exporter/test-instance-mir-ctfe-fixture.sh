@@ -2,12 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-export RUSTUP_HOME="${RUSTUP_HOME:-$ROOT/.rustup}"
-export CARGO_HOME="${CARGO_HOME:-$ROOT/.cargo}"
-TOOLCHAIN="miri-exporter-8144389c895d"
-SYSROOT="$("$CARGO_HOME/bin/rustup" run "$TOOLCHAIN" rustc --print sysroot)"
-export PATH="$SYSROOT/bin:$CARGO_HOME/bin:$PATH"
-export LD_LIBRARY_PATH="$SYSROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+source "$ROOT/exporter/tests/fixture-env.sh"
 if [[ -n "${EXPORTER_BIN:-}" ]]; then
   # Verification workspaces can pin an immutable exporter executable from a
   # separate checkout without rebuilding or modifying that producer tree.

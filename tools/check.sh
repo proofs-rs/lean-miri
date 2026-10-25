@@ -65,8 +65,7 @@ bash tests/operand/run_differential.sh
 bash tests/validity/run_differential.sh
 bash tests/memory_state/run.sh
 bash tests/memory_kind/run.sh
-bash exporter/test-fixture.sh
-bash exporter/test-instance-mir-ctfe-fixture.sh
+cargo +miri-exporter-8144389c895d test --locked --offline --manifest-path exporter/Cargo.toml
 bash tests/input/run.sh
 EVAL_CORE_SKIP_BUILD=1 bash tests/eval_core/run.sh
 bash tests/frontend/run.sh
