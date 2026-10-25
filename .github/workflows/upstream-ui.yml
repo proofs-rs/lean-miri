@@ -5,6 +5,16 @@ on:
     branches: [main]
   pull_request:
     paths:
+      - 'Miri/**'
+      - 'Miri.lean'
+      - 'native/**'
+      - 'exporter/**'
+      - 'lakefile.lean'
+      - 'lean-toolchain'
+      - 'upstream/source-lock.json'
+      - 'tools/build-exporter.sh'
+      - 'tools/ci/setup.sh'
+      - 'tools/run_guarded.py'
       - '.github/workflows/upstream-ui.yml'
       - 'tests/upstream_ui/**'
       - 'tests/test_upstream_ui.py'
