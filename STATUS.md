@@ -445,7 +445,9 @@ JSON parsing took 0.883–1.06 seconds in the four large trials. Replacing the w
 encoding alone therefore targets a small fraction of this input's measured cost.
 A future typed DAG/ID-based traversal could also remove structural work after
 parsing, but requires separate validation of its schema, diagnostics and adapters.
-No format migration or whole-guest performance claim is included here.
+The external format can remain JSON: retain document-local node IDs internally
+and include decoding context in memo keys, preserving validation and diagnostic
+rebasing. No format migration is implemented here.
 
 Validation: `tools/check-performance-regressions.sh` passed, including native
 cached/reference comparisons of readiness, ordered obligations and ABI/body
@@ -456,11 +458,66 @@ quick checks passed all 70 Python tests plus source/audit/fixture checks. Native
 profiling and parity targets built successfully. Earlier VM golden/parity
 attempts were interrupted and the same assertions completed natively. The
 initial stale-module regression invocation was corrected; all attempted logs
-are retained. Full `check.sh`, fresh producer/Miri comparisons and whole-guest
-timings were not run. The tested implementation, harness, build and toolchain
+are retained. At this stage, full `check.sh`, fresh producer/Miri comparisons and
+whole-guest timings had not been run; the large-input follow-up is below.
+The tested implementation, harness, build and toolchain
 files were hash-checked unchanged after integrating the concurrent CI changes
 from main. Frozen artifacts, hashes, raw counters and internal profiles are in
 ignored `scratch/runtime-value-cache/`.
+
+### Large catch-panic measurement follow-up
+
+The same [catch guest](tests/repro/unwind/catch_guest.rs) was freshly exported
+with the pinned compiler, `LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1`, `--root main`
+and crate name `catch_guest`. The schema3/shared-payload-v2 input is 278,817,280
+bytes, 736 bytes smaller than the historical 278,818,016-byte artifact. Its SHA256
+is `005614751be65ee4c8f0d1571bfd323fec262a537e481afedff1e22ca5027821`;
+it is a re-export of the same source, not the historical byte-identical input.
+It contains 1 selected body, 9,991 instances, 26,625 types, 180,133 allocations,
+43,827 caller-location rows and 1,574,011 shared nodes.
+
+Frozen full native runners shared all harness/dependency objects; only the
+Decoder object was replaced with the pre-change source from `21f163b1`, using
+the same Lean package/module setup and C compiler flags. Generated consumers
+call the decoder entry point and contain none of the changed private runtime-
+value implementation symbols. The small control matched terminal/tape/events
+before the large trials. Builds and exports were excluded from timing and did
+not overlap the four sequential baseline/candidate/baseline/candidate runs on
+CPU2 with one Lean thread, `--profile` and the unchanged no-seed diagnostic policy.
+
+| Trial | Baseline wall / CPU / steal (seconds) | Candidate wall / CPU / steal (seconds) |
+| --- | --- | --- |
+| 1 | 641.527 / 635.650 / 333.180 | 573.440 / 568.635 / 295.350 |
+| 2 | 665.373 / 650.205 / 362.950 | 527.109 / 520.578 / 259.370 |
+
+| Metric | Baseline | Candidate |
+| --- | ---: | ---: |
+| Full process wall median (seconds) | 653.450 | 550.274 |
+| Read/decode wall median (seconds) | 302.814 | 212.698 |
+| Internal runtime-value median (seconds) | 103.850 | 42.600 |
+| Internal JSON parse median (seconds) | 9.430 | 11.045 |
+| Sampled peak process-group RSS (GB, decimal) | 3.338–3.354 | 3.849 |
+
+The observed whole-process median difference is 103.176 seconds. Runtime-value
+spans were 95.7/112.0 seconds baseline and 42.4/42.8 seconds candidate. Unchanged
+phases also varied; do not attribute the entire whole-process difference to this
+change or infer a precise general speedup from these two shared-host pairs.
+Baseline trial2 had 9.231 seconds of cgroup throttling; the other trials had
+0.002/0.068/0.079 seconds. Steal is recorded raw, without a CPU-time correction.
+These values must not be compared directly with the historical 205-second run.
+
+All four runs passed strict readiness and finalized exit0/cursor2640, with
+byte-identical consumed tapes, choice events and terminal output. All leak walks
+reported live39/root22/edges17. Input and frozen binary hashes remained unchanged
+afterward. This is finite execution evidence, not safety over all choices or
+a new same-prepared-TyCtxt comparison with reference Miri.
+
+Preparation attempts remain visible: the previously cached debug exporter emitted
+schema2 and was not measured; a schema3 unscoped export was rejected at readiness
+with 9,247 blocking obligations and is not counted as successful execution. The
+corrected export selects main, retaining runtime checks for demanded queries.
+Raw artifacts, compiler/link manifests, all attempted logs, per-run counters and
+the structured `results.json` are in ignored `scratch/catch-runtime-value/`.
 
 ## Feature support outside the current acceptance scope
 

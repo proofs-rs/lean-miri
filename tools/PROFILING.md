@@ -76,6 +76,20 @@ records execution mode, artifact hash and any build-log path. Both modes accept
 `--seed U64` and `--profile`; omitting the seed preserves the existing bounded
 diagnostic zero policy. Explicit Lean runners require a prebuilt module closure.
 
+To regenerate the large catch-panic workload after Rust/sysroot setup, build the
+current exporter and select main explicitly:
+
+```bash
+bash tools/build-exporter.sh
+LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1 bash tools/export-mir.sh \
+  --output scratch/catch-fresh.json --root main -- \
+  tests/repro/unwind/catch_guest.rs --crate-name catch_guest
+```
+
+Unscoped exports also emit generic closure templates as independent roots and
+can fail readiness. Use one unchanged export across every paired trial; a fresh
+export of the same Rust source need not match a historical artifact's bytes.
+
 For hotspot attribution, `--profile` additionally reports complete scheduler
 iterations taking at least 10ms as `execution.iteration_N.*`. The label records
 the starting canonical body index as well as definition ID and MIR/unwind
