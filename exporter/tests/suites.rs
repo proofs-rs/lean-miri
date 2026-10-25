@@ -65,3 +65,23 @@ fn call_transfer_fixture() {
 fn instance_mir_ctfe_fixture() {
     run("bash", &["test-instance-mir-ctfe-fixture.sh"]);
 }
+
+#[test]
+fn producer_settings() {
+    run("bash", &["tests/run-producer.sh", "settings"]);
+}
+
+#[test]
+fn primitive_ranges() {
+    run("bash", &["tests/run-producer.sh", "primitive_ranges"]);
+}
+
+#[test]
+fn selected_alloc_world() {
+    run("bash", &["tests/run-producer.sh", "selected_alloc_world"]);
+}
+
+#[test]
+fn selected_static_typeid() {
+    run("bash", &["tests/run-producer.sh", "selected_static_typeid"]);
+}

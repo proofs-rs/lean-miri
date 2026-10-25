@@ -74,7 +74,8 @@ root with the same environment:
 ```
 
 This runs the Rust unit tests, Python unittest discovery under `exporter/tests/`,
-and all four `test-*.sh` fixture scripts, using Cargo's executable for the selected
+all four `test-*.sh` fixture scripts, and four producer checks, using Cargo's
+executable for the selected
 profile and target directory. Failures include the child process output. Fixture
 tests require bash, Python 3, the pinned toolchain and a matching MIR-enabled
 sysroot; missing prerequisites fail with setup instructions rather than skip.
@@ -87,6 +88,15 @@ Cargo additionally exposes those two as individually selectable tests. For examp
 append `--test suites call_transfer_fixture` to the Cargo command above. Cargo
 passes `EXPORTER_BIN` so fixture scripts do not rebuild the exporter; standalone
 scripts can also use this override. Each fixture uses temporary output directories.
+
+The producer checks cover input settings and consumed artifact hashes, exact
+u128/niche ranges, function/vtable allocator-world crosswalks, and static/TypeId
+crosswalks. Their validators and Rust fixtures live under `exporter/`. Run one
+with `--test suites producer_settings`, `primitive_ranges`, `selected_alloc_world`
+or `selected_static_typeid`. For standalone use, after building the exporter,
+run `bash exporter/tests/run-producer.sh NAME` (`settings` selects the settings
+check). An optional second argument supplies an output JSON path; the Lean
+primitive-range driver uses this to consume the same checked export.
 
 Lean decoder, frontend and execution comparisons under root `tests/` remain
 separate integration checks; this command does not run the entire repository suite.

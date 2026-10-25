@@ -92,6 +92,20 @@ budget of OPEN exploration does not resolve the proofs above.
 
 ## Validation gaps and pending checks within scope
 
+### Primitive-range Lean fixture reads shared transport as inline JSON
+
+`python3 tests/producer/primitive_ranges.py` currently fails in
+`tests/producer/PrimitiveRanges.lean` with `property not found: u128` on a genuine
+schema-3 export. The raw `compiler_runtime_primitives` object is a
+`$lean_miri_shared_ref`; the harness reads its `u128` field without resolving that
+reference. This was reproduced with the retained pre-migration export after
+building `Miri.Input.Decoder` and `Miri.Input.RuntimeMetadata`, as well as with
+fresh output after moving producer checks into `exporter/`. The separate Cargo
+primitive-range producer validator passes. Adapt the Lean fixture's transport
+handling and rerun its existing decoder/runtime assertions; its current failure
+is not a successful consumer validation.
+
+
 ### Compiler query closure and prepared allocation identity
 
 General query closure remains unproved for the [exporter](exporter/src/main.rs),
