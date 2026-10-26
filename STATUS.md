@@ -552,8 +552,18 @@ snapshot, including revisions, with explicit profile exclusions (1,118 cases,
 `tests/upstream_ui/README.md` for the acceptance contract and separate sharded
 workflow. A collector rejects incomplete or stale shards independently of
 comparison success. Registration and acceptance-oracle unit tests do not establish that
-these Rust inputs pass Lean execution. Full-sweep results are pending; do not
-claim coverage from incomplete shards or count Unsupported/timeout as agreement.
+these Rust inputs pass Lean execution.
+
+The [2026-10-26 CI sweep](https://github.com/proofs-rs/lean-miri/actions/runs/40207829366)
+finished with **failure**, and inventory coverage was incomplete. Of 809 candidate
+cases, the retained results report 604 agreements, 40 Lean timeouts, 33 UB kind/site
+mismatches, 45 export failures, 66 other nonpassing outcomes (including unsupported,
+process/interpreter failures and pending execution), and 21 missing results.
+Shard 27 was interrupted by runner shutdown and did not retain its artifact.
+The mismatch causes have not yet been classified as interpreter defects versus
+comparison-adapter defects. Do not claim full coverage or count Unsupported,
+timeouts, pending execution or missing results as agreement. The PR/main workflow
+currently runs the full suite automatically; it is not a passing regression gate.
 
 Initial investigation found a shared cost before guest execution: even a std
 `miri_start` returning zero pulls thousands of compiler instances through the
