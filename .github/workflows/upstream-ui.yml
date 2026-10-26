@@ -3,63 +3,17 @@ name: Upstream Miri UI
 on:
   push:
     branches: [main]
-  pull_request:
-    paths:
-      - 'Miri/**'
-      - 'Miri.lean'
-      - 'native/**'
-      - 'exporter/**'
-      - 'lakefile.lean'
-      - 'lean-toolchain'
-      - 'upstream/source-lock.json'
-      - 'tools/build-exporter.sh'
-      - 'tools/ci/setup.sh'
-      - 'tools/run_guarded.py'
-      - '.github/workflows/upstream-ui.yml'
-      - 'tests/upstream_ui/**'
-      - 'tests/test_upstream_ui.py'
-      - 'tools/check-upstream-ui.py'
-      - 'tools/collect-upstream-ui.py'
-      - 'tests/test_upstream_ui_collection.py'
-      - 'tools/NativeRunner.lean'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: upstream-ui-${{ github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: upstream-ui-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
-  cancel-previous:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-24.04
-    permissions:
-      actions: write
-      contents: read
-    steps:
-      - name: Cancel superseded runs of this PR workflow
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          UI_BRANCH: ${{ github.head_ref }}
-        run: |
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs?event=pull_request&per_page=100" > "$RUNNER_TEMP/ui-runs.json"
-          python3 - <<'PYTHON'
-          import json, os, pathlib, subprocess
-          runs = json.loads(pathlib.Path(os.environ['RUNNER_TEMP'], 'ui-runs.json').read_text())
-          for run in runs['workflow_runs']:
-              if (run.get('path', '').split('@')[0] == '.github/workflows/upstream-ui.yml'
-                      and run['head_branch'] == os.environ['UI_BRANCH']
-                      and run['id'] < int(os.environ['GITHUB_RUN_ID'])
-                      and run['status'] != 'completed'):
-                  subprocess.run(['gh', 'api', '--method', 'POST',
-                                  f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run['id']}/cancel"], check=False)
-          PYTHON
   compare:
-    needs: cancel-previous
-    if: always()
     name: UI shard ${{ matrix.shard }}
     runs-on: ubuntu-24.04
     timeout-minutes: 360

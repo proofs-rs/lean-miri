@@ -27,7 +27,8 @@ Default execution is serial: each exporter/Lean process has a shared-cgroup
 15.5 GB guard, an export timeout of 900 seconds and a Lean timeout of 600 seconds.
 `--jobs` is available but shares that memory budget.
 
-The GitHub workflow shards case IDs deterministically into 32 independent
+The GitHub workflow runs on pushes to `main` and manual dispatch only; PR
+updates do not trigger it. It shards case IDs deterministically into 32 independent
 workers and retains every shard's evidence even when comparisons fail. Its
 per-case budgets are explicit in the workflow. A missing final summary
 means the shard did not finish; an interrupted shard is never full coverage.

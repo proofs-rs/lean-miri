@@ -562,8 +562,8 @@ process/interpreter failures and pending execution), and 21 missing results.
 Shard 27 was interrupted by runner shutdown and did not retain its artifact.
 The mismatch causes have not yet been classified as interpreter defects versus
 comparison-adapter defects. Do not claim full coverage or count Unsupported,
-timeouts, pending execution or missing results as agreement. The PR/main workflow
-currently runs the full suite automatically; it is not a passing regression gate.
+timeouts, pending execution or missing results as agreement. The full suite runs on pushes to main and manual dispatch only, not on PR
+updates; it is not a passing regression gate.
 
 Initial investigation found a shared cost before guest execution: even a std
 `miri_start` returning zero pulls thousands of compiler instances through the
