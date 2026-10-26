@@ -758,3 +758,57 @@ To rerun, follow README setup/fetch, then
 Start individual genuine re-exports with `tools/export-connected.py`.
 Out-of-scope Windows/native validation and the general proofs above were
 also not completed in this run.
+
+## Pinned upstream UI sweep
+
+`tools/check-upstream-ui.py` now enumerates the entire pinned pass/fail source
+snapshot, including revisions, with explicit profile exclusions (1,118 cases,
+809 candidates with the supported settings). See
+`tests/upstream_ui/README.md` for the acceptance contract and separate sharded
+workflow. A collector rejects incomplete or stale shards independently of
+comparison success. Registration and acceptance-oracle unit tests do not establish that
+these Rust inputs pass Lean execution.
+
+The [2026-10-26 CI sweep](https://github.com/proofs-rs/lean-miri/actions/runs/40207829366)
+finished with **failure**, and inventory coverage was incomplete. Of 809 candidate
+cases, the retained results report 604 agreements, 40 Lean timeouts, 33 UB kind/site
+mismatches, 45 export failures, 66 other nonpassing outcomes (including unsupported,
+process/interpreter failures and pending execution), and 21 missing results.
+Shard 27 was interrupted by runner shutdown and did not retain its artifact.
+The mismatch causes have not yet been classified as interpreter defects versus
+comparison-adapter defects. Do not claim full coverage or count Unsupported,
+timeouts, pending execution or missing results as agreement. The full suite runs on pushes to main and manual dispatch only, not on PR
+updates; it is not a passing regression gate.
+
+Existing-regression compatibility was checked on 2026-10-26 for the upstream UI
+changes (`1bb518eb`). The `Miri`/`MiriTests` build, 47 registered runtime checks,
+axiom audit of 69,646 Miri declarations, Python 85 tests and exporter Cargo 9 tests
+passed. Existing component comparisons through integer/bool/char operations also
+passed, including MachineHooks, retag and Tree Borrows. The standard regression
+lane did **not** pass: `tests/integer_cast/run_differential.sh` stopped with exit
+124 at its unchanged pinned-reference Miri invocation (180-second timeout), before
+Lean comparison. Subsequent checks were attempted separately: immediate, operand,
+validity and memory-state/kind checks passed; the input suite was stopped at a
+20-minute verification budget while running `DecoderTests.lean`, so later input
+checks remain unconfirmed. Eval-core, runtime metadata, arithmetic execution,
+calls and globals passed. Frontend timed out at a separate 600-second verification
+budget. Extended and connected replay lanes were not rerun in this compatibility
+check. No regression was established in the completed checks, but full existing
+regression success and the causes of the timeouts remain unconfirmed. These
+verification budgets do not change maintained test expectations or interpreter
+limits. Detailed local logs are ignored under `scratch/compatibility-check/` and
+`scratch/ci/regression/`.
+
+Initial investigation found a shared cost before guest execution: even a std
+`miri_start` returning zero pulls thousands of compiler instances through the
+exporter's panic/helper/callback query closure. A local prepared export/reference
+completed, but does not establish Lean agreement or a bound for larger guests.
+Keep the original sources and their std startup; do not hide this cost by
+rewriting tests. The opt-in `LEAN_MIRI_TRACE_EXPORT` diagnostic exposes closure
+sizes and phases without changing query selection.
+
+The upstream `pass/no_core.rs` reference completed locally, but Lean rejected
+its missing structural/compiler obligations before execution, including retained
+catalog obligations. This is an unresolved import/bootstrap capability, not a
+passed normal-exit comparison. Preserve the strict readiness gate while
+investigating the demanded dependencies and absent core language items.

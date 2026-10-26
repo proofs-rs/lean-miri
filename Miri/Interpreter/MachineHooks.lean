@@ -292,12 +292,13 @@ structure Hooks (K User : Type) where
   /-- Source get_alloc_extra may materialize a compiler global or fail (extern static). -/
   ensureTreeExtra : AllocId → M K User Unit
 
-private def borrowAccessError (status : Miri.TreeBorrows.BorrowTree.BorrowTreeAccessStatus) : StepError :=
+private def borrowAccessError (context : String)
+    (status : Miri.TreeBorrows.BorrowTree.BorrowTreeAccessStatus) : StepError :=
   match status with
   | .AccessFailure _ (.TransitionError ..)
   | .WildcardFailure _ (.TransitionError ..)
   | .WildcardFailure _ (.NoValidExposedReferences ..) =>
-    .undefinedBehavior s!"Tree Borrows: {reprStr status}"
+    .undefinedBehavior s!"Tree Borrows {context}: {reprStr status}"
   | _ => .invalidProgram s!"Tree Borrows invariant: {reprStr status}"
 
 private def applyRetag [DecidableEq K] (request : Miri.TreeBorrows.RetagPipeline.Request) :
@@ -324,7 +325,7 @@ private def applyRetag [DecidableEq K] (request : Miri.TreeBorrows.RetagPipeline
   setCurrentFrame { frame with extra := { frame.extra with borrowTracker := some result.state.frame } }
   match result.outcome with
   | .error (.hook error) => throw error
-  | .error (.core (.treeAccess _ status)) => throw (borrowAccessError status)
+  | .error (.core (.treeAccess _ status)) => throw (borrowAccessError "reborrow" status)
   | .error (.core (.writeToReadOnly _)) => throw .retagWriteToReadOnly
   | .error (.core error) => fail "Tree Borrows retag" error
   | .ok provenance => return (provenance, result.events.contains .retaggedValueReconstructed)
@@ -409,7 +410,7 @@ def beforeStackPopWithEnsure [DecidableEq K]
         modify fun state => { state with machine := { state.machine with memory } }
         match released.status with
         | .Released => pure ()
-        | .AccessFailure _ status => throw (borrowAccessError status)
+        | .AccessFailure _ status => throw (borrowAccessError "protector release" status)
         | other => throw (.invalidProgram s!"protector release invariant: {reprStr other}")
     let state ← get
     let tracker ← match state.machine.borrowTracker with

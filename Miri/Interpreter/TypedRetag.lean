@@ -93,7 +93,7 @@ private def accessError (status : BorrowTree.BorrowTreeAccessStatus) : StepError
   | .AccessFailure _ (.TransitionError ..)
   | .WildcardFailure _ (.TransitionError ..)
   | .WildcardFailure _ (.NoValidExposedReferences ..) =>
-    .undefinedBehavior s!"Tree Borrows: {reprStr status}"
+    .undefinedBehavior s!"Tree Borrows reborrow: {reprStr status}"
   | _ => .invalidProgram s!"Tree Borrows invariant: {reprStr status}"
 
 /-- Actual per-segment memory/TB/race transitions, including partially modified
