@@ -565,6 +565,25 @@ comparison-adapter defects. Do not claim full coverage or count Unsupported,
 timeouts, pending execution or missing results as agreement. The full suite runs on pushes to main and manual dispatch only, not on PR
 updates; it is not a passing regression gate.
 
+Existing-regression compatibility was checked on 2026-10-26 for the upstream UI
+changes (`1bb518eb`). The `Miri`/`MiriTests` build, 47 registered runtime checks,
+axiom audit of 69,646 Miri declarations, Python 85 tests and exporter Cargo 9 tests
+passed. Existing component comparisons through integer/bool/char operations also
+passed, including MachineHooks, retag and Tree Borrows. The standard regression
+lane did **not** pass: `tests/integer_cast/run_differential.sh` stopped with exit
+124 at its unchanged pinned-reference Miri invocation (180-second timeout), before
+Lean comparison. Subsequent checks were attempted separately: immediate, operand,
+validity and memory-state/kind checks passed; the input suite was stopped at a
+20-minute verification budget while running `DecoderTests.lean`, so later input
+checks remain unconfirmed. Eval-core, runtime metadata, arithmetic execution,
+calls and globals passed. Frontend timed out at a separate 600-second verification
+budget. Extended and connected replay lanes were not rerun in this compatibility
+check. No regression was established in the completed checks, but full existing
+regression success and the causes of the timeouts remain unconfirmed. These
+verification budgets do not change maintained test expectations or interpreter
+limits. Detailed local logs are ignored under `scratch/compatibility-check/` and
+`scratch/ci/regression/`.
+
 Initial investigation found a shared cost before guest execution: even a std
 `miri_start` returning zero pulls thousands of compiler instances through the
 exporter's panic/helper/callback query closure. A local prepared export/reference
