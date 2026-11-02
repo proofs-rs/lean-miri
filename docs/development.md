@@ -170,13 +170,14 @@ boundaries, sampling and interpretation of results.
 ## Building the API reference
 
 Documentation uses a separate `docbuild` Lake project with doc-gen4 pinned to the
-Lean release in `lean-toolchain`. It builds the `Miri` library and its imports;
+Lean release in `lean-toolchain`. `MiriApi.lean` includes the `Miri` library and the frontend, execution-choice
+policy and TLS callback modules outside its import closure;
 Rust setup and the comparison fixtures are not required.
 
 After installing the pinned Lean toolchain, run from the repository root:
 
 ```bash
-(cd docbuild && flock /tmp/lean-miri-lake-build.lock lake build Miri:docs)
+(cd docbuild && flock /tmp/lean-miri-lake-build.lock lake build MiriApi:docs)
 python3 -m http.server --directory docbuild/.lake/build/doc 8000
 ```
 

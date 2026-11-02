@@ -30,11 +30,15 @@ jobs:
           echo "$ELAN_HOME/bin" >> "$GITHUB_PATH"
       - name: Build API reference
         working-directory: docbuild
-        run: flock /tmp/lean-miri-lake-build.lock lake build Miri:docs
+        run: flock /tmp/lean-miri-lake-build.lock lake build MiriApi:docs
       - name: Check generated entry points
         run: |
           test -s docbuild/.lake/build/doc/index.html
           test -s docbuild/.lake/build/doc/Miri.html
+          test -s docbuild/.lake/build/doc/Miri/Frontend/ImportMIR.html
+          test -s docbuild/.lake/build/doc/Miri/Input/ExecutionChoicePolicy.html
+          test -s docbuild/.lake/build/doc/Miri/Interpreter/TlsCallbacks.html
+          test -s docbuild/.lake/build/doc/declarations/declaration-data.bmp
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
