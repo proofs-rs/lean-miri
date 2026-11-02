@@ -1,3 +1,4 @@
+import Miri.Memory.QSortProof
 import Miri.Memory.AllocRange
 import Miri.Memory.CtfeProvenance
 
@@ -325,3 +326,91 @@ def applyCopy (copy : ProvenanceCopy Prov) (range : AllocRange) (repeatCount : U
 end ProvenanceMap
 
 end Miri.Memory
+
+namespace Miri.Memory.ProvenanceMap
+open Miri.ABI
+set_option autoImplicit false
+variable {P : Type}
+theorem clear_new (range : AllocRange) (data : Array UInt8) (pointerSize finish : Size)
+    (positive : pointerSize.bytes ≠ 0) (endEq : range.endExclusive = .ok finish) :
+    clear range data pointerSize (new (Prov := P)) = .ok () new := by
+  unfold clear
+  by_cases zero : range.size.bytes = 0
+  · simp [zero,pure,Pure.pure,EStateM.pure]
+  · simp only [zero,beq_iff_eq,Bool.false_eq_true,↓reduceIte]
+    unfold rangePtrs rangeEnd adjustedStart rangeEntries checked
+    simp only [endEq,positive,↓reduceIte]
+    simp [new,bind,Bind.bind,EStateM.bind,pure,Pure.pure,EStateM.pure,EStateM.get,EStateM.set,Except.mapError,Except.bind,Except.pure,positive,zero]
+end Miri.Memory.ProvenanceMap
+
+namespace Miri.Memory.ProvenanceMap
+open Miri.ABI
+set_option autoImplicit false
+set_option maxRecDepth 65536
+set_option maxHeartbeats 4000000
+variable {P : Type}
+private theorem empty_range (range : AllocRange) (pointerSize finish : Size)
+    (positive : pointerSize.bytes ≠ 0) (endEq : range.endExclusive = .ok finish) :
+    (new (Prov := P)).rangeEmpty range pointerSize = .ok true := by
+  unfold rangeEmpty rangePtrs rangeBytes adjustedStart rangeEnd rangeEntries
+  simp [new,positive,endEq,bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure,Except.mapError]
+
+theorem insertPtr_new (offset pointerSize finish : Size) (provenance : P)
+    (positive : pointerSize.bytes ≠ 0) (endEq : (allocRange offset pointerSize).endExclusive = .ok finish) :
+    insertPtr offset provenance pointerSize (new (Prov := P)) = .ok () ⟨#[(offset,provenance)],none⟩ := by
+  unfold insertPtr
+  have empty := empty_range (P := P) (allocRange offset pointerSize) pointerSize finish positive endEq
+  simp only [new] at empty
+  simp [checked,empty,new,insertEntry,bind,Bind.bind,EStateM.bind,EStateM.get,EStateM.set,
+    pure,Pure.pure,EStateM.pure]
+  simp [Array.filter_empty,Miri.Memory.QSortProof.singleton]
+
+private theorem singleton_before_range (range : AllocRange) (pointerSize finish : Size) (provenance : P)
+    (positive : pointerSize.bytes ≠ 0) (before : pointerSize.bytes.toNat ≤ range.start.bytes.toNat)
+    (endEq : range.endExclusive = .ok finish) :
+    (⟨#[(Size.ZERO,provenance)],none⟩ : ProvenanceMap P).rangePtrs range pointerSize = .ok #[] := by
+  have ptrNatPositive : 0 < pointerSize.bytes.toNat := Nat.pos_of_ne_zero (by
+    intro zero
+    exact positive (UInt64.toNat_inj.mp zero))
+  have differencePositive : 0 < range.start.bytes.toNat - (pointerSize.bytes.toNat-1) := by omega
+  have fits : range.start.bytes.toNat - (pointerSize.bytes.toNat-1) < 2^64 := by
+    have := range.start.bytes.toNat_lt
+    omega
+  have adjustedPositive : 0 < (UInt64.ofNat (range.start.bytes.toNat - (pointerSize.bytes.toNat-1))).toNat := by
+    simpa only [UInt64.toNat_ofNat',Nat.mod_eq_of_lt fits] using differencePositive
+  have notBelow : ¬ UInt64.ofNat (range.start.bytes.toNat - (pointerSize.bytes.toNat-1)) ≤ 0 := by
+    simp only [UInt64.le_iff_toNat_le,UInt64.toNat_zero]
+    omega
+  unfold rangePtrs adjustedStart rangeEnd rangeEntries
+  simp [positive,endEq,Size.ZERO,Size.ofBytes,notBelow,bind,Bind.bind,Except.bind,Except.mapError,pure,Pure.pure,Except.pure]
+
+ theorem clear_singleton_before (range : AllocRange) (data : Array UInt8) (pointerSize finish : Size) (provenance : P)
+    (positive : pointerSize.bytes ≠ 0) (before : pointerSize.bytes.toNat ≤ range.start.bytes.toNat)
+    (endEq : range.endExclusive = .ok finish) :
+    clear range data pointerSize (⟨#[(Size.ZERO,provenance)],none⟩ : ProvenanceMap P) =
+      .ok () ⟨#[(Size.ZERO,provenance)],none⟩ := by
+  have noPointers := singleton_before_range range pointerSize finish provenance positive before endEq
+  unfold clear
+  by_cases zero : range.size.bytes = 0
+  · simp [zero,pure,Pure.pure,EStateM.pure]
+  · simp only [zero,beq_iff_eq,↓reduceIte]
+    unfold rangeEnd checked
+    simp [endEq,noPointers,bind,Bind.bind,EStateM.bind,EStateM.get,EStateM.set,
+      pure,Pure.pure,EStateM.pure,Except.mapError,zero]
+
+theorem insertPtr_singleton_after (offset pointerSize finish : Size) (old newProvenance : P)
+    (positive : pointerSize.bytes ≠ 0) (before : pointerSize.bytes.toNat ≤ offset.bytes.toNat)
+    (endEq : (allocRange offset pointerSize).endExclusive = .ok finish) :
+    ∃ updated, insertPtr offset newProvenance pointerSize
+      (⟨#[(Size.ZERO,old)],none⟩ : ProvenanceMap P) = .ok () updated := by
+  have noPointers := singleton_before_range (allocRange offset pointerSize) pointerSize finish old positive before endEq
+  have empty : (⟨#[(Size.ZERO,old)],none⟩ : ProvenanceMap P).rangeEmpty (allocRange offset pointerSize) pointerSize =
+      .ok true := by
+    unfold rangeEmpty
+    rw [noPointers]
+    simp [rangeBytes,rangeEnd,rangeEntries,endEq,bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure,Except.mapError]
+  refine ⟨⟨insertEntry #[(Size.ZERO,old)] offset newProvenance,none⟩,?_⟩
+  unfold insertPtr
+  simp [checked,empty,bind,Bind.bind,EStateM.bind,EStateM.get,EStateM.set,pure,Pure.pure,EStateM.pure]
+
+end Miri.Memory.ProvenanceMap

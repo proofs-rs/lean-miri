@@ -99,3 +99,10 @@ def bindStep [DecidableEq K]
     | .error error state => (state,.error error) }
 
 end Miri.Interpreter.TerminatorMachine
+
+namespace Miri.Interpreter.TerminatorMachine
+ theorem updateControl_eq (h : Hooks K User Host) (f : Control Host → Control Host)
+    (state : MachineHooks.State K User) :
+    updateControl h f state = .ok () {state with machine := {state.machine with
+      user := h.setControl (f (h.getControl state.machine.user)) state.machine.user}} := by rfl
+end Miri.Interpreter.TerminatorMachine

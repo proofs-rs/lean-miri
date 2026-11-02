@@ -125,6 +125,25 @@ def writeMemory [DecidableEq K] (config : AccessConfig K User)
   commit config result.memory result.hooks result.touched
   finish config result.hooks result.outcome
 
+/-- The canonical zero-sized unit write preserves the entire machine and stack.
+No allocation lookup, pointer resolution or permission transition is assumed.
+The layout and pointer-size premises concern compiler/target data only. -/
+theorem writeMemory_zero_uninit [DecidableEq K]
+    (config : AccessConfig K User) (later : MemoryOperandLayout → Bool)
+    (place : MPlaceTy Provenance) (pointer : Pointer (Option Provenance))
+    (ty : Option Nat) (pointerSize : Size)
+    (unitLayout : localMemoryLayout place.layout =
+      ⟨Size.ZERO, Align.ONE, .Memory (sized := true), ty⟩)
+    (placeMemory : place.mplace = ⟨pointer, .none, none⟩)
+    (pointerMetadata : config.runtime.pointerSizeIn config.runtime.defaultAddressSpace = .ok pointerSize)
+    (retain : ∀ machine, config.retainTouched machine none = machine)
+    (state : State K User) :
+    writeMemory config later .uninit place state = .ok () state := by
+  simp only [writeMemory, unitLayout, placeMemory]
+  simp only [zero_uninit_write (pointerSize := pointerSize) (pointerMetadata := pointerMetadata)]
+  simp [commit, finish, retain]
+  with_unfolding_all rfl
+
 /-- Source stack init_allocation: root borrow tree before allocation race
 state. Stack allocation time comes from the active thread; historical local
 clocks are transferred by afterLocalMovedToMemory later. Span-only diagnostic
@@ -325,5 +344,62 @@ def bindRvalue [DecidableEq K]
     enforceValidity := compiler.enforceValidity
     copyOp := fun c source dest => copyRuntimePlace place copy c source dest false
     copyOpAllowTransmute := fun c source dest => copyRuntimePlace place copy c source dest true }
+
+end Miri.Interpreter.PlaceMachine
+
+namespace Miri.Interpreter.PlaceMachine
+open Miri.ABI Miri.Memory Miri.TreeBorrows
+set_option autoImplicit false
+set_option maxRecDepth 65536
+set_option maxHeartbeats 2000000
+variable {K User : Type}
+/-- Internal stage composition for the fresh allocation's first whole write.
+The caller discharges diagnostic/weak/sync edges from the current raw machine. -/
+theorem memoryAccess_fresh_write (config : AccessConfig K User)
+    (machine : Machine K User) (id : AllocId) (tag : BorTag) (size : Size)
+    (noClocks : machine.dataRace = none)
+    (diagnostic : config.diagnostic true id (allocRange Size.ZERO size) machine = .ok () machine)
+    (weak : config.weakMemoryWrite id (allocRange Size.ZERO size) machine = .ok () machine)
+    (sync : config.syncAccess true id (allocRange Size.ZERO size) machine = .ok () machine) :
+    memoryAccess config true ⟨machine,none⟩ (BorrowTree.new tag size) id (.concrete tag)
+      (allocRange Size.ZERO size) = ⟨⟨machine,none⟩,BorrowTree.new tag size,.ok ()⟩ := by
+  unfold memoryAccess bridge
+  dsimp only [Id.run]
+  rw [diagnostic]
+  simp only [Id.run,bind,Bind.bind,pure,Pure.pure,MachineHooks.memoryRaceAccess,noClocks]
+  rw [weak]
+  cases tracked : machine.borrowTracker with
+  | none => simp [tracked,sync,bind,Bind.bind,pure,Pure.pure]
+  | some tracker =>
+    have tree := BorrowTree.fresh_root_full_write tag size tracker.global.protectedTags
+    simp only [tracked,allocRange,↓reduceIte]
+    rw [tree.1,tree.2]
+    simp only [allocRange] at sync
+    simp [sync,bind,Bind.bind,pure,Pure.pure]
+/-- An internal exact resolver equation lifted through the production bridge. -/
+theorem resolvePointer_ok (config : AccessConfig K User) (memory : MemoryState Provenance BorrowTree K)
+    (machine : Machine K User) (pointer : Pointer (Option Provenance)) (amount : Int)
+    (result : Except UInt64 (ResolvedPointer ProvenanceExtra))
+    (resolved : config.resolvePointer memory pointer amount machine = .ok result machine) :
+    (accessHooks config).resolvePointer memory ⟨machine,none⟩ pointer amount = ⟨⟨machine,none⟩,.ok result⟩ := by
+  simp [accessHooks,bridge,resolved]
+
+/-- Commit a successful actual operand mutation through the production
+memory writer; every stack/user field outside memory is retained exactly. -/
+theorem writeMemory_of_result [DecidableEq K] (config : AccessConfig K User)
+    (later : MemoryOperandLayout → Bool) (value : Immediate Provenance) (place : MPlaceTy Provenance)
+    (state : State K User) (memory : MemoryState Provenance BorrowTree K)
+    (touched : Option (AllocationAccessRef Provenance BorrowTree))
+    (retain : config.retainTouched = fun machine _ => machine)
+    (operand : writeImmediateToMplaceNoValidate state.machine.memory ⟨state.machine,none⟩ value
+      ⟨place.mplace,localMemoryLayout place.layout⟩ config.runtime config.ghostMode config.globalKind
+      config.globalHooks (accessHooks config) config.dynamicLayout later =
+      ⟨memory,⟨state.machine,none⟩,touched,.ok ()⟩) :
+    writeMemory config later value place state = .ok () {state with machine := {state.machine with memory}} := by
+  unfold writeMemory
+  simp only [get,getThe,MonadStateOf.get,EStateM.get,bind,Bind.bind,EStateM.bind]
+  rw [operand]
+  simp [commit,finish,retain,modify,modifyGet,MonadStateOf.modifyGet,EStateM.modifyGet,
+    pure,Pure.pure,EStateM.pure,bind,Bind.bind,EStateM.bind]
 
 end Miri.Interpreter.PlaceMachine

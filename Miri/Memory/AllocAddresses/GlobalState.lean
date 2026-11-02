@@ -437,6 +437,50 @@ def freeAllocId (state : GlobalAddressState) (id : AllocId) (size : Size)
   else
     return ⟨state, .error (.malformedInverseIndex position state.intToPtrMap.size)⟩
 
+/-- Proof interface to the existing inverse-search consumer, exact base case. -/
+theorem allocation_base_zero (state : GlobalAddressState) (address : UInt64) (id : AllocId)
+    (hooks : AddressLookupHooks) (position : Nat)
+    (mode : state.provenanceMode ≠ .strict)
+    (search : findInverseIndex state.intToPtrMap address = (position,true))
+    (row : state.intToPtrMap[position]? = some ⟨address,id⟩)
+    (exposed : state.exposed.contains id = true) (live : hooks.isLive id = some true) :
+    state.allocIdFromAddr address 0 hooks = .ok (some id) := by
+  have member : id ∈ state.exposed := by simpa using exposed
+  simp [allocIdFromAddr,inverseSearch,search,mode,row,member,live,
+    bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure]
+
+/-- Proof interface to the existing inverse-search consumer, interior case. -/
+theorem allocation_interior_zero (state : GlobalAddressState) (address base : UInt64) (id : AllocId)
+    (hooks : AddressLookupHooks) (size : Size) (position : Nat)
+    (mode : state.provenanceMode ≠ .strict)
+    (search : findInverseIndex state.intToPtrMap address = (position+1,false))
+    (row : state.intToPtrMap[position]? = some ⟨base,id⟩)
+    (known : hooks.sizeOf id = some size) (inside : address-base < size.bytes)
+    (exposed : state.exposed.contains id = true) (live : hooks.isLive id = some true) :
+    state.allocIdFromAddr address 0 hooks = .ok (some id) := by
+  have member : id ∈ state.exposed := by simpa using exposed
+  simp [allocIdFromAddr,inverseSearch,search,mode,row,known,inside,member,live,
+    bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure]
+
+/-- The selected allocation and a current base cache complete ptr_get_alloc. -/
+theorem pointer_from_selection (state : GlobalAddressState) (pointer : Pointer Provenance)
+    (count : Int64) (hooks : AddressLookupHooks) (arithmetic : PointerArithmetic)
+    (id : AllocId) (base relative : UInt64)
+    (selected : (match pointer.provenance with
+      | .concrete id _ => (Except.ok (some id) : Except AddressStateError (Option AllocId))
+      | .wildcard => state.allocIdFromAddr pointer.offset.bytes count hooks) = .ok (some id))
+    (cached : state.baseAddr.find? (fun row => row.allocId == id) = some ⟨id,base⟩)
+    (truncated : arithmetic.truncateToTargetUsize (pointer.offset.bytes-base) = .ok relative) :
+    state.ptrGetAlloc pointer count hooks arithmetic = .ok (some (id,Size.ofBytes relative)) := by
+  cases kind : pointer.provenance with
+  | concrete supplied tag =>
+    have same : supplied = id := by simpa only [kind,Except.ok.injEq,Option.some.injEq] using selected
+    subst supplied
+    simp [ptrGetAlloc,kind,findBase,cached,truncated,Except.mapError,bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure]
+  | wildcard =>
+    have chosen : state.allocIdFromAddr pointer.offset.bytes count hooks = .ok (some id) := by simpa only [kind] using selected
+    simp [ptrGetAlloc,kind,chosen,findBase,cached,truncated,Except.mapError,bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure]
+
 end GlobalAddressState
 
 end Miri.Memory.AllocAddresses

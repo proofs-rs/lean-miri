@@ -110,3 +110,33 @@ def requiredConstants (p : Prepared) (body : LoadedBody) : MachineHooks.M K User
 def hooks (p : Prepared) (base : CallMachine.Lifecycle K User C) : CallMachine.Lifecycle K User C :=
   {base with preambleSpan := preambleSpan p, requiredConstants := requiredConstants p}
 end Miri.Input.CompilerLifecycle
+
+namespace Miri.Input.CompilerLifecycle
+open Miri Miri.ABI Miri.Memory Miri.Interpreter Miri.MIR
+set_option autoImplicit false
+variable {K U : Type}
+theorem preamble_known (p : Prepared) (body : LoadedBody) (actual : LoweredBody)
+    (span : SpanRef) (fnInstance : CallInstance)
+    (row : p.program.bundle.bodies[body.identity.index]? = some actual)
+    (contents : actual.body = body.body)
+    (evidence : p.entries[body.identity.index]? = some ⟨.ok span,.ok fnInstance,.ok #[]⟩) :
+    (preambleSpan p body : MachineHooks.M K U SpanRef) = pure span := by
+  simp [preambleSpan, entry, lift, row, contents, evidence,
+    bind, Except.bind, pure, Except.pure]
+ theorem required_empty (p : Prepared) (body : LoadedBody) (actual : LoweredBody)
+    (span : SpanRef) (fnInstance : CallInstance)
+    (row : p.program.bundle.bodies[body.identity.index]? = some actual)
+    (contents : actual.body = body.body)
+    (evidence : p.entries[body.identity.index]? = some ⟨.ok span,.ok fnInstance,.ok #[]⟩)
+    (frames : Array (Frame Provenance LocalLayout MachineHooks.FrameExtra))
+    (frame : Frame Provenance LocalLayout MachineHooks.FrameExtra)
+    (machine : MachineHooks.MachineState K U)
+    (identity : frame.bodyIdentity = body.identity)
+    (function : frame.functionInstance = fnInstance) :
+    requiredConstants p body (⟨⟨frames.push frame⟩,machine⟩ : MachineHooks.State K U) =
+      .ok () ⟨⟨frames.push frame⟩,machine⟩ := by
+  simp [requiredConstants, entry, lift, row, contents, evidence,
+    MachineHooks.currentFrame, Stack.currentFrame?, identity, function,
+    get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,
+    Except.bind,Except.pure]
+end Miri.Input.CompilerLifecycle

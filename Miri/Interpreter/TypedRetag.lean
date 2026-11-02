@@ -208,4 +208,88 @@ def machineRetagPtrValue [DecidableEq K] (h : Hooks K User) (budget : Nat)
   | none => return none
   | some tracker => retagPtrValue h budget value ty tracker.retagMode
 
+/-- In the imprecise unit profile, the inside permission map is empty. This
+uses compiler Freeze and profile facts, with no memory-operation premise. -/
+theorem insidePermissions_unit (h : Hooks K User) (budget : Nat)
+    (place : MPlaceTy Provenance)
+    (precise : h.preciseInteriorMut = pure false)
+    (freeze : h.typeIsFreeze place.layout.ty = pure true) :
+    insidePermissions h budget place Size.ZERO MachineHooks.protectionPolicy =
+      pure (DedupRangeMap.new Size.ZERO
+        (⟨.ReservedFrz false, false, .None⟩ : Tree.LocationState)) := by
+  unfold insidePermissions
+  rw [precise]
+  simp only [bind, pure]
+  rw [freeze]
+  with_unfolding_all rfl
+
+/-- The raw enabled/disabled tracker query, exposed for source-level proofs. -/
+theorem tracker_apply (state : State K User) : tracker state =
+    match state.machine.borrowTracker with
+    | some value => .ok value state
+    | none => .error (.invalidProgram "Tree Borrows called while disabled") state := by
+  change ((show M K User MachineHooks.BorrowState from match state.machine.borrowTracker with
+    | some value => (pure value : M K User MachineHooks.BorrowState)
+    | none => throw (.invalidProgram "Tree Borrows called while disabled")) state) = _
+  cases state.machine.borrowTracker <;> rfl
+
+/-- The tree query follows the current raw live lookup without effects. -/
+theorem getTree_apply (id : AllocId) (state : State K User) : getTree id state =
+    match state.machine.memory.live.find? (fun row => row.1 == id) with
+    | some entry => .ok entry.2.allocation.extra state
+    | none => .error (.invalidProgram "Tree Borrows allocation extra unavailable") state := by
+  change ((show M K User BorrowTree from do
+    let some entry := state.machine.memory.live.find? (fun row => row.1 == id)
+      | throw (.invalidProgram "Tree Borrows allocation extra unavailable")
+    pure entry.2.allocation.extra) state) = _
+  cases state.machine.memory.live.find? (fun row => row.1 == id) <;> rfl
+
+/-- The exact tree write-back equation retains both failure branches. -/
+theorem updateTree_apply [DecidableEq K] (id : AllocId) (tree : BorrowTree) (state : State K User) :
+    updateTree id tree state =
+    match state.machine.memory.live.find? (fun row => row.1 == id) with
+    | none => .error (.invalidProgram "Tree Borrows allocation extra unavailable") state
+    | some entry =>
+      match state.machine.memory.setLiveAllocation id (entry.2.allocation.setExtra tree) with
+      | .error error => .error (.invalidProgram s!"update allocation tree: {reprStr error}") state
+      | .ok memory => .ok () {state with machine := {state.machine with memory}} := by
+  change ((show M K User Unit from do
+    let some entry := state.machine.memory.live.find? (fun row => row.1 == id)
+      | throw (.invalidProgram "Tree Borrows allocation extra unavailable")
+    let memory ← checked "update allocation tree"
+      (state.machine.memory.setLiveAllocation id (entry.2.allocation.setExtra tree))
+    set {state with machine := {state.machine with memory}}) state) = _
+  cases found : state.machine.memory.live.find? (fun row => row.1 == id) with
+  | none => rfl
+  | some entry =>
+    dsimp only
+    cases mutation : state.machine.memory.setLiveAllocation id (entry.2.allocation.setExtra tree) <;>
+      simp [checked] <;> with_unfolding_all rfl
+
+/-- Checked pure compiler/memory results preserve the existing error mapping. -/
+theorem checked_eq (operation : String) (value : Except E A) [Repr E] :
+    (checked operation value : M K User A) =
+      match value with
+      | .ok result => pure result
+      | .error error => throw (.invalidProgram s!"{operation}: {reprStr error}") := by rfl
+
+end Miri.Interpreter.TypedRetag
+
+namespace Miri.Interpreter.TypedRetag
+open Miri.ABI Miri.Memory Miri.TreeBorrows
+set_option autoImplicit false
+/-- A checked tag-counter failure stops before any reborrow effect. -/
+theorem retagPlace_tag_failure {K U : Type} [DecidableEq K]
+    (h : Hooks K U) (budget : Nat) (place : MPlaceTy Provenance)
+    (policy : RetagPolicy.NewPermission) (state : MachineHooks.State K U)
+    (old : MachineHooks.BorrowState) (measured : Option (Size × Align))
+    (sizeQuery : h.sizeAndAlign place = pure measured)
+    (enabled : state.machine.borrowTracker = some old)
+    (failure : old.global.newPointerTag = .error (.pointerTagOverflow old.global.nextPointerTag)) :
+    ∃ reason, retagPlace h budget place policy state = .error (.invalidProgram reason) state := by
+  refine ⟨"new pointer tag" ++ ": " ++ reprStr (.pointerTagOverflow old.global.nextPointerTag : GlobalStateError),?_⟩
+  simp [retagPlace,sizeQuery,tracker,checked,enabled,failure,bind,Bind.bind,EStateM.bind,
+    pure,Pure.pure,EStateM.pure,get,getThe,MonadStateOf.get,EStateM.get,
+    throw,throwThe,MonadExceptOf.throw,EStateM.throw]
+  rfl
 end Miri.Interpreter.TypedRetag

@@ -207,3 +207,24 @@ def executionHooks (p : CompilerProviders.Prepared)
     compiler := compilerHooks p base.compiler
     rvalues := {base.rvalues with normalize := fun _ ty => normalizeCastTarget p ty}}
 end Miri.Input.CompilerFrameContext
+
+namespace Miri.Input.CompilerFrameContext
+open Miri Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
+set_option autoImplicit false
+variable {K U : Type}
+ theorem localSpan_known (p : CompilerProviders.Prepared) (body : LoadedBody) (actual : LoweredBody)
+    (fnInstance : CallInstance) (decl : LocalDecl) (span : SpanRef)
+    (row : p.program.bundle.bodies[body.identity.index]? = some actual)
+    (contents : actual.body = body.body)
+    (loader : CallResolution.loadedBodyOfInstance p.lifecycle.calls.calls fnInstance = .ok body)
+    (declaration : actual.input.locals[0]? = some decl)
+    (indexed : p.program.bundle.spans.toList.idxOf? decl.sourceInfo.span = some span.id)
+    (frames : Array ActualFrame) (frame : ActualFrame) (machine : MachineHooks.MachineState K U)
+    (identity : frame.bodyIdentity = body.identity) (function : frame.functionInstance = fnInstance)
+    (frameBody : frame.body = body.body) :
+    localSpan p body.body 0 (⟨⟨frames.push frame⟩,machine⟩ : MachineHooks.State K U) =
+      .ok span ⟨⟨frames.push frame⟩,machine⟩ := by
+  simp [localSpan,MachineHooks.currentFrame,Stack.currentFrame?,bodyOfFrame,lift,
+    row,contents,loader,declaration,indexed,identity,function,frameBody,
+    get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,Except.bind,Except.pure]
+end Miri.Input.CompilerFrameContext

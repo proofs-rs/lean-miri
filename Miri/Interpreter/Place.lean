@@ -32,8 +32,16 @@ structure PlaceHooks (P S C E : Type) where
 
 private def placeLift (value : Except StepError A) : PlaceM S A :=
   match value with | .ok value => pure value | .error error => throw error
+/-- Successful physical/compiler results lift without state effects. -/
+@[simp] theorem placeLift_ok (value : A) :
+    placeLift (.ok value) = (pure value : PlaceM S A) := rfl
+
 private def stackLift (value : Except StackError A) : PlaceM S A :=
   placeLift (value.mapError .stack)
+/-- Successful stack results lift without changing interpreter state. -/
+@[simp] theorem stackLift_ok (value : A) :
+    stackLift (.ok value) = (pure value : PlaceM S A) := rfl
+
 private def projectionLift (value : Except ProjectionError A) : PlaceM S A :=
   placeLift (value.mapError fun error => match error with
     | .machineError error => error
@@ -56,6 +64,17 @@ private def checkLocalIdentity (h : PlaceHooks P S C E) (identity : LocalsIdenti
   if h.debugAssertions then
     if identity != (← h.getFrame).localsIdentity then
       throw (.invalidProgram "local place refers to a different locals buffer")
+
+/-- Public source equation for the structural current-frame guard. -/
+theorem requireCurrent_eq (h : PlaceHooks P S C E) (frame : Nat) :
+    requireCurrent h frame = (do
+      if (← h.frameIndex) != frame then throw (.invalidProgram "place refers to another frame")) := rfl
+
+/-- Debug-disabled local identity assertions are query-free. -/
+@[simp] theorem checkLocalIdentity_debugOff (h : PlaceHooks P S C E)
+    (identity : LocalsIdentity) (off : h.debugAssertions = false) :
+    checkLocalIdentity h identity = pure () := by
+  simp [checkLocalIdentity, off]
 
 def localToPlace (h : PlaceHooks P S C E) (choice : C) (localId : MIR.LocalId) : PlaceM S (RuntimePlace P) := do
   let layout ← placeLayoutOfLocal h choice localId

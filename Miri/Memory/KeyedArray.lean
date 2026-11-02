@@ -132,5 +132,99 @@ def mapValuesForKey (table : KeyedArray K V keyFn) (key : K) (f : V → V)
     result := result.modifyAt rowIndex f preserves
   return result
 
+private theorem index_contains [LawfulBEq K] [LawfulHashable K]
+    (keys : Array K) (initial : Nat × Std.HashMap K (Array Nat)) (key : K) :
+    (keys.foldl indexStep initial).2.contains key =
+      (initial.2.contains key || keys.contains key) := by
+  rw [←Array.foldl_toList,←Array.contains_toList]
+  generalize keys.toList = rows
+  induction rows generalizing initial with
+  | nil => simp
+  | cons first rest ih =>
+    have swap : (first == key) = (key == first) := by
+      apply Bool.eq_iff_iff.mpr
+      simp only [beq_iff_eq]
+      exact eq_comm
+    simp [List.foldl_cons,indexStep,ih,Std.HashMap.contains_insert,
+      Bool.or_assoc,Bool.or_comm,Bool.or_left_comm,swap]
+
+/-- The certified hash index contains precisely the keys of current rows. -/
+theorem contains_rows [LawfulBEq K] [LawfulHashable K]
+    (table : KeyedArray K V keyFn) (key : K) :
+    table.contains key = (table.toArray.map keyFn).contains key := by
+  simp only [contains,table.exact,canonicalIndex,index_contains]
+  simp [table.keysMatchRows,toArray]
+
 end KeyedArray
 end Miri.Memory
+
+namespace Miri.Memory.KeyedArray
+variable {K V : Type} [BEq K] [Hashable K] [LawfulBEq K] [LawfulHashable K]
+private def indexValid (state : Nat × Std.HashMap K (Array Nat)) : Prop :=
+  ∀ (key : K) (positions : Array Nat), state.2[key]? = some positions →
+    0 < positions.size ∧ ∀ index ∈ positions, index < state.1
+private theorem indexStep_valid (state : Nat × Std.HashMap K (Array Nat))
+    (key : K) (valid : indexValid state) : indexValid (indexStep state key) := by
+  intro query positions found
+  change 0 < positions.size ∧ ∀ index ∈ positions, index < state.1+1
+  simp only [indexStep,Std.HashMap.getElem?_insert] at found
+  split at found
+  · rename_i same
+    cases found
+    constructor
+    · simp
+    · intro index member
+      rcases Array.mem_push.mp member with old | rfl
+      · cases previous : state.2[key]? with
+        | none => simp [Std.HashMap.getD_eq_getD_getElem?,previous] at old
+        | some rows =>
+          have oldValid := valid key rows previous
+          have before : index < state.1 := oldValid.2 index (by simpa [Std.HashMap.getD_eq_getD_getElem?,previous] using old)
+          omega
+      · omega
+  · have oldValid := valid query positions found
+    exact ⟨oldValid.1,fun index member => by have bound := oldValid.2 index member; omega⟩
+private theorem canonical_valid (keys : Array K) : indexValid (canonicalIndex keys) := by
+  have fold : ∀ (rows : List K) state, indexValid state →
+      indexValid (rows.foldl indexStep state) := by
+    intro rows
+    induction rows with
+    | nil => intro state valid; exact valid
+    | cons first rest ih => intro state valid; exact ih _ (indexStep_valid state first valid)
+  change indexValid (keys.foldl indexStep (0,{}))
+  rw [←Array.foldl_toList]
+  apply fold keys.toList (0,{})
+  intro key positions found
+  simp at found
+private theorem canonical_size (keys : Array K) : (canonicalIndex keys).1 = keys.size := by
+  have fold : ∀ (rows : List K) state, (rows.foldl indexStep state).1 = state.1+rows.length := by
+    intro rows
+    induction rows with
+    | nil => intro state; simp
+    | cons first rest ih => intro state; simp [List.foldl_cons,ih,indexStep]; omega
+  simpa [canonicalIndex,Array.foldl_toList] using fold keys.toList (0,{})
+/-- A certified present key always selects a real row, including duplicate keys. -/
+theorem find_of_contains {keyFn : V → K} (table : KeyedArray K V keyFn) (key : K)
+    (present : table.contains key = true) : ∃ row, table.find? key = some row := by
+  have existsPositions : ∃ positions, table.indexState.2[key]? = some positions := by
+    cases query : table.indexState.2[key]? with
+    | none => simp only [contains,Std.HashMap.contains_eq_isSome_getElem?,query,Option.isSome_none,Bool.false_eq_true] at present
+    | some positions => exact ⟨positions,rfl⟩
+  obtain ⟨positions,found⟩ := existsPositions
+  have good := canonical_valid table.keys key positions (by simpa only [←table.exact] using found)
+  have first : 0 < positions.size := good.1
+  have bound : positions[0] < table.rows.size := by
+    have small := good.2 positions[0] (Array.getElem_mem first)
+    rw [canonical_size,table.aligned] at small
+    exact small
+  refine ⟨table.rows[positions[0]],?_⟩
+  simp [find?,found,Array.getElem?_eq_getElem first,Array.getElem?_eq_getElem bound]
+/-- Missing lookup excludes index membership, without an additional coherence law. -/
+theorem contains_false_of_find_none {keyFn : V → K} (table : KeyedArray K V keyFn) (key : K)
+    (missing : table.find? key = none) : table.contains key = false := by
+  cases present : table.contains key
+  · rfl
+  · obtain ⟨row,found⟩ := find_of_contains table key present
+    rw [missing] at found
+    cases found
+end Miri.Memory.KeyedArray

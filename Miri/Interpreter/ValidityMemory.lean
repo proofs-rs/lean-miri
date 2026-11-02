@@ -84,6 +84,21 @@ def beginPadding [DecidableEq K] (env : Environment P E K H X S)
     (place : MPlaceTy P) (size : Size) : M S (Option PaddingHandle) := do
   return (← pointerAccess env place size true).map fun reference => ⟨reference.allocId,reference.range⟩
 
+/-- A zero-sized padding region obtains no allocation reference. The lens
+identity states that committing the unchanged view has no effect. -/
+theorem beginPadding_zero [DecidableEq K] (env : Environment P E K H X S)
+    (place : MPlaceTy P) (state : S)
+    (identity : env.putTouched (env.putMemoryHooks state (env.memory state) (env.hooks state)) none = state) :
+    beginPadding env place Size.ZERO state = .ok none state := by
+  have zero : AllocationAccess.getPtrAllocMut (env.memory state) (env.hooks state)
+      ⟨env.context.runtime.pointerSize⟩ place.mplace.ptr Size.ZERO true
+      env.context.globalKind env.context.globalHooks env.context.accessHooks =
+      ⟨env.memory state, env.hooks state, none, .ok none⟩ := by
+    with_unfolding_all rfl
+  simp [beginPadding, pointerAccess, zero, commit, identity,
+    get, getThe, MonadStateOf.get, EStateM.get, modify, modifyGet, MonadStateOf.modifyGet,
+    EStateM.modifyGet, bind, Bind.bind, EStateM.bind, pure, Pure.pure, EStateM.pure]
+
 private def mutate [DecidableEq K] (env : Environment P E K H X S) (handle : PaddingHandle)
     (action : Allocation P E → EStateM.Result AllocError (Allocation P E) Unit) : M S Unit := do
   let state ← get

@@ -1,0 +1,66 @@
+name: Empty-function proof
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    name: empty-function kernel and axiom audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      LEAN_NUM_THREADS: '1'
+      PYTHONUNBUFFERED: '1'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Restore pinned Lean toolchain
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .elan
+          key: elan-proof-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('lean-toolchain') }}
+      - name: Install pinned Lean
+        run: bash tools/setup-lean.sh
+      - name: Compute compatible library cache key
+        id: library-key
+        run: |
+          abi=$( { cc --version; ld --version; printf '%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"; } | sha256sum | cut -d ' ' -f 1)
+          echo "prefix=lean-proof-build-v1-${{ runner.os }}-${{ runner.arch }}-${abi}-${{ hashFiles('lean-toolchain', 'lakefile.lean', 'lake-manifest.json', 'native/**') }}-" >> "$GITHUB_OUTPUT"
+      - name: Restore library build artifacts
+        id: library-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .lake/build
+          key: ${{ steps.library-key.outputs.prefix }}${{ hashFiles('Miri.lean', 'Miri/**/*.lean', 'tools/*.lean') }}
+          restore-keys: ${{ steps.library-key.outputs.prefix }}
+      - name: Check proof closure and transitive axioms
+        run: |
+          mkdir -p scratch/ci-proofs
+          bash tools/check-empty-function.sh 2>&1 | tee scratch/ci-proofs/empty_function.log
+      - name: Save successful library build artifacts
+        if: success() && steps.library-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .lake/build
+          key: ${{ steps.library-cache.outputs.cache-primary-key }}
+      - name: Retain proof diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: empty_function-proof-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            scratch/ci-proofs/

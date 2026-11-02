@@ -7,6 +7,47 @@ execution in the current checkout. See the
 [development guide](docs/development.md#check-commands) for check entry points
 and prerequisites.
 
+## Empty-function call safety
+
+The [empty_function example](examples/empty_function/README.md) proves `TotalCallGoal.Target` through
+`ActualNoUBFinal.target` (`ActualNoUBFinal.noUB` per caller): actual call
+initialization and every finite in-call execution prefix report no UB.
+
+The target uses only `Metadata`, `Profile`, `RuntimeProfile` and
+`CurrentInputDraft`. It has no numeric resource/`ChoiceFits` admission
+condition, future success law or remaining family/stage proof. It observes
+actual initialization and step errors with their failed states and permits
+checked non-UB stops, including resource exhaustion. Normal return and
+NoErrors for every resource supply are not claimed; the conditional
+normal-return and eleven-clause preservation results are intermediate results.
+
+Allocator/generator coherence for projected backing is required only when
+its raw runtime and enabled-source counters are active. Zero/wrapped counters
+and exhaustion flags remain admitted; when allocation is attempted, its
+actual checked error is observed. Reserving the final MAX ID itself is also admitted.
+`AllocatorActive` is a guard on coherence fields, not a caller premise, and
+the allocator implementation is unchanged.
+
+The current-input record explicitly describes raw caller, representation,
+pointer/source, memory/borrow, address/ID and runtime coherence. A theorem
+that every Rust-valid caller state satisfies this domain remains absent.
+Compiler/exporter correctness and Rust/interpreter correspondence remain
+trusted; the agreed pure metadata facts are explicit assumptions. The exact
+race-off/shallow/fixed-scheduling profile remains in `Specification`. Other
+scheduler interleavings and caller execution after return are outside scope.
+
+Runtime definitions are unchanged; Miri additions are completed proof-only
+APIs. The checker verifies fixed Rust/MIR hashes and library source stability
+during validation. Proof-only reflected MIR is `noncomputable` to avoid a native-code
+boxing panic, without adding axioms or replacing the interpreter.
+
+`bash tools/check-empty-function.sh` passed on this branch: the root and its source
+closure compile, the target type checks, fixed Rust/MIR hashes match, and the
+transitive axiom audit permits only `propext`, `Quot.sound`, and
+`Classical.choice`. `bash tools/check-quick.sh` also passed. These checks do
+not establish compiler/exporter correctness or the missing caller-domain
+transport theorem.
+
 ## Self-contained Lean test entry points
 
 Self-contained Lean checks are collected under `MiriTests/` and registered with
