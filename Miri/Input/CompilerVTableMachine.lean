@@ -22,8 +22,11 @@ private def lift (result : Except String A) : MachineHooks.M K User A :=
   | .error error => throw (.unsupported s!"compiler vtable machine: {error}")
 
 def hooks (p : Prepared) (image : AllocationImage.Imported)
-    (base : VTableMachine.Hooks K User Other) : VTableMachine.Hooks K User Other :=
-  let lookup := CompilerVTableRuntime.GlobalLookup.prepare p.calls.symbols
+    (base : VTableMachine.Hooks K User Other)
+    (cache : Option (CompilerVTableRuntime.GlobalLookup p.calls.symbols) := none) : VTableMachine.Hooks K User Other :=
+  let lookup := match cache with
+    | some lookup => lookup
+    | none => CompilerVTableRuntime.GlobalLookup.prepare p.calls.symbols
   {base with importedVTable := fun id => do
     lift (CompilerVTableRuntime.globalVTableUsing p.calls.symbols lookup image (← get).machine.memory id)}
 

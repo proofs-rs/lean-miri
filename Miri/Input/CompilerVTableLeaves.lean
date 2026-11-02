@@ -16,8 +16,8 @@ def make (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
       MachineHooks.M K U (MemPlace Provenance)) :
     VTableHooks Provenance (MachineHooks.State K U) C CallInstance (FnAbi MIR.TyId) :=
   let facts := p.lifecycle.calls.symbols.facts
-  let lookup := CompilerVTableRuntime.GlobalLookup.prepare p.lifecycle.calls.symbols
-  let engine := CompilerVTableMachine.hooks p.vtables image engine
+  let lookup := p.symbolLookup
+  let engine := CompilerVTableMachine.hooks p.vtables image engine (some p.vtableLookup)
   { target := p.runtime.target.base
     isDynamic := fun _ ty => lift (CompilerFacts.boolean facts.context ty "is_dynamic")
     memoryOffset := memoryOffset

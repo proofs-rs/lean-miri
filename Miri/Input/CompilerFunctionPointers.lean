@@ -85,9 +85,15 @@ private def lift (result : Except String A) : MachineHooks.M K User A :=
   | .error error => throw (.unsupported s!"compiler function pointers: {error}")
 
 def hooks (p : Prepared) (image : AllocationImage.Imported)
-    (base : FunctionPointers.Hooks K User Other) : FunctionPointers.Hooks K User Other :=
-  let lookup := CompilerVTableRuntime.GlobalLookup.prepare p.calls.symbols
-  let inlineLookup := InlineLookup.prepare p
+    (base : FunctionPointers.Hooks K User Other)
+    (globalCache : Option (CompilerVTableRuntime.GlobalLookup p.calls.symbols) := none)
+    (inlineCache : Option (InlineLookup p) := none) : FunctionPointers.Hooks K User Other :=
+  let lookup := match globalCache with
+    | some lookup => lookup
+    | none => CompilerVTableRuntime.GlobalLookup.prepare p.calls.symbols
+  let inlineLookup := match inlineCache with
+    | some lookup => lookup
+    | none => InlineLookup.prepare p
   {base with
     inlineNever := fun callee => lift do
       let some never := inlineNeverUsing inlineLookup callee
