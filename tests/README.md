@@ -357,3 +357,18 @@ not executed. Normal termination for selected programs/seeds is finite evidence.
 UB freedom requires excluding UB on every reachable permitted finite prefix;
 local proofs, open graph exploration and source inventories do not establish that
 whole-machine claim.
+
+## Duplicate-prefix proof and wildcard postorder regressions
+
+`python3 tools/check-duplicate-prefix-dag.py CurrentCallOrdinaryWitnessSafety`
+checks the final all-count safety theorem and its positive witness; omitting
+the root checks the complete `examples/duplicate_prefix/Check.lean` aggregate.
+`tests/regression/WildcardPostorderDisabled.lean` and
+`tests/regression/CutoffBorrowTraceDiagnostic.lean` cover the retained child
+transitions and repaired postorder behavior. Both are included in the structural
+regression checker. The standalone files in `tests/diagnostics/` are separate
+compiler/native diagnostics, with prerequisites and limits in their headers;
+they are excluded from the structural check.
+
+The optional independent Miri derivative checks under `tests/tree_borrows/patches/`
+use a separate upstream checkout and do not modify the source-locked snapshot.

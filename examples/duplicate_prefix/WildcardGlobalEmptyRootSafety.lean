@@ -1,0 +1,153 @@
+import duplicate_prefix.WildcardGlobalEmptyRootCallEquivalence
+import duplicate_prefix.WildcardPoolHitRootSafety
+import duplicate_prefix.DuplicatePrefixCompletedCallResult
+import duplicate_prefix.GeneralBorrowStructuralHistorySifaState
+import duplicate_prefix.ConcreteEmptyRootSafety
+
+/-! Genuine wildcard invocations for every UInt64 count from a lazy compiler MEMORY global. The
+actual call prefix materializes the image during argument retagging. The proved
+call equality then reuses the existing return-slot, trace, physical return and
+NoUB suffix. The compiler descriptor/root tag/address coherence is explicit;
+SupportedImage covers data-only images and arbitrary finite ordered disjoint
+in-bounds relocations, with arbitrary eight-byte words in target endian, to
+cached compiler-memory or declared non-TLS, non-extern static targets. Bytes
+outside relocation windows are arbitrary; source mutability and initialization
+masks are preserved. The source allocation remains compiler memory. Static
+source initializers, TLS/extern targets, byte-fragment provenance, unknown IDs
+and general image domains beyond Supported are outside this unit. -/
+namespace DuplicatePrefix.WildcardGlobalEmptyRootSafety
+open Miri Miri.Input Miri.ABI Miri.Memory Miri.MIR Miri.DataStructures Miri.TreeBorrows Miri.Interpreter Miri.Concurrency
+open CanonicalConfigFacts ActualReferenceContext
+set_option maxRecDepth 65536
+set_option maxHeartbeats 16000000
+set_option backward.isDefEq.respectTransparency false
+set_option backward.dsimp.instances true
+
+theorem invoke
+    (options : EvalConfigurationCore.Options) (limits : ExecutionMachine.Limits) (remaining : Nat)
+    (span : PreparedContracts.FixedSpanQuery)
+    (debugOff : options.place.debugAssertions = false) (cmp : ProjectionMetadataFacts.NullComparator)
+    (dynamicFuel validityFuel : Nat) (fuelEq : options.place.dynamicFuel = dynamicFuel+1)
+    (validationEq : options.limits.validation = validityFuel+1)
+    (id : AllocId) (parentTag : BorTag) (tracker : MachineHooks.BorrowState)
+    (base offset count : UInt64) (nonzero : base+offset ≠ 0)
+    (before : MachineHooks.MachineState MiriMemoryKind Machine.RootUser)
+    (ghost : before.user.payload.ghost = false) (shallow : before.user.payload.validation = .Shallow)
+    (cachedAddress : before.user.addresses.baseAddr.find? (fun row => row.allocId == id) = some ⟨id,base⟩)
+    (enabled : before.borrowTracker = some tracker)
+    (fresh : tracker.global.nextPointerTag.value < 18446744073709551615)
+    (distinct : parentTag ≠ tracker.global.nextPointerTag)
+    (source : Allocation CtfeProvenance Unit) (supported : GlobalSupportedImage.Supported source PreparedReflection.actual.compiler.runtime.target
+      before.memory tracker.global.rootPointerTags before.user.addresses.baseAddr)
+    (rootCached : tracker.global.rootTag? id = some parentTag) (race : before.dataRace = none)
+    (noExtras : (before.user.payload.payload.user.runtime.extras.allocations.any (fun row => row.1 == id)) = false)
+    (absent : before.memory.live.find? (fun row => row.1 == id) = none)
+    (noFunction : before.memory.hasFunctionPointer id = false) (noVaList : before.memory.hasVaListId id = false)
+    (descriptor : before.memory.findGlobal? id = some
+      ⟨id,.memory,source.byteSize,source.align,source.mutability,some (.memory source)⟩)
+    (addressMode : before.user.addresses.provenanceMode ≠ .strict)
+    (geometry : WildcardGeneralHitReborrow.Geometry before.user.addresses.intToPtrMap (base+offset) base id source.byteSize)
+    (exposed : before.user.addresses.exposed.contains id = true)
+    (allocLive : before.memory.isAllocLive id = true)
+    (metadata : before.user.payload.payload.user.types.metadata = PreparedReflection.actual.runtime)
+    (notConstructed : before.user.payload.payload.user.types.entries.any (·.value.ty == 4) = false)
+    (place : MPlaceTy Provenance) (layout : place.layout = RootCompilerFacts.boolLayout)
+    (slotId : AllocId) (slotEntry : LocalAllocation Provenance BorrowTree MiriMemoryKind)
+    (slotBase : UInt64) (slotRoot : BorTag)
+    (slotPointer : place.mplace.ptr = Pointer.new (some (.concrete slotId slotRoot)) (Size.ofBytes slotBase))
+    (aligned : place.mplace.misaligned = none)
+    (slotCached : before.user.addresses.baseAddr.find? (fun row => row.allocId == slotId) = some ⟨slotId,slotBase⟩)
+    (slotTree : slotEntry.allocation.extra = BorrowTree.new slotRoot (Size.ofBytes 1))
+    (slotSize : slotEntry.allocation.byteSize = Size.ofBytes 1)
+    (slotPresent : before.memory.live.find? (fun row => row.1 == slotId) = some (slotId,slotEntry))
+    (slotFresh : (TypedRetagEmpty.successorTag tracker.global.nextPointerTag fresh).value < 18446744073709551615)
+    (slotDistinct : slotRoot ≠ TypedRetagEmpty.successorTag tracker.global.nextPointerTag fresh)
+    (slotParentDistinct : slotRoot ≠ tracker.global.nextPointerTag)
+    (slotFree : tracker.global.protectedTags.contains slotRoot = false)
+    (mutable : slotEntry.allocation.mutability = .Mut)
+    (storage : slotEntry.allocation.len = slotEntry.allocation.byteSize.bytes.toNat)
+    (maskLength : slotEntry.allocation.initializationMask.len = slotEntry.allocation.byteSize)
+    (provenance : slotEntry.allocation.provenanceMap = ProvenanceMap.new)
+    (noBackend : before.user.payload.payload.user.backend = .none)
+    (extras : before.user.payload.payload.user.runtime.extras.allocations.find? (fun row => row.1 == slotId) = some (slotId,⟨none,#[]⟩))
+    (thread : Miri.Concurrency.ThreadRecord)
+    (active : before.threads.activeThread? = some thread)
+    (noCache : thread.topUserRelevantFrame = none)
+    (precise : options.retag.preciseInteriorMut = false) (implicitWrites : options.retag.implicitWrites = false)
+    (sourceComparator : PreparedContracts.SourceComparator) (mode : tracker.retagMode = .Default)
+    (unchecked : ((PreparedContracts.actualConfig options () (remaining+1) span).terminators.getControl before.user).checkedArithmetic = false)
+    (noGc : ((PreparedContracts.actualConfig options () (remaining+1) span).terminators.getControl before.user).gcInterval = 0)
+    (fixed : before.threads.fixedScheduling = true) (fits : slotBase.toNat+1<2^64)
+    (tags : Fin 6 → BorTag) (tagsDistinct : Function.Injective tags)
+    (parentEq : parentTag = tags 0) (childEq : tracker.global.nextPointerTag = tags 1)
+    (thirdFresh : (PositiveRootInvocationState.held tracker fresh slotFresh).global.nextPointerTag.value < 18446744073709551615)
+    (fourthFresh : (ReferenceBorrowDriver.allocatedTracker (PositiveRootInvocationState.held tracker fresh slotFresh) thirdFresh).global.nextPointerTag.value < 18446744073709551615)
+    (thirdTag : (PositiveRootInvocationState.held tracker fresh slotFresh).global.nextPointerTag = tags 2)
+    (fourthTag : (ReferenceBorrowDriver.allocatedTracker (PositiveRootInvocationState.held tracker fresh slotFresh) thirdFresh).global.nextPointerTag = tags 3)
+    (slotChildNot3 : (PositiveRootInvocationState.next tracker fresh).global.nextPointerTag ≠ tags 3)
+    (slotRootNot3 : slotRoot ≠ tags 3)
+    (budget : Nat) (dispatchFuel : limits.callDispatch = budget+1) :
+    DuplicatePrefixArgumentCallResult.Result options limits remaining span before
+      (.pointer (Pointer.new .wildcard (Size.ofBytes (base+offset)))) 0 count place := by
+  obtain ⟨ctx,actualPointers⟩ := GlobalEmptyReferenceContext.exists_context options remaining span precise implicitWrites
+  obtain ⟨converted,facts,callEq⟩ := WildcardGlobalEmptyRootCallEquivalence.call_eq options limits remaining span ctx actualPointers
+    debugOff cmp dynamicFuel validityFuel fuelEq validationEq id parentTag tracker base offset count nonzero before
+    ghost shallow cachedAddress enabled fresh distinct source supported rootCached race noExtras absent
+    noFunction noVaList descriptor addressMode geometry exposed allocLive metadata notConstructed place thread active noCache
+  let prepared := WildcardGlobalEmptyRootCopy.preparedMachine options before id parentTag source converted
+  let entry := WildcardGlobalEmptyRootCopy.entry parentTag source converted
+  have present : prepared.memory.live.find? (fun row => row.1 == id) = some (id,entry) :=
+    MemoryCopyBridge.live_lookup_replaced before.memory id entry
+  have size : entry.allocation.byteSize = Size.ofBytes source.byteSize.bytes := facts.size
+  have separate : slotId ≠ id := by
+    intro equal
+    have original := slotPresent
+    rw [equal,absent] at original
+    contradiction
+  have slotPrepared : prepared.memory.live.find? (fun row => row.1 == slotId) = some (slotId,slotEntry) := by
+    exact (GlobalEmptyRootPrepared.live_other options before id slotId parentTag source converted separate).trans slotPresent
+  have extrasPrepared : prepared.user.payload.payload.user.runtime.extras.allocations.find? (fun row => row.1 == slotId) =
+      some (slotId,⟨none,#[]⟩) := by
+    exact (GlobalEmptyRootPrepared.extras_other options before id slotId parentTag source converted separate).trans extras
+  have control : (PreparedContracts.actualConfig options () (remaining+1) span).terminators.getControl prepared.user =
+      (PreparedContracts.actualConfig options () (remaining+1) span).terminators.getControl before.user := by
+    rw [(CanonicalConfigFacts.actual_fields options () (remaining+1) span).terminators]
+    rfl
+  have different (i j : Fin 6) (notEqual : i≠j) : tags i ≠ tags j := fun equal => notEqual (tagsDistinct equal)
+  have rootFresh (tag : BorTag) (ne : parentTag≠tag) : GeneralBorrowTagMap.Fresh entry.allocation.extra.tagMapping tag := by
+    intro row member
+    change row ∈ (#[(parentTag,(⟨0⟩ : UniIndex))] : Array (BorTag × UniIndex)) at member
+    have equal : row=(parentTag,(⟨0⟩ : UniIndex)) := by simpa only [Array.mem_singleton] using member
+    rw [equal]
+    exact ne
+  have formed := GeneralBorrowStructuralHistorySifaState.initial parentTag source.byteSize tracker.global.protectedTags
+  let history : WildcardHitPoolContinuationData.Input entry.allocation.extra tracker.global.nextPointerTag (tags 2) (tags 3) := {
+    depth := Classical.choice formed.depth
+    pool := formed.allocator.pool
+    accounting := formed.allocator.accounting
+    clean := GeneralBorrowStructuralHistorySifaState.vacant_clean _ _ formed
+    rootFresh := rootFresh _ distinct
+    sharedFresh := rootFresh _ (by rw [parentEq];exact different 0 2 (by decide))
+    lenFresh := rootFresh _ (by rw [parentEq];exact different 0 3 (by decide))
+    rootShared := by rw [childEq];exact different 1 2 (by decide)
+    rootLen := by rw [childEq];exact different 1 3 (by decide)
+    sharedLen := different 2 3 (by decide)
+    room := by change 1+2≤4294967295;decide }
+  have geometryPrepared : WildcardGeneralHitReborrow.Geometry prepared.user.addresses.intToPtrMap
+      (base+offset) base id entry.allocation.byteSize := by
+    change WildcardGeneralHitReborrow.Geometry before.user.addresses.intToPtrMap (base+offset) base id converted.byteSize
+    rw [facts.size]
+    exact geometry
+  obtain ⟨installed,done,call,trace,stop,empty,safe⟩ := WildcardPoolHitRootSafety.invoke options limits remaining span
+    debugOff cmp dynamicFuel validityFuel fuelEq validationEq id tracker base offset count nonzero entry prepared
+    ghost shallow cachedAddress present enabled fresh addressMode geometryPrepared exposed (tags 2) (tags 3) history
+    race metadata notConstructed place layout slotId slotEntry slotBase slotRoot slotPointer aligned slotCached slotTree
+    slotSize slotPrepared separate slotFresh slotDistinct slotParentDistinct slotFree mutable storage maskLength
+    provenance noBackend extrasPrepared thread active noCache precise implicitWrites sourceComparator mode
+    (by rw [control];exact unchecked) (by rw [control];exact noGc) fixed fits
+    thirdFresh fourthFresh thirdTag fourthTag slotChildNot3 slotRootNot3 budget dispatchFuel
+  exact DuplicatePrefixCompletedCallResult.of_trace options limits remaining span before
+    (.pointer (Pointer.new .wildcard (Size.ofBytes (base+offset)))) 0 count place installed done
+    (callEq.trans call) safe.1 trace stop
+
+end DuplicatePrefix.WildcardGlobalEmptyRootSafety

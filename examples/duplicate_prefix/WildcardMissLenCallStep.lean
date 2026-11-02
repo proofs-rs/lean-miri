@@ -1,0 +1,88 @@
+import duplicate_prefix.WildcardMissLenUncachedCall
+import duplicate_prefix.LenCallStep
+import duplicate_prefix.LenUncachedCall
+import duplicate_prefix.MetadataCallStep
+namespace DuplicatePrefix.WildcardMissLenCallStep
+open Miri Miri.Input Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter Miri.TreeBorrows
+open CanonicalConfigFacts ActualReferenceContext NestedConstruction BorrowRangeAccess NestedBorrowAccess LenUncachedFrontend
+noncomputable section
+set_option maxRecDepth 1000000
+set_option maxHeartbeats 16000000
+set_option backward.isDefEq.respectTransparency false
+set_option backward.dsimp.instances true
+theorem integer_zero
+    (options : EvalConfigurationCore.Options) (limits : ExecutionMachine.Limits) (remaining budget : Nat) (dispatchFuel : limits.callDispatch = budget+1) (span : PreparedContracts.FixedSpanQuery)
+    (ctx : ActualReferenceContext.Context options remaining span)
+    (debugOff : options.place.debugAssertions = false) (cmp : ProjectionMetadataFacts.NullComparator)
+    (dynamicFuel validityFuel : Nat) (fuelEq : options.place.dynamicFuel = dynamicFuel+1)
+    (validationEq : options.limits.validation = validityFuel+1)
+    (address : UInt64) (nonzero : address ≠ 0)
+    (frames : Array CompilerFrameContext.ActualFrame) (caller : CompilerFrameContext.ActualFrame)
+    (machine : MachineHooks.MachineState MiriMemoryKind Machine.RootUser)
+    (tracker : MachineHooks.BorrowState) (enabled : machine.borrowTracker = some tracker)
+    (fresh : tracker.global.nextPointerTag.value < 18446744073709551615)
+    (valid : 11 < caller.locals.size) (old : Immediate Provenance)
+    (live : caller.locals[11].value = .live (.immediate old))
+    (uncached : caller.locals[11].layout = none)
+    (noClocks : caller.extra.dataRace = none)
+    (ghost : machine.user.payload.ghost = false) (shallow : machine.user.payload.validation = .Shallow)
+    (race : machine.dataRace = none)
+    (thread : Miri.Concurrency.ThreadRecord) (index : Nat) (current : CompilerFrameContext.ActualFrame)
+    (active : machine.threads.activeThread? = some thread)
+    (top : FrameRelevance.top (LenPush.pushed options.userRelevantCrates (Storage.withCurrent frames (cachedCaller caller valid) machine)
+      (LocalPlaces.localRuntimePlace frames.size (cachedCaller caller valid) 11 RootCompilerFacts.usizeLayout).stackView).stack thread.topUserRelevantFrame = some index)
+    (presentFrame : (LenPush.pushed options.userRelevantCrates (Storage.withCurrent frames (cachedCaller caller valid) machine)
+      (LocalPlaces.localRuntimePlace frames.size (cachedCaller caller valid) 11 RootCompilerFacts.usizeLayout).stackView).stack.frames[index]? = some current)
+    (addressMode : machine.user.addresses.provenanceMode ≠ .strict)
+    (miss : WildcardMissAddress.Miss machine.user.addresses address)
+    (metadata : (EvalProjectionMachine.arrays.get (LenPush.completed options.userRelevantCrates (Storage.withCurrent frames (cachedCaller caller valid) machine)
+      (LocalPlaces.localRuntimePlace frames.size (cachedCaller caller valid) 11 RootCompilerFacts.usizeLayout).stackView current)).metadata = PreparedReflection.actual.runtime)
+    (notConstructed : (EvalProjectionMachine.arrays.get (LenPush.completed options.userRelevantCrates (Storage.withCurrent frames (cachedCaller caller valid) machine)
+      (LocalPlaces.localRuntimePlace frames.size (cachedCaller caller valid) 11 RootCompilerFacts.usizeLayout).stackView current)).entries.any (·.value.ty == 4) = false)
+    (sourceBody : caller.body = RootBody.reflected.body.body)
+    (identity : caller.bodyIdentity = RootBody.reflected.body.identity)
+    (callee : caller.functionInstance = RootBody.reflected.functionInstance)
+    (located : caller.location = .mir ⟨2,12⟩)
+    (source : PreparedContracts.SourceComparator)
+    (sourceValid : 12 < caller.locals.size)
+    (sourceLive : caller.locals[12].value = .live (.immediate (RetagReferencePlace.sliceValue (config options remaining span).access.runtime.base (Pointer.new .wildcard (Size.ofBytes address)) 0 SharedReferenceMetadata.sharedLayout).imm))
+    (sourceCached : caller.locals[12].layout = some SharedReferenceMetadata.sharedLayout)
+    (backend : machine.user.payload.payload.user.backend = .none)
+    (beforeMachine : MachineHooks.MachineState MiriMemoryKind Machine.RootUser)
+    (machineEq : machine = PtrMetadataReturn.accountedMachine options remaining span beforeMachine)
+    (unchecked : ((PreparedContracts.actualConfig options () (remaining+1) span).terminators.getControl beforeMachine.user).checkedArithmetic = false)
+    (noGc : ((PreparedContracts.actualConfig options () (remaining+1) span).terminators.getControl beforeMachine.user).gcInterval = 0)
+    (fixed : beforeMachine.threads.fixedScheduling = true) :
+    let cfg := config options remaining span
+    let state := Storage.withCurrent frames (cachedCaller caller valid) machine
+    let destination := (LocalPlaces.localRuntimePlace frames.size (cachedCaller caller valid) 11 RootCompilerFacts.usizeLayout).stackView
+    let frame := LenEntry.rawFrame options state destination
+    let postMachine := (LenPush.completed options.userRelevantCrates state destination current).machine
+    let frameValid : 1 < frame.locals.size := by rw [LenEntry.raw_size]; decide
+    let value := (RetagReferencePlace.sliceValue (config options remaining span).access.runtime.base (Pointer.new .wildcard (Size.ofBytes address)) 0 SharedReferenceMetadata.sharedLayout).imm
+    let output := (RetagReferencePlace.sliceValue (config options remaining span).access.runtime.base (Pointer.new .wildcard (Size.ofBytes address)) 0 SharedReferenceMetadata.sharedLayout).imm
+    let afterFrame := LenInstall.resultFrame frame frameValid output
+    let resultMachine := ReferenceBorrowDriver.allocatedMachine postMachine tracker fresh
+    ExecutionMachine.step (PreparedContracts.actualConfig options () (remaining+1) span) limits ()
+      (Storage.withCurrent frames caller beforeMachine) =
+      ((Storage.withCurrent (frames.push (cachedCaller caller valid))
+        (LenDone.doneFrame {afterFrame with location := .unwinding LenEntryFacts.lenPreamble}) resultMachine),.ok true) := by
+  let cfg := PreparedContracts.actualConfig options () (remaining+1) span
+  let before := Storage.withCurrent frames caller beforeMachine
+  let nextState := Storage.withCurrent frames caller machine
+  have effect := WildcardMissLenUncachedCall.integer_zero options limits remaining budget dispatchFuel span ctx debugOff cmp dynamicFuel validityFuel fuelEq validationEq address nonzero frames caller machine tracker enabled fresh valid old live uncached noClocks ghost shallow race thread index current active top presentFrame addressMode miss metadata notConstructed sourceBody identity callee located source sourceValid sourceLive sourceCached backend
+  have accounting := SourceControl.before_terminator cfg limits () before
+    (CanonicalConfigFacts.actual_term_get_set options () (remaining+1) span)
+    (CanonicalConfigFacts.actual_term_set_set options () (remaining+1) span) unchecked noGc fixed
+  have accounting' : (ExecutionMachine.stepHooks cfg limits).beforeTerminator () before = (nextState,.ok ()) := by
+    simpa only [nextState,before,machineEq,PtrMetadataReturn.accountedMachine,SourceControl.accounted,Storage.withCurrent,cfg] using accounting
+  let block := RootBody.reflected.body.body.basicBlocks[2]'(by decide +kernel)
+  have blockAt : caller.body.basicBlocks[2]? = some block := by rw [sourceBody];simp [block]
+  have noStatement : block.statements[12]? = none := by with_unfolding_all rfl
+  apply GenericCallStages.source_step cfg limits () before nextState _ caller ⟨2,12⟩ block
+    LenHelper.resolved.function #[LenEvaluateCall.argument] ⟨11,#[]⟩ (some 3) .Continue LenCallFrontend.sourceKind LenCallFrontend.fnSpan
+    (by simp [before,Storage.withCurrent,Stack.currentFrame?]) located blockAt noStatement LenCallFrontend.source_call accounting' effect
+  simp [Storage.withCurrent,nextState]
+
+end
+end DuplicatePrefix.WildcardMissLenCallStep

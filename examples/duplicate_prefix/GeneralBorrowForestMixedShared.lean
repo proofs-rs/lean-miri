@@ -1,0 +1,86 @@
+import duplicate_prefix.GeneralBorrowForestMixedConstructor
+import duplicate_prefix.GeneralBorrowForestMixedSlice
+import duplicate_prefix.GeneralBorrowFreshReadFrame
+
+namespace DuplicatePrefix.GeneralBorrowForestMixedShared
+open Miri.ABI Miri.Memory Miri.DataStructures Miri.TreeBorrows Miri.TreeBorrows.Tree
+open GeneralBorrowForestMixedAccess (Data)
+open GeneralBorrowForestAccessData (Context)
+open GeneralBorrowFreshReborrowStages (Slot)
+open GeneralBorrowFreshReadFrame
+set_option maxRecDepth 65536
+set_option maxHeartbeats 1000000
+
+def read (tree : BorrowTree) (protections : ProtectedTags) (parentTag : BorTag)
+    (offset len : UInt64) (mode : ChildrenVisitMode) :=
+  tree.performBorrowAccessRange (.concrete parentTag) (Size.ofBytes offset) (Size.ofBytes len) .Read protections mode
+
+def child (tree : BorrowTree) (protections : ProtectedTags) (parentTag newTag : BorTag) (isProtected : Bool)
+    (offset len : UInt64) (mode : ChildrenVisitMode) :=
+  (read tree protections parentTag offset len mode).tree.newChild (Size.ofBytes offset) (.concrete parentTag) newTag
+    (DedupRangeMap.new (Size.ofBytes len) GeneralBorrowFreshAnchor.sharedState) .Frozen isProtected
+
+/-- The REAL ranged Read followed by the REAL Frozen constructor completes
+and forms every new-child next-input permission/cache/region/graph record.
+Both visitor modes, arbitrary finite extra unexposed subtrees, protected flag,
+and actual append/reuse are supported. Only initial slice-local data is used;
+no visitor-exclusion, operation-success or poststate ownership premise occurs.
+Protector registration and allocator/history iteration are separate stages. -/
+theorem run (tree : BorrowTree) (protections : ProtectedTags) (parentTag newTag : BorTag) (isProtected : Bool)
+    (parent primary : UniIndex) (extras : List UniIndex) (offset len : UInt64) (mode : ChildrenVisitMode)
+    (context : Context tree parent primary extras) (covered : GeneralBorrowGraph.RootsCover tree)
+    (parentTagPresent : tree.indexOfTag parentTag = some parent)
+    (fresh : GeneralBorrowTagMap.Fresh tree.tagMapping newTag) (slot : Slot tree context.depth parent)
+    (fits : tree.nodes.data.size ≤ 4294967296) (writable : Nat → Bool) (nonzero : len ≠ 0) (well : tree.locations.WellFormed)
+    (bounds : offset.toNat+len.toNat ≤ tree.locations.size.bytes.toNat)
+    (before : GeneralRangeMapOrigins.OwnedOn
+      (fun location => Nonempty (Data tree location protections parent primary extras writable))
+      offset (offset+len) tree.locations) :
+    (read tree protections parentTag offset len mode).status = .Completed ∧
+    (child tree protections parentTag newTag isProtected offset len mode).outcome = .ok () ∧
+    Nonempty (Context (child tree protections parentTag newTag isProtected offset len mode).tree
+      (GeneralBorrowFreshMetadataChildSlot.index slot) primary extras) ∧
+    GeneralRangeMapOrigins.OwnedOn
+      (fun location => Nonempty (Data (child tree protections parentTag newTag isProtected offset len mode).tree
+        location protections (GeneralBorrowFreshMetadataChildSlot.index slot) primary extras
+        (GeneralBorrowFreshMixedChild.extend writable (GeneralBorrowFreshMetadataChildSlot.index slot).toNat)))
+      offset (offset+len) (child tree protections parentTag newTag isProtected offset len mode).tree.locations := by
+  have good := GeneralBorrowForestMixedSlice.access tree protections parentTag parent primary extras
+    (Size.ofBytes offset) (Size.ofBytes len) writable mode context parentTagPresent well fits offset (offset+len) before bounds
+    (Nat.le_refl _) (Nat.le_refl _)
+  let accessed := read tree protections parentTag offset len mode
+  change accessed.status = .Completed ∧
+    GeneralRangeMapOrigins.OwnedOn
+      (fun location => Nonempty (Data accessed.tree location protections parent primary extras writable))
+      offset (offset+len) accessed.tree.locations ∧
+    accessed.tree.locations.WellFormed ∧ accessed.tree.locations.size = tree.locations.size at good
+  have frame := GeneralBorrowFreshReadFrame.frame tree (.concrete parentTag) (Size.ofBytes offset) (Size.ofBytes len) .Read protections mode
+  change accessed.tree = {tree with locations := accessed.tree.locations} at frame
+  have nodes : accessed.tree.nodes = tree.nodes := by simpa only using congrArg BorrowTree.nodes frame
+  have mapping : accessed.tree.tagMapping = tree.tagMapping := by simpa only using congrArg BorrowTree.tagMapping frame
+  let depth := depth_on tree accessed.tree nodes context.depth
+  let nextContext : Context accessed.tree parent primary extras := {
+    anchorNode := context.anchorNode
+    primaryNode := context.primaryNode
+    depth := depth
+    children := by rw [frame];exact context.children
+    anchorPresent := by change accessed.tree.nodes.get parent = _;rw [nodes];exact context.anchorPresent
+    primaryPresent := by rw [nodes];exact context.primaryPresent
+    roots := by rw [frame];exact context.roots
+    different := context.different
+    unexposed := by intro index node present;rw [nodes] at present;exact context.unexposed index node present }
+  have nextCovered : GeneralBorrowGraph.RootsCover accessed.tree := by rw [frame];exact covered
+  have nextTag : accessed.tree.indexOfTag parentTag = some parent := by rw [frame];exact parentTagPresent
+  have nextFresh : GeneralBorrowTagMap.Fresh accessed.tree.tagMapping newTag := by rw [mapping];exact fresh
+  let nextSlot := GeneralBorrowFreshMetadataChildSlot.transport tree accessed.tree context.depth depth nodes mapping rfl parent slot
+  have slotEq : GeneralBorrowFreshMetadataChildSlot.index nextSlot = GeneralBorrowFreshMetadataChildSlot.index slot :=
+    GeneralBorrowFreshMetadataChildSlot.transport_index tree accessed.tree context.depth depth nodes mapping rfl parent slot
+  have nextFits : accessed.tree.nodes.data.size ≤ 4294967296 := by rw [nodes];exact fits
+  have nextBounds : offset.toNat+len.toNat ≤ accessed.tree.locations.size.bytes.toNat := by rw [good.2.2.2];exact bounds
+  have result := GeneralBorrowForestMixedConstructor.construct accessed.tree protections newTag isProtected parentTag parent primary extras offset len
+    nextContext nextCovered nextTag nextFresh nextSlot nextFits writable nonzero good.2.2.1 nextBounds good.2.1
+  refine ⟨good.1,result.1,?_,?_⟩
+  · simpa only [slotEq,child,accessed] using result.2.1
+  · simpa only [slotEq,child,accessed] using result.2.2
+
+end DuplicatePrefix.GeneralBorrowForestMixedShared

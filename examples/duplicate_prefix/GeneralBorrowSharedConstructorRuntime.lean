@@ -1,0 +1,84 @@
+import duplicate_prefix.GeneralBorrowConstructorPossible
+import duplicate_prefix.GeneralBorrowSharedConstructorExposureCache
+import duplicate_prefix.DuplicatePrefixBorrowContract
+namespace DuplicatePrefix.GeneralBorrowSharedConstructorRuntime
+open Miri Miri.ABI Miri.Memory Miri.DataStructures Miri.TreeBorrows Miri.TreeBorrows.Tree
+open GeneralBorrowFreshAnchor (sharedState)
+set_option maxRecDepth 65536
+set_option maxHeartbeats 3000000
+
+/-- The real concrete shared constructor preserves complete call-time runtime
+facts with arbitrary consistent allocator pools and arbitrary exposure forests.
+The fresh tag's strict bound is an explicit external counter resource. -/
+theorem construct (tree : BorrowTree) (global : GlobalState)
+    (runtime : DuplicatePrefixBorrowContract.RuntimeFacts tree global)
+    (parentTag newTag : BorTag) (parent : UniIndex) (parentNode : TreeNode)
+    (tagged : tree.indexOfTag parentTag = some parent) (present : tree.nodeAt parent = some parentNode)
+    (fresh : GeneralBorrowTagMap.Fresh tree.tagMapping newTag) (room : tree.nodes.size+1 ≤ 4294967295)
+    (tagBound : newTag.value.toNat < global.nextPointerTag.value.toNat)
+    (held : Bool) (aligned : global.protectedTags.contains newTag = held)
+    (offset len : UInt64) (nonzero : len ≠ 0)
+    (bounds : offset.toNat+len.toNat ≤ tree.locations.size.bytes.toNat) :
+    let actual := tree.newChild (Size.ofBytes offset) (.concrete parentTag) newTag
+      (DedupRangeMap.new (Size.ofBytes len) sharedState) .Frozen held
+    actual.outcome = .ok () ∧ DuplicatePrefixBorrowContract.RuntimeFacts actual.tree global ∧
+    actual.tree.locations.size = tree.locations.size ∧ actual.tree.nodes.size ≤ tree.nodes.size+1 := by
+  have formed := GeneralBorrowSharedConstructorFormed.construct tree global.protectedTags runtime.formed parentTag newTag parent parentNode
+    tagged present fresh room held aligned offset len nonzero bounds
+  let rank := GeneralBorrowStructuralHistoryShared.depth tree runtime.formed.toState
+  let slot := GeneralBorrowStructuralHistoryShared.slot tree runtime.formed.toState parent parentNode present room
+  have closure :
+      GeneralRangeMapState.Every (fun location => GeneralBorrowExposureCardinality.LocationCoherent
+        (GeneralBorrowFreshMetadataChildSlot.result tree parentTag newTag held offset len) location global.protectedTags)
+        (GeneralBorrowFreshMetadataChildSlot.result tree parentTag newTag held offset len).locations ∧
+      GeneralRangeMapState.Every (GeneralBorrowSnapshotReadRuntime.GlobalPossible
+        (GeneralBorrowFreshMetadataChildSlot.result tree parentTag newTag held offset len))
+        (GeneralBorrowFreshMetadataChildSlot.result tree parentTag newTag held offset len).locations ∧
+      GeneralBorrowForestTagHighWater.Below (GeneralBorrowFreshMetadataChildSlot.result tree parentTag newTag held offset len)
+        global.protectedTags global.nextPointerTag := by
+    cases slot with
+    | append noFree accounting fits =>
+      let input : GeneralBorrowFreshMetadataChildShared.Input :=
+        ⟨tree,rank,runtime.formed.children,runtime.formed.covered,parentTag,newTag,parent,parentNode,tagged,present,fresh,
+          noFree,accounting,fits,held,offset,len,nonzero,runtime.formed.well,bounds⟩
+      have coherence := (GeneralBorrowSharedConstructorExposureCache.append input global.protectedTags runtime.coherent).2
+      have vacant : tree.nodes.get (GeneralBorrowFreshMetadataChildShared.index input) = none := by
+        have atEnd : (GeneralBorrowFreshMetadataChildShared.index input).toNat = tree.nodes.data.size := GeneralBorrowFreshMetadataChildShared.at_end input
+        simp only [UniValMap.get,atEnd,Array.getElem?_eq_none (Nat.le_refl _),Option.getD_none]
+      have possible := GeneralBorrowConstructorPossible.shared_stage tree global.protectedTags
+        (GeneralBorrowFreshMetadataChildShared.index input) parent parentNode newTag (GeneralBorrowFreshMetadataChildShared.mapping input)
+        vacant present offset len runtime.formed.well bounds runtime.formed.profile runtime.possible
+      change GeneralRangeMapState.Every (GeneralBorrowSnapshotReadRuntime.GlobalPossible
+        (sourceUpdateSifa (GeneralBorrowFreshMetadataChildShared.stage input) input.parent .Read).1)
+        (sourceUpdateSifa (GeneralBorrowFreshMetadataChildShared.stage input) input.parent .Read).1.locations at possible
+      rw [←GeneralBorrowFreshMetadataChildShared.tree_eq input] at possible
+      refine ⟨coherence,possible,⟨?_,runtime.below.protectors⟩⟩
+      intro row member
+      change row ∈ (GeneralBorrowFreshMetadataChildShared.result input).tagMapping.mapping at member
+      rw [(GeneralBorrowFreshMetadataChildShared.append input).mapping] at member
+      change row ∈ tree.tagMapping.mapping.push (newTag,GeneralBorrowFreshMetadataChildShared.index input) at member
+      rcases Array.mem_push.mp member with previous | latest
+      · exact runtime.below.mapping row previous
+      · subst row;exact tagBound
+    | reuse index available valid vacant slack =>
+      let input : GeneralBorrowFreshMetadataChildSharedReuse.Input :=
+        ⟨tree,rank,runtime.formed.children,runtime.formed.covered,parentTag,newTag,parent,parentNode,tagged,present,fresh,
+          index,available,valid,vacant,slack,held,offset,len,nonzero,runtime.formed.well,bounds⟩
+      have coherence := (GeneralBorrowSharedConstructorExposureCache.reuse input global.protectedTags runtime.coherent).2
+      have possible := GeneralBorrowConstructorPossible.shared_stage tree global.protectedTags index parent parentNode newTag
+        (GeneralBorrowFreshMetadataChildSharedReuse.mapping input) vacant present offset len runtime.formed.well bounds runtime.formed.profile runtime.possible
+      change GeneralRangeMapState.Every (GeneralBorrowSnapshotReadRuntime.GlobalPossible
+        (sourceUpdateSifa (GeneralBorrowFreshMetadataChildSharedReuse.stage input) input.parent .Read).1)
+        (sourceUpdateSifa (GeneralBorrowFreshMetadataChildSharedReuse.stage input) input.parent .Read).1.locations at possible
+      rw [←GeneralBorrowFreshMetadataChildSharedReuse.tree_eq input] at possible
+      refine ⟨coherence,possible,⟨?_,runtime.below.protectors⟩⟩
+      intro row member
+      change row ∈ (GeneralBorrowFreshMetadataChildSharedReuse.result input).tagMapping.mapping at member
+      rw [(GeneralBorrowFreshMetadataChildSharedReuse.reuse input).mapping] at member
+      change row ∈ tree.tagMapping.mapping.push (newTag,index) at member
+      rcases Array.mem_push.mp member with previous | latest
+      · exact runtime.below.mapping row previous
+      · subst row;exact tagBound
+  exact ⟨formed.1,⟨formed.2.1,closure.1,closure.2.1,closure.2.2⟩,formed.2.2.1,formed.2.2.2⟩
+
+end DuplicatePrefix.GeneralBorrowSharedConstructorRuntime

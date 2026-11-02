@@ -473,29 +473,39 @@ def performWildcardAccessAt (tree : BorrowTree) (initialLocation : LocationTree)
             match exactRelatedness? related with
             | none => pure ()
             | some rel =>
-                match state.recordNewAccess kind rel with
-                | .DebugAssertion => status := .RecordDebugAssertion index
-                | .Recorded recorded =>
-                    location := { location with perms := location.perms.insert index recorded }
-                    let access := recorded.performAccess kind rel isProtected
-                    let updatedState := access.resultingState
-                    location := { location with perms := location.perms.insert index updatedState }
-                    match access with
-                    | .Success _ transition =>
-                        if node.isExposed && !transition.isNoop then
-                          let oldLevel := oldState.permission.strongestAllowedLocalAccess isProtected
-                          let newLevel := updatedState.permission.strongestAllowedLocalAccess isProtected
-                          let update := location.exposedCache.updateExposure tree.nodes index
-                            oldLevel newLevel
-                          location := { location with exposedCache := update.cache }
-                          match update.outcome with
-                          | .error error => status := .CacheFailure error
-                          | .ok _ => pure ()
-                    | .Error _ error => status := .TransitionError index error
-                    | .PermissionInvariantFailure _ => status := .PermissionInvariantFailure index
-                    | .TransitionApplicationInvariantFailure _ =>
-                        status := .TransitionApplicationInvariantFailure index
-                    | .PossibleInvariantFailure _ => status := .PossibleInvariantFailure index
+                -- Child transitions can remove the last exposed descendant and
+                -- change an entry-time Either access into a Foreign access.
+                -- The complete foreign-Write no-op class is read-safe too.
+                -- A current SIFA skip therefore leaves every state field
+                -- unchanged, including the held-sensitive protected cases.
+                -- Retain materialization and all child/cache/witness effects.
+                if rel == .ForeignAccess && state.foreignWriteNoop isProtected &&
+                    state.skipIfKnownNoop kind rel == .SkipSelfAndChildren then
+                  pure ()
+                else
+                  match state.recordNewAccess kind rel with
+                  | .DebugAssertion => status := .RecordDebugAssertion index
+                  | .Recorded recorded =>
+                      location := { location with perms := location.perms.insert index recorded }
+                      let access := recorded.performAccess kind rel isProtected
+                      let updatedState := access.resultingState
+                      location := { location with perms := location.perms.insert index updatedState }
+                      match access with
+                      | .Success _ transition =>
+                          if node.isExposed && !transition.isNoop then
+                            let oldLevel := oldState.permission.strongestAllowedLocalAccess isProtected
+                            let newLevel := updatedState.permission.strongestAllowedLocalAccess isProtected
+                            let update := location.exposedCache.updateExposure tree.nodes index
+                              oldLevel newLevel
+                            location := { location with exposedCache := update.cache }
+                            match update.outcome with
+                            | .error error => status := .CacheFailure error
+                            | .ok _ => pure ()
+                      | .Error _ error => status := .TransitionError index error
+                      | .PermissionInvariantFailure _ => status := .PermissionInvariantFailure index
+                      | .TransitionApplicationInvariantFailure _ =>
+                          status := .TransitionApplicationInvariantFailure index
+                      | .PossibleInvariantFailure _ => status := .PossibleInvariantFailure index
   if status == .Completed && !hasValidExposed && !isWildcardTree then
     status := .NoValidExposedReferences root none
   return { location, status }

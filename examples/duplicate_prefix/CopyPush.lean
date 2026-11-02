@@ -1,0 +1,32 @@
+import duplicate_prefix.TrackedFrame
+import duplicate_prefix.CopyEntryFacts
+namespace DuplicatePrefix.CopyPush
+open Miri Miri.Input Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
+set_option maxRecDepth 65536
+set_option maxHeartbeats 16000000
+noncomputable def pushed (state : CanonicalConfigFacts.RootState) (destination : RuntimeStackPlace Provenance)
+    (cont : ReturnContinuation) :=
+  TrackedFrame.pushed state.stack.frames state.machine HelperCompilerFacts.copyCall.callee HelperCompilerFacts.copyBody
+    CopyEntryFacts.copyPreamble destination cont
+ theorem actual_push (options : EvalConfigurationCore.Options) (limits : ExecutionMachine.Limits)
+    (remaining : Nat) (span : PreparedContracts.FixedSpanQuery) (debug : options.place.debugAssertions = false)
+    (state : CanonicalConfigFacts.RootState) (destination : RuntimeStackPlace Provenance) (cont : ReturnContinuation)
+    (thread : Miri.Concurrency.ThreadRecord) (active : state.machine.threads.activeThread? = some thread)
+    (index : Nat) (cached : thread.topUserRelevantFrame = some index)
+    (cachedFrame : Frame Provenance LocalLayout MachineHooks.FrameExtra)
+    (valid : index < state.stack.frames.size) (lookup : state.stack.frames[index]? = some cachedFrame)
+    (positive : cachedFrame.extra.userRelevance > 0) :
+    (ExecutionMachine.callHooks (PreparedContracts.actualConfig options () remaining span) limits).pushRaw ()
+      HelperCompilerFacts.copyCall.callee HelperCompilerFacts.copyBody destination cont state =
+      .ok () (pushed state destination cont) := by
+  exact TrackedFrame.push_raw_of_metadata options limits remaining span debug
+    HelperCompilerFacts.copyCall.callee HelperCompilerFacts.copyBody CopyEntryFacts.copyPreamble
+    CopyEntryFacts.inline_attr CopyCallFacts.copy_caller_location CopyEntryFacts.copy_preamble
+    (fun frames frame machine identity callee => CopyEntryFacts.copy_required_constants frames frame machine identity callee)
+    state destination cont thread active index cached cachedFrame valid lookup positive
+end DuplicatePrefix.CopyPush
+open Lean Elab Command in
+run_cmd do
+  for dependency in (← collectAxioms ``DuplicatePrefix.CopyPush.actual_push) do
+    unless #[``propext, ``Quot.sound, ``Classical.choice].contains dependency do
+      throwError "unapproved add push dependency {dependency}"
