@@ -25,12 +25,12 @@ def source (s : Static) := CanonicalDictionaries.pointerSource s.prepared.compil
     EvalConfigurationCore.pureQuery_eq,EvalConfigurationCore.liftConstruction_eq,
     EvalMathMachine.hooks,CompilerCallConstruction.helpers,
     metadata.construction.i32_eq,metadata.construction.bool_eq,metadata.construction.u8_eq,
-    metadata.construction.unit_eq,metadata.construction.rootSpan_eq,
+    metadata.construction.unit_eq,CompilerProviders.Prepared.rootSpan_eq,metadata.construction.rootSpan_eq,
     Except.mapError,Except.map,bind,Except.bind,pure,Except.pure] at built
   simp only [metadata.construction.maximum_eq,EvalConfigurationCore.pureQuery_eq,
     EvalConfigurationCore.liftConstruction_eq,EvalMathMachine.hooks,CompilerCallConstruction.helpers,
     metadata.construction.i32_eq,metadata.construction.bool_eq,metadata.construction.u8_eq,
-    metadata.construction.unit_eq,metadata.construction.rootSpan_eq,
+    metadata.construction.unit_eq,CompilerProviders.Prepared.rootSpan_eq,metadata.construction.rootSpan_eq,
     Except.mapError,Except.map,bind,Except.bind,pure,Except.pure] at built
   have same := Except.ok.inj built
   rw [←same]

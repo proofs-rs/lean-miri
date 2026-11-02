@@ -731,8 +731,19 @@ Validation passed: `check-quick.sh` (85 Python tests and integrity/semantic chec
 goldens (16 + 4 shared-ID cases), and `check-structural-regressions.sh`. The
 Miri/MiriTests/frontend build and axiom audit passed (70,846 declarations, only
 the three permitted axioms). Cached/reference tests include changed local bounds,
-malformed locals/projections, debug payloads and terminator edges. Raw artifacts,
-source/binary hashes, profiles and counters are under ignored `scratch/perf-ui/`.
+malformed locals/projections, debug payloads and terminator edges.
+
+All 300 `examples/empty_function` Lean modules also typechecked using
+`tools/check-empty-function.sh` with every module selected as a root. Fourteen
+proof files apply `CompilerProviders.Prepared.rootSpan_eq` at 33 factory
+simplification sites. These edits only rewrite the cached query to the original
+query; theorem statements, premises and the fixed Rust/MIR hashes are unchanged.
+The final target type check passed. An additional combined audit of all 300
+modules and their imported Miri declarations passed for 91,882 declarations,
+using only propext, Quot.sound and Classical.choice.
+
+Raw artifacts, source/binary hashes, profiles, counters and example check/audit
+logs are under ignored `scratch/perf-ui/`.
 Full `check.sh` and the 809-candidate upstream sweep were not run. Finishing the
 long const-addrs guest under an explicit execution budget remains unresolved;
 this optimization does not establish whole-machine equivalence or UB freedom.
