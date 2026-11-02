@@ -1,0 +1,179 @@
+diff --git a/src/borrow_tracker/tree_borrows/tree.rs b/src/borrow_tracker/tree_borrows/tree.rs
+index b58a7cf..0d55240 100644
+--- a/src/borrow_tracker/tree_borrows/tree.rs
++++ b/src/borrow_tracker/tree_borrows/tree.rs
+@@ -1154,6 +1154,23 @@ impl<'tcx> LocationTree {
+                     return Ok(());
+                 };
+ 
++                // Child transitions can make this access exactly foreign after the
++                // prechildren skip check. Recheck the complete same-state foreign
++                // Write class, which also preserves the state for foreign Reads.
++                // Retain child effects and the exposure accounting above.
++                let foreign_write_noop = perm.permission.is_cell()
++                    || (perm.permission.is_disabled() && (!protected || !perm.accessed()))
++                    || (perm.permission == Permission::new_reserved_im() && !protected);
++                if relatedness.is_foreign()
++                    && foreign_write_noop
++                    && matches!(
++                        perm.skip_if_known_noop(access_kind, relatedness),
++                        ContinueTraversal::SkipSelfAndChildren
++                    )
++                {
++                    return Ok(());
++                }
++
+                 // We know the exact relatedness, so we can actually do precise checks.
+                 perm.perform_transition(
+                     args.idx,
+diff --git a/tests/pass/tree_borrows/wildcard-postorder-reserved-im.rs b/tests/pass/tree_borrows/wildcard-postorder-reserved-im.rs
+new file mode 100644
+index 0000000..6e2e623
+--- /dev/null
++++ b/tests/pass/tree_borrows/wildcard-postorder-reserved-im.rs
+@@ -0,0 +1,70 @@
++//@compile-flags: -Copt-level=0 -Cdebug-assertions=yes
++//@compile-flags: -Zmiri-tree-borrows -Zmiri-tree-borrows-no-precise-interior-mut
++//@compile-flags: -Zmiri-permissive-provenance -Zmiri-disable-data-race-detector -Zmiri-seed=0
++
++//! One finite QA variant of the saved zero-Cell caller.
++//! Only A's reference kind changes; this is an unsafe diagnostic, not a proof
++//! of Rust validity or ordinary admission.
++//! A is mutable and B is shared `UnsafeCell<()>`; D/W come from their returned
++//! pointer values. D's typed use ends before the first original write; V's
++//! zero-length typed use ends before the second. Only the raw D is retained.
++//! Miri assigns its own tags/addresses; no equality to Lean's tag literals is assumed.
++
++use core::cell::UnsafeCell;
++
++mod target {
++/// Duplicate the first `n` bytes into the following `n` bytes.
++///
++/// The bounds check ensures the source and destination ranges fit in `buf`.
++/// For `n == 0`, the pointer operation is skipped.
++pub fn duplicate_prefix(buf: &mut [u8], n: usize) -> bool {
++    if n == 0 {
++        return true;
++    }
++    if n > buf.len() / 2 {
++        return false;
++    }
++    let p = buf.as_mut_ptr();
++    unsafe {
++        std::ptr::copy_nonoverlapping(p, p.add(n), n);
++    }
++    true
++}
++
++}
++
++#[repr(C, align(2))]
++struct Storage([u8; 2]);
++
++fn main() {
++    let mut storage = Storage([11, 22]);
++    let original = (&raw mut storage.0) as *mut u8;
++
++    // One expose/cast instance; A and B use copies of this same wildcard.
++    let address = original as usize;
++    let wildcard = address as *mut UnsafeCell<()>;
++    let saved_raw_d = unsafe {
++        let a: &mut UnsafeCell<()> = &mut *wildcard;
++        let from_a = a as *const UnsafeCell<()> as *mut u8;
++        let d: &mut [u8] = &mut *core::ptr::slice_from_raw_parts_mut(from_a, 2);
++        d as *mut [u8] as *mut u8
++    };
++
++    unsafe {
++        (original as *mut u16).write(0x160b);
++    }
++    let b: &UnsafeCell<()> = unsafe { &*wildcard };
++    unsafe {
++        let v: &mut [u8] = &mut *core::ptr::slice_from_raw_parts_mut(saved_raw_d, 0);
++        // Keep this exposure in MIR without accessing any pointee bytes.
++        core::hint::black_box(v as *mut [u8] as *mut u8 as usize);
++    }
++    unsafe {
++        (original as *mut u16).write(0x160b);
++    }
++    let w: &mut [u8] = unsafe {
++        let from_b = b as *const UnsafeCell<()> as *mut u8;
++        &mut *core::ptr::slice_from_raw_parts_mut(from_b, 2)
++    };
++    assert!(target::duplicate_prefix(w, 1));
++}
+diff --git a/tests/pass/tree_borrows/wildcard-postorder-zero-cell.rs b/tests/pass/tree_borrows/wildcard-postorder-zero-cell.rs
+new file mode 100644
+index 0000000..7166431
+--- /dev/null
++++ b/tests/pass/tree_borrows/wildcard-postorder-zero-cell.rs
+@@ -0,0 +1,69 @@
++//@compile-flags: -Copt-level=0 -Cdebug-assertions=yes
++//@compile-flags: -Zmiri-tree-borrows -Zmiri-tree-borrows-no-precise-interior-mut
++//@compile-flags: -Zmiri-permissive-provenance -Zmiri-disable-data-race-detector -Zmiri-seed=0
++
++//! One finite QA construction corresponding to the closed Lean caller.
++//! This is an unsafe diagnostic, not a proof of its Rust validity.
++//! A/B are shared `UnsafeCell<()>` references; D/W come from their returned
++//! pointer values. D's typed use ends before the first original write; V's
++//! zero-length typed use ends before the second. Only the raw D is retained.
++//! Miri assigns its own tags/addresses; no equality to Lean's tag literals is assumed.
++
++use core::cell::UnsafeCell;
++
++mod target {
++/// Duplicate the first `n` bytes into the following `n` bytes.
++///
++/// The bounds check ensures the source and destination ranges fit in `buf`.
++/// For `n == 0`, the pointer operation is skipped.
++pub fn duplicate_prefix(buf: &mut [u8], n: usize) -> bool {
++    if n == 0 {
++        return true;
++    }
++    if n > buf.len() / 2 {
++        return false;
++    }
++    let p = buf.as_mut_ptr();
++    unsafe {
++        std::ptr::copy_nonoverlapping(p, p.add(n), n);
++    }
++    true
++}
++
++}
++
++#[repr(C, align(2))]
++struct Storage([u8; 2]);
++
++fn main() {
++    let mut storage = Storage([11, 22]);
++    let original = (&raw mut storage.0) as *mut u8;
++
++    // One expose/cast instance; A and B use copies of this same wildcard.
++    let address = original as usize;
++    let wildcard = address as *mut UnsafeCell<()>;
++    let saved_raw_d = unsafe {
++        let a: &UnsafeCell<()> = &*wildcard;
++        let from_a = a as *const UnsafeCell<()> as *mut u8;
++        let d: &mut [u8] = &mut *core::ptr::slice_from_raw_parts_mut(from_a, 2);
++        d as *mut [u8] as *mut u8
++    };
++
++    unsafe {
++        (original as *mut u16).write(0x160b);
++    }
++    let b: &UnsafeCell<()> = unsafe { &*wildcard };
++    unsafe {
++        let v: &mut [u8] = &mut *core::ptr::slice_from_raw_parts_mut(saved_raw_d, 0);
++        // Keep this exposure in MIR without accessing any pointee bytes.
++        core::hint::black_box(v as *mut [u8] as *mut u8 as usize);
++    }
++    unsafe {
++        (original as *mut u16).write(0x160b);
++    }
++    let w: &mut [u8] = unsafe {
++        let from_b = b as *const UnsafeCell<()> as *mut u8;
++        &mut *core::ptr::slice_from_raw_parts_mut(from_b, 2)
++    };
++    assert!(target::duplicate_prefix(w, 1));
++}

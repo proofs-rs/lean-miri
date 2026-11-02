@@ -7,6 +7,39 @@ execution in the current checkout. See the
 [development guide](docs/development.md#check-commands) for check entry points
 and prerequisites.
 
+## Completed duplicate_prefix ordinary-input goal
+
+`CurrentCallOrdinarySafety.invoke` takes the explicit `OrdinaryInput` domain
+and any UInt64 count and proves `DuplicatePrefixArgumentCallResult.Result`:
+actual call initialization, normal physical return, no interpreter errors,
+finite-prefix UB freedom and reachable-step progress. Empty and positive
+inputs, source/return representations, LIVE/CURRENT backings and shared or
+distinct allocation IDs are included. Resource, configuration, compiler metadata
+and typed choice-input premises remain explicit. Arbitrary Rust caller-history
+formation, Rust/interpreter correspondence and additional Bool-value guarantees
+are outside this theorem.
+
+`CurrentCallOrdinaryWitnessSafety` constructs a positive CURRENT/CURRENT
+example with source [0,2), Bool destination [2,3), bytes [11,22,0], length 2
+and count 1. Its span and JSON-comparator contracts remain assumptions; the
+synthetic allocation registry does not certify a Rust calling history.
+
+The included interpreter changes wildcard postorder handling. The proof targets
+that explicit implementation, whose sources are bound by
+`examples/duplicate_prefix/LIBRARY-SHA256SUMS`. This is not a proof about an
+unmodified upstream interpreter. Compiler/exporter correctness remains trusted.
+
+See [the example guide](examples/duplicate_prefix/README.md) for the precise
+premises and reproduction commands. The complete `Check` source closure compiles against the included library.
+Its transitive axiom audit permits only `propext`, `Quot.sound`, and
+`Classical.choice`, including imported theorems and private/generated example
+declarations. Fixed Rust/MIR hashes and source/artifact bindings were checked.
+Quick source/fixture checks and the Tree Borrows component comparisons passed.
+These checks do not establish the missing Rust caller-domain transport or
+Rust/interpreter correspondence. The full `tools/check.sh` suite and independent
+Miri derivative QA were not rerun.
+
+
 ## Self-contained Lean test entry points
 
 Self-contained Lean checks are collected under `MiriTests/` and registered with
