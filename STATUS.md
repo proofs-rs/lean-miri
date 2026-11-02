@@ -744,9 +744,58 @@ using only propext, Quot.sound and Classical.choice.
 
 Raw artifacts, source/binary hashes, profiles, counters and example check/audit
 logs are under ignored `scratch/perf-ui/`.
-Full `check.sh` and the 809-candidate upstream sweep were not run. Finishing the
-long const-addrs guest under an explicit execution budget remains unresolved;
-this optimization does not establish whole-machine equivalence or UB freedom.
+Full `check.sh` and the 809-candidate upstream sweep were not run. At that checkpoint the
+long const-addrs guest remained unresolved; the subsequent native-driver results
+below supersede that blocker. Neither optimization establishes whole-machine
+equivalence or UB freedom.
+
+
+### Further compiler reuse and native execution without implicit quotas
+
+Allocation-world validation is computed once by the native decoder and bound
+by type to its exact raw JSON, typed allocation rows and compiler world. The
+getter's equality with the strict validator is kernel checked; failures remain
+deferred to their original demand sites. TLS rows likewise reuse the exact
+ordered scan, with whole-query equality proofs preserving duplicates and errors.
+Recursive configurations also reuse existing symbol and inline lookup indices.
+Optional JSON queries avoid discarded error strings, with proved equality.
+Singleton reference checks inspect actual tree shape, including malformed Raw
+size annotations. MIR consistency checks use Lean's proof-guarded `withPtrEq`
+fast path with complete structural comparison otherwise; `bodyContentsEqual_eq`
+is definitionally exact. A broader field/path cache was rejected: negligible
+wall-time benefit and approximately 600 MB extra RSS on unops.
+
+Pinned Miri's `concurrency/scheduler.rs::run_threads` and ui_test 0.30.7 have no
+matching 100,000-iteration or generated-choice/byte quotas. NativeRunner now
+repeats the fixed RunLoop iteration until actual termination/error, without a
+preallocated outer choice list. `--max-iterations N` remains an explicit pending
+prefix limit. Existing finite proof APIs keep their original bounded behavior.
+Native diagnostics keep the same zero/seeded algorithms, supplied-prefix
+validation and full replay history, without the implicit 65,536-draw/4,096-byte
+quotas. This does not assert rand/Miri RNG equivalence or safety of other traces.
+
+The UI harness no longer defaults to a 600-second Lean timeout or 15.5 GB memory
+guard; `--timeout` and `--memory-limit` opt into host resource controls. Killed and
+pending runs still fail comparison. Export/build budgets and the GitHub job
+deadline remain infrastructure controls. Component recursion/query budgets and
+unavailable host services remain support limits; this is not full Miri equivalence.
+
+The unchanged original const-addrs input (EVALS=64, inline MIR disabled) now
+finalizes exit zero: 309.129 wall / 309.053 CPU seconds, 74,057 choices, 4.423 GB
+RSS, 2.420 seconds same-CPU steal and zero throttling. Both old native quotas are
+exceeded. This is one full-run observation; the old binary cannot supply a
+full-run timing because it stops pending at 100,000 iterations.
+
+Validation passed: quick/integrity checks (88 Python tests), 18 guard/UI helper
+tests, native runner regressions, performance/structural regressions and connected
+component proof checks. The full MiriTests build passed; existing rvalue runtime
+assertions needed explicit IO Unit elaboration, with assertions retained. The
+Miri audit passed for 71,056 declarations. All 300 empty-function modules compiled;
+index/Bernoulli non-UB proofs include the new unbounded-policy cases. The final
+NoUB target type/premises and Rust/MIR hashes are unchanged. The combined audit
+passed for 92,058 declarations, using only the permitted three axioms. The unused
+example remaining-quota helper now returns Option Nat, with none for unbounded.
+The full upstream inventory has not been rerun by these focused checks.
 
 ## Feature support outside the current acceptance scope
 
