@@ -166,3 +166,27 @@ observing process output does not establish successful execution or safety.
 
 See the [profiling guide](../tools/PROFILING.md) for measurement modes, profiler
 boundaries, sampling and interpretation of results.
+
+## Building the API reference
+
+Documentation uses a separate `docbuild` Lake project with doc-gen4 pinned to the
+Lean release in `lean-toolchain`. `MiriApi.lean` includes the `Miri` library and the frontend, execution-choice
+policy and TLS callback modules outside its import closure;
+Rust setup and the comparison fixtures are not required.
+
+After installing the pinned Lean toolchain, run from the repository root:
+
+```bash
+(cd docbuild && flock /tmp/lean-miri-lake-build.lock lake build MiriApi:docs)
+python3 -m http.server --directory docbuild/.lake/build/doc 8000
+```
+
+Open `http://localhost:8000/Miri.html`. Serve the files over HTTP so that search
+works. When upgrading Lean, update the doc-gen4 revision in
+`docbuild/lakefile.toml` to the matching release and regenerate its manifest with
+`(cd docbuild && flock /tmp/lean-miri-lake-build.lock lake update doc-gen4)`.
+
+The `Miri API documentation` workflow builds on pull requests and publishes on
+`main` pushes or manual dispatch from `main`. In repository Settings → Pages,
+select **GitHub Actions** as the source. The published API entry point is
+<https://proofs-rs.github.io/lean-miri/Miri.html>.

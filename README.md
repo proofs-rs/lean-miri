@@ -9,6 +9,13 @@ executes that data and defines the semantics used in safety proofs.
 The project is under development; the import and proof APIs are experimental.
 See [STATUS.md](STATUS.md) for remaining work.
 
+## API reference
+
+Browse the [Miri API reference](https://proofs-rs.github.io/lean-miri/Miri.html),
+generated with doc-gen4 from `main`. The import and proof APIs remain experimental.
+See [Building the API reference](docs/development.md#building-the-api-reference)
+for local generation and hosting details.
+
 ## Build
 
 With [Elan](https://github.com/leanprover/elan) installed, run:
