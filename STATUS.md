@@ -786,8 +786,37 @@ RSS, 2.420 seconds same-CPU steal and zero throttling. Both old native quotas ar
 exceeded. This is one full-run observation; the old binary cannot supply a
 full-run timing because it stops pending at 100,000 iterations.
 
+Additional timings compare the preceding optimized native binary (`b6390f6a`)
+with runtime source `a9f2789e` (`700a8d0a` binary), not the original pre-optimization
+baseline. Inputs are byte-identical original exports. Trials alternate candidate
+and baseline sequentially on CPU 2 with LEAN_NUM_THREADS=1; builds and tests do
+not overlap. Wall/CPU/steal are raw seconds; throttle deltas are zero throughout.
+
+| Input / trial | Previous wall / CPU / steal | New wall / CPU / steal |
+| --- | --- | --- |
+| unops, 1 | 76.171 / 75.645 / 0.800 | 57.808 / 57.667 / 0.450 |
+| unops, 2 | 76.290 / 76.154 / 0.700 | 57.190 / 57.147 / 0.580 |
+| const-addrs, 100,000-iteration prefix, 1 | 252.872 / 252.548 / 2.940 | 114.655 / 114.509 / 1.300 |
+| const-addrs, same prefix, 2 | 248.717 / 248.426 / 1.930 | 114.571 / 114.516 / 0.920 |
+| invalid-bool, 1 | 69.856 / 69.772 / 0.590 | 53.767 / 53.655 / 0.410 |
+
+Unops median falls 76.231 → 57.499 seconds (24.57%); the half-time target is
+still unmet for this input, whose decoder/preparation work dominates. Const-addrs
+prefix median falls 250.795 → 114.613 seconds (54.30%), meeting that target for
+the same prefix, not for full execution. Candidate/base ranges are respectively
+57.190–57.808 / 76.171–76.290 for unops and 114.571–114.655 /
+248.717–252.872 for the const prefix. Peak RSS remains about 3.84 / 4.42 GB.
+Full tapes, events and terminal observations match exactly between old/new runs
+of each input/prefix. The independent pinned reference oracle accepts unops and
+the full const run, and invalid-bool at its original source line 3 (invalidBool 2).
+The invalid-bool pair is a single control observation, not a spread estimate.
+Both const prefix results remain pending, never passing outcomes. The full-run
+result above is separate. Native FNV/length, SHA256 and compiler pins match the
+retained reference bindings. Raw profiles, counters, manifests, input/reference bindings,
+parity results and example audits are under ignored scratch/perf-next/.
+
 Validation passed: quick/integrity checks (88 Python tests), 18 guard/UI helper
-tests, native runner regressions, performance/structural regressions and connected
+tests, 15 CI helper tests, native runner regressions, performance/structural regressions and connected
 component proof checks. The full MiriTests build passed; existing rvalue runtime
 assertions needed explicit IO Unit elaboration, with assertions retained. The
 Miri audit passed for 71,056 declarations. All 300 empty-function modules compiled;
