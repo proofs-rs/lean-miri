@@ -472,6 +472,25 @@ def visit [PointerProvenance P] [DecidableEq P] (h : Hooks P S C E F A Pad) (c :
     if h.debugAssertions then abiRanges h c session place
     return session
 
+/-- A fieldless inhabited aggregate has no value bytes or child accesses.
+The premises expose compiler queries at this state, rather than assuming a
+validation-operation outcome. -/
+theorem visit_fieldless [PointerProvenance P] [DecidableEq P]
+    (h : Hooks P S C E F A Pad) (c : C) (fuel : Nat) (session : Session P)
+    (place : RuntimePlace P) (state : S) (variant : Nat)
+    (classify : h.classify c place.layout.ty state =
+      .ok (.aggregate false false false) state)
+    (inhabited : h.opsemInhabited c place.layout.ty state = .ok true state)
+    (fields : place.layout.layout.fields = .Arbitrary #[] #[])
+    (variants : place.layout.layout.variants = .Single variant)
+    (runtime : session.ctfeMode = none) (debugOff : h.debugAssertions = false) :
+    visit h c (fuel+1) session place state = .ok session state := by
+  simp [visit, classify, primitive, fields, variants, runtime, inhabited, debugOff,
+    bind, Bind.bind, EStateM.bind, pure, Pure.pure, EStateM.pure]
+  cases session with | mk path flags mode tracking bytes =>
+    cases flags
+    simp_all
+
 private def resetPadding (h : Hooks P S C E F A Pad) (c : C) (session : Session P)
     (place : RuntimePlace P) : M S Unit := do
   let some ranges := session.dataBytes | return
@@ -483,6 +502,27 @@ private def resetPadding (h : Hooks P S C E F A Pad) (c : C) (session : Session 
   let some handle ← h.beginPadding c memory size | return
   let writes ← liftResult ((paddingWrites ranges start size).mapError fun error => .invalidProgram s!"padding: {repr error}")
   for range in writes do h.writePadding c handle range
+
+/-- No padding allocation is needed for a local-only validation session. -/
+@[simp] theorem resetPadding_no_ranges (h : Hooks P S C E F A Pad) (c : C)
+    (session : Session P) (place : RuntimePlace P) (empty : session.dataBytes = none) :
+    resetPadding h c session place = pure () := by
+  simp [resetPadding, empty]
+
+/-- Unit memory validation has no padding bytes. Its zero-size mutable-access
+query produces no handle, so reset performs no writes or allocation. -/
+theorem resetPadding_memory_zero [PointerProvenance P] (h : Hooks P S C E F A Pad)
+    (c : C) (session : Session P) (place : MPlaceTy P) (state : S)
+    (ranges : session.dataBytes = some .empty)
+    (size : place.layout.layout.size = Size.ZERO)
+    (dynamic : h.sizeAndAlign c place state = .ok (some (Size.ZERO,place.layout.layout.align.abi)) state)
+    (padding : h.beginPadding c place Size.ZERO state = .ok none state) :
+    resetPadding h c session ⟨.memory place.mplace,place.layout⟩ state = .ok () state := by
+  simp [resetPadding, ranges, forceAllocation, dynamic, size,
+    bind, Bind.bind, EStateM.bind, pure, Pure.pure, EStateM.pure]
+  split
+  · rfl
+  · simp only [bind, Bind.bind, EStateM.bind, padding, pure, Pure.pure, EStateM.pure]
 
 /-- Runtime validation: root may retag/reset; tracked pointees are checked in
 LIFO order without reset, without further tracking, and under may_dangle. -/
@@ -526,5 +566,20 @@ def constValidatePlace [PointerProvenance P] [DecidableEq P] (h : Hooks P S C E 
   match session.refTracking with
   | some tracking => return tracking
   | none => throw (.invalidProgram "const validation lost tracker")
+
+/-- Internal zero-padding composition after the original local place has
+been proved to denote its existing backing. -/
+theorem resetPadding_forced_zero [PointerProvenance P] (h : Hooks P S C E F A Pad)
+    (c : C) (session : Session P) (original : RuntimePlace P) (place : MPlaceTy P) (state : S)
+    (ranges : session.dataBytes = some .empty)
+    (forced : forceAllocation h.projection.place c original state = .ok place state)
+    (size : place.layout.layout.size = Size.ZERO)
+    (dynamic : h.sizeAndAlign c place state = .ok (some (Size.ZERO,place.layout.layout.align.abi)) state)
+    (padding : h.beginPadding c place Size.ZERO state = .ok none state) :
+    resetPadding h c session original state = .ok () state := by
+  simp [resetPadding,ranges,forced,dynamic,size,bind,Bind.bind,EStateM.bind,pure,Pure.pure,EStateM.pure]
+  split
+  · rfl
+  · simp only [bind,Bind.bind,EStateM.bind,padding,pure,Pure.pure,EStateM.pure]
 
 end Miri.Interpreter.ValidityVisitor

@@ -723,3 +723,483 @@ def fromCompilerImage (bytes : Array UInt8) (align : Align) (mutability : Mutabi
 end Allocation
 
 end Miri.Memory
+
+namespace Miri.Memory.Allocation
+open Miri.ABI
+set_option autoImplicit false
+set_option linter.unusedSimpArgs false
+set_option maxRecDepth 65536
+set_option maxHeartbeats 2000000
+variable {P E E' : Type}
+theorem writeScalar_mapExtra (layout : TargetDataLayout) (range : AllocRange)
+    (value : Scalar P) (allocation : Allocation P E) (f : E → E') :
+    Allocation.writeScalar layout range value (allocation.mapExtra f) =
+      (match Allocation.writeScalar layout range value allocation with
+       | .ok value state => .ok value (state.mapExtra f)
+       | .error error state => .error error (state.mapExtra f)) := by
+  have slices : Allocation.getBytesUnchecked (allocation.mapExtra f) range =
+      Allocation.getBytesUnchecked allocation range := rfl
+  unfold Allocation.getBytesUnchecked at slices
+  unfold Allocation.writeScalar
+  rw [slices]
+  simp only [Id.run,bind,Bind.bind,pure,Pure.pure]
+  by_cases mutable : allocation.mutability = .Mut
+  · cases converted : value.toBitsOrPtrInternal range.size <;>
+      simp_all only [Allocation.mapExtra,mutable,beq_self_eq_true,Bool.not_true,↓reduceIte]
+    all_goals repeat' (split <;> try simp_all [Allocation.mapExtra])
+  · simp [Allocation.mapExtra,mutable]
+
+theorem writeUninit_mapExtra (range : AllocRange) (pointerSize : Size)
+    (allocation : Allocation P E) (f : E → E') :
+    Allocation.writeUninit range pointerSize (allocation.mapExtra f) =
+      (match Allocation.writeUninit range pointerSize allocation with
+       | .ok value state => .ok value (state.mapExtra f)
+       | .error error state => .error error (state.mapExtra f)) := by
+  have slices : Allocation.getBytesUnchecked (allocation.mapExtra f) range =
+      Allocation.getBytesUnchecked allocation range := rfl
+  unfold Allocation.getBytesUnchecked at slices
+  unfold Allocation.writeUninit
+  rw [slices]
+  unfold setInitialization
+  simp only [Id.run,bind,Bind.bind,pure,Pure.pure,Except.mapError,Except.bind]
+  cases mask : allocation.initializationMask.setRange range false <;>
+    simp only [Allocation.initializationMask] at mask
+  all_goals simp only [mask,Except.pure,Allocation.mapExtra]
+  all_goals repeat' (split <;> try simp_all [Allocation.mapExtra,Except.pure])
+
+
+end Miri.Memory.Allocation
+
+namespace Miri.Memory.Allocation
+open Miri.ABI
+set_option autoImplicit false
+set_option maxRecDepth 65536
+set_option maxHeartbeats 2000000
+variable {P : Type}
+
+theorem tryNew_uninit_image (size : Size) (align : Align) (pointerSize : Size)
+    (allocation : Allocation P Unit) (positive : pointerSize.bytes ≠ 0)
+    (created : Allocation.tryNew size align .Uninit
+      (fun n _ => some (Array.replicate n.bytes.toNat 0)) = .ok allocation) :
+    allocation.len = size.bytes.toNat ∧
+    ∃ initialized, Allocation.fromBytes (Array.replicate size.bytes.toNat 0) align .Mut = .ok initialized ∧
+      Allocation.writeUninit (allocRange Size.ZERO size) pointerSize initialized =
+        .ok () (if size.bytes = 0 then {allocation with initMask := InitMask.new size true} else allocation) := by
+  unfold Allocation.tryNew at created
+  cases checked : checkedAlign align with
+  | error error => simp [checked,bind,Bind.bind,Except.bind] at created
+  | ok normalized =>
+    simp only [checked,bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure] at created
+    simp only [Array.size_replicate] at created
+    cases nz : firstNonZero (Array.replicate size.bytes.toNat 0) with
+    | some pair => cases pair; simp_all [throw,MonadExceptOf.throw,throwThe]
+    | none =>
+      simp_all
+      subst allocation
+      refine ⟨by simp [Allocation.len],?_⟩
+      refine ⟨⟨Array.replicate size.bytes.toNat 0,size,ProvenanceMap.new,
+        InitMask.new size true,normalized,.Mut,(),none⟩,?_,?_⟩
+      · have bound : ¬maxU64Nat < size.bytes.toNat := by
+          unfold maxU64Nat
+          have := size.bytes.toNat_lt
+          omega
+        have eta : Size.ofBytes size.bytes = size := by cases size; rfl
+        unfold Allocation.fromBytes sizeForArray
+        simp only [Array.size_replicate,bound,↓reduceIte]
+        simp_all [eta,bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure]
+      · have endEq : (allocRange Size.ZERO size).endExclusive = .ok size := by
+          cases size
+          simp [AllocRange.endExclusive,AllocRange.end,allocRange,Size.ZERO,Size.add,Size.ofBytes,Except.mapError]
+        unfold Allocation.writeUninit setInitialization checkedSlice
+        simp only [Array.size_replicate]
+        rw [endEq]
+        simp only [bind,Bind.bind,Except.bind,Except.mapError,pure,Pure.pure,Except.pure,Id.run]
+        simp only [allocRange,Size.ZERO,Size.ofBytes]
+        simp only [UInt64.not_lt_zero,UInt64.lt_irrefl,↓reduceIte]
+        have maskEq := InitMask.full_overwrite_stays_lazy size size true false (allocRange Size.ZERO size)
+          endEq rfl (by exact UInt64.le_refl _)
+        simp only [allocRange,Size.ZERO,Size.ofBytes] at maskEq
+        rw [maskEq]
+        by_cases zero : size.bytes = 0
+        · simp [zero]
+        · simp only [zero,↓reduceIte,Except.bind,Except.mapError,pure,Pure.pure,Except.pure]
+          have cleared := ProvenanceMap.clear_new (P := P) (allocRange Size.ZERO size)
+            (Array.replicate size.bytes.toNat 0) pointerSize size positive endEq
+          simp only [allocRange,Size.ZERO,Size.ofBytes] at cleared
+          rw [cleared]
+          simp [zero,bind,Bind.bind,Except.bind,Except.mapError,pure,Pure.pure,Except.pure,Id.run]
+
+end Miri.Memory.Allocation
+
+namespace Miri.Memory.Allocation
+open Miri.ABI
+set_option autoImplicit false
+private theorem firstNonZero_replicate (n : Nat) : firstNonZero (Array.replicate n 0) = none := by
+  let step : Nat → Option (Option (Nat × UInt8)) × Unit → Id (ForInStep (Option (Option (Nat × UInt8)) × Unit)) :=
+    fun index _ => match (Array.replicate n 0)[index]? with
+      | some byte => if byte != 0 then pure (.done (some (some (index,byte)),())) else pure (.yield (none,()))
+      | none => pure (.done (some (some (index,0)),()))
+  have scan : ∀ indices : List Nat, (∀ index ∈ indices, index < n) →
+      forIn indices (none,()) step = (none,()) := by
+    intro indices
+    induction indices with
+    | nil => intro good; rfl
+    | cons head tail ih =>
+      intro good
+      have bound := good head (by simp)
+      have atHead : (Array.replicate n (0 : UInt8))[head]? = some 0 := by simp [bound]
+      rw [List.forIn_cons]
+      simp only [step,atHead,beq_self_eq_true,Bool.not_true,Bool.false_eq_true,↓reduceIte,
+        pure,Pure.pure,bind,Bind.bind]
+      exact ih (by intro index member; exact good index (by simp [member]))
+  simp only [firstNonZero]
+  simp only [Std.Legacy.Range.forIn_eq_forIn_range',Array.size_replicate,Std.Legacy.Range.size,
+    Nat.sub_zero,Nat.add_sub_cancel,Nat.div_one]
+  simp only [Id.run,bind,Bind.bind,pure,Pure.pure]
+  dsimp only [step,Id.run,pure,Pure.pure] at scan
+  rw [scan (List.range' 0 n) (by intro index member; have := List.mem_range'.mp member; omega)]
+end Miri.Memory.Allocation
+
+namespace Miri.Memory.Allocation
+open Miri.ABI
+set_option autoImplicit false
+variable {P : Type}
+
+theorem tryNew_replicate (size : Size) (align : Align) (alignmentBytes : UInt64)
+    (bytes : Align.bytes align = .ok alignmentBytes)
+    (normalized : Align.fromBytes alignmentBytes = .ok align) :
+    ∃ allocation : Allocation P Unit,
+      Allocation.tryNew size align .Uninit (fun n _ => some (Array.replicate n.bytes.toNat 0)) = .ok allocation ∧
+      allocation.byteSize = size ∧ allocation.len = size.bytes.toNat ∧
+      allocation.nativeBuffer = none ∧ allocation.mutability = .Mut := by
+  refine ⟨⟨Array.replicate size.bytes.toNat 0,size,ProvenanceMap.new,
+    InitMask.new size false,align,.Mut,(),none⟩,?_,rfl,by simp [Allocation.len],rfl,rfl⟩
+  simp [Allocation.tryNew,checkedAlign,bytes,normalized,firstNonZero_replicate,
+    bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure,Except.mapError]
+
+end Miri.Memory.Allocation
+
+namespace Miri.Memory.Allocation
+open Miri.ABI
+set_option autoImplicit false
+variable {P : Type}
+
+theorem tryNew_replicate_full (size : Size) (align : Align) (alignmentBytes : UInt64)
+    (bytes : Align.bytes align = .ok alignmentBytes)
+    (normalized : Align.fromBytes alignmentBytes = .ok align) :
+    ∃ allocation : Allocation P Unit,
+      Allocation.tryNew size align .Uninit (fun n _ => some (Array.replicate n.bytes.toNat 0)) = .ok allocation ∧
+      allocation.byteSize = size ∧ allocation.len = size.bytes.toNat ∧
+      allocation.nativeBuffer = none ∧ allocation.mutability = .Mut ∧ allocation.align = align := by
+  refine ⟨⟨Array.replicate size.bytes.toNat 0,size,ProvenanceMap.new,
+    InitMask.new size false,align,.Mut,(),none⟩,?_,rfl,by simp [Allocation.len],rfl,rfl,rfl⟩
+  simp [Allocation.tryNew,checkedAlign,bytes,normalized,firstNonZero_replicate,
+    bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure,Except.mapError]
+
+end Miri.Memory.Allocation
+
+namespace Miri.Memory.Allocation
+open Miri.ABI
+set_option autoImplicit false
+set_option maxRecDepth 65536
+set_option maxHeartbeats 4000000
+private theorem target_bytes_exists (layout : TargetDataLayout) (size : Size) (bits : U128)
+    (limit : size.bytes.toNat ≤ 16) :
+    ∃ bytes, targetUIntBytes layout size bits = .ok bytes ∧ bytes.size = size.bytes.toNat := by
+  let step : Nat → Array UInt8 → Except AllocError (ForInStep (Array UInt8)) := fun index bytes =>
+    let valueIndex := if layout.endian == .little then index else size.bytes.toNat-index-1
+    pure (.yield (bytes.push (UInt8.ofNat ((bits.toNat / 2^(8*valueIndex)) % 256))))
+  have build : ∀ (indices : List Nat) (initial : Array UInt8),
+      ∃ bytes, forIn indices initial step = .ok bytes ∧ bytes.size = initial.size+indices.length := by
+    intro indices
+    induction indices with
+    | nil => intro initial; exact ⟨initial,rfl,by simp⟩
+    | cons index rest ih =>
+      intro initial
+      let byte := UInt8.ofNat ((bits.toNat / 2^(8*(if layout.endian == .little then index else size.bytes.toNat-index-1))) % 256)
+      obtain ⟨bytes,ok,length⟩ := ih (initial.push byte)
+      refine ⟨bytes,?_,?_⟩
+      · simpa only [List.forIn_cons,step,byte,bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure] using ok
+      · simp_all [Nat.add_assoc,Nat.add_comm,Nat.add_left_comm]
+  have small : ¬size.bytes > 16 := by
+    simp only [UInt64.lt_iff_toNat_lt]
+    simpa using Nat.not_lt.mpr limit
+  unfold targetUIntBytes
+  simp only [small,↓reduceIte,Std.Legacy.Range.forIn_eq_forIn_range']
+  obtain ⟨bytes,ok,length⟩ := build (List.range' 0 [:size.bytes.toNat].size) #[]
+  refine ⟨bytes,?_,?_⟩
+  · dsimp only [step] at ok
+    rw [ok]
+    rfl
+  · simpa using length
+end Miri.Memory.Allocation
+
+namespace Miri.Memory.Allocation
+open Miri.ABI
+set_option autoImplicit false
+set_option maxRecDepth 65536
+set_option maxHeartbeats 8000000
+variable {P E : Type}
+private theorem write_add_size (left right : Size)
+    (fits : left.bytes.toNat+right.bytes.toNat < 2^64) :
+    Size.add left right = .ok (Size.ofBytes (left.bytes+right.bytes)) := by
+  have noWrap : ¬left.bytes+right.bytes < left.bytes := by
+    simp only [UInt64.lt_iff_toNat_lt,UInt64.toNat_add,Nat.mod_eq_of_lt fits]
+    omega
+  simp [Size.add,noWrap]
+
+private theorem scalar_with_transitions (layout : TargetDataLayout)
+    (allocation : Allocation P E) (range : AllocRange) (value : Scalar P)
+    (converted : ScalarBitsOrPointer P) (cleared nextProvenance : ProvenanceMap P)
+    (storage : allocation.len = allocation.byteSize.bytes.toNat)
+    (mutable : allocation.mutability = .Mut)
+    (maskLength : allocation.initializationMask.len = allocation.byteSize)
+    (maskValid : InitMask.WriteProof.WellFormed allocation.initializationMask)
+    (nonzero : range.size.bytes ≠ 0) (width : range.size.bytes.toNat ≤ 16)
+    (bound : range.start.bytes.toNat+range.size.bytes.toNat ≤ allocation.byteSize.bytes.toNat)
+    (conversion : value.toBitsOrPtrInternal range.size = .ok converted)
+    (clear : allocation.provenanceMap.clear range allocation.rawBytes (pointerSize layout) = .ok () cleared)
+    (insert : match converted with
+      | .bits _ => nextProvenance = cleared
+      | .pointer pointer => range.size = pointerSize layout ∧
+          cleared.insertPtr range.start pointer.provenance (pointerSize layout) = .ok () nextProvenance) :
+    ∃ updated, Allocation.writeScalar layout range value allocation = .ok () updated ∧
+      updated.byteSize = allocation.byteSize ∧ updated.len = allocation.len ∧
+      updated.mutability = allocation.mutability ∧ updated.align = allocation.align ∧
+      updated.extra = allocation.extra ∧ updated.nativeBuffer = allocation.nativeBuffer ∧
+      updated.initializationMask.len = allocation.initializationMask.len ∧
+      InitMask.WriteProof.WellFormed updated.initializationMask ∧ updated.provenanceMap = nextProvenance := by
+  have fits : range.start.bytes.toNat+range.size.bytes.toNat < 2^64 := by
+    have := allocation.byteSize.bytes.toNat_lt
+    omega
+  let finish := Size.ofBytes (range.start.bytes+range.size.bytes)
+  have endpoint : range.endExclusive = .ok finish := by
+    unfold AllocRange.endExclusive AllocRange.end
+    exact congrArg (Except.mapError MemoryError.sizeError) (write_add_size range.start range.size fits)
+  have finishNat : finish.bytes.toNat = range.start.bytes.toNat+range.size.bytes.toNat := by
+    simp only [finish,Size.ofBytes,UInt64.toNat_add,Nat.mod_eq_of_lt fits]
+  have positive : 0 < range.size.bytes.toNat := Nat.pos_of_ne_zero (by
+    intro zero; exact nonzero (UInt64.toNat_inj.mp zero))
+  obtain ⟨mask,maskOk,maskSize,maskWF⟩ := InitMask.WriteProof.set_range_exists allocation.initializationMask range finish true
+    maskValid endpoint (by omega) (by rw [maskLength]; simpa only [finishNat] using bound)
+  let bits := match converted with
+    | .bits bits => bits
+    | .pointer pointer => BitVec.ofNat 128 pointer.offset.bytes.toNat
+  obtain ⟨data,dataOk,dataSize⟩ := target_bytes_exists layout range.size bits width
+  let bytes := allocation.rawBytes.extract 0 range.start.bytes.toNat ++ data ++
+    allocation.rawBytes.extract (range.start.bytes.toNat+range.size.bytes.toNat) allocation.rawBytes.size
+  have startBound : range.start.bytes.toNat ≤ allocation.rawBytes.size := by
+    change range.start.bytes.toNat ≤ allocation.len
+    omega
+  have endBound : finish.bytes.toNat ≤ allocation.rawBytes.size := by
+    change finish.bytes.toNat ≤ allocation.len
+    omega
+  have bytesLength : bytes.size = allocation.byteSize.bytes.toNat := by
+    simp only [bytes,Array.size_append,Array.size_extract,Nat.min_eq_left startBound,Nat.min_self,
+      Nat.sub_zero,dataSize,Nat.min_eq_left (by omega : range.start.bytes.toNat+range.size.bytes.toNat ≤ allocation.rawBytes.size)]
+    change _ = allocation.byteSize.bytes.toNat
+    change allocation.rawBytes.size = allocation.byteSize.bytes.toNat at storage
+    omega
+  let updated : Allocation P E :=
+    ⟨bytes,allocation.byteSize,nextProvenance,mask,allocation.align,allocation.mutability,allocation.extra,allocation.nativeBuffer⟩
+  refine ⟨updated,?_,rfl,?_,rfl,rfl,rfl,rfl,maskSize,maskWF,rfl⟩
+  · have slice : checkedSlice allocation range = .ok (allocation.rawBytes.extract range.start.bytes.toNat finish.bytes.toNat) := by
+      unfold checkedSlice
+      change allocation.rawBytes.size = allocation.size.bytes.toNat at storage
+      simp [storage,endpoint,finishNat,UInt64.lt_iff_toNat_lt,bound,bind,Bind.bind,Except.bind,Except.mapError,pure,Pure.pure,Except.pure]
+      exact bound
+    simp only [Allocation.initializationMask] at maskOk
+    simp only [Allocation.provenanceMap] at clear
+    unfold Allocation.writeScalar
+    simp only [mutable,bne_self_eq_false,Bool.false_eq_true,↓reduceIte,conversion]
+    simp only [Id.run,bind,Bind.bind,pure,Pure.pure]
+    rw [slice,maskOk]
+    simp only [bind,Bind.bind,pure,Pure.pure]
+    rw [clear]
+    simp only [bind,Bind.bind,pure,Pure.pure]
+    dsimp only [bytes,Allocation.byteSize] at bytesLength
+    cases converted with
+    | bits payload =>
+      dsimp only [bits] at dataOk
+      rw [dataOk]
+      simp only [bytesLength,bne_self_eq_false,Bool.false_eq_true,↓reduceIte]
+      simp [insert,updated,bytes,mutable,bind,Bind.bind,pure,Pure.pure]
+      rfl
+    | pointer pointer =>
+      dsimp only [bits] at dataOk
+      rw [dataOk]
+      simp only [bytesLength,bne_self_eq_false,Bool.false_eq_true,↓reduceIte]
+      rcases insert with ⟨sizeEq,inserted⟩
+      simp only [sizeEq,bne_self_eq_false,Bool.false_eq_true,↓reduceIte]
+      rw [inserted]
+      simp [updated,bytes,mutable,sizeEq]
+      rfl
+  · change bytes.size = allocation.len
+    exact bytesLength.trans storage.symm
+end Miri.Memory.Allocation
+
+namespace Miri.Memory.Allocation
+open Miri.ABI
+set_option autoImplicit false
+set_option maxRecDepth 65536
+set_option maxHeartbeats 8000000
+variable {P E : Type}
+private def zeroPointer (provenance : P) : ProvenanceMap P :=
+  match ProvenanceMap.insertPtr Size.ZERO provenance (Size.ofBytes 8) ProvenanceMap.new with
+  | .ok _ state => state
+  | .error _ state => state
+
+/-- Successful physical first component write in fresh uninitialized storage.
+All non-byte metadata is retained; only an optional zero-offset pointer entry
+can be present for the subsequent disjoint component. -/
+theorem writeScalar_fresh_zero (layout : TargetDataLayout) (allocation : Allocation P E) (value : Scalar P)
+    (converted : ScalarBitsOrPointer P)
+    (storage : allocation.len = allocation.byteSize.bytes.toNat)
+    (mutable : allocation.mutability = .Mut)
+    (maskLength : allocation.initializationMask.len = allocation.byteSize)
+    (maskValid : InitMask.WriteProof.WellFormed allocation.initializationMask)
+    (empty : allocation.provenanceMap = ProvenanceMap.new)
+    (nonzero : value.size.bytes ≠ 0) (width : value.size.bytes.toNat ≤ 16)
+    (bound : value.size.bytes.toNat ≤ allocation.byteSize.bytes.toNat)
+    (target : layout.pointerWidth = .w64)
+    (pointerWidth : match converted with | .bits _ => True | .pointer _ => value.size = Size.fromBits layout.pointerWidth.bits)
+    (conversion : value.toBitsOrPtrInternal value.size = .ok converted) :
+    ∃ updated, Allocation.writeScalar layout (allocRange Size.ZERO value.size) value allocation = .ok () updated ∧
+      updated.byteSize = allocation.byteSize ∧ updated.len = allocation.len ∧
+      updated.mutability = allocation.mutability ∧ updated.align = allocation.align ∧
+      updated.extra = allocation.extra ∧ updated.nativeBuffer = allocation.nativeBuffer ∧
+      updated.initializationMask.len = allocation.initializationMask.len ∧
+      InitMask.WriteProof.WellFormed updated.initializationMask ∧
+      (updated.provenanceMap = ProvenanceMap.new ∨
+        value.size = pointerSize layout ∧ ∃ provenance, updated.provenanceMap = zeroPointer provenance) := by
+  have pointerDef : pointerSize layout = Size.fromBits layout.pointerWidth.bits := rfl
+  simp only [←pointerDef] at pointerWidth
+  have positive : (pointerSize layout).bytes ≠ 0 := by simp [pointerSize,target,PointerWidth.bits,Size.fromBits,Size.ofBytes]
+  have endpoint : (allocRange Size.ZERO value.size).endExclusive = .ok value.size := by
+    cases sized : value.size
+    simp [allocRange,AllocRange.endExclusive,AllocRange.end,Size.ZERO,Size.ofBytes,Size.add,Except.mapError]
+  have clear : allocation.provenanceMap.clear (allocRange Size.ZERO value.size) allocation.rawBytes (pointerSize layout) =
+      .ok () ProvenanceMap.new := by
+    rw [empty]
+    exact ProvenanceMap.clear_new _ _ _ _ positive endpoint
+  cases converted with
+  | bits bits =>
+    obtain ⟨updated,written,sizeEq,lenEq,mutEq,alignEq,extraEq,nativeEq,maskEq,valid,provenance⟩ :=
+      scalar_with_transitions layout allocation (allocRange Size.ZERO value.size) value (.bits bits)
+        ProvenanceMap.new ProvenanceMap.new storage mutable maskLength maskValid nonzero width
+        (by simpa [allocRange,Size.ZERO,Size.ofBytes] using bound) conversion clear rfl
+    exact ⟨updated,written,sizeEq,lenEq,mutEq,alignEq,extraEq,nativeEq,maskEq,valid,Or.inl provenance⟩
+  | pointer pointer =>
+    have inserted : ProvenanceMap.insertPtr Size.ZERO pointer.provenance (pointerSize layout) ProvenanceMap.new =
+        .ok () (zeroPointer pointer.provenance) := by
+      have ptr8 : pointerSize layout = Size.ofBytes 8 := by simp [pointerSize,target,PointerWidth.bits,Size.fromBits]
+      have actual := ProvenanceMap.insertPtr_new Size.ZERO (Size.ofBytes 8) (Size.ofBytes 8) pointer.provenance
+        (by decide) (by decide)
+      unfold zeroPointer
+      rw [ptr8,actual]
+    obtain ⟨updated,written,sizeEq,lenEq,mutEq,alignEq,extraEq,nativeEq,maskEq,valid,provenance⟩ :=
+      scalar_with_transitions layout allocation (allocRange Size.ZERO value.size) value (.pointer pointer)
+        ProvenanceMap.new (zeroPointer pointer.provenance) storage mutable maskLength maskValid nonzero width
+        (by simpa [allocRange,Size.ZERO,Size.ofBytes] using bound) conversion clear ⟨pointerWidth,inserted⟩
+    exact ⟨updated,written,sizeEq,lenEq,mutEq,alignEq,extraEq,nativeEq,maskEq,valid,
+      Or.inr ⟨pointerWidth,pointer.provenance,provenance⟩⟩
+end Miri.Memory.Allocation
+
+namespace Miri.Memory.Allocation
+open Miri.ABI
+set_option autoImplicit false
+set_option maxRecDepth 65536
+set_option maxHeartbeats 8000000
+variable {P E : Type}
+/-- The second component writes a disjoint window of fresh storage. It keeps
+an earlier pointer entry intact and derives every provenance operation. -/
+theorem writeScalar_separated (layout : TargetDataLayout) (allocation : Allocation P E) (offset : Size)
+    (value : Scalar P) (converted : ScalarBitsOrPointer P)
+    (storage : allocation.len = allocation.byteSize.bytes.toNat) (mutable : allocation.mutability = .Mut)
+    (maskLength : allocation.initializationMask.len = allocation.byteSize)
+    (maskValid : InitMask.WriteProof.WellFormed allocation.initializationMask)
+    (separated : allocation.provenanceMap = ProvenanceMap.new ∨
+      ∃ provenance, allocation.provenanceMap = zeroPointer provenance ∧
+        (pointerSize layout).bytes.toNat ≤ offset.bytes.toNat)
+    (nonzero : value.size.bytes ≠ 0) (width : value.size.bytes.toNat ≤ 16)
+    (bound : offset.bytes.toNat+value.size.bytes.toNat ≤ allocation.byteSize.bytes.toNat)
+    (target : layout.pointerWidth = .w64)
+    (pointerWidth : match converted with | .bits _ => True | .pointer _ => value.size = Size.fromBits layout.pointerWidth.bits)
+    (conversion : value.toBitsOrPtrInternal value.size = .ok converted) :
+    ∃ updated, Allocation.writeScalar layout (allocRange offset value.size) value allocation = .ok () updated ∧
+      updated.byteSize = allocation.byteSize ∧ updated.len = allocation.len ∧
+      updated.mutability = allocation.mutability ∧ updated.align = allocation.align ∧
+      updated.extra = allocation.extra ∧ updated.nativeBuffer = allocation.nativeBuffer ∧
+      updated.initializationMask.len = allocation.initializationMask.len ∧
+      InitMask.WriteProof.WellFormed updated.initializationMask := by
+  have pointerDef : pointerSize layout = Size.fromBits layout.pointerWidth.bits := rfl
+  simp only [←pointerDef] at pointerWidth
+  let range := allocRange offset value.size
+  have fits : offset.bytes.toNat+value.size.bytes.toNat < 2^64 := by have := allocation.byteSize.bytes.toNat_lt; omega
+  let finish := Size.ofBytes (offset.bytes+value.size.bytes)
+  have endpoint : range.endExclusive = .ok finish := by
+    unfold AllocRange.endExclusive AllocRange.end range allocRange
+    exact congrArg (Except.mapError MemoryError.sizeError) (write_add_size offset value.size fits)
+  have ptr8 : pointerSize layout = Size.ofBytes 8 := by simp [pointerSize,target,PointerWidth.bits,Size.fromBits]
+  have positive : (pointerSize layout).bytes ≠ 0 := by rw [ptr8]; decide
+  have clear : allocation.provenanceMap.clear range allocation.rawBytes (pointerSize layout) =
+      .ok () allocation.provenanceMap := by
+    rcases separated with empty | ⟨old,present,before⟩
+    · rw [empty]; exact ProvenanceMap.clear_new _ _ _ _ positive endpoint
+    · have initial := ProvenanceMap.insertPtr_new Size.ZERO (Size.ofBytes 8) (Size.ofBytes 8) old
+        (by decide) (by decide)
+      unfold zeroPointer at present
+      rw [initial] at present
+      dsimp only at present
+      rw [present]
+      exact ProvenanceMap.clear_singleton_before range allocation.rawBytes (pointerSize layout) finish old
+        positive before endpoint
+  cases converted with
+  | bits bits =>
+    obtain ⟨updated,written,sizeEq,lenEq,mutEq,alignEq,extraEq,nativeEq,maskEq,valid,_⟩ :=
+      scalar_with_transitions layout allocation range value (.bits bits) allocation.provenanceMap allocation.provenanceMap
+        storage mutable maskLength maskValid nonzero width bound conversion clear rfl
+    exact ⟨updated,written,sizeEq,lenEq,mutEq,alignEq,extraEq,nativeEq,maskEq,valid⟩
+  | pointer pointer =>
+    have insertExists : ∃ next, allocation.provenanceMap.insertPtr offset pointer.provenance (pointerSize layout) =
+        .ok () next := by
+      rcases separated with empty | ⟨old,present,before⟩
+      · rw [empty]
+        have actual := ProvenanceMap.insertPtr_new offset (pointerSize layout) finish pointer.provenance positive
+          (by simpa only [range,pointerWidth] using endpoint)
+        let next := match ProvenanceMap.insertPtr offset pointer.provenance (pointerSize layout) ProvenanceMap.new with
+          | .ok _ state => state | .error _ state => state
+        refine ⟨next,?_⟩
+        dsimp only [next]
+        rw [actual]
+      · have initial := ProvenanceMap.insertPtr_new Size.ZERO (Size.ofBytes 8) (Size.ofBytes 8) old
+          (by decide) (by decide)
+        unfold zeroPointer at present
+        rw [initial] at present
+        dsimp only at present
+        rw [present]
+        exact ProvenanceMap.insertPtr_singleton_after offset (pointerSize layout) finish old pointer.provenance
+          positive before (by simpa only [range,pointerWidth] using endpoint)
+    obtain ⟨next,inserted⟩ := insertExists
+    obtain ⟨updated,written,sizeEq,lenEq,mutEq,alignEq,extraEq,nativeEq,maskEq,valid,_⟩ :=
+      scalar_with_transitions layout allocation range value (.pointer pointer) allocation.provenanceMap next
+        storage mutable maskLength maskValid nonzero width bound conversion clear ⟨pointerWidth,inserted⟩
+    exact ⟨updated,written,sizeEq,lenEq,mutEq,alignEq,extraEq,nativeEq,maskEq,valid⟩
+end Miri.Memory.Allocation
+
+namespace Miri.Memory.Allocation
+open Miri.ABI
+set_option autoImplicit false
+variable {P : Type}
+theorem tryNew_uninit_shape (size : Size) (align : Align) (allocation : Allocation P Unit)
+    (created : Allocation.tryNew size align .Uninit
+      (fun n _ => some (Array.replicate n.bytes.toNat 0)) = .ok allocation) :
+    allocation.provenanceMap = ProvenanceMap.new ∧ allocation.initializationMask = InitMask.new size false := by
+  unfold tryNew at created
+  cases checked : checkedAlign align with
+  | error error => simp [checked,bind,Bind.bind,Except.bind] at created
+  | ok normalized =>
+    simp [checked,firstNonZero_replicate,bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure] at created
+    subst allocation
+    exact ⟨rfl,rfl⟩
+end Miri.Memory.Allocation

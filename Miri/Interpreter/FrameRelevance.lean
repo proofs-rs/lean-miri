@@ -99,3 +99,30 @@ def bindLifecycle (debugAssertions : Bool)
       | .ok () => execute beforeStackPop before.stack before.state }
 
 end Miri.Interpreter.FrameRelevance
+
+namespace Miri.Interpreter.FrameRelevance
+open Miri Miri.ABI Miri.Memory Miri.MIR Miri.Concurrency
+set_option autoImplicit false
+variable {K U : Type}
+abbrev FreshFrame := Frame Provenance LocalLayout MachineHooks.FrameExtra
+ def pushedMachine (frames : Array FreshFrame) (frame old : FreshFrame)
+    (machine : MachineHooks.MachineState K U) :=
+  if frame.extra.userRelevance >= old.extra.userRelevance then
+    {machine with threads := {machine.threads with threads := machine.threads.threads.mapIdx fun index thread =>
+      if index == machine.threads.activeThread.toNat then
+        {thread with topUserRelevantFrame := some frames.size} else thread}}
+  else machine
+ theorem afterPush_known (frames : Array FreshFrame) (frame old : FreshFrame)
+    (machine : MachineHooks.MachineState K U) (thread : ThreadRecord) (index : Nat)
+    (current : machine.threads.activeThread? = some thread)
+    (cached : top ⟨frames.push frame⟩ thread.topUserRelevantFrame = some index)
+    (selected : (frames.push frame)[index]? = some old) :
+    afterStackPush false (⟨⟨frames.push frame⟩,machine⟩ : MachineHooks.State K U) =
+      .ok () ⟨⟨frames.push frame⟩,pushedMachine frames frame old machine⟩ := by
+  simp [afterStackPush,MachineHooks.currentFrame,Stack.currentFrame?,active,setCache,
+    current,cached,selected,pushedMachine,
+    get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,
+    modify,modifyGet,MonadStateOf.modifyGet,EStateM.modifyGet]
+  split <;> simp_all [get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,
+    modify,modifyGet,MonadStateOf.modifyGet,EStateM.modifyGet]
+end Miri.Interpreter.FrameRelevance

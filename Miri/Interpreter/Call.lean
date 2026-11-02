@@ -1,3 +1,4 @@
+import Miri.ABI.FnAbi
 import Miri.Interpreter.OperandPath
 import Miri.Interpreter.ControlFlow
 import Miri.Interpreter.Rvalue
@@ -525,3 +526,131 @@ def run (computation : CallM S A) (state : S) : StepResult S A :=
 
 end Call
 end Miri.Interpreter
+
+namespace Miri.Interpreter.Call
+open Miri Miri.ABI Miri.Memory Miri.MIR
+set_option autoImplicit false
+variable {P S C E Other Extern : Type}
+abbrev ZeroHooks (P S C E Other Extern : Type) := CallHooks P S C E Other Extern (FnAbi TyId) (ArgAbi TyId)
+ def zeroCore (h : ZeroHooks P S C E Other Extern) (choice : C) (fnInstance : CallInstance) (body : LoadedBody)
+    (abi : FnAbi TyId) (destination : MPlaceTy P) (cont : ReturnContinuation) : CallM S Unit := do
+  let cont := if h.abiCanUnwind abi then cont else
+    match cont with
+    | .stop _ => cont
+    | .goto ret _ => .goto ret .Unreachable
+  h.pushRaw choice fnInstance body (.memory destination) cont
+  let frame ← h.getFrame
+  let preamble ← match frame.location with
+    | .unwinding span => pure span
+    | .mir _ => throw (.invalidProgram "raw frame does not have preamble location")
+  h.setFrame {frame with trackCallerArg := none}
+  let (_,calleeIndex) ← h.withRetagMode choice .FnEntry (pure (0,0))
+  setSpan h (← h.localSpan body.body 0)
+  unless ← h.checkArgumentCompat choice abi.ret abi.ret do
+    throw (.undefinedBehavior "AbiMismatchReturn")
+  h.protectArgument choice destination
+  setSpan h preamble
+  require (calleeIndex == 0) "mismatch between callee ABI and callee body arguments"
+  h.afterFrameInit choice
+  h.pushDone choice
+ theorem zero_entry_core (h : ZeroHooks P S C E Other Extern) (choice : C) (fnInstance : CallInstance)
+    (body : LoadedBody) (abi : FnAbi TyId) (destination : MPlaceTy P) (cont : ReturnContinuation)
+    (requires : h.requiresCallerLocation fnInstance = pure false)
+    (instanceAbi : h.fnAbiOfInstance choice fnInstance #[] = pure abi)
+    (features : h.checkTargetFeatures choice fnInstance = pure ())
+    (memory : h.placeToOp choice (.memory destination) = pure ⟨.indirect destination.mplace,destination.layout⟩)
+    (closure : h.nonCapturingClosure choice fnInstance abi = pure false)
+    (variadic : h.abiVariadic abi = false)
+    (convention : h.sameConvention abi abi = true)
+    (arguments : h.abiArgs abi = #[])
+    (ret : h.abiReturn abi = abi.ret)
+    (count : body.body.argumentCount = 0) :
+    initStackFrame h choice fnInstance body abi #[] false (.memory destination) cont =
+      zeroCore h choice fnInstance body abi destination cont := by
+  simp [initStackFrame,zeroCore,requires,instanceAbi,features,memory,closure,variadic,
+    convention,arguments,ret,count,require,setSpan,bind_assoc]
+
+/-- Source specialization for a zero-argument call whose actual preflight
+operand is immediate. The preflight equation is an internal composition edge. -/
+def zeroImmediateCore (h : ZeroHooks P S C E Other Extern) (choice : C)
+    (fnInstance : CallInstance) (body : LoadedBody) (abi : FnAbi TyId)
+    (destination : RuntimeStackPlace P) (cont : ReturnContinuation) : CallM S Unit := do
+  let cont := if h.abiCanUnwind abi then cont else
+    match cont with | .stop _ => cont | .goto ret _ => .goto ret .Unreachable
+  h.pushRaw choice fnInstance body destination cont
+  let frame ← h.getFrame
+  let preamble ← match frame.location with
+    | .unwinding span => pure span
+    | .mir _ => throw (.invalidProgram "raw frame does not have preamble location")
+  h.setFrame {frame with trackCallerArg := none}
+  let (_,calleeIndex) ← h.withRetagMode choice .FnEntry (pure (0,0))
+  setSpan h (← h.localSpan body.body 0)
+  unless ← h.checkArgumentCompat choice abi.ret abi.ret do
+    throw (.undefinedBehavior "AbiMismatchReturn")
+  setSpan h preamble
+  require (calleeIndex == 0) "mismatch between callee ABI and callee body arguments"
+  h.afterFrameInit choice
+  h.pushDone choice
+
+ theorem zero_entry_immediate (h : ZeroHooks P S C E Other Extern) (choice : C)
+    (fnInstance : CallInstance) (body : LoadedBody) (abi : FnAbi TyId)
+    (destination : RuntimeStackPlace P) (cont : ReturnContinuation)
+    (before cached : S) (value : Immediate P) (layout : LocalLayout)
+    (requires : h.requiresCallerLocation fnInstance = pure false)
+    (instanceAbi : h.fnAbiOfInstance choice fnInstance #[] = pure abi)
+    (features : h.checkTargetFeatures choice fnInstance = pure ())
+    (immediate : h.placeToOp choice destination before = .ok ⟨.immediate value,layout⟩ cached)
+    (closure : h.nonCapturingClosure choice fnInstance abi = pure false)
+    (variadic : h.abiVariadic abi = false) (convention : h.sameConvention abi abi = true)
+    (arguments : h.abiArgs abi = #[]) (ret : h.abiReturn abi = abi.ret)
+    (count : body.body.argumentCount = 0) :
+    initStackFrame h choice fnInstance body abi #[] false destination cont before =
+      zeroImmediateCore h choice fnInstance body abi destination cont cached := by
+  simp only [initStackFrame,zeroImmediateCore,requires,instanceAbi,features,closure,variadic,
+    convention,arguments,ret,count,require,setSpan,bind_assoc,pure_bind]
+  simp [bind,Bind.bind,EStateM.bind,pure,Pure.pure,EStateM.pure,immediate]
+  rfl
+
+
+def zeroIndirectCore (h : ZeroHooks P S C E Other Extern) (choice : C) (fnInstance : CallInstance) (body : LoadedBody)
+    (abi : FnAbi TyId) (destination : RuntimeStackPlace P) (memory : MPlaceTy P) (cont : ReturnContinuation) : CallM S Unit := do
+  let cont := if h.abiCanUnwind abi then cont else
+    match cont with
+    | .stop _ => cont
+    | .goto ret _ => .goto ret .Unreachable
+  h.pushRaw choice fnInstance body destination cont
+  let frame ← h.getFrame
+  let preamble ← match frame.location with
+    | .unwinding span => pure span
+    | .mir _ => throw (.invalidProgram "raw frame does not have preamble location")
+  h.setFrame {frame with trackCallerArg := none}
+  let (_,calleeIndex) ← h.withRetagMode choice .FnEntry (pure (0,0))
+  setSpan h (← h.localSpan body.body 0)
+  unless ← h.checkArgumentCompat choice abi.ret abi.ret do
+    throw (.undefinedBehavior "AbiMismatchReturn")
+  h.protectArgument choice memory
+  setSpan h preamble
+  require (calleeIndex == 0) "mismatch between callee ABI and callee body arguments"
+  h.afterFrameInit choice
+  h.pushDone choice
+
+ theorem zero_entry_indirect (h : ZeroHooks P S C E Other Extern) (choice : C)
+    (fnInstance : CallInstance) (body : LoadedBody) (abi : FnAbi TyId)
+    (destination : RuntimeStackPlace P) (cont : ReturnContinuation)
+    (before cached : S) (memory : MPlaceTy P)
+    (requires : h.requiresCallerLocation fnInstance = pure false)
+    (instanceAbi : h.fnAbiOfInstance choice fnInstance #[] = pure abi)
+    (features : h.checkTargetFeatures choice fnInstance = pure ())
+    (indirect : h.placeToOp choice destination before = .ok ⟨.indirect memory.mplace,memory.layout⟩ cached)
+    (closure : h.nonCapturingClosure choice fnInstance abi = pure false)
+    (variadic : h.abiVariadic abi = false) (convention : h.sameConvention abi abi = true)
+    (arguments : h.abiArgs abi = #[]) (ret : h.abiReturn abi = abi.ret)
+    (count : body.body.argumentCount = 0) :
+    initStackFrame h choice fnInstance body abi #[] false destination cont before =
+      zeroIndirectCore h choice fnInstance body abi destination memory cont cached := by
+  simp only [initStackFrame,zeroIndirectCore,requires,instanceAbi,features,closure,variadic,
+    convention,arguments,ret,count,require,setSpan,bind_assoc,pure_bind]
+  simp [bind,Bind.bind,EStateM.bind,pure,Pure.pure,EStateM.pure,indirect]
+  rfl
+
+end Miri.Interpreter.Call

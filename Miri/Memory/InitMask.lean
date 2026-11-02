@@ -1,3 +1,4 @@
+import Lean
 import Miri.Memory.AllocRange
 
 /-! Checked Lean model of the pinned rustc allocation initialization mask. -/
@@ -405,3 +406,236 @@ theorem full_overwrite_stays_lazy (size finish : Size) (oldState newState : Bool
 end InitMask
 
 end Miri.Memory
+
+namespace Miri.Memory.InitMask.WriteProof
+open Miri.ABI Miri.Memory
+set_option autoImplicit false
+set_option linter.unusedSimpArgs false
+set_option maxRecDepth 65536
+set_option maxHeartbeats 4000000
+set_option backward.isDefEq.respectTransparency false
+set_option backward.dsimp.instances true
+variable {ε α β : Type}
+private abbrev getBlock := @Miri.Memory.InitMaskMaterialized.getBlock
+private abbrev setBlock := @Miri.Memory.InitMaskMaterialized.setBlock
+private abbrev setRangeInbounds := @Miri.Memory.InitMaskMaterialized.setRangeInbounds
+private abbrev materialize := @Miri.Memory.InitMask.materialize
+private abbrev setWordRange := @Miri.Memory.setWordRange
+private abbrev wordMask := @Miri.Memory.wordMask
+private theorem get_block_ok (words : Array UInt64) (index : Nat) (inBounds : index < words.size) :
+    getBlock ⟨words⟩ index = .ok words[index] := by
+  unfold getBlock
+  unfold Miri.Memory.InitMaskMaterialized.getBlock
+  simp [Array.getElem?_eq_getElem inBounds]
+
+private theorem set_block_ok (words : Array UInt64) (index : Nat) (word : UInt64) (inBounds : index < words.size) :
+    setBlock words index word = .ok (words.set index word) := by
+  unfold setBlock
+  unfold Miri.Memory.InitMaskMaterialized.setBlock
+  simp [inBounds]
+
+private def write_step (word : UInt64) (index : Nat) (words : Array UInt64) :
+    Except InitMaskError (ForInStep (Array UInt64)) := do
+  let updated ← setBlock words index word
+  pure (.yield updated)
+
+private theorem write_list_exists (indices : List Nat) (words : Array UInt64) (word : UInt64)
+    (inBounds : ∀ index ∈ indices, index < words.size) :
+    ∃ updated, forIn indices words (write_step word) = .ok updated ∧ updated.size = words.size := by
+  induction indices generalizing words with
+  | nil => exact ⟨words, rfl, rfl⟩
+  | cons first rest ih =>
+    have firstBound := inBounds first (by simp)
+    have restBound : ∀ index ∈ rest, index < (words.set first word).size := by
+      intro index member
+      simpa using inBounds index (by simp [member])
+    obtain ⟨updated, tailOk, sizeOk⟩ := ih (words.set first word) restBound
+    refine ⟨updated, ?_, by simpa using sizeOk⟩
+    simp only [List.forIn_cons, write_step, set_block_ok words first word firstBound,
+      Bind.bind, Except.bind, Pure.pure, Except.pure]
+    exact tailOk
+
+private theorem write_range_exists (lower upper : Nat) (words : Array UInt64) (word : UInt64)
+    (inBounds : ∀ index, lower ≤ index → index < upper → index < words.size) :
+    ∃ updated, (forIn (Std.Legacy.Range.mk lower upper 1 (by decide)) words (write_step word)) = .ok updated ∧ updated.size = words.size := by
+  rw [Std.Legacy.Range.forIn_eq_forIn_range']
+  apply write_list_exists
+  intro index member
+  obtain ⟨i, bound, rfl⟩ := List.mem_range'.mp member
+  simp only [Std.Legacy.Range.size, Nat.sub_zero, Nat.add_zero, Nat.sub_self, Nat.div_one, Nat.one_mul] at bound ⊢
+  apply inBounds <;> omega
+
+
+private def update_word (words : Array UInt64) (index : Nat) (transform : UInt64 → UInt64) :
+    Except InitMaskError (Array UInt64) := do
+  let word ← getBlock ⟨words⟩ index
+  setBlock words index (transform word)
+
+private theorem update_word_exists (words : Array UInt64) (index : Nat) (transform : UInt64 → UInt64)
+    (inBounds : index < words.size) :
+    ∃ updated, update_word words index transform = .ok updated ∧ updated.size = words.size := by
+  refine ⟨words.set index (transform words[index]), ?_, by simp⟩
+  simp [update_word, get_block_ok words index inBounds, set_block_ok, inBounds,
+    Bind.bind, Except.bind]
+
+private def set_range_words (words : Array UInt64) (blockA bitA blockB bitB : Nat) (state : Bool) :
+    Except InitMaskError (Array UInt64) := do
+  if blockA == blockB then
+    update_word words blockA (fun word => setWordRange word.toNat bitA (if bitB == 0 then 64 else bitB) state)
+  else
+    let initial ← update_word words blockA (fun word => setWordRange word.toNat bitA 64 state)
+    let middle ← if bitB != 0 then update_word initial blockB (fun word => setWordRange word.toNat 0 bitB state) else pure initial
+    forIn (Std.Legacy.Range.mk (blockA + 1) blockB 1 (by decide)) middle
+      (write_step (if state then UInt64.ofNat wordMask else 0))
+
+private theorem set_range_words_exists (words : Array UInt64) (blockA bitA blockB bitB : Nat) (state : Bool)
+    (firstBound : blockA < words.size)
+    (lastBound : bitB ≠ 0 → blockB < words.size)
+    (middleBound : ∀ index, blockA + 1 ≤ index → index < blockB → index < words.size) :
+    ∃ updated, set_range_words words blockA bitA blockB bitB state = .ok updated ∧ updated.size = words.size := by
+  by_cases same : blockA == blockB
+  · exact update_word_exists words blockA _ firstBound |>.imp (by intro updated props; simpa [set_range_words, same] using props)
+  · obtain ⟨initial, initialOk, initialSize⟩ := update_word_exists words blockA
+      (fun word => setWordRange word.toNat bitA 64 state) firstBound
+    have obtainMiddle : ∃ middle,
+        (if bitB != 0 then update_word initial blockB (fun word => setWordRange word.toNat 0 bitB state) else pure initial) = .ok middle ∧ middle.size = words.size := by
+      by_cases tail : bitB = 0
+      · exact ⟨initial, by simp [tail, Pure.pure, Except.pure], initialSize⟩
+      · obtain ⟨middle, middleOk, middleSize⟩ := update_word_exists initial blockB
+          (fun word => setWordRange word.toNat 0 bitB state) (by rw [initialSize]; exact lastBound tail)
+        exact ⟨middle, by simpa [tail] using middleOk, middleSize.trans initialSize⟩
+    obtain ⟨middle, middleOk, middleSize⟩ := obtainMiddle
+    obtain ⟨updated, loopOk, updatedSize⟩ := write_range_exists (blockA + 1) blockB middle
+      (if state then UInt64.ofNat wordMask else 0) (by simpa only [middleSize] using middleBound)
+    refine ⟨updated, ?_, updatedSize.trans middleSize⟩
+    simp only [set_range_words, same, Bool.false_eq_true, ↓reduceIte, initialOk, Bind.bind, Except.bind]
+    by_cases tail : bitB != 0
+    all_goals simp only [tail, Bool.false_eq_true, ↓reduceIte] at middleOk ⊢
+    all_goals rw [middleOk]
+    all_goals exact loopOk
+
+private theorem bind_if (p : Prop) [Decidable p] (yes no : Except ε α) (next : α → Except ε β) :
+    ((if p then yes else no) >>= next) = (if p then yes >>= next else no >>= next) := by
+  split <;> rfl
+
+private theorem set_range_inbounds_reduces (self : InitMaskMaterialized) (start finish : Size) (state : Bool) :
+    setRangeInbounds self start finish state = do
+      let words ← set_range_words self.blocks (start.bytes.toNat / 64) (start.bytes.toNat % 64)
+        (finish.bytes.toNat / 64) (finish.bytes.toNat % 64) state
+      return ⟨words⟩ := by
+  unfold setRangeInbounds
+  unfold Miri.Memory.InitMaskMaterialized.setRangeInbounds
+  unfold set_range_words update_word write_step getBlock setBlock setWordRange wordMask
+  unfold InitMaskMaterialized.bitIndex
+  unfold Miri.Memory.sizeBytes
+  unfold Miri.Memory.blockSize
+  cases state <;> simp only [Bool.false_eq_true, Bool.true_eq, ↓reduceIte, bind_if, bind_assoc, pure_bind]
+
+
+private theorem set_range_inbounds_exists (self : InitMaskMaterialized) (start finish : Size) (state : Bool)
+    (nonempty : start.bytes.toNat < finish.bytes.toNat)
+    (capacity : finish.bytes.toNat ≤ self.blocks.size * 64) :
+    ∃ updated, setRangeInbounds self start finish state = .ok updated ∧ updated.blocks.size = self.blocks.size := by
+  have firstBound : start.bytes.toNat / 64 < self.blocks.size := by omega
+  have lastBound : finish.bytes.toNat % 64 ≠ 0 → finish.bytes.toNat / 64 < self.blocks.size := by omega
+  have middleBound : ∀ index, start.bytes.toNat / 64 + 1 ≤ index → index < finish.bytes.toNat / 64 → index < self.blocks.size := by
+    intro index lower upper
+    omega
+  obtain ⟨words, wordsOk, wordsSize⟩ := set_range_words_exists self.blocks
+    (start.bytes.toNat / 64) (start.bytes.toNat % 64) (finish.bytes.toNat / 64) (finish.bytes.toNat % 64) state
+    firstBound lastBound middleBound
+  refine ⟨⟨words⟩, ?_, wordsSize⟩
+  rw [set_range_inbounds_reduces, wordsOk]
+  rfl
+
+def WellFormed (mask : InitMask) : Prop :=
+  match mask.blocks with
+  | .Lazy _ => True
+  | .Materialized blocks => mask.len.bytes.toNat ≤ blocks.blocks.size * 64
+
+private theorem materialized_set_range_exists (blocks : InitMaskMaterialized) (len : Size) (range : AllocRange) (finish : Size) (state : Bool)
+    (maskCapacity : len.bytes.toNat ≤ blocks.blocks.size * 64)
+    (endpoint : range.endExclusive = .ok finish)
+    (nonempty : range.start.bytes.toNat < finish.bytes.toNat)
+    (inBounds : finish.bytes.toNat ≤ len.bytes.toNat) :
+    ∃ updated, (InitMask.mk (.Materialized blocks) len).setRange range state = .ok updated ∧ updated.len = len ∧ WellFormed updated := by
+  by_cases full : range.start.bytes = 0 ∧ len.bytes ≤ finish.bytes
+  · have equal : finish = len := by
+      have lower := UInt64.le_iff_toNat_le.mp full.2
+      have equalBytes : finish.bytes = len.bytes := UInt64.toNat_inj.mp (by omega)
+      exact congrArg Size.ofBytes equalBytes
+    refine ⟨⟨.Lazy state, len⟩, ?_, rfl, trivial⟩
+    simp [InitMask.setRange, endpoint, full, equal, Pure.pure, Except.pure, Bind.bind, Except.bind]
+  · obtain ⟨updated, updatedOk, sizeOk⟩ := set_range_inbounds_exists blocks range.start finish state nonempty (by omega)
+    refine ⟨⟨.Materialized updated, len⟩, ?_, rfl, ?_⟩
+    · unfold InitMask.setRange
+      simp only [endpoint, Bind.bind, Except.bind]
+      simp only [full, ↓reduceIte, show finish.bytes ≤ len.bytes from UInt64.le_iff_toNat_le.mpr inBounds]
+      unfold setRangeInbounds at updatedOk
+      rw [updatedOk]
+      rfl
+    · simp only [WellFormed]
+      omega
+
+private theorem materialize_lazy_nonzero (len : Size) (state : Bool) (nonzero : len.bytes.toNat ≠ 0) :
+    materialize (InitMask.new len state) = .ok ⟨Array.replicate (len.bytes.toNat / 64 + 1) (if state then UInt64.ofNat 18446744073709551615 else 0)⟩ := by
+  unfold materialize
+  unfold Miri.Memory.InitMask.materialize
+  unfold InitMask.new
+  dsimp only
+  unfold Miri.Memory.InitMaskMaterialized.grow
+  unfold Miri.Memory.sizeBytes
+  unfold Miri.Memory.blockSize
+  unfold Miri.Memory.wordMask
+  simp [nonzero, Size.ofBytes, Array.empty_append, Pure.pure, Except.pure, Bind.bind, Except.bind]
+
+theorem set_range_exists (mask : InitMask) (range : AllocRange) (finish : Size) (state : Bool)
+    (valid : WellFormed mask) (endpoint : range.endExclusive = .ok finish)
+    (nonempty : range.start.bytes.toNat < finish.bytes.toNat)
+    (inBounds : finish.bytes.toNat ≤ mask.len.bytes.toNat) :
+    ∃ updated, mask.setRange range state = .ok updated ∧ updated.len = mask.len ∧ WellFormed updated := by
+  cases mask with
+  | mk blocks len =>
+    cases blocks with
+    | Materialized blocks => exact materialized_set_range_exists blocks len range finish state valid endpoint nonempty inBounds
+    | Lazy initial =>
+      dsimp only at inBounds
+      by_cases full : range.start.bytes = 0 ∧ len.bytes ≤ finish.bytes
+      · have lower := UInt64.le_iff_toNat_le.mp full.2
+        have equalBytes : finish.bytes = len.bytes := UInt64.toNat_inj.mp (by omega)
+        have equal : finish = len := congrArg Size.ofBytes equalBytes
+        refine ⟨⟨.Lazy state, len⟩, ?_, rfl, trivial⟩
+        simp [InitMask.setRange, endpoint, full, equal, Pure.pure, Except.pure, Bind.bind, Except.bind]
+      · by_cases same : initial == state
+        · refine ⟨⟨.Lazy initial, len⟩, ?_, rfl, trivial⟩
+          have notGrow : ¬finish.bytes > len.bytes := by simpa [UInt64.lt_iff_toNat_lt] using Nat.not_lt.mpr inBounds
+          simp [InitMask.setRange, endpoint, full, same, notGrow, Pure.pure, Except.pure, Bind.bind, Except.bind]
+        · have lenNonzero : len.bytes.toNat ≠ 0 := by omega
+          let words := Array.replicate (len.bytes.toNat / 64 + 1) (if initial then UInt64.ofNat 18446744073709551615 else 0)
+          have materialized := materialize_lazy_nonzero len initial lenNonzero
+          have capacity : finish.bytes.toNat ≤ words.size * 64 := by simp only [words, Array.size_replicate]; omega
+          obtain ⟨updated, updatedOk, sizeOk⟩ := set_range_inbounds_exists ⟨words⟩ range.start finish state nonempty capacity
+          refine ⟨⟨.Materialized updated, len⟩, ?_, rfl, ?_⟩
+          · unfold InitMask.setRange
+            simp only [endpoint, Bind.bind, Except.bind, full, ↓reduceIte, same, Bool.false_eq_true]
+            change (materialize (InitMask.new len initial) >>= _) = _
+            rw [materialized]
+            simp only [Bind.bind, Except.bind, show finish.bytes ≤ len.bytes from UInt64.le_iff_toNat_le.mpr inBounds, ↓reduceIte]
+            unfold setRangeInbounds at updatedOk
+            rw [updatedOk]
+            rfl
+          · simp only [WellFormed]
+            change updated.blocks.size = words.size at sizeOk
+            simp only [words, Array.size_replicate] at sizeOk
+            omega
+
+
+end Miri.Memory.InitMask.WriteProof
+
+open Lean Elab Command in
+run_cmd do
+  for (name,_) in (←getEnv).constants.toList do
+    if (name.toString.splitOn "Miri.Memory.InitMask.WriteProof.").length != 1 then
+      for dependency in (←collectAxioms name) do
+        unless #[``propext,``Quot.sound,``Classical.choice].contains dependency do
+          throwError "unapproved mask write axiom {dependency} in {name}"

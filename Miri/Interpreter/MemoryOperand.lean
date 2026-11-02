@@ -495,4 +495,233 @@ theorem unsized_raw_read_does_not_call_dynamic_access
       globalHooks accessHooks dynamicLayout).memory = memory := by
   simp [readImmediateFromMplaceRaw, h]
 
+/-- Unit storage has no byte write, for any aligned pointer and arbitrary
+memory/access hooks. Only the target pointer-size query is a metadata premise. -/
+theorem zero_uninit_write {P E K H X : Type} [DecidableEq K]
+    [DecidableEq P] [PointerProvenance P]
+    (memory : MemoryState P E K) (hooks : H)
+    (pointer : Pointer (Option P)) (runtime : RuntimeTargetDataLayout)
+    (pointerSize : Size)
+    (pointerMetadata : runtime.pointerSizeIn runtime.defaultAddressSpace = .ok pointerSize)
+    (ghost : Bool) (kind : Option K)
+    (globals : GlobalAllocationHooks P E K H)
+    (access : AllocationAccessHooks P E K H X)
+    (dynamic : DynamicLayoutResolver P E K H)
+    (later : MemoryOperandLayout → Bool) (ty : Option Nat) :
+    writeImmediateToMplaceNoValidate memory hooks .uninit
+      ⟨⟨pointer, .none, none⟩, ⟨Size.ZERO, Align.ONE, .Memory (sized := true), ty⟩⟩
+      runtime ghost kind globals access dynamic later =
+      ⟨memory, hooks, none, .ok ()⟩ := by
+  unfold writeImmediateToMplaceNoValidate getPlaceAllocMut
+  simp only [BackendRepr.isUnsized]
+  unfold immediateMatchesAbi selectedSizeAndAlign pointerArithmeticFor
+  simp only [BackendRepr.isUnsized]
+  rw [pointerMetadata]
+  cases ghost <;> with_unfolding_all rfl
+
+
+end Miri.Interpreter
+
+namespace Miri.Interpreter
+open Miri.ABI Miri.Memory
+set_option autoImplicit false
+set_option maxRecDepth 65536
+set_option maxHeartbeats 2000000
+variable {P E K H X : Type} [DecidableEq K]
+/-- Internal positive-access composition after raw source resolution. -/
+theorem getPlaceAllocMut_sized_of_access
+    (memory : MemoryState P E K) (hooks : H) (place : MemoryOperandPlace P)
+    (runtime : RuntimeTargetDataLayout) (pointerSize : Size) (kind : Option K)
+    (global : GlobalAllocationHooks P E K H) (access : AllocationAccessHooks P E K H X)
+    (dynamic : DynamicLayoutResolver P E K H) (reference : AllocationAccessRef P E)
+    (sized : place.layout.backendRepr.isUnsized = false) (aligned : place.mplace.misaligned = none)
+    (pointer : runtime.pointerSizeIn runtime.defaultAddressSpace = .ok pointerSize)
+    (actual : AllocationAccess.getPtrAllocMut memory hooks ⟨pointerSize⟩ place.mplace.ptr place.layout.size
+      false kind global access = ⟨memory,hooks,some reference,.ok (some reference)⟩) :
+    getPlaceAllocMut memory hooks place runtime false kind global access dynamic =
+      ⟨memory,hooks,some reference,.ok (some reference)⟩ := by
+  unfold getPlaceAllocMut selectedSizeAndAlign pointerArithmeticFor
+  simp only [sized,Bool.false_eq_true,↓reduceIte]
+  simp only [Id.run,bind,Bind.bind,pure,Pure.pure]
+  rw [pointer]
+  simp only [Except.mapError,Except.bind,Except.pure,Bool.false_eq_true,↓reduceIte,bind,Bind.bind,pure,Pure.pure]
+  rw [actual]
+  simp [finishPlaceAccess,aligned]
+end Miri.Interpreter
+
+namespace Miri.Interpreter
+open Miri.ABI Miri.Memory
+set_option autoImplicit false
+set_option maxRecDepth 65536
+set_option maxHeartbeats 4000000
+variable {P E K H X : Type} [DecidableEq K] [DecidableEq P] [PointerProvenance P]
+private theorem zero_subrange (size width : Size) (bound : width.bytes ≤ size.bytes) :
+    (allocRange Size.ZERO size).subrange (allocRange Size.ZERO width) = .ok (allocRange Size.ZERO width) := by
+  cases size; cases width
+  simp [AllocRange.subrange,AllocRange.endExclusive,AllocRange.end,allocRange,Size.ZERO,Size.add,Size.ofBytes,
+    bound,Except.mapError,bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure]
+
+/-- The actual scalar immediate writer, composed with its derived mutable
+access and pure allocation mutation. These are internal operation edges. -/
+theorem writeImmediate_scalar_of_access
+    (memory afterMemory : MemoryState P E K) (hooks : H) (place : MemoryOperandPlace P)
+    (runtime : RuntimeTargetDataLayout) (kind : Option K) (global : GlobalAllocationHooks P E K H)
+    (access : AllocationAccessHooks P E K H X) (dynamic : DynamicLayoutResolver P E K H)
+    (later : MemoryOperandLayout → Bool) (value : Memory.Scalar P) (abi : Miri.ABI.Scalar)
+    (id : AllocId) (allocation after : Allocation P E)
+    (backend : place.layout.backendRepr = .Scalar abi)
+    (width : Primitive.size abi.primitive runtime = .ok value.size)
+    (category : match abi.primitive with | .Pointer _ => True | _ => value.isPointer = false)
+    (bound : value.size.bytes ≤ place.layout.size.bytes)
+    (actual : getPlaceAllocMut memory hooks place runtime false kind global access dynamic =
+      ⟨memory,hooks,some ⟨id,allocRange Size.ZERO place.layout.size,allocation⟩,
+        .ok (some ⟨id,allocRange Size.ZERO place.layout.size,allocation⟩)⟩)
+    (written : Allocation.writeScalar runtime.base (allocRange Size.ZERO value.size) value allocation = .ok () after)
+    (committed : memory.setLiveAllocation id after = .ok afterMemory) :
+    writeImmediateToMplaceNoValidate memory hooks (.scalar value) place runtime false kind global access dynamic later =
+      ⟨afterMemory,hooks,some ⟨id,allocRange Size.ZERO place.layout.size,after⟩,.ok ()⟩ := by
+  have abiOk : immediateMatchesAbi (.scalar value) place.layout runtime = .ok () := by
+    unfold immediateMatchesAbi
+    rw [backend]
+    dsimp only
+    unfold scalarMatchesPrimitive
+    rw [width]
+    cases primitive : abi.primitive <;>
+      simp_all [bind,Bind.bind,Except.bind,Except.mapError,pure,Pure.pure,Except.pure]
+  unfold writeImmediateToMplaceNoValidate
+  simp only [backend,BackendRepr.isUnsized,Bool.false_eq_true,↓reduceIte]
+  rw [abiOk]
+  dsimp only [Id.run,bind,Bind.bind,pure,Pure.pure]
+  rw [actual]
+  dsimp only [bind,Bind.bind,pure,Pure.pure]
+  unfold writeScalarAt writeRange
+  dsimp only [Id.run,bind,Bind.bind,pure,Pure.pure]
+  rw [zero_subrange _ _ bound]
+  simp only [Except.mapError,Except.bind,bind,Bind.bind,pure,Pure.pure]
+  rw [written]
+  simp [commitAllocationMutation,committed,Id.run,bind,Bind.bind,pure,Pure.pure]
+end Miri.Interpreter
+
+namespace Miri.Interpreter
+open Miri.ABI Miri.Memory
+set_option autoImplicit false
+set_option maxRecDepth 65536
+set_option maxHeartbeats 4000000
+variable {P E K H X : Type} [DecidableEq K] [DecidableEq P] [PointerProvenance P]
+private theorem add_size_ok (left right : Size)
+    (fits : left.bytes.toNat + right.bytes.toNat < 2^64) :
+    Size.add left right = .ok (Size.ofBytes (left.bytes + right.bytes)) := by
+  have noWrap : ¬ left.bytes + right.bytes < left.bytes := by
+    simp only [UInt64.lt_iff_toNat_lt,UInt64.toNat_add,Nat.mod_eq_of_lt fits]
+    omega
+  simp [Size.add,noWrap]
+
+private theorem offset_subrange (size offset width : Size)
+    (bound : offset.bytes.toNat + width.bytes.toNat ≤ size.bytes.toNat) :
+    (allocRange Size.ZERO size).subrange (allocRange offset width) = .ok (allocRange offset width) := by
+  have fits : offset.bytes.toNat + width.bytes.toNat < 2^64 := by have := size.bytes.toNat_lt; omega
+  have endpoint : (allocRange offset width).endExclusive = .ok (Size.ofBytes (offset.bytes+width.bytes)) := by
+    unfold AllocRange.endExclusive AllocRange.end allocRange
+    rw [add_size_ok offset width fits]
+    rfl
+  have outer : (allocRange Size.ZERO size).endExclusive = .ok size := by
+    cases size
+    simp [allocRange,AllocRange.endExclusive,AllocRange.end,Size.add,Size.ZERO,Size.ofBytes,Except.mapError]
+  have contained : offset.bytes+width.bytes ≤ size.bytes := by
+    simp only [UInt64.le_iff_toNat_le,UInt64.toNat_add,Nat.mod_eq_of_lt fits]
+    exact bound
+  have start : Size.add Size.ZERO offset = .ok offset := by
+    cases offset
+    simp [Size.add,Size.ZERO,Size.ofBytes]
+  unfold AllocRange.subrange
+  simp only [allocRange] at endpoint outer ⊢
+  rw [start]
+  simp only [Except.mapError,bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure]
+  rw [endpoint,outer]
+  simp [contained,bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure]
+  exact contained
+
+private theorem primitive_matches (runtime : RuntimeTargetDataLayout) (primitive : BackendPrimitive)
+    (value : Memory.Scalar P)
+    (category : match primitive with | .Pointer _ => True | _ => value.isPointer = false)
+    (width : Primitive.size primitive runtime = .ok value.size) :
+    scalarMatchesPrimitive value primitive runtime = .ok () := by
+  unfold scalarMatchesPrimitive
+  rw [width]
+  cases primitive <;> simp_all [Except.mapError,bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure]
+private theorem scalar_at_of_write (memory afterMemory : MemoryState P E K) (hooks : H)
+    (reference : AllocationAccessRef P E) (runtime : RuntimeTargetDataLayout) (offset : Size) (value : Memory.Scalar P)
+    (range : AllocRange) (after : Allocation P E)
+    (selected : reference.range.subrange (allocRange offset value.size) = .ok range)
+    (written : Allocation.writeScalar runtime.base range value reference.allocation = .ok () after)
+    (committed : memory.setLiveAllocation reference.allocId after = .ok afterMemory) :
+    writeScalarAt memory hooks reference runtime offset value =
+      ⟨afterMemory,hooks,some {reference with allocation := after},.ok ()⟩ := by
+  unfold writeScalarAt writeRange
+  dsimp only [Id.run,bind,Bind.bind,pure,Pure.pure]
+  rw [selected]
+  simp only [Except.mapError,Id.run,bind,Bind.bind,pure,Pure.pure]
+  rw [written]
+  simp [commitAllocationMutation,committed,Id.run,bind,Bind.bind,pure,Pure.pure]
+
+/-- ScalarPair's real source branch under the caller's current shallow
+validation policy; the two writes and intermediate cache update are retained. -/
+theorem writeImmediate_pair_of_access
+    (memory middleMemory afterMemory : MemoryState P E K) (hooks : H) (place : MemoryOperandPlace P)
+    (runtime : RuntimeTargetDataLayout) (kind : Option K) (global : GlobalAllocationHooks P E K H)
+    (access : AllocationAccessHooks P E K H X) (dynamic : DynamicLayoutResolver P E K H)
+    (first second : Memory.Scalar P) (abiA abiB : Miri.ABI.Scalar) (offset : Size)
+    (id : AllocId) (allocation middle after : Allocation P E)
+    (backend : place.layout.backendRepr = .ScalarPair (a := abiA) (b := abiB) (bOffset := offset))
+    (widthA : Primitive.size abiA.primitive runtime = .ok first.size)
+    (widthB : Primitive.size abiB.primitive runtime = .ok second.size)
+    (categoryA : match abiA.primitive with | .Pointer _ => True | _ => first.isPointer = false)
+    (categoryB : match abiB.primitive with | .Pointer _ => True | _ => second.isPointer = false)
+    (offsetPositive : offset.bytes ≠ 0) (firstEnd : first.size.bytes ≤ offset.bytes)
+    (bound : offset.bytes.toNat + second.size.bytes.toNat ≤ place.layout.size.bytes.toNat)
+    (actual : getPlaceAllocMut memory hooks place runtime false kind global access dynamic =
+      ⟨memory,hooks,some ⟨id,allocRange Size.ZERO place.layout.size,allocation⟩,
+        .ok (some ⟨id,allocRange Size.ZERO place.layout.size,allocation⟩)⟩)
+    (writtenA : Allocation.writeScalar runtime.base (allocRange Size.ZERO first.size) first allocation = .ok () middle)
+    (cacheA : memory.setLiveAllocation id middle = .ok middleMemory)
+    (writtenB : Allocation.writeScalar runtime.base (allocRange offset second.size) second middle = .ok () after)
+    (cacheB : middleMemory.setLiveAllocation id after = .ok afterMemory) :
+    writeImmediateToMplaceNoValidate memory hooks (.scalarPair first second) place runtime false kind global access dynamic
+      (fun _ => true) =
+      ⟨afterMemory,hooks,some ⟨id,allocRange Size.ZERO place.layout.size,after⟩,.ok ()⟩ := by
+  have firstNat : first.size.bytes.toNat ≤ offset.bytes.toNat := UInt64.le_iff_toNat_le.mp firstEnd
+  have sumFits : first.size.bytes.toNat + second.size.bytes.toNat < 2^64 := by
+    have limit := place.layout.size.bytes.toNat_lt
+    omega
+  have firstBound : first.size.bytes ≤ place.layout.size.bytes := by
+    apply UInt64.le_iff_toNat_le.mpr
+    omega
+  have abiOk : immediateMatchesAbi (.scalarPair first second) place.layout runtime = .ok () := by
+    unfold immediateMatchesAbi
+    rw [backend]
+    dsimp only
+    have firstOk := primitive_matches runtime abiA.primitive first categoryA widthA
+    have secondOk := primitive_matches runtime abiB.primitive second categoryB widthB
+    rw [firstOk]
+    dsimp only [bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure]
+    rw [secondOk]
+  have aWrite := scalar_at_of_write memory middleMemory hooks
+    (⟨id,allocRange Size.ZERO place.layout.size,allocation⟩ : AllocationAccessRef P E) runtime Size.ZERO first
+    (allocRange Size.ZERO first.size) middle (zero_subrange _ _ firstBound) writtenA cacheA
+  have bWrite := scalar_at_of_write middleMemory afterMemory hooks
+    (⟨id,allocRange Size.ZERO place.layout.size,middle⟩ : AllocationAccessRef P E) runtime offset second
+    (allocRange offset second.size) after (offset_subrange _ _ _ bound) writtenB cacheB
+  unfold writeImmediateToMplaceNoValidate
+  simp only [backend,BackendRepr.isUnsized,Bool.false_eq_true,↓reduceIte]
+  rw [abiOk]
+  dsimp only [Id.run,bind,Bind.bind,pure,Pure.pure]
+  rw [actual]
+  dsimp only [bind,Bind.bind,pure,Pure.pure]
+  simp only [backend,offsetPositive,bne_iff_ne,beq_iff_eq,↓reduceIte]
+  rw [add_size_ok first.size second.size sumFits]
+  dsimp only [bind,Bind.bind,pure,Pure.pure]
+  simp only [Bool.not_true,Bool.false_and,Bool.false_eq_true,↓reduceIte]
+  rw [aWrite]
+  dsimp only [bind,Bind.bind,pure,Pure.pure]
+  rw [bWrite]
 end Miri.Interpreter

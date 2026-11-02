@@ -1,3 +1,5 @@
+import Lean
+import Init.Internal.Order.While
 import Miri.TreeBorrows.UniMap
 import Miri.TreeBorrows.LocationState
 import Miri.TreeBorrows.NormalTree
@@ -1180,6 +1182,1069 @@ theorem new_one_byte_root_is_accessed_unique :
   decide
 
 
+/-! Zero-byte protected child construction from finite graph and allocator
+invariants. These proof-only declarations do not change the interpreter.
+The rank and loop lemmas are adapted from PR35/38 generic Tree Borrows proofs. -/
+
+namespace ZeroProtection
+open Miri.TreeBorrows.Tree
+set_option maxRecDepth 65536
+set_option maxHeartbeats 16000000
+open Lean Elab Tactic in
+elab "name_ancestor_loop" : tactic => do
+  liftMetaTactic fun goal => goal.withContext do
+    let target ← goal.getType
+    let some loop := target.find? (fun expr => expr.isAppOf ``Lean.Loop.forIn)
+      | throwError "no Loop.forIn found"
+    let body := loop.getAppArgs.back!
+    let goal ← goal.define `scan (← Lean.Meta.inferType body) body
+    let (scan, goal) ← goal.intro1P
+    let target ← goal.getType
+    let target := target.replace fun expr =>
+      if expr == body then some (mkFVar scan) else none
+    return [← goal.change target]
+/-- A source while-loop invariant with a well-founded data measure. -/
+theorem loop_invariant {β : Type} (scan : Unit → β → Id (ForInStep β))
+    (measure : β → Nat) (property : β → Prop)
+    (step : ∀ state, property state →
+      (∃ final, scan () state = .done final ∧ property final) ∨
+      ∃ next, scan () state = .yield next ∧ property next ∧ measure next < measure state)
+    (initial : β) (valid : property initial) :
+    property (Lean.Loop.forIn {} initial scan) := by
+  have sound : ∀ bound state, measure state = bound → property state →
+      property (Lean.Loop.forIn {} state scan) := by
+    intro bound
+    induction bound using Nat.strongRecOn with
+    | ind bound ih =>
+      intro state measured valid
+      rw [Lean.Loop.forIn_eq_of_monadTail]
+      rcases step state valid with done | more
+      · obtain ⟨final,actual,preserved⟩ := done
+        simpa only [actual,bind,pure] using preserved
+      · obtain ⟨next,actual,preserved,smaller⟩ := more
+        simp only [actual,bind]
+        exact ih (measure next) (by omega) next rfl preserved
+  exact sound (measure initial) initial rfl valid
+structure ParentDepth (nodes : UniValMap TreeNode) where
+  depth : UniIndex → Nat
+  bounded : ∀ index node, nodes.get index = some node → depth index ≤ nodes.size
+  parent : ∀ index node, nodes.get index = some node → ∀ before, node.parent = some before →
+    ∃ earlier, nodes.get before = some earlier ∧ depth before < depth index
+theorem index_injective (left right : UniIndex) (same : left.toNat = right.toNat) : left = right := by
+  cases left with
+  | mk left =>
+    cases right with
+    | mk right =>
+      exact congrArg UniIndex.mk (UInt32.toNat_inj.mp same)
+
+theorem lookup_valid {α : Type} (nodes : UniValMap α) (index : UniIndex) (value : α)
+    (present : nodes.get index = some value) : index.toNat < nodes.data.size := by
+  unfold UniValMap.get at present
+  cases source : nodes.data[index.toNat]? with
+  | none => simp [source] at present
+  | some old => exact (Array.getElem?_eq_some_iff.mp source).1
+
+theorem insert_existing {α : Type} (nodes : UniValMap α) (index : UniIndex) (old next : α)
+    (present : nodes.get index = some old) :
+    (nodes.insert index next).data = nodes.data.set index.toNat (some next) (lookup_valid nodes index old present) := by
+  have valid := lookup_valid nodes index old present
+  have noExtra : index.toNat + 1 - nodes.data.size = 0 := by omega
+  simp [UniValMap.insert,UniValMap.extendTo,noExtra,valid,Id.run,pure]
+
+theorem insert_existing_get_same {α : Type} (nodes : UniValMap α) (index : UniIndex) (old next : α)
+    (present : nodes.get index = some old) : (nodes.insert index next).get index = some next := by
+  unfold UniValMap.get
+  rw [insert_existing nodes index old next present]
+  simp
+
+theorem insert_existing_get_other {α : Type} (nodes : UniValMap α) (index query : UniIndex) (old next : α)
+    (present : nodes.get index = some old) (different : query ≠ index) :
+    (nodes.insert index next).get query = nodes.get query := by
+  have differentNat : query.toNat ≠ index.toNat := fun same => different (index_injective query index same)
+  unfold UniValMap.get
+  rw [insert_existing nodes index old next present]
+  simp [Ne.symm differentNat]
+
+theorem insert_existing_size {α : Type} (nodes : UniValMap α) (index : UniIndex) (old next : α)
+    (present : nodes.get index = some old) : (nodes.insert index next).size = nodes.size := by
+  unfold UniValMap.size
+  rw [insert_existing nodes index old next present]
+  simp
+
+/-- Changing non-parent node metadata preserves the real exposed-cache
+ancestor certificate and its depth function. -/
+def update_depth (nodes : UniValMap TreeNode) (depth : ParentDepth nodes) (index : UniIndex)
+    (old next : TreeNode) (present : nodes.get index = some old) (sameParent : next.parent = old.parent) :
+    ParentDepth (nodes.insert index next) where
+  depth := depth.depth
+  bounded := by
+    intro query node lookup
+    rw [insert_existing_size nodes index old next present]
+    by_cases same : query = index
+    · subst query
+      rw [insert_existing_get_same nodes index old next present] at lookup
+      cases lookup
+      exact depth.bounded index old present
+    · rw [insert_existing_get_other nodes index query old next present same] at lookup
+      exact depth.bounded query node lookup
+  parent := by
+    intro query node lookup before parentEq
+    have original : ∃ original, nodes.get query = some original ∧ original.parent = node.parent := by
+      by_cases same : query = index
+      · subst query
+        rw [insert_existing_get_same nodes index old next present] at lookup
+        cases lookup
+        exact ⟨old,present,sameParent.symm⟩
+      · rw [insert_existing_get_other nodes index query old next present same] at lookup
+        exact ⟨node,lookup,rfl⟩
+    obtain ⟨original,originalLookup,parentSame⟩ := original
+    obtain ⟨ancestor,ancestorLookup,smaller⟩ := depth.parent query original originalLookup before (parentSame.trans parentEq)
+    by_cases same : before = index
+    · subst before
+      exact ⟨next,insert_existing_get_same nodes index old next present,smaller⟩
+    · exact ⟨ancestor,(insert_existing_get_other nodes index before old next present same).trans ancestorLookup,smaller⟩
+abbrev LoopState := Option (BorrowTree × Except BorrowTree.ChildInsertError Unit) × BorrowTree × Option UniIndex × Nat × Bool
+
+def weakened (tree : BorrowTree) (index : UniIndex) (node : TreeNode) (strongest : IdempotentForeignAccess) : BorrowTree :=
+  {tree with
+    locations := (tree.locations.modifyAll fun _ location =>
+      match location.perms.get index with
+      | none => location
+      | some state => {location with perms := location.perms.insert index ({state with idempotentForeignAccess := (state.idempotentForeignAccess.ensureNoStrongerThan strongest).1})})
+    nodes := tree.nodes.insert index
+      ({node with defaultInitialSifa := (node.defaultInitialSifa.ensureNoStrongerThan strongest).1})}
+
+def changed (tree : BorrowTree) (index : UniIndex) (node : TreeNode) (strongest : IdempotentForeignAccess) : Bool := Id.run do
+  let mut result := (node.defaultInitialSifa.ensureNoStrongerThan strongest).2
+  for segment in tree.locations.iterAll do
+    if let some state := segment.data.perms.get index then
+      result := result || (state.idempotentForeignAccess.ensureNoStrongerThan strongest).2
+  return result
+
+def Good (depth : UniIndex → Nat) (state : LoopState) : Prop :=
+  state.1 = none ∧ ∃ certificate : ParentDepth state.2.1.nodes,
+    certificate.depth = depth ∧ state.2.2.2.1 ≤ state.2.1.nodes.size ∧
+      (state.2.2.2.2 = true → ∀ index, state.2.2.1 = some index → ∃ node,
+        state.2.1.nodes.get index = some node ∧ state.2.2.2.1 + depth index < state.2.1.nodes.size)
+
+def Measure (depth : UniIndex → Nat) (state : LoopState) : Nat :=
+  if state.2.2.2.2 then (state.2.2.1.map (fun index => depth index + 2)).getD 1 else 0
+
+theorem succeeds (tree : BorrowTree) (depth : ParentDepth tree.nodes) (start : UniIndex)
+    (node : TreeNode) (present : tree.nodes.get start = some node)
+    (strict : depth.depth start < tree.nodes.size) (strongest : IdempotentForeignAccess) :
+    (updateSifaAfterRetag tree start strongest).2 = .ok () := by
+  unfold updateSifaAfterRetag
+  split
+  · rfl
+  · simp only [Id.run,bind,pure,ForIn.forIn]
+    name_ancestor_loop
+    have step : ∀ state, Good depth.depth state →
+        (∃ final, scan () state = .done final ∧ Good depth.depth final) ∨
+        ∃ next, scan () state = .yield next ∧ Good depth.depth next ∧ Measure depth.depth next < Measure depth.depth state := by
+      intro state good
+      rcases state with ⟨returned,current,cursor,steps,active⟩
+      rcases good with ⟨returnedEq,certificate,depthEq,stepsBound,live⟩
+      dsimp only at returnedEq stepsBound
+      subst returned
+      cases active with
+      | false => exact .inl ⟨_,rfl,⟨rfl,certificate,depthEq,stepsBound,by simp⟩⟩
+      | true =>
+        have notPast : ¬ steps > current.nodes.size := by omega
+        cases cursor with
+        | none =>
+          refine .inr ⟨(none,current,none,steps,false),?_,⟨rfl,certificate,depthEq,stepsBound,by simp⟩,?_⟩
+          · simp [scan,notPast]
+          · simp [Measure]
+        | some index =>
+          obtain ⟨currentNode,lookup,strictBound⟩ := live rfl index rfl
+          dsimp only at strictBound
+          let nextNode := {currentNode with defaultInitialSifa := (currentNode.defaultInitialSifa.ensureNoStrongerThan strongest).1}
+          let nextTree := weakened current index currentNode strongest
+          let nextCertificate := update_depth current.nodes certificate index currentNode nextNode lookup rfl
+          have nextDepth : nextCertificate.depth = depth.depth := depthEq
+          have sameSize : nextTree.nodes.size = current.nodes.size := insert_existing_size current.nodes index currentNode nextNode lookup
+          have parentPresent : ∀ before, currentNode.parent = some before → ∃ earlier,
+              nextTree.nodes.get before = some earlier ∧ depth.depth before < depth.depth index := by
+            intro before edge
+            obtain ⟨earlier,earlierLookup,smaller⟩ := nextCertificate.parent index nextNode
+              (insert_existing_get_same current.nodes index currentNode nextNode lookup) before edge
+            rw [nextDepth] at smaller
+            exact ⟨earlier,earlierLookup,smaller⟩
+          cases actualChanged : changed current index currentNode strongest with
+          | false =>
+            have actual : scan () (none,current,some index,steps,true) = .yield (none,nextTree,some index,steps,false) := by
+              simp only [scan,ite_eq_left rfl,ite_eq_right notPast,lookup]
+              change (if changed current index currentNode strongest then _ else _) = _
+              rw [actualChanged]
+              rfl
+            refine .inr ⟨_,actual,⟨rfl,nextCertificate,nextDepth,?_,by simp⟩,?_⟩
+            · rw [sameSize]; exact stepsBound
+            · simp [Measure]
+          | true =>
+            have actual : scan () (none,current,some index,steps,true) = .yield (none,nextTree,currentNode.parent,steps+1,true) := by
+              simp only [scan,ite_eq_left rfl,ite_eq_right notPast,lookup]
+              change (if changed current index currentNode strongest then _ else _) = _
+              rw [actualChanged]
+              rfl
+            refine .inr ⟨_,actual,⟨rfl,nextCertificate,nextDepth,?_,?_⟩,?_⟩
+            · dsimp only; rw [sameSize]; omega
+            · intro active before edge
+              obtain ⟨earlier,earlierLookup,smaller⟩ := parentPresent before edge
+              exact ⟨earlier,earlierLookup,by dsimp; rw [sameSize]; omega⟩
+            · cases parentEq : currentNode.parent with
+              | none => simp [Measure]
+              | some before =>
+                have smaller := (parentPresent before parentEq).choose_spec.2
+                simp only [Measure,↓reduceIte,Option.map_some,Option.getD_some]
+                omega
+    have initial : Good depth.depth (none,tree,some start,0,true) := by
+      refine ⟨rfl,depth,rfl,by simp,?_⟩
+      intro active index same
+      have indexEq : index = start := Option.some.inj same.symm
+      subst index
+      exact ⟨node,present,by simpa using strict⟩
+    have maintained := loop_invariant scan (Measure depth.depth) (Good depth.depth) step _ initial
+    rw [maintained.1]
+
+namespace Append
+/-- The append-index branch of the actual newChild node insertion. Existing
+node data and parent depth are arbitrary; free-index reuse is a separate case. -/
+theorem insert_append {α : Type} (nodes : UniValMap α) (index : UniIndex) (value : α)
+ (atEnd : index.toNat = nodes.data.size) :
+ (nodes.insert index value).data = nodes.data.push (some value) := by
+ simp [UniValMap.insert,UniValMap.extendTo,atEnd,Id.run,pure,Array.set_push]
+theorem append_size {α : Type} (nodes : UniValMap α) (index : UniIndex) (value : α)
+ (atEnd : index.toNat = nodes.data.size) : (nodes.insert index value).size = nodes.size+1 := by
+ unfold UniValMap.size
+ rw [insert_append nodes index value atEnd]
+ simp
+theorem append_get_same {α : Type} (nodes : UniValMap α) (index : UniIndex) (value : α)
+ (atEnd : index.toNat = nodes.data.size) : (nodes.insert index value).get index = some value := by
+ unfold UniValMap.get
+ rw [insert_append nodes index value atEnd]
+ simp [atEnd]
+theorem append_get_other {α : Type} (nodes : UniValMap α) (index query : UniIndex) (value : α)
+ (atEnd : index.toNat = nodes.data.size) (different : query ≠ index) :
+ (nodes.insert index value).get query = nodes.get query := by
+ have notEnd : query.toNat ≠ nodes.data.size := fun same => different (index_injective query index (same.trans atEnd.symm))
+ unfold UniValMap.get
+ rw [insert_append nodes index value atEnd]
+ by_cases valid : query.toNat < nodes.data.size
+ · simp [Array.getElem?_push,valid,notEnd]
+ · simp [Array.getElem?_push,valid,notEnd]
+def append_depth (nodes : UniValMap TreeNode) (before : ParentDepth nodes)
+ (index parent : UniIndex) (parentNode newNode : TreeNode)
+ (atEnd : index.toNat = nodes.data.size)
+ (parentPresent : nodes.get parent = some parentNode) (childParent : newNode.parent = some parent) :
+ ParentDepth (nodes.insert index newNode) where
+ depth := fun query => if query = index then before.depth parent + 1 else before.depth query
+ bounded := by
+   intro query node lookup
+   rw [append_size nodes index newNode atEnd]
+   by_cases same : query = index
+   · subst query
+     simp only [ite_true]
+     have bound := before.bounded parent parentNode parentPresent
+     omega
+   · simp only [same,ite_false]
+     rw [append_get_other nodes index query newNode atEnd same] at lookup
+     have bound := before.bounded query node lookup
+     omega
+ parent := by
+   intro query node lookup earlier edge
+   have parentNotNew : parent ≠ index := by
+     intro same
+     have bound := lookup_valid nodes parent parentNode parentPresent
+     rw [same,atEnd] at bound
+     omega
+   by_cases same : query = index
+   · subst query
+     rw [append_get_same nodes index newNode atEnd] at lookup
+     cases lookup
+     have earlierEq : earlier = parent := Option.some.inj (edge.symm.trans childParent)
+     subst earlier
+     refine ⟨parentNode,(append_get_other nodes index parent newNode atEnd parentNotNew).trans parentPresent,?_⟩
+     simp only [parentNotNew,ite_false,ite_true]
+     omega
+   · rw [append_get_other nodes index query newNode atEnd same] at lookup
+     obtain ⟨ancestor,present,smaller⟩ := before.parent query node lookup earlier edge
+     have earlierNotNew : earlier ≠ index := by
+       intro equal
+       have bound := lookup_valid nodes earlier ancestor present
+       rw [equal,atEnd] at bound
+       omega
+     refine ⟨ancestor,(append_get_other nodes index earlier newNode atEnd earlierNotNew).trans present,?_⟩
+     simpa only [earlierNotNew,same,ite_false] using smaller
+
+
+/-- The second source-ordered node insertion in newChild attaches the new
+index to its parent's children, without changing either node's parent link. -/
+def attachedNodes (nodes : UniValMap TreeNode) (index parent : UniIndex)
+    (parentNode newNode : TreeNode) : UniValMap TreeNode :=
+  (nodes.insert index newNode).insert parent {parentNode with children := parentNode.children.push index}
+
+theorem parent_not_fresh (nodes : UniValMap TreeNode) (index parent : UniIndex) (parentNode : TreeNode)
+    (atEnd : index.toNat = nodes.data.size) (parentPresent : nodes.get parent = some parentNode) : parent ≠ index := by
+  intro same
+  have valid := lookup_valid nodes parent parentNode parentPresent
+  rw [same,atEnd] at valid
+  omega
+
+def attached_depth (nodes : UniValMap TreeNode) (before : ParentDepth nodes)
+    (index parent : UniIndex) (parentNode newNode : TreeNode)
+    (atEnd : index.toNat = nodes.data.size) (parentPresent : nodes.get parent = some parentNode)
+    (childParent : newNode.parent = some parent) : ParentDepth (attachedNodes nodes index parent parentNode newNode) :=
+  update_depth (nodes.insert index newNode)
+    (append_depth nodes before index parent parentNode newNode atEnd parentPresent childParent)
+    parent parentNode {parentNode with children := parentNode.children.push index}
+    ((append_get_other nodes index parent newNode atEnd (parent_not_fresh nodes index parent parentNode atEnd parentPresent)).trans parentPresent) rfl
+
+theorem attached_parent_strict (nodes : UniValMap TreeNode) (before : ParentDepth nodes)
+    (index parent : UniIndex) (parentNode newNode : TreeNode)
+    (atEnd : index.toNat = nodes.data.size) (parentPresent : nodes.get parent = some parentNode)
+    (childParent : newNode.parent = some parent) :
+    (attached_depth nodes before index parent parentNode newNode atEnd parentPresent childParent).depth parent <
+      (attachedNodes nodes index parent parentNode newNode).size := by
+  have different := parent_not_fresh nodes index parent parentNode atEnd parentPresent
+  have lookup := (append_get_other nodes index parent newNode atEnd different).trans parentPresent
+  change (if parent = index then before.depth parent+1 else before.depth parent) < _
+  simp only [different,ite_false]
+  unfold attachedNodes
+  rw [insert_existing_size (nodes.insert index newNode) parent parentNode _ lookup,
+    append_size nodes index newNode atEnd]
+  have bound := before.bounded parent parentNode parentPresent
+  omega
+
+/-- The real ancestor-SIFA stage invoked by newChild succeeds after its two
+actual node insertions. The new index and original parent's presence are data
+conditions; no successful child insertion or SIFA update is a premise. -/
+theorem sifa_after_attach (tree : BorrowTree) (before : ParentDepth tree.nodes)
+    (index parent : UniIndex) (parentNode newNode : TreeNode)
+    (atEnd : index.toNat = tree.nodes.data.size) (parentPresent : tree.nodes.get parent = some parentNode)
+    (childParent : newNode.parent = some parent) (strongest : IdempotentForeignAccess) :
+    (updateSifaAfterRetag
+      {tree with nodes := attachedNodes tree.nodes index parent parentNode newNode} parent strongest).2 = .ok () := by
+  let nodes := tree.nodes.insert index newNode
+  let updatedParent := {parentNode with children := parentNode.children.push index}
+  have lookup : nodes.get parent = some parentNode :=
+    (append_get_other tree.nodes index parent newNode atEnd
+      (parent_not_fresh tree.nodes index parent parentNode atEnd parentPresent)).trans parentPresent
+  let current : BorrowTree := {tree with nodes := attachedNodes tree.nodes index parent parentNode newNode}
+  let certificate : ParentDepth current.nodes := by
+    dsimp only [current]
+    exact attached_depth tree.nodes before index parent parentNode newNode atEnd parentPresent childParent
+  have present : current.nodes.get parent = some updatedParent := by
+    dsimp only [current,attachedNodes,updatedParent]
+    exact insert_existing_get_same (tree.nodes.insert index newNode) parent parentNode
+      {parentNode with children := parentNode.children.push index} lookup
+  have strict : certificate.depth parent < current.nodes.size := by
+    dsimp only [certificate,current]
+    exact attached_parent_strict tree.nodes before index parent parentNode newNode atEnd parentPresent childParent
+  change (updateSifaAfterRetag current parent strongest).2 = .ok ()
+  exact ZeroProtection.succeeds current certificate parent updatedParent present strict strongest
+
+end Append
+
+namespace Sparse
+/-- Extending a sparse location map with absent entries preserves every lookup,
+including queries beyond both its old and new extents. -/
+theorem extend_get {α : Type} (map : UniValMap α) (length : Nat) (index : UniIndex) :
+    (⟨UniValMap.extendTo map.data length⟩ : UniValMap α).get index = map.get index := by
+  unfold UniValMap.get UniValMap.extendTo
+  rw [Array.getElem?_append]
+  by_cases valid : index.toNat < map.data.size
+  · simp only [valid,↓reduceIte]
+  · have absent : map.data[index.toNat]? = none := Array.getElem?_eq_none (by omega)
+    simp only [valid,↓reduceIte,absent,Array.getElem?_replicate]
+    by_cases inside : index.toNat-map.data.size < length-map.data.size <;> simp only [inside,↓reduceIte]
+
+private theorem extended_bound {α : Type} (map : UniValMap α) (index : UniIndex) :
+    index.toNat < (UniValMap.extendTo map.data (index.toNat+1)).size := by
+  simp only [UniValMap.extendTo,Array.size_append,Array.size_replicate]
+  omega
+
+private theorem inserted_data {α : Type} (map : UniValMap α) (index : UniIndex) (value : α) :
+    (map.insert index value).data =
+      (UniValMap.extendTo map.data (index.toNat+1)).set index.toNat (some value) (extended_bound map index) := by
+  simp only [UniValMap.insert,extended_bound map index,↓reduceDIte,Id.run,pure]
+
+/-- The actual sparse-map insertion stores the new child's materialized state. -/
+theorem get_same {α : Type} (map : UniValMap α) (index : UniIndex) (value : α) :
+    (map.insert index value).get index = some value := by
+  unfold UniValMap.get
+  rw [inserted_data]
+  simp
+
+/-- Inserting the new child state preserves every other node's state even
+when the per-location sparse array has a different length from the node table. -/
+theorem get_other {α : Type} (map : UniValMap α) (index query : UniIndex) (value : α) (different : query ≠ index) :
+    (map.insert index value).get query = map.get query := by
+  have differentNat : query.toNat ≠ index.toNat := fun equal => different (index_injective query index equal)
+  unfold UniValMap.get
+  rw [inserted_data]
+  simp only [Array.getElem?_set,Ne.symm differentNat,↓reduceIte]
+  exact extend_get map (index.toNat+1) query
+
+
+end Sparse
+
+namespace Reuse
+/-- Insertion at a bounded sparse slot retains the table length. Vacancy is a
+separate caller condition: this operation itself also permits overwriting. -/
+theorem insert_bounded {α : Type} (nodes : UniValMap α) (index : UniIndex) (value : α)
+    (valid : index.toNat < nodes.data.size) :
+    (nodes.insert index value).data = nodes.data.set index.toNat (some value) valid := by
+  have noExtra : index.toNat+1-nodes.data.size = 0 := by omega
+  simp [UniValMap.insert,UniValMap.extendTo,noExtra,valid,Id.run,pure]
+
+theorem bounded_size {α : Type} (nodes : UniValMap α) (index : UniIndex) (value : α)
+    (valid : index.toNat < nodes.data.size) : (nodes.insert index value).size = nodes.size := by
+  unfold UniValMap.size
+  rw [insert_bounded nodes index value valid]
+  simp
+
+theorem parent_not_vacant (nodes : UniValMap TreeNode) (index parent : UniIndex) (parentNode : TreeNode)
+    (vacant : nodes.get index = none) (parentPresent : nodes.get parent = some parentNode) : parent ≠ index := by
+  intro same
+  rw [same,vacant] at parentPresent
+  cases parentPresent
+
+/-- A bounded vacant slot can hold a fresh child. The explicit rank slack
+ensures the child's parent-rank-plus-one fits without enlarging the table.
+Every old parent edge remains valid; none can point to the vacant slot. -/
+def vacant_depth (nodes : UniValMap TreeNode) (before : ParentDepth nodes)
+    (index parent : UniIndex) (parentNode newNode : TreeNode)
+    (valid : index.toNat < nodes.data.size) (vacant : nodes.get index = none)
+    (parentPresent : nodes.get parent = some parentNode) (childParent : newNode.parent = some parent)
+    (parentSlack : before.depth parent < nodes.size) : ParentDepth (nodes.insert index newNode) where
+  depth := fun query => if query = index then before.depth parent+1 else before.depth query
+  bounded := by
+    intro query node lookup
+    rw [bounded_size nodes index newNode valid]
+    by_cases same : query = index
+    · subst query
+      simp only [ite_true]
+      omega
+    · simp only [same,ite_false]
+      rw [Sparse.get_other nodes index query newNode same] at lookup
+      exact before.bounded query node lookup
+  parent := by
+    intro query node lookup earlier edge
+    have parentNotNew := parent_not_vacant nodes index parent parentNode vacant parentPresent
+    by_cases same : query = index
+    · subst query
+      rw [Sparse.get_same] at lookup
+      cases lookup
+      have earlierEq : earlier = parent := Option.some.inj (edge.symm.trans childParent)
+      subst earlier
+      refine ⟨parentNode,(Sparse.get_other nodes index parent newNode parentNotNew).trans parentPresent,?_⟩
+      simp only [parentNotNew,ite_false,ite_true]
+      omega
+    · rw [Sparse.get_other nodes index query newNode same] at lookup
+      obtain ⟨ancestor,present,smaller⟩ := before.parent query node lookup earlier edge
+      have earlierNotNew : earlier ≠ index := by
+        intro equal
+        rw [equal,vacant] at present
+        cases present
+      refine ⟨ancestor,(Sparse.get_other nodes index earlier newNode earlierNotNew).trans present,?_⟩
+      simpa only [earlierNotNew,same,ite_false] using smaller
+
+/-- Both source node insertions preserve the depth certificate on a reusable
+slot. No absence of per-location permissions is inferred from node vacancy. -/
+def attached_depth (nodes : UniValMap TreeNode) (before : ParentDepth nodes)
+    (index parent : UniIndex) (parentNode newNode : TreeNode)
+    (valid : index.toNat < nodes.data.size) (vacant : nodes.get index = none)
+    (parentPresent : nodes.get parent = some parentNode) (childParent : newNode.parent = some parent)
+    (parentSlack : before.depth parent < nodes.size) :
+    ParentDepth (Append.attachedNodes nodes index parent parentNode newNode) :=
+  update_depth (nodes.insert index newNode)
+    (vacant_depth nodes before index parent parentNode newNode valid vacant parentPresent childParent parentSlack)
+    parent parentNode {parentNode with children := parentNode.children.push index}
+    ((Sparse.get_other nodes index parent newNode
+      (parent_not_vacant nodes index parent parentNode vacant parentPresent)).trans parentPresent) rfl
+
+theorem attached_parent_strict (nodes : UniValMap TreeNode) (before : ParentDepth nodes)
+    (index parent : UniIndex) (parentNode newNode : TreeNode)
+    (valid : index.toNat < nodes.data.size) (vacant : nodes.get index = none)
+    (parentPresent : nodes.get parent = some parentNode) (childParent : newNode.parent = some parent)
+    (parentSlack : before.depth parent < nodes.size) :
+    (attached_depth nodes before index parent parentNode newNode valid vacant parentPresent childParent parentSlack).depth parent <
+      (Append.attachedNodes nodes index parent parentNode newNode).size := by
+  have different := parent_not_vacant nodes index parent parentNode vacant parentPresent
+  have lookup := (Sparse.get_other nodes index parent newNode different).trans parentPresent
+  change (if parent = index then before.depth parent+1 else before.depth parent) < _
+  simp only [different,ite_false]
+  unfold Append.attachedNodes
+  rw [insert_existing_size (nodes.insert index newNode) parent parentNode _ lookup,bounded_size nodes index newNode valid]
+  exact parentSlack
+
+theorem sifa_after_attach (tree : BorrowTree) (before : ParentDepth tree.nodes)
+    (index parent : UniIndex) (parentNode newNode : TreeNode)
+    (valid : index.toNat < tree.nodes.data.size) (vacant : tree.nodes.get index = none)
+    (parentPresent : tree.nodes.get parent = some parentNode) (childParent : newNode.parent = some parent)
+    (parentSlack : before.depth parent < tree.nodes.size) (strongest : IdempotentForeignAccess) :
+    (updateSifaAfterRetag {tree with nodes := Append.attachedNodes tree.nodes index parent parentNode newNode}
+      parent strongest).2 = .ok () := by
+  let current : BorrowTree := {tree with nodes := Append.attachedNodes tree.nodes index parent parentNode newNode}
+  let updatedParent := {parentNode with children := parentNode.children.push index}
+  let certificate : ParentDepth current.nodes := by
+    dsimp only [current]
+    exact attached_depth tree.nodes before index parent parentNode newNode valid vacant parentPresent childParent parentSlack
+  have lookup := (Sparse.get_other tree.nodes index parent newNode
+    (parent_not_vacant tree.nodes index parent parentNode vacant parentPresent)).trans parentPresent
+  have present : current.nodes.get parent = some updatedParent := by
+    dsimp only [current,Append.attachedNodes,updatedParent]
+    exact insert_existing_get_same (tree.nodes.insert index newNode) parent parentNode _ lookup
+  have strict : certificate.depth parent < current.nodes.size := by
+    dsimp only [certificate,current]
+    exact attached_parent_strict tree.nodes before index parent parentNode newNode valid vacant parentPresent childParent parentSlack
+  exact ZeroProtection.succeeds current certificate parent updatedParent present strict strongest
+
+end Reuse
+
+/-- Both concrete allocation branches of a zero-byte protected child complete
+from raw parent, allocator and acyclic-graph facts. -/
+theorem concrete_child (tree : BorrowTree) (depth : ParentDepth tree.nodes)
+    (parentTag tag : Miri.Memory.BorTag) (parent : UniIndex) (parentNode : TreeNode)
+    (tagged : tree.tagMapping.get parentTag = some parent)
+    (present : tree.nodes.get parent = some parentNode)
+    (fresh : tree.tagMapping.get tag = none)
+    (room : tree.tagMapping.mapping.size ≤ 4294967295)
+    (appendAligned : tree.tagMapping.deassigned.back? = none → tree.tagMapping.mapping.size = tree.nodes.size)
+    (reuseValid : ∀ index, tree.tagMapping.deassigned.back? = some index →
+      index.toNat < tree.nodes.size ∧ tree.nodes.get index = none)
+    (rank : depth.depth parent < tree.nodes.size)
+    (offset : Size) (initial : Tree.LocationState) :
+    ∃ after, tree.newChild offset (.concrete parentTag) tag
+      (DedupRangeMap.new Size.ZERO initial) (.ReservedFrz false) true = ⟨after, .ok ()⟩ := by
+  cases available : tree.tagMapping.deassigned.back? with
+  | none =>
+    let index : UniIndex := ⟨UInt32.ofNat tree.tagMapping.mapping.size⟩
+    let mapping : UniKeyMap Miri.Memory.BorTag := {
+      mapping := (tree.tagMapping.mapping.filter fun row => row.1 != tag).push (tag,index)
+      deassigned := tree.tagMapping.deassigned }
+    have inserted : tree.tagMapping.insert tag = .Inserted mapping index := by
+      simp [UniKeyMap.insert, available, UniIndex.ofNat?, room, fresh, mapping, index]
+    have atEnd : index.toNat = tree.nodes.data.size := by
+      simp only [index,UniIndex.toNat,UInt32.toNat_ofNat',Nat.mod_eq_of_lt (by omega : tree.tagMapping.mapping.size < 2^32)]
+      exact appendAligned available
+    let node : TreeNode := {
+      tag := tag, parent := some parent, children := #[]
+      defaultInitialPermission := .ReservedFrz false, defaultInitialSifa := .None, isExposed := false }
+    have success := Append.sifa_after_attach {tree with tagMapping := mapping} depth index parent parentNode node
+      atEnd present rfl .None
+    have different := Append.parent_not_fresh tree.nodes index parent parentNode atEnd present
+    have lookup := (Append.append_get_other tree.nodes index parent node atEnd different).trans present
+    unfold BorrowTree.newChild
+    rw [inserted]
+    simp only [tagged,Option.map_some,Bool.false_eq_true,↓reduceIte]
+    simp only [Permission.isInitial,Permission.isUnique,Permission.strongestIdempotentForeignAccess,
+      Bool.not_true,Bool.false_eq_true,↓reduceIte,Id.run,bind,pure]
+    simp only [node] at lookup
+    rw [lookup]
+    simp only [DedupRangeMap.new, DedupRangeMap.iterAll, Size.ZERO, Size.ofBytes,
+      beq_self_eq_true, ↓reduceIte, ← Array.forIn_toList, List.forIn_nil, pure]
+    change ∃ after, (let result := (updateSifaAfterRetag
+      {tree with tagMapping := mapping, nodes := Append.attachedNodes tree.nodes index parent parentNode node}
+      parent .None); (⟨result.1,result.2⟩ : ChildInsertResult)) = ⟨after,.ok ()⟩
+    exact ⟨_, congrArg (fun outcome => (⟨_,outcome⟩ : ChildInsertResult)) success⟩
+  | some index =>
+    let mapping : UniKeyMap Miri.Memory.BorTag := {
+      mapping := (tree.tagMapping.mapping.filter fun row => row.1 != tag).push (tag,index)
+      deassigned := tree.tagMapping.deassigned.pop }
+    have inserted : tree.tagMapping.insert tag = .Inserted mapping index := by
+      simp [UniKeyMap.insert, available, fresh, mapping]
+    obtain ⟨bounded,vacant⟩ := reuseValid index available
+    let node : TreeNode := {
+      tag := tag, parent := some parent, children := #[]
+      defaultInitialPermission := .ReservedFrz false, defaultInitialSifa := .None, isExposed := false }
+    have success := Reuse.sifa_after_attach {tree with tagMapping := mapping} depth index parent parentNode node
+      bounded vacant present rfl rank .None
+    have different := Reuse.parent_not_vacant tree.nodes index parent parentNode vacant present
+    have lookup := (Sparse.get_other tree.nodes index parent node different).trans present
+    unfold BorrowTree.newChild
+    rw [inserted]
+    simp only [tagged,Option.map_some,Bool.false_eq_true,↓reduceIte]
+    simp only [Permission.isInitial,Permission.isUnique,Permission.strongestIdempotentForeignAccess,
+      Bool.not_true,Bool.false_eq_true,↓reduceIte,Id.run,bind,pure]
+    simp only [node] at lookup
+    rw [lookup]
+    simp only [DedupRangeMap.new, DedupRangeMap.iterAll, Size.ZERO, Size.ofBytes,
+      beq_self_eq_true, ↓reduceIte, ← Array.forIn_toList, List.forIn_nil, pure]
+    change ∃ after, (let result := (updateSifaAfterRetag
+      {tree with tagMapping := mapping, nodes := Append.attachedNodes tree.nodes index parent parentNode node}
+      parent .None); (⟨result.1,result.2⟩ : ChildInsertResult)) = ⟨after,.ok ()⟩
+    exact ⟨_, congrArg (fun outcome => (⟨_,outcome⟩ : ChildInsertResult)) success⟩
+
+namespace View
+open Miri.Memory
+abbrev StateShape := Permission × Bool
+abbrev NodeShape := BorTag × Option UniIndex × Array UniIndex × Permission × Bool
+
+def stateShape (state : LocationState) : StateShape := (state.permission,state.accessed)
+def nodeShape (node : TreeNode) : NodeShape := (node.tag,node.parent,node.children,node.defaultInitialPermission,node.isExposed)
+def locationShape (location : LocationTree) : Array (Option StateShape) := location.perms.data.map (Option.map stateShape)
+def treeShape (tree : BorrowTree) :=
+  (tree.tagMapping,tree.nodes.data.map (Option.map nodeShape),
+    tree.locations.entries.map (fun segment => (segment.range,locationShape segment.data)),tree.roots)
+
+theorem insert_existing_shape {α β : Type} (shape : α → β) (nodes : UniValMap α)
+    (index : UniIndex) (old next : α) (present : nodes.get index = some old) (same : shape next = shape old) :
+    (nodes.insert index next).data.map (Option.map shape) = nodes.data.map (Option.map shape) := by
+  have valid := lookup_valid nodes index old present
+  have slot : nodes.data[index.toNat] = some old := by
+    simpa only [UniValMap.get,Array.getElem?_eq_getElem valid] using present
+  rw [insert_existing nodes index old next present]
+  apply Array.ext
+  · simp
+  · intro position left right
+    simp only [Array.getElem_map,Array.getElem_set]
+    by_cases equal : index.toNat = position
+    · subst position
+      simp [slot,same]
+    · simp [equal]
+
+def weakenLocation (location : LocationTree) (index : UniIndex) (strongest : IdempotentForeignAccess) : LocationTree :=
+  match location.perms.get index with
+  | none => location
+  | some state => {location with perms := location.perms.insert index ({state with idempotentForeignAccess := (state.idempotentForeignAccess.ensureNoStrongerThan strongest).1})}
+
+theorem weaken_location_shape (location : LocationTree) (index : UniIndex) (strongest : IdempotentForeignAccess) :
+    locationShape (weakenLocation location index strongest) = locationShape location := by
+  unfold weakenLocation
+  cases present : location.perms.get index with
+  | none => rfl
+  | some state => exact insert_existing_shape stateShape location.perms index state _ present rfl
+
+theorem weakened_tree_shape (tree : BorrowTree) (index : UniIndex) (node : TreeNode)
+    (present : tree.nodes.get index = some node) (strongest : IdempotentForeignAccess) :
+    treeShape (weakened tree index node strongest) = treeShape tree := by
+  have nodeEq := insert_existing_shape nodeShape tree.nodes index node
+    {node with defaultInitialSifa := (node.defaultInitialSifa.ensureNoStrongerThan strongest).1} present rfl
+  have locationsEq : ((weakened tree index node strongest).locations.entries.map
+      (fun segment => (segment.range,locationShape segment.data))) =
+      tree.locations.entries.map (fun segment => (segment.range,locationShape segment.data)) := by
+    apply Array.ext
+    · simp [weakened,DedupRangeMap.modifyAll]
+    · intro position left right
+      have valid : position < tree.locations.entries.size := by simpa only [Array.size_map] using right
+      simp only [weakened,DedupRangeMap.modifyAll,Array.getElem_map]
+      exact congrArg (fun value => ((tree.locations.entries[position]'valid).range,value))
+        (weaken_location_shape (tree.locations.entries[position]'valid).data index strongest)
+  have actualNodeEq : (weakened tree index node strongest).nodes.data.map (Option.map nodeShape) =
+      tree.nodes.data.map (Option.map nodeShape) := nodeEq
+  change (tree.tagMapping,(weakened tree index node strongest).nodes.data.map (Option.map nodeShape),
+    (weakened tree index node strongest).locations.entries.map
+      (fun segment => (segment.range,locationShape segment.data)),tree.roots) =
+    (tree.tagMapping,tree.nodes.data.map (Option.map nodeShape),
+      tree.locations.entries.map (fun segment => (segment.range,locationShape segment.data)),tree.roots)
+  rw [actualNodeEq,locationsEq]
+def Preserves (before : BorrowTree) (state : LoopState) : Prop :=
+  treeShape state.2.1 = treeShape before ∧
+    ∀ returned, state.1 = some returned → treeShape returned.1 = treeShape before
+
+def Measure (state : LoopState) : Nat :=
+  if state.2.2.2.2 then (state.2.1.nodes.size+1-state.2.2.2.1)+1 else 0
+
+/-- Even an error result changes no tag/topology/permission/accessed data in
+this SIFA-only stage. This metadata fact is not an assertion of safe execution. -/
+theorem preserves (tree : BorrowTree) (start : UniIndex) (strongest : IdempotentForeignAccess) :
+    treeShape (updateSifaAfterRetag tree start strongest).1 = treeShape tree := by
+  unfold updateSifaAfterRetag
+  split
+  · rfl
+  · simp only [Id.run,bind,pure,ForIn.forIn]
+    name_ancestor_loop
+    have step : ∀ state, Preserves tree state →
+        (∃ final, scan () state = .done final ∧ Preserves tree final) ∨
+        ∃ next, scan () state = .yield next ∧ Preserves tree next ∧ Measure next < Measure state := by
+      intro state preserved
+      rcases state with ⟨returned,current,cursor,steps,active⟩
+      have currentShape : treeShape current = treeShape tree := preserved.1
+      cases active with
+      | false => exact .inl ⟨_,rfl,⟨currentShape,by simp⟩⟩
+      | true =>
+        by_cases past : steps > current.nodes.size
+        · refine .inl ⟨(some (current,.error (.ParentCycle (cursor.getD start))),current,cursor,steps,true),?_,?_⟩
+          · simp [scan,past]
+          · exact ⟨currentShape,fun returned same => by cases same; exact currentShape⟩
+        · cases cursor with
+          | none =>
+            refine .inr ⟨(none,current,none,steps,false),?_,⟨currentShape,by simp⟩,?_⟩
+            · simp [scan,past]
+            · simp [Measure]
+          | some index =>
+            cases lookup : current.nodes.get index with
+            | none =>
+              refine .inl ⟨(some (current,.error (.MissingNode index)),current,some index,steps,true),?_,?_⟩
+              · simp [scan,past,lookup]
+              · exact ⟨currentShape,fun returned same => by cases same; exact currentShape⟩
+            | some node =>
+              let nextTree := weakened current index node strongest
+              have nextShape : treeShape nextTree = treeShape tree :=
+                (weakened_tree_shape current index node lookup strongest).trans currentShape
+              have sameSize : nextTree.nodes.size = current.nodes.size := insert_existing_size current.nodes index node _ lookup
+              cases actualChanged : changed current index node strongest with
+              | false =>
+                have actual : scan () (returned,current,some index,steps,true) = .yield (none,nextTree,some index,steps,false) := by
+                  simp only [scan,ite_eq_left rfl,ite_eq_right past,lookup]
+                  change (if changed current index node strongest then _ else _) = _
+                  rw [actualChanged]
+                  rfl
+                refine .inr ⟨_,actual,⟨nextShape,by simp⟩,?_⟩
+                simp [Measure]
+              | true =>
+                have actual : scan () (returned,current,some index,steps,true) = .yield (none,nextTree,node.parent,steps+1,true) := by
+                  simp only [scan,ite_eq_left rfl,ite_eq_right past,lookup]
+                  change (if changed current index node strongest then _ else _) = _
+                  rw [actualChanged]
+                  rfl
+                refine .inr ⟨_,actual,⟨nextShape,by simp⟩,?_⟩
+                simp only [Measure,↓reduceIte]
+                rw [sameSize]
+                omega
+    have initial : Preserves tree (none,tree,some start,0,true) := ⟨rfl,by simp⟩
+    have maintained := loop_invariant scan Measure (Preserves tree) step _ initial
+    cases actual : (Lean.Loop.forIn {} (none,tree,some start,0,true) scan).1 with
+    | none => exact maintained.1
+    | some returned => exact maintained.2 returned actual
+
+/-- Sparse lookup commutes with the observable metadata projection. -/
+theorem mapped_lookup {A B : Type} (shape : A → B) (nodes : UniValMap A) (index : UniIndex) :
+    ((nodes.data.map (Option.map shape))[index.toNat]?).getD none =
+      (nodes.get index).map shape := by
+  simp only [Array.getElem?_map, UniValMap.get]
+  cases nodes.data[index.toNat]? <;> rfl
+
+/-- In particular, SIFA weakening preserves any fresh node's tag and exposure. -/
+theorem node_fields (before after : BorrowTree) (same : treeShape after = treeShape before)
+    (index : UniIndex) (node : TreeNode) (present : before.nodes.get index = some node) :
+    ∃ result, after.nodes.get index = some result ∧ result.tag = node.tag ∧ result.isExposed = node.isExposed := by
+  have nodesEq := congrArg (fun shape => shape.2.1) same
+  change after.nodes.data.map (Option.map nodeShape) = before.nodes.data.map (Option.map nodeShape) at nodesEq
+  have observed := congrArg (fun data => (data[index.toNat]?).getD none) nodesEq
+  rw [mapped_lookup, mapped_lookup, present] at observed
+  cases found : after.nodes.get index with
+  | none => simp [found] at observed
+  | some result =>
+    have shapeEq : nodeShape result = nodeShape node := by simpa [found] using observed
+    exact ⟨result, rfl, congrArg (fun value => value.1) shapeEq,
+      congrArg (fun value => value.2.2.2.2) shapeEq⟩
+
+/-- An index absent from every location remains absent after SIFA weakening;
+we do not assume that physical node vacancy alone implies permission vacancy. -/
+theorem absent_permissions (before after : BorrowTree) (same : treeShape after = treeShape before)
+    (index : UniIndex)
+    (absent : ∀ position (valid : position < before.locations.entries.size),
+      before.locations.entries[position].data.perms.get index = none) :
+    ∀ position (valid : position < after.locations.entries.size),
+      after.locations.entries[position].data.perms.get index = none := by
+  have locationsEq := congrArg (fun shape => shape.2.2.1) same
+  change after.locations.entries.map (fun segment => (segment.range,locationShape segment.data)) =
+    before.locations.entries.map (fun segment => (segment.range,locationShape segment.data)) at locationsEq
+  have countEq := congrArg Array.size locationsEq
+  simp only [Array.size_map] at countEq
+  intro position valid
+  have beforeValid : position < before.locations.entries.size := by omega
+  have observed := congrArg (fun entries => entries[position]?) locationsEq
+  simp only [Array.getElem?_map, Array.getElem?_eq_getElem valid,
+    Array.getElem?_eq_getElem beforeValid, Option.map_some] at observed
+  have permissionsEq := congrArg Prod.snd (Option.some.inj observed)
+  have lookup := congrArg (fun data => (data[index.toNat]?).getD none) permissionsEq
+  change ((after.locations.entries[position].data.perms.data.map (Option.map stateShape))[index.toNat]?).getD none =
+    ((before.locations.entries[position].data.perms.data.map (Option.map stateShape))[index.toNat]?).getD none at lookup
+  rw [mapped_lookup, mapped_lookup, absent position beforeValid] at lookup
+  cases result : after.locations.entries[position].data.perms.get index with
+  | none => rfl
+  | some state => simp [result] at lookup
+
+end View
+
+namespace Release
+open Lean Elab Tactic
+open Miri.Memory
+
+/-- An in-range raw range-map index always supplies its actual stored segment. -/
+theorem index_exact {A : Type} (map : DedupRangeMap A) (position : Nat)
+    (valid : position < map.entries.size) : map.index position = .ok map.entries[position] := by
+  unfold DedupRangeMap.index
+  change (match (if h : position < map.entries.size then some map.entries[position] else none) with
+    | some segment => Except.ok segment
+    | none => Except.error (DedupRangeMapError.indexOutOfBounds position map.entries.size)) = _
+  simp [valid]
+
+theorem list_tail {α β : Type} (items : List α) (scan : α → β → Id (ForInStep β))
+    (property : List α → β → Prop) (initial : β) (good : property items initial) (distinct : items.Nodup)
+    (step : ∀ item rest, item ∉ rest → ∀ state, property (item::rest) state →
+      ∃ next, scan item state = .yield next ∧ property rest next) :
+    property [] (forIn items initial scan) := by
+  induction items generalizing initial with
+  | nil => exact good
+  | cons item rest ih =>
+    obtain ⟨notMember,restDistinct⟩ := List.nodup_cons.mp distinct
+    obtain ⟨next,actual,preserved⟩ := step item rest notMember initial good
+    simpa only [List.forIn_cons,actual,bind,pure] using ih next preserved restDistinct
+
+elab "name_fresh_release_scan" : tactic => do
+  liftMetaTactic fun goal => goal.withContext do
+    let target ← goal.getType
+    let some loop := target.find? (fun expr => expr.isAppOf ``ForIn.forIn)
+      | throwError "no actual protector release loop"
+    let body := loop.getAppArgs.back!
+    let goal ← goal.define `scan (←Lean.Meta.inferType body) body
+    let (scan,goal) ← goal.intro1P
+    let target ← goal.getType
+    return [←goal.change (target.replace fun expr => if expr == body then some (mkFVar scan) else none)]
+
+/-- Releasing an unexposed zero-sized reservation with no materialized states
+really scans all allocation locations, skips each absent permission, and returns
+Released. Existing roots, ranges and exposure caches are preserved. -/
+theorem release (tree : BorrowTree) (tag : BorTag) (index : UniIndex) (node : TreeNode)
+    (tagged : tree.indexOfTag tag = some index) (present : tree.nodeAt index = some node)
+    (unexposed : node.isExposed = false)
+    (absent : ∀ position (valid : position < tree.locations.entries.size),
+      tree.locations.entries[position].data.perms.get index = none)
+    (protections : ProtectedTags) :
+    tree.releaseProtector tag protections = ⟨tree,.Released⟩ := by
+  have exposure : tree.updateExposureForProtectorRelease tag = ⟨tree,.ok ()⟩ := by
+    unfold BorrowTree.updateExposureForProtectorRelease
+    simp [tagged,present,unexposed,Id.run,pure]
+  unfold BorrowTree.releaseProtector
+  rw [tagged]
+  simp only [Id.run,bind,pure,Std.Legacy.Range.forIn_eq_forIn_range',Std.Legacy.Range.size,
+    Nat.sub_zero,Nat.add_sub_cancel,Nat.div_one]
+  name_fresh_release_scan
+  let property := fun (remaining : List Nat) (state : Option BorrowTree.ProtectorReleaseResult × BorrowTree) =>
+    state = (none,tree) ∧ ∀ position ∈ remaining, position < tree.locations.entries.size
+  have step : ∀ position rest, position ∉ rest → ∀ state, property (position::rest) state →
+      ∃ next, scan position state = .yield next ∧ property rest next := by
+    intro position rest notMember state good
+    rcases good with ⟨equal,bounded⟩
+    subst state
+    have valid := bounded position (by simp)
+    refine ⟨(none,tree),?_,rfl,?_⟩
+    · simp only [scan,index_exact tree.locations position valid,absent position valid]
+    · intro query member
+      exact bounded query (by simp [member])
+  have finished := list_tail (List.range tree.locations.entries.size) scan property (none,tree)
+    ⟨rfl,by intro position member;exact List.mem_range.mp member⟩ (List.nodup_range) step
+  simp only [List.range_eq_range'] at finished
+  rw [finished.1]
+  simp only [exposure]
+
+
+/-- The ancestor SIFA stage preserves the exact facts needed to release a
+fresh, lazy, unexposed child, including on every existing byte partition. -/
+theorem after_sifa (tree : BorrowTree) (tag : BorTag) (index start : UniIndex)
+    (node : TreeNode) (strongest : IdempotentForeignAccess)
+    (tagged : tree.indexOfTag tag = some index)
+    (present : tree.nodes.get index = some node) (unexposed : node.isExposed = false)
+    (absent : ∀ position (valid : position < tree.locations.entries.size),
+      tree.locations.entries[position].data.perms.get index = none)
+    (protections : ProtectedTags) :
+    let after := (updateSifaAfterRetag tree start strongest).1
+    after.releaseProtector tag protections = ⟨after,.Released⟩ := by
+  dsimp only
+  let after := (updateSifaAfterRetag tree start strongest).1
+  have shape : View.treeShape after = View.treeShape tree := View.preserves tree start strongest
+  have maps := congrArg (fun view => view.1) shape
+  change after.tagMapping = tree.tagMapping at maps
+  have selected : after.indexOfTag tag = some index := by
+    unfold indexOfTag
+    rw [maps]
+    exact tagged
+  obtain ⟨next,found,_,sameExposure⟩ := View.node_fields tree after shape index node present
+  exact release after tag index next selected found (sameExposure.trans unexposed)
+    (View.absent_permissions tree after shape index absent) protections
+
+attribute [local irreducible] updateSifaAfterRetag UniValMap.insert
+set_option maxHeartbeats 100000
+
+/-- Implementation-facing source equation for a concrete zero child. The
+insertion equation is discharged from raw freshness/pool data by clients. -/
+theorem concrete_zero_eq (tree : BorrowTree) (parentTag tag : BorTag) (index parent : UniIndex)
+    (parentNode : TreeNode) (mapping : UniKeyMap BorTag)
+    (inserted : tree.tagMapping.insert tag = .Inserted mapping index)
+    (tagged : tree.tagMapping.get parentTag = some parent)
+    (present : tree.nodes.get parent = some parentNode) (vacant : tree.nodes.get index = none)
+    (offset : Size) (initial : LocationState) :
+    let node : TreeNode := {
+      tag := tag, parent := some parent, children := #[]
+      defaultInitialPermission := .ReservedFrz false, defaultInitialSifa := .None, isExposed := false }
+    let staged : BorrowTree := {tree with
+      tagMapping := mapping
+      nodes := Append.attachedNodes tree.nodes index parent parentNode node}
+    let result := updateSifaAfterRetag staged parent .None
+    tree.newChild offset (.concrete parentTag) tag (DedupRangeMap.new Size.ZERO initial)
+      (.ReservedFrz false) true = ⟨result.1,result.2⟩ := by
+  dsimp only
+  have different := Reuse.parent_not_vacant tree.nodes index parent parentNode vacant present
+  have lookup := (Sparse.get_other tree.nodes index parent
+    ({
+      tag := tag, parent := some parent, children := #[], defaultInitialPermission := .ReservedFrz false
+      defaultInitialSifa := .None, isExposed := false} : TreeNode) different).trans present
+  unfold BorrowTree.newChild
+  rw [inserted]
+  simp only [tagged,Option.map_some,Bool.false_eq_true,↓reduceIte]
+  simp only [Permission.isInitial,Permission.isUnique,Permission.strongestIdempotentForeignAccess,
+    Bool.not_true,Bool.false_eq_true,↓reduceIte,Id.run,bind,pure]
+  rw [lookup]
+  simp only [DedupRangeMap.new,DedupRangeMap.iterAll,Size.ZERO,Size.ofBytes,
+    beq_self_eq_true,↓reduceIte,←Array.forIn_toList,List.forIn_nil,pure]
+  rfl
+
+/-- The freshly inserted concrete zero child can be released without changing
+its post-constructor tree. Initial node vacancy and permission vacancy are
+separate facts; no release or byte-access success is assumed. -/
+theorem concrete_zero_release (tree : BorrowTree) (parentTag tag : BorTag) (index parent : UniIndex)
+    (parentNode : TreeNode) (mapping : UniKeyMap BorTag)
+    (inserted : tree.tagMapping.insert tag = .Inserted mapping index)
+    (tagged : tree.tagMapping.get parentTag = some parent)
+    (present : tree.nodes.get parent = some parentNode) (vacant : tree.nodes.get index = none)
+    (newTag : mapping.get tag = some index)
+    (absent : ∀ position (valid : position < tree.locations.entries.size),
+      tree.locations.entries[position].data.perms.get index = none)
+    (offset : Size) (initial : LocationState) (protections : ProtectedTags) :
+    let after := (tree.newChild offset (.concrete parentTag) tag (DedupRangeMap.new Size.ZERO initial)
+      (.ReservedFrz false) true).tree
+    after.releaseProtector tag protections = ⟨after,.Released⟩ := by
+  rw [concrete_zero_eq tree parentTag tag index parent parentNode mapping inserted tagged present vacant]
+  dsimp only
+  let node : TreeNode := {
+    tag := tag, parent := some parent, children := #[]
+    defaultInitialPermission := .ReservedFrz false, defaultInitialSifa := .None, isExposed := false }
+  let staged : BorrowTree := {tree with
+    tagMapping := mapping
+    nodes := Append.attachedNodes tree.nodes index parent parentNode node}
+  have different := Reuse.parent_not_vacant tree.nodes index parent parentNode vacant present
+  have newPresent : staged.nodes.get index = some node := by
+    change ((tree.nodes.insert index node).insert parent
+      {parentNode with children := parentNode.children.push index}).get index = some node
+    rw [Sparse.get_other _ parent index _ (Ne.symm different),Sparse.get_same]
+  exact after_sifa staged tag index parent node .None newTag newPresent rfl absent protections
+
+/-- Exact lazy-root result for the wildcard zero-size source constructor. -/
+theorem wildcard_zero_eq (tree : BorrowTree) (tag : BorTag) (index : UniIndex)
+    (mapping : UniKeyMap BorTag)
+    (inserted : tree.tagMapping.insert tag = .Inserted mapping index)
+    (offset : Size) (initial : LocationState) :
+    tree.newChild offset .wildcard tag (DedupRangeMap.new Size.ZERO initial)
+      (.ReservedFrz false) true =
+      ⟨{tree with
+        tagMapping := mapping
+        nodes := tree.nodes.insert index {
+          tag := tag, parent := none, children := #[]
+          defaultInitialPermission := .ReservedFrz false, defaultInitialSifa := .None, isExposed := false }
+        roots := tree.roots.push index}, .ok ()⟩ := by
+  simp [BorrowTree.newChild, inserted, DedupRangeMap.new, DedupRangeMap.iterAll,
+    Permission.isInitial, Permission.isUnique, Permission.strongestIdempotentForeignAccess,Size.ZERO,Size.ofBytes]
+
+/-- Ending the fresh wildcard-root protector leaves its zero-size constructor
+result unchanged. Node vacancy and permission vacancy are kept independent. -/
+theorem wildcard_zero_release (tree : BorrowTree) (tag : BorTag) (index : UniIndex)
+    (mapping : UniKeyMap BorTag)
+    (inserted : tree.tagMapping.insert tag = .Inserted mapping index)
+    (newTag : mapping.get tag = some index)
+    (absent : ∀ position (valid : position < tree.locations.entries.size),
+      tree.locations.entries[position].data.perms.get index = none)
+    (offset : Size) (initial : LocationState) (protections : ProtectedTags) :
+    let after := (tree.newChild offset .wildcard tag (DedupRangeMap.new Size.ZERO initial)
+      (.ReservedFrz false) true).tree
+    after.releaseProtector tag protections = ⟨after,.Released⟩ := by
+  rw [wildcard_zero_eq tree tag index mapping inserted]
+  dsimp only
+  apply release
+  · exact newTag
+  · exact Sparse.get_same _ _ _
+  · rfl
+  · exact absent
+
+end Release
+
+end ZeroProtection
+
 end BorrowTree
 
 end Miri.TreeBorrows
+
+namespace Miri.TreeBorrows.BorrowTree
+open Miri.ABI Miri.Memory Miri.DataStructures
+set_option autoImplicit false
+set_option maxRecDepth 65536
+set_option maxHeartbeats 4000000
+private def freshLocation : LocationTree :=
+  ⟨⟨#[some ⟨.Unique,true,.None⟩]⟩,{}⟩
+private def freshNormal (held : Bool) : Tree.NormalTreeState :=
+  ⟨⟨#[⟨none,[]⟩]⟩,#[⟨.Disabled,false,.None⟩],if held then [0] else [],#[some ⟨.Unique,true,.None⟩]⟩
+private theorem fresh_normal (held : Bool) :
+    Tree.NormalTreeState.performAccess (freshNormal held) 0 .Write .VisitChildrenOfAccessed =
+      ⟨freshNormal held,0,[⟨0,.LocalAccess⟩],.Completed⟩ := by
+  cases held <;> decide
+
+private theorem fresh_projection (tag : BorTag) (size : Size) (protectedTags : ProtectedTags) :
+    normalProjection (BorrowTree.new tag size) freshLocation protectedTags =
+      freshNormal (protectedTags.contains tag) := by
+  simp [normalProjection,BorrowTree.new,freshLocation,freshNormal,rootIndex,
+    traversalProjection,UniValMap.entries,UniValMap.insert,UniValMap.get,TreeNode.defaultLocationState,
+    UniIndex.ofNat?,UniIndex.toNat,Id.run,bind,Bind.bind,pure,Pure.pure,
+    UniValMap.extendTo,Permission.newDisabled,Permission.newUnique]
+  cases held : protectedTags.contains tag <;> simp [List.filterMap,held]
+
+private theorem fresh_normal_at (tag : BorTag) (size : Size) (protectedTags : ProtectedTags) :
+    (BorrowTree.new tag size).performNormalAccessAt freshLocation rootIndex .Write protectedTags .VisitChildrenOfAccessed =
+      ⟨freshLocation,⟨freshNormal (protectedTags.contains tag),0,[⟨0,.LocalAccess⟩],.Completed⟩,.ok ()⟩ := by
+  unfold performNormalAccessAt
+  rw [fresh_projection]
+  simp only [rootIndex,UniIndex.toNat,UInt32.toNat_zero,fresh_normal]
+  simp [freshNormal,freshLocation,BorrowTree.new,rootIndex,nodeAt,UniIndex.ofNat?,UniIndex.toNat,
+    UniValMap.insert,UniValMap.get,UniValMap.extendTo,Id.run,bind,Bind.bind,pure,Pure.pure,
+    ←Array.forIn_toList]
+
+private theorem fresh_tree_at (tag : BorTag) (size : Size) (protectedTags : ProtectedTags) (range : ByteRange) :
+    (BorrowTree.new tag size).performTreeAccessAt freshLocation (some rootIndex) .Write protectedTags
+      .VisitChildrenOfAccessed range =
+      ⟨freshLocation,some ⟨freshNormal (protectedTags.contains tag),0,[⟨0,.LocalAccess⟩],.Completed⟩,none⟩ := by
+  unfold performTreeAccessAt
+  dsimp only [Id.run]
+  rw [fresh_normal_at]
+  simp [BorrowTree.new,rootIndex,nodeAt,UniIndex.ofNat?,UniIndex.toNat,
+    UniValMap.insert,UniValMap.get,UniValMap.extendTo,Id.run,bind,Bind.bind,pure,Pure.pure,
+    ←Array.forIn_toList]
+
+/-- The actual first full-range write on fresh allocation-owned provenance.
+The existing global protector map is arbitrary. -/
+theorem fresh_root_full_write (tag : BorTag) (size : Size) (protectedTags : ProtectedTags) :
+    let result := (BorrowTree.new tag size).performBorrowAccessRange (.concrete tag)
+      Size.ZERO size .Write protectedTags .VisitChildrenOfAccessed
+    result.status = .Completed ∧ result.tree = BorrowTree.new tag size := by
+  have source : (BorrowTree.new tag size).indexOfTag tag = some rootIndex := by
+    simp [BorrowTree.indexOfTag,BorrowTree.new,rootIndex,UniKeyMap.get,Id.run,
+      bind,Bind.bind,pure,Pure.pure]
+  have locations : (BorrowTree.new tag size).locations = DedupRangeMap.new size freshLocation := rfl
+  dsimp only
+  unfold performBorrowAccessRange
+  dsimp only [Id.run]
+  rw [source]
+  rw [locations]
+  by_cases zero : size.bytes = 0
+  · simp [DedupRangeMap.iterMut,DedupRangeMap.iterMutWithClone,zero,
+      Id.run,bind,Bind.bind,pure,Pure.pure]
+    rfl
+  · rw [DedupRangeMap.iterMut_new_full size freshLocation zero]
+    simp only [Id.run,bind,Bind.bind,pure,Pure.pure]
+    simp only [Std.Legacy.Range.forIn_eq_forIn_range',Std.Legacy.Range.size,Array.size_singleton,
+      Nat.sub_zero,Nat.add_sub_cancel,Nat.div_one]
+    simp only [List.range',List.forIn_cons,List.forIn_nil,bind,Bind.bind,pure,Pure.pure]
+    simp only [Option.isNone_some,beq_self_eq_true,Bool.false_eq_true,↓reduceIte,Array.getElem?_singleton]
+    rw [fresh_tree_at]
+    simp only [bind,Bind.bind,pure,Pure.pure]
+    have same : (DedupRangeMap.new size freshLocation).setAtPos 0 freshLocation =
+        ⟨DedupRangeMap.new size freshLocation,.ok ()⟩ := by
+      simp only [DedupRangeMap.new,zero,beq_iff_eq,↓reduceIte]
+      rfl
+    rw [same]
+    simp [locations,Id.run,bind,Bind.bind,pure,Pure.pure]
+    rfl
+
+end Miri.TreeBorrows.BorrowTree

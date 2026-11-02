@@ -1703,4 +1703,21 @@ def step (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
   match make p image bytes options leaves choice options.callbackCapacity with
   | .error error => (state,.error error)
   | .ok config => ExecutionStateTransport.step config options.limits choice state
+/-- Public proof boundary for the canonical factory. Operational dictionaries
+remain exactly those assembled by `makeWithForeignContext`. -/
+theorem make_eq_context (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
+    (bytes : CompilerGlobalBytes.Prepared) (options : Options)
+    (leaves : Leaves Os R P H D O Aff B Host C ClockHost) (choice : C) (capacity : Nat) :
+    make p image bytes options leaves choice capacity =
+      (makeWithForeignContext (Assembly := Unit) p image bytes options leaves choice none none capacity).map Prod.fst := rfl
+
+/-- Reveal only the pure construction-error adapter to client proofs. -/
+theorem pureQuery_eq {A : Type} (value : Except String A) :
+    pureQuery value = value.mapError StepError.unsupported := rfl
+
+/-- Reveal only the universe lift used during factory construction. -/
+theorem liftConstruction_eq {A : Type} (value : Except StepError A) :
+    liftConstruction value = value.map (fun item => (ULift.up item : ULift.{1} A)) := by
+  cases value <;> rfl
+
 end Miri.Input.EvalConfigurationCore

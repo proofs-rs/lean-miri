@@ -444,6 +444,17 @@ def setLiveAllocation [DecidableEq MachineKind]
   let some entry := findLive? state id | throw (.unavailable id)
   return insertLive state id { entry with allocation := allocation }
 
+/-- Exact live write-back from a raw current lookup. This exposes the update
+without requiring clients to unfold private memory-map helpers. -/
+theorem setLiveAllocation_of_find [DecidableEq MachineKind]
+    (state : MemoryState Prov Extra MachineKind) (id : AllocId)
+    (entry : LocalAllocation Prov Extra MachineKind) (allocation : Allocation Prov Extra)
+    (present : state.live.find? (fun row => row.1 == id) = some (id,entry)) :
+    state.setLiveAllocation id allocation = .ok
+      {state with live := ((state.live.filter fun row => row.1 != id).push (id,{entry with allocation}))} := by
+  simp [setLiveAllocation,findLive?,insertLive,present]
+  rfl
+
 private def removeLive (state : MemoryState Prov Extra MachineKind) (id : AllocId) :
     MemoryState Prov Extra MachineKind × Option (LocalAllocation Prov Extra MachineKind) :=
   let found := findLive? state id
@@ -459,6 +470,60 @@ owners. -/
 def removeUnreachable (state : MemoryState Prov Extra MachineKind) (reachable : Array AllocId) :
     MemoryState Prov Extra MachineKind :=
   { state with dead := state.dead.filter fun entry => reachable.contains entry.allocId }
+
+private theorem highWater_absent {V : Type} {keyFn : V → UInt64}
+    (table : KeyedArray UInt64 V keyFn) (cursor : UInt64)
+    (below : ∀ row ∈ table.toArray, (keyFn row).toNat < cursor.toNat) :
+    table.contains cursor = false := by
+  rw [KeyedArray.contains_rows]
+  cases found : (table.toArray.map keyFn).contains cursor with
+  | false => rfl
+  | true =>
+    have present : cursor ∈ table.toArray.map keyFn := by
+      simpa only [Array.contains_eq_mem,decide_eq_true_eq] using found
+    obtain ⟨row,member,equal⟩ := Array.mem_map.mp present
+    have bound := below row member
+    rw [equal] at bound
+    exact False.elim (Nat.lt_irrefl _ bound)
+
+/-- Raw high-water data and nonzero supplies suffice for the actual allocator
+reservation. No future allocation/byte/choice operation succeeds by assumption. -/
+theorem reserve_of_highWater (state : MemoryState Prov Extra MachineKind)
+    (available : state.idSupplyExhausted = false) (nonzero : state.nextAllocId ≠ 0)
+    (sourceAvailable : state.sourceAllocIdWorldActive = true → state.sourceAllocIdExhausted = false)
+    (sourceNonzero : state.sourceAllocIdWorldActive = true → state.sourceAllocIdNext ≠ 0)
+    (issued : ∀ id ∈ state.issuedIds, id.value.toNat < state.nextAllocId.toNat)
+    (live : ∀ row ∈ state.live, row.1.value.toNat < state.nextAllocId.toNat)
+    (global : ∀ row ∈ state.globals, row.allocId.value.toNat < state.nextAllocId.toNat)
+    (dead : ∀ row ∈ state.dead, row.allocId.value.toNat < state.nextAllocId.toNat) :
+    ∃ after, state.reserveAllocId = (after,.ok ⟨state.nextAllocId,nonzero⟩) := by
+  have issuedAbsent : state.issuedIdTable.contains state.nextAllocId = false :=
+    highWater_absent _ _ (by simpa only [issuedIds] using issued)
+  have globalAbsent : state.globalTable.contains state.nextAllocId = false :=
+    highWater_absent _ _ (by simpa only [globals] using global)
+  have liveAbsent : state.live.any (fun row => row.1 == (⟨state.nextAllocId,nonzero⟩ : AllocId)) = false := by
+    apply Array.any_eq_false.mpr
+    intro index valid found
+    have equal := beq_iff_eq.mp found
+    have bound := live state.live[index] (Array.getElem_mem valid)
+    rw [equal] at bound
+    exact False.elim (Nat.lt_irrefl _ bound)
+  have deadAbsent : state.dead.any (fun row => row.allocId == (⟨state.nextAllocId,nonzero⟩ : AllocId)) = false := by
+    apply Array.any_eq_false.mpr
+    intro index valid found
+    have equal := beq_iff_eq.mp found
+    have bound := dead state.dead[index] (Array.getElem_mem valid)
+    rw [equal] at bound
+    exact False.elim (Nat.lt_irrefl _ bound)
+  have absent : containsId state ⟨state.nextAllocId,nonzero⟩ = false := by
+    simp only [containsId,issuedAbsent,globalAbsent,liveAbsent,deadAbsent,Bool.false_or]
+  cases active : state.sourceAllocIdWorldActive with
+  | false =>
+    simp [reserveAllocId,available,active,AllocId.ofUInt64,nonzero,absent,Id.run,pure,Pure.pure]
+  | true =>
+    have source := sourceAvailable active
+    have sourceNZ := sourceNonzero active
+    simp [reserveAllocId,available,active,source,sourceNZ,AllocId.ofUInt64,nonzero,absent,Id.run,pure,Pure.pure]
 
 end MemoryState
 

@@ -1,3 +1,4 @@
+import Lean
 import Miri.ABI.Size
 
 /-! A checked port of Miri's `DedupRangeMap<T>` range partition. -/
@@ -393,3 +394,58 @@ theorem new_wellFormed (size : Size) (initial : α) :
 
 end DedupRangeMap
 end Miri.DataStructures
+
+namespace Miri.DataStructures.DedupRangeMap
+open Miri.ABI
+set_option autoImplicit false
+set_option maxRecDepth 65536
+set_option maxHeartbeats 4000000
+variable {A : Type} [DecidableEq A]
+private theorem findOffset_new_zero (size : Size) (value : A) (positive : size.bytes ≠ 0) :
+    findOffset (new size value) 0 = .ok 0 := by
+  unfold findOffset new
+  simp only [positive,beq_iff_eq,↓reduceIte,Size.ofBytes,Id.run,bind,Bind.bind,pure,Pure.pure,ForIn.forIn]
+  rw [Lean.Loop.forIn_eq_of_monadTail]
+  simp [segmentAt?,positive,bind,Bind.bind,pure,Pure.pure]
+  rw [Lean.Loop.forIn_eq_of_monadTail]
+  simp [bind,Bind.bind,pure,Pure.pure]
+
+open Lean Elab Meta Tactic in
+elab "name_full_range_scan" : tactic => do
+  liftMetaTactic fun goal => goal.withContext do
+    let target ← goal.getType
+    let some loop := target.find? (fun e => e.isAppOf ``Lean.Loop.forIn)
+      | throwError "missing full-range source loop"
+    let body := loop.getAppArgs.back!
+    let goal ← goal.define `scan (← inferType body) body
+    let (scan,goal) ← goal.intro1P
+    return [← goal.change (target.replace fun e => if e == body then some (mkFVar scan) else none)]
+
+theorem iterMut_new_full (size : Size) (value : A) (positive : size.bytes ≠ 0) :
+    (new size value).iterMut Size.ZERO size =
+      ⟨new size value,#[0],#[⟨⟨0,size.bytes⟩,value⟩],.ok ()⟩ := by
+  have splitZero : splitIndex (new size value).entries 0 0 id =
+      .ok ((new size value).entries,false) := by
+    simp [new,positive,splitIndex,segmentAt?,Id.run,pure,Pure.pure,Except.pure]
+  have finish : checkedEnd 0 size.bytes = .ok size.bytes := by
+    simp [checkedEnd,Size.ZERO,Size.ofBytes,Size.add,Except.mapError,bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure]
+  unfold iterMut iterMutWithClone
+  simp only [Size.ZERO,Size.ofBytes,positive,beq_iff_eq,↓reduceIte]
+  rw [findOffset_new_zero size value positive]
+  dsimp only [Id.run,bind,Bind.bind,pure,Pure.pure]
+  rw [splitZero]
+  dsimp only [bind,Bind.bind,pure,Pure.pure]
+  rw [finish]
+  dsimp only [bind,Bind.bind,pure,Pure.pure]
+  simp only [ForIn.forIn]
+  name_full_range_scan
+  have computed : Lean.Loop.forIn {} ((new size value),0,3,0,false,(none : Option DedupRangeMapError)) scan =
+      ((new size value),1,2,1,true,(none : Option DedupRangeMapError)) := by
+    rw [Lean.Loop.forIn_eq_of_monadTail]
+    simp [scan,new,positive,segmentAt?,bind,Bind.bind,pure,Pure.pure]
+    rw [Lean.Loop.forIn_eq_of_monadTail]
+    simp [scan,new,positive,segmentAt?,bind,Bind.bind,pure,Pure.pure]
+  rw [computed]
+  simp [new,positive,splitIndex,segmentAt?,selectedSlice,Id.run,
+    bind,Bind.bind,pure,Pure.pure,Except.bind,Except.pure]
+end Miri.DataStructures.DedupRangeMap

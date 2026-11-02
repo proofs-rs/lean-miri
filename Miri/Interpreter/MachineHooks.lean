@@ -119,6 +119,15 @@ private def deallocateLocal (hooks : StorageHooks K User) (value : LocalValue Pr
     M K User Unit := do
   if let .live (.indirect place) := value then hooks.deallocateStack place.ptr
 
+/-- A successful stack result introduces no machine effect. This public rule
+lets client proofs use the storage driver without naming its private adapter. -/
+@[simp] theorem storageResult_ok (value : A) :
+    fromStack (.ok value) = (pure value : M K User A) := rfl
+
+/-- Dead local storage owns no allocation to deallocate. -/
+@[simp] theorem deallocateLocal_dead (hooks : StorageHooks K User) :
+    deallocateLocal hooks .dead = (pure () : M K User Unit) := rfl
+
 /-- Canonical whole-state source storage_live_dyn. The generic Frame operation
 cannot itself install FrameExtra mutations made by a machine hook; this binding
 uses current Frame methods after each hook so local-race/protector state survives. -/

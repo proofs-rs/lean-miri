@@ -93,4 +93,111 @@ def addrFromAllocId (access : Access (State K U)) (h : Hooks K U)
       pure {unused with reuse, crossThread := cross, poolIndex := begin+selected}
   assign h id (some kind) choices
 
+
+/-- The stack-miss source branch requests exactly one Fin16 slack sample
+before the deterministic assignment. No source address success is assumed. -/
+theorem stack_miss_request (access : Access (State K U)) (h : Hooks K U)
+    (state : State K U) (id : AllocId) (info : AllocationInfo)
+    (generation : AddressGenerationState)
+    (missing : state.user.addresses.baseAddr.find? (fun row => row.allocId == id) = none)
+    (metadata : state.memory.getAllocInfo id = .ok info)
+    (data : info.kind = .liveData) (live : state.memory.isAllocLive id = true)
+    (managed : state.user.addresses.addressMode = .managed)
+    (currentGeneration : state.user.addresses.generation = some generation) :
+    addrFromAllocId access h id (some .stack) state =
+      (do let selected ← ExecutionChoices.index access .addressSlack 16
+          if valid : selected < 16 then
+            assign h id (some .stack) ⟨false,false,0,⟨selected,valid⟩⟩
+          else throw (StepError.invalidProgram "checked address slack exceeded support")) state := by
+  simp [addrFromAllocId,missing,metadata,data,live,managed,currentGeneration,
+    ReusePool.prepareTakeAddr,setAddresses,slack,Id.run,
+    get,getThe,MonadStateOf.get,EStateM.get,modify,modifyGet,
+    MonadStateOf.modifyGet,EStateM.modifyGet,bind,EStateM.bind,pure,EStateM.pure]
+  simp only [←currentGeneration,←managed]
+  cases supplied : ExecutionChoices.index access .addressSlack 16 state with
+  | error error after => simp
+  | ok value after =>
+    by_cases within : value < 16
+    · simp [within,EStateM.pure]
+    · simp [within,throw,throwThe,MonadExceptOf.throw,EStateM.throw]
+
+
+/-- A legal supplied stack-slack sample is consumed exactly once before
+actual source assignment; assignment's non-choice outcome remains explicit. -/
+theorem stack_miss_supplied (access : Access (State K U)) (h : Hooks K U)
+    (state : State K U) (id : AllocId) (info : AllocationInfo)
+    (generation : AddressGenerationState) (tape : Tape) (value : Nat)
+    (missing : state.user.addresses.baseAddr.find? (fun row => row.allocId == id) = none)
+    (metadata : state.memory.getAllocInfo id = .ok info)
+    (data : info.kind = .liveData) (live : state.memory.isAllocLive id = true)
+    (managed : state.user.addresses.addressMode = .managed)
+    (currentGeneration : state.user.addresses.generation = some generation)
+    (currentTape : access.get state = tape) (strict : tape.policy = .strict)
+    (head : tape.inputs[tape.cursor]? = some (.index .addressSlack value))
+    (supported : value < 16) :
+    addrFromAllocId access h id (some .stack) state =
+      assign h id (some .stack) ⟨false,false,0,⟨value,supported⟩⟩
+        (access.put state {tape with cursor := tape.cursor+1, events := tape.events.push ⟨.index .addressSlack 16,.index .addressSlack value⟩}) := by
+  rw [stack_miss_request access h state id info generation missing metadata data live managed currentGeneration]
+  have draw := ExecutionChoices.index_supplied access state tape .addressSlack 16 value currentTape strict head supported
+  simp only [bind,EStateM.bind,draw,supported,↓reduceDIte]
+
+/-- Source action outcomes retain their effects on both error and success. -/
+def resultState {S A : Type} : EStateM.Result StepError S A → S
+  | .ok _ state => state
+  | .error _ state => state
+
+theorem assign_managed_payload (h : Hooks K U) (state : State K U)
+    (id : AllocId) (kind : Option AddressMemoryKind) (choices : AddressRandomChoices)
+    (managed : state.user.addresses.addressMode = .managed)
+    (noRace : state.dataRace = none) :
+    (resultState (assign h id kind choices state)).user.payload = state.user.payload := by
+  cases cache : state.user.addresses.baseAddr.find? (fun row => row.allocId == id) with
+  | some cached =>
+    simp [assign,addresses,cache,get,getThe,MonadStateOf.get,EStateM.get,
+      bind,EStateM.bind,pure,EStateM.pure,resultState]
+  | none =>
+    cases kind with
+    | none =>
+      simp [assign,addresses,cache,get,getThe,MonadStateOf.get,EStateM.get,
+        bind,EStateM.bind,pure,EStateM.pure,resultState,
+        throw,throwThe,MonadExceptOf.throw,EStateM.throw]
+    | some kind =>
+      cases metadata : state.memory.getAllocInfo id with
+      | error error =>
+        simp [assign,addresses,cache,metadata,get,getThe,MonadStateOf.get,EStateM.get,
+          bind,EStateM.bind,pure,EStateM.pure,resultState,
+          throw,throwThe,MonadExceptOf.throw,EStateM.throw]
+      | ok info =>
+        let addrInfo : AllocationAddressInfo := {
+          kind := if info.kind == .dead then .dead else if info.kind == .typeId then .typeId else .liveData
+          live := state.memory.isAllocLive id
+          size := info.size
+          align := info.align
+          memoryKind := some kind
+          thread := UInt32.ofNat state.threads.activeThread.toNat }
+        cases outcome : state.user.addresses.addrFromAllocId id (some addrInfo) choices ⟨none⟩ with
+        | mk afterAddress result =>
+          simp only [addrInfo,beq_iff_eq] at outcome
+          cases result with
+          | error error =>
+            simp [assign,addresses,finish,setAddresses,cache,metadata,managed,noRace,outcome,
+              get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,
+              modify,modifyGet,MonadStateOf.modifyGet,EStateM.modifyGet,resultState,
+              throw,throwThe,MonadExceptOf.throw,EStateM.throw]
+          | ok assignment =>
+            cases assignment with
+            | ready address =>
+              simp [assign,addresses,finish,setAddresses,cache,metadata,managed,noRace,outcome,
+                get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,
+                modify,modifyGet,MonadStateOf.modifyGet,EStateM.modifyGet,resultState]
+            | acquireRequired target address clock =>
+              cases cached : afterAddress.cacheAddress target address with
+              | mk cachedState result =>
+                cases result <;>
+                  simp [assign,addresses,finish,setAddresses,cache,metadata,managed,noRace,outcome,cached,
+                    get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,
+                    modify,modifyGet,MonadStateOf.modifyGet,EStateM.modifyGet,resultState,
+                    throw,throwThe,MonadExceptOf.throw,EStateM.throw]
+
 end Miri.Interpreter.MachineAddress

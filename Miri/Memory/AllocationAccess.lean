@@ -143,3 +143,54 @@ def getPtrAllocMut [DecidableEq MachineKind]
 
 end AllocationAccess
 end Miri.Memory
+
+namespace Miri.Memory.AllocationAccess
+open Miri.ABI
+set_option autoImplicit false
+set_option maxRecDepth 65536
+set_option maxHeartbeats 4000000
+variable {P E K H X : Type} [DecidableEq K]
+/-- Internal edges compose the production positive mutable-access path. -/
+theorem live_mut_of_edges (memory : MemoryState P E K) (hooks : H)
+    (target : PointerArithmetic) (ptr : Pointer (Option P)) (size : Size)
+    (kind : Option K) (global : GlobalAllocationHooks P E K H)
+    (access : AllocationAccessHooks P E K H X) (id : AllocId)
+    (entry : LocalAllocation P E K) (provenance : X) (amount : Int)
+    (signed : sizeAsI64 size = .ok amount) (nonzero : amount ≠ 0)
+    (resolve : access.resolvePointer memory hooks ptr amount = ⟨hooks,.ok (.ok ⟨id,Size.ZERO,provenance⟩)⟩)
+    (live : memory.live.find? (fun row => row.1 == id) = some (id,entry))
+    (mutable : entry.allocation.mutability = .Mut)
+    (synchronize : global.synchronizeMemory memory hooks = hooks)
+    (bounds : checkedBounds target id entry.allocation.byteSize Size.ZERO amount .memoryAccess = .ok ())
+    (before : access.beforeAllocationAccess hooks id = ⟨hooks,.ok ()⟩)
+    (write : access.beforeMemoryWrite hooks entry.allocation.extra ptr id provenance (allocRange Size.ZERO size) =
+      ⟨hooks,entry.allocation.extra,.ok ()⟩)
+    (last : (memory.live.filter (fun row => row.1 != id)).push (id,entry) = memory.live) :
+    getPtrAllocMut memory hooks target ptr size false kind global access =
+      ⟨memory,hooks,some ⟨id,allocRange Size.ZERO size,entry.allocation⟩,
+        .ok (some ⟨id,allocRange Size.ZERO size,entry.allocation⟩)⟩ := by
+  have sameExtra : entry.allocation.setExtra entry.allocation.extra = entry.allocation := by
+    cases entry.allocation; rfl
+  have cache : memory.setLiveAllocation id entry.allocation = .ok memory := by
+    rw [MemoryState.setLiveAllocation_of_find memory id entry entry.allocation live]
+    simp only [last]
+  have raw : MemoryLifecycle.getAllocRawMut memory hooks id kind global =
+      ⟨memory,hooks,.ok entry.allocation⟩ := by
+    simp [MemoryLifecycle.getAllocRawMut,live,mutable,synchronize]
+  unfold getPtrAllocMut getPtrAllocation
+  rw [signed]
+  dsimp only [Id.run,bind,Bind.bind,pure,Pure.pure]
+  simp only [nonzero,bne_iff_ne,↓reduceIte]
+  rw [resolve]
+  dsimp only [bind,Bind.bind,pure,Pure.pure]
+  rw [raw]
+  dsimp only [bind,Bind.bind,pure,Pure.pure]
+  rw [bounds]
+  simp only [bind,Bind.bind,pure,Pure.pure]
+  simp only [nonzero,↓reduceIte,Bool.not_false,Option.map_some]
+  rw [before]
+  dsimp only [bind,Bind.bind,pure,Pure.pure]
+  rw [write]
+  simp only [sameExtra]
+  split <;> simp_all [cache,bind,Bind.bind,pure,Pure.pure]
+end Miri.Memory.AllocationAccess

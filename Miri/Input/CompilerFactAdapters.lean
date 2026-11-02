@@ -207,4 +207,14 @@ def validityHooks (prepared : Prepared) (machine : ValidityVisitor.Hooks P S C E
     typeName := fun _ ty => do pure (← lift (source prepared.context ty)).display
     opsemInhabited := fun _ ty => lift (CompilerFacts.boolean prepared.context ty "opsem_inhabited")
     isFreeze := fun _ ty => lift (CompilerFacts.boolean prepared.context ty "is_freeze") }
+/-- The diagnostic type name is a pure compiler-node projection. -/
+theorem validity_typeName_of_node (prepared : Prepared)
+    (machine : ValidityVisitor.Hooks P S C E Fn Abi Pad) (choice : C)
+    (ty : TypeId) (node : TypeNode)
+    (found : prepared.context.runtime.node ty = .ok node) :
+    (validityHooks prepared machine).typeName choice ty = pure node.display := by
+  funext state
+  simp [validityHooks, source, lift, found, Except.mapError,
+    bind, Bind.bind, EStateM.bind, pure, Pure.pure, EStateM.pure]
+
 end Miri.Input.CompilerFactAdapters
