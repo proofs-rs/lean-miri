@@ -490,6 +490,43 @@ fn prepared_miri_reference_arguments() -> Result<Vec<String>, String> {
 }
 
 #[cfg(feature = "miri-reference")]
+fn apply_prepared_ui_flags(config: &mut miri::MiriConfig, flags: &[String]) -> Result<(), String> {
+    // These arms mirror pinned src/bin/miri.rs; the Lean UI profile accepts
+    // exactly the same whitelist. This does not change rustc flags or MIR.
+    for flag in flags {
+        match flag.as_str() {
+            "-Zmiri-tree-borrows" => config.borrow_tracker = Some(miri::BorrowTrackerMethod::TreeBorrows(
+                miri::TreeBorrowsParams { precise_interior_mut: true, implicit_writes: false })),
+            "-Zmiri-disable-stacked-borrows" => config.borrow_tracker = None,
+            "-Zmiri-tree-borrows-implicit-writes" | "-Zmiri-tree-borrows-no-precise-interior-mut" => {
+                let Some(miri::BorrowTrackerMethod::TreeBorrows(params)) = &mut config.borrow_tracker else {
+                    return Err(format!("{flag} requires Tree Borrows"));
+                };
+                if flag == "-Zmiri-tree-borrows-implicit-writes" { params.implicit_writes = true; }
+                else { params.precise_interior_mut = false; }
+            }
+            "-Zmiri-disable-validation" => config.validation = miri::ValidationMode::No,
+            "-Zmiri-recursive-validation" => config.validation = miri::ValidationMode::Deep,
+            "-Zmiri-disable-alignment-check" => config.check_alignment = miri::AlignmentCheck::None,
+            "-Zmiri-symbolic-alignment-check" => config.check_alignment = miri::AlignmentCheck::Symbolic,
+            "-Zmiri-strict-provenance" => config.provenance_mode = miri::ProvenanceMode::Strict,
+            "-Zmiri-permissive-provenance" => config.provenance_mode = miri::ProvenanceMode::Permissive,
+            "-Zmiri-ignore-leaks" => { config.ignore_leaks = true; config.collect_leak_backtraces = false; }
+            "-Zmiri-fixed-schedule" => config.fixed_scheduling = true,
+            "-Zmiri-disable-data-race-detector" => { config.data_race_detector = false; config.weak_memory_emulation = false; }
+            "-Zmiri-deterministic-concurrency" => {
+                config.fixed_scheduling = true;
+                config.address_reuse_cross_thread_rate = 0.0;
+                config.cmpxchg_weak_failure_rate = 0.0;
+                config.weak_memory_emulation = false;
+            }
+            other => return Err(format!("unsupported UI runtime flag: {other}")),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "miri-reference")]
 fn run_prepared_miri_reference_entry(
     tcx: TyCtxt<'_>,
     entry: rustc_hir::def_id::DefId,
@@ -503,7 +540,20 @@ fn run_prepared_miri_reference_entry(
             implicit_writes: false,
         },
     ));
-    config.env = env::vars_os().collect();
+    let ui_flags = match env::var("LEAN_MIRI_REFERENCE_UI_FLAGS_JSON") {
+        Ok(raw) => match serde_json::from_str::<Vec<String>>(&raw) {
+            Ok(flags) => flags,
+            Err(error) => return json!({"status":"failed", "outcome":{"kind":"invalid_ui_profile"}, "reason":error.to_string()}),
+        },
+        Err(env::VarError::NotPresent) => Vec::new(),
+        Err(error) => return json!({"status":"failed", "outcome":{"kind":"invalid_ui_profile"}, "reason":error.to_string()}),
+    };
+    if let Err(error) = apply_prepared_ui_flags(&mut config, &ui_flags) {
+        return json!({"status":"failed", "outcome":{"kind":"invalid_ui_profile"}, "reason":error});
+    }
+    let empty_environment = env::var_os("LEAN_MIRI_REFERENCE_EMPTY_ENV").is_some();
+    config.env = if empty_environment { Vec::new() } else { env::vars_os().collect() };
+    if empty_environment { config.seed = Some(0); }
     let file_name = tcx.sess.io.input.file_name(tcx.sess);
     let mut args = vec![file_name.prefer_local_unconditionally().to_string()];
     args.extend_from_slice(extra_args);
@@ -512,10 +562,17 @@ fn run_prepared_miri_reference_entry(
         .into_local_path()
         .and_then(|path| path.canonicalize().ok());
 
+    let (borrow_tracker, tree_borrows) = match &config.borrow_tracker {
+        Some(miri::BorrowTrackerMethod::TreeBorrows(params)) => ("tree_borrows", json!({
+            "precise_interior_mut":params.precise_interior_mut, "implicit_writes":params.implicit_writes})),
+        None => ("none", Value::Null),
+        Some(_) => ("unsupported", Value::Null),
+    };
     let config_description = json!({
         "same_tcx":true,
-        "borrow_tracker":"tree_borrows",
-        "tree_borrows":{"precise_interior_mut":true,"implicit_writes":false},
+        "borrow_tracker":borrow_tracker,
+        "tree_borrows":tree_borrows,
+        "ui_flags":ui_flags,
         "validation":format!("{:?}",config.validation),
         "alignment_check":format!("{:?}",config.check_alignment),
         "isolated_op":format!("{:?}",config.isolated_op),
@@ -539,7 +596,7 @@ fn run_prepared_miri_reference_entry(
         "float_rounding_error_mode":format!("{:?}",config.float_rounding_error),
         "short_fd_operations":config.short_fd_operations,
         "collect_leak_backtraces":config.collect_leak_backtraces,
-        "environment_policy":"host snapshot used; variable names and values are not serialized",
+        "environment_policy":if empty_environment { "empty" } else { "host snapshot used; variable names and values are not serialized" },
         "args":args,
     });
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1419,6 +1476,8 @@ impl Callbacks for ExportCallbacks {
             intrinsic_type_names,
             caller_location_constants,
         ) = loop {
+            let trace_export = env::var_os("LEAN_MIRI_TRACE_EXPORT").is_some();
+            if trace_export { eprintln!("export closure: instances={} types={} allocations={} pending={}", export_context.instance_ids.len(), export_context.type_ids.len(), export_context.allocation_ids.len(), export_context.pending_instances.len()); }
             // Most accumulated domains are insertion-only, so cardinalities
             // prove that their keys did not change. These identity sets can
             // also lose members on upgrade; their exact net membership delta
@@ -1460,14 +1519,17 @@ impl Callbacks for ExportCallbacks {
                 export_context.runtime_type_query_demands.len(),
                 processed_runtime_type_queries.len(),
             ];
+            if trace_export { eprintln!("export phase: cast_queries"); }
             let cast_queries = cast_queries::export(tcx, &mut export_context);
             let (vtable_queries, vtable_query_ids) =
                 compiler_vtable_queries_json(tcx, &mut export_context);
+            if trace_export { eprintln!("export phase: runtime_foreign_symbols"); }
             let runtime_foreign_symbols = foreign_symbols::export(tcx, &mut export_context);
             let runtime_virtual_queries =
                 compiler_runtime_virtual_queries_json(tcx, &mut export_context);
             register_fn_pointer_call_transfers(&mut export_context, tcx);
             register_runtime_callback_transfers(&mut export_context, tcx);
+            if trace_export { eprintln!("export phase: runtime_type_query_wave"); }
             let runtime_type_query_wave = compiler_runtime_type_queries_json(
                 tcx,
                 &mut export_context,
@@ -1485,7 +1547,9 @@ impl Callbacks for ExportCallbacks {
                 symbol_identity_instances_json(tcx, &mut export_context);
             let instance_abis = compiler_instance_abis_json(tcx, &mut export_context);
             let covariance_queries = covariance_queries::export(tcx, &mut export_context);
+            if trace_export { eprintln!("export phase: function_facts"); }
             let function_facts = compiler_function_facts_json(tcx, &mut export_context);
+            if trace_export { eprintln!("export phase: predicate_queries"); }
             let predicate_queries = compiler_predicate_queries_json(tcx, &mut export_context);
             let native_signature_queries =
                 native_signature_queries::export(tcx, &mut export_context);
@@ -1494,6 +1558,7 @@ impl Callbacks for ExportCallbacks {
                 intrinsic_value_queries::type_names(tcx, &mut export_context);
             let caller_location_constants =
                 intrinsic_value_queries::caller_locations(tcx, &mut export_context);
+            if trace_export { eprintln!("export phase: instances.extend(export_reachable_instances"); }
             instances.extend(export_reachable_instances(tcx, &mut export_context));
             if self.prepared_allocator_world {
                 register_backtrace_frame_pointer_demands(tcx, &mut export_context);

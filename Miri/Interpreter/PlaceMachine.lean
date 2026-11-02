@@ -35,12 +35,12 @@ structure AccessConfig (K User : Type) where
   retainTouched : Machine K User → Option (AllocationAccessRef Provenance BorrowTree) → Machine K User
   memoryError : MemoryOperandError → StepError
 
-private def treeError (status : BorrowTree.BorrowTreeAccessStatus) : StepError :=
+private def treeError (write : Bool) (status : BorrowTree.BorrowTreeAccessStatus) : StepError :=
   match status with
   | .AccessFailure _ (.TransitionError ..)
   | .WildcardFailure _ (.TransitionError ..)
   | .WildcardFailure _ (.NoValidExposedReferences ..) =>
-    .undefinedBehavior s!"Tree Borrows: {reprStr status}"
+    .undefinedBehavior s!"Tree Borrows {if write then "write" else "read"} access: {reprStr status}"
   | _ => .invalidProgram s!"Tree Borrows invariant: {reprStr status}"
 
 private def bridge (state : AccessState K User) (action : MachineM K User A) :
@@ -73,7 +73,7 @@ def memoryAccess (config : AccessConfig K User) (write : Bool)
       (if write then .Write else .Read) tracker.global.protectedTags .VisitChildrenOfAccessed
     tree := accessed.tree
     if accessed.status != .Completed then
-      let error := treeError accessed.status
+      let error := treeError write accessed.status
       return ⟨{state with pendingError := some error}, tree, .error (reprStr error)⟩
   let sync := bridge state (config.syncAccess write allocId range)
   return ⟨sync.state, tree, sync.outcome⟩
