@@ -49,7 +49,7 @@ jobs:
         run: >-
           python3 tools/check-upstream-ui.py
           --shard-index '${{ matrix.shard }}' --shard-count 32
-          --export-timeout 600 --timeout 600
+          --export-timeout 600
           --output scratch/upstream-ui/ci
       - name: Retain inventory, reference diagnostics and all outcomes
         if: always()

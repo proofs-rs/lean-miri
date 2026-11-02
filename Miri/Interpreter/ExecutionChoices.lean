@@ -52,6 +52,8 @@ inductive Policy where
   /-- Deterministic seeded diagnostic draws. This is a replay aid for exploring
   one trace, not rand/Miri PRNG equivalence or exhaustive exploration. -/
   | boundedSeededDiagnostic (maxGeneratedChoices maxByteLength : Nat) (seed : UInt64)
+  /-- Native diagnostic execution, without an implicit draw or byte quota. -/
+  | generatedDiagnostic (seed : Option UInt64)
   deriving DecidableEq, Repr
 
 structure Tape where
@@ -157,7 +159,7 @@ private def demand (access : Access S) (request : Request) : M S Input := do
   if tape.cursor > tape.inputs.size then
     match tape.policy with
     | .strict => pure ()
-    | .boundedDiagnostic _ _ | .boundedSeededDiagnostic _ _ _ =>
+    | .boundedDiagnostic _ _ | .boundedSeededDiagnostic _ _ _ | .generatedDiagnostic _ =>
       throw (.invalidProgram "diagnostic choice cursor exceeds supplied input prefix")
   if let some value := tape.inputs[tape.cursor]? then return value
   match tape.policy with
@@ -175,6 +177,18 @@ private def demand (access : Access S) (request : Request) : M S Input := do
       throw (.resourceExhaustion "bounded seeded diagnostic choice count exhausted")
     let (value, nextState) ← seededDiagnosticInput request maxByteLength seed
       tape.diagnosticRngState (tape.generatedChoices == 0)
+    modify fun state =>
+      let current := access.get state
+      access.put state {current with inputs := current.inputs.push value, generatedChoices := current.generatedChoices + 1, diagnosticRngState := nextState}
+    return value
+
+  | .generatedDiagnostic seed => do
+    let maxByteLength := match request with | .bytes _ length => length | _ => 0
+    let (value, nextState) ← match seed with
+      | none => do
+        let value ← diagnosticInput request maxByteLength
+        pure (value, tape.diagnosticRngState)
+      | some seed => seededDiagnosticInput request maxByteLength seed tape.diagnosticRngState (tape.generatedChoices == 0)
     modify fun state =>
       let current := access.get state
       access.put state {current with inputs := current.inputs.push value, generatedChoices := current.generatedChoices + 1, diagnosticRngState := nextState}
@@ -379,7 +393,7 @@ theorem demandSource_eq (access : Access S) (request : Request) :
   if tape.cursor > tape.inputs.size then
     match tape.policy with
     | .strict => pure ()
-    | .boundedDiagnostic _ _ | .boundedSeededDiagnostic _ _ _ =>
+    | .boundedDiagnostic _ _ | .boundedSeededDiagnostic _ _ _ | .generatedDiagnostic _ =>
       throw (.invalidProgram "diagnostic choice cursor exceeds supplied input prefix")
   if let some value := tape.inputs[tape.cursor]? then return value
   match tape.policy with
@@ -397,6 +411,18 @@ theorem demandSource_eq (access : Access S) (request : Request) :
       throw (.resourceExhaustion "bounded seeded diagnostic choice count exhausted")
     let (value, nextState) ← seededDiagnosticInputSource request maxByteLength seed
       tape.diagnosticRngState (tape.generatedChoices == 0)
+    modify fun state =>
+      let current := access.get state
+      access.put state {current with inputs := current.inputs.push value, generatedChoices := current.generatedChoices + 1, diagnosticRngState := nextState}
+    return value
+
+  | .generatedDiagnostic seed => do
+    let maxByteLength := match request with | .bytes _ length => length | _ => 0
+    let (value, nextState) ← match seed with
+      | none => do
+        let value ← diagnosticInputSource request maxByteLength
+        pure (value, tape.diagnosticRngState)
+      | some seed => seededDiagnosticInputSource request maxByteLength seed tape.diagnosticRngState (tape.generatedChoices == 0)
     modify fun state =>
       let current := access.get state
       access.put state {current with inputs := current.inputs.push value, generatedChoices := current.generatedChoices + 1, diagnosticRngState := nextState}

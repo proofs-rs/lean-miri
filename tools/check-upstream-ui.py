@@ -30,10 +30,10 @@ def sha256(path):
     return h.hexdigest()
 
 
-def invoke(command, env, log, timeout):
+def invoke(command, env, log, timeout, memory_limit=None):
     try:
         return guarded_run(command, cwd=ROOT, env=env, log=log, timeout=timeout,
-                           memory_limit=15_500_000_000).returncode
+                           memory_limit=memory_limit).returncode
     except RuntimeError as error:
         return 'timeout' if 'walltime limit' in str(error) else 'resource_limit'
 
@@ -55,7 +55,7 @@ def run_case(case, args, env, output):
     record['command'] = command
     started = time.monotonic()
     case_env = env | {'LEAN_MIRI_REFERENCE_UI_FLAGS_JSON': json.dumps(case.runtime_flags)}
-    export_code = invoke(command, case_env, directory / 'export.log', args.export_timeout)
+    export_code = invoke(command, case_env, directory / 'export.log', args.export_timeout, args.memory_limit)
     record['export_exit'] = export_code
     record['export_seconds'] = time.monotonic() - started
     sidecar_path = Path(str(snapshot) + '.miri-reference.json')
@@ -96,7 +96,7 @@ def run_case(case, args, env, output):
         record['status'] = status
         if status == 'ready':
             started = time.monotonic()
-            code = invoke([str(args.runner), str(snapshot), '--ui-source', str(source), '--ui-flags', json.dumps(case.runtime_flags)], env, directory / 'lean.log', args.timeout)
+            code = invoke([str(args.runner), str(snapshot), '--ui-source', str(source), '--ui-flags', json.dumps(case.runtime_flags)], env, directory / 'lean.log', args.timeout, args.memory_limit)
             record['lean_exit'] = code
             record['lean_seconds'] = time.monotonic() - started
             if code != 0:
@@ -132,15 +132,17 @@ def main():
     parser.add_argument('--sysroot', type=Path, default=ROOT / 'scratch/miri-sysroot')
     parser.add_argument('--runner', type=Path, default=ROOT / '.lake/build/bin/native_runner')
     parser.add_argument('--skip-build', action='store_true')
-    parser.add_argument('--timeout', type=float, default=600)
+    parser.add_argument('--timeout', type=float, help='optional Lean execution wall limit in seconds; default unlimited')
+    parser.add_argument('--memory-limit', type=int, help='optional shared cgroup memory guard in bytes; default unlimited')
     parser.add_argument('--export-timeout', type=float, default=900)
     parser.add_argument('--shard-index', type=int, default=0)
     parser.add_argument('--shard-count', type=int, default=1)
     parser.add_argument('--jobs', type=int, default=1, help='independent guest processes (default serial; high memory per case)')
     parser.add_argument('--keep-inputs', action='store_true')
     args = parser.parse_args()
-    if min(args.timeout, args.export_timeout, args.jobs) <= 0:
-        parser.error('timeouts and jobs must be positive')
+    if min(args.export_timeout, args.jobs) <= 0 or any(
+            value is not None and value <= 0 for value in (args.timeout, args.memory_limit)):
+        parser.error('explicit timeouts, memory limit and jobs must be positive')
     cases = list(discover())
     if args.case:
         unknown = set(args.case) - {c.id for c in cases}
@@ -186,7 +188,7 @@ def main():
         'shard_index': args.shard_index, 'shard_count': args.shard_count,
         'source_lock_sha256': sha256(ROOT / 'upstream/source-lock.json'),
         'exporter_sha256': exporter_hash, 'runner_sha256': runner_hash,
-        'timeout': args.timeout, 'export_timeout': args.export_timeout,
+        'timeout': args.timeout, 'memory_limit': args.memory_limit, 'export_timeout': args.export_timeout,
         'profile': 'same-prepared-TyCtxt Tree Borrows, precise interior mutability, no implicit writes',
         'claim': 'finite executions only; no whole-machine safety proof',
     }, indent=2) + '\n')

@@ -1,3 +1,4 @@
+import Miri.Input.NativeRunnerOptions
 import Miri.Input.EvalSourceRunFinalization
 import Miri.Input.ExecutionChoicePolicy
 import Miri.Input.NativeMathHost
@@ -92,14 +93,12 @@ private def uiSettings (flags : Array String) : Except String UiSettings := do
   return result
 
 private def choiceTape (seed : Option UInt64) (inputs : Array ExecutionChoices.Input) :=
-  match seed with
-  | none => Input.ExecutionChoicePolicy.diagnosticTape 65536 4096 inputs
-  | some value => Input.ExecutionChoicePolicy.seededDiagnosticTape 65536 4096 value inputs
+  Input.ExecutionChoicePolicy.generatedTape seed inputs
 
 private def choiceMode (seed : Option UInt64) : String :=
   match seed with
-  | none => "bounded-diagnostic-zero"
-  | some value => s!"bounded-seeded-diagnostic seed={value.toNat} algorithm=SplitMix64-v1"
+  | none => "diagnostic-zero"
+  | some value => s!"seeded-diagnostic seed={value.toNat} algorithm=SplitMix64-v1"
 
 private def linuxOs : Input.EvalHostRuntimeConstruction.OsHostEffects Os := {
   hostWindows := false, hostUnix := true, targetWindows := false
@@ -347,7 +346,7 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
     (initialMemory : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind)
     (pageSize : UInt64) (numCpus hostPid : UInt32) (diagnosticSeed : Option UInt64)
     (profile : Lean.Options) (argument0 : String) (uiProfile : Bool)
-    (uiFlags : Array String) :
+    (uiFlags : Array String) (maxIterations : Option Nat) :
     Except String ((Array ExecutionChoices.Input → Except StepError
       (Input.EvalSourceRunFinalization.Result OuterState)) ×
       (Array ExecutionChoices.Input → Except String String)) := do
@@ -426,9 +425,9 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
         (Input.EvalSourceRunFinalization.Result OuterState) :=
       Input.EvalSourceRunFinalization.runFromSourceAndFinalizeProfiled
       profile prepared prepared.image bytes options sourceLeaves () machineConfig initialMemory arrays
-      (choiceTape diagnosticSeed inputs) rawInitHooks bootstrap options.limits 256 100000
-      (List.replicate 100000 ()) (uiProfile && ui.ignoreLeaks) reports
-      (some ⟨fun selected => by cases selected; rfl⟩) ({} : InitTrace)
+      (choiceTape diagnosticSeed inputs) rawInitHooks bootstrap options.limits 256 0
+      [] (uiProfile && ui.ignoreLeaks) reports
+      (some ⟨fun selected => by cases selected; rfl⟩) (.native maxIterations) ({} : InitTrace)
     match finalized with
     | .ok result trace => if trace.cursor == 2 then .ok result else .error (.invalidProgram "raw init trace not consumed")
     | .error error _ => .error error,
@@ -439,7 +438,7 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
         if machineConfig.validation == .No then .Shallow else .No}
       let result := Input.EvalSourceRunConstruction.runFromInitial
         prepared prepared.image bytes options sourceLeaves () mismatchedConfiguration bootstrap
-        options.limits 256 100000 (List.replicate 100000 ()) initial
+        options.limits 256 0 [] initial
       let runResult ← result.mapError fun error => s!"runFromInitial returned outer error: {reprStr error}"
       let state ← match runResult with
         | .failed state (.invalidProgram message) =>
@@ -518,10 +517,11 @@ def main (args : List String) : IO Unit := do
     return
   let profileEnabled := args.getLast? == some "--profile"
   let args := if profileEnabled then args.dropLast else args
+  let (args, maxIterations) ← must (Miri.NativeRunnerOptions.iterationLimit args)
   let profile := if profileEnabled then
     (({} : Lean.Options).setBool `profiler true).set `profiler.threshold (0 : Nat)
     else ({} : Lean.Options)
-  let some path := args.head? | throw (IO.userError "usage: NativeRunner <untouched-export.json|/dev/stdin> [--seed <u64> | --ui-source SOURCE.rs] [--profile] (gzip streamed externally)")
+  let some path := args.head? | throw (IO.userError "usage: NativeRunner <untouched-export.json|/dev/stdin> [--seed <u64> | --ui-source SOURCE.rs] [--max-iterations N] [--profile] (gzip streamed externally)")
   let (diagnosticSeed, uiSource, uiFlags) ← match args.drop 1 with
     | [] => pure (none, none, #[])
     | ["--ui-source", source] => pure (some 0, some source, #[])
@@ -535,8 +535,8 @@ def main (args : List String) : IO Unit := do
       let some value := raw.toNat? | throw (IO.userError "--seed expects an unsigned decimal u64")
       if value >= 2^64 then throw (IO.userError "--seed is outside the u64 range")
       pure (some (UInt64.ofNat value), none, #[])
-    | _ => throw (IO.userError "usage: NativeRunner <untouched-export.json|/dev/stdin> [--seed <u64> | --ui-source SOURCE.rs] [--profile] (gzip streamed externally)")
-  boundary s!"choice_mode={choiceMode diagnosticSeed}; generated_budget=65536; byte_budget=4096; supplied_prefix=preserved"
+    | _ => throw (IO.userError "usage: NativeRunner <untouched-export.json|/dev/stdin> [--seed <u64> | --ui-source SOURCE.rs] [--max-iterations N] [--profile] (gzip streamed externally)")
+  boundary s!"choice_mode={choiceMode diagnosticSeed}; iteration_limit={reprStr maxIterations}; supplied_prefix=preserved"
   boundary "raw_host_poll: finite source initialization replay; no live poll capability"
   boundary "decode: start"
   let input ← readJson path
@@ -567,7 +567,7 @@ def main (args : List String) : IO Unit := do
   let (execute, checkValidationMismatch) ← must
     (prepareRun prepared attempt.memory pageSize (if uiSource.isSome then 1 else numCpus)
       hostPid diagnosticSeed profile
-      (uiSource.getD "/workspace/lean-miri/scratch/main31.rs") uiSource.isSome uiFlags)
+      (uiSource.getD "/workspace/lean-miri/scratch/main31.rs") uiSource.isSome uiFlags maxIterations)
   let mismatch ← match checkValidationMismatch initialInputs with
     | .ok report => pure report
     | .error error => throw (IO.userError s!"validation preflight regression failed: {error}")

@@ -114,7 +114,7 @@ sys.exit(CODE)
                 output = root / f'run-{code}-{len(diagnostic)}'
                 output.mkdir()
                 args = SimpleNamespace(exporter=exporter, runner=native, sysroot=root,
-                                       export_timeout=10, timeout=10, keep_inputs=False)
+                                       export_timeout=10, timeout=10, memory_limit=None, keep_inputs=False)
                 record = driver.run_case(case, args, __import__('os').environ.copy(), output)
                 self.assertEqual(record['status'], expected)
                 if expected != 'passed':

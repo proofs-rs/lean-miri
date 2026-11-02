@@ -71,6 +71,7 @@ theorem actual_strict_demand_spec (t : Tape) (request : ExecutionChoices.Request
       | none => rfl
     | boundedDiagnostic maxChoices maxByteLength => simp at hpolicy
     | boundedSeededDiagnostic maxChoices maxByteLength seed => simp at hpolicy
+    | generatedDiagnostic seed => simp at hpolicy
 
 #print axioms actual_strict_demand_spec
 end ChoiceDemand211

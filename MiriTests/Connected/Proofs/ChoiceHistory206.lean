@@ -112,6 +112,7 @@ theorem actual_strict_demand_spec (t : Tape) (request : ExecutionChoices.Request
       | none => rfl
     | boundedDiagnostic maxChoices maxByteLength => simp at hpolicy
     | boundedSeededDiagnostic maxChoices maxByteLength seed => simp at hpolicy
+    | generatedDiagnostic seed => simp at hpolicy
 
 
 theorem compact_idempotent (t : Tape) : compactInputs (compactInputs t) = compactInputs t := by

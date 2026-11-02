@@ -16,7 +16,7 @@ private theorem demand_index_eq {S : Type} (access : Access S) (site : IndexSite
       if tape.cursor > tape.inputs.size then
         match tape.policy with
         | .strict => pure ()
-        | .boundedDiagnostic _ _ | .boundedSeededDiagnostic _ _ _ =>
+        | .boundedDiagnostic _ _ | .boundedSeededDiagnostic _ _ _ | .generatedDiagnostic _ =>
           throw (.invalidProgram "diagnostic choice cursor exceeds supplied input prefix")
       if let some value := tape.inputs[tape.cursor]? then return value
       match tape.policy with
@@ -37,6 +37,16 @@ private theorem demand_index_eq {S : Type} (access : Access S) (site : IndexSite
         modify fun state =>
           let current := access.get state
           access.put state {current with inputs := current.inputs.push value, generatedChoices := current.generatedChoices+1, diagnosticRngState := nextState}
+        return value
+      | .generatedDiagnostic seed => do
+        let (value, nextState) ← match seed with
+          | none => do
+            let value ← diagnosticInputSource (.index site count) 0
+            pure (value, tape.diagnosticRngState)
+          | some seed => seededDiagnosticInputSource (.index site count) 0 seed tape.diagnosticRngState (tape.generatedChoices == 0)
+        modify fun state =>
+          let current := access.get state
+          access.put state {current with inputs := current.inputs.push value, generatedChoices := current.generatedChoices + 1, diagnosticRngState := nextState}
         return value) := rfl
 
 private theorem index_eq {S : Type} (access : Access S) (site : IndexSite) (count : Nat) :

@@ -23,14 +23,14 @@ results, inventory and a summary remain; temporary incomplete exports are delete
 The runner is built under the repository's Lake lock before guests execute.
 Its fingerprint-only mode checks the Rust reference's FNV/byte-length binding;
 SHA-256 also records input identity and detects subsequent mutation.
-Default execution is serial: each exporter/Lean process has a shared-cgroup
-15.5 GB guard, an export timeout of 900 seconds and a Lean timeout of 600 seconds.
-`--jobs` is available but shares that memory budget.
+Default execution is serial, with a 900-second export timeout. Lean execution
+has no default wall-time or memory guard. `--timeout` and `--memory-limit` opt into
+local resource guards; `--jobs` starts independent cases in the same cgroup.
 
 The GitHub workflow runs on pushes to `main` and manual dispatch only; PR
 updates do not trigger it. It shards case IDs deterministically into 32 independent
 workers and retains every shard's evidence even when comparisons fail. Its
-per-case budgets are explicit in the workflow. A missing final summary
+export budget and job deadline are explicit in the workflow. A missing final summary
 means the shard did not finish; an interrupted shard is never full coverage.
 
 ## Acceptance contract
@@ -73,7 +73,7 @@ case into a success.
 By default the prepared reference and UI runner use Tree Borrows with precise
 interior mutability, no implicit writes, shallow validation, integer alignment
 checks, default provenance, one CPU, weak memory and data-race checking. Both generators receive seed 0;
-the Lean UI mode uses `seededDiagnosticTape` rather than the zero-value policy. Supported
+the Lean UI mode uses `generatedTape (some 0)` rather than the zero-value policy. Supported
 upstream flags override both sides in the same order, and the reference sidecar
 must record the resulting profile exactly. Guest startup
 has the original source filename as argv[0] and an empty environment. The
@@ -82,7 +82,7 @@ profile. The original reference-exporter behavior remains the default outside
 this suite. UI mode also uses the reference's 0.8 weak-CAS failure probability,
 float nondeterminism and short FD operations.
 
-These are independent finite executions; the reference's RNG and Lean's bounded seeded
+These are independent finite executions; the reference's RNG and Lean's seeded
 choice planning do not promise identical traces or exploration of all schedules.
 The suite makes no whole-machine UB-freedom or general equivalence claim.
 Missing host capabilities remain demand-local Unsupported, which fails a guest
@@ -94,3 +94,16 @@ cases, stale source identities and changed profile dispositions prevent a comple
 report. Completeness and successful comparison are separate fields; a complete
 sweep with failures remains a failing check. Superseded runs on the same PR are
 cancelled; pushes to main retain their independent runs.
+
+The pinned Miri `run_threads` loop runs until termination, error or interruption;
+its UI harness has no interpreter iteration or random-draw quota. NativeRunner
+likewise has no default iteration, generated-choice or random-byte quota.
+`--max-iterations N` is an explicit diagnostic prefix limit; reaching it is
+pending and never a passing result. The finite proof-facing APIs retain their
+explicit finite input bounds.
+
+The UI comparison driver also defaults to no Lean wall-time or memory guard.
+Use `--timeout SECONDS` and/or `--memory-limit BYTES` when a job needs an explicit
+resource guard; these are local execution controls, not upstream Miri semantics.
+A killed or pending run fails comparison. Export/build timeouts remain separate
+infrastructure controls. Missing interpreter/host capabilities still fail locally.
