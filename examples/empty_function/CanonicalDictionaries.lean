@@ -77,7 +77,7 @@ theorem make_fields (p : CompilerProviders.Prepared) (image : AllocationImage.Im
   simp (config := {zeta := false}) only [contract.maximum_eq,
     EvalConfigurationCore.pureQuery_eq, EvalConfigurationCore.liftConstruction_eq,
     EvalMathMachine.hooks, CompilerCallConstruction.helpers,
-    contract.i32_eq, contract.bool_eq, contract.u8_eq, contract.unit_eq, contract.rootSpan_eq,
+    contract.i32_eq, contract.bool_eq, contract.u8_eq, contract.unit_eq, CompilerProviders.Prepared.rootSpan_eq, contract.rootSpan_eq,
     Except.mapError, Except.map, bind, Except.bind, pure, Except.pure]
   refine ⟨_, rfl, ?_⟩
   constructor
@@ -190,7 +190,7 @@ theorem make_global_fields (p : CompilerProviders.Prepared) (image : AllocationI
   simp (config := {zeta := false}) only [contract.maximum_eq,
     EvalConfigurationCore.pureQuery_eq, EvalConfigurationCore.liftConstruction_eq,
     EvalMathMachine.hooks, CompilerCallConstruction.helpers,
-    contract.i32_eq, contract.bool_eq, contract.u8_eq, contract.unit_eq, contract.rootSpan_eq,
+    contract.i32_eq, contract.bool_eq, contract.u8_eq, contract.unit_eq, CompilerProviders.Prepared.rootSpan_eq, contract.rootSpan_eq,
     Except.mapError, Except.map, bind, Except.bind, pure, Except.pure]
   refine ⟨_, rfl, ?_⟩
   constructor
