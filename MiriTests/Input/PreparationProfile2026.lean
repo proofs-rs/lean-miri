@@ -4,6 +4,9 @@ import Miri.Input.EvalPreparation
 preparation result, including failed outcomes and partial imported memory. -/
 namespace Miri.Input.PreparationProfile2026
 
+theorem rootSpanCacheIdentity (p : CompilerProviders.Prepared) :
+    p.rootSpan = CompilerContextSpan.rootSpan p.program := p.rootSpan_eq
+
 theorem lifecycleProfiledIdentity (profile : Lean.Options)
     (calls : CompilerCallPipeline.Prepared) :
     CompilerLifecyclePipeline.prepareProfiled profile calls =
@@ -37,6 +40,7 @@ theorem evalPreparationProfiledIdentity (profile : Lean.Options)
 end Miri.Input.PreparationProfile2026
 
 #print axioms Miri.Input.PreparationProfile2026.callPipelineProfiledIdentity
+#print axioms Miri.Input.PreparationProfile2026.rootSpanCacheIdentity
 #print axioms Miri.Input.PreparationProfile2026.lifecycleProfiledIdentity
 #print axioms Miri.Input.PreparationProfile2026.constantsProfiledIdentity
 #print axioms Miri.Input.PreparationProfile2026.providersProfiledIdentity

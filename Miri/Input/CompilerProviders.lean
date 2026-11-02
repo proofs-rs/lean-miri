@@ -26,6 +26,8 @@ namespace Miri.Input.CompilerProviders
 open Lean Miri.ABI Miri.Memory Miri.Interpreter
 structure Prepared where
   program : LoweredProgram
+  /-- Reused by recursive callback configuration construction. -/
+  rootSpanCache : Option (CompilerContextSpan.Bound program) := none
   /-- Prepared lowering indices certified for this provider's exact input.
   Publicly assembled providers may omit the cache; their accessor preserves
   the historical behavior by deriving from `program.input`. -/
@@ -38,6 +40,8 @@ structure Prepared where
   and retained for every provider check against this source document. -/
   sourceEquality : RuntimeMetadata.JsonReflexivity runtime.source.raw
   lifecycle : CompilerLifecyclePipeline.Prepared
+  symbolLookup : CompilerVTableRuntime.GlobalLookup lifecycle.calls.symbols :=
+    CompilerVTableRuntime.GlobalLookup.prepare lifecycle.calls.symbols
   functions : CompilerFunctionFacts.Prepared
   main : CompilerMain.Prepared
   intrinsics : CompilerIntrinsicFacts.Prepared
@@ -49,7 +53,13 @@ structure Prepared where
   namedGlobals : CompilerNamedGlobals.Prepared
   externStatics : CompilerExternStatic.Prepared
   pointers : CompilerFunctionPointers.Prepared
+  pointerLookup : CompilerVTableRuntime.GlobalLookup pointers.calls.symbols :=
+    CompilerVTableRuntime.GlobalLookup.prepare pointers.calls.symbols
+  inlineLookup : CompilerFunctionPointers.InlineLookup pointers :=
+    CompilerFunctionPointers.InlineLookup.prepare pointers
   vtables : CompilerVTableMachine.Prepared
+  vtableLookup : CompilerVTableRuntime.GlobalLookup vtables.calls.symbols :=
+    CompilerVTableRuntime.GlobalLookup.prepare vtables.calls.symbols
   namedAbi : CompilerNamedShimAbi.Prepared
   /-- Immutable compiler export table. Errors remain stored so source
   consumers retain their original demand-local failure boundary. -/
@@ -63,6 +73,18 @@ structure Prepared where
   /-- Initial persistent interner. Runtime execution must thread its updated World. -/
   initialArrays : Except String RuntimeArrayTypes.World
   tls : Except String (Array CompilerThreadLocal.Entry)
+
+def Prepared.rootSpan (p : Prepared) : Except String MIR.SpanRef :=
+  match p.rootSpanCache with
+  | some bound => bound.result
+  | none => CompilerContextSpan.rootSpan p.program
+
+theorem Prepared.rootSpan_eq (p : Prepared) :
+    p.rootSpan = CompilerContextSpan.rootSpan p.program := by
+  unfold rootSpan
+  split
+  · exact CompilerContextSpan.Bound.result_eq _
+  · rfl
 
 /-- Reuse lowering indices only when certified for this provider's own source
 document. This remains correct for manually assembled records whose nested
@@ -184,6 +206,7 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
     CompilerConstantQueries.bind constants runtime (some sourceEquality)
   return {
     program
+    rootSpanCache := some (CompilerContextSpan.bind program)
     lowering := some (LowerContext.bindDocument program.input)
     runtime
     primitiveQueries := some (CompilerPrimitiveFacts.bind runtime)
@@ -250,6 +273,7 @@ def executionHooks (p : Prepared) (image : AllocationImage.Imported)
     (base : ExecutionMachine.Config K User C Other ABI.ExternAbi Host) :
     ExecutionMachine.Config K User C Other ABI.ExternAbi Host :=
   let functions := CompilerFunctionPointers.hooks p.pointers image base.functions
+    (some p.pointerLookup) (some p.inlineLookup)
   let vtableEngine := {vtableEngine with functions}
   let callCompiler := {base.calls.compiler with
     resolve := fun _ definition args => resolveCurrent p definition args

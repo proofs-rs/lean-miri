@@ -39,7 +39,7 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Attempt 
     | .ok value => pure value
     | .error error => return ⟨empty,.error error⟩
   let dummySpanResult := profileit "preparation.eval.root_span" profile fun _ =>
-    CompilerContextSpan.rootSpan compiler.program
+    compiler.rootSpan
   let dummySpan ← match dummySpanResult with
     | .ok value => pure value
     | .error error => return ⟨empty,.error error⟩

@@ -111,46 +111,77 @@ private def validateReferences (node : JsonTraversalCache.Node) (path : String)
     (typeCount allocationCount instanceCount : Nat) : Except String Unit := do
   let _ ← validateReferencesAux node path typeCount allocationCount instanceCount {}
 
-private partial def validateMirIndices (j : Json) (path : String)
+private def validateMirField (key : String) (value : Json) (path : String)
+    (localCount : Nat) : Except String Unit := do
+  if key == "local" then
+    let id ← value.getNat? |>.mapError fun e => s!"{joinPath path key}: expected local index ({e})"
+    if id >= localCount then throw s!"{joinPath path key}: local {id} is out of range (locals={localCount})"
+  if key == "projection" then
+    let projections ← value.getArr? |>.mapError fun e => s!"{joinPath path key}: expected projection array ({e})"
+    for (projection, index) in projections.toList.zipIdx do
+      let pPath := s!"{joinPath path key}[{index}]"
+      let kind ← fieldString projection "kind" pPath
+      if kind == "Index" then
+        let id ← fieldNat projection "local" pPath
+        if id >= localCount then throw s!"{pPath}.local: local {id} is out of range (locals={localCount})"
+      if kind == "ConstantIndex" then
+        let _ ← fieldNat projection "offset" pPath
+        let _ ← fieldNat projection "min_length" pPath
+        let _ ← fieldBool projection "from_end" pPath
+      if kind == "Subslice" then
+        let _ ← fieldNat projection "from" pPath
+        let _ ← fieldNat projection "to" pPath
+        let _ ← fieldBool projection "from_end" pPath
+      if kind == "Field" then
+        let _ ← fieldNat projection "index" pPath
+        let _ ← field projection "field_type" pPath
+      if kind == "Downcast" then
+        let _ ← fieldNat projection "variant_index" pPath
+      if kind == "OpaqueCast" then let _ ← field projection "cast_type" pPath
+      if kind == "UnwrapUnsafeBinder" then let _ ← field projection "inner_type" pPath
+      if isKnownProjection kind then let _ ← field projection "resulting_type" pPath
+
+private partial def validateMirIndicesReference (j : Json) (path : String)
     (localCount : Nat) : Except String Unit := do
   if statusOf? j == some "debug_payload" then return
   match j with
   | .arr values =>
     let mut index := 0
     for value in values do
-      validateMirIndices value s!"{path}[{index}]" localCount
+      validateMirIndicesReference value s!"{path}[{index}]" localCount
       index := index + 1
   | .obj fields =>
     for (key, value) in fields.toList do
-      if key == "local" then
-        let id ← value.getNat? |>.mapError fun e => s!"{joinPath path key}: expected local index ({e})"
-        if id >= localCount then throw s!"{joinPath path key}: local {id} is out of range (locals={localCount})"
-      if key == "projection" then
-        let projections ← value.getArr? |>.mapError fun e => s!"{joinPath path key}: expected projection array ({e})"
-        for (projection, index) in projections.toList.zipIdx do
-          let pPath := s!"{joinPath path key}[{index}]"
-          let kind ← fieldString projection "kind" pPath
-          if kind == "Index" then
-            let id ← fieldNat projection "local" pPath
-            if id >= localCount then throw s!"{pPath}.local: local {id} is out of range (locals={localCount})"
-          if kind == "ConstantIndex" then
-            let _ ← fieldNat projection "offset" pPath
-            let _ ← fieldNat projection "min_length" pPath
-            let _ ← fieldBool projection "from_end" pPath
-          if kind == "Subslice" then
-            let _ ← fieldNat projection "from" pPath
-            let _ ← fieldNat projection "to" pPath
-            let _ ← fieldBool projection "from_end" pPath
-          if kind == "Field" then
-            let _ ← fieldNat projection "index" pPath
-            let _ ← field projection "field_type" pPath
-          if kind == "Downcast" then
-            let _ ← fieldNat projection "variant_index" pPath
-          if kind == "OpaqueCast" then let _ ← field projection "cast_type" pPath
-          if kind == "UnwrapUnsafeBinder" then let _ ← field projection "inner_type" pPath
-          if isKnownProjection kind then let _ ← field projection "resulting_type" pPath
-      validateMirIndices value (joinPath path key) localCount
+      validateMirField key value path localCount
+      validateMirIndicesReference value (joinPath path key) localCount
   | _ => pure ()
+
+/-- Successful checks are reusable only at the same local-variable bound.
+The cache is local to this document traversal; failed checks are never stored,
+so the first failing occurrence retains its original path and error order. -/
+private abbrev MirIndexValidation :=
+  StateT (Std.HashSet (Nat × Nat)) (Except String)
+
+private partial def validateMirIndices (node : JsonTraversalCache.Node) (path : String)
+    (localCount : Nat) : MirIndexValidation Unit := do
+  let .cached key _ := node | validateMirIndicesReference node.value path localCount
+  let j := key.value
+  if statusOf? j == some "debug_payload" then return
+  let memoKey := key.id.map fun id => (id, localCount)
+  if let some key := memoKey then
+    if (← get).contains key then return
+  match j with
+  | .arr values =>
+    let mut index := 0
+    for value in values do
+      validateMirIndices (node.child index value) s!"{path}[{index}]" localCount
+      index := index + 1
+  | .obj fields =>
+    for ((key, value), index) in fields.toList.zipIdx do
+      validateMirField key value path localCount
+      validateMirIndices (node.child index value) (joinPath path key) localCount
+  | _ => pure ()
+  if let some key := memoKey then modify (·.insert key)
 
 private def checkBlockIndex (value : Json) (path : String) (blockCount : Nat) : Except String Unit := do
   let id ← value.getNat? |>.mapError fun e => s!"{path}: expected basic-block index ({e})"
@@ -199,7 +230,8 @@ private def validateTerminatorEdges (j : Json) (path : String) (blockCount : Nat
     validateUnwind (← field j "unwind" path) (joinPath path "unwind") blockCount
   | _ => pure ()
 
-private def validateBody (j : Json) (path : String) : Except String Unit := do
+private def validateBody (node : JsonTraversalCache.Node) (path : String) : MirIndexValidation Unit := do
+  let j := node.value
   let locals ← arrayField j "locals" path
   let blocks ← arrayField j "basic_blocks" path
   if locals.isEmpty then throw s!"{joinPath path "locals"}: MIR body must declare the return local"
@@ -209,24 +241,28 @@ private def validateBody (j : Json) (path : String) : Except String Unit := do
     let id ← fieldNat localDecl "local" s!"{joinPath path "locals"}[{index}]"
     if id != index then throw s!"{joinPath path "locals"}[{index}]: local declarations must be densely ordered"
     index := index + 1
+  let blocksNode := node.field "basic_blocks" (.arr blocks)
   index := 0
   for block in blocks do
+    let blockNode := blocksNode.child index block
     let blockPath := s!"{joinPath path "basic_blocks"}[{index}]"
     let id ← fieldNat block "block" blockPath
     if id != index then throw s!"{blockPath}: basic blocks must be densely ordered"
     let statements ← arrayField block "statements" blockPath
+    let statementsNode := blockNode.field "statements" (.arr statements)
     for (statement, stmtIndex) in statements.toList.zipIdx do
+      let statementNode := statementsNode.child stmtIndex statement
       let kind ← field statement "kind" s!"{blockPath}.statements[{stmtIndex}]"
-      validateMirIndices kind s!"{blockPath}.statements[{stmtIndex}].kind" locals.size
+      validateMirIndices (statementNode.field "kind" kind) s!"{blockPath}.statements[{stmtIndex}].kind" locals.size
     let termWrapper ← field block "terminator" blockPath
     if termWrapper == .null then throw s!"{blockPath}: missing terminator"
     let term ← field termWrapper "kind" s!"{blockPath}.terminator"
-    validateMirIndices term s!"{blockPath}.terminator.kind" locals.size
+    validateMirIndices ((blockNode.field "terminator" termWrapper).field "kind" term) s!"{blockPath}.terminator.kind" locals.size
     validateTerminatorEdges term s!"{blockPath}.terminator.kind" blocks.size
     index := index + 1
 
 private partial def validateAllBodiesAux (node : JsonTraversalCache.Node) (path : String) (visited : Std.HashSet JsonTraversalCache.IdentityKey)
-    : Except String (Std.HashSet JsonTraversalCache.IdentityKey) := do
+    : MirIndexValidation (Std.HashSet JsonTraversalCache.IdentityKey) := do
   let j := node.value
   let memoKey := node.identity
   if statusOf? j == some "debug_payload" then return visited
@@ -244,7 +280,7 @@ private partial def validateAllBodiesAux (node : JsonTraversalCache.Node) (path 
     let hasLocals := (j.getObjVal? "locals").isOk
     let hasBlocks := (j.getObjVal? "basic_blocks").isOk
     if hasLocals != hasBlocks then throw s!"{path}: body requires both locals and basic_blocks"
-    if hasLocals && hasBlocks then validateBody j path
+    if hasLocals && hasBlocks then validateBody node path
     let mut visited := visited
     for ((key, value), childIndex) in fields.toList.zipIdx do
       visited ← validateAllBodiesAux (node.child childIndex value) (joinPath path key) visited
@@ -252,7 +288,7 @@ private partial def validateAllBodiesAux (node : JsonTraversalCache.Node) (path 
   | _ => return visited
 
 private def validateAllBodies (node : JsonTraversalCache.Node) (path : String) : Except String Unit := do
-  let _ ← validateAllBodiesAux node path {}
+  let _ ← (validateAllBodiesAux node path {}).run' {}
 
 private def jsonToNatArray (nodes : Array α) (getId : α → Nat) : Array Nat := nodes.map getId
 

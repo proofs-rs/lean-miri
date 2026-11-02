@@ -71,7 +71,9 @@ def main (args : List String) : IO Unit := do
   let wrongSymbols := { secondProvider.lifecycle.calls.symbols with facts := wrongFacts }
   let wrongCalls := { secondProvider.lifecycle.calls with symbols := wrongSymbols }
   let wrongLifecycle := { secondProvider.lifecycle with calls := wrongCalls }
-  let manualProvider := { rebound with lifecycle := wrongLifecycle }
+  let manualProvider := { rebound with
+    lifecycle := wrongLifecycle
+    symbolLookup := CompilerVTableRuntime.GlobalLookup.prepare wrongLifecycle.calls.symbols }
   check (renderResult manualProvider.callerLocationType == renderResult secondOwnCaller)
     "provider primitive query followed a malformed nested context instead of its requested runtime"
   check (renderResult (manualProvider.primitiveLayout "usize") == renderResult secondUsize)
