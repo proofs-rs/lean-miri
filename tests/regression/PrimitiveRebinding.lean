@@ -52,7 +52,7 @@ def main (args : List String) : IO Unit := do
   -- has missing query evidence. The provider's own primitive source remains
   -- source2, and its cache must preserve that result/error boundary.
   let malformedNestedRuntime : RuntimeMetadata := { firstProvider.runtime with
-    source := { firstProvider.runtime.source with raw := .null } }
+    source := { firstProvider.runtime.source with raw := .null, allocationWorldValidation := none } }
   let malformedNestedIndexed := RuntimeMetadata.Indexed.ofMetadata malformedNestedRuntime
   let originalNested := secondProvider.lifecycle.calls.symbols.facts.context
   let malformedNested : CompilerFacts.Context := { originalNested with

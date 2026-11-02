@@ -1,3 +1,4 @@
+import Miri.Input.CompilerBodyEquality
 import Miri.Input.CompilerPanicFacts
 import Miri.Input.CompilerLifecyclePipeline
 import Miri.Input.CompilerFunctionFacts
@@ -72,6 +73,7 @@ structure Prepared where
   signatureAbiIndex : CompilerQueryIndices.SignatureAbi runtime program.input.raw
   /-- Initial persistent interner. Runtime execution must thread its updated World. -/
   initialArrays : Except String RuntimeArrayTypes.World
+  tlsRows : Option (CompilerThreadLocal.Rows program.input.raw) := none
   tls : Except String (Array CompilerThreadLocal.Entry)
 
 def Prepared.rootSpan (p : Prepared) : Except String MIR.SpanRef :=
@@ -200,7 +202,10 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
     CompilerQueryIndices.signatureAbi runtime program.input.raw abiCache
   let arrays := profileit "preparation.providers.runtime_arrays" profile fun _ =>
     RuntimeArrayTypes.create runtime |>.mapError reprStr
-  let tls := profileit "preparation.providers.thread_local" profile fun _ => CompilerThreadLocal.ofProgram program
+  let tlsRows := profileit "preparation.providers.thread_local_rows" profile fun _ =>
+    CompilerThreadLocal.Rows.prepare program.input.raw
+  let tls := profileit "preparation.providers.thread_local" profile fun _ =>
+    CompilerThreadLocal.ofProgram program (some tlsRows)
   let constants := profileit "preparation.providers.rebind_constants" profile fun _ => {constants with program}
   let constantBinding := profileit "preparation.providers.constant_binding" profile fun _ =>
     CompilerConstantQueries.bind constants runtime (some sourceEquality)
@@ -227,6 +232,7 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
     covarianceIndex
     signatureAbiIndex
     initialArrays := arrays
+    tlsRows := some tlsRows
     tls }
 
 def prepare (input : LoweredProgram) : Except String Prepared :=
@@ -249,7 +255,7 @@ def resolveCurrent (p : Prepared) (definition : MIR.DefId) (args : Array MIR.Gen
   let .mir location := frame.location | throw (.invalidProgram "callee resolution outside a MIR source location")
   let body ← lift do
     let some body := p.program.bundle.bodies[frame.bodyIdentity.index]? | throw "missing canonical source body"
-    unless body.body == frame.body do throw "callee resolution canonical body/content mismatch"
+    unless bodyContentsEqual body.body frame.body do throw "callee resolution canonical body/content mismatch"
     let loaded ← CallResolution.loadedBodyOfInstance p.lifecycle.calls.calls frame.functionInstance
     unless loaded.identity == frame.bodyIdentity do throw "callee resolution current full-instance/body mismatch"
     pure body

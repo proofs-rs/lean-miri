@@ -84,7 +84,28 @@ def optionalNatField (j : Json) (key path : String) : Except String (Option Nat)
     (v.getNat?).map some |>.mapError fun e => s!"{joinPath path key}: expected unsigned integer or null ({e})"
 
 def optionalField (j : Json) (key : String) : Option Json :=
-  (j.getObjVal? key).toOption
+  match j with
+  | .obj fields => fields[key]?
+  | _ => none
+
+theorem optionalField_eq_getObjVal (j : Json) (key : String) :
+    optionalField j key = (j.getObjVal? key).toOption := by
+  cases j <;> try rfl
+  case obj fields => cases h : fields[key]? <;> simp [optionalField, Json.getObjVal?, h] <;> rfl
+
+/-- Optional string queries avoid constructing discarded missing-field errors. -/
+def optionalStringValue (j : Json) (key : String) : Option String :=
+  match optionalField j key with
+  | some (.str value) => some value
+  | _ => none
+
+theorem optionalStringValue_eq_getObjValAs (j : Json) (key : String) :
+    optionalStringValue j key = (j.getObjValAs? String key).toOption := by
+  rw [optionalStringValue, optionalField_eq_getObjVal]
+  unfold Json.getObjValAs? Json.getObjValD
+  cases h : j.getObjVal? key with
+  | error error => rfl
+  | ok value => cases value <;> rfl
 
 def optionalString (j : Json) (key path : String) : Except String (Option String) := do
   match optionalField j key with
@@ -163,7 +184,12 @@ def parseSourceInfo (j : Json) (path : String) (memo : DecodeMemo := {}) : Excep
     scope := ← fieldNat j "scope" path
   }
 
-def hasField (j : Json) (key : String) : Bool := (j.getObjVal? key).isOk
+def hasField (j : Json) (key : String) : Bool := (optionalField j key).isSome
+
+theorem hasField_eq_getObjVal (j : Json) (key : String) :
+    hasField j key = (j.getObjVal? key).isOk := by
+  rw [hasField, optionalField_eq_getObjVal]
+  cases j.getObjVal? key <;> rfl
 
 def isSourceSpanJson (j : Json) : Bool :=
   hasField j "lo" && hasField j "hi" && hasField j "start" && hasField j "end" &&
@@ -306,7 +332,7 @@ def asTag? (j : Json) (key : String) : Option String :=
   | none => none
   | some value => match value.getStr? with | .ok text => some text | .error _ => none
 
-def singletonRef (j : Json) (key : String) : Option Nat :=
+def singletonRefReference (j : Json) (key : String) : Option Nat :=
   match objectFields j with
   | .error _ => none
   | .ok fields =>
@@ -315,6 +341,13 @@ def singletonRef (j : Json) (key : String) : Option Nat :=
       if name != key then none else
         match value.getNat? with | .ok id => some id | .error _ => none
     | _ => none
+
+/-- Inspect actual tree shape, ignoring untrusted Raw size annotations. -/
+def singletonRef (j : Json) (key : String) : Option Nat :=
+  match j with
+  | .obj ⟨⟨.inner _ name value .leaf .leaf⟩⟩ =>
+    if name != key then none else value.getNat?.toOption
+  | _ => none
 
 def isTypeRef (j : Json) : Option Nat := singletonRef j "type_id"
 
@@ -2399,6 +2432,23 @@ def validateCompilerAllocIdWorldRaw (raw : Json) (nodes : Array AllocationNode)
     let verified ← parseCompilerAllocIdWorld rawWorld nodes
     unless verified == world do
       throw "source AllocId profile model does not match its exact raw document object"
+
+set_option autoImplicit false in
+/-- Exact deferred validation outcome for one raw/typed allocation world.
+The private constructor prevents replacing the validation result with a guess. -/
+structure AllocationWorldValidation (raw : Json) (nodes : Array AllocationNode)
+    (world : Option CompilerAllocIdWorld) where
+  private mk ::
+  result : Except String Unit
+  private exact : result = validateCompilerAllocIdWorldRaw raw nodes world
+
+def AllocationWorldValidation.prepare (raw : Json) (nodes : Array AllocationNode)
+    (world : Option CompilerAllocIdWorld) : AllocationWorldValidation raw nodes world :=
+  ⟨validateCompilerAllocIdWorldRaw raw nodes world, rfl⟩
+
+theorem AllocationWorldValidation.result_eq {raw nodes world}
+    (checked : AllocationWorldValidation raw nodes world) :
+    checked.result = validateCompilerAllocIdWorldRaw raw nodes world := checked.exact
 
 def parseLocal (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String LocalDecl := do
   let type ← field j "type" path

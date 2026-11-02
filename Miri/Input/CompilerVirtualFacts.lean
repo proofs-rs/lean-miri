@@ -1,3 +1,4 @@
+import Miri.Input.CompilerBodyEquality
 import Miri.Input.CompilerFactAdapters
 import Miri.Input.CompilerVTableFacts
 import Miri.Input.CompilerScopes
@@ -82,7 +83,7 @@ def scopeHooks (prepared : CompilerScopes.Prepared) (base : VirtualCalls.Compile
       let actual ← lift (match prepared.program.bundle.bodies[identity.index]? with
         | some value => .ok value
         | none => .error "canonical frame body identity is absent")
-      unless actual.body == body do throw (.invalidProgram "frame body identity/content mismatch")
+      unless bodyContentsEqual actual.body body do throw (.invalidProgram "frame body identity/content mismatch")
       lift (CompilerScopes.sourceScope prepared identity.index scope)
     requiresCallerLocation := fun fnInstance => do
       match ← lift (inlineAttribute prepared fnInstance) with

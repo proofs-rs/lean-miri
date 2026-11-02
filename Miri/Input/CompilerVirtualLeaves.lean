@@ -1,3 +1,4 @@
+import Miri.Input.CompilerBodyEquality
 import Miri.Input.CompilerCallPipeline
 
 /-! Complete compiler dictionary for source virtual/drop/caller-location
@@ -28,7 +29,7 @@ def make (p : CompilerCallPipeline.Prepared) : VirtualCalls.CompilerHooks S C :=
     sourceScope := fun identity _ body index => do
       let some actual := p.scopes.program.bundle.bodies[identity.index]?
         | throw (.unsupported "canonical frame body identity is absent")
-      unless actual.body == body do throw (.invalidProgram "frame body identity/content mismatch")
+      unless bodyContentsEqual actual.body body do throw (.invalidProgram "frame body identity/content mismatch")
       lift (CompilerScopes.sourceScope p.scopes identity.index index)
     unitLayout := lift (CompilerFacts.unitLayout facts.context) }
 end Miri.Input.CompilerVirtualLeaves

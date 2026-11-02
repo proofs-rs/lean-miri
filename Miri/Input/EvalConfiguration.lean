@@ -23,8 +23,8 @@ def functions (p : CompilerProviders.Prepared) (image : AllocationImage.Imported
     (pointers : PointerMachine.Hooks MiriMemoryKind
       (ValidityMachine.Control (Stored Os R P H D O Aff B Host))) :
     FunctionPointers.Hooks MiriMemoryKind (User Os R P H D O Aff B Host) O := Id.run do
-  let lookup := CompilerVTableRuntime.GlobalLookup.prepare p.lifecycle.calls.symbols
-  let inlineLookup := CompilerFunctionPointers.InlineLookup.prepare p.pointers
+  let lookup := p.symbolLookup
+  let inlineLookup := p.inlineLookup
   return {
     registry := fun user => user.payload.payload.user.functions
     putRegistry := fun user functions => {user with payload := {user.payload with payload :=

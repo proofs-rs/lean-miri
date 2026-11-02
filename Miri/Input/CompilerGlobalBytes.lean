@@ -52,8 +52,7 @@ def prepare (program : LoweredProgram) (runtime : RuntimeMetadata)
   unless (← source.getObjValAs? Nat "salt_count") == 32 do throw "global byte salt support differs from pinned source"
   let mut keys := #[]
   if let some world := program.input.compilerAllocIdWorld then
-    Miri.Input.validateCompilerAllocIdWorldRaw program.input.raw program.input.allocations
-      (some world) |>.mapError fun error => s!"compiler AllocId world: {error}"
+    program.input.validateAllocationWorld |>.mapError fun error => s!"compiler AllocId world: {error}"
     unless memory.sourceAllocIdWorldActive do
       throw "prepared source AllocId world was not installed before byte-key attachment"
     let mut runtimeByGraph : Std.HashMap Nat AllocId := {}

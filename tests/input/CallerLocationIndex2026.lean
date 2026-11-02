@@ -21,8 +21,8 @@ private def set (j : Json) (key : String) (value : Json) : Json :=
   | _ => Json.mkObj [(key,value)]
 private def withRows (p : CompilerProviders.Prepared) (rows : Json) : CompilerProviders.Prepared :=
   let raw := set p.program.input.raw "compiler_caller_location_constants" rows
-  let program := {p.program with input := {p.program.input with raw}}
-  {p with program, lowering := none, rootSpanCache := none
+  let program := {p.program with input := {p.program.input with raw, allocationWorldValidation := none}}
+  {p with program, lowering := none, rootSpanCache := none, tlsRows := none
           covarianceIndex := CompilerQueryIndices.covariance raw
           signatureAbiIndex := CompilerQueryIndices.signatureAbi p.runtime raw}
 private def compare (p : CompilerProviders.Prepared) (span : Miri.MIR.SpanRef) : IO Unit := do

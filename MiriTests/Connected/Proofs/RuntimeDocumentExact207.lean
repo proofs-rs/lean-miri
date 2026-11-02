@@ -64,6 +64,7 @@ deriving instance DecidableEq for CompilerPredicateEvidence
 -- irrelevance, just like the existing source-bound runtime caches below.
 deriving instance DecidableEq for DecoderValues.CompilerFunctionAbiTable
 deriving instance DecidableEq for DecoderValues.CompilerValueMemo
+deriving instance DecidableEq for DecoderValues.AllocationWorldValidation
 deriving instance DecidableEq for ImportDocumentCore
 deriving instance DecidableEq for ImportDocument
 

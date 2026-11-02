@@ -1,3 +1,4 @@
+import Miri.Input.CompilerBodyEquality
 import Miri.Input.CompilerConstantQueries
 import Miri.Interpreter.CallMachine
 
@@ -89,7 +90,7 @@ private def lift (query : Except String A) : MachineHooks.M K User A :=
   | .error error => throw (.unsupported s!"compiler lifecycle: {error}")
 private def entry (p : Prepared) (body : LoadedBody) : Except String Entry := do
   let some actual := p.program.bundle.bodies[body.identity.index]? | throw "canonical body identity absent"
-  unless actual.body == body.body do throw "canonical body identity/content mismatch"
+  unless bodyContentsEqual actual.body body.body do throw "canonical body identity/content mismatch"
   let some entry := p.entries[body.identity.index]? | throw "body lifecycle evidence absent"
   return entry
 

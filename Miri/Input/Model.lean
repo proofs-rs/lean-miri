@@ -24,6 +24,21 @@ structure ImportDocumentCore where
   /-- Checked import-time ABI queries; failures remain deferred until demand. -/
   compilerFunctionAbiTable : Option (CompilerFunctionAbiTable sharedNodes) := none
   compilerValueMemo : Option CompilerValueMemo := none
+  /-- Native import validation is tied to the exact raw and typed source rows. -/
+  allocationWorldValidation : Option (DecoderValues.AllocationWorldValidation raw allocations compilerAllocIdWorld) := none
+
+def ImportDocumentCore.validateAllocationWorld (document : ImportDocumentCore) : Except String Unit :=
+  match document.allocationWorldValidation with
+  | some checked => checked.result
+  | none => validateCompilerAllocIdWorldRaw document.raw document.allocations document.compilerAllocIdWorld
+
+theorem ImportDocumentCore.validateAllocationWorld_eq (document : ImportDocumentCore) :
+    document.validateAllocationWorld = validateCompilerAllocIdWorldRaw document.raw
+      document.allocations document.compilerAllocIdWorld := by
+  unfold validateAllocationWorld
+  split
+  · exact DecoderValues.AllocationWorldValidation.result_eq _
+  · rfl
 
 /-- Full diagnostic import retained for callers that inspect the typed JSON
 projection. Runtime decoding uses `ImportDocumentCore` and does not retain this
