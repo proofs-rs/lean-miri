@@ -911,6 +911,72 @@ sweep has not been rerun. Frozen binaries, raw counters, profiles, equality/orac
 checks and combined example audits are retained under ignored
 `scratch/perf-prepared/`.
 
+### Positional ABI transport prototype — no demonstrated speedup
+
+This experimental branch builds on `cac937b7` and does not enable a new format
+by default. It is a reviewable transport prototype, not an adopted performance
+change to PR #9. `LEAN_MIRI_TYPED_ABI=1` packs exact ABI argument and function
+headers into versioned positional records while retaining existing DAG IDs.
+Lean validates references, scalar types and record arity, decodes each argument
+once, and directly constructs the existing typed ABI values. Layouts, modes and
+calling conventions retain their canonical component validators. Failed
+predecodes fall through to the original demand-local canonical parser.
+
+Compatibility JSON is reconstructed for the remaining validators and compiler
+adapters. The exporter still builds its original JSON tree before packing, so
+this prototype does not eliminate the generic tree or the generic runtime-value
+walk. It tests the ABI portion of a typed-input design, not a full typed MIR
+format or a binary serializer. On unops, 9,819 ABI headers share 1,734 arguments.
+
+CPU-2, one-thread alternating native trials use frozen artifacts `7fb2fa62`
+(baseline) and `5e8c9598` (prototype). The prototype inputs are transport-adapted
+copies, not newly generated Rust/Miri observations. Complete raw DAG/business
+round-trips are checked against the untouched original unops, invalid-bool and
+const-addrs exports. Their shared IDs and source data are unchanged; adapted
+files have no fabricated reference sidecars.
+
+| unops trial | Baseline wall / CPU / steal | Positional wall / CPU / steal |
+| --- | --- | --- |
+| 1 | 45.317 / 45.276 / 0.290 | 45.160 / 44.948 / 0.160 |
+| 2 | 45.118 / 45.017 / 0.470 | 46.150 / 45.888 / 0.350 |
+
+Baseline median/range is 45.217 / 45.118–45.317 seconds; prototype median/range
+is 45.655 / 45.160–46.150 seconds. No speedup is established. Prototype loading
+of the unchanged legacy format takes 44.909 wall / 44.877 CPU seconds in one
+control observation, not a separate speedup claim. Peak unops RSS is about
+3.91 GB versus 3.90 GB; the small difference is not a memory-performance claim.
+The typed predecoder adds about 130 ms and ABI preparation was already a small,
+cached part of the roughly 45-second cold run. These timings have no overlapping
+builds/tests and zero throttling deltas.
+
+A fresh same-source/flags pipeline pair separately uses real exporters and
+unaltered fingerprint-bound Miri references with seed 0 and an empty guest
+environment. Total measured export/reference/native wall is 125.317 → 120.760
+seconds. It is one pair with different fresh compiler query ordering and no
+spread estimate; it does not override the repeated native comparison or justify
+an ABI-specific speedup claim. Both independent source oracles accept exit zero,
+and consumed tapes, events and terminal results match exactly. The adapted UB
+control retains invalidBool 2 at original source line 3 and the exact original
+replay; it is an adapter parity check rather than a fresh negative Miri run.
+
+Validation: `tools/check-typed-abi.sh` passes both retained fixtures, all decoded
+ABI field comparisons, malformed transport/reference/scalar tests, missing Cast
+fields, malformed layout and dangling-type ordered-diagnostic parity. Native
+comparison also checks every field of all 9,819 unops ABI values. Python raw-DAG
+round-trips pass for all three large adapted snapshots; nine Python wire tests
+and the Rust producer transport test pass. The legacy cached/reference decoder
+suite, 88 quick/integrity tests and the Miri library build pass. The axiom audit
+covers 71,279 Miri declarations and permits only propext, Quot.sound and
+Classical.choice. The full MiriTests build, all 300 example modules and full
+809-case sweep have not been rerun for this unadopted prototype. No example
+source or final NoUB target/premise changes are introduced.
+
+The broader typed-input idea remains untested for MIR bodies and type/compiler
+information. ABI headers alone are too small a target to establish the further
+half-time goal. Reproduction tools and frozen artifacts/counters/oracle checks
+are under ignored `scratch/perf-typed-abi/`; the QA adapter is explicitly not a
+fresh producer or source of Miri reference evidence.
+
 ## Feature support outside the current acceptance scope
 
 The following support and integration work remains in the backlog, even though

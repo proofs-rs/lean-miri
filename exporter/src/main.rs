@@ -14,6 +14,7 @@ mod named_constants;
 mod named_statics;
 mod native_signature_queries;
 mod payload_sharing;
+mod typed_abi;
 mod panic_queries;
 mod producer;
 mod projection_queries;
@@ -1818,6 +1819,12 @@ impl Callbacks for ExportCallbacks {
         if let Err(error) = sharing_result {
             self.export_error = Some(error);
             return Compilation::Stop;
+        }
+        if env::var_os("LEAN_MIRI_TYPED_ABI").as_deref() == Some(std::ffi::OsStr::new("1")) {
+            if let Err(error) = typed_abi::pack(&mut document) {
+                self.export_error = Some(error);
+                return Compilation::Stop;
+            }
         }
         if let Err(error) = vtable_diagnostics::write_report(vtable_diagnostics, &document) {
             self.export_error = Some(error);

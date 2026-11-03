@@ -27,6 +27,57 @@ class MirJSONError(ValueError):
     """Malformed or unsupported current MIR JSON document."""
 
 
+def unpack_typed_abi_nodes(nodes: list[Any], catalog: dict[str, Any]) -> list[Any]:
+    """Normalize only typed ABI headers, retaining all original DAG edges/IDs."""
+    arg_marker, abi_marker = "$lean_miri_abi_arg", "$lean_miri_fn_abi"
+    if "typed_abi_version" in catalog:
+        version = catalog["typed_abi_version"]
+        if isinstance(version, bool) or version != 1:
+            raise MirJSONError("shared_payloads.typed_abi_version must be 1")
+        nodes = list(nodes)
+        arguments: set[int] = set()
+        vectors: set[int] = set()
+
+        def natural(value: Any) -> bool:
+            return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+        def arg_reference(value: Any) -> bool:
+            return (isinstance(value, dict) and set(value) == {SHARED_REF_FIELD}
+                    and natural(value[SHARED_REF_FIELD]) and value[SHARED_REF_FIELD] in arguments)
+
+        for index, node in enumerate(nodes):
+            if isinstance(node, dict) and (arg_marker in node or abi_marker in node):
+                marker = arg_marker if arg_marker in node else abi_marker
+                values = node[marker]
+                if set(node) != {marker} or not isinstance(values, list):
+                    raise MirJSONError(f"typed ABI node {index}: malformed record")
+                if marker == arg_marker:
+                    if len(values) != 3 or not natural(values[0]):
+                        raise MirJSONError(f"typed ABI node {index}: invalid argument slots")
+                    nodes[index] = {"type": {"type_id": values[0]}, "layout": values[1], "mode": values[2]}
+                    arguments.add(index)
+                else:
+                    if len(values) != 6:
+                        raise MirJSONError(f"typed ABI node {index}: invalid function slots")
+                    vector, returned, convention, unwind, variadic, fixed = values
+                    if (vector is not None and (not natural(vector) or vector not in vectors)) or (
+                        not natural(returned) or returned not in arguments
+                        or not isinstance(unwind, bool) or not isinstance(variadic, bool)
+                        or not natural(fixed)
+                    ):
+                        raise MirJSONError(f"typed ABI node {index}: invalid function references or scalars")
+                    nodes[index] = {"arguments": [] if vector is None else {SHARED_REF_FIELD: vector},
+                        "return": {SHARED_REF_FIELD: returned}, "calling_convention": convention,
+                        "can_unwind": unwind, "c_variadic": variadic, "fixed_count": fixed}
+            elif isinstance(node, list) and all(arg_reference(child) for child in node):
+                vectors.add(index)
+            elif isinstance(node, dict) and set(node) == {SHARED_REF_FIELD} and (
+                natural(node[SHARED_REF_FIELD]) and node[SHARED_REF_FIELD] in vectors
+            ):
+                vectors.add(index)
+    return nodes
+
+
 def decode_mir_document(document: Any) -> dict[str, Any]:
     """Validate and expand one current MIR shared-payload graph document."""
     if not isinstance(document, dict):
@@ -41,8 +92,10 @@ def decode_mir_document(document: Any) -> dict[str, Any]:
     catalog = document.get(SHARED_PAYLOADS_FIELD)
     if not isinstance(catalog, dict):
         raise MirJSONError("current MIR document must contain a shared_payloads graph")
-    if set(catalog) not in ({"schema_version", "nodes"}, {"schema_version", "nodes", "scan_flags"}):
-        raise MirJSONError("shared_payloads must contain only schema_version and nodes, with optional scan_flags")
+    if not {"schema_version", "nodes"} <= set(catalog) or not set(catalog) <= {
+        "schema_version", "nodes", "scan_flags", "typed_abi_version"
+    }:
+        raise MirJSONError("shared_payloads must contain only schema_version and nodes, with optional prepared metadata")
     if catalog.get("schema_version") != SHARED_PAYLOADS_SCHEMA_VERSION:
         raise MirJSONError(
             f"shared_payloads schema_version must be {SHARED_PAYLOADS_SCHEMA_VERSION}"
@@ -59,6 +112,9 @@ def decode_mir_document(document: Any) -> dict[str, Any]:
     ):
         raise MirJSONError("shared_payloads.scan_flags must contain one four-bit integer per node")
 
+    arg_marker, abi_marker = "$lean_miri_abi_arg", "$lean_miri_fn_abi"
+    nodes = unpack_typed_abi_nodes(nodes, catalog)
+
     cache: dict[int, Any] = {}
 
     def expand(value: Any, *, parent_node: int | None, active: set[int]) -> Any:
@@ -66,6 +122,8 @@ def decode_mir_document(document: Any) -> dict[str, Any]:
             return [expand(child, parent_node=parent_node, active=active) for child in value]
         if not isinstance(value, dict):
             return value
+        if arg_marker in value or abi_marker in value:
+            raise MirJSONError("typed ABI marker requires versioned catalog node root")
 
         if SHARED_REF_FIELD in value:
             if set(value) != {SHARED_REF_FIELD}:

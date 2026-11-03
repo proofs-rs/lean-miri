@@ -176,8 +176,15 @@ private def buildRoot (input : Json) (resolved : SharedPayloads.ResolvedGraph) :
   if rawNodes.size != resolved.nodes.size then return ← none
   let mut available := #[]
   let mut flags := ByteArray.empty
+  let typed := !resolved.typedAbi.arguments.isEmpty
   for index in [:rawNodes.size] do
-    let node ← buildNode available (← rawNodes[index]?) (← resolved.nodes[index]?)
+    let raw ← rawNodes[index]?
+    let raw ← match (if typed && AbiWire.hasMarker raw then
+        AbiWire.parse raw s!"$.shared_payloads.nodes[{index}]" else .ok none) with
+      | .error _ => none
+      | .ok (some record) => some record.toRawJson
+      | .ok none => some raw
+    let node ← buildNode available raw (← resolved.nodes[index]?)
     available := available.push (node.withId index)
     flags := flags.push node.key.interests
   let .obj fields := input | return ← none

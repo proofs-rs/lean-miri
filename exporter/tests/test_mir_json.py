@@ -23,6 +23,27 @@ def document(nodes, payload, **root):
 
 
 class MirJSONTests(unittest.TestCase):
+    def test_typed_abi_headers_preserve_business_document_and_validate_ids(self):
+        arg = {"type": {"type_id": 7}, "layout": {"status": "unsupported"}, "mode": {"kind": "Ignore"}}
+        abi = {"arguments": {REF: 1}, "return": {REF: 0}, "calling_convention": {"kind": "Rust"},
+               "can_unwind": False, "c_variadic": False, "fixed_count": 1}
+        ordinary = document([arg, [{REF: 0}], abi], {REF: 2})
+        typed = document([{"$lean_miri_abi_arg": [7, arg["layout"], arg["mode"]]},
+                          [{REF: 0}], {"$lean_miri_fn_abi": [1, 0, abi["calling_convention"], False, False, 1]}], {REF: 2})
+        typed["shared_payloads"]["typed_abi_version"] = 1
+        self.assertEqual(decode_mir_document(ordinary), decode_mir_document(typed))
+        typed["shared_payloads"]["scan_flags"] = [1, 1, 5]
+        self.assertEqual(decode_mir_document(ordinary), decode_mir_document(typed))
+        for slot, value in [(0, 2), (1, 1), (1, -1), (3, 0), (4, "false"), (5, True)]:
+            import copy
+            bad = copy.deepcopy(typed)
+            bad["shared_payloads"]["nodes"][2]["$lean_miri_fn_abi"][slot] = value
+            with self.assertRaisesRegex(MirJSONError, "typed ABI"):
+                decode_mir_document(bad)
+        typed["shared_payloads"].pop("typed_abi_version")
+        with self.assertRaisesRegex(MirJSONError, "typed ABI"):
+            decode_mir_document(typed)
+
     def test_prepared_scan_flags_are_checked_against_all_nodes(self):
         encoded = document([{"type_id": 7}, [{REF: 0}], {"locals": []}], {REF: 1})
         expected = decode_mir_document(encoded)

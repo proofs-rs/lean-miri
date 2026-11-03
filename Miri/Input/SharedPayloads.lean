@@ -1,4 +1,5 @@
 import Lean
+import Miri.Input.AbiWire
 
 /-! Shared JSON payload graph transport. Nodes are resolved once in topological
 order, and resolved Json values are reused directly at every reference site. -/
@@ -37,6 +38,7 @@ structure ResolvedGraph where
   /-- Optional producer summaries. They must be checked against the real graph
   before any decoder uses them to prune a traversal. -/
   scanFlags : Option ByteArray := none
+  typedAbi : AbiWire.Table := {}
   deriving Inhabited
 
 private def parseReference (value : Json) (path : String) : Except String Nat := do
@@ -50,6 +52,8 @@ private partial def resolveValue (available : Array Json) (totalCount limit : Na
     (value : Json) (path : String) : Except String (Option Json) := do
   match value with
   | .obj fields =>
+    if AbiWire.hasMarker value then
+      throw s!"{path}: typed ABI record is only permitted at a catalog node root"
     if (value.getObjVal? markerKey).isOk then
       let index ← parseReference value path
       if index >= available.size then
@@ -87,15 +91,20 @@ private partial def resolveValue (available : Array Json) (totalCount limit : Na
     if changed then pure (some (.arr resolved)) else pure none
   | _ => pure none
 
-private def parseCatalog (catalog : Json) : Except String (Array Json × Option ByteArray) := do
+private def parseCatalog (catalog : Json) : Except String (Array Json × Option ByteArray × Bool) := do
   let withFlags := (catalog.getObjVal? "scan_flags").isOk
   let names := if withFlags then ["schema_version", "nodes", "scan_flags"] else ["schema_version", "nodes"]
+  let typed := (catalog.getObjVal? "typed_abi_version").isOk
+  let names := if typed then names ++ ["typed_abi_version"] else names
   let _ ← exactObjectFields catalog names "$.shared_payloads" "catalog"
   let version ← field catalog "schema_version" "$.shared_payloads"
   let version ← version.getNat? |>.mapError fun error =>
     s!"$.shared_payloads.schema_version: expected unsigned integer ({error})"
   unless version == 2 do
     throw "$.shared_payloads.schema_version: unsupported shared-payload schema version (expected 2)"
+  if typed then
+    unless ((← field catalog "typed_abi_version" "$.shared_payloads").getNat?).toOption == some 1 do
+      throw "$.shared_payloads.typed_abi_version: expected 1"
   let nodesValue ← field catalog "nodes" "$.shared_payloads"
   let nodes ← nodesValue.getArr? |>.mapError fun error =>
     s!"$.shared_payloads.nodes: expected array ({error})"
@@ -113,7 +122,7 @@ private def parseCatalog (catalog : Json) : Except String (Array Json × Option 
         flags := flags.push (UInt8.ofNat flag)
       pure (some flags)
     else pure none
-  pure (nodes, flags)
+  pure (nodes, flags, typed)
 
 /-- Resolve the mandatory v2 shared-payload graph and strip its transport field.
 Every node is resolved exactly once in array order; node references can only
@@ -125,12 +134,41 @@ def resolveGraph (document : Json) : Except String ResolvedGraph := do
     throw "$: a shared reference cannot occupy the document root"
   let some catalog := (document.getObjVal? "shared_payloads").toOption
     | throw "$.shared_payloads: missing mandatory shared-payload graph"
-  let (rawNodes, scanFlags) ← parseCatalog catalog
+  let (rawNodes, scanFlags, typed) ← parseCatalog catalog
   let mut nodes := #[]
+  let mut abi : AbiWire.Table := {}
   for (node, index) in rawNodes.toList.zipIdx do
     let nodePath := s!"$.shared_payloads.nodes[{index}]"
-    let resolved ← resolveValue nodes rawNodes.size index node nodePath
-    nodes := nodes.push (resolved.getD node)
+    let record ← if typed then AbiWire.parse node nodePath else pure none
+    match record with
+    | some (.argument arg) =>
+      let layout ← resolveValue nodes rawNodes.size index arg.layout s!"{nodePath}.layout"
+      let mode ← resolveValue nodes rawNodes.size index arg.mode s!"{nodePath}.mode"
+      let arg := { arg with layout := layout.getD arg.layout, mode := mode.getD arg.mode }
+      nodes := nodes.push arg.toJson
+      abi := { abi with arguments := abi.arguments.insert index arg }
+    | some (.function fn) =>
+      let arguments ← match fn.argumentVector with
+        | none => pure (.arr #[])
+        | some id =>
+          unless id < index && abi.vectors.contains id do
+            throw s!"{nodePath}: function ABI argument vector is absent or not earlier"
+          match nodes[id]? with
+          | some value => pure value
+          | none => throw s!"{nodePath}: function ABI argument vector is absent"
+      unless fn.returnId < index && abi.arguments.contains fn.returnId do
+        throw s!"{nodePath}: function ABI return argument is absent or not earlier"
+      let some returned := nodes[fn.returnId]? | throw s!"{nodePath}: ABI return is absent"
+      let convention ← resolveValue nodes rawNodes.size index fn.convention s!"{nodePath}.calling_convention"
+      let fn := { fn with convention := convention.getD fn.convention }
+      nodes := nodes.push (fn.toJson arguments returned)
+      abi := { abi with functions := abi.functions.push fn }
+    | none =>
+      let resolved ← resolveValue nodes rawNodes.size index node nodePath
+      nodes := nodes.push (resolved.getD node)
+      if typed then
+        if let some ids := AbiWire.argumentVector? abi node then
+          abi := { abi with vectors := abi.vectors.insert index ids }
   let mut rootFields := #[]
   for (key, value) in fields do
     if key == "shared_payloads" then continue
@@ -141,6 +179,7 @@ def resolveGraph (document : Json) : Except String ResolvedGraph := do
     root := Json.mkObj rootFields.toList
     nodeResolutionCount := nodes.size
     scanFlags := scanFlags
+    typedAbi := abi
   }
 
 /-- Resolve a shared graph, returning only its business document for decoder
