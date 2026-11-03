@@ -135,6 +135,18 @@ budget of OPEN exploration does not resolve the proofs above.
 
 ### Automated regression scope
 
+Run [41454462879](https://github.com/proofs-rs/lean-miri/actions/runs/41454462879)
+on `59f65b93` failed all three regression lanes while elaborating the untyped
+`#eval do` assertions in `MiriTests/Rvalue/Rvalue.lean` (`MonadExcept IO.Error
+CommandElabM` instance failures). Explicit `IO Unit` result types fix the local
+reproduction without changing the assertions or interpreter. The focused module
+build and all 22 assertions pass; a deliberately mismatched trace is rejected.
+`bash tools/check-build.sh` passed 707 build jobs, 47 registered runtime checks
+and the 70,784-declaration axiom audit (only the three permitted axioms).
+`bash tools/check-connected-proofs.sh` and all 15 CI-runner Python tests also
+passed. The complete three-lane comparisons/replays were not rerun locally;
+a successful hosted three-lane rerun is still required.
+
 Run [40192012725](https://github.com/proofs-rs/lean-miri/actions/runs/40192012725)
 on `3d55eace` stopped the broad regression suite at
 `tests/memory_state/run_lifecycle_differential.sh` because the hosted runner

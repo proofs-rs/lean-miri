@@ -51,35 +51,35 @@ private def hooks : RvalueHooks Unit Trace Unit Unit := {
 private def trace (value : MIR.Rvalue) : Trace :=
   (runRvalue (evalRvalueIntoPlace hooks () value place) []).1
 
-#eval do
+#eval show IO Unit from do
   unless (trace (.BinaryOp .Add operand operand) =
     ["place:true", "operand:true", "readImmediate", "operand:true", "readImmediate", "binary", "writeImmediate"]) do throw (IO.userError "runtime assertion failed")
-#eval do
+#eval show IO Unit from do
   unless (trace (.Use operand .Yes) =
     ["place:true", "operand:true", "mode:Miri.TreeBorrows.RetagPolicy.RetagMode.Default", "copy", "restoreMode"]) do throw (IO.userError "runtime assertion failed")
-#eval do
+#eval show IO Unit from do
   unless (trace (.CopyForDeref place) == ["place:true"]) do throw (IO.userError "runtime assertion failed")
-#eval do
+#eval show IO Unit from do
   unless (trace (.RawPtr .Const place) == ["place:true", "baseRaw", "place:false", "forceAllocation"]) do throw (IO.userError "runtime assertion failed")
-#eval do
+#eval show IO Unit from do
   unless (trace (.Reborrow 0 .Not place) == ["place:true", "placeToOp", "transmuteCopy"]) do throw (IO.userError "runtime assertion failed")
-#eval do
+#eval show IO Unit from do
   unless (trace (.WrapUnsafeBinder operand 0) == ["place:true", "operand:false", "transmuteCopy"]) do throw (IO.userError "runtime assertion failed")
-#eval do
+#eval show IO Unit from do
   unless (trace (.ThreadLocalRef 0) == ["place:true", "threadLocalPointer"]) do throw (IO.userError "runtime assertion failed")
-#eval do
+#eval show IO Unit from do
   unless (trace (.Aggregate .Tuple #[]) == ["place:true", "aggregate"]) do throw (IO.userError "runtime assertion failed")
-#eval do
+#eval show IO Unit from do
   unless ((runRvalue (evalRvalueIntoPlace hooks () (.ThreadLocalRef 0) place) []).2 =
     Except.error (StepError.unsupported "threadLocalPointer")) do throw (IO.userError "runtime assertion failed")
 
-#eval do
+#eval show IO Unit from do
   unless (trace (.UnaryOp .Neg operand) =
     ["place:true", "operand:true", "readImmediate", "unary", "writeImmediate"]) do throw (IO.userError "runtime assertion failed")
-#eval do
+#eval show IO Unit from do
   unless (trace (.Discriminant place) =
     ["place:true", "placeToOp", "readDiscriminant"]) do throw (IO.userError "runtime assertion failed")
-#eval do
+#eval show IO Unit from do
   unless (trace (.Ref .Erased .Shared place) =
     ["place:true", "place:true", "forceAllocation"]) do throw (IO.userError "runtime assertion failed")
 
@@ -91,36 +91,36 @@ private def allocated : RvalueHooks Unit Trace Unit Unit := {
   retagPtrValue := fun _ _ _ => log "retag" (some imm) }
 private def allocatedTrace (value : MIR.Rvalue) : Trace :=
   (runRvalue (evalRvalueIntoPlace allocated () value place) []).1
-#eval do
+#eval show IO Unit from do
   unless (allocatedTrace (.Ref .Erased (.Mut .TwoPhaseBorrow) place) =
     ["place:true", "place:true", "forceAllocation", "toRef", "mode:Miri.TreeBorrows.RetagPolicy.RetagMode.TwoPhase", "enforceValidity", "retag", "writeImmediate", "restoreMode"]) do throw (IO.userError "runtime assertion failed")
-#eval do
+#eval show IO Unit from do
   unless (allocatedTrace (.RawPtr .Const place) =
     ["place:true", "baseRaw", "place:false", "forceAllocation", "toRef", "writeImmediate"]) do throw (IO.userError "runtime assertion failed")
 private def freshRaw : RvalueHooks Unit Trace Unit Unit := {
   allocated with placeBaseRaw := fun _ _ => log "baseRaw" false }
-#eval do
+#eval show IO Unit from do
   unless ((runRvalue (evalRvalueIntoPlace freshRaw () (.RawPtr .Const place) place) []).1 =
     ["place:true", "baseRaw", "place:false", "forceAllocation", "toRef", "mode:Miri.TreeBorrows.RetagPolicy.RetagMode.Raw", "retag", "restoreMode", "writeImmediate"]) do throw (IO.userError "runtime assertion failed")
-#eval do
+#eval show IO Unit from do
   unless ((runRvalue (evalRvalueIntoPlace freshRaw () (.RawPtr .FakeForPtrMetadata place) place) []).1 =
     ["place:true", "baseRaw", "place:false", "forceAllocation", "toRef", "writeImmediate"]) do throw (IO.userError "runtime assertion failed")
-#eval do
+#eval show IO Unit from do
   unless (trace (.Cast .IntToInt operand 0) =
     ["place:true", "operand:false", "normalize", "cast"]) do throw (IO.userError "runtime assertion failed")
-#eval do
+#eval show IO Unit from do
   unless (trace (.Repeat operand .Error) == ["place:true", "repeat"]) do throw (IO.userError "runtime assertion failed")
-#eval do
+#eval show IO Unit from do
   unless (trace (.BinaryOp .Eq operand operand) =
     ["place:true", "operand:false", "readImmediate", "operand:true", "readImmediate", "binary", "writeImmediate"]) do throw (IO.userError "runtime assertion failed")
-#eval do
+#eval show IO Unit from do
   unless (trace (.BinaryOp .Shl operand operand) =
     ["place:true", "operand:true", "readImmediate", "operand:false", "readImmediate", "binary", "writeImmediate"]) do throw (IO.userError "runtime assertion failed")
 private def mismatch : RvalueHooks Unit Trace Unit Unit := {
   hooks with binaryOp := fun _ _ _ _ => log "binary" { imm with layout := { layout with ty := 1 } } }
-#eval do
+#eval show IO Unit from do
   unless ((runRvalue (evalRvalueIntoPlace mismatch () (.BinaryOp .Add operand operand) place) []).2 =
     Except.error (StepError.invalidProgram "rvalue result layout mismatch")) do throw (IO.userError "runtime assertion failed")
-#eval do
+#eval show IO Unit from do
   unless ((runRvalue (evalRvalueIntoPlace mismatch () (.BinaryOp .Add operand operand) place) []).1 =
     ["place:true", "operand:true", "readImmediate", "operand:true", "readImmediate", "binary"]) do throw (IO.userError "runtime assertion failed")

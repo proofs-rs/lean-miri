@@ -3,7 +3,6 @@ name: Miri API documentation
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -45,7 +44,7 @@ jobs:
           path: docbuild/.lake/build/doc
 
   deploy:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-24.04
     permissions:
