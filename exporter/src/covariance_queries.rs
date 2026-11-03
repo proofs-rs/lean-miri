@@ -66,8 +66,18 @@ pub(super) fn export<'tcx>(tcx:TyCtxt<'tcx>,context:&mut ExportContext<'tcx>)->V
     }
     profile.mark("covariance.vtable_pairs");
     if profile.0.is_some() { eprintln!("covariance_profile: groups={} pairs_before_dedup={}", groups.len(), pairs.len()); }
-    pairs.sort_by_key(|(source,target)|(
-        format!("{source:?}"),format!("{target:?}")));
+    // Diagnostic oracle uses the very same TyCtxt and input order. Keep it
+    // outside timed trials: the original comparison sort is intentionally slow.
+    let reference_order = if env::var_os("LEAN_MIRI_VERIFY_COVARIANCE_SORT").is_some() {
+        let mut reference = pairs.clone();
+        reference.sort_by_key(|(source,target)| (format!("{source:?}"),format!("{target:?}")));
+        Some(reference)
+    } else { None };
+    let reused = context.covariance_sort.sort(&mut pairs, |ty| format!("{ty:?}"));
+    if let Some(reference) = reference_order {
+        assert_eq!(pairs, reference, "cached covariance ordering differs from the legacy sort");
+    }
+    if profile.0.is_some() { eprintln!("covariance_profile: reused_debug_ranks={reused}"); }
     pairs.dedup();
     profile.mark("covariance.debug_sort_dedup");
     if profile.0.is_some() { eprintln!("covariance_profile: pairs_after_dedup={}", pairs.len()); }

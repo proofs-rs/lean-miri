@@ -3,6 +3,7 @@
 mod cast_queries;
 mod allocator_world;
 mod covariance_queries;
+mod covariance_sort;
 mod foreign_symbols;
 mod generated_call_queries;
 mod global_byte_queries;
@@ -146,6 +147,7 @@ struct ExportContext<'tcx> {
     /// rustc's `mir_assign_valid_types`, even when their normalized types do
     /// not share the finite identity-group query domain.
     covariance_query_requests: HashSet<(ty::Ty<'tcx>, ty::Ty<'tcx>)>,
+    covariance_sort: covariance_sort::Cache<ty::Ty<'tcx>>,
     cast_box_requests: HashSet<ty::Ty<'tcx>>,
     fn_pointer_abi_requests: HashSet<(ty::Ty<'tcx>, &'tcx ty::List<ty::Ty<'tcx>>)>,
     /// Concrete candidates produced by function allocations referenced in

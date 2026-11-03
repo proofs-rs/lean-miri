@@ -996,7 +996,8 @@ sorting/deduplication, versus 0.292 seconds constructing its result rows and
 round has 17,273 normalized groups and 32,553 pairs before / 32,478 after dedup.
 `sort_by_key` repeatedly formats both deep types during comparisons; this is
 not primarily the actual rustc relation query. Caching sort keys and avoiding re-sorting unchanged pairs
-is the first local optimization candidate. Its realized gain is not measured.
+was the first local optimization candidate; the later measurements below
+implement it.
 
 Native measurements use the same frozen `7fb2fa62` runner and unchanged
 fingerprint-bound input from the preceding exporter change, CPU 2 and one Lean
@@ -1043,6 +1044,55 @@ unops replay and the original const control retain exact complete tapes, events
 and terminal output against their preceding frozen-runner observations.
 Raw profiles, counters, frozen artifacts and source/reference bindings are in
 ignored `scratch/perf-bottleneck/`.
+
+### Cached covariance ordering
+
+The covariance exporter now caches each immutable compiler type's debug string
+within one `ExportContext`. A stable cached-key sort formats each key once;
+known pairs reuse integer ranks from the previous textual ordering. Equal debug
+keys share a rank, preserving incoming tie order and the original adjacent
+pair deduplication. New keys rebuild the entire rank domain to prevent stale
+ranks after insertions/removals. The pair domain, compiler relation calls,
+result rows and subsequent type-ID sort are unchanged. No relation answers,
+unsupported outcomes or compiler demands are cached or skipped.
+
+A separate `LEAN_MIRI_VERIFY_COVARIANCE_SORT=1` original-unops export compares
+the complete pre-dedup pair sequence with the old sort in the very same TyCtxt
+in all seven rounds. It passes, including reuse on the last round. This
+43.730-second oracle run deliberately performs both sorts and is excluded
+from performance trials. Two unit tests cover changing domains, subsets,
+insertions, duplicate pairs and distinct identities with equal textual keys,
+including 100 generated waves compared with the prior stable sort.
+
+Final measurements use frozen old/new exporters, identical original unops
+source/rustc flags, CPU 2, one Lean thread, seed 0 and empty guest environment.
+Trials are sequential old→new twice, without overlapping builds/tests.
+
+| Export + same-TyCtxt Miri reference | Old | Cached ordering |
+| --- | ---: | ---: |
+| Wall, seconds | 42.795 / 42.601 | 27.338 / 27.334 |
+| CPU, seconds | 42.627 / 42.573 | 27.189 / 27.286 |
+| Peak sampled process-group RSS, decimal GB | 4.931 / 4.931 | 4.931 / 4.931 |
+| Selected CPU steal, seconds | 0.34 / 0.27 | 0.15 / 0.21 |
+| Debug sort/dedup, seconds | 14.820 / 14.765 | 0.048 / 0.050 |
+| Complete covariance catalog, seconds | 15.220 / 15.168 | 0.425 / 0.435 |
+
+Cgroup CPU throttling deltas are zero. Mean export/reference wall time falls
+about 36% in these shared-host observations. The first pair also runs the
+unchanged native executable on each fresh export: 45.601→44.599 seconds, with
+no native interpreter speedup claimed. Export+execution phase sums are
+88.396→71.937 seconds, about 19% shorter in this single full-pipeline pair.
+Full tapes, choice events and terminal observations agree exactly, ending
+exit zero. Every timed export and the oracle export have independent pinned,
+fingerprint-bound references; original source and artifact hashes are recorded
+in ignored `scratch/perf-covariance/` with raw wall/CPU/RSS/steal/throttle data.
+
+Validation passed: 15 Rust unit tests, all nine exporter integration entry
+points, ordinary pinned Cargo check and quick/integrity checks (88 Python
+tests). Lean runtime/example sources, JSON schema and saved fixtures are
+unchanged; no full Lean proof/axiom audit or 809-candidate UI sweep was rerun.
+The full-pipeline half-time goal remains open. Final structural sharing and
+Lean decoding/lowering/preparation are the remaining common bottlenecks.
 
 ## Feature support outside the current acceptance scope
 

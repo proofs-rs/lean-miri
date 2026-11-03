@@ -145,3 +145,12 @@ and process shutdown are outside its sum. Measure total wall/CPU/RSS/steal and
 throttling separately. Keep profiling artifacts frozen, serialize builds and
 trials, verify each fresh snapshot's independent reference and binding, and
 compare complete native outcomes separately from phase attribution.
+
+Covariance ordering caches each type's debug key within one `ExportContext`.
+Known type pairs reuse ranks from the previous textual ordering; equal textual
+keys share one rank, so stable tie order and adjacent deduplication remain exact.
+The profile reports `reused_debug_ranks`. For an independent same-TyCtxt check,
+set `LEAN_MIRI_VERIFY_COVARIANCE_SORT=1`: each round additionally runs the old
+comparison sort and asserts equality of the entire pair sequence before dedup
+and type-ID assignment. This diagnostic deliberately restores the old cost;
+omit it from performance trials. The optimization itself is enabled normally.
