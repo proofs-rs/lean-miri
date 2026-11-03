@@ -199,3 +199,38 @@ after another specialization, so use its callers and source code before
 attributing ownership. Do not sum cumulative percentages or convert them into
 an assumed removable wall time. Sampling overhead and shared-host variation
 require separate verification of any subsequent optimization.
+
+## Full Rust-source-to-result scope
+
+Frozen-exporter/native timings and their sum exclude the public wrappers'
+build checks. They must not be labeled complete user-entry latency. For the
+normal Rust source path, include `build-exporter.sh`, `export-mir.sh`, and
+`run.sh` through the final result and process exit. Record rebuild-needed and
+cache-valid invocations separately; `run.sh` invokes Lake before executing the
+runner, even though the generic runner is independent of each Rust program.
+Toolchain/sysroot installation is a separate prerequisite and must be named if
+included. Do not substitute a seeded UI run or independent Miri comparison for
+the normal source invocation without reporting that configuration difference.
+
+The existing nested timing helper can record the public commands together:
+
+```bash
+mkdir -p scratch/source-timing
+export CI_TIMING_FILE="$PWD/scratch/source-timing/steps.jsonl" LEAN_NUM_THREADS=1
+python3 tools/ci/time_command.py source-to-result -- bash -ec '
+  source tools/ci/timing.sh
+  ci_step build:exporter bash tools/build-exporter.sh
+  ci_step source:export env -u LEAN_MIRI_RUN_PREPARED_MIRI \
+    LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1 bash tools/export-mir.sh \
+    --output scratch/source-timing/unops.json --root main -- \
+    upstream/miri-source/tests/pass/unops.rs --crate-name unops --edition=2021
+  ci_step source:run bash tools/run.sh scratch/source-timing/unops.json
+'
+```
+
+Inspect the terminal outcome, not only process exit. For finer boundaries,
+record the first `choice_mode=` line after `run.sh` starts (build/load gate),
+then decode/lower/prepare boundaries, `run: finalized_exit` and the final
+`upstream_result:` line. Keep the remaining output/teardown time in the total.
+Repeat the exact commands after the build cache becomes valid; do not delete
+caches or skip a required rebuild merely to obtain a shorter total.

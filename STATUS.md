@@ -1169,6 +1169,61 @@ Caller samples are truncated and cumulative percentages overlap; generic helper
 names can be aliases after identical-code folding. The observations identify
 candidates, not measured speedups or a guarantee for other guests.
 
+### Public Rust-source-to-result accounting
+
+The user clarified the performance boundary as Rust input → lean-miri result,
+not a frozen executable phase or a UI-harness run. Earlier approximately
+72-second figures sum prebuilt export/native phases; they omit the public entry
+build checks and are not a measured complete user invocation. Their UI seed,
+compiler flags and reference-generation settings also differ from normal use.
+
+The original unops Rust file was measured through the actual public commands:
+`build-exporter.sh` (ordinary features), `export-mir.sh --root main` with the
+prepared AllocId world, and `run.sh` with no seed/UI/profile override or Miri
+reference generation. Pinned toolchains and MIR sysroot were already installed;
+their installation/download time is excluded. The first observation required
+rebuilding the generic Lean runner (1122 Lake jobs); the second repeats exactly
+the same commands with valid build caches. These are environment observations,
+not a paired optimization benchmark: affinity is inherited (not fixed to CPU 2),
+Lean threads are one, and there is no implementation change.
+
+| Public source-entry stage | Rebuild needed, seconds | Build cache valid, seconds |
+| --- | ---: | ---: |
+| Exporter build/check | 11.864 | 0.041 |
+| Rust → exported MIR | 27.770 | 30.042 |
+| Runner build/check/load before first native marker | 296.658 | 0.804 |
+| Read/strict decode | 26.082 | 26.263 |
+| MIR lowering | 4.414 | 4.583 |
+| Provider/runtime preparation | 10.294 | 10.288 |
+| Remaining startup, execution, final result and teardown | 3.718 | 3.735 |
+| Complete entry through process exit | 380.803 | 75.760 |
+
+The first human-readable finalized-exit observation arrives at 379.119 /
+74.046 seconds from entry; the structured result arrives at 380.796 / 75.753.
+Totals include the final-result/output tail rather than stopping at guest exit.
+Cumulative child CPU is 423.471 / 75.697 seconds (the build may use parallel
+workers despite one Lean thread); peak process-group RSS 4.954 / 4.928 GB.
+Selected-CPU-2 steal is 1.70 / 0.01 seconds, not a correction for all inherited
+CPUs; cgroup throttling is 0.004645 / 0 seconds.
+
+Both invocations pass strict readiness and finalize exit zero, with exactly
+matching complete default-mode choice tapes/events (1361 choices). The rebuilt
+runner's SHA256 equals frozen `7fb2fa62`, confirming that previously compiled
+entry results remain semantically relevant while their build time was omitted.
+Sources are unchanged; raw commands, boundaries, build logs, hashes and resource
+counters are under ignored `scratch/perf-whole/`. An earlier aborted profiling
+wrapper attempt is separate and is not included in either successful total.
+
+The whole-source target must now be evaluated at this public boundary, reporting
+cache state. Rebuild-needed latency is dominated by compiling the library runner;
+cache-valid latency is dominated by exporting MIR (~30 seconds) and reading,
+lowering and preparing it (~41 seconds). A Rust-program-specific Lean build is
+not required by this JSON/native path. The existing cache already reuses the
+generic runner; blindly bypassing a stale build would risk running old semantics.
+No new speedup is claimed, and the half-time goal remains open for the complete
+source-to-result path. Runtime, exporter and proof sources were not modified by
+this scope correction; no full UI sweep or proof/axiom audit was rerun.
+
 ## Feature support outside the current acceptance scope
 
 The following support and integration work remains in the backlog, even though
