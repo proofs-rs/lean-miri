@@ -2783,6 +2783,43 @@ def parseFunctionAbi (j : Json) (path : String) (memo : DecodeMemo := {}) : Exce
   | some abi => pure abi
   | none => parseFunctionAbiUncached j path memo
 
+/-- Directly materialize positional transport records. Only successful checked
+results enter the ordinary source-keyed memo; failures fall through to the
+canonical parser at their original occurrence and preserve its error ordering.
+Keys are reconstructed from the very fields used to build each typed value, so
+even a table from another document cannot install an unrelated source result. -/
+def prepareTypedAbiMemo (table : AbiWire.Table) (base : DecodeMemo) : DecodeMemo := Id.run do
+  if table.functions.isEmpty then return base
+  let mut args : Std.HashMap Nat AbiArgument := {}
+  for (id, arg) in table.arguments do
+    let decoded : Except String AbiArgument := do
+      return {
+        typeId := arg.typeId
+        layout := some (← parseLayout arg.layout "$typed_abi.layout" base)
+        mode := ← parseAbiPassMode arg.mode "$typed_abi.mode"
+        payload := arg.toJson
+      }
+    if let .ok value := decoded then args := args.insert id value
+  let mut memo := base
+  for fn in table.functions do
+    let decoded : Except String FunctionAbi := do
+      let ids ← match fn.argumentVector with
+        | none => pure #[]
+        | some id => match table.vectors[id]? with
+          | some values => pure values
+          | none => throw "typed ABI argument vector is absent"
+      let arguments ← ids.mapM fun id => match args[id]? with
+        | some value => pure value
+        | none => throw "typed ABI argument did not decode"
+      let some returned := args[fn.returnId]? | throw "typed ABI return did not decode"
+      let convention ← parseCanonicalAbi fn.convention "$typed_abi.calling_convention"
+      let payload := fn.toJson (.arr (arguments.map (·.payload))) returned.payload
+      return ⟨arguments, returned, convention, fn.canUnwind, fn.cVariadic, fn.fixedCount, payload⟩
+    if let .ok value := decoded then
+      if hasCanonicalJsonObjectKeys value.payload then
+        memo := { memo with functionAbis := memo.functionAbis.insert value.payload value }
+  return memo
+
 /-- Decode an exact compiler projection layout using the canonical schema. -/
 def decodeCompilerLayout (j : Json) : Except String Layout :=
   parseLayout j "$.compiler_projection_layout"

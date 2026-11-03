@@ -63,6 +63,10 @@ lean_exe decoder_traversal_cache_tests where
   srcDir := "tests/input"
   root := `DecoderTraversalCache2026
 
+lean_exe typed_abi_wire_tests where
+  srcDir := "tests/input"
+  root := `TypedAbiWire2026
+
 -- Native-only host driver and unlimited diagnostic choice regressions.
 lean_exe native_runner_regression where
   srcDir := "tools"

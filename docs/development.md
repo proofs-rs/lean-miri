@@ -78,6 +78,7 @@ mkdir -p scratch/logs
 bash tools/check-quick.sh > scratch/logs/quick.log 2>&1
 bash tools/check-build.sh > scratch/logs/build.log 2>&1
 bash tools/check-decoder.sh > scratch/logs/decoder.log 2>&1
+bash tools/check-typed-abi.sh > scratch/logs/typed-abi.log 2>&1
 bash tools/check-connected-proofs.sh > scratch/logs/proofs.log 2>&1
 ```
 

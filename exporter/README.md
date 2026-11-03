@@ -58,6 +58,25 @@ Without this field Lean derives the same summaries once during import. The
 summaries skip unrelated traversal branches, never validation of relevant data.
 The ordinary JSON output and existing fixtures remain supported.
 
+`LEAN_MIRI_TYPED_ABI=1` enables an experimental positional ABI transport. Catalog
+`typed_abi_version: 1` replaces exact ABI argument records with
+`$lean_miri_abi_arg: [type_id, layout, mode]`, and function records with
+`$lean_miri_fn_abi: [argument_vector_id_or_null, return_argument_id,
+calling_convention, can_unwind, c_variadic, fixed_count]`. IDs refer to earlier
+shared nodes; vectors must contain ABI argument references. Extra source fields
+are retained through the ordinary representation rather than discarded.
+
+Lean validates these references and scalar types, decodes each argument once,
+and constructs the existing typed ABI records directly. Layouts, pass modes and
+calling conventions still use the canonical checked decoders. Failures are not
+cached, so demand-local diagnostics retain their original paths. Compatibility
+JSON views keep the remaining source validators unchanged. This first prototype
+packs headers after DAG interning; it does not remove the exporter's JSON tree or
+all compatibility views. It is off by default and is not an established speedup.
+Run `bash tools/check-typed-abi.sh` for transport/field/diagnostic parity. Its
+snapshot adapter does not fabricate Miri references; fresh comparisons must use
+the real exporter/reference pipeline.
+
 Specify `LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1` for prepared execution such as
 main. Building with `--features miri-reference` and adding
 `LEAN_MIRI_RUN_PREPARED_MIRI=1` also generates a reference Miri sidecar by

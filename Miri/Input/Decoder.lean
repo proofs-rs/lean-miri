@@ -1578,6 +1578,9 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
   let selectedScope ← match optionalJson j "selected_scope" with
     | none => pure none
     | some value => pure (some (← parseSelectedScope value "$.selected_scope"))
+  let memo := if cachedTraversal then profileit "decoder.typed_abi" profile fun _ =>
+      prepareTypedAbiMemo resolved.typedAbi memo
+    else memo
   let compilerFunctionAbiTable := profileit "decoder.compiler_abi_queries" profile fun _ =>
     prepareCompilerFunctionAbiTableUsing resolved.nodes memo
   let memo := compilerFunctionAbiTable.extendDecodeMemo memo
