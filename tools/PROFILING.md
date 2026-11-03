@@ -154,3 +154,48 @@ set `LEAN_MIRI_VERIFY_COVARIANCE_SORT=1`: each round additionally runs the old
 comparison sort and asserts equality of the entire pair sequence before dedup
 and type-ID assignment. This diagnostic deliberately restores the old cost;
 omit it from performance trials. The optimization itself is enabled normally.
+
+## CPU sampling without perf_event access
+
+`tools/cpu-sample.c` is an optional Linux x86-64 preload diagnostic. It records
+monotonic timestamps, interrupted instruction PCs and thread IDs every 4ms of
+process CPU time. It owns SIGPROF/ITIMER_PROF during that diagnostic run.
+It samples only the exact executable specified by
+`LEAN_MIRI_SAMPLE_EXE`, so helper version probes do not overwrite its output.
+Use a unique, existing scratch directory and prefix for each matching process.
+It does not change Lean/Miri sources or provide a guest safety verdict.
+
+```bash
+mkdir -p scratch/cpu-sampling
+cc -shared -fPIC -O2 -Wall -Wextra tools/cpu-sample.c \
+  -o scratch/cpu-sampling/pc.so
+# Use an already frozen executable and the same validated arguments as control.
+LEAN_MIRI_SAMPLE_EXE="$(realpath scratch/frozen-native)" \
+LEAN_MIRI_SAMPLE_OUTPUT="$PWD/scratch/cpu-sampling/first" \
+LD_PRELOAD="$PWD/scratch/cpu-sampling/pc.so" LEAN_NUM_THREADS=1 \
+  taskset -c 2 scratch/frozen-native INPUT.json --ui-source SOURCE.rs --profile
+python3 tools/summarize-cpu-samples.py scratch/cpu-sampling/first
+```
+
+For caller PCs, install libunwind development headers and additionally compile
+with `-DWITH_LIBUNWIND -lunwind`. This uses libunwind's local signal-frame
+unwinder and records up to 32 callers; summarize these records with
+`--stack-depth 32`. The PC-only mode needs no libunwind dependency. Symbolization
+runs offline using `nm` and `readelf`; the header mapping supplies the correct
+PIE bias even when lld inserts pages between LOAD segments. Nonzero-address
+PIE headers and truncated records are rejected rather than guessed.
+
+With the corresponding `measure.py` run JSON, `--phases RUN.json` attributes
+samples to decoder/lowering/preparation/bootstrap/execution boundaries.
+`--leaf-span PROVIDER.NAME` additionally selects a reported interval known to
+contain no nested profiler calls; exclusive parent profiler times cannot be
+used as inclusive interval lengths. Sampling is diagnostic attribution, not a
+speedup benchmark: keep an unsampled control and verify complete outcomes.
+
+Exclusive counts describe the interrupted PC; cumulative counts count each
+symbol at most once per sampled stack and overlap with callers. Truncation can
+omit upper callers. Linked identical-code folding may name a generic helper
+after another specialization, so use its callers and source code before
+attributing ownership. Do not sum cumulative percentages or convert them into
+an assumed removable wall time. Sampling overhead and shared-host variation
+require separate verification of any subsequent optimization.

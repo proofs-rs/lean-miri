@@ -1094,6 +1094,81 @@ unchanged; no full Lean proof/axiom audit or 809-candidate UI sweep was rerun.
 The full-pipeline half-time goal remains open. Final structural sharing and
 Lean decoding/lowering/preparation are the remaining common bottlenecks.
 
+### Remaining unops costs after covariance sorting
+
+Further attribution uses the same frozen cached-order exporter and native
+`7fb2fa62`, original unops source and unchanged fingerprint-bound input.
+No Rust/Lean interpreter/exporter behavior changes are made in this investigation.
+Optional `tools/cpu-sample.c` and `tools/summarize-cpu-samples.py` provide 4ms
+CPU-PC sampling and optional 32-caller local signal-frame unwinding; neither
+requires perf_event access. A known burn/main control checks exclusive/caller
+symbolization. Four unit tests cover PIE segment gaps, caller return boundaries,
+phase filtering, truncation and rejection of unsupported ELF header bases.
+
+Native control, PC-sampled and caller-sampled runs are sequential on CPU 2 with
+one Lean thread and the same UI source/seed. Wall times are 46.062 / 45.257 /
+45.802 seconds; CPU 46.020 / 45.226 / 45.771; selected CPU steal 0.51 / 0.40 /
+0.36 seconds; peak sampled process RSS 3.904 / 3.909 / 3.907 GB. Throttling is
+zero. These are diagnostic controls, not an optimization comparison. The
+unsampled native boundary times are decode 26.815, lowering 4.650, preparation
+10.486, bootstrap 1.386 and post-bootstrap interpretation 0.838 seconds.
+
+The PC run collects 11,200 samples; the caller run has 1,127 lowering samples,
+1,507 runtime-value-validation samples and 713 backtrace-preparation samples.
+The principal remaining costs are:
+
+- Exporter structural sharing: 9.501 seconds in an unsampled 28.684-second
+  export/reference run. A sampled 27.595-second control attributes about 49% of
+  sharing stacks to recursive `WireKey::hash::walk`, and 38% to HashMap
+  `reserve_rehash` (overlapping paths). Keys are structurally rehashed on table
+  growth and get/insert operations. Caching the exact structural digest and
+  avoiding duplicate hashing are the next local candidates; full key equality
+  must remain authoritative on collisions.
+- Exporter obligation/diagnostic collection: 2.478 seconds. Sampled stacks split
+  approximately between `catalog_evidence_obligations::walk` and
+  `retained_vtable_probe_diagnostics::walk`; about 35% include path-string
+  formatting. Lazy path rendering/relative-path summaries may reduce work while
+  retaining every ordered obligation and diagnostic occurrence.
+- Runtime JSON value validation: about six seconds. It repeats contextual graph
+  traversal and creates/disposes temporary summaries and memo entries. PC and
+  caller samples both show substantial reference-counting work (roughly a
+  quarter to a third of this interval), alongside node traversal/hash maps.
+  It remains necessary validation, not guest instruction execution.
+- MIR lowering: 4.650 seconds. About 58% of sampled lowering stacks include
+  `sourceBodyMatches`, 38% include its `typedValueMatchesSource`, and 33% include
+  `payloadObligations`. These are overlapping cumulative observations, not
+  additive timings. Source consistency calls `decodeCompilerValue` again for
+  already decoded statements/terminators and then compares typed values. A
+  checked source-bound cache/certificate could reuse outcomes without accepting
+  caller-modified MIR or dropping the original obligations.
+- Backtrace/source-map preparation: about 2.9 seconds. About 89% of exclusive
+  samples are array copy/free paths. Caller stacks lead through
+  `CompilerBacktraceSource.spans` → `lowerCompilerSpanWithInterner` → span
+  interning and its HashMap insertion. Copy-on-write candidate-table arrays,
+  rather than source-map queries themselves, dominate. The interner retains
+  the previous candidates as a fallback; making index updates exclusive while
+  preserving exact span identity/error behavior is a localized next target.
+- Source JSON reflexivity: about 1.6 seconds of full structural comparison.
+  This is a real checked prerequisite for existing pointer shortcuts; it cannot
+  simply be assumed away.
+
+Thus the next small changes should address cached structural hashes/rehashing
+and span-index ownership, then duplicate decoding/validation. JSON parsing alone
+is about two seconds. Large gains may still require a checked prepared data
+representation, but no evidence here requires immediately replacing the whole
+interpreter or skipping checks. Realized savings and the half-time goal remain
+unmeasured by this diagnostic-only change.
+
+All three native runs retain exactly the prior complete choice tape, events and
+exit-zero terminal observation. Both fresh exporter snapshots have independent
+pinned Miri references and verified FNV/length bindings. Artifact/input hashes
+are unchanged; counters and traces are under ignored `scratch/perf-unops-remaining/`.
+Quick/source-integrity checks pass with 92 Python tests. No full UI sweep or
+Lean proof/axiom audit was rerun because interpreter/proof sources are unchanged.
+Caller samples are truncated and cumulative percentages overlap; generic helper
+names can be aliases after identical-code folding. The observations identify
+candidates, not measured speedups or a guarantee for other guests.
+
 ## Feature support outside the current acceptance scope
 
 The following support and integration work remains in the backlog, even though
