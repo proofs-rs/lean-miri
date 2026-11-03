@@ -33,6 +33,25 @@ are stored in `scratch/` and the ignored upstream `target/` directory. Lean repl
 of saved fixtures, decoder checks and local proofs do not require the reference
 Miri binary or old working checkouts.
 
+## Exporter construction and wire compatibility
+
+The exporter constructs persistent shared values: cloning a payload retains its
+immutable node, and mutation copies only changed containers. Metadata patch
+passes memoize construction nodes; final encoding visits each shared source
+node once per applicable field role. Structural interning uses exact ordered
+wire equality (including numeric spelling), with full equality on hash collisions.
+Pointer identity is only a document-local traversal optimization, never a Rust
+allocation/type identity or a wire ID. Compiler query evaluation order is unchanged.
+
+The external format remains root schema 3 / shared-payload schema 2 JSON.
+The final compact node catalog is serialized directly; no expanded JSON tree
+or serialized subtree strings are needed by the default construction path.
+The `legacy-json` Cargo feature retains the previous tree builder and string-key
+encoder for comparison. Run the exporter Cargo tests both normally and with
+`--features legacy-json`; add `miri-reference` when testing reference integration.
+Tests cover exact legacy wire output, hash collisions, copy-on-write snapshots,
+exponentially repeated construction, and exact/unknown vtable links.
+
 ## What the checks test
 
 See [tests/README.md](../tests/README.md) for the detailed directory map,

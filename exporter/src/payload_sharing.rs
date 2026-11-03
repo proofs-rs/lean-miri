@@ -5,7 +5,7 @@
 //! references into `shared_payloads.nodes`; nodes are emitted after their
 //! children, so every reference in a node points to a lower numbered node.
 
-use serde_json::{Map, Value, json};
+use crate::{JsonMap as Map, Value, json};
 use std::collections::HashMap;
 
 const SHARED_CATALOG_FIELD: &str = "shared_payloads";
@@ -73,8 +73,73 @@ fn reference(index: usize) -> Value {
 #[derive(Default)]
 struct Encoder {
     nodes: Vec<Value>,
+    #[cfg(feature = "legacy-json")]
     indices: HashMap<String, usize>,
+    #[cfg(not(feature = "legacy-json"))]
+    indices: HashMap<WireKey, usize>,
+    #[cfg(not(feature = "legacy-json"))]
+    source_nodes: HashMap<(u8, usize, bool), (Value, Value, u8)>,
     scan_flags: Vec<u8>,
+}
+
+/// Exact canonical wire equality, including numeric spelling (notably -0.0).
+/// Hash collisions always fall through to full equality; hashes are not IDs.
+#[cfg(not(feature = "legacy-json"))]
+#[derive(Clone)]
+struct WireKey(Value);
+#[cfg(not(feature = "legacy-json"))]
+impl PartialEq for WireKey {
+    fn eq(&self, other: &Self) -> bool {
+        fn eq(a: &Value, b: &Value) -> bool {
+            match (a, b) {
+                (Value::Null, Value::Null) => true,
+                (Value::Bool(a), Value::Bool(b)) => a == b,
+                (Value::Number(a), Value::Number(b)) => a.to_string() == b.to_string(),
+                (Value::String(a), Value::String(b)) => a == b,
+                (Value::Array(a), Value::Array(b)) => {
+                    a.len() == b.len() && a.iter().zip(b.iter()).all(|(a, b)| eq(a, b))
+                }
+                (Value::Object(a), Value::Object(b)) => {
+                    a.len() == b.len()
+                        && a.iter()
+                            .zip(b.iter())
+                            .all(|((ka, a), (kb, b))| ka == kb && eq(a, b))
+                }
+                _ => false,
+            }
+        }
+        eq(&self.0, &other.0)
+    }
+}
+#[cfg(not(feature = "legacy-json"))]
+impl Eq for WireKey {}
+#[cfg(not(feature = "legacy-json"))]
+impl std::hash::Hash for WireKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        fn walk<H: std::hash::Hasher>(value: &Value, state: &mut H) {
+            std::mem::discriminant(value).hash(state);
+            match value {
+                Value::Null => (),
+                Value::Bool(v) => v.hash(state),
+                Value::Number(v) => v.to_string().hash(state),
+                Value::String(v) => v.as_str().hash(state),
+                Value::Array(v) => {
+                    v.len().hash(state);
+                    for child in v.iter() {
+                        walk(child, state);
+                    }
+                }
+                Value::Object(v) => {
+                    v.len().hash(state);
+                    for (key, child) in v.iter() {
+                        key.hash(state);
+                        walk(child, state);
+                    }
+                }
+            }
+        }
+        walk(&self.0, state);
+    }
 }
 
 fn field_interest(name: &str) -> u8 {
@@ -99,6 +164,38 @@ impl Encoder {
         // array with a reference can otherwise make its containing record look
         // small by the time its own post-order visit finishes.
         let should_intern = eligible(value, field);
+        #[cfg(not(feature = "legacy-json"))]
+        {
+            let identity = value
+                .identity()
+                .filter(|_| value.is_shared())
+                .map(|(tag, ptr)| (tag, ptr, should_intern));
+            if let Some(identity) = identity {
+                if let Some((_, encoded, interests)) = self.source_nodes.get(&identity) {
+                    *value = encoded.clone();
+                    return Ok(*interests);
+                }
+            }
+            // Retaining the immutable source prevents address reuse and makes
+            // subsequent mutations COW. This is a per-document traversal memo.
+            let original = identity.map(|_| value.clone());
+            let interests = self.encode_unique(value, field, should_intern)?;
+            if let Some(identity) = identity {
+                self.source_nodes
+                    .insert(identity, (original.unwrap(), value.clone(), interests));
+            }
+            return Ok(interests);
+        }
+        #[cfg(feature = "legacy-json")]
+        self.encode_unique(value, field, should_intern)
+    }
+
+    fn encode_unique(
+        &mut self,
+        value: &mut Value,
+        _field: Option<&str>,
+        should_intern: bool,
+    ) -> Result<u8, String> {
         let mut interests = 0;
 
         match value {
@@ -119,9 +216,12 @@ impl Encoder {
             return Ok(interests);
         }
 
-        // serde_json's default Map is key ordered, making this a stable,
-        // collision-free structural key (rather than a hash-only identity).
+        // Both representations have ordered object keys. Exact wire equality,
+        // including numeric spelling, resolves all structural hash collisions.
+        #[cfg(feature = "legacy-json")]
         let key = value.to_string();
+        #[cfg(not(feature = "legacy-json"))]
+        let key = WireKey(value.clone());
         if let Some(index) = self.indices.get(&key) {
             *value = reference(*index);
             return Ok(self.scan_flags[*index]);
@@ -138,14 +238,17 @@ impl Encoder {
 
 /// Encode eligible values as a bottom-up DAG while preserving root fields.
 ///
-/// The transform is deterministic and exact: structural JSON serialization
-/// is used as the interning key, and references point to nodes with lower ids.
+/// The transform is deterministic and exact: ordered structural wire values
+/// are the interning keys, and references point to nodes with lower ids.
 pub(crate) fn share_payloads(document: &mut Value) -> Result<(), String> {
     share_payloads_with_scan_flags(document, false)
 }
 
 /// Optional checked traversal summaries, using the same node IDs and payloads.
-pub(crate) fn share_payloads_with_scan_flags(document: &mut Value, prepared: bool) -> Result<(), String> {
+pub(crate) fn share_payloads_with_scan_flags(
+    document: &mut Value,
+    prepared: bool,
+) -> Result<(), String> {
     let Some(root) = document.as_object() else {
         return Err("shared payload exporter expected a JSON object root".into());
     };
@@ -161,9 +264,17 @@ pub(crate) fn share_payloads_with_scan_flags(document: &mut Value, prepared: boo
         encoder.encode_value(child, Some(key))?;
     }
 
-    let mut catalog = json!({"schema_version": SCHEMA_VERSION, "nodes": encoder.nodes});
+    let nodes = std::mem::take(&mut encoder.nodes);
+    let scan_flags = std::mem::take(&mut encoder.scan_flags);
+    // Release raw construction nodes and intern keys before writing. The final
+    // graph owns its rows; inserting them does not serialize or clone them.
+    drop(encoder);
+    let mut catalog_fields = Map::new();
+    catalog_fields.insert("schema_version".into(), json!(SCHEMA_VERSION));
+    catalog_fields.insert("nodes".into(), Value::Array(nodes.into()));
+    let mut catalog = Value::Object(catalog_fields.into());
     if prepared {
-        catalog["scan_flags"] = json!(encoder.scan_flags);
+        catalog["scan_flags"] = json!(scan_flags);
     }
     root.insert(SHARED_CATALOG_FIELD.into(), catalog);
     Ok(())
@@ -172,6 +283,136 @@ pub(crate) fn share_payloads_with_scan_flags(document: &mut Value, prepared: boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(feature = "legacy-json"))]
+    fn old_wire(mut document: serde_json::Value) -> serde_json::Value {
+        use serde_json::Value as V;
+        fn eligible(v: &V, field: Option<&str>) -> bool {
+            match v {
+                V::String(_) => !is_fixed_leaf_string_field(field),
+                V::Array(v) => !v.is_empty(),
+                V::Object(v) => {
+                    !(v.len() == 2
+                        && v.get("line").and_then(V::as_u64).is_some()
+                        && v.get("column").and_then(V::as_u64).is_some())
+                        && (v.len() >= 4
+                            || v.values().any(|x| matches!(x,V::Array(a) if !a.is_empty()))
+                            || v.iter().any(|(k, x)| match x {
+                                V::String(_) => !is_fixed_leaf_string_field(Some(k)),
+                                V::Object(_) => eligible(x, None),
+                                _ => false,
+                            }))
+                }
+                _ => false,
+            }
+        }
+        fn encode(
+            v: &mut V,
+            field: Option<&str>,
+            nodes: &mut Vec<V>,
+            keys: &mut HashMap<String, usize>,
+        ) {
+            let share = eligible(v, field);
+            match v {
+                V::Array(a) => {
+                    for x in a {
+                        encode(x, None, nodes, keys)
+                    }
+                }
+                V::Object(o) => {
+                    for (k, x) in o {
+                        encode(x, Some(k), nodes, keys)
+                    }
+                }
+                _ => (),
+            }
+            if share {
+                let key = v.to_string();
+                let id = if let Some(id) = keys.get(&key) {
+                    *id
+                } else {
+                    let id = nodes.len();
+                    nodes.push(std::mem::take(v));
+                    keys.insert(key, id);
+                    id
+                };
+                *v = serde_json::json!({SHARED_REF_FIELD:id});
+            }
+        }
+        let mut nodes = Vec::new();
+        let mut keys = HashMap::new();
+        for (k, v) in document.as_object_mut().unwrap() {
+            encode(v, Some(k), &mut nodes, &mut keys);
+        }
+        document[SHARED_CATALOG_FIELD] = serde_json::json!({"schema_version":2,"nodes":nodes});
+        document
+    }
+
+    #[cfg(not(feature = "legacy-json"))]
+    #[test]
+    fn shared_builder_and_encoder_preserve_exact_legacy_wire() {
+        fn sample(seed: u64, depth: usize) -> serde_json::Value {
+            if depth == 0 {
+                return match seed % 5 {
+                    0 => serde_json::Value::Null,
+                    1 => serde_json::json!(seed % 2 == 0),
+                    2 => serde_json::json!(seed),
+                    3 => serde_json::json!(format!("unicode-λ-\\-\"-{seed}")),
+                    _ => serde_json::json!(-0.0),
+                };
+            }
+            let a = sample(seed.wrapping_mul(17).wrapping_add(1), depth - 1);
+            let b = sample(seed.wrapping_mul(31).wrapping_add(2), depth - 1);
+            if seed % 2 == 0 {
+                serde_json::json!([a, b, a])
+            } else {
+                serde_json::json!({"kind":"tag","left":a,"right":b,"again":a})
+            }
+        }
+        for seed in 0..64 {
+            let original =
+                serde_json::json!({"root":sample(seed,4),"position":{"line":1,"column":2}});
+            let expected = old_wire(original.clone());
+            let mut graph = Value::from(original);
+            share_payloads(&mut graph).unwrap();
+            assert_eq!(
+                serde_json::to_vec(&graph).unwrap(),
+                serde_json::to_vec(&expected).unwrap()
+            );
+        }
+        let scalar = json!("shared-role");
+        let mut graph = json!({"kind":scalar,"payload":scalar,"again":scalar,
+            "zeros":[[0.0],[-0.0]],"identities":[{"kind":"function","id":17,"name":"a","salt":1},
+            {"kind":"function","id":18,"name":"a","salt":1}]});
+        let expected = old_wire(serde_json::to_value(&graph).unwrap());
+        share_payloads(&mut graph).unwrap();
+        assert_eq!(
+            serde_json::to_vec(&graph).unwrap(),
+            serde_json::to_vec(&expected).unwrap()
+        );
+    }
+
+    #[cfg(not(feature = "legacy-json"))]
+    #[test]
+    fn wire_key_hash_collisions_do_not_merge_distinct_payloads() {
+        #[derive(Default)]
+        struct Zero;
+        impl std::hash::Hasher for Zero {
+            fn finish(&self) -> u64 {
+                0
+            }
+            fn write(&mut self, _: &[u8]) {}
+        }
+        let mut map: HashMap<WireKey, usize, std::hash::BuildHasherDefault<Zero>> =
+            HashMap::default();
+        for (id, value) in [json!([0.0]), json!([-0.0]), json!([1]), json!([1.0])]
+            .into_iter()
+            .enumerate()
+        {
+            assert!(map.insert(WireKey(value), id).is_none());
+        }
+        assert_eq!(map.len(), 4);
+    }
 
     fn is_reference(value: &Value) -> bool {
         value
@@ -195,16 +436,18 @@ mod tests {
 
         match value {
             Value::Array(values) => Value::Array(
-                values
+                (values
                     .iter()
                     .map(|child| dereference(child, nodes, current_node))
-                    .collect(),
+                    .collect::<Vec<_>>())
+                .into(),
             ),
             Value::Object(object) => Value::Object(
-                object
+                (object
                     .iter()
                     .map(|(key, child)| (key.clone(), dereference(child, nodes, current_node)))
-                    .collect(),
+                    .collect::<Map<_, _>>())
+                .into(),
             ),
             _ => value.clone(),
         }
@@ -231,7 +474,7 @@ mod tests {
         let decoded = dereference(&encoded, nodes, None);
         let mut decoded = decoded.as_object().unwrap().clone();
         decoded.remove(SHARED_CATALOG_FIELD);
-        assert_eq!(Value::Object(decoded), original);
+        assert_eq!(Value::Object(decoded.into()), original);
     }
 
     #[test]
@@ -267,7 +510,7 @@ mod tests {
         let decoded = dereference(&encoded, nodes, None);
         let mut decoded = decoded.as_object().unwrap().clone();
         decoded.remove(SHARED_CATALOG_FIELD);
-        assert_eq!(Value::Object(decoded), original);
+        assert_eq!(Value::Object(decoded.into()), original);
     }
 
     #[test]
@@ -284,7 +527,7 @@ mod tests {
         let decoded = dereference(&encoded, nodes, None);
         let mut decoded = decoded.as_object().unwrap().clone();
         decoded.remove(SHARED_CATALOG_FIELD);
-        assert_eq!(Value::Object(decoded), original);
+        assert_eq!(Value::Object(decoded.into()), original);
         assert_ne!(nodes[0], nodes[1]);
     }
 
@@ -311,9 +554,24 @@ mod tests {
         share_payloads_with_scan_flags(&mut prepared, true).unwrap();
         let catalog = prepared[SHARED_CATALOG_FIELD].as_object_mut().unwrap();
         let flags = catalog.remove("scan_flags").unwrap();
-        assert_eq!(flags.as_array().unwrap().len(), catalog["nodes"].as_array().unwrap().len());
-        assert!(flags.as_array().unwrap().iter().any(|flag| flag == &json!(15)));
-        assert!(flags.as_array().unwrap().iter().any(|flag| flag == &json!(0)));
+        assert_eq!(
+            flags.as_array().unwrap().len(),
+            catalog["nodes"].as_array().unwrap().len()
+        );
+        assert!(
+            flags
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|flag| flag == &json!(15))
+        );
+        assert!(
+            flags
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|flag| flag == &json!(0))
+        );
         assert_eq!(ordinary, prepared, "only the checked summaries may differ");
     }
 }

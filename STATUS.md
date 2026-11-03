@@ -911,6 +911,64 @@ sweep has not been rerun. Frozen binaries, raw counters, profiles, equality/orac
 checks and combined example audits are retained under ignored
 `scratch/perf-prepared/`.
 
+### Persistent exporter construction
+
+The exporter now constructs an immutable shared graph instead of cloning
+expanded `serde_json::Value` trees. The `json!` construction adapter retains
+payload nodes directly, mutations copy only changed containers, and vtable
+metadata patches visit shared nodes once. Final encoding memoizes shared source
+nodes by identity and field role; unique nodes need no retained snapshot.
+Structural wire keys compare complete ordered contents (including numeric
+spelling), so hash collisions cannot merge distinct compiler/runtime identities.
+The compact final catalog is serialized directly, without subtree string keys.
+Compiler query demand/order, root schema 3 / shared-payload schema 2, and checked
+prepared scan flags retain their previous behavior. The old builder/encoder is
+available through the comparison-only `legacy-json` Cargo feature.
+
+Validation on this change: 13 Rust unit tests, all nine exporter integration
+entry points (Python wire tests, four fixture scripts and four producer checks),
+eight legacy-builder Rust tests, the ordinary pinned Cargo check, and quick
+source/integrity checks (88 Python tests) passed.
+Tests compare exact bytes with the prior encoder across generated fixtures,
+retain copy-on-write snapshots, force structural hash collisions, preserve exact
+and unknown vtable query links, and construct 40 levels of doubled payloads
+without exponential expansion. Fresh original `unops.rs` exports replay to exit
+zero with exactly matching full tapes/events/terminal results against the old
+exporter. Each input has its own pinned, fingerprint-bound Miri reference.
+Fresh `invalid_bool.rs` retains invalidBool 2 at original line 3; its expected
+Miri UB diagnostic and annotation are checked independently of process exit.
+Lean runtime/example sources and saved fixture inputs are unchanged; their
+full proof/axiom checks were not rerun for this exporter-only change.
+
+Two final old→new paired export/reference trials use the same original
+`pass/unops.rs`, rustc flags, CPU 2, one Lean thread, seed 0 and empty guest
+environment, sequentially with no overlapping builds/tests. Old exporter SHA256
+is `f3e5dab13aac15348dfda3509d8b1a01812bfda36847701be22ffd184e4c8eba`;
+new is `3f30b411701272dbe8cd7fbf0740947d634bee12edb1243068e703114244f100`.
+The unchanged native runner remains `7fb2fa62` from the preceding measurements.
+
+| Export + same-TyCtxt Miri reference | Old | Persistent construction |
+| --- | ---: | ---: |
+| Wall, seconds (two samples) | 76.094 / 78.345 | 43.684 / 44.107 |
+| CPU, seconds | 75.873 / 78.115 | 43.525 / 43.974 |
+| Peak sampled process-group RSS, decimal GB | 9.864 / 9.864 | 4.930 / 4.936 |
+| Selected-CPU steal, seconds | 0.35 / 0.81 | 0.31 / 0.29 |
+
+Cgroup CPU throttling deltas are zero. Mean preparation wall time falls about
+43%, and peak RSS about 50%, in these shared-host observations. An additional
+candidate-only observation is 43.471 seconds; the earlier 59.815-second prototype
+predates the unique-node memo fix and is excluded from the final comparison.
+One full fresh-source pair measures 121.341→88.711 seconds including native
+execution (44.901→44.724 seconds); the preparation change does not establish a
+native interpreter speedup. Fresh compiler query row ordering can differ, so
+large snapshots are checked against their own references rather than assumed
+byte-identical. Exact wire bytes are compared by the isolated encoder tests.
+
+The further half-time goal and full 809-candidate sweep remain open. This change
+reduces exporter preparation; generic Lean decoding and guest execution remain.
+Raw counters, artifact/source hashes, reference bindings and validation output
+are under ignored `scratch/perf-direct-dag/`.
+
 ## Feature support outside the current acceptance scope
 
 The following support and integration work remains in the backlog, even though

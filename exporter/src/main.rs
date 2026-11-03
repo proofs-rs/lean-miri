@@ -14,6 +14,8 @@ mod named_constants;
 mod named_statics;
 mod native_signature_queries;
 mod payload_sharing;
+#[cfg(not(feature = "legacy-json"))]
+mod shared_value;
 mod panic_queries;
 mod producer;
 mod projection_queries;
@@ -54,7 +56,10 @@ use rustc_interface::interface;
 use rustc_middle::mir::interpret::{AllocId, CTFE_ALLOC_SALT, GlobalAlloc};
 use rustc_middle::ty::{self, ExistentialPredicateStableCmpExt, TyCtxt, TypeVisitableExt};
 use rustc_span::Pos;
-use serde_json::{Value, json};
+#[cfg(feature = "legacy-json")]
+use serde_json::{Value, json, Map as JsonMap};
+#[cfg(not(feature = "legacy-json"))]
+use shared_value::{Value, json, Map as JsonMap};
 
 const EXPECTED_RUSTC_COMMIT: &str = "8144389c895da997dbdecaa635e41d6a50be6ffd";
 const MIRI_COMMIT: &str = "7fa591d7d4dd9af8154becbc8332f8096f8323b1";
@@ -757,7 +762,7 @@ fn select_roots<'tcx>(
 }
 
 fn rooted_closure_obligations(document: &Value) -> Vec<Value> {
-    fn probe_matches_query(document: &Value, cast: &serde_json::Map<String, Value>) -> bool {
+    fn probe_matches_query(document: &Value, cast: &JsonMap<String, Value>) -> bool {
         let Some(query) = cast
             .get("vtable_query")
             .filter(|query| query.get("status").and_then(Value::as_str) == Some("supported"))
@@ -1628,13 +1633,13 @@ impl Callbacks for ExportCallbacks {
         };
         instances.extend(symbol_identity_instances);
         let runtime_queries = {
-            let mut queries = serde_json::Map::new();
+            let mut queries: JsonMap<String, Value> = JsonMap::new();
             queries.insert("startup".into(), startup_queries::export(tcx));
-            queries.insert("types".into(), Value::Array(runtime_type_queries));
+            queries.insert("types".into(), Value::Array(runtime_type_queries.into()));
             queries.insert("virtual".into(), runtime_virtual_queries);
             queries.insert("instances".into(), runtime_caller_instances);
             queries.insert("foreign_symbols".into(), runtime_foreign_symbols);
-            Value::Object(queries)
+            Value::Object(queries.into())
         };
         // Preserve the pinned query/evidence evaluation order from the former
         // root json! expression while keeping these outputs owned for moves.
@@ -1656,7 +1661,7 @@ impl Callbacks for ExportCallbacks {
             runtime_check_json(tcx, rustc_middle::mir::RuntimeChecks::UbChecks),
             runtime_check_json(tcx, rustc_middle::mir::RuntimeChecks::ContractChecks),
             runtime_check_json(tcx, rustc_middle::mir::RuntimeChecks::OverflowChecks),
-        ]);
+        ].into());
         let mut session_queries = json!({
             "internal_target_features":internal_target_features,
             "is_like_wasm":tcx.sess.target.is_like_wasm,
@@ -1709,7 +1714,7 @@ impl Callbacks for ExportCallbacks {
             fields.insert("producer".into(), producer);
             fields.insert("runtime_target_data_layout".into(), target_data_layout);
             fields.insert("compiler_session_queries".into(), session_queries);
-            fields.insert("instances".into(), Value::Array(instances));
+            fields.insert("instances".into(), Value::Array(instances.into()));
             fields.insert("compiler_runtime_queries".into(), runtime_queries);
             fields.insert("compiler_named_statics".into(), named_statics);
             fields.insert("compiler_frame_metadata".into(), frame_metadata);
@@ -1739,7 +1744,7 @@ impl Callbacks for ExportCallbacks {
             fields.insert("compiler_vtable_queries".into(), vtable_queries);
             fields.insert("compiler_shim_abis".into(), shim_abis);
             fields.insert("compiler_predicate_queries".into(), predicate_queries);
-            fields.insert("bodies".into(), Value::Array(bodies));
+            fields.insert("bodies".into(), Value::Array(bodies.into()));
         }
         let allocator_world = if self.prepared_allocator_world {
             match allocator_world::capture(tcx, &mut export_context, &selected_alloc_id_keys) {
@@ -2897,7 +2902,7 @@ fn type_compiler_facts_json<'tcx>(
     };
     let input = query_input;
     let is_unsafe_cell = matches!(input.kind(),ty::Adt(def,_) if def.is_unsafe_cell());
-    let mut booleans = serde_json::Map::new();
+    let mut booleans: JsonMap<String, Value> = JsonMap::new();
     booleans.insert(
         "is_unsafe_cell".into(),
         compiler_fact(json!(is_unsafe_cell)),
@@ -2998,7 +3003,7 @@ fn type_compiler_facts_json<'tcx>(
             _ => missing(),
         },
     );
-    let mut types = serde_json::Map::new();
+    let mut types: JsonMap<String, Value> = JsonMap::new();
     types.insert(
         "discriminant_type".into(),
         match normalized {
@@ -6510,7 +6515,7 @@ fn compiler_runtime_type_queries_json<'tcx>(
             "mut_reference_type":compiler_fact(query_generated_type_json(context,tcx,ty::Ty::new_mut_ref(tcx,tcx.lifetimes.re_erased,input))),
             "drop_glue":drop})
     }).collect::<Vec<_>>();
-    Value::Array(records)
+    Value::Array(records.into())
 }
 
 fn compiler_runtime_virtual_queries_json<'tcx>(
@@ -6696,7 +6701,7 @@ fn compiler_runtime_virtual_queries_json<'tcx>(
                     "_query_key":{"input_type_id":input_type_id,"input_predicate_ids":input_predicate_ids}}}));
         }
     }
-    Value::Array(virtual_queries)
+    Value::Array(virtual_queries.into())
 }
 
 enum VtablePredicateMatch {
@@ -6786,7 +6791,7 @@ fn compiler_caller_location_queries_json<'tcx>(
             || !matches!(tcx.def_kind(instance.def_id()),rustc_hir::def::DefKind::Fn|rustc_hir::def::DefKind::AssocFn|rustc_hir::def::DefKind::Ctor(_, rustc_hir::def::CtorKind::Fn)|rustc_hir::def::DefKind::Closure|rustc_hir::def::DefKind::SyntheticCoroutineBody) {
             unavailable_compiler_fact("symbol name requires a complete concrete callable instance")
         }else{compiler_fact(json!(tcx.symbol_name(instance).name))}
-    })).collect::<Vec<_>>())
+    })).collect())
 }
 
 fn compiler_frame_metadata_json(tcx: TyCtxt<'_>) -> Value {
@@ -6878,7 +6883,7 @@ fn compiler_instance_abis_json<'tcx>(
         if let Some(id)=context.instance_ids.get(&instance){record["instance_id"]=json!(id);}
         record
     }).collect::<Vec<_>>();
-    Value::Array(records)
+    Value::Array(records.into())
 }
 
 // backtrace.rs::handle_miri_get_backtrace and resolve_frame_pointer. The table
@@ -6910,7 +6915,7 @@ fn backtrace_spans_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tc
                 "filename":position.file.name.prefer_remapped_unconditionally().to_string()}})
         })
         .collect::<Vec<_>>();
-    Value::Array(records)
+    Value::Array(records.into())
 }
 
 // stack.rs::push_stack_frame post-monomorphization required constant checks.
@@ -7245,9 +7250,35 @@ fn compiler_vtable_queries_json<'tcx>(
             row
         })
         .collect::<Vec<_>>();
-    (Value::Array(records), query_ids)
+    (Value::Array(records.into()), query_ids)
 }
 
+#[cfg(not(feature = "legacy-json"))]
+fn patch_vtable_query_ids(document: &mut Value, query_ids: &HashMap<(u64, Vec<u64>), u64>) {
+    *document = shared_value::transform(document, &|value| {
+        let query = value.get("vtable_query").filter(|query| !query.is_null())?;
+        let key = query.get("_query_key").and_then(|key| {
+            Some((key.get("input_type_id")?.as_u64()?, key.get("input_predicate_ids")?
+                .as_array()?.iter().map(Value::as_u64).collect::<Option<Vec<_>>>()?))
+        });
+        let id = key.and_then(|key| query_ids.get(&key).copied());
+        let mut result = value.clone();
+        let fields = result.as_object_mut()?;
+        if let Some(object) = fields.get_mut("vtable_query").and_then(Value::as_object_mut) {
+            if let Some(id) = id {
+                object.insert("query_id".into(), json!(id));
+            } else {
+                object.insert("status".into(), json!("unknown"));
+                object.insert("reason".into(),json!("Cast vtable query pair was absent from the finalized exact compiler query catalog"));
+            }
+            object.remove("_query_key");
+        }
+        if id.is_none() { fields.insert("status".into(), json!("unknown")); }
+        Some(result)
+    });
+}
+
+#[cfg(feature = "legacy-json")]
 fn patch_vtable_query_ids(document: &mut Value, query_ids: &HashMap<(u64, Vec<u64>), u64>) {
     match document {
         Value::Array(values) => {
@@ -7326,6 +7357,7 @@ fn patch_virtual_resolution_candidates(document: &mut Value) {
         ids.sort_unstable();
         ids.dedup();
     }
+    #[cfg(feature = "legacy-json")]
     fn patch(value: &mut Value, candidates: &HashMap<u64, Vec<u64>>) {
         match value {
             Value::Object(fields) => {
@@ -7355,7 +7387,19 @@ fn patch_virtual_resolution_candidates(document: &mut Value) {
             _ => (),
         }
     }
+    #[cfg(feature = "legacy-json")]
     patch(document, &candidates);
+    #[cfg(not(feature = "legacy-json"))]
+    {
+        *document = shared_value::transform(document, &|value| {
+            let id = value.get("virtual_resolution").filter(|v| !v.is_null())?
+                .get("instance_id").and_then(Value::as_u64)?;
+            let mut result = value.clone();
+            let object = result.get_mut("virtual_resolution").and_then(Value::as_object_mut)?;
+            object.insert("candidate_query_ids".into(),json!(candidates.get(&id).cloned().unwrap_or_default()));
+            Some(result)
+        });
+    }
 }
 
 fn intrinsic_fallback_is_spec(tcx: TyCtxt<'_>, def: rustc_hir::def_id::DefId) -> bool {
@@ -7539,3 +7583,6 @@ fn compiler_function_facts_json<'tcx>(
     }
     json!({"types":records,"pointer_abis":abis,"helper_signatures":helper_signatures})
 }
+
+#[cfg(test)]
+mod payload_patch_tests;

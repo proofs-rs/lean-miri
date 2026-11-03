@@ -11,8 +11,11 @@ path = "src/main.rs"
 
 [dependencies]
 serde_json = "1.0"
+serde = "1.0"
 miri = { path = "../upstream/miri-source", default-features = false, optional = true }
 
 [features]
 default = []
+# Reference builder/encoder for output and performance comparisons.
+legacy-json = []
 miri-reference = ["dep:miri"]

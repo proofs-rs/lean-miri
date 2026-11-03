@@ -253,7 +253,7 @@ fn selected_foreign_fallbacks(candidates: &[Value], demanded_symbols: &[String])
             selected.push(row);
         }
     }
-    Value::Array(selected)
+    Value::Array(selected.into())
 }
 
 fn demanded_extern_statics<'tcx>(

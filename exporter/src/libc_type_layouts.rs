@@ -74,7 +74,7 @@ fn query<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>, name: &str)
 }
 
 pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>) -> Value {
-    let mut entries = serde_json::Map::new();
+    let mut entries: JsonMap<String, Value> = JsonMap::new();
     for name in LIBC_LAYOUT_PATHS {
         entries.insert((*name).to_owned(), query(tcx, context, name));
     }

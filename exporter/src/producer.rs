@@ -6,7 +6,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command,Stdio};
 use rustc_middle::ty::TyCtxt;
-use serde_json::{Value,json};
+use crate::{Value,json};
 
 pub const MIRI_DEFAULT_ARGS: &[&str]=&[
     "--cfg=miri","-Zalways-encode-mir","-Zextra-const-ub-checks","-Zmir-preserve-ub",

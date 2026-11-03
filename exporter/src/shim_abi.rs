@@ -846,11 +846,11 @@ pub(super) fn named_signatures<'tcx>(
     };
     result.push(json!({"name":"ioctl","recipe":variadic_query(tcx,context,"C",&["i32",if ulong{"usize"}else{"i32"}],"i32",true),
         "source_target_op_is_ulong":ulong}));
-    Value::Array(result)
+    Value::Array(result.into())
 }
 
 pub(super) fn named_types<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>) -> Value {
-    let mut result = serde_json::Map::new();
+    let mut result: JsonMap<String, Value> = JsonMap::new();
     for (name, path) in [
         ("c_ulong", &["core", "ffi", "c_ulong"][..]),
         ("pid_t", &["libc", "pid_t"][..]),
@@ -906,5 +906,5 @@ pub(super) fn named_types<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'
             ty::Ty::new_mut_ptr(tcx, tcx.types.i32),
         )),
     );
-    Value::Object(result)
+    Value::Object(result.into())
 }
