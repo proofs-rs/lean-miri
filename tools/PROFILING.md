@@ -127,3 +127,21 @@ Caller-location queries reuse a span index within each demand; runtime Location
 roots remain fresh per intrinsic evaluation. See [STATUS.md](../STATUS.md) for
 measured inputs, limits and remaining costs, and
 `tools/check-performance-regressions.sh` for parity checks.
+
+For exporter phase attribution, set `LEAN_MIRI_PROFILE_EXPORT=1` on the existing
+export command. Build with `--features miri-reference` and keep
+`LEAN_MIRI_RUN_PREPARED_MIRI=1` when measuring reference generation too.
+`export_profile: PHASE SECONDS` lines on stderr measure adjacent wall-clock
+intervals in `after_analysis`, including fixed-point producers, vtable patches,
+scope obligations, sharing, writing, snapshot destruction and Miri execution.
+`LEAN_MIRI_TRACE_EXPORT=1` additionally reports each closure round's domain sizes.
+These diagnostics do not issue compiler queries or change query ordering.
+
+Covariance construction has its own `covariance.*` adjacent spans and
+`covariance_profile:` domain counts. These spans are nested inside
+`closure.covariance_queries`; do not add both to the same total. The first
+outer span begins at `after_analysis`, so compiler work before that callback
+and process shutdown are outside its sum. Measure total wall/CPU/RSS/steal and
+throttling separately. Keep profiling artifacts frozen, serialize builds and
+trials, verify each fresh snapshot's independent reference and binding, and
+compare complete native outcomes separately from phase attribution.

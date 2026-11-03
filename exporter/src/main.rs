@@ -1310,12 +1310,28 @@ fn runtime_target_data_layout_json(tcx: TyCtxt<'_>) -> Value {
     })
 }
 
+/// Optional non-overlapping wall-time spans; never performs compiler queries.
+struct ExportProfile(Option<std::time::Instant>);
+impl ExportProfile {
+    fn new() -> Self {
+        Self(env::var_os("LEAN_MIRI_PROFILE_EXPORT").map(|_| std::time::Instant::now()))
+    }
+    fn mark(&mut self, phase: &str) {
+        if let Some(previous) = &mut self.0 {
+            let now = std::time::Instant::now();
+            eprintln!("export_profile: {phase} {:.6}", now.duration_since(*previous).as_secs_f64());
+            *previous = now;
+        }
+    }
+}
+
 impl Callbacks for ExportCallbacks {
     fn after_analysis<'tcx>(
         &mut self,
         _compiler: &interface::Compiler,
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
+        let mut export_profile = ExportProfile::new();
         #[cfg(feature = "miri-reference")]
         let reference_entry = if self.miri_reference {
             if !self.prepared_allocator_world {
@@ -1422,6 +1438,7 @@ impl Callbacks for ExportCallbacks {
             "ordering_enum":if tcx.lang_items().get(rustc_attr_ir::LangItem::OrderingEnum).is_some(){
                 compiler_fact(type_json(&mut export_context,tcx,tcx.ty_ordering_enum(rustc_span::DUMMY_SP)))
             }else{unavailable_compiler_fact("missing OrderingEnum lang item")}});
+        export_profile.mark("local_roots_and_primitives");
         let named_shim_abis = shim_abi::named_signatures(tcx, &mut export_context);
         let named_types = shim_abi::named_types(tcx, &mut export_context);
         let libc_type_layouts = libc_type_layouts::export(tcx, &mut export_context);
@@ -1433,6 +1450,7 @@ impl Callbacks for ExportCallbacks {
         let named_statics = named_statics::export(tcx, &mut export_context);
         let shim_abis = shim_abi::export(tcx, &mut export_context);
         panic_queries::register_termination_helpers(tcx, &mut export_context);
+        export_profile.mark("named_metadata");
         let mut instances = export_reachable_instances(tcx, &mut export_context);
         // Seed erased signature types before the finite runtime-query domain.
         let _ = native_signature_queries::export(tcx, &mut export_context);
@@ -1445,6 +1463,7 @@ impl Callbacks for ExportCallbacks {
         let _predicate_queries_seed = compiler_predicate_queries_json(tcx, &mut export_context);
         let _native_signature_queries_seed = native_signature_queries::export(tcx, &mut export_context);
         let _retag_queries_seed = retag_queries::export(tcx, &export_context);
+        export_profile.mark("initial_instance_closure_and_seeds");
         let mut internal_target_features = tcx
             .sess
             .internal_target_features
@@ -1454,6 +1473,7 @@ impl Callbacks for ExportCallbacks {
         internal_target_features.sort();
         let mut root_span = span_json(&mut export_context, tcx, rustc_span::DUMMY_SP);
         root_span["is_dummy"] = json!(rustc_span::DUMMY_SP.is_dummy());
+        export_profile.mark("initial_context");
         // Every catalog below is a source-demand producer or a projection of
         // accumulated source demands. Recompute the projections until one full
         // round adds no types, predicates, instances, allocations, query keys,
@@ -1524,22 +1544,26 @@ impl Callbacks for ExportCallbacks {
                 export_context.runtime_type_query_demands.len(),
                 processed_runtime_type_queries.len(),
             ];
+            export_profile.mark("closure.round_setup");
             if trace_export { eprintln!("export phase: cast_queries"); }
             let cast_queries = cast_queries::export(tcx, &mut export_context);
             let (vtable_queries, vtable_query_ids) =
                 compiler_vtable_queries_json(tcx, &mut export_context);
+            export_profile.mark("closure.cast_and_vtable_queries");
             if trace_export { eprintln!("export phase: runtime_foreign_symbols"); }
             let runtime_foreign_symbols = foreign_symbols::export(tcx, &mut export_context);
             let runtime_virtual_queries =
                 compiler_runtime_virtual_queries_json(tcx, &mut export_context);
             register_fn_pointer_call_transfers(&mut export_context, tcx);
             register_runtime_callback_transfers(&mut export_context, tcx);
+            export_profile.mark("closure.foreign_virtual_transfers");
             if trace_export { eprintln!("export phase: runtime_type_query_wave"); }
             let runtime_type_query_wave = compiler_runtime_type_queries_json(
                 tcx,
                 &mut export_context,
                 &mut processed_runtime_type_queries,
             );
+            export_profile.mark("closure.runtime_type_queries");
             let mut runtime_type_query_rows = match runtime_type_query_wave {
                 Value::Array(rows) => rows,
                 _ => panic!("runtime type queries are an array"),
@@ -1547,13 +1571,19 @@ impl Callbacks for ExportCallbacks {
             runtime_type_queries.append(&mut runtime_type_query_rows);
             let runtime_caller_instances =
                 compiler_caller_location_queries_json(tcx, &mut export_context);
+            export_profile.mark("closure.caller_location_queries");
             let global_byte_queries = global_byte_queries::export(tcx, &mut export_context);
+            export_profile.mark("closure.global_byte_queries");
             let symbol_identity_instances =
                 symbol_identity_instances_json(tcx, &mut export_context);
+            export_profile.mark("closure.symbol_identity_instances");
             let instance_abis = compiler_instance_abis_json(tcx, &mut export_context);
+            export_profile.mark("closure.instance_abis");
             let covariance_queries = covariance_queries::export(tcx, &mut export_context);
+            export_profile.mark("closure.covariance_queries");
             if trace_export { eprintln!("export phase: function_facts"); }
             let function_facts = compiler_function_facts_json(tcx, &mut export_context);
+            export_profile.mark("closure.function_facts");
             if trace_export { eprintln!("export phase: predicate_queries"); }
             let predicate_queries = compiler_predicate_queries_json(tcx, &mut export_context);
             let native_signature_queries =
@@ -1563,6 +1593,7 @@ impl Callbacks for ExportCallbacks {
                 intrinsic_value_queries::type_names(tcx, &mut export_context);
             let caller_location_constants =
                 intrinsic_value_queries::caller_locations(tcx, &mut export_context);
+            export_profile.mark("closure.predicate_signature_retag_intrinsics");
             if trace_export { eprintln!("export phase: instances.extend(export_reachable_instances"); }
             instances.extend(export_reachable_instances(tcx, &mut export_context));
             if self.prepared_allocator_world {
@@ -1574,6 +1605,7 @@ impl Callbacks for ExportCallbacks {
                     return Compilation::Stop;
                 }
             }
+            export_profile.mark("closure.reachable_and_alloc_probes");
             let after = [
                 export_context.instance_ids.len(),
                 export_context.pending_instances.len(),
@@ -1632,6 +1664,7 @@ impl Callbacks for ExportCallbacks {
             }
         };
         instances.extend(symbol_identity_instances);
+        export_profile.mark("closure_finalize");
         let runtime_queries = {
             let mut queries: JsonMap<String, Value> = JsonMap::new();
             queries.insert("startup".into(), startup_queries::export(tcx));
@@ -1746,6 +1779,7 @@ impl Callbacks for ExportCallbacks {
             fields.insert("compiler_predicate_queries".into(), predicate_queries);
             fields.insert("bodies".into(), Value::Array(bodies.into()));
         }
+        export_profile.mark("root_document");
         let allocator_world = if self.prepared_allocator_world {
             match allocator_world::capture(tcx, &mut export_context, &selected_alloc_id_keys) {
                 Ok(world) => Some(world),
@@ -1757,6 +1791,7 @@ impl Callbacks for ExportCallbacks {
         } else {
             None
         };
+        export_profile.mark("allocation_world_capture");
         let vtable_diagnostics = match export_context.vtable_diagnostics.report(&export_context, &vtable_query_ids) {
             Ok(report) => report,
             Err(error) => {
@@ -1782,8 +1817,10 @@ impl Callbacks for ExportCallbacks {
                 fields.insert("compiler_alloc_id_world".into(), world);
             }
         }
+        export_profile.mark("context_release_and_tables");
         patch_vtable_query_ids(&mut document, &vtable_query_ids);
         patch_virtual_resolution_candidates(&mut document);
+        export_profile.mark("vtable_patches");
         if is_scoped {
             let roots = selected_root_records
                 .expect("scoped export has precomputed root records");
@@ -1800,6 +1837,7 @@ impl Callbacks for ExportCallbacks {
                 "unresolved_obligations":obligations,
             });
         }
+        export_profile.mark("scope_obligations");
         if let Some(invocation) = self.invocation.take() {
             document["invocation"] = invocation;
         }
@@ -1815,6 +1853,7 @@ impl Callbacks for ExportCallbacks {
         } else {
             None
         };
+        export_profile.mark("reference_frontier");
         let sharing_result = if env::var_os("LEAN_MIRI_PREPARED_SCAN_FLAGS").as_deref() == Some(std::ffi::OsStr::new("1")) {
             payload_sharing::share_payloads_with_scan_flags(&mut document, true)
         } else {
@@ -1824,10 +1863,12 @@ impl Callbacks for ExportCallbacks {
             self.export_error = Some(error);
             return Compilation::Stop;
         }
+        export_profile.mark("share_payloads");
         if let Err(error) = vtable_diagnostics::write_report(vtable_diagnostics, &document) {
             self.export_error = Some(error);
             return Compilation::Stop;
         }
+        export_profile.mark("diagnostic_report");
         if self.miri_reference {
             if !self.prepared_allocator_world {
                 self.export_error = Some(
@@ -1842,6 +1883,7 @@ impl Callbacks for ExportCallbacks {
             }
             #[cfg(feature = "miri-reference")]
             {
+                export_profile.mark("write_snapshot");
                 let (fingerprint, byte_length) = match snapshot_fingerprint(&self.output) {
                     Ok(fingerprint) => fingerprint,
                     Err(error) => {
@@ -1872,9 +1914,11 @@ impl Callbacks for ExportCallbacks {
                     self.export_error = Some(error);
                     return Compilation::Stop;
                 }
+                export_profile.mark("fingerprint_and_reference_setup");
                 // Drop the large owned snapshot tree before Miri starts using
                 // the same TyCtxt, keeping the reference peak within budget.
                 drop(document);
+                export_profile.mark("drop_snapshot");
                 let result = match reference_entry {
                     Some((entry, entry_type)) => run_prepared_miri_reference_entry(
                         tcx,
@@ -1888,6 +1932,7 @@ impl Callbacks for ExportCallbacks {
                         "same_tcx":true,
                     }),
                 };
+                export_profile.mark("miri_reference");
                 let mut finished = sidecar_base;
                 finished["reference"] = result.clone();
                 finished["status"] = result["status"].clone();

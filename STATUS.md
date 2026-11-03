@@ -969,6 +969,81 @@ reduces exporter preparation; generic Lean decoding and guest execution remain.
 Raw counters, artifact/source hashes, reference bindings and validation output
 are under ignored `scratch/perf-direct-dag/`.
 
+### Pipeline bottleneck attribution after persistent construction
+
+`LEAN_MIRI_PROFILE_EXPORT=1` now emits optional adjacent wall spans without
+changing compiler queries. Covariance subspans are nested in their outer phase
+and are excluded when summing outer exporter spans. See `tools/PROFILING.md`.
+No optimization is claimed by this diagnostic-only change.
+
+On the unchanged original `pass/unops.rs`, two detailed exporter/reference runs
+are 43.688 / 44.080 seconds (CPU 43.524 / 43.919; RSS 4.931 / 4.931 GB; selected
+CPU steal 0.26 / 0.37 seconds; zero throttling). The principal outer spans are:
+
+| Exporter/reference phase | Seconds, two detailed trials |
+| --- | ---: |
+| Covariance catalog | 15.667 / 15.853 |
+| Final structural sharing | 9.595 / 9.703 |
+| Vtable patches | 2.625 / 2.660 |
+| Scope/catalog obligations | 2.528 / 2.550 |
+| Destruction of snapshot graph | 2.843 / 2.821 |
+| JSON file write | 1.740 / 1.738 |
+| Actual prepared Miri reference execution | 0.084 / 0.085 |
+
+A further covariance subprofile attributes 14.867 seconds to debug-string-key
+sorting/deduplication, versus 0.292 seconds constructing its result rows and
+0.017 seconds normalizing groups. The closure takes seven rounds; the final
+round has 17,273 normalized groups and 32,553 pairs before / 32,478 after dedup.
+`sort_by_key` repeatedly formats both deep types during comparisons; this is
+not primarily the actual rustc relation query. Caching sort keys and avoiding re-sorting unchanged pairs
+is the first local optimization candidate. Its realized gain is not measured.
+
+Native measurements use the same frozen `7fb2fa62` runner and unchanged
+fingerprint-bound input from the preceding exporter change, CPU 2 and one Lean
+thread. Two unops trials finish in 46.197 / 44.420 seconds (CPU 46.171 / 44.372;
+steal 0.53 / 0.33 seconds; zero throttling). Parent-observed phase boundaries,
+rather than sums of potentially nested profiler spans, give:
+
+| Native unops phase | Seconds, two trials |
+| --- | ---: |
+| Read/strict decode | 26.708 / 25.452 |
+| Lower MIR | 4.596 / 4.334 |
+| Prepare providers/runtime input | 10.647 / 10.480 |
+| Bootstrap | 1.428 / 1.387 |
+| Post-bootstrap interpretation to raw result | 0.837 / 0.847 |
+| Exit finalization | 0.004 / 0.004 |
+
+One original `const-addrs` EVALS=64 control finishes exit zero with 74,057 choices
+in 122.393 seconds: decode 36.638, lowering 5.652, preparation 12.762, bootstrap
+1.528 and post-bootstrap execution 61.766 seconds (CPU 121.629, steal 1.10;
+zero throttling). This is a single attribution run, not a performance spread or
+an end-to-end const export measurement. Its guest cost differs substantially
+from unops. Slow-iteration spans cover only 0.669 seconds of those 61.766;
+sub-10ms repeated operations still need attribution. Full-instance/body checks
+in `CompilerFrameContext.bodyOfFrame`/`CallResolution.loadedBodyOfInstance`
+perform repeated exact instance/source scans and are a candidate, not a measured
+fraction of that execution time.
+
+The next half-time objective applies to the full approximately 89-second unops
+pipeline. Optimizing its interpreter loop alone cannot deliver it. First remove
+repeated covariance sorting; then investigate construction-time canonical node
+IDs and checked prepared MIR/compiler tables, avoiding final global interning
+and generic JSON → typed model → lowered MIR → runtime projection passes.
+JSON text parsing alone remains around two seconds. An ABI-only transport
+change has too narrow a scope. A prepared format must retain exact identities,
+unsupported/unknown outcomes and independent validation of references, compiler
+metadata and obligations; no checks may be replaced by trusting a readiness bit.
+Exporter around 20 seconds plus native around 20–24 seconds is a design target,
+not a benchmark result. A general half-time claim for long-running guests also
+requires execution-hotspot work. The full UI sweep remains unrerun.
+Validation: 13 exporter Rust unit tests and quick/integrity checks (88 Python
+tests) passed. Five instrumented exports have independently verified pinned
+references/fingerprints. Both fixed-input unops replays, a fresh instrumented
+unops replay and the original const control retain exact complete tapes, events
+and terminal output against their preceding frozen-runner observations.
+Raw profiles, counters, frozen artifacts and source/reference bindings are in
+ignored `scratch/perf-bottleneck/`.
+
 ## Feature support outside the current acceptance scope
 
 The following support and integration work remains in the backlog, even though
