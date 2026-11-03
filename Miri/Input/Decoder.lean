@@ -4,8 +4,9 @@ namespace Miri.Input
 open Lean DecoderValues
 
 private partial def collectFunctionAbisAux (node : JsonTraversalCache.Node) (path : String) (memo : DecodeMemo)
-    (seen : Std.HashSet JsonTraversalCache.Key := {}) (visited : Std.HashSet JsonTraversalCache.IdentityKey := {})
-    : Except String (Array FunctionAbi × Std.HashSet JsonTraversalCache.Key × Std.HashSet JsonTraversalCache.IdentityKey) := do
+    (seen : Std.HashSet JsonTraversalCache.Key := {}) (visited : JsonTraversalCache.IdentitySet := .empty)
+    : Except String (Array FunctionAbi × Std.HashSet JsonTraversalCache.Key × JsonTraversalCache.IdentitySet) := do
+  if !node.mayContain 4 then return (#[], seen, visited)
   let j := node.value
   let key := node.identity
   if statusOf? j == some "debug_payload" then return (#[], seen, visited)
@@ -56,8 +57,8 @@ private partial def collectFunctionAbisAux (node : JsonTraversalCache.Node) (pat
     return (all, seen, visited)
   | _ => return (#[], seen, visited)
 
-private def collectFunctionAbis (node : JsonTraversalCache.Node) (path : String) (memo : DecodeMemo := emptyDecodeMemo) : Except String (Array FunctionAbi) := do
-  return (← collectFunctionAbisAux node path memo).1
+private def collectFunctionAbis (node : JsonTraversalCache.Node) (path : String) (memo : DecodeMemo := emptyDecodeMemo) (nodeCount : Nat := 0) : Except String (Array FunctionAbi) := do
+  return (← collectFunctionAbisAux node path memo {} (.empty nodeCount)).1
 
 private def validateDense (ids : Array Nat) (what : String) : Except String Unit := do
   let mut seen : Std.HashSet Nat := {}
@@ -71,8 +72,9 @@ private def validateDense (ids : Array Nat) (what : String) : Except String Unit
 `validateDense`; each dense array then denotes exactly the natural range below
 its size, independent of row order. -/
 private partial def validateReferencesAux (node : JsonTraversalCache.Node) (path : String)
-    (typeCount allocationCount instanceCount : Nat) (visited : Std.HashSet JsonTraversalCache.IdentityKey)
-    : Except String (Std.HashSet JsonTraversalCache.IdentityKey) := do
+    (typeCount allocationCount instanceCount : Nat) (visited : JsonTraversalCache.IdentitySet)
+    : Except String (JsonTraversalCache.IdentitySet) := do
+  if !node.mayContain 1 then return visited
   let j := node.value
   let memoKey := node.identity
   if statusOf? j == some "debug_payload" then return visited
@@ -108,8 +110,8 @@ private partial def validateReferencesAux (node : JsonTraversalCache.Node) (path
   | _ => return visited
 
 private def validateReferences (node : JsonTraversalCache.Node) (path : String)
-    (typeCount allocationCount instanceCount : Nat) : Except String Unit := do
-  let _ ← validateReferencesAux node path typeCount allocationCount instanceCount {}
+    (typeCount allocationCount instanceCount : Nat) (nodeCount : Nat := 0) : Except String Unit := do
+  let _ ← validateReferencesAux node path typeCount allocationCount instanceCount (.empty nodeCount)
 
 private def validateMirField (key : String) (value : Json) (path : String)
     (localCount : Nat) : Except String Unit := do
@@ -261,8 +263,9 @@ private def validateBody (node : JsonTraversalCache.Node) (path : String) : MirI
     validateTerminatorEdges term s!"{blockPath}.terminator.kind" blocks.size
     index := index + 1
 
-private partial def validateAllBodiesAux (node : JsonTraversalCache.Node) (path : String) (visited : Std.HashSet JsonTraversalCache.IdentityKey)
-    : MirIndexValidation (Std.HashSet JsonTraversalCache.IdentityKey) := do
+private partial def validateAllBodiesAux (node : JsonTraversalCache.Node) (path : String) (visited : JsonTraversalCache.IdentitySet)
+    : MirIndexValidation (JsonTraversalCache.IdentitySet) := do
+  if !node.mayContain 2 then return visited
   let j := node.value
   let memoKey := node.identity
   if statusOf? j == some "debug_payload" then return visited
@@ -287,8 +290,8 @@ private partial def validateAllBodiesAux (node : JsonTraversalCache.Node) (path 
     return if node.shouldMemo then visited.insert memoKey else visited
   | _ => return visited
 
-private def validateAllBodies (node : JsonTraversalCache.Node) (path : String) : Except String Unit := do
-  let _ ← (validateAllBodiesAux node path {}).run' {}
+private def validateAllBodies (node : JsonTraversalCache.Node) (path : String) (nodeCount : Nat := 0) : Except String Unit := do
+  let _ ← (validateAllBodiesAux node path (.empty nodeCount)).run' {}
 
 private def jsonToNatArray (nodes : Array α) (getId : α → Nat) : Array Nat := nodes.map getId
 
@@ -1413,7 +1416,8 @@ private def exactDynamicVtableUpcast? (j node descriptor : Json) : Bool := Id.ru
   return true
 
 private partial def malformedDynamicVtableUpcastAux (root : Json) (node : JsonTraversalCache.Node) (path : String)
-    (visited : Std.HashSet JsonTraversalCache.IdentityKey) : Option String × Std.HashSet JsonTraversalCache.IdentityKey := Id.run do
+    (visited : JsonTraversalCache.IdentitySet) : Option String × JsonTraversalCache.IdentitySet := Id.run do
+  if !node.mayContain 8 then return (none, visited)
   let current := node.value
   let memoKey := node.identity
   match current with
@@ -1441,8 +1445,8 @@ private partial def malformedDynamicVtableUpcastAux (root : Json) (node : JsonTr
   | _ => pure ()
   return (none, visited)
 
-private def malformedDynamicVtableUpcast? (node : JsonTraversalCache.Node) : Option String :=
-  (malformedDynamicVtableUpcastAux node.value node "$" {}).1
+private def malformedDynamicVtableUpcast? (node : JsonTraversalCache.Node) (nodeCount : Nat := 0) : Option String :=
+  (malformedDynamicVtableUpcastAux node.value node "$" (.empty nodeCount)).1
 
 private partial def hasFailedStatusAt (j : Json) (wanted path : String) : Bool := Id.run do
   match j with
@@ -1545,7 +1549,7 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
   if (← fieldNat j "schema_version" "$") != expectedSchemaVersion then
     throw s!"$.schema_version: unsupported schema version"
   if let some path := profileit "decoder.dynamic_vtable_scan" profile fun _ =>
-      malformedDynamicVtableUpcast? traversal then
+      malformedDynamicVtableUpcast? traversal resolved.nodes.size then
     throw s!"{path}: supported dynamic vtable upcast lacks matching compiler cast evidence"
   let producerJson ← field j "producer" "$"
   let producer : Producer := {
@@ -1577,7 +1581,7 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
   let compilerFunctionAbiTable := profileit "decoder.compiler_abi_queries" profile fun _ =>
     prepareCompilerFunctionAbiTableUsing resolved.nodes memo
   let memo := compilerFunctionAbiTable.extendDecodeMemo memo
-  let functionAbis ← profileit "decoder.function_abis" profile fun _ => collectFunctionAbis traversal "$" memo
+  let functionAbis ← profileit "decoder.function_abis" profile fun _ => collectFunctionAbis traversal "$" memo resolved.nodes.size
   let compilerAbiLayoutSchema ← optionalString j "compiler_abi_layout_schema" "$"
   if let some schema := compilerAbiLayoutSchema then
     if schema != expectedCompilerAbiLayoutSchema then
@@ -1595,9 +1599,9 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
   profileit "decoder.validate_dense_type_ids" profile fun _ => validateDense typeIds "type IDs"
   profileit "decoder.validate_dense_allocation_ids" profile fun _ => validateDense allocationIds "allocation IDs"
   profileit "decoder.validate_dense_instance_ids" profile fun _ => validateDense instanceIds "instance IDs"
-  profileit "decoder.validate_all_bodies" profile fun _ => validateAllBodies traversal "$"
+  profileit "decoder.validate_all_bodies" profile fun _ => validateAllBodies traversal "$" resolved.nodes.size
   profileit "decoder.validate_references" profile fun _ =>
-    validateReferences traversal "$" types.size allocations.size instances.size
+    validateReferences traversal "$" types.size allocations.size instances.size resolved.nodes.size
   let (typedTree?, valueIssues) ← if runtimeOnly then
       let decoded ← profileit "decoder.runtime_value" profile fun _ =>
         decodeRuntimeValue traversal "$" .any .none memo

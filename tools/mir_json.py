@@ -41,8 +41,8 @@ def decode_mir_document(document: Any) -> dict[str, Any]:
     catalog = document.get(SHARED_PAYLOADS_FIELD)
     if not isinstance(catalog, dict):
         raise MirJSONError("current MIR document must contain a shared_payloads graph")
-    if set(catalog) != {"schema_version", "nodes"}:
-        raise MirJSONError("shared_payloads must contain only schema_version and nodes")
+    if set(catalog) not in ({"schema_version", "nodes"}, {"schema_version", "nodes", "scan_flags"}):
+        raise MirJSONError("shared_payloads must contain only schema_version and nodes, with optional scan_flags")
     if catalog.get("schema_version") != SHARED_PAYLOADS_SCHEMA_VERSION:
         raise MirJSONError(
             f"shared_payloads schema_version must be {SHARED_PAYLOADS_SCHEMA_VERSION}"
@@ -50,6 +50,14 @@ def decode_mir_document(document: Any) -> dict[str, Any]:
     nodes = catalog.get("nodes")
     if not isinstance(nodes, list):
         raise MirJSONError("shared_payloads.nodes must be an array")
+    flags = catalog.get("scan_flags")
+    if "scan_flags" in catalog and (
+        not isinstance(flags, list) or len(flags) != len(nodes) or any(
+            isinstance(flag, bool) or not isinstance(flag, int) or not 0 <= flag < 16
+            for flag in flags
+        )
+    ):
+        raise MirJSONError("shared_payloads.scan_flags must contain one four-bit integer per node")
 
     cache: dict[int, Any] = {}
 
@@ -94,6 +102,33 @@ def decode_mir_document(document: Any) -> dict[str, Any]:
     for index in range(len(nodes)):
         if index not in cache:
             cache[index] = expand(nodes[index], parent_node=index, active={index})
+
+    if flags is not None:
+        field_bits = {"type_id": 1, "allocation_id": 1, "instance_id": 1,
+                      "locals": 2, "basic_blocks": 2, "fn_abi": 4,
+                      "calling_convention": 4, "vtable_allocation": 8}
+        computed: list[int] = []
+
+        def summary(value: Any) -> int:
+            if isinstance(value, dict):
+                if SHARED_REF_FIELD in value:
+                    return computed[value[SHARED_REF_FIELD]]
+                result = 0
+                for key, child in value.items():
+                    result |= field_bits.get(key, 0) | summary(child)
+                return result
+            if isinstance(value, list):
+                result = 0
+                for child in value:
+                    result |= summary(child)
+                return result
+            return 0
+
+        for index, node in enumerate(nodes):
+            actual = summary(node)
+            if actual != flags[index]:
+                raise MirJSONError(f"shared_payloads.scan_flags[{index}] differs from actual graph")
+            computed.append(actual)
 
     result = {
         key: expand(value, parent_node=None, active=set())

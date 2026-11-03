@@ -826,6 +826,91 @@ passed for 92,058 declarations, using only the permitted three axioms. The unuse
 example remaining-quota helper now returns Option Nat, with none for unbounded.
 The full upstream inventory has not been rerun by these focused checks.
 
+### Checked graph summaries and canonical span indices
+
+The importer now computes conservative subtree classes during its existing
+bottom-up graph/hash preparation. ABI, body, reference and vtable-cast scans
+skip only branches containing none of their relevant fields. The complete
+runtime obligation scan, readiness gates and demand-time errors remain in place.
+Visited exporter IDs use a byte array; raw/noncanonical input and out-of-range
+internal keys retain the original exact-key set fallback.
+
+`LEAN_MIRI_PREPARED_SCAN_FLAGS=1` optionally lets the exporter emit the same
+per-node summaries while interning its graph. Lean recomputes and checks every
+summary before pruning, including summaries of unused nodes. Incorrect bits,
+lengths and unsupported values fail closed. Legacy exports remain supported,
+and the default wire output is unchanged. This is checked preparation metadata,
+not a switch to a binary format or a transfer of interpreter execution to Rust.
+JSON text parsing alone is about 1.9 seconds in the cold unops run.
+
+Compiler providers also prepare a span index tied by type to their final span
+array. `CompilerSpanLookup.Prepared.find_eq` and `findUsing_eq` prove equality
+with the original first full-equality list lookup for every array and query.
+Hash buckets use numeric bounds, while complete payload, filename, hygiene and
+source coordinates decide equality; collisions, duplicates and missing spans
+retain their original behavior. Manual providers can omit the index. The
+existing local-span theorem keeps its original premises and conclusion.
+A source-span-only wire/memo prototype showed no clear speedup and was removed.
+
+Final native artifacts compare the immediately preceding span-search candidate
+(`0f9ad346`), rather than the much older pre-optimization interpreter, with
+`7fb2fa62`. The three original exports are byte-identical throughout these
+trials. Each final pair runs sequentially on CPU 2 with one Lean thread, without
+builds or tests in the measurement interval. Raw seconds follow; throttling is
+zero in every trial. These final pairs each have n=1, so no spread estimate is
+claimed for the final artifact. Earlier frozen traversal-only trials separately
+repeated unops at 45.693/45.706 seconds against 55.946/55.012 seconds.
+
+| Full input | Previous wall / CPU / steal | New wall / CPU / steal |
+| --- | --- | --- |
+| unops | 54.541 / 54.525 / 0.210 | 45.471 / 45.417 / 0.430 |
+| const-addrs, original EVALS=64 | 148.447 / 148.321 / 1.510 | 114.424 / 114.390 / 0.660 |
+| invalid-bool | 54.805 / 54.690 / 0.340 | 43.707 / 43.565 / 0.260 |
+
+Observed wall reductions are 16.63%, 22.92% and 20.25%. Peak RSS changes from
+3.84/4.42/3.81 GB to 3.91/4.51/3.88 GB respectively. All positive inputs finalize
+exit zero; const-addrs consumes all 74,057 choices. Invalid-bool still reports
+invalidBool 2 at original source line 3. Full consumed tapes, choice events and
+terminal observations match exactly between each baseline/candidate pair.
+Independent pinned Miri references, native FNV/byte lengths and SHA256 bindings
+are checked. This does not meet the further half-time target.
+
+A separate fresh-source pipeline pair uses the identical original unops Rust
+source, rustc arguments and pinned tools, with seed 0 and an empty environment
+for each same-TyCtxt reference. The previous exporter is rebuilt from `330a5b59`;
+the new exporter enables the optional summaries. Each fresh export has its own
+unaltered fingerprint-bound reference. Compiler query row ordering can differ
+between fresh exports; this is a source-to-result comparison, not an assertion
+that those two MIR files are byte-identical. Tapes/events/terminal results match
+exactly, and each independent oracle accepts the completed execution.
+
+| Pipeline phase | Previous wall / CPU / steal | New wall / CPU / steal |
+| --- | --- | --- |
+| export plus prepared Miri reference | 79.414 / 79.221 / 1.700 | 75.068 / 74.973 / 0.280 |
+| native execution | 54.817 / 54.718 / 0.510 | 45.698 / 45.508 / 0.210 |
+
+The phase-wall sum is 134.231 → 120.766 seconds; total measured pipeline wall,
+including collection/fingerprint overhead, is 134.536 → 121.085 seconds. All
+throttling deltas are zero. Exporter peak RSS is 9.81 → 9.86 GB. This is one
+pipeline pair, with no spread estimate and no separate claim that the small
+exporter timing difference is caused by summaries. An exploratory trial with a
+mismatched reference profile was rejected and excluded from these results.
+
+Validation passed: performance regressions and full MiriTests typechecking,
+native runner tests, cached/reference decoder parity, structural regressions,
+88 quick/integrity tests, eight Python wire tests and six Rust sharing tests.
+The Miri axiom audit covers 71,161 declarations. All 300 empty-function modules
+compile without example source edits; the original Rust/MIR hashes and final
+NoUB target type/premises are unchanged. Their combined audit covers 92,163
+declarations and admits only propext, Quot.sound and Classical.choice.
+
+The half-time goal remains open. Generic runtime-value decoding/preparation and
+repeated full-instance body lookup remain substantial costs. No generic binary
+serializer is claimed to solve those costs. The full 809-candidate upstream
+sweep has not been rerun. Frozen binaries, raw counters, profiles, equality/oracle
+checks and combined example audits are retained under ignored
+`scratch/perf-prepared/`.
+
 ## Feature support outside the current acceptance scope
 
 The following support and integration work remains in the backlog, even though

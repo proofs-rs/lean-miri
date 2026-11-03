@@ -1,3 +1,4 @@
+import Miri.Input.CompilerSpanLookup
 import Miri.Input.CompilerBodyEquality
 import Miri.Input.CompilerProviders
 import Miri.Input.NormalizationBody
@@ -122,7 +123,7 @@ def localSpan (p : CompilerProviders.Prepared) (supplied : MIR.Body) (id : MIR.L
   unless bodyContentsEqual supplied frame.body do throw (.invalidProgram "local span body differs from active frame")
   let body ← lift (bodyOfFrame p frame)
   let some decl := body.input.locals[id]? | throw (.invalidProgram "local source span index is absent")
-  match p.program.bundle.spans.toList.idxOf? decl.sourceInfo.span with
+  match CompilerSpanLookup.findUsing p.program.bundle.spans p.spanLookup decl.sourceInfo.span with
   | some index => pure ⟨index⟩
   | none => throw (.unsupported "exact local source span is absent from canonical span table")
 

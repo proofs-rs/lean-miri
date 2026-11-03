@@ -1,3 +1,4 @@
+import Miri.Input.CompilerSpanLookup
 import Miri.Input.NativeRunnerOptions
 import Miri.Interpreter.NativeRunLoop
 import Miri.Input.ExecutionChoicePolicy
@@ -62,6 +63,21 @@ def main : IO Unit := do
     match ExecutionChoices.index ⟨id, fun _ value => value⟩ .scheduler 7 bad with
     | .error _ after => check (after.cursor == 0 && after.generatedChoices == 0) "bad supplied head generated fallback"
     | _ => throw (IO.userError "out-of-domain head accepted")
+  let sourceSpan : SourceSpanData := ⟨"original", 10, 20, ⟨1, 2⟩, ⟨3, 4⟩, "context", "file.rs"⟩
+  let collisions := #[{sourceSpan with originalPayload := "other"},
+    {sourceSpan with context := "other"}, {sourceSpan with file := "other.rs"},
+    {sourceSpan with start := ⟨7, 8⟩}, sourceSpan, sourceSpan]
+  check (CompilerSpanLookup.find collisions sourceSpan == some 4) "span collision or duplicate order"
+  let collisionIndex := CompilerSpanLookup.prepare collisions
+  check (collisionIndex.find sourceSpan == some 4) "indexed span collision or duplicate order"
+  check (collisionIndex.find {sourceSpan with lo := 11} == none) "indexed missing span fabricated"
+  check (CompilerSpanLookup.find collisions {sourceSpan with lo := 11} == none) "missing span fabricated"
+  for count in [:64] do
+    let spans := (Array.range count).map fun n => {sourceSpan with lo := n, hi := n + 1}
+    let index := CompilerSpanLookup.prepare spans
+    for wanted in spans.push sourceSpan do
+      check (CompilerSpanLookup.find spans wanted == spans.toList.idxOf? wanted) "span lookup differs"
+      check (index.find wanted == spans.toList.idxOf? wanted) "prepared span lookup differs"
   let body : Miri.MIR.Body := ⟨.Built, 0, none, #[0, 1], #[]⟩
   check (bodyContentsEqual body body) "same canonical body rejected"
   let equalBody : Miri.MIR.Body := ⟨.Built, 0, none, (List.range 2).toArray, #[]⟩

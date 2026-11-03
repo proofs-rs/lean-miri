@@ -1810,7 +1810,12 @@ impl Callbacks for ExportCallbacks {
         } else {
             None
         };
-        if let Err(error) = payload_sharing::share_payloads(&mut document) {
+        let sharing_result = if env::var_os("LEAN_MIRI_PREPARED_SCAN_FLAGS").as_deref() == Some(std::ffi::OsStr::new("1")) {
+            payload_sharing::share_payloads_with_scan_flags(&mut document, true)
+        } else {
+            payload_sharing::share_payloads(&mut document)
+        };
+        if let Err(error) = sharing_result {
             self.export_error = Some(error);
             return Compilation::Stop;
         }

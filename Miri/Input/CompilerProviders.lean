@@ -1,4 +1,5 @@
 import Miri.Input.CompilerBodyEquality
+import Miri.Input.CompilerSpanLookup
 import Miri.Input.CompilerPanicFacts
 import Miri.Input.CompilerLifecyclePipeline
 import Miri.Input.CompilerFunctionFacts
@@ -27,6 +28,8 @@ namespace Miri.Input.CompilerProviders
 open Lean Miri.ABI Miri.Memory Miri.Interpreter
 structure Prepared where
   program : LoweredProgram
+  /-- First-match source positions, tied to the final canonical span table. -/
+  spanLookup : Option (CompilerSpanLookup.Prepared program.bundle.spans) := none
   /-- Reused by recursive callback configuration construction. -/
   rootSpanCache : Option (CompilerContextSpan.Bound program) := none
   /-- Prepared lowering indices certified for this provider's exact input.
@@ -211,6 +214,8 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
     CompilerConstantQueries.bind constants runtime (some sourceEquality)
   return {
     program
+    spanLookup := some (profileit "preparation.providers.span_lookup" profile fun _ =>
+      CompilerSpanLookup.prepare program.bundle.spans)
     rootSpanCache := some (CompilerContextSpan.bind program)
     lowering := some (LowerContext.bindDocument program.input)
     runtime

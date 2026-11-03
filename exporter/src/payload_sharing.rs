@@ -74,10 +74,21 @@ fn reference(index: usize) -> Value {
 struct Encoder {
     nodes: Vec<Value>,
     indices: HashMap<String, usize>,
+    scan_flags: Vec<u8>,
+}
+
+fn field_interest(name: &str) -> u8 {
+    match name {
+        "type_id" | "allocation_id" | "instance_id" => 1,
+        "locals" | "basic_blocks" => 2,
+        "fn_abi" | "calling_convention" => 4,
+        "vtable_allocation" => 8,
+        _ => 0,
+    }
 }
 
 impl Encoder {
-    fn encode_value(&mut self, value: &mut Value, field: Option<&str>) -> Result<(), String> {
+    fn encode_value(&mut self, value: &mut Value, field: Option<&str>) -> Result<u8, String> {
         if contains_reference_marker(value) {
             return Err(format!(
                 "input contains reserved `{SHARED_REF_FIELD}` reference shape"
@@ -88,23 +99,24 @@ impl Encoder {
         // array with a reference can otherwise make its containing record look
         // small by the time its own post-order visit finishes.
         let should_intern = eligible(value, field);
+        let mut interests = 0;
 
         match value {
             Value::Array(values) => {
                 for child in values {
-                    self.encode_value(child, None)?;
+                    interests |= self.encode_value(child, None)?;
                 }
             }
             Value::Object(object) => {
                 for (key, child) in object.iter_mut() {
-                    self.encode_value(child, Some(key))?;
+                    interests |= field_interest(key) | self.encode_value(child, Some(key))?;
                 }
             }
             _ => {}
         }
 
         if !should_intern {
-            return Ok(());
+            return Ok(interests);
         }
 
         // serde_json's default Map is key ordered, making this a stable,
@@ -112,14 +124,15 @@ impl Encoder {
         let key = value.to_string();
         if let Some(index) = self.indices.get(&key) {
             *value = reference(*index);
-            return Ok(());
+            return Ok(self.scan_flags[*index]);
         }
 
         let index = self.nodes.len();
         self.nodes.push(std::mem::replace(value, Value::Null));
         self.indices.insert(key, index);
+        self.scan_flags.push(interests);
         *value = reference(index);
-        Ok(())
+        Ok(interests)
     }
 }
 
@@ -128,6 +141,11 @@ impl Encoder {
 /// The transform is deterministic and exact: structural JSON serialization
 /// is used as the interning key, and references point to nodes with lower ids.
 pub(crate) fn share_payloads(document: &mut Value) -> Result<(), String> {
+    share_payloads_with_scan_flags(document, false)
+}
+
+/// Optional checked traversal summaries, using the same node IDs and payloads.
+pub(crate) fn share_payloads_with_scan_flags(document: &mut Value, prepared: bool) -> Result<(), String> {
     let Some(root) = document.as_object() else {
         return Err("shared payload exporter expected a JSON object root".into());
     };
@@ -143,13 +161,11 @@ pub(crate) fn share_payloads(document: &mut Value) -> Result<(), String> {
         encoder.encode_value(child, Some(key))?;
     }
 
-    root.insert(
-        SHARED_CATALOG_FIELD.into(),
-        json!({
-            "schema_version": SCHEMA_VERSION,
-            "nodes": encoder.nodes,
-        }),
-    );
+    let mut catalog = json!({"schema_version": SCHEMA_VERSION, "nodes": encoder.nodes});
+    if prepared {
+        catalog["scan_flags"] = json!(encoder.scan_flags);
+    }
+    root.insert(SHARED_CATALOG_FIELD.into(), catalog);
     Ok(())
 }
 
@@ -279,5 +295,25 @@ mod tests {
 
         let mut with_ref = json!({"payload": {SHARED_REF_FIELD: 0}});
         assert!(share_payloads(&mut with_ref).is_err());
+    }
+
+    #[test]
+    fn prepared_scan_flags_follow_shared_edges_and_preserve_transport() {
+        let original = json!({"items": [
+            {"locals": [], "basic_blocks": [{"type_id": 7}]},
+            {"fn_abi": {"calling_convention": "Rust"}},
+            {"vtable_allocation": {"kind": "dynamic_vtable_upcast"}},
+            {"plain": [1, 2, 3]}
+        ]});
+        let mut ordinary = original.clone();
+        share_payloads(&mut ordinary).unwrap();
+        let mut prepared = original;
+        share_payloads_with_scan_flags(&mut prepared, true).unwrap();
+        let catalog = prepared[SHARED_CATALOG_FIELD].as_object_mut().unwrap();
+        let flags = catalog.remove("scan_flags").unwrap();
+        assert_eq!(flags.as_array().unwrap().len(), catalog["nodes"].as_array().unwrap().len());
+        assert!(flags.as_array().unwrap().iter().any(|flag| flag == &json!(15)));
+        assert!(flags.as_array().unwrap().iter().any(|flag| flag == &json!(0)));
+        assert_eq!(ordinary, prepared, "only the checked summaries may differ");
     }
 }

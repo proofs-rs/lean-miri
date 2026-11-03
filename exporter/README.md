@@ -50,6 +50,14 @@ references, distinct from raw Miri AllocId values.
 [SharedPayloads](../Miri/Input/SharedPayloads.lean) and
 [Decoder](../Miri/Input/Decoder.lean) check catalog, reference and typed-query contracts.
 
+`LEAN_MIRI_PREPARED_SCAN_FLAGS=1` experimentally adds one four-bit summary per
+shared node. Bits 1, 2, 4 and 8 summarize descendant reference IDs, MIR bodies,
+FnAbi records and vtable-cast fields. Lean checks these summaries against the
+actual graph before using them; incorrect or incomplete summaries are rejected.
+Without this field Lean derives the same summaries once during import. The
+summaries skip unrelated traversal branches, never validation of relevant data.
+The ordinary JSON output and existing fixtures remain supported.
+
 Specify `LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1` for prepared execution such as
 main. Building with `--features miri-reference` and adding
 `LEAN_MIRI_RUN_PREPARED_MIRI=1` also generates a reference Miri sidecar by

@@ -23,6 +23,16 @@ def document(nodes, payload, **root):
 
 
 class MirJSONTests(unittest.TestCase):
+    def test_prepared_scan_flags_are_checked_against_all_nodes(self):
+        encoded = document([{"type_id": 7}, [{REF: 0}], {"locals": []}], {REF: 1})
+        expected = decode_mir_document(encoded)
+        encoded["shared_payloads"]["scan_flags"] = [1, 1, 2]
+        self.assertEqual(decode_mir_document(encoded), expected)
+        for flags in ([0, 1, 2], [1, 15, 2], [1], [1, True, 2], [1, 16, 2], None):
+            encoded["shared_payloads"]["scan_flags"] = flags
+            with self.assertRaisesRegex(MirJSONError, "scan_flags"):
+                decode_mir_document(encoded)
+
     def test_expands_nested_and_repeated_backward_references(self):
         encoded = document(
             [
