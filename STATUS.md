@@ -1322,7 +1322,7 @@ copy-on-write table copies; ownership was corrected before all reported trials.
 
 ### Compiler payload sharing, indexed diagnostics and persistent span preparation
 
-Implementation `52e0756d` shares checked compiler instance kinds and complete
+Implementation `e538c05a` shares checked compiler instance kinds and complete
 generic arguments between import and preparation. Source definition slots are
 rebound to each consumer's current tables; current type membership is rechecked.
 Memo keys include complete canonical kind/argument payloads. Failed parses and
@@ -1340,12 +1340,14 @@ No diagnostic is dropped or newly classified from a name alone. Span candidate
 indices now use persistent hash tries: a deferred-error branch can retain its
 old state without copying/freeing the whole index at every successful update.
 Complete span equality, first matching indices, conflicts and rollback remain.
-The runtime-document exact-equality proof module includes every new cache field,
+The existing prepared MIR/span memo is also threaded through instance bodies and
+promoted bodies; previously that parser path used its empty default memo. The
+runtime-document exact-equality proof module includes every new cache field,
 with the same conditional Json/pattern equality assumptions.
 
 Three alternating, sequential whole-source pairs compare the previous indexed
 implementation (`ca69a0d5`, native SHA256 `0eaa49db`) with this implementation
-(native `7c791f88`). Both use the unchanged frozen ordinary exporter `67014ea0`,
+(native `880aeb08`). Both use the unchanged frozen ordinary exporter `67014ea0`,
 the original unops Rust source and flags, CPU 2 and one Lean thread. As in the
 previous source-entry experiment, both include common current cache-valid Cargo
 and Lake checks, fresh export, all native stages, final output and process exit
@@ -1356,35 +1358,34 @@ export byte identity is not assumed.
 
 | Metric (independent medians), seconds | Previous indexed baseline | Compiler metadata reuse |
 | --- | ---: | ---: |
-| Complete source entry through native exit | 58.411 | 49.763 |
-| Rust export | 17.873 | 17.903 |
-| Native process | 39.949 | 31.399 |
-| Read/strict decode | 23.474 | 18.384 |
-| MIR lowering | 2.419 | 2.387 |
-| Provider/runtime preparation | 10.614 | 7.228 |
-| Cumulative child CPU | 57.953 | 49.359 |
+| Complete source entry through native exit | 59.193 | 48.033 |
+| Rust export | 18.047 | 18.032 |
+| Native process | 40.516 | 29.559 |
+| Read/strict decode | 23.778 | 17.119 |
+| MIR lowering | 2.475 | 2.224 |
+| Provider/runtime preparation | 10.680 | 6.974 |
+| Cumulative child CPU | 58.714 | 47.629 |
 
-The complete path is **14.8% shorter**; native execution including loading and
-preparation is 21.4% shorter. Independent phase medians do not add to the whole.
-Whole times are 58.478 / 58.211 / 58.411 seconds versus 49.747 / 49.763 / 50.218;
-CPU-2 steal deltas 0.44 / 0.25 / 0.34 versus 0.30 / 0.21 / 0.29, with zero cgroup
-throttling. Export remains unchanged at 116,090,756 bytes. All six complete native
-outputs and 1361-choice tapes/events are byte-identical, pass strict readiness
-and finalize exit zero. A separate actual public build-exporter/export-mir/run.sh
-invocation takes **49.743 seconds** through exit and has the same complete output.
-Post-exit manifest hashing is excluded from those end boundaries; raw collector
-wrapper times are also retained. No cold-build or small memory-change speedup is
-claimed.
+The complete path is **18.9% shorter**; native execution including
+loading and preparation is 27.0% shorter. Independent phase medians do not
+add to the whole. Whole times are 59.193 / 59.269 / 58.453 seconds versus
+48.033 / 48.402 / 47.783; CPU-2 steal deltas 0.52 / 0.64 / 0.37 versus
+0.58 / 0.63 / 0.29, with zero cgroup throttling. Rust exporter sources and output
+format are unchanged. All six complete native outputs and 1361-choice tapes/events
+are byte-identical, pass strict readiness and finalize exit zero. A separate actual
+public build-exporter/export-mir/run.sh invocation takes **48.433 seconds**
+through exit and has the same complete output. Post-exit manifest hashing is
+excluded from those end boundaries; raw collector wrapper times are also retained.
+No cold-build or small memory-change speedup is claimed.
 
-A separate final profile reports runtime-value validation 3.97 seconds, compiler
-instance source-table preparation 127ms, document construction 1.77 seconds,
-backtrace-source preparation 477ms and compiler lifecycle 284ms. JSON parsing is
-still about 1.03 seconds. Source-reflexivity preparation (1.38 seconds) and
-allocation-world validation (1.77 seconds) remain, alongside other metadata and
-reference processing. Profiler spans can overlap and are not an additive total.
-The estimated 40–45-second whole-source time was optimistic; that estimate and
-the half-time goal remain unmet. The new source table covers instance kinds and
-arguments, not every compiler-metadata family.
+The final profile and complete phase measurements are retained under
+`profile-final/` and `source-pairs-final/`. The estimated 40–45-second whole-source
+time and the half-time goal remain unmet. The source table covers instance kinds
+and arguments, not every compiler-metadata family; other metadata/reference
+processing, source equality and allocation-world checking still run. The final
+profile reports instance-body parsing 440ms, runtime-value checking 4.01 seconds
+and backtrace-source preparation 376ms. Nested profiler spans are not additive
+whole-path timings.
 
 Validation: complete decoder check script passes, including existing ID/shared
 reference checks, 16 indexed/legacy cases and 10 new retained-query/compiler
@@ -1405,13 +1406,19 @@ sweep and the complete standalone runtime registry were not rerun for this step;
 Rust exporter sources are unchanged.
 
 Commands, resource counters, full logs and hashes are under ignored
-`scratch/perf-metadata/`: `source-pairs/summary.json`, `source-pairs/public1.json`,
-`profile/`, `ui/`, `decoder-suite.log`, `source-hits.log`, `interner.log`,
-`backtrace.log` and `proofs.log`. Baseline CPU attribution is under `attribution/`
+`scratch/perf-metadata/`: `source-pairs-final/summary.json`, `source-pairs-final/public1.json`,
+`profile-final/`, `ui-final/`, `final-decoder.log`, `final-interner.log`,
+`final-backtrace.log` and `final-proofs.log`. Baseline CPU attribution is under `attribution/`
 and `cpu-summary.json`; sampling was diagnostic and excluded from the pairs.
 An initial proof build exposed missing decidable-equality instances for the new
 cache data; explicit instances were added without weakening the original
 statement or assumptions, then the entire proof build/audit was rerun.
+
+The earlier partial metadata experiment (before threading the MIR/span memo into
+instance parsing) measured 58.411 → 49.763 seconds. Its original artifacts/logs
+remain in `source-pairs/`, `profile/` and `ui/`; the final figures above supersede
+that observation. All targeted checks, proof builds and fresh Miri comparisons
+were repeated after the parser fix.
 
 ## Feature support outside the current acceptance scope
 
