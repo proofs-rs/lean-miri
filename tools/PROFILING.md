@@ -254,3 +254,25 @@ interpreter binary. Decode/lower/preparation/guest behavior must be checked for
 each artifact pair, including complete choices and terminal classifications.
 `--profile` is useful for attribution but does not replace an unprofiled whole
 source-entry measurement. Nested profiler spans are not an additive phase total.
+
+For exporter-only attribution, enable `LEAN_MIRI_PROFILE_EXPORT=1` on a direct
+export. It reports fixpoint producer spans, per-round catalog counts, separate
+vtable/diagnostic walks, graph encoding/source release, snapshot writing and the
+rustc driver before/after its export callback. For example, with the pinned
+sysroot installed and the release exporter already built:
+
+```bash
+LEAN_MIRI_PROFILE_EXPORT=1 LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1 \
+  bash tools/export-mir.sh --output scratch/unops-profile.json --root main -- \
+  upstream/miri-source/tests/pass/unops.rs --crate-name unops --edition=2021 \
+  > scratch/unops-profile.log 2>&1
+python3 tools/summarize-exporter-profile.py scratch/unops-profile.log
+```
+
+The parent `direct.driver` span includes the complete export callback. The
+`covariance.*`, `patch.*`, `scope.*` and `image.*` spans are also nested inside
+parent spans; do not add both levels. The callback includes compiler queries as
+well as metadata construction; a producer's duration is not pure compiler query
+time. `export_catalog` counts rows reconstructed in each round, not distinct
+query-provider executions or proven-unused records. Profiling is diagnostic and
+does not alter the selected query closure or snapshot contents.

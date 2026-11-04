@@ -1524,6 +1524,116 @@ file-cache pressure (no OOM kill). It is not counted as passing; both comparison
 were rerun successfully after releasing reclaimable pages for local build/trial
 files, without changing any input, assertion or guard.
 
+## Exporter cost and query-closure investigation (2026-11-04)
+
+The approximately 18-second fresh-export cost was measured on original
+`upstream/miri-source/tests/pass/unops.rs`, `--root main`, `--crate-name unops
+--edition=2021`, prepared AllocId world, ordinary exporter and pinned installed
+sysroot. Profiling now separates direct-mode pin/argument work, compiler driver
+before/after its export callback, graph encoding from source release, individual
+vtable/diagnostic walks, writing and final image release. It also records
+per-producer domain growth and per-round catalog sizes. This adds diagnostics,
+not a new input format, query-selection policy, runtime limit or cross-input
+cache. `tools/summarize-exporter-profile.py` preserves the parent/child span
+hierarchy rather than summing overlapping spans.
+
+Three sequential diagnostic runs use frozen exporter `b1a79f7a`, CPU 2, one Lean
+thread, fresh output each time and no concurrent builds/tests. Their process
+walls are 18.193 / 17.878 / 18.019 seconds, CPU times 18.190 / 17.877 / 18.017,
+CPU-2 steal 0.19 / 0.11 / 0.12 and cgroup throttling zero. Peak process RSS is
+approximately 2.130 decimal GB. These are profiling observations, not a paired
+speedup experiment or whole Rust-to-guest timings.
+
+| Export phase, independent medians | Seconds |
+| --- | ---: |
+| Pin and argument preparation | 0.012 |
+| Compiler driver before exporter callback | 0.008 |
+| Query/metadata generation before vtable patches | 10.404 |
+| Two vtable patch traversals | 1.511 |
+| Structural closure and retained diagnostic collection | 1.976 |
+| Indexed graph encoding and raw source release | 2.945 |
+| Compiler driver after callback, including cleanup | 0.745 |
+| Snapshot writing | 0.151 |
+| Final image release | 0.103 |
+| Complete exporter process | 18.019 |
+
+Small callback cleanup/startup gaps are not separate table rows; independent
+medians must not be added into a purported exact process total. The diagnostic
+subspans are graph encoding 2.094s and source release 0.840s; vtable-ID patch
+0.753s and virtual-candidate patch 0.758s; rooted structural closure 0.015s,
+catalog evidence 0.841s and retained vtable diagnostics 1.119s. These are children
+of the table rows, not additional time. Within query/metadata generation, reaching
+MIR/allocation probes takes 3.197s and foreign/virtual transfer work 1.622s across
+all closure rounds. Function facts, instance ABI projections and covariance take
+0.572 / 0.440 / 0.627 seconds respectively; they combine compiler calls, data
+construction and repeated projection, and are not pure query execution times.
+
+A separate pinned-rustc self-profile, recording only query providers and cache
+hit counts, reports **0.296 seconds summed exclusive provider execution**. This
+excludes cache-hit lookup, query framework overhead and non-query compiler APIs;
+it is not an exact measure of every compiler-related operation. Representative
+self times are normalization 0.040s, instance ABI 0.038s and layout 0.028s, with
+223,514 / 227,203 / 588,654 cache hits. A diagnostic 4ms CPU sampler independently
+finds rustc_query_impl/system frames in 78/4574 stacks (1.7%); inlining and its
+32-frame depth limit make that attribution incomplete. Construction interning,
+formatting, graph traversal, allocation and destruction dominate the visible
+stacks. Cumulative stack percentages overlap and must not be summed.
+
+The closure reaches a fixed point after seven rounds: 9,937 instance identities,
+3,942 emitted MIR instances and 26,469 type IDs. Per-producer growth identifies
+runtime type queries as adding **17,693 type IDs and 5,902 instance identities**;
+MIR/allocation probing adds a further 6,062 types and 117,778 registered allocation
+ID keys. These are growth observations, not a proof that those identities are
+unused or removable. Generated pointer/reference outputs are already suppressed
+as fresh runtime-type demands; simply iterating only the existing demand set is
+not a new optimization.
+
+Repeated projection is also visible: 19,224 function rows, 25,149 instance ABI
+rows and 48,830 helper-signature candidate rows are reconstructed across the
+seven rounds, although only 3,495 / 4,427 / 8,964 rows survive in those final
+catalogs. Final explicit instance ABI requests number 3,262; fallback rows cannot
+be declared unused merely by subtracting this from the catalog size. The pinned
+`helpers.rs::call_function` constructs the caller signature from actual argument
+types, destination (including unit when absent), caller ABI and caller-location
+requirement. The exporter conservatively enumerates combinations of these facts.
+One successful guest trace does not justify removing variants needed by another
+permitted execution. No query or catalog row was removed in this investigation.
+
+The clearest next mechanical target is approximately **3.47 seconds of vtable
+patching plus retained-diagnostic traversal**: skip immutable subgraphs that cannot
+contain the relevant fields, preserving every diagnostic occurrence/path and
+patch result. Encoding/source ownership is another approximately 2.95-second
+area. Exact per-compilation reuse of unchanged catalog projections could reduce
+rebuilding across seven rounds without introducing a cross-program cache.
+Narrower per-operation type/drop-glue demands need further source/consumer
+analysis before claiming that the 17,693 generated types can be reduced. Query
+provider execution alone is too small to deliver a large speedup. The 20-second
+whole-source goal remains unresolved; these observed costs are targets, not
+promised savings.
+
+Raw evidence is ignored under `scratch/perf-exporter-closure/`: `summary.json`,
+`detailed{1,2,3}-stats.json`, `detailed{1,2,3}-phases.json`, `coarse-phases.json`,
+`growth-summary.json`, `query-profile/`, `sampled-cpu.json` and
+`sample-details.json`. Self-profile tooling uses measureme tag 12.0.3,
+commit `5ac839c602b59eee9c908b3b35b6d6c0cd1c42f7`; its separate diagnostic build
+needed warning-lint compatibility flags for two obsolete `unsafe` wrappers.
+No project compiler, test expectation or semantic check was weakened.
+
+Validation on the final recorder: normal exporter 21 unit plus 9 integration
+tests, legacy-json 10 plus 9, quick/source/fixture checks and Python 96 tests
+(including four profile-attribution parser cases) pass. A profiled ordinary export
+runs through the unchanged native interpreter with complete output byte-identical
+to the earlier default-mode unops baseline, including 1361 choices/events and
+strict readiness. Fresh final-reference-exporter comparisons with profiling
+enabled pass unops and uninitialized-byte-read, including snapshot binding and
+expected UB category/location. The final ordinary/reference exporter hashes are
+`ecdd3e63` / `1fd2de5c`. Lean sources were not changed, so no new Lean build/proof
+audit or full upstream UI sweep is claimed for this diagnostics-only update.
+Logs are `final-{rust,legacy}-tests.log`, `final-quick.log`,
+`native-validation.log` and `ui-checked/` in the same ignored evidence directory.
+The generation-range reduction is still unimplemented: the investigation locates
+expansion/reconstruction costs, not a proven list of removable compiler facts.
+
 ## Feature support outside the current acceptance scope
 
 The following support and integration work remains in the backlog, even though
