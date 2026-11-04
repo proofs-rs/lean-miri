@@ -2,6 +2,10 @@
 
 mod cast_queries;
 mod allocator_world;
+#[cfg(not(feature="legacy-json"))]
+mod construction_pool;
+#[cfg(not(feature="legacy-json"))]
+mod prepared_image;
 mod covariance_queries;
 mod covariance_sort;
 mod foreign_symbols;
@@ -72,11 +76,40 @@ struct Options {
     root_paths: Vec<String>,
 }
 
+/// Keep the indexed output table typed through serialization. The fallback
+/// retains the exact legacy Value encoding for compatibility comparisons.
+enum Snapshot {
+    Json(Value),
+    #[cfg(not(feature = "legacy-json"))]
+    Image(prepared_image::Image),
+}
+impl serde::Serialize for Snapshot {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Json(value) => value.serialize(serializer),
+            #[cfg(not(feature = "legacy-json"))]
+            Self::Image(image) => image.serialize(serializer),
+        }
+    }
+}
+fn finish_snapshot(mut document: Value) -> Result<Snapshot, String> {
+    #[cfg(not(feature = "legacy-json"))]
+    if construction_pool::enabled() {
+        return prepared_image::encode(&document).map(Snapshot::Image);
+    }
+    if env::var_os("LEAN_MIRI_PREPARED_SCAN_FLAGS").as_deref() == Some(OsStr::new("1")) {
+        payload_sharing::share_payloads_with_scan_flags(&mut document, true)?;
+    } else {
+        payload_sharing::share_payloads(&mut document)?;
+    }
+    Ok(Snapshot::Json(document))
+}
+
 struct ExportCallbacks {
     output: PathBuf,
     root_paths: Vec<String>,
     rustc_version: String,
-    document: Option<Value>,
+    document: Option<Snapshot>,
     invocation: Option<Value>,
     write_during_analysis: bool,
     continue_compilation: bool,
@@ -1856,15 +1889,13 @@ impl Callbacks for ExportCallbacks {
             None
         };
         export_profile.mark("reference_frontier");
-        let sharing_result = if env::var_os("LEAN_MIRI_PREPARED_SCAN_FLAGS").as_deref() == Some(std::ffi::OsStr::new("1")) {
-            payload_sharing::share_payloads_with_scan_flags(&mut document, true)
-        } else {
-            payload_sharing::share_payloads(&mut document)
+        let document = match finish_snapshot(document) {
+            Ok(document) => document,
+            Err(error) => {
+                self.export_error = Some(error);
+                return Compilation::Stop;
+            }
         };
-        if let Err(error) = sharing_result {
-            self.export_error = Some(error);
-            return Compilation::Stop;
-        }
         export_profile.mark("share_payloads");
         if let Err(error) = vtable_diagnostics::write_report(vtable_diagnostics, &document) {
             self.export_error = Some(error);
@@ -2345,7 +2376,7 @@ fn join_paths_prepend(prefix: &Path, rest: &std::ffi::OsStr) -> Result<std::ffi:
         .map_err(|error| format!("cannot construct toolchain search path: {error}"))
 }
 
-fn write_document(path: &Path, document: &Value) -> Result<(), String> {
+fn write_document(path: &Path, document: &impl serde::Serialize) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("output path {} has no parent", path.display()))?;

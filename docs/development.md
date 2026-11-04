@@ -43,14 +43,42 @@ wire equality (including numeric spelling), with full equality on hash collision
 Pointer identity is only a document-local traversal optimization, never a Rust
 allocation/type identity or a wire ID. Compiler query evaluation order is unchanged.
 
-The external format remains root schema 3 / shared-payload schema 2 JSON.
-The final compact node catalog is serialized directly; no expanded JSON tree
-or serialized subtree strings are needed by the default construction path.
-The `legacy-json` Cargo feature retains the previous tree builder and string-key
-encoder for comparison. Run the exporter Cargo tests both normally and with
-`--features legacy-json`; add `miri-reference` when testing reference integration.
-Tests cover exact legacy wire output, hash collisions, copy-on-write snapshots,
-exponentially repeated construction, and exact/unknown vtable links.
+The default external format is `lean-miri-prepared-image` version 1. It contains
+an interned field-name dictionary and a bottom-up indexed node table. Row tags
+are null, false, true, number, string, array-of-node-IDs and
+object-of-(field-ID,node-ID)-pairs (tags 0 through 6). Object names are strictly
+ordered; every edge points to an earlier row. Node IDs are transport identities,
+not Rust allocation, type, instance or MIR indices. The reconstructed business
+document still uses MIR schema 3. This is still JSON transport; it does not remove
+JSON parsing or precompute unchecked execution/readiness results in Rust.
+
+Canonical immutable construction nodes are interned as they are built, with exact
+ordered wire equality on hash collisions. The final encoder visits source nodes
+by identity instead of performing another structural deduplication pass. The
+output table stays in typed Rust rows through serialization to the writer; it
+never becomes another generic JSON Value tree. Weak
+pool entries do not own compiler payloads. Mutation invalidates the cached hash
+and copies a shared container before changing it.
+
+Lean validates every typed row, edge and dictionary entry (including unused
+rows), then constructs indexed traversal nodes and their local hashes/summaries
+in the same pass. The typed MIR reader reuses document-local node IDs and complete
+decoding context across MIR roots. Lowering retains its source-consistency check;
+a reused result must match both the source path and complete canonical raw value.
+Failed decodes fall through to ordinary parsing, preserving diagnostic paths and
+first-error order. Only a resolver-produced traversal can populate the opaque
+MIR memo. Readiness, compiler evidence and execution checks still run.
+
+Set `LEAN_MIRI_PREPARED_IMAGE=0` to retain shared-payload schema 2 output with the
+persistent builder. Lean and `tools/mir_json.py` accept both formats. The
+`legacy-json` Cargo feature separately retains the tree builder and string-key
+encoder for comparisons. Run exporter Cargo tests normally and with
+`--features legacy-json`; add `miri-reference` for reference integration.
+`tools/check-decoder.sh` includes typed-row rejection, Python-reader checks and
+indexed/legacy parity on retained compiler exports and their malformed ID cases.
+Exporter tests also cover forced hash collisions, copy-on-write snapshots,
+exact numeric spelling, graph-sized encoding of exponentially repeated input,
+and exact/unknown vtable links.
 
 ## What the checks test
 

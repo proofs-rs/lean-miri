@@ -10,18 +10,40 @@ use std::sync::Arc;
 pub type Map<K = String, V = Value> = BTreeMap<K, V>;
 
 #[derive(Debug)]
-pub struct Shared<T>(Arc<T>);
+pub struct Shared<T>(Arc<T>, std::sync::OnceLock<u64>);
 impl<T> Clone for Shared<T> {
     fn clone(&self) -> Self {
-        Self(self.0.clone())
+        Self(self.0.clone(), self.1.clone())
     }
 }
-impl<T> From<T> for Shared<T> {
+impl<T: crate::construction_pool::Internable> From<T> for Shared<T> {
     fn from(value: T) -> Self {
-        Self(Arc::new(value))
+        crate::construction_pool::intern(value)
     }
 }
-impl<T: Default> Default for Shared<T> {
+impl<T> Shared<T> {
+    pub fn fresh(value: T, hash: Option<u64>) -> Self {
+        let node = Self(Arc::new(value), std::sync::OnceLock::new());
+        if let Some(hash) = hash {
+            let _ = node.1.set(hash);
+        }
+        node
+    }
+    pub fn from_arc(value: Arc<T>, hash: u64) -> Self {
+        let node = Self(value, std::sync::OnceLock::new());
+        let _ = node.1.set(hash);
+        node
+    }
+    pub fn identity_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+impl<T: crate::construction_pool::Internable> Shared<T> {
+    pub fn cached_digest(&self) -> u64 {
+        *self.1.get_or_init(|| self.0.digest())
+    }
+}
+impl<T: Default + crate::construction_pool::Internable> Default for Shared<T> {
     fn default() -> Self {
         T::default().into()
     }
@@ -34,6 +56,7 @@ impl<T> Deref for Shared<T> {
 }
 impl<T: Clone> DerefMut for Shared<T> {
     fn deref_mut(&mut self) -> &mut T {
+        self.1.take();
         Arc::make_mut(&mut self.0)
     }
 }
@@ -70,14 +93,14 @@ where
         (&mut **self).into_iter()
     }
 }
-impl<A> FromIterator<A> for Shared<Vec<A>> {
-    fn from_iter<T: IntoIterator<Item = A>>(items: T) -> Self {
+impl FromIterator<Value> for Shared<Vec<Value>> {
+    fn from_iter<T: IntoIterator<Item = Value>>(items: T) -> Self {
         Vec::from_iter(items).into()
     }
 }
-impl<K: Ord, V> FromIterator<(K, V)> for Shared<BTreeMap<K, V>> {
-    fn from_iter<T: IntoIterator<Item = (K, V)>>(items: T) -> Self {
-        BTreeMap::from_iter(items).into()
+impl FromIterator<(String, Value)> for Shared<Map> {
+    fn from_iter<T: IntoIterator<Item = (String, Value)>>(items: T) -> Self {
+        Map::from_iter(items).into()
     }
 }
 
@@ -92,6 +115,9 @@ pub enum Value {
     Object(Shared<Map>),
 }
 impl Value {
+    pub fn fingerprint(&self) -> u64 {
+        crate::construction_pool::fingerprint(self)
+    }
     pub fn array(values: Vec<Self>) -> Self {
         Self::Array(values.into())
     }

@@ -11,6 +11,10 @@ import os
 from pathlib import Path
 import subprocess
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mir_json import decode_mir_document
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -78,7 +82,7 @@ def check_case(args, output, env, elan, sysroot, fixed):
             reference.get('snapshot_byte_length') != len(raw) or
             reference.get('snapshot_fnv1a64') != f'{digest:016x}'):
         raise SystemExit('reference did not establish same-TyCtxt exit_zero for these exact bytes')
-    snapshot = json.loads(raw)
+    snapshot = decode_mir_document(json.loads(raw))
     records = expand_shared(snapshot, snapshot['compiler_runtime_queries'])['instances']
     names = {record.get('item_name', {}).get('value') for record in records
              if record.get('intrinsic_metadata', {}).get('status') == 'supported'

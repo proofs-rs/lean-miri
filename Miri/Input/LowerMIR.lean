@@ -1029,17 +1029,17 @@ private def controlTargets : MIR.TerminatorKind → Array Nat
   | .InlineAsm asm => asm.targets ++ unwindTargets asm.unwind
   | .UnwindResume | .UnwindTerminate _ | .Return | .Unreachable | .TailCall .. | .CoroutineDrop => #[]
 
-private def typedValueMatchesSource (source : Lean.Json) (path : String)
+private def typedValueMatchesSource (source : Lean.Json) (memo : Option CompilerValueMemo) (path : String)
     (value : TypedValue) : Bool := Id.run do
   let some raw := jsonAtPath source path | return false
-  match decodeCompilerValue raw with
+  match decodeCompilerValueAtPath raw path memo with
   | .ok decoded => return decoded == value
   | .error _ => return false
 
 /-- Recheck that the typed MIR nodes used by lowering are exactly the ones
 decoded from the same raw body. Retaining only a raw payload/path is not enough:
 callers can construct or mutate an ImportDocument after decoding. -/
-private def sourceBodyMatches (source : Lean.Json) (input : BodyCore) : Bool := Id.run do
+private def sourceBodyMatches (source : Lean.Json) (memo : Option CompilerValueMemo) (input : BodyCore) : Bool := Id.run do
   unless input.sourcePath.startsWith "$." && jsonAtPath source input.sourcePath == some input.payload do
     return false
   let some rawBlocks := ((input.payload.getObjVal? "basic_blocks").bind Lean.Json.getArr?).toOption
@@ -1054,16 +1054,16 @@ private def sourceBodyMatches (source : Lean.Json) (input : BodyCore) : Bool := 
     unless rawStatements.size == block.statements.size do return false
     for (node, statementIndex) in block.statements.toList.zipIdx do
       let path := s!"{input.sourcePath}.basic_blocks[{index}].statements[{statementIndex}].kind"
-      unless typedValueMatchesSource source path node.value do return false
+      unless typedValueMatchesSource source memo path node.value do return false
     let terminatorPath := s!"{input.sourcePath}.basic_blocks[{index}].terminator.kind"
-    unless typedValueMatchesSource source terminatorPath block.terminator.value do return false
+    unless typedValueMatchesSource source memo terminatorPath block.terminator.value do return false
   return true
 
 /-- Construct source-shaped MIR, preserving its decoded envelope and interning
 actual source spans. Unsupported constructors and missing metadata are errors. -/
 private def lowerBodyState (ctx : LowerContext) (input : BodyCore) (initial : LowerState) : LowerResult (LoweredBody × LowerState) := do
   let sourceDocument := match ctx.sourceDocument with
-    | some source => if sourceBodyMatches source input then some source else none
+    | some source => if sourceBodyMatches source ctx.compilerValueMemo input then some source else none
     | none => none
   let mirPhase ← phase input.phase
   match input.injectionPhase with

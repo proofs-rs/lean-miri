@@ -183,7 +183,7 @@ impl Write for Fingerprint {
 
 pub(super) fn write_report(
     report: Option<(PathBuf, Value)>,
-    document: &Value,
+    document: &impl serde::Serialize,
 ) -> Result<(), String> {
     let Some((path, mut report)) = report else {
         return Ok(());

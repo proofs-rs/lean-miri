@@ -1540,10 +1540,14 @@ private def parseBodyArray (values : Array Json) (memo : DecodeMemo) : Except St
 
 private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     (profile : Options := {}) (cachedTraversal : Bool := true) : Except String ParsedDocument := do
-  let (resolved,traversal) ← profileit "decoder.shared_payload_resolution" profile fun _ =>
-    JsonTraversalCache.resolve input cachedTraversal profile
+  let (resolved,checkedTraversal) ← profileit "decoder.shared_payload_resolution" profile fun _ =>
+    JsonTraversalCache.resolveChecked input cachedTraversal profile
+  let traversal := checkedTraversal.node
   let j := resolved.root
   let memo := profileit "decoder.shared_decode_memo" profile fun _ => sharedDecodeMemo resolved.nodes
+  let memo := if (input.getObjValAs? String "schema").toOption == some "lean-miri-prepared-image" then
+      profileit "decoder.indexed_mir" profile fun _ => prepareIndexedMirMemo checkedTraversal memo
+    else memo
   if (← fieldString j "schema" "$") != expectedSchema then
     throw s!"$.schema: expected `{expectedSchema}`"
   if (← fieldNat j "schema_version" "$") != expectedSchemaVersion then

@@ -6,3 +6,7 @@ export PATH="$ELAN_HOME/bin:$PATH"
 python3 tests/input/build_id_fixtures.py
 lake env lean --run tests/input/DecoderIdChecks2026.lean scratch/decoder-id-inputs tests/input/fixtures/decoder-id-expected.json
 lake env lean --run tests/input/DecoderSharedIdChecks2026.lean scratch/decoder-id-inputs
+python3 tests/input/prepared_image_reader.py
+python3 tests/input/build_prepared_image_cases.py scratch/decoder-id-inputs scratch/decoder-image-inputs
+lake env lean --run tests/input/PreparedImageChecks.lean
+lake env lean --run tests/input/IndexedMirChecks.lean scratch/decoder-id-inputs scratch/decoder-image-inputs/*.json

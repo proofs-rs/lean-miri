@@ -184,11 +184,102 @@ private def buildRoot (input : Json) (resolved : SharedPayloads.ResolvedGraph) :
   let business := Json.mkObj (fields.toList.filter (fun entry => entry.1 != "shared_payloads"))
   return (← buildNode available business resolved.root, flags)
 
+/-- Decode the versioned execution graph directly into its indexed runtime
+nodes. All edges, field names and row shapes are checked before use. Digests
+and traversal summaries are computed locally, never trusted from the producer. -/
+private def preparedGraph (input : Json) : Except String (SharedPayloads.ResolvedGraph × Node) := do
+  let .obj header := input | throw "prepared image: expected object"
+  let names := header.toList.map Prod.fst
+  unless names == ["fields", "nodes", "root", "schema", "schema_version"] do
+    throw "prepared image: unexpected or missing header fields"
+  unless (← input.getObjValAs? Nat "schema_version") == 1 do
+    throw "prepared image: unsupported schema version"
+  let fields ← (← input.getObjVal? "fields").getArr?
+  let mut dictionary : Array String := #[]
+  let mut seen : Std.HashSet String := {}
+  for field in fields do
+    let name ← field.getStr?
+    if seen.contains name then throw "prepared image: duplicate field name"
+    seen := seen.insert name
+    dictionary := dictionary.push name
+  let rows ← (← input.getObjVal? "nodes").getArr?
+  let mut available : Array Node := #[]
+  let mut values : Array Json := #[]
+  for index in [:rows.size] do
+    let row ← rows[index]!.getArr?
+    let some tagJson := row[0]? | throw "prepared image: empty node row"
+    let tag ← tagJson.getNat?
+    let child := fun (id : Json) => do
+      let id ← id.getNat?
+      let some node := available[id]? | throw s!"prepared image: node {index} has forward/out-of-range edge {id}"
+      pure node
+    let (value, children, digest, interests) ← match tag with
+      | 0 | 1 | 2 => do
+        unless row.size == 1 do throw "prepared image: scalar row arity"
+        let value := if tag == 0 then Json.null else Json.bool (tag == 2)
+        pure (value, #[], hash value, (0 : UInt8))
+      | 3 | 4 => do
+        unless row.size == 2 do throw "prepared image: leaf row arity"
+        let value := row[1]!
+        match tag, value with
+        | 3, .num _ | 4, .str _ => pure ()
+        | _, _ => throw "prepared image: leaf payload type"
+        pure (value, #[], hash value, (0 : UInt8))
+      | 5 => do
+        unless row.size == 2 do throw "prepared image: array row arity"
+        let ids ← row[1]!.getArr?
+        let mut elements := #[]
+        let mut children := #[]
+        let mut digest : UInt64 := 7
+        let mut interests : UInt8 := 0
+        for id in ids do
+          let node ← child id
+          elements := elements.push node.value
+          children := children.push node
+          digest := mixHash digest node.key.digest
+          interests := interests ||| node.key.interests
+        pure (Json.arr elements, children, mixHash 23 digest, interests)
+      | 6 => do
+        unless row.size == 2 do throw "prepared image: object row arity"
+        let pairs ← row[1]!.getArr?
+        let mut entries := #[]
+        let mut children := #[]
+        let mut previous : Option String := none
+        let mut digest : UInt64 := 7
+        let mut interests : UInt8 := 0
+        for pair in pairs do
+          let pair ← pair.getArr?
+          unless pair.size == 2 do throw "prepared image: field row arity"
+          let id ← pair[0]!.getNat?
+          let some name := dictionary[id]? | throw "prepared image: field ID out of range"
+          if let some old := previous then
+            unless old < name do throw "prepared image: object fields are not strictly ordered"
+          if name == "$lean_miri_shared_ref" then throw "prepared image: reserved reference field"
+          let node ← child pair[1]!
+          previous := some name
+          entries := entries.push (name, node.value)
+          children := children.push node
+          digest := mixHash digest (mixHash (hash name) node.key.digest)
+          interests := interests ||| fieldInterest name ||| node.key.interests
+        pure (Json.mkObj entries.toList, children, mixHash 29 digest, interests)
+      | _ => throw "prepared image: unknown node kind"
+    let node := Node.cached ⟨value, digest, some index, interests⟩ children
+    available := available.push node
+    values := values.push value
+  let root ← input.getObjValAs? Nat "root"
+  let some node := available[root]? | throw "prepared image: root ID out of range"
+  let .obj fields := node.value | throw "prepared image: business root must be object"
+  if fields.contains "shared_payloads" then throw "prepared image: reserved catalog field"
+  pure (⟨values, node.value, values.size, none⟩, node)
+
 /-- Only this constructor path creates the optional cache from the same input
 and resolver result. Fallback preserves arbitrary manually constructed Raw JSON.
 The cache performs no readiness or semantic validation of its own. -/
 def resolve (input : Json) (enabled : Bool := true) (profile : Options := {}) :
     Except String (SharedPayloads.ResolvedGraph × Node) := do
+  if (input.getObjValAs? String "schema").toOption == some "lean-miri-prepared-image" then
+    let (resolved,node) ← profileit "decoder.prepared_graph" profile fun _ => preparedGraph input
+    return (resolved, if enabled then node else .uncached resolved.root)
   let resolved ← SharedPayloads.resolveGraph input
   let built := if enabled || resolved.scanFlags.isSome then
     profileit "decoder.traversal_hash_cache" profile (fun _ => buildRoot input resolved)
@@ -201,6 +292,20 @@ def resolve (input : Json) (enabled : Bool := true) (profile : Options := {}) :
   let node := if enabled then built.map Prod.fst |>.getD (.uncached resolved.root)
     else .uncached resolved.root
   return (resolved,node)
+
+/-- Capability for a traversal produced by this module's checked resolver.
+The witness prevents record updates from substituting arbitrary child nodes. -/
+structure CheckedRoot where
+  private mk ::
+  node : Node
+  private checked : ∃ (input : Json) (enabled : Bool) (profile : Options)
+    (resolved : SharedPayloads.ResolvedGraph), resolve input enabled profile = .ok (resolved, node)
+
+def resolveChecked (input : Json) (enabled : Bool := true) (profile : Options := {}) :
+    Except String (SharedPayloads.ResolvedGraph × CheckedRoot) :=
+  match h : resolve input enabled profile with
+  | .error error => .error error
+  | .ok (resolved, node) => .ok (resolved, ⟨node, ⟨input, enabled, profile, resolved, h⟩⟩)
 
 /-- Diagnostic consistency check; deliberately expensive, never used as a
 readiness shortcut. It checks every cached child independently. -/

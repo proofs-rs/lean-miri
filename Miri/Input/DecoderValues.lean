@@ -149,6 +149,11 @@ structure DecodeMemo where
   private sourceSpans : Std.HashMap Json SourceSpanData := {}
   private layouts : Std.HashMap Json Layout := {}
   private functionAbis : Std.HashMap Json FunctionAbi := {}
+  /-- Successful MIR decodes, bound to both the source path and complete raw value.
+  Only the document-local indexed reader populates these fields. -/
+  private mirStatements : Std.HashMap String (Json × TypedValue) := {}
+  private mirTerminators : Std.HashMap String (Json × TypedValue) := {}
+  private compilerMirValues : Std.HashMap String (Json × TypedValue) := {}
 
 def emptyDecodeMemo : DecodeMemo := {}
 
@@ -557,19 +562,60 @@ def parseUserTypeProjection (j : Json) (path : String) : Except String UserTypeP
     throw s!"{path}: supported user-type projection is missing base index or projection sequence"
   return ⟨status, baseIndex, projections, j⟩
 
-abbrev DecodeValueM := StateT (Std.HashMap DecodeValueKey TypedValue) (Except String)
+/-- Document-local node identity plus every decoding context flag. Only successful
+results are memoized; diagnostics are rebased separately for each occurrence. -/
+structure RuntimeValueKey where
+  json : JsonTraversalCache.IdentityKey
+  domain : Domain
+  tagCategory : Option TypedEnumTag
+  isRegionPath : Bool
+  isHirIdPath : Bool
+  isCoveragePath : Bool
+  isCastCoercionPath : Bool
+  deriving BEq, Hashable
+
+def runtimeValueKey (node : JsonTraversalCache.Node) (path : String)
+    (domain : Domain) (tagCategory : Option TypedEnumTag) : RuntimeValueKey := {
+  json := node.identity
+  domain := domain
+  tagCategory := tagCategory
+  isRegionPath := path.endsWith ".region"
+  isHirIdPath := path.endsWith ".hir_id"
+  isCoveragePath := path.endsWith ".coverage"
+  isCastCoercionPath := path.endsWith ".cast_kind.coercion"
+}
+
+/-- The raw fallback retains the original key comparison and hash exactly,
+including manually constructed JSON whose BEq need not be lawful. -/
+theorem runtimeValueKey_uncached_beq_eq (a b : Json)
+    (pathA pathB : String) (domainA domainB : Domain)
+    (tagA tagB : Option TypedEnumTag) :
+    (runtimeValueKey (.uncached a) pathA domainA tagA ==
+      runtimeValueKey (.uncached b) pathB domainB tagB) =
+    (decodeValueKey a pathA domainA tagA == decodeValueKey b pathB domainB tagB) := rfl
+
+theorem runtimeValueKey_uncached_hash_eq (value : Json) (path : String)
+    (domain : Domain) (tag : Option TypedEnumTag) :
+    hash (runtimeValueKey (.uncached value) path domain tag) =
+      hash (decodeValueKey value path domain tag) := rfl
+
+abbrev DecodeValueM := StateT (Std.HashMap RuntimeValueKey TypedValue) (Except String)
 
 mutual
-partial def decodeValueM (j : Json) (path : String) (domain : Domain)
+partial def decodeValueM (node : JsonTraversalCache.Node) (path : String) (domain : Domain)
     (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : DecodeValueM TypedValue := do
-  let key := decodeValueKey j path domain tagCategory
+  match node.value with
+  | .arr _ | .obj _ => pure ()
+  | _ => return ← decodeValueBody node path domain tagCategory memo
+  let key := runtimeValueKey node path domain tagCategory
   if let some value := (← get).get? key then return value
-  let value ← decodeValueBody j path domain tagCategory memo
+  let value ← decodeValueBody node path domain tagCategory memo
   modify fun cache => cache.insert key value
   return value
 
-partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
+partial def decodeValueBody (node : JsonTraversalCache.Node) (path : String) (domain : Domain)
     (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : DecodeValueM TypedValue := do
+  let j := node.value
   if let some id := isTypeRef j then return .typeRef id
   if let some id := isAllocationRef j then return .allocationRef id
   if statusOf? j == some "debug_payload" then return .diagnostic j
@@ -578,7 +624,7 @@ partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
     let mut decoded := #[]
     let mut index := 0
     for value in values do
-      decoded := decoded.push (← decodeValueM value s!"{path}[{index}]" domain tagCategory memo)
+      decoded := decoded.push (← decodeValueM (node.child index value) s!"{path}[{index}]" domain tagCategory memo)
       index := index + 1
     return .array decoded
   | .obj _ =>
@@ -593,7 +639,7 @@ partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
     let parentTag := match effectiveDomain with
       | .rvalue | .operand | .statement | .terminator => domainTag j effectiveDomain
       | _ => none
-    for (key, value) in fields do
+    for ((key, value), index) in fields.toList.zipIdx do
       let nextDomain := childDomain effectiveDomain key
       let decoded ← if key == "user_type_projection" && parentTag == some "AscribeUserType" then
           .userTypeProjection <$> parseUserTypeProjection value (joinPath path key)
@@ -607,7 +653,7 @@ partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
           match unOpFromExportTag tag with
           | some op => pure (.unOperator op status)
           | none => pure (.unknownUnOperator tag status)
-        else decodeValueM value (joinPath path key) nextDomain (typedEnumCategory? key path parentTag value) memo
+        else decodeValueM (node.child index value) (joinPath path key) nextDomain (typedEnumCategory? key path parentTag value) memo
       let isTagField := match effectiveDomain with
         | .statement | .terminator | .rvalue | .operand | .projection => key == "status" || key == "variant" || key == "kind"
         | _ => false
@@ -657,7 +703,77 @@ end
 
 def decodeValue (j : Json) (path : String) (domain : Domain := .any)
     (tagCategory : Option TypedEnumTag := none) (memo : DecodeMemo := {}) : Except String TypedValue := do
-  (decodeValueM j path domain tagCategory memo).run' {}
+  (decodeValueM (.uncached j) path domain tagCategory memo).run' {}
+
+/-- Locate MIR roots without scanning compiler metadata that cannot contain bodies.
+The paths follow exactly the public parser's array and object conventions. -/
+private partial def indexedMirRoots (node : JsonTraversalCache.Node) (path : String) :
+    Array (String × Domain × JsonTraversalCache.Node) := Id.run do
+  if !node.mayContain 2 then return #[]
+  let mut roots := #[]
+  match node.value with
+  | .arr values =>
+    for index in [:values.size] do
+      roots := roots ++ indexedMirRoots (node.child index values[index]!) s!"{path}[{index}]"
+  | .obj fields =>
+    for ((name, value), index) in fields.toList.zipIdx do
+      let child := node.child index value
+      let childPath := joinPath path name
+      if name == "basic_blocks" then
+        if let .arr blocks := value then
+          for blockIndex in [:blocks.size] do
+            let block := child.child blockIndex blocks[blockIndex]!
+            let blockPath := s!"{childPath}[{blockIndex}]"
+            if let some (.arr statements) := optionalField block.value "statements" then
+              let source := block.field "statements" (.arr statements)
+              for statementIndex in [:statements.size] do
+                let wrapper := source.child statementIndex statements[statementIndex]!
+                if let some kind := optionalField wrapper.value "kind" then
+                  roots := roots.push (s!"{blockPath}.statements[{statementIndex}].kind",
+                    .statement, wrapper.field "kind" kind)
+            if let some terminator := optionalField block.value "terminator" then
+              let wrapper := block.field "terminator" terminator
+              if let some kind := optionalField terminator "kind" then
+                roots := roots.push (s!"{blockPath}.terminator.kind", .terminator,
+                  wrapper.field "kind" kind)
+      else
+        roots := roots ++ indexedMirRoots child childPath
+  | _ => pure ()
+  return roots
+
+/-- Reuse the checked typed reader across MIR roots. Failed decodes are omitted:
+ordinary parsing still reports its original first error and occurrence path. -/
+def prepareIndexedMirMemo (root : JsonTraversalCache.CheckedRoot) (memo : DecodeMemo) : DecodeMemo := Id.run do
+  -- Only checked prepared images assign an ID to the document root. Legacy
+  -- and uncached roots may contain manually constructed noncanonical JSON;
+  -- they retain the ordinary decoder rather than populating this private memo.
+  let .cached key _ := root.node | return memo
+  if key.id.isNone then return memo
+  let mut result := memo
+  let mut cache := {}
+  for (path, domain, node) in indexedMirRoots root.node "$" do
+    -- Transfer ownership before the fallible call. Retaining the old map for
+    -- an error branch would copy the entire table on every successful root.
+    let previous := cache
+    cache := {}
+    match (decodeValueM node path domain none memo).run previous with
+    | .ok (value, next) =>
+      cache := next
+      if domain == .statement then
+        result := { result with mirStatements := result.mirStatements.insert path (node.value, value) }
+      else
+        result := { result with mirTerminators := result.mirTerminators.insert path (node.value, value) }
+    | .error _ => pure ()
+    -- The source consistency checker uses auto-domain and compiler context.
+    -- Decode that exact context as well; do not assume it equals the MIR domain.
+    let previous := cache
+    cache := {}
+    match (decodeValueM node "$compiler_value" .any none memo).run previous with
+    | .ok (value, next) =>
+      cache := next
+      result := { result with compilerMirValues := result.compilerMirValues.insert path (node.value, value) }
+    | .error _ => pure ()
+  return result
 
 def statusObligation? (status : PayloadStatus) (path : String) : Option Obligation :=
   match status with
@@ -936,43 +1052,6 @@ structure RuntimeValueDecode where
   /-- Only the direct fields consumed by the parent's local invariants. -/
   summary : TypedValue
   obligations : Option RuntimeObligationSequence
-
-/-- Document-local node identity plus every decoding context flag. Only successful
-results are memoized; diagnostics are rebased separately for each occurrence. -/
-structure RuntimeValueKey where
-  json : JsonTraversalCache.IdentityKey
-  domain : Domain
-  tagCategory : Option TypedEnumTag
-  isRegionPath : Bool
-  isHirIdPath : Bool
-  isCoveragePath : Bool
-  isCastCoercionPath : Bool
-  deriving BEq, Hashable
-
-def runtimeValueKey (node : JsonTraversalCache.Node) (path : String)
-    (domain : Domain) (tagCategory : Option TypedEnumTag) : RuntimeValueKey := {
-  json := node.identity
-  domain := domain
-  tagCategory := tagCategory
-  isRegionPath := path.endsWith ".region"
-  isHirIdPath := path.endsWith ".hir_id"
-  isCoveragePath := path.endsWith ".coverage"
-  isCastCoercionPath := path.endsWith ".cast_kind.coercion"
-}
-
-/-- The raw fallback retains the original key comparison and hash exactly,
-including manually constructed JSON whose BEq need not be lawful. -/
-theorem runtimeValueKey_uncached_beq_eq (a b : Json)
-    (pathA pathB : String) (domainA domainB : Domain)
-    (tagA tagB : Option TypedEnumTag) :
-    (runtimeValueKey (.uncached a) pathA domainA tagA ==
-      runtimeValueKey (.uncached b) pathB domainB tagB) =
-    (decodeValueKey a pathA domainA tagA == decodeValueKey b pathB domainB tagB) := rfl
-
-theorem runtimeValueKey_uncached_hash_eq (value : Json) (path : String)
-    (domain : Domain) (tag : Option TypedEnumTag) :
-    hash (runtimeValueKey (.uncached value) path domain tag) =
-      hash (decodeValueKey value path domain tag) := rfl
 
 abbrev RuntimeDecodeCache := Std.HashMap RuntimeValueKey (String × RuntimeValueDecode)
 
@@ -2466,7 +2545,13 @@ def parseLocal (j : Json) (path : String) (memo : DecodeMemo := {}) : Except Str
 def parseMirNode (wrapper : Json) (path : String) (domain : Domain) (memo : DecodeMemo := {}) : Except String MirNode := do
   let sourceInfo ← parseSourceInfo (← field wrapper "source_info" path) (joinPath path "source_info") memo
   let kind ← field wrapper "kind" path
-  let value ← decodeValue kind (joinPath path "kind") domain .none memo
+  let kindPath := joinPath path "kind"
+  let prepared := if domain == .statement then memo.mirStatements.get? kindPath
+    else if domain == .terminator then memo.mirTerminators.get? kindPath else none
+  let value ← match prepared with
+    | some (raw, value) =>
+      if raw == kind then pure value else decodeValue kind kindPath domain .none memo
+    | none => decodeValue kind kindPath domain .none memo
   return ⟨value, sourceInfo⟩
 
 def parseBasicBlock (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String BasicBlock := do
@@ -2859,11 +2944,12 @@ its immutable keys include the entire source value, never only a local ID. -/
 structure CompilerValueMemo where
   private mk ::
   private entries : Std.HashMap Json (Except String TypedValue)
+  private sourcePaths : Std.HashMap String (Json × TypedValue)
   private exact : ∃ (nodes : Array Json) (memo : DecodeMemo),
     entries = buildCompilerValueEntries nodes memo
 
 def prepareCompilerValueMemoUsing (nodes : Array Json) (memo : DecodeMemo) : CompilerValueMemo :=
-  ⟨buildCompilerValueEntries nodes memo, ⟨nodes, memo, rfl⟩⟩
+  ⟨buildCompilerValueEntries nodes memo, memo.compilerMirValues, ⟨nodes, memo, rfl⟩⟩
 
 def decodeCompilerValueWithMemo (raw : Json) (memo : Option CompilerValueMemo) : Except String TypedValue :=
   match memo with
@@ -2874,8 +2960,21 @@ def decodeCompilerValueWithMemo (raw : Json) (memo : Option CompilerValueMemo) :
     | none => decodeCompilerValue raw
   | none => decodeCompilerValue raw
 
+/-- A source path only locates a candidate. Bind the hit to the entire canonical
+raw value, so public document updates cannot reuse a stale or foreign decode. -/
+def decodeCompilerValueAtPath (raw : Json) (path : String)
+    (memo : Option CompilerValueMemo) : Except String TypedValue :=
+  match memo with
+  | some memo =>
+    match memo.sourcePaths[path]? with
+    | some (source, value) =>
+      if hasCanonicalJsonObjectKeys raw && source == raw then .ok value
+      else decodeCompilerValue raw
+    | none => decodeCompilerValueWithMemo raw (some memo)
+  | none => decodeCompilerValue raw
+
 end Miri.Input.DecoderValues
 
 namespace Miri.Input
-export DecoderValues (expectedMiriCommit expectedRustcCommit expectedSchema expectedSchemaVersion expectedCompilerAbiLayoutSchema CompilerFunctionAbiMemo prepareCompilerFunctionAbiMemo decodeCompilerPredicateEvidence decodeCompilerPattern decodeTypeCompilerFacts decodeVtableEntry decodeStaticGlobalInfo validateCompilerAllocIdWorldRaw decodeCompilerLayout decodeCompilerFunctionAbi decodeCompilerFunctionAbiWithMemo CompilerFunctionAbiTable CompilerValueMemo decodeCompilerValue decodeCompilerValueWithMemo)
+export DecoderValues (expectedMiriCommit expectedRustcCommit expectedSchema expectedSchemaVersion expectedCompilerAbiLayoutSchema CompilerFunctionAbiMemo prepareCompilerFunctionAbiMemo decodeCompilerPredicateEvidence decodeCompilerPattern decodeTypeCompilerFacts decodeVtableEntry decodeStaticGlobalInfo validateCompilerAllocIdWorldRaw decodeCompilerLayout decodeCompilerFunctionAbi decodeCompilerFunctionAbiWithMemo CompilerFunctionAbiTable CompilerValueMemo decodeCompilerValue decodeCompilerValueWithMemo decodeCompilerValueAtPath)
 end Miri.Input

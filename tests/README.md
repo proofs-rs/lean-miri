@@ -368,3 +368,10 @@ rejects unrelated failures for expected-UB cases. The separate
 32 shards; unsupported profiles remain in each shard's inventory. Full sweep
 completion and remaining blockers must be checked in its artifacts, not inferred
 from Python oracle tests or the existence of this command.
+
+The dedicated `tools/check-decoder.sh` also tests the versioned indexed execution
+image: strict row/edge/dictionary rejection in Lean and Python, and comparison
+against retained schema-3 exports for typed MIR, source-binding cache fallback,
+ordered diagnostics and execution readiness. Its independent transport adapter
+is `tests/input/build_prepared_image_cases.py`; these are finite decoder checks,
+not Rust executions or an equivalence proof for arbitrary programs.
