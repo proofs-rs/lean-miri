@@ -1420,6 +1420,110 @@ remain in `source-pairs/`, `profile/` and `ui/`; the final figures above superse
 that observation. All targeted checks, proof builds and fresh Miri comparisons
 were repeated after the parser fix.
 
+## Compiler-record experiment: not adopted (2026-11-04)
+
+The next proposed change combined exporter-side positional records with Lean
+load-time checked projections, without a cross-program or persistent cache.
+Prototype `01281fa1` is retained on the local branch
+`perf/compiler-record-prototype`; it is **not part of this PR's execution path**.
+It covers type/allocation references, definition IDs, source positions, diagnostic
+payloads, spans and source info (219,462 records in unchanged `unops.rs`). Rust
+constructs these records without field-name maps. A version-2 image loader checks
+the rows, prepares successful context-independent typed values, and shares checked
+span results with import. Resolver-produced capabilities protect the exact-key
+memo from arbitrary malformed Raw JSON; semantic parse failures retain the old
+occurrence decoder and diagnostic order. Existing image version 1 and shared
+payload version 2 remain accepted by the prototype.
+
+The experiment was stopped after whole-source measurements showed too little
+benefit to adopt the new format and import machinery. Three alternating sequential
+pairs compare the previous metadata head `bcc9d6d0` (native `880aeb08`, exporter
+`67014ea0`) with the prototype (native `84efa464`, exporter `3b5e2348`). The same
+original Rust source/flags, prepared AllocId profile, installed pinned toolchains,
+CPU 2, one Lean thread, ordinary exporter features and cache-valid build gates are
+used. Fresh export, native result output and process teardown are inside one
+continuous entry clock; independent Miri, profiling and other tests/builds are
+outside the timed path.
+
+| Metric (independent medians) | Previous implementation | Prototype |
+| --- | ---: | ---: |
+| Complete source entry through native exit, seconds | 47.968 | 47.327 |
+| Fresh Rust export, seconds | 17.950 | 17.415 |
+| Complete native process, seconds | 29.632 | 29.294 |
+| Read/strict decode, seconds | 17.074 | 16.862 |
+| MIR lowering, seconds | 2.238 | 2.262 |
+| Provider/runtime preparation, seconds | 7.053 | 7.061 |
+| Child CPU, seconds | 47.536 | 46.895 |
+| Sampled peak process-group RSS, decimal GB | 2.697 | 2.774 |
+| Export bytes | 116,090,756 | 113,675,080 |
+
+Whole observations are 47.968 / 48.949 / 47.708 versus
+47.258 / 47.472 / 47.327 seconds. The median difference is only 0.641 seconds
+(1.34%); this small shared-host result is not evidence of a substantial speedup.
+Preparation does not improve and sampled peak memory increases about 2.8%.
+CPU-2 steal deltas are 0.27 / 0.43 / 0.24 versus 0.24 / 0.43 / 0.40 seconds;
+cgroup throttling is zero in all six runs. All complete native outputs, including
+1361 choices/events, are byte-identical and finalize exit zero with strict
+readiness. A separate actual public build-exporter/export-mir/run.sh invocation
+of the prototype takes 48.195 seconds with identical output. Phase medians are
+independent and must not be summed.
+
+The diagnostic prototype profile reports graph loading 1.94 seconds (previous
+profile 1.44), shared decode memo 501ms (718ms), runtime-value validation 3.55
+seconds (4.01), allocation-world validation 1.85 seconds, and preparation source
+equality 1.34 seconds. Much of the decoding cost moved into graph loading rather
+than disappearing. These nested spans overlap. The prototype still reconstructs
+ordinary JSON and retains generic MIR/layout/ABI/compiler-query walks. The seven
+foundation schemas alone do not implement the proposed complete typed execution
+input. Reaching a materially lower whole-source time, especially the requested
+20 seconds, remains unresolved: subsequent work must eliminate those intermediate
+representations and repeated checks through checked typed data, while preserving
+legacy input/public-model mutation checks and first-error priority. Merely extending
+this positional envelope is not established as a solution. Fresh export alone
+still takes about 18 seconds; a 20-second total also needs a substantial producer
+improvement, not just reduced Lean preparation.
+
+Prototype validation passed: exporter 25 unit and 9 integration tests; unchanged
+legacy-json configuration 10 plus 9; Python suite 92 and dedicated reader 5;
+complete decoder script including 16 version-1 and 16 version-2 indexed cases,
+10 metadata/status/argument cases, 1636 authentic compiler instances and 24
+kind/error cases, source/context mutations, full/runtime projections, and 11
+record cases across 160 domain/tag/path contexts. Fresh Miri comparisons pass
+unops and uninitialized-byte-read with expected UB category/location and snapshot
+bindings. Miri/MiriTests were freshly rebuilt and connected proof harnesses
+checked; axiom audit passed for 71,418 declarations with only propext, Quot.sound
+and Classical.choice. These finite checks do not prove general format/compiler
+or interpreter equivalence. A full UI sweep and standalone runtime registry were
+not rerun. An intermediate check overlapped a rebuild and found a missing olean;
+the complete decoder script was rerun successfully after rebuilding.
+
+Only checked/proved collection bounds discovered during validation are retained
+from the prototype: MIR/graph indexing uses proved bounds or explicit errors,
+and an invalid prepared definition slot fails instead of producing a default ID.
+These are not claimed as a performance improvement. The original format and
+metadata pipeline are retained. The 20-second and further half-time goals remain
+open. Raw trials, complete outputs, counters, artifact hashes and the prototype
+patch are retained under ignored `scratch/perf-records/`, notably
+`source-pairs/summary.json`, `source-pairs/public1.json`, `profile/`,
+`prototype.patch`, `decoder-final.log`, `checked-final-proofs.log` and
+`ui-final-capability/`.
+
+After withdrawing the prototype, the retained bounds-only change was separately
+rebuilt with Miri/MiriTests and checked by the complete original decoder script,
+21 exporter unit plus 9 integration tests, quick/source/fixture checks, the
+123-body/191-constant ordered-scan comparison and backtrace conflict/rollback
+checks. Connected proofs and the axiom audit pass for 71,353 declarations with
+only the three permitted axioms. Fresh restored-format Miri comparisons pass
+unops and uninitialized-byte-read; the complete default-mode unops output matches
+the earlier baseline byte-for-byte. The restored native hash is `2b8d238b` and
+the original exporter hash is again `67014ea0`; no new latency claim is made for
+the bounds changes. Logs are `restored-*.log` and `ui-restored-clean/` in the same
+ignored evidence directory. The first restored UI attempt was classified as a
+resource failure when the shared cgroup memory `max` event counter changed under
+file-cache pressure (no OOM kill). It is not counted as passing; both comparisons
+were rerun successfully after releasing reclaimable pages for local build/trial
+files, without changing any input, assertion or guard.
+
 ## Feature support outside the current acceptance scope
 
 The following support and integration work remains in the backlog, even though
