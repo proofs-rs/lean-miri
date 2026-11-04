@@ -1465,10 +1465,38 @@ private partial def hasFailedStatusAt (j : Json) (wanted path : String) : Bool :
   | _ => pure ()
   return false
 
+/-- Direct lookup for the simple canonical paths emitted for compiler queries.
+Unexpected spellings retain the original scanner. The caller enables this only
+for resolver-checked indexed images, whose object keys are unique and ordered. -/
+private def failedStatusAtIndexed? (j : Json) (wanted : String) : Option Bool := do
+  if !wanted.startsWith "$." || wanted.contains '%' then none else do
+    let mut current := j
+    let mut actual := "$"
+    for segment in (wanted.drop 2).toString.splitOn "." do
+      if optionalStringValue current "status" == some "debug_payload" then return false
+      let (key, index?) ← match segment.splitOn "[" with
+        | [key] => if key.contains ']' then none else some (key, none)
+        | [key, suffix] => do
+          let [text, ""] := suffix.splitOn "]" | none
+          let .ok index := decimalNat text wanted | none
+          if toString index != text then none else some (key, some index)
+        | _ => none
+      actual := joinPath actual key
+      let some next := (current.getObjVal? key).toOption | return false
+      current := next
+      if let some index := index? then
+        let some values := current.getArr?.toOption | return false
+        let some next := values[index]? | return false
+        current := next
+        actual := s!"{actual}[{index}]"
+    if actual != wanted then none else
+      let status := optionalStringValue current "status"
+      return status.isSome && status != some "supported" && status != some "debug_payload"
+
 /-- Copied catalog diagnostics inherit only their exact original query role.
 The original obligations remain present; runtime providers still reject failed
 queries when the corresponding source operation requests them. -/
-private def retainedQueryDiagnosticRole (j : Json) (path : String) : QueryDependencyRole := Id.run do
+private def retainedQueryDiagnosticRole (j : Json) (path : String) (indexed : Bool := false) : QueryDependencyRole := Id.run do
   let pathPrefix := "$.selected_scope.retained_catalog_obligations["
   let suffix := "].status"
   unless path.startsWith pathPrefix && path.endsWith suffix do return .structural
@@ -1481,7 +1509,13 @@ private def retainedQueryDiagnosticRole (j : Json) (path : String) : QueryDepend
   let some record := records[index]? | return .structural
   let some sourcePath := ((record.getObjVal? "path").bind Json.getStr?).toOption
     | return .structural
-  unless hasFailedStatusAt j ("$." ++ sourcePath) "$" do return .structural
+  let wanted := "$." ++ sourcePath
+  let failed := if indexed then
+      match failedStatusAtIndexed? j wanted with
+      | some result => result
+      | none => hasFailedStatusAt j wanted "$"
+    else hasFailedStatusAt j wanted "$"
+  unless failed do return .structural
   if exactVtableProbeDiagnostic j ("$." ++ sourcePath ++ ".status") then return .runtimeCast
   return queryDependencyRole ("$." ++ sourcePath ++ ".status")
 
@@ -1489,11 +1523,12 @@ private def retainedQueryDiagnosticRole (j : Json) (path : String) : QueryDepend
 blocks on. Keep diagnostics and the execution decision on this single
 predicate so reports cannot drift from the fail-closed gate. -/
 private def selectedScopeBlockingObligations (j : Json) (obligations : Array Obligation)
-    (requiredLayoutPaths : List String) (requiredInstancePaths : Array String) : Array Obligation :=
+    (requiredLayoutPaths : List String) (requiredInstancePaths : Array String)
+    (indexed : Bool := false) : Array Obligation :=
   obligations.filter fun issue =>
     (!globalCompletenessPath issue.path && !exactVtableProbeDiagnostic j issue.path &&
       obligationQueryRole issue.path == .structural &&
-      retainedQueryDiagnosticRole j issue.path == .structural
+      retainedQueryDiagnosticRole j issue.path indexed == .structural
       || issue.path == "$.selected_scope.kind" || issue.path == "$.selected_scope.status" ||
       issue.path == "$.selected_scope.semantics" || issue.path.startsWith "$.selected_scope.roots[" ||
       requiredLayoutPaths.contains issue.path ||
@@ -1606,9 +1641,15 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
   profileit "decoder.validate_all_bodies" profile fun _ => validateAllBodies traversal "$" resolved.nodes.size
   profileit "decoder.validate_references" profile fun _ =>
     validateReferences traversal "$" types.size allocations.size instances.size resolved.nodes.size
+  let compilerValues := if runtimeOnly then some (profileit "decoder.compiler_values" profile fun _ =>
+    prepareCompilerValueMemoUsing resolved.nodes memo) else none
+  let instanceSources := compilerValues.map fun values =>
+    profileit "decoder.compiler_instance_sources" profile fun _ =>
+      prepareCompilerInstanceSourceMemo resolved.nodes values
   let (typedTree?, valueIssues) ← if runtimeOnly then
       let decoded ← profileit "decoder.runtime_value" profile fun _ =>
-        decodeRuntimeValue traversal "$" .any .none memo
+        decodeRuntimeValueWithCompilerMemo traversal "$" .any .none memo
+          (if cachedTraversal then compilerValues else none)
       pure (none, flattenRuntimeObligations decoded.obligations)
     else
       let typedTree ← decodeValue j "$" .any .none memo
@@ -1667,8 +1708,8 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     allocationWorldValidation := if runtimeOnly then
       some (profileit "decoder.allocation_world_validation" profile fun _ =>
         AllocationWorldValidation.prepare j allocations compilerAllocIdWorld) else none
-    compilerValueMemo := if runtimeOnly then some (profileit "decoder.compiler_values" profile fun _ =>
-      prepareCompilerValueMemoUsing resolved.nodes memo) else none
+    compilerValueMemo := compilerValues
+    compilerInstanceSourceMemo := instanceSources
   }
   let requiredLayoutPaths := types.toList.zipIdx.filterMap fun (ty, typeIndex) =>
     if requiredDependencies.typeIds.contains ty.id then some s!"$.types[{typeIndex}].layout.status" else none
@@ -1679,6 +1720,7 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
   let scopeIsSelected := selectedScope.isSome
   let blockingObligations := if scopeIsSelected then
       selectedScopeBlockingObligations j obligations requiredLayoutPaths requiredInstancePaths
+        (match traversal with | .cached key _ => key.id.isSome | .uncached _ => false)
     else obligations
   let scopeIssuesRemain := !blockingObligations.isEmpty
   let ready :=

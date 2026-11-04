@@ -61,11 +61,56 @@ private def kind (ctx : LowerContext) (j : Json) : M CallInstanceKind := do
   | _ => throw "unknown compiler instance kind"
 
 /-- Thread all appended DefId/TypeConstId entries back into the shared bundle. -/
-def decode (ctx : LowerContext) (tables : CompilerTables) (j : Json) :
+def decodeReference (ctx : LowerContext) (tables : CompilerTables) (j : Json) :
     Except String (CallInstance × CompilerTables) := do
   let (instanceKind, tables) ← (kind ctx (← field j "instance_kind")).run tables
   let args ← ctx.decodeCompilerValue (← field j "generic_args")
   let (args, tables) ← lowerCompilerGenericArgs ctx tables args
   pure (⟨instanceKind, args⟩, tables)
+
+private def bindSource (ctx : LowerContext) (tables : CompilerTables)
+    (source : CompilerInstanceSource) : Except String (CallInstance × CompilerTables) := do
+  for id in source.requiredTypes do
+    unless ctx.containsTypeId id do throw "instance type references missing compiler metadata"
+  let mut tables := tables
+  let mut definitions : Array MIR.DefId := #[]
+  for id in source.definitions do
+    match lookupDefinitionId tables.definitions id with
+    | .ok index => definitions := definitions.push index
+    | .error _ =>
+      definitions := definitions.push tables.definitions.size
+      tables := { tables with definitions := tables.definitions.push id }
+  let definition := fun id => definitions[id]!
+  let shim : CallShimKind → CallShimKind := fun
+    | .VTable d => .VTable (definition d)
+    | .Reify d r => .Reify (definition d) r
+    | .FnPtr d t => .FnPtr (definition d) t
+    | .ClosureOnce a b t => .ClosureOnce (definition a) (definition b) t
+    | .ConstructCoroutineInClosure d b => .ConstructCoroutineInClosure (definition d) b
+    | .ThreadLocal d => .ThreadLocal (definition d)
+    | .FutureDropPoll d p i => .FutureDropPoll (definition d) p i
+    | .DropGlue d t => .DropGlue (definition d) t
+    | .Clone d t => .Clone (definition d) t
+    | .FnPtrAsPtr d t => .FnPtrAsPtr (definition d) t
+    | .FnPtrFromPtr d t => .FnPtrFromPtr (definition d) t
+    | .AsyncDropGlueCtor d t => .AsyncDropGlueCtor (definition d) t
+    | .AsyncDropGlue d t => .AsyncDropGlue (definition d) t
+  let kind : CallInstanceKind := match source.kind with
+    | .Item d => .Item (definition d)
+    | .Intrinsic d => .Intrinsic (definition d)
+    | .LlvmIntrinsic d => .LlvmIntrinsic (definition d)
+    | .Virtual d i => .Virtual (definition d) i
+    | .Shim s => .Shim (shim s)
+  let (args,next) ← lowerCompilerGenericArgs ctx tables source.args
+  return (⟨kind,args⟩,next)
+
+/-- Reuse import-time source decoding while rebinding every identity in the
+consumer's current tables. Failed source parses retain the original decoder
+and first error; changed source fields cannot hit the canonical-key memo. -/
+def decode (ctx : LowerContext) (tables : CompilerTables) (j : Json) :
+    Except String (CallInstance × CompilerTables) :=
+  match ctx.compilerInstanceSourceMemo.bind (·.lookup j) with
+  | some source => bindSource ctx tables source
+  | none => decodeReference ctx tables j
 
 end Miri.Input.CompilerInstance

@@ -375,3 +375,12 @@ against retained schema-3 exports for typed MIR, source-binding cache fallback,
 ordered diagnostics and execution readiness. Its independent transport adapter
 is `tests/input/build_prepared_image_cases.py`; these are finite decoder checks,
 not Rust executions or an equivalence proof for arbitrary programs.
+
+Compiler metadata reuse checks are included in `tools/check-decoder.sh`.
+`CompilerInstanceSourceTests2026.lean` compares cached and independent raw
+instance decoders, table extension order, all instance/shim kinds, malformed
+fields, changed type contexts and changed source values. The generated metadata
+cases compare indexed and reference readiness/ordered diagnostics, including
+debug ancestors, noncanonical query indices and compiler-argument failures.
+`CompilerPreparationInterner2026.lean` and `CompilerBacktraceIndexTests2026.lean`
+remain dedicated checks for span IDs, conflicts and rollback.

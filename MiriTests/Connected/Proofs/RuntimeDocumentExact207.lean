@@ -63,7 +63,11 @@ deriving instance DecidableEq for CompilerPredicateEvidence
 -- Cache equality includes exact stored entries; proof fields use proof
 -- irrelevance, just like the existing source-bound runtime caches below.
 deriving instance DecidableEq for DecoderValues.CompilerFunctionAbiTable
+deriving instance DecidableEq for DecoderValues.RuntimeObligationSequence
+deriving instance DecidableEq for DecoderValues.RuntimeValueDecode
 deriving instance DecidableEq for DecoderValues.CompilerValueMemo
+deriving instance DecidableEq for DecoderValues.CompilerInstanceSource
+deriving instance DecidableEq for DecoderValues.CompilerInstanceSourceMemo
 deriving instance DecidableEq for DecoderValues.AllocationWorldValidation
 deriving instance DecidableEq for ImportDocumentCore
 deriving instance DecidableEq for ImportDocument

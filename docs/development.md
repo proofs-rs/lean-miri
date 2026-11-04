@@ -80,6 +80,23 @@ Exporter tests also cover forced hash collisions, copy-on-write snapshots,
 exact numeric spelling, graph-sized encoding of exponentially repeated input,
 and exact/unknown vtable links.
 
+Compiler instance kinds and complete generic arguments are decoded into a shared
+import-time source table. Its definition slots are local to each source record;
+preparation rebinds them to the current compiler tables and rechecks type
+membership. The immutable key includes the complete canonical kind and argument
+payloads. Changed contexts, changed fields and failed parses retain the original
+decoder/error behavior. Runtime checking also consumes the complete typed
+argument projection and rebases its ordered obligations, rather than decoding
+that JSON subtree again. Dense node-ID/context buckets accelerate the remaining
+runtime walk; raw JSON retains the exact-key map fallback.
+
+Canonical indexed inputs use direct retained-query path lookup for supported
+path syntax. Ancestor debug-payload exclusion and canonical index spelling are
+preserved; other syntax and uncached inputs use the reference scan. Incremental
+span candidates use a persistent hash trie so deferred failures can retain the
+old interner without copying its entire index. Complete span equality and first
+matching IDs remain decisive.
+
 ## What the checks test
 
 See [tests/README.md](../tests/README.md) for the detailed directory map,

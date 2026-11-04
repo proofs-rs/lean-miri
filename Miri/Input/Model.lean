@@ -24,6 +24,7 @@ structure ImportDocumentCore where
   /-- Checked import-time ABI queries; failures remain deferred until demand. -/
   compilerFunctionAbiTable : Option (CompilerFunctionAbiTable sharedNodes) := none
   compilerValueMemo : Option CompilerValueMemo := none
+  compilerInstanceSourceMemo : Option CompilerInstanceSourceMemo := none
   /-- Native import validation is tied to the exact raw and typed source rows. -/
   allocationWorldValidation : Option (DecoderValues.AllocationWorldValidation raw allocations compilerAllocIdWorld) := none
 

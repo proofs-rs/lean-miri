@@ -62,6 +62,7 @@ structure LowerContext where
   lowering. A bare caller-supplied path never discharges an obligation. -/
   sourceDocument : Option Lean.Json := none
   compilerValueMemo : Option CompilerValueMemo := none
+  compilerInstanceSourceMemo : Option CompilerInstanceSourceMemo := none
   /-- Optional exact-array certificates; hand-built contexts default to the
   original linear lookup behavior. -/
   typeIndex : Option (LowerContextTypeIndex typeIds) := none
@@ -123,7 +124,10 @@ def LowerContext.ofTypes (types : Array TypeNode) : LowerContext := Id.run do
 semantics remain independent from syntax lowering and its obligations. -/
 def LowerContext.ofDocument (document : ImportDocumentCore) : LowerContext :=
   let ctx := (ofTypes document.types).withAllocationIds (document.allocations.map (·.id))
-  { ctx with sourceDocument := some document.raw, compilerValueMemo := document.compilerValueMemo }
+  { ctx with
+    sourceDocument := some document.raw
+    compilerValueMemo := document.compilerValueMemo
+    compilerInstanceSourceMemo := document.compilerInstanceSourceMemo }
 
 set_option autoImplicit false in
 /-- A prepared lowering context tied to one exact decoded source document.
@@ -185,7 +189,7 @@ private structure LowerState where
   typeConstants : Array MIR.TypeConst := #[]
   /-- Enabled only by `lowerBodies`; standalone lowering keeps the original
   linear lookup path. Buckets are candidates, never substitutes for equality. -/
-  spanCandidates : Option (Std.HashMap (String × Nat × Nat) (Array Nat)) := none
+  spanCandidates : Option (Lean.PersistentHashMap (String × Nat × Nat) (Array Nat)) := none
   definitionCandidates : Option (Std.HashMap (Nat × Nat) Nat) := none
 
 private abbrev LowerM := StateT LowerState (Except String)
@@ -238,7 +242,7 @@ private def intern (span : SourceSpanData) : LowerM MIR.SpanRef := do
       StateT.set { state with spans := state.spans.push span }
       pure ⟨state.spans.size⟩
   | some candidates =>
-    let bucket := candidates.getD (spanCandidateKey span) #[]
+    let bucket := candidates.findD (spanCandidateKey span) #[]
     if let some i := bucket.find? fun i =>
         match state.spans[i]? with
         | some previous => decide (previous = span)
@@ -1125,7 +1129,7 @@ structure LoweredBodies where
 mutually recursive references. Every returned body uses the same ID tables. -/
 def lowerBodies (ctx : LowerContext) (inputs : Array BodyCore)
     (seedDefinitions : Array DefinitionId := #[]) : LowerResult LoweredBodies := do
-  let mut state : LowerState := { spanCandidates := some {}, definitionCandidates := some {} }
+  let mut state : LowerState := { spanCandidates := some .empty, definitionCandidates := some {} }
   for id in seedDefinitions do
     state := addDefinition state id
   -- Seed definition identities before traversing instructions: references to
@@ -1270,15 +1274,15 @@ the search and full span equality remains authoritative. -/
 structure CompilerSpanInterner where
   private mk ::
   private tables : CompilerTables
-  private candidates : Std.HashMap (String × Nat × Nat) (Array Nat)
+  private candidates : Lean.PersistentHashMap (String × Nat × Nat) (Array Nat)
   private spanReflexivity : SpanArrayReflexivity tables.spans
 
 def CompilerSpanInterner.ofTables (tables : CompilerTables) : CompilerSpanInterner := Id.run do
-  let mut candidates : Std.HashMap (String × Nat × Nat) (Array Nat) := {}
+  let mut candidates : Lean.PersistentHashMap (String × Nat × Nat) (Array Nat) := {}
   for index in [:tables.spans.size] do
     if let some span := tables.spans[index]? then
       let key := spanCandidateKey span
-      candidates := candidates.insert key ((candidates.getD key #[]).push index)
+      candidates := candidates.insert key ((candidates.findD key #[]).push index)
   return ⟨tables, candidates, .prepare tables.spans⟩
 
 /-- Reuse an index only when the complete span arrays compare equal. The

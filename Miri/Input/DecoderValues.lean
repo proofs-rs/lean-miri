@@ -1,4 +1,5 @@
 import Miri.Input.Model.Types
+import Miri.Interpreter.Instance
 import Miri.Input.SharedPayloads
 import Miri.Input.JsonTraversalCache
 
@@ -1053,7 +1054,38 @@ structure RuntimeValueDecode where
   summary : TypedValue
   obligations : Option RuntimeObligationSequence
 
-abbrev RuntimeDecodeCache := Std.HashMap RuntimeValueKey (String × RuntimeValueDecode)
+/-- Dense transport IDs select a small context bucket directly. Inline/raw
+JSON retains the original exact-key hash map. No hash is used as identity. -/
+structure RuntimeDecodeCache where
+  private dense : Array (List (RuntimeValueKey × (String × RuntimeValueDecode))) := #[]
+  private fallback : Std.HashMap RuntimeValueKey (String × RuntimeValueDecode) := {}
+
+private def RuntimeDecodeCache.forRoot (node : JsonTraversalCache.Node) : RuntimeDecodeCache :=
+  match node with
+  | .cached key _ => match key.id with
+    | some id => { dense := Array.replicate (id + 1) [] }
+    | none => {}
+  | .uncached _ => {}
+
+private def RuntimeDecodeCache.get? (cache : RuntimeDecodeCache) (key : RuntimeValueKey) :
+    Option (String × RuntimeValueDecode) :=
+  match key.json with
+  | .node id =>
+    match cache.dense[id]? with
+    | some bucket => (bucket.find? (fun entry => entry.1 == key)).map (·.2)
+    | none => cache.fallback.get? key
+  | .raw _ => cache.fallback.get? key
+
+private def RuntimeDecodeCache.insert (cache : RuntimeDecodeCache) (key : RuntimeValueKey)
+    (value : String × RuntimeValueDecode) : RuntimeDecodeCache :=
+  match key.json with
+  | .node id =>
+    if h : id < cache.dense.size then
+      let bucket := cache.dense[id]
+      { cache with dense := cache.dense.set id ((key,value) :: bucket) h }
+    else { cache with fallback := cache.fallback.insert key value }
+  | .raw _ => { cache with fallback := cache.fallback.insert key value }
+
 
 def runtimeLocalObligations (value : TypedValue) (path : String)
     (children : Option RuntimeObligationSequence := none) : Option RuntimeObligationSequence :=
@@ -1088,23 +1120,25 @@ abbrev RuntimeDecodeM := StateT RuntimeDecodeCache (Except String)
 
 mutual
 partial def decodeRuntimeValueM (node : JsonTraversalCache.Node) (path : String) (domain : Domain)
-    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : RuntimeDecodeM RuntimeValueDecode := do
-  if !node.shouldMemo then return ← decodeRuntimeValueBody node path domain tagCategory memo
+    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo)
+    (reuse : Json → String → Option RuntimeValueDecode) : RuntimeDecodeM RuntimeValueDecode := do
+  if !node.shouldMemo then return ← decodeRuntimeValueBody node path domain tagCategory memo reuse
   -- Scalars are cheap and mostly inline. Giving every occurrence its own cache
   -- entry would retain millions of unique leaf IDs without sharing any work.
   match node.value with
   | .arr _ | .obj _ => pure ()
-  | _ => return ← decodeRuntimeValueBody node path domain tagCategory memo
+  | _ => return ← decodeRuntimeValueBody node path domain tagCategory memo reuse
   let key := runtimeValueKey node path domain tagCategory
   if let some (oldPath, decoded) := (← get).get? key then
     if oldPath == path then return decoded
     return { decoded with obligations := decoded.obligations.map fun issues => .rebase oldPath path issues }
-  let decoded ← decodeRuntimeValueBody node path domain tagCategory memo
+  let decoded ← decodeRuntimeValueBody node path domain tagCategory memo reuse
   modify fun cache => cache.insert key (path, decoded)
   return decoded
 
 partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : String) (domain : Domain)
-    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : RuntimeDecodeM RuntimeValueDecode := do
+    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo)
+    (reuse : Json → String → Option RuntimeValueDecode) : RuntimeDecodeM RuntimeValueDecode := do
   let j := node.value
   if let some id := isTypeRef j then
     let value := TypedValue.typeRef id
@@ -1120,7 +1154,7 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
     let mut obligations : Option RuntimeObligationSequence := none
     let mut index := 0
     for value in values do
-      let child ← decodeRuntimeValueM (node.child index value) s!"{path}[{index}]" domain tagCategory memo
+      let child ← decodeRuntimeValueM (node.child index value) s!"{path}[{index}]" domain tagCategory memo reuse
       obligations := appendRuntimeObligations obligations child.obligations
       index := index + 1
     let summary := TypedValue.array #[]
@@ -1160,7 +1194,14 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
             | some op => TypedValue.unOperator op status
             | none => TypedValue.unknownUnOperator tag status
           pure ⟨decoded, runtimeLocalObligations decoded childPath⟩
-        else decodeRuntimeValueM (node.child index value) childPath nextDomain (typedEnumCategory? key path parentTag value) memo
+        else do
+          let category := typedEnumCategory? key path parentTag value
+          -- Compiler arguments already have a complete checked typed projection.
+          -- This field is never retained in a parent's runtime summary.
+          if key == "generic_args" && nextDomain == .any && category.isNone then
+            if let some checked := reuse value childPath then pure checked
+            else decodeRuntimeValueM (node.child index value) childPath nextDomain category memo reuse
+          else decodeRuntimeValueM (node.child index value) childPath nextDomain category memo reuse
       let isTagField := match effectiveDomain with
         | .statement | .terminator | .rvalue | .operand | .projection => key == "status" || key == "variant" || key == "kind"
         | _ => false
@@ -1237,7 +1278,7 @@ end
 
 def decodeRuntimeValue (node : JsonTraversalCache.Node) (path : String) (domain : Domain := .any)
     (tagCategory : Option TypedEnumTag := none) (memo : DecodeMemo := {}) : Except String RuntimeValueDecode := do
-  (decodeRuntimeValueM node path domain tagCategory memo).run' {}
+  (decodeRuntimeValueM node path domain tagCategory memo (fun _ _ => none)).run' (.forRoot node)
 
 def jsonArray (j : Json) (path : String) : Except String (Array Json) :=
   j.getArr? |>.mapError fun e => s!"{path}: expected array ({e})"
@@ -2945,11 +2986,21 @@ structure CompilerValueMemo where
   private mk ::
   private entries : Std.HashMap Json (Except String TypedValue)
   private sourcePaths : Std.HashMap String (Json × TypedValue)
+  private runtimeArguments : Std.HashMap Json RuntimeValueDecode
   private exact : ∃ (nodes : Array Json) (memo : DecodeMemo),
     entries = buildCompilerValueEntries nodes memo
 
 def prepareCompilerValueMemoUsing (nodes : Array Json) (memo : DecodeMemo) : CompilerValueMemo :=
-  ⟨buildCompilerValueEntries nodes memo, memo.compilerMirValues, ⟨nodes, memo, rfl⟩⟩
+  let entries := buildCompilerValueEntries nodes memo
+  let runtime := Id.run do
+    let mut runtime := {}
+    for (raw, result) in entries do
+      if let .ok value := result then
+        let issues := valueObligations value "$compiler_value"
+        let sequence := if issues.isEmpty then none else some (RuntimeObligationSequence.leaf issues)
+        runtime := runtime.insert raw ({ summary := value, obligations := sequence } : RuntimeValueDecode)
+    return runtime
+  ⟨entries, memo.compilerMirValues, runtime, ⟨nodes, memo, rfl⟩⟩
 
 def decodeCompilerValueWithMemo (raw : Json) (memo : Option CompilerValueMemo) : Except String TypedValue :=
   match memo with
@@ -2959,6 +3010,24 @@ def decodeCompilerValueWithMemo (raw : Json) (memo : Option CompilerValueMemo) :
     | some result => result
     | none => decodeCompilerValue raw
   | none => decodeCompilerValue raw
+
+/-- The complete typed payload was already checked by the same reader. Reuse its
+ordered obligations at compiler-argument occurrences; failed parses fall through
+so the original runtime decoder retains its first diagnostic and source path. -/
+def CompilerValueMemo.runtimeArgument (memo : CompilerValueMemo) (raw : Json)
+    (path : String) : Option RuntimeValueDecode := do
+  unless hasCanonicalJsonObjectKeys raw do none
+  let checked ← memo.runtimeArguments[raw]?
+  return { checked with
+    obligations := checked.obligations.map fun issues => .rebase "$compiler_value" path issues }
+
+/-- Runtime validation consumes the same checked compiler-argument projections
+as preparation; arbitrary callbacks cannot populate the importer's memo. -/
+def decodeRuntimeValueWithCompilerMemo (node : JsonTraversalCache.Node) (path : String)
+    (domain : Domain) (tagCategory : Option TypedEnumTag) (memo : DecodeMemo)
+    (values : Option CompilerValueMemo) : Except String RuntimeValueDecode := do
+  (decodeRuntimeValueM node path domain tagCategory memo
+    (fun raw path => values.bind (fun values => values.runtimeArgument raw path))).run' (.forRoot node)
 
 /-- A source path only locates a candidate. Bind the hit to the entire canonical
 raw value, so public document updates cannot reuse a stale or foreign decode. -/
@@ -2973,8 +3042,104 @@ def decodeCompilerValueAtPath (raw : Json) (path : String)
     | none => decodeCompilerValueWithMemo raw (some memo)
   | none => decodeCompilerValue raw
 
+/-- Compiler instance payloads decoded once, before preparation adapters bind
+source DefIds into their evolving compilation-local tables. Type membership is
+still checked against the consumer's current context at use time. -/
+structure CompilerInstanceSource where
+  kind : Miri.Interpreter.CallInstanceKind
+  definitions : Array DefinitionId
+  requiredTypes : Array Nat
+  args : TypedValue
+
+private abbrev InstanceSourceM := StateT (Array DefinitionId × Array Nat) (Except String)
+private def sourceDefinition (j : Json) (key : String) : InstanceSourceM Miri.MIR.DefId := do
+  let value ← j.getObjVal? key
+  let id : DefinitionId := ⟨← (← value.getObjVal? "crate").getNat?, ← (← value.getObjVal? "index").getNat?⟩
+  let (definitions, types) ← get
+  set (definitions.push id, types)
+  return definitions.size
+private def sourceType (j : Json) (key : String) : InstanceSourceM Nat := do
+  let id ← (← (← j.getObjVal? key).getObjVal? "type_id").getNat?
+  modify fun (definitions, types) => (definitions, types.push id)
+  return id
+private def instanceString (j : Json) (key : String) : Except String String := do
+  (← j.getObjVal? key).getStr?
+private def instanceBool (j : Json) (key : String) : Except String Bool := do
+  (← j.getObjVal? key).getBool?
+private def instanceNat (j : Json) (key : String) : Except String Nat := do
+  (← j.getObjVal? key).getNat?
+private def sourceKind (j : Json) : InstanceSourceM Miri.Interpreter.CallInstanceKind := do
+  match ← instanceString j "kind" with
+  | "item" => pure (.Item (← sourceDefinition j "def_id"))
+  | "intrinsic" => pure (.Intrinsic (← sourceDefinition j "def_id"))
+  | "llvm_intrinsic" => pure (.LlvmIntrinsic (← sourceDefinition j "def_id"))
+  | "virtual" => pure (.Virtual (← sourceDefinition j "def_id") (← instanceNat j "dispatch_slot"))
+  | "shim" =>
+    let shim : Miri.Interpreter.CallShimKind ← do
+      match ← instanceString j "shim_kind" with
+        | "vtable" => pure (Miri.Interpreter.CallShimKind.VTable (← sourceDefinition j "def_id"))
+        | "reify" =>
+          let reason ← j.getObjVal? "reason"
+          let reason ← if reason == .null then pure none else do
+            match ← reason.getStr? with
+            | "function_pointer" => pure (some Miri.Interpreter.CallReifyReason.FnPtr)
+            | "vtable" => pure (some Miri.Interpreter.CallReifyReason.Vtable)
+            | _ => throw "unknown compiler reify reason"
+          pure (.Reify (← sourceDefinition j "def_id") reason)
+        | "fn_pointer" => pure (.FnPtr (← sourceDefinition j "def_id") (← sourceType j "function_type"))
+        | "closure_once" => pure (.ClosureOnce (← sourceDefinition j "call_once_def_id") (← sourceDefinition j "closure_def_id") (← instanceBool j "track_caller"))
+        | "construct_coroutine_in_closure" => pure (.ConstructCoroutineInClosure (← sourceDefinition j "coroutine_closure_def_id") (← instanceBool j "receiver_by_ref"))
+        | "thread_local" => pure (.ThreadLocal (← sourceDefinition j "def_id"))
+        | "future_drop_poll" => pure (.FutureDropPoll (← sourceDefinition j "def_id") (← sourceType j "proxy_coroutine_type") (← sourceType j "implementation_coroutine_type"))
+        | "drop_glue" =>
+          let value ← j.getObjVal? "drop_type"
+          let dropTy ← if value == .null then pure none else (sourceType j "drop_type").map some
+          pure (.DropGlue (← sourceDefinition j "def_id") dropTy)
+        | "clone" => pure (.Clone (← sourceDefinition j "def_id") (← sourceType j "clone_type"))
+        | "fn_pointer_as_pointer" => pure (.FnPtrAsPtr (← sourceDefinition j "def_id") (← sourceType j "function_type"))
+        | "fn_pointer_from_pointer" => pure (.FnPtrFromPtr (← sourceDefinition j "def_id") (← sourceType j "function_type"))
+        | "async_drop_glue_constructor" => pure (.AsyncDropGlueCtor (← sourceDefinition j "def_id") (← sourceType j "drop_type"))
+        | "async_drop_glue" => pure (.AsyncDropGlue (← sourceDefinition j "def_id") (← sourceType j "coroutine_type"))
+        | _ => throw "unknown compiler shim kind"
+    pure (.Shim shim)
+  | _ => throw "unknown compiler instance kind"
+
+private def parseInstanceSource (kind args : Json) (memo : CompilerValueMemo) :
+    Except String CompilerInstanceSource := do
+  let (kind,(definitions,requiredTypes)) ← (sourceKind kind).run (#[],#[])
+  let args ← decodeCompilerValueWithMemo args (some memo)
+  return ⟨kind,definitions,requiredTypes,args⟩
+
+private def instanceSourceEntries (nodes : Array Json) (memo : CompilerValueMemo) :
+    Std.HashMap (Json × Json) CompilerInstanceSource := Id.run do
+  let mut entries := {}
+  for node in nodes do
+    let .obj fields := node | continue
+    unless fields.contains "instance_kind" && fields.contains "generic_args" do continue
+    let some kind := (node.getObjVal? "instance_kind").toOption | continue
+    let some args := (node.getObjVal? "generic_args").toOption | continue
+    unless hasCanonicalJsonObjectKeys kind && hasCanonicalJsonObjectKeys args do continue
+    if entries.contains (kind,args) then continue
+    if let .ok source := parseInstanceSource kind args memo then
+      entries := entries.insert (kind,args) source
+  return entries
+
+structure CompilerInstanceSourceMemo where
+  private mk ::
+  private entries : Std.HashMap (Json × Json) CompilerInstanceSource
+  private exact : ∃ nodes memo, entries = instanceSourceEntries nodes memo
+
+def prepareCompilerInstanceSourceMemo (nodes : Array Json) (memo : CompilerValueMemo) : CompilerInstanceSourceMemo :=
+  ⟨instanceSourceEntries nodes memo, ⟨nodes,memo,rfl⟩⟩
+
+def CompilerInstanceSourceMemo.lookup (memo : CompilerInstanceSourceMemo) (j : Json) : Option CompilerInstanceSource := do
+  let kind ← (j.getObjVal? "instance_kind").toOption
+  let args ← (j.getObjVal? "generic_args").toOption
+  if !hasCanonicalJsonObjectKeys kind || !hasCanonicalJsonObjectKeys args then none
+  else memo.entries[(kind,args)]?
+
 end Miri.Input.DecoderValues
 
 namespace Miri.Input
-export DecoderValues (expectedMiriCommit expectedRustcCommit expectedSchema expectedSchemaVersion expectedCompilerAbiLayoutSchema CompilerFunctionAbiMemo prepareCompilerFunctionAbiMemo decodeCompilerPredicateEvidence decodeCompilerPattern decodeTypeCompilerFacts decodeVtableEntry decodeStaticGlobalInfo validateCompilerAllocIdWorldRaw decodeCompilerLayout decodeCompilerFunctionAbi decodeCompilerFunctionAbiWithMemo CompilerFunctionAbiTable CompilerValueMemo decodeCompilerValue decodeCompilerValueWithMemo decodeCompilerValueAtPath)
+export DecoderValues (expectedMiriCommit expectedRustcCommit expectedSchema expectedSchemaVersion expectedCompilerAbiLayoutSchema CompilerFunctionAbiMemo prepareCompilerFunctionAbiMemo decodeCompilerPredicateEvidence decodeCompilerPattern decodeTypeCompilerFacts decodeVtableEntry decodeStaticGlobalInfo validateCompilerAllocIdWorldRaw decodeCompilerLayout decodeCompilerFunctionAbi decodeCompilerFunctionAbiWithMemo CompilerFunctionAbiTable CompilerInstanceSource CompilerInstanceSourceMemo prepareCompilerInstanceSourceMemo CompilerValueMemo decodeCompilerValue decodeCompilerValueWithMemo decodeCompilerValueAtPath)
 end Miri.Input
