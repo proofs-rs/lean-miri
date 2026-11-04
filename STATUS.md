@@ -1224,6 +1224,102 @@ No new speedup is claimed, and the half-time goal remains open for the complete
 source-to-result path. Runtime, exporter and proof sources were not modified by
 this scope correction; no full UI sweep or proof/axiom audit was rerun.
 
+### Indexed execution images and checked MIR reuse
+
+The default exporter now interns immutable construction payloads while building
+and emits `lean-miri-prepared-image` version 1: a field-name dictionary and
+bottom-up typed rows with dense transport IDs. The output table remains typed
+Rust data through direct serialization, rather than constructing another large
+JSON Value tree. IDs do not replace Rust allocation/type/instance identity.
+`LEAN_MIRI_PREPARED_IMAGE=0` retains shared-payload schema 2 output; both are
+accepted by Lean and the maintained Python readers. The independent
+`legacy-json` builder/encoder feature is retained.
+
+The Lean loader checks every row, edge, field dictionary and object order,
+including unused rows, while constructing its indexed traversal and local
+hashes/interest summaries. A resolver-produced capability restricts the private
+typed MIR memo to canonical indexed roots. Checked typed decodes are reused by
+node ID plus complete decoding context; source consistency checks still bind
+results to the full canonical raw value and source path. Errors fall through to
+the original occurrence decoder. No readiness/UB check, compiler evidence,
+source program, nondeterministic policy or runner limit was removed. Default
+execution still reports `iteration_limit=none`.
+
+On the unchanged upstream `unops.rs`, three sequential alternating pairs compare
+pre-change executables from `0d7e4fa9` with implementation `cb4a1dea`. The continuous
+source-entry clock includes the same cache-valid exporter and runner build checks,
+fresh Rust export, native decoding/lowering/preparation, execution, output and
+process teardown. The old/current executables are frozen separately; the common
+build gates validate the current cached build, then each trial intentionally runs
+its selected executable. These are whole-source trials, not sums of separately
+measured phases or a cold-build comparison. CPU affinity is 2, Lean threads one,
+ordinary exporter features, prepared AllocId world enabled, `--root main`,
+`--crate-name unops --edition=2021`, no UI/seed/profile override and no independent
+Miri reference in the timed path. Pinned toolchains and MIR sysroot are installed.
+
+| Metric (independent medians) | Before | Indexed image |
+| --- | ---: | ---: |
+| Complete source entry through native exit, seconds | 75.147 | 57.724 |
+| Fresh Rust export, seconds | 28.286 | 17.632 |
+| Complete native process, seconds | 46.368 | 39.897 |
+| Read/strict decode, seconds | 26.943 | 23.521 |
+| MIR lowering, seconds | 4.625 | 2.420 |
+| Provider/runtime preparation, seconds | 10.839 | 10.636 |
+| Cumulative child CPU, seconds | 74.614 | 57.291 |
+| Sampled peak process-group RSS, decimal GB | 4.928 | 2.784 |
+| Export bytes | 277,818,584 | 116,090,756 |
+
+Whole-source latency is 23.2% shorter, output 58.2% smaller and sampled peak RSS
+43.5% lower. Phase medians are independent and need not sum to the whole median.
+The three whole-source observations are 75.147 / 75.006 / 75.582 seconds versus
+57.647 / 57.724 / 58.319. CPU-2 steal deltas are 0.47 / 0.63 / 0.53 versus
+0.44 / 0.49 / 0.33 seconds; cgroup throttling is zero in every trial. The final
+wall boundary excludes post-exit manifest hashing; the raw collector's slightly
+larger wrapper wall is also retained. Fresh export hashes are recorded per trial;
+byte identity of separately generated MIR documents is not assumed. All six
+complete native outputs, including all 1361 choices and their events, are
+byte-for-byte identical and finish with strict readiness and exit zero.
+
+A separate actual public invocation of `build-exporter.sh`, `export-mir.sh` and
+`run.sh`, with the same ordinary settings and CPU affinity, takes **59.729 seconds**
+through process exit (export 18.792, run.sh including its cached Lake gate 40.898).
+It also passes readiness and produces the identical complete native output.
+This is one current-version observation, not an additional paired speedup claim.
+No new rebuild-needed timing is claimed: changing the library required a generic
+1122-job native rebuild during development, kept outside these warm trials.
+
+The prior 45–50-second estimate was optimistic and the whole-source half-time
+goal remains open. The remaining measured costs are approximately 23.5 seconds
+of decoding/checking and 10.6 seconds of preparation. A separate frozen native
+profile finds JSON text parsing only 1.01 seconds and graph loading 1.36 seconds;
+changing JSON syntax alone cannot recover the remaining gap. Larger spans include
+runtime-value validation (6.21 seconds), document construction (5.04 seconds,
+partly nested with document substeps), allocation-world validation (1.77 seconds),
+backtrace-source preparation (3.06 seconds) and source equality (1.29 seconds).
+Further substantial work needs typed compiler-metadata tables and reusable checked
+preparation results; the present generic compiler-metadata interpretation still
+runs. These profiling spans overlap and are not additive whole-path timings.
+
+Validation on this implementation: normal exporter 21 unit tests plus 9 integration
+tests; legacy-json 10 plus 9; Python suite 92 tests plus 4 dedicated reader checks;
+legacy ID/first-error/shared-reference checks and indexed/legacy parity on 16
+retained genuine/malformed-ID cases; final cached/uncached image checks on 2 cases;
+all 13 rvalue/12 statement/15 terminator lowering branches and typed-mutation
+checks; 328 compiler ABI memo candidates and collision/source fallback checks;
+axiom audit of 71,209 declarations (only propext, Quot.sound, Classical.choice).
+Fresh final-artifact upstream UI comparisons pass `pass/unops.rs` and
+`fail/uninit/uninit_byte_read.rs`, including same-TyCtxt snapshot fingerprints
+and the expected UB category/location. This is finite comparison evidence; a full
+UI sweep and a general decoder/whole-machine equivalence proof were not performed.
+
+Raw commands, counters, per-trial hashes and complete logs are under ignored
+`scratch/perf-image/`, with paired summaries in `source-pairs/summary.json`, the
+actual public observation in `source-pairs/public1.json`, profiles in
+`final-profile/` and final UI evidence in `ui-final/`. Frozen old exporter/native
+SHA256 prefixes are `12d32278` / `7fb2fa62`; current prefixes `67014ea0` /
+`0eaa49db`. An early typed-cache diagnostic was interrupted after discovering
+copy-on-write table copies; ownership was corrected before all reported trials.
+
 ## Feature support outside the current acceptance scope
 
 The following support and integration work remains in the backlog, even though

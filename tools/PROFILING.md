@@ -234,3 +234,23 @@ then decode/lower/prepare boundaries, `run: finalized_exit` and the final
 `upstream_result:` line. Keep the remaining output/teardown time in the total.
 Repeat the exact commands after the build cache becomes valid; do not delete
 caches or skip a required rebuild merely to obtain a shorter total.
+
+
+For exporter/transport changes, measure Rust source to result as one entry, with
+both build caches valid, rather than adding frozen native phase times. Use the
+same source, rustc flags, pinned toolchains/sysroot, affinity and thread count;
+freeze and record both exporter and runner identities for alternating trials.
+Include cached Cargo/Lake gates, fresh export, all result output and native
+teardown. Record the actual public commands separately if the paired collector
+selects frozen executables behind common cached build gates. Report cache state;
+a library rebuild belongs in a separate observation. The indexed-image comparison
+and its precise boundaries, hashes, sample spread and remaining costs are in
+[STATUS](../STATUS.md#indexed-execution-images-and-checked-mir-reuse).
+
+The default `lean-miri-prepared-image` transport still uses JSON text. To compare
+the retained persistent-builder/shared-payload encoding, set
+`LEAN_MIRI_PREPARED_IMAGE=0` when exporting; do not assume this recreates a previous
+interpreter binary. Decode/lower/preparation/guest behavior must be checked for
+each artifact pair, including complete choices and terminal classifications.
+`--profile` is useful for attribution but does not replace an unprofiled whole
+source-entry measurement. Nested profiler spans are not an additive phase total.
