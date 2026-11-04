@@ -140,6 +140,8 @@ struct ExportContext<'tcx> {
     /// query constructors can create type nodes without adding them here.
     runtime_type_query_demands: HashSet<rustc_middle::ty::Ty<'tcx>>,
     runtime_type_query_suppression: usize,
+    /// Compilation-local operation requirements, not a cache or execution trace.
+    runtime_type_operations: HashMap<ty::Ty<'tcx>, u8>,
     type_nodes: BTreeMap<u64, Value>,
     type_nodes_in_progress: HashSet<rustc_middle::ty::Ty<'tcx>>,
     next_type_id: u64,
@@ -241,7 +243,42 @@ enum IdentityMembershipSet {
     RuntimeQueryOnlyEmptyDrop,
 }
 
+const TYPE_MUT_POINTER: u8 = 1;
+const TYPE_MUT_REFERENCE: u8 = 2;
+const TYPE_DROP_GLUE: u8 = 4;
+const TYPE_ALL_OPERATIONS: u8 = TYPE_MUT_POINTER | TYPE_MUT_REFERENCE | TYPE_DROP_GLUE;
+
+// Later closure waves can discover another operation for an already emitted
+// type. Keep one row and preserve evidence produced in previous waves.
+fn merge_runtime_type_queries(
+    output: &mut Vec<Value>, positions: &mut HashMap<u64, usize>, rows: impl IntoIterator<Item = Value>,
+) {
+    for row in rows {
+        let id = row.get("input_type_id").and_then(Value::as_u64)
+            .expect("type query producer emits an input ID");
+        if let Some(&index) = positions.get(&id) {
+            output[index].as_object_mut().expect("type query row is object")
+                .extend(row.as_object().expect("type query row is object").clone());
+        } else {
+            positions.insert(id, output.len());
+            output.push(row);
+        }
+    }
+}
+
 impl<'tcx> ExportContext<'tcx> {
+    fn require_type_operations(&mut self, ty: ty::Ty<'tcx>, operations: u8) {
+        if cfg!(feature = "full-type-queries") {
+            return;
+        }
+        self.type_id(ty);
+        *self.runtime_type_operations.entry(ty).or_default() |= operations;
+    }
+    fn required_type_operation_count(&self) -> usize {
+        self.runtime_type_operations.values()
+            .map(|bits| bits.count_ones() as usize).sum()
+    }
+
     fn note_identity_membership_change(
         &mut self,
         set: IdentityMembershipSet,
@@ -1506,6 +1543,10 @@ impl Callbacks for ExportCallbacks {
             "ordering_enum":if tcx.lang_items().get(rustc_attr_ir::LangItem::OrderingEnum).is_some(){
                 compiler_fact(type_json(&mut export_context,tcx,tcx.ty_ordering_enum(rustc_span::DUMMY_SP)))
             }else{unavailable_compiler_fact("missing OrderingEnum lang item")}});
+        // machine.rs/backtrace.rs use *mut (), panic.rs uses mplace_to_imm_ptr
+        // on an allocated str. Other pointer demands come from Box/vtables.
+        export_context.require_type_operations(tcx.types.unit, TYPE_MUT_POINTER);
+        export_context.require_type_operations(tcx.types.str_, TYPE_MUT_POINTER);
         export_profile.mark("local_roots_and_primitives");
         export_profile.domains("local_roots_and_primitives", &export_context);
         let named_shim_abis = shim_abi::named_signatures(tcx, &mut export_context);
@@ -1553,7 +1594,8 @@ impl Callbacks for ExportCallbacks {
         // constructors; generated runtime pointer/ref outputs are suppressed
         // as fresh runtime-query demands.
         let mut runtime_type_queries = Vec::new();
-        let mut processed_runtime_type_queries = HashSet::new();
+        let mut processed_runtime_type_queries = HashMap::<ty::Ty<'tcx>, u8>::new();
+        let mut runtime_type_query_positions = HashMap::<u64, usize>::new();
         let mut selected_alloc_id_keys = allocator_world::SelectedKeyProbes::new();
         let (
             cast_queries,
@@ -1615,6 +1657,8 @@ impl Callbacks for ExportCallbacks {
                 export_context.runtime_query_only_empty_drops.len(),
                 export_context.runtime_type_query_demands.len(),
                 processed_runtime_type_queries.len(),
+                export_context.required_type_operation_count(),
+                processed_runtime_type_queries.values().map(|bits| bits.count_ones() as usize).sum(),
             ];
             export_profile.mark("closure.round_setup");
             export_profile.domains("closure.round_setup", &export_context);
@@ -1640,11 +1684,12 @@ impl Callbacks for ExportCallbacks {
             );
             export_profile.mark("closure.runtime_type_queries");
             export_profile.domains("closure.runtime_type_queries", &export_context);
-            let mut runtime_type_query_rows = match runtime_type_query_wave {
+            let runtime_type_query_rows = match runtime_type_query_wave {
                 Value::Array(rows) => rows,
                 _ => panic!("runtime type queries are an array"),
             };
-            runtime_type_queries.append(&mut runtime_type_query_rows);
+            merge_runtime_type_queries(&mut runtime_type_queries,
+                &mut runtime_type_query_positions, runtime_type_query_rows);
             let runtime_caller_instances =
                 compiler_caller_location_queries_json(tcx, &mut export_context);
             export_profile.mark("closure.caller_location_queries");
@@ -1737,6 +1782,8 @@ impl Callbacks for ExportCallbacks {
                 export_context.runtime_query_only_empty_drops.len(),
                 export_context.runtime_type_query_demands.len(),
                 processed_runtime_type_queries.len(),
+                export_context.required_type_operation_count(),
+                processed_runtime_type_queries.values().map(|bits| bits.count_ones() as usize).sum(),
             ];
             if before == after && export_context.identity_membership_delta.is_empty() {
                 break (
@@ -1763,6 +1810,9 @@ impl Callbacks for ExportCallbacks {
         export_profile.mark("closure_finalize");
         let runtime_queries = {
             let mut queries: JsonMap<String, Value> = JsonMap::new();
+            if !cfg!(feature = "full-type-queries") {
+                queries.insert("type_query_schema".into(), json!("source_operations_v1"));
+            }
             queries.insert("startup".into(), startup_queries::export(tcx));
             queries.insert("types".into(), Value::Array(runtime_type_queries.into()));
             queries.insert("virtual".into(), runtime_virtual_queries);
@@ -2974,6 +3024,9 @@ fn type_json_with_query<'tcx>(
     if context.runtime_type_query_suppression == 0 {
         context.runtime_type_query_demands.insert(ty);
     }
+    if let Some(pointee) = query_ty.boxed_ty() {
+        context.require_type_operations(pointee, TYPE_MUT_POINTER);
+    }
     let id = context.type_id(ty);
     if context.type_nodes.contains_key(&id) || context.type_nodes_in_progress.contains(&ty) {
         return json!({"type_id":id});
@@ -4123,6 +4176,9 @@ fn terminator_json<'tcx>(
             replace,
             drop,
         } => {
+            // call.rs::init_drop_in_place_call resolves this exact place type
+            // and constructs &mut T. Include cleanup blocks and empty drops.
+            context.require_type_operations(place.ty(body, tcx).ty, TYPE_MUT_REFERENCE | TYPE_DROP_GLUE);
             let status = if drop.is_some() {
                 "unsupported"
             } else {
@@ -6290,6 +6346,9 @@ fn allocation_ref<'tcx>(
             }
         }
         Some(GlobalAlloc::VTable(ty, predicates)) => {
+            // Virtual dispatch uses *mut T; dyn drop uses &mut T and resolves
+            // concrete drop glue even when the vtable's drop slot is null.
+            context.require_type_operations(ty, TYPE_ALL_OPERATIONS);
             let route = if context.vtable_diagnostics.probe_allocations.contains(&alloc_id) {
                 "prepared_salt_probe_global"
             } else { "symbolic_global" };
@@ -6620,55 +6679,114 @@ fn bytes_hex(bytes: &[u8]) -> String {
 fn compiler_runtime_type_queries_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-    processed: &mut HashSet<ty::Ty<'tcx>>,
+    processed: &mut HashMap<ty::Ty<'tcx>, u8>,
 ) -> Value {
-    let mut types = context
-        .runtime_type_query_demands
-        .iter()
-        .filter(|ty| !processed.contains(ty))
-        .filter_map(|ty| context.type_ids.get(ty).map(|id| (*id, *ty)))
-        .collect::<Vec<_>>();
-    types.sort_by_key(|(id, _)| *id);
-    let records=types.into_iter().map(|(id,input)| {
-        processed.insert(input);
-        let closed=!input.has_non_region_param() && !input.has_escaping_bound_vars()
-            && !input.has_infer() && !input.has_placeholders() && !input.references_error();
-        let normalized=if closed {tcx.try_normalize_erasing_regions(ty::TypingEnv::fully_monomorphized(),ty::Unnormalized::new_wip(input)).ok()} else {None};
-        let drop=match normalized {
-            Some(ty) if tcx.lang_items().get(rustc_attr_ir::LangItem::DropGlue).is_some()=> {
-                let instance=ty::Instance::resolve_drop_glue(tcx,ty);
-                // rustc represents an empty drop operation as DropGlue(None).
-                // Static Drop terminators skip it, so a mere type query does
-                // not demand its MIR. Real dynamic/vtable calls promote this
-                // identity through register_instance and export the shim body.
-                let instance_id=if matches!(instance.def,
-                    ty::InstanceKind::Shim(ty::ShimKind::DropGlue(_, None))) {
-                    let already_reached = context.pending_instances.contains(&instance)
-                        || context.emitted_instances.contains(&instance);
-                    let id = context.register_instance_identity(instance);
-                    if !already_reached {
-                        if context.runtime_query_only_empty_drops.insert(instance) {
-                            context.note_identity_membership_change(
-                                IdentityMembershipSet::RuntimeQueryOnlyEmptyDrop,
-                                instance,
-                            );
+    let mut types = if cfg!(feature = "full-type-queries") {
+        context
+            .runtime_type_query_demands
+            .iter()
+            .filter(|ty| context.type_ids.contains_key(ty))
+            .map(|ty| (*ty, TYPE_ALL_OPERATIONS))
+            .collect::<Vec<_>>()
+    } else {
+        context
+            .runtime_type_operations
+            .iter()
+            .map(|(ty, bits)| (*ty, *bits))
+            .collect()
+    };
+    types.retain(|(ty, bits)| bits & !processed.get(ty).copied().unwrap_or(0) != 0);
+    types.sort_by_key(|(ty, _)| context.type_ids.get(ty).copied());
+    let mut records = Vec::new();
+    for (input, required) in types {
+        let operations = required & !processed.get(&input).copied().unwrap_or(0);
+        let id = context.type_ids[&input];
+        let drop = if operations & TYPE_DROP_GLUE != 0 {
+            let closed = !input.has_non_region_param()
+                && !input.has_escaping_bound_vars()
+                && !input.has_infer()
+                && !input.has_placeholders()
+                && !input.references_error();
+            let normalized = if closed {
+                tcx.try_normalize_erasing_regions(
+                    ty::TypingEnv::fully_monomorphized(),
+                    ty::Unnormalized::new_wip(input),
+                )
+                .ok()
+            } else {
+                None
+            };
+            let drop = match normalized {
+                Some(ty)
+                    if tcx
+                        .lang_items()
+                        .get(rustc_attr_ir::LangItem::DropGlue)
+                        .is_some() =>
+                {
+                    let instance = ty::Instance::resolve_drop_glue(tcx, ty);
+                    // rustc represents an empty drop operation as DropGlue(None).
+                    // Static Drop terminators skip it, so a mere type query does
+                    // not demand its MIR. Real dynamic/vtable calls promote this
+                    // identity through register_instance and export the shim body.
+                    let instance_id = if matches!(
+                        instance.def,
+                        ty::InstanceKind::Shim(ty::ShimKind::DropGlue(_, None))
+                    ) {
+                        let already_reached = context.pending_instances.contains(&instance)
+                            || context.emitted_instances.contains(&instance);
+                        let id = context.register_instance_identity(instance);
+                        if !already_reached {
+                            if context.runtime_query_only_empty_drops.insert(instance) {
+                                context.note_identity_membership_change(
+                                    IdentityMembershipSet::RuntimeQueryOnlyEmptyDrop,
+                                    instance,
+                                );
+                            }
                         }
-                    }
-                    id
-                } else {
-                    context.register_instance(instance)
-                };
-                compiler_fact(json!({"instance_id":instance_id,
+                        id
+                    } else {
+                        context.register_instance(instance)
+                    };
+                    compiler_fact(json!({"instance_id":instance_id,
                     "instance_kind":instance_kind_json(context,tcx,instance.def),
                     "generic_args":generic_args_json(context,tcx,instance.args)}))
-            }
-            _=>unavailable_compiler_fact("drop glue requires normalized monomorphic type and drop_in_place lang item"),
+                }
+                _ => unavailable_compiler_fact(
+                    "drop glue requires normalized monomorphic type and drop_in_place lang item",
+                ),
+            };
+            Some(drop)
+        } else {
+            None
         };
-        json!({"input_type_id":id,"typing_env":"fully_monomorphized",
-            "mut_pointer_type":compiler_fact(query_generated_type_json(context,tcx,ty::Ty::new_mut_ptr(tcx,input))),
-            "mut_reference_type":compiler_fact(query_generated_type_json(context,tcx,ty::Ty::new_mut_ref(tcx,tcx.lifetimes.re_erased,input))),
-            "drop_glue":drop})
-    }).collect::<Vec<_>>();
+        if !cfg!(feature = "full-type-queries") {
+            // Ensure implicit input identities also have a complete source node.
+            let _ = type_json(context, tcx, input);
+        }
+        let mut row = json!({"input_type_id":id,"typing_env":"fully_monomorphized"});
+        if operations & TYPE_MUT_POINTER != 0 {
+            row["mut_pointer_type"] = compiler_fact(query_generated_type_json(
+                context,
+                tcx,
+                ty::Ty::new_mut_ptr(tcx, input),
+            ));
+        }
+        if operations & TYPE_MUT_REFERENCE != 0 {
+            row["mut_reference_type"] = compiler_fact(query_generated_type_json(
+                context,
+                tcx,
+                ty::Ty::new_mut_ref(tcx, tcx.lifetimes.re_erased, input),
+            ));
+        }
+        if let Some(drop) = drop {
+            row["drop_glue"] = drop;
+        }
+        processed.insert(
+            input,
+            processed.get(&input).copied().unwrap_or(0) | operations,
+        );
+        records.push(row);
+    }
     Value::Array(records.into())
 }
 
@@ -7185,6 +7303,7 @@ fn compiler_vtable_metadata_json<'tcx>(
     input: ty::Ty<'tcx>,
     predicates: &'tcx ty::List<ty::PolyExistentialPredicate<'tcx>>,
 ) -> Value {
+    context.require_type_operations(input, TYPE_ALL_OPERATIONS);
     let predicate_json = predicates
         .iter()
         .map(|predicate| existential_predicate_json(context, tcx, predicate))

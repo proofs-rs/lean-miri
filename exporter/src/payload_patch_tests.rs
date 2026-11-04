@@ -2,6 +2,25 @@
 use super::*;
 
 #[test]
+fn runtime_type_operation_promotion_keeps_prior_fields_and_one_row() {
+    let mut rows = Vec::new();
+    let mut positions = HashMap::new();
+    merge_runtime_type_queries(&mut rows, &mut positions, vec![
+        json!({"input_type_id":9,"mut_pointer_type":{"status":"supported","value":{"type_id":10}}}),
+        json!({"input_type_id":2,"drop_glue":{"status":"unsupported"}}),
+    ]);
+    merge_runtime_type_queries(&mut rows, &mut positions, vec![
+        json!({"input_type_id":9,"mut_reference_type":{"status":"supported","value":{"type_id":11}}}),
+    ]);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(positions[&9], 0);
+    assert_eq!(rows[0]["mut_pointer_type"]["value"]["type_id"], 10);
+    assert_eq!(rows[0]["mut_reference_type"]["value"]["type_id"], 11);
+    assert!(rows[0].get("drop_glue").is_none());
+    assert_eq!(rows[1]["drop_glue"]["status"], "unsupported");
+}
+
+#[test]
 fn exact_vtable_links_keep_unknown_queries_unknown() {
     let hit = json!({"status":"supported","vtable_query":{
         "status":"supported","_query_key":{"input_type_id":7,"input_predicate_ids":[2,3]}}});

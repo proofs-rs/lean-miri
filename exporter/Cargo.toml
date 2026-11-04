@@ -18,4 +18,6 @@ miri = { path = "../upstream/miri-source", default-features = false, optional = 
 default = []
 # Reference builder/encoder for output and performance comparisons.
 legacy-json = []
+# Reference producer for differential checks of operation-directed type queries.
+full-type-queries = []
 miri-reference = ["dep:miri"]

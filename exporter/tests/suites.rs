@@ -72,6 +72,11 @@ fn producer_settings() {
 }
 
 #[test]
+fn runtime_operations() {
+    run("bash", &["tests/run-producer.sh", "runtime_operations"]);
+}
+
+#[test]
 fn primitive_ranges() {
     run("bash", &["tests/run-producer.sh", "primitive_ranges"]);
 }

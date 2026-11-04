@@ -1634,8 +1634,103 @@ expected UB category/location. The final ordinary/reference exporter hashes are
 audit or full upstream UI sweep is claimed for this diagnostics-only update.
 Logs are `checked-rust-tests.log`, `final-legacy-tests.log`, `final-quick.log`,
 `native-validation.log` and `ui-last/` in the same ignored evidence directory.
-The generation-range reduction is still unimplemented: the investigation locates
-expansion/reconstruction costs, not a proven list of removable compiler facts.
+This investigation itself did not change generation ranges. The subsequent
+operation-directed change is measured and validated separately below.
+
+## Operation-directed runtime type queries (2026-11-04)
+
+The exporter now collects separate mutable-pointer, mutable-reference and drop
+requirements from all exported MIR (including cleanup blocks), Box pointees,
+concrete vtables and implicit startup/backtrace/panic operations. Requirements
+are not inferred from a successful guest trace. The compilation-local fixed
+point includes operation-mask growth, and later operations merge into one row
+per exact source type. The pinned compiler still constructs the exact types and
+resolves drop glue. Null vtable drop slots retain concrete reference/drop facts
+and promotion of their executable empty-drop shim.
+
+The explicit `source_operations_v1` type-query marker permits omitted
+operations; requesting an omitted operation fails. Present malformed constructor
+evidence is still rejected during preparation. Unmarked legacy rows still
+require both constructors. The former full-query producer remains available
+with `--features full-type-queries`; its selected-allocator fixture output is
+byte-identical to the frozen pre-change producer. See the requirement mapping in
+[the exporter guide](exporter/README.md). No cross-program cache, guest rewrite,
+runtime-limit change or successful replacement for missing semantics was added.
+
+An ordinary diagnostic unops export reduces type IDs from 26,469 to 9,002,
+instance identities from 9,937 to 4,279 and runtime type rows from 9,002 to 323.
+Most remaining metadata belongs to other MIR/ABI/helper catalogs, so these
+counts do not imply a proportional reduction in total input size or time.
+
+Three alternating sequential source-entry pairs use original
+`upstream/miri-source/tests/pass/unops.rs`, root `main`, crate `unops`, edition
+2021, CPU 2, one Lean thread, immutable ordinary exporter/native artifacts and
+the prepared AllocId world. Each includes identical current cache-valid
+Cargo/Lake gates, a fresh export, all native result output and process teardown;
+post-exit diagnostic manifest hashing is excluded. No UI/seed/profile override
+or reference-Miri run is in the timed path. Installed toolchain/sysroot and
+valid build caches are prerequisites; cold builds are not measured.
+
+| Independent medians | Frozen pre-change | Operation-directed |
+| --- | ---: | ---: |
+| Rust source entry → native exit | 48.128 s | 44.540 s |
+| Export | 18.120 s | 17.206 s |
+| Native process | 29.373 s | 26.696 s |
+| Read/strict decode | 16.967 s | 15.101 s |
+| MIR lowering | 2.260 s | 1.771 s |
+| Provider/runtime preparation | 7.003 s | 6.915 s |
+| Sampled peak process-group RSS | 2.692 GB | 2.417 GB |
+| Input bytes | 116,090,756 | 100,249,298 |
+
+Whole observations are 48.128 / 47.999 / 48.171 versus
+44.690 / 44.540 / 44.209 seconds: **7.46% shorter**, not a half-time result.
+Phase medians are independent and must not be added. Child CPU medians are
+47.672 versus 44.107 seconds, steal observations span 0.26–0.38 seconds and
+cgroup throttling is zero. Baseline ordinary/native SHA256 prefixes are
+`ba3e58f2` / `2b8d238b`; candidate `8c423774` / `8e3673f8`.
+Strict readiness, finalized exit zero and all 1361 choice events/tapes agree in
+all six executions. Complete outputs differ only in the existing
+`canonical_body_1814` source-ID diagnostic: removing unreached compiler entries
+renumbers type/instance/body IDs. Excluding exactly that line, the output SHA256
+is `4d64d9a2b8f0e917eed65032df627d8aeb0b1096c7627fcb06ceec1a14542ea1`.
+A separate invocation through public `build-exporter.sh` / `export-mir.sh` /
+`run.sh` takes 44.453 seconds through native exit, with complete output
+byte-identical to the candidate trials.
+
+The preparation phase is essentially unchanged. This reduces unnecessary
+construction/transport but does not remove the remaining generic MIR/ABI/helper
+preparation walks. The 20-second and further half-time goals remain unresolved;
+type-row counts alone did not predict the whole-source improvement.
+
+Validation passes normal exporter 22 unit plus 10 integration tests, full-query
+reference 22 plus 10, legacy-json 11 plus 10, and final focused producer reruns
+after making its operation fixture a library (the producer check needs no std
+main wrapper). A fresh binary fixture separately asserts two observable drop
+calls and exercises borrowed-only types, Box, virtual calls and null-slot dyn
+drop; both same-prepared-TyCtxt Miri and Lean exit zero. Full decoder checks pass,
+including 16 indexed cases, 10 metadata cases, 1636 authentic instance rows,
+24 kind/error cases and new sparse/legacy/malformed operation checks. Quick,
+source/fixture checks and Python 96 pass. The native/MiriTests build, 47 runtime
+checks, connected proof harnesses and transitive axiom audit for 71,356
+declarations pass (only propext, Quot.sound and Classical.choice).
+
+Fresh final-reference/native upstream comparisons pass unops,
+uninitialized-byte-read (including expected UB category/site), packed dyn traits,
+panic catch/unwind and ZST Box. The first multi-check attempt classified panic
+and ZST Box as resource failures when shared cgroup memory events changed under
+file-cache pressure, without an OOM kill. Those attempts are not counted as
+passes; both were rerun successfully with stable event counters after releasing
+reclaimable workspace file pages. An intermediate legacy fixture shell failed
+after its script was edited while running; clean final reruns pass. No guard or
+expectation was weakened. No complete upstream UI sweep or general exporter /
+machine-equivalence proof was performed.
+
+Evidence is ignored under `scratch/perf-demand-types/`: `source-pairs/summary.json`,
+per-trial manifests and logs, `unops-export.log`, `ui-focused/`,
+`ui-resource-rerun/`, `operations-counter*`, `decoder.log`, `rust-tests-final.log`,
+`full-tests.log`, `legacy-tests-final.log`, final focused fixture logs,
+`quick-final.log`, `connected.log` and `runtime-tests.log`. Frozen binaries and
+source-entry collection/analysis scripts are retained there for reproduction.
 
 ## Feature support outside the current acceptance scope
 

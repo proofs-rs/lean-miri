@@ -34,6 +34,26 @@ guarantee coverage of unknown dynamic callees or semantic completeness. Without
 Unsupported or unknown queries remain explicit obligations and are not replaced
 with opaque debug payloads.
 
+Runtime type rows use `compiler_runtime_queries.type_query_schema =
+"source_operations_v1"`. Requirements are collected from all exported MIR,
+including cleanup blocks, and implicit interpreter operations, independently of
+the executed guest path:
+
+| Operation | Requirement source |
+| --- | --- |
+| `*mut T` | Box pointees (validity/Tree Borrows), concrete vtable receivers, unit initialization/backtraces, allocated panic strings |
+| `&mut T` | MIR Drop places and concrete vtable types, including null drop slots |
+| drop glue | MIR Drop places and concrete vtable types |
+
+The compilation-local fixed point also closes over demands discovered while
+exporting newly reached types/MIR. Later requirements for the same type merge
+into one row. Constructors and drop resolution still use the pinned compiler's
+exact queries. Absent operations fail if requested; present malformed constructor
+facts fail preparation. Rows without the marker retain the legacy requirement
+for both constructors. `--features full-type-queries` retains the former producer
+for finite differential checks. This is not a shared cache or trace-based pruning;
+other metadata catalogs and their checks are retained.
+
 For Cargo projects, use `exporter/target/debug/lean-miri-mir-exporter --cargo check
 --manifest-path /path/to/Cargo.toml`. The wrapper uses pinned Cargo/rustc,
 rebuilds dependency crates with MIR, writes per-crate JSON under `lean-miri-mir/`
