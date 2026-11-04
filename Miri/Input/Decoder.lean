@@ -1554,11 +1554,11 @@ private def parseAllocationArray (values : Array Json) : Except String (Array Al
     index := index + 1
   pure result
 
-private def parseInstanceArray (values : Array Json) : Except String (Array InstanceNode) := do
+private def parseInstanceArray (values : Array Json) (memo : DecodeMemo) : Except String (Array InstanceNode) := do
   let mut result := #[]
   let mut index := 0
   for value in values do
-    result := result.push (← parseInstance value s!"$.instances[{index}]")
+    result := result.push (← parseInstance value s!"$.instances[{index}]" memo)
     index := index + 1
   pure result
 
@@ -1613,7 +1613,7 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     | none => pure none
     | some value => pure (some (← parseCompilerAllocIdWorld value allocations))
   let instancesJson ← arrayField j "instances" "$"
-  let instances ← profileit "decoder.instances" profile fun _ => parseInstanceArray instancesJson
+  let instances ← profileit "decoder.instances" profile fun _ => parseInstanceArray instancesJson memo
   let selectedScope ← match optionalJson j "selected_scope" with
     | none => pure none
     | some value => pure (some (← parseSelectedScope value "$.selected_scope"))

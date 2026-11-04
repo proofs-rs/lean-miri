@@ -2676,7 +2676,7 @@ def parseBody (j : Json) (path fallbackName : String) (memo : DecodeMemo := {}) 
   let promotedBodies ← parsePromotedBodies j path fallbackName memo
   return { core with promotedBodies := promotedBodies }
 
-def parseInstance (j : Json) (path : String) : Except String InstanceNode := do
+def parseInstance (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String InstanceNode := do
   let kindText ← fieldString j "kind" path
   let kind := match kindText with
     | "instance_mir" => .instanceMir
@@ -2708,8 +2708,8 @@ def parseInstance (j : Json) (path : String) : Except String InstanceNode := do
     | some value => (value.getBool?).map some |>.mapError fun e => s!"{joinPath path "instance_args_are_monomorphic"}: expected boolean ({e})"
   let body ← match optionalJson j "body" with
     | none => pure none
-    | some value => pure (some (← parseBody value (joinPath path "body") fallback))
-  let promotedBodies ← parsePromotedBodies j path fallback
+    | some value => pure (some (← parseBody value (joinPath path "body") fallback memo))
+  let promotedBodies ← parsePromotedBodies j path fallback memo
   return {
     id := id
     status := parseStatus (← fieldString j "status" path)
