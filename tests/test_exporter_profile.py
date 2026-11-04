@@ -27,7 +27,7 @@ export_catalog: instances=9 emitted_mir=3
             'export_callback': 10, 'driver_after_callback': 2, 'driver_total': 13})
         self.assertEqual(result['span_seconds']['closure.function_facts']['total'], 9)
         self.assertEqual(result['domain_snapshots'], [{'phase': 'closure.setup', 'instances': 5, 'types': 2}])
-        self.assertEqual(result['catalog_rounds'], [{'instances': 9, 'emitted_mir': 3}])
+        self.assertEqual(result['catalog_rounds'], [{'instances': 9, 'processed_instances': 3}])
 
     def test_old_logs_keep_spans_without_inventing_driver_times(self):
         result = profile.summarize('export_profile: share_payloads 3.5\n')

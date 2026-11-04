@@ -1580,7 +1580,10 @@ formatting, graph traversal, allocation and destruction dominate the visible
 stacks. Cumulative stack percentages overlap and must not be summed.
 
 The closure reaches a fixed point after seven rounds: 9,937 instance identities,
-3,942 emitted MIR instances and 26,469 type IDs. Per-producer growth identifies
+3,942 processed instance requests and 26,469 type IDs. Of the final instance rows,
+3,628 contain MIR bodies; intrinsic/foreign/virtual dispatch rows need no body.
+Early logs labeled the processed registry `emitted_mir`; the reader normalizes
+that field to `processed_instances`. Per-producer growth identifies
 runtime type queries as adding **17,693 type IDs and 5,902 instance identities**;
 MIR/allocation probing adds a further 6,062 types and 117,778 registered allocation
 ID keys. These are growth observations, not a proof that those identities are
@@ -1627,10 +1630,10 @@ to the earlier default-mode unops baseline, including 1361 choices/events and
 strict readiness. Fresh final-reference-exporter comparisons with profiling
 enabled pass unops and uninitialized-byte-read, including snapshot binding and
 expected UB category/location. The final ordinary/reference exporter hashes are
-`ecdd3e63` / `1fd2de5c`. Lean sources were not changed, so no new Lean build/proof
+`ba3e58f2` / `60ca206e`. Lean sources were not changed, so no new Lean build/proof
 audit or full upstream UI sweep is claimed for this diagnostics-only update.
-Logs are `final-{rust,legacy}-tests.log`, `final-quick.log`,
-`native-validation.log` and `ui-checked/` in the same ignored evidence directory.
+Logs are `checked-rust-tests.log`, `final-legacy-tests.log`, `final-quick.log`,
+`native-validation.log` and `ui-last/` in the same ignored evidence directory.
 The generation-range reduction is still unimplemented: the investigation locates
 expansion/reconstruction costs, not a proven list of removable compiler facts.
 

@@ -1692,7 +1692,7 @@ impl Callbacks for ExportCallbacks {
             export_profile.domains("closure.reachable_and_alloc_probes", &export_context);
             if export_profile.0.is_some() {
                 let array_len = |v: &Value| v.as_array().map_or(0, |rows| rows.len());
-                eprintln!("export_catalog: instances={} emitted_mir={} types={} allocations={} explicit_instance_abi_requests={} instance_abi_rows={} function_rows={} pointer_abi_rows={} helper_signature_candidates={} runtime_type_rows={} symbol_only_instances={} frame_instances={}",
+                eprintln!("export_catalog: instances={} processed_instances={} types={} allocations={} explicit_instance_abi_requests={} instance_abi_rows={} function_rows={} pointer_abi_rows={} helper_signature_candidates={} runtime_type_rows={} symbol_only_instances={} frame_instances={}",
                     export_context.instance_ids.len(), export_context.emitted_instances.len(),
                     export_context.type_ids.len(), export_context.allocation_ids.len(),
                     export_context.instance_abi_requests.len(), array_len(&instance_abis),

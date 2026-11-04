@@ -30,6 +30,8 @@ def summarize(text):
             row = {'phase': parts[1]} if domain else {}
             for field in (parts[2:] if domain else parts[1:]):
                 name, raw = field.split('=', 1)
+                if name == 'emitted_mir':  # Early logs counted the processed registry, not bodies.
+                    name = 'processed_instances'
                 value = int(raw)
                 if value < 0 or name in row:
                     raise ValueError('invalid catalog count')
