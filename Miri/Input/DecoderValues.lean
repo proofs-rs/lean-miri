@@ -714,21 +714,21 @@ private partial def indexedMirRoots (node : JsonTraversalCache.Node) (path : Str
   let mut roots := #[]
   match node.value with
   | .arr values =>
-    for index in [:values.size] do
-      roots := roots ++ indexedMirRoots (node.child index values[index]!) s!"{path}[{index}]"
+    for h : index in [:values.size] do
+      roots := roots ++ indexedMirRoots (node.child index values[index]) s!"{path}[{index}]"
   | .obj fields =>
     for ((name, value), index) in fields.toList.zipIdx do
       let child := node.child index value
       let childPath := joinPath path name
       if name == "basic_blocks" then
         if let .arr blocks := value then
-          for blockIndex in [:blocks.size] do
-            let block := child.child blockIndex blocks[blockIndex]!
+          for h : blockIndex in [:blocks.size] do
+            let block := child.child blockIndex blocks[blockIndex]
             let blockPath := s!"{childPath}[{blockIndex}]"
             if let some (.arr statements) := optionalField block.value "statements" then
               let source := block.field "statements" (.arr statements)
-              for statementIndex in [:statements.size] do
-                let wrapper := source.child statementIndex statements[statementIndex]!
+              for h : statementIndex in [:statements.size] do
+                let wrapper := source.child statementIndex statements[statementIndex]
                 if let some kind := optionalField wrapper.value "kind" then
                   roots := roots.push (s!"{blockPath}.statements[{statementIndex}].kind",
                     .statement, wrapper.field "kind" kind)

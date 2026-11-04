@@ -205,8 +205,11 @@ private def preparedGraph (input : Json) : Except String (SharedPayloads.Resolve
   let rows ← (← input.getObjVal? "nodes").getArr?
   let mut available : Array Node := #[]
   let mut values : Array Json := #[]
-  for index in [:rows.size] do
-    let row ← rows[index]!.getArr?
+  for h : index in [:rows.size] do
+    let row ← rows[index].getArr?
+    let item := fun (i : Nat) => match row[i]? with
+      | some value => Except.ok value
+      | none => Except.error "prepared image: missing row payload"
     let some tagJson := row[0]? | throw "prepared image: empty node row"
     let tag ← tagJson.getNat?
     let child := fun (id : Json) => do
@@ -220,14 +223,14 @@ private def preparedGraph (input : Json) : Except String (SharedPayloads.Resolve
         pure (value, #[], hash value, (0 : UInt8))
       | 3 | 4 => do
         unless row.size == 2 do throw "prepared image: leaf row arity"
-        let value := row[1]!
+        let value := (← item 1)
         match tag, value with
         | 3, .num _ | 4, .str _ => pure ()
         | _, _ => throw "prepared image: leaf payload type"
         pure (value, #[], hash value, (0 : UInt8))
       | 5 => do
         unless row.size == 2 do throw "prepared image: array row arity"
-        let ids ← row[1]!.getArr?
+        let ids ← (← item 1).getArr?
         let mut elements := #[]
         let mut children := #[]
         let mut digest : UInt64 := 7
@@ -241,7 +244,7 @@ private def preparedGraph (input : Json) : Except String (SharedPayloads.Resolve
         pure (Json.arr elements, children, mixHash 23 digest, interests)
       | 6 => do
         unless row.size == 2 do throw "prepared image: object row arity"
-        let pairs ← row[1]!.getArr?
+        let pairs ← (← item 1).getArr?
         let mut entries := #[]
         let mut children := #[]
         let mut previous : Option String := none
@@ -250,12 +253,14 @@ private def preparedGraph (input : Json) : Except String (SharedPayloads.Resolve
         for pair in pairs do
           let pair ← pair.getArr?
           unless pair.size == 2 do throw "prepared image: field row arity"
-          let id ← pair[0]!.getNat?
+          let some fieldId := pair[0]? | throw "prepared image: missing field ID"
+          let id ← fieldId.getNat?
           let some name := dictionary[id]? | throw "prepared image: field ID out of range"
           if let some old := previous then
             unless old < name do throw "prepared image: object fields are not strictly ordered"
           if name == "$lean_miri_shared_ref" then throw "prepared image: reserved reference field"
-          let node ← child pair[1]!
+          let some childId := pair[1]? | throw "prepared image: missing field edge"
+          let node ← child childId
           previous := some name
           entries := entries.push (name, node.value)
           children := children.push node

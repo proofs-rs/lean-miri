@@ -80,27 +80,32 @@ private def bindSource (ctx : LowerContext) (tables : CompilerTables)
     | .error _ =>
       definitions := definitions.push tables.definitions.size
       tables := { tables with definitions := tables.definitions.push id }
-  let definition := fun id => definitions[id]!
-  let shim : CallShimKind → CallShimKind := fun
-    | .VTable d => .VTable (definition d)
-    | .Reify d r => .Reify (definition d) r
-    | .FnPtr d t => .FnPtr (definition d) t
-    | .ClosureOnce a b t => .ClosureOnce (definition a) (definition b) t
-    | .ConstructCoroutineInClosure d b => .ConstructCoroutineInClosure (definition d) b
-    | .ThreadLocal d => .ThreadLocal (definition d)
-    | .FutureDropPoll d p i => .FutureDropPoll (definition d) p i
-    | .DropGlue d t => .DropGlue (definition d) t
-    | .Clone d t => .Clone (definition d) t
-    | .FnPtrAsPtr d t => .FnPtrAsPtr (definition d) t
-    | .FnPtrFromPtr d t => .FnPtrFromPtr (definition d) t
-    | .AsyncDropGlueCtor d t => .AsyncDropGlueCtor (definition d) t
-    | .AsyncDropGlue d t => .AsyncDropGlue (definition d) t
-  let kind : CallInstanceKind := match source.kind with
-    | .Item d => .Item (definition d)
-    | .Intrinsic d => .Intrinsic (definition d)
-    | .LlvmIntrinsic d => .LlvmIntrinsic (definition d)
-    | .Virtual d i => .Virtual (definition d) i
-    | .Shim s => .Shim (shim s)
+  let definition := fun id => match definitions[id]? with
+    | some value => Except.ok value
+    | none => Except.error "invalid prepared compiler definition slot"
+  let shim : CallShimKind → Except String CallShimKind := fun value => do
+    match value with
+      | .VTable d => return .VTable (← definition d)
+      | .Reify d r => return .Reify (← definition d) r
+      | .FnPtr d t => return .FnPtr (← definition d) t
+      | .ClosureOnce a b t => return .ClosureOnce (← definition a) (← definition b) t
+      | .ConstructCoroutineInClosure d b => return .ConstructCoroutineInClosure (← definition d) b
+      | .ThreadLocal d => return .ThreadLocal (← definition d)
+      | .FutureDropPoll d p i => return .FutureDropPoll (← definition d) p i
+      | .DropGlue d t => return .DropGlue (← definition d) t
+      | .Clone d t => return .Clone (← definition d) t
+      | .FnPtrAsPtr d t => return .FnPtrAsPtr (← definition d) t
+      | .FnPtrFromPtr d t => return .FnPtrFromPtr (← definition d) t
+      | .AsyncDropGlueCtor d t => return .AsyncDropGlueCtor (← definition d) t
+      | .AsyncDropGlue d t => return .AsyncDropGlue (← definition d) t
+  let rebind : CallInstanceKind → Except String CallInstanceKind := fun value => do
+    match value with
+    | .Item d => return .Item (← definition d)
+    | .Intrinsic d => return .Intrinsic (← definition d)
+    | .LlvmIntrinsic d => return .LlvmIntrinsic (← definition d)
+    | .Virtual d i => return .Virtual (← definition d) i
+    | .Shim s => return .Shim (← shim s)
+  let kind ← rebind source.kind
   let (args,next) ← lowerCompilerGenericArgs ctx tables source.args
   return (⟨kind,args⟩,next)
 
