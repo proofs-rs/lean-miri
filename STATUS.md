@@ -1320,6 +1320,99 @@ SHA256 prefixes are `12d32278` / `7fb2fa62`; current prefixes `67014ea0` /
 `0eaa49db`. An early typed-cache diagnostic was interrupted after discovering
 copy-on-write table copies; ownership was corrected before all reported trials.
 
+### Compiler payload sharing, indexed diagnostics and persistent span preparation
+
+Implementation `52e0756d` shares checked compiler instance kinds and complete
+generic arguments between import and preparation. Source definition slots are
+rebound to each consumer's current tables; current type membership is rechecked.
+Memo keys include complete canonical kind/argument payloads. Failed parses and
+changed inputs retain the independent raw decoder and its original first error.
+Runtime argument validation consumes the same complete typed projection with
+ordered diagnostic rebasing. Dense transport IDs select runtime context buckets
+directly; inline/raw inputs keep the exact-key hash map. All decoding context
+flags remain in the key.
+
+Baseline CPU sampling found repeated retained-query path scans dominating the
+previous roughly five-second document span. Indexed imports now look up the
+exact canonical path, preserving ancestor debug-payload exclusion; unusual path
+syntax, noncanonical indices and uncached imports retain the reference scan.
+No diagnostic is dropped or newly classified from a name alone. Span candidate
+indices now use persistent hash tries: a deferred-error branch can retain its
+old state without copying/freeing the whole index at every successful update.
+Complete span equality, first matching indices, conflicts and rollback remain.
+The runtime-document exact-equality proof module includes every new cache field,
+with the same conditional Json/pattern equality assumptions.
+
+Three alternating, sequential whole-source pairs compare the previous indexed
+implementation (`ca69a0d5`, native SHA256 `0eaa49db`) with this implementation
+(native `7c791f88`). Both use the unchanged frozen ordinary exporter `67014ea0`,
+the original unops Rust source and flags, CPU 2 and one Lean thread. As in the
+previous source-entry experiment, both include common current cache-valid Cargo
+and Lake checks, fresh export, all native stages, final output and process exit
+on one continuous clock. No UI/seed/profile override or Miri reference runs in
+the timed path. Installed toolchains/sysroot and generic runner rebuilds remain
+outside these warm observations. Per-trial export hashes are retained; fresh
+export byte identity is not assumed.
+
+| Metric (independent medians), seconds | Previous indexed baseline | Compiler metadata reuse |
+| --- | ---: | ---: |
+| Complete source entry through native exit | 58.411 | 49.763 |
+| Rust export | 17.873 | 17.903 |
+| Native process | 39.949 | 31.399 |
+| Read/strict decode | 23.474 | 18.384 |
+| MIR lowering | 2.419 | 2.387 |
+| Provider/runtime preparation | 10.614 | 7.228 |
+| Cumulative child CPU | 57.953 | 49.359 |
+
+The complete path is **14.8% shorter**; native execution including loading and
+preparation is 21.4% shorter. Independent phase medians do not add to the whole.
+Whole times are 58.478 / 58.211 / 58.411 seconds versus 49.747 / 49.763 / 50.218;
+CPU-2 steal deltas 0.44 / 0.25 / 0.34 versus 0.30 / 0.21 / 0.29, with zero cgroup
+throttling. Export remains unchanged at 116,090,756 bytes. All six complete native
+outputs and 1361-choice tapes/events are byte-identical, pass strict readiness
+and finalize exit zero. A separate actual public build-exporter/export-mir/run.sh
+invocation takes **49.743 seconds** through exit and has the same complete output.
+Post-exit manifest hashing is excluded from those end boundaries; raw collector
+wrapper times are also retained. No cold-build or small memory-change speedup is
+claimed.
+
+A separate final profile reports runtime-value validation 3.97 seconds, compiler
+instance source-table preparation 127ms, document construction 1.77 seconds,
+backtrace-source preparation 477ms and compiler lifecycle 284ms. JSON parsing is
+still about 1.03 seconds. Source-reflexivity preparation (1.38 seconds) and
+allocation-world validation (1.77 seconds) remain, alongside other metadata and
+reference processing. Profiler spans can overlap and are not an additive total.
+The estimated 40–45-second whole-source time was optimistic; that estimate and
+the half-time goal remain unmet. The new source table covers instance kinds and
+arguments, not every compiler-metadata family.
+
+Validation: complete decoder check script passes, including existing ID/shared
+reference checks, 16 indexed/legacy cases and 10 new retained-query/compiler
+argument cases checked against both reference import and full typed projection.
+The 10 cases include debug ancestors, supported/failed source status, missing or
+noncanonical indices, unsupported argument tags and hard parser failures. The
+instance test checks 1636 authentic rows (all hit the memo), 24 kind/error cases,
+changed type contexts and changed source arguments against the independent raw
+decoder, including resulting table IDs. Ordered-scan constant/lifecycle
+comparison passes on 123 bodies and 191 constants; backtrace conflict/rollback
+checks pass. The proof modules were freshly rebuilt (704 Lake jobs), connected
+proof harnesses typecheck, and axiom audit passes for 71,350 declarations with
+only propext, Quot.sound and Classical.choice. Fresh final-artifact Miri UI
+comparisons pass unops and uninitialized-byte-read, including exact expected UB
+category/location and same-TyCtxt snapshot bindings. This is finite comparison
+evidence, not a general decoder/compiler/machine equivalence proof. A full UI
+sweep and the complete standalone runtime registry were not rerun for this step;
+Rust exporter sources are unchanged.
+
+Commands, resource counters, full logs and hashes are under ignored
+`scratch/perf-metadata/`: `source-pairs/summary.json`, `source-pairs/public1.json`,
+`profile/`, `ui/`, `decoder-suite.log`, `source-hits.log`, `interner.log`,
+`backtrace.log` and `proofs.log`. Baseline CPU attribution is under `attribution/`
+and `cpu-summary.json`; sampling was diagnostic and excluded from the pairs.
+An initial proof build exposed missing decidable-equality instances for the new
+cache data; explicit instances were added without weakening the original
+statement or assumptions, then the entire proof build/audit was rerun.
+
 ## Feature support outside the current acceptance scope
 
 The following support and integration work remains in the backlog, even though
