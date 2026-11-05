@@ -106,6 +106,26 @@ Failed decodes fall through to ordinary parsing, preserving diagnostic paths and
 first-error order. Only a resolver-produced traversal can populate the opaque
 MIR memo. Readiness, compiler evidence and execution checks still run.
 
+Direct exports can opt into the binary graph with `--binary-image`; the native
+runner detects it from its versioned magic. JSON remains the default and both
+paths run the same semantic decoder. The binary reader validates canonical u64
+LEB128 integers, UTF-8, ordered fields, all edges and unused rows. These format
+bounds are unrelated to guest execution limits. `tools/check-upstream-ui.py
+--binary-image` compares this transport with same-TyCtxt Miri using the existing
+source, artifact, fingerprint and resource guards.
+
+`bash tools/check-decoder.sh [GENUINE_PREPARED_WORLD_EXPORT]` builds native finite
+decoder comparisons, malformed binary controls and runtime-summary/context
+comparisons. The optional genuine prepared-world input also compares the new
+allocation parse-origin reuse with the old independent raw/model validator and
+rejects modified raw data, allocation rows and worlds. Both transport encodings
+are accepted. Import-origin evidence is indexed by the actual input and typed
+outputs; it is neither an exporter hint nor a guest safety certificate.
+
+Release exporter and native project objects use ThinLTO. The linker uses four
+workers; this changes build cost and does not add interpreter workers. Performance
+comparisons still freeze executables and use one Lean thread and CPU affinity.
+
 Set `LEAN_MIRI_PREPARED_IMAGE=0` to retain shared-payload schema 2 output with the
 persistent builder. Lean and `tools/mir_json.py` accept both formats. The
 `legacy-json` Cargo feature separately retains the tree builder and string-key

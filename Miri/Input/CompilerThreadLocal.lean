@@ -88,7 +88,7 @@ def forDefinition (program : LoweredProgram) (definition : MIR.DefId)
   unless !rows.isEmpty do throw "missing exact compiler TLS declaration/initializer evidence"
   -- Reuse the existing strict decoder on the selected records with the same
   -- source tables; this is a query view, never a second program representation.
-  let selected := {program with input := {program.input with raw := .arr rows, allocationWorldValidation := none}}
+  let selected := {program with input := {program.input with raw := .arr rows, allocationWorldValidation := none, allocationParseBinding := none}}
   find (← ofProgram selected) definition
 
 theorem forDefinition_preparedRows (program : LoweredProgram) (definition : MIR.DefId)

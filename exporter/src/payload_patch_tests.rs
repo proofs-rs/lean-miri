@@ -101,3 +101,13 @@ fn diagnostic_graph_scan_preserves_every_occurrence_and_order() {
         shared = json!({"a":[shared, shared],"z":probe});
     }
 }
+
+#[test]
+fn binary_format_flag_is_consumed_before_rustc_arguments() {
+    let binary = parse_args(["--output","test.lmir","--binary-image","--","test.rs"]
+        .map(str::to_owned)).unwrap();
+    assert!(binary.binary_image);
+    assert!(!binary.rustc_args.iter().any(|arg|arg=="--binary-image"));
+    let json = parse_args(["--output","test.json","--","test.rs"].map(str::to_owned)).unwrap();
+    assert!(!json.binary_image);
+}

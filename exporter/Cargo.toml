@@ -25,3 +25,7 @@ full-caller-locations = []
 # Reference encoding of the same allocation-world facts.
 full-allocation-world = []
 miri-reference = ["dep:miri"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

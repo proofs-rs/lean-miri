@@ -11,11 +11,15 @@ open Miri.Memory
 set_option autoImplicit false in
 def install {P E K : Type} (raw : Lean.Json) (world? : Option CompilerAllocIdWorld) (nodes : Array AllocationNode)
     (memory : MemoryState P E K)
-    (checked : Option (DecoderValues.AllocationWorldValidation raw nodes world?) := none) :
+    (checked : Option (DecoderValues.AllocationWorldValidation raw nodes world?) := none)
+    (parsed : Option (DecoderValues.AllocationParseBinding raw nodes world?) := none) :
     Except String (MemoryState P E K) := do
-  match checked with
-  | some checked => checked.result
-  | none => Miri.Input.validateCompilerAllocIdWorldRaw raw nodes world?
+  match parsed with
+  | some _ => pure ()
+  | none =>
+    match checked with
+    | some checked => checked.result
+    | none => Miri.Input.validateCompilerAllocIdWorldRaw raw nodes world?
   let some world := world? | return memory
   if memory.sourceAllocIdWorldActive then throw "source AllocId world is already installed"
   if !memory.live.isEmpty || !memory.dead.isEmpty || !memory.extraFnPtrIds.isEmpty ||

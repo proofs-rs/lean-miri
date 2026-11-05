@@ -68,6 +68,7 @@ deriving instance DecidableEq for DecoderValues.RuntimeValueDecode
 deriving instance DecidableEq for DecoderValues.CompilerValueMemo
 deriving instance DecidableEq for DecoderValues.CompilerInstanceSource
 deriving instance DecidableEq for DecoderValues.CompilerInstanceSourceMemo
+deriving instance DecidableEq for DecoderValues.AllocationParseBinding
 deriving instance DecidableEq for DecoderValues.AllocationWorldValidation
 deriving instance DecidableEq for ImportDocumentCore
 deriving instance DecidableEq for ImportDocument

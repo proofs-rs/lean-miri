@@ -3,6 +3,8 @@ open Lake DSL
 
 package «lean-miri» where
   version := v!"0.1.0"
+  moreLeancArgs := #["-flto=thin"]
+  moreLinkArgs := #["-flto=thin", "-Wl,--thinlto-jobs=4"]
 
 extern_lib nativeMathLgamma pkg := do
   let source := pkg.dir / "native" / "math_lgamma.c"
@@ -62,6 +64,35 @@ lean_exe profile_runtime_decoder where
 lean_exe decoder_traversal_cache_tests where
   srcDir := "tests/input"
   root := `DecoderTraversalCache2026
+
+-- Run the same finite reader/semantic comparisons without bytecode overhead.
+lean_exe decoder_id_tests where
+  srcDir := "tests/input"
+  root := `DecoderIdChecks2026
+
+lean_exe decoder_shared_id_tests where
+  srcDir := "tests/input"
+  root := `DecoderSharedIdChecks2026
+
+lean_exe indexed_mir_tests where
+  srcDir := "tests/input"
+  root := `IndexedMirChecks
+
+lean_exe runtime_decode_equivalence_tests where
+  srcDir := "tests/input"
+  root := `RuntimeDecodeEquivalence165
+
+lean_exe binary_image_tests where
+  srcDir := "tests/input"
+  root := `BinaryImageChecks
+
+lean_exe runtime_summary_tests where
+  srcDir := "tests/input"
+  root := `RuntimeSummaryChecks
+
+lean_exe allocation_parse_binding_tests where
+  srcDir := "tests/input"
+  root := `AllocationParseBindingChecks
 
 -- Native-only host driver and unlimited diagnostic choice regressions.
 lean_exe native_runner_regression where

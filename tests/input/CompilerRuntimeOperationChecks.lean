@@ -27,7 +27,7 @@ def main (args : List String) : IO Unit := do
       ("virtual", .arr #[])] ++ schema.toList.map ("type_query_schema", ·))
     let raw := set program.input.raw "compiler_runtime_queries" raw
     CompilerRuntimeQueries.prepare { program with
-      input := { program.input with raw, allocationWorldValidation := none } }
+      input := { program.input with raw, allocationWorldValidation := none, allocationParseBinding := none } }
   let marker := some (Json.str "source_operations_v1")
   let sparse ← must (prepare #[row] marker)
   check ((CompilerRuntimeQueries.mutPointerType sparse ty.id).isOk == false) "absent pointer succeeded"

@@ -202,79 +202,6 @@ def isSourceSpanJson (j : Json) : Bool :=
   hasField j "lo" && hasField j "hi" && hasField j "start" && hasField j "end" &&
     hasField j "ctxt" && hasField j "file"
 
-def statementVariant (tag : String) : StatementVariant :=
-  match tag with
-  | "Assign" => .assign
-  | "FakeRead" => .fakeRead
-  | "SetDiscriminant" => .setDiscriminant
-  | "StorageLive" => .storageLive
-  | "StorageDead" => .storageDead
-  | "PlaceMention" => .placeMention
-  | "AscribeUserType" => .ascribeUserType
-  | "Coverage" => .coverage
-  | "Intrinsic" => .intrinsic
-  | "ConstEvalCounter" => .constEvalCounter
-  | "Nop" => .nop
-  | "BackwardIncompatibleDropHint" => .backwardIncompatibleDropHint
-  | other => .unknown other
-
-def terminatorVariant (tag : String) : TerminatorVariant :=
-  match tag with
-  | "Goto" => .goto
-  | "SwitchInt" => .switchInt
-  | "UnwindResume" => .unwindResume
-  | "UnwindTerminate" => .unwindTerminate
-  | "Return" => .return
-  | "Unreachable" => .unreachable
-  | "Drop" => .drop
-  | "Call" => .call
-  | "TailCall" => .tailCall
-  | "Assert" => .assert
-  | "Yield" => .yield
-  | "CoroutineDrop" => .coroutineDrop
-  | "FalseEdge" => .falseEdge
-  | "FalseUnwind" => .falseUnwind
-  | "InlineAsm" => .inlineAsm
-  | other => .unknown other
-
-def rvalueVariant (tag : String) : RvalueVariant :=
-  match tag with
-  | "Use" => .use
-  | "Repeat" => .repeat
-  | "Ref" => .ref
-  | "ThreadLocalRef" => .threadLocalRef
-  | "RawPtr" => .rawPtr
-  | "Cast" => .cast
-  | "BinaryOp" => .binaryOp
-  | "UnaryOp" => .unaryOp
-  | "Discriminant" => .discriminant
-  | "Aggregate" => .aggregate
-  | "CopyForDeref" => .copyForDeref
-  | "WrapUnsafeBinder" => .wrapUnsafeBinder
-  | "Reborrow" => .reborrow
-  | other => .unknown other
-
-def operandVariant (tag : String) : OperandVariant :=
-  match tag with
-  | "Copy" => .copy
-  | "Move" => .move
-  | "Constant" => .constant
-  | "RuntimeChecks" => .runtimeChecks
-  | other => .unknown other
-
-def projectionVariant (tag : String) : ProjectionVariant :=
-  match tag with
-  | "Deref" => .deref
-  | "Field" => .field
-  | "Index" => .index
-  | "ConstantIndex" => .constantIndex
-  | "Subslice" => .subslice
-  | "Downcast" => .downcast
-  | "OpaqueCast" => .opaqueCast
-  | "UnwrapUnsafeBinder" => .unwrapUnsafeBinder
-  | "PhantomDeref" => .phantomDeref
-  | other => .unknown other
-
 def typeShapeKind (tag : String) : TypeShapeKind :=
   match tag with
   | "bool" => .bool
@@ -371,17 +298,6 @@ def childDomain (parent : Domain) (key : String) : Domain :=
   | _, "statements" => .statementWrapper
   | _, "terminator" => .terminatorWrapper
   | _, _ => .any
-
-def isKnownStatement (tag : String) : Bool :=
-  match statementVariant tag with | .unknown _ => false | _ => true
-def isKnownTerminator (tag : String) : Bool :=
-  match terminatorVariant tag with | .unknown _ => false | _ => true
-def isKnownRvalue (tag : String) : Bool :=
-  match rvalueVariant tag with | .unknown _ => false | _ => true
-def isKnownOperand (tag : String) : Bool :=
-  match operandVariant tag with | .unknown _ => false | _ => true
-def isKnownProjection (tag : String) : Bool :=
-  match projectionVariant tag with | .unknown _ => false | _ => true
 
 def recognizedAutoDomain (j : Json) : Option Domain :=
   if (optionalField j "status").isSome then
@@ -1161,8 +1077,12 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
     let mut obligations : Option RuntimeObligationSequence := none
     let mut index := 0
     for value in values do
-      let child ← decodeRuntimeValueM (node.child index value) s!"{path}[{index}]" domain tagCategory memo reuse
-      obligations := appendRuntimeObligations obligations child.obligations
+      let childNode := node.child index value
+      -- Array summaries never retain children. Only the locally checked
+      -- absence of generic-context checks permits omitting this walk.
+      unless domain == .any && tagCategory.isNone && !childNode.mayHaveRuntimeChecks do
+        let child ← decodeRuntimeValueM childNode s!"{path}[{index}]" domain tagCategory memo reuse
+        obligations := appendRuntimeObligations obligations child.obligations
       index := index + 1
     let summary := TypedValue.array #[]
     return ⟨summary, runtimeLocalObligations summary path obligations⟩
@@ -1183,6 +1103,8 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
     let mut summaries := #[]
     let mut obligations : Option RuntimeObligationSequence := none
     for ((key, value), index) in fields.toList.zipIdx do
+      let retainSummary := runtimeSummaryKeys.contains key ||
+        path.endsWith ".hir_id" && (key == "owner_def_id" || key == "local_id")
       let childPath := joinPath path key
       let nextDomain := childDomain effectiveDomain key
       let child ← if key == "user_type_projection" && parentTag == some "AscribeUserType" then do
@@ -1205,10 +1127,14 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
           let category := typedEnumCategory? key path parentTag value
           -- Compiler arguments already have a complete checked typed projection.
           -- This field is never retained in a parent's runtime summary.
-          if key == "generic_args" && nextDomain == .any && category.isNone then
-            if let some checked := reuse (node.child index value) childPath then pure checked
-            else decodeRuntimeValueM (node.child index value) childPath nextDomain category memo reuse
-          else decodeRuntimeValueM (node.child index value) childPath nextDomain category memo reuse
+          let childNode := node.child index value
+          if !retainSummary && nextDomain == .any && category.isNone &&
+              !childNode.mayHaveRuntimeChecks then
+            pure ⟨.object #[], none⟩
+          else if key == "generic_args" && nextDomain == .any && category.isNone then
+            if let some checked := reuse childNode childPath then pure checked
+            else decodeRuntimeValueM childNode childPath nextDomain category memo reuse
+          else decodeRuntimeValueM childNode childPath nextDomain category memo reuse
       let isTagField := match effectiveDomain with
         | .statement | .terminator | .rvalue | .operand | .projection => key == "status" || key == "variant" || key == "kind"
         | _ => false
@@ -1226,8 +1152,7 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
       let statusSequence := if statusIssues.isEmpty then none else some (.leaf statusIssues.toArray)
       let childSequence := appendRuntimeObligations statusSequence child.obligations
       if !isTagField then obligations := appendRuntimeObligations obligations childSequence
-      if !isTagField && (runtimeSummaryKeys.contains key ||
-          path.endsWith ".hir_id" && (key == "owner_def_id" || key == "local_id")) then
+      if !isTagField && retainSummary then
         let childSummary := match key, value with
           | "instance_id", .num _ => match value.getNat? with
             | .ok id => TypedValue.instanceRef id
@@ -2607,6 +2532,54 @@ def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except
     unsupportedKeyFamilies := unsupportedFamilies
   }
 
+private def parseAllocationArraySource (values : Array Json) : Except String (Array AllocationNode) := do
+  let mut result := #[]
+  let mut index := 0
+  for value in values do
+    result := result.push (← parseAllocation value s!"$.allocations[{index}]")
+    index := index + 1
+  return result
+
+private def parseAllocationTables (raw : Json) (profile : Options) :
+    Except String (Array AllocationNode × Option CompilerAllocIdWorld) := do
+  let rows ← arrayField raw "allocations" "$"
+  let nodes ← profileit "decoder.allocations" profile fun _ => parseAllocationArraySource rows
+  let world ← profileit "decoder.compiler_alloc_id_world" profile fun _ => do
+    match optionalJson raw "compiler_alloc_id_world" with
+    | none => pure none
+    | some value => pure (some (← parseCompilerAllocIdWorld value nodes))
+  return (nodes, world)
+
+private def indexedAllocationSource (root : JsonTraversalCache.CheckedRoot) : Bool :=
+  match root.node with | .cached key _ => key.id.isSome | .uncached _ => false
+
+set_option autoImplicit false in
+/-- Origin evidence for the exact allocation rows and world produced by the
+checked reader. It certifies source binding, not readiness or guest safety.
+No runtime Boolean supplied by the exporter can construct this witness. Raw
+compatibility imports, which may contain noncanonical manually built JSON,
+retain their historical revalidation path. -/
+structure AllocationParseBinding (raw : Json) (nodes : Array AllocationNode)
+    (world : Option CompilerAllocIdWorld) : Type where
+  private mk ::
+  private origin : ∃ (root : JsonTraversalCache.CheckedRoot) (profile : Options),
+    root.node.value = raw ∧ indexedAllocationSource root = true ∧
+      parseAllocationTables root.node.value profile = .ok (nodes, world)
+
+/-- The successful parse is observed once. Its erased witness ties both typed
+outputs to the original immutable checked source. Dependent model fields prevent
+retaining it when raw data, allocation rows or the world are replaced. -/
+def parseAllocationTablesChecked (root : JsonTraversalCache.CheckedRoot) (profile : Options) :
+    Except String (Σ values : Array AllocationNode × Option CompilerAllocIdWorld,
+      Option (AllocationParseBinding root.node.value values.1 values.2)) :=
+  match h : parseAllocationTables root.node.value profile with
+  | .error error => .error error
+  | .ok values =>
+    let binding := if indexed : indexedAllocationSource root then
+        some (AllocationParseBinding.mk ⟨root, profile, rfl, indexed, h⟩)
+      else none
+    .ok ⟨values, binding⟩
+
 /-- String wire equality is reflexive even for a malformed JSON object. Pointer
 reuse avoids serializing an unchanged payload twice; distinct values still use
 exactly the historical wire comparison. -/
@@ -3063,10 +3036,10 @@ private def buildCompilerValueEntries (nodes : Array Json) (memo : DecodeMemo) :
   let mut entries := {}
   for node in nodes do
     let .obj fields := node | continue
-    for (key, raw) in fields.toList do
-      if ["generic_args", "rebased_args", "span", "preamble_def_span", "callsite_span"].contains key &&
-          hasCanonicalJsonObjectKeys raw && !entries.contains raw then
-        entries := entries.insert raw (decodeValue raw "$compiler_value" .any none memo)
+    for key in ["generic_args", "rebased_args", "span", "preamble_def_span", "callsite_span"] do
+      if let some raw := fields[key]? then
+        if hasCanonicalJsonObjectKeys raw && !entries.contains raw then
+          entries := entries.insert raw (decodeValue raw "$compiler_value" .any none memo)
   return entries
 
 /-- Every entry is a checked decoder outcome for its JSON key. Unlike an

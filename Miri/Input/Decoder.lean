@@ -1546,14 +1546,6 @@ private def parseTypeArray (values : Array Json) (memo : DecodeMemo) : Except St
     index := index + 1
   pure result
 
-private def parseAllocationArray (values : Array Json) : Except String (Array AllocationNode) := do
-  let mut result := #[]
-  let mut index := 0
-  for value in values do
-    result := result.push (← parseAllocation value s!"$.allocations[{index}]")
-    index := index + 1
-  pure result
-
 private def parseInstanceArray (values : Array Json) (memo : DecodeMemo) : Except String (Array InstanceNode) := do
   let mut result := #[]
   let mut index := 0
@@ -1573,14 +1565,14 @@ private def parseBodyArray (values : Array Json) (memo : DecodeMemo) : Except St
     index := index + 1
   pure result
 
-private def parseDocument (input : Json) (runtimeOnly : Bool := false)
-    (profile : Options := {}) (cachedTraversal : Bool := true) : Except String ParsedDocument := do
-  let (resolved,checkedTraversal) ← profileit "decoder.shared_payload_resolution" profile fun _ =>
-    JsonTraversalCache.resolveChecked input cachedTraversal profile
+private def parseResolvedDocument (resolved : SharedPayloads.ResolvedGraph)
+    (checkedTraversal : JsonTraversalCache.CheckedRoot) (indexed : Bool)
+    (runtimeOnly : Bool := false) (profile : Options := {})
+    (cachedTraversal : Bool := true) : Except String ParsedDocument := do
   let traversal := checkedTraversal.node
-  let j := resolved.root
+  let j := checkedTraversal.node.value
   let memo := profileit "decoder.shared_decode_memo" profile fun _ => sharedDecodeMemo resolved.nodes
-  let memo := if (input.getObjValAs? String "schema").toOption == some "lean-miri-prepared-image" then
+  let memo := if indexed then
       profileit "decoder.indexed_mir" profile fun _ => prepareIndexedMirMemo checkedTraversal memo
     else memo
   if (← fieldString j "schema" "$") != expectedSchema then
@@ -1606,12 +1598,10 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
   let typesJson ← arrayField j "types" "$"
   if typesJson.isEmpty then throw "$.types: input has no type graph; refusing an empty import"
   let types ← profileit "decoder.types" profile fun _ => parseTypeArray typesJson memo
-  let allocationsJson ← arrayField j "allocations" "$"
-  let allocations ← profileit "decoder.allocations" profile fun _ => parseAllocationArray allocationsJson
-  let compilerAllocIdWorld ← profileit "decoder.compiler_alloc_id_world" profile fun _ => do
-    match optionalJson j "compiler_alloc_id_world" with
-    | none => pure none
-    | some value => pure (some (← parseCompilerAllocIdWorld value allocations))
+  let allocationSource ← parseAllocationTablesChecked checkedTraversal profile
+  let allocations := allocationSource.1.1
+  let compilerAllocIdWorld := allocationSource.1.2
+  let allocationBinding := allocationSource.2
   let instancesJson ← arrayField j "instances" "$"
   let instances ← profileit "decoder.instances" profile fun _ => parseInstanceArray instancesJson memo
   let selectedScope ← match optionalJson j "selected_scope" with
@@ -1705,7 +1695,8 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     raw := j
     sharedNodes := resolved.nodes
     compilerFunctionAbiTable := some compilerFunctionAbiTable
-    allocationWorldValidation := if runtimeOnly then
+    allocationParseBinding := if runtimeOnly then allocationBinding else none
+    allocationWorldValidation := if runtimeOnly && allocationBinding.isNone then
       some (profileit "decoder.allocation_world_validation" profile fun _ =>
         AllocationWorldValidation.prepare j allocations compilerAllocIdWorld) else none
     compilerValueMemo := compilerValues
@@ -1737,6 +1728,14 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     let executionInput := if ready then some ⟨core⟩ else none
     return .runtime ⟨core, executionInput, blockingObligations⟩
 
+private def parseDocument (input : Json) (runtimeOnly : Bool := false)
+    (profile : Options := {}) (cachedTraversal : Bool := true) : Except String ParsedDocument := do
+  let (resolved, checkedTraversal) ← profileit "decoder.shared_payload_resolution" profile fun _ =>
+    JsonTraversalCache.resolveChecked input cachedTraversal profile
+  parseResolvedDocument resolved checkedTraversal
+    ((input.getObjValAs? String "schema").toOption == some "lean-miri-prepared-image")
+    runtimeOnly profile cachedTraversal
+
 def decodeJson (text : String) : Except String DecodeResult := do
   let json ← Json.parse text
   match ← parseDocument json with
@@ -1755,6 +1754,20 @@ decoder result and diagnostic order. -/
 def decodeRuntimeJsonProfiled (text : String) (profile : Options) : Except String RuntimeDecodeResult := do
   let json ← profileit "decoder.json_parse" profile fun _ => Json.parse text
   match ← profileit "decoder.document" profile fun _ => parseDocument json true profile with
+  | .runtime result => pure result
+  | .full _ => throw "internal decoder mode mismatch"
+
+/-- Both transports enter the same semantic checks with a locally checked graph.
+The binary path never constructs a JSON transport tree. -/
+def decodeRuntimeBytesProfiled (bytes : ByteArray) (profile : Options) :
+    Except String RuntimeDecodeResult := do
+  if !BinaryImage.hasMagic bytes then
+    let some text := String.fromUTF8? bytes | throw "input: invalid UTF-8 JSON"
+    return ← decodeRuntimeJsonProfiled text profile
+  let (resolved, checked) ← profileit "decoder.binary_graph" profile fun _ =>
+    JsonTraversalCache.resolveBinaryChecked bytes
+  match ← profileit "decoder.document" profile fun _ =>
+      parseResolvedDocument resolved checked true true profile with
   | .runtime result => pure result
   | .full _ => throw "internal decoder mode mismatch"
 

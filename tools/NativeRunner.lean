@@ -487,8 +487,8 @@ private def choiceRepair (message : String) : Option ChoiceRepair := Id.run do
       return some .flipBool
   return none
 
-private def readJson (path : String) : IO String :=
-  IO.FS.readFile (if path == "-" then "/dev/stdin" else path)
+private def readInput (path : String) : IO ByteArray :=
+  IO.FS.readBinFile (if path == "-" then "/dev/stdin" else path)
 
 private def boundary (message : String) : IO Unit := do
   IO.println message
@@ -539,8 +539,8 @@ def main (args : List String) : IO Unit := do
   boundary s!"choice_mode={choiceMode diagnosticSeed}; iteration_limit={reprStr maxIterations}; supplied_prefix=preserved"
   boundary "raw_host_poll: finite source initialization replay; no live poll capability"
   boundary "decode: start"
-  let input ← readJson path
-  let decoded ← must (Input.decodeRuntimeJsonProfiled input profile)
+  let input ← readInput path
+  let decoded ← must (Input.decodeRuntimeBytesProfiled input profile)
   unless decoded.executionInput.isSome && decoded.blockingObligations.isEmpty do
     let sample := decoded.blockingObligations.toList.take 40
     throw (IO.userError s!"strict readiness gate failed: {decoded.blockingObligations.size} blocking obligations; sample={reprStr sample}")

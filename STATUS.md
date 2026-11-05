@@ -2007,6 +2007,97 @@ remain material. Next investigate direct checked graph transport/semantic rows
 that avoid intermediate JSON trees, plus shared allocation payload templates.
 Do not adopt the rejected embedded-Lean IR experiment or cross-program caches.
 
+## Direct checked graph transport and runtime traversal reduction (2026-11-05)
+
+The sub-20-second Rust-source-to-final-result goal remains **unmet**. This
+experiment improves the original, untouched upstream `unops.rs` entry from
+28.612 to **24.850 seconds** (13.15% shorter); it does not justify claiming a
+further halving. No cross-program cache, source rewrite, omitted standard
+startup, default guest budget or producer readiness assertion is introduced.
+The rejected complete embedded-Lean execution-IR experiment above stays rejected.
+
+The exporter can write `--binary-image` (`LMIRIMG` version 1) directly from its
+finished typed image. No generic JSON transport tree is constructed or parsed
+on this path. The Lean reader constructs the existing checked runtime graph,
+checking all dictionary entries, rows, backward edges, scalar encodings, root
+and trailing bytes, including unused rows. JSON remains supported and is still
+the exporter's default. Binary integers are canonical bounded u64 LEB128; string
+UTF-8 and exact non-integer numeric spellings, including negative zero, survive.
+These wire bounds do not impose an interpreter execution budget.
+
+Both readers compute conservative runtime-parser summaries locally. A branch
+can be omitted only when its summary is discarded, its decoding context is
+unrestricted/untagged, and it contains no relevant checks. Enum contexts, MIR
+roles, HIR retention, source span/info markers, unsupported statuses and ordered
+obligations retain their original behavior. Legacy/raw inputs use a conservative
+fallback. Existing four-bit producer scan flags are unchanged. MIR tag recognition
+is factored into one module rather than copied into the graph reader.
+
+Allocation parsing returns erased, private-constructor origin evidence indexed
+by the exact raw document, typed allocations and allocation world. Internal
+consumers reuse that first successful parse; modifying any indexed value requires
+dropping the evidence and revalidating. All initial world, body/reference, dense-ID,
+readiness, installation/crosswalk and runtime checks remain. The historical raw
+validator and `validateAllocationWorld_eq` theorem are unchanged. The new witness
+proves parse origin, not whole-machine safety or a general theorem equating the
+old opaque JSON Boolean predicate with the new path. Genuine-input comparisons
+exercise that independent old validator as well as foreign raw/model rejection.
+
+The producer also reuses compiler-owned generic-argument projections within one
+TyCtxt, with separate query-suppression roles. Debug assertions re-run each hit
+and compare its output and type-demand/operation/registration effects. A fresh
+unops export with these assertions enabled passed. Release builds use ThinLTO
+and one Rust codegen unit; project native objects/linking also use ThinLTO with
+four linker workers. These are build optimizations, not semantic shortcuts.
+
+Three alternating sequential pairs, fresh exports, frozen executables, CPU 2,
+one Lean thread, cached tool build gates included, end at final child exit:
+
+| Complete entry or phase | Previous graph | This experiment |
+| --- | ---: | ---: |
+| Rust source to final result | 28.612 s | 24.850 s |
+| Export | 7.967 s | 7.609 s |
+| Decode and checks | 10.689 s | 7.891 s |
+| Lower | 1.750 s | 1.715 s |
+| Prepare | 5.808 s | 5.498 s |
+| Run to terminal marker | 0.950 s | 0.897 s |
+
+Phase medians must not be added. Whole trial spreads are
+28.564/28.616/28.612 versus 25.331/24.570/24.850 seconds; CPU medians are
+28.246 versus 24.519 seconds. Peak sampled group RSS is 2.124 versus 1.807 GB.
+Same-core steal is 0.17–0.37 seconds and cgroup throttling is zero. All six full
+outputs have SHA256 `47a681990447e340c09c71f7a503a9cc8d034ab5019506f3a6826c072a66de67`,
+zero readiness obligations, finalized exit 0 and 1361 events. Independent fresh
+compiler inputs need not have identical helper type-ID ordering. Frozen artifacts,
+trial manifests, logs and phase summary are under ignored
+`scratch/perf-direct-checked-graph/source-pairs/summary.json` and its parent.
+
+Validation: ordinary Rust 31 unit + 10 integration tests; legacy-json 14 + 10;
+full native decoder/reference comparisons, all-prefix binary truncation and
+malformed/unused-row controls; 1567 exact runtime-summary/context/error comparisons;
+genuine-world origin and raw/typed mutation rejection; Python 96 tests;
+Miri/MiriTests/native build and 71,556-declaration axiom audit, with only the three
+permitted axioms. Fresh same-TyCtxt Miri comparisons with **binary** inputs pass
+unops, uninitialized-byte-read UB (category and site) and panic catch/unwind;
+source, artifact, snapshot fingerprint and memory-event guards remain enabled.
+No full upstream UI sweep, fresh caller-location comparison or whole-machine
+proof was run for this version.
+
+Two unsuccessful experiments are removed from production source. Reusing full
+MIR runtime projections did not materially reduce runtime decoding and was
+removed before the locally computed branch summaries. Parallel pure decoder
+checks took 29.473 seconds versus 24.471 for the sequential version under the
+same four-CPU/four-thread resource allowance; their additional shared-data work
+outweighed overlap. Retain the sequential implementation. Their patches/binaries
+and logs remain in ignored scratch evidence.
+
+Next prioritize removing repeated full-document walks and binding typed source
+results once across decode/lower/preparation. Source equality, constant discovery,
+TLS collection and repeated body consistency work remain material. Any replacement
+must retain manual/foreign-model rejection, exact diagnostics, compiler identities
+and existing proof claims; moving unchanged work into the exporter again is
+insufficient. Shared program caches remain explicitly excluded.
+
 ## Feature support outside the current acceptance scope
 
 The following support and integration work remains in the backlog, even though

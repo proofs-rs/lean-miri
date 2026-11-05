@@ -118,7 +118,7 @@ private def seedImportedImpl (p : Prepared) (image : AllocationImage.Imported)
       throw "prepared function catalog requires the active source AllocId world"
     unless image.matchesSupportedSource input.allocations do
       throw "prepared function catalog allocation image differs from its owning program"
-    input.validateAllocationWorld
+    input.validateAllocationWorldForRun
       |>.mapError fun error => s!"prepared AllocId world: {error}"
   else
     for (_,id) in memory.importedGlobalIds do
