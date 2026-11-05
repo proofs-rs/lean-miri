@@ -232,6 +232,16 @@ private def typeId (ctx : LowerContext) : TypedValue → LowerResult MIR.TyId
 private def spanCandidateKey (span : SourceSpanData) : String × Nat × Nat :=
   (span.file, span.lo, span.hi)
 
+/-- Source spans have lawful propositional equality. Shared import-time spans
+can skip the repeated field comparison without changing interner identity. -/
+private def sameSpan (left right : SourceSpanData) : Bool :=
+  withPtrEq left right (fun _ => decide (left = right))
+    (by intro equal; cases equal; simp)
+
+theorem sameSpan_eq (left right : SourceSpanData) :
+    sameSpan left right = decide (left = right) := by
+  simp [sameSpan, withPtrEq]
+
 private def intern (span : SourceSpanData) : LowerM MIR.SpanRef := do
   let state ← StateT.get
   match state.spanCandidates with
@@ -245,7 +255,7 @@ private def intern (span : SourceSpanData) : LowerM MIR.SpanRef := do
     let bucket := candidates.findD (spanCandidateKey span) #[]
     if let some i := bucket.find? fun i =>
         match state.spans[i]? with
-        | some previous => decide (previous = span)
+        | some previous => sameSpan previous span
         | none => false then
       pure ⟨i⟩
     else
@@ -1129,7 +1139,7 @@ structure LoweredBodies where
 mutually recursive references. Every returned body uses the same ID tables. -/
 def lowerBodies (ctx : LowerContext) (inputs : Array BodyCore)
     (seedDefinitions : Array DefinitionId := #[]) : LowerResult LoweredBodies := do
-  let mut state : LowerState := { spanCandidates := some .empty, definitionCandidates := some {} }
+  let mut state : LowerState := { spanCandidates := some {}, definitionCandidates := some {} }
   for id in seedDefinitions do
     state := addDefinition state id
   -- Seed definition identities before traversing instructions: references to

@@ -48,7 +48,7 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
         context: &mut ExportContext<'tcx>,
     ) -> Result<(), String> {
         let mut functions = context.fn_pointer_targets.iter().copied().collect::<Vec<_>>();
-        functions.sort_by_key(|instance| format!("{instance:?}"));
+        functions.sort_by_cached_key(|instance| format!("{instance:?}"));
         for instance in functions {
             if self.functions.contains(&instance) {
                 continue;

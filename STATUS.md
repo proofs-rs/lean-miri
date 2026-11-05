@@ -1930,6 +1930,83 @@ per-trial manifests/logs and losslessly compressed inputs, `public-entry.log`,
 `legacy-tests.log`, `runtime-checks-final.log`, `connected.log`, `quick-final.log`,
 `ui-focused/`, `ui-location-fixed/`, `ui-location-literal/` and `caller-runtime-final/`.
 
+## Compiler-owned construction and exact consumer reuse (2026-11-05)
+
+The default exporter keeps its immutable construction graph on the compiler
+thread with Rc/OnceCell. Only the finished typed image (or explicit legacy JSON
+snapshot) crosses the worker boundary. Small objects use ordered flat fields;
+static protocol field names are borrowed, and repeated scalar strings are
+looked up before allocating an owned candidate. Compiler-owned ABI addresses
+provide a projection cache before the existing structural ABI cache. Pointer
+addresses never replace compiler identities, and all hash collisions still
+require complete exact wire equality. Cached sort keys retain stable tie order.
+Numeric interning retains floating-point spelling, including negative zero.
+
+Producer diagnostic scans now memoize relative results over construction nodes,
+including empty branches. Every occurrence is emitted in its original traversal
+order with its original path; debug-payload suppression remains unchanged.
+Independent test-only copies of the previous walkers compare duplicated/shared
+branches and diagnostics. This reduces repeated graph scans and path allocation
+without pruning exported facts or query demand.
+
+The reader reuses the checked graph's JSON digest for compiler-argument bucket
+selection while retaining full key equality and the original raw fallback.
+Required type/instance membership uses sets without changing result order.
+Unchanged allocation payload wire comparisons and source-span interning use
+proved pointer shortcuts. Imported supported allocation arrays carry a private
+owner binding plus a checked self-equality certificate, so the three startup
+catalog checks can reuse their original comparison result. Theorems equate
+both wire comparison and image-owner comparison to their historical predicates;
+nonreflexive malformed JSON retains the full fallback. No interpreter, resource
+limit, readiness gate, UB check or source identity policy changed.
+
+Three alternating sequential pairs use original unops/root main/crate unops/
+edition 2021, prepared AllocId world, CPU 2, one Lean thread and immutable
+exporter/runner artifacts. Timings include current cache-valid code build gates,
+fresh source export, checks/preparation, execution, all output and process exit;
+post-exit evidence hashing is excluded. There is no shared program-data cache.
+
+| Independent medians | Retained 4583a2ec | New construction/reuse |
+| --- | ---: | ---: |
+| Rust source entry to final exit | 36.632 s | 28.440 s |
+| Export | 14.975 s | 7.935 s |
+| Semantic decode/checks | 11.199 s | 10.629 s |
+| MIR lowering | 1.740 s | 1.731 s |
+| Preparation | 5.706 s | 5.860 s |
+| Child CPU | 36.217 s | 28.082 s |
+| Sampled peak process-group RSS | 2.115 GB | 2.114 GB |
+
+Whole trials are 36.559/36.632/36.790 versus 28.921/28.440/28.407 seconds,
+**22.36% shorter**. All six complete outputs are byte-identical (the same
+47a68199… SHA256 recorded above), strict readiness is zero, finalized exit is
+zero and the choice/event cursor is 1361. Steal is 0.24–0.46 seconds and cgroup
+throttling is zero. Independent phase medians must not be added. Separate
+compilations may reorder compiler query-only helper type IDs; input byte
+identity is not claimed. Evidence and immutable artifacts are under ignored
+`scratch/perf-owned-graph/`, especially `source-pairs/summary.json` and trial
+manifests/logs; old large inputs are losslessly compressed.
+
+Validation passes ordinary exporter 29 unit + 10 integration tests, legacy-json
+13 + 10, the full decoder comparison script, Python 96 and quick checks,
+Miri/MiriTests/native builds, 47 rebuilt runtime checks and the 71,433-declaration
+axiom audit (only the three permitted axioms). New owner-binding controls compare
+foreign/mutated/independently reconstructed arrays, duplicate IDs and deliberately
+nonreflexive malformed JSON; span-interner sequence/error comparisons also pass.
+Fresh same-TyCtxt Miri comparisons pass unops, uninitialized-byte-read UB with
+its expected category/site, panic catch/unwind and the maintained caller-location
+fixture. The first panic/caller attempts were invalidated by cgroup memory-event
+changes during concurrent checks, not accepted as passes. After releasing unused
+build/evidence file-cache pages and serializing the comparison reruns, both pass
+with unchanged guards. No full UI sweep or whole-machine equivalence proof ran.
+
+A tested transient replacement of the persistent span-candidate map with a
+copy-on-write hash map made backtrace preparation much slower through repeated
+copies; it is reverted. Keep the persistent index for shared incremental states.
+**The sub-20-second goal is still unmet.** Reader/preparation and producer work
+remain material. Next investigate direct checked graph transport/semantic rows
+that avoid intermediate JSON trees, plus shared allocation payload templates.
+Do not adopt the rejected embedded-Lean IR experiment or cross-program caches.
+
 ## Feature support outside the current acceptance scope
 
 The following support and integration work remains in the backlog, even though

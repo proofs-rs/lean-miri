@@ -53,9 +53,14 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Attempt 
   let importNodes := match compiler.program.input.compilerAllocIdWorld with
     | none => compiler.program.input.allocations
     | some _ => compiler.program.input.allocations.filter (·.status == .supported)
+  let supportedBinding : Option (AllocationImage.SupportedSourceBinding importNodes) :=
+    match h : compiler.program.input.compilerAllocIdWorld with
+    | none => none
+    | some _ => some (AllocationImage.SupportedSourceBinding.prepare importNodes
+        compiler.program.input.allocations (by simp [importNodes, h]))
   let imported := profileit "preparation.eval.allocation_import_graph" profile fun _ =>
     AllocationImage.importGraph compiler.runtime.target
-      compiler.program.compilerTables.definitions CompilerGlobals.queries importNodes empty
+      compiler.program.compilerTables.definitions CompilerGlobals.queries importNodes empty supportedBinding
   match imported.outcome with
   | .error error => return ⟨imported.memory,.error error⟩
   | .ok image =>

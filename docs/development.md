@@ -43,6 +43,14 @@ wire equality (including numeric spelling), with full equality on hash collision
 Pointer identity is only a document-local traversal optimization, never a Rust
 allocation/type identity or a wire ID. Compiler query evaluation order is unchanged.
 
+Construction stays on rustc's compiler thread using Rc/OnceCell; the finished
+typed image is Send and owns its scalar leaves. Ordered flat objects borrow
+static field names, and scalar-string hits avoid allocating a candidate. ABI
+projection caches use compiler-owned addresses only while the tcx borrow keeps
+them alive; the structural fallback retains its original deduplication policy.
+Relative diagnostic summaries preserve every occurrence and its path in order.
+These caches are local to a compilation and never retain another program.
+
 The default external format is `lean-miri-prepared-image` version 1. It contains
 an interned field-name dictionary and a bottom-up indexed node table. Row tags
 are null, false, true, number, string, array-of-node-IDs and

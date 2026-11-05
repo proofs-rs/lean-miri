@@ -138,10 +138,40 @@ private def find? {source : Array AllocationNode} (index : SourceIndex source)
 
 end SourceIndex
 
+/-- Bind the supported allocation image to its exact owning array. The stored
+self-comparison is checked once, including JSON payloads that may be malformed.
+The pointer shortcut requires the owner itself, never only equal IDs or hashes. -/
+structure SupportedSourceBinding (source : Array AllocationNode) where
+  private mk ::
+  private owner : Array AllocationNode
+  private exact : source = owner.filter (·.status == .supported)
+  private reflexive : Option (PLift ((source == source) = true))
+
+namespace SupportedSourceBinding
+
+def prepare (source owner : Array AllocationNode)
+    (exact : source = owner.filter (·.status == .supported)) : SupportedSourceBinding source :=
+  ⟨owner, exact, if h : source == source then some ⟨h⟩ else none⟩
+
+def matchesOwner (binding : SupportedSourceBinding source) (candidate : Array AllocationNode) : Bool :=
+  match binding.reflexive with
+  | none => source == candidate.filter (·.status == .supported)
+  | some ⟨reflexive⟩ =>
+    withPtrEq binding.owner candidate
+      (fun _ => source == candidate.filter (·.status == .supported))
+      (by intro equal; cases equal; rw [← binding.exact]; exact reflexive)
+
+theorem matches_eq (binding : SupportedSourceBinding source) (candidate : Array AllocationNode) :
+    binding.matchesOwner candidate = (source == candidate.filter (·.status == .supported)) := by
+  cases h : binding.reflexive <;> simp [matchesOwner, h, withPtrEq]
+
+end SupportedSourceBinding
+
 structure Imported where
   source : Array AllocationNode
   initializers : Array (Nat × Allocation CtfeProvenance Unit)
   private sourceIndex : Option (SourceIndex source) := none
+  private supportedBinding : Option (SupportedSourceBinding source) := none
 
 namespace Imported
 
@@ -154,9 +184,21 @@ def ofSource (source : Array AllocationNode)
 /-- Construct a manually assembled image with a fresh index tied to this exact
 source array. Replacing the source cannot reuse this dependent cache. -/
 def withSourceIndex (source : Array AllocationNode)
-    (initializers : Array (Nat × Allocation CtfeProvenance Unit)) : Imported :=
+    (initializers : Array (Nat × Allocation CtfeProvenance Unit))
+    (supportedBinding : Option (SupportedSourceBinding source) := none) : Imported :=
   { source := source, initializers := initializers,
-    sourceIndex := some (SourceIndex.build source) }
+    sourceIndex := some (SourceIndex.build source), supportedBinding }
+
+/-- Manual images and changed/foreign owners retain the full historical check. -/
+def matchesSupportedSource (image : Imported) (owner : Array AllocationNode) : Bool :=
+  match image.supportedBinding with
+  | some binding => binding.matchesOwner owner
+  | none => image.source == owner.filter (·.status == .supported)
+
+theorem matchesSupportedSource_eq (image : Imported) (owner : Array AllocationNode) :
+    image.matchesSupportedSource owner = (image.source == owner.filter (·.status == .supported)) := by
+  cases h : image.supportedBinding <;> simp [matchesSupportedSource, h, SupportedSourceBinding.matches_eq]
+
 
 private def findSourceNode? (image : Imported) (sourceId : Nat) : Option AllocationNode :=
   match image.sourceIndex with
@@ -195,7 +237,8 @@ relocations therefore resolve through a complete source→runtime map. A failure
 returns all IDs already consumed by the source allocation-ID supply. -/
 def importGraph [DecidableEq K] (target : RuntimeTargetDataLayout)
     (definitions : Array DefinitionId) (queries : Queries) (nodes : Array AllocationNode)
-    (initial : MemoryState P E K) : ImportResult P E K := Id.run do
+    (initial : MemoryState P E K)
+    (supportedBinding : Option (SupportedSourceBinding nodes) := none) : ImportResult P E K := Id.run do
   let mut memory := initial
   for node in nodes do
     let (kind, size, align, mutable) ← match metadata target queries node with
@@ -237,7 +280,7 @@ def importGraph [DecidableEq K] (target : RuntimeTargetDataLayout)
       | .error e => return ⟨memory, .error e⟩
     if let some initializer := payload.2 then initializers := initializers.push initializer
     memory := memory.setGlobalPayload id payload.1
-  return ⟨memory, .ok (Imported.withSourceIndex nodes initializers)⟩
+  return ⟨memory, .ok (Imported.withSourceIndex nodes initializers supportedBinding)⟩
 
 /-- Recover the exact compiler node for a runtime global identity. Function,
 vtable, type-id, static and TLS leaf queries consume this retained metadata;

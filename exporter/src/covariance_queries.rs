@@ -43,7 +43,7 @@ pub(super) fn export<'tcx>(tcx:TyCtxt<'tcx>,context:&mut ExportContext<'tcx>)->V
     // Query only these compiler-derived pairs from reached vtable metadata.
     profile.mark("covariance.normalized_and_demanded_pairs");
     let mut vtable_requests=context.vtable_query_requests.iter().copied().collect::<Vec<_>>();
-    vtable_requests.sort_by_key(|(input,predicates)|format!("{input:?}|{predicates:?}"));
+    vtable_requests.sort_by_cached_key(|(input,predicates)|format!("{input:?}|{predicates:?}"));
     for (input,predicates) in vtable_requests {
         if !closed(input) || predicates.has_non_region_param() || predicates.has_escaping_bound_vars() ||
             predicates.has_infer() || predicates.has_placeholders() || predicates.references_error() {

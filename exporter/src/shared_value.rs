@@ -1,16 +1,19 @@
-//! Persistent construction graph. Cloning a compiler payload copies an Arc,
+//! Persistent construction graph. Cloning a compiler payload copies an Rc,
 //! never its descendants. Mutation is copy-on-write and preserves the snapshot
 //! semantics of serde_json::Value. Serialization is the external JSON boundary.
 use serde::{Serialize, Serializer};
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, Hash};
 use std::ops::{Deref, DerefMut, Index, IndexMut};
-use std::sync::Arc;
+use std::rc::Rc;
+use rustc_data_structures::fx::FxHashMap;
 
-pub type Map<K = String, V = Value> = BTreeMap<K, V>;
+#[path = "flat_object.rs"]
+mod flat_object;
+pub use flat_object::{Map,FieldName};
 
 #[derive(Debug)]
-pub struct Shared<T>(Arc<T>, std::sync::OnceLock<u64>);
+pub struct Shared<T>(Rc<T>, std::cell::OnceCell<u64>);
 impl<T> Clone for Shared<T> {
     fn clone(&self) -> Self {
         Self(self.0.clone(), self.1.clone())
@@ -23,19 +26,19 @@ impl<T: crate::construction_pool::Internable> From<T> for Shared<T> {
 }
 impl<T> Shared<T> {
     pub fn fresh(value: T, hash: Option<u64>) -> Self {
-        let node = Self(Arc::new(value), std::sync::OnceLock::new());
+        let node = Self(Rc::new(value), std::cell::OnceCell::new());
         if let Some(hash) = hash {
             let _ = node.1.set(hash);
         }
         node
     }
-    pub fn from_arc(value: Arc<T>, hash: u64) -> Self {
-        let node = Self(value, std::sync::OnceLock::new());
+    pub fn from_rc(value: Rc<T>, hash: u64) -> Self {
+        let node = Self(value, std::cell::OnceCell::new());
         let _ = node.1.set(hash);
         node
     }
     pub fn identity_eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+        Rc::ptr_eq(&self.0, &other.0)
     }
 }
 impl<T: crate::construction_pool::Internable> Shared<T> {
@@ -57,12 +60,12 @@ impl<T> Deref for Shared<T> {
 impl<T: Clone> DerefMut for Shared<T> {
     fn deref_mut(&mut self) -> &mut T {
         self.1.take();
-        Arc::make_mut(&mut self.0)
+        Rc::make_mut(&mut self.0)
     }
 }
 impl<T: PartialEq> PartialEq for Shared<T> {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0) || **self == **other
+        Rc::ptr_eq(&self.0, &other.0) || **self == **other
     }
 }
 impl<T: Eq> Eq for Shared<T> {}
@@ -70,7 +73,7 @@ impl<T: Clone + IntoIterator> IntoIterator for Shared<T> {
     type Item = T::Item;
     type IntoIter = T::IntoIter;
     fn into_iter(self) -> Self::IntoIter {
-        Arc::unwrap_or_clone(self.0).into_iter()
+        Rc::unwrap_or_clone(self.0).into_iter()
     }
 }
 impl<'a, T> IntoIterator for &'a Shared<T>
@@ -100,8 +103,11 @@ impl FromIterator<Value> for Shared<Vec<Value>> {
 }
 impl FromIterator<(String, Value)> for Shared<Map> {
     fn from_iter<T: IntoIterator<Item = (String, Value)>>(items: T) -> Self {
-        Map::from_iter(items).into()
+        Map::<FieldName,Value>::from_iter(items.into_iter().map(|(key,value)|(key.into(),value))).into()
     }
+}
+impl From<Map<String,Value>> for Shared<Map> {
+    fn from(value:Map<String,Value>)->Self {value.into_iter().collect()}
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -216,7 +222,7 @@ impl Value {
         for token in pointer.strip_prefix('/')?.split('/') {
             let token = token.replace("~1", "/").replace("~0", "~");
             value = match value {
-                Self::Object(fields) => fields.get(&token)?,
+                Self::Object(fields) => fields.get(token.as_str())?,
                 Self::Array(values) => {
                     if token.starts_with('+') || (token.len() > 1 && token.starts_with('0')) {
                         return None;
@@ -231,18 +237,18 @@ impl Value {
     /// Unique nodes need no traversal memo or retained snapshot.
     pub fn is_shared(&self) -> bool {
         match self {
-            Self::String(v) => Arc::strong_count(&v.0) > 1,
-            Self::Array(v) => Arc::strong_count(&v.0) > 1,
-            Self::Object(v) => Arc::strong_count(&v.0) > 1,
+            Self::String(v) => Rc::strong_count(&v.0) > 1,
+            Self::Array(v) => Rc::strong_count(&v.0) > 1,
+            Self::Object(v) => Rc::strong_count(&v.0) > 1,
             _ => false,
         }
     }
     /// Identity is used only while a clone retains the original immutable node.
     pub fn identity(&self) -> Option<(u8, usize)> {
         match self {
-            Self::String(v) => Some((0, Arc::as_ptr(&v.0) as usize)),
-            Self::Array(v) => Some((1, Arc::as_ptr(&v.0) as usize)),
-            Self::Object(v) => Some((2, Arc::as_ptr(&v.0) as usize)),
+            Self::String(v) => Some((0, Rc::as_ptr(&v.0) as usize)),
+            Self::Array(v) => Some((1, Rc::as_ptr(&v.0) as usize)),
+            Self::Object(v) => Some((2, Rc::as_ptr(&v.0) as usize)),
             _ => None,
         }
     }
@@ -270,12 +276,12 @@ compare_numbers!(as_i64, i64, i8, i16, i32, i64, isize);
 compare_numbers!(as_f64, f64, f32, f64);
 
 /// Apply a context-independent metadata patch once per immutable construction
-/// node. Unchanged edges keep their original Arc; no whole-tree COW traversal.
+/// node. Unchanged edges keep their original Rc; no whole-tree COW traversal.
 pub fn transform(root: &Value, patch: &impl Fn(&Value) -> Option<Value>) -> Value {
     fn visit(
         value: &Value,
         patch: &impl Fn(&Value) -> Option<Value>,
-        memo: &mut HashMap<(u8, usize), (Value, Value)>,
+        memo: &mut FxHashMap<(u8, usize), (Value, Value)>,
     ) -> Value {
         let id = value.identity().filter(|_| value.is_shared());
         if let Some(id) = id {
@@ -318,7 +324,7 @@ pub fn transform(root: &Value, patch: &impl Fn(&Value) -> Option<Value>) -> Valu
         }
         result
     }
-    visit(root, patch, &mut HashMap::new())
+    visit(root, patch, &mut FxHashMap::default())
 }
 fn same_node(a: &Value, b: &Value) -> bool {
     match (a.identity(), b.identity()) {
@@ -340,8 +346,7 @@ impl IndexMut<&str> for Value {
         }
         self.as_object_mut()
             .expect("JSON index requires object")
-            .entry(key.into())
-            .or_default()
+            .get_mut_or_insert_default(key.to_owned().into())
     }
 }
 impl Index<usize> for Value {
@@ -383,7 +388,7 @@ impl From<serde_json::Value> for Value {
             serde_json::Value::String(v) => Self::String(v.into()),
             serde_json::Value::Array(v) => Self::array(v.into_iter().map(Self::from).collect()),
             serde_json::Value::Object(v) => {
-                Self::object(v.into_iter().map(|(k, v)| (k, Self::from(v))).collect())
+                Self::object(v.into_iter().map(|(k, v)| (k.into(), Self::from(v))).collect())
             }
         }
     }
@@ -402,9 +407,18 @@ impl<T: IntoValue + ?Sized> IntoValue for &T {
         (**self).into_value()
     }
 }
+impl IntoValue for Map {
+    fn into_value(&self) -> Value { Value::object(self.clone()) }
+}
+impl IntoValue for Map<String,Value> {
+    fn into_value(&self) -> Value {Value::Object(self.clone().into())}
+}
+impl IntoValue for FieldName {
+    fn into_value(&self) -> Value {self.as_str().into_value()}
+}
 impl IntoValue for str {
     fn into_value(&self) -> Value {
-        Value::String(self.to_owned().into())
+        Value::String(crate::construction_pool::intern_str(self))
     }
 }
 impl IntoValue for std::borrow::Cow<'_, str> {
@@ -457,7 +471,7 @@ impl<K: AsRef<str> + Ord, V: IntoValue> IntoValue for BTreeMap<K, V> {
     fn into_value(&self) -> Value {
         Value::object(
             self.iter()
-                .map(|(k, v)| (k.as_ref().into(), v.into_value()))
+                .map(|(k, v)| (k.as_ref().to_owned().into(), v.into_value()))
                 .collect(),
         )
     }
@@ -466,7 +480,7 @@ impl<K: AsRef<str> + Eq + Hash, V: IntoValue, S: BuildHasher> IntoValue for Hash
     fn into_value(&self) -> Value {
         Value::object(
             self.iter()
-                .map(|(k, v)| (k.as_ref().into(), v.into_value()))
+                .map(|(k, v)| (k.as_ref().to_owned().into(), v.into_value()))
                 .collect(),
         )
     }

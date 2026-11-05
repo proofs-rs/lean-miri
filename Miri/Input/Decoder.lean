@@ -1711,10 +1711,12 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     compilerValueMemo := compilerValues
     compilerInstanceSourceMemo := instanceSources
   }
+  let requiredTypes := Std.HashSet.ofArray requiredDependencies.typeIds
+  let requiredInstances := Std.HashSet.ofArray requiredDependencies.instanceIds
   let requiredLayoutPaths := types.toList.zipIdx.filterMap fun (ty, typeIndex) =>
-    if requiredDependencies.typeIds.contains ty.id then some s!"$.types[{typeIndex}].layout.status" else none
+    if requiredTypes.contains ty.id then some s!"$.types[{typeIndex}].layout.status" else none
   let requiredInstancePaths := instances.toList.zipIdx.foldl (fun paths (instNode, instanceIndex) =>
-    if requiredDependencies.instanceIds.contains instNode.id then
+    if requiredInstances.contains instNode.id then
       paths ++ #[s!"instances[{instanceIndex}]", s!"$.instances[{instanceIndex}].status"]
     else paths) #[]
   let scopeIsSelected := selectedScope.isSome

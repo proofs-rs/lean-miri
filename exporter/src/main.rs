@@ -8,6 +8,7 @@ mod construction_pool;
 mod prepared_image;
 mod covariance_queries;
 mod covariance_sort;
+mod diagnostic_paths;
 mod foreign_symbols;
 mod generated_call_queries;
 mod global_byte_queries;
@@ -36,6 +37,8 @@ extern crate rustc_ast;
 extern crate rustc_attr_ir;
 extern crate rustc_codegen_ssa;
 extern crate rustc_const_eval;
+#[cfg(not(feature = "legacy-json"))]
+extern crate rustc_data_structures;
 extern crate rustc_driver;
 extern crate rustc_hir;
 extern crate rustc_index;
@@ -62,7 +65,9 @@ use rustc_middle::mir::interpret::{AllocId, CTFE_ALLOC_SALT, GlobalAlloc};
 use rustc_middle::ty::{self, ExistentialPredicateStableCmpExt, TyCtxt, TypeVisitableExt};
 use rustc_span::Pos;
 #[cfg(feature = "legacy-json")]
-use serde_json::{Value, json, Map as JsonMap};
+use serde_json::{Value, json};
+#[cfg(feature = "legacy-json")]
+type JsonMap<K = String, V = Value> = serde_json::Map<K, V>;
 #[cfg(not(feature = "legacy-json"))]
 use shared_value::{Value, json, Map as JsonMap};
 
@@ -79,7 +84,7 @@ struct Options {
 /// Keep the indexed output table typed through serialization. The fallback
 /// retains the exact legacy Value encoding for compatibility comparisons.
 enum Snapshot {
-    Json(Value),
+    Json(serde_json::Value),
     #[cfg(not(feature = "legacy-json"))]
     Image(prepared_image::Image),
 }
@@ -107,6 +112,8 @@ fn finish_snapshot(mut document: Value) -> Result<Snapshot, String> {
     } else {
         payload_sharing::share_payloads(&mut document)?;
     }
+    #[cfg(not(feature = "legacy-json"))]
+    let document = serde_json::to_value(document).map_err(|error| error.to_string())?;
     Ok(Snapshot::Json(document))
 }
 
@@ -115,7 +122,7 @@ struct ExportCallbacks {
     root_paths: Vec<String>,
     rustc_version: String,
     document: Option<Snapshot>,
-    invocation: Option<Value>,
+    invocation: Option<serde_json::Value>,
     write_during_analysis: bool,
     continue_compilation: bool,
     prepared_allocator_world: bool,
@@ -124,15 +131,32 @@ struct ExportCallbacks {
     export_error: Option<String>,
 }
 
-/// Compilation-scoped identities for the actual interned rustc types.
-/// The numeric IDs are serialization-local and deliberately carry no claim of
-/// cross-compilation stability. Type graph nodes live in `type_nodes`; MIR
-/// payloads refer to them by `type_id`.
+/// A compiler-owned immutable ABI query result, kept alive by its tcx borrow.
+struct CompilerAbiSource<'tcx>(
+    &'tcx rustc_target::callconv::FnAbi<'tcx, rustc_middle::ty::Ty<'tcx>>,
+);
+impl PartialEq for CompilerAbiSource<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0)
+    }
+}
+impl Eq for CompilerAbiSource<'_> {}
+impl std::hash::Hash for CompilerAbiSource<'_> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&std::ptr::from_ref(self.0), state);
+    }
+}
+
+/// Compilation-scoped identities. Numeric IDs remain serialization-local.
 #[derive(Default)]
 struct ExportContext<'tcx> {
     vtable_diagnostics: vtable_diagnostics::Trace<'tcx>,
     span_payload_cache: HashMap<rustc_span::Span, Value>,
     layout_payload_cache: HashMap<rustc_abi::TyAndLayout<'tcx, ty::Ty<'tcx>>, Value>,
+    // The compiler owns this immutable query result for the entire context.
+    // Pointer identity caches only its JSON projection, never semantic ABI/type
+    // identity. Equal results at different addresses may simply miss the cache.
+    fn_abi_source_cache: HashMap<CompilerAbiSource<'tcx>, Value>,
     fn_abi_payload_cache:
         HashMap<rustc_target::callconv::FnAbi<'tcx, ty::Ty<'tcx>>, Value>,
     type_ids: HashMap<rustc_middle::ty::Ty<'tcx>, u64>,
@@ -840,7 +864,7 @@ fn select_roots<'tcx>(
 }
 
 fn rooted_closure_obligations(document: &Value) -> Vec<Value> {
-    fn probe_matches_query(document: &Value, cast: &JsonMap<String, Value>) -> bool {
+    fn probe_matches_query(document: &Value, cast: &JsonMap) -> bool {
         let Some(query) = cast
             .get("vtable_query")
             .filter(|query| query.get("status").and_then(Value::as_str) == Some("supported"))
@@ -995,7 +1019,7 @@ fn rooted_closure_obligations(document: &Value) -> Vec<Value> {
                     }
                     if ["type_id", "allocation_id", "instance_id"].contains(&key.as_str()) {
                         if let Some(id) = child.as_u64() {
-                            references.push((key.clone(), id));
+                            references.push((key.to_string(), id));
                         }
                     }
                     visit(
@@ -1076,6 +1100,60 @@ fn rooted_closure_obligations(document: &Value) -> Vec<Value> {
 // dependency result. Consumers must still discharge each query they actually
 // use; a complete structural closure is not execution readiness or UB freedom.
 fn catalog_evidence_obligations(document: &Value) -> Vec<Value> {
+    let mut result = Vec::new();
+    let mut scan = diagnostic_paths::Collector::new(|value| {
+        if value.get("status").and_then(Value::as_str) == Some("debug_payload") {
+            return None;
+        }
+        let mut hits = Vec::new();
+        if let Some(status) = value.get("status").and_then(Value::as_str)
+            && status != "supported"
+        {
+            hits.push((String::new(), json!({"status":status,
+                "kind":value.get("kind"),"reason":value.get("reason")})));
+        }
+        Some(hits)
+    });
+    for key in [
+        "types", "compiler_runtime_queries", "compiler_shim_abis", "compiler_predicate_queries",
+        "compiler_named_shim_abis", "compiler_named_types", "compiler_runtime_primitives",
+        "compiler_named_constants", "compiler_cast_queries", "compiler_type_name_constants",
+        "compiler_caller_location_constants", "compiler_panic_queries", "compiler_covariance_queries",
+        "compiler_global_byte_queries", "compiler_native_signature_queries", "compiler_retag_queries",
+    ] {
+        if let Some(value) = document.get(key) {
+            scan.collect(value, key, &mut result);
+        }
+    }
+    result
+}
+
+fn retained_vtable_probe_diagnostics(document: &Value) -> Vec<Value> {
+    let mut result = Vec::new();
+    let mut scan = diagnostic_paths::Collector::new(|value| {
+        let mut hits = Vec::new();
+        if let Some(probe) = value.get("vtable_probe") {
+            if probe.get("status").and_then(Value::as_str) == Some("incomplete")
+                && probe.get("kind").and_then(Value::as_str) == Some("symbolic_vtable_allocation")
+                && probe.get("salt_policy").and_then(Value::as_str).is_some()
+            {
+                hits.push((".vtable_probe".to_owned(), json!({"status":probe.get("status"),
+                    "kind":probe.get("kind"),"reason":probe.get("salt_policy"),
+                    "diagnostic_only":true})));
+            }
+        }
+        Some(hits)
+    });
+    for key in ["bodies", "instances"] {
+        if let Some(value) = document.get(key) {
+            scan.collect(value, key, &mut result);
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+fn catalog_evidence_obligations_reference(document: &Value) -> Vec<Value> {
     fn walk(value: &Value, path: &str, out: &mut Vec<Value>) {
         match value {
             Value::Object(object) => {
@@ -1126,7 +1204,8 @@ fn catalog_evidence_obligations(document: &Value) -> Vec<Value> {
     result
 }
 
-fn retained_vtable_probe_diagnostics(document: &Value) -> Vec<Value> {
+#[cfg(test)]
+fn retained_vtable_probe_diagnostics_reference(document: &Value) -> Vec<Value> {
     fn walk(value: &Value, path: &str, out: &mut Vec<Value>) {
         match value {
             Value::Object(object) => {
@@ -1810,7 +1889,7 @@ impl Callbacks for ExportCallbacks {
         instances.extend(symbol_identity_instances);
         export_profile.mark("closure_finalize");
         let runtime_queries = {
-            let mut queries: JsonMap<String, Value> = JsonMap::new();
+            let mut queries: JsonMap = JsonMap::new();
             if !cfg!(feature = "full-type-queries") {
                 queries.insert("type_query_schema".into(), json!("source_operations_v1"));
             }
@@ -1829,7 +1908,8 @@ impl Callbacks for ExportCallbacks {
             "rustc_version": self.rustc_version,
             "target_triple": tcx.sess.opts.target_triple.to_string(),
         });
-        let input_settings = producer::evidence(tcx, self.invocation.as_ref());
+        let invocation = self.invocation.take().map(Value::from);
+        let input_settings = producer::evidence(tcx, invocation.as_ref());
         producer
             .as_object_mut()
             .expect("producer metadata is an object")
@@ -1992,7 +2072,7 @@ impl Callbacks for ExportCallbacks {
             });
         }
         export_profile.mark("scope_obligations");
-        if let Some(invocation) = self.invocation.take() {
+        if let Some(invocation) = invocation {
             document["invocation"] = invocation;
         }
         // The reference sidecar records allocator-world metadata from the raw
@@ -2175,7 +2255,7 @@ fn run_direct(args: Vec<String>) -> Result<(), String> {
     let mut rustc_args = Vec::with_capacity(options.rustc_args.len() + 1);
     rustc_args.push("rustc".to_owned());
     rustc_args.extend(options.rustc_args);
-    let invocation = json!({
+    let invocation = serde_json::json!({
         "kind":"direct_rustc_driver",
         "rustc_commit":EXPECTED_RUSTC_COMMIT,
         "rustc_executable":resolve_executable(selected_rustc),
@@ -2300,7 +2380,7 @@ fn run_as_rustc_wrapper(args: Vec<String>) -> Result<(), String> {
         }
     }
     let output = cargo_export_path(&out_dir, &crate_name, &rustc_args)?;
-    let invocation = json!({
+    let invocation = serde_json::json!({
         "kind":"cargo_rustc_wrapper",
         "rustc_commit":EXPECTED_RUSTC_COMMIT,
         "rustc_executable":rustc_path.canonicalize().ok().map(|path|path.to_string_lossy().into_owned()).unwrap_or_else(||rustc_path.to_string_lossy().into_owned()),
@@ -3110,7 +3190,7 @@ fn type_compiler_facts_json<'tcx>(
     };
     let input = query_input;
     let is_unsafe_cell = matches!(input.kind(),ty::Adt(def,_) if def.is_unsafe_cell());
-    let mut booleans: JsonMap<String, Value> = JsonMap::new();
+    let mut booleans: JsonMap = JsonMap::new();
     booleans.insert(
         "is_unsafe_cell".into(),
         compiler_fact(json!(is_unsafe_cell)),
@@ -3211,7 +3291,7 @@ fn type_compiler_facts_json<'tcx>(
             _ => missing(),
         },
     );
-    let mut types: JsonMap<String, Value> = JsonMap::new();
+    let mut types: JsonMap = JsonMap::new();
     types.insert(
         "discriminant_type".into(),
         match normalized {
@@ -5429,7 +5509,7 @@ fn register_fn_pointer_call_transfers<'tcx>(
     tcx: TyCtxt<'tcx>,
 ) {
     let mut targets = context.fn_pointer_targets.iter().copied().collect::<Vec<_>>();
-    targets.sort_by_key(|target| format!("{target:?}"));
+    targets.sort_by_cached_key(|target| format!("{target:?}"));
     for call_site in 0..context.fn_pointer_call_transfers.len() {
         let request = context.fn_pointer_call_transfers[call_site].clone();
         for target in targets.iter().copied() {
@@ -5660,7 +5740,7 @@ fn register_runtime_callback_transfers<'tcx>(
 ) {
     generated_call_queries::register_catch_unwind_transfers(context, tcx);
     let mut targets = context.fn_pointer_targets.iter().copied().collect::<Vec<_>>();
-    targets.sort_by_key(|target| format!("{target:?}"));
+    targets.sort_by_cached_key(|target| format!("{target:?}"));
     for call_site in 0..context.runtime_callback_transfers.len() {
         let callback = context.runtime_callback_transfers[call_site].clone();
         // Keep the registration operand type attached to the request as
@@ -5969,13 +6049,20 @@ fn resolve_callee_json<'tcx>(
 fn fn_abi_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
-    abi: &rustc_target::callconv::FnAbi<'tcx, rustc_middle::ty::Ty<'tcx>>,
+    abi: &'tcx rustc_target::callconv::FnAbi<'tcx, rustc_middle::ty::Ty<'tcx>>,
 ) -> Value {
-    if let Some(value) = context.fn_abi_payload_cache.get(abi) {
+    let source = CompilerAbiSource(abi);
+    if let Some(value) = context.fn_abi_source_cache.get(&source) {
         return value.clone();
+    }
+    if let Some(value) = context.fn_abi_payload_cache.get(abi) {
+        let value = value.clone();
+        context.fn_abi_source_cache.insert(source, value.clone());
+        return value;
     }
     let value = json!({"calling_convention":canon_abi_json(abi.conv),"c_variadic":abi.c_variadic,"fixed_count":abi.fixed_count,"can_unwind":abi.can_unwind,"return":arg_abi_json(context, tcx,&abi.ret),"arguments":abi.args.iter().map(|arg|arg_abi_json(context, tcx,arg)).collect::<Vec<_>>()});
     context.fn_abi_payload_cache.insert(abi.clone(), value.clone());
+    context.fn_abi_source_cache.insert(source, value.clone());
     value
 }
 
@@ -6813,7 +6900,7 @@ fn compiler_runtime_virtual_queries_json<'tcx>(
         }
     }
     let mut concrete = concrete_pairs.into_iter().collect::<Vec<_>>();
-    concrete.sort_by_key(|(ty, predicates)| format!("{ty:?}|{predicates:?}"));
+    concrete.sort_by_cached_key(|(ty, predicates)| format!("{ty:?}|{predicates:?}"));
     for (ty, predicates) in concrete.iter().copied() {
         context.type_id(ty);
         for predicate in predicates.iter() {
@@ -7412,7 +7499,7 @@ fn compiler_vtable_queries_json<'tcx>(
         .iter()
         .copied()
         .collect::<Vec<_>>();
-    dynamic_upcasts.sort_by_key(|(source, target)| format!("{source:?}|{target:?}"));
+    dynamic_upcasts.sort_by_cached_key(|(source, target)| format!("{source:?}|{target:?}"));
     let mut processed = HashSet::new();
     let mut rows = Vec::new();
     loop {
@@ -7448,7 +7535,7 @@ fn compiler_vtable_queries_json<'tcx>(
         // Seed any query-only identities in a deterministic compiler-type order
         // before assigning serialization-local IDs. HashSet iteration must never
         // decide either type IDs or the canonical query row order.
-        pending.sort_by_key(|(input, predicates)| format!("{input:?}|{predicates:?}"));
+        pending.sort_by_cached_key(|(input, predicates)| format!("{input:?}|{predicates:?}"));
         for (input, predicates) in pending {
             processed.insert((input, predicates));
             let input_json = type_json(context, tcx, input);

@@ -2,6 +2,16 @@
 use super::*;
 
 #[test]
+fn finished_snapshot_crosses_threads_without_construction_nodes() {
+    fn require_send<T: Send>() {}
+    require_send::<Snapshot>();
+    let snapshot = finish_snapshot(json!({"values":["text",1,-0.0,true,null]})).unwrap();
+    let expected = serde_json::to_string(&snapshot).unwrap();
+    let actual = std::thread::spawn(move || serde_json::to_string(&snapshot).unwrap()).join().unwrap();
+    assert_eq!(actual,expected);
+}
+
+#[test]
 fn runtime_type_operation_promotion_keeps_prior_fields_and_one_row() {
     let mut rows = Vec::new();
     let mut positions = HashMap::new();
@@ -71,4 +81,23 @@ fn virtual_candidates_use_exact_instance_and_sorted_unique_queries() {
         document["calls"][4],
         json!({"virtual_resolution":{"instance_id":"5"}})
     );
+}
+
+#[test]
+fn diagnostic_graph_scan_preserves_every_occurrence_and_order() {
+    let probe = json!({"vtable_probe":{"status":"incomplete",
+        "kind":"symbolic_vtable_allocation","salt_policy":"kept"}});
+    let unresolved = json!({"status":"unsupported","kind":"query","reason":"kept"});
+    let debug = json!({"status":"debug_payload","nested":[unresolved, probe]});
+    let mut shared = json!({"a.b%[": [probe, unresolved, debug], "supported":{"status":"supported"}});
+    for depth in 0..9 {
+        let document = json!({"types":[shared, shared],
+            "compiler_runtime_queries":{"later":shared},
+            "bodies":[shared, shared],"instances":{"later":shared}});
+        assert_eq!(catalog_evidence_obligations(&document),
+            catalog_evidence_obligations_reference(&document), "catalog depth {depth}");
+        assert_eq!(retained_vtable_probe_diagnostics(&document),
+            retained_vtable_probe_diagnostics_reference(&document), "probe depth {depth}");
+        shared = json!({"a":[shared, shared],"z":probe});
+    }
 }

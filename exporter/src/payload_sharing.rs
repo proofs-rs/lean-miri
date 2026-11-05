@@ -18,7 +18,7 @@ fn contains_reference_marker(value: &Value) -> bool {
         .is_some_and(|object| object.contains_key(SHARED_REF_FIELD))
 }
 
-fn is_position_container(object: &Map<String, Value>) -> bool {
+fn is_position_container(object: &Map) -> bool {
     object.len() == 2
         && object.get("line").and_then(Value::as_u64).is_some()
         && object.get("column").and_then(Value::as_u64).is_some()
@@ -269,7 +269,7 @@ pub(crate) fn share_payloads_with_scan_flags(
     // Release raw construction nodes and intern keys before writing. The final
     // graph owns its rows; inserting them does not serialize or clone them.
     drop(encoder);
-    let mut catalog_fields = Map::new();
+    let mut catalog_fields: Map = Map::new();
     catalog_fields.insert("schema_version".into(), json!(SCHEMA_VERSION));
     catalog_fields.insert("nodes".into(), Value::Array(nodes.into()));
     let mut catalog = Value::Object(catalog_fields.into());

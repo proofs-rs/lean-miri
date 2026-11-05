@@ -4,11 +4,36 @@
 use crate::Value;
 #[cfg(test)]
 use crate::json;
+use rustc_data_structures::fx::FxHashMap;
 use serde::{
     Serialize, Serializer,
     ser::{SerializeStruct, SerializeTuple},
 };
-use std::collections::HashMap;
+
+/// Scalar interning uses exact wire identities. Integer syntax has one
+/// canonical spelling in serde_json::Number; floats retain their full spelling.
+#[derive(Hash, PartialEq, Eq)]
+enum ScalarKey {
+    Null,
+    Bool(bool),
+    Unsigned(u64),
+    Signed(i64),
+    OtherNumber(String),
+}
+fn scalar_key(value: &Value) -> Option<ScalarKey> {
+    match value {
+        Value::Null => Some(ScalarKey::Null),
+        Value::Bool(value) => Some(ScalarKey::Bool(*value)),
+        Value::Number(value) => Some(match value.as_u64() {
+            Some(value) => ScalarKey::Unsigned(value),
+            None => match value.as_i64() {
+                Some(value) => ScalarKey::Signed(value),
+                None => ScalarKey::OtherNumber(value.to_string()),
+            },
+        }),
+        _ => None,
+    }
+}
 
 /// The output table is typed Rust data, serialized straight to the writer.
 /// It never becomes a second generic JSON Value tree.
@@ -19,7 +44,8 @@ pub struct Image {
 }
 enum Row {
     Empty(u8),
-    Leaf(u8, Value),
+    Number(serde_json::Number),
+    String(String),
     Array(Vec<usize>),
     Object(Vec<(usize, usize)>),
 }
@@ -29,8 +55,12 @@ impl Serialize for Row {
             serializer.serialize_tuple(if matches!(self, Self::Empty(_)) { 1 } else { 2 })?;
         match self {
             Self::Empty(tag) => tuple.serialize_element(tag)?,
-            Self::Leaf(tag, value) => {
-                tuple.serialize_element(tag)?;
+            Self::Number(value) => {
+                tuple.serialize_element(&3u8)?;
+                tuple.serialize_element(value)?;
+            }
+            Self::String(value) => {
+                tuple.serialize_element(&4u8)?;
                 tuple.serialize_element(value)?;
             }
             Self::Array(ids) => {
@@ -73,9 +103,9 @@ fn wire(image: Image) -> Value {
 struct Encoder {
     nodes: Vec<Row>,
     fields: Vec<String>,
-    field_ids: HashMap<String, usize>,
-    identities: HashMap<(u8, usize), usize>,
-    scalars: HashMap<String, usize>,
+    field_ids: FxHashMap<String, usize>,
+    identities: FxHashMap<(u8, usize), usize>,
+    scalars: FxHashMap<ScalarKey, usize>,
 }
 impl Encoder {
     fn field(&mut self, name: &str) -> usize {
@@ -93,11 +123,7 @@ impl Encoder {
                 return Ok(*id);
             }
         }
-        let scalar = if value.identity().is_none() {
-            Some(value.to_string())
-        } else {
-            None
-        };
+        let scalar = scalar_key(value);
         if let Some(key) = &scalar {
             if let Some(id) = self.scalars.get(key) {
                 return Ok(*id);
@@ -107,8 +133,8 @@ impl Encoder {
             Value::Null => Row::Empty(0),
             Value::Bool(false) => Row::Empty(1),
             Value::Bool(true) => Row::Empty(2),
-            Value::Number(_) => Row::Leaf(3, value.clone()),
-            Value::String(_) => Row::Leaf(4, value.clone()),
+            Value::Number(number) => Row::Number(number.clone()),
+            Value::String(string) => Row::String(string.to_string()),
             Value::Array(values) => {
                 let mut children = Vec::with_capacity(values.len());
                 for child in values.iter() {
@@ -159,6 +185,38 @@ pub fn encode(document: &Value) -> Result<Image, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scalar_keys_preserve_reference_wire_distinctions() {
+        let values = [
+            "null",
+            "false",
+            "true",
+            "0",
+            "-0",
+            "0.0",
+            "-0.0",
+            "1",
+            "1.0",
+            "1e0",
+            "-1",
+            "18446744073709551615",
+            "-9223372036854775808",
+            "9007199254740993",
+            "1.0000000000000002",
+            "1e-100",
+            "1e100",
+        ]
+        .map(|text| Value::from(serde_json::from_str::<serde_json::Value>(text).unwrap()));
+        for a in &values {
+            for b in &values {
+                assert_eq!(
+                    scalar_key(a) == scalar_key(b),
+                    a.to_string() == b.to_string()
+                );
+            }
+        }
+        assert!(scalar_key(&json!("1")).is_none());
+    }
     #[test]
     fn indexed_rows_preserve_source_identity_and_topological_order() {
         let a = json!({"type_id":17,"name":"same"});
@@ -214,7 +272,10 @@ mod roundtrip_tests {
                                 .as_str()
                                 .unwrap()
                                 .to_owned();
-                            (name, values[pair[1].as_u64().unwrap() as usize].clone())
+                            (
+                                name.into(),
+                                values[pair[1].as_u64().unwrap() as usize].clone(),
+                            )
                         })
                         .collect(),
                 ),

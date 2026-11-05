@@ -18,6 +18,7 @@ done
 for test in DecoderDynamicScan2026 CompilerFunctionAbiMemoTests2026 CompilerBacktraceIndexTests2026 CompilerPreparationInterner2026; do
   lake env lean --run "tests/input/$test.lean" scratch/decoder-id-inputs/genuine-mir-features.json
 done
+lake env lean --run tests/allocation/SupportedSourceBindingChecks.lean
 lake env lean --run tests/constant/AllocationImageTests.lean scratch/decoder-id-inputs/genuine-mir-features.json
 for test in AllocatorIds MemoryState GlobalMutationPrefixes; do
   lake env lean --run "MiriTests/MemoryState/$test.lean"

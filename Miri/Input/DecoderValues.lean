@@ -2,6 +2,7 @@ import Miri.Input.Model.Types
 import Miri.Interpreter.Instance
 import Miri.Input.SharedPayloads
 import Miri.Input.JsonTraversalCache
+import Std.Data.HashMap.Raw
 
 namespace Miri.Input.DecoderValues
 
@@ -1121,7 +1122,13 @@ abbrev RuntimeDecodeM := StateT RuntimeDecodeCache (Except String)
 mutual
 partial def decodeRuntimeValueM (node : JsonTraversalCache.Node) (path : String) (domain : Domain)
     (tagCategory : Option TypedEnumTag) (memo : DecodeMemo)
-    (reuse : Json → String → Option RuntimeValueDecode) : RuntimeDecodeM RuntimeValueDecode := do
+    (reuse : JsonTraversalCache.Node → String → Option RuntimeValueDecode) : RuntimeDecodeM RuntimeValueDecode := do
+  -- Scalar leaves cannot be references, source records or status objects. Most
+  -- graph edges end here; avoid re-running all object classifiers for each one.
+  match node.value with
+  | .null | .bool _ | .num _ => return ⟨.scalar node.value, none⟩
+  | .str _ => if tagCategory.isNone then return ⟨.scalar node.value, none⟩
+  | _ => pure ()
   if !node.shouldMemo then return ← decodeRuntimeValueBody node path domain tagCategory memo reuse
   -- Scalars are cheap and mostly inline. Giving every occurrence its own cache
   -- entry would retain millions of unique leaf IDs without sharing any work.
@@ -1138,7 +1145,7 @@ partial def decodeRuntimeValueM (node : JsonTraversalCache.Node) (path : String)
 
 partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : String) (domain : Domain)
     (tagCategory : Option TypedEnumTag) (memo : DecodeMemo)
-    (reuse : Json → String → Option RuntimeValueDecode) : RuntimeDecodeM RuntimeValueDecode := do
+    (reuse : JsonTraversalCache.Node → String → Option RuntimeValueDecode) : RuntimeDecodeM RuntimeValueDecode := do
   let j := node.value
   if let some id := isTypeRef j then
     let value := TypedValue.typeRef id
@@ -1199,7 +1206,7 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
           -- Compiler arguments already have a complete checked typed projection.
           -- This field is never retained in a parent's runtime summary.
           if key == "generic_args" && nextDomain == .any && category.isNone then
-            if let some checked := reuse value childPath then pure checked
+            if let some checked := reuse (node.child index value) childPath then pure checked
             else decodeRuntimeValueM (node.child index value) childPath nextDomain category memo reuse
           else decodeRuntimeValueM (node.child index value) childPath nextDomain category memo reuse
       let isTagField := match effectiveDomain with
@@ -2600,6 +2607,17 @@ def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except
     unsupportedKeyFamilies := unsupportedFamilies
   }
 
+/-- String wire equality is reflexive even for a malformed JSON object. Pointer
+reuse avoids serializing an unchanged payload twice; distinct values still use
+exactly the historical wire comparison. -/
+def jsonWireEq (left right : Json) : Bool :=
+  withPtrEq left right (fun _ => left.compress == right.compress)
+    (by intro equal; cases equal; simp)
+
+theorem jsonWireEq_eq (left right : Json) :
+    jsonWireEq left right = (left.compress == right.compress) := by
+  simp [jsonWireEq, withPtrEq]
+
 /-- Revalidate allocation identity metadata against the exact retained raw
 document. Public model records can be assembled or updated by callers, so the
 prepared runtime must not trust the decoder's prior validation as a flag. -/
@@ -2619,7 +2637,7 @@ def validateCompilerAllocIdWorldRaw (raw : Json) (nodes : Array AllocationNode)
       unless parsed.id == supplied.id && parsed.sourceAllocId == supplied.sourceAllocId &&
           parsed.status == supplied.status && parsed.kind == supplied.kind &&
           parsed.memory == supplied.memory && parsed.data == supplied.data &&
-          parsed.payload.compress == supplied.payload.compress do
+          jsonWireEq parsed.payload supplied.payload do
         throw s!"$.allocations[{index}]: source AllocId profile does not match the exact raw allocation node"
     let verified ← parseCompilerAllocIdWorld rawWorld nodes
     unless verified == world do
@@ -3058,14 +3076,14 @@ structure CompilerValueMemo where
   private mk ::
   private entries : Std.HashMap Json (Except String TypedValue)
   private sourcePaths : Std.HashMap String (Json × TypedValue)
-  private runtimeArguments : Std.HashMap Json RuntimeValueDecode
+  private runtimeArguments : Std.HashMap.Raw Json RuntimeValueDecode
   private exact : ∃ (nodes : Array Json) (memo : DecodeMemo),
     entries = buildCompilerValueEntries nodes memo
 
 def prepareCompilerValueMemoUsing (nodes : Array Json) (memo : DecodeMemo) : CompilerValueMemo :=
   let entries := buildCompilerValueEntries nodes memo
   let runtime := Id.run do
-    let mut runtime := {}
+    let mut runtime : Std.HashMap.Raw Json RuntimeValueDecode := {}
     for (raw, result) in entries do
       if let .ok value := result then
         let issues := valueObligations value "$compiler_value"
@@ -3089,9 +3107,25 @@ so the original runtime decoder retains its first diagnostic and source path. -/
 def CompilerValueMemo.runtimeArgument (memo : CompilerValueMemo) (raw : Json)
     (path : String) : Option RuntimeValueDecode := do
   unless hasCanonicalJsonObjectKeys raw do none
-  let checked ← memo.runtimeArguments[raw]?
+  let checked ← memo.runtimeArguments.get? raw
   return { checked with
     obligations := checked.obligations.map fun issues => .rebase "$compiler_value" path issues }
+
+/-- The private checked graph builder gives indexed nodes their canonical
+keys and the ordinary JSON digest. Reuse that digest to choose a bucket; the
+complete JSON comparison still decides a hit. Raw/inline values keep the
+historical canonicality check and recursive hashing. -/
+private def CompilerValueMemo.runtimeArgumentNode (memo : CompilerValueMemo)
+    (node : JsonTraversalCache.Node) (path : String) : Option RuntimeValueDecode := do
+  match node with
+  | .cached key _ =>
+    if key.id.isSome then
+      let _ : Hashable Json := ⟨fun _ => key.digest⟩
+      let checked ← memo.runtimeArguments.get? key.value
+      return { checked with
+        obligations := checked.obligations.map fun issues => .rebase "$compiler_value" path issues }
+    else memo.runtimeArgument node.value path
+  | .uncached raw => memo.runtimeArgument raw path
 
 /-- Runtime validation consumes the same checked compiler-argument projections
 as preparation; arbitrary callbacks cannot populate the importer's memo. -/
@@ -3099,7 +3133,7 @@ def decodeRuntimeValueWithCompilerMemo (node : JsonTraversalCache.Node) (path : 
     (domain : Domain) (tagCategory : Option TypedEnumTag) (memo : DecodeMemo)
     (values : Option CompilerValueMemo) : Except String RuntimeValueDecode := do
   (decodeRuntimeValueM node path domain tagCategory memo
-    (fun raw path => values.bind (fun values => values.runtimeArgument raw path))).run' (.forRoot node)
+    (fun node path => values.bind (fun values => values.runtimeArgumentNode node path))).run' (.forRoot node)
 
 /-- A source path only locates a candidate. Bind the hit to the entire canonical
 raw value, so public document updates cannot reuse a stale or foreign decode. -/
