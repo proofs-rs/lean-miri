@@ -1,4 +1,5 @@
 import Miri.Input.DecoderValues
+import Miri.Input.JsonSourceEquality
 
 namespace Miri.Input
 
@@ -27,6 +28,10 @@ structure ImportDocumentCore where
   compilerInstanceSourceMemo : Option CompilerInstanceSourceMemo := none
   /-- Native import validation is tied to the exact raw and typed source rows. -/
   allocationWorldValidation : Option (DecoderValues.AllocationWorldValidation raw allocations compilerAllocIdWorld) := none
+  /-- Erased first-pass source binding; cannot survive a foreign source/model update. -/
+  allocationParseBinding : Option (DecoderValues.AllocationParseBinding raw allocations compilerAllocIdWorld) := none
+  /-- The original exact source-equality check, optionally completed during input preparation. -/
+  rawReflexivity : Option (RuntimeMetadata.JsonReflexivity raw) := none
 
 def ImportDocumentCore.validateAllocationWorld (document : ImportDocumentCore) : Except String Unit :=
   match document.allocationWorldValidation with
@@ -40,6 +45,14 @@ theorem ImportDocumentCore.validateAllocationWorld_eq (document : ImportDocument
   split
   · exact DecoderValues.AllocationWorldValidation.result_eq _
   · rfl
+
+/-- The internal checked-source path consumes the original parse witness.
+Manual/reflected models retain the exact historical Boolean revalidation API.
+The existing validateAllocationWorld_eq theorem is deliberately unchanged. -/
+def ImportDocumentCore.validateAllocationWorldForRun (document : ImportDocumentCore) : Except String Unit :=
+  match document.allocationParseBinding with
+  | some _ => pure ()
+  | none => document.validateAllocationWorld
 
 /-- Full diagnostic import retained for callers that inspect the typed JSON
 projection. Runtime decoding uses `ImportDocumentCore` and does not retain this

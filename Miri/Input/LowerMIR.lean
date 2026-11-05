@@ -1073,12 +1073,78 @@ private def sourceBodyMatches (source : Lean.Json) (memo : Option CompilerValueM
     unless typedValueMatchesSource source memo terminatorPath block.terminator.value do return false
   return true
 
+private def bodySourceAgrees (source : Option Lean.Json) (memo : Option CompilerValueMemo)
+    (input : BodyCore) : Bool :=
+  match source with
+  | some source => sourceBodyMatches source memo input
+  | none => false
+
+/-- Exact source-consistency result for one immutable body and decoder context.
+A changed body, source or memo cannot retain this indexed certificate. -/
+structure BodySourceValidation (source : Option Lean.Json) (memo : Option CompilerValueMemo)
+    (input : BodyCore) where
+  private mk ::
+  result : Bool
+  private exact : result = bodySourceAgrees source memo input
+
+def BodySourceValidation.prepare (source : Option Lean.Json) (memo : Option CompilerValueMemo)
+    (input : BodyCore) : BodySourceValidation source memo input :=
+  ⟨bodySourceAgrees source memo input, rfl⟩
+
+theorem BodySourceValidation.result_eq {source memo input}
+    (checked : BodySourceValidation source memo input) :
+    checked.result = bodySourceAgrees source memo input := checked.exact
+
+private def boundBodySource (source : Option Lean.Json) (memo : Option CompilerValueMemo)
+    (input : BodyCore) (checked : Option (BodySourceValidation source memo input)) : Option Lean.Json :=
+  let agrees := match checked with
+    | some checked => checked.result
+    | none => bodySourceAgrees source memo input
+  if agrees then source else none
+
+private theorem boundBodySource_eq (source : Option Lean.Json) (memo : Option CompilerValueMemo)
+    (input : BodyCore) (checked : Option (BodySourceValidation source memo input)) :
+    boundBodySource source memo input checked = boundBodySource source memo input none := by
+  cases checked with
+  | none => rfl
+  | some checked => simp only [boundBodySource, BodySourceValidation.result_eq]
+
+/-- Entries carry their actual source index. A missing or misplaced entry
+falls back to the ordinary check; no completeness claim or Boolean hint is trusted. -/
+structure BodySourceValidationTable (source : Option Lean.Json) (memo : Option CompilerValueMemo)
+    (inputs : Array BodyCore) where
+  entries : Array (Σ i : Fin inputs.size, BodySourceValidation source memo inputs[i])
+
+def BodySourceValidationTable.get {source memo inputs}
+    (table : BodySourceValidationTable source memo inputs) (index : Fin inputs.size) :
+    Option (BodySourceValidation source memo inputs[index]) := do
+  let ⟨actual,checked⟩ ← table.entries[index.val]?
+  if equal : actual = index then some (equal ▸ checked) else none
+
+@[noinline] private def sourceValidationTasks (source : Option Lean.Json)
+    (memo : Option CompilerValueMemo) (inputs : Array BodyCore) (workers : Nat)
+    (profile : Lean.Options) :
+    Array (Task (Array (Σ i : Fin inputs.size, BodySourceValidation source memo inputs[i]))) := Id.run do
+  let count := min inputs.size (max 1 workers)
+  let mut tasks := #[]
+  for chunk in [:count] do
+    let start := inputs.size * chunk / count
+    let stop := inputs.size * (chunk + 1) / count
+    tasks := tasks.push (Task.spawn fun _ =>
+      Lean.profileit "lower.source_body_validation" profile fun _ => Id.run do
+        let mut entries := #[]
+        for index in [start:stop] do
+          if h : index < inputs.size then
+            entries := entries.push ⟨⟨index,h⟩, BodySourceValidation.prepare source memo inputs[index]⟩
+        return entries)
+  return tasks
+
 /-- Construct source-shaped MIR, preserving its decoded envelope and interning
 actual source spans. Unsupported constructors and missing metadata are errors. -/
-private def lowerBodyState (ctx : LowerContext) (input : BodyCore) (initial : LowerState) : LowerResult (LoweredBody × LowerState) := do
-  let sourceDocument := match ctx.sourceDocument with
-    | some source => if sourceBodyMatches source ctx.compilerValueMemo input then some source else none
-    | none => none
+private def lowerBodyState (ctx : LowerContext) (input : BodyCore) (initial : LowerState)
+    (checked : Option (BodySourceValidation ctx.sourceDocument ctx.compilerValueMemo input) := none) :
+    LowerResult (LoweredBody × LowerState) := do
+  let sourceDocument := boundBodySource ctx.sourceDocument ctx.compilerValueMemo input checked
   let mirPhase ← phase input.phase
   match input.injectionPhase with
   | some value => let _ ← phase value; pure ()
@@ -1124,6 +1190,11 @@ private def lowerBodyState (ctx : LowerContext) (input : BodyCore) (initial : Lo
     obligations.push ⟨"body.definitionId", "source definition identity is missing; runtime frame initialization must fail until supplied"⟩
   return (⟨⟨mirPhase, input.argumentCount, input.spreadArgument, input.locals.map (·.typeId), blocks⟩, state.spans, input, state.definitions, state.typeConstants, obligations⟩, state)
 
+private theorem lowerBodyState_checked_eq (ctx : LowerContext) (input : BodyCore)
+    (initial : LowerState) (checked : Option (BodySourceValidation ctx.sourceDocument ctx.compilerValueMemo input)) :
+    lowerBodyState ctx input initial checked = lowerBodyState ctx input initial none := by
+  simp only [lowerBodyState, boundBodySource_eq]
+
 /-- A standalone body's definition/type-constant/span IDs are local to this
 result. Use `lowerBodies` or `lowerProgram` for cross-function linking. -/
 def lowerBody (ctx : LowerContext) (input : BodyCore) : LowerResult LoweredBody :=
@@ -1138,7 +1209,9 @@ structure LoweredBodies where
 /-- Lower a compilation's bodies through one shared interner, including
 mutually recursive references. Every returned body uses the same ID tables. -/
 def lowerBodies (ctx : LowerContext) (inputs : Array BodyCore)
-    (seedDefinitions : Array DefinitionId := #[]) : LowerResult LoweredBodies := do
+    (seedDefinitions : Array DefinitionId := #[])
+    (checks : Option (BodySourceValidationTable ctx.sourceDocument ctx.compilerValueMemo inputs) := none) :
+    LowerResult LoweredBodies := do
   let mut state : LowerState := { spanCandidates := some {}, definitionCandidates := some {} }
   for id in seedDefinitions do
     state := addDefinition state id
@@ -1148,10 +1221,12 @@ def lowerBodies (ctx : LowerContext) (inputs : Array BodyCore)
     if let some id := input.definitionId then
       state := addDefinition state id
   let mut bodies := #[]
-  for input in inputs do
-    let (body, next) ← lowerBodyState ctx input state
-    bodies := bodies.push body
-    state := next
+  for index in [:inputs.size] do
+    if h : index < inputs.size then
+      let checked := checks.bind fun table => table.get ⟨index,h⟩
+      let (body, next) ← lowerBodyState ctx inputs[index] state checked
+      bodies := bodies.push body
+      state := next
   bodies := bodies.map fun body =>
     { body with
       spans := state.spans
@@ -1177,9 +1252,13 @@ def LoweredProgram.rootDefinitionId (program : LoweredProgram) (rootIndex : Nat)
   let some body := program.bundle.bodies[bodyIndex]? | throw "root body index is out of range"
   body.ownDefinitionId
 
-/-- Lower all present root, instance, and promoted bodies with global compiler
-identity tables. Unavailable bodies remain explicit source graph obligations. -/
-def lowerCoreProgram (input : ImportDocumentCore) : LowerResult LoweredProgram := do
+private structure ProgramBodyInputs where
+  inputs : Array BodyCore
+  roots : Array Nat
+  instances : Array (InstanceId × Nat)
+  promoted : Array (Nat × Nat × Nat)
+
+private def coreProgramBodies (input : ImportDocumentCore) : ProgramBodyInputs := Id.run do
   let mut inputs : Array BodyCore := #[]
   let mut roots := #[]
   let mut instances := #[]
@@ -1202,10 +1281,32 @@ def lowerCoreProgram (input : ImportDocumentCore) : LowerResult LoweredProgram :
         if let some childBody := child.body then
           promoted := promoted.push (parent, child.index, inputs.size)
           inputs := inputs.push childBody
-  -- The complete source body list includes root/instance/promoted identities;
-  -- seed all of them explicitly, plus graph instances that have no MIR body.
-  let definitions := inputs.filterMap (·.definitionId) ++ input.instances.filterMap (·.definitionId)
-  pure ⟨← lowerBodies (LowerContext.ofDocument input) inputs definitions, roots, instances, promoted, input⟩
+  return ⟨inputs,roots,instances,promoted⟩
+
+/-- Lower all present root, instance, and promoted bodies with global compiler
+identity tables. Unavailable bodies remain explicit source graph obligations. -/
+def lowerCoreProgram (input : ImportDocumentCore) : LowerResult LoweredProgram := do
+  let collected := coreProgramBodies input
+  let definitions := collected.inputs.filterMap (·.definitionId) ++ input.instances.filterMap (·.definitionId)
+  pure ⟨← lowerBodies (LowerContext.ofDocument input) collected.inputs definitions,
+    collected.roots,collected.instances,collected.promoted,input⟩
+
+/-- Parallelize only the exact source guards. MIR construction and all ID
+interning stay in their original serial order. This safe API also accepts manual
+models: every cached Boolean is the old predicate on that precise source/body. -/
+def lowerCoreProgramForProcess (profile : Lean.Options) (workers : Nat) (input : ImportDocumentCore) :
+    IO (LowerResult LoweredProgram) := do
+  if workers ≤ 1 then return lowerCoreProgram input
+  let collected := coreProgramBodies input
+  let ctx := LowerContext.ofDocument input
+  let tasks := sourceValidationTasks ctx.sourceDocument ctx.compilerValueMemo collected.inputs workers profile
+  let mut entries := #[]
+  for task in tasks do entries := entries ++ task.get
+  let checks : BodySourceValidationTable ctx.sourceDocument ctx.compilerValueMemo collected.inputs := ⟨entries⟩
+  let definitions := collected.inputs.filterMap (·.definitionId) ++ input.instances.filterMap (·.definitionId)
+  return do
+    pure ⟨← lowerBodies ctx collected.inputs definitions (some checks),
+      collected.roots,collected.instances,collected.promoted,input⟩
 
 /-- Compatibility entrypoint for full diagnostic documents. Runtime clients
 that decode without retaining the typed JSON tree should call

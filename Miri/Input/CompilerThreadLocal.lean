@@ -12,12 +12,14 @@ private def field (j : Json) (key : String) : Except String Json := j.getObjVal?
 private def natField (j : Json) (key : String) : Except String Nat := do (← field j key).getNat?
 private def stringField (j : Json) (key : String) : Except String String := do (← field j key).getStr?
 
-private partial def collect (j : Json) : Array Json :=
-  let here := if (DecoderValues.optionalStringValue j "kind") == some "ThreadLocalRef" then #[j] else #[]
+private partial def collectInto (j : Json) (found : Array Json) : Array Json :=
+  let found := if (DecoderValues.optionalStringValue j "kind") == some "ThreadLocalRef" then found.push j else found
   match j with
-  | .arr values => values.foldl (fun found value => found ++ collect value) here
-  | .obj values => values.toList.foldl (fun found entry => found ++ collect entry.2) here
-  | _ => here
+  | .arr values => values.foldl (fun found value => collectInto value found) found
+  | .obj values => values.foldl (fun found _ value => collectInto value found) found
+  | _ => found
+
+private def collect (j : Json) : Array Json := collectInto j #[]
 
 /-- Preserve the exact ordered scan, including duplicate and malformed rows. -/
 structure Rows (raw : Json) where
@@ -88,7 +90,7 @@ def forDefinition (program : LoweredProgram) (definition : MIR.DefId)
   unless !rows.isEmpty do throw "missing exact compiler TLS declaration/initializer evidence"
   -- Reuse the existing strict decoder on the selected records with the same
   -- source tables; this is a query view, never a second program representation.
-  let selected := {program with input := {program.input with raw := .arr rows, allocationWorldValidation := none}}
+  let selected := {program with input := {program.input with raw := .arr rows, allocationWorldValidation := none, allocationParseBinding := none, rawReflexivity := none}}
   find (← ofProgram selected) definition
 
 theorem forDefinition_preparedRows (program : LoweredProgram) (definition : MIR.DefId)

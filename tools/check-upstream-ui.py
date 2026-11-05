@@ -45,6 +45,8 @@ def run_case(case, args, env, output):
     snapshot = directory / 'input.json'
     source = SOURCES / case.path
     command = [str(args.exporter), '--output', str(snapshot)]
+    if getattr(args, 'binary_image', False):
+        command.append('--binary-image')
     entry_root = 'miri_start' if b'#![no_main]' in source.read_bytes() else 'main'
     command += ['--root', entry_root]
     command += ['--', str(source),
@@ -132,6 +134,9 @@ def main():
     parser.add_argument('--sysroot', type=Path, default=ROOT / 'scratch/miri-sysroot')
     parser.add_argument('--runner', type=Path, default=ROOT / '.lake/build/bin/native_runner')
     parser.add_argument('--skip-build', action='store_true')
+    parser.add_argument('--binary-image', action='store_true', help='compare the direct binary transport with the same source and reference guards')
+    parser.add_argument('--input-threads', type=int, default=1,
+                        help='Lean input preparation workers; guest CPU count remains one (default: 1)')
     parser.add_argument('--timeout', type=float, help='optional Lean execution wall limit in seconds; default unlimited')
     parser.add_argument('--memory-limit', type=int, help='optional shared cgroup memory guard in bytes; default unlimited')
     parser.add_argument('--export-timeout', type=float, default=900)
@@ -140,9 +145,9 @@ def main():
     parser.add_argument('--jobs', type=int, default=1, help='independent guest processes (default serial; high memory per case)')
     parser.add_argument('--keep-inputs', action='store_true')
     args = parser.parse_args()
-    if min(args.export_timeout, args.jobs) <= 0 or any(
+    if min(args.export_timeout, args.jobs, args.input_threads) <= 0 or any(
             value is not None and value <= 0 for value in (args.timeout, args.memory_limit)):
-        parser.error('explicit timeouts, memory limit and jobs must be positive')
+        parser.error('explicit timeouts, memory limit, jobs and input threads must be positive')
     cases = list(discover())
     if args.case:
         unknown = set(args.case) - {c.id for c in cases}
@@ -167,7 +172,7 @@ def main():
                LD_LIBRARY_PATH=str(toolchain / 'lib') + ':' + env.get('LD_LIBRARY_PATH', ''),
                MIRI_SYSROOT=str(args.sysroot.resolve()), ELAN_HOME=str(ROOT / '.elan'),
                LEAN_MIRI_PREPARED_ALLOC_ID_WORLD='1', LEAN_MIRI_RUN_PREPARED_MIRI='1',
-               LEAN_NUM_THREADS='1')
+               LEAN_NUM_THREADS=str(args.input_threads))
     # No ambient reference args may silently change test conditions.
     for key in list(env):
         if key.startswith('LEAN_MIRI_REFERENCE_'):
@@ -189,6 +194,8 @@ def main():
         'source_lock_sha256': sha256(ROOT / 'upstream/source-lock.json'),
         'exporter_sha256': exporter_hash, 'runner_sha256': runner_hash,
         'timeout': args.timeout, 'memory_limit': args.memory_limit, 'export_timeout': args.export_timeout,
+        'binary_image': args.binary_image,
+        'input_threads': args.input_threads,
         'profile': 'same-prepared-TyCtxt Tree Borrows, precise interior mutability, no implicit writes',
         'claim': 'finite executions only; no whole-machine safety proof',
     }, indent=2) + '\n')

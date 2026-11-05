@@ -87,6 +87,66 @@ impl Serialize for Image {
         record.end()
     }
 }
+const BINARY_MAGIC: &[u8; 8] = b"LMIRIMG\x01";
+fn write_var(mut value: u64, out: &mut impl std::io::Write) -> std::io::Result<()> {
+    while value >= 128 {
+        out.write_all(&[(value as u8 & 127) | 128])?;
+        value >>= 7;
+    }
+    out.write_all(&[value as u8])
+}
+fn write_text(value: &str, out: &mut impl std::io::Write) -> std::io::Result<()> {
+    write_var(value.len() as u64, out)?;
+    out.write_all(value.as_bytes())
+}
+impl Image {
+    pub fn write_binary(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
+        out.write_all(BINARY_MAGIC)?;
+        write_var(self.fields.len() as u64, out)?;
+        for field in &self.fields {
+            write_text(field, out)?;
+        }
+        write_var(self.nodes.len() as u64, out)?;
+        for row in &self.nodes {
+            match row {
+                Row::Empty(tag) => out.write_all(&[*tag])?,
+                Row::Number(value) => {
+                    if let Some(value) = value.as_u64() {
+                        out.write_all(&[7])?;
+                        write_var(value, out)?;
+                    } else if let Some(value) = value.as_i64() {
+                        out.write_all(&[8])?;
+                        write_var(value.unsigned_abs(), out)?;
+                    } else {
+                        out.write_all(&[3])?;
+                        write_text(&value.to_string(), out)?;
+                    }
+                }
+                Row::String(value) => {
+                    out.write_all(&[4])?;
+                    write_text(value, out)?;
+                }
+                Row::Array(ids) => {
+                    out.write_all(&[5])?;
+                    write_var(ids.len() as u64, out)?;
+                    for id in ids {
+                        write_var(*id as u64, out)?;
+                    }
+                }
+                Row::Object(pairs) => {
+                    out.write_all(&[6])?;
+                    write_var(pairs.len() as u64, out)?;
+                    for (field, id) in pairs {
+                        write_var(*field as u64, out)?;
+                        write_var(*id as u64, out)?;
+                    }
+                }
+            }
+        }
+        write_var(self.root as u64, out)
+    }
+}
+
 #[cfg(test)]
 fn wire(image: Image) -> Value {
     let direct = serde_json::to_string(&image).unwrap();
@@ -284,6 +344,42 @@ mod roundtrip_tests {
             values.push(value);
         }
         values[image["root"].as_u64().unwrap() as usize].clone()
+    }
+
+    #[test]
+    fn binary_rows_match_independent_json_reference() {
+        let mut source = json!({"numbers":[null,false,true,0,127,128,-17,
+            i64::MIN,u64::MAX,-0.0,0.0,1.0,1e100,1e-100],"unicode":"日本語\nquoted\""});
+        for _ in 0..7 {
+            source = json!({"a.b%[":source,"z":source});
+        }
+        let image = encode(&source).unwrap();
+        let mut binary = Vec::new();
+        image.write_binary(&mut binary).unwrap();
+        assert!(binary.starts_with(BINARY_MAGIC));
+        let prefix =
+            std::env::temp_dir().join(format!("lean-miri-binary-image-{}", std::process::id()));
+        let json_path = prefix.with_extension("json");
+        let binary_path = prefix.with_extension("lmir");
+        std::fs::write(&json_path, serde_json::to_vec(&image).unwrap()).unwrap();
+        std::fs::write(&binary_path, binary).unwrap();
+        let result = std::process::Command::new("python3")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../tests/input/binary_image_reader.py"
+            ))
+            .arg("--compare")
+            .arg(&json_path)
+            .arg(&binary_path)
+            .output()
+            .unwrap();
+        std::fs::remove_file(json_path).unwrap();
+        std::fs::remove_file(binary_path).unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
     }
 
     #[test]

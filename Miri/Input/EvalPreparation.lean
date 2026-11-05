@@ -27,7 +27,7 @@ are required evidence, never inferred from storage sizes. -/
 def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Attempt := Id.run do
   let empty : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind := .empty
   match profileit "preparation.eval.validate_alloc_id_world" profile fun _ =>
-      input.input.validateAllocationWorld with
+      input.input.validateAllocationWorldForRun with
   | .ok _ => pure ()
   | .error error => return ⟨empty,.error s!"compiler AllocId world: {error}"⟩
   let preparedInput := profileit "preparation.eval.compiler_globals" profile fun _ =>
@@ -67,7 +67,7 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Attempt 
     let memory ← match profileit "preparation.eval.install_alloc_id_world" profile fun _ =>
         CompilerAllocIdWorld.install compiler.program.input.raw
           compiler.program.input.compilerAllocIdWorld compiler.program.input.allocations imported.memory
-          compiler.program.input.allocationWorldValidation with
+          compiler.program.input.allocationWorldValidation compiler.program.input.allocationParseBinding with
       | .ok value => pure value
       | .error error => return ⟨imported.memory,.error s!"compiler AllocId world: {error}"⟩
     return ⟨memory,.ok ⟨compiler,image,types,layouts,dummySpan⟩⟩

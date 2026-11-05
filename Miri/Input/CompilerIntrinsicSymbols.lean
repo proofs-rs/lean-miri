@@ -56,7 +56,7 @@ def seedImported (p : CompilerProviders.Prepared) (image : AllocationImage.Impor
       throw "prepared TypeId catalog requires the active source AllocId world"
     unless image.matchesSupportedSource input.allocations do
       throw "prepared TypeId catalog allocation image differs from its owning program"
-    input.validateAllocationWorld
+    input.validateAllocationWorldForRun
       |>.mapError fun error => s!"prepared AllocId world: {error}"
     -- Build the prepared key set independently of existing machine state so
     -- preseeded entries cannot validate themselves.

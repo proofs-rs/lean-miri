@@ -77,6 +77,7 @@ const ROOT_SCHEMA_VERSION: u64 = 3;
 
 struct Options {
     output: PathBuf,
+    binary_image: bool,
     rustc_args: Vec<String>,
     root_paths: Vec<String>,
 }
@@ -119,6 +120,7 @@ fn finish_snapshot(mut document: Value) -> Result<Snapshot, String> {
 
 struct ExportCallbacks {
     output: PathBuf,
+    binary_image: bool,
     root_paths: Vec<String>,
     rustc_version: String,
     document: Option<Snapshot>,
@@ -152,6 +154,9 @@ impl std::hash::Hash for CompilerAbiSource<'_> {
 struct ExportContext<'tcx> {
     vtable_diagnostics: vtable_diagnostics::Trace<'tcx>,
     span_payload_cache: HashMap<rustc_span::Span, Value>,
+    // Query suppression changes which type demands must be registered. Cache
+    // each role separately; both demand sets and operation bits are monotone.
+    generic_args_payload_cache: HashMap<(ty::GenericArgsRef<'tcx>, bool), Value>,
     layout_payload_cache: HashMap<rustc_abi::TyAndLayout<'tcx, ty::Ty<'tcx>>, Value>,
     // The compiler owns this immutable query result for the entire context.
     // Pointer identity caches only its JSON projection, never semantic ABI/type
@@ -515,6 +520,7 @@ fn loaded_rustc_driver_is_pinned() -> Result<(), String> {
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
     let mut args = args.into_iter();
     let mut output = None;
+    let mut binary_image = false;
     let mut root_paths = Vec::new();
     let mut rustc_args = Vec::new();
     while let Some(arg) = args.next() {
@@ -522,6 +528,8 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
             output = Some(PathBuf::from(
                 args.next().ok_or("--output requires a path")?,
             ));
+        } else if arg == "--binary-image" {
+            binary_image = true;
         } else if arg == "--root" {
             root_paths.push(
                 args.next()
@@ -529,7 +537,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
             );
         } else if arg == "--help" || arg == "-h" {
             println!(
-                "Usage:\n  lean-miri-mir-exporter --output FILE [--root DEF-PATH]... [--] RUSTC-ARG...\n  lean-miri-mir-exporter --cargo CARGO-ARGS...\n\nDirect mode exports typed MIR and stops after analysis. Optional --root selects exact non-generic local def-path roots and emits their reachable structural closure. Cargo mode acts as a rustc wrapper, writes one JSON file per compiled crate, and continues normal codegen/metadata emission. Set LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1 to opt into a post-export raw allocation-world snapshot. Both require the pinned rustc revision."
+                "Usage:\n  lean-miri-mir-exporter --output FILE [--binary-image] [--root DEF-PATH]... [--] RUSTC-ARG...\n  lean-miri-mir-exporter --cargo CARGO-ARGS...\n\nDirect mode exports typed MIR and stops after analysis. Optional --root selects exact non-generic local def-path roots and emits their reachable structural closure. Cargo mode acts as a rustc wrapper, writes one JSON file per compiled crate, and continues normal codegen/metadata emission. Set LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1 to opt into a post-export raw allocation-world snapshot. Both require the pinned rustc revision."
             );
             std::process::exit(0);
         } else if arg == "--" {
@@ -554,6 +562,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Options, String>
     }
     Ok(Options {
         output,
+        binary_image,
         rustc_args,
         root_paths,
     })
@@ -2046,10 +2055,18 @@ impl Callbacks for ExportCallbacks {
         }
         export_profile.mark("context_release_and_tables");
         let mut patch_profile = ExportProfile::new();
-        patch_vtable_query_ids(&mut document, &vtable_query_ids);
-        patch_profile.mark("patch.vtable_ids");
-        patch_virtual_resolution_candidates(&mut document);
-        patch_profile.mark("patch.virtual_candidates");
+        #[cfg(not(feature = "legacy-json"))]
+        {
+            patch_compiler_vtable_metadata(&mut document, &vtable_query_ids);
+            patch_profile.mark("patch.vtable_and_virtual");
+        }
+        #[cfg(feature = "legacy-json")]
+        {
+            patch_vtable_query_ids(&mut document, &vtable_query_ids);
+            patch_profile.mark("patch.vtable_ids");
+            patch_virtual_resolution_candidates(&mut document);
+            patch_profile.mark("patch.virtual_candidates");
+        }
         export_profile.mark("vtable_patches");
         if is_scoped {
             let roots = selected_root_records
@@ -2109,7 +2126,7 @@ impl Callbacks for ExportCallbacks {
                 );
                 return Compilation::Stop;
             }
-            if let Err(error) = write_document(&self.output, &document) {
+            if let Err(error) = write_snapshot(&self.output, &document, self.binary_image) {
                 self.export_error = Some(error);
                 return Compilation::Stop;
             }
@@ -2186,7 +2203,7 @@ impl Callbacks for ExportCallbacks {
             }
         }
         if self.write_during_analysis {
-            if let Err(error) = write_document(&self.output, &document) {
+            if let Err(error) = write_snapshot(&self.output, &document, self.binary_image) {
                 self.export_error = Some(error);
                 return Compilation::Stop;
             }
@@ -2221,7 +2238,7 @@ fn run() -> Result<(), String> {
             let _ = parse_args(args);
             Ok(())
         }
-        Some("--output") => run_direct(args),
+        Some("--output") | Some("--binary-image") => run_direct(args),
         Some(_) => run_as_rustc_wrapper(args),
         None => Err("missing arguments; pass --help for usage".into()),
     }
@@ -2281,6 +2298,7 @@ fn run_direct(args: Vec<String>) -> Result<(), String> {
     let miri_reference_args = Vec::new();
     let mut callbacks = ExportCallbacks {
         output: options.output,
+        binary_image: options.binary_image,
         root_paths: options.root_paths,
         rustc_version,
         document: None,
@@ -2309,7 +2327,7 @@ fn run_direct(args: Vec<String>) -> Result<(), String> {
     let document = callbacks
         .document
         .ok_or("rustc completed without after_analysis output")?;
-    let result = write_document(&callbacks.output, &document);
+    let result = write_snapshot(&callbacks.output, &document, callbacks.binary_image);
     direct_profile.mark("direct.write_snapshot");
     drop(document);
     direct_profile.mark("direct.release_image");
@@ -2411,6 +2429,7 @@ fn run_as_rustc_wrapper(args: Vec<String>) -> Result<(), String> {
     let miri_reference_args = Vec::new();
     let mut callbacks = ExportCallbacks {
         output,
+        binary_image: false,
         root_paths: Vec::new(),
         rustc_version,
         document: None,
@@ -2583,7 +2602,36 @@ fn join_paths_prepend(prefix: &Path, rest: &std::ffi::OsStr) -> Result<std::ffi:
         .map_err(|error| format!("cannot construct toolchain search path: {error}"))
 }
 
+fn write_snapshot(path: &Path, document: &Snapshot, binary: bool) -> Result<(), String> {
+    if !binary {
+        return write_document(path, document);
+    }
+    #[cfg(not(feature = "legacy-json"))]
+    if let Snapshot::Image(image) = document {
+        return write_file(path, |writer, temporary| {
+            image.write_binary(writer)
+                .map_err(|error| format!("cannot write {}: {error}", temporary.display()))
+        });
+    }
+    Err("--binary-image requires the default prepared-image builder".into())
+}
+
 fn write_document(path: &Path, document: &impl serde::Serialize) -> Result<(), String> {
+    write_file(path, |writer, temporary| {
+        serde_json::to_writer(writer, document).map_err(|error| {
+            if error.io_error_kind().is_some() {
+                format!("cannot write {}: {error}", temporary.display())
+            } else {
+                error.to_string()
+            }
+        })
+    })
+}
+
+fn write_file(
+    path: &Path,
+    write: impl FnOnce(&mut std::io::BufWriter<fs::File>, &Path) -> Result<(), String>,
+) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("output path {} has no parent", path.display()))?;
@@ -2599,18 +2647,12 @@ fn write_document(path: &Path, document: &impl serde::Serialize) -> Result<(), S
     let file = fs::File::create(&temporary)
         .map_err(|error| format!("cannot write {}: {error}", temporary.display()))?;
     let mut writer = std::io::BufWriter::new(file);
-    serde_json::to_writer(&mut writer, document).map_err(|error| {
-        if error.io_error_kind().is_some() {
-            format!("cannot write {}: {error}", temporary.display())
-        } else {
-            error.to_string()
-        }
-    })?;
+    write(&mut writer, &temporary)?;
     writer
         .flush()
         .map_err(|error| format!("cannot write {}: {error}", temporary.display()))?;
     // Close the file before rename for platforms that do not allow renaming
-    // an open file. A successful flush above guarantees the complete JSON
+    // an open file. A successful flush above guarantees the complete snapshot
     // has reached the temporary file before it can replace the destination.
     drop(writer);
     fs::rename(&temporary, path)
@@ -3670,7 +3712,33 @@ fn generic_args_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     args: ty::GenericArgsRef<'tcx>,
 ) -> Value {
-    generic_args_json_inner(context, tcx, args)
+    let key = (args, context.runtime_type_query_suppression != 0);
+    if let Some(value) = context.generic_args_payload_cache.get(&key).cloned() {
+        #[cfg(debug_assertions)]
+        {
+            // Compare within the same TyCtxt, including all registration effects.
+            // This is deliberately enabled by ordinary Rust debug assertions,
+            // not by a separate production feature or a trusted producer hint.
+            let demands = context.runtime_type_query_demands.clone();
+            let operations = context.runtime_type_operations.clone();
+            let counts = (
+                context.type_ids.len(), context.type_nodes.len(),
+                context.allocation_nodes.len(), context.pending_instances.len(),
+            );
+            let reference = generic_args_json_inner(context, tcx, args);
+            assert_eq!(value.to_string(), reference.to_string());
+            assert_eq!(demands, context.runtime_type_query_demands);
+            assert_eq!(operations, context.runtime_type_operations);
+            assert_eq!(counts, (
+                context.type_ids.len(), context.type_nodes.len(),
+                context.allocation_nodes.len(), context.pending_instances.len(),
+            ));
+        }
+        return value;
+    }
+    let value = generic_args_json_inner(context, tcx, args);
+    context.generic_args_payload_cache.insert(key, value.clone());
+    value
 }
 
 fn generic_args_json_inner<'tcx>(
@@ -7615,28 +7683,31 @@ fn compiler_vtable_queries_json<'tcx>(
 }
 
 #[cfg(not(feature = "legacy-json"))]
-fn patch_vtable_query_ids(document: &mut Value, query_ids: &HashMap<(u64, Vec<u64>), u64>) {
-    *document = shared_value::transform(document, &|value| {
-        let query = value.get("vtable_query").filter(|query| !query.is_null())?;
-        let key = query.get("_query_key").and_then(|key| {
-            Some((key.get("input_type_id")?.as_u64()?, key.get("input_predicate_ids")?
-                .as_array()?.iter().map(Value::as_u64).collect::<Option<Vec<_>>>()?))
-        });
-        let id = key.and_then(|key| query_ids.get(&key).copied());
-        let mut result = value.clone();
-        let fields = result.as_object_mut()?;
-        if let Some(object) = fields.get_mut("vtable_query").and_then(Value::as_object_mut) {
-            if let Some(id) = id {
-                object.insert("query_id".into(), json!(id));
-            } else {
-                object.insert("status".into(), json!("unknown"));
-                object.insert("reason".into(),json!("Cast vtable query pair was absent from the finalized exact compiler query catalog"));
-            }
-            object.remove("_query_key");
-        }
-        if id.is_none() { fields.insert("status".into(), json!("unknown")); }
-        Some(result)
+fn patch_vtable_value(value: &Value, query_ids: &HashMap<(u64, Vec<u64>), u64>) -> Option<Value> {
+    let query = value.get("vtable_query").filter(|query| !query.is_null())?;
+    let key = query.get("_query_key").and_then(|key| {
+        Some((key.get("input_type_id")?.as_u64()?, key.get("input_predicate_ids")?
+            .as_array()?.iter().map(Value::as_u64).collect::<Option<Vec<_>>>()?))
     });
+    let id = key.and_then(|key| query_ids.get(&key).copied());
+    let mut result = value.clone();
+    let fields = result.as_object_mut()?;
+    if let Some(object) = fields.get_mut("vtable_query").and_then(Value::as_object_mut) {
+        if let Some(id) = id {
+            object.insert("query_id".into(), json!(id));
+        } else {
+            object.insert("status".into(), json!("unknown"));
+            object.insert("reason".into(),json!("Cast vtable query pair was absent from the finalized exact compiler query catalog"));
+        }
+        object.remove("_query_key");
+    }
+    if id.is_none() { fields.insert("status".into(), json!("unknown")); }
+    Some(result)
+}
+
+#[cfg(all(not(feature = "legacy-json"), test))]
+fn patch_vtable_query_ids(document: &mut Value, query_ids: &HashMap<(u64, Vec<u64>), u64>) {
+    *document = shared_value::transform(document, &|value| patch_vtable_value(value, query_ids));
 }
 
 #[cfg(feature = "legacy-json")]
@@ -7695,11 +7766,9 @@ fn patch_vtable_query_ids(document: &mut Value, query_ids: &HashMap<(u64, Vec<u6
 // produced for that same virtual Instance. The catalog may contain many
 // unrelated concrete vtables; those rows are not dispatch evidence for this
 // call and must not be attached by type coincidence.
-fn patch_virtual_resolution_candidates(document: &mut Value) {
+fn virtual_candidate_ids(rows: Option<&Value>) -> HashMap<u64, Vec<u64>> {
     let mut candidates: HashMap<u64, Vec<u64>> = HashMap::new();
-    if let Some(rows) = document
-        .pointer("/compiler_runtime_queries/virtual")
-        .and_then(Value::as_array)
+    if let Some(rows) = rows.and_then(Value::as_array)
     {
         for row in rows {
             let Some(instance_id) = row.get("original_instance_id").and_then(Value::as_u64) else {
@@ -7718,6 +7787,12 @@ fn patch_virtual_resolution_candidates(document: &mut Value) {
         ids.sort_unstable();
         ids.dedup();
     }
+    candidates
+}
+
+#[cfg(any(feature = "legacy-json", test))]
+fn patch_virtual_resolution_candidates(document: &mut Value) {
+    let candidates = virtual_candidate_ids(document.pointer("/compiler_runtime_queries/virtual"));
     #[cfg(feature = "legacy-json")]
     fn patch(value: &mut Value, candidates: &HashMap<u64, Vec<u64>>) {
         match value {
@@ -7752,15 +7827,32 @@ fn patch_virtual_resolution_candidates(document: &mut Value) {
     patch(document, &candidates);
     #[cfg(not(feature = "legacy-json"))]
     {
-        *document = shared_value::transform(document, &|value| {
-            let id = value.get("virtual_resolution").filter(|v| !v.is_null())?
-                .get("instance_id").and_then(Value::as_u64)?;
-            let mut result = value.clone();
-            let object = result.get_mut("virtual_resolution").and_then(Value::as_object_mut)?;
-            object.insert("candidate_query_ids".into(),json!(candidates.get(&id).cloned().unwrap_or_default()));
-            Some(result)
-        });
+        *document = shared_value::transform(document, &|value| patch_virtual_value(value, &candidates));
     }
+}
+
+#[cfg(not(feature = "legacy-json"))]
+fn patch_virtual_value(value: &Value, candidates: &HashMap<u64, Vec<u64>>) -> Option<Value> {
+    let id = value.get("virtual_resolution").filter(|v| !v.is_null())?
+        .get("instance_id").and_then(Value::as_u64)?;
+    let mut result = value.clone();
+    let object = result.get_mut("virtual_resolution").and_then(Value::as_object_mut)?;
+    object.insert("candidate_query_ids".into(),json!(candidates.get(&id).cloned().unwrap_or_default()));
+    Some(result)
+}
+
+/// The candidate catalog depends on patched virtual rows, not on a second
+/// complete document traversal. Patch that small subtree first, then fuse both
+/// context-independent edits in one pass. Neither edit introduces a new query.
+#[cfg(not(feature = "legacy-json"))]
+fn patch_compiler_vtable_metadata(document: &mut Value, query_ids: &HashMap<(u64, Vec<u64>), u64>) {
+    let virtual_rows = document.pointer("/compiler_runtime_queries/virtual")
+        .map(|rows| shared_value::transform(rows, &|value| patch_vtable_value(value, query_ids)));
+    let candidates = virtual_candidate_ids(virtual_rows.as_ref());
+    *document = shared_value::transform(document, &|value| {
+        let patched = patch_vtable_value(value, query_ids);
+        patch_virtual_value(patched.as_ref().unwrap_or(value), &candidates).or(patched)
+    });
 }
 
 fn intrinsic_fallback_is_spec(tcx: TyCtxt<'_>, def: rustc_hir::def_id::DefId) -> bool {

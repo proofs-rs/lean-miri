@@ -106,6 +106,41 @@ Failed decodes fall through to ordinary parsing, preserving diagnostic paths and
 first-error order. Only a resolver-produced traversal can populate the opaque
 MIR memo. Readiness, compiler evidence and execution checks still run.
 
+Direct exports can opt into the binary graph with `--binary-image`; the native
+runner detects it from its versioned magic. JSON remains the default and both
+paths run the same semantic decoder. The binary reader validates canonical u64
+LEB128 integers, UTF-8, ordered fields, all edges and unused rows. These format
+bounds are unrelated to guest execution limits. `tools/check-upstream-ui.py
+--binary-image` compares this transport with same-TyCtxt Miri using the existing
+source, artifact, fingerprint and resource guards.
+
+`tools/run.sh` uses up to three input workers from the process's available CPUs
+unless `LEAN_NUM_THREADS` is explicitly set. `LEAN_NUM_THREADS=1` keeps the
+ordinary sequential library path. Extra workers validate immutable compiler
+input and body/source bindings; they do not parallelize guest execution. For
+same-TyCtxt comparisons, select this path with `--input-threads 3`; the UI guest
+CPU count remains one.
+
+The native one-input process retains its fresh, read-only compiler graph until
+exit, using Lean's `Runtime.markPersistent` before sharing it with workers.
+It never pins mutable guest state or shares a program cache with another process.
+Library decoding continues to reclaim input normally. Validation results are
+joined in the previous diagnostic order, and body lowering/ID interning remain
+serial. Source-equality and body-validation evidence is indexed by the exact
+values it checked; foreign or modified models use the original checks.
+
+`bash tools/check-decoder.sh [GENUINE_PREPARED_WORLD_EXPORT]` builds native finite
+decoder comparisons, malformed binary controls and runtime-summary/context
+comparisons. The optional genuine prepared-world input also compares the new
+allocation parse-origin reuse with the old independent raw/model validator and
+rejects modified raw data, allocation rows and worlds. Both transport encodings
+are accepted. Import-origin evidence is indexed by the actual input and typed
+outputs; it is neither an exporter hint nor a guest safety certificate.
+
+Release exporter and native project objects use ThinLTO. The linker uses four
+workers; this changes build cost and does not add interpreter workers. Performance
+comparisons still freeze executables and use one Lean thread and CPU affinity.
+
 Set `LEAN_MIRI_PREPARED_IMAGE=0` to retain shared-payload schema 2 output with the
 persistent builder. Lean and `tools/mir_json.py` accept both formats. The
 `legacy-json` Cargo feature separately retains the tree builder and string-key
