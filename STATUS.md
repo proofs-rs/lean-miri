@@ -1827,8 +1827,9 @@ Raw evidence and immutable binaries are ignored under `scratch/perf-execution-ir
 `ui-focused/`, `ui-negative-rerun/`, `ui-final/`, `ui-stack/`, `decoder.log`,
 `image-checks.log`, `rust-tests-final.log`, `legacy-tests.log`, `quick-final.log`,
 `connected.log` and `runtime-tests.log`. The collection and analysis scripts are
-retained there. The prototype source is preserved on `perf/full-execution-ir`;
-the retained PR only records its outcome.
+retained there. The prototype source is preserved at `2b08ad39` on `perf/full-execution-ir`
+and in [draft PR #17](https://github.com/proofs-rs/lean-miri/pull/17);
+the retained PR #9 only records its outcome.
 
 ## Feature support outside the current acceptance scope
 
