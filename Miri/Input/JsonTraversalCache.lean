@@ -99,6 +99,20 @@ private def fieldInterest (name : String) : UInt8 :=
   else if name == "vtable_allocation" then 8
   else 0
 
+/-- Dictionary-local facts are computed once, not for every field occurrence.
+The source field ID only selects a checked descriptor; it supplies no hashes or
+semantic hints. -/
+private structure FieldInfo where
+  name : String
+  kind : RuntimeFieldClass
+  digest : UInt64
+  interests : UInt8
+  marker : UInt8
+
+private def fieldInfo (name : String) : FieldInfo :=
+  let kind := runtimeFieldClass name
+  ⟨name, kind, hash name, fieldInterest name, runtimeMarker kind⟩
+
 /-- Identity keys are confined to a single document traversal. Sharing is
 supplied by the exporter, never inferred from hashes. -/
 inductive IdentityKey where
@@ -247,7 +261,7 @@ private def arrayNode (index : Nat) (children : Array Node) : Node := Id.run do
     runtimeChecks := runtimeChecks || child.mayHaveRuntimeChecks
   return .cached ⟨.arr values, mixHash 23 digest, some index, interests, runtimeChecks⟩ children
 
-private def objectNode (index : Nat) (entries : Array (String × Node × RuntimeFieldClass)) : Node := Id.run do
+private def objectNode (index : Nat) (entries : Array (FieldInfo × Node)) : Node := Id.run do
   let mut digest : UInt64 := 7
   let mut interests : UInt8 := 0
   let mut runtimeChecks := false
@@ -255,17 +269,19 @@ private def objectNode (index : Nat) (entries : Array (String × Node × Runtime
   let mut children := #[]
   let mut markers : UInt8 := 0
   let mut diagnostic := false
-  for (name, child, kind) in entries do
-    runtimeChecks := runtimeChecks || runtimeFieldRisk kind child.value
-    markers := markers ||| runtimeMarker kind
-    if name == "status" && child.value == .str "debug_payload" then diagnostic := true
+  for (info, child) in entries do
+    let name := info.name
+    runtimeChecks := runtimeChecks || runtimeFieldRisk info.kind child.value
+    markers := markers ||| info.marker
+    if let .status := info.kind then
+      if child.value == .str "debug_payload" then diagnostic := true
     values := values.push (name, child.value)
     children := children.push child
-    digest := mixHash digest (mixHash (hash name) child.key.digest)
-    interests := interests ||| fieldInterest name ||| child.key.interests
+    digest := mixHash digest (mixHash info.digest child.key.digest)
+    interests := interests ||| info.interests ||| child.key.interests
     runtimeChecks := runtimeChecks || child.mayHaveRuntimeChecks
   runtimeChecks := !diagnostic && (runtimeChecks || markers &&& 63 == 63 || markers &&& 192 == 192)
-  return .cached ⟨Json.mkObj values.toList, mixHash 29 digest, some index, interests, runtimeChecks⟩ children
+  return .cached ⟨.obj (Std.TreeMap.Raw.ofArray values), mixHash 29 digest, some index, interests, runtimeChecks⟩ children
 
 private def finishPreparedGraph (available : Array Node) (values : Array Json) (root : Nat) :
     Except String (SharedPayloads.ResolvedGraph × Node) := do
@@ -285,13 +301,13 @@ private def preparedGraph (input : Json) : Except String (SharedPayloads.Resolve
   unless (← input.getObjValAs? Nat "schema_version") == 1 do
     throw "prepared image: unsupported schema version"
   let fields ← (← input.getObjVal? "fields").getArr?
-  let mut dictionary : Array (String × RuntimeFieldClass) := #[]
+  let mut dictionary : Array FieldInfo := #[]
   let mut seen : Std.HashSet String := {}
   for field in fields do
     let name ← field.getStr?
     if seen.contains name then throw "prepared image: duplicate field name"
     seen := seen.insert name
-    dictionary := dictionary.push (name, runtimeFieldClass name)
+    dictionary := dictionary.push (fieldInfo name)
   let rows ← (← input.getObjVal? "nodes").getArr?
   let mut available : Array Node := #[]
   let mut values : Array Json := #[]
@@ -333,14 +349,15 @@ private def preparedGraph (input : Json) : Except String (SharedPayloads.Resolve
           unless pair.size == 2 do throw "prepared image: field row arity"
           let some fieldId := pair[0]? | throw "prepared image: missing field ID"
           let id ← fieldId.getNat?
-          let some (name, kind) := dictionary[id]? | throw "prepared image: field ID out of range"
+          let some info := dictionary[id]? | throw "prepared image: field ID out of range"
+          let name := info.name
           if let some old := previous then
             unless old < name do throw "prepared image: object fields are not strictly ordered"
           if name == "$lean_miri_shared_ref" then throw "prepared image: reserved reference field"
           let some childId := pair[1]? | throw "prepared image: missing field edge"
           let node ← child childId
           previous := some name
-          entries := entries.push (name, node, kind)
+          entries := entries.push (info, node)
         pure (objectNode index entries)
       | _ => throw "prepared image: unknown node kind"
     available := available.push node
@@ -349,13 +366,13 @@ private def preparedGraph (input : Json) : Except String (SharedPayloads.Resolve
 
 private def binaryGraphM : BinaryImage.Reader (SharedPayloads.ResolvedGraph × Node) := do
   let count ← BinaryImage.readCount
-  let mut dictionary : Array (String × RuntimeFieldClass) := #[]
+  let mut dictionary : Array FieldInfo := #[]
   let mut seen : Std.HashSet String := {}
   for _ in [:count] do
     let name ← BinaryImage.readText
     if seen.contains name then throw "prepared image: duplicate field name"
     seen := seen.insert name
-    dictionary := dictionary.push (name, runtimeFieldClass name)
+    dictionary := dictionary.push (fieldInfo name)
   let count ← BinaryImage.readCount
   let mut available : Array Node := #[]
   let mut values : Array Json := #[]
@@ -390,13 +407,14 @@ private def binaryGraphM : BinaryImage.Reader (SharedPayloads.ResolvedGraph × N
         let mut previous : Option String := none
         for _ in [:count] do
           let id ← BinaryImage.readNat
-          let some (name, kind) := dictionary[id]? | throw "prepared image: field ID out of range"
+          let some info := dictionary[id]? | throw "prepared image: field ID out of range"
+          let name := info.name
           if let some old := previous then
             unless old < name do throw "prepared image: object fields are not strictly ordered"
           if name == "$lean_miri_shared_ref" then throw "prepared image: reserved reference field"
           let node ← child
           previous := some name
-          entries := entries.push (name, node, kind)
+          entries := entries.push (info, node)
         pure (objectNode index entries)
       | _ => throw "prepared image: unknown node kind"
     available := available.push node

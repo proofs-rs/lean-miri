@@ -15,7 +15,11 @@ fi
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
 export ELAN_HOME="$root/.elan"
-export LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-1}"
+if [[ -z "${LEAN_NUM_THREADS:-}" ]]; then
+  input_workers=$(nproc)
+  if (( input_workers > 3 )); then input_workers=3; fi
+  export LEAN_NUM_THREADS="$input_workers"
+fi
 mkdir -p scratch/runner-builds
 build_log=$(mktemp "$root/scratch/runner-builds/build-XXXXXXXX.log")
 if ! flock --no-fork /tmp/lean-miri-lake-build.lock \

@@ -1565,16 +1565,96 @@ private def parseBodyArray (values : Array Json) (memo : DecodeMemo) : Except St
     index := index + 1
   pure result
 
+/-- Keep work creation outside the later diagnostic-order join. Without this
+boundary the pure compiler can sink each spawn to its first `get`, serializing
+the computation while still paying to share its captured data. -/
+@[noinline] private def deferDecodeWork {α : Type} (parallel : Bool) (work : Unit → α) : Thunk α :=
+  if parallel then
+    let task := Task.spawn work
+    Thunk.mk fun _ => task.get
+  else Thunk.mk work
+
+private theorem deferDecodeWork_get {α : Type} (parallel : Bool) (work : Unit → α) :
+    (deferDecodeWork parallel work).get = work () := by
+  cases parallel <;> rfl
+
+@[noinline] private def joinDecodeWork
+    (bodies references : Thunk (Except String Unit))
+    (values : Thunk (Option CompilerValueMemo))
+    (runtime : Thunk (Except String RuntimeValueDecode)) :
+    Except String (Option CompilerValueMemo × Thunk (Except String RuntimeValueDecode)) := do
+  bodies.get
+  references.get
+  return (values.get, runtime)
+
+private structure NativeDecodeContext (nodes : Array Json) (raw : Json) where
+  sourceEquality : Thunk (RuntimeMetadata.JsonReflexivity raw)
+  baseMemo : DecodeMemo
+  abiTable : CompilerFunctionAbiTable nodes
+  extendedMemo : DecodeMemo
+  bodies : Thunk (Except String Unit)
+  references : Thunk (Except String Unit)
+  values : Thunk (Option CompilerValueMemo)
+  runtime : Thunk (Except String RuntimeValueDecode)
+
+/-- Prepare immutable compiler projections once, before publishing any work.
+Only this one-input process path changes source-object lifetime. All JSON,
+traversal nodes and memo contents are synchronous, fresh/read-only compiler data;
+no task has received them when they are marked persistent. Guest state is absent.
+The same parsers build both memos and preserve deferred query failures. -/
+@[noinline] private def prepareNativeDecodeContext (resolved : SharedPayloads.ResolvedGraph)
+    (checked : JsonTraversalCache.CheckedRoot) (indexed : Bool) (profile : Options) :
+    IO (NativeDecodeContext resolved.nodes checked.node.value) := do
+  let base := profileit "decoder.shared_decode_memo" profile fun _ => sharedDecodeMemo resolved.nodes
+  let base := if indexed then
+      profileit "decoder.indexed_mir" profile fun _ => prepareIndexedMirMemo checked base
+    else base
+  let table := profileit "decoder.compiler_abi_queries" profile fun _ =>
+    prepareCompilerFunctionAbiTableUsing resolved.nodes base
+  let extended := table.extendDecodeMemo base
+  let _ ← unsafe do
+    let _ ← Runtime.markPersistent (resolved,checked,base,table,extended)
+    pure ()
+  let traversal := checked.node
+  let j := traversal.value
+  -- Start the longest independent check first. Cache misses use the same
+  -- complete decoder; waiting for compiler-value memoization lengthens the
+  -- critical path even though it saves some aggregate CPU work.
+  let runtime := deferDecodeWork true fun _ =>
+    profileit "decoder.runtime_value" profile fun _ =>
+      decodeRuntimeValueWithCompilerMemo traversal "$" .any .none extended none
+  let bodies := deferDecodeWork true fun _ =>
+    profileit "decoder.validate_all_bodies" profile fun _ =>
+      validateAllBodies traversal "$" resolved.nodes.size
+  let references := deferDecodeWork true fun _ => do
+    let types ← arrayField j "types" "$"
+    let allocations ← arrayField j "allocations" "$"
+    let instances ← arrayField j "instances" "$"
+    profileit "decoder.validate_references" profile fun _ =>
+      validateReferences traversal "$" types.size allocations.size instances.size resolved.nodes.size
+  let valueTask := Task.spawn fun _ =>
+    some (profileit "decoder.compiler_values" profile fun _ =>
+      prepareCompilerValueMemoUsing resolved.nodes extended)
+  let values := Thunk.mk fun _ => valueTask.get
+  let sourceEquality := deferDecodeWork true fun _ =>
+    profileit "decoder.source_equality" profile fun _ =>
+      RuntimeMetadata.JsonReflexivity.prepare (left := j)
+  return ⟨sourceEquality,base,table,extended,bodies,references,values,runtime⟩
+
 private def parseResolvedDocument (resolved : SharedPayloads.ResolvedGraph)
     (checkedTraversal : JsonTraversalCache.CheckedRoot) (indexed : Bool)
     (runtimeOnly : Bool := false) (profile : Options := {})
-    (cachedTraversal : Bool := true) : Except String ParsedDocument := do
+    (cachedTraversal : Bool := true)
+    (native : Option (NativeDecodeContext resolved.nodes checkedTraversal.node.value) := none) : Except String ParsedDocument := do
   let traversal := checkedTraversal.node
   let j := checkedTraversal.node.value
-  let memo := profileit "decoder.shared_decode_memo" profile fun _ => sharedDecodeMemo resolved.nodes
-  let memo := if indexed then
-      profileit "decoder.indexed_mir" profile fun _ => prepareIndexedMirMemo checkedTraversal memo
-    else memo
+  let memo := match native with
+    | some prepared => prepared.baseMemo
+    | none =>
+      let memo := profileit "decoder.shared_decode_memo" profile fun _ => sharedDecodeMemo resolved.nodes
+      if indexed then
+        profileit "decoder.indexed_mir" profile fun _ => prepareIndexedMirMemo checkedTraversal memo
+      else memo
   if (← fieldString j "schema" "$") != expectedSchema then
     throw s!"$.schema: expected `{expectedSchema}`"
   if (← fieldNat j "schema_version" "$") != expectedSchemaVersion then
@@ -1607,9 +1687,13 @@ private def parseResolvedDocument (resolved : SharedPayloads.ResolvedGraph)
   let selectedScope ← match optionalJson j "selected_scope" with
     | none => pure none
     | some value => pure (some (← parseSelectedScope value "$.selected_scope"))
-  let compilerFunctionAbiTable := profileit "decoder.compiler_abi_queries" profile fun _ =>
-    prepareCompilerFunctionAbiTableUsing resolved.nodes memo
-  let memo := compilerFunctionAbiTable.extendDecodeMemo memo
+  let compilerFunctionAbiTable := match native with
+    | some prepared => prepared.abiTable
+    | none => profileit "decoder.compiler_abi_queries" profile fun _ =>
+      prepareCompilerFunctionAbiTableUsing resolved.nodes memo
+  let memo := match native with
+    | some prepared => prepared.extendedMemo
+    | none => compilerFunctionAbiTable.extendDecodeMemo memo
   let functionAbis ← profileit "decoder.function_abis" profile fun _ => collectFunctionAbis traversal "$" memo resolved.nodes.size
   let compilerAbiLayoutSchema ← optionalString j "compiler_abi_layout_schema" "$"
   if let some schema := compilerAbiLayoutSchema then
@@ -1628,18 +1712,25 @@ private def parseResolvedDocument (resolved : SharedPayloads.ResolvedGraph)
   profileit "decoder.validate_dense_type_ids" profile fun _ => validateDense typeIds "type IDs"
   profileit "decoder.validate_dense_allocation_ids" profile fun _ => validateDense allocationIds "allocation IDs"
   profileit "decoder.validate_dense_instance_ids" profile fun _ => validateDense instanceIds "instance IDs"
-  profileit "decoder.validate_all_bodies" profile fun _ => validateAllBodies traversal "$" resolved.nodes.size
-  profileit "decoder.validate_references" profile fun _ =>
-    validateReferences traversal "$" types.size allocations.size instances.size resolved.nodes.size
-  let compilerValues := if runtimeOnly then some (profileit "decoder.compiler_values" profile fun _ =>
-    prepareCompilerValueMemoUsing resolved.nodes memo) else none
+  let (compilerValues,runtimeWork) ← match native with
+    | some prepared =>
+      let (values,runtime) ← joinDecodeWork prepared.bodies prepared.references prepared.values prepared.runtime
+      pure (values, some runtime)
+    | none => do
+      profileit "decoder.validate_all_bodies" profile fun _ => validateAllBodies traversal "$" resolved.nodes.size
+      profileit "decoder.validate_references" profile fun _ =>
+        validateReferences traversal "$" types.size allocations.size instances.size resolved.nodes.size
+      let values := if runtimeOnly then some (profileit "decoder.compiler_values" profile fun _ =>
+        prepareCompilerValueMemoUsing resolved.nodes memo) else none
+      pure (values, none)
   let instanceSources := compilerValues.map fun values =>
     profileit "decoder.compiler_instance_sources" profile fun _ =>
       prepareCompilerInstanceSourceMemo resolved.nodes values
   let (typedTree?, valueIssues) ← if runtimeOnly then
-      let decoded ← profileit "decoder.runtime_value" profile fun _ =>
-        decodeRuntimeValueWithCompilerMemo traversal "$" .any .none memo
-          (if cachedTraversal then compilerValues else none)
+      let decoded ← match runtimeWork with
+        | some work => work.get
+        | none => profileit "decoder.runtime_value" profile fun _ =>
+          decodeRuntimeValueWithCompilerMemo traversal "$" .any .none memo (if cachedTraversal then compilerValues else none)
       pure (none, flattenRuntimeObligations decoded.obligations)
     else
       let typedTree ← decodeValue j "$" .any .none memo
@@ -1696,6 +1787,7 @@ private def parseResolvedDocument (resolved : SharedPayloads.ResolvedGraph)
     sharedNodes := resolved.nodes
     compilerFunctionAbiTable := some compilerFunctionAbiTable
     allocationParseBinding := if runtimeOnly then allocationBinding else none
+    rawReflexivity := native.map fun prepared => prepared.sourceEquality.get
     allocationWorldValidation := if runtimeOnly && allocationBinding.isNone then
       some (profileit "decoder.allocation_world_validation" profile fun _ =>
         AllocationWorldValidation.prepare j allocations compilerAllocIdWorld) else none
@@ -1770,6 +1862,39 @@ def decodeRuntimeBytesProfiled (bytes : ByteArray) (profile : Options) :
       parseResolvedDocument resolved checked true true profile with
   | .runtime result => pure result
   | .full _ => throw "internal decoder mode mismatch"
+
+/-- One-input native-process entry. The ordinary pure/library decoders retain
+normal reclamation. This path keeps its immutable source graph until process
+exit, just like compiled constant data; no program cache is shared or retained
+for a later input. All transport and semantic checks are unchanged.
+
+Safety: graph construction is synchronous, and no worker has received these
+fresh JSON objects. Existing closed constants are already persistent. Only
+compiler input is pinned here, never the interpreter's mutable guest state. -/
+def decodeRuntimeBytesForProcess (bytes : ByteArray) (profile : Options) :
+    IO (Except String RuntimeDecodeResult) := do
+  if !profile.getBool `miri.parallelInput false then
+    return decodeRuntimeBytesProfiled bytes profile
+  let graph : Except String (SharedPayloads.ResolvedGraph × JsonTraversalCache.CheckedRoot × Bool) := do
+    if BinaryImage.hasMagic bytes then
+      let (resolved, checked) ← profileit "decoder.binary_graph" profile fun _ =>
+        JsonTraversalCache.resolveBinaryChecked bytes
+      return (resolved,checked,true)
+    let some text := String.fromUTF8? bytes | throw "input: invalid UTF-8 JSON"
+    let json ← profileit "decoder.json_parse" profile fun _ => Json.parse text
+    let (resolved,checked) ← profileit "decoder.shared_payload_resolution" profile fun _ =>
+      JsonTraversalCache.resolveChecked json true profile
+    return (resolved,checked,
+      (json.getObjValAs? String "schema").toOption == some "lean-miri-prepared-image")
+  match graph with
+  | .error error => return .error error
+  | .ok (resolved,checked,indexed) =>
+    let native ← prepareNativeDecodeContext resolved checked indexed profile
+    return do
+      match ← profileit "decoder.document" profile fun _ =>
+          parseResolvedDocument resolved checked indexed true profile true (some native) with
+      | .runtime result => pure result
+      | .full _ => throw "internal decoder mode mismatch"
 
 /-- Regression oracle: identical validation with the structural-hash memo off.
 This is not a relaxed decoder and retains the full original error ordering. -/

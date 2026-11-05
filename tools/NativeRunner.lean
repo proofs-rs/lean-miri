@@ -521,6 +521,8 @@ def main (args : List String) : IO Unit := do
   let profile := if profileEnabled then
     (({} : Lean.Options).setBool `profiler true).set `profiler.threshold (0 : Nat)
     else ({} : Lean.Options)
+  let inputThreads := ((← IO.getEnv "LEAN_NUM_THREADS").bind String.toNat?).getD 1
+  let profile := profile.setBool `miri.parallelInput (inputThreads > 1)
   let some path := args.head? | throw (IO.userError "usage: NativeRunner <untouched-export.json|/dev/stdin> [--seed <u64> | --ui-source SOURCE.rs] [--max-iterations N] [--profile] (gzip streamed externally)")
   let (diagnosticSeed, uiSource, uiFlags) ← match args.drop 1 with
     | [] => pure (none, none, #[])
@@ -540,13 +542,13 @@ def main (args : List String) : IO Unit := do
   boundary "raw_host_poll: finite source initialization replay; no live poll capability"
   boundary "decode: start"
   let input ← readInput path
-  let decoded ← must (Input.decodeRuntimeBytesProfiled input profile)
+  let decoded ← must (← Input.decodeRuntimeBytesForProcess input profile)
   unless decoded.executionInput.isSome && decoded.blockingObligations.isEmpty do
     let sample := decoded.blockingObligations.toList.take 40
     throw (IO.userError s!"strict readiness gate failed: {decoded.blockingObligations.size} blocking obligations; sample={reprStr sample}")
   boundary s!"decode: ready obligations={decoded.blockingObligations.size}"
   boundary "lower: start"
-  let program ← must (Input.lowerCoreProgram decoded.document)
+  let program ← must (← Input.lowerCoreProgramForProcess profile inputThreads decoded.document)
   boundary "lower: complete"
   boundary "prepare: start"
   let attempt := Input.EvalPreparation.prepareProfiled profile program

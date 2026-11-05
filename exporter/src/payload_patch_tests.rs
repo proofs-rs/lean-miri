@@ -1,6 +1,33 @@
 //! The same fixtures run against both persistent and legacy tree patch passes.
 use super::*;
 
+#[cfg(not(feature = "legacy-json"))]
+#[test]
+fn fused_vtable_pass_matches_ordered_reference_with_aliases_and_malformed_rows() {
+    let ids = HashMap::from([((7, vec![2, 3]), 19)]);
+    let hit = json!({"status":"supported","vtable_query":{
+        "status":"supported","_query_key":{"input_type_id":7,"input_predicate_ids":[2,3]}},
+        "virtual_resolution":{"instance_id":5}});
+    let malformed = json!({"original_instance_id":5,"vtable_query":{
+        "query_id":2,"_query_key":{"input_type_id":"bad"},
+        "virtual_resolution":{"instance_id":5}}});
+    let mut cases = vec![Value::Null, json!(false), json!([]), hit.clone(), malformed.clone()];
+    for rows in [Value::Null, json!(false), json!([hit, hit, malformed]),
+        json!([{"original_instance_id":5,"vtable_query":{"query_id":9}},
+            {"original_instance_id":5,"vtable_query":{"query_id":9}}])] {
+        let call = json!({"virtual_resolution":{"instance_id":5}});
+        cases.push(json!({"compiler_runtime_queries":{"virtual":rows},
+            "calls":[call,call,{"virtual_resolution":false},{"vtable_query":false}]}));
+    }
+    for mut actual in cases {
+        let mut expected = actual.clone();
+        patch_vtable_query_ids(&mut expected, &ids);
+        patch_virtual_resolution_candidates(&mut expected);
+        patch_compiler_vtable_metadata(&mut actual, &ids);
+        assert_eq!(actual.to_string(), expected.to_string());
+    }
+}
+
 #[test]
 fn finished_snapshot_crosses_threads_without_construction_nodes() {
     fn require_send<T: Send>() {}

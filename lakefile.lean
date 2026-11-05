@@ -94,6 +94,14 @@ lean_exe allocation_parse_binding_tests where
   srcDir := "tests/input"
   root := `AllocationParseBindingChecks
 
+lean_exe source_walk_tests where
+  srcDir := "tests/input"
+  root := `SourceWalkChecks
+
+lean_exe lowering_validation_tests where
+  srcDir := "tests/input"
+  root := `LoweringValidationChecks
+
 -- Native-only host driver and unlimited diagnostic choice regressions.
 lean_exe native_runner_regression where
   srcDir := "tools"

@@ -49,12 +49,27 @@ def bind (prepared : Prepared) (runtime : RuntimeMetadata)
 private def field (j : Json) (key : String) : Except String Json := j.getObjVal? key
 private def natural (j : Json) (key : String) : Except String Nat := do (← field j key).getNat?
 private def array (j : Json) (key : String) : Except String (Array Json) := do (← field j key).getArr?
-private partial def constants (j : Json) (path : Array PathElement := #[]) : Array (Array PathElement × Json) :=
-  if ((j.getObjVal? "constant").bind (fun c => c.getObjValAs? String "kind")).toOption == some "evaluated_const" then #[(path,j)]
+private partial def constantsInto (j : Json) (path : Array PathElement)
+    (found : Array (Array PathElement × Json)) : Array (Array PathElement × Json) :=
+  let kind := (DecoderValues.optionalField j "constant").bind fun c =>
+    DecoderValues.optionalStringValue c "kind"
+  if kind == some "evaluated_const" then found.push (path,j)
   else match j with
-  | .arr values => (values.mapIdx fun i value => constants value (path.push (.index i))).flatten
-  | .obj fields => (fields.toList.toArray.map fun (name,value) => constants value (path.push (.field name))).flatten
-  | _ => #[]
+  | .arr values => Id.run do
+      let mut found := found
+      let mut index := 0
+      for value in values do
+        found := constantsInto value (path.push (.index index)) found
+        index := index + 1
+      return found
+  | .obj fields => fields.foldl (fun found name value =>
+      constantsInto value (path.push (.field name)) found) found
+  | _ => found
+
+/-- Exact preorder discovery, stopping below an evaluated operand. One owned
+output buffer avoids allocating and flattening arrays at every inert node. -/
+def constantOperands (j : Json) (path : Array PathElement := #[]) : Array (Array PathElement × Json) :=
+  constantsInto j path #[]
 
 private def lookupPath (j : Json) (path : Array PathElement) : Except String Json :=
   path.foldlM (fun value key => match key with
@@ -72,9 +87,9 @@ private def sourceConstants (bodyIndex : Nat) (body : Json) : Except String (Arr
     let statements ← array block "statements"
     for i in [:statements.size] do
       let some statement := statements[i]? | throw "statement array changed"
-      for (path, value) in constants statement do
+      for (path, value) in constantOperands statement do
         found := found.push (⟨bodyIndex, ⟨blockId,i⟩, path⟩,value)
-    for (path,value) in constants (← field block "terminator") do
+    for (path,value) in constantOperands (← field block "terminator") do
       found := found.push (⟨bodyIndex, ⟨blockId,statements.size⟩,path⟩,value)
   pure found
 

@@ -24,7 +24,7 @@ def main (args : List String) : IO Unit := do
     "canonical base/indexed layout lookup diverged"
 
   -- An ordinary update outside the indexed arrays preserves the caches safely.
-  let rawUpdated : RuntimeMetadata := { metadata with source := { metadata.source with raw := .null, allocationWorldValidation := none, allocationParseBinding := none } }
+  let rawUpdated : RuntimeMetadata := { metadata with source := { metadata.source with raw := .null, allocationWorldValidation := none, allocationParseBinding := none, rawReflexivity := none } }
   check ((rawUpdated.node first.id).toOption.map (·.display) == some first.display)
     "source-only update invalidated a matching type cache"
 

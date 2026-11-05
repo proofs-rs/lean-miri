@@ -25,20 +25,20 @@ def main (args : List String) : IO Unit := do
   let changedWorld := { world with nextSourceAllocId := world.nextSourceAllocId + 1 }
   let foreignWorld := { document with
     compilerAllocIdWorld := some changedWorld,
-    allocationWorldValidation := none, allocationParseBinding := none }
+    allocationWorldValidation := none, allocationParseBinding := none, rawReflexivity := none }
   check (!foreignWorld.validateAllocationWorldForRun.isOk) "foreign typed world accepted"
   let some node := document.allocations[0]? | throw (IO.userError "fixture needs allocation rows")
   let changedNodes := document.allocations.set! 0 { node with id := node.id + 1000000 }
   let foreignNodes := { document with
     allocations := changedNodes,
-    allocationWorldValidation := none, allocationParseBinding := none }
+    allocationWorldValidation := none, allocationParseBinding := none, rawReflexivity := none }
   check (!foreignNodes.validateAllocationWorldForRun.isOk) "foreign typed allocation accepted"
   let foreignRaw := { document with
     raw := set document.raw "compiler_alloc_id_world" .null,
-    allocationWorldValidation := none, allocationParseBinding := none }
+    allocationWorldValidation := none, allocationParseBinding := none, rawReflexivity := none }
   check (!foreignRaw.validateAllocationWorldForRun.isOk) "foreign raw world accepted"
   let changedRows := { document with
     raw := set document.raw "allocations" (.arr #[]),
-    allocationWorldValidation := none, allocationParseBinding := none }
+    allocationWorldValidation := none, allocationParseBinding := none, rawReflexivity := none }
   check (!changedRows.validateAllocationWorldForRun.isOk) "foreign raw allocations accepted"
   IO.println "allocation parse origin: original validator and foreign raw/model rejection PASS"

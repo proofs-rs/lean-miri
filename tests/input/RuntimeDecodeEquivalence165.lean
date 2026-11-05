@@ -147,9 +147,12 @@ private def sameCore (left right : ImportDocumentCore) : Bool := Id.run do
     if !sameBody a b then return false
   return true
 
-private def checkOne (path : String) : IO Unit := do
+private def checkOne (path : String) (processLifetime : Bool := false) : IO Unit := do
   let text ← IO.FS.readFile path
-  match decodeJson text, decodeRuntimeJson text with
+  let runtimeResult ← if processLifetime then
+      decodeRuntimeBytesForProcess text.toUTF8 (({} : Options).setBool `miri.parallelInput true)
+    else pure (decodeRuntimeJson text)
+  match decodeJson text, runtimeResult with
   | .error fullError, .error runtimeError =>
     check (fullError == runtimeError) s!"{path}: hard errors differ; full={fullError}; runtime={runtimeError}"
     IO.println s!"PASS {path}: same hard error: {fullError}"
@@ -173,5 +176,20 @@ private def checkOne (path : String) : IO Unit := do
     throw (IO.userError s!"{path}: runtime decoder rejected but full decoder accepted: {runtimeError}")
 
 def main (args : List String) : IO Unit := do
+  if let ["--process-bytes", path] := args then
+    let bytes ← IO.FS.readBinFile path
+    let expected := decodeRuntimeBytesProfiled bytes {}
+    let actual ← decodeRuntimeBytesForProcess bytes (({} : Options).setBool `miri.parallelInput true)
+    match expected, actual with
+    | .error a, .error b => check (a == b) "process decoder changed the first error"
+    | .ok a, .ok b =>
+      check (sameCore a.document b.document) "process decoder changed the complete Core projection"
+      check (a.blockingObligations == b.blockingObligations) "process decoder changed ordered obligations"
+      check (a.executionInput.isSome == b.executionInput.isSome) "process decoder changed readiness"
+    | _, _ => throw (IO.userError "process decoder changed the result class")
+    IO.println s!"PASS {path}: serial/process byte decoders, complete Core, ordered obligations and readiness"
+    return
+  if let ["--process", path] := args then
+    return ← checkOne path true
   check (!args.isEmpty) "usage: RuntimeDecodeEquivalence165 <input.json>..."
   for path in args do checkOne path

@@ -1585,16 +1585,21 @@ def collectSharedDecodeMemo (j : Json) (path : String) (memo : DecodeMemo)
 
 def sharedDecodeMemo (nodes : Array Json) : DecodeMemo := Id.run do
   let mut memo : DecodeMemo := {}
-  for (node, index) in nodes.toList.zipIdx do
-    memo := collectSharedDecodeMemo node s!"$.shared_payloads.nodes[{index}]" memo
+  let mut index := 0
+  for node in nodes do
+    if isSourceSpanJson node || isLayoutPayload node then
+      memo := collectSharedDecodeMemo node s!"$.shared_payloads.nodes[{index}]" memo
+    index := index + 1
   return memo
 
 def compilerFunctionAbiDecodeMemo (nodes : Array Json) : DecodeMemo := Id.run do
   let mut memo : DecodeMemo := {}
-  for (node, index) in nodes.toList.zipIdx do
+  let mut index := 0
+  for node in nodes do
     if !isSourceSpanJson node && isLayoutPayload node && hasCanonicalJsonObjectKeys node then
       if let .ok layout := parseLayoutUncached node s!"$.shared_payloads.nodes[{index}]" then
         memo := { memo with layouts := memo.layouts.insert node layout }
+    index := index + 1
   return memo
 
 /-- Opaque success-only layout memo for repeated decoding of compiler FnAbi
@@ -2989,7 +2994,13 @@ def decodeCompilerFunctionAbiWithMemo (j : Json) (memo : CompilerFunctionAbiMemo
 
 def isFunctionAbiCandidate (raw : Json) : Bool :=
   ["arguments", "return", "calling_convention", "can_unwind", "c_variadic", "fixed_count"]
-    |>.all fun key => (raw.getObjVal? key).isOk
+    |>.all fun key => hasField raw key
+
+theorem isFunctionAbiCandidate_eq (raw : Json) :
+    isFunctionAbiCandidate raw =
+      (["arguments", "return", "calling_convention", "can_unwind", "c_variadic", "fixed_count"]
+        |>.all fun key => (raw.getObjVal? key).isOk) := by
+  simp only [isFunctionAbiCandidate, hasField_eq_getObjVal]
 
 private def buildCompilerFunctionAbiEntries (nodes : Array Json) (memo : CompilerFunctionAbiMemo) :
     Array (Json × Except String FunctionAbi) := Id.run do

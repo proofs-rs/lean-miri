@@ -114,6 +114,21 @@ bounds are unrelated to guest execution limits. `tools/check-upstream-ui.py
 --binary-image` compares this transport with same-TyCtxt Miri using the existing
 source, artifact, fingerprint and resource guards.
 
+`tools/run.sh` uses up to three input workers from the process's available CPUs
+unless `LEAN_NUM_THREADS` is explicitly set. `LEAN_NUM_THREADS=1` keeps the
+ordinary sequential library path. Extra workers validate immutable compiler
+input and body/source bindings; they do not parallelize guest execution. For
+same-TyCtxt comparisons, select this path with `--input-threads 3`; the UI guest
+CPU count remains one.
+
+The native one-input process retains its fresh, read-only compiler graph until
+exit, using Lean's `Runtime.markPersistent` before sharing it with workers.
+It never pins mutable guest state or shares a program cache with another process.
+Library decoding continues to reclaim input normally. Validation results are
+joined in the previous diagnostic order, and body lowering/ID interning remain
+serial. Source-equality and body-validation evidence is indexed by the exact
+values it checked; foreign or modified models use the original checks.
+
 `bash tools/check-decoder.sh [GENUINE_PREPARED_WORLD_EXPORT]` builds native finite
 decoder comparisons, malformed binary controls and runtime-summary/context
 comparisons. The optional genuine prepared-world input also compares the new

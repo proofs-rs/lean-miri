@@ -25,7 +25,9 @@ def prepareProfiled (profile : Lean.Options) (program : LoweredProgram) : Result
   let metadata ← profileit "preparation.call.runtime_metadata" profile fun _ =>
     (RuntimeMetadata.ofDocument runtime.program.input).mapError toString
   let sourceEquality := profileit "preparation.call.source_equality" profile fun _ =>
-    RuntimeMetadata.JsonReflexivity.prepare (left := metadata.source.raw)
+    match metadata.source.rawReflexivity with
+    | some checked => checked
+    | none => RuntimeMetadata.JsonReflexivity.prepare (left := metadata.source.raw)
   let context ← profileit "preparation.call.compiler_facts" profile fun _ =>
     CompilerFacts.ofProgram metadata runtime.program (some sourceEquality)
   let facts ← profileit "preparation.call.fact_adapters" profile fun _ =>

@@ -2055,10 +2055,18 @@ impl Callbacks for ExportCallbacks {
         }
         export_profile.mark("context_release_and_tables");
         let mut patch_profile = ExportProfile::new();
-        patch_vtable_query_ids(&mut document, &vtable_query_ids);
-        patch_profile.mark("patch.vtable_ids");
-        patch_virtual_resolution_candidates(&mut document);
-        patch_profile.mark("patch.virtual_candidates");
+        #[cfg(not(feature = "legacy-json"))]
+        {
+            patch_compiler_vtable_metadata(&mut document, &vtable_query_ids);
+            patch_profile.mark("patch.vtable_and_virtual");
+        }
+        #[cfg(feature = "legacy-json")]
+        {
+            patch_vtable_query_ids(&mut document, &vtable_query_ids);
+            patch_profile.mark("patch.vtable_ids");
+            patch_virtual_resolution_candidates(&mut document);
+            patch_profile.mark("patch.virtual_candidates");
+        }
         export_profile.mark("vtable_patches");
         if is_scoped {
             let roots = selected_root_records
@@ -7675,28 +7683,31 @@ fn compiler_vtable_queries_json<'tcx>(
 }
 
 #[cfg(not(feature = "legacy-json"))]
-fn patch_vtable_query_ids(document: &mut Value, query_ids: &HashMap<(u64, Vec<u64>), u64>) {
-    *document = shared_value::transform(document, &|value| {
-        let query = value.get("vtable_query").filter(|query| !query.is_null())?;
-        let key = query.get("_query_key").and_then(|key| {
-            Some((key.get("input_type_id")?.as_u64()?, key.get("input_predicate_ids")?
-                .as_array()?.iter().map(Value::as_u64).collect::<Option<Vec<_>>>()?))
-        });
-        let id = key.and_then(|key| query_ids.get(&key).copied());
-        let mut result = value.clone();
-        let fields = result.as_object_mut()?;
-        if let Some(object) = fields.get_mut("vtable_query").and_then(Value::as_object_mut) {
-            if let Some(id) = id {
-                object.insert("query_id".into(), json!(id));
-            } else {
-                object.insert("status".into(), json!("unknown"));
-                object.insert("reason".into(),json!("Cast vtable query pair was absent from the finalized exact compiler query catalog"));
-            }
-            object.remove("_query_key");
-        }
-        if id.is_none() { fields.insert("status".into(), json!("unknown")); }
-        Some(result)
+fn patch_vtable_value(value: &Value, query_ids: &HashMap<(u64, Vec<u64>), u64>) -> Option<Value> {
+    let query = value.get("vtable_query").filter(|query| !query.is_null())?;
+    let key = query.get("_query_key").and_then(|key| {
+        Some((key.get("input_type_id")?.as_u64()?, key.get("input_predicate_ids")?
+            .as_array()?.iter().map(Value::as_u64).collect::<Option<Vec<_>>>()?))
     });
+    let id = key.and_then(|key| query_ids.get(&key).copied());
+    let mut result = value.clone();
+    let fields = result.as_object_mut()?;
+    if let Some(object) = fields.get_mut("vtable_query").and_then(Value::as_object_mut) {
+        if let Some(id) = id {
+            object.insert("query_id".into(), json!(id));
+        } else {
+            object.insert("status".into(), json!("unknown"));
+            object.insert("reason".into(),json!("Cast vtable query pair was absent from the finalized exact compiler query catalog"));
+        }
+        object.remove("_query_key");
+    }
+    if id.is_none() { fields.insert("status".into(), json!("unknown")); }
+    Some(result)
+}
+
+#[cfg(all(not(feature = "legacy-json"), test))]
+fn patch_vtable_query_ids(document: &mut Value, query_ids: &HashMap<(u64, Vec<u64>), u64>) {
+    *document = shared_value::transform(document, &|value| patch_vtable_value(value, query_ids));
 }
 
 #[cfg(feature = "legacy-json")]
@@ -7755,11 +7766,9 @@ fn patch_vtable_query_ids(document: &mut Value, query_ids: &HashMap<(u64, Vec<u6
 // produced for that same virtual Instance. The catalog may contain many
 // unrelated concrete vtables; those rows are not dispatch evidence for this
 // call and must not be attached by type coincidence.
-fn patch_virtual_resolution_candidates(document: &mut Value) {
+fn virtual_candidate_ids(rows: Option<&Value>) -> HashMap<u64, Vec<u64>> {
     let mut candidates: HashMap<u64, Vec<u64>> = HashMap::new();
-    if let Some(rows) = document
-        .pointer("/compiler_runtime_queries/virtual")
-        .and_then(Value::as_array)
+    if let Some(rows) = rows.and_then(Value::as_array)
     {
         for row in rows {
             let Some(instance_id) = row.get("original_instance_id").and_then(Value::as_u64) else {
@@ -7778,6 +7787,12 @@ fn patch_virtual_resolution_candidates(document: &mut Value) {
         ids.sort_unstable();
         ids.dedup();
     }
+    candidates
+}
+
+#[cfg(any(feature = "legacy-json", test))]
+fn patch_virtual_resolution_candidates(document: &mut Value) {
+    let candidates = virtual_candidate_ids(document.pointer("/compiler_runtime_queries/virtual"));
     #[cfg(feature = "legacy-json")]
     fn patch(value: &mut Value, candidates: &HashMap<u64, Vec<u64>>) {
         match value {
@@ -7812,15 +7827,32 @@ fn patch_virtual_resolution_candidates(document: &mut Value) {
     patch(document, &candidates);
     #[cfg(not(feature = "legacy-json"))]
     {
-        *document = shared_value::transform(document, &|value| {
-            let id = value.get("virtual_resolution").filter(|v| !v.is_null())?
-                .get("instance_id").and_then(Value::as_u64)?;
-            let mut result = value.clone();
-            let object = result.get_mut("virtual_resolution").and_then(Value::as_object_mut)?;
-            object.insert("candidate_query_ids".into(),json!(candidates.get(&id).cloned().unwrap_or_default()));
-            Some(result)
-        });
+        *document = shared_value::transform(document, &|value| patch_virtual_value(value, &candidates));
     }
+}
+
+#[cfg(not(feature = "legacy-json"))]
+fn patch_virtual_value(value: &Value, candidates: &HashMap<u64, Vec<u64>>) -> Option<Value> {
+    let id = value.get("virtual_resolution").filter(|v| !v.is_null())?
+        .get("instance_id").and_then(Value::as_u64)?;
+    let mut result = value.clone();
+    let object = result.get_mut("virtual_resolution").and_then(Value::as_object_mut)?;
+    object.insert("candidate_query_ids".into(),json!(candidates.get(&id).cloned().unwrap_or_default()));
+    Some(result)
+}
+
+/// The candidate catalog depends on patched virtual rows, not on a second
+/// complete document traversal. Patch that small subtree first, then fuse both
+/// context-independent edits in one pass. Neither edit introduces a new query.
+#[cfg(not(feature = "legacy-json"))]
+fn patch_compiler_vtable_metadata(document: &mut Value, query_ids: &HashMap<(u64, Vec<u64>), u64>) {
+    let virtual_rows = document.pointer("/compiler_runtime_queries/virtual")
+        .map(|rows| shared_value::transform(rows, &|value| patch_vtable_value(value, query_ids)));
+    let candidates = virtual_candidate_ids(virtual_rows.as_ref());
+    *document = shared_value::transform(document, &|value| {
+        let patched = patch_vtable_value(value, query_ids);
+        patch_virtual_value(patched.as_ref().unwrap_or(value), &candidates).or(patched)
+    });
 }
 
 fn intrinsic_fallback_is_spec(tcx: TyCtxt<'_>, def: rustc_hir::def_id::DefId) -> bool {

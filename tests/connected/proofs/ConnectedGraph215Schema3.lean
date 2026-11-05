@@ -658,7 +658,7 @@ private def runScLitmusPure [DecidableEq OuterState] (contents : String) (nodeBu
         let changedSharedNodesEq := decide (afterCallbacks = changedSharedNodesState)
         unless source.raw != Lean.Json.null do
           throw "fixture unexpectedly has a null source document"
-        let changedRawState := withSource {source with raw := Lean.Json.null, allocationWorldValidation := none, allocationParseBinding := none}
+        let changedRawState := withSource {source with raw := Lean.Json.null, allocationWorldValidation := none, allocationParseBinding := none, rawReflexivity := none}
           world.types.metadata.nodeCache
         let changedRawEq := decide (afterCallbacks = changedRawState)
         let timestampRead := Miri.Concurrency.VTimestamp.ofPacked 2 (by decide)

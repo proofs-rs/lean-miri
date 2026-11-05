@@ -1,4 +1,5 @@
 import Miri.Input.DecoderValues
+import Miri.Input.JsonSourceEquality
 
 namespace Miri.Input
 
@@ -29,6 +30,8 @@ structure ImportDocumentCore where
   allocationWorldValidation : Option (DecoderValues.AllocationWorldValidation raw allocations compilerAllocIdWorld) := none
   /-- Erased first-pass source binding; cannot survive a foreign source/model update. -/
   allocationParseBinding : Option (DecoderValues.AllocationParseBinding raw allocations compilerAllocIdWorld) := none
+  /-- The original exact source-equality check, optionally completed during input preparation. -/
+  rawReflexivity : Option (RuntimeMetadata.JsonReflexivity raw) := none
 
 def ImportDocumentCore.validateAllocationWorld (document : ImportDocumentCore) : Except String Unit :=
   match document.allocationWorldValidation with

@@ -2009,7 +2009,8 @@ Do not adopt the rejected embedded-Lean IR experiment or cross-program caches.
 
 ## Direct checked graph transport and runtime traversal reduction (2026-11-05)
 
-The sub-20-second Rust-source-to-final-result goal remains **unmet**. This
+At revision `789a56f8`, the sub-20-second Rust-source-to-final-result goal
+remained **unmet**; the follow-up below supersedes that outcome. This
 experiment improves the original, untouched upstream `unops.rs` entry from
 28.612 to **24.850 seconds** (13.15% shorter); it does not justify claiming a
 further halving. No cross-program cache, source rewrite, omitted standard
@@ -2088,15 +2089,100 @@ MIR runtime projections did not materially reduce runtime decoding and was
 removed before the locally computed branch summaries. Parallel pure decoder
 checks took 29.473 seconds versus 24.471 for the sequential version under the
 same four-CPU/four-thread resource allowance; their additional shared-data work
-outweighed overlap. Retain the sequential implementation. Their patches/binaries
+outweighed overlap. That prototype was rejected; the follow-up below changes
+work creation and immutable-input ownership before retrying parallelism. Its patches/binaries
 and logs remain in ignored scratch evidence.
 
-Next prioritize removing repeated full-document walks and binding typed source
-results once across decode/lower/preparation. Source equality, constant discovery,
+That revision left repeated full-document walks and binding typed source
+results once across decode/lower/preparation as the next priorities. Source equality, constant discovery,
 TLS collection and repeated body consistency work remain material. Any replacement
 must retain manual/foreign-model rejection, exact diagnostics, compiler identities
 and existing proof claims; moving unchanged work into the exporter again is
 insufficient. Shared program caches remain explicitly excluded.
+
+## Immutable process input and independent preparation (2026-11-05)
+
+The original, untouched upstream `pass/unops.rs` now finishes below 20 seconds
+with binary transport, four available CPUs and three input workers. Final frozen
+artifact confirmation samples are **19.587 / 19.819 / 19.572 seconds**, median
+**19.587 seconds**, CPU median 23.694 seconds, maximum sampled group RSS 1.900 GB.
+This is a warm tool-build result, with fresh Rust compilation/export on every
+trial and both cache-valid tool build gates included. Timing starts before the
+first gate and ends after the final child exits; post-exit hashing is excluded.
+No shared program cache, guest rewrite, omitted std startup or guest budget is
+introduced. This is one finite workload, not a universal sub-20-second guarantee.
+
+A preceding three-pair alternating comparison under the same four-CPU allowance
+measured d29620f4 at 28.788 / 28.579 / 28.532 seconds versus the new implementation
+at 19.840 / 19.829 / 19.673 seconds: medians 28.579 to 19.829, 30.62% shorter.
+The final confirmation removes an unused task-mapping helper; it is reported
+separately rather than silently mixing artifacts into those pairs. For the
+repository's one-CPU/one-Lean-thread comparison, three alternating pairs measure
+29.056 / 28.784 / 29.184 versus 23.753 / 23.981 / 24.102 seconds, medians 29.056
+to 23.981 (17.46% shorter), CPU medians 28.679 to 23.638, maximum RSS 2.119 to
+1.814 GB. Parallel input preparation supplies the additional wall-time reduction;
+it does not accelerate guest execution. Same-core steal is recorded per trial
+(0.03--0.47 seconds across these groups); cgroup CPU throttling is zero. Phase
+medians are independent and must not be added.
+
+All 15 complete outputs across the alternating four-CPU comparison, final
+confirmations and one-thread comparison have the historical SHA256
+`47a681990447e340c09c71f7a503a9cc8d034ab5019506f3a6826c072a66de67`,
+zero readiness obligations, finalized exit 0 and 1361 recorded choice events.
+Frozen executables, per-trial counters and raw logs are ignored under
+`scratch/perf-direct-checked-graph/`; `source-pairs/parallel-summary.json` and
+`source-pairs/validated-summary.json` distinguish the measured groups.
+
+The native one-input path constructs compiler projections once, then uses the
+standard Lean `Runtime.markPersistent` GC primitive on the fresh read-only
+source graph and completed memos before publishing any tasks. This retains that
+input until process exit and avoids repeatedly converting the large graph for
+thread sharing. No mutable guest state is pinned. The ordinary pure/library
+entry retains normal reclamation; this is not a cache for a later program.
+`tools/run.sh` defaults to at most three available input workers, respecting an
+explicit `LEAN_NUM_THREADS=1`. The upstream UI harness keeps its serial default
+and records an explicit `--input-threads` setting; the guest still reports one CPU.
+
+Independent body/reference checks, source reflexivity and compiler-value
+projection run concurrently. The longest whole-runtime check starts first and
+uses the original complete cache-miss decoder rather than waiting for the
+compiler-value memo. Join points preserve the original first-error order.
+Source reflexivity evidence is tied to the exact raw value; record updates clear
+it. Lowering computes exact body/source guards in balanced task chunks, carrying
+private, dependently indexed certificates. A kernel theorem shows cached guards
+leave body lowering unchanged. MIR construction and global ID/span/constant
+interning remain serial and ordered. Missing or misplaced certificates fall
+back to the historical predicate; they cannot assert readiness.
+
+TLS/constant discovery now accumulates directly into owned output arrays and
+folds object trees without temporary lists/flattening. Shared memo setup avoids
+constructing paths and index lists for inert nodes. Checked graph dictionaries
+compute field classifications/hashes once per name. The exporter fuses its two
+vtable/virtual metadata passes, retaining an ordered reference implementation
+in tests; an isolated component comparison reduces those passes from 0.609 to
+0.362 seconds. These are reductions in work, separate from concurrency.
+
+Completed checks: normal Rust 32 unit + 10 integration; legacy-json 14 + 10;
+`tools/check-quick.sh` including Python 96 and source/inventory/fixture integrity;
+`tools/check-build.sh` including 47 self-contained runtime checks and the
+71,715-declaration axiom audit, with only propext, Quot.sound and Classical.choice.
+The full native decoder script passed, including malformed binary controls,
+1567 runtime-summary comparisons, ordered source-walk/shared-memo comparisons,
+serial/process complete-Core equality for the full genuine binary unops export,
+ordered obligations/readiness and lowering/foreign-model rejection. Independently
+parsed source-equality and metadata cache fallback/first-error checks also pass.
+Fresh same-TyCtxt Miri binary comparisons with three input workers pass unops,
+uninitialized-byte-read UB category/site, and panic catch/unwind. Their source,
+artifact, snapshot fingerprint and memory-event guards remain enabled.
+
+An earlier decoder check was invalidated by a concurrent build replacing an
+OLean. An initial UI unops comparison tripped the memory-event guard while a
+large decoder comparison ran concurrently; neither is counted as success.
+The decoder was rerun after its build, and all three UI cases were rerun serially
+without other heavy checks; all passed. Logs remain under ignored scratch,
+including `final-decoder-tests.log`, `final-runtime-build-check.log`,
+`final-quick-check.log` and `ui-parallel-final/`. Full UI coverage, fresh caller
+location comparison for this revision, and whole-machine safety remain unproved.
 
 ## Feature support outside the current acceptance scope
 

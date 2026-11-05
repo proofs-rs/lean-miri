@@ -36,6 +36,19 @@ private def must (result : Except String α) : IO α :=
   match result with | .ok value => pure value | .error error => throw (IO.userError error)
 
 def main : IO Unit := do
+  let mut seed : UInt64 := 0x42f0e1eba9ea3693
+  let boundaries := (#[0,1,127,128,16383,16384,2^63,2^64-1] : Array Nat)
+  for value in boundaries do
+    match BinaryImage.readNat.run { bytes := var value } with
+    | .ok actual cursor =>
+      check (actual == value && cursor.position == cursor.bytes.size) "integer boundary round trip"
+    | .error error _ => throw (IO.userError error)
+  for _ in [:512] do
+    seed := (seed ^^^ (seed >>> 13)) * 0x9e3779b97f4a7c15
+    match BinaryImage.readNat.run { bytes := var seed.toNat } with
+    | .ok actual cursor =>
+      check (actual == seed.toNat && cursor.position == cursor.bytes.size) "u64 round trip"
+    | .error error _ => throw (IO.userError error)
   let fields := #["a", "n", "s", "z"]
   let rows := #[row 0, row 1, row 2, row 8 (var (2^63)), row 7 (var (2^64-1)),
     row 3 (text "-0.0"), row 4 (text "日本語\n"), array #[0,1,2,3,4,5,6],
