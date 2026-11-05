@@ -55,6 +55,11 @@ def run_case(case, args, env, output):
     record['command'] = command
     started = time.monotonic()
     case_env = env | {'LEAN_MIRI_REFERENCE_UI_FLAGS_JSON': json.dumps(case.runtime_flags)}
+    execution_ir = getattr(args, 'execution_ir', False)
+    if execution_ir:
+        case_env.update(LEAN_MIRI_EXECUTION_IR='1',
+                        LEAN_MIRI_EXECUTION_IR_ARGS_JSON=json.dumps([
+                            '--ui-source', str(source), '--ui-flags', json.dumps(case.runtime_flags)]))
     export_code = invoke(command, case_env, directory / 'export.log', args.export_timeout, args.memory_limit)
     record['export_exit'] = export_code
     record['export_seconds'] = time.monotonic() - started
@@ -95,15 +100,24 @@ def run_case(case, args, env, output):
             status = 'export_failed'
         record['status'] = status
         if status == 'ready':
-            started = time.monotonic()
-            code = invoke([str(args.runner), str(snapshot), '--ui-source', str(source), '--ui-flags', json.dumps(case.runtime_flags)], env, directory / 'lean.log', args.timeout, args.memory_limit)
-            record['lean_exit'] = code
-            record['lean_seconds'] = time.monotonic() - started
-            if code != 0:
+            if execution_ir:
+                # The checked oracle and expected combined process status above
+                # are mandatory. An absent/failed IR run cannot supply a result.
+                record['combined_process_exit'] = export_code
+                outcome_log = directory / 'export.log'
+                process_ok = True
+            else:
+                started = time.monotonic()
+                code = invoke([str(args.runner), str(snapshot), '--ui-source', str(source), '--ui-flags', json.dumps(case.runtime_flags)], env, directory / 'lean.log', args.timeout, args.memory_limit)
+                record['lean_exit'] = code
+                record['lean_seconds'] = time.monotonic() - started
+                outcome_log = directory / 'lean.log'
+                process_ok = code == 0
+            if not process_ok:
                 record['status'] = 'lean_' + code if isinstance(code, str) else 'lean_process_failed'
             else:
                 terminals = [line.removeprefix('upstream_result: ') for line in
-                             (directory / 'lean.log').read_text(errors='replace').splitlines()
+                             outcome_log.read_text(errors='replace').splitlines()
                              if line.startswith('upstream_result: ')]
                 if len(terminals) != 1:
                     record['status'] = 'lean_missing_outcome'
@@ -131,6 +145,8 @@ def main():
     parser.add_argument('--exporter', type=Path, default=ROOT / 'exporter/target/release/lean-miri-mir-exporter')
     parser.add_argument('--sysroot', type=Path, default=ROOT / 'scratch/miri-sysroot')
     parser.add_argument('--runner', type=Path, default=ROOT / '.lake/build/bin/native_runner')
+    parser.add_argument('--execution-ir', action='store_true', help='compare the combined exporter/IR/interpreter entry')
+    parser.add_argument('--execution-ir-library', type=Path, default=ROOT / '.lake/build/lib/libexecution_ir.so')
     parser.add_argument('--skip-build', action='store_true')
     parser.add_argument('--timeout', type=float, help='optional Lean execution wall limit in seconds; default unlimited')
     parser.add_argument('--memory-limit', type=int, help='optional shared cgroup memory guard in bytes; default unlimited')
@@ -173,12 +189,18 @@ def main():
         if key.startswith('LEAN_MIRI_REFERENCE_'):
             del env[key]
     env['LEAN_MIRI_REFERENCE_EMPTY_ENV'] = '1'
+    # No ambient experimental mode may change the ordinary comparison lane.
+    env.pop('LEAN_MIRI_EXECUTION_IR', None)
+    env.pop('LEAN_MIRI_EXECUTION_IR_ARGS_JSON', None)
+    env.pop('LEAN_MIRI_EXECUTION_IR_LIBRARY', None)
+    if args.execution_ir:
+        env['LEAN_MIRI_EXECUTION_IR_LIBRARY'] = str(args.execution_ir_library.resolve())
     if not args.skip_build:
         with (output / 'build.log').open('w') as log:
             subprocess.run(['flock', '--no-fork', '/tmp/lean-miri-lake-build.lock',
                             str(ROOT / '.elan/bin/lake'), 'build', 'native_runner'],
                            cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
-    for path in (args.exporter, args.runner):
+    for path in (args.exporter, args.runner, *([args.execution_ir_library] if args.execution_ir else [])):
         if not path.is_file():
             parser.error(f'missing executable: {path}')
     source_hash = source_fingerprint()
@@ -188,6 +210,8 @@ def main():
         'shard_index': args.shard_index, 'shard_count': args.shard_count,
         'source_lock_sha256': sha256(ROOT / 'upstream/source-lock.json'),
         'exporter_sha256': exporter_hash, 'runner_sha256': runner_hash,
+        'execution_ir': args.execution_ir,
+        'execution_ir_library_sha256': sha256(args.execution_ir_library) if args.execution_ir else None,
         'timeout': args.timeout, 'memory_limit': args.memory_limit, 'export_timeout': args.export_timeout,
         'profile': 'same-prepared-TyCtxt Tree Borrows, precise interior mutability, no implicit writes',
         'claim': 'finite executions only; no whole-machine safety proof',

@@ -20,4 +20,6 @@ default = []
 legacy-json = []
 # Reference producer for differential checks of operation-directed type queries.
 full-type-queries = []
+# Full in-process execution-IR experiment; uses the separately built Lean library.
+execution-ir = []
 miri-reference = ["dep:miri"]

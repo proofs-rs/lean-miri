@@ -64,6 +64,41 @@ exact arguments cannot be fingerprinted.
 
 ## Input contract
 
+The complete in-process execution-IR experiment is available with
+`bash tools/execute-rust.sh --root main -- program.rs --crate-name program
+--edition=2021` on Linux x86-64. It builds the fixed Lean interpreter library and
+the `execution-ir` exporter feature, collects fresh compiler facts, constructs
+typed source rows, and compiles **all** MIR/types/allocations/ABI/provider data
+into one checked execution IR before running the same interpreter. No program
+data is retained between invocations. Normal export/run entry points stay
+available for comparison and proof imports.
+
+This prototype embeds the existing compiled Lean validation/lowering/provider
+code in the exporter; it does not reimplement those checks in Rust or remove
+their computation. Full-source timings must include this producer-side work,
+native data construction, library initialization, interpretation and teardown.
+The experiment removes JSON text/file transfer and row-envelope interpretation;
+it is not a claim that all metadata interpretation or preparation has vanished.
+The raw compiler evidence still accompanies prepared registries where runtime
+queries and diagnostics require it.
+
+`LEAN_MIRI_EXECUTION_IR=1` selects this path in a feature-enabled direct exporter;
+`LEAN_MIRI_EXECUTION_IR_ARGS_JSON` supplies the ordinary runner arguments, and
+`LEAN_MIRI_EXECUTION_IR_LIBRARY` selects the fixed interpreter library. The normal
+required `--output` option is unused in this mode. The comparison harness's
+`--execution-ir` lane separately writes and binds the exact captured snapshot to
+same-TyCtxt Miri before executing its in-memory counterpart. Expected reference
+UB retains its nonzero process status; only the independent oracle plus matching
+Lean terminal can pass a negative case.
+
+The C shim constructs ordinary typed values and transfers one opaque IR within
+the same runtime; no serialized Lean heap or unchecked readiness certificate is
+loaded. All graph rows (including unused rows), dictionary/edge invariants,
+source pins, semantic obligations and preparation failures remain checked. The
+run uses Lean's normal main-thread stack policy and flushes Lean output before
+Rust diagnostics. The dynamic library is executable code built from this
+checkout and the pinned Lean toolchain, not an input-specific shared cache.
+
 The root schema is `lean-miri-rustc-mir` version3 and the `shared_payloads` catalog
 is version2. Reading old schema2 is not supported. IDs are document-local
 references, distinct from raw Miri AllocId values.

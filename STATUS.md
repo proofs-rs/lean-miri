@@ -1732,6 +1732,104 @@ per-trial manifests and logs, `unops-export.log`, `ui-focused/`,
 `quick-final.log`, `connected.log` and `runtime-tests.log`. Frozen binaries and
 source-entry collection/analysis scripts are retained there for reproduction.
 
+## Complete producer-side execution-IR experiment (2026-11-05)
+
+A whole-pipeline prototype moves **all** checked decoding, MIR lowering,
+compiler/provider preparation and initial allocation registration into the
+exporter, then passes one opaque typed execution IR to the unchanged interpreter
+in the same Lean runtime. It covers types, MIR, allocations, ABI, scopes,
+constants, virtual/drop calls, frames, startup and remaining provider registries;
+it is not an ABI-only experiment. No input-specific shared cache is used.
+
+The implementation reuses the existing compiled Lean checks inside the exporter.
+It is **not** a Rust-native rewrite of semantic metadata emission, nor does it
+erase all internal JSON evidence or runtime query decoding. Typed native source
+rows avoid JSON text/file transfer, row-envelope reconstruction and decimal
+reparsing for unsigned integer leaves. Every row/edge/dictionary entry (including
+unused rows), source pin, semantic obligation, strict-readiness condition and
+preparation error is still checked. The native traversal capability has a private
+witness of a successful checked resolver; no producer readiness bit or unchecked
+serialized Lean heap is accepted. Existing serialized input contracts remain
+unchanged on the prototype's ordinary entry.
+
+The C bridge uses pinned Lean constructors, owned reference transfers and an
+opaque same-runtime IR. Interpretation uses the same `lean_run_main` runtime
+thread/stack policy as the standalone runner. A transient in-call ownership
+handoff is cleared before interpretation; it retains no cross-program data.
+Same-TyCtxt Miri comparisons bind the exact captured snapshot to the in-memory
+image and independently check its terminal/UB category/site. Reference UB keeps
+its original nonzero process status and cannot pass without a matching Lean
+terminal. The shared library is fixed interpreter code, not a program cache.
+
+Three alternating sequential pairs use unchanged original unops source, root
+`main`, crate `unops`, edition 2021, prepared AllocId world, CPU 2, one Lean
+thread and frozen ordinary exporter/native or IR exporter/library artifacts.
+Both include identical current cache-valid code-build gates, fresh compilation,
+all producer-side validation/preparation, guest execution, output and final
+process teardown. Reference Miri, UI/seed/profile overrides and program-data
+caches are absent from timings. Installed toolchains/sysroot and valid code
+build caches are prerequisites; cold builds are not measured.
+
+| Independent medians | Retained two-process entry | Complete producer-side IR |
+| --- | ---: | ---: |
+| Rust source entry → final process exit | 42.940 s | 40.179 s |
+| Entry → semantic reader boundary | 17.195 s | 17.580 s |
+| Graph/semantic read and checks | 14.586 s | 11.769 s |
+| MIR lowering | 1.706 s | 1.745 s |
+| Provider/runtime preparation | 6.696 s | 6.357 s |
+| Sampled peak process-group RSS | 2.414 GB | 3.501 GB |
+| Child CPU | 42.502 s | 39.769 s |
+
+Whole observations are 43.797 / 42.924 / 42.940 versus
+40.145 / 40.179 / 41.487 seconds: **6.43% shorter**, with approximately **45% more
+peak RSS**. Independent phase medians must not be added. All six complete
+outputs are byte-identical, including strict readiness, finalized exit zero and
+1361 choices/events. Output SHA256 is
+`47a681990447e340c09c71f7a503a9cc8d034ab5019506f3a6826c072a66de67`.
+Steal observations span 0.29–0.49 seconds and cgroup throttling is zero. A separate
+invocation through the public `execute-rust.sh` command takes 40.360 seconds with
+identical complete output. The baseline differs from older 44.5-second records
+because these are new paired measurements; earlier and current samples must not
+be mixed into one speedup claim.
+
+Measured baseline exporter/native SHA256 prefixes are `8c423774` / `8e3673f8`;
+IR exporter/library prefixes are `94236b6e` / `5156be41`. Compilation still builds
+the source metadata and runs the existing semantic preparation. Merely moving
+those functions into the producer does not eliminate their cost. This experiment
+does not meet the further half-time or 20-second goal, and does not establish an
+upper bound for a future direct semantic typed-emission design. It is not
+recommended as the default entry given the small whole-source gain, increased
+memory and native embedding surface. Preserve the prototype for review; retain
+the existing default execution pipeline.
+
+Validation of the prototype passes exporter `execution-ir` 22 unit + 10
+integration tests, legacy-json 11 + 10, Python 96, quick/source/fixture checks,
+the complete decoder script, and native typed-image parity tests for unused-row
+errors, dictionaries, source graphs/digests, readiness and canonical lowered MIR.
+Native/MiriTests builds, 47 runtime checks, connected proof harnesses and the
+71,433-declaration axiom audit pass (only propext, Quot.sound and Classical.choice).
+Finite IR comparisons pass unops, ZST Box, packed dyn traits, uninitialized-byte
+UB and panic catch/unwind. After the final embedding fix, a fresh final-library
+run passes panic, unops and uninitialized-byte-read with stable source identities
+and memory-event counters. No full UI sweep or general translation/equivalence
+proof was performed.
+
+Intermediate failures are not counted as passes: mixed C/Rust stream buffering
+split a long UB terminal JSON line (fixed by flushing before returning to Rust);
+the initial embedded run overflowed Rust's smaller stack while printing 102560
+choice events after guest exit (fixed by Lean's normal main-thread entry).
+That earlier panic attempt also observed source edits during comparison and was
+invalidated by the unchanged source guard. No oracle, resource guard or expected
+outcome was weakened. Subsequent successful reruns use immutable artifacts.
+
+Raw evidence and immutable binaries are ignored under `scratch/perf-execution-ir/`:
+`source-pairs/summary.json`, per-trial manifests/logs, `public-entry.log`,
+`ui-focused/`, `ui-negative-rerun/`, `ui-final/`, `ui-stack/`, `decoder.log`,
+`image-checks.log`, `rust-tests-final.log`, `legacy-tests.log`, `quick-final.log`,
+`connected.log` and `runtime-tests.log`. The collection and analysis scripts are
+retained there. The prototype source is preserved on `perf/full-execution-ir`;
+the retained PR only records its outcome.
+
 ## Feature support outside the current acceptance scope
 
 The following support and integration work remains in the backlog, even though
