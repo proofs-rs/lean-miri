@@ -1,4 +1,4 @@
-name: Miri API documentation
+name: lean-miri website and API documentation
 
 on:
   push:
@@ -38,10 +38,24 @@ jobs:
           test -s docbuild/.lake/build/doc/Miri/Input/ExecutionChoicePolicy.html
           test -s docbuild/.lake/build/doc/Miri/Interpreter/TlsCallbacks.html
           test -s docbuild/.lake/build/doc/declarations/declaration-data.bmp
+      - name: Assemble website and API reference
+        run: |
+          mkdir -p _pages
+          cp -a docbuild/.lake/build/doc/. _pages/
+          mv _pages/index.html _pages/api-index.html
+          cp site/index.html _pages/index.html
+          touch _pages/.nojekyll
+          test -s _pages/index.html
+          test -s _pages/api-index.html
+          test -s _pages/Miri.html
+          test -s _pages/Miri/Frontend/ImportMIR.html
+          test -s _pages/Miri/Input/ExecutionChoicePolicy.html
+          test -s _pages/Miri/Interpreter/TlsCallbacks.html
+          test -s _pages/declarations/declaration-data.bmp
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
-          path: docbuild/.lake/build/doc
+          path: _pages
 
   deploy:
     if: github.ref == 'refs/heads/main'
@@ -59,6 +73,6 @@ jobs:
     steps:
       - name: Configure Pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
-      - name: Deploy API reference
+      - name: Deploy website and API reference
         id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
