@@ -1831,6 +1831,105 @@ retained there. The prototype source is preserved at `2b08ad39` on `perf/full-ex
 and in [draft PR #17](https://github.com/proofs-rs/lean-miri/pull/17);
 the retained PR #9 only records its outcome.
 
+## Compiler allocation-catalog normalization (2026-11-05)
+
+The retained two-process path now removes repeated compiler allocation metadata
+rather than moving the same semantic preparation into another process. The
+exporter keeps all caller-location span coverage, but captures one exact compiler
+Location template per filename and each span's effective u32 coordinates. The
+interpreter constructs a fresh immutable root for every intrinsic invocation,
+using compiler field offsets and the existing checked scalar writes. Filename
+CTFE provenance, untouched bytes, initialization and per-call identity remain
+separate. The pinned `const_caller_location` is an uncached hook; these templates
+must never turn repeated guest calls into a single shared root. The
+`full-caller-locations` feature retains the literal reference producer.
+
+Prepared allocator worlds use `rustc_alloc_id_world_v2`: a dense ASCII source-kind
+column and sparse opaque-memory projections replace the repeated raw-pool JSON
+objects. Supported-node facts come from the existing allocation table. Lean
+reconstructs the full typed pool and retains the complete prefix/frontier,
+source/graph bindings, salt/key checks and exhaustive byte-family validation.
+Unknown mutability, noncanonical byte keys, mixed encodings and missing or
+repeated opaque projections fail. Legacy v1 parsing and the exact raw/typed
+binding validator remain available; `full-allocation-world` emits v1 reference
+facts. No program cache, trace pruning, guest rewrite, iteration limit or
+readiness/UB/provenance bypass was introduced.
+
+Three final alternating sequential pairs use unchanged original unops source,
+root main, crate unops, edition 2021, CPU 2, one Lean thread, frozen binaries and
+fresh exports with the prepared AllocId world. Both paths include current
+cache-valid Cargo/Lake gates, complete output and final child exit; post-exit
+input hashing is excluded. Installed toolchains/sysroot and build caches are
+prerequisites, not cold-build measurements. The chronological retained order is
+baseline3/candidate3, candidate2/baseline2, baseline1/candidate1. Earlier collector
+observations that included diagnostic hashing are retained separately and are
+not used below.
+
+| Independent medians | Retained baseline | Normalized catalogs |
+| --- | ---: | ---: |
+| Complete Rust source entry → process exit | 43.420 s | 36.020 s |
+| Export | 16.751 s | 14.733 s |
+| Read/strict decode | 14.666 s | 10.810 s |
+| MIR lowering | 1.772 s | 1.691 s |
+| Provider/runtime preparation | 6.764 s | 5.664 s |
+| Child CPU | 42.963 s | 35.588 s |
+| Sampled peak process-group RSS | 2.407 GB | 2.112 GB |
+| Input bytes | 100,249,298 | 70,498,621 |
+
+Whole observations are 43.878 / 43.074 / 43.420 versus
+35.245 / 36.034 / 36.020 seconds: **17.04% shorter**. Phase medians must not be
+added. Steal spans 0.14–0.41 seconds and throttling is zero. A separate public
+build-exporter/export-mir/run.sh invocation takes 35.895 seconds. Every complete
+output is byte-identical, including strict readiness, exit zero and all 1361
+choices/events; SHA256 is
+`47a681990447e340c09c71f7a503a9cc8d034ab5019506f3a6826c072a66de67`.
+Frozen baseline exporter/native prefixes are `8c4237746c21` / `8e3673f8b388`;
+final normalized prefixes are `c672ed3b8870` / `e8db14b4a226`.
+
+Validation passes normal exporter 22 unit + 10 integration tests, legacy-json
+11 + 10, the complete decoder script, Python 96 and quick/source/fixture checks,
+47 rebuilt self-contained runtime checks, connected proof harnesses and the
+71,390-declaration axiom audit (only propext, Quot.sound and Classical.choice).
+`tools/check-compact-input.sh` passes genuine v1/v2 full-pool/catalog/frontier and
+other-document-field equality, independent Lean world equality and malformed
+input controls. It compares all 183 source spans in a macro/track-caller fixture
+against actual compiler images under four location-detail settings. Immutable
+construction checks cover both endiannesses, pointer/provenance retention,
+uninitialized padding, source isolation, bounds and guest-write rejection.
+Literal/recipe query controls also cover u32 limits and malformed evidence.
+
+Fresh same-prepared-TyCtxt Miri comparisons pass unops, uninitialized-byte-read
+with its independent expected UB category/site, panic catch/unwind, and the
+separate maintained caller-location fixture (macro/track-caller coordinates and
+fresh identities for repeated calls). The reusable entry for the last case is
+`tools/check-caller-location-runtime.py`; it does not extend the upstream
+inventory. The initial panic attempt exposed an incorrect exactly-three-fields
+assumption; the pinned Location has a fourth zero-sized PhantomData field.
+The adapter now follows the compiler's projection of its first three fields.
+That failed attempt is not counted as a pass.
+
+Two broader controls remain unpassed. `pass/track-caller-attribute.rs` stops with
+a rustc closure-signature ICE (collect.rs:1244); the frozen pre-change exporter
+reproduces it. After the field fix, `pass/panic/std-panic-locations.rs` stops at
+`cast compiler query: type kind is outside the cast operand domain`; a fresh
+fully materialized caller-location control reaches the same Unsupported result.
+Neither is an agreement/pass, and neither expectation was weakened. No full UI
+sweep or general compiler/interpreter equivalence proof was performed.
+
+**The 20-second goal remains unmet.** Export, semantic import and preparation
+still dominate this short guest. Further work must reduce repeated producer and
+consumer representations together; moving the existing checked pipeline into
+the exporter alone was insufficient (separate PR #17 above). Investigate shared
+allocation payload templates and direct typed semantic metadata while preserving
+all source identity/binding checks, legacy errors and maintainability; avoid
+cross-program caches. Evidence, collection scripts and immutable artifacts are
+ignored under `scratch/perf-catalog-redesign/`: `final-source-pairs/summary.json`,
+per-trial manifests/logs and losslessly compressed inputs, `public-entry.log`,
+`compact-entry-check.log`, `caller-producer-comparison.log`, `world-checks-final.log`,
+`template-checks-final.log`, `caller-checks.log`, `decoder.log`, `rust-tests.log`,
+`legacy-tests.log`, `runtime-checks-final.log`, `connected.log`, `quick-final.log`,
+`ui-focused/`, `ui-location-fixed/`, `ui-location-literal/` and `caller-runtime-final/`.
+
 ## Feature support outside the current acceptance scope
 
 The following support and integration work remains in the backlog, even though

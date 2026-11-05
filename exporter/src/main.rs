@@ -173,6 +173,7 @@ struct ExportContext<'tcx> {
     /// each invocation allocates a fresh global. Cache the exact serialized
     /// result once per source span so closure rounds do not invent identities.
     caller_location_constant_rows: HashMap<rustc_span::Span, Value>,
+    caller_location_templates: HashMap<String, Value>,
     cast_unsize_requests: HashSet<(ty::Ty<'tcx>, ty::Ty<'tcx>)>,
     vtable_query_requests: HashSet<(
         ty::Ty<'tcx>,

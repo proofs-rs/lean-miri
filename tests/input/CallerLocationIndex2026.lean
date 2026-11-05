@@ -55,4 +55,23 @@ def main (args : List String) : IO Unit := do
   compare (withRows p (.arr #[missing,row])) span
   compare (withRows p (.arr #[row,missing])) span
   compare (withRows p (.arr #[Json.mkObj []])) ⟨p.program.compilerTables.spans.size⟩
+  let literal ← must (CompilerValueConstants.callerLocation (withRows p (.arr #[row])) span)
+  let legacyTemplate ← must (CompilerValueConstants.callerLocationTemplate (withRows p (.arr #[row])) span)
+  unless decide (legacyTemplate = (literal.1,literal.2,none)) do
+    throw (IO.userError "legacy caller-location template changed its literal")
+  let recipe := set (set (set (set row "recipe_schema" (.str "caller_location_template_v1"))
+    "template_value" (← must (row.getObjVal? "value"))) "line_u32" (toJson (2^32-1 : Nat)))
+    "column_u32" (toJson (0 : Nat))
+  let actual ← must (CompilerValueConstants.callerLocationTemplate (withRows p (.arr #[recipe])) span)
+  unless decide (actual = (literal.1,literal.2,some (2^32-1,0))) do
+    throw (IO.userError "recipe template or u32 coordinates changed")
+  unless !(CompilerValueConstants.callerLocation (withRows p (.arr #[recipe])) span).isOk do
+    throw (IO.userError "literal API returned an uninstantiated recipe")
+  for bad in [set recipe "line_u32" (toJson (2^32 : Nat)),
+      set recipe "column_u32" (toJson (2^32 : Nat)),
+      set recipe "recipe_schema" (.str "future"),
+      set recipe "template_value" .null,
+      set recipe "status" (.str "unsupported")] do
+    unless !(CompilerValueConstants.callerLocationTemplate (withRows p (.arr #[bad])) span).isOk do
+      throw (IO.userError "malformed caller-location recipe accepted")
   IO.println "caller-location reference/indexed success, duplicates, errors, collisions and base isolation: PASS"

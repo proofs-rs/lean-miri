@@ -26,3 +26,4 @@ lake env lean MiriTests/AxiomAudit.lean
 
 lake env lean --run tests/input/CallerLocationIndex2026.lean scratch/decoder-id-inputs/genuine-fresh.json
 .lake/build/bin/decoder_traversal_cache_tests scratch/decoder-id-inputs
+bash tools/check-compact-input.sh

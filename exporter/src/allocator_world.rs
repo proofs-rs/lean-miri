@@ -626,13 +626,34 @@ pub(super) fn capture<'tcx>(
     }
     let capacity = usize::try_from(frontier)
         .map_err(|_| "prepared allocator-world pool exceeds addressable capacity".to_owned())?;
-    let mut raw_pool = Vec::with_capacity(capacity);
+    let legacy = cfg!(feature="full-allocation-world");
+    let mut raw_pool = Vec::new();
+    let mut raw_kinds = String::with_capacity(capacity);
+    let mut opaque_memory = Vec::new();
     for raw in 1..=frontier {
         let id = alloc_id(raw)?;
-        raw_pool.push(pool_row(tcx, context, id, raw == frontier)?);
+        if legacy {
+            raw_pool.push(pool_row(tcx, context, id, raw == frontier)?);
+            continue;
+        }
+        let global = if raw == frontier { None } else { tcx.try_get_global_alloc(id) };
+        // Raw identity is the byte position + 1. Supported graph witnesses and
+        // their memory projections already exist in the allocation table.
+        raw_kinds.push(match &global {
+            None => 'd', Some(GlobalAlloc::Memory(_)) => 'm',
+            Some(GlobalAlloc::Function {..}) => 'f', Some(GlobalAlloc::VTable(..)) => 'v',
+            Some(GlobalAlloc::Static(..)) => 's', Some(GlobalAlloc::TypeId {..}) => 't',
+        });
+        if matches!(global, Some(GlobalAlloc::Memory(_))) {
+            let row = pool_row(tcx, context, id, false)?;
+            if row.get("status").and_then(Value::as_str) != Some("serialized") {
+                opaque_memory.push(row);
+            }
+        }
     }
-    Ok(json!({
-        "schema":"rustc_alloc_id_world_v1",
+    let mut result = json!({
+
+        "schema":if legacy {"rustc_alloc_id_world_v1"} else {"rustc_alloc_id_world_v2"},
         "profile":"prepared_post_export",
         "frontier":{
             "last_reserved_source_alloc_id":frontier,
@@ -640,7 +661,6 @@ pub(super) fn capture<'tcx>(
             "next_source_alloc_id":next,
         },
         "global_pool_complete_through":frontier,
-        "raw_pool":raw_pool,
         "dedup_catalog":catalog.into_values().chain(selected_keys.rows()).collect::<Vec<_>>(),
         "complete_key_families":["byte_memory"],
         "unsupported_key_families":[
@@ -650,5 +670,12 @@ pub(super) fn capture<'tcx>(
             "type_id",
             "memory_const_allocation",
         ],
-    }))
+    });
+    if legacy {
+        result["raw_pool"] = json!(raw_pool);
+    } else {
+        result["raw_kinds"] = json!(raw_kinds);
+        result["opaque_memory"] = json!(opaque_memory);
+    }
+    Ok(result)
 }

@@ -20,4 +20,8 @@ default = []
 legacy-json = []
 # Reference producer for differential checks of operation-directed type queries.
 full-type-queries = []
+# Differential producer for fully materialized caller-location constants.
+full-caller-locations = []
+# Reference encoding of the same allocation-world facts.
+full-allocation-world = []
 miri-reference = ["dep:miri"]

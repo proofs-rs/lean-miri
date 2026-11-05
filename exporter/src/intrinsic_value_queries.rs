@@ -35,22 +35,47 @@ pub(super) fn collect_spans<'tcx>(tcx:TyCtxt<'tcx>,context:&mut ExportContext<'t
     }
     for span in spans {if context.caller_location_span_set.insert(span){context.caller_location_spans.push(span);}}
 }
+// CallerLocation source values are templates, not guest pointers. The runtime
+// creates a fresh root at each intrinsic invocation. Keep one exact compiler
+// template per filename and parameterize only the two u32 fields written by
+// rustc_const_eval::util::caller_location::alloc_caller_location.
+fn caller_location_recipe<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>,
+    span: rustc_span::Span) -> Value {
+    let topmost = span.ctxt().outer_expn().expansion_cause().unwrap_or(span);
+    let position = tcx.sess.source_map().lookup_char_pos(topmost.lo());
+    let filename = position.file.name
+        .display(rustc_span::RemapPathScopeComponents::MACRO).to_string_lossy().into_owned();
+    let template = match context.caller_location_templates.get(&filename) {
+        Some(value) => value.clone(),
+        None => {
+            let value = tcx.const_caller_location(rustc_span::Symbol::intern(&filename), 0, 0);
+            let value = const_value_json(context, tcx, tcx.caller_location_ty(), value);
+            context.caller_location_templates.insert(filename, value.clone());
+            value
+        }
+    };
+    let details = tcx.sess.opts.unstable_opts.location_detail;
+    // Match span_as_caller_location casts and the provider's redaction policy.
+    let line = if details.line { position.line as u32 } else { 0 };
+    let column = if details.column { position.col_display as u32 + 1 } else { 0 };
+    json!({"status":"supported", "recipe_schema":"caller_location_template_v1",
+        "template_value":template, "line_u32":line, "column_u32":column})
+}
+
 pub(super) fn caller_locations<'tcx>(tcx:TyCtxt<'tcx>,context:&mut ExportContext<'tcx>)->Value {
-    // `span_as_caller_location` invokes a rustc hook rather than a memoized
-    // query. Its provider allocates fresh CallerLocation memory on every
-    // invocation, so revisiting already-seen spans in a closure round would
-    // create unrelated compiler allocations. Cache by exact Span; distinct
-    // spans remain distinct even when they map to identical source positions.
     let spans=context.caller_location_spans.clone();
     for span in spans.iter().copied() {
         if context.caller_location_constant_rows.contains_key(&span) { continue; }
-        let mut result=if tcx.lang_items().get(rustc_attr_ir::LangItem::PanicLocation).is_some(){
+        let mut result=if tcx.lang_items().get(rustc_attr_ir::LangItem::PanicLocation).is_none(){
+            unavailable_compiler_fact("caller location constant requires PanicLocation lang item")
+        } else if cfg!(feature="full-caller-locations") {
             compiler_fact(const_value_json(context,tcx,tcx.caller_location_ty(),tcx.span_as_caller_location(span)))
-        }else{unavailable_compiler_fact("caller location constant requires PanicLocation lang item")};
+        } else {
+            caller_location_recipe(tcx,context,span)
+        };
         result["span"]=span_json(context,tcx,span);
         result["result_type"]=if tcx.lang_items().get(rustc_attr_ir::LangItem::PanicLocation).is_some(){type_json(context,tcx,tcx.caller_location_ty())}else{Value::Null};
         context.caller_location_constant_rows.insert(span,result);
     }
-    // Preserve source span discovery order on every returned catalog snapshot.
     Value::Array(spans.iter().map(|span|context.caller_location_constant_rows[span].clone()).collect())
 }

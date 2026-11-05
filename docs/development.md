@@ -60,6 +60,35 @@ never becomes another generic JSON Value tree. Weak
 pool entries do not own compiler payloads. Mutation invalidates the cached hash
 and copies a shared container before changing it.
 
+The prepared allocator world uses `rustc_alloc_id_world_v2`: `raw_kinds` has one
+ASCII kind tag per source AllocId, and `opaque_memory` carries memory projections
+not already owned by supported allocation nodes. The reader reconstructs the
+same complete raw pool and runs the full identity, frontier, salt/key and byte
+family checks. This normalizes repeated facts; it does not remove opaque IDs or
+change completeness requirements. Legacy `v1` worlds remain accepted. The
+`full-allocation-world` exporter feature emits the reference `v1` representation.
+
+Caller-location rows use `caller_location_template_v1`: the compiler produces
+one immutable Location template per filename, and each source span retains the
+effective u32 line/column, including macro expansion and redaction behavior.
+The interpreter constructs a fresh root for each invocation using the compiler's
+physical field offsets and checked scalar writes. Filename provenance and all
+untouched bytes/initialization are preserved. Literal query APIs reject recipes
+rather than expose an uninstantiated template. `full-caller-locations` retains the
+fully materialized compiler-query reference producer. These are compilation-local
+tables; neither format uses a shared program cache.
+
+`bash tools/check-compact-input.sh` compares genuine reference/normalized exports,
+the complete Lean allocation-world results and malformed-world rejection, and
+checks immutable construction with both target endiannesses. The performance
+regression entry point also runs it. The same check compares every source span
+in a macro/track-caller fixture against fully materialized compiler images under
+four location-detail settings, including complete redaction.
+After building with `bash tools/build-exporter.sh --features miri-reference`,
+`python3 tools/check-caller-location-runtime.py --output scratch/caller-location-runtime`
+checks real macro/track-caller coordinates and repeated-call allocation identity
+against same-prepared-TyCtxt Miri. This is separate from upstream inventory coverage.
+
 Lean validates every typed row, edge and dictionary entry (including unused
 rows), then constructs indexed traversal nodes and their local hashes/summaries
 in the same pass. The typed MIR reader reuses document-local node IDs and complete

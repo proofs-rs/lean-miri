@@ -13,15 +13,18 @@ private def unique (entries : Array Json) : Except String Json := do
   let some first := entries[0]? | throw "missing exact compiler intrinsic constant query"
   unless entries.all (· == first) do throw "conflicting exact compiler intrinsic constant queries"
   pure first
-private def decode (p : CompilerProviders.Prepared) (record : Json) :
+private def decodeAtKey (p : CompilerProviders.Prepared) (record : Json) (key : String) :
     Except String (MIR.TyId × MIR.ConstValue) := do
   unless (← record.getObjValAs? String "status") == "supported" do
     throw s!"compiler intrinsic constant query failed: {record.compress}"
   let ty ← ref (← record.getObjVal? "result_type")
   let _ ← p.runtime.node ty |>.mapError toString
   let value ← lowerCompilerConstValue p.loweringContext ty
-    (← p.loweringContext.decodeCompilerValue (← record.getObjVal? "value"))
+    (← p.loweringContext.decodeCompilerValue (← record.getObjVal? key))
   pure (ty,value)
+
+private def decode (p : CompilerProviders.Prepared) (record : Json) :=
+  decodeAtKey p record "value"
 
 def typeName (p : CompilerProviders.Prepared) (ty : MIR.TyId) :
     Except String (MIR.TyId × MIR.ConstValue) := do
@@ -47,8 +50,8 @@ def callerLocationReference (p : CompilerProviders.Prepared) (span : MIR.SpanRef
 Each row starts from the same base: missing spans cannot pollute later rows.
 The immutable ConstValue is still materialized as a fresh runtime global by
 EvalCallerLocationConstruction; no guest pointer is cached here. -/
-def callerLocation (p : CompilerProviders.Prepared) (span : MIR.SpanRef) :
-    Except String (MIR.TyId × MIR.ConstValue) := do
+private def callerLocationRecord (p : CompilerProviders.Prepared) (span : MIR.SpanRef) :
+    Except String Json := do
   unless span.id < p.program.compilerTables.spans.size do throw "caller-location span absent from shared table"
   let entries ← records p "compiler_caller_location_constants"
   let base := CompilerSpanInterner.ofTables p.program.compilerTables
@@ -58,7 +61,34 @@ def callerLocation (p : CompilerProviders.Prepared) (span : MIR.SpanRef) :
       (← p.loweringContext.decodeCompilerValue (← record.getObjVal? "span"))
     if next.sameSpansAs base && actual == span then
       matching := matching.push record
-  decode p (← unique matching)
+  unique matching
+
+/-- Legacy clients receive only literal constants, never a zero-valued template
+masquerading as the requested location. The execution adapter consumes recipes. -/
+def callerLocation (p : CompilerProviders.Prepared) (span : MIR.SpanRef) :
+    Except String (MIR.TyId × MIR.ConstValue) := do
+  let record ← callerLocationRecord p span
+  if (record.getObjVal? "recipe_schema").isOk then
+    throw "caller-location recipe requires fresh allocation construction"
+  decode p record
+
+/-- A recipe keeps an exact compiler template plus the provider's effective
+u32 coordinates. Missing/malformed evidence remains a demanded failure. -/
+def callerLocationTemplate (p : CompilerProviders.Prepared) (span : MIR.SpanRef) :
+    Except String (MIR.TyId × MIR.ConstValue × Option (Nat × Nat)) := do
+  let record ← callerLocationRecord p span
+  match record.getObjVal? "recipe_schema" with
+  | .error _ =>
+    let (ty,value) ← decode p record
+    pure (ty,value,none)
+  | .ok schema =>
+    unless (← schema.getStr?) == "caller_location_template_v1" do
+      throw "unknown caller-location recipe schema"
+    let line ← record.getObjValAs? Nat "line_u32"
+    let column ← record.getObjValAs? Nat "column_u32"
+    unless line < 2^32 && column < 2^32 do throw "caller-location coordinate exceeds u32"
+    let (ty,value) ← decodeAtKey p record "template_value"
+    pure (ty,value,some (line,column))
 
 def eval (p : CompilerProviders.Prepared)
     (functions : FunctionPointers.Hooks K U Other) (arithmetic : PointerArithmetic)

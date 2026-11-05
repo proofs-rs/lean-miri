@@ -2232,8 +2232,74 @@ def parseSourceAllocIdDedupRow (j : Json) (path : String) : Except String Source
   | _, some _ => throw s!"{joinPath path "bytes_hex"}: only valid for byte-image dedup key"
   pure ⟨keyKind, keyAllocationId, byteImageHex, salts⟩
 
+/-- The compact world normalizes facts already owned by allocation nodes.
+Only unmaterialized memory globals need separate projection evidence. The
+result still passes the same complete pool/catalog validator as legacy input. -/
+private structure CompactSourcePool where
+  kinds : ByteArray
+  opaqueMemory : Std.HashMap Nat SourceAllocIdPoolRow
+
+private def compactSourcePool (j : Json) (count : Nat) : Except String CompactSourcePool := do
+  if (j.getObjVal? "raw_pool").isOk then
+    throw "$.compiler_alloc_id_world: compact world also supplies legacy raw_pool"
+  let kinds := (← fieldString j "raw_kinds" "$.compiler_alloc_id_world").toUTF8
+  unless kinds.size == count do throw "$.compiler_alloc_id_world.raw_kinds: wrong raw ID prefix length"
+  let mut memory := {}
+  for row in ← arrayField j "opaque_memory" "$.compiler_alloc_id_world" do
+    let row ← parseSourceAllocIdPoolRow row "$.compiler_alloc_id_world.opaque_memory"
+    unless row.kind == .memory && row.status == .opaque && row.sourceAllocId.toNat ≤ count do
+      throw "$.compiler_alloc_id_world.opaque_memory: expected opaque memory within prefix"
+    if memory.contains row.sourceAllocId.toNat then
+      throw "$.compiler_alloc_id_world.opaque_memory: duplicate raw identity"
+    memory := memory.insert row.sourceAllocId.toNat row
+  return ⟨kinds,memory⟩
+
+private def compactSourcePoolRow (compact : CompactSourcePool) (index : Nat)
+    (nodes : Array AllocationNode) (sourceIndex : Std.HashMap Nat Nat) :
+    Except String SourceAllocIdPoolRow := do
+  let some tag := compact.kinds[index]? | throw "compact source pool index absent"
+  let kind ← match tag.toNat with
+    | 100 => pure SourceAllocIdKind.dangling -- d
+    | 109 => pure .memory -- m
+    | 102 => pure .function -- f
+    | 118 => pure .vtable -- v
+    | 115 => pure .static -- s
+    | 116 => pure .typeId -- t
+    | _ => throw "$.compiler_alloc_id_world.raw_kinds: unknown source global kind"
+  let raw := index + 1
+  let node? := sourceIndex[raw]?.bind (nodes[·]?)
+  if let some projection := compact.opaqueMemory[raw]? then
+    unless kind == .memory && (node?.map (·.status != .supported)).getD true do
+      throw "$.compiler_alloc_id_world.opaque_memory: redundant or mismatched memory projection"
+    return projection
+  if kind == .dangling then
+    return { sourceAllocId := UInt64.ofNat raw, kind, status := .dangling, allocationId := none }
+  match node? with
+  | some node =>
+    if node.status != .supported then
+      unless kind != .memory do throw "compact source pool lacks opaque memory projection"
+      return { sourceAllocId := UInt64.ofNat raw, kind, status := .opaque, allocationId := none, opaqueAllocationId := some node.id }
+    if kind != .memory then
+      return { sourceAllocId := UInt64.ofNat raw, kind, status := .serialized, allocationId := some node.id }
+    let some (.memory image) := node.data | throw "compact source memory has no typed image"
+    unless image.mutability == .immutable || image.mutability == .mutable do
+      throw "compact source memory has unknown mutability"
+    let initialized := image.initializationRanges.all (·.initialized)
+    let provenance := !image.relocations.isEmpty
+    let eligible := image.mutability == .immutable && image.alignBytes == 1 && initialized && !provenance
+    if eligible && !canonicalLowerHex image.bytesHex then
+      throw "compact source byte image is not canonical lowercase hexadecimal"
+    return ⟨UInt64.ofNat raw,kind,.serialized,some node.id,none,
+      some image.mutability,some image.alignBytes,some initialized,some provenance,
+      if eligible then some image.bytesHex else none⟩
+  | none =>
+    unless kind != .memory do throw "compact source pool lacks opaque memory projection"
+    return { sourceAllocId := UInt64.ofNat raw, kind, status := .opaque, allocationId := none }
+
 def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except String CompilerAllocIdWorld := do
-  unless (← fieldString j "schema" "$.compiler_alloc_id_world") == "rustc_alloc_id_world_v1" do
+  let schema ← fieldString j "schema" "$.compiler_alloc_id_world"
+  let compact := schema == "rustc_alloc_id_world_v2"
+  unless compact || schema == "rustc_alloc_id_world_v1" do
     throw "$.compiler_alloc_id_world.schema: unsupported source AllocId world schema"
   unless (← fieldString j "profile" "$.compiler_alloc_id_world") == "prepared_post_export" do
     throw "$.compiler_alloc_id_world.profile: unsupported source AllocId world profile"
@@ -2248,8 +2314,10 @@ def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except
     throw "$.compiler_alloc_id_world.frontier: sentinel, last reservation, and next counter disagree"
   let poolThrough ← fieldNat j "global_pool_complete_through" path
   unless poolThrough == lastNat do throw "$.compiler_alloc_id_world.global_pool_complete_through: does not equal frontier"
-  let poolJson ← arrayField j "raw_pool" path
-  unless poolJson.size == lastNat do throw "$.compiler_alloc_id_world.raw_pool: must contain exactly the raw ID prefix 1..=frontier"
+  let compactPool ← if compact then (compactSourcePool j lastNat).map some else pure none
+  let poolJson ← if compact then pure #[] else arrayField j "raw_pool" path
+  unless compact || poolJson.size == lastNat do
+    throw "$.compiler_alloc_id_world.raw_pool: must contain exactly the raw ID prefix 1..=frontier"
   let mut nodeIndexByGraphId : Std.HashMap Nat Nat := {}
   let mut nodeIndexBySourceId : Std.HashMap Nat Nat := {}
   for (node, index) in nodes.toList.zipIdx do
@@ -2260,9 +2328,13 @@ def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except
         throw "$.compiler_alloc_id_world: duplicate source AllocId witness on allocation nodes"
       nodeIndexBySourceId := nodeIndexBySourceId.insert sourceId.toNat index
   let mut pool := #[]
-  for (value, index) in poolJson.toList.zipIdx do
+  for index in [:lastNat] do
     let rowPath := s!"$.compiler_alloc_id_world.raw_pool[{index}]"
-    let row ← parseSourceAllocIdPoolRow value rowPath
+    let row ← match compactPool with
+      | some compact => compactSourcePoolRow compact index nodes nodeIndexBySourceId
+      | none => do
+        let some value := poolJson[index]? | throw "source AllocId pool row absent"
+        parseSourceAllocIdPoolRow value rowPath
     unless row.sourceAllocId.toNat == index + 1 do
       throw s!"{rowPath}.source_alloc_id: pool rows must be ordered and contiguous from one"
     if row.status == .serialized then
