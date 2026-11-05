@@ -21,6 +21,38 @@ private def malformedObject : Json := Id.run do
   return .obj ⟨⟨root⟩⟩
 
 def main : IO Unit := do
+  let flagged := document #[Json.mkObj [("type_id", toJson (7 : Nat))],
+      .arr #[reference 0], Json.mkObj [("locals", .arr #[])]] [("root", reference 1)]
+  let addFlags (flags : Json) : Json := match flagged with
+    | .obj fields => .obj (fields.insert "shared_payloads" (Json.mkObj [
+        ("schema_version", toJson (2 : Nat)), ("nodes", .arr #[
+          Json.mkObj [("type_id", toJson (7 : Nat))], .arr #[reference 0],
+          Json.mkObj [("locals", .arr #[])]]), ("scan_flags", flags)]))
+    | other => other
+  let good := addFlags (toJson (#[1, 1, 2] : Array Nat))
+  check good
+  for enabled in [true, false] do
+    match JsonTraversalCache.resolve good enabled with
+    | .ok _ => pure ()
+    | .error error => throw (IO.userError s!"valid prepared summaries rejected: {error}")
+    for bad in [toJson (#[0, 1, 2] : Array Nat), toJson (#[1, 15, 2] : Array Nat),
+        toJson (#[1] : Array Nat), toJson (#[1, 16, 2] : Array Nat), .null] do
+      match JsonTraversalCache.resolve (addFlags bad) enabled with
+      | .error error => unless error.contains "scan_flags" do
+          throw (IO.userError s!"wrong prepared-summary error: {error}")
+      | .ok _ => throw (IO.userError "forged scan summaries accepted")
+  for capacity in [0, 1, 7, 64] do
+    let mut dense := JsonTraversalCache.IdentitySet.empty capacity
+    let mut reference : Std.HashSet JsonTraversalCache.IdentityKey := {}
+    let keys := (Array.range 80).map (fun n => .node ((n * 17) % 83))
+    let raw := (JsonTraversalCache.Node.uncached (.str "raw fallback")).identity
+    let keys := keys.push raw
+    for key in keys do
+      dense := dense.insert key
+      reference := reference.insert key
+      for query in keys do
+        unless dense.contains query == reference.contains query do
+          throw (IO.userError "dense identity membership differs from exact reference set")
   for n in [:40] do
     let leaf := Json.mkObj [("n",toJson n), ("s",.str s!"value-{n}"), ("flag",toJson (n % 2 == 0)), ("null",.null)]
     let nodes := #[leaf, leaf, .arr #[reference 0, reference 1],

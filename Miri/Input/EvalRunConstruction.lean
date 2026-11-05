@@ -1,3 +1,4 @@
+import Miri.Interpreter.NativeRunLoop
 import Miri.Input.EvalCallbackMachine
 import Miri.Input.EvalExecutable
 import Miri.Input.HostRuntime
@@ -435,6 +436,29 @@ def runUntilTerminalProfiled
       return classifyError state error
     | .ok () => pure ()
   return .pending state (.outerChoicesExhausted iterations)
+
+/-- Executable selection; existing finite proof APIs retain their bounds. -/
+inductive Driver where
+  | bounded
+  | native (iterationLimit : Option Nat)
+
+def runNativeProfiled (profile : Lean.Options)
+    (loop : RunLoopHooks (State Os R P H D O Aff B Poll Instant System Native Profiler)
+      C Callback) (choice : C) (limit : Option Nat)
+    (initial : State Os R P H D O Aff B Poll Instant System Native Profiler) :
+    RunResult (State Os R P H D O Aff B Poll Instant System Native Profiler) :=
+  let step := fun iterations state =>
+    let state := observeProgress profile "before" iterations state
+    let (after, result) := iterationProfiled profile loop choice iterations state
+    (observeProgress profile "after" iterations after, result)
+  match NativeRunLoop.run step limit initial with
+  | .exhausted state iterations => .pending state (.outerChoicesExhausted iterations)
+  | .stopped state error iterations =>
+    if error == .callback "choice input unknown: tape exhausted" then
+      .pending state (.choiceTapeExhausted iterations)
+    else if let .resourceExhaustion _ := error then
+      .pending state (.sourceResourceExhausted iterations error)
+    else classifyError state error
 
 /-- Original API, with observation disabled. -/
 def runUntilTerminal

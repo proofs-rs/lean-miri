@@ -57,5 +57,5 @@ pub(super) fn export<'tcx>(tcx:TyCtxt<'tcx>,context:&mut ExportContext<'tcx>)->V
         let mut result=if tcx.lang_items().owned_box().is_some(){compiler_fact(type_json(context,tcx,ty::Ty::new_box(tcx,input)))}else{unavailable_compiler_fact("Box constructor requires owned_box lang item")};
         result["query_kind"]=json!("box_type");result["typing_env"]=json!("fully_monomorphized");result["input_type"]=type_json(context,tcx,input);records.push(result);
     }
-    Value::Array(records)
+    Value::Array(records.into())
 }

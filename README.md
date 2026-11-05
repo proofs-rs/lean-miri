@@ -36,6 +36,8 @@ Alternatively, install Lean locally with `bash tools/setup-lean.sh`, then use
 ### Run a Rust program
 
 The execution pipeline is Rust source → exported MIR JSON → Lean interpreter.
+The exporter uses an indexed graph with shared field names and payload nodes by
+default; the runner also accepts existing shared-payload schema 2 exports.
 On Linux x86_64, first prepare the pinned Rust compiler and MIR-enabled standard
 library using the [Rust setup instructions](docs/development.md#rust-toolchain-and-reference-setup).
 Then, from the repository root:

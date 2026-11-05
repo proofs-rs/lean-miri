@@ -357,3 +357,30 @@ not executed. Normal termination for selected programs/seeds is finite evidence.
 UB freedom requires excluding UB on every reachable permitted finite prefix;
 local proofs, open graph exploration and source inventories do not establish that
 whole-machine claim.
+
+## Upstream UI sources
+
+[`upstream_ui/`](upstream_ui/README.md) documents the full pinned pass/fail
+inventory and `python3 tools/check-upstream-ui.py`. It expands revisions,
+compares genuine prepared reference runs with the native Lean runner, and
+rejects unrelated failures for expected-UB cases. The separate
+`.github/workflows/upstream-ui.yml` workflow runs every compatible case across
+32 shards; unsupported profiles remain in each shard's inventory. Full sweep
+completion and remaining blockers must be checked in its artifacts, not inferred
+from Python oracle tests or the existence of this command.
+
+The dedicated `tools/check-decoder.sh` also tests the versioned indexed execution
+image: strict row/edge/dictionary rejection in Lean and Python, and comparison
+against retained schema-3 exports for typed MIR, source-binding cache fallback,
+ordered diagnostics and execution readiness. Its independent transport adapter
+is `tests/input/build_prepared_image_cases.py`; these are finite decoder checks,
+not Rust executions or an equivalence proof for arbitrary programs.
+
+Compiler metadata reuse checks are included in `tools/check-decoder.sh`.
+`CompilerInstanceSourceTests2026.lean` compares cached and independent raw
+instance decoders, table extension order, all instance/shim kinds, malformed
+fields, changed type contexts and changed source values. The generated metadata
+cases compare indexed and reference readiness/ordered diagnostics, including
+debug ancestors, noncanonical query indices and compiler-argument failures.
+`CompilerPreparationInterner2026.lean` and `CompilerBacktraceIndexTests2026.lean`
+remain dedicated checks for span IDs, conflicts and rollback.

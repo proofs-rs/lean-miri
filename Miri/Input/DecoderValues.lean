@@ -1,6 +1,8 @@
 import Miri.Input.Model.Types
+import Miri.Interpreter.Instance
 import Miri.Input.SharedPayloads
 import Miri.Input.JsonTraversalCache
+import Std.Data.HashMap.Raw
 
 namespace Miri.Input.DecoderValues
 
@@ -12,7 +14,7 @@ def expectedSchema : String := "lean-miri-rustc-mir"
 def expectedSchemaVersion : Nat := 3
 def expectedCompilerAbiLayoutSchema : String := "physical_ty_and_layout_v1"
 
-def escapePathKey (key : String) : String :=
+def escapePathKeyReference (key : String) : String :=
   key.toList.foldl (fun out char => out ++ match char with
     | '%' => "%25"
     | '\\' => "%5C"
@@ -20,6 +22,40 @@ def escapePathKey (key : String) : String :=
     | '[' => "%5B"
     | ']' => "%5D"
     | _ => String.ofList [char]) ""
+
+private def pathKeyNeedsEscape (c : Char) : Bool :=
+  c == '%' || c == '\\' || c == '.' || c == '[' || c == ']'
+
+/-- Most exporter keys need no escaping. Scan without allocating a character
+list or rebuilding the string; preserve the original transform otherwise. -/
+def escapePathKey (key : String) : String :=
+  if key.contains pathKeyNeedsEscape then escapePathKeyReference key else key
+
+private theorem escapePathKey_unescaped (cs : List Char) (out : String) (h : cs.any pathKeyNeedsEscape = false) :
+    cs.foldl (fun out char => out ++ match char with
+      | '%' => "%25" | '\\' => "%5C" | '.' => "%2E" | '[' => "%5B" | ']' => "%5D"
+      | _ => String.ofList [char]) out = out ++ String.ofList cs := by
+  induction cs generalizing out with
+  | nil => simp
+  | cons c cs ih =>
+    simp only [List.any_cons, Bool.or_eq_false_iff] at h
+    have hc := h.1
+    simp only [pathKeyNeedsEscape, Bool.or_eq_false_iff, beq_eq_false_iff_ne] at hc
+    simp only [List.foldl_cons]
+    rw [ih _ h.2]
+    simp [hc, String.ofList_cons]
+    apply String.toList_inj.mp
+    simp [List.append_assoc]
+
+theorem escapePathKey_eq_reference (key : String) :
+    escapePathKey key = escapePathKeyReference key := by
+  unfold escapePathKey
+  split
+  · rfl
+  · rename_i h
+    have hx : key.toList.any pathKeyNeedsEscape = false := by
+      simpa [String.contains_bool_eq] using h
+    simpa [escapePathKeyReference] using (escapePathKey_unescaped key.toList "" hx).symm
 
 def joinPath (path key : String) : String :=
   let key := escapePathKey key
@@ -50,7 +86,28 @@ def optionalNatField (j : Json) (key path : String) : Except String (Option Nat)
     (v.getNat?).map some |>.mapError fun e => s!"{joinPath path key}: expected unsigned integer or null ({e})"
 
 def optionalField (j : Json) (key : String) : Option Json :=
-  (j.getObjVal? key).toOption
+  match j with
+  | .obj fields => fields[key]?
+  | _ => none
+
+theorem optionalField_eq_getObjVal (j : Json) (key : String) :
+    optionalField j key = (j.getObjVal? key).toOption := by
+  cases j <;> try rfl
+  case obj fields => cases h : fields[key]? <;> simp [optionalField, Json.getObjVal?, h] <;> rfl
+
+/-- Optional string queries avoid constructing discarded missing-field errors. -/
+def optionalStringValue (j : Json) (key : String) : Option String :=
+  match optionalField j key with
+  | some (.str value) => some value
+  | _ => none
+
+theorem optionalStringValue_eq_getObjValAs (j : Json) (key : String) :
+    optionalStringValue j key = (j.getObjValAs? String key).toOption := by
+  rw [optionalStringValue, optionalField_eq_getObjVal]
+  unfold Json.getObjValAs? Json.getObjValD
+  cases h : j.getObjVal? key with
+  | error error => rfl
+  | ok value => cases value <;> rfl
 
 def optionalString (j : Json) (key path : String) : Except String (Option String) := do
   match optionalField j key with
@@ -94,6 +151,11 @@ structure DecodeMemo where
   private sourceSpans : Std.HashMap Json SourceSpanData := {}
   private layouts : Std.HashMap Json Layout := {}
   private functionAbis : Std.HashMap Json FunctionAbi := {}
+  /-- Successful MIR decodes, bound to both the source path and complete raw value.
+  Only the document-local indexed reader populates these fields. -/
+  private mirStatements : Std.HashMap String (Json × TypedValue) := {}
+  private mirTerminators : Std.HashMap String (Json × TypedValue) := {}
+  private compilerMirValues : Std.HashMap String (Json × TypedValue) := {}
 
 def emptyDecodeMemo : DecodeMemo := {}
 
@@ -129,7 +191,12 @@ def parseSourceInfo (j : Json) (path : String) (memo : DecodeMemo := {}) : Excep
     scope := ← fieldNat j "scope" path
   }
 
-def hasField (j : Json) (key : String) : Bool := (j.getObjVal? key).isOk
+def hasField (j : Json) (key : String) : Bool := (optionalField j key).isSome
+
+theorem hasField_eq_getObjVal (j : Json) (key : String) :
+    hasField j key = (j.getObjVal? key).isOk := by
+  rw [hasField, optionalField_eq_getObjVal]
+  cases j.getObjVal? key <;> rfl
 
 def isSourceSpanJson (j : Json) : Bool :=
   hasField j "lo" && hasField j "hi" && hasField j "start" && hasField j "end" &&
@@ -272,7 +339,7 @@ def asTag? (j : Json) (key : String) : Option String :=
   | none => none
   | some value => match value.getStr? with | .ok text => some text | .error _ => none
 
-def singletonRef (j : Json) (key : String) : Option Nat :=
+def singletonRefReference (j : Json) (key : String) : Option Nat :=
   match objectFields j with
   | .error _ => none
   | .ok fields =>
@@ -281,6 +348,13 @@ def singletonRef (j : Json) (key : String) : Option Nat :=
       if name != key then none else
         match value.getNat? with | .ok id => some id | .error _ => none
     | _ => none
+
+/-- Inspect actual tree shape, ignoring untrusted Raw size annotations. -/
+def singletonRef (j : Json) (key : String) : Option Nat :=
+  match j with
+  | .obj ⟨⟨.inner _ name value .leaf .leaf⟩⟩ =>
+    if name != key then none else value.getNat?.toOption
+  | _ => none
 
 def isTypeRef (j : Json) : Option Nat := singletonRef j "type_id"
 
@@ -490,19 +564,60 @@ def parseUserTypeProjection (j : Json) (path : String) : Except String UserTypeP
     throw s!"{path}: supported user-type projection is missing base index or projection sequence"
   return ⟨status, baseIndex, projections, j⟩
 
-abbrev DecodeValueM := StateT (Std.HashMap DecodeValueKey TypedValue) (Except String)
+/-- Document-local node identity plus every decoding context flag. Only successful
+results are memoized; diagnostics are rebased separately for each occurrence. -/
+structure RuntimeValueKey where
+  json : JsonTraversalCache.IdentityKey
+  domain : Domain
+  tagCategory : Option TypedEnumTag
+  isRegionPath : Bool
+  isHirIdPath : Bool
+  isCoveragePath : Bool
+  isCastCoercionPath : Bool
+  deriving BEq, Hashable
+
+def runtimeValueKey (node : JsonTraversalCache.Node) (path : String)
+    (domain : Domain) (tagCategory : Option TypedEnumTag) : RuntimeValueKey := {
+  json := node.identity
+  domain := domain
+  tagCategory := tagCategory
+  isRegionPath := path.endsWith ".region"
+  isHirIdPath := path.endsWith ".hir_id"
+  isCoveragePath := path.endsWith ".coverage"
+  isCastCoercionPath := path.endsWith ".cast_kind.coercion"
+}
+
+/-- The raw fallback retains the original key comparison and hash exactly,
+including manually constructed JSON whose BEq need not be lawful. -/
+theorem runtimeValueKey_uncached_beq_eq (a b : Json)
+    (pathA pathB : String) (domainA domainB : Domain)
+    (tagA tagB : Option TypedEnumTag) :
+    (runtimeValueKey (.uncached a) pathA domainA tagA ==
+      runtimeValueKey (.uncached b) pathB domainB tagB) =
+    (decodeValueKey a pathA domainA tagA == decodeValueKey b pathB domainB tagB) := rfl
+
+theorem runtimeValueKey_uncached_hash_eq (value : Json) (path : String)
+    (domain : Domain) (tag : Option TypedEnumTag) :
+    hash (runtimeValueKey (.uncached value) path domain tag) =
+      hash (decodeValueKey value path domain tag) := rfl
+
+abbrev DecodeValueM := StateT (Std.HashMap RuntimeValueKey TypedValue) (Except String)
 
 mutual
-partial def decodeValueM (j : Json) (path : String) (domain : Domain)
+partial def decodeValueM (node : JsonTraversalCache.Node) (path : String) (domain : Domain)
     (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : DecodeValueM TypedValue := do
-  let key := decodeValueKey j path domain tagCategory
+  match node.value with
+  | .arr _ | .obj _ => pure ()
+  | _ => return ← decodeValueBody node path domain tagCategory memo
+  let key := runtimeValueKey node path domain tagCategory
   if let some value := (← get).get? key then return value
-  let value ← decodeValueBody j path domain tagCategory memo
+  let value ← decodeValueBody node path domain tagCategory memo
   modify fun cache => cache.insert key value
   return value
 
-partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
+partial def decodeValueBody (node : JsonTraversalCache.Node) (path : String) (domain : Domain)
     (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : DecodeValueM TypedValue := do
+  let j := node.value
   if let some id := isTypeRef j then return .typeRef id
   if let some id := isAllocationRef j then return .allocationRef id
   if statusOf? j == some "debug_payload" then return .diagnostic j
@@ -511,7 +626,7 @@ partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
     let mut decoded := #[]
     let mut index := 0
     for value in values do
-      decoded := decoded.push (← decodeValueM value s!"{path}[{index}]" domain tagCategory memo)
+      decoded := decoded.push (← decodeValueM (node.child index value) s!"{path}[{index}]" domain tagCategory memo)
       index := index + 1
     return .array decoded
   | .obj _ =>
@@ -526,7 +641,7 @@ partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
     let parentTag := match effectiveDomain with
       | .rvalue | .operand | .statement | .terminator => domainTag j effectiveDomain
       | _ => none
-    for (key, value) in fields do
+    for ((key, value), index) in fields.toList.zipIdx do
       let nextDomain := childDomain effectiveDomain key
       let decoded ← if key == "user_type_projection" && parentTag == some "AscribeUserType" then
           .userTypeProjection <$> parseUserTypeProjection value (joinPath path key)
@@ -540,7 +655,7 @@ partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
           match unOpFromExportTag tag with
           | some op => pure (.unOperator op status)
           | none => pure (.unknownUnOperator tag status)
-        else decodeValueM value (joinPath path key) nextDomain (typedEnumCategory? key path parentTag value) memo
+        else decodeValueM (node.child index value) (joinPath path key) nextDomain (typedEnumCategory? key path parentTag value) memo
       let isTagField := match effectiveDomain with
         | .statement | .terminator | .rvalue | .operand | .projection => key == "status" || key == "variant" || key == "kind"
         | _ => false
@@ -590,7 +705,77 @@ end
 
 def decodeValue (j : Json) (path : String) (domain : Domain := .any)
     (tagCategory : Option TypedEnumTag := none) (memo : DecodeMemo := {}) : Except String TypedValue := do
-  (decodeValueM j path domain tagCategory memo).run' {}
+  (decodeValueM (.uncached j) path domain tagCategory memo).run' {}
+
+/-- Locate MIR roots without scanning compiler metadata that cannot contain bodies.
+The paths follow exactly the public parser's array and object conventions. -/
+private partial def indexedMirRoots (node : JsonTraversalCache.Node) (path : String) :
+    Array (String × Domain × JsonTraversalCache.Node) := Id.run do
+  if !node.mayContain 2 then return #[]
+  let mut roots := #[]
+  match node.value with
+  | .arr values =>
+    for h : index in [:values.size] do
+      roots := roots ++ indexedMirRoots (node.child index values[index]) s!"{path}[{index}]"
+  | .obj fields =>
+    for ((name, value), index) in fields.toList.zipIdx do
+      let child := node.child index value
+      let childPath := joinPath path name
+      if name == "basic_blocks" then
+        if let .arr blocks := value then
+          for h : blockIndex in [:blocks.size] do
+            let block := child.child blockIndex blocks[blockIndex]
+            let blockPath := s!"{childPath}[{blockIndex}]"
+            if let some (.arr statements) := optionalField block.value "statements" then
+              let source := block.field "statements" (.arr statements)
+              for h : statementIndex in [:statements.size] do
+                let wrapper := source.child statementIndex statements[statementIndex]
+                if let some kind := optionalField wrapper.value "kind" then
+                  roots := roots.push (s!"{blockPath}.statements[{statementIndex}].kind",
+                    .statement, wrapper.field "kind" kind)
+            if let some terminator := optionalField block.value "terminator" then
+              let wrapper := block.field "terminator" terminator
+              if let some kind := optionalField terminator "kind" then
+                roots := roots.push (s!"{blockPath}.terminator.kind", .terminator,
+                  wrapper.field "kind" kind)
+      else
+        roots := roots ++ indexedMirRoots child childPath
+  | _ => pure ()
+  return roots
+
+/-- Reuse the checked typed reader across MIR roots. Failed decodes are omitted:
+ordinary parsing still reports its original first error and occurrence path. -/
+def prepareIndexedMirMemo (root : JsonTraversalCache.CheckedRoot) (memo : DecodeMemo) : DecodeMemo := Id.run do
+  -- Only checked prepared images assign an ID to the document root. Legacy
+  -- and uncached roots may contain manually constructed noncanonical JSON;
+  -- they retain the ordinary decoder rather than populating this private memo.
+  let .cached key _ := root.node | return memo
+  if key.id.isNone then return memo
+  let mut result := memo
+  let mut cache := {}
+  for (path, domain, node) in indexedMirRoots root.node "$" do
+    -- Transfer ownership before the fallible call. Retaining the old map for
+    -- an error branch would copy the entire table on every successful root.
+    let previous := cache
+    cache := {}
+    match (decodeValueM node path domain none memo).run previous with
+    | .ok (value, next) =>
+      cache := next
+      if domain == .statement then
+        result := { result with mirStatements := result.mirStatements.insert path (node.value, value) }
+      else
+        result := { result with mirTerminators := result.mirTerminators.insert path (node.value, value) }
+    | .error _ => pure ()
+    -- The source consistency checker uses auto-domain and compiler context.
+    -- Decode that exact context as well; do not assume it equals the MIR domain.
+    let previous := cache
+    cache := {}
+    match (decodeValueM node "$compiler_value" .any none memo).run previous with
+    | .ok (value, next) =>
+      cache := next
+      result := { result with compilerMirValues := result.compilerMirValues.insert path (node.value, value) }
+    | .error _ => pure ()
+  return result
 
 def statusObligation? (status : PayloadStatus) (path : String) : Option Obligation :=
   match status with
@@ -870,44 +1055,38 @@ structure RuntimeValueDecode where
   summary : TypedValue
   obligations : Option RuntimeObligationSequence
 
-/-- Document-local node identity plus every decoding context flag. Only successful
-results are memoized; diagnostics are rebased separately for each occurrence. -/
-structure RuntimeValueKey where
-  json : JsonTraversalCache.IdentityKey
-  domain : Domain
-  tagCategory : Option TypedEnumTag
-  isRegionPath : Bool
-  isHirIdPath : Bool
-  isCoveragePath : Bool
-  isCastCoercionPath : Bool
-  deriving BEq, Hashable
+/-- Dense transport IDs select a small context bucket directly. Inline/raw
+JSON retains the original exact-key hash map. No hash is used as identity. -/
+structure RuntimeDecodeCache where
+  private dense : Array (List (RuntimeValueKey × (String × RuntimeValueDecode))) := #[]
+  private fallback : Std.HashMap RuntimeValueKey (String × RuntimeValueDecode) := {}
 
-def runtimeValueKey (node : JsonTraversalCache.Node) (path : String)
-    (domain : Domain) (tagCategory : Option TypedEnumTag) : RuntimeValueKey := {
-  json := node.identity
-  domain := domain
-  tagCategory := tagCategory
-  isRegionPath := path.endsWith ".region"
-  isHirIdPath := path.endsWith ".hir_id"
-  isCoveragePath := path.endsWith ".coverage"
-  isCastCoercionPath := path.endsWith ".cast_kind.coercion"
-}
+private def RuntimeDecodeCache.forRoot (node : JsonTraversalCache.Node) : RuntimeDecodeCache :=
+  match node with
+  | .cached key _ => match key.id with
+    | some id => { dense := Array.replicate (id + 1) [] }
+    | none => {}
+  | .uncached _ => {}
 
-/-- The raw fallback retains the original key comparison and hash exactly,
-including manually constructed JSON whose BEq need not be lawful. -/
-theorem runtimeValueKey_uncached_beq_eq (a b : Json)
-    (pathA pathB : String) (domainA domainB : Domain)
-    (tagA tagB : Option TypedEnumTag) :
-    (runtimeValueKey (.uncached a) pathA domainA tagA ==
-      runtimeValueKey (.uncached b) pathB domainB tagB) =
-    (decodeValueKey a pathA domainA tagA == decodeValueKey b pathB domainB tagB) := rfl
+private def RuntimeDecodeCache.get? (cache : RuntimeDecodeCache) (key : RuntimeValueKey) :
+    Option (String × RuntimeValueDecode) :=
+  match key.json with
+  | .node id =>
+    match cache.dense[id]? with
+    | some bucket => (bucket.find? (fun entry => entry.1 == key)).map (·.2)
+    | none => cache.fallback.get? key
+  | .raw _ => cache.fallback.get? key
 
-theorem runtimeValueKey_uncached_hash_eq (value : Json) (path : String)
-    (domain : Domain) (tag : Option TypedEnumTag) :
-    hash (runtimeValueKey (.uncached value) path domain tag) =
-      hash (decodeValueKey value path domain tag) := rfl
+private def RuntimeDecodeCache.insert (cache : RuntimeDecodeCache) (key : RuntimeValueKey)
+    (value : String × RuntimeValueDecode) : RuntimeDecodeCache :=
+  match key.json with
+  | .node id =>
+    if h : id < cache.dense.size then
+      let bucket := cache.dense[id]
+      { cache with dense := cache.dense.set id ((key,value) :: bucket) h }
+    else { cache with fallback := cache.fallback.insert key value }
+  | .raw _ => { cache with fallback := cache.fallback.insert key value }
 
-abbrev RuntimeDecodeCache := Std.HashMap RuntimeValueKey (String × RuntimeValueDecode)
 
 def runtimeLocalObligations (value : TypedValue) (path : String)
     (children : Option RuntimeObligationSequence := none) : Option RuntimeObligationSequence :=
@@ -942,23 +1121,31 @@ abbrev RuntimeDecodeM := StateT RuntimeDecodeCache (Except String)
 
 mutual
 partial def decodeRuntimeValueM (node : JsonTraversalCache.Node) (path : String) (domain : Domain)
-    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : RuntimeDecodeM RuntimeValueDecode := do
-  if !node.shouldMemo then return ← decodeRuntimeValueBody node path domain tagCategory memo
+    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo)
+    (reuse : JsonTraversalCache.Node → String → Option RuntimeValueDecode) : RuntimeDecodeM RuntimeValueDecode := do
+  -- Scalar leaves cannot be references, source records or status objects. Most
+  -- graph edges end here; avoid re-running all object classifiers for each one.
+  match node.value with
+  | .null | .bool _ | .num _ => return ⟨.scalar node.value, none⟩
+  | .str _ => if tagCategory.isNone then return ⟨.scalar node.value, none⟩
+  | _ => pure ()
+  if !node.shouldMemo then return ← decodeRuntimeValueBody node path domain tagCategory memo reuse
   -- Scalars are cheap and mostly inline. Giving every occurrence its own cache
   -- entry would retain millions of unique leaf IDs without sharing any work.
   match node.value with
   | .arr _ | .obj _ => pure ()
-  | _ => return ← decodeRuntimeValueBody node path domain tagCategory memo
+  | _ => return ← decodeRuntimeValueBody node path domain tagCategory memo reuse
   let key := runtimeValueKey node path domain tagCategory
   if let some (oldPath, decoded) := (← get).get? key then
     if oldPath == path then return decoded
     return { decoded with obligations := decoded.obligations.map fun issues => .rebase oldPath path issues }
-  let decoded ← decodeRuntimeValueBody node path domain tagCategory memo
+  let decoded ← decodeRuntimeValueBody node path domain tagCategory memo reuse
   modify fun cache => cache.insert key (path, decoded)
   return decoded
 
 partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : String) (domain : Domain)
-    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : RuntimeDecodeM RuntimeValueDecode := do
+    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo)
+    (reuse : JsonTraversalCache.Node → String → Option RuntimeValueDecode) : RuntimeDecodeM RuntimeValueDecode := do
   let j := node.value
   if let some id := isTypeRef j then
     let value := TypedValue.typeRef id
@@ -974,7 +1161,7 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
     let mut obligations : Option RuntimeObligationSequence := none
     let mut index := 0
     for value in values do
-      let child ← decodeRuntimeValueM (node.child index value) s!"{path}[{index}]" domain tagCategory memo
+      let child ← decodeRuntimeValueM (node.child index value) s!"{path}[{index}]" domain tagCategory memo reuse
       obligations := appendRuntimeObligations obligations child.obligations
       index := index + 1
     let summary := TypedValue.array #[]
@@ -1014,7 +1201,14 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
             | some op => TypedValue.unOperator op status
             | none => TypedValue.unknownUnOperator tag status
           pure ⟨decoded, runtimeLocalObligations decoded childPath⟩
-        else decodeRuntimeValueM (node.child index value) childPath nextDomain (typedEnumCategory? key path parentTag value) memo
+        else do
+          let category := typedEnumCategory? key path parentTag value
+          -- Compiler arguments already have a complete checked typed projection.
+          -- This field is never retained in a parent's runtime summary.
+          if key == "generic_args" && nextDomain == .any && category.isNone then
+            if let some checked := reuse (node.child index value) childPath then pure checked
+            else decodeRuntimeValueM (node.child index value) childPath nextDomain category memo reuse
+          else decodeRuntimeValueM (node.child index value) childPath nextDomain category memo reuse
       let isTagField := match effectiveDomain with
         | .statement | .terminator | .rvalue | .operand | .projection => key == "status" || key == "variant" || key == "kind"
         | _ => false
@@ -1091,7 +1285,7 @@ end
 
 def decodeRuntimeValue (node : JsonTraversalCache.Node) (path : String) (domain : Domain := .any)
     (tagCategory : Option TypedEnumTag := none) (memo : DecodeMemo := {}) : Except String RuntimeValueDecode := do
-  (decodeRuntimeValueM node path domain tagCategory memo).run' {}
+  (decodeRuntimeValueM node path domain tagCategory memo (fun _ _ => none)).run' (.forRoot node)
 
 def jsonArray (j : Json) (path : String) : Except String (Array Json) :=
   j.getArr? |>.mapError fun e => s!"{path}: expected array ({e})"
@@ -2045,8 +2239,74 @@ def parseSourceAllocIdDedupRow (j : Json) (path : String) : Except String Source
   | _, some _ => throw s!"{joinPath path "bytes_hex"}: only valid for byte-image dedup key"
   pure ⟨keyKind, keyAllocationId, byteImageHex, salts⟩
 
+/-- The compact world normalizes facts already owned by allocation nodes.
+Only unmaterialized memory globals need separate projection evidence. The
+result still passes the same complete pool/catalog validator as legacy input. -/
+private structure CompactSourcePool where
+  kinds : ByteArray
+  opaqueMemory : Std.HashMap Nat SourceAllocIdPoolRow
+
+private def compactSourcePool (j : Json) (count : Nat) : Except String CompactSourcePool := do
+  if (j.getObjVal? "raw_pool").isOk then
+    throw "$.compiler_alloc_id_world: compact world also supplies legacy raw_pool"
+  let kinds := (← fieldString j "raw_kinds" "$.compiler_alloc_id_world").toUTF8
+  unless kinds.size == count do throw "$.compiler_alloc_id_world.raw_kinds: wrong raw ID prefix length"
+  let mut memory := {}
+  for row in ← arrayField j "opaque_memory" "$.compiler_alloc_id_world" do
+    let row ← parseSourceAllocIdPoolRow row "$.compiler_alloc_id_world.opaque_memory"
+    unless row.kind == .memory && row.status == .opaque && row.sourceAllocId.toNat ≤ count do
+      throw "$.compiler_alloc_id_world.opaque_memory: expected opaque memory within prefix"
+    if memory.contains row.sourceAllocId.toNat then
+      throw "$.compiler_alloc_id_world.opaque_memory: duplicate raw identity"
+    memory := memory.insert row.sourceAllocId.toNat row
+  return ⟨kinds,memory⟩
+
+private def compactSourcePoolRow (compact : CompactSourcePool) (index : Nat)
+    (nodes : Array AllocationNode) (sourceIndex : Std.HashMap Nat Nat) :
+    Except String SourceAllocIdPoolRow := do
+  let some tag := compact.kinds[index]? | throw "compact source pool index absent"
+  let kind ← match tag.toNat with
+    | 100 => pure SourceAllocIdKind.dangling -- d
+    | 109 => pure .memory -- m
+    | 102 => pure .function -- f
+    | 118 => pure .vtable -- v
+    | 115 => pure .static -- s
+    | 116 => pure .typeId -- t
+    | _ => throw "$.compiler_alloc_id_world.raw_kinds: unknown source global kind"
+  let raw := index + 1
+  let node? := sourceIndex[raw]?.bind (nodes[·]?)
+  if let some projection := compact.opaqueMemory[raw]? then
+    unless kind == .memory && (node?.map (·.status != .supported)).getD true do
+      throw "$.compiler_alloc_id_world.opaque_memory: redundant or mismatched memory projection"
+    return projection
+  if kind == .dangling then
+    return { sourceAllocId := UInt64.ofNat raw, kind, status := .dangling, allocationId := none }
+  match node? with
+  | some node =>
+    if node.status != .supported then
+      unless kind != .memory do throw "compact source pool lacks opaque memory projection"
+      return { sourceAllocId := UInt64.ofNat raw, kind, status := .opaque, allocationId := none, opaqueAllocationId := some node.id }
+    if kind != .memory then
+      return { sourceAllocId := UInt64.ofNat raw, kind, status := .serialized, allocationId := some node.id }
+    let some (.memory image) := node.data | throw "compact source memory has no typed image"
+    unless image.mutability == .immutable || image.mutability == .mutable do
+      throw "compact source memory has unknown mutability"
+    let initialized := image.initializationRanges.all (·.initialized)
+    let provenance := !image.relocations.isEmpty
+    let eligible := image.mutability == .immutable && image.alignBytes == 1 && initialized && !provenance
+    if eligible && !canonicalLowerHex image.bytesHex then
+      throw "compact source byte image is not canonical lowercase hexadecimal"
+    return ⟨UInt64.ofNat raw,kind,.serialized,some node.id,none,
+      some image.mutability,some image.alignBytes,some initialized,some provenance,
+      if eligible then some image.bytesHex else none⟩
+  | none =>
+    unless kind != .memory do throw "compact source pool lacks opaque memory projection"
+    return { sourceAllocId := UInt64.ofNat raw, kind, status := .opaque, allocationId := none }
+
 def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except String CompilerAllocIdWorld := do
-  unless (← fieldString j "schema" "$.compiler_alloc_id_world") == "rustc_alloc_id_world_v1" do
+  let schema ← fieldString j "schema" "$.compiler_alloc_id_world"
+  let compact := schema == "rustc_alloc_id_world_v2"
+  unless compact || schema == "rustc_alloc_id_world_v1" do
     throw "$.compiler_alloc_id_world.schema: unsupported source AllocId world schema"
   unless (← fieldString j "profile" "$.compiler_alloc_id_world") == "prepared_post_export" do
     throw "$.compiler_alloc_id_world.profile: unsupported source AllocId world profile"
@@ -2061,8 +2321,10 @@ def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except
     throw "$.compiler_alloc_id_world.frontier: sentinel, last reservation, and next counter disagree"
   let poolThrough ← fieldNat j "global_pool_complete_through" path
   unless poolThrough == lastNat do throw "$.compiler_alloc_id_world.global_pool_complete_through: does not equal frontier"
-  let poolJson ← arrayField j "raw_pool" path
-  unless poolJson.size == lastNat do throw "$.compiler_alloc_id_world.raw_pool: must contain exactly the raw ID prefix 1..=frontier"
+  let compactPool ← if compact then (compactSourcePool j lastNat).map some else pure none
+  let poolJson ← if compact then pure #[] else arrayField j "raw_pool" path
+  unless compact || poolJson.size == lastNat do
+    throw "$.compiler_alloc_id_world.raw_pool: must contain exactly the raw ID prefix 1..=frontier"
   let mut nodeIndexByGraphId : Std.HashMap Nat Nat := {}
   let mut nodeIndexBySourceId : Std.HashMap Nat Nat := {}
   for (node, index) in nodes.toList.zipIdx do
@@ -2073,9 +2335,13 @@ def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except
         throw "$.compiler_alloc_id_world: duplicate source AllocId witness on allocation nodes"
       nodeIndexBySourceId := nodeIndexBySourceId.insert sourceId.toNat index
   let mut pool := #[]
-  for (value, index) in poolJson.toList.zipIdx do
+  for index in [:lastNat] do
     let rowPath := s!"$.compiler_alloc_id_world.raw_pool[{index}]"
-    let row ← parseSourceAllocIdPoolRow value rowPath
+    let row ← match compactPool with
+      | some compact => compactSourcePoolRow compact index nodes nodeIndexBySourceId
+      | none => do
+        let some value := poolJson[index]? | throw "source AllocId pool row absent"
+        parseSourceAllocIdPoolRow value rowPath
     unless row.sourceAllocId.toNat == index + 1 do
       throw s!"{rowPath}.source_alloc_id: pool rows must be ordered and contiguous from one"
     if row.status == .serialized then
@@ -2341,6 +2607,17 @@ def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except
     unsupportedKeyFamilies := unsupportedFamilies
   }
 
+/-- String wire equality is reflexive even for a malformed JSON object. Pointer
+reuse avoids serializing an unchanged payload twice; distinct values still use
+exactly the historical wire comparison. -/
+def jsonWireEq (left right : Json) : Bool :=
+  withPtrEq left right (fun _ => left.compress == right.compress)
+    (by intro equal; cases equal; simp)
+
+theorem jsonWireEq_eq (left right : Json) :
+    jsonWireEq left right = (left.compress == right.compress) := by
+  simp [jsonWireEq, withPtrEq]
+
 /-- Revalidate allocation identity metadata against the exact retained raw
 document. Public model records can be assembled or updated by callers, so the
 prepared runtime must not trust the decoder's prior validation as a flag. -/
@@ -2360,11 +2637,28 @@ def validateCompilerAllocIdWorldRaw (raw : Json) (nodes : Array AllocationNode)
       unless parsed.id == supplied.id && parsed.sourceAllocId == supplied.sourceAllocId &&
           parsed.status == supplied.status && parsed.kind == supplied.kind &&
           parsed.memory == supplied.memory && parsed.data == supplied.data &&
-          parsed.payload.compress == supplied.payload.compress do
+          jsonWireEq parsed.payload supplied.payload do
         throw s!"$.allocations[{index}]: source AllocId profile does not match the exact raw allocation node"
     let verified ← parseCompilerAllocIdWorld rawWorld nodes
     unless verified == world do
       throw "source AllocId profile model does not match its exact raw document object"
+
+set_option autoImplicit false in
+/-- Exact deferred validation outcome for one raw/typed allocation world.
+The private constructor prevents replacing the validation result with a guess. -/
+structure AllocationWorldValidation (raw : Json) (nodes : Array AllocationNode)
+    (world : Option CompilerAllocIdWorld) where
+  private mk ::
+  result : Except String Unit
+  private exact : result = validateCompilerAllocIdWorldRaw raw nodes world
+
+def AllocationWorldValidation.prepare (raw : Json) (nodes : Array AllocationNode)
+    (world : Option CompilerAllocIdWorld) : AllocationWorldValidation raw nodes world :=
+  ⟨validateCompilerAllocIdWorldRaw raw nodes world, rfl⟩
+
+theorem AllocationWorldValidation.result_eq {raw nodes world}
+    (checked : AllocationWorldValidation raw nodes world) :
+    checked.result = validateCompilerAllocIdWorldRaw raw nodes world := checked.exact
 
 def parseLocal (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String LocalDecl := do
   let type ← field j "type" path
@@ -2382,7 +2676,13 @@ def parseLocal (j : Json) (path : String) (memo : DecodeMemo := {}) : Except Str
 def parseMirNode (wrapper : Json) (path : String) (domain : Domain) (memo : DecodeMemo := {}) : Except String MirNode := do
   let sourceInfo ← parseSourceInfo (← field wrapper "source_info" path) (joinPath path "source_info") memo
   let kind ← field wrapper "kind" path
-  let value ← decodeValue kind (joinPath path "kind") domain .none memo
+  let kindPath := joinPath path "kind"
+  let prepared := if domain == .statement then memo.mirStatements.get? kindPath
+    else if domain == .terminator then memo.mirTerminators.get? kindPath else none
+  let value ← match prepared with
+    | some (raw, value) =>
+      if raw == kind then pure value else decodeValue kind kindPath domain .none memo
+    | none => decodeValue kind kindPath domain .none memo
   return ⟨value, sourceInfo⟩
 
 def parseBasicBlock (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String BasicBlock := do
@@ -2466,7 +2766,7 @@ def parseBody (j : Json) (path fallbackName : String) (memo : DecodeMemo := {}) 
   let promotedBodies ← parsePromotedBodies j path fallbackName memo
   return { core with promotedBodies := promotedBodies }
 
-def parseInstance (j : Json) (path : String) : Except String InstanceNode := do
+def parseInstance (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String InstanceNode := do
   let kindText ← fieldString j "kind" path
   let kind := match kindText with
     | "instance_mir" => .instanceMir
@@ -2498,8 +2798,8 @@ def parseInstance (j : Json) (path : String) : Except String InstanceNode := do
     | some value => (value.getBool?).map some |>.mapError fun e => s!"{joinPath path "instance_args_are_monomorphic"}: expected boolean ({e})"
   let body ← match optionalJson j "body" with
     | none => pure none
-    | some value => pure (some (← parseBody value (joinPath path "body") fallback))
-  let promotedBodies ← parsePromotedBodies j path fallback
+    | some value => pure (some (← parseBody value (joinPath path "body") fallback memo))
+  let promotedBodies ← parsePromotedBodies j path fallback memo
   return {
     id := id
     status := parseStatus (← fieldString j "status" path)
@@ -2775,11 +3075,22 @@ its immutable keys include the entire source value, never only a local ID. -/
 structure CompilerValueMemo where
   private mk ::
   private entries : Std.HashMap Json (Except String TypedValue)
+  private sourcePaths : Std.HashMap String (Json × TypedValue)
+  private runtimeArguments : Std.HashMap.Raw Json RuntimeValueDecode
   private exact : ∃ (nodes : Array Json) (memo : DecodeMemo),
     entries = buildCompilerValueEntries nodes memo
 
 def prepareCompilerValueMemoUsing (nodes : Array Json) (memo : DecodeMemo) : CompilerValueMemo :=
-  ⟨buildCompilerValueEntries nodes memo, ⟨nodes, memo, rfl⟩⟩
+  let entries := buildCompilerValueEntries nodes memo
+  let runtime := Id.run do
+    let mut runtime : Std.HashMap.Raw Json RuntimeValueDecode := {}
+    for (raw, result) in entries do
+      if let .ok value := result then
+        let issues := valueObligations value "$compiler_value"
+        let sequence := if issues.isEmpty then none else some (RuntimeObligationSequence.leaf issues)
+        runtime := runtime.insert raw ({ summary := value, obligations := sequence } : RuntimeValueDecode)
+    return runtime
+  ⟨entries, memo.compilerMirValues, runtime, ⟨nodes, memo, rfl⟩⟩
 
 def decodeCompilerValueWithMemo (raw : Json) (memo : Option CompilerValueMemo) : Except String TypedValue :=
   match memo with
@@ -2790,8 +3101,151 @@ def decodeCompilerValueWithMemo (raw : Json) (memo : Option CompilerValueMemo) :
     | none => decodeCompilerValue raw
   | none => decodeCompilerValue raw
 
+/-- The complete typed payload was already checked by the same reader. Reuse its
+ordered obligations at compiler-argument occurrences; failed parses fall through
+so the original runtime decoder retains its first diagnostic and source path. -/
+def CompilerValueMemo.runtimeArgument (memo : CompilerValueMemo) (raw : Json)
+    (path : String) : Option RuntimeValueDecode := do
+  unless hasCanonicalJsonObjectKeys raw do none
+  let checked ← memo.runtimeArguments.get? raw
+  return { checked with
+    obligations := checked.obligations.map fun issues => .rebase "$compiler_value" path issues }
+
+/-- The private checked graph builder gives indexed nodes their canonical
+keys and the ordinary JSON digest. Reuse that digest to choose a bucket; the
+complete JSON comparison still decides a hit. Raw/inline values keep the
+historical canonicality check and recursive hashing. -/
+private def CompilerValueMemo.runtimeArgumentNode (memo : CompilerValueMemo)
+    (node : JsonTraversalCache.Node) (path : String) : Option RuntimeValueDecode := do
+  match node with
+  | .cached key _ =>
+    if key.id.isSome then
+      let _ : Hashable Json := ⟨fun _ => key.digest⟩
+      let checked ← memo.runtimeArguments.get? key.value
+      return { checked with
+        obligations := checked.obligations.map fun issues => .rebase "$compiler_value" path issues }
+    else memo.runtimeArgument node.value path
+  | .uncached raw => memo.runtimeArgument raw path
+
+/-- Runtime validation consumes the same checked compiler-argument projections
+as preparation; arbitrary callbacks cannot populate the importer's memo. -/
+def decodeRuntimeValueWithCompilerMemo (node : JsonTraversalCache.Node) (path : String)
+    (domain : Domain) (tagCategory : Option TypedEnumTag) (memo : DecodeMemo)
+    (values : Option CompilerValueMemo) : Except String RuntimeValueDecode := do
+  (decodeRuntimeValueM node path domain tagCategory memo
+    (fun node path => values.bind (fun values => values.runtimeArgumentNode node path))).run' (.forRoot node)
+
+/-- A source path only locates a candidate. Bind the hit to the entire canonical
+raw value, so public document updates cannot reuse a stale or foreign decode. -/
+def decodeCompilerValueAtPath (raw : Json) (path : String)
+    (memo : Option CompilerValueMemo) : Except String TypedValue :=
+  match memo with
+  | some memo =>
+    match memo.sourcePaths[path]? with
+    | some (source, value) =>
+      if hasCanonicalJsonObjectKeys raw && source == raw then .ok value
+      else decodeCompilerValue raw
+    | none => decodeCompilerValueWithMemo raw (some memo)
+  | none => decodeCompilerValue raw
+
+/-- Compiler instance payloads decoded once, before preparation adapters bind
+source DefIds into their evolving compilation-local tables. Type membership is
+still checked against the consumer's current context at use time. -/
+structure CompilerInstanceSource where
+  kind : Miri.Interpreter.CallInstanceKind
+  definitions : Array DefinitionId
+  requiredTypes : Array Nat
+  args : TypedValue
+
+private abbrev InstanceSourceM := StateT (Array DefinitionId × Array Nat) (Except String)
+private def sourceDefinition (j : Json) (key : String) : InstanceSourceM Miri.MIR.DefId := do
+  let value ← j.getObjVal? key
+  let id : DefinitionId := ⟨← (← value.getObjVal? "crate").getNat?, ← (← value.getObjVal? "index").getNat?⟩
+  let (definitions, types) ← get
+  set (definitions.push id, types)
+  return definitions.size
+private def sourceType (j : Json) (key : String) : InstanceSourceM Nat := do
+  let id ← (← (← j.getObjVal? key).getObjVal? "type_id").getNat?
+  modify fun (definitions, types) => (definitions, types.push id)
+  return id
+private def instanceString (j : Json) (key : String) : Except String String := do
+  (← j.getObjVal? key).getStr?
+private def instanceBool (j : Json) (key : String) : Except String Bool := do
+  (← j.getObjVal? key).getBool?
+private def instanceNat (j : Json) (key : String) : Except String Nat := do
+  (← j.getObjVal? key).getNat?
+private def sourceKind (j : Json) : InstanceSourceM Miri.Interpreter.CallInstanceKind := do
+  match ← instanceString j "kind" with
+  | "item" => pure (.Item (← sourceDefinition j "def_id"))
+  | "intrinsic" => pure (.Intrinsic (← sourceDefinition j "def_id"))
+  | "llvm_intrinsic" => pure (.LlvmIntrinsic (← sourceDefinition j "def_id"))
+  | "virtual" => pure (.Virtual (← sourceDefinition j "def_id") (← instanceNat j "dispatch_slot"))
+  | "shim" =>
+    let shim : Miri.Interpreter.CallShimKind ← do
+      match ← instanceString j "shim_kind" with
+        | "vtable" => pure (Miri.Interpreter.CallShimKind.VTable (← sourceDefinition j "def_id"))
+        | "reify" =>
+          let reason ← j.getObjVal? "reason"
+          let reason ← if reason == .null then pure none else do
+            match ← reason.getStr? with
+            | "function_pointer" => pure (some Miri.Interpreter.CallReifyReason.FnPtr)
+            | "vtable" => pure (some Miri.Interpreter.CallReifyReason.Vtable)
+            | _ => throw "unknown compiler reify reason"
+          pure (.Reify (← sourceDefinition j "def_id") reason)
+        | "fn_pointer" => pure (.FnPtr (← sourceDefinition j "def_id") (← sourceType j "function_type"))
+        | "closure_once" => pure (.ClosureOnce (← sourceDefinition j "call_once_def_id") (← sourceDefinition j "closure_def_id") (← instanceBool j "track_caller"))
+        | "construct_coroutine_in_closure" => pure (.ConstructCoroutineInClosure (← sourceDefinition j "coroutine_closure_def_id") (← instanceBool j "receiver_by_ref"))
+        | "thread_local" => pure (.ThreadLocal (← sourceDefinition j "def_id"))
+        | "future_drop_poll" => pure (.FutureDropPoll (← sourceDefinition j "def_id") (← sourceType j "proxy_coroutine_type") (← sourceType j "implementation_coroutine_type"))
+        | "drop_glue" =>
+          let value ← j.getObjVal? "drop_type"
+          let dropTy ← if value == .null then pure none else (sourceType j "drop_type").map some
+          pure (.DropGlue (← sourceDefinition j "def_id") dropTy)
+        | "clone" => pure (.Clone (← sourceDefinition j "def_id") (← sourceType j "clone_type"))
+        | "fn_pointer_as_pointer" => pure (.FnPtrAsPtr (← sourceDefinition j "def_id") (← sourceType j "function_type"))
+        | "fn_pointer_from_pointer" => pure (.FnPtrFromPtr (← sourceDefinition j "def_id") (← sourceType j "function_type"))
+        | "async_drop_glue_constructor" => pure (.AsyncDropGlueCtor (← sourceDefinition j "def_id") (← sourceType j "drop_type"))
+        | "async_drop_glue" => pure (.AsyncDropGlue (← sourceDefinition j "def_id") (← sourceType j "coroutine_type"))
+        | _ => throw "unknown compiler shim kind"
+    pure (.Shim shim)
+  | _ => throw "unknown compiler instance kind"
+
+private def parseInstanceSource (kind args : Json) (memo : CompilerValueMemo) :
+    Except String CompilerInstanceSource := do
+  let (kind,(definitions,requiredTypes)) ← (sourceKind kind).run (#[],#[])
+  let args ← decodeCompilerValueWithMemo args (some memo)
+  return ⟨kind,definitions,requiredTypes,args⟩
+
+private def instanceSourceEntries (nodes : Array Json) (memo : CompilerValueMemo) :
+    Std.HashMap (Json × Json) CompilerInstanceSource := Id.run do
+  let mut entries := {}
+  for node in nodes do
+    let .obj fields := node | continue
+    unless fields.contains "instance_kind" && fields.contains "generic_args" do continue
+    let some kind := (node.getObjVal? "instance_kind").toOption | continue
+    let some args := (node.getObjVal? "generic_args").toOption | continue
+    unless hasCanonicalJsonObjectKeys kind && hasCanonicalJsonObjectKeys args do continue
+    if entries.contains (kind,args) then continue
+    if let .ok source := parseInstanceSource kind args memo then
+      entries := entries.insert (kind,args) source
+  return entries
+
+structure CompilerInstanceSourceMemo where
+  private mk ::
+  private entries : Std.HashMap (Json × Json) CompilerInstanceSource
+  private exact : ∃ nodes memo, entries = instanceSourceEntries nodes memo
+
+def prepareCompilerInstanceSourceMemo (nodes : Array Json) (memo : CompilerValueMemo) : CompilerInstanceSourceMemo :=
+  ⟨instanceSourceEntries nodes memo, ⟨nodes,memo,rfl⟩⟩
+
+def CompilerInstanceSourceMemo.lookup (memo : CompilerInstanceSourceMemo) (j : Json) : Option CompilerInstanceSource := do
+  let kind ← (j.getObjVal? "instance_kind").toOption
+  let args ← (j.getObjVal? "generic_args").toOption
+  if !hasCanonicalJsonObjectKeys kind || !hasCanonicalJsonObjectKeys args then none
+  else memo.entries[(kind,args)]?
+
 end Miri.Input.DecoderValues
 
 namespace Miri.Input
-export DecoderValues (expectedMiriCommit expectedRustcCommit expectedSchema expectedSchemaVersion expectedCompilerAbiLayoutSchema CompilerFunctionAbiMemo prepareCompilerFunctionAbiMemo decodeCompilerPredicateEvidence decodeCompilerPattern decodeTypeCompilerFacts decodeVtableEntry decodeStaticGlobalInfo validateCompilerAllocIdWorldRaw decodeCompilerLayout decodeCompilerFunctionAbi decodeCompilerFunctionAbiWithMemo CompilerFunctionAbiTable CompilerValueMemo decodeCompilerValue decodeCompilerValueWithMemo)
+export DecoderValues (expectedMiriCommit expectedRustcCommit expectedSchema expectedSchemaVersion expectedCompilerAbiLayoutSchema CompilerFunctionAbiMemo prepareCompilerFunctionAbiMemo decodeCompilerPredicateEvidence decodeCompilerPattern decodeTypeCompilerFacts decodeVtableEntry decodeStaticGlobalInfo validateCompilerAllocIdWorldRaw decodeCompilerLayout decodeCompilerFunctionAbi decodeCompilerFunctionAbiWithMemo CompilerFunctionAbiTable CompilerInstanceSource CompilerInstanceSourceMemo prepareCompilerInstanceSourceMemo CompilerValueMemo decodeCompilerValue decodeCompilerValueWithMemo decodeCompilerValueAtPath)
 end Miri.Input

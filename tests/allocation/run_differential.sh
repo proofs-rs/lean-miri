@@ -32,4 +32,5 @@ fi
 diff -u "$work_dir/access_rust.out" "$work_dir/access_lean.out"
 lake env lean --run MiriTests/Allocation/LeanTests.lean
 lake env lean --run MiriTests/Allocation/Operations.lean
+lake env lean --run tests/allocation/ImmutableTemplateChecks.lean
 echo "matched $(wc -l < "$work_dir/lean.out") allocation constructor/read and $(wc -l < "$work_dir/access_lean.out") extracted memory access observations"

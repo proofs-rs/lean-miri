@@ -52,7 +52,7 @@ def main (args : List String) : IO Unit := do
   -- has missing query evidence. The provider's own primitive source remains
   -- source2, and its cache must preserve that result/error boundary.
   let malformedNestedRuntime : RuntimeMetadata := { firstProvider.runtime with
-    source := { firstProvider.runtime.source with raw := .null } }
+    source := { firstProvider.runtime.source with raw := .null, allocationWorldValidation := none } }
   let malformedNestedIndexed := RuntimeMetadata.Indexed.ofMetadata malformedNestedRuntime
   let originalNested := secondProvider.lifecycle.calls.symbols.facts.context
   let malformedNested : CompilerFacts.Context := { originalNested with
@@ -71,7 +71,9 @@ def main (args : List String) : IO Unit := do
   let wrongSymbols := { secondProvider.lifecycle.calls.symbols with facts := wrongFacts }
   let wrongCalls := { secondProvider.lifecycle.calls with symbols := wrongSymbols }
   let wrongLifecycle := { secondProvider.lifecycle with calls := wrongCalls }
-  let manualProvider := { rebound with lifecycle := wrongLifecycle }
+  let manualProvider := { rebound with
+    lifecycle := wrongLifecycle
+    symbolLookup := CompilerVTableRuntime.GlobalLookup.prepare wrongLifecycle.calls.symbols }
   check (renderResult manualProvider.callerLocationType == renderResult secondOwnCaller)
     "provider primitive query followed a malformed nested context instead of its requested runtime"
   check (renderResult (manualProvider.primitiveLayout "usize") == renderResult secondUsize)

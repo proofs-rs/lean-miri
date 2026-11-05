@@ -10,6 +10,32 @@ template through guest memory. -/
 namespace Miri.Input.EvalCallerLocationConstruction
 open Lean Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
 
+/-- The pinned provider writes fields 1 and 2 as u32 before interning the
+Location. Reuse its exact immutable filename/padding/provenance template and
+repeat only those two checked writes in a fresh construction buffer. -/
+private def instantiate (p : CompilerProviders.Prepared) (ty : TyId)
+    (pointee : TyId → Except String (Option TyId))
+    (coordinates : Option (Nat × Nat)) (template : Allocation CtfeProvenance Unit) :
+    Except String (Allocation CtfeProvenance Unit) := do
+  let some (line,column) := coordinates | return template
+  unless ty == (← p.callerLocationType) do throw "caller-location recipe result type mismatch"
+  let some locTy ← pointee ty | throw "caller-location recipe result is not a pointer"
+  let layout ← p.runtime.lookup locTy |>.mapError toString
+  -- The pinned Location also has a zero-sized PhantomData field. The compiler
+  -- projects the first three fields, not an exactly-three-field aggregate.
+  unless layout.layout.fields.count ≥ 3 do throw "caller-location recipe fields are absent"
+  let u32 ← p.primitiveLayout "u32"
+  unless u32.layout.size.bytes == 4 do throw "caller-location u32 layout mismatch"
+  let lineOffset ← layout.layout.fields.offset 1 |>.mapError reprStr
+  let columnOffset ← layout.layout.fields.offset 2 |>.mapError reprStr
+  let mut fields := #[]
+  for (offset,number) in [(lineOffset,line),(columnOffset,column)] do
+    unless number < 2^32 do throw "caller-location coordinate exceeds u32"
+    let scalar : Scalar CtfeProvenance ← Scalar.fromUInt (BitVec.ofNat 128 number)
+      u32.layout.size |>.mapError toString
+    fields := fields.push (allocRange offset u32.layout.size, scalar)
+  Allocation.instantiateImmutable p.runtime.target.base template fields
+
 def hook (p : CompilerProviders.Prepared)
     (functions : FunctionPointers.Hooks K User Other)
     (currentLocation : MachineHooks.M K User SpanRef)
@@ -20,7 +46,7 @@ def hook (p : CompilerProviders.Prepared)
   -- Keep the source frame/current-location lookup before consulting the
   -- compiler's cached ConstValue row.
   let span ← currentLocation
-  let (ty,value) ← match CompilerValueConstants.callerLocation p span with
+  let (ty,value,coordinates) ← match CompilerValueConstants.callerLocationTemplate p span with
     | .ok result => pure result
     | .error reason => throw (.unsupported reason)
   let some currentFrame := (← get).stack.currentFrame? | throw (.stack .emptyStack)
@@ -59,8 +85,11 @@ def hook (p : CompilerProviders.Prepared)
     | .ok id => pure id
     | .error error => throw (.resourceExhaustion s!"caller-location global identity: {reprStr error}")
   let state ← get
+  let allocation ← match instantiate p ty pointee coordinates templateAllocation with
+    | .ok value => pure value
+    | .error reason => throw (.unsupported reason)
   let memory := MemoryState.pushGlobal state.machine.memory
-    ⟨freshId,.memory,templateAllocation.byteSize,templateAllocation.align,.Not,some (.memory templateAllocation)⟩
+    ⟨freshId,.memory,allocation.byteSize,allocation.align,.Not,some (.memory allocation)⟩
   set {state with machine := {state.machine with memory}}
   let pointeeTy ← match pointee ty with
     | .ok (some id) => pure id

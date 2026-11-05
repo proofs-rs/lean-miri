@@ -8,6 +8,9 @@ instance/promoted bodies; missing promoted bodies do not consume an index.
 import argparse
 import json
 import pathlib
+import sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from mir_json import load_mir_document
 
 
 def canonical_bodies(document):
@@ -66,7 +69,7 @@ def main():
     parser.add_argument('--block', type=int, default=0)
     parser.add_argument('--statement', type=int, default=0)
     args = parser.parse_args()
-    bodies, deref = canonical_bodies(json.loads(args.input.read_text()))
+    bodies, deref = canonical_bodies(load_mir_document(args.input))
     if args.body < 0 or args.body >= len(bodies):
         parser.error('body index out of range')
     selected = bodies[args.body]

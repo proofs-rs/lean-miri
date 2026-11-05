@@ -127,3 +127,152 @@ Caller-location queries reuse a span index within each demand; runtime Location
 roots remain fresh per intrinsic evaluation. See [STATUS.md](../STATUS.md) for
 measured inputs, limits and remaining costs, and
 `tools/check-performance-regressions.sh` for parity checks.
+
+For exporter phase attribution, set `LEAN_MIRI_PROFILE_EXPORT=1` on the existing
+export command. Build with `--features miri-reference` and keep
+`LEAN_MIRI_RUN_PREPARED_MIRI=1` when measuring reference generation too.
+`export_profile: PHASE SECONDS` lines on stderr measure adjacent wall-clock
+intervals in `after_analysis`, including fixed-point producers, vtable patches,
+scope obligations, sharing, writing, snapshot destruction and Miri execution.
+`LEAN_MIRI_TRACE_EXPORT=1` additionally reports each closure round's domain sizes.
+These diagnostics do not issue compiler queries or change query ordering.
+
+Covariance construction has its own `covariance.*` adjacent spans and
+`covariance_profile:` domain counts. These spans are nested inside
+`closure.covariance_queries`; do not add both to the same total. The first
+outer span begins at `after_analysis`, so compiler work before that callback
+and process shutdown are outside its sum. Measure total wall/CPU/RSS/steal and
+throttling separately. Keep profiling artifacts frozen, serialize builds and
+trials, verify each fresh snapshot's independent reference and binding, and
+compare complete native outcomes separately from phase attribution.
+
+Covariance ordering caches each type's debug key within one `ExportContext`.
+Known type pairs reuse ranks from the previous textual ordering; equal textual
+keys share one rank, so stable tie order and adjacent deduplication remain exact.
+The profile reports `reused_debug_ranks`. For an independent same-TyCtxt check,
+set `LEAN_MIRI_VERIFY_COVARIANCE_SORT=1`: each round additionally runs the old
+comparison sort and asserts equality of the entire pair sequence before dedup
+and type-ID assignment. This diagnostic deliberately restores the old cost;
+omit it from performance trials. The optimization itself is enabled normally.
+
+## CPU sampling without perf_event access
+
+`tools/cpu-sample.c` is an optional Linux x86-64 preload diagnostic. It records
+monotonic timestamps, interrupted instruction PCs and thread IDs every 4ms of
+process CPU time. It owns SIGPROF/ITIMER_PROF during that diagnostic run.
+It samples only the exact executable specified by
+`LEAN_MIRI_SAMPLE_EXE`, so helper version probes do not overwrite its output.
+Use a unique, existing scratch directory and prefix for each matching process.
+It does not change Lean/Miri sources or provide a guest safety verdict.
+
+```bash
+mkdir -p scratch/cpu-sampling
+cc -shared -fPIC -O2 -Wall -Wextra tools/cpu-sample.c \
+  -o scratch/cpu-sampling/pc.so
+# Use an already frozen executable and the same validated arguments as control.
+LEAN_MIRI_SAMPLE_EXE="$(realpath scratch/frozen-native)" \
+LEAN_MIRI_SAMPLE_OUTPUT="$PWD/scratch/cpu-sampling/first" \
+LD_PRELOAD="$PWD/scratch/cpu-sampling/pc.so" LEAN_NUM_THREADS=1 \
+  taskset -c 2 scratch/frozen-native INPUT.json --ui-source SOURCE.rs --profile
+python3 tools/summarize-cpu-samples.py scratch/cpu-sampling/first
+```
+
+For caller PCs, install libunwind development headers and additionally compile
+with `-DWITH_LIBUNWIND -lunwind`. This uses libunwind's local signal-frame
+unwinder and records up to 32 callers; summarize these records with
+`--stack-depth 32`. The PC-only mode needs no libunwind dependency. Symbolization
+runs offline using `nm` and `readelf`; the header mapping supplies the correct
+PIE bias even when lld inserts pages between LOAD segments. Nonzero-address
+PIE headers and truncated records are rejected rather than guessed.
+
+With the corresponding `measure.py` run JSON, `--phases RUN.json` attributes
+samples to decoder/lowering/preparation/bootstrap/execution boundaries.
+`--leaf-span PROVIDER.NAME` additionally selects a reported interval known to
+contain no nested profiler calls; exclusive parent profiler times cannot be
+used as inclusive interval lengths. Sampling is diagnostic attribution, not a
+speedup benchmark: keep an unsampled control and verify complete outcomes.
+
+Exclusive counts describe the interrupted PC; cumulative counts count each
+symbol at most once per sampled stack and overlap with callers. Truncation can
+omit upper callers. Linked identical-code folding may name a generic helper
+after another specialization, so use its callers and source code before
+attributing ownership. Do not sum cumulative percentages or convert them into
+an assumed removable wall time. Sampling overhead and shared-host variation
+require separate verification of any subsequent optimization.
+
+## Full Rust-source-to-result scope
+
+Frozen-exporter/native timings and their sum exclude the public wrappers'
+build checks. They must not be labeled complete user-entry latency. For the
+normal Rust source path, include `build-exporter.sh`, `export-mir.sh`, and
+`run.sh` through the final result and process exit. Record rebuild-needed and
+cache-valid invocations separately; `run.sh` invokes Lake before executing the
+runner, even though the generic runner is independent of each Rust program.
+Toolchain/sysroot installation is a separate prerequisite and must be named if
+included. Do not substitute a seeded UI run or independent Miri comparison for
+the normal source invocation without reporting that configuration difference.
+
+The existing nested timing helper can record the public commands together:
+
+```bash
+mkdir -p scratch/source-timing
+export CI_TIMING_FILE="$PWD/scratch/source-timing/steps.jsonl" LEAN_NUM_THREADS=1
+python3 tools/ci/time_command.py source-to-result -- bash -ec '
+  source tools/ci/timing.sh
+  ci_step build:exporter bash tools/build-exporter.sh
+  ci_step source:export env -u LEAN_MIRI_RUN_PREPARED_MIRI \
+    LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1 bash tools/export-mir.sh \
+    --output scratch/source-timing/unops.json --root main -- \
+    upstream/miri-source/tests/pass/unops.rs --crate-name unops --edition=2021
+  ci_step source:run bash tools/run.sh scratch/source-timing/unops.json
+'
+```
+
+Inspect the terminal outcome, not only process exit. For finer boundaries,
+record the first `choice_mode=` line after `run.sh` starts (build/load gate),
+then decode/lower/prepare boundaries, `run: finalized_exit` and the final
+`upstream_result:` line. Keep the remaining output/teardown time in the total.
+Repeat the exact commands after the build cache becomes valid; do not delete
+caches or skip a required rebuild merely to obtain a shorter total.
+
+
+For exporter/transport changes, measure Rust source to result as one entry, with
+both build caches valid, rather than adding frozen native phase times. Use the
+same source, rustc flags, pinned toolchains/sysroot, affinity and thread count;
+freeze and record both exporter and runner identities for alternating trials.
+Include cached Cargo/Lake gates, fresh export, all result output and native
+teardown. Record the actual public commands separately if the paired collector
+selects frozen executables behind common cached build gates. Report cache state;
+a library rebuild belongs in a separate observation. The indexed-image comparison
+and its precise boundaries, hashes, sample spread and remaining costs are in
+[STATUS](../STATUS.md#indexed-execution-images-and-checked-mir-reuse).
+
+The default `lean-miri-prepared-image` transport still uses JSON text. To compare
+the retained persistent-builder/shared-payload encoding, set
+`LEAN_MIRI_PREPARED_IMAGE=0` when exporting; do not assume this recreates a previous
+interpreter binary. Decode/lower/preparation/guest behavior must be checked for
+each artifact pair, including complete choices and terminal classifications.
+`--profile` is useful for attribution but does not replace an unprofiled whole
+source-entry measurement. Nested profiler spans are not an additive phase total.
+
+For exporter-only attribution, enable `LEAN_MIRI_PROFILE_EXPORT=1` on a direct
+export. It reports fixpoint producer spans, per-round catalog counts, separate
+vtable/diagnostic walks, graph encoding/source release, snapshot writing and the
+rustc driver before/after its export callback. For example, with the pinned
+sysroot installed and the release exporter already built:
+
+```bash
+LEAN_MIRI_PROFILE_EXPORT=1 LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1 \
+  bash tools/export-mir.sh --output scratch/unops-profile.json --root main -- \
+  upstream/miri-source/tests/pass/unops.rs --crate-name unops --edition=2021 \
+  > scratch/unops-profile.log 2>&1
+python3 tools/summarize-exporter-profile.py scratch/unops-profile.log
+```
+
+The parent `direct.driver` span includes the complete export callback. The
+`covariance.*`, `patch.*`, `scope.*` and `image.*` spans are also nested inside
+parent spans; do not add both levels. The callback includes compiler queries as
+well as metadata construction; a producer's duration is not pure compiler query
+time. `export_catalog` counts rows reconstructed in each round, not distinct
+query-provider executions or proven-unused records. Profiling is diagnostic and
+does not alter the selected query closure or snapshot contents.

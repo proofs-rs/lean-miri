@@ -34,6 +34,26 @@ guarantee coverage of unknown dynamic callees or semantic completeness. Without
 Unsupported or unknown queries remain explicit obligations and are not replaced
 with opaque debug payloads.
 
+Runtime type rows use `compiler_runtime_queries.type_query_schema =
+"source_operations_v1"`. Requirements are collected from all exported MIR,
+including cleanup blocks, and implicit interpreter operations, independently of
+the executed guest path:
+
+| Operation | Requirement source |
+| --- | --- |
+| `*mut T` | Box pointees (validity/Tree Borrows), concrete vtable receivers, unit initialization/backtraces, allocated panic strings |
+| `&mut T` | MIR Drop places and concrete vtable types, including null drop slots |
+| drop glue | MIR Drop places and concrete vtable types |
+
+The compilation-local fixed point also closes over demands discovered while
+exporting newly reached types/MIR. Later requirements for the same type merge
+into one row. Constructors and drop resolution still use the pinned compiler's
+exact queries. Absent operations fail if requested; present malformed constructor
+facts fail preparation. Rows without the marker retain the legacy requirement
+for both constructors. `--features full-type-queries` retains the former producer
+for finite differential checks. This is not a shared cache or trace-based pruning;
+other metadata catalogs and their checks are retained.
+
 For Cargo projects, use `exporter/target/debug/lean-miri-mir-exporter --cargo check
 --manifest-path /path/to/Cargo.toml`. The wrapper uses pinned Cargo/rustc,
 rebuilds dependency crates with MIR, writes per-crate JSON under `lean-miri-mir/`
@@ -49,6 +69,14 @@ is version2. Reading old schema2 is not supported. IDs are document-local
 references, distinct from raw Miri AllocId values.
 [SharedPayloads](../Miri/Input/SharedPayloads.lean) and
 [Decoder](../Miri/Input/Decoder.lean) check catalog, reference and typed-query contracts.
+
+`LEAN_MIRI_PREPARED_SCAN_FLAGS=1` experimentally adds one four-bit summary per
+shared node. Bits 1, 2, 4 and 8 summarize descendant reference IDs, MIR bodies,
+FnAbi records and vtable-cast fields. Lean checks these summaries against the
+actual graph before using them; incorrect or incomplete summaries are rejected.
+Without this field Lean derives the same summaries once during import. The
+summaries skip unrelated traversal branches, never validation of relevant data.
+The ordinary JSON output and existing fixtures remain supported.
 
 Specify `LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1` for prepared execution such as
 main. Building with `--features miri-reference` and adding

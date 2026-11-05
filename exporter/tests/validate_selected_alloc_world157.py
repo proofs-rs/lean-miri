@@ -5,6 +5,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "tools"))
 from mir_json import load_mir_document
+from alloc_world_rows import allocation_world_rows
 
 
 def require(condition: bool, message: str) -> None:
@@ -28,9 +29,9 @@ def vtable_key(node: dict) -> tuple:
 def main(path: str) -> None:
     document = load_mir_document(path)
     world = document["compiler_alloc_id_world"]
-    require(world["schema"] == "rustc_alloc_id_world_v1", "wrong world schema")
+    require(world["schema"] in ("rustc_alloc_id_world_v1", "rustc_alloc_id_world_v2"), "wrong world schema")
     require(world["profile"] == "prepared_post_export", "wrong prepared profile")
-    rows = world["raw_pool"]
+    rows = allocation_world_rows(document)
     frontier = world["frontier"]
     through = frontier["last_reserved_source_alloc_id"]
     require(len(rows) == through, "raw pool length differs from source frontier")

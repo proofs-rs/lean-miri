@@ -157,6 +157,7 @@ name = "lean-miri-rustc-mir-exporter"
 version = "0.1.0"
 dependencies = [
  "miri",
+ "serde",
  "serde_json",
 ]
 

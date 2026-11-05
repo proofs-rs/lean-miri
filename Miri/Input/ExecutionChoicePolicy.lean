@@ -33,4 +33,9 @@ def seededDiagnosticTape (maxGeneratedChoices maxByteLength : Nat) (seed : UInt6
     policy := .boundedSeededDiagnostic maxGeneratedChoices maxByteLength seed,
     diagnosticRngState := seed }
 
+/-- Generate one replayable trace until source termination, without a host quota. -/
+def generatedTape (seed : Option UInt64) (inputs : Array ExecutionChoices.Input := #[]) :
+    ExecutionChoices.Tape :=
+  { inputs, policy := .generatedDiagnostic seed, diagnosticRngState := seed.getD 0 }
+
 end Miri.Input.ExecutionChoicePolicy

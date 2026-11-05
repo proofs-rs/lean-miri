@@ -1,3 +1,4 @@
+import Miri.Input.CompilerBodyEquality
 import Miri.Input.CompilerCallPipeline
 import Miri.Interpreter.FrameMetadataBindings
 
@@ -48,7 +49,7 @@ def hooks (p : Prepared) (userRelevantCrates : Array Nat) : FrameMetadata.Compil
       let some actual := p.calls.scopes.program.bundle.bodies[identity.index]?
         | throw "canonical frame body identity absent"
       return actual
-    unless actual.body == body do throw (.invalidProgram "frame body identity/content mismatch")
+    unless bodyContentsEqual actual.body body do throw (.invalidProgram "frame body identity/content mismatch")
     lift (CompilerScopes.sourceScope p.calls.scopes identity.index scope) }
 
 end Miri.Input.CompilerFrameMetadata

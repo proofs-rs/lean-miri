@@ -10,6 +10,7 @@ fn closed(input:ty::Ty<'_>)->bool {
         !input.has_infer() && !input.has_placeholders() && !input.references_error()
 }
 pub(super) fn export<'tcx>(tcx:TyCtxt<'tcx>,context:&mut ExportContext<'tcx>)->Value {
+    let mut profile = ExportProfile::new();
     let env=ty::TypingEnv::fully_monomorphized();
     let mut inputs=context.type_ids.iter().map(|(ty,id)|(*id,*ty)).collect::<Vec<_>>();
     inputs.sort_by_key(|(id,_)|*id);
@@ -20,6 +21,7 @@ pub(super) fn export<'tcx>(tcx:TyCtxt<'tcx>,context:&mut ExportContext<'tcx>)->V
             groups.entry(normal).or_default().push(input);
         }
     }
+    profile.mark("covariance.normalize_groups");
     let mut pairs=groups.values().flat_map(|group|group.iter().flat_map(|a|group.iter().filter(move|b|*b!=a).map(move|b|(*a,*b)))).collect::<Vec<_>>();
 
     // rustc's Transmute/Subtype/BoxDerefTransmute evaluator calls
@@ -39,8 +41,9 @@ pub(super) fn export<'tcx>(tcx:TyCtxt<'tcx>,context:&mut ExportContext<'tcx>)->V
     // operand is the raw mutable pointer used to invoke the vtable entry; the
     // destination type comes from that concrete method's first FnAbi argument.
     // Query only these compiler-derived pairs from reached vtable metadata.
+    profile.mark("covariance.normalized_and_demanded_pairs");
     let mut vtable_requests=context.vtable_query_requests.iter().copied().collect::<Vec<_>>();
-    vtable_requests.sort_by_key(|(input,predicates)|format!("{input:?}|{predicates:?}"));
+    vtable_requests.sort_by_cached_key(|(input,predicates)|format!("{input:?}|{predicates:?}"));
     for (input,predicates) in vtable_requests {
         if !closed(input) || predicates.has_non_region_param() || predicates.has_escaping_bound_vars() ||
             predicates.has_infer() || predicates.has_placeholders() || predicates.references_error() {
@@ -61,11 +64,26 @@ pub(super) fn export<'tcx>(tcx:TyCtxt<'tcx>,context:&mut ExportContext<'tcx>)->V
             }
         }
     }
-    pairs.sort_by_key(|(source,target)|(
-        format!("{source:?}"),format!("{target:?}")));
+    profile.mark("covariance.vtable_pairs");
+    if profile.0.is_some() { eprintln!("covariance_profile: groups={} pairs_before_dedup={}", groups.len(), pairs.len()); }
+    // Diagnostic oracle uses the very same TyCtxt and input order. Keep it
+    // outside timed trials: the original comparison sort is intentionally slow.
+    let reference_order = if env::var_os("LEAN_MIRI_VERIFY_COVARIANCE_SORT").is_some() {
+        let mut reference = pairs.clone();
+        reference.sort_by_key(|(source,target)| (format!("{source:?}"),format!("{target:?}")));
+        Some(reference)
+    } else { None };
+    let reused = context.covariance_sort.sort(&mut pairs, |ty| format!("{ty:?}"));
+    if let Some(reference) = reference_order {
+        assert_eq!(pairs, reference, "cached covariance ordering differs from the legacy sort");
+    }
+    if profile.0.is_some() { eprintln!("covariance_profile: reused_debug_ranks={reused}"); }
     pairs.dedup();
+    profile.mark("covariance.debug_sort_dedup");
+    if profile.0.is_some() { eprintln!("covariance_profile: pairs_after_dedup={}", pairs.len()); }
     pairs.sort_by_key(|(a,b)|(context.type_id(*a),context.type_id(*b)));
-    Value::Array(pairs.into_iter().map(|(source,target)|json!({
+    profile.mark("covariance.id_sort");
+    let result = Value::Array(pairs.into_iter().map(|(source,target)|json!({
         "typing_env":"fully_monomorphized","variance":"covariant",
         // These are inputs to a projected relation query. Their genuine
         // runtime type-query demand is registered by source MIR/cast/vtable
@@ -75,5 +93,7 @@ pub(super) fn export<'tcx>(tcx:TyCtxt<'tcx>,context:&mut ExportContext<'tcx>)->V
         "source_type":query_generated_type_json(context,tcx,source),
         "target_type":query_generated_type_json(context,tcx,target),
         "status":"supported","value":rustc_const_eval::util::relate_types(tcx,env,ty::Variance::Covariant,source,target),
-    })).collect())
+    })).collect());
+    profile.mark("covariance.render_rows");
+    result
 }

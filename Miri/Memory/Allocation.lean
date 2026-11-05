@@ -455,6 +455,20 @@ def writeScalar (layout : TargetDataLayout) (range : AllocRange)
       | .ok () insertedMap =>
         return .ok () { afterWrite with provenance := insertedMap }
 
+/-- Construct a distinct immutable constant from an immutable CTFE template.
+This is not a write to guest memory: it detaches native backing, copies through
+the ordinary checked scalar writes, and freezes the resulting value again.
+Padding, initialization and untouched provenance are preserved by writeScalar. -/
+def instantiateImmutable (layout : TargetDataLayout) (source : Allocation Prov Extra)
+    (fields : Array (AllocRange × Scalar Prov)) : Except String (Allocation Prov Extra) := do
+  unless source.mutability == .Not do throw "constant template is not immutable"
+  let mut allocation := {source with mutability := .Mut, nativeBuffer := none}
+  for (range,value) in fields do
+    match writeScalar layout range value allocation with
+    | .error error _ => throw s!"constant field construction failed: {reprStr error}"
+    | .ok () next => allocation := next
+  return {allocation with mutability := .Not}
+
 /-- Pointer-valued convenience wrapper around the source scalar write path. -/
 def writePointer (layout : TargetDataLayout) (range : AllocRange)
     (pointer : Pointer Prov) : EStateM AllocError (Allocation Prov Extra) Unit :=

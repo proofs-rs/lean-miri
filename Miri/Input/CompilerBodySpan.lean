@@ -1,3 +1,4 @@
+import Miri.Input.CompilerBodyEquality
 import Miri.Input.CompilerProviders
 
 /-! eval_context.rs::unwind_to_block records the exact current Body.span,
@@ -11,7 +12,7 @@ def get (p : CompilerProviders.Prepared) (frame : Frame P L E) :
     Except StepError MIR.SpanRef := do
   let some body := p.program.bundle.bodies[frame.bodyIdentity.index]?
     | throw (.invalidProgram "unwind body identity absent from canonical compilation")
-  unless body.body == frame.body do
+  unless bodyContentsEqual body.body frame.body do
     throw (.invalidProgram "unwind body identity/content mismatch")
   let source ← ((body.input.payload.getObjVal? "span").bind p.loweringContext.decodeCompilerValue).mapError StepError.unsupported
   let (span,tables) ← lowerCompilerSpan p.program.compilerTables source |>.mapError StepError.unsupported

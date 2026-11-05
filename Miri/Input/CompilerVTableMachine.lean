@@ -22,8 +22,11 @@ private def lift (result : Except String A) : MachineHooks.M K User A :=
   | .error error => throw (.unsupported s!"compiler vtable machine: {error}")
 
 def hooks (p : Prepared) (image : AllocationImage.Imported)
-    (base : VTableMachine.Hooks K User Other) : VTableMachine.Hooks K User Other :=
-  let lookup := CompilerVTableRuntime.GlobalLookup.prepare p.calls.symbols
+    (base : VTableMachine.Hooks K User Other)
+    (cache : Option (CompilerVTableRuntime.GlobalLookup p.calls.symbols) := none) : VTableMachine.Hooks K User Other :=
+  let lookup := match cache with
+    | some lookup => lookup
+    | none => CompilerVTableRuntime.GlobalLookup.prepare p.calls.symbols
   {base with importedVTable := fun id => do
     lift (CompilerVTableRuntime.globalVTableUsing p.calls.symbols lookup image (← get).machine.memory id)}
 
@@ -64,9 +67,9 @@ private def seedImportedImpl (p : Prepared) (image : AllocationImage.Imported)
   if let some world := world? then
     unless memory.sourceAllocIdWorldActive do
       throw "prepared vtable catalog requires the active source AllocId world"
-    unless image.source == input.allocations.filter (·.status == .supported) do
+    unless image.matchesSupportedSource input.allocations do
       throw "prepared vtable catalog allocation image differs from its owning program"
-    Miri.Input.validateCompilerAllocIdWorldRaw input.raw input.allocations (some world)
+    input.validateAllocationWorld
       |>.mapError fun error => s!"prepared AllocId world: {error}"
   else
     for (_,id) in memory.importedGlobalIds do

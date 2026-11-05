@@ -465,7 +465,8 @@ def runFromInitialProfiled
     (initial : EvalRunConstruction.State Os R EvalSyncPayload.Payload H D
       (EvalUnixSourceConstruction.Other Raw Listener TcpStream Error) CpuAffinity.Mask B
       Poll Instant System Native Profiler)
-    (stableChoice : Option (StableChoice choice) := none) :
+    (stableChoice : Option (StableChoice choice) := none)
+    (driver : EvalRunConstruction.Driver := .bounded) :
     Except StepError
       (EvalRunConstruction.RunResult
         (EvalRunConstruction.State Os R EvalSyncPayload.Payload H D
@@ -572,8 +573,10 @@ def runFromInitialProfiled
                   choiceAccess clock durationSince process
                 let loopReady := Lean.profileit "startup.bootstrap_ready" profile
                   (fun _ => afterCallbacks)
-                return .ok (EvalRunConstruction.runUntilTerminalProfiled profile loop
-                  iterationFuel outerChoices loopReady)
+                return .ok (match driver with
+                  | .bounded => EvalRunConstruction.runUntilTerminalProfiled profile loop
+                      iterationFuel outerChoices loopReady
+                  | .native limit => EvalRunConstruction.runNativeProfiled profile loop choice limit loopReady)
 
 /-- Compatibility entry with the original positional API. Runtime profiling is
 opt-in through `runFromInitialProfiled`; ordinary callers retain this exact
@@ -673,7 +676,8 @@ def runFromSourceProfiled
     (capacity iterationFuel : Nat)
     (outerChoices : List C)
     (useBuiltinChronoTz : Bool := true)
-    (stableChoice : Option (StableChoice choice) := none) :
+    (stableChoice : Option (StableChoice choice) := none)
+    (driver : EvalRunConstruction.Driver := .bounded) :
     EStateM StepError External
       (EvalRunConstruction.RunResult
         (EvalRunConstruction.State Os R EvalSyncPayload.Payload H D
@@ -710,7 +714,7 @@ def runFromSourceProfiled
     initialConfiguration initialMemory runtimeTypes choiceTape
   match runFromInitialProfiled profile prepared image bytes options sourceLeaves choice initialConfiguration
       bootstrapConfiguration limits capacity iterationFuel outerChoices initial
-      stableChoice with
+      stableChoice driver with
   | .ok result => pure result
   | .error error => throw error
 

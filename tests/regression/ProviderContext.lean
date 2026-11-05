@@ -33,7 +33,15 @@ def main (args : List String) : IO Unit := do
   let wrongSymbols := { prepared.lifecycle.calls.symbols with facts := wrongFacts }
   let wrongCalls := { prepared.lifecycle.calls with symbols := wrongSymbols }
   let wrongLifecycle := { prepared.lifecycle with calls := wrongCalls }
-  let manualProvider := { prepared with lifecycle := wrongLifecycle, lowering := none }
+  let manualProvider := { prepared with
+    lifecycle := wrongLifecycle
+    lowering := none
+    symbolLookup := CompilerVTableRuntime.GlobalLookup.prepare wrongLifecycle.calls.symbols }
+  check (reprStr manualProvider.rootSpan == reprStr (CompilerContextSpan.rootSpan prepared.program))
+    "root-span cache incorrectly followed its mismatched nested context"
+  let uncachedProvider := { manualProvider with rootSpanCache := none }
+  check (reprStr uncachedProvider.rootSpan == reprStr manualProvider.rootSpan)
+    "manual root-span fallback changed the exact query outcome"
   check (manualProvider.loweringContext.sourceDocument == some firstProgram.input.raw)
     "manual provider incorrectly followed its mismatched nested context"
   check (manualProvider.lifecycle.calls.symbols.facts.context.loweringContext.sourceDocument ==

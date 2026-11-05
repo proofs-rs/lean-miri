@@ -62,3 +62,8 @@ lean_exe profile_runtime_decoder where
 lean_exe decoder_traversal_cache_tests where
   srcDir := "tests/input"
   root := `DecoderTraversalCache2026
+
+-- Native-only host driver and unlimited diagnostic choice regressions.
+lean_exe native_runner_regression where
+  srcDir := "tools"
+  root := `NativeRunnerRegression

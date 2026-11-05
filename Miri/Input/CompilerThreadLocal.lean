@@ -13,11 +13,21 @@ private def natField (j : Json) (key : String) : Except String Nat := do (← fi
 private def stringField (j : Json) (key : String) : Except String String := do (← field j key).getStr?
 
 private partial def collect (j : Json) : Array Json :=
-  let here := if (j.getObjValAs? String "kind").toOption == some "ThreadLocalRef" then #[j] else #[]
+  let here := if (DecoderValues.optionalStringValue j "kind") == some "ThreadLocalRef" then #[j] else #[]
   match j with
   | .arr values => values.foldl (fun found value => found ++ collect value) here
   | .obj values => values.toList.foldl (fun found entry => found ++ collect entry.2) here
   | _ => here
+
+/-- Preserve the exact ordered scan, including duplicate and malformed rows. -/
+structure Rows (raw : Json) where
+  private mk ::
+  values : Array Json
+  private exact : values = collect raw
+
+def Rows.prepare (raw : Json) : Rows raw := ⟨collect raw, rfl⟩
+
+theorem Rows.values_eq {raw : Json} (rows : Rows raw) : rows.values = collect raw := rows.exact
 
 structure Entry where
   definition : MIR.DefId
@@ -27,9 +37,13 @@ structure Entry where
 
 /-- Missing, failed and foreign initializer queries remain explicit failures;
 no TLS identity is obtained by interpreting diagnostic names. -/
-def ofProgram (program : LoweredProgram) : Except String (Array Entry) := do
+def ofProgram (program : LoweredProgram)
+    (preparedRows : Option (Rows program.input.raw) := none) : Except String (Array Entry) := do
   let mut entries := #[]
-  for value in collect program.input.raw do
+  let values := match preparedRows with
+    | some rows => rows.values
+    | none => collect program.input.raw
+  for value in values do
     let defJson ← field value "def_id"
     let sourceId : DefinitionId := ⟨← natField defJson "crate", ← natField defJson "index"⟩
     let definition ← lookupDefinitionId program.bundle.definitions sourceId
@@ -46,6 +60,11 @@ def ofProgram (program : LoweredProgram) : Except String (Array Entry) := do
     else entries := entries.push ⟨definition, info, memory, value⟩
   pure entries
 
+/-- Caching preserves duplicate checks, diagnostics and result order. -/
+theorem ofProgram_preparedRows (program : LoweredProgram) (rows : Rows program.input.raw) :
+    ofProgram program (some rows) = ofProgram program := by
+  simp only [ofProgram, Rows.values_eq]
+
 private def find (entries : Array Entry) (definition : MIR.DefId) : Except String Entry :=
   match entries.find? (·.definition == definition) with
   | some entry => pure entry
@@ -54,10 +73,14 @@ private def find (entries : Array Entry) (definition : MIR.DefId) : Except Strin
 /-- Select this exact compiler definition before decoding any initializer.
 Other TLS declarations, including unsupported initializers, are not demanded
 by this source lookup. The canonical definition table is unchanged. -/
-def forDefinition (program : LoweredProgram) (definition : MIR.DefId) : Except String Entry := do
+def forDefinition (program : LoweredProgram) (definition : MIR.DefId)
+    (preparedRows : Option (Rows program.input.raw) := none) : Except String Entry := do
   let some target := program.bundle.definitions[definition]?
     | throw "TLS definition absent from canonical compiler table"
-  let rows := (collect program.input.raw).filter fun value =>
+  let values := match preparedRows with
+    | some rows => rows.values
+    | none => collect program.input.raw
+  let rows := values.filter fun value =>
     let actual := do
       let raw ← field value "def_id"
       pure (⟨← natField raw "crate", ← natField raw "index"⟩ : DefinitionId)
@@ -65,8 +88,15 @@ def forDefinition (program : LoweredProgram) (definition : MIR.DefId) : Except S
   unless !rows.isEmpty do throw "missing exact compiler TLS declaration/initializer evidence"
   -- Reuse the existing strict decoder on the selected records with the same
   -- source tables; this is a query view, never a second program representation.
-  let selected := {program with input := {program.input with raw := .arr rows}}
+  let selected := {program with input := {program.input with raw := .arr rows, allocationWorldValidation := none}}
   find (← ofProgram selected) definition
+
+theorem forDefinition_preparedRows (program : LoweredProgram) (definition : MIR.DefId)
+    (rows : Rows program.input.raw) :
+    forDefinition program definition (some rows) = forDefinition program definition := by
+  rcases rows with ⟨values, exact⟩
+  cases exact
+  rfl
 
 /-- Machine leaves supply byte storage, provenance adjustment and allocation
 hooks. Compiler leaves are replaced by checked evidence keyed by shared DefId.

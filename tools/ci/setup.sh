@@ -2,8 +2,8 @@
 # Fresh-checkout setup for the maintained regression lanes; no test skips.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
-lane="${1:?usage: setup.sh regression|extended|replay}"
-case "$lane" in regression|extended|replay) ;; *) exit 2 ;; esac
+lane="${1:?usage: setup.sh regression|extended|replay|upstream-ui}"
+case "$lane" in regression|extended|replay|upstream-ui) ;; *) exit 2 ;; esac
 if [[ "$lane" != replay ]] && ! command -v rg >/dev/null 2>&1; then
   echo "Missing rg (ripgrep); install ripgrep before running $lane setup." >&2
   exit 1

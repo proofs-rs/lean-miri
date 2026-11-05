@@ -33,6 +33,107 @@ are stored in `scratch/` and the ignored upstream `target/` directory. Lean repl
 of saved fixtures, decoder checks and local proofs do not require the reference
 Miri binary or old working checkouts.
 
+## Exporter construction and wire compatibility
+
+The exporter constructs persistent shared values: cloning a payload retains its
+immutable node, and mutation copies only changed containers. Metadata patch
+passes memoize construction nodes; final encoding visits each shared source
+node once per applicable field role. Structural interning uses exact ordered
+wire equality (including numeric spelling), with full equality on hash collisions.
+Pointer identity is only a document-local traversal optimization, never a Rust
+allocation/type identity or a wire ID. Compiler query evaluation order is unchanged.
+
+Construction stays on rustc's compiler thread using Rc/OnceCell; the finished
+typed image is Send and owns its scalar leaves. Ordered flat objects borrow
+static field names, and scalar-string hits avoid allocating a candidate. ABI
+projection caches use compiler-owned addresses only while the tcx borrow keeps
+them alive; the structural fallback retains its original deduplication policy.
+Relative diagnostic summaries preserve every occurrence and its path in order.
+These caches are local to a compilation and never retain another program.
+
+The default external format is `lean-miri-prepared-image` version 1. It contains
+an interned field-name dictionary and a bottom-up indexed node table. Row tags
+are null, false, true, number, string, array-of-node-IDs and
+object-of-(field-ID,node-ID)-pairs (tags 0 through 6). Object names are strictly
+ordered; every edge points to an earlier row. Node IDs are transport identities,
+not Rust allocation, type, instance or MIR indices. The reconstructed business
+document still uses MIR schema 3. This is still JSON transport; it does not remove
+JSON parsing or precompute unchecked execution/readiness results in Rust.
+
+Canonical immutable construction nodes are interned as they are built, with exact
+ordered wire equality on hash collisions. The final encoder visits source nodes
+by identity instead of performing another structural deduplication pass. The
+output table stays in typed Rust rows through serialization to the writer; it
+never becomes another generic JSON Value tree. Weak
+pool entries do not own compiler payloads. Mutation invalidates the cached hash
+and copies a shared container before changing it.
+
+The prepared allocator world uses `rustc_alloc_id_world_v2`: `raw_kinds` has one
+ASCII kind tag per source AllocId, and `opaque_memory` carries memory projections
+not already owned by supported allocation nodes. The reader reconstructs the
+same complete raw pool and runs the full identity, frontier, salt/key and byte
+family checks. This normalizes repeated facts; it does not remove opaque IDs or
+change completeness requirements. Legacy `v1` worlds remain accepted. The
+`full-allocation-world` exporter feature emits the reference `v1` representation.
+
+Caller-location rows use `caller_location_template_v1`: the compiler produces
+one immutable Location template per filename, and each source span retains the
+effective u32 line/column, including macro expansion and redaction behavior.
+The interpreter constructs a fresh root for each invocation using the compiler's
+physical field offsets and checked scalar writes. Filename provenance and all
+untouched bytes/initialization are preserved. Literal query APIs reject recipes
+rather than expose an uninstantiated template. `full-caller-locations` retains the
+fully materialized compiler-query reference producer. These are compilation-local
+tables; neither format uses a shared program cache.
+
+`bash tools/check-compact-input.sh` compares genuine reference/normalized exports,
+the complete Lean allocation-world results and malformed-world rejection, and
+checks immutable construction with both target endiannesses. The performance
+regression entry point also runs it. The same check compares every source span
+in a macro/track-caller fixture against fully materialized compiler images under
+four location-detail settings, including complete redaction.
+After building with `bash tools/build-exporter.sh --features miri-reference`,
+`python3 tools/check-caller-location-runtime.py --output scratch/caller-location-runtime`
+checks real macro/track-caller coordinates and repeated-call allocation identity
+against same-prepared-TyCtxt Miri. This is separate from upstream inventory coverage.
+
+Lean validates every typed row, edge and dictionary entry (including unused
+rows), then constructs indexed traversal nodes and their local hashes/summaries
+in the same pass. The typed MIR reader reuses document-local node IDs and complete
+decoding context across MIR roots. Lowering retains its source-consistency check;
+a reused result must match both the source path and complete canonical raw value.
+Failed decodes fall through to ordinary parsing, preserving diagnostic paths and
+first-error order. Only a resolver-produced traversal can populate the opaque
+MIR memo. Readiness, compiler evidence and execution checks still run.
+
+Set `LEAN_MIRI_PREPARED_IMAGE=0` to retain shared-payload schema 2 output with the
+persistent builder. Lean and `tools/mir_json.py` accept both formats. The
+`legacy-json` Cargo feature separately retains the tree builder and string-key
+encoder for comparisons. Run exporter Cargo tests normally and with
+`--features legacy-json`; add `miri-reference` for reference integration.
+`tools/check-decoder.sh` includes typed-row rejection, Python-reader checks and
+indexed/legacy parity on retained compiler exports and their malformed ID cases.
+Exporter tests also cover forced hash collisions, copy-on-write snapshots,
+exact numeric spelling, graph-sized encoding of exponentially repeated input,
+and exact/unknown vtable links.
+
+Compiler instance kinds and complete generic arguments are decoded into a shared
+import-time source table. Its definition slots are local to each source record;
+preparation rebinds them to the current compiler tables and rechecks type
+membership. The immutable key includes the complete canonical kind and argument
+payloads. Changed contexts, changed fields and failed parses retain the original
+decoder/error behavior. Runtime checking also consumes the complete typed
+argument projection and rebases its ordered obligations, rather than decoding
+that JSON subtree again. Dense node-ID/context buckets accelerate the remaining
+runtime walk; raw JSON retains the exact-key map fallback.
+
+Canonical indexed inputs use direct retained-query path lookup for supported
+path syntax. Ancestor debug-payload exclusion and canonical index spelling are
+preserved; other syntax and uncached inputs use the reference scan. Incremental
+span candidates use a persistent hash trie so deferred failures can retain the
+old interner without copying its entire index. Complete span equality and first
+matching IDs remain decisive.
+
 ## What the checks test
 
 See [tests/README.md](../tests/README.md) for the detailed directory map,

@@ -1,3 +1,5 @@
+import Miri.Input.CompilerBodyEquality
+import Miri.Input.CompilerSpanLookup
 import Miri.Input.CompilerPanicFacts
 import Miri.Input.CompilerLifecyclePipeline
 import Miri.Input.CompilerFunctionFacts
@@ -26,6 +28,10 @@ namespace Miri.Input.CompilerProviders
 open Lean Miri.ABI Miri.Memory Miri.Interpreter
 structure Prepared where
   program : LoweredProgram
+  /-- First-match source positions, tied to the final canonical span table. -/
+  spanLookup : Option (CompilerSpanLookup.Prepared program.bundle.spans) := none
+  /-- Reused by recursive callback configuration construction. -/
+  rootSpanCache : Option (CompilerContextSpan.Bound program) := none
   /-- Prepared lowering indices certified for this provider's exact input.
   Publicly assembled providers may omit the cache; their accessor preserves
   the historical behavior by deriving from `program.input`. -/
@@ -38,6 +44,8 @@ structure Prepared where
   and retained for every provider check against this source document. -/
   sourceEquality : RuntimeMetadata.JsonReflexivity runtime.source.raw
   lifecycle : CompilerLifecyclePipeline.Prepared
+  symbolLookup : CompilerVTableRuntime.GlobalLookup lifecycle.calls.symbols :=
+    CompilerVTableRuntime.GlobalLookup.prepare lifecycle.calls.symbols
   functions : CompilerFunctionFacts.Prepared
   main : CompilerMain.Prepared
   intrinsics : CompilerIntrinsicFacts.Prepared
@@ -49,7 +57,13 @@ structure Prepared where
   namedGlobals : CompilerNamedGlobals.Prepared
   externStatics : CompilerExternStatic.Prepared
   pointers : CompilerFunctionPointers.Prepared
+  pointerLookup : CompilerVTableRuntime.GlobalLookup pointers.calls.symbols :=
+    CompilerVTableRuntime.GlobalLookup.prepare pointers.calls.symbols
+  inlineLookup : CompilerFunctionPointers.InlineLookup pointers :=
+    CompilerFunctionPointers.InlineLookup.prepare pointers
   vtables : CompilerVTableMachine.Prepared
+  vtableLookup : CompilerVTableRuntime.GlobalLookup vtables.calls.symbols :=
+    CompilerVTableRuntime.GlobalLookup.prepare vtables.calls.symbols
   namedAbi : CompilerNamedShimAbi.Prepared
   /-- Immutable compiler export table. Errors remain stored so source
   consumers retain their original demand-local failure boundary. -/
@@ -62,7 +76,20 @@ structure Prepared where
   signatureAbiIndex : CompilerQueryIndices.SignatureAbi runtime program.input.raw
   /-- Initial persistent interner. Runtime execution must thread its updated World. -/
   initialArrays : Except String RuntimeArrayTypes.World
+  tlsRows : Option (CompilerThreadLocal.Rows program.input.raw) := none
   tls : Except String (Array CompilerThreadLocal.Entry)
+
+def Prepared.rootSpan (p : Prepared) : Except String MIR.SpanRef :=
+  match p.rootSpanCache with
+  | some bound => bound.result
+  | none => CompilerContextSpan.rootSpan p.program
+
+theorem Prepared.rootSpan_eq (p : Prepared) :
+    p.rootSpan = CompilerContextSpan.rootSpan p.program := by
+  unfold rootSpan
+  split
+  · exact CompilerContextSpan.Bound.result_eq _
+  · rfl
 
 /-- Reuse lowering indices only when certified for this provider's own source
 document. This remains correct for manually assembled records whose nested
@@ -178,12 +205,18 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
     CompilerQueryIndices.signatureAbi runtime program.input.raw abiCache
   let arrays := profileit "preparation.providers.runtime_arrays" profile fun _ =>
     RuntimeArrayTypes.create runtime |>.mapError reprStr
-  let tls := profileit "preparation.providers.thread_local" profile fun _ => CompilerThreadLocal.ofProgram program
+  let tlsRows := profileit "preparation.providers.thread_local_rows" profile fun _ =>
+    CompilerThreadLocal.Rows.prepare program.input.raw
+  let tls := profileit "preparation.providers.thread_local" profile fun _ =>
+    CompilerThreadLocal.ofProgram program (some tlsRows)
   let constants := profileit "preparation.providers.rebind_constants" profile fun _ => {constants with program}
   let constantBinding := profileit "preparation.providers.constant_binding" profile fun _ =>
     CompilerConstantQueries.bind constants runtime (some sourceEquality)
   return {
     program
+    spanLookup := some (profileit "preparation.providers.span_lookup" profile fun _ =>
+      CompilerSpanLookup.prepare program.bundle.spans)
+    rootSpanCache := some (CompilerContextSpan.bind program)
     lowering := some (LowerContext.bindDocument program.input)
     runtime
     primitiveQueries := some (CompilerPrimitiveFacts.bind runtime)
@@ -204,6 +237,7 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
     covarianceIndex
     signatureAbiIndex
     initialArrays := arrays
+    tlsRows := some tlsRows
     tls }
 
 def prepare (input : LoweredProgram) : Except String Prepared :=
@@ -226,7 +260,7 @@ def resolveCurrent (p : Prepared) (definition : MIR.DefId) (args : Array MIR.Gen
   let .mir location := frame.location | throw (.invalidProgram "callee resolution outside a MIR source location")
   let body ← lift do
     let some body := p.program.bundle.bodies[frame.bodyIdentity.index]? | throw "missing canonical source body"
-    unless body.body == frame.body do throw "callee resolution canonical body/content mismatch"
+    unless bodyContentsEqual body.body frame.body do throw "callee resolution canonical body/content mismatch"
     let loaded ← CallResolution.loadedBodyOfInstance p.lifecycle.calls.calls frame.functionInstance
     unless loaded.identity == frame.bodyIdentity do throw "callee resolution current full-instance/body mismatch"
     pure body
@@ -250,6 +284,7 @@ def executionHooks (p : Prepared) (image : AllocationImage.Imported)
     (base : ExecutionMachine.Config K User C Other ABI.ExternAbi Host) :
     ExecutionMachine.Config K User C Other ABI.ExternAbi Host :=
   let functions := CompilerFunctionPointers.hooks p.pointers image base.functions
+    (some p.pointerLookup) (some p.inlineLookup)
   let vtableEngine := {vtableEngine with functions}
   let callCompiler := {base.calls.compiler with
     resolve := fun _ definition args => resolveCurrent p definition args

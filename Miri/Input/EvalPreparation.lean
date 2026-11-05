@@ -27,8 +27,7 @@ are required evidence, never inferred from storage sizes. -/
 def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Attempt := Id.run do
   let empty : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind := .empty
   match profileit "preparation.eval.validate_alloc_id_world" profile fun _ =>
-      Miri.Input.validateCompilerAllocIdWorldRaw input.input.raw input.input.allocations
-        input.input.compilerAllocIdWorld with
+      input.input.validateAllocationWorld with
   | .ok _ => pure ()
   | .error error => return ⟨empty,.error s!"compiler AllocId world: {error}"⟩
   let preparedInput := profileit "preparation.eval.compiler_globals" profile fun _ =>
@@ -39,7 +38,7 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Attempt 
     | .ok value => pure value
     | .error error => return ⟨empty,.error error⟩
   let dummySpanResult := profileit "preparation.eval.root_span" profile fun _ =>
-    CompilerContextSpan.rootSpan compiler.program
+    compiler.rootSpan
   let dummySpan ← match dummySpanResult with
     | .ok value => pure value
     | .error error => return ⟨empty,.error error⟩
@@ -54,15 +53,21 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Attempt 
   let importNodes := match compiler.program.input.compilerAllocIdWorld with
     | none => compiler.program.input.allocations
     | some _ => compiler.program.input.allocations.filter (·.status == .supported)
+  let supportedBinding : Option (AllocationImage.SupportedSourceBinding importNodes) :=
+    match h : compiler.program.input.compilerAllocIdWorld with
+    | none => none
+    | some _ => some (AllocationImage.SupportedSourceBinding.prepare importNodes
+        compiler.program.input.allocations (by simp [importNodes, h]))
   let imported := profileit "preparation.eval.allocation_import_graph" profile fun _ =>
     AllocationImage.importGraph compiler.runtime.target
-      compiler.program.compilerTables.definitions CompilerGlobals.queries importNodes empty
+      compiler.program.compilerTables.definitions CompilerGlobals.queries importNodes empty supportedBinding
   match imported.outcome with
   | .error error => return ⟨imported.memory,.error error⟩
   | .ok image =>
     let memory ← match profileit "preparation.eval.install_alloc_id_world" profile fun _ =>
         CompilerAllocIdWorld.install compiler.program.input.raw
-          compiler.program.input.compilerAllocIdWorld compiler.program.input.allocations imported.memory with
+          compiler.program.input.compilerAllocIdWorld compiler.program.input.allocations imported.memory
+          compiler.program.input.allocationWorldValidation with
       | .ok value => pure value
       | .error error => return ⟨imported.memory,.error s!"compiler AllocId world: {error}"⟩
     return ⟨memory,.ok ⟨compiler,image,types,layouts,dummySpan⟩⟩

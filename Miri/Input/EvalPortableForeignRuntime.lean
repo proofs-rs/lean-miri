@@ -58,6 +58,7 @@ def backtraceCore [DecidableEq MiriMemoryKind]
       (RuntimePlace Provenance) (RuntimePlace Provenance) LoadedBody CallInstance
       MachineHooks.FrameExtra CompilerBacktraceSource.Position :=
   let functionPointers := CompilerFunctionPointers.hooks providers.pointers image functionPointers
+    (some providers.pointerLookup) (some providers.inlineLookup)
   let source := CompilerBacktraceSource.source providers.lifecycle.backtrace hostUsizeMax
     (lift (CompilerBacktraceFacts.unitPointerLayout providers.lifecycle.calls))
     (PointerPlaceMachine.misalignmentWith access PointerPlaceMachine.controlledAlignment)
@@ -134,6 +135,7 @@ def portableOther [DecidableEq MiriMemoryKind]
     lookupFunction := exactForeign.lookupFunction
     checkSymbolClash := exactForeign.checkSymbolClash }
   let functionPointers := CompilerFunctionPointers.hooks providers.pointers image functionPointers
+    (some providers.pointerLookup) (some providers.inlineLookup)
   exact EvalPortableForeignConstruction.portableOtherFromSource sourceForeign machine choice
     thread unitLayout reuseClock effects access arithmetic projection providers.lifecycle.backtrace
     hostUsizeMax (lift (CompilerBacktraceFacts.unitPointerLayout providers.lifecycle.calls))

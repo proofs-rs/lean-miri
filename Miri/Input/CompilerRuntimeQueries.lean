@@ -6,8 +6,8 @@ namespace Miri.Input.CompilerRuntimeQueries
 open Lean Miri.Interpreter
 structure TypeEntry where
   typeId : Nat
-  pointerType : Nat
-  referenceType : Nat
+  pointerType : Except String Nat
+  referenceType : Except String Nat
   dropGlue : Except String CallInstance
 structure VirtualEntry where
   original : CallInstance
@@ -31,6 +31,15 @@ private def typeId (ctx : LowerContext) (j : Json) : Except String Nat := do
   unless ctx.containsTypeId id do throw "runtime query references absent compiler type"
   pure id
 
+/-- Legacy rows must contain both constructor fields. The explicit sparse
+schema may omit an operation, but requesting that operation still fails. Present
+malformed/unsupported constructor evidence is rejected during preparation. -/
+private def typeOperation (ctx : LowerContext) (entry : Json) (key : String)
+    (sparse : Bool) : Except String (Except String Nat) := do
+  if sparse && (entry.getObjVal? key).toOption.isNone then
+    return .error s!"missing exact compiler runtime operation {key}"
+  return .ok (← typeId ctx (← value entry key))
+
 private def definition (tables : CompilerTables) (j : Json) :
     Except String (MIR.DefId × CompilerTables) := do
   let id : DefinitionId := ⟨← (← j.getObjVal? "crate").getNat?, ← (← j.getObjVal? "index").getNat?⟩
@@ -40,6 +49,10 @@ private def definition (tables : CompilerTables) (j : Json) :
 
 def prepare (program : LoweredProgram) : Except String Prepared := do
   let raw ← program.input.raw.getObjVal? "compiler_runtime_queries"
+  let sparse ← match raw.getObjVal? "type_query_schema" with
+    | .error _ => pure false
+    | .ok (.str "source_operations_v1") => pure true
+    | .ok _ => throw "unsupported compiler runtime type-query schema"
   let ctx := LowerContext.ofDocument program.input
   let mut tables := program.compilerTables
   let mut types := #[]
@@ -48,8 +61,8 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
       throw "runtime query typing environment mismatch"
     let id ← (← entry.getObjVal? "input_type_id").getNat?
     unless ctx.containsTypeId id do throw "runtime query input type absent"
-    let pointer ← typeId ctx (← value entry "mut_pointer_type")
-    let reference ← typeId ctx (← value entry "mut_reference_type")
+    let pointer ← typeOperation ctx entry "mut_pointer_type" sparse
+    let reference ← typeOperation ctx entry "mut_reference_type" sparse
     let dropResult := do CompilerInstance.decode ctx tables (← value entry "drop_glue")
     let drop ← match dropResult with
       | .error e => pure (.error e)
@@ -93,11 +106,11 @@ private def entry (prepared : Prepared) (id : Nat) : Except String TypeEntry := 
     | throw "missing exact compiler runtime type query"
   pure entry
 
-def mutPointerType (prepared : Prepared) (id : Nat) : Except String Nat :=
-  return (← entry prepared id).pointerType
+def mutPointerType (prepared : Prepared) (id : Nat) : Except String Nat := do
+  (← entry prepared id).pointerType
 
-def mutReferenceType (prepared : Prepared) (id : Nat) : Except String Nat :=
-  return (← entry prepared id).referenceType
+def mutReferenceType (prepared : Prepared) (id : Nat) : Except String Nat := do
+  (← entry prepared id).referenceType
 
 def resolveDropGlue (prepared : Prepared) (id : Nat) : Except String CallInstance := do
   (← entry prepared id).dropGlue

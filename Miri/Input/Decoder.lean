@@ -4,8 +4,9 @@ namespace Miri.Input
 open Lean DecoderValues
 
 private partial def collectFunctionAbisAux (node : JsonTraversalCache.Node) (path : String) (memo : DecodeMemo)
-    (seen : Std.HashSet JsonTraversalCache.Key := {}) (visited : Std.HashSet JsonTraversalCache.IdentityKey := {})
-    : Except String (Array FunctionAbi × Std.HashSet JsonTraversalCache.Key × Std.HashSet JsonTraversalCache.IdentityKey) := do
+    (seen : Std.HashSet JsonTraversalCache.Key := {}) (visited : JsonTraversalCache.IdentitySet := .empty)
+    : Except String (Array FunctionAbi × Std.HashSet JsonTraversalCache.Key × JsonTraversalCache.IdentitySet) := do
+  if !node.mayContain 4 then return (#[], seen, visited)
   let j := node.value
   let key := node.identity
   if statusOf? j == some "debug_payload" then return (#[], seen, visited)
@@ -56,8 +57,8 @@ private partial def collectFunctionAbisAux (node : JsonTraversalCache.Node) (pat
     return (all, seen, visited)
   | _ => return (#[], seen, visited)
 
-private def collectFunctionAbis (node : JsonTraversalCache.Node) (path : String) (memo : DecodeMemo := emptyDecodeMemo) : Except String (Array FunctionAbi) := do
-  return (← collectFunctionAbisAux node path memo).1
+private def collectFunctionAbis (node : JsonTraversalCache.Node) (path : String) (memo : DecodeMemo := emptyDecodeMemo) (nodeCount : Nat := 0) : Except String (Array FunctionAbi) := do
+  return (← collectFunctionAbisAux node path memo {} (.empty nodeCount)).1
 
 private def validateDense (ids : Array Nat) (what : String) : Except String Unit := do
   let mut seen : Std.HashSet Nat := {}
@@ -71,8 +72,9 @@ private def validateDense (ids : Array Nat) (what : String) : Except String Unit
 `validateDense`; each dense array then denotes exactly the natural range below
 its size, independent of row order. -/
 private partial def validateReferencesAux (node : JsonTraversalCache.Node) (path : String)
-    (typeCount allocationCount instanceCount : Nat) (visited : Std.HashSet JsonTraversalCache.IdentityKey)
-    : Except String (Std.HashSet JsonTraversalCache.IdentityKey) := do
+    (typeCount allocationCount instanceCount : Nat) (visited : JsonTraversalCache.IdentitySet)
+    : Except String (JsonTraversalCache.IdentitySet) := do
+  if !node.mayContain 1 then return visited
   let j := node.value
   let memoKey := node.identity
   if statusOf? j == some "debug_payload" then return visited
@@ -108,49 +110,80 @@ private partial def validateReferencesAux (node : JsonTraversalCache.Node) (path
   | _ => return visited
 
 private def validateReferences (node : JsonTraversalCache.Node) (path : String)
-    (typeCount allocationCount instanceCount : Nat) : Except String Unit := do
-  let _ ← validateReferencesAux node path typeCount allocationCount instanceCount {}
+    (typeCount allocationCount instanceCount : Nat) (nodeCount : Nat := 0) : Except String Unit := do
+  let _ ← validateReferencesAux node path typeCount allocationCount instanceCount (.empty nodeCount)
 
-private partial def validateMirIndices (j : Json) (path : String)
+private def validateMirField (key : String) (value : Json) (path : String)
+    (localCount : Nat) : Except String Unit := do
+  if key == "local" then
+    let id ← value.getNat? |>.mapError fun e => s!"{joinPath path key}: expected local index ({e})"
+    if id >= localCount then throw s!"{joinPath path key}: local {id} is out of range (locals={localCount})"
+  if key == "projection" then
+    let projections ← value.getArr? |>.mapError fun e => s!"{joinPath path key}: expected projection array ({e})"
+    for (projection, index) in projections.toList.zipIdx do
+      let pPath := s!"{joinPath path key}[{index}]"
+      let kind ← fieldString projection "kind" pPath
+      if kind == "Index" then
+        let id ← fieldNat projection "local" pPath
+        if id >= localCount then throw s!"{pPath}.local: local {id} is out of range (locals={localCount})"
+      if kind == "ConstantIndex" then
+        let _ ← fieldNat projection "offset" pPath
+        let _ ← fieldNat projection "min_length" pPath
+        let _ ← fieldBool projection "from_end" pPath
+      if kind == "Subslice" then
+        let _ ← fieldNat projection "from" pPath
+        let _ ← fieldNat projection "to" pPath
+        let _ ← fieldBool projection "from_end" pPath
+      if kind == "Field" then
+        let _ ← fieldNat projection "index" pPath
+        let _ ← field projection "field_type" pPath
+      if kind == "Downcast" then
+        let _ ← fieldNat projection "variant_index" pPath
+      if kind == "OpaqueCast" then let _ ← field projection "cast_type" pPath
+      if kind == "UnwrapUnsafeBinder" then let _ ← field projection "inner_type" pPath
+      if isKnownProjection kind then let _ ← field projection "resulting_type" pPath
+
+private partial def validateMirIndicesReference (j : Json) (path : String)
     (localCount : Nat) : Except String Unit := do
   if statusOf? j == some "debug_payload" then return
   match j with
   | .arr values =>
     let mut index := 0
     for value in values do
-      validateMirIndices value s!"{path}[{index}]" localCount
+      validateMirIndicesReference value s!"{path}[{index}]" localCount
       index := index + 1
   | .obj fields =>
     for (key, value) in fields.toList do
-      if key == "local" then
-        let id ← value.getNat? |>.mapError fun e => s!"{joinPath path key}: expected local index ({e})"
-        if id >= localCount then throw s!"{joinPath path key}: local {id} is out of range (locals={localCount})"
-      if key == "projection" then
-        let projections ← value.getArr? |>.mapError fun e => s!"{joinPath path key}: expected projection array ({e})"
-        for (projection, index) in projections.toList.zipIdx do
-          let pPath := s!"{joinPath path key}[{index}]"
-          let kind ← fieldString projection "kind" pPath
-          if kind == "Index" then
-            let id ← fieldNat projection "local" pPath
-            if id >= localCount then throw s!"{pPath}.local: local {id} is out of range (locals={localCount})"
-          if kind == "ConstantIndex" then
-            let _ ← fieldNat projection "offset" pPath
-            let _ ← fieldNat projection "min_length" pPath
-            let _ ← fieldBool projection "from_end" pPath
-          if kind == "Subslice" then
-            let _ ← fieldNat projection "from" pPath
-            let _ ← fieldNat projection "to" pPath
-            let _ ← fieldBool projection "from_end" pPath
-          if kind == "Field" then
-            let _ ← fieldNat projection "index" pPath
-            let _ ← field projection "field_type" pPath
-          if kind == "Downcast" then
-            let _ ← fieldNat projection "variant_index" pPath
-          if kind == "OpaqueCast" then let _ ← field projection "cast_type" pPath
-          if kind == "UnwrapUnsafeBinder" then let _ ← field projection "inner_type" pPath
-          if isKnownProjection kind then let _ ← field projection "resulting_type" pPath
-      validateMirIndices value (joinPath path key) localCount
+      validateMirField key value path localCount
+      validateMirIndicesReference value (joinPath path key) localCount
   | _ => pure ()
+
+/-- Successful checks are reusable only at the same local-variable bound.
+The cache is local to this document traversal; failed checks are never stored,
+so the first failing occurrence retains its original path and error order. -/
+private abbrev MirIndexValidation :=
+  StateT (Std.HashSet (Nat × Nat)) (Except String)
+
+private partial def validateMirIndices (node : JsonTraversalCache.Node) (path : String)
+    (localCount : Nat) : MirIndexValidation Unit := do
+  let .cached key _ := node | validateMirIndicesReference node.value path localCount
+  let j := key.value
+  if statusOf? j == some "debug_payload" then return
+  let memoKey := key.id.map fun id => (id, localCount)
+  if let some key := memoKey then
+    if (← get).contains key then return
+  match j with
+  | .arr values =>
+    let mut index := 0
+    for value in values do
+      validateMirIndices (node.child index value) s!"{path}[{index}]" localCount
+      index := index + 1
+  | .obj fields =>
+    for ((key, value), index) in fields.toList.zipIdx do
+      validateMirField key value path localCount
+      validateMirIndices (node.child index value) (joinPath path key) localCount
+  | _ => pure ()
+  if let some key := memoKey then modify (·.insert key)
 
 private def checkBlockIndex (value : Json) (path : String) (blockCount : Nat) : Except String Unit := do
   let id ← value.getNat? |>.mapError fun e => s!"{path}: expected basic-block index ({e})"
@@ -199,7 +232,8 @@ private def validateTerminatorEdges (j : Json) (path : String) (blockCount : Nat
     validateUnwind (← field j "unwind" path) (joinPath path "unwind") blockCount
   | _ => pure ()
 
-private def validateBody (j : Json) (path : String) : Except String Unit := do
+private def validateBody (node : JsonTraversalCache.Node) (path : String) : MirIndexValidation Unit := do
+  let j := node.value
   let locals ← arrayField j "locals" path
   let blocks ← arrayField j "basic_blocks" path
   if locals.isEmpty then throw s!"{joinPath path "locals"}: MIR body must declare the return local"
@@ -209,24 +243,29 @@ private def validateBody (j : Json) (path : String) : Except String Unit := do
     let id ← fieldNat localDecl "local" s!"{joinPath path "locals"}[{index}]"
     if id != index then throw s!"{joinPath path "locals"}[{index}]: local declarations must be densely ordered"
     index := index + 1
+  let blocksNode := node.field "basic_blocks" (.arr blocks)
   index := 0
   for block in blocks do
+    let blockNode := blocksNode.child index block
     let blockPath := s!"{joinPath path "basic_blocks"}[{index}]"
     let id ← fieldNat block "block" blockPath
     if id != index then throw s!"{blockPath}: basic blocks must be densely ordered"
     let statements ← arrayField block "statements" blockPath
+    let statementsNode := blockNode.field "statements" (.arr statements)
     for (statement, stmtIndex) in statements.toList.zipIdx do
+      let statementNode := statementsNode.child stmtIndex statement
       let kind ← field statement "kind" s!"{blockPath}.statements[{stmtIndex}]"
-      validateMirIndices kind s!"{blockPath}.statements[{stmtIndex}].kind" locals.size
+      validateMirIndices (statementNode.field "kind" kind) s!"{blockPath}.statements[{stmtIndex}].kind" locals.size
     let termWrapper ← field block "terminator" blockPath
     if termWrapper == .null then throw s!"{blockPath}: missing terminator"
     let term ← field termWrapper "kind" s!"{blockPath}.terminator"
-    validateMirIndices term s!"{blockPath}.terminator.kind" locals.size
+    validateMirIndices ((blockNode.field "terminator" termWrapper).field "kind" term) s!"{blockPath}.terminator.kind" locals.size
     validateTerminatorEdges term s!"{blockPath}.terminator.kind" blocks.size
     index := index + 1
 
-private partial def validateAllBodiesAux (node : JsonTraversalCache.Node) (path : String) (visited : Std.HashSet JsonTraversalCache.IdentityKey)
-    : Except String (Std.HashSet JsonTraversalCache.IdentityKey) := do
+private partial def validateAllBodiesAux (node : JsonTraversalCache.Node) (path : String) (visited : JsonTraversalCache.IdentitySet)
+    : MirIndexValidation (JsonTraversalCache.IdentitySet) := do
+  if !node.mayContain 2 then return visited
   let j := node.value
   let memoKey := node.identity
   if statusOf? j == some "debug_payload" then return visited
@@ -241,18 +280,18 @@ private partial def validateAllBodiesAux (node : JsonTraversalCache.Node) (path 
       index := index + 1
     return if node.shouldMemo then visited.insert memoKey else visited
   | .obj fields =>
-    let hasLocals := (j.getObjVal? "locals").isOk
-    let hasBlocks := (j.getObjVal? "basic_blocks").isOk
+    let hasLocals := hasField j "locals"
+    let hasBlocks := hasField j "basic_blocks"
     if hasLocals != hasBlocks then throw s!"{path}: body requires both locals and basic_blocks"
-    if hasLocals && hasBlocks then validateBody j path
+    if hasLocals && hasBlocks then validateBody node path
     let mut visited := visited
     for ((key, value), childIndex) in fields.toList.zipIdx do
       visited ← validateAllBodiesAux (node.child childIndex value) (joinPath path key) visited
     return if node.shouldMemo then visited.insert memoKey else visited
   | _ => return visited
 
-private def validateAllBodies (node : JsonTraversalCache.Node) (path : String) : Except String Unit := do
-  let _ ← validateAllBodiesAux node path {}
+private def validateAllBodies (node : JsonTraversalCache.Node) (path : String) (nodeCount : Nat := 0) : Except String Unit := do
+  let _ ← (validateAllBodiesAux node path (.empty nodeCount)).run' {}
 
 private def jsonToNatArray (nodes : Array α) (getId : α → Nat) : Array Nat := nodes.map getId
 
@@ -417,19 +456,19 @@ private def virtualIdentityObligations (raw : Json) (types : Array TypeNode)
     if node.kind != .virtualDispatchTarget || node.status != .supported then continue
     let base := s!"$.instances[{index}]"
     let payload := node.payload
-    if (payload.getObjValAs? String "body_status").toOption != some "not_applicable" then
+    if (DecoderValues.optionalStringValue payload "body_status") != some "not_applicable" then
       issues := issues.push ⟨base ++ ".body_status", "virtual dispatch identity must explicitly have no executable MIR body"⟩
     if node.body.isSome then
       issues := issues.push ⟨base ++ ".body", "virtual dispatch identity cannot carry a fabricated MIR body"⟩
     let kind := (payload.getObjVal? "instance_kind").toOption.getD .null
-    if (kind.getObjValAs? String "kind").toOption != some "virtual" then
+    if (DecoderValues.optionalStringValue kind "kind") != some "virtual" then
       issues := issues.push ⟨base ++ ".instance_kind.kind", "virtual dispatch target must retain rustc InstanceKind::Virtual"⟩
     if (kind.getObjVal? "def_id").toOption != (payload.getObjVal? "def_id").toOption then
       issues := issues.push ⟨base ++ ".instance_kind.def_id", "virtual InstanceKind DefId disagrees with catalog DefId"⟩
     if (kind.getObjVal? "dispatch_slot").toOption != (payload.getObjVal? "dispatch_slot").toOption then
       issues := issues.push ⟨base ++ ".instance_kind.dispatch_slot", "virtual InstanceKind slot disagrees with catalog slot"⟩
     let identity := (payload.getObjVal? "virtual_identity").toOption.getD .null
-    if (identity.getObjValAs? String "status").toOption != some "supported" then
+    if (DecoderValues.optionalStringValue identity "status") != some "supported" then
       issues := issues.push ⟨base ++ ".virtual_identity.status", "virtual method identity/signature query is unresolved"⟩
     let functionType := (identity.getObjVal? "function_type").toOption.getD .null
     let typeId := (functionType.getObjValAs? Nat "type_id").toOption
@@ -443,7 +482,7 @@ private def virtualIdentityObligations (raw : Json) (types : Array TypeNode)
         if ty.shapeKind != .functionPointer && ty.shapeKind != .functionDefinition then
           issues := issues.push ⟨base ++ ".virtual_identity.function_type", "virtual method identity type is not a compiler function value"⟩
     let abi := (identity.getObjVal? "fn_abi").toOption.getD .null
-    if (abi.getObjValAs? String "status").toOption != some "supported" then
+    if (DecoderValues.optionalStringValue abi "status") != some "supported" then
       issues := issues.push ⟨base ++ ".virtual_identity.fn_abi.status", "virtual method FnAbi query is unresolved"⟩
     let abiValue := (abi.getObjVal? "value").toOption
     let catalog := ((raw.getObjVal? "compiler_instance_abis").bind Json.getArr?).toOption.getD #[]
@@ -455,7 +494,7 @@ private def virtualIdentityObligations (raw : Json) (types : Array TypeNode)
       issues := issues.push ⟨base ++ ".virtual_identity.fn_abi", "virtual identity must match one exact full-instance FnAbi query"⟩
     else if let some row := abiRows[0]? then
       let query := (row.getObjVal? "abi_query").toOption.getD .null
-      if (query.getObjValAs? String "status").toOption != some "supported" then
+      if (DecoderValues.optionalStringValue query "status") != some "supported" then
         issues := issues.push ⟨base ++ ".virtual_identity.fn_abi", "matching full-instance FnAbi query is unresolved"⟩
       else if abiValue != (query.getObjVal? "value").toOption then
         issues := issues.push ⟨base ++ ".virtual_identity.fn_abi", "virtual identity FnAbi disagrees with the exact full-instance FnAbi query"⟩
@@ -595,7 +634,7 @@ private def extraSemanticObligations (raw : Json) (types : Array TypeNode) (allo
       if node.body.isSome then
         issues := issues.push ⟨joinPath base "body", "intrinsic dispatch identity cannot carry fabricated MIR"⟩
       let instanceKind := (node.payload.getObjVal? "instance_kind").toOption.getD .null
-      let tag := (instanceKind.getObjValAs? String "kind").toOption
+      let tag := (DecoderValues.optionalStringValue instanceKind "kind")
       if tag != some "intrinsic" && tag != some "llvm_intrinsic" then
         issues := issues.push ⟨joinPath base "instance_kind.kind", "intrinsic dispatch requires exact rustc Intrinsic or LlvmIntrinsic identity"⟩
       let topDefId := node.definitionId
@@ -619,11 +658,11 @@ private def extraSemanticObligations (raw : Json) (types : Array TypeNode) (allo
       if (node.payload.getObjValAs? Bool "foreign_item").toOption != some true then
         issues := issues.push ⟨joinPath base "foreign_item", "no-MIR foreign dispatch requires exact rustc is_foreign_item=true evidence"⟩
       let symbol := (node.payload.getObjVal? "symbol_name").toOption.getD .null
-      if (symbol.getObjValAs? String "status").toOption != some "supported" ||
-          ((symbol.getObjValAs? String "value").toOption.getD "").isEmpty then
+      if (DecoderValues.optionalStringValue symbol "status") != some "supported" ||
+          ((DecoderValues.optionalStringValue symbol "value").getD "").isEmpty then
         issues := issues.push ⟨joinPath base "symbol_name", "no-MIR foreign dispatch requires an exact nonempty rustc symbol name"⟩
       let instanceKind := (node.payload.getObjVal? "instance_kind").toOption.getD .null
-      if (instanceKind.getObjValAs? String "kind").toOption != some "item" then
+      if (DecoderValues.optionalStringValue instanceKind "kind") != some "item" then
         issues := issues.push ⟨joinPath base "instance_kind.kind", "foreign dispatch requires exact rustc Item identity"⟩
       let topDefId := node.definitionId
       let nestedDefIdJson := (instanceKind.getObjVal? "def_id").toOption
@@ -830,7 +869,7 @@ private partial def collectGraphReferencesInto (j : Json)
     (result : Array (String × Nat)) : Array (String × Nat) := Id.run do
   match j with
   | .obj fields =>
-    if (j.getObjValAs? String "status").toOption == some "debug_payload" then return result
+    if (DecoderValues.optionalStringValue j "status") == some "debug_payload" then return result
     let mut result := result
     for (key, value) in fields.toList do
       if key == "normalization_template" || key == "compiler_facts" || key == "constructor_identity" then
@@ -855,8 +894,8 @@ private partial def collectThreadLocalRefsInto (j : Json) (path : String)
     (found : Array (String × Json)) : Array (String × Json) := Id.run do
   match j with
   | .obj fields =>
-    if (j.getObjValAs? String "status").toOption == some "debug_payload" then return found
-    let mut found := if (j.getObjValAs? String "kind").toOption == some "ThreadLocalRef" then found.push ⟨path,j⟩ else found
+    if (DecoderValues.optionalStringValue j "status") == some "debug_payload" then return found
+    let mut found := if (DecoderValues.optionalStringValue j "kind") == some "ThreadLocalRef" then found.push ⟨path,j⟩ else found
     for (key, value) in fields.toList do
       found := collectThreadLocalRefsInto value (joinPath path key) found
     return found
@@ -1046,7 +1085,7 @@ private def requiredIdentityOnlyInstanceObligations (instances : Array InstanceN
 private def threadLocalShapeObligations (references : Array (String × Json)) : Array Obligation := Id.run do
   let mut issues := #[]
   for (path, value) in references do
-    unless (value.getObjValAs? String "status").toOption == some "supported" do continue
+    unless (DecoderValues.optionalStringValue value "status") == some "supported" do continue
     let definition := (value.getObjVal? "def_id").toOption
     match definition with
     | none => issues := issues.push ⟨joinPath path "def_id", "supported ThreadLocalRef is missing its exact compiler DefId"⟩
@@ -1059,7 +1098,7 @@ private def threadLocalShapeObligations (references : Array (String × Json)) : 
     match info with
     | none => issues := issues.push ⟨joinPath path "global_info", "supported ThreadLocalRef is missing static compiler query evidence"⟩
     | some info =>
-      if (info.getObjValAs? String "status").toOption != some "supported" then
+      if (DecoderValues.optionalStringValue info "status") != some "supported" then
         issues := issues.push ⟨joinPath (joinPath path "global_info") "status", "ThreadLocalRef static compiler query is unresolved"⟩
       if (info.getObjValAs? Bool "is_static").toOption != some true then
         issues := issues.push ⟨joinPath (joinPath path "global_info") "is_static", "ThreadLocalRef DefId is not confirmed as a static"⟩
@@ -1073,7 +1112,7 @@ private def threadLocalShapeObligations (references : Array (String × Json)) : 
     | none => issues := issues.push ⟨joinPath path "initializer", "supported ThreadLocalRef is missing exact initializer query evidence"⟩
     | some initializer =>
       let initializerPath := joinPath path "initializer"
-      if (initializer.getObjValAs? String "status").toOption == some "supported" then
+      if (DecoderValues.optionalStringValue initializer "status") == some "supported" then
         let allocation := (initializer.getObjVal? "allocation").toOption
         match allocation with
         | none => issues := issues.push ⟨joinPath initializerPath "allocation", "supported TLS initializer is missing its allocation image"⟩
@@ -1091,7 +1130,7 @@ private def threadLocalShapeObligations (references : Array (String × Json)) : 
               | .ok align => if align != memory.alignBytes then
                   issues := issues.push ⟨joinPath allocationPath "align_bytes", "TLS initializer alignment disagrees with static compiler query"⟩
               | .error _ => issues := issues.push ⟨joinPath (joinPath path "global_info") "align_bytes", "TLS static query is missing its allocation alignment"⟩
-      else if foreign && (initializer.getObjValAs? String "status").toOption != some "unsupported" then
+      else if foreign && (DecoderValues.optionalStringValue initializer "status") != some "unsupported" then
         issues := issues.push ⟨joinPath initializerPath "status", "foreign TLS initializer must remain an explicit unsupported query"⟩
   return issues
 
@@ -1181,7 +1220,7 @@ private def dynamicPredicateArray? (j : Json) (typeId : Nat) : Option (Array Jso
   unless matching.size == 1 do return none
   let some ty := matching[0]? | return none
   let some shape := (ty.getObjVal? "shape").toOption | return none
-  unless ((shape.getObjValAs? String "kind").toOption == some "dynamic_trait_object") do return none
+  unless ((DecoderValues.optionalStringValue shape "kind") == some "dynamic_trait_object") do return none
   return ((shape.getObjVal? "predicates").bind Json.getArr?).toOption
 
 private def compilerBuiltinDerefType? (j : Json) (typeId : Nat) : Option Nat := Id.run do
@@ -1193,16 +1232,16 @@ private def compilerBuiltinDerefType? (j : Json) (typeId : Nat) : Option Nat := 
   let some facts := (ty.getObjVal? "compiler_facts").toOption | return none
   let some queries := (facts.getObjVal? "type_queries").toOption | return none
   let some query := (queries.getObjVal? "builtin_deref_explicit").toOption | return none
-  unless ((query.getObjValAs? String "status").toOption == some "supported") do return none
+  unless ((DecoderValues.optionalStringValue query "status") == some "supported") do return none
   let some value := (query.getObjVal? "value").toOption | return none
   return jsonTypeId? value
 
 private def exactLockstepTails? (j : Json) (source target : Nat) : Option Json := Id.run do
   let some rows := (((j.getObjVal? "compiler_cast_queries").bind Json.getArr?).toOption) | return none
   let matching := rows.filter fun row =>
-    ((row.getObjValAs? String "query_kind").toOption == some "lockstep_tails") &&
-    ((row.getObjValAs? String "typing_env").toOption == some "fully_monomorphized") &&
-    ((row.getObjValAs? String "status").toOption == some "supported") &&
+    ((DecoderValues.optionalStringValue row "query_kind") == some "lockstep_tails") &&
+    ((DecoderValues.optionalStringValue row "typing_env") == some "fully_monomorphized") &&
+    ((DecoderValues.optionalStringValue row "status") == some "supported") &&
     ((row.getObjVal? "input_source").toOption.bind jsonTypeId? == some source) &&
     ((row.getObjVal? "input_target").toOption.bind jsonTypeId? == some target)
   unless matching.size == 1 do return none
@@ -1231,19 +1270,19 @@ def exactVtableProbeDiagnostic (j : Json) (path : String) : Bool := Id.run do
   unless path.endsWith suffix do return false
   let castPath := (path.dropEnd suffix.length).toString
   let some node := jsonAtPath j castPath | return false
-  unless ((node.getObjValAs? String "status").toOption == some "supported") do return false
-  unless ((node.getObjValAs? String "kind").toOption == some "Cast") do return false
+  unless ((DecoderValues.optionalStringValue node "status") == some "supported") do return false
+  unless ((DecoderValues.optionalStringValue node "kind") == some "Cast") do return false
   let some castKind := (node.getObjVal? "cast_kind").toOption | return false
-  unless ((castKind.getObjValAs? String "status").toOption == some "supported") &&
-      ((castKind.getObjValAs? String "kind").toOption == some "PointerCoercion") do return false
+  unless ((DecoderValues.optionalStringValue castKind "status") == some "supported") &&
+      ((DecoderValues.optionalStringValue castKind "kind") == some "PointerCoercion") do return false
   let some coercion := (castKind.getObjVal? "coercion").toOption | return false
-  unless ((coercion.getObjValAs? String "kind").toOption == some "Unsize") do return false
+  unless ((DecoderValues.optionalStringValue coercion "kind") == some "Unsize") do return false
   let some sourceType := (node.getObjVal? "target_type").toOption | return false
   let some sourceTypeId := jsonTypeId? sourceType | return false
   unless castOperandTypeId? node |>.isSome do return false
   let some operandTypeId := castOperandTypeId? node | return false
   let some queryRef := (node.getObjVal? "vtable_query").toOption | return false
-  unless ((queryRef.getObjValAs? String "status").toOption == some "supported") do return false
+  unless ((DecoderValues.optionalStringValue queryRef "status") == some "supported") do return false
   let some queryId := ((queryRef.getObjVal? "query_id").bind Json.getNat?).toOption | return false
   let some querySource := (queryRef.getObjVal? "source_type").toOption | return false
   let some queryTarget := (queryRef.getObjVal? "target_type").toOption | return false
@@ -1277,7 +1316,7 @@ def exactVtableProbeDiagnostic (j : Json) (path : String) : Bool := Id.run do
     ((row.getObjValAs? Nat "query_id").toOption == some queryId)
   unless matching.size == 1 do return false
   let some row := matching[0]? | return false
-  unless ((row.getObjValAs? String "status").toOption == some "supported") do return false
+  unless ((DecoderValues.optionalStringValue row "status") == some "supported") do return false
   unless ((row.getObjVal? "input_type").toOption.bind jsonTypeId? == some inputTypeId) do return false
   unless jsonTypeId? ((row.getObjVal? "output_type").toOption.getD .null) |>.isSome do return false
   let some rowInputPredicates := ((row.getObjVal? "input_predicates").bind Json.getArr?).toOption | return false
@@ -1286,9 +1325,9 @@ def exactVtableProbeDiagnostic (j : Json) (path : String) : Bool := Id.run do
   unless ((row.getObjValAs? Bool "output_type_monomorphic_enough").toOption == some true) &&
       ((row.getObjValAs? Bool "output_predicates_monomorphic_enough").toOption == some true) do return false
   let some probe := (node.getObjVal? "vtable_probe").toOption | return false
-  unless ((probe.getObjValAs? String "status").toOption == some "incomplete") &&
-      ((probe.getObjValAs? String "kind").toOption == some "symbolic_vtable_allocation") &&
-      (((probe.getObjValAs? String "salt_policy").toOption.getD "").startsWith
+  unless ((DecoderValues.optionalStringValue probe "status") == some "incomplete") &&
+      ((DecoderValues.optionalStringValue probe "kind") == some "symbolic_vtable_allocation") &&
+      (((DecoderValues.optionalStringValue probe "salt_policy").getD "").startsWith
         "exporter uses CTFE_ALLOC_SALT; Miri runtime allocation salts may be randomized") do return false
   unless (node.getObjVal? "vtable_allocation").toOption == some .null do return false
   unless (match probe.getObjVal? "allocation" with | .error _ => true | .ok _ => false) &&
@@ -1306,22 +1345,22 @@ private def castUnsizingPointeeType? (j : Json) (typeId : Nat) : Option Nat := I
   unless matching.size == 1 do return none
   let some ty := matching[0]? | return none
   let some shape := (ty.getObjVal? "shape").toOption | return none
-  let some kind := (shape.getObjValAs? String "kind").toOption | return none
+  let some kind := (DecoderValues.optionalStringValue shape "kind") | return none
   if kind == "reference" || kind == "raw_pointer" then
     return (shape.getObjVal? "pointee").toOption.bind jsonTypeId?
   else
     return some typeId
 
 private def exactDynamicVtableUpcast? (j node descriptor : Json) : Bool := Id.run do
-  unless ((node.getObjValAs? String "status").toOption == some "supported") &&
-      ((node.getObjValAs? String "kind").toOption == some "Cast") do return false
+  unless ((DecoderValues.optionalStringValue node "status") == some "supported") &&
+      ((DecoderValues.optionalStringValue node "kind") == some "Cast") do return false
   let some castKind := (node.getObjVal? "cast_kind").toOption | return false
-  unless ((castKind.getObjValAs? String "status").toOption == some "supported") &&
-      ((castKind.getObjValAs? String "kind").toOption == some "PointerCoercion") do return false
+  unless ((DecoderValues.optionalStringValue castKind "status") == some "supported") &&
+      ((DecoderValues.optionalStringValue castKind "kind") == some "PointerCoercion") do return false
   let some coercion := (castKind.getObjVal? "coercion").toOption | return false
-  unless (coercion.getObjValAs? String "kind").toOption == some "Unsize" do return false
-  unless ((descriptor.getObjValAs? String "status").toOption == some "supported") &&
-      ((descriptor.getObjValAs? String "kind").toOption == some "dynamic_vtable_upcast") do return false
+  unless (DecoderValues.optionalStringValue coercion "kind") == some "Unsize" do return false
+  unless ((DecoderValues.optionalStringValue descriptor "status") == some "supported") &&
+      ((DecoderValues.optionalStringValue descriptor "kind") == some "dynamic_vtable_upcast") do return false
   let some sourceType := (descriptor.getObjVal? "source_type").toOption | return false
   let some sourceTypeId := jsonTypeId? sourceType | return false
   let some targetType := (descriptor.getObjVal? "target_type").toOption | return false
@@ -1353,19 +1392,19 @@ private def exactDynamicVtableUpcast? (j node descriptor : Json) : Bool := Id.ru
   unless (dynamicPredicateArray? j sourceTailId).isSome &&
       (dynamicPredicateArray? j targetTailId).isSome do return false
 
-  unless (descriptor.getObjValAs? String "runtime_vtable").toOption ==
+  unless (DecoderValues.optionalStringValue descriptor "runtime_vtable") ==
       some "source_operand_metadata" do return false
   let some embeddedQuery := (descriptor.getObjVal? "supertrait_slot_query").toOption | return false
-  unless ((embeddedQuery.getObjValAs? String "status").toOption == some "supported") &&
-      ((embeddedQuery.getObjValAs? String "query_kind").toOption == some "supertrait_slot") &&
-      ((embeddedQuery.getObjValAs? String "typing_env").toOption == some "fully_monomorphized") &&
+  unless ((DecoderValues.optionalStringValue embeddedQuery "status") == some "supported") &&
+      ((DecoderValues.optionalStringValue embeddedQuery "query_kind") == some "supertrait_slot") &&
+      ((DecoderValues.optionalStringValue embeddedQuery "typing_env") == some "fully_monomorphized") &&
       ((embeddedQuery.getObjVal? "input_source").toOption.bind jsonTypeId? == some sourceTailId) &&
       ((embeddedQuery.getObjVal? "input_target").toOption.bind jsonTypeId? == some targetTailId) do return false
   let some rows := (((j.getObjVal? "compiler_cast_queries").bind Json.getArr?).toOption) | return false
   let matching := rows.filter fun row =>
-    ((row.getObjValAs? String "query_kind").toOption == some "supertrait_slot") &&
-    ((row.getObjValAs? String "typing_env").toOption == some "fully_monomorphized") &&
-    ((row.getObjValAs? String "status").toOption == some "supported") &&
+    ((DecoderValues.optionalStringValue row "query_kind") == some "supertrait_slot") &&
+    ((DecoderValues.optionalStringValue row "typing_env") == some "fully_monomorphized") &&
+    ((DecoderValues.optionalStringValue row "status") == some "supported") &&
     ((row.getObjVal? "input_source").toOption.bind jsonTypeId? == some sourceTailId) &&
     ((row.getObjVal? "input_target").toOption.bind jsonTypeId? == some targetTailId)
   unless matching.size == 1 do return false
@@ -1377,7 +1416,8 @@ private def exactDynamicVtableUpcast? (j node descriptor : Json) : Bool := Id.ru
   return true
 
 private partial def malformedDynamicVtableUpcastAux (root : Json) (node : JsonTraversalCache.Node) (path : String)
-    (visited : Std.HashSet JsonTraversalCache.IdentityKey) : Option String × Std.HashSet JsonTraversalCache.IdentityKey := Id.run do
+    (visited : JsonTraversalCache.IdentitySet) : Option String × JsonTraversalCache.IdentitySet := Id.run do
+  if !node.mayContain 8 then return (none, visited)
   let current := node.value
   let memoKey := node.identity
   match current with
@@ -1387,10 +1427,10 @@ private partial def malformedDynamicVtableUpcastAux (root : Json) (node : JsonTr
   let mut visited := if node.shouldMemo then visited.insert memoKey else visited
   match current with
   | .obj fields =>
-    if (current.getObjValAs? String "kind").toOption == some "Cast" then
+    if (DecoderValues.optionalStringValue current "kind") == some "Cast" then
       if let some descriptor := (current.getObjVal? "vtable_allocation").toOption then
-        if (descriptor.getObjValAs? String "kind").toOption == some "dynamic_vtable_upcast" &&
-            (descriptor.getObjValAs? String "status").toOption == some "supported" &&
+        if (DecoderValues.optionalStringValue descriptor "kind") == some "dynamic_vtable_upcast" &&
+            (DecoderValues.optionalStringValue descriptor "status") == some "supported" &&
             !exactDynamicVtableUpcast? root current descriptor then
           return (some (joinPath path "vtable_allocation"), visited)
     for ((key, value), childIndex) in fields.toList.zipIdx do
@@ -1405,15 +1445,15 @@ private partial def malformedDynamicVtableUpcastAux (root : Json) (node : JsonTr
   | _ => pure ()
   return (none, visited)
 
-private def malformedDynamicVtableUpcast? (node : JsonTraversalCache.Node) : Option String :=
-  (malformedDynamicVtableUpcastAux node.value node "$" {}).1
+private def malformedDynamicVtableUpcast? (node : JsonTraversalCache.Node) (nodeCount : Nat := 0) : Option String :=
+  (malformedDynamicVtableUpcastAux node.value node "$" (.empty nodeCount)).1
 
 private partial def hasFailedStatusAt (j : Json) (wanted path : String) : Bool := Id.run do
   match j with
   | .obj fields =>
-    if (j.getObjValAs? String "status").toOption == some "debug_payload" then return false
+    if (DecoderValues.optionalStringValue j "status") == some "debug_payload" then return false
     if path == wanted then
-      if let some status := (j.getObjValAs? String "status").toOption then
+      if let some status := (DecoderValues.optionalStringValue j "status") then
         if status != "supported" then return true
     for (key, value) in fields.toList do
       let child := joinPath path key
@@ -1425,10 +1465,38 @@ private partial def hasFailedStatusAt (j : Json) (wanted path : String) : Bool :
   | _ => pure ()
   return false
 
+/-- Direct lookup for the simple canonical paths emitted for compiler queries.
+Unexpected spellings retain the original scanner. The caller enables this only
+for resolver-checked indexed images, whose object keys are unique and ordered. -/
+private def failedStatusAtIndexed? (j : Json) (wanted : String) : Option Bool := do
+  if !wanted.startsWith "$." || wanted.contains '%' then none else do
+    let mut current := j
+    let mut actual := "$"
+    for segment in (wanted.drop 2).toString.splitOn "." do
+      if optionalStringValue current "status" == some "debug_payload" then return false
+      let (key, index?) ← match segment.splitOn "[" with
+        | [key] => if key.contains ']' then none else some (key, none)
+        | [key, suffix] => do
+          let [text, ""] := suffix.splitOn "]" | none
+          let .ok index := decimalNat text wanted | none
+          if toString index != text then none else some (key, some index)
+        | _ => none
+      actual := joinPath actual key
+      let some next := (current.getObjVal? key).toOption | return false
+      current := next
+      if let some index := index? then
+        let some values := current.getArr?.toOption | return false
+        let some next := values[index]? | return false
+        current := next
+        actual := s!"{actual}[{index}]"
+    if actual != wanted then none else
+      let status := optionalStringValue current "status"
+      return status.isSome && status != some "supported" && status != some "debug_payload"
+
 /-- Copied catalog diagnostics inherit only their exact original query role.
 The original obligations remain present; runtime providers still reject failed
 queries when the corresponding source operation requests them. -/
-private def retainedQueryDiagnosticRole (j : Json) (path : String) : QueryDependencyRole := Id.run do
+private def retainedQueryDiagnosticRole (j : Json) (path : String) (indexed : Bool := false) : QueryDependencyRole := Id.run do
   let pathPrefix := "$.selected_scope.retained_catalog_obligations["
   let suffix := "].status"
   unless path.startsWith pathPrefix && path.endsWith suffix do return .structural
@@ -1441,7 +1509,13 @@ private def retainedQueryDiagnosticRole (j : Json) (path : String) : QueryDepend
   let some record := records[index]? | return .structural
   let some sourcePath := ((record.getObjVal? "path").bind Json.getStr?).toOption
     | return .structural
-  unless hasFailedStatusAt j ("$." ++ sourcePath) "$" do return .structural
+  let wanted := "$." ++ sourcePath
+  let failed := if indexed then
+      match failedStatusAtIndexed? j wanted with
+      | some result => result
+      | none => hasFailedStatusAt j wanted "$"
+    else hasFailedStatusAt j wanted "$"
+  unless failed do return .structural
   if exactVtableProbeDiagnostic j ("$." ++ sourcePath ++ ".status") then return .runtimeCast
   return queryDependencyRole ("$." ++ sourcePath ++ ".status")
 
@@ -1449,11 +1523,12 @@ private def retainedQueryDiagnosticRole (j : Json) (path : String) : QueryDepend
 blocks on. Keep diagnostics and the execution decision on this single
 predicate so reports cannot drift from the fail-closed gate. -/
 private def selectedScopeBlockingObligations (j : Json) (obligations : Array Obligation)
-    (requiredLayoutPaths : List String) (requiredInstancePaths : Array String) : Array Obligation :=
+    (requiredLayoutPaths : List String) (requiredInstancePaths : Array String)
+    (indexed : Bool := false) : Array Obligation :=
   obligations.filter fun issue =>
     (!globalCompletenessPath issue.path && !exactVtableProbeDiagnostic j issue.path &&
       obligationQueryRole issue.path == .structural &&
-      retainedQueryDiagnosticRole j issue.path == .structural
+      retainedQueryDiagnosticRole j issue.path indexed == .structural
       || issue.path == "$.selected_scope.kind" || issue.path == "$.selected_scope.status" ||
       issue.path == "$.selected_scope.semantics" || issue.path.startsWith "$.selected_scope.roots[" ||
       requiredLayoutPaths.contains issue.path ||
@@ -1479,11 +1554,11 @@ private def parseAllocationArray (values : Array Json) : Except String (Array Al
     index := index + 1
   pure result
 
-private def parseInstanceArray (values : Array Json) : Except String (Array InstanceNode) := do
+private def parseInstanceArray (values : Array Json) (memo : DecodeMemo) : Except String (Array InstanceNode) := do
   let mut result := #[]
   let mut index := 0
   for value in values do
-    result := result.push (← parseInstance value s!"$.instances[{index}]")
+    result := result.push (← parseInstance value s!"$.instances[{index}]" memo)
     index := index + 1
   pure result
 
@@ -1500,16 +1575,20 @@ private def parseBodyArray (values : Array Json) (memo : DecodeMemo) : Except St
 
 private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     (profile : Options := {}) (cachedTraversal : Bool := true) : Except String ParsedDocument := do
-  let (resolved,traversal) ← profileit "decoder.shared_payload_resolution" profile fun _ =>
-    JsonTraversalCache.resolve input cachedTraversal profile
+  let (resolved,checkedTraversal) ← profileit "decoder.shared_payload_resolution" profile fun _ =>
+    JsonTraversalCache.resolveChecked input cachedTraversal profile
+  let traversal := checkedTraversal.node
   let j := resolved.root
   let memo := profileit "decoder.shared_decode_memo" profile fun _ => sharedDecodeMemo resolved.nodes
+  let memo := if (input.getObjValAs? String "schema").toOption == some "lean-miri-prepared-image" then
+      profileit "decoder.indexed_mir" profile fun _ => prepareIndexedMirMemo checkedTraversal memo
+    else memo
   if (← fieldString j "schema" "$") != expectedSchema then
     throw s!"$.schema: expected `{expectedSchema}`"
   if (← fieldNat j "schema_version" "$") != expectedSchemaVersion then
     throw s!"$.schema_version: unsupported schema version"
   if let some path := profileit "decoder.dynamic_vtable_scan" profile fun _ =>
-      malformedDynamicVtableUpcast? traversal then
+      malformedDynamicVtableUpcast? traversal resolved.nodes.size then
     throw s!"{path}: supported dynamic vtable upcast lacks matching compiler cast evidence"
   let producerJson ← field j "producer" "$"
   let producer : Producer := {
@@ -1534,14 +1613,14 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     | none => pure none
     | some value => pure (some (← parseCompilerAllocIdWorld value allocations))
   let instancesJson ← arrayField j "instances" "$"
-  let instances ← profileit "decoder.instances" profile fun _ => parseInstanceArray instancesJson
+  let instances ← profileit "decoder.instances" profile fun _ => parseInstanceArray instancesJson memo
   let selectedScope ← match optionalJson j "selected_scope" with
     | none => pure none
     | some value => pure (some (← parseSelectedScope value "$.selected_scope"))
   let compilerFunctionAbiTable := profileit "decoder.compiler_abi_queries" profile fun _ =>
     prepareCompilerFunctionAbiTableUsing resolved.nodes memo
   let memo := compilerFunctionAbiTable.extendDecodeMemo memo
-  let functionAbis ← profileit "decoder.function_abis" profile fun _ => collectFunctionAbis traversal "$" memo
+  let functionAbis ← profileit "decoder.function_abis" profile fun _ => collectFunctionAbis traversal "$" memo resolved.nodes.size
   let compilerAbiLayoutSchema ← optionalString j "compiler_abi_layout_schema" "$"
   if let some schema := compilerAbiLayoutSchema then
     if schema != expectedCompilerAbiLayoutSchema then
@@ -1559,12 +1638,18 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
   profileit "decoder.validate_dense_type_ids" profile fun _ => validateDense typeIds "type IDs"
   profileit "decoder.validate_dense_allocation_ids" profile fun _ => validateDense allocationIds "allocation IDs"
   profileit "decoder.validate_dense_instance_ids" profile fun _ => validateDense instanceIds "instance IDs"
-  profileit "decoder.validate_all_bodies" profile fun _ => validateAllBodies traversal "$"
+  profileit "decoder.validate_all_bodies" profile fun _ => validateAllBodies traversal "$" resolved.nodes.size
   profileit "decoder.validate_references" profile fun _ =>
-    validateReferences traversal "$" types.size allocations.size instances.size
+    validateReferences traversal "$" types.size allocations.size instances.size resolved.nodes.size
+  let compilerValues := if runtimeOnly then some (profileit "decoder.compiler_values" profile fun _ =>
+    prepareCompilerValueMemoUsing resolved.nodes memo) else none
+  let instanceSources := compilerValues.map fun values =>
+    profileit "decoder.compiler_instance_sources" profile fun _ =>
+      prepareCompilerInstanceSourceMemo resolved.nodes values
   let (typedTree?, valueIssues) ← if runtimeOnly then
       let decoded ← profileit "decoder.runtime_value" profile fun _ =>
-        decodeRuntimeValue traversal "$" .any .none memo
+        decodeRuntimeValueWithCompilerMemo traversal "$" .any .none memo
+          (if cachedTraversal then compilerValues else none)
       pure (none, flattenRuntimeObligations decoded.obligations)
     else
       let typedTree ← decodeValue j "$" .any .none memo
@@ -1620,18 +1705,24 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     raw := j
     sharedNodes := resolved.nodes
     compilerFunctionAbiTable := some compilerFunctionAbiTable
-    compilerValueMemo := if runtimeOnly then some (profileit "decoder.compiler_values" profile fun _ =>
-      prepareCompilerValueMemoUsing resolved.nodes memo) else none
+    allocationWorldValidation := if runtimeOnly then
+      some (profileit "decoder.allocation_world_validation" profile fun _ =>
+        AllocationWorldValidation.prepare j allocations compilerAllocIdWorld) else none
+    compilerValueMemo := compilerValues
+    compilerInstanceSourceMemo := instanceSources
   }
+  let requiredTypes := Std.HashSet.ofArray requiredDependencies.typeIds
+  let requiredInstances := Std.HashSet.ofArray requiredDependencies.instanceIds
   let requiredLayoutPaths := types.toList.zipIdx.filterMap fun (ty, typeIndex) =>
-    if requiredDependencies.typeIds.contains ty.id then some s!"$.types[{typeIndex}].layout.status" else none
+    if requiredTypes.contains ty.id then some s!"$.types[{typeIndex}].layout.status" else none
   let requiredInstancePaths := instances.toList.zipIdx.foldl (fun paths (instNode, instanceIndex) =>
-    if requiredDependencies.instanceIds.contains instNode.id then
+    if requiredInstances.contains instNode.id then
       paths ++ #[s!"instances[{instanceIndex}]", s!"$.instances[{instanceIndex}].status"]
     else paths) #[]
   let scopeIsSelected := selectedScope.isSome
   let blockingObligations := if scopeIsSelected then
       selectedScopeBlockingObligations j obligations requiredLayoutPaths requiredInstancePaths
+        (match traversal with | .cached key _ => key.id.isSome | .uncached _ => false)
     else obligations
   let scopeIssuesRemain := !blockingObligations.isEmpty
   let ready :=

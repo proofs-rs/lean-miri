@@ -63,11 +63,11 @@ def constantAt (p : CompilerProviders.Prepared) (image : AllocationImage.Importe
   simp (config := {zeta := false}) only [contract.maximum_eq,
     EvalConfigurationCore.pureQuery_eq, EvalConfigurationCore.liftConstruction_eq,
     EvalMathMachine.hooks, CompilerCallConstruction.helpers,
-    contract.i32_eq, contract.bool_eq, contract.u8_eq, contract.unit_eq, contract.rootSpan_eq,
+    contract.i32_eq, contract.bool_eq, contract.u8_eq, contract.unit_eq, CompilerProviders.Prepared.rootSpan_eq, contract.rootSpan_eq,
     Except.mapError, Except.map, bind, Except.bind, pure, Except.pure]
   simp only [contract.maximum_eq, EvalConfigurationCore.pureQuery_eq,
     EvalConfigurationCore.liftConstruction_eq, EvalMathMachine.hooks, CompilerCallConstruction.helpers,
-    contract.i32_eq, contract.bool_eq, contract.u8_eq, contract.unit_eq, contract.rootSpan_eq,
+    contract.i32_eq, contract.bool_eq, contract.u8_eq, contract.unit_eq, CompilerProviders.Prepared.rootSpan_eq, contract.rootSpan_eq,
     Except.mapError, Except.map, bind, Except.bind, pure, Except.pure]
   apply congrArg Except.ok
   funext choice path constant known

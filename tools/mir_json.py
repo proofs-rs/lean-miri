@@ -27,10 +27,73 @@ class MirJSONError(ValueError):
     """Malformed or unsupported current MIR JSON document."""
 
 
+def _decode_prepared_image(document: dict[str, Any]) -> dict[str, Any]:
+    """Validate all typed rows, retaining read-only DAG sharing in the result."""
+    if set(document) != {"schema", "schema_version", "fields", "nodes", "root"}:
+        raise MirJSONError("prepared image has unexpected or missing header fields")
+    if type(document["schema_version"]) is not int or document["schema_version"] != 1:
+        raise MirJSONError("unsupported prepared image schema_version")
+    fields, rows = document["fields"], document["nodes"]
+    if not isinstance(fields, list) or any(type(key) is not str for key in fields):
+        raise MirJSONError("prepared image fields must be strings")
+    if len(set(fields)) != len(fields):
+        raise MirJSONError("prepared image field dictionary contains duplicates")
+    if not isinstance(rows, list):
+        raise MirJSONError("prepared image nodes must be an array")
+    values: list[Any] = []
+
+    def index(raw: Any, size: int, label: str) -> int:
+        if type(raw) is not int or not 0 <= raw < size:
+            raise MirJSONError(f"prepared image {label} out of range")
+        return raw
+
+    for row in rows:
+        if not isinstance(row, list) or not row or type(row[0]) is not int:
+            raise MirJSONError("prepared image invalid node row")
+        tag = row[0]
+        if tag in (0, 1, 2):
+            if len(row) != 1:
+                raise MirJSONError("prepared image scalar row arity")
+            value = (None, False, True)[tag]
+        elif tag in (3, 4):
+            if len(row) != 2 or (tag == 3 and type(row[1]) not in (int, float)) or (tag == 4 and type(row[1]) is not str):
+                raise MirJSONError("prepared image leaf payload type or arity")
+            value = row[1]
+        elif tag in (5, 6):
+            if len(row) != 2 or not isinstance(row[1], list):
+                raise MirJSONError("prepared image container row arity or payload")
+            if tag == 5:
+                value = [values[index(child, len(values), "edge")] for child in row[1]]
+            else:
+                value = {}
+                previous = None
+                for pair in row[1]:
+                    if not isinstance(pair, list) or len(pair) != 2:
+                        raise MirJSONError("prepared image invalid field row")
+                    name = fields[index(pair[0], len(fields), "field ID")]
+                    if previous is not None and not previous < name:
+                        raise MirJSONError("prepared image object fields are not strictly ordered")
+                    if name == SHARED_REF_FIELD:
+                        raise MirJSONError("prepared image reserved reference field")
+                    previous = name
+                    value[name] = values[index(pair[1], len(values), "edge")]
+        else:
+            raise MirJSONError("prepared image unknown node kind")
+        values.append(value)
+    root = values[index(document["root"], len(values), "root ID")]
+    if not isinstance(root, dict) or SHARED_PAYLOADS_FIELD in root:
+        raise MirJSONError("prepared image business root must be an object without a catalog")
+    if root.get("schema") != "lean-miri-rustc-mir" or type(root.get("schema_version")) is not int or root["schema_version"] != 3:
+        raise MirJSONError("prepared image has unsupported MIR business schema")
+    return root
+
+
 def decode_mir_document(document: Any) -> dict[str, Any]:
     """Validate and expand one current MIR shared-payload graph document."""
     if not isinstance(document, dict):
         raise MirJSONError("MIR document root must be an object")
+    if document.get("schema") == "lean-miri-prepared-image":
+        return _decode_prepared_image(document)
     if SHARED_REF_FIELD in document:
         raise MirJSONError(f"reserved {SHARED_REF_FIELD!r} marker is not valid at the document root")
     if document.get("schema") != "lean-miri-rustc-mir":
@@ -41,8 +104,8 @@ def decode_mir_document(document: Any) -> dict[str, Any]:
     catalog = document.get(SHARED_PAYLOADS_FIELD)
     if not isinstance(catalog, dict):
         raise MirJSONError("current MIR document must contain a shared_payloads graph")
-    if set(catalog) != {"schema_version", "nodes"}:
-        raise MirJSONError("shared_payloads must contain only schema_version and nodes")
+    if set(catalog) not in ({"schema_version", "nodes"}, {"schema_version", "nodes", "scan_flags"}):
+        raise MirJSONError("shared_payloads must contain only schema_version and nodes, with optional scan_flags")
     if catalog.get("schema_version") != SHARED_PAYLOADS_SCHEMA_VERSION:
         raise MirJSONError(
             f"shared_payloads schema_version must be {SHARED_PAYLOADS_SCHEMA_VERSION}"
@@ -50,6 +113,14 @@ def decode_mir_document(document: Any) -> dict[str, Any]:
     nodes = catalog.get("nodes")
     if not isinstance(nodes, list):
         raise MirJSONError("shared_payloads.nodes must be an array")
+    flags = catalog.get("scan_flags")
+    if "scan_flags" in catalog and (
+        not isinstance(flags, list) or len(flags) != len(nodes) or any(
+            isinstance(flag, bool) or not isinstance(flag, int) or not 0 <= flag < 16
+            for flag in flags
+        )
+    ):
+        raise MirJSONError("shared_payloads.scan_flags must contain one four-bit integer per node")
 
     cache: dict[int, Any] = {}
 
@@ -94,6 +165,33 @@ def decode_mir_document(document: Any) -> dict[str, Any]:
     for index in range(len(nodes)):
         if index not in cache:
             cache[index] = expand(nodes[index], parent_node=index, active={index})
+
+    if flags is not None:
+        field_bits = {"type_id": 1, "allocation_id": 1, "instance_id": 1,
+                      "locals": 2, "basic_blocks": 2, "fn_abi": 4,
+                      "calling_convention": 4, "vtable_allocation": 8}
+        computed: list[int] = []
+
+        def summary(value: Any) -> int:
+            if isinstance(value, dict):
+                if SHARED_REF_FIELD in value:
+                    return computed[value[SHARED_REF_FIELD]]
+                result = 0
+                for key, child in value.items():
+                    result |= field_bits.get(key, 0) | summary(child)
+                return result
+            if isinstance(value, list):
+                result = 0
+                for child in value:
+                    result |= summary(child)
+                return result
+            return 0
+
+        for index, node in enumerate(nodes):
+            actual = summary(node)
+            if actual != flags[index]:
+                raise MirJSONError(f"shared_payloads.scan_flags[{index}] differs from actual graph")
+            computed.append(actual)
 
     result = {
         key: expand(value, parent_node=None, active=set())

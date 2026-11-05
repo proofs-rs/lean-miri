@@ -1,3 +1,5 @@
+import Miri.Input.CompilerSpanLookup
+import Miri.Input.CompilerBodyEquality
 import Miri.Input.CompilerProviders
 import Miri.Input.NormalizationBody
 import Miri.Interpreter.AllocationDriver
@@ -19,7 +21,7 @@ def bodyOfFrame (p : CompilerProviders.Prepared) (frame : ActualFrame) :
     Except String LoweredBody := do
   let some body := p.program.bundle.bodies[frame.bodyIdentity.index]?
     | throw "canonical body identity is absent"
-  unless body.body == frame.body do throw "canonical body/content mismatch"
+  unless bodyContentsEqual body.body frame.body do throw "canonical body/content mismatch"
   let loaded ← CallResolution.loadedBodyOfInstance p.lifecycle.calls.calls frame.functionInstance
   unless loaded.identity == frame.bodyIdentity do throw "full-instance/canonical body identity mismatch"
   pure body
@@ -118,10 +120,10 @@ def layoutOfLocal (p : CompilerProviders.Prepared) (debugAssertions : Bool)
 def localSpan (p : CompilerProviders.Prepared) (supplied : MIR.Body) (id : MIR.LocalId) :
     MachineHooks.M K User MIR.SpanRef := do
   let frame ← MachineHooks.currentFrame
-  unless supplied == frame.body do throw (.invalidProgram "local span body differs from active frame")
+  unless bodyContentsEqual supplied frame.body do throw (.invalidProgram "local span body differs from active frame")
   let body ← lift (bodyOfFrame p frame)
   let some decl := body.input.locals[id]? | throw (.invalidProgram "local source span index is absent")
-  match p.program.bundle.spans.toList.idxOf? decl.sourceInfo.span with
+  match CompilerSpanLookup.findUsing p.program.bundle.spans p.spanLookup decl.sourceInfo.span with
   | some index => pure ⟨index⟩
   | none => throw (.unsupported "exact local source span is absent from canonical span table")
 

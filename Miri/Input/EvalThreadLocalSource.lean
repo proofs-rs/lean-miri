@@ -100,7 +100,7 @@ def getOrCreate (p : CompilerProviders.Prepared) (maximum : Size)
     (source : EvalPointerSource.Constructed Os R P H D O Aff B Host)
     (definition : MIR.DefId) : M Os R P H D O Aff B Host (Pointer Provenance) := do
   if let some pointer ← cached definition then return pointer
-  let entry ← compiler (CompilerThreadLocal.forDefinition p.program definition)
+  let entry ← compiler (CompilerThreadLocal.forDefinition p.program definition p.tlsRows)
   if entry.info.foreignItem then throw (.unsupported "foreign thread-local statics are not supported")
   let some initializer := entry.initializer | throw (.unsupported "TLS initializer compiler evidence missing")
   let initializer ← compiler (AllocationImage.decode p.runtime.target (← get).memory initializer)

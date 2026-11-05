@@ -5,7 +5,7 @@ source "$ROOT/exporter/tests/fixture-env.sh"
 EXPORTER="${EXPORTER_BIN:-$ROOT/exporter/target/debug/lean-miri-mir-exporter}"
 export EXPORTER_BIN="$EXPORTER"
 if [[ $# -lt 1 || $# -gt 2 ]]; then
-  echo 'Usage: run-producer.sh {settings|primitive_ranges|selected_alloc_world|selected_static_typeid} [output.json]' >&2
+  echo 'Usage: run-producer.sh {settings|primitive_ranges|selected_alloc_world|selected_static_typeid|runtime_operations} [output.json]' >&2
   exit 2
 fi
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/lean-miri-producer-XXXXXX")"
@@ -13,6 +13,12 @@ trap 'rm -rf "$WORK"' EXIT
 OUT="${2:-$WORK/output.json}"
 cd "$ROOT"
 case "$1" in
+  runtime_operations)
+    "$EXPORTER" --output "$OUT" --root main -- \
+      "$ROOT/exporter/fixtures/runtime_operations.rs" --crate-name runtime_operations \
+      --crate-type=lib --edition=2021 -Zmir-opt-level=0
+    python3 "$ROOT/exporter/tests/validate_runtime_operations.py" "$OUT"
+    ;;
   settings)
     python3 "$ROOT/exporter/tests/validate_producer_settings.py"
     ;;

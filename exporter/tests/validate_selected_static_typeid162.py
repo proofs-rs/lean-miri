@@ -6,6 +6,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "tools"))
 from mir_json import load_mir_document
+from alloc_world_rows import allocation_world_rows
 
 
 def require(condition: bool, message: str) -> None:
@@ -16,9 +17,9 @@ def require(condition: bool, message: str) -> None:
 def main(path: str) -> None:
     document = load_mir_document(path)
     world = document["compiler_alloc_id_world"]
-    require(world["schema"] == "rustc_alloc_id_world_v1", "wrong allocator-world schema")
+    require(world["schema"] in ("rustc_alloc_id_world_v1", "rustc_alloc_id_world_v2"), "wrong allocator-world schema")
     require(world["profile"] == "prepared_post_export", "wrong allocator-world profile")
-    rows = world["raw_pool"]
+    rows = allocation_world_rows(document)
     frontier = world["frontier"]
     last = frontier["last_reserved_source_alloc_id"]
     require(len(rows) == last, "raw pool length differs from source frontier")

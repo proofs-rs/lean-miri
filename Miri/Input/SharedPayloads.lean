@@ -34,6 +34,9 @@ structure ResolvedGraph where
   nodes : Array Json
   root : Json
   nodeResolutionCount : Nat
+  /-- Optional producer summaries. They must be checked against the real graph
+  before any decoder uses them to prune a traversal. -/
+  scanFlags : Option ByteArray := none
   deriving Inhabited
 
 private def parseReference (value : Json) (path : String) : Except String Nat := do
@@ -84,16 +87,33 @@ private partial def resolveValue (available : Array Json) (totalCount limit : Na
     if changed then pure (some (.arr resolved)) else pure none
   | _ => pure none
 
-private def parseCatalog (catalog : Json) : Except String (Array Json) := do
-  let _ ← exactObjectFields catalog ["schema_version", "nodes"] "$.shared_payloads" "catalog"
+private def parseCatalog (catalog : Json) : Except String (Array Json × Option ByteArray) := do
+  let withFlags := (catalog.getObjVal? "scan_flags").isOk
+  let names := if withFlags then ["schema_version", "nodes", "scan_flags"] else ["schema_version", "nodes"]
+  let _ ← exactObjectFields catalog names "$.shared_payloads" "catalog"
   let version ← field catalog "schema_version" "$.shared_payloads"
   let version ← version.getNat? |>.mapError fun error =>
     s!"$.shared_payloads.schema_version: expected unsigned integer ({error})"
   unless version == 2 do
     throw "$.shared_payloads.schema_version: unsupported shared-payload schema version (expected 2)"
   let nodesValue ← field catalog "nodes" "$.shared_payloads"
-  nodesValue.getArr? |>.mapError fun error =>
+  let nodes ← nodesValue.getArr? |>.mapError fun error =>
     s!"$.shared_payloads.nodes: expected array ({error})"
+  let flags ← if withFlags then do
+      let values ← (← field catalog "scan_flags" "$.shared_payloads").getArr?
+        |>.mapError fun _ => "$.shared_payloads.scan_flags: expected array"
+      unless values.size == nodes.size do
+        throw "$.shared_payloads.scan_flags: expected one summary per node"
+      let mut flags := ByteArray.empty
+      for (value, index) in values.toList.zipIdx do
+        let flag ← value.getNat? |>.mapError fun _ =>
+          s!"$.shared_payloads.scan_flags[{index}]: expected unsigned integer"
+        unless flag < 16 do
+          throw s!"$.shared_payloads.scan_flags[{index}]: unknown scan bits"
+        flags := flags.push (UInt8.ofNat flag)
+      pure (some flags)
+    else pure none
+  pure (nodes, flags)
 
 /-- Resolve the mandatory v2 shared-payload graph and strip its transport field.
 Every node is resolved exactly once in array order; node references can only
@@ -105,7 +125,7 @@ def resolveGraph (document : Json) : Except String ResolvedGraph := do
     throw "$: a shared reference cannot occupy the document root"
   let some catalog := (document.getObjVal? "shared_payloads").toOption
     | throw "$.shared_payloads: missing mandatory shared-payload graph"
-  let rawNodes ← parseCatalog catalog
+  let (rawNodes, scanFlags) ← parseCatalog catalog
   let mut nodes := #[]
   for (node, index) in rawNodes.toList.zipIdx do
     let nodePath := s!"$.shared_payloads.nodes[{index}]"
@@ -120,6 +140,7 @@ def resolveGraph (document : Json) : Except String ResolvedGraph := do
     nodes := nodes
     root := Json.mkObj rootFields.toList
     nodeResolutionCount := nodes.size
+    scanFlags := scanFlags
   }
 
 /-- Resolve a shared graph, returning only its business document for decoder

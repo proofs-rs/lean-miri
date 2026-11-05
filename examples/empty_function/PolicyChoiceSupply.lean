@@ -75,11 +75,14 @@ def Fits {budget : Nat} : Plan budget → Tape → Prop
 structure Environment {budget : Nat} (plan : Plan budget) (tape : Tape) : Prop where
   fits : Fits plan tape
 
-/-- Remaining supplied inputs and generated quota contribute additively. -/
-def remaining (tape : Tape) : Nat := tape.inputs.size-tape.cursor +
+/-- Remaining supplied inputs and quota for finite policies. `none` denotes
+an unbounded generator; no finite global quota is invented for native runs. -/
+def remaining (tape : Tape) : Option Nat :=
   match tape.policy with
-  | .strict => 0
-  | .boundedDiagnostic maximum _ | .boundedSeededDiagnostic maximum _ _ => maximum-tape.generatedChoices
+  | .strict => some (tape.inputs.size - tape.cursor)
+  | .boundedDiagnostic maximum _ | .boundedSeededDiagnostic maximum _ _ =>
+    some (tape.inputs.size - tape.cursor + (maximum - tape.generatedChoices))
+  | .generatedDiagnostic _ => none
 
 structure AccessLaws {S : Type} (access : Access S) : Prop where
   get_put : ∀ state tape, access.get (access.put state tape) = tape

@@ -62,6 +62,7 @@ structure LowerContext where
   lowering. A bare caller-supplied path never discharges an obligation. -/
   sourceDocument : Option Lean.Json := none
   compilerValueMemo : Option CompilerValueMemo := none
+  compilerInstanceSourceMemo : Option CompilerInstanceSourceMemo := none
   /-- Optional exact-array certificates; hand-built contexts default to the
   original linear lookup behavior. -/
   typeIndex : Option (LowerContextTypeIndex typeIds) := none
@@ -123,7 +124,10 @@ def LowerContext.ofTypes (types : Array TypeNode) : LowerContext := Id.run do
 semantics remain independent from syntax lowering and its obligations. -/
 def LowerContext.ofDocument (document : ImportDocumentCore) : LowerContext :=
   let ctx := (ofTypes document.types).withAllocationIds (document.allocations.map (·.id))
-  { ctx with sourceDocument := some document.raw, compilerValueMemo := document.compilerValueMemo }
+  { ctx with
+    sourceDocument := some document.raw
+    compilerValueMemo := document.compilerValueMemo
+    compilerInstanceSourceMemo := document.compilerInstanceSourceMemo }
 
 set_option autoImplicit false in
 /-- A prepared lowering context tied to one exact decoded source document.
@@ -185,7 +189,7 @@ private structure LowerState where
   typeConstants : Array MIR.TypeConst := #[]
   /-- Enabled only by `lowerBodies`; standalone lowering keeps the original
   linear lookup path. Buckets are candidates, never substitutes for equality. -/
-  spanCandidates : Option (Std.HashMap (String × Nat × Nat) (Array Nat)) := none
+  spanCandidates : Option (Lean.PersistentHashMap (String × Nat × Nat) (Array Nat)) := none
   definitionCandidates : Option (Std.HashMap (Nat × Nat) Nat) := none
 
 private abbrev LowerM := StateT LowerState (Except String)
@@ -228,6 +232,16 @@ private def typeId (ctx : LowerContext) : TypedValue → LowerResult MIR.TyId
 private def spanCandidateKey (span : SourceSpanData) : String × Nat × Nat :=
   (span.file, span.lo, span.hi)
 
+/-- Source spans have lawful propositional equality. Shared import-time spans
+can skip the repeated field comparison without changing interner identity. -/
+private def sameSpan (left right : SourceSpanData) : Bool :=
+  withPtrEq left right (fun _ => decide (left = right))
+    (by intro equal; cases equal; simp)
+
+theorem sameSpan_eq (left right : SourceSpanData) :
+    sameSpan left right = decide (left = right) := by
+  simp [sameSpan, withPtrEq]
+
 private def intern (span : SourceSpanData) : LowerM MIR.SpanRef := do
   let state ← StateT.get
   match state.spanCandidates with
@@ -238,10 +252,10 @@ private def intern (span : SourceSpanData) : LowerM MIR.SpanRef := do
       StateT.set { state with spans := state.spans.push span }
       pure ⟨state.spans.size⟩
   | some candidates =>
-    let bucket := candidates.getD (spanCandidateKey span) #[]
+    let bucket := candidates.findD (spanCandidateKey span) #[]
     if let some i := bucket.find? fun i =>
         match state.spans[i]? with
-        | some previous => decide (previous = span)
+        | some previous => sameSpan previous span
         | none => false then
       pure ⟨i⟩
     else
@@ -1029,17 +1043,17 @@ private def controlTargets : MIR.TerminatorKind → Array Nat
   | .InlineAsm asm => asm.targets ++ unwindTargets asm.unwind
   | .UnwindResume | .UnwindTerminate _ | .Return | .Unreachable | .TailCall .. | .CoroutineDrop => #[]
 
-private def typedValueMatchesSource (source : Lean.Json) (path : String)
+private def typedValueMatchesSource (source : Lean.Json) (memo : Option CompilerValueMemo) (path : String)
     (value : TypedValue) : Bool := Id.run do
   let some raw := jsonAtPath source path | return false
-  match decodeCompilerValue raw with
+  match decodeCompilerValueAtPath raw path memo with
   | .ok decoded => return decoded == value
   | .error _ => return false
 
 /-- Recheck that the typed MIR nodes used by lowering are exactly the ones
 decoded from the same raw body. Retaining only a raw payload/path is not enough:
 callers can construct or mutate an ImportDocument after decoding. -/
-private def sourceBodyMatches (source : Lean.Json) (input : BodyCore) : Bool := Id.run do
+private def sourceBodyMatches (source : Lean.Json) (memo : Option CompilerValueMemo) (input : BodyCore) : Bool := Id.run do
   unless input.sourcePath.startsWith "$." && jsonAtPath source input.sourcePath == some input.payload do
     return false
   let some rawBlocks := ((input.payload.getObjVal? "basic_blocks").bind Lean.Json.getArr?).toOption
@@ -1054,16 +1068,16 @@ private def sourceBodyMatches (source : Lean.Json) (input : BodyCore) : Bool := 
     unless rawStatements.size == block.statements.size do return false
     for (node, statementIndex) in block.statements.toList.zipIdx do
       let path := s!"{input.sourcePath}.basic_blocks[{index}].statements[{statementIndex}].kind"
-      unless typedValueMatchesSource source path node.value do return false
+      unless typedValueMatchesSource source memo path node.value do return false
     let terminatorPath := s!"{input.sourcePath}.basic_blocks[{index}].terminator.kind"
-    unless typedValueMatchesSource source terminatorPath block.terminator.value do return false
+    unless typedValueMatchesSource source memo terminatorPath block.terminator.value do return false
   return true
 
 /-- Construct source-shaped MIR, preserving its decoded envelope and interning
 actual source spans. Unsupported constructors and missing metadata are errors. -/
 private def lowerBodyState (ctx : LowerContext) (input : BodyCore) (initial : LowerState) : LowerResult (LoweredBody × LowerState) := do
   let sourceDocument := match ctx.sourceDocument with
-    | some source => if sourceBodyMatches source input then some source else none
+    | some source => if sourceBodyMatches source ctx.compilerValueMemo input then some source else none
     | none => none
   let mirPhase ← phase input.phase
   match input.injectionPhase with
@@ -1270,15 +1284,15 @@ the search and full span equality remains authoritative. -/
 structure CompilerSpanInterner where
   private mk ::
   private tables : CompilerTables
-  private candidates : Std.HashMap (String × Nat × Nat) (Array Nat)
+  private candidates : Lean.PersistentHashMap (String × Nat × Nat) (Array Nat)
   private spanReflexivity : SpanArrayReflexivity tables.spans
 
 def CompilerSpanInterner.ofTables (tables : CompilerTables) : CompilerSpanInterner := Id.run do
-  let mut candidates : Std.HashMap (String × Nat × Nat) (Array Nat) := {}
+  let mut candidates : Lean.PersistentHashMap (String × Nat × Nat) (Array Nat) := {}
   for index in [:tables.spans.size] do
     if let some span := tables.spans[index]? then
       let key := spanCandidateKey span
-      candidates := candidates.insert key ((candidates.getD key #[]).push index)
+      candidates := candidates.insert key ((candidates.findD key #[]).push index)
   return ⟨tables, candidates, .prepare tables.spans⟩
 
 /-- Reuse an index only when the complete span arrays compare equal. The

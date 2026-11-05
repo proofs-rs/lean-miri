@@ -105,7 +105,7 @@ private def mutateInstanceName (program : LoweredProgram) (record : Json) : Exce
   let records ← (← field queries "instances").getArr?
   let queries ← setField queries "instances" (.arr (records.push record))
   let raw ← setField program.input.raw "compiler_runtime_queries" queries
-  return { program with input := { program.input with raw } }
+  return { program with input := { program.input with raw, allocationWorldValidation := none } }
 
 private def hasBacktraceRows (body : LoweredBody) : Bool :=
   match (body.input.payload.getObjVal? "backtrace_spans").bind Json.getArr? with

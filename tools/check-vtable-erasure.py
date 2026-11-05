@@ -13,6 +13,10 @@ import re
 from pathlib import Path
 import subprocess
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mir_json import decode_mir_document
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -90,6 +94,8 @@ def summarize_queries(raw, provenance, query_log, runtime_log):
     if provenance['schema'] != 'lean-miri-vtable-origins-v1':
         raise ValueError('unknown vtable provenance schema')
     document = json.loads(raw)
+    if document.get("schema") == "lean-miri-prepared-image":
+        document = decode_mir_document(document)
     if (provenance['snapshot_fnv1a64'] != fingerprint(raw) or
             provenance['snapshot_byte_length'] != len(raw) or
             provenance['rustc_commit'] != expand(document['producer'])['rustc_commit']):
@@ -197,7 +203,7 @@ def main():
             reference.get('snapshot_fnv1a64') != digest):
         raise SystemExit('reference did not establish same-TyCtxt exit_zero for these exact bytes')
     if args.require_external_constant:
-        require_external_constant(json.loads(raw), args.require_external_constant)
+        require_external_constant(decode_mir_document(json.loads(raw)), args.require_external_constant)
     query_args = [args.expect] + (['predicate-contrast'] if args.require_predicate_contrast else [])
     if args.require_trait_vptr:
         query_args.append('trait-vptr')
