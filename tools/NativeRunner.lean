@@ -507,14 +507,14 @@ private def captureLinuxProfile : IO (UInt64 × UInt32) := do
     throw (IO.userError "Linux host profile values are outside their supported range")
   pure (UInt64.ofNat page, UInt32.ofNat cpu)
 
-def main (args : List String) : IO Unit := do
-  if let ["--fingerprint", path] := args then
-    let bytes ← IO.FS.readBinFile path
-    let hash := bytes.foldl (fun (hash : UInt64) byte =>
-      (hash ^^^ UInt64.ofNat byte.toNat) * 0x100000001b3) 0xcbf29ce484222325
-    IO.println s!"upstream_fingerprint: {(Lean.Json.mkObj [
-      ("byte_length", toJson bytes.size), ("fnv1a64", toJson hash.toNat)]).compress}"
-    return
+private structure RunnerSettings where
+  profile : Lean.Options
+  maxIterations : Option Nat
+  diagnosticSeed : Option UInt64
+  uiSource : Option String
+  uiFlags : Array String
+
+private def parseRunnerSettings (args : List String) : IO (String × RunnerSettings) := do
   let profileEnabled := args.getLast? == some "--profile"
   let args := if profileEnabled then args.dropLast else args
   let (args, maxIterations) ← must (Miri.NativeRunnerOptions.iterationLimit args)
@@ -536,11 +536,22 @@ def main (args : List String) : IO Unit := do
       if value >= 2^64 then throw (IO.userError "--seed is outside the u64 range")
       pure (some (UInt64.ofNat value), none, #[])
     | _ => throw (IO.userError "usage: NativeRunner <untouched-export.json|/dev/stdin> [--seed <u64> | --ui-source SOURCE.rs] [--max-iterations N] [--profile] (gzip streamed externally)")
-  boundary s!"choice_mode={choiceMode diagnosticSeed}; iteration_limit={reprStr maxIterations}; supplied_prefix=preserved"
+  pure (path, ⟨profile, maxIterations, diagnosticSeed, uiSource, uiFlags⟩)
+
+/-- All source decoding, lowering, compiler registries and initial allocation
+registration have completed. No resource/choice result or guest step is cached.
+The only producer is the complete checked compilation function below. -/
+private structure ExecutionIR where
+  prepared : Input.EvalPreparation.Prepared
+  memory : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind
+  settings : RunnerSettings
+
+@[noinline] private def compileExecutionIR (settings : RunnerSettings)
+    (decode : Unit → IO (Except String Input.RuntimeDecodeResult)) : IO ExecutionIR := do
+  boundary s!"choice_mode={choiceMode settings.diagnosticSeed}; iteration_limit={reprStr settings.maxIterations}; supplied_prefix=preserved"
   boundary "raw_host_poll: finite source initialization replay; no live poll capability"
   boundary "decode: start"
-  let input ← readJson path
-  let decoded ← must (Input.decodeRuntimeJsonProfiled input profile)
+  let decoded ← must (← decode ())
   unless decoded.executionInput.isSome && decoded.blockingObligations.isEmpty do
     let sample := decoded.blockingObligations.toList.take 40
     throw (IO.userError s!"strict readiness gate failed: {decoded.blockingObligations.size} blocking obligations; sample={reprStr sample}")
@@ -549,9 +560,19 @@ def main (args : List String) : IO Unit := do
   let program ← must (Input.lowerCoreProgram decoded.document)
   boundary "lower: complete"
   boundary "prepare: start"
-  let attempt := Input.EvalPreparation.prepareProfiled profile program
+  let attempt := Input.EvalPreparation.prepareProfiled settings.profile program
   let prepared ← must attempt.outcome
   boundary "prepare: complete"
+  pure ⟨prepared, attempt.memory, settings⟩
+
+private def runExecutionIR (ir : ExecutionIR) : IO Unit := do
+  let prepared := ir.prepared
+  let memory := ir.memory
+  let profile := ir.settings.profile
+  let maxIterations := ir.settings.maxIterations
+  let diagnosticSeed := ir.settings.diagnosticSeed
+  let uiSource := ir.settings.uiSource
+  let uiFlags := ir.settings.uiFlags
   -- Keep the actual prepared identity tables visible at the body reported by
   -- the source105 terminal. This is diagnostic only; all lookups stay exact.
   let bodyIndex := 1814
@@ -565,7 +586,7 @@ def main (args : List String) : IO Unit := do
   let hostPid ← IO.Process.getPID
   boundary "run: start"
   let (execute, checkValidationMismatch) ← must
-    (prepareRun prepared attempt.memory pageSize (if uiSource.isSome then 1 else numCpus)
+    (prepareRun prepared memory pageSize (if uiSource.isSome then 1 else numCpus)
       hostPid diagnosticSeed profile
       (uiSource.getD "/workspace/lean-miri/scratch/main31.rs") uiSource.isSome uiFlags maxIterations)
   let mismatch ← match checkValidationMismatch initialInputs with
@@ -603,3 +624,35 @@ def main (args : List String) : IO Unit := do
     | .finished state .. | .undefinedBehavior state .. | .unsupported state .. |
       .failed state .. | .pending state .. => finish state
   plan 0 0 #[]
+
+/-- Integer source leaves arrive as typed values without reparsing decimal text. -/
+@[export lean_miri_ir_natural]
+private def nativeNatural (value : UInt64) : Input.ExecutionImage.Row :=
+  .number (JsonNumber.fromNat value.toNat)
+
+/-- Native exporter creates the complete IR in this runtime and retains the
+opaque typed value. There is no serialized object image or unchecked readiness
+certificate. Compilation keeps exactly the legacy validation/failure paths. -/
+@[export lean_miri_ir_compile]
+private def compileNativeExecutionIR (image : Input.ExecutionImage.Image)
+    (args : Array String) : IO ExecutionIR := do
+  let (_, settings) ← parseRunnerSettings ("<native-execution-ir>" :: args.toList)
+  compileExecutionIR settings (fun _ => pure (Input.decodeRuntimeImageProfiled image settings.profile))
+
+@[export lean_miri_ir_run]
+private def runNativeExecutionIR (ir : ExecutionIR) : IO Unit :=
+  runExecutionIR ir
+
+def main (args : List String) : IO Unit := do
+  if let ["--fingerprint", path] := args then
+    let bytes ← IO.FS.readBinFile path
+    let hash := bytes.foldl (fun (hash : UInt64) byte =>
+      (hash ^^^ UInt64.ofNat byte.toNat) * 0x100000001b3) 0xcbf29ce484222325
+    IO.println s!"upstream_fingerprint: {(Lean.Json.mkObj [
+      ("byte_length", toJson bytes.size), ("fnv1a64", toJson hash.toNat)]).compress}"
+    return
+  let (path, settings) ← parseRunnerSettings args
+  let ir ← compileExecutionIR settings (fun _ => do
+    let input ← readJson path
+    pure (Input.decodeRuntimeJsonProfiled input settings.profile))
+  runExecutionIR ir

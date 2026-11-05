@@ -12,12 +12,14 @@ use std::collections::HashMap;
 
 /// The output table is typed Rust data, serialized straight to the writer.
 /// It never becomes a second generic JSON Value tree.
+#[derive(Clone)]
 pub struct Image {
-    fields: Vec<String>,
-    nodes: Vec<Row>,
-    root: usize,
+    pub(crate) fields: Vec<String>,
+    pub(crate) nodes: Vec<Row>,
+    pub(crate) root: usize,
 }
-enum Row {
+#[derive(Clone)]
+pub(crate) enum Row {
     Empty(u8),
     Leaf(u8, Value),
     Array(Vec<usize>),

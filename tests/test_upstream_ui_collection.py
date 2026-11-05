@@ -96,29 +96,38 @@ class CollectionTests(unittest.TestCase):
                               repr('upstream_fingerprint: ' + json.dumps({'byte_length': 2, 'fnv1a64': hash_value})) +
                               ')\nelse:\n    print(' + repr('upstream_result: ' + json.dumps(terminal)) + ')\n')
             native.chmod(0o700)
-            for code, diagnostic, expected in (
-                (2, f'error: Undefined Behavior: expected a boolean\n --> {case.path}:{line}:1', 'passed'),
-                (1, f'error: Undefined Behavior: expected a boolean\n --> {case.path}:{line}:1', 'export_failed'),
-                (2, 'error: unrelated compiler failure', 'reference_mismatch'),
-            ):
-                exporter = root / f'exporter-{code}-{len(diagnostic)}'
-                exporter.write_text('''#!/usr/bin/env python3
-import json, pathlib, sys
+            for execution_ir in (False, True):
+                for code, diagnostic, expected, outcomes in (
+                    (2, f'error: Undefined Behavior: expected a boolean\n --> {case.path}:{line}:1', 'passed', [terminal]),
+                    (1, f'error: Undefined Behavior: expected a boolean\n --> {case.path}:{line}:1', 'export_failed', [terminal]),
+                    (2, 'error: unrelated compiler failure', 'reference_mismatch', [terminal]),
+                    (2, f'error: Undefined Behavior: expected a boolean\n --> {case.path}:{line}:1',
+                     'lean_missing_outcome' if execution_ir else 'passed', []),
+                    (2, f'error: Undefined Behavior: expected a boolean\n --> {case.path}:{line}:1',
+                     'lean_missing_outcome' if execution_ir else 'passed', [terminal, terminal]),
+                ):
+                    exporter = root / f'exporter-{execution_ir}-{code}-{len(diagnostic)}-{len(outcomes)}'
+                    exporter.write_text('''#!/usr/bin/env python3
+import json, pathlib, sys, os
 out = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])
 out.write_text('{}')
 pathlib.Path(str(out) + '.miri-reference.json').write_text(json.dumps(SIDECAR))
 print(DIAGNOSTIC)
+if os.environ.get("LEAN_MIRI_EXECUTION_IR") == "1":
+    for outcome in OUTCOMES:
+        print("upstream_result: " + json.dumps(outcome))
 sys.exit(CODE)
-'''.replace('SIDECAR', repr(sidecar)).replace('DIAGNOSTIC', repr(diagnostic)).replace('CODE', str(code)))
-                exporter.chmod(0o700)
-                output = root / f'run-{code}-{len(diagnostic)}'
-                output.mkdir()
-                args = SimpleNamespace(exporter=exporter, runner=native, sysroot=root,
-                                       export_timeout=10, timeout=10, memory_limit=None, keep_inputs=False)
-                record = driver.run_case(case, args, __import__('os').environ.copy(), output)
-                self.assertEqual(record['status'], expected)
-                if expected != 'passed':
-                    self.assertNotIn('lean_exit', record)
+'''.replace('SIDECAR', repr(sidecar)).replace('DIAGNOSTIC', repr(diagnostic)).replace('CODE', str(code)).replace('OUTCOMES', repr(outcomes)))
+                    exporter.chmod(0o700)
+                    output = root / f'run-{execution_ir}-{code}-{len(diagnostic)}-{len(outcomes)}'
+                    output.mkdir()
+                    args = SimpleNamespace(exporter=exporter, runner=native, sysroot=root,
+                                           export_timeout=10, timeout=10, memory_limit=None, keep_inputs=False,
+                                           execution_ir=execution_ir)
+                    record = driver.run_case(case, args, __import__('os').environ.copy(), output)
+                    self.assertEqual(record['status'], expected)
+                    if expected != 'passed':
+                        self.assertNotIn('lean_exit', record)
 
 
 if __name__ == '__main__':

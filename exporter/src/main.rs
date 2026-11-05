@@ -1,6 +1,8 @@
 #![feature(rustc_private)]
 
 mod cast_queries;
+#[cfg(all(feature = "execution-ir", not(feature = "legacy-json")))]
+mod execution_ir;
 mod allocator_world;
 #[cfg(not(feature="legacy-json"))]
 mod construction_pool;
@@ -78,6 +80,7 @@ struct Options {
 
 /// Keep the indexed output table typed through serialization. The fallback
 /// retains the exact legacy Value encoding for compatibility comparisons.
+#[derive(Clone)]
 enum Snapshot {
     Json(Value),
     #[cfg(not(feature = "legacy-json"))]
@@ -111,6 +114,7 @@ fn finish_snapshot(mut document: Value) -> Result<Snapshot, String> {
 }
 
 struct ExportCallbacks {
+    execute_ir: bool,
     output: PathBuf,
     root_paths: Vec<String>,
     rustc_version: String,
@@ -2068,6 +2072,11 @@ impl Callbacks for ExportCallbacks {
                 export_profile.mark("fingerprint_and_reference_setup");
                 // Drop the large owned snapshot tree before Miri starts using
                 // the same TyCtxt, keeping the reference peak within budget.
+                // Diagnostic comparisons retain the exact captured image for
+                // the in-process interpreter after the same-TyCtxt reference.
+                if self.execute_ir {
+                    self.document = Some(document.clone());
+                }
                 drop(document);
                 export_profile.mark("drop_snapshot");
                 let result = match reference_entry {
@@ -2157,9 +2166,22 @@ fn validate_rustc_pin(rustc: &OsStr) -> Result<String, String> {
     rustc_version_line_from(rustc)
 }
 
+fn execution_ir_enabled() -> Result<bool, String> {
+    let enabled = match env::var("LEAN_MIRI_EXECUTION_IR").as_deref() {
+        Err(env::VarError::NotPresent) | Ok("0") => false,
+        Ok("1") => true,
+        _ => return Err("LEAN_MIRI_EXECUTION_IR must be 0 or 1".into()),
+    };
+    if enabled && (!cfg!(feature = "execution-ir") || cfg!(feature = "legacy-json")) {
+        return Err("execution IR requires --features execution-ir without legacy-json".into());
+    }
+    Ok(enabled)
+}
+
 fn run_direct(args: Vec<String>) -> Result<(), String> {
     let mut direct_profile = ExportProfile::new();
     let mut options = parse_args(args)?;
+    let execute_ir = execution_ir_enabled()?;
     append_miri_target_flags(&mut options.rustc_args)?;
     if !has_flag(&options.rustc_args, "--sysroot") {
         let sysroot=env::var_os("MIRI_SYSROOT").ok_or("direct MIR export requires explicit --sysroot or MIRI_SYSROOT pointing to the pinned Miri metadata sysroot")?;
@@ -2199,6 +2221,7 @@ fn run_direct(args: Vec<String>) -> Result<(), String> {
     #[cfg(not(feature = "miri-reference"))]
     let miri_reference_args = Vec::new();
     let mut callbacks = ExportCallbacks {
+        execute_ir,
         output: options.output,
         root_paths: options.root_paths,
         rustc_version,
@@ -2216,18 +2239,36 @@ fn run_direct(args: Vec<String>) -> Result<(), String> {
         rustc_driver::compiler_entrypoint(&rustc_args, &mut callbacks)
     });
     direct_profile.mark("direct.driver");
-    if status != std::process::ExitCode::SUCCESS {
+    if status != std::process::ExitCode::SUCCESS
+        && !(execute_ir && callbacks.miri_reference && callbacks.document.is_some()) {
         return Err("pinned rustc driver reported compilation errors".into());
     }
-    if let Some(error) = callbacks.export_error {
-        return Err(error);
+    let retained_reference_error = callbacks.export_error.take();
+    if let Some(error) = &retained_reference_error {
+        if !(execute_ir && callbacks.miri_reference && callbacks.document.is_some()) {
+            return Err(error.clone());
+        }
     }
-    if callbacks.miri_reference {
+    if callbacks.miri_reference && !execute_ir {
         return Ok(());
     }
     let document = callbacks
         .document
         .ok_or("rustc completed without after_analysis output")?;
+    if execute_ir {
+        #[cfg(all(feature = "execution-ir", not(feature = "legacy-json")))]
+        {
+            let Snapshot::Image(image) = document else {
+                return Err("execution IR requires the default indexed producer".into());
+            };
+            execution_ir::run(image)?;
+            if let Some(error) = retained_reference_error { return Err(error); }
+            if status != std::process::ExitCode::SUCCESS {
+                return Err("reference driver diagnostics retained after execution IR comparison".into());
+            }
+            return Ok(());
+        }
+    }
     let result = write_document(&callbacks.output, &document);
     direct_profile.mark("direct.write_snapshot");
     drop(document);
@@ -2236,6 +2277,9 @@ fn run_direct(args: Vec<String>) -> Result<(), String> {
 }
 
 fn run_as_rustc_wrapper(args: Vec<String>) -> Result<(), String> {
+    if execution_ir_enabled()? {
+        return Err("execution IR is a direct Rust-source entry, not a Cargo wrapper mode".into());
+    }
     if args.is_empty() {
         return Err("Cargo rustc wrapper invocation omitted the rustc executable".into());
     }
@@ -2329,6 +2373,7 @@ fn run_as_rustc_wrapper(args: Vec<String>) -> Result<(), String> {
     #[cfg(not(feature = "miri-reference"))]
     let miri_reference_args = Vec::new();
     let mut callbacks = ExportCallbacks {
+        execute_ir: false,
         output,
         root_paths: Vec::new(),
         rustc_version,

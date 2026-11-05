@@ -1573,14 +1573,14 @@ private def parseBodyArray (values : Array Json) (memo : DecodeMemo) : Except St
     index := index + 1
   pure result
 
-private def parseDocument (input : Json) (runtimeOnly : Bool := false)
-    (profile : Options := {}) (cachedTraversal : Bool := true) : Except String ParsedDocument := do
-  let (resolved,checkedTraversal) ← profileit "decoder.shared_payload_resolution" profile fun _ =>
-    JsonTraversalCache.resolveChecked input cachedTraversal profile
+private def parseResolvedDocument (resolved : SharedPayloads.ResolvedGraph)
+    (checkedTraversal : JsonTraversalCache.CheckedRoot) (indexedMir : Bool)
+    (runtimeOnly : Bool := false) (profile : Options := {})
+    (cachedTraversal : Bool := true) : Except String ParsedDocument := do
   let traversal := checkedTraversal.node
   let j := resolved.root
   let memo := profileit "decoder.shared_decode_memo" profile fun _ => sharedDecodeMemo resolved.nodes
-  let memo := if (input.getObjValAs? String "schema").toOption == some "lean-miri-prepared-image" then
+  let memo := if indexedMir then
       profileit "decoder.indexed_mir" profile fun _ => prepareIndexedMirMemo checkedTraversal memo
     else memo
   if (← fieldString j "schema" "$") != expectedSchema then
@@ -1734,6 +1734,24 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
   | none =>
     let executionInput := if ready then some ⟨core⟩ else none
     return .runtime ⟨core, executionInput, blockingObligations⟩
+
+private def parseDocument (input : Json) (runtimeOnly : Bool := false)
+    (profile : Options := {}) (cachedTraversal : Bool := true) : Except String ParsedDocument := do
+  let (resolved,checkedTraversal) ← profileit "decoder.shared_payload_resolution" profile fun _ =>
+    JsonTraversalCache.resolveChecked input cachedTraversal profile
+  parseResolvedDocument resolved checkedTraversal
+    ((input.getObjValAs? String "schema").toOption == some "lean-miri-prepared-image")
+    runtimeOnly profile cachedTraversal
+
+/-- Native producer compilation performs the same complete semantic/readiness
+checks. Only JSON text parsing and the generic row envelope are absent. -/
+def decodeRuntimeImageProfiled (image : ExecutionImage.Image) (profile : Options := {}) :
+    Except String RuntimeDecodeResult := do
+  let (resolved,checkedTraversal) ← profileit "decoder.native_graph" profile fun _ =>
+    JsonTraversalCache.resolveImageChecked image
+  match ← parseResolvedDocument resolved checkedTraversal true true profile with
+  | .runtime result => pure result
+  | .full _ => throw "internal decoder mode mismatch"
 
 def decodeJson (text : String) : Except String DecodeResult := do
   let json ← Json.parse text

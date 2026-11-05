@@ -15,3 +15,4 @@ lake env lean --run tests/input/IndexedMirChecks.lean scratch/decoder-metadata-i
 lake env lean --run tests/input/RuntimeDecodeEquivalence165.lean scratch/decoder-metadata-inputs/image/*.json
 lake env lean --run tests/input/CompilerInstanceSourceTests2026.lean scratch/decoder-image-inputs/genuine-mir-features.json
 lake env lean --run tests/input/CompilerRuntimeOperationChecks.lean scratch/decoder-image-inputs/genuine-mir-features.json
+lake env lean --run tests/input/ExecutionImageChecks.lean scratch/decoder-image-inputs/genuine-mir-features.json
