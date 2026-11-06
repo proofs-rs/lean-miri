@@ -58,9 +58,7 @@ structure LowerContext where
   scalarSizes : Array (TypeId × Nat)
   allocationIds : Array AllocationId := #[]
   obligations : Array Obligation := #[]
-  /-- Raw source paired with reader-constructed MIR for source-path query roles.
-  Supplying hand-edited bodies with this source is outside this lowering API's
-  contract; source correspondence is not revalidated here. -/
+  /-- Paired source for query metadata addressed by paths in decoded MIR. -/
   sourceDocument : Option Lean.Json := none
   compilerValueMemo : Option CompilerValueMemo := none
   /-- Optional exact-array certificates; hand-built contexts default to the
@@ -1033,9 +1031,6 @@ private def controlTargets : MIR.TerminatorKind → Array Nat
 /-- Construct source-shaped MIR, preserving its decoded envelope and interning
 actual source spans. Unsupported constructors and missing metadata are errors. -/
 private def lowerBodyState (ctx : LowerContext) (input : BodyCore) (initial : LowerState) : LowerResult (LoweredBody × LowerState) := do
-  -- Bodies on this path are the reader's construction from this document.
-  -- Re-decoding their typed nodes here duplicates input loading.
-  let sourceDocument := ctx.sourceDocument
   let mirPhase ← phase input.phase
   match input.injectionPhase with
   | some value => let _ ← phase value; pure ()
@@ -1072,9 +1067,9 @@ private def lowerBodyState (ctx : LowerContext) (input : BodyCore) (initial : Lo
     let bodyPrefix := if input.sourcePath.isEmpty then "" else input.sourcePath ++ "."
     let blockPrefix := s!"{bodyPrefix}basic_blocks[{blockIndex}]"
     let statements := block.statements.toList.zipIdx.foldl (fun issues (node, statementIndex) =>
-      issues ++ payloadObligations sourceDocument node.value
+      issues ++ payloadObligations ctx.sourceDocument node.value
         s!"{blockPrefix}.statements[{statementIndex}].kind") #[]
-    let terminator := payloadObligations sourceDocument block.terminator.value
+    let terminator := payloadObligations ctx.sourceDocument block.terminator.value
       s!"{blockPrefix}.terminator.kind"
     return out ++ statements ++ terminator) ctx.obligations
   let obligations := if input.definitionId.isSome then obligations else

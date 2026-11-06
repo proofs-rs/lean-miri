@@ -360,8 +360,6 @@ UB freedom requires excluding UB on every reachable permitted finite prefix;
 local proofs, open graph exploration and source inventories do not establish that
 whole-machine claim.
 
-Reader-constructed MIR lowering is compared with the former source-redecode guard
-by `bash tools/check-lowering-reader.sh [INPUT.json ...]`. It checks both full and
-runtime decoder outputs, including instance/promoted bodies, and ordered lowering
-obligations. Hand-edited body/source combinations are outside this API contract;
-this comparison does not establish a general compiler correspondence theorem.
+`bash tools/check-lowering-reader.sh [INPUT.json ...]` checks full/runtime
+lowering agreement and source paths for root, instance and promoted bodies.
+The default input is the fixed empty-function fixture.

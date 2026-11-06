@@ -193,26 +193,14 @@ The `Miri API documentation` workflow builds on pull requests and publishes on
 select **GitHub Actions** as the source. The published API entry point is
 <https://proofs-rs.github.io/lean-miri/Miri.html>.
 
-## Reader-constructed MIR lowering
+## MIR lowering
 
-`lowerProgram`/`lowerCoreProgram` consume the MIR and raw source produced together
-by the decoder. Lowering no longer decodes each typed statement/terminator again
-to establish that correspondence. The decoder's structural/reference/readiness
-checks and lowering's type/local/block/span/control-flow checks still run.
+`lowerProgram`/`lowerCoreProgram` accept decoder-produced MIR paired with its
+source document. Manually assembled or edited body/source pairs are outside this
+experimental API contract.
 
-`LowerContext.sourceDocument` must be paired with the reader's unedited bodies.
-Directly pairing edited or manually assembled MIR with another raw document is
-outside the public experimental lowering contract. The removed comparison did
-not reject the body: it withheld source-based diagnostic exceptions when typed
-nodes or their paths disagreed. Such manually mismatched inputs can therefore
-receive different obligation lists now. No compatibility fallback or new
-certificate machinery is provided.
-
-`bash tools/check-lowering-reader.sh [INPUT.json ...]` compares full/runtime
-reader-produced roots, instance bodies and promoted bodies with the removed guard
-retained as a test-only reference. It checks the resulting MIR, identity tables,
-spans and ordered obligations. The default is the fixed empty-function fixture.
-This is a finite regression comparison; no speedup or general correspondence
-proof is claimed. The fixed empty-function UB-freedom proof is checked separately
-with `bash tools/check-empty-function.sh`. No interpreter safety check, theorem
-premise, axiom or unsafe primitive is added by this change.
+`bash tools/check-lowering-reader.sh [INPUT.json ...]` checks source paths and
+agreement between full and runtime decoding after lowering, including MIR,
+identity tables, spans and ordered obligations. The default input is the fixed
+empty-function fixture. Run `bash tools/check-empty-function.sh` for its
+UB-freedom proof and axiom audit.

@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Finite comparison with the removed source-redecode guard on real reader output.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export ELAN_HOME="${LEAN_MIRI_ELAN_HOME:-$PWD/.elan}"
