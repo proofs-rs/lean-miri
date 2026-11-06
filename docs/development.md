@@ -192,3 +192,15 @@ The `Miri API documentation` workflow builds on pull requests and publishes on
 `main` pushes or manual dispatch from `main`. In repository Settings → Pages,
 select **GitHub Actions** as the source. The published API entry point is
 <https://proofs-rs.github.io/lean-miri/Miri.html>.
+
+## MIR lowering
+
+`lowerProgram`/`lowerCoreProgram` accept decoder-produced MIR paired with its
+source document. Manually assembled or edited body/source pairs are outside this
+experimental API contract.
+
+`bash tools/check-lowering-reader.sh [INPUT.json ...]` checks source paths and
+agreement between full and runtime decoding after lowering, including MIR,
+identity tables, spans and ordered obligations. The default input is the fixed
+empty-function fixture. Run `bash tools/check-empty-function.sh` for its
+UB-freedom proof and axiom audit.
