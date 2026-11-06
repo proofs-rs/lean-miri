@@ -2,79 +2,31 @@
 
 This file is the sole entry point for known remaining work. Backlog triage does
 not broaden the acceptance scope, semantics, theorem claims or test expectations.
-Distinguish the existence of tests and historical successes from successful
-execution in the current checkout. See the
-[development guide](docs/development.md#check-commands) for check entry points
-and prerequisites.
+See the [development guide](docs/development.md#check-commands) and
+[test guide](tests/README.md) for check entry points, prerequisites and coverage.
+Historical successes do not establish successful execution in the current checkout.
 
-## Empty-function call safety
-
-The [empty_function example](examples/empty_function/README.md) proves `TotalCallGoal.Target` through
-`ActualNoUBFinal.target` (`ActualNoUBFinal.noUB` per caller): actual call
-initialization and every finite in-call execution prefix report no UB.
-
-The target uses only `Metadata`, `Profile`, `RuntimeProfile` and
-`CurrentInputDraft`. It has no numeric resource/`ChoiceFits` admission
-condition, future success law or remaining family/stage proof. It observes
-actual initialization and step errors with their failed states and permits
-checked non-UB stops, including resource exhaustion. Normal return and
-NoErrors for every resource supply are not claimed; the conditional
-normal-return and eleven-clause preservation results are intermediate results.
-
-Allocator/generator coherence for projected backing is required only when
-its raw runtime and enabled-source counters are active. Zero/wrapped counters
-and exhaustion flags remain admitted; when allocation is attempted, its
-actual checked error is observed. Reserving the final MAX ID itself is also admitted.
-`AllocatorActive` is a guard on coherence fields, not a caller premise, and
-the allocator implementation is unchanged.
-
-The current-input record explicitly describes raw caller, representation,
-pointer/source, memory/borrow, address/ID and runtime coherence. A theorem
-that every Rust-valid caller state satisfies this domain remains absent.
-Compiler/exporter correctness and Rust/interpreter correspondence remain
-trusted; the agreed pure metadata facts are explicit assumptions. The exact
-race-off/shallow/fixed-scheduling profile remains in `Specification`. Other
-scheduler interleavings and caller execution after return are outside scope.
-
-Runtime definitions are unchanged; Miri additions are completed proof-only
-APIs. The checker verifies fixed Rust/MIR hashes and library source stability
-during validation. Proof-only reflected MIR is `noncomputable` to avoid a native-code
-boxing panic, without adding axioms or replacing the interpreter.
-
-`bash tools/check-empty-function.sh` passed on this branch: the root and its source
-closure compile, the target type checks, fixed Rust/MIR hashes match, and the
-transitive axiom audit permits only `propext`, `Quot.sound`, and
-`Classical.choice`. `bash tools/check-quick.sh` also passed. These checks do
-not establish compiler/exporter correctness or the missing caller-domain
-transport theorem.
-
-## Self-contained Lean test entry points
-
-Self-contained Lean checks are collected under `MiriTests/` and registered with
-Lake. `lake build MiriTests` checks all its modules; `lake exe miri_tests` reruns
-registered runtime assertions even with cached builds. External comparisons and
-input-dependent harnesses remain under `tests/`. This registration does not add
-whole-machine proofs or turn historical results below into current reruns. See
-[the test guide](tests/README.md#self-contained-lean-checks-miritests).
-
-## Acceptance scope and current position
-
-The scope includes common MIR, memory/Tree Borrows, Rust main startup
+The acceptance scope includes common MIR, memory/Tree Borrows, Rust main startup
 and exit, threads, synchronization, atomics, weak memory and data races. Finite
 QA and general whole-machine proofs are separate goals. Overall completion and
 the ability to verify arbitrary Rust are not claimed.
 
-Records for the latest implementation before cleanup, `b747a48c`, were checked
-against the code and subsequent results. There are finite success records for
-shared frontend inputs, 77 maintained regressions (combined across multiple
-attempts), 12 canonical cases, 4 SC controls, 16 decoder comparisons and 4 shared-ID
-cases. A finite comparison of the large TB input also succeeded after re-exporting
-the same Rust as schema3; the old schema2/900-second timeout is not counted as a
-current unsupported feature. Additional SC diagnostic seeds 0–11 have success
-records, observing 4 of the 6 store-before-load orderings. Sx,Sy,Ly,Lx and
-Sy,Sx,Lx,Ly were not observed; this does not mean every schedule was tried.
-These are not claims of successful reruns during this cleanup. Reusable
-assertions, proofs and inputs have been moved into tests.
+## Empty-function caller-domain transport
+
+The [empty-function proof](examples/empty_function/README.md) covers actual call
+initialization and every finite in-call prefix under its explicit `Metadata`,
+`Profile`, `RuntimeProfile` and `CurrentInputDraft` assumptions. A theorem that
+every Rust-valid caller state satisfies this domain remains absent. The domain
+includes raw caller, representation, pointer/source, memory/borrow, address/ID
+and runtime coherence; agreed pure metadata facts remain explicit assumptions.
+Compiler/exporter correctness and Rust/interpreter correspondence remain trusted.
+
+The target admits checked non-UB stops, including resource exhaustion; it does
+not claim normal return or NoErrors for every resource supply. Allocator
+coherence is guarded by active raw runtime and enabled-source counters, rather
+than excluding zero/wrapped counters, exhaustion flags or the final MAX ID.
+The exact race-off/shallow/fixed-scheduling profile is in `Specification`;
+other scheduler interleavings and caller execution after return are outside scope.
 
 ## Remaining general proofs (not acceptance conditions for current finite QA)
 
@@ -126,688 +78,130 @@ conditions, external contracts and permitted choices.
 
 The [connected graph explorer](tests/connected/proofs/ConnectedGraph215Schema3.lean)
 and [exact state comparison](MiriTests/Connected/Proofs/ExactStateCodec207.lean) are
-reusable. Earlier exploration was interrupted at 143,800 nodes with a remaining
-frontier and no complete capture. No completion bound is established.
+reusable, but exploration has no complete capture or established completion bound.
 `bash tools/check-connected-proofs.sh` only typechecks these. Increasing the
 budget of OPEN exploration does not resolve the proofs above.
 
-## Validation gaps and pending checks within scope
+## Validation gaps within scope
 
-### Automated regression scope
+### Hosted regressions and coverage
 
-Run [41454462879](https://github.com/proofs-rs/lean-miri/actions/runs/41454462879)
-on `59f65b93` failed all three regression lanes while elaborating the untyped
-`#eval do` assertions in `MiriTests/Rvalue/Rvalue.lean` (`MonadExcept IO.Error
-CommandElabM` instance failures). Explicit `IO Unit` result types fix the local
-reproduction without changing the assertions or interpreter. The focused module
-build and all 22 assertions pass; a deliberately mismatched trace is rejected.
-`bash tools/check-build.sh` passed 707 build jobs, 47 registered runtime checks
-and the 70,784-declaration axiom audit (only the three permitted axioms).
-`bash tools/check-connected-proofs.sh` and all 15 CI-runner Python tests also
-passed. The complete three-lane comparisons/replays were not rerun locally;
-a successful hosted three-lane rerun is still required.
+A successful hosted three-lane regression rerun remains required after the
+`MiriTests/Rvalue/Rvalue.lean` assertion elaboration fix and the hosted ripgrep
+setup fix. These fixes do not establish the complete comparisons/replays or the
+later exporter and fresh-input/execution phases that the failures prevented.
+See [CI coverage](tools/ci/README.md) for lane commands and artifacts.
 
-Run [40192012725](https://github.com/proofs-rs/lean-miri/actions/runs/40192012725)
-on `3d55eace` stopped the broad regression suite at
-`tests/memory_state/run_lifecycle_differential.sh` because the hosted runner
-lacked `rg` (ripgrep). Later phases of `check.sh`, including exporter and fresh
-input/execution comparisons, were not executed in that lane. Explicit dependency
-installation and an early setup check address the infrastructure defect; a new
-successful run is still required to establish those results.
+Timezone also needs a successful hosted rerun. Its CI wrapper failed before
+guest execution because its libc filename glob did not identify exactly one
+archive; the match count and paths were not logged. The Cargo compiler-artifact
+selection fix needs hosted validation rather than relying on the old glob.
 
-The Miri regression workflow selects the existing broad regression checks,
-additional component comparisons, saved connected/ordering/SC/large-TB replay,
-and fresh math/timezone/vtable identity controls. Its commands and result format
-are documented in [CI coverage](tools/ci/README.md). Adding the workflow is not a
-record of a successful run; use each commit's Actions results and artifacts.
 Fresh regeneration/comparison of every canonical and focused guest, the complete
-argument-driven query-demand suite, and standalone unregistered harnesses are
-not yet covered by this workflow. Saved replay cannot validate changed producer
-behavior. The selected finite checks do not close the general proof or source
-correspondence gaps below.
+argument-driven query-demand suite and standalone unregistered harnesses remain
+outside workflow coverage. Saved replay cannot validate changed producers.
+Selected finite checks do not close general proof or source-correspondence gaps.
 
-In run [40192012725](https://github.com/proofs-rs/lean-miri/actions/runs/40192012725),
-21 of 22 extended suites passed, but timezone stopped before guest execution
-because the CI wrapper's libc filename glob did not identify exactly one archive.
-The number and paths of those glob matches were not logged. Record and consume
-Cargo's actual compiler-artifact path rather than assuming the output layout;
-a successful timezone rerun is still required. This failure is not a guest
-behavior comparison result.
-
+The latest shared-node/typed-metadata optimization revision still needs full
+`tools/check.sh`, the full `miri_tests` runtime registry and a fresh
+same-prepared-TyCtxt reference-Miri comparison. The full regression result for an
+earlier revision does not validate later changes. Separate canonical12, ordering,
+large-TB, SC-schedule, connected-proof and structural-regression entry points
+also need current-revision execution. Fresh construction of the reference Miri
+and MIR-enabled std sysroot remains a validation gap; reusing retained artifacts
+does not establish that setup path.
 
 ### Compiler query closure and prepared allocation identity
 
 General query closure remains unproved for the [exporter](exporter/src/main.rs),
-[allocator_world](exporter/src/allocator_world.rs),
+[allocator world](exporter/src/allocator_world.rs),
 [CompilerAllocIdWorld](Miri/Input/CompilerAllocIdWorld.lean) and
-[Decoder](Miri/Input/Decoder.lean). Subsequent implementations and finite
-successes exist for entry function pointers, backtrace frame Instances, Offset
-overflow pairs and memory-backed vtable providers; old gaps are not simply
-repeated as current gaps. Next, retain inputs whose fresh exports expose actual
-uncollected queries, and extend producer closure from their typed keys and source
-operations. Resolution requires a reproduction for the target query to pass
-fresh export → real connected execution while missing keys still produce
-Unsupported. This task does not require query completeness for every program
-or agreement with vanilla Miri's raw AllocId history.
+[Decoder](Miri/Input/Decoder.lean). Retain genuine fresh exports exposing
+uncollected queries and extend producer closure from their typed keys and source
+operations. A target reproduction must pass fresh export → real connected
+execution while missing keys still produce Unsupported. This does not require
+query completeness for every program or agreement with vanilla Miri's raw
+AllocId history. Entry function pointers, backtrace frame Instances, Offset
+overflow pairs and memory-backed vtable providers already have implementations
+and finite controls; investigate actual missing queries before extending them.
 
-Generate fresh [canonical cases](tests/connected/cases.py) with
-`tools/export-connected.py`; replay fixed inputs with `tools/check-connected.py`.
-Do not treat a dynamic vtable's CTFE salt0 probe as its runtime-salt ID.
-Nonidentity erase/anonymize vtable queries were not observed in earlier small
-inputs, and genuine producer→consumer validation for that branch remains pending.
-Next, pin an input triggering the query and check the join between
-[VTable](Miri/Interpreter/VTable.lean) and the compiler catalog. Resolution
-requires a real-input comparison distinguishing 32 salts, type/predicate identity
-and raw/dense IDs.
+Nonidentity erase/anonymize vtable queries still lack genuine producer-to-consumer
+validation. Pin a triggering input and check the join between
+[VTable](Miri/Interpreter/VTable.lean) and the compiler catalog, distinguishing
+all 32 salts, type/predicate identity and raw/dense IDs. A dynamic vtable's CTFE
+salt0 probe is not its runtime-salt ID. Use [erasure controls](tests/repro/README.md)
+and `tools/check-vtable-erasure.py --trace-queries`: a changed catalog pair must
+actually be consumed by the connected runtime, alongside fresh reference,
+query/catalog and salt checks. Catalog rows from roots/templates or TraitVPtr
+children do not establish runtime consumption. Identity controls and synthetic
+changed pairs cannot discharge this branch.
 
-[Fresh erasure controls](tests/repro/README.md) and
-`tools/check-vtable-erasure.py` distinguish an identity result from the required
-nonidentity witness. Named HRTB syntax alone is insufficient: pinned rustc's
-`PostAnalysisNormalize` erases/anonymizes successful MIR type queries before
-the exporter collects them. A fresh before/after MIR dump of the retained HRTB
-control confirmed that both named binders become anonymous while both unsize
-casts and the Send predicate contrast remain. The exporter's
-`struct_lockstep_tails_for_codegen` also normalizes when traversing struct-tail
-fields, but does not unconditionally normalize its initial input pair; its
-normalization assertion does not rewrite the caller's types. The static
-borrowed-object control also retains an identity result. This explains these
-controls, not every producer path: global symbolic vtables and recursively
-discovered TraitVPtr demands also feed the query closure. Neither an identity
-control nor a synthetic changed pair resolves this pending branch.
+Before adding syntax variants, investigate whether noncanonical pairs are
+reachable. Pinned rustc normalizes/erases successful MIR queries, CTFE vtable
+creation and TraitVPtr principals; its normalization provider also erases the
+resolved result after alias normalization. Struct-tail traversal normalizes
+fields without unconditionally rewriting its initial input pair. Metadata
+decoding preserves the encoded pair, and `reserve_and_set_vtable_alloc` itself
+does not normalize. HRTB, upcast, static and cross-crate metadata controls have
+retained identity pairs only. These controls and source tracing do not prove
+canonicality preservation across type extraction, metadata decoding and recursive
+demand closure, or general nonreachability of nonidentity pairs. The TraitVPtr
+provider lies outside the selected local rustc source corpus.
 
-In the inspected source, [CTFE symbolic-vtable creation](upstream/rustc-source/compiler/rustc_const_eval/src/interpret/traits.rs)
-erases/anonymizes before reserving the pair; [metadata decoding](upstream/rustc-source/compiler/rustc_middle/src/mir/interpret/mod.rs)
-preserves the encoded pair without normalizing it again. Additional inspection of
-the [vtable provider at the pinned rustc commit](https://github.com/rust-lang/rust/blob/8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_trait_selection/src/traits/vtable.rs#L133)
-found late-bound-erasure/normalization before supertrait refs become TraitVPtr
-entries. That provider is outside the selected local rustc source corpus; this
-source tracing and the finite controls are not a general nonreachability proof.
+### Performance and optimization assurance
 
-Fresh control runs passed same-prepared-TyCtxt Miri exit-zero,
-the query/catalog checks and connected exit-zero with leak checks. The HRTB
-control retained two same-type/distinct-predicate queries and 64 salt results;
-the static control retained one query and 32 salt results. A higher-ranked
-second-supertrait upcast retained three queries and 96 salt results, including
-distinct higher-ranked/instantiated principals sharing an exact memory-backed
-vtable allocation. Its consumer now compares compiler-normalized principal
-evidence while preserving the type, allocation, layout and entries checks and
-the original symbolic predicate/salt identities. Forged principal aliases,
-conflicting layout and missing normalization evidence are rejected. All six
-queries were identity results; these controls do not resolve the nonidentity gap.
+Remaining performance work includes runtime-value decoding, residual equality
+and validation work, and preparation outside the optimized call-resolution
+lookup. Caller-location still scans its catalog; optimization must retain
+source-order diagnostics, malformed-row handling and fresh Location allocations.
+Measure current immutable artifacts with the protocol in [AGENTS](AGENTS.md);
+old timings and shared-host samples do not establish a general speedup.
 
-The [cross-crate metadata control](tests/repro/README.md) additionally builds an
-rlib containing a public HRTB trait-object constant, then freshly exports a
-separate consumer with no local concrete-to-dyn coercion. It passed
-same-prepared-TyCtxt Miri and connected exit-zero, one thread and leak checking.
-The root's evaluated external constant has a symbolic-vtable relocation; its
-one query stayed identity and all 32 raw/dense/runtime salt joins passed. This
-narrows the untested metadata path but is not a nonidentity witness.
+No full generic indexed-query/decoder equivalence proof exists. Component
+identities, cached/reference parity and finite guest comparisons do not imply
+whole-decoder equivalence or all-choice safety. The shared-ID cache partition
+supersedes the earlier structural-key comparison identity; local Raw-fallback
+identities do not prove the new whole-decoder implementation equivalent.
+Native profiling identities preserve Lean states/outcomes, not native C compiler
+correctness. The large catch guest still needs a fresh same-prepared-TyCtxt
+reference comparison; native completion of a diagnostic trace does not prove UB
+freedom over every permitted choice.
 
-Inspection of the complete compiler source archive at the pinned rustc commit
-found two call sites of `reserve_and_set_vtable_alloc`: CTFE's already-normalizing
-`get_vtable_ptr` and metadata decoding of the encoded pair. The constructor
-itself does not normalize. Together with the previously inspected MIR
-normalization and TraitVPtr provider, this gives a source-level reason to check
-whether a noncanonical pair is reachable before adding more syntax variants.
-The pinned [normalization provider](https://github.com/rust-lang/rust/blob/8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_traits/src/normalize_erasing_regions.rs#L39)
-also erases/anonymizes the resolved result after alias normalization; erasure is
-not limited to the input before associated-type projections are expanded.
-This source inspection and one metadata round trip do not prove that every
-producer/decoder transformation preserves canonical identities. Nonidentity
-producer-to-consumer validation remains pending; synthetic pairs or these
-identity controls must not discharge it.
-
-The optional `tools/check-vtable-erasure.py --trace-queries` diagnostic joins
-producer collection sites to actual connected erasure lookups. Root/templates
-can contribute catalog rows independently of runtime consumption. Nonidentity
-mode therefore requires a changed pair to be consumed by the connected runtime,
-in addition to the existing fresh reference, query and 32-salt checks. Neither
-the existence of this diagnostic nor its parser unit tests resolves the pending
-branch. Canonicality preservation across type extraction, metadata decoding and
-recursive demand closure is still not a general nonreachability theorem.
-
-Fresh traced comparisons passed same-prepared-TyCtxt Miri,
-all 32 salt joins per catalog key and connected exit-zero with leak checks for
-HRTB, upcast, static and cross-crate metadata controls. Their catalog query
-counts were 2/3/1/1, while actual runtime erasure lookup counts were 2/2/0/0.
-All seven query pairs stayed identity; the upcast's TraitVPtr child was not
-consumed by the erasure lookup. Zero erasure calls does not negate the separate
-global-allocation/metadata checks. Traced/untraced HRTB runs retained identical
-export bytes and terminal output, including choice cursor 53. The reference
-exporter reused the retained compiled Miri dependency closure; that closure was
-not freshly rebuilt. These controls narrow coverage but do not resolve
-nonidentity reachability or its pending producer-to-consumer witness.
-
-### Execution performance and remaining hot interval
-
-The same 278,818,016-byte export of
-[catch_guest.rs](tests/repro/unwind/catch_guest.rs) now **finalizes as exit0**
-with a compiled native runner. Earlier Lean --run executions timed out at
-40 minutes without a raw result; that historical timeout no longer leaves
-completion of this native diagnostic trace unresolved. The input SHA256 is
-`034e3157806207389308d8777b1d2bfce95ee89f8a8dbe7663a8d187fb993012`.
-The source sets a silent panic hook, catches one intentional panic, checks Err
-and drops the payload. Its source workload is small; 279 MB is compiler metadata.
-
-Build `native_runner` with the pinned Lake toolchain. `run.sh` now
-uses this executable, preserving arguments and the existing bounded diagnostic
-policy. The first C compilation is separate from execution timings; subsequent
-invocations reuse the executable. The collector defaults to the same cached native build, freezing its executable
-under the build lock before measurement. Explicit `--executable` skips building;
-explicit `--runner` selects Lean --run with `--lean-path`. It records build-log
-paths and mode/artifact hashes,
-and forwards an optional u64 seed. The default no-seed policy is unchanged.
-
-Three alternating sequential small-input pairs on CPU2, LEAN_NUM_THREADS=1,
-with --profile, produced identical terminal/tape/event output in all six runs:
-code822085532/cursor327. Lean --run wall times were 10.402/9.970/9.733 s
-(CPU10.200/9.759/9.530, steal0.260/0.110/0.050); native times were
-1.401/1.337/1.312 s (CPU1.395/1.330/1.308, steal0.020/0.010/0).
-Throttling was zero. The ratio of sample median wall times is 7.46.
-This finite comparison does not prove all executions compiler-equivalent.
-
-These performance samples use the runtime frozen before merging main `6789b53a`;
-they have not been repeated on that integrated runtime. Integration validation
-passed the native build, all five profile identity axiom checks, quick checks
-(55 Python tests) and the small native exit822085532/cursor327 replay. Logs are
-in ignored `scratch/merge-pr9/`.
-
-The large-input native replay with --profile completed on candidate0 in **420.606 s wall**,
-420.425 s CPU, steal4.210 s, wall-minus-steal approximation416.396 s, with
-zero throttling and unchanged memory.events. Peak process-group RSS was
-3.496 GB. Builds and other benchmarks did not overlap the timed samples.
-Runtime/harness sources matched the frozen bytecode baseline by hash, and
-input/binary/module hashes remained unchanged afterwards. This is one large
-native trial; there is no matched whole-run speed ratio because bytecode did
-not finish. It ran the existing no-seed bounded diagnostic policy.
-
-| Native large-input phase | Observed wall seconds |
-| --- | ---: |
-| Read/decode, blocking obligations 0 | 177.369 |
-| Lower | 7.728 |
-| Preparation | 42.337 |
-| Setup/negative preflight | 2.649 |
-| Bootstrap | 12.731 |
-| Bootstrap-to-raw-result | 174.722 |
-| Outer finalization | 0.005925 |
-| Total process including output | 420.606 |
-
-The first 184 sampled before/after scheduler labels exactly matched the
-historical bytecode replay. The native trace then emitted 396 sampled boundaries,
-reached main_exiting/tls_done and finalized exit0/cursor2640. Raw exit, finalizer,
-leak-check/walk and candidate0 markers appeared in order. Actual leak-walk
-shape was live39/root entries22/edges17; export allocation counts are not live
-allocation counts. A finite finalized result is not UB freedom over all choices.
-
-The formerly unresolved123-second interval is attributed in the analysis below.
-The implementation and validation results are recorded below.
-The earlier two catch_unwind ReifyFnPointer iterations took 21.015/21.102 s
-under --run but only 0.060757/0.060249 s natively, so their old wall times are no
-longer the best optimization target. Outer leak checking took milliseconds.
-The five generic profile identity checks remain available in
-[FinalizationProfileIdentity2026](MiriTests/Input/FinalizationProfileIdentity2026.lean).
-They preserve Lean states and bounded outcomes; they do not verify native C
-compilation or all Rust executions.
-
-The small no_std function-pointer control also finalized42 natively in1.275 s
-(CPU1.269, steal0.040), matching its bytecode and vanilla-Miri expected42.
-The regular wrapper finalized the original small input in both normal mode
-(cursor327) and --seed0 --profile (cursor339). Native build passed1244 jobs;
-quick checks passed54 Python tests plus source/fixture checks. New collector
-checks cover native launch without LEAN_PATH, seed forwarding/u64 rejection and
-mutually exclusive runner selection. Full check.sh/performance-regressions.sh
-and same-prepared-TyCtxt Miri comparison remain unexecuted.
-
-Vanilla pinned Miri's prior catch-source trials were silent exit0 in
-0.266/0.165/0.166 s wall (CPU0.236/0.154/0.154; steal0.030/0.010/0,
-throttling0). They include compiler-driver invocation but exclude toolchain/
-sysroot builds. They do not match the prepared TyCtxt/AllocId history of Lean's
-export, so no strict slowdown ratio is claimed. The fresh export took91.449 s,
-separate from both execution measurements.
-
-Current logs, frozen binary, manifests, trial/trace assertions and summaries
-are in ignored `scratch/native-comparison/`. Binary SHA256:
-`4aa45fe398e6b5ae6675fab7e0985912bb8de05f07ce70e41ce2177922bf6f8d`.
-Historical evidence remains under `scratch/execution-progress/`,
-`scratch/finalization-probe/main-99644c50-001/`,
-`scratch/large-input-investigation/` and `scratch/catch-reference-probe/`.
-Follow the performance protocol in [AGENTS](AGENTS.md) and [README](README.md).
-
-The collector-default follow-up passed two separate default invocations with
-identical frozen binary hashes and no C compilation/relink in either cached
-build log. Both finalized code822085532; the explicit --runner bytecode path
-also retained that result. Build failure aborts before execution, and snapshot
-immutability is tested. Latest quick checks passed55 Python tests. These
-follow-up logs and summaries are in ignored `scratch/measure-default/`.
-
-### Caller-location and decoder optimization
-
-The two optimizations are implemented on the analysis branch, with main
-`fd2a981f` integrated before changes (its post-#9 additions were documentation
-and control inputs). The native baseline binary is the frozen analysis binary;
-its SHA matches `scratch/native-hotspots/profiled-native`. No guest semantics,
-checks or choice constraints were intentionally changed.
-
-**Caller-location:** [callerLocation](Miri/Input/CompilerValueConstants.lean)
-still processes all43,827 rows in source order, including malformed nonmatching
-rows, but builds a CompilerSpanInterner once per demand. Candidate buckets retain
-full SourceSpanData comparison and first matching index. Every row starts from
-the same base, so missing spans cannot append into subsequent rows' tables.
-The checked same-array comparison avoids deep equality for unchanged tables;
-its equality to the original comparison is kernel-checked. The old query is
-retained as callerLocationReference for parity tests. This is a batch span-index
-optimization, not a constant-time catalog cache. Runtime Location allocation,
-provenance, roots and failed-prefix handling remain in the unchanged materializer.
-
-**Decoder:** [JsonTraversalCache](Miri/Input/JsonTraversalCache.lean) runs the
-authoritative SharedPayloads resolver first, then constructs parallel cached
-hashes bottom-up using the transport DAG. The actual resolved Json is retained.
-Four existing DFS validators/collectors use keys containing that Json and its
-cached structural hash. Key equality remains the original Json equality, never
-hash/ID equality, so equal distinct nodes deduplicate and collisions still
-compare values. Checks, traversal/phase order, paths and ABI result order remain.
-Noncanonical raw objects or unexpected shapes fall back to ordinary hashing;
-no lawfulness of arbitrary Raw Json is assumed. No semantic check is delegated
-to the cache. Both runtime and full decoders use it; uncached reference entry
-points remain for differential checks. Hash caching adds about2.7 seconds to
-input processing, included in total decode time below. Nested native profiler
-reports are self times; the parent resolution span excludes this child span.
-
-Same278,818,016-byte input, immutable native binaries, CPU2 and one Lean thread.
-Order: candidate1, baseline1, candidate2, baseline2. No builds/other benchmarks
-overlapped. All4 runs finalized exit0/cursor2640, with byte-identical consumed
-tapes and choice events, unchanged hashes/memory.events and zero throttling.
-
-| Trial | Baseline wall / CPU / steal seconds | Candidate wall / CPU / steal seconds |
-| --- | --- | --- |
-| 1 | 442.595 / 441.978 / 4.820 | 201.197 / 201.086 / 2.080 |
-| 2 | 421.536 / 421.359 / 4.890 | 208.099 / 208.015 / 2.520 |
-| Wall median | 432.065 | 204.648 |
-
-The median ratio is2.11x, a52.6% wall-time reduction on this fixed diagnostic
-input. It is not an arbitrary-program claim. Raw wall-minus-same-CPU-steal
-approximations are437.775/416.646 s baseline and199.117/205.579 s candidate;
-they are not CPU time. Peak process-group RSS was3.493–3.507 GB baseline and
-3.368–3.462 GB candidate. Export and lean-miri compilation are separate budgets.
-
-| Phase wall median (seconds) | Baseline | Candidate |
-| --- | ---: | ---: |
-| Read/decode, including hash preparation | 178.374 | 86.109 |
-| Lower | 7.765 | 7.498 |
-| Preparation | 45.378 | 42.198 |
-| Setup/negative preflight | 2.751 | 2.712 |
-| Bootstrap | 12.100 | 12.061 |
-| Bootstrap to raw result | 182.880 | 51.426 |
-| Outer finalization | 0.008 | 0.007 |
-
-The directly timed caller-location iteration2353 fell from122–136 s to1.3 s.
-On trial2, the four hash-keyed decoder phases fell from133.2 s combined to
-38.79 s; runtime-value decoding remains26.4 s and was not optimized. Differences
-in unchanged preparation/lower phases are not attributed to these changes.
-The small control matched code822085532/cursor327/tape/events at1.343 s baseline
-and0.968 s candidate; this is one control pair, not a small-input benchmark suite.
-
-Validation: native build passed1246 jobs. Full
-`tools/check-performance-regressions.sh` passed, including the added cached/
-uncached decoder, caller-location error/order and hash-cache tests; its axiom
-audit passed70,661 declarations with only propext/Quot.sound/Classical.choice.
-The original generic decoder profiling identity remains unchanged and typechecks.
-The independent decoder goldens passed16 schema-3 cases plus4 shared-ID cases.
-Cached/uncached decoding also matched readiness, ordered obligations and ABI/body
-payload sequences on those16 cases and malformed ABI/vtable precedence probes.
-Cache tests audit actual hashes/child correspondence, inline/shared duplicates,
-noncanonical fallback and transport errors. Caller tests compare the old query
-on success, equal/conflicting rows, malformed headers/rows, coarse-key collisions,
-missing spans and range-guard precedence. Quick checks passed58 Python tests.
-
-A fresh [same-site repeated-caller control](tests/repro/compiler-queries/caller-location-repeat.rs)
-requires two runtime Location roots to have different allocation IDs. Its fresh
-prepared export finalized42/cursor340 on baseline and candidate with matching
-tapes/events. Vanilla pinned Miri also returned42. This independently checks
-freshness, but does not match Miri's full prepared TyCtxt/AllocId history.
-The native synthetic hash probe also matches cached/uncached digests, including
-the root object. It is a mechanism check, not a Rust speedup measurement.
-
-No full generic indexed-query/decoder equivalence proof is added: the component
-identities, old-query parity, independent golden diagnostics and finite guest
-comparisons have the scopes stated above. Full check.sh and a new same-prepared-
-TyCtxt Miri comparison of the large guest were not run. Raw manifests, all
-attempts, frozen binaries,4 large trials, control export/reference, paired hashes
-and audits are in ignored `scratch/native-optimization/`.
-
-Remaining priorities are runtime-value decoding, the residual equality/validation
-work within decode, and preparation call resolution (about22 s). Caller-location
-still scans the catalog, but now costs about1.3 s here; do not prioritize a guest
-pointer cache or skip checks to remove it. Prepared-input reuse can amortize
-multiple seeds only with input/version/config binding and fresh guest state; it
-does not replace first-run improvements or justify reusing allocation identities.
-
-### Runtime-value structural-hash reuse
-
-The first optimization carried the existing validated
-[JsonTraversalCache](Miri/Input/JsonTraversalCache.lean) nodes through runtime-value
-array and object children. Its key reused the structural hash while retaining
-full JSON equality, decoding context flags and per-occurrence diagnostic rebasing.
-A kernel-checked comparison identity related that key to the original full-value
-key. The shared-node changes below supersede that key; the uncached reference
-decoder remains available. This was not a general decoder equivalence proof.
-
-The native [decode-only profiler](tools/ProfileRuntimeDecoder.lean) separates JSON
-parsing from runtime-value decoding without executing the guest. Two alternating
-candidate/baseline pairs used the retained 31,718,745-byte large-TB input, frozen
-native binaries, CPU2 and one Lean thread. All passed strict decode readiness.
-
-| Trial | Baseline wall / CPU / steal (seconds) | Candidate wall / CPU / steal (seconds) |
-| --- | --- | --- |
-| 1 | 47.588 / 46.790 / 31.200 | 32.280 / 32.181 / 18.760 |
-| 2 | 25.677 / 25.603 / 10.800 | 24.658 / 24.600 / 11.850 |
-
-The internal runtime-value spans were 8.86/9.52 seconds baseline and 5.33/4.56
-seconds candidate. Other phases varied substantially, and baseline trial1 had
-1.048 seconds of cgroup throttling (the other three had none). These shared-host
-samples do not establish a small whole-decoder speedup. Steal is the raw
-same-CPU observation, not process CPU time. Sampled peak process-group RSS rose
-from 475–476 MB to 526–529 MB; retaining traversal nodes through runtime-value
-decoding extends the cache lifetime. The small input passed readiness in both
-versions, with 2.963/2.584 seconds baseline/candidate wall time; this is one pair.
-
-JSON parsing took 0.883–1.06 seconds in the four large trials. Replacing the wire
-encoding alone therefore targets a small fraction of this input's measured cost.
-This motivated the shared-node and typed-metadata work described below. The
-external format remains JSON; retaining document-local node IDs internally and
-including decoding context in memo keys removes further structural work without
-a format migration. Validation and diagnostic rebasing remain required.
-
-Validation: `tools/check-performance-regressions.sh` passed, including native
-cached/reference comparisons of readiness, ordered obligations and ABI/body
-payloads, shared/inline duplicates, context changes and rebased escaped paths.
-Its axiom audit passed 69,676 declarations using only the three permitted axioms.
-The independent decoder goldens passed 16 cases plus 4 shared-ID cases natively;
-quick checks passed all 70 Python tests plus source/audit/fixture checks. Native
-profiling and parity targets built successfully. Earlier VM golden/parity
-attempts were interrupted and the same assertions completed natively. The
-initial stale-module regression invocation was corrected; all attempted logs
-are retained. At this stage, full `check.sh`, fresh producer/Miri comparisons and
-whole-guest timings had not been run; the large-input follow-up is below.
-The tested implementation, harness, build and toolchain
-files were hash-checked unchanged after integrating the concurrent CI changes
-from main. Frozen artifacts, hashes, raw counters and internal profiles are in
-ignored `scratch/runtime-value-cache/`.
-
-### Large catch-panic measurement follow-up
-
-The same [catch guest](tests/repro/unwind/catch_guest.rs) was freshly exported
-with the pinned compiler, `LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1`, `--root main`
-and crate name `catch_guest`. The schema3/shared-payload-v2 input is 278,817,280
-bytes, 736 bytes smaller than the historical 278,818,016-byte artifact. Its SHA256
-is `005614751be65ee4c8f0d1571bfd323fec262a537e481afedff1e22ca5027821`;
-it is a re-export of the same source, not the historical byte-identical input.
-It contains 1 selected body, 9,991 instances, 26,625 types, 180,133 allocations,
-43,827 caller-location rows and 1,574,011 shared nodes.
-
-Frozen full native runners shared all harness/dependency objects; only the
-Decoder object was replaced with the pre-change source from `21f163b1`, using
-the same Lean package/module setup and C compiler flags. Generated consumers
-call the decoder entry point and contain none of the changed private runtime-
-value implementation symbols. The small control matched terminal/tape/events
-before the large trials. Builds and exports were excluded from timing and did
-not overlap the four sequential baseline/candidate/baseline/candidate runs on
-CPU2 with one Lean thread, `--profile` and the unchanged no-seed diagnostic policy.
-
-| Trial | Baseline wall / CPU / steal (seconds) | Candidate wall / CPU / steal (seconds) |
-| --- | --- | --- |
-| 1 | 641.527 / 635.650 / 333.180 | 573.440 / 568.635 / 295.350 |
-| 2 | 665.373 / 650.205 / 362.950 | 527.109 / 520.578 / 259.370 |
-
-| Metric | Baseline | Candidate |
-| --- | ---: | ---: |
-| Full process wall median (seconds) | 653.450 | 550.274 |
-| Read/decode wall median (seconds) | 302.814 | 212.698 |
-| Internal runtime-value median (seconds) | 103.850 | 42.600 |
-| Internal JSON parse median (seconds) | 9.430 | 11.045 |
-| Sampled peak process-group RSS (GB, decimal) | 3.338–3.354 | 3.849 |
-
-The observed whole-process median difference is 103.176 seconds. Runtime-value
-spans were 95.7/112.0 seconds baseline and 42.4/42.8 seconds candidate. Unchanged
-phases also varied; do not attribute the entire whole-process difference to this
-change or infer a precise general speedup from these two shared-host pairs.
-Baseline trial2 had 9.231 seconds of cgroup throttling; the other trials had
-0.002/0.068/0.079 seconds. Steal is recorded raw, without a CPU-time correction.
-These values must not be compared directly with the historical 205-second run.
-
-All four runs passed strict readiness and finalized exit0/cursor2640, with
-byte-identical consumed tapes, choice events and terminal output. All leak walks
-reported live39/root22/edges17. Input and frozen binary hashes remained unchanged
-afterward. This is finite execution evidence, not safety over all choices or
-a new same-prepared-TyCtxt comparison with reference Miri.
-
-Preparation attempts remain visible: the previously cached debug exporter emitted
-schema2 and was not measured; a schema3 unscoped export was rejected at readiness
-with 9,247 blocking obligations and is not counted as successful execution. The
-corrected export selects main, retaining runtime checks for demanded queries.
-Raw artifacts, compiler/link manifests, all attempted logs, per-run counters and
-the structured `results.json` are in ignored `scratch/catch-runtime-value/`.
-
-### Node identities and import-time compiler metadata
-
-The traversal builder now retains the exporter's existing document-local node
-IDs and reference edges. Repeated shared references keep the same identity;
-inline values are traversed directly, without new IDs or independent memo
-entries. Runtime-value memoization and successful validation visits compare
-shared IDs plus the existing context flags, avoiding structural JSON comparisons.
-Scalars are decoded directly, including shared scalar strings.
-Structural keys remain for the public FnAbi sequence's value-based deduplication.
-Noncanonical manually constructed JSON still uses the uncached fallback. No
-additional Lean interning or external encoding change is introduced.
-
-FnAbi queries are decoded into an immutable typed table during import, reusing
-the already prepared layout memo. Its private constructor binds all entries to
-the exact shared-node table and decoder build. Query failures are stored, not
-raised for unused catalog entries. Preparation consumes these typed outcomes
-and still converts/validates the physical ABI against the current runtime.
-Manual documents without the table retain the original path. Source-node table
-updates cannot silently reuse a table indexed by the old source array. Call-site
-lookup uses one index over the typed ABI records instead of scanning their JSON
-payloads for every call. Noncanonical manual values keep the original linear
-lookup and first-match behavior.
-
-Complete compiler values for generic arguments and source spans are also
-prepared once from shared nodes and reused by instance, scope, lifecycle,
-backtrace, main, constant and intrinsic adapters. Their memo stores exact JSON
-keys and full typed values rather than the runtime decoder's shallow summaries;
-missing keys decode directly, and malformed raw keys bypass memo lookup.
-This is selective import-time typing, not elimination of every JSON field read:
-query envelopes, layout extras and several specialized adapters still inspect
-source payloads. Guest pointers, allocation identity and fresh guest state are
-not memoized.
-
-To carry the checked projections in the document without a circular import,
-model node definitions moved to `Miri/Input/Model/Types.lean`, value decoders to
-`Miri/Input/DecoderValues.lean`, and document/validation entrypoints remain in
-`Model.lean`/`Decoder.lean`. Existing public decoder names remain available.
-The caches belong only to native runtime `ImportDocumentCore` values. Diagnostic
-and reflected `ImportDocument` values retain their original schema fields;
-conversion from those values uses the uncached compatibility path. Frontend
-reflection still emits typed constructor data, without quoting private caches
-or inserting an opaque decoder call. Temporary decode memos are existential
-proof witnesses and are erased rather than retained in the document.
-The earlier structural-key equality lemma describes the initial hash-only
-implementation; ID-based memoization has a different cache partition and does
-not claim that key-comparison identity or whole-decoder equivalence. New local
-kernel-checked identities preserve both the old full-value key comparison and
-hash exactly in the uncached Raw fallback.
-
-Validation on source revision `267f46a09b67e0c0e4fe2fa57243fc127f44d589`:
-`tools/check-performance-regressions.sh` passed, including the native build,
-frontend reflection, cached/reference diagnostics and obligation ordering,
-compiler ABI/value comparisons, runtime ABI rejection checks and the transitive
-axiom audit (69,823 Miri declarations; only the three allowed axioms).
-`tools/check-quick.sh` passed all 70 Python tests. Selected LowerContext,
-ProviderContext and PrimitiveRebinding structural checks also passed. A small
-native control matched the complete tape, choice events and terminal result.
-The full `check.sh`, full miri_tests runtime registry and a fresh same-TyCtxt
-reference-Miri comparison have not been rerun for this revision.
-
-The combined change was measured against the previous hash-only PR head
-`77f60e8489f0152d2b33eb00af36f7bddb29e942`, with candidate source
-`267f46a09b67e0c0e4fe2fa57243fc127f44d589`. Two alternating sequential pairs
-used CPU2, one Lean thread, native `--profile` runners, and the same immutable
-278,817,280-byte schema3 catch input as the preceding experiment (SHA256
-`005614751be65ee4c8f0d1571bfd323fec262a537e481afedff1e22ca5027821`).
-No export, compilation or tests overlapped these timed trials. Runner hashes:
-baseline `594bdde92fd2536a3833022c5276c2074cd4c293c36cd2a195a4fc39f9d59305`,
-candidate `029043353625bfc08555c711d065952be2793a473f0cf4f54fc7e2d0cdd29f98`.
-Input, runner and candidate source hashes were checked before and after.
-
-| Metric | Previous hash-only head | Shared IDs + typed metadata |
-| --- | ---: | ---: |
-| Whole-process wall, trials (s) | 365.478 / 372.885 | 274.444 / 278.184 |
-| Whole-process wall median (s) | 369.181 | 276.314 |
-| Process CPU, trials (s) | 360.993 / 371.207 | 272.981 / 276.577 |
-| Same-CPU steal delta, trials (s) | 127.25 / 131.83 | 79.95 / 80.19 |
-| Cgroup throttling delta, trials (s) | 9.202939 / 0.026710 | 0.000021 / 0.818928 |
-| Sampled peak RSS (decimal GB) | 3.849–3.850 | 3.848 |
-| Read/decode wall median (s) | 157.649 | 125.394 |
-| Preparation wall median (s) | 80.989 | 37.257 |
-| Combined read/decode + preparation (s) | 238.638 | 162.652 |
-| Runtime-value internal span median (s) | 26.100 | 22.700 |
-| Call-resolution internal span median (s) | 37.850 | 0.865 |
-
-The observed whole-process median reduction is 92.867 seconds (25.15%, about
-1.34 times throughput for this case). These are shared-host observations from
-two pairs, not a precise general speedup guarantee or attribution of every saved
-second. Unchanged guest execution also varied (median 103.906 to 90.225 seconds,
-including bootstrap), and the first baseline's cgroup throttling was substantial.
-The body-validation span varied 52.2/20.9 seconds before versus 16.7/18.1 after.
-Import-time typing moves some work out of preparation: candidate FnAbi query
-and compiler-value preparation spans had medians 0.742/3.215 seconds. Compare
-whole-process or combined decoding/preparation rather than preparation alone.
-JSON parsing medians were 5.675/6.385 seconds, so replacing the wire encoding
-alone still addresses little of this measured runtime.
-
-All four trials passed strict readiness with zero obligations and finalized
-exit0/cursor2640, with byte-identical consumed tapes, choice events and terminal
-output. All leak walks reported live39/roots22/edges17. This is one bounded
-execution comparison, not all-choice safety or whole-machine equivalence.
-The first attempted baseline reached the 1,200-second timeout during guest
-execution and is excluded from completed samples; its JSON parse alone took
-50.9 seconds. The successful retry used a 3,600-second limit per run. The earlier
-approximately 550-second hash-only median came from a different host interval
-and is not the baseline for this comparison. Raw logs, including the timed-out
-attempt, counters, results and immutable manifests remain in ignored
-`scratch/node-id-typed/`.
+Import-time typing remains selective: query envelopes, layout extras and some
+specialized adapters still inspect source payloads. Any prepared-input reuse
+across seeds must bind input/version/configuration and create fresh guest state;
+it must not reuse guest pointers or allocation identities or replace first-run
+improvements. Preserve validation, context-sensitive memo keys, diagnostic
+rebasing and uncached compatibility paths when extending caching.
 
 ## Feature support outside the current acceptance scope
 
-The following support and integration work remains in the backlog, even though
-it is not required for current main/parallel-Rust acceptance. Retaining a task
-here does not imply that the whole feature is unimplemented: existing support
-and validation gaps must be checked against pinned upstream before extending it.
-Preserve existing implementations and fail-closed Unsupported outcomes.
-WP remains deferred with its implementation removed. GenMC support has been removed;
-the interpreter supports disabled race tracking and the Miri vector-clock backend.
+These gaps remain in the backlog, without implying that the whole feature is
+unimplemented. Check existing support against pinned upstream before extending
+it; preserve implementations and fail-closed Unsupported outcomes. WP remains
+deferred with its implementation removed. GenMC is removed; available race
+tracking modes are disabled tracking and the Miri vector-clock backend.
 
 * **Windows / peripheral OS facilities** —
-  [WindowsPlatform](Miri/Interpreter/WindowsPlatform.lean), MiriTests/Native/ and
-  Unix tests. Target ABI, all shims and real-host connections are not guaranteed.
-  On resumption, resolution requires reproducing missing capabilities with a
-  fixed target and genuine input, then comparing the shim's ABI, state and errors.
+  [WindowsPlatform](Miri/Interpreter/WindowsPlatform.lean), `MiriTests/Native/`
+  and Unix tests do not guarantee every target ABI, shim or real-host connection.
+  Reproduce missing capabilities with a fixed target and genuine input, then
+  compare shim ABI, state and errors.
 * **Native guest and math boundary** — [native](native/),
-  [NativeMathHost](Miri/Input/NativeMathHost.lean), tools/NativeRunner.lean,
-  tools/NativeMathBoundaryQA.lean and MiriTests/Native/. Separate host callbacks from
-  numerical equivalence. `tools/check-powi-zero.py` passed fresh
-  same-prepared-TyCtxt Miri and connected exit-zero with leak checks for 16
-  exact positive-one bit assertions: f32/f64 exponent zero with positive/negative
-  finite values, signed zeros, infinities and quiet NaNs. Fresh MIR retained both
-  intrinsic calls with runtime bases and constant-zero exponents. This uses the
-  fixed-result path, not a numerical host callback, and the no_std `miri_start`
-  entry, not std main. Signaling-NaN nondeterministic choices, other
-  widths/exponents, f128 and broader absent-host validation remain pending.
-  On resumption, generate a reference from the
-  same Rust and compare real-host bits and Unsupported outcomes. Helper-mock
-  success does not resolve this.
-  The finite `tools/check-math-nohost.py` run passed fresh
-  same-prepared-TyCtxt Miri references for f64 sin(1) and fixed cos(0). Both
-  connected guests exited zero with the native host; without it, sin reached
-  the exact unary-capability Unsupported (explicitly not guest success), while
-  cos retained exact 1.0 bits and exited zero with leak checking. Two negative
-  invocations rejected the wrong terminal expectations. This closes those two
-  absent-host controls only; other operations, widths and NaN cases remain open.
+  [NativeMathHost](Miri/Input/NativeMathHost.lean), `tools/NativeRunner.lean`,
+  `tools/NativeMathBoundaryQA.lean` and `MiriTests/Native/`. Signaling-NaN choices,
+  other widths/exponents, f128 and broader absent-host validation remain pending.
+  Existing f32/f64 exponent-zero controls use fixed results and no_std
+  `miri_start`, and the f64 sin(1)/cos(0) controls cover only those absent-host
+  cases. They do not establish broader numerical or std-main equivalence.
+  Generate references from the same Rust and compare real-host bits and
+  Unsupported outcomes; helper mocks do not resolve these gaps. Separate host
+  callbacks from numerical equivalence.
 * **Timezone** — [source and assumptions](docs/chrono-tz-source-port.md),
-  MiriTests/Regression/TimezoneGuestEnv.lean and `tools/check-timezone.py`.
-  Eight genuine `localtime_r` calls passed fresh connected Lean
-  execution and standalone pinned Miri on the same Rust/compiler flags/sysroot:
-  absent/UTC TZ, invalid name/UTF-8 fallback, the second before the epoch, a
-  leap day, New York's spring DST boundary and Kathmandu's fractional offset.
-  All nine integer tm fields, gmtoff and numeric NUL-terminated zone strings
-  were asserted; Lean required exit-zero, one thread and a successful leak check.
-  The reference explicitly disabled isolation and used a separate TyCtxt from
-  export. Lean consumed an ordered finite trace from a real retained Linux
-  epoll, one monotonic-clock observation and 278 of 512 observed empty
-  nonblocking polls; unobserved host demands remain Unsupported. This does not
-  establish general host integration, all-zone/date equivalence or timestamp
-  endpoint/out-of-range behavior. Next, extend genuine comparisons to those
-  remaining date-range boundaries; table generation/count checks alone do not
-  resolve them.
-
-## Integrated regression validation
-
-`bash tools/check.sh` completed with exit status 0 against
-`1cf5fb9a` in a separate worktree, without implementation changes. This closes
-the pending full producer-to-runtime regression for that revision. The run
-included 48 Python tests, 6 Rust analyzer tests, Lean builds, an axiom audit of
-70,527 declarations (only the 3 permitted axioms), maintained component
-comparisons, fresh exporter/input/frontend/runtime-metadata checks, fresh
-exported-MIR execution comparisons with pinned Miri, and the final obligation
-inventory diff. The eval-core cases used hash-checked, adapted schema3 unit
-fixtures rather than fresh exports.
-
-The pinned Lean/Rust installations and existing reference Miri binary and
-MIR-enabled std sysroot were reused; the reference environment was not freshly
-constructed. Lake artifacts were copied into an independent writable directory
-and checked by the builds. Build calls were serialized with
-`/tmp/lean-miri-lake-build.lock`; fixture execution did not hold that lock.
-The full-run log is in ignored `scratch/logs/full-locked.log` in that worktree.
-
-This result covers the checked revision only. The separate canonical12,
-ordering, large-TB, SC-schedule, connected-proof and structural-regression entry
-points were not rerun in this pass. It does not validate later changes, establish
-large-input completion or performance, or resolve the general proofs and query
-closure gaps above.
-
-## Historical checks from the earlier repository cleanup
-
-The cleaned-up files were placed in a separate directory and the
-checks below were run without copying existing `.lake`, target, working scratch
-or reference Miri/sysroot. Installed pinned Lean/Rust compilers and the Cargo
-registry cache were reused as external dependencies. These are historical results
-for the cleanup revision, not reruns on the current branch. Logs are in ignored scratch; this table records reruns
-after fixes. Intermediate setup failures and unexecuted checks are not counted
-as successes.
-
-| Check entry point | Result and scope |
-| --- | --- |
-| `bash tools/check-quick.sh` | PASS. 48 Python tests, pin/source audit, semantic lint, expected inventory and fixed-fixture hashes. |
-| `bash tools/check-build.sh` | PASS. Built from empty Lake artifacts, including ExecutionChoicePolicy needed for replay. Final axiom audit: 70,254 declarations, only the 3 permitted axioms. |
-| `cargo test --locked --offline --manifest-path source-analysis/Cargo.toml` | PASS, 6 Rust analyzer tests. |
-| Pinned Cargo `check --locked --offline --manifest-path exporter/Cargo.toml` (ordinary / `--features miri-reference`) | Both configurations PASS. Missing crates fetched without changing the lock. This is not successful guest/Miri execution. |
-| `bash tools/check-decoder.sh` | PASS. 16 comparisons with saved expectations from an independent old decoder, plus 4 shared-ID cases. |
-| `bash tools/check-connected-proofs.sh` | PASS. Kernel checks for 18 component modules and graph-runner typechecking. All 64 printed axiom dependencies are permitted. This is not a whole-machine safety proof. |
-| `python3 tests/connected/compare_selector.py` | PASS. Finite multiset comparison for SC6 / Relaxed20 extracted from pinned source. This does not run the Miri interpreter. |
-| `bash tools/check-structural-regressions.sh` | PASS. Additional typechecking, kernel examples, #eval and no-input runtime assertions for zero width, indexes/duplicate order, crosswalk and clock reuse. Supplemental guests requiring arguments were not run. |
-| `python3 tools/check-connected.py` | PASS, all canonical12 replays. Checked classification of 9 normal + 3 expected UB, fixed expected output and unchanged sources/OLean. Reference Miri reused retained same-TyCtxt results. |
-| `python3 tools/check-connected.py --ordering` | PASS, 4 controls. Compared typed prefixes, worker-operation/scheduler order, weak (0,0) and SC candidate-domain restrictions. |
-| `python3 tools/check-connected.py --large-tb --timeout 1800` | PASS. Frozen child write on the same Rust input; matched source line 14 / MIR bb1[8], 1 thread and 44 choices. |
-| `python3 tools/check-sc-schedules.py` | PASS, all 12 executions for seeds 0–11, observing 4 orderings. Rejected 3 negative logs for truncation, out-of-support input and missing post-step records. |
-
-In that historical run, unexecuted checks included **fresh construction of reference Miri and the
-MIR-enabled std sysroot, and full regression `bash tools/check.sh` from fresh
-exports**.
-That historical run was limited to a fresh Lean build,
-saved-input replay and local checks; it did not include fresh construction of
-the heavy reference environment. Do not count that work as successful.
-To rerun, follow README setup/fetch, then
-`bash tools/setup-miri-reference.sh` → `bash tools/check.sh`.
-Start individual genuine re-exports with `tools/export-connected.py`.
-Out-of-scope Windows/native validation and the general proofs above were
-also not completed in this run.
+  `MiriTests/Regression/TimezoneGuestEnv.lean` and `tools/check-timezone.py`.
+  General host integration, all-zone/date equivalence and timestamp
+  endpoint/out-of-range behavior remain unestablished. Extend genuine
+  comparisons to date-range boundaries; table generation/count checks alone
+  do not resolve them. Existing finite comparisons use a separate reference
+  TyCtxt with isolation disabled and a retained Linux host trace; unobserved
+  host demands remain Unsupported.
