@@ -172,3 +172,20 @@ after another specialization, so use its callers and source code before
 attributing ownership. Do not sum cumulative percentages or convert them into
 an assumed removable wall time. Sampling overhead and shared-host variation
 require separate verification of any subsequent optimization.
+
+## Summarize saved exporter profiles
+
+Run `python3 tools/summarize-exporter-profile.py EXPORTER.log` to summarize
+saved `export_profile:` spans. Repeated spans retain individual values and call
+counts. Parent spans include children; do not add nested totals together.
+The summary describes attribution, not guest safety or a measured speedup.
+
+Logs containing all four direct-mode `export_profile_at:` boundaries additionally
+separate driver time before/after the export callback. Incomplete, repeated or
+out-of-order boundaries are rejected. Older span-only logs produce no invented
+driver intervals. Optional domain/catalog records preserve counts; the historical
+`emitted_mir` field is labeled `processed_instances`, since it counted processed
+requests rather than emitted bodies.
+
+This offline tool can analyze retained experiment logs without changing the
+exporter. Additional event production is a separate change.
