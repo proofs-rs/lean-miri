@@ -653,8 +653,8 @@ structure LocalDecl where
   payload : Lean.Json
 
 structure BodyCore where
-  /-- Exact location of this body in the source document. Lowering checks this
-  path against the retained raw document before using source-scoped metadata. -/
+  /-- Reader-assigned location of this body in the source document. Lowering
+  uses it for source-scoped metadata without reconstructing the typed body. -/
   sourcePath : String := ""
   defPath : String
   definitionId : Option DefinitionId
