@@ -174,6 +174,69 @@ it must not reuse guest pointers or allocation identities or replace first-run
 improvements. Preserve validation, context-sensitive memo keys, diagnostic
 rebasing and uncached compatibility paths when extending caching.
 
+### Shared MIR validation and callback metadata reuse
+
+The upstream UI harness in #9 repeatedly constructed immutable compiler indices
+while assembling recursive execution callbacks. Providers now retain the existing
+source-bound vtable/function/inline lookup views. The root-span query outcome,
+including errors, is bound to the final program; its accessor has a kernel-checked
+identity with the original query. Manual provider updates must rebind affected
+indices or clear the optional root-span cache.
+
+MIR local/projection validation now reuses successful shared-node checks keyed by
+(document-local node ID, local count). Terminator edges and each body's dense
+indices remain checked. Failed checks retain occurrence paths; Raw fallback uses
+the original traversal. Diagnostic path escaping avoids rebuilding ordinary keys;
+`DecoderValues.escapePathKey_eq_reference` proves equality for every string.
+
+Measurements use main `59f65b93` plus #9 `f7fea8dd` as the baseline, identical
+untouched Rust exports, immutable native `--profile` runners, CPU 2 and one Lean
+thread. Builds, exports and tests did not overlap the alternating trials. The
+input/reference FNV, length and toolchain pins matched; SHA256 identities and all
+15 changed source files were checked. Both runners used the reference's original
+source argv[0], empty guest environment and seeded UI profile.
+
+| Input / trial | Baseline wall / CPU / steal (seconds) | Candidate wall / CPU / steal (seconds) |
+| --- | --- | --- |
+| `pass/unops.rs`, 1 | 112.220 / 112.026 / 0.980 | 78.831 / 78.675 / 0.670 |
+| `pass/unops.rs`, 2 | 113.845 / 113.786 / 1.480 | 78.826 / 78.721 / 0.700 |
+| `pass/const-addrs.rs`, bounded prefix | 613.661 / 612.964 / 6.140 | 261.673 / 261.552 / 2.370 |
+| `fail/validity/invalid_bool.rs` | 97.354 / 97.225 / 1.040 | 73.208 / 73.131 / 0.840 |
+
+`unops` finalized exit zero in all four trials, with identical tapes, events and
+terminal diagnostics. Its median wall time fell from 113.033 to 78.828 seconds
+(30.26%). Peak RSS was 3.835–3.837 GB (decimal). The const-addrs pair also matched
+exactly, at 4.422 GB RSS, but both stopped with `outerChoicesExhausted 100000`.
+That pair measures the same **pending prefix**, not successful execution: the
+reference finalized exit zero, so this case still fails the UI acceptance oracle.
+The 57.36% prefix-time reduction is one pair, not a general speedup estimate.
+The original invalid-bool negative case matched the independent reference UB
+category and exact source line 3 in both versions, with identical tapes/events
+and terminal diagnostics (3.808–3.810 GB RSS). This is one control pair.
+Throttling was zero in every listed trial; steal is the raw same-CPU observation.
+
+Validation passed: `check-quick.sh` (85 Python tests and integrity/semantic checks),
+15 CI helper tests, `check-performance-regressions.sh`, independent decoder
+goldens (16 + 4 shared-ID cases), and `check-structural-regressions.sh`. The
+Miri/MiriTests/frontend build and axiom audit passed (70,846 declarations, only
+the three permitted axioms). Cached/reference tests include changed local bounds,
+malformed locals/projections, debug payloads and terminator edges.
+
+All 300 `examples/empty_function` Lean modules also typechecked using
+`tools/check-empty-function.sh` with every module selected as a root. Fourteen
+proof files apply `CompilerProviders.Prepared.rootSpan_eq` at 33 factory
+simplification sites. These edits only rewrite the cached query to the original
+query; theorem statements, premises and the fixed Rust/MIR hashes are unchanged.
+The final target type check passed. An additional combined audit of all 300
+modules and their imported Miri declarations passed for 91,882 declarations,
+using only propext, Quot.sound and Classical.choice.
+
+Raw artifacts, source/binary hashes, profiles, counters and example check/audit
+logs are under ignored `scratch/perf-ui/`.
+Full `check.sh` and the 809-candidate upstream sweep were not run. Finishing the
+long const-addrs guest under an explicit execution budget remains unresolved;
+this optimization does not establish whole-machine equivalence or UB freedom.
+
 ## Feature support outside the current acceptance scope
 
 These gaps remain in the backlog, without implying that the whole feature is

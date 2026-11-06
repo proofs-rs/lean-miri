@@ -12,7 +12,7 @@ def expectedSchema : String := "lean-miri-rustc-mir"
 def expectedSchemaVersion : Nat := 3
 def expectedCompilerAbiLayoutSchema : String := "physical_ty_and_layout_v1"
 
-def escapePathKey (key : String) : String :=
+def escapePathKeyReference (key : String) : String :=
   key.toList.foldl (fun out char => out ++ match char with
     | '%' => "%25"
     | '\\' => "%5C"
@@ -20,6 +20,40 @@ def escapePathKey (key : String) : String :=
     | '[' => "%5B"
     | ']' => "%5D"
     | _ => String.ofList [char]) ""
+
+private def pathKeyNeedsEscape (c : Char) : Bool :=
+  c == '%' || c == '\\' || c == '.' || c == '[' || c == ']'
+
+/-- Most exporter keys need no escaping. Scan without allocating a character
+list or rebuilding the string; preserve the original transform otherwise. -/
+def escapePathKey (key : String) : String :=
+  if key.contains pathKeyNeedsEscape then escapePathKeyReference key else key
+
+private theorem escapePathKey_unescaped (cs : List Char) (out : String) (h : cs.any pathKeyNeedsEscape = false) :
+    cs.foldl (fun out char => out ++ match char with
+      | '%' => "%25" | '\\' => "%5C" | '.' => "%2E" | '[' => "%5B" | ']' => "%5D"
+      | _ => String.ofList [char]) out = out ++ String.ofList cs := by
+  induction cs generalizing out with
+  | nil => simp
+  | cons c cs ih =>
+    simp only [List.any_cons, Bool.or_eq_false_iff] at h
+    have hc := h.1
+    simp only [pathKeyNeedsEscape, Bool.or_eq_false_iff, beq_eq_false_iff_ne] at hc
+    simp only [List.foldl_cons]
+    rw [ih _ h.2]
+    simp [hc, String.ofList_cons]
+    apply String.toList_inj.mp
+    simp [List.append_assoc]
+
+theorem escapePathKey_eq_reference (key : String) :
+    escapePathKey key = escapePathKeyReference key := by
+  unfold escapePathKey
+  split
+  · rfl
+  · rename_i h
+    have hx : key.toList.any pathKeyNeedsEscape = false := by
+      simpa [String.contains_bool_eq] using h
+    simpa [escapePathKeyReference] using (escapePathKey_unescaped key.toList "" hx).symm
 
 def joinPath (path key : String) : String :=
   let key := escapePathKey key

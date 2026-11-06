@@ -20,4 +20,17 @@ def rootSpan (program : LoweredProgram) : Except String MIR.SpanRef := do
   unless tables.spans == program.compilerTables.spans do
     throw "compiler root span is absent from final shared span table"
   pure span
+
+/-- Store the exact query outcome, including errors, for this final program.
+Changing the program cannot retain a certificate from the previous tables. -/
+structure Bound (program : LoweredProgram) where
+  private mk ::
+  result : Except String MIR.SpanRef
+  private exact : result = rootSpan program
+
+def bind (program : LoweredProgram) : Bound program :=
+  ⟨rootSpan program, rfl⟩
+
+theorem Bound.result_eq {program : LoweredProgram} (bound : Bound program) :
+    bound.result = rootSpan program := bound.exact
 end Miri.Input.CompilerContextSpan
