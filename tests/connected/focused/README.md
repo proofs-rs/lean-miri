@@ -5,6 +5,10 @@ For current validation gaps, use [STATUS](../../../STATUS.md).
 The no-input collection tests moved to `MiriTests/Connected/Focused/` and are
 registered in `lake exe miri_tests`. They are executable independently of guest exports.
 
+The fresh CI lane now exports and checks all six guest rows below independently.
+It retains reference diagnostics, verifies expected reference exits/DataRace UB,
+and invokes these existing harnesses without rewriting their assertions.
+
 | Harness | Rust reproduction | Extra harness argument |
 | --- | --- | --- |
 | AtomicHandoff.lean | [Acquire](../../repro/atomic-handoff/acquire.rs), [Relaxed](../../repro/atomic-handoff/relaxed.rs) | `expect-zero`, `expect-race` respectively |

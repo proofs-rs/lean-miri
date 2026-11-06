@@ -3,6 +3,7 @@ name: Miri regression
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [regression, extended, replay]
+        lane: [regression, extended, replay, fresh]
     env:
       LEAN_NUM_THREADS: '1'
       CARGO_BUILD_JOBS: '2'
@@ -87,5 +88,8 @@ jobs:
             scratch/sc-schedules/**/*.log
             scratch/sc-schedules/**/seed-*.json
             scratch/ci-fresh/**/*.log
+            scratch/ci-fresh/**/*.miri-reference.json
+            scratch/ci-fresh/query-demand/**/*.json
+            scratch/ci-fresh/runtime-type-closure/**/*.json
             scratch/connected-libc-target/build.jsonl
             scratch/connected-libc-target/libc-rlib.path

@@ -25,6 +25,13 @@ class Suite:
 
 
 def suites(lane):
+    if lane == 'fresh':
+        # A failing guest must not prevent the other independent checks.
+        from fresh_tests import FOCUSED
+        return [Suite('build', ('bash', 'tools/ci/build.sh'), 7200),
+                Suite('fresh-prepare', ('bash', 'tools/ci/fresh.sh', 'prepare'), 7200),
+                *[Suite(name, ('python3', 'tools/ci/fresh_tests.py', name))
+                  for name in ('query-demand', 'runtime-type-closure', 'vtable-cross-crate', *FOCUSED)]]
     if lane == 'regression':
         # check.sh already contains quick's audit/Python/inventory checks.
         # Only the two fixture hash manifests are unique to check-quick.sh.
@@ -169,7 +176,7 @@ def run_all(selected, output, metadata, root=ROOT):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('lane', choices=['regression', 'extended', 'replay'])
+    parser.add_argument('lane', choices=['regression', 'extended', 'replay', 'fresh'])
     parser.add_argument('--list', action='store_true')
     args = parser.parse_args()
     selected = suites(args.lane)
