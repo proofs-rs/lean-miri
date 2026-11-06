@@ -1,6 +1,6 @@
 # Miri regression CI
 
-`.github/workflows/miri-regression.yml` runs only on `main` pushes.
+`.github/workflows/miri-regression.yml` runs only on `main` pushes and manual dispatch.
 Main runs are not cancelled by later pushes. The matrix
 does not fail fast: a failure in one lane does not cancel the other lanes.
 All lanes use independent Linux x86_64 `ubuntu-24.04` runners. The public runner's
@@ -14,12 +14,13 @@ with another runner.
 | --- | --- |
 | `regression` | Two fixture hash manifests and `check.sh`: source/fixture integrity, Python tools, source-analyzer Rust tests, Lean proofs/assertions/axioms, source-extracted component comparisons, the exporter's current Cargo test entry point, fresh input/frontend/runtime-metadata and arithmetic/call/global execution comparisons. |
 | `extended` | Build prerequisites; decoder, structural, optimization and connected-proof scripts; intrinsic float/AES/random-memory comparisons; scheduler and SC prefixes; detached join ordering; source-extracted selector; fresh primitive-range producer/Lean decoder contract; native math ABI. Then a separate reference-feature release exporter for fresh powi-zero, math capability, timezone and three vtable identity controls. |
+| `fresh` | Independent fresh query-demand mutations, runtime-type closure, cross-crate vtable metadata, and six focused guests (acquire/relaxed handoff, positive/negative fence, pthread race, backtrace). |
 | `replay` | Build prerequisites, all canonical12 saved exports, four ordering controls, large Tree Borrows and SC diagnostic seeds 0–11 with negative-log checks. |
 
 `check.sh` owns the common `miri_tests` runtime registry and axiom audit. Other
 lanes build their own prerequisites without rerunning that registry. Their
 specialized scripts retain their own assertions and audits. The workflow requires
-all three lanes to pass, so this removes duplicate runs without dropping checks.
+all four lanes to pass, so this removes duplicate runs without dropping checks.
 Similarly, quick/full audit and Python checks run once through `check.sh`; the
 two hash manifests unique to `check-quick.sh` remain separate suites. Replay needs
 no Rust/reference build and therefore skips the SDK disk cleanup step.
@@ -60,7 +61,7 @@ the other lanes also install repository-local stable Rust, install and verify
 the exact pinned rustc-dev compiler, prefetch locked Cargo dependencies, and run
 the existing reference Miri/sysroot setup. Setup needs network access. Fresh
 checks deliberately require new output paths: use a fresh checkout or move
-previous `scratch/ci-fresh` output before repeating the extended lane. Setup
+previous `scratch/ci-fresh` output before repeating the extended or fresh lane. Setup
 does not delete previous evidence. Non-replay setup checks for ripgrep before
 installing toolchains; the workflow installs Ubuntu's `ripgrep` package explicitly.
 Several source-comparison shell drivers invoke `rg`, so it is a test prerequisite,
@@ -120,3 +121,29 @@ for performance claims.
 The connected-libc build records Cargo's reported archive in
 `scratch/connected-libc-target/libc-rlib.path`. Timezone consumes that exact path;
 missing or ambiguous artifacts and stale records after a failed rebuild fail.
+
+
+## Fresh supplemental checks and upstream UI
+
+`python3 tools/ci/run.py fresh --list` lists nine independent checks after build
+and reference-exporter/libc preparation. Each gets its own retained log and
+failure status; one failed guest does not prevent later guests from running.
+The query-demand check exports the existing call-transfer and TLS fixtures before
+mutating native-signature roles and TLS initializers. Its existing missing
+CatalogRoles TLS-provider branch remains a visible failure. Runtime type
+closure exports the existing nested-vtable fixture and checks LateOnly plus both
+reached virtual methods. The cross-crate control compiles its producer separately
+and requires the consumer's genuine external constant/vtable relocation.
+
+All six focused guests are freshly exported, checked against reference Miri,
+and passed untouched to their existing Lean harness. Negative guests require a
+real reference Data race diagnostic and the Lean harness's exact typed DataRace
+outcome; a failed process is not an accepted negative. No fixed expectations are
+rewritten. `scratch/ci-fresh` outputs require a new checkout/run directory.
+
+The separate [upstream UI workflow](../../.github/workflows/upstream-ui.yml) ports
+PR #9's pinned-source test harness only, without its compiler/runtime fixes.
+See its [acceptance contract](../../tests/upstream_ui/README.md). Main/manual
+shards continue independently, upload diagnostics on failure, and require a
+complete aggregate report. Current-main profile mismatches remain failures even
+when guest terminal outcomes happen to agree. Neither workflow runs on PR events.

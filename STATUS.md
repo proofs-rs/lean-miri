@@ -86,7 +86,7 @@ budget of OPEN exploration does not resolve the proofs above.
 
 ### Hosted regressions and coverage
 
-A successful hosted three-lane regression rerun remains required after the
+A successful hosted regression rerun remains required after the
 `MiriTests/Rvalue/Rvalue.lean` assertion elaboration fix and the hosted ripgrep
 setup fix. These fixes do not establish the complete comparisons/replays or the
 later exporter and fresh-input/execution phases that the failures prevented.
@@ -97,9 +97,19 @@ guest execution because its libc filename glob did not identify exactly one
 archive; the match count and paths were not logged. The Cargo compiler-artifact
 selection fix needs hosted validation rather than relying on the old glob.
 
-Fresh regeneration/comparison of every canonical and focused guest, the complete
-argument-driven query-demand suite and standalone unregistered harnesses remain
-outside workflow coverage. Saved replay cannot validate changed producers.
+The fresh CI lane now schedules the six supplemental focused guests, native/TLS
+query-demand mutations, runtime-type closure and the cross-crate vtable control;
+a successful hosted run remains required. Fresh regeneration/comparison of every
+canonical guest and standalone unregistered harnesses remain outside workflow
+coverage. The existing CatalogRoles consumer
+lacks the TLS-provider branch required by its optional generator mode.
+Saved replay cannot validate changed producers.
+
+The upstream UI workflow ports PR #9’s test harness without its compiler/runtime
+fixes. Main’s reference environment and Lean choice/argv/CPU/float/CAS/I/O profile
+differ from that harness’s strict contract; profile mismatches remain failures,
+with attempted Lean outcomes retained. Full hosted sweep and aggregate coverage
+remain unvalidated.
 Selected finite checks do not close general proof or source-correspondence gaps.
 
 The latest shared-node/typed-metadata optimization revision still needs full

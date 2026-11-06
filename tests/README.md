@@ -289,12 +289,14 @@ when changing it.
 | `lake env lean --run MiriTests/Native/BytesOwnership.lean` | Included in `lake exe miri_tests`: host-byte ownership, release and copy-failure cleanup using fixture hosts. “Native” here names the boundary, not an execution mode. |
 | `python3 tests/scheduling/test_source_prefix.py` | Extracted scheduler service prefix with fixture leaves, and `Stateful.lean` proof examples. |
 | `MiriTests/FunctionPointers/*.lean` | Self-contained persistent reservation assertions are included in the runtime registry. |
-| `tests/query_demand/make_cases.py` + `CatalogRoles.lean` | Generate mutations from fresh compiler evidence, then run readiness/obligation/provider assertions. Generator needs base/output paths, optional TLS base; run Lean `--run` with the generated directory. |
+| `tests/query_demand/make_cases.py` + `CatalogRoles.lean` | Generate mutations from fresh compiler evidence, then run readiness/obligation/provider assertions. Native-signature and TLS cases run in the fresh CI lane; the existing missing TLS consumer provider branch remains a visible failure. |
 
 `exporter/tests/compare_shared_graph.py`, `compare_source126_compact.py` and
-`check_runtime_type_closure.py` are additional argument-driven helpers. Read their
-interfaces and supply matching inputs; merely placing them under `tests/` does
-not schedule them.
+`check_runtime_type_closure.py` are argument-driven helpers. The fresh CI lane
+exports the runtime-type closure fixture and runs its helper; shared-graph and
+source126 comparison helpers still need explicit matching inputs. See
+[CI coverage](../tools/ci/README.md) and the
+[upstream UI contract](upstream_ui/README.md) for scheduled entry points.
 
 ## Choosing checks after a change
 

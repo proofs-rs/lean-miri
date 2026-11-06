@@ -5,7 +5,7 @@ import Miri.Input.NativeMathHost
 /-! Standalone source run harness draft. It enters through
 EvalSourceRunFinalization.runFromSourceAndFinalize. Host operations that this
 fixture cannot perform remain demand-local Unsupported outcomes. -/
-open Miri Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
+open Lean Miri Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
 
 private abbrev Os := ByteArray
 private abbrev R := Unit
@@ -269,6 +269,36 @@ private def summarize (result : Input.EvalSourceRunFinalization.Result OuterStat
   | .failed state error => s!"failed {reprStr error}; {stateInfo state}"
   | .pending state cause => s!"pending {reprStr cause}; {stateInfo state}"
 
+/-- Diagnostics use the stopped frames' exact MIR source spans. This is separate
+from the allocation span hooks and does not change interpreter execution. -/
+private def terminalDiagnostic (prepared : Input.EvalPreparation.Prepared)
+    (result : Input.EvalSourceRunFinalization.Result OuterState) : Lean.Json := Id.run do
+  let (kind, error, state) := match result with
+    | .finished state code => ("exit", toString code, state)
+    | .undefinedBehavior state error => ("ub", reprStr error, state)
+    | .unsupported state error => ("unsupported", reprStr error, state)
+    | .failed state error => ("failed", reprStr error, state)
+    | .pending state cause => ("pending", reprStr cause, state)
+  let frames := state.stack.frames.map fun frame => Id.run do
+    let span? : Option SpanRef := match frame.location with
+      | .unwinding span => some span
+      | .mir location => do
+        let block ← frame.body.basicBlocks[location.block]?
+        if location.statementIndex == block.statements.size then
+          some block.terminator.sourceInfo.span
+        else do
+          let statement ← block.statements[location.statementIndex]?
+          pure statement.sourceInfo.span
+    let source? := span?.bind fun span => prepared.compiler.program.bundle.spans[span.id]?
+    return match source? with
+    | none => Lean.Json.null
+    | some source => Lean.Json.mkObj [
+        ("file", toJson source.file), ("line", toJson source.start.line),
+        ("end_line", toJson source.«end».line), ("column", toJson source.start.column),
+        ("lo", toJson source.lo), ("hi", toJson source.hi)]
+  return Lean.Json.mkObj [("kind", toJson kind), ("detail", toJson error),
+    ("frames", .arr frames)]
+
 private def prepareRun (prepared : Input.EvalPreparation.Prepared)
     (initialMemory : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind)
     (pageSize : UInt64) (numCpus hostPid : UInt32) (diagnosticSeed : Option UInt64)
@@ -413,6 +443,13 @@ private def captureLinuxProfile : IO (UInt64 × UInt32) := do
   pure (UInt64.ofNat page, UInt32.ofNat cpu)
 
 def main (args : List String) : IO Unit := do
+  if let ["--fingerprint", path] := args then
+    let bytes ← IO.FS.readBinFile path
+    let hash := bytes.foldl (fun (hash : UInt64) byte =>
+      (hash ^^^ UInt64.ofNat byte.toNat) * 0x100000001b3) 0xcbf29ce484222325
+    IO.println s!"upstream_fingerprint: {(Lean.Json.mkObj [
+      ("byte_length", toJson bytes.size), ("fnv1a64", toJson hash.toNat)]).compress}"
+    return
   let profileEnabled := args.getLast? == some "--profile"
   let args := if profileEnabled then args.dropLast else args
   let profile := if profileEnabled then
@@ -452,6 +489,14 @@ def main (args : List String) : IO Unit := do
     s!"fnInstance={reprStr row.fnInstance}, sourceInstanceId={row.sourceInstanceId}, bodyIndex={row.bodyIndex}"
   boundary s!"canonical_body_1814: {reprStr bodySource}; source_rows={reprStr sourceRows}; call_rows={reprStr callRows}"
   let (pageSize,numCpus) ← captureLinuxProfile
+  IO.println s!"upstream_profile: {(Lean.Json.mkObj [
+    ("num_cpus", toJson numCpus.toNat),
+    ("environment_policy", toJson ("empty" : String)),
+    ("argv0", toJson ("/workspace/lean-miri/scratch/main31.rs" : String)),
+    ("float_nondeterminism", toJson options.floatNondeterministic),
+    ("cmpxchg_weak_failure_rate_bits", toJson options.weakFailureRate.toNat),
+    ("short_fd_operations", toJson false),
+    ("choice_policy", toJson (choiceMode diagnosticSeed))]).compress}"
   let hostPid ← IO.Process.getPID
   boundary "run: start"
   let (execute, checkValidationMismatch) ← must
@@ -470,6 +515,7 @@ def main (args : List String) : IO Unit := do
       boundary s!"consumed_tape={reprStr state.machine.user.user.payload.payload.choices.inputs}"
       boundary s!"choice_events={reprStr state.machine.user.user.payload.payload.choices.events}"
       boundary s!"run: {summarize result}"
+      IO.println s!"upstream_result: {(terminalDiagnostic prepared result).compress}"
     match result with
     | .failed state (.callback message) =>
       let some repair := choiceRepair message | return ← finish state
