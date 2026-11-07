@@ -128,4 +128,4 @@ def main (args : List String) : IO Unit := do
   IO.println "ReferenceValidationChecks: passed"
 
 #print axioms Miri.Input.ReferenceValidation.TableRef.exists_in_source
-#print axioms Miri.Input.ReferenceValidation.Checked.forSource
+#print axioms Miri.Input.ReferenceValidation.validateUsing

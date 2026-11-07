@@ -196,7 +196,7 @@ deriving instance ToExpr for Input.SourceAllocIdProbeOutcome
 deriving instance ToExpr for Input.SourceAllocIdSaltResult
 deriving instance ToExpr for Input.SourceAllocIdDedupRow
 deriving instance ToExpr for Input.CompilerAllocIdWorld
--- Reflection keeps schema data; runtime validation witnesses are not quoted.
+-- IO validation must not become a trusted reflected proof premise.
 instance : ToExpr Input.ImportDocument where
   toTypeExpr := mkConst ``Input.ImportDocument
   toExpr document :=

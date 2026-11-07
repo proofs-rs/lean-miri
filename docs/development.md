@@ -207,69 +207,49 @@ UB-freedom proof and axiom audit.
 
 ## Reference validation
 
-`ReferenceValidation.validate` checks references in the resolved JSON document
-and returns evidence tied to that source. Global references retain their source
-ID, table position and row-ID equality proof, including permuted dense tables.
-Local and block references retain a body scope and bounds proofs. Missing and
-unsupported compiler facts remain separate from reference existence; allocation
-liveness, provenance and permissions remain runtime checks.
+The reader parses JSON, resolves shared payloads, validates references, and
+constructs MIR input. `ForSource` ties the validation result to its JSON source.
+`ProgramShape` bounds global IDs; `BodyShape` bounds local and block IDs.
+Checked MIR references are `Fin` values, and each body proves that its local and
+block arrays have the declared lengths. Lowering consumes these values directly.
+The interpreter's MIR and frames currently use Nat IDs.
 
-`CheckedConstruction` builds MIR bodies from the validated JSON body tables.
-`TypedValue`, `LocalDecl` and `BasicBlock` carry a `ReferenceContext`: checked
-references are `Fin` values, and each body retains equalities between its actual
-local/block array lengths and its `BodyShape`. `ProgramShape` supplies the global
-ID bounds. A global ID is not the row position in a permuted source table;
-`TableRef` separately retains that position and its row-ID equality proof.
+Global source IDs may appear in any row order. `TableRef` records their row
+position and row-ID equality separately. `Fin n` proves a range; table identity
+still requires correspondence. Exporter/importer/lowering correspondence is part
+of the input trust boundary. Reflection quotes kernel-checked bounds and array
+length proofs without treating IO validation success as a proof premise.
 
-The full diagnostic JSON projection remains raw. Reflected MIR constants retain
-their `Fin` bounds and body length proofs as kernel-checked constructor terms;
-the runtime validator success witness is not quoted. The validator runs before
-schema construction, so malformed inputs can report a different first error.
-
-Lowering retains the checked input body but converts its values to the existing
-Nat-based backend representation. Its existing constructed-MIR checks remain.
-This phase does not establish array-indexed backend/evaluator access, nor does
-a size-indexed `Fin` distinguish two independently constructed tables of equal
-size. It adds no axiom or native proof oracle.
-
-The common validator covers these source references:
-
-| Family | JSON form | Checked MIR input representation |
+| Reference | JSON form | Checked MIR input |
 | --- | --- | --- |
-| Type | `{type_id: n}` | `TypedValue.typeRef`, `LocalDecl.typeId` |
-| Allocation | `{allocation_id: n}` | `TypedValue.allocationRef` |
-| Instance | Numeric `instance_id` | `TypedValue.instanceRef` |
-| Local | MIR `local`, projection `Index.local`, body `spread_arg` | `TypedValue.localRef`, `BodyCore.spreadArgument` |
-| Block | `block`, `target`, `otherwise`, `real_target`, `imaginary_target`, `resume`; `SwitchInt.targets[].target`; `Drop.async_drop`; `Yield.drop`; `Cleanup.target`; `InlineAsm.targets[]` | `TypedValue.blockRef` |
+| Type | `{type_id: n}` | `typeRef`, `LocalDecl.typeId` |
+| Allocation | `{allocation_id: n}` | `allocationRef` |
+| Instance | Numeric `instance_id` | `instanceRef` |
+| Local | `local`, projection `Index.local`, `spread_arg` | `localRef`, `spreadArgument` |
+| Block | `block`, `target`, `otherwise`, `real_target`, `imaginary_target`, `resume`; `SwitchInt.targets[].target`; `Drop.async_drop`; `Yield.drop`; `Cleanup.target`; `InlineAsm.targets[]` | `blockRef` |
 
-Type/allocation references use the singleton-object syntax above. Bare numeric
-aliases such as `compiler_runtime_queries.types[].input_type_id`,
-`original_instance_id`, `vtable_allocation_id` and `covered_allocation_ids`
-retain their existing individual checks. The validator skips `debug_payload`; other unsupported/unresolved nodes
-are not skipped wholesale. Reference existence supplies no missing semantic fact.
+Type/allocation references use singleton objects. Definition keys remain Nat IDs.
+`debug_payload` is diagnostic data; other unsupported/unresolved payloads still
+undergo reference checks when they contain references. Existence does not supply
+missing compiler facts, allocation liveness, provenance or permissions.
 
-Other identities retain their existing representations and checks:
+Other identities use their domain-specific checks:
 
-| Family | Current boundary; additional work for checked indices |
+| Domain | Fields / ownership |
 | --- | --- |
-| Shared payloads | `$lean_miri_shared_ref` refers to the position in `shared_payloads.nodes`; the existing transport resolver checks its schema and predecessor bounds. Retaining these as `Fin` node references would change that transport boundary. |
-| Rust definitions and HIR | `def_id`, `source_def_id`, `trait_def_id`, `{crate,index}`, `hir_id.owner_def_id/local_id`. These source identities are sparse; bounded references need an explicit emitted/interned table and unresolved cases. |
-| Rust allocations | `source_alloc_id`, raw pool/frontier/sentinel IDs, `opaque_allocation_id`, `key_allocation_id`. `parseCompilerAllocIdWorld` checks the captured nonzero-u64 pool, graph correspondence and dedup data. Typed snapshot references must remain separate from dynamic allocation lifetime and permissions. |
-| Compiler queries | `predicate_id`, predicate normalization IDs, `query_id`, `candidate_query_ids`, `input_type_id`, `original_instance_id`, `vtable_allocation_id`, `covered_allocation_ids`. Their existing compiler metadata checks remain; checked references need the corresponding predicate/query/global table shape. Diagnostic sidecar query origins are separate from the normal input wire. |
-| Body source and promoted metadata | Source `scope`, `parent`, `inlined_parent_scope`, `source_promoted`, `promoted`, `promoted_index`. Checked indices need the owning body's scope/promoted table lengths and correspondence. |
-| Type-dependent positions | Field/variant indices, `active_union_field`, `tag_field_index`, `untagged_variant`, user projection `base_index`, generic parameter indices, binder `debruijn_index/variable_index`, placeholder `universe`, and virtual `dispatch_slot`/supertrait slots. These need their owning type/layout/binder shape rather than a single global ID bound. |
-| Instruction-local positions | Inline assembly `operand_index` and label `target_index`, and ABI argument positions. Checked indices need the specific instruction/ABI arrays. |
-| Coverage/diagnostic identities | Coverage block-marker `id`, virtual-counter `bcb`, diagnostic iteration/query-origin indices. These are not the MIR basic-block table and require separate domains if used as references. |
+| Shared payloads | `$lean_miri_shared_ref` indexes `shared_payloads.nodes`; the transport resolver checks predecessor bounds and shape. |
+| Rust definitions/HIR | `def_id`, `source_def_id`, `trait_def_id`, `{crate,index}`, `hir_id.owner_def_id/local_id`; source IDs are sparse. |
+| Rust allocations | `source_alloc_id`, pool/frontier/sentinel, `opaque_allocation_id`, `key_allocation_id`; `parseCompilerAllocIdWorld` checks snapshot correspondence. Dynamic lifetime and permissions remain separate. |
+| Compiler metadata | `predicate_id`, normalization IDs, `query_id`, `candidate_query_ids`, `input_type_id`, `original_instance_id`, `vtable_allocation_id`, `covered_allocation_ids`; compiler preparation and demand checks apply. |
+| Body metadata | `scope`, `parent`, `inlined_parent_scope`, `source_promoted`, `promoted`, `promoted_index`; owned by their body/scope tables. |
+| Type/binder positions | Field/variant indices, `active_union_field`, `tag_field_index`, `untagged_variant`, user projection `base_index`, generic indices, `debruijn_index/variable_index`, `universe`, `dispatch_slot`/supertrait slots; their bounds depend on the owning type, binder or vtable. |
+| Instruction positions | Assembly `operand_index`/`target_index`, ABI argument positions; owned by the instruction/ABI arrays. |
+| Coverage/diagnostics | Block-marker `id`, counter `bcb`, iteration/query-origin indices; separate from MIR basic blocks. |
 
-The current wire does not supply a typed HIR/coverage node universe, and
-`user_type_annotations` is a debug payload. Checking references into such tables
-requires additional exporter evidence; binder indices need their binder-stack
-context. The exporter's temporary `_query_key` is removed before wire emission.
+The wire has no typed HIR/coverage node universe and stores
+`user_type_annotations` as debug data. Bounds for these references require
+exporter evidence. Binder indices require a binder stack. `type_id_hash`, array
+offsets, lengths and counts are values rather than ID-table references.
 
-Structured type/allocation/query metadata and the backend still retain Nat IDs,
-even when their source JSON references were checked. Intrinsic `type_id_hash`,
-array offsets, lengths and counts are values, not references into these ID tables.
-
-Run `bash tools/check-reference-validation.sh [INPUT.json ...]` for validator
-checks, scope isolation, optional control-flow edges, checked-reference retention
-through lowering, and the selected witness declarations' axiom audit.
+Run `bash tools/check-reference-validation.sh [INPUT.json ...]` for bounds,
+scope isolation, optional control-flow edges and reader/lowering checks.

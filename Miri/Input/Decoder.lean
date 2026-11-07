@@ -1416,7 +1416,7 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     obligations := obligations
     raw := j
     sharedNodes := resolved.nodes
-    checkedReferences := some (checkedReferences.forSource j rfl)
+    checkedReferences := some checkedReferences
     compilerFunctionAbiTable := some compilerFunctionAbiTable
     compilerValueMemo := if runtimeOnly then some (profileit "decoder.compiler_values" profile fun _ =>
       prepareCompilerValueMemoUsing resolved.nodes memo) else none

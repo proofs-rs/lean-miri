@@ -339,29 +339,19 @@ private def run (node : JsonTraversalCache.Node) : Except String Summary := do
   let globals ← validateReferencesAux node "$" indices {}
   return ⟨tables, globals.references, bodies, typeIndex, allocationIndex, instanceIndex⟩
 
-structure Checked (node : JsonTraversalCache.Node) where
-  private mk ::
-  summary : Summary
-  exact : run node = .ok summary
-
-def Checked.source (_checked : Checked node) : Json := node.value
-
 /-- The existential witness avoids retaining the traversal cache at runtime. -/
 structure ForSource (source : Json) where
   summary : Summary
   exact : ∃ node, node.value = source ∧ run node = .ok summary
 
-def Checked.forSource (checked : Checked node) (source : Json) (same : node.value = source) :
-    ForSource source :=
-  ⟨checked.summary, ⟨node, same, checked.exact⟩⟩
+def ForSource.source {source : Json} (_checked : ForSource source) : Json := source
 
-def validateUsing (node : JsonTraversalCache.Node) : Except String (Checked node) :=
+def validateUsing (node : JsonTraversalCache.Node) : Except String (ForSource node.value) :=
   match checked : run node with
   | .error error => .error error
-  | .ok summary => .ok ⟨summary, checked⟩
+  | .ok summary => .ok ⟨summary, ⟨node, rfl, checked⟩⟩
 
-def validate (source : Json) : Except String (ForSource source) := do
-  let checked ← validateUsing (.uncached source)
-  return checked.forSource source rfl
+def validate (source : Json) : Except String (ForSource source) :=
+  validateUsing (.uncached source)
 
 end Miri.Input.ReferenceValidation

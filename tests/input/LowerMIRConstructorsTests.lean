@@ -6,7 +6,7 @@ open Miri Input
 private def must (value : Except String α) : IO α :=
   match value with | .ok v => pure v | .error e => throw (IO.userError e)
 
-private partial def containsProbe : TypedValue → Bool
+private partial def containsProbe : TypedValue context → Bool
   | .array values => values.any containsProbe
   | .object fields => fields.any fun (key, value) =>
       (key == "kind" && value == .scalar (.str "symbolic_vtable_allocation")) || containsProbe value
@@ -15,7 +15,7 @@ private partial def containsProbe : TypedValue → Bool
       fields.any fun (_, value) => containsProbe value
   | _ => false
 
-private partial def mutateProbeStatus : TypedValue → TypedValue
+private partial def mutateProbeStatus : TypedValue context → TypedValue context
   | .array values => .array (values.map mutateProbeStatus)
   | .object fields =>
       let isProbe := fields.any fun (key, value) =>
@@ -102,12 +102,21 @@ def main (args : List String) : IO Unit := do
   let path ← match args with | path :: _ => pure path | [] => throw (IO.userError "expected compiler fixture path")
   let decoded ← must (decodeJson (← IO.FS.readFile path))
   let some original := decoded.document.bodies[0]? | throw (IO.userError "empty bodies")
-  let some first := original.blocks[0]? | throw (IO.userError "empty blocks")
+  let source ← must (DecoderValues.parseBodyCore original.payload original.sourcePath original.defPath)
+  let ⟨.raw, _, _, _, _, _, _, spread, locals, blocks, _, _, _⟩ := source
+    | throw (IO.userError "expected unbounded compiler syntax")
+  let source := { source with
+    context := .raw
+    spreadArgument := spread
+    locals := locals
+    blocks := blocks
+    aligned := by trivial }
+  let some first := source.blocks[0]? | throw (IO.userError "empty blocks")
   let info := first.terminator.sourceInfo
-  let some decl := original.locals[0]? | throw (IO.userError "empty locals")
+  let some decl := source.locals[0]? | throw (IO.userError "empty locals")
   let ty := decl.typeId
   let ctx := LowerContext.ofTypes decoded.document.types
-  let input := { original.toBodyCore with argumentCount := 0, spreadArgument := none }
+  let input := { source with argumentCount := 0, spreadArgument := none }
   let lower (ss : Array MirNode) (term : TypedValue) := lowerBody ctx { input with blocks := #[{ first with id := 0, statements := ss, terminator := ⟨term, info⟩ }] }
   for (kind, fs) in rvalues ty do
     let _ ← must (lower #[⟨.statement .assign .supported #[("place", pl), ("rvalue", .rvalue kind .supported fs)], info⟩] (.terminator .return .supported #[]))
@@ -175,6 +184,7 @@ def main (args : List String) : IO Unit := do
   for lowered in program.bundle.bodies do
     unless lowered.definitions == program.bundle.definitions && lowered.typeConstants == program.bundle.typeConstants && lowered.spans == program.bundle.spans do
       throw (IO.userError "identity seeding rewrote shared constant/span tables inconsistently")
+  IO.println "constructor branches and compiler identity cases passed"
   let probeInstance? := decoded.document.instances.find? fun instNode =>
     match instNode.body with
     | some body => body.blocks.any fun block =>
@@ -182,12 +192,14 @@ def main (args : List String) : IO Unit := do
     | none => false
   let some probeInstance := probeInstance? | throw (IO.userError "fixture has no exact vtable probe to mutate")
   let some probeBody := probeInstance.body | throw (IO.userError "probe instance body disappeared")
-  let mutatedCore := { probeBody.toBodyCore with blocks := probeBody.blocks.map fun block =>
+  let mutatedCore := { probeBody.toBodyCore with
+    blocks := probeBody.blocks.map (fun block =>
     { block with
       statements := block.statements.map fun node => { node with value := mutateProbeStatus node.value }
-      terminator := { block.terminator with value := mutateProbeStatus block.terminator.value } } }
+      terminator := { block.terminator with value := mutateProbeStatus block.terminator.value } })
+    aligned := by simpa using probeBody.aligned }
   let mutatedLowering ← must (lowerBody (LowerContext.ofDocument decoded.document) mutatedCore)
   unless mutatedLowering.obligations.any (fun obligation =>
       obligation.message == "compiler metadata status remains unsupported") do
-    throw (IO.userError "mutated typed MIR inherited a raw-document vtable-probe exemption")
+    throw (IO.userError s!"mutated typed MIR inherited a raw-document vtable-probe exemption: {reprStr mutatedLowering.obligations}")
   IO.println "all 13 rvalue, 12 statement, 15 terminator source constructor branches lowered; typed metadata and execution obligations retained"

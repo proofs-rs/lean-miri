@@ -31,7 +31,7 @@ def main (args : List String) : IO Unit := do
   let ctx := LowerContext.ofTypes decoded.document.types
   let lowered ← must (lowerBody ctx input)
   check (lowered.body.argumentCount == input.argumentCount) "argument count lost"
-  check (lowered.body.spreadArgument == input.spreadArgument) "spread argument lost"
+  check (lowered.body.spreadArgument == input.spreadArgument.map (ReferenceContext.toNat (context := input.context) (kind := .local))) "spread argument lost"
   check (lowered.body.basicBlocks.size == input.blocks.size) "blocks lost"
   check (!lowered.spans.isEmpty) "actual source spans were not interned"
   check (lowered.spans.all fun s => !s.originalPayload.isEmpty) "source payload was discarded"
@@ -45,13 +45,23 @@ def main (args : List String) : IO Unit := do
   check ((lowerBody (ctx.withScalarSizes #[]) input).isOk == false) "missing scalar width accepted"
   check ((lowerBody ctx { input with phase := .scalar (.str "unknown") }).isOk == false) "unknown phase accepted"
   check ((lowerBody ctx { input with sourceScopes := none }).isOk == false) "missing source metadata accepted"
-  check ((lowerBody ctx { input with spreadArgument := some input.locals.size }).isOk == false) "out-of-range spread argument accepted"
+  let raw ← must (DecoderValues.parseBodyCore input.payload input.sourcePath input.defPath)
+  let ⟨.raw, _, _, _, _, _, _, spread, locals, blocks, _, _, _⟩ := raw
+    | throw (IO.userError "expected unbounded compiler syntax")
+  let raw := { raw with
+    context := .raw
+    spreadArgument := spread
+    locals := locals
+    blocks := blocks
+    aligned := by trivial }
+  check ((lowerBody ctx { raw with spreadArgument := some raw.locals.size }).isOk == false) "out-of-range spread argument accepted"
   let first ← match input.blocks[0]? with
     | some b => pure b
     | none => throw (IO.userError "empty fixture")
   let bad := { first with terminator := { first.terminator with value := .terminator (.unknown "future") .supported #[] } }
-  check ((lowerBody ctx { input with blocks := input.blocks.set! 0 bad }).isOk == false) "unknown terminator accepted"
-  let outOfRange := { first with terminator := { first.terminator with
-    value := .terminator .falseEdge .supported #[("real_target", .blockRef input.blocks.size), ("imaginary_target", .blockRef 0)] } }
-  check ((lowerBody ctx { input with blocks := input.blocks.set! 0 outOfRange }).isOk == false) "out-of-range CFG edge accepted"
+  check ((lowerBody ctx { input with blocks := input.blocks.set! 0 bad, aligned := by simpa using input.aligned }).isOk == false) "unknown terminator accepted"
+  let rawFirst : BasicBlock .raw ← match raw.blocks[0]? with | some block => pure block | none => throw (IO.userError "empty raw fixture")
+  let outOfRange := { rawFirst with terminator := { rawFirst.terminator with
+    value := .terminator .falseEdge .supported #[("real_target", .blockRef raw.blocks.size), ("imaginary_target", .blockRef 0)] } }
+  check ((lowerBody ctx { raw with blocks := raw.blocks.set! 0 outOfRange }).isOk == false) "out-of-range CFG edge accepted"
   IO.println s!"add_one lowered: {lowered.body.basicBlocks.size} blocks, {lowered.spans.size} actual spans; negative metadata/phase/constructor checks passed"
