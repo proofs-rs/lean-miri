@@ -213,7 +213,7 @@ open Miri Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
 set_option autoImplicit false
 variable {K U : Type}
  theorem localSpan_known (p : CompilerProviders.Prepared) (body : LoadedBody) (actual : LoweredBody)
-    (fnInstance : CallInstance) (decl : LocalDecl) (span : SpanRef)
+    (fnInstance : CallInstance) (decl : LocalDecl actual.input.context) (span : SpanRef)
     (row : p.program.bundle.bodies[body.identity.index]? = some actual)
     (contents : actual.body = body.body)
     (loader : CallResolution.loadedBodyOfInstance p.lifecycle.calls.calls fnInstance = .ok body)

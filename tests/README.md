@@ -365,5 +365,6 @@ lowering agreement and source paths for root, instance and promoted bodies.
 The default input is the fixed empty-function fixture.
 
 `bash tools/check-reference-validation.sh [INPUT.json ...]` checks permuted
-source IDs, dangling-reference diagnostics and evidence retention in both
-reader views. Existing decoder-ID fixtures cover the diagnostic boundary.
+source IDs, dangling references, body-scope isolation and optional control-flow
+edges. It also checks that both reader modes retain checked references and body
+array lengths through lowering. Existing decoder-ID fixtures cover diagnostics.

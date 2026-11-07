@@ -490,28 +490,28 @@ def parseUserTypeProjection (j : Json) (path : String) : Except String UserTypeP
     throw s!"{path}: supported user-type projection is missing base index or projection sequence"
   return ⟨status, baseIndex, projections, j⟩
 
-abbrev DecodeValueM := StateT (Std.HashMap DecodeValueKey TypedValue) (Except String)
+abbrev DecodeValueM (context : ReferenceContext := .raw) := StateT (Std.HashMap DecodeValueKey (TypedValue context)) (Except String)
 
 mutual
-partial def decodeValueM (j : Json) (path : String) (domain : Domain)
-    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : DecodeValueM TypedValue := do
+partial def decodeValueM {context : ReferenceContext} (resolve : ReferenceContext.Resolver context) (j : Json) (path : String) (domain : Domain)
+    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : DecodeValueM context (TypedValue context) := do
   let key := decodeValueKey j path domain tagCategory
   if let some value := (← get).get? key then return value
-  let value ← decodeValueBody j path domain tagCategory memo
+  let value ← decodeValueBody resolve j path domain tagCategory memo
   modify fun cache => cache.insert key value
   return value
 
-partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
-    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : DecodeValueM TypedValue := do
-  if let some id := isTypeRef j then return .typeRef id
-  if let some id := isAllocationRef j then return .allocationRef id
+partial def decodeValueBody {context : ReferenceContext} (resolve : ReferenceContext.Resolver context) (j : Json) (path : String) (domain : Domain)
+    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : DecodeValueM context (TypedValue context) := do
+  if let some id := isTypeRef j then return .typeRef (← resolve .type id)
+  if let some id := isAllocationRef j then return .allocationRef (← resolve .allocation id)
   if statusOf? j == some "debug_payload" then return .diagnostic j
   match j with
   | .arr values =>
     let mut decoded := #[]
     let mut index := 0
     for value in values do
-      decoded := decoded.push (← decodeValueM value s!"{path}[{index}]" domain tagCategory memo)
+      decoded := decoded.push (← decodeValueM resolve value s!"{path}[{index}]" domain tagCategory memo)
       index := index + 1
     return .array decoded
   | .obj _ =>
@@ -540,19 +540,33 @@ partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
           match unOpFromExportTag tag with
           | some op => pure (.unOperator op status)
           | none => pure (.unknownUnOperator tag status)
-        else decodeValueM value (joinPath path key) nextDomain (typedEnumCategory? key path parentTag value) memo
+        else if key == "targets" && parentTag == some "InlineAsm" && context != .raw then do
+          let targets ← value.getArr? |>.mapError fun e => s!"{joinPath path key}: expected target array ({e})"
+          let values ← targets.mapIdxM fun index target => do
+            let id ← target.getNat? |>.mapError fun e => s!"{joinPath path key}[{index}]: expected basic-block index ({e})"
+            return TypedValue.blockRef (← resolve .block id)
+          pure (.array values)
+        else decodeValueM resolve value (joinPath path key) nextDomain (typedEnumCategory? key path parentTag value) memo
       let isTagField := match effectiveDomain with
         | .statement | .terminator | .rvalue | .operand | .projection => key == "status" || key == "variant" || key == "kind"
         | _ => false
-      let decoded := match key, value with
+      let decoded ← match key, value with
         | "instance_id", .num _ =>
-          match value.getNat? with | .ok id => .instanceRef id | .error _ => decoded
+          match value.getNat? with | .ok id => pure (.instanceRef (← resolve .instance id)) | .error _ => pure decoded
         | "local", .num _ =>
-          match value.getNat? with | .ok id => .localRef id | .error _ => decoded
+          match value.getNat? with | .ok id => pure (.localRef (← resolve .local id)) | .error _ => pure decoded
+        | "async_drop", .num _ =>
+          if parentTag == some "Drop" then
+            match value.getNat? with | .ok id => pure (.blockRef (← resolve .block id)) | .error _ => pure decoded
+          else pure decoded
+        | "drop", .num _ =>
+          if parentTag == some "Yield" then
+            match value.getNat? with | .ok id => pure (.blockRef (← resolve .block id)) | .error _ => pure decoded
+          else pure decoded
         | "block", .num _ | "target", .num _ | "otherwise", .num _
         | "real_target", .num _ | "imaginary_target", .num _ | "resume", .num _ =>
-          match value.getNat? with | .ok id => .blockRef id | .error _ => decoded
-        | _, _ => decoded
+          match value.getNat? with | .ok id => pure (.blockRef (← resolve .block id)) | .error _ => pure decoded
+        | _, _ => pure decoded
       if !isTagField then decodedFields := decodedFields.push (key, decoded)
     match effectiveDomain with
     | .statement =>
@@ -588,9 +602,14 @@ partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
   | _ => return .scalar j
 end
 
+def decodeValueUsing (context : ReferenceContext) (resolve : ReferenceContext.Resolver context)
+    (j : Json) (path : String) (domain : Domain := .any)
+    (tagCategory : Option TypedEnumTag := none) (memo : DecodeMemo := {}) : Except String (TypedValue context) := do
+  (decodeValueM resolve j path domain tagCategory memo).run' {}
+
 def decodeValue (j : Json) (path : String) (domain : Domain := .any)
-    (tagCategory : Option TypedEnumTag := none) (memo : DecodeMemo := {}) : Except String TypedValue := do
-  (decodeValueM j path domain tagCategory memo).run' {}
+    (tagCategory : Option TypedEnumTag := none) (memo : DecodeMemo := {}) : Except String TypedValue :=
+  decodeValueUsing .raw ReferenceContext.rawResolver j path domain tagCategory memo
 
 def statusObligation? (status : PayloadStatus) (path : String) : Option Obligation :=
   match status with
@@ -961,10 +980,10 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
     (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : RuntimeDecodeM RuntimeValueDecode := do
   let j := node.value
   if let some id := isTypeRef j then
-    let value := TypedValue.typeRef id
+    let value := TypedValue.typeRef (context := .raw) id
     return ⟨value, runtimeLocalObligations value path⟩
   if let some id := isAllocationRef j then
-    let value := TypedValue.allocationRef id
+    let value := TypedValue.allocationRef (context := .raw) id
     return ⟨value, runtimeLocalObligations value path⟩
   if statusOf? j == some "debug_payload" then
     let value := TypedValue.diagnostic j
@@ -1036,15 +1055,15 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
           path.endsWith ".hir_id" && (key == "owner_def_id" || key == "local_id")) then
         let childSummary := match key, value with
           | "instance_id", .num _ => match value.getNat? with
-            | .ok id => TypedValue.instanceRef id
+            | .ok id => TypedValue.instanceRef (context := .raw) id
             | .error _ => runtimeSummaryChild key child.summary
           | "local", .num _ => match value.getNat? with
-            | .ok id => TypedValue.localRef id
+            | .ok id => TypedValue.localRef (context := .raw) id
             | .error _ => runtimeSummaryChild key child.summary
           | "block", .num _ | "target", .num _ | "otherwise", .num _
           | "real_target", .num _ | "imaginary_target", .num _ | "resume", .num _ =>
             match value.getNat? with
-            | .ok id => TypedValue.blockRef id
+            | .ok id => TypedValue.blockRef (context := .raw) id
             | .error _ => runtimeSummaryChild key child.summary
           | _, _ => runtimeSummaryChild key child.summary
         summaries := summaries.push (key, childSummary)
@@ -2402,19 +2421,10 @@ def parseBasicBlock (j : Json) (path : String) (memo : DecodeMemo := {}) : Excep
     payload := j
   }
 
-def parseBodyCore (j : Json) (path fallbackName : String) (memo : DecodeMemo := {}) : Except String BodyCore := do
-  let localsJson ← arrayField j "locals" path
-  let mut locals := #[]
-  let mut index := 0
-  for localDecl in localsJson do
-    locals := locals.push (← parseLocal localDecl s!"{joinPath path "locals"}[{index}]" memo)
-    index := index + 1
-  let blocksJson ← arrayField j "basic_blocks" path
-  let mut blocks := #[]
-  index := 0
-  for block in blocksJson do
-    blocks := blocks.push (← parseBasicBlock block s!"{joinPath path "basic_blocks"}[{index}]" memo)
-    index := index + 1
+def parseBodyEnvelope (context : ReferenceContext) (resolve : ReferenceContext.Resolver context)
+    (j : Json) (path fallbackName : String) (locals : Array (LocalDecl context))
+    (blocks : Array (BasicBlock context)) (aligned : context.Aligned locals.size blocks.size)
+    (memo : DecodeMemo := {}) : Except String BodyCore := do
   let defPath ← optionalString j "def_path" path
   let definitionId ← match optionalJson j "def_id" with
     | none => match optionalJson j "source_def_id" with
@@ -2429,20 +2439,38 @@ def parseBodyCore (j : Json) (path fallbackName : String) (memo : DecodeMemo := 
     | none => pure none
     | some value => some <$> jsonArray value (joinPath path "source_scopes")
   return {
+    context := context
     sourcePath := path
     defPath := match defPath with | some name => name | none => fallbackName
     definitionId := definitionId
     phase := phase
     injectionPhase := injectionPhase
     argumentCount := ← fieldNat j "arg_count" path
-    spreadArgument := ← optionalNat j "spread_arg" path
+    spreadArgument := ← (← optionalNat j "spread_arg" path).mapM (resolve .local)
     locals := locals
     blocks := blocks
     sourceScopes := sourceScopes
     payload := j
+    aligned := aligned
   }
 
-def parsePromotedBodies (j : Json) (path fallbackName : String) (memo : DecodeMemo := {}) : Except String (Array PromotedBody) := do
+def parseBodyCore (j : Json) (path fallbackName : String) (memo : DecodeMemo := {}) : Except String BodyCore := do
+  let localsJson ← arrayField j "locals" path
+  let mut locals := #[]
+  let mut index := 0
+  for localDecl in localsJson do
+    locals := locals.push (← parseLocal localDecl s!"{joinPath path "locals"}[{index}]" memo)
+    index := index + 1
+  let blocksJson ← arrayField j "basic_blocks" path
+  let mut blocks := #[]
+  index := 0
+  for block in blocksJson do
+    blocks := blocks.push (← parseBasicBlock block s!"{joinPath path "basic_blocks"}[{index}]" memo)
+    index := index + 1
+  parseBodyEnvelope .raw ReferenceContext.rawResolver j path fallbackName locals blocks (by trivial) memo
+
+def parsePromotedBodies (j : Json) (path fallbackName : String) (memo : DecodeMemo := {})
+    (coreParser : Json → String → String → DecodeMemo → Except String BodyCore := fun j path name memo => parseBodyCore j path name memo) : Except String (Array PromotedBody) := do
   let promotedJson ← match optionalJson j "promoted_bodies" with
     | none => pure #[]
     | some value => jsonArray value (joinPath path "promoted_bodies")
@@ -2457,7 +2485,7 @@ def parsePromotedBodies (j : Json) (path fallbackName : String) (memo : DecodeMe
       | some value => parseStatus <$> (value.getStr? |>.mapError fun e => s!"{joinPath promotedPath "status"}: expected string ({e})")
     let body ← match optionalJson entry "body" with
       | none => pure none
-      | some value => pure (some (← parseBodyCore value (joinPath promotedPath "body") s!"{fallbackName}::promoted[{promotedIndex}]" memo))
+      | some value => pure (some (← coreParser value (joinPath promotedPath "body") s!"{fallbackName}::promoted[{promotedIndex}]" memo))
     promotedBodies := promotedBodies.push ⟨promotedIndex, status, body, entry⟩
   return promotedBodies
 
@@ -2466,7 +2494,9 @@ def parseBody (j : Json) (path fallbackName : String) (memo : DecodeMemo := {}) 
   let promotedBodies ← parsePromotedBodies j path fallbackName memo
   return { core with promotedBodies := promotedBodies }
 
-def parseInstance (j : Json) (path : String) : Except String InstanceNode := do
+def parseInstance (j : Json) (path : String)
+    (bodyParser : Json → String → String → Except String Body := fun j path name => parseBody j path name)
+    (promotedParser : Json → String → String → Except String (Array PromotedBody) := fun j path name => parsePromotedBodies j path name) : Except String InstanceNode := do
   let kindText ← fieldString j "kind" path
   let kind := match kindText with
     | "instance_mir" => .instanceMir
@@ -2498,8 +2528,8 @@ def parseInstance (j : Json) (path : String) : Except String InstanceNode := do
     | some value => (value.getBool?).map some |>.mapError fun e => s!"{joinPath path "instance_args_are_monomorphic"}: expected boolean ({e})"
   let body ← match optionalJson j "body" with
     | none => pure none
-    | some value => pure (some (← parseBody value (joinPath path "body") fallback))
-  let promotedBodies ← parsePromotedBodies j path fallback
+    | some value => pure (some (← bodyParser value (joinPath path "body") fallback))
+  let promotedBodies ← promotedParser j path fallback
   return {
     id := id
     status := parseStatus (← fieldString j "status" path)

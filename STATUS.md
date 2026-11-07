@@ -14,10 +14,12 @@ the ability to verify arbitrary Rust are not claimed.
 ## Bounded references after data construction
 
 The reference validator retains source-bound existence and range evidence.
-The current MIR construction and interpreter still use their existing IDs.
-A construction-correspondence theorem and propagation of bounded references
-through compiler queries, MIR and evaluation remain future work; the validator
-alone does not justify removing their reference checks.
+MIR input construction now carries Shape-indexed `Fin` references and body array
+length equalities. Lowering retains that checked input but adapts its values to
+the existing Nat-based backend; backend/compiler-query/evaluator checks remain.
+Global source IDs and permuted JSON row positions are distinct, and `Fin` bounds
+do not identify two equal-sized tables. Extending these proofs to the backend
+and its direct array accesses remains future work.
 
 ## Empty-function caller-domain transport
 

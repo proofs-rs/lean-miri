@@ -1,4 +1,4 @@
-import Miri.Input.Model
+import Miri.Input.CheckedConstruction
 
 namespace Miri.Input
 open Lean DecoderValues
@@ -1282,22 +1282,22 @@ private def parseAllocationArray (values : Array Json) : Except String (Array Al
     index := index + 1
   pure result
 
-private def parseInstanceArray (values : Array Json) : Except String (Array InstanceNode) := do
+private def parseInstanceArray (source : CheckedConstruction.Source) (memo : DecodeMemo) (values : Array Json) : Except String (Array InstanceNode) := do
   let mut result := #[]
   let mut index := 0
   for value in values do
-    result := result.push (← parseInstance value s!"$.instances[{index}]")
+    result := result.push (← parseInstance value s!"$.instances[{index}]" (fun j path name => CheckedConstruction.body source j path name memo) (fun j path name => CheckedConstruction.promoted source j path name memo))
     index := index + 1
   pure result
 
-private def parseBodyArray (values : Array Json) (memo : DecodeMemo) : Except String (Array Body) := do
+private def parseBodyArray (source : CheckedConstruction.Source) (values : Array Json) (memo : DecodeMemo) : Except String (Array Body) := do
   let mut result := #[]
   let mut index := 0
   for value in values do
     let fallback := match optionalField value "def_path" with
       | some (.str name) => name
       | _ => s!"body[{index}]"
-    result := result.push (← parseBody value s!"$.bodies[{index}]" fallback memo)
+    result := result.push (← CheckedConstruction.body source value s!"$.bodies[{index}]" fallback memo)
     index := index + 1
   pure result
 
@@ -1305,12 +1305,10 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     (profile : Options := {}) (cachedTraversal : Bool := true) : Except String ParsedDocument := do
   let (resolved,traversal) ← profileit "decoder.shared_payload_resolution" profile fun _ =>
     JsonTraversalCache.resolve input cachedTraversal profile
-  let referenceValidation := profileit "decoder.reference_validation" profile fun _ =>
+  let checkedReferences ← profileit "decoder.reference_validation" profile fun _ =>
     ReferenceValidation.validateUsing traversal
-  -- Keep payload diagnostics ahead of reference diagnostics for invalid input.
-  let j := match referenceValidation with
-    | .ok checked => checked.source
-    | .error _ => resolved.root
+  let j := checkedReferences.source
+  let construction := CheckedConstruction.Source.ofSummary checkedReferences.summary
   let memo := profileit "decoder.shared_decode_memo" profile fun _ => sharedDecodeMemo resolved.nodes
   if (← fieldString j "schema" "$") != expectedSchema then
     throw s!"$.schema: expected `{expectedSchema}`"
@@ -1342,7 +1340,7 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     | none => pure none
     | some value => pure (some (← parseCompilerAllocIdWorld value allocations))
   let instancesJson ← arrayField j "instances" "$"
-  let instances ← profileit "decoder.instances" profile fun _ => parseInstanceArray instancesJson
+  let instances ← profileit "decoder.instances" profile fun _ => parseInstanceArray construction memo instancesJson
   let selectedScope ← match optionalJson j "selected_scope" with
     | none => pure none
     | some value => pure (some (← parseSelectedScope value "$.selected_scope"))
@@ -1360,10 +1358,7 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
           throw s!"$.compiler_abi_layout_schema: ABI record {abiIndex} argument {abiArgumentIndex} lacks its physical layout"
   let bodiesJson ← arrayField j "bodies" "$"
   if bodiesJson.isEmpty then throw "$.bodies: input has no MIR bodies; refusing an empty import"
-  let bodies ← profileit "decoder.bodies" profile fun _ => parseBodyArray bodiesJson memo
-  let checkedReferences ← match validationResult : referenceValidation with
-    | .error error => throw error
-    | .ok checked => pure (checked.forSource j (by simp [j, validationResult, ReferenceValidation.Checked.source]))
+  let bodies ← profileit "decoder.bodies" profile fun _ => parseBodyArray construction bodiesJson memo
   let (typedTree?, valueIssues) ← if runtimeOnly then
       let decoded ← profileit "decoder.runtime_value" profile fun _ =>
         decodeRuntimeValue traversal "$" .any .none memo
@@ -1421,7 +1416,7 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     obligations := obligations
     raw := j
     sharedNodes := resolved.nodes
-    checkedReferences := some checkedReferences
+    checkedReferences := some (checkedReferences.forSource j rfl)
     compilerFunctionAbiTable := some compilerFunctionAbiTable
     compilerValueMemo := if runtimeOnly then some (profileit "decoder.compiler_values" profile fun _ =>
       prepareCompilerValueMemoUsing resolved.nodes memo) else none

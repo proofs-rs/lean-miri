@@ -10,6 +10,11 @@ private def must (value : Except String α) : IO α :=
 private def checkSourcePaths (program : LoweredProgram) : IO Unit := do
   for lowered in program.bundle.bodies do
     let input := lowered.input
+    match input.context with
+    | .raw => throw (IO.userError s!"body lost checked references: {input.sourcePath}")
+    | .checked _ shape =>
+      unless input.locals.size == shape.locals && input.blocks.size == shape.blocks do
+        throw (IO.userError s!"body shape differs from its arrays: {input.sourcePath}")
     unless input.sourcePath.startsWith "$." &&
         jsonAtPath program.input.raw input.sourcePath == some input.payload do
       throw (IO.userError s!"body source path does not resolve: {input.sourcePath}")

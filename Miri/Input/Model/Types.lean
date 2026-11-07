@@ -1,4 +1,5 @@
 import Lean
+import Miri.Input.Model.ReferenceShape
 import Miri.Memory.CtfeProvenance
 import Miri.MIR.Operators
 
@@ -452,35 +453,35 @@ structure FunctionAbi where
   fixedCount : Nat
   payload : Lean.Json
 
-inductive TypedValue where
+inductive TypedValue (context : ReferenceContext := .raw) where
   | scalar (value : Lean.Json)
   | diagnostic (value : Lean.Json)
-  | array (values : Array TypedValue)
-  | object (fields : Array (String × TypedValue))
-  | typeRef (id : TypeId)
-  | allocationRef (id : AllocationId)
-  | instanceRef (id : InstanceId)
-  | localRef (id : LocalId)
-  | blockRef (id : BlockId)
+  | array (values : Array (TypedValue context))
+  | object (fields : Array (String × TypedValue context))
+  | typeRef (id : context.Ref .type)
+  | allocationRef (id : context.Ref .allocation)
+  | instanceRef (id : context.Ref .instance)
+  | localRef (id : context.Ref .local)
+  | blockRef (id : context.Ref .block)
   | sourceSpan (value : SourceSpanData)
   | sourceInfo (value : SourceInfo)
   | statement (variant : StatementVariant) (status : PayloadStatus)
-      (fields : Array (String × TypedValue))
+      (fields : Array (String × TypedValue context))
   | terminator (variant : TerminatorVariant) (status : PayloadStatus)
-      (fields : Array (String × TypedValue))
+      (fields : Array (String × TypedValue context))
   | rvalue (variant : RvalueVariant) (status : PayloadStatus)
-      (fields : Array (String × TypedValue))
+      (fields : Array (String × TypedValue context))
   | binOperator (operator : Miri.MIR.BinOp) (status : PayloadStatus)
   | unknownBinOperator (tag : String) (status : PayloadStatus)
   | unOperator (operator : Miri.MIR.UnOp) (status : PayloadStatus)
   | unknownUnOperator (tag : String) (status : PayloadStatus)
   | enumTag (category : TypedEnumTag) (tag : TaggedNode)
-      (children : Array (String × TypedValue))
+      (children : Array (String × TypedValue context))
   | userTypeProjection (value : UserTypeProjection)
   | operand (variant : OperandVariant) (status : PayloadStatus)
-      (fields : Array (String × TypedValue))
+      (fields : Array (String × TypedValue context))
   | projection (variant : ProjectionVariant)
-      (fields : Array (String × TypedValue))
+      (fields : Array (String × TypedValue context))
   deriving BEq
 
 
@@ -635,24 +636,25 @@ structure CompilerAllocIdWorld where
   unsupportedKeyFamilies : Array SourceAllocIdDedupKind := #[]
   deriving Repr, DecidableEq
 
-structure MirNode where
-  value : TypedValue
+structure MirNode (context : ReferenceContext := .raw) where
+  value : TypedValue context
   sourceInfo : SourceInfo
 
-structure BasicBlock where
+structure BasicBlock (context : ReferenceContext := .raw) where
   id : BlockId
-  statements : Array MirNode
-  terminator : MirNode
+  statements : Array (MirNode context)
+  terminator : MirNode context
   cleanup : Bool
   payload : Lean.Json
 
-structure LocalDecl where
+structure LocalDecl (context : ReferenceContext := .raw) where
   id : LocalId
-  typeId : TypeId
+  typeId : context.Ref .type
   sourceInfo : SourceInfo
   payload : Lean.Json
 
 structure BodyCore where
+  context : ReferenceContext := .raw
   /-- Source location for body-scoped compiler queries. -/
   sourcePath : String := ""
   defPath : String
@@ -660,11 +662,12 @@ structure BodyCore where
   phase : TypedValue
   injectionPhase : Option TypedValue
   argumentCount : Nat
-  spreadArgument : Option LocalId
-  locals : Array LocalDecl
-  blocks : Array BasicBlock
+  spreadArgument : Option (context.Ref .local)
+  locals : Array (LocalDecl context)
+  blocks : Array (BasicBlock context)
   sourceScopes : Option (Array Lean.Json)
   payload : Lean.Json
+  aligned : context.Aligned locals.size blocks.size := by simp [ReferenceContext.Aligned]
 
 structure PromotedBody where
   index : Nat

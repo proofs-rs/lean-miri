@@ -128,6 +128,15 @@ deriving instance ToExpr for Input.AbiCastTarget
 deriving instance ToExpr for Input.AbiPassMode
 deriving instance ToExpr for Input.AbiArgument
 deriving instance ToExpr for Input.FunctionAbi
+deriving instance ToExpr for Input.ProgramShape
+deriving instance ToExpr for Input.BodyShape
+deriving instance ToExpr for Input.ReferenceContext
+
+instance (context : Input.ReferenceContext) (kind : Input.ReferenceKind) : ToExpr (context.Ref kind) :=
+  match context with
+  | .raw => inferInstanceAs (ToExpr Nat)
+  | .checked _ _ => inferInstanceAs (ToExpr (Fin _))
+
 deriving instance ToExpr for Input.TypedValue
 
 section
@@ -146,7 +155,32 @@ deriving instance ToExpr for Input.AllocationNode
 deriving instance ToExpr for Input.MirNode
 deriving instance ToExpr for Input.BasicBlock
 deriving instance ToExpr for Input.LocalDecl
-deriving instance ToExpr for Input.BodyCore
+@[noinline] def checkedBodyCore (context : Input.ReferenceContext) (sourcePath defPath : String)
+    (definitionId : Option Input.DefinitionId) (phase : Input.TypedValue)
+    (injectionPhase : Option Input.TypedValue) (argumentCount : Nat)
+    (spreadArgument : Option (context.Ref .local)) (locals : Array (Input.LocalDecl context))
+    (blocks : Array (Input.BasicBlock context)) (sourceScopes : Option (Array Json)) (payload : Json)
+    (aligned : context.Aligned locals.size blocks.size) : Input.BodyCore :=
+  ⟨context, sourcePath, defPath, definitionId, phase, injectionPhase, argumentCount,
+    spreadArgument, locals, blocks, sourceScopes, payload, aligned⟩
+
+instance : ToExpr Input.BodyCore where
+  toTypeExpr := mkConst ``Input.BodyCore
+  toExpr body :=
+    let alignment := match body.context with
+      | .raw => mkConst ``True.intro
+      | .checked _ scope =>
+          let first := mkApp2 (mkConst ``Eq.refl [1]) (mkConst ``Nat) (toExpr scope.locals)
+          let second := mkApp2 (mkConst ``Eq.refl [1]) (mkConst ``Nat) (toExpr scope.blocks)
+          let localsType := mkApp3 (mkConst ``Eq [1]) (mkConst ``Nat)
+            (toExpr body.locals.size) (toExpr scope.locals)
+          let blocksType := mkApp3 (mkConst ``Eq [1]) (mkConst ``Nat)
+            (toExpr body.blocks.size) (toExpr scope.blocks)
+          mkApp4 (mkConst ``And.intro) localsType blocksType first second
+    mkAppN (mkConst ``checkedBodyCore) #[toExpr body.context, toExpr body.sourcePath,
+      toExpr body.defPath, toExpr body.definitionId, toExpr body.phase,
+      toExpr body.injectionPhase, toExpr body.argumentCount, toExpr body.spreadArgument,
+      toExpr body.locals, toExpr body.blocks, toExpr body.sourceScopes, toExpr body.payload, alignment]
 deriving instance ToExpr for Input.PromotedBody
 deriving instance ToExpr for Input.Body
 deriving instance ToExpr for Input.InstanceNode
@@ -246,78 +280,78 @@ mutual
 private partial def typedValueExpr [ToExpr Json] (value : Input.TypedValue) : QuoteM Expr := do
   let expr ← match value with
     | .scalar value => do
-      pure <| mkApp (mkConst ``Input.TypedValue.scalar) (toExpr value)
+      pure <| mkApp (mkApp (mkConst ``Input.TypedValue.scalar) (mkConst ``Input.ReferenceContext.raw)) (toExpr value)
     | .diagnostic value => do
-      pure <| mkApp (mkConst ``Input.TypedValue.diagnostic) (toExpr value)
+      pure <| mkApp (mkApp (mkConst ``Input.TypedValue.diagnostic) (mkConst ``Input.ReferenceContext.raw)) (toExpr value)
     | .array values => do
       let children ← values.mapM typedValueExpr
-      pure <| mkApp (mkConst ``Input.TypedValue.array) (exprArray (mkConst ``Input.TypedValue) children)
+      pure <| mkApp (mkApp (mkConst ``Input.TypedValue.array) (mkConst ``Input.ReferenceContext.raw)) (exprArray (mkApp (mkConst ``Input.TypedValue) (mkConst ``Input.ReferenceContext.raw)) children)
     | .object fields => do
       let children ← fields.mapM fun (key, child) => do
         let child ← typedValueExpr child
         pure <| mkApp4 (mkConst ``Prod.mk [0, 0]) (mkConst ``String)
-          (mkConst ``Input.TypedValue) (toExpr key) child
-      pure <| mkApp (mkConst ``Input.TypedValue.object) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Input.TypedValue)) children)
+          (mkApp (mkConst ``Input.TypedValue) (mkConst ``Input.ReferenceContext.raw)) (toExpr key) child
+      pure <| mkApp (mkApp (mkConst ``Input.TypedValue.object) (mkConst ``Input.ReferenceContext.raw)) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkApp (mkConst ``Input.TypedValue) (mkConst ``Input.ReferenceContext.raw))) children)
     | .typeRef id => do
-      pure <| mkApp (mkConst ``Input.TypedValue.typeRef) (toExpr id)
+      pure <| mkApp (mkApp (mkConst ``Input.TypedValue.typeRef) (mkConst ``Input.ReferenceContext.raw)) (toExpr id)
     | .allocationRef id => do
-      pure <| mkApp (mkConst ``Input.TypedValue.allocationRef) (toExpr id)
+      pure <| mkApp (mkApp (mkConst ``Input.TypedValue.allocationRef) (mkConst ``Input.ReferenceContext.raw)) (toExpr id)
     | .instanceRef id => do
-      pure <| mkApp (mkConst ``Input.TypedValue.instanceRef) (toExpr id)
+      pure <| mkApp (mkApp (mkConst ``Input.TypedValue.instanceRef) (mkConst ``Input.ReferenceContext.raw)) (toExpr id)
     | .localRef id => do
-      pure <| mkApp (mkConst ``Input.TypedValue.localRef) (toExpr id)
+      pure <| mkApp (mkApp (mkConst ``Input.TypedValue.localRef) (mkConst ``Input.ReferenceContext.raw)) (toExpr id)
     | .blockRef id => do
-      pure <| mkApp (mkConst ``Input.TypedValue.blockRef) (toExpr id)
+      pure <| mkApp (mkApp (mkConst ``Input.TypedValue.blockRef) (mkConst ``Input.ReferenceContext.raw)) (toExpr id)
     | .sourceSpan value => do
-      pure <| mkApp (mkConst ``Input.TypedValue.sourceSpan) (toExpr value)
+      pure <| mkApp (mkApp (mkConst ``Input.TypedValue.sourceSpan) (mkConst ``Input.ReferenceContext.raw)) (toExpr value)
     | .sourceInfo value => do
-      pure <| mkApp (mkConst ``Input.TypedValue.sourceInfo) (toExpr value)
+      pure <| mkApp (mkApp (mkConst ``Input.TypedValue.sourceInfo) (mkConst ``Input.ReferenceContext.raw)) (toExpr value)
     | .statement variant status fields => do
       let children ← fields.mapM fun (key, child) => do
         let child ← typedValueExpr child
         pure <| mkApp4 (mkConst ``Prod.mk [0, 0]) (mkConst ``String)
-          (mkConst ``Input.TypedValue) (toExpr key) child
-      pure <| mkApp3 (mkConst ``Input.TypedValue.statement) (toExpr variant) (toExpr status) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Input.TypedValue)) children)
+          (mkApp (mkConst ``Input.TypedValue) (mkConst ``Input.ReferenceContext.raw)) (toExpr key) child
+      pure <| mkApp3 (mkApp (mkConst ``Input.TypedValue.statement) (mkConst ``Input.ReferenceContext.raw)) (toExpr variant) (toExpr status) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkApp (mkConst ``Input.TypedValue) (mkConst ``Input.ReferenceContext.raw))) children)
     | .terminator variant status fields => do
       let children ← fields.mapM fun (key, child) => do
         let child ← typedValueExpr child
         pure <| mkApp4 (mkConst ``Prod.mk [0, 0]) (mkConst ``String)
-          (mkConst ``Input.TypedValue) (toExpr key) child
-      pure <| mkApp3 (mkConst ``Input.TypedValue.terminator) (toExpr variant) (toExpr status) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Input.TypedValue)) children)
+          (mkApp (mkConst ``Input.TypedValue) (mkConst ``Input.ReferenceContext.raw)) (toExpr key) child
+      pure <| mkApp3 (mkApp (mkConst ``Input.TypedValue.terminator) (mkConst ``Input.ReferenceContext.raw)) (toExpr variant) (toExpr status) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkApp (mkConst ``Input.TypedValue) (mkConst ``Input.ReferenceContext.raw))) children)
     | .rvalue variant status fields => do
       let children ← fields.mapM fun (key, child) => do
         let child ← typedValueExpr child
         pure <| mkApp4 (mkConst ``Prod.mk [0, 0]) (mkConst ``String)
-          (mkConst ``Input.TypedValue) (toExpr key) child
-      pure <| mkApp3 (mkConst ``Input.TypedValue.rvalue) (toExpr variant) (toExpr status) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Input.TypedValue)) children)
+          (mkApp (mkConst ``Input.TypedValue) (mkConst ``Input.ReferenceContext.raw)) (toExpr key) child
+      pure <| mkApp3 (mkApp (mkConst ``Input.TypedValue.rvalue) (mkConst ``Input.ReferenceContext.raw)) (toExpr variant) (toExpr status) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkApp (mkConst ``Input.TypedValue) (mkConst ``Input.ReferenceContext.raw))) children)
     | .binOperator operator status => do
-      pure <| mkApp2 (mkConst ``Input.TypedValue.binOperator) (toExpr operator) (toExpr status)
+      pure <| mkApp2 (mkApp (mkConst ``Input.TypedValue.binOperator) (mkConst ``Input.ReferenceContext.raw)) (toExpr operator) (toExpr status)
     | .unknownBinOperator tag status => do
-      pure <| mkApp2 (mkConst ``Input.TypedValue.unknownBinOperator) (toExpr tag) (toExpr status)
+      pure <| mkApp2 (mkApp (mkConst ``Input.TypedValue.unknownBinOperator) (mkConst ``Input.ReferenceContext.raw)) (toExpr tag) (toExpr status)
     | .unOperator operator status => do
-      pure <| mkApp2 (mkConst ``Input.TypedValue.unOperator) (toExpr operator) (toExpr status)
+      pure <| mkApp2 (mkApp (mkConst ``Input.TypedValue.unOperator) (mkConst ``Input.ReferenceContext.raw)) (toExpr operator) (toExpr status)
     | .unknownUnOperator tag status => do
-      pure <| mkApp2 (mkConst ``Input.TypedValue.unknownUnOperator) (toExpr tag) (toExpr status)
+      pure <| mkApp2 (mkApp (mkConst ``Input.TypedValue.unknownUnOperator) (mkConst ``Input.ReferenceContext.raw)) (toExpr tag) (toExpr status)
     | .enumTag category tag fields => do
       let children ← fields.mapM fun (key, child) => do
         let child ← typedValueExpr child
         pure <| mkApp4 (mkConst ``Prod.mk [0, 0]) (mkConst ``String)
-          (mkConst ``Input.TypedValue) (toExpr key) child
-      pure <| mkApp3 (mkConst ``Input.TypedValue.enumTag) (toExpr category) (toExpr tag) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Input.TypedValue)) children)
+          (mkApp (mkConst ``Input.TypedValue) (mkConst ``Input.ReferenceContext.raw)) (toExpr key) child
+      pure <| mkApp3 (mkApp (mkConst ``Input.TypedValue.enumTag) (mkConst ``Input.ReferenceContext.raw)) (toExpr category) (toExpr tag) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkApp (mkConst ``Input.TypedValue) (mkConst ``Input.ReferenceContext.raw))) children)
     | .userTypeProjection value => do
-      pure <| mkApp (mkConst ``Input.TypedValue.userTypeProjection) (toExpr value)
+      pure <| mkApp (mkApp (mkConst ``Input.TypedValue.userTypeProjection) (mkConst ``Input.ReferenceContext.raw)) (toExpr value)
     | .operand variant status fields => do
       let children ← fields.mapM fun (key, child) => do
         let child ← typedValueExpr child
         pure <| mkApp4 (mkConst ``Prod.mk [0, 0]) (mkConst ``String)
-          (mkConst ``Input.TypedValue) (toExpr key) child
-      pure <| mkApp3 (mkConst ``Input.TypedValue.operand) (toExpr variant) (toExpr status) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Input.TypedValue)) children)
+          (mkApp (mkConst ``Input.TypedValue) (mkConst ``Input.ReferenceContext.raw)) (toExpr key) child
+      pure <| mkApp3 (mkApp (mkConst ``Input.TypedValue.operand) (mkConst ``Input.ReferenceContext.raw)) (toExpr variant) (toExpr status) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkApp (mkConst ``Input.TypedValue) (mkConst ``Input.ReferenceContext.raw))) children)
     | .projection variant fields => do
       let children ← fields.mapM fun (key, child) => do
         let child ← typedValueExpr child
         pure <| mkApp4 (mkConst ``Prod.mk [0, 0]) (mkConst ``String)
-          (mkConst ``Input.TypedValue) (toExpr key) child
-      pure <| mkApp2 (mkConst ``Input.TypedValue.projection) (toExpr variant) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Input.TypedValue)) children)
+          (mkApp (mkConst ``Input.TypedValue) (mkConst ``Input.ReferenceContext.raw)) (toExpr key) child
+      pure <| mkApp2 (mkApp (mkConst ``Input.TypedValue.projection) (mkConst ``Input.ReferenceContext.raw)) (toExpr variant) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkApp (mkConst ``Input.TypedValue) (mkConst ``Input.ReferenceContext.raw))) children)
   internExpr expr
 end
 
@@ -359,7 +393,7 @@ elab_rules : command
       let shared ← quoteSharedJson declName result.document.sharedNodes
       letI : ToExpr Json := { toTypeExpr := mkConst ``Json, toExpr := jsonExpr shared }
       letI : ToExpr Input.TypedValue := {
-        toTypeExpr := mkConst ``Input.TypedValue
+        toTypeExpr := mkApp (mkConst ``Input.TypedValue) (mkConst ``Input.ReferenceContext.raw)
         toExpr := fun value => (typedValueExpr value).run' {}
       }
       (splitValue declName (toExpr result)).run' {}

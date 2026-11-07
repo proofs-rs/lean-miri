@@ -1,3 +1,4 @@
+import Miri.Input.Model.RawView
 import Miri.Input.Model
 import Miri.Input.Decoder
 import Miri.MIR.Syntax
@@ -1031,29 +1032,32 @@ private def controlTargets : MIR.TerminatorKind → Array Nat
 /-- Construct source-shaped MIR, preserving its decoded envelope and interning
 actual source spans. Unsupported constructors and missing metadata are errors. -/
 private def lowerBodyState (ctx : LowerContext) (input : BodyCore) (initial : LowerState) : LowerResult (LoweredBody × LowerState) := do
+  let sourceLocals := input.rawLocals
+  let sourceBlocks := input.rawBlocks
+  let spreadArgument := input.spreadArgumentNat
   let mirPhase ← phase input.phase
   match input.injectionPhase with
   | some value => let _ ← phase value; pure ()
   | none => pure ()
-  unless !input.blocks.isEmpty do throw "body has no entry basic block"
+  unless !sourceBlocks.isEmpty do throw "body has no entry basic block"
   let scopes ← match input.sourceScopes with
     | some scopes => pure scopes
     | none => throw "missing source scope metadata"
-  for decl in input.locals do
+  for decl in sourceLocals do
     unless decl.sourceInfo.scope < scopes.size do throw "unresolved local source scope"
-  unless input.argumentCount < input.locals.size do throw "argument count exceeds locals"
-  for (decl, i) in input.locals.toList.zipIdx do
+  unless input.argumentCount < sourceLocals.size do throw "argument count exceeds locals"
+  for (decl, i) in sourceLocals.toList.zipIdx do
     unless decl.id == i do throw "noncontiguous local IDs"
     unless ctx.containsTypeId decl.typeId do throw s!"unresolved local type {decl.typeId}"
-  for (block, i) in input.blocks.toList.zipIdx do
+  for (block, i) in sourceBlocks.toList.zipIdx do
     unless block.id == i do throw "noncontiguous basic block IDs"
     for node in block.statements.push block.terminator do
       unless node.sourceInfo.scope < scopes.size do throw "unresolved instruction source scope"
-      validateReferences ctx input.locals.size input.blocks.size node.value
-  match input.spreadArgument with
+      validateReferences ctx sourceLocals.size sourceBlocks.size node.value
+  match spreadArgument with
   | some arg => unless arg > 0 && arg ≤ input.argumentCount do throw "invalid spread argument"
   | none => pure ()
-  let action : LowerM (Array MIR.BasicBlock) := input.blocks.mapM fun block => do
+  let action : LowerM (Array MIR.BasicBlock) := sourceBlocks.mapM fun block => do
     return ⟨← block.statements.mapM (statement ctx), ← terminator ctx block.terminator, block.cleanup⟩
   let initial := match input.definitionId with
     | some sourceId =>
@@ -1063,7 +1067,7 @@ private def lowerBodyState (ctx : LowerContext) (input : BodyCore) (initial : Lo
   for block in blocks do
     for target in controlTargets block.terminator.kind do
       unless target < blocks.size do throw s!"out-of-range control-flow target {target}"
-  let obligations := input.blocks.toList.zipIdx.foldl (fun out (block, blockIndex) => Id.run do
+  let obligations := sourceBlocks.toList.zipIdx.foldl (fun out (block, blockIndex) => Id.run do
     let bodyPrefix := if input.sourcePath.isEmpty then "" else input.sourcePath ++ "."
     let blockPrefix := s!"{bodyPrefix}basic_blocks[{blockIndex}]"
     let statements := block.statements.toList.zipIdx.foldl (fun issues (node, statementIndex) =>
@@ -1074,7 +1078,7 @@ private def lowerBodyState (ctx : LowerContext) (input : BodyCore) (initial : Lo
     return out ++ statements ++ terminator) ctx.obligations
   let obligations := if input.definitionId.isSome then obligations else
     obligations.push ⟨"body.definitionId", "source definition identity is missing; runtime frame initialization must fail until supplied"⟩
-  return (⟨⟨mirPhase, input.argumentCount, input.spreadArgument, input.locals.map (·.typeId), blocks⟩, state.spans, input, state.definitions, state.typeConstants, obligations⟩, state)
+  return (⟨⟨mirPhase, input.argumentCount, spreadArgument, sourceLocals.map (·.typeId), blocks⟩, state.spans, input, state.definitions, state.typeConstants, obligations⟩, state)
 
 /-- A standalone body's definition/type-constant/span IDs are local to this
 result. Use `lowerBodies` or `lowerProgram` for cross-function linking. -/

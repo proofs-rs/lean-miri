@@ -8,21 +8,23 @@ structure TableRef (ids : Array Nat) where
   sourceId : Nat
   position : Fin ids.size
   identifies : ids[position] = sourceId
+  bounded : sourceId < ids.size
 
 structure IdIndex (ids : Array Nat) where
   private positions : Std.HashMap Nat (Fin ids.size)
+  bounds : ∀ position : Fin ids.size, ids[position] < ids.size
 
-def IdIndex.build (ids : Array Nat) : IdIndex ids := Id.run do
+def IdIndex.build (ids : Array Nat) (bounds : ∀ position : Fin ids.size, ids[position] < ids.size) : IdIndex ids := Id.run do
   let mut positions := {}
   for h : index in [:ids.size] do
     have bound := Membership.mem.upper h
     positions := positions.insert ids[index] ⟨index, bound⟩
-  return ⟨positions⟩
+  return ⟨positions, bounds⟩
 
 def IdIndex.reference? (index : IdIndex ids) (id : Nat) : Option (TableRef ids) := do
   let position ← index.positions[id]?
   if identifies : ids[position] = id then
-    return ⟨id, position, identifies⟩
+    return ⟨id, position, identifies, by simpa [identifies] using index.bounds position⟩
   else none
 
 theorem TableRef.exists_in_source (reference : TableRef ids) : reference.sourceId ∈ ids := by
@@ -57,6 +59,45 @@ structure Summary where
   tables : Tables
   global : Array (GlobalOccurrence tables)
   bodies : Array BodyReferences
+  typeIndex : IdIndex tables.types
+  allocationIndex : IdIndex tables.allocations
+  instanceIndex : IdIndex tables.instances
+
+def Tables.shape (tables : Tables) : ProgramShape :=
+  ⟨tables.types.size, tables.allocations.size, tables.instances.size⟩
+
+def BodyReferences.shape (body : BodyReferences) : BodyShape :=
+  ⟨body.localRows.size, body.blockRows.size⟩
+
+structure BodyIndex (body : BodyReferences) where
+  locals : Std.HashMap Nat (Fin body.localRows.size)
+  blocks : Std.HashMap Nat (Fin body.blockRows.size)
+
+@[noinline] def BodyReferences.index (body : BodyReferences) : BodyIndex body :=
+  ⟨body.locals.foldl (fun table item => table.insert item.2.val item.2) {},
+    body.blocks.foldl (fun table item => table.insert item.2.val item.2) {}⟩
+
+def Summary.resolver (summary : Summary) (body : BodyReferences) (index : BodyIndex body) :
+    ReferenceContext.Resolver (.checked summary.tables.shape body.shape) :=
+  fun kind id =>
+  match kind with
+  | .type => do
+    let some reference := summary.typeIndex.reference? id | throw s!"missing validated type {id}"
+    return ⟨reference.sourceId, reference.bounded⟩
+  | .allocation => do
+    let some reference := summary.allocationIndex.reference? id | throw s!"missing validated allocation {id}"
+    return ⟨reference.sourceId, reference.bounded⟩
+  | .instance => do
+    let some reference := summary.instanceIndex.reference? id | throw s!"missing validated instance {id}"
+    return ⟨reference.sourceId, reference.bounded⟩
+  | .local => do
+    let some reference := index.locals[id]?
+      | throw s!"missing validated local {id}"
+    return reference
+  | .block => do
+    let some reference := index.blocks[id]?
+      | throw s!"missing validated block {id}"
+    return reference
 
 private structure Indices (tables : Tables) where
   types : IdIndex tables.types
@@ -67,13 +108,17 @@ private structure GlobalState (tables : Tables) where
   visited : Std.HashSet JsonTraversalCache.IdentityKey := {}
   references : Array (GlobalOccurrence tables) := #[]
 
-private def validateDense (ids : Array Nat) (what : String) : Except String Unit := do
+private def validateDense (ids : Array Nat) (what : String) : Except String (IdIndex ids) := do
   let mut seen : Std.HashSet Nat := {}
   for id in ids do
     if seen.contains id then throw s!"{what}: duplicate IDs"
     seen := seen.insert id
-  for id in ids do
-    if id >= ids.size then throw s!"{what}: IDs must be dense from zero; found {id} with {ids.size} entries"
+  if bounds : ∀ position : Fin ids.size, ids[position] < ids.size then
+    return IdIndex.build ids bounds
+  else
+    let some id := ids.find? (fun id => id >= ids.size)
+      | throw s!"{what}: IDs must be dense from zero"
+    throw s!"{what}: IDs must be dense from zero; found {id} with {ids.size} entries"
 
 private partial def validateReferencesAux (node : JsonTraversalCache.Node) (path : String)
     (indices : Indices tables) (state : GlobalState tables) : Except String (GlobalState tables) := do
@@ -132,6 +177,11 @@ private partial def validateMirIndices (j : Json) (path : String)
         if bound : id < localCount then
           modify fun state => (state.1.push (joinPath path key, ⟨id, bound⟩), state.2)
         else throw s!"{joinPath path key}: local {id} is out of range (locals={localCount})"
+      if ["block", "target", "otherwise", "real_target", "imaginary_target", "resume"].contains key then
+        if let .ok id := value.getNat? then
+          if bound : id < blockCount then
+            modify fun state => (state.1, state.2.push (joinPath path key, ⟨id, bound⟩))
+          else throw s!"{joinPath path key}: basic block {id} is out of range (blocks={blockCount})"
       if key == "projection" then
         let projections ← value.getArr? |>.mapError fun e => s!"{joinPath path key}: expected projection array ({e})"
         for (projection, index) in projections.toList.zipIdx do
@@ -163,6 +213,7 @@ private partial def validateMirIndices (j : Json) (path : String)
 
 private def checkBlockIndex (value : Json) (path : String) (localCount blockCount : Nat) : BodyCheck localCount blockCount Unit := do
   let id ← value.getNat? |>.mapError fun e => s!"{path}: expected basic-block index ({e})"
+  if (← get).2.any (fun item => item.1 == path && item.2.val == id) then return
   if bound : id < blockCount then
     modify fun state => (state.1, state.2.push (path, ⟨id, bound⟩))
   else throw s!"{path}: basic block {id} is out of range (blocks={blockCount})"
@@ -202,6 +253,10 @@ private def validateTerminatorEdges (j : Json) (path : String) (localCount block
   | "Yield" =>
     checkRequiredEdge j "resume" path localCount blockCount
     checkOptionalEdge j "drop" path localCount blockCount
+  | "InlineAsm" =>
+    let targets ← arrayField j "targets" path
+    for (target, index) in targets.toList.zipIdx do
+      checkBlockIndex target s!"{joinPath path "targets"}[{index}]" localCount blockCount
   | "FalseEdge" =>
     checkRequiredEdge j "real_target" path localCount blockCount
     checkRequiredEdge j "imaginary_target" path localCount blockCount
@@ -225,6 +280,10 @@ private def validateBody (j : Json) (path : String) : Except String BodyReferenc
           let id ← fieldNat localDecl "local" s!"{joinPath path "locals"}[{index}]"
           if id != index then throw s!"{joinPath path "locals"}[{index}]: local declarations must be densely ordered"
           index := index + 1
+        if let some spread ← optionalNat j "spread_arg" path then
+          if bound : spread < locals.size then
+            modify fun state => (state.1.push (joinPath path "spread_arg", ⟨spread, bound⟩), state.2)
+          else throw s!"{joinPath path "spread_arg"}: local {spread} is out of range (locals={locals.size})"
         index := 0
         for block in blocks do
           let blockPath := s!"{joinPath path "basic_blocks"}[{index}]"
@@ -273,13 +332,13 @@ private def tableIds (input : Json) (table key : String) : Except String (Array 
 private def run (node : JsonTraversalCache.Node) : Except String Summary := do
   let tables : Tables := ⟨← tableIds node.value "types" "type_id",
     ← tableIds node.value "allocations" "allocation_id", ← tableIds node.value "instances" "instance_id"⟩
-  validateDense tables.types "type IDs"
-  validateDense tables.allocations "allocation IDs"
-  validateDense tables.instances "instance IDs"
+  let typeIndex ← validateDense tables.types "type IDs"
+  let allocationIndex ← validateDense tables.allocations "allocation IDs"
+  let instanceIndex ← validateDense tables.instances "instance IDs"
   let (_, bodies) ← validateAllBodiesAux node "$" ({}, #[])
-  let indices : Indices tables := ⟨.build tables.types, .build tables.allocations, .build tables.instances⟩
+  let indices : Indices tables := ⟨typeIndex, allocationIndex, instanceIndex⟩
   let globals ← validateReferencesAux node "$" indices {}
-  return ⟨tables, globals.references, bodies⟩
+  return ⟨tables, globals.references, bodies, typeIndex, allocationIndex, instanceIndex⟩
 
 structure Checked (node : JsonTraversalCache.Node) where
   private mk ::

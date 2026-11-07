@@ -214,11 +214,57 @@ Local and block references retain a body scope and bounds proofs. Missing and
 unsupported compiler facts remain separate from reference existence; allocation
 liveness, provenance and permissions remain runtime checks.
 
-The decoder uses this phase's source for data construction and retains the
-evidence in both runtime document views. Reflected Lean constants contain schema
-data without the runtime validation witness. Payload errors retain their previous priority
-over reference errors. Lowering still checks its constructed MIR: a theorem
-connecting that construction to the reference evidence is future work.
+`CheckedConstruction` builds MIR bodies from the validated JSON body tables.
+`TypedValue`, `LocalDecl` and `BasicBlock` carry a `ReferenceContext`: checked
+references are `Fin` values, and each body retains equalities between its actual
+local/block array lengths and its `BodyShape`. `ProgramShape` supplies the global
+ID bounds. A global ID is not the row position in a permuted source table;
+`TableRef` separately retains that position and its row-ID equality proof.
+
+The full diagnostic JSON projection remains raw. Reflected MIR constants retain
+their `Fin` bounds and body length proofs as kernel-checked constructor terms;
+the runtime validator success witness is not quoted. The validator runs before
+schema construction, so malformed inputs can report a different first error.
+
+Lowering retains the checked input body but converts its values to the existing
+Nat-based backend representation. Its existing constructed-MIR checks remain.
+This phase does not establish array-indexed backend/evaluator access, nor does
+a size-indexed `Fin` distinguish two independently constructed tables of equal
+size. It adds no axiom or native proof oracle.
+
+The common validator covers these source references:
+
+| Family | JSON form | Checked MIR input representation |
+| --- | --- | --- |
+| Type | `{type_id: n}` | `TypedValue.typeRef`, `LocalDecl.typeId` |
+| Allocation | `{allocation_id: n}` | `TypedValue.allocationRef` |
+| Instance | Numeric `instance_id` | `TypedValue.instanceRef` |
+| Local | MIR `local`, projection `Index.local`, body `spread_arg` | `TypedValue.localRef`, `BodyCore.spreadArgument` |
+| Block | `block`, `target`, `otherwise`, `real_target`, `imaginary_target`, `resume`; `SwitchInt.targets[].target`; `Drop.async_drop`; `Yield.drop`; `Cleanup.target`; `InlineAsm.targets[]` | `TypedValue.blockRef` |
+
+Type/allocation references use the singleton-object syntax above. Bare numeric
+aliases such as `compiler_runtime_queries.types[].input_type_id`,
+`original_instance_id` and `vtable_allocation_id` retain their existing individual
+checks. The validator skips `debug_payload`; other unsupported/unresolved nodes
+are not skipped wholesale. Reference existence supplies no missing semantic fact.
+
+Other identities retain their existing representations and checks:
+
+| Family | Current boundary; additional work for checked indices |
+| --- | --- |
+| Shared payloads | `$lean_miri_shared_ref` refers to the position in `shared_payloads.nodes`; the existing transport resolver checks its schema and predecessor bounds. Retaining these as `Fin` node references would change that transport boundary. |
+| Rust definitions and HIR | `def_id`, `source_def_id`, `trait_def_id`, `{crate,index}`, `hir_id.owner_def_id/local_id`. These source identities are sparse; bounded references need an explicit emitted/interned table and unresolved cases. |
+| Rust allocations | `source_alloc_id`, raw pool/frontier/sentinel IDs, `opaque_allocation_id`, `key_allocation_id`. `parseCompilerAllocIdWorld` checks the captured nonzero-u64 pool, graph correspondence and dedup data. Typed snapshot references must remain separate from dynamic allocation lifetime and permissions. |
+| Compiler queries | `predicate_id`, predicate normalization IDs, `query_id`, `input_type_id`, `original_instance_id`, `vtable_allocation_id`. Their existing compiler metadata checks remain; checked references need the corresponding predicate/query/global table shape. Diagnostic sidecar query origins are separate from the normal input wire. |
+| Body source and promoted metadata | Source `scope`, `parent`, `inlined_parent_scope`, `source_promoted`, `promoted`, `promoted_index`. Checked indices need the owning body's scope/promoted table lengths and correspondence. |
+| Type-dependent positions | Field/variant indices, `active_union_field`, `tag_field_index`, `untagged_variant`, user projection `base_index`, binder `debruijn_index/variable_index`. These need their owning type/layout/binder shape rather than a single global ID bound. |
+| Instruction-local positions | Inline assembly `operand_index` and label `target_index`, and ABI argument positions. Checked indices need the specific instruction/ABI arrays. |
+| Coverage/diagnostic identities | Coverage block-marker `id`, virtual-counter `bcb`, diagnostic iteration/query-origin indices. These are not the MIR basic-block table and require separate domains if used as references. |
+
+Structured type/allocation/query metadata and the backend still retain Nat IDs,
+even when their source JSON references were checked. Intrinsic `type_id_hash`,
+array offsets, lengths and counts are values, not references into these ID tables.
 
 Run `bash tools/check-reference-validation.sh [INPUT.json ...]` for validator
-checks, reader evidence retention and the selected witness declarations' axiom audit.
+checks, scope isolation, optional control-flow edges, checked-reference retention
+through lowering, and the selected witness declarations' axiom audit.
