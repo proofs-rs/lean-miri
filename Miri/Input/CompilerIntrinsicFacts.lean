@@ -1,3 +1,4 @@
+import Miri.Input.CompilerFacts
 import Miri.Input.CompilerInstance
 import Miri.Interpreter.OperandMachine
 
@@ -7,62 +8,40 @@ never inferred from a spelling or absence of an implementation in Lean.
 -/
 namespace Miri.Input.CompilerIntrinsicFacts
 open Lean Miri.Interpreter
-structure Metadata where
-  mustOverride : Bool
-  fallbackIsSpec : Bool
+abbrev Metadata := IntrinsicData
 structure Entry where
   callee : CallInstance
-  name : Except String String
-  intrinsic : Except String (Option Metadata)
-  payload : Json
+  data : RuntimeInstanceData
 structure Prepared where
-  program : LoweredProgram
+  context : CompilerFacts.Context
   entries : Array Entry
   checks : Array (MIR.RuntimeChecks × Bool)
-private def supportedValue (j : Json) : Except String Json := do
-  unless (← (← j.getObjVal? "status").getStr?) == "supported" do
-    throw s!"compiler intrinsic query unavailable: {((j.getObjVal? "reason").bind Json.getStr?).toOption}"
-  j.getObjVal? "value"
 
-def prepare (program : LoweredProgram) : Except String Prepared := do
-  let query ← program.input.raw.getObjVal? "compiler_runtime_queries"
-  let records ← (← query.getObjVal? "instances").getArr?
-  let ctx := LowerContext.ofDocument program.input
-  let mut tables := program.compilerTables
+@[inline] def Prepared.program (prepared : Prepared) : LoweredProgram := prepared.context.program
+@[inline] def Prepared.owner (prepared : Prepared) : RuntimeProgram := prepared.context.owner
+
+def Prepared.withProgram (prepared : Prepared) (program : LoweredProgram) : Prepared :=
+  {prepared with context := prepared.context.withProgram program}
+
+def prepare (context : CompilerFacts.Context) : Except String Prepared := do
+  let program := context.program
+  let records ← program.input.mirTables.runtimeInstances
   let mut entries := #[]
   for record in records do
-    let (callee,next) ← CompilerInstance.decode ctx tables record
-    tables := next
+    let callee ← program.input.mirTables.instance record.instanceId
     unless !(entries.any (·.callee == callee)) do throw "duplicate full-instance intrinsic metadata key"
-    let name := do (← supportedValue (← record.getObjVal? "item_name")).getStr?
-    let intrinsic := do
-      let value ← supportedValue (← record.getObjVal? "intrinsic_metadata")
-      if value == Json.null then pure none else
-        pure (some (⟨← (← value.getObjVal? "must_be_overridden").getBool?,
-          ← (← value.getObjVal? "fallback_is_spec").getBool?⟩ : Metadata))
-    entries := entries.push ⟨callee,name,intrinsic,record⟩
-  let session ← program.input.raw.getObjVal? "compiler_session_queries"
-  let mut checks := #[]
-  for check in (← (← session.getObjVal? "runtime_checks").getArr?) do
-    unless (← (← check.getObjVal? "status").getStr?) == "supported" do
-      throw "compiler session runtime-check query unavailable"
-    let kind ← (← check.getObjVal? "kind").getStr?
-    let kind : MIR.RuntimeChecks ← match kind with
-      | "ub_checks" => pure .UbChecks | "contract_checks" => pure .ContractChecks
-      | "overflow_checks" => pure .OverflowChecks
-      | _ => throw "unknown compiler runtime-check kind"
-    unless !(checks.any (·.1 == kind)) do throw "duplicate compiler runtime-check query"
-    checks := checks.push (kind,← (← check.getObjVal? "enabled").getBool?)
-  pure ⟨program.withCompilerTables tables,entries,checks⟩
+    entries := entries.push ⟨callee,record⟩
+  let checks ← (← program.input.mirTables.sessionMetadata).runtimeChecks
+  pure ⟨context,entries,checks⟩
 private def entry (prepared : Prepared) (callee : CallInstance) : Except String Entry := do
   let some entry := prepared.entries.find? (·.callee == callee)
     | throw "missing exact full-instance intrinsic metadata"
   pure entry
 
 def itemName (prepared : Prepared) (callee : CallInstance) : Except String String := do
-  (← entry prepared callee).name
+  (← entry prepared callee).data.itemName
 private def metadata (prepared : Prepared) (callee : CallInstance) : Except String Metadata := do
-  let some value ← (← entry prepared callee).intrinsic
+  let some value ← (← entry prepared callee).data.intrinsic
     | throw "source intrinsic metadata unwrap: definition is not an intrinsic"
   pure value
 

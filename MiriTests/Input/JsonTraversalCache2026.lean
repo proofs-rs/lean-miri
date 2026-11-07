@@ -1,3 +1,5 @@
+import MiriTests.Input.ReferenceTraversal
+import MiriTests.Input.SharedPayloads
 import Miri.Input.JsonTraversalCache
 
 open Lean Miri.Input
@@ -8,10 +10,10 @@ private def document (nodes : Array Json) (fields : List (String × Json)) : Jso
 private def reference (id : Nat) : Json := Json.mkObj [("$lean_miri_shared_ref", toJson id)]
 private def check (input : Json) : IO Unit := do
   let .ok original := SharedPayloads.resolveGraph input | throw (IO.userError "bad fixture")
-  let .ok (resolved,node) := JsonTraversalCache.resolve input | throw (IO.userError "cached resolution failed")
+  let .ok (resolved,node) := MiriTests.Input.ReferenceTraversal.resolve input | throw (IO.userError "cached resolution failed")
   unless resolved.root == original.root && node.value == original.root && node.audit do
     throw (IO.userError "cached hash/value differs from original resolver")
-  let .ok (_,slow) := JsonTraversalCache.resolve input false | throw (IO.userError "slow resolution failed")
+  let .ok (_,slow) := MiriTests.Input.ReferenceTraversal.resolve input false | throw (IO.userError "slow resolution failed")
   unless slow.key.digest == hash original.root do throw (IO.userError "fallback hash differs")
 
 private def malformedObject : Json := Id.run do
@@ -29,7 +31,7 @@ def main : IO Unit := do
   let leaf := Json.mkObj [("status", .str "unsupported")]
   let input := document #[leaf, leaf] [("a",reference 0), ("b",reference 0),
     ("c",reference 1), ("d",leaf)]
-  let .ok (_,root) := JsonTraversalCache.resolve input | throw (IO.userError "ID fixture failed")
+  let .ok (_,root) := MiriTests.Input.ReferenceTraversal.resolve input | throw (IO.userError "ID fixture failed")
   let a := root.field "a" leaf
   let b := root.field "b" leaf
   let c := root.field "c" leaf
@@ -39,15 +41,15 @@ def main : IO Unit := do
       a.shouldMemo && !d.shouldMemo do
     throw (IO.userError "reference identity or distinct equal-node IDs were lost")
   let bad := document #[malformedObject] [("root",reference 0)]
-  let .ok (_,node) := JsonTraversalCache.resolve bad | throw (IO.userError "malformed raw resolver failed")
+  let .ok (_,node) := MiriTests.Input.ReferenceTraversal.resolve bad | throw (IO.userError "malformed raw resolver failed")
   match node with
   | .uncached _ => pure ()
   | _ => throw (IO.userError "noncanonical raw object enabled caching")
   let forward := document #[reference 1, .null] [("root", reference 0)]
-  match SharedPayloads.resolveGraph forward, JsonTraversalCache.resolve forward with
+  match SharedPayloads.resolveGraph forward, MiriTests.Input.ReferenceTraversal.resolve forward with
   | .error a, .error b => unless a == b do throw (IO.userError "transport error changed")
   | _, _ => throw (IO.userError "invalid graph accepted")
   IO.println "cached hashes, duplicates, shared/inline values, fallback and transport errors: PASS"
 
-#print axioms Miri.Input.JsonTraversalCache.Key.beq_eq
-#print axioms Miri.Input.JsonTraversalCache.uncached_hash_eq
+#print axioms MiriTests.Input.ReferenceTraversal.Key.beq_eq
+#print axioms MiriTests.Input.ReferenceTraversal.uncached_hash_eq

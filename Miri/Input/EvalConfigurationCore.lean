@@ -1,3 +1,4 @@
+import Miri.Interpreter.OperandTable
 import Miri.Input.EvalConfiguration
 import Miri.Interpreter.NativeAllocationLifecycle
 import Miri.Interpreter.MemoryErrors
@@ -450,7 +451,7 @@ def makeWithForeignContext {Assembly : Type}
       | .error error => throw error
       | .ok config => ValidityMachine.validateRuntime config.validity c options.limits.validation place true
     let compiler := EvalPlaceConstruction.compiler p placeOptions access pointers table
-      (CompilerPlaceTypes.place p options.place.debugAssertions covariance) validate
+      (CompilerPlaceTypes.dynamicPlace p options.place.debugAssertions covariance) validate
     let projection := EvalPlaceConstruction.projection p placeOptions access allocation compiler table
     let pointerCompiler := CompilerExecutionProviders.pointerCompiler facts
     let dereference := PointerPlaceMachine.dereference access pointerCompiler projection.dynamic table projection.dynamicFuel
@@ -461,10 +462,9 @@ def makeWithForeignContext {Assembly : Type}
       dereference
       runtimeChecks := CompilerScalarLeaves.runtimeChecks p
       boolLayout := CompilerScalarLeaves.boolLayout p
-      constant := fun _ _ _ => throw (.unsupported "constant operand requires an exact structural source site")
-      constantAt := fun _ path constant known => do
-        let site ← CompilerOperandSites.current path
-        CompilerConstantMachine.evalAtBound p.constantBinding site functions pointers.arithmetic
+      constant := fun _ id constant known => do
+        let site ← CompilerOperandSites.current id
+        CompilerConstantMachine.evalAt p.constants site functions pointers.arithmetic
           externStatic MemoryErrors.constant constant known
           (if options.place.debugAssertions then some (fun computed expected => physical (compatibility computed expected)) else none) }
     let callBackend : CallDispatchMachine.Backend (State Os R P H D O Aff B Host) := {
@@ -629,21 +629,21 @@ def makeWithForeignContext {Assembly : Type}
           MemoryErrors.constant (fun a b => physical (compatibility a b))
         chooseStaticKnown := fun _ => ExecutionChoices.boolean EvalCoreMachine.tape .staticKnown }
         simd atomic typeId varArgs
-        (fun c op => OperandMachine.evalOperand operands c op none)
-        (fun c path op => OperandMachine.evalOperandAt operands c path op none)
+        (fun c op => OperandTable.evalOperand operands c op none)
+        (fun c path op => OperandTable.evalOperandAt operands c path op none)
         (fun c op => do let place ← dereference c op; pure ⟨.memory place.mplace,place.layout⟩)
         (fun c value => do let place ← PointerPlaceMachine.fromImmediate access pointerCompiler c value; pure ⟨.indirect place.mplace,place.layout⟩)
         scalar floats (Discriminant.readDiscriminant discr) (Discriminant.discriminantForVariant discr)
         (Unwind.handleCatchUnwind unwind) returnToBlock access allocation extra deallocateStack compiler projection.place copy pointers
         projection.dynamic projection.dynamicFuel validity options.limits.validation
       {core with mathHooks := some math}
-    let llvm := fun callee => query (EvalArchitectureMachine.compilerDispatcher context p.intrinsics pointers
+    let llvm := fun callee => query (EvalArchitectureMachine.compilerDispatcher p.intrinsics pointers
       leaves.checkLlvmSymbolClash math access projection (intrinsics callee).simdHooks (fun name os => .unsupported s!"unsupported foreign item {name} on {os}"))
     let ⟨rootSpan⟩ ← liftConstruction (pureQuery (CompilerContextSpan.rootSpan p.program))
     let ⟨helpers⟩ ← liftConstruction (pureQuery (CompilerCallConstruction.helpers p rootSpan (CompilerSignatureAbi.hook p)))
     let config : ExecutionMachine.Config MiriMemoryKind (User Os R P H D O Aff B Host) C O ABI.ExternAbi ClockHost := {
       access,allocation,compiler,projection,copy,retag,validity,lifecycle,functions,atomics,varArgs,intrinsics,floats
-      operands := ⟨operands.checkPlaceType,operands.dereference,operands.runtimeChecks,operands.boolLayout,operands.constantAt⟩
+      operands := ⟨operands.checkPlaceType,operands.dereference,operands.runtimeChecks,operands.boolLayout,operands.constant⟩
       validationRecursive := fun _ _ => ValidityMachine.enforceValidityRecursively
       calls := CompilerCallConstruction.leaves p options.compatibilityBudget
         (foreignOverride.orElse fun _ => leaves.foreign.map pure) callBackend leaves.dynSymName llvm
@@ -941,25 +941,8 @@ private def buildSourceCallbacks [DecidableEq MiriMemoryKind] [DecidableEq Os]
                   }
                 .ok (product,afterFutex)
 
-private def sourcePanicUnwinds (p : CompilerProviders.Prepared) : Except StepError Bool := do
-  let producer ← (p.program.input.raw.getObjVal? "producer").mapError fun _ =>
-    StepError.unsupported "source compiler panic strategy is missing"
-  let settings ← (producer.getObjVal? "input_settings").mapError fun _ =>
-    StepError.unsupported "source compiler panic strategy is missing"
-  let status ← (settings.getObjVal? "status").mapError fun _ =>
-    StepError.unsupported "source compiler settings status is missing"
-  let status ← status.getStr?.mapError fun _ =>
-    StepError.unsupported "source compiler settings status is malformed"
-  unless status == "supported" do
-    throw (.unsupported "source compiler settings are not supported")
-  let strategy ← (settings.getObjVal? "effective_panic_strategy").mapError fun _ =>
-    StepError.unsupported "source compiler panic strategy is missing"
-  let strategy ← strategy.getStr?.mapError fun _ =>
-    StepError.unsupported "source compiler panic strategy is malformed"
-  match strategy with
-  | "unwind" => pure true
-  | "abort" | "immediate-abort" => pure false
-  | _ => throw (.unsupported s!"unknown source compiler panic strategy: {strategy}")
+private def sourcePanicUnwinds (p : CompilerProviders.Prepared) : Except StepError Bool :=
+  p.program.input.mirTables.panicUnwinds.mapError StepError.unsupported
 
 /-- Source-owned Core construction for the canonical Unix EvalWorld. This
 entry fixes the Other/Host state dimensions, derives native-library paths from

@@ -7,7 +7,8 @@ namespace ExactEqualityFast225
 open ExactStateCodec207
 
 local instance jsonDecEq : DecidableEq Json := ExactJson213.jsonDecidableEq
-local instance patternDecEq : DecidableEq Input.CompilerPattern := ExactStateCodec207.compilerPatternDecidableEq
+-- PatternData carries table IDs; its exact structural equality is derived upstream.
+example : DecidableEq Input.PatternData := inferInstance
 
 def importDocumentCorePointerDecEq : DecidableEq Input.ImportDocumentCore :=
   fun left right => withPtrEqDecEq left right (fun _ =>

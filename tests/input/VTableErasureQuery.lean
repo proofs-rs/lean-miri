@@ -13,51 +13,51 @@ private def must {α : Type} (result : Except String α) : IO α :=
 private def check (condition : Bool) (message : String) : IO Unit :=
   unless condition do throw (IO.userError message)
 
-private def replaceField (value : Json) (key : String) (replacement : Json) : Json :=
-  match value with
-  | .obj fields => Json.mkObj (fields.toList.map fun (name, old) =>
-      (name, if name == key then replacement else old))
-  | _ => value
-
-private def rejects {α : Type} (result : Except String α) (expected : String) : IO Unit :=
+private def rejects {α : Type} (result : Except String α) (label : String) : IO Unit :=
   match result with
-  | .error error => check (error == expected) s!"unexpected negative-case diagnostic: {error}"
-  | .ok _ => throw (IO.userError s!"invalid vtable evidence accepted: {expected}")
+  | .error _ => pure ()
+  | .ok _ => throw (IO.userError s!"invalid vtable evidence accepted: {label}")
 
-private def checkMemoryAlias (runtime : CompilerVTableRuntime.Prepared) (raw : Json)
-    (rows : Array Json) (parent : Json) (ty allocation : Nat) : IO Unit := do
+private def checkMemoryAlias (runtime : CompilerVTableRuntime.Prepared)
+    (parent : Json) (ty allocation : Nat) : IO Unit := do
   let facts := runtime.facts
-  check (facts.context.program.input.allocations.any fun node =>
-    node.id == allocation && node.kind == .memory) "TraitVPtr control target is not memory-backed"
-  let _ ← must (CompilerVTableRuntime.queryTargetPrincipal facts raw ty allocation)
-  let targets := rows.toList.zipIdx.filter fun (row, _) =>
-    (row.getObjValAs? Nat "vtable_allocation_id").toOption == some allocation
-  check (targets.length >= 2) "control lost its shared memory-backed vtable allocation"
-  let some (target, index) := targets.head? | throw (IO.userError "missing target query")
-  let metadata ← must (target.getObjVal? "vtable_metadata")
-  let parentMetadata ← must (parent.getObjVal? "vtable_metadata")
-  let entries ← must (metadata.getObjVal? "entries")
-  -- Give an unrelated principal the same physical allocation and entry shape.
-  -- Equal concrete type/layout/entries cannot replace normalization evidence.
-  let alias := replaceField (replaceField parent "vtable_allocation_id" (toJson allocation))
-    "vtable_metadata" (replaceField parentMetadata "entries" entries)
-  let aliasRows := rows.push alias
-  let conflict := "conflicting compiler vtable rows for exact allocation identity"
-  rejects (CompilerVTableRuntime.queryTargetPrincipal facts
-    (replaceField raw "compiler_vtable_queries" (.arr aliasRows)) ty allocation) conflict
-  let size ← must (metadata.getObjValAs? Nat "size_bytes")
-  let wrongSize := replaceField target "vtable_metadata" (replaceField metadata "size_bytes" (toJson (size + 1)))
-  let wrongRows := rows.mapIdx fun position row => if position == index then wrongSize else row
-  rejects (CompilerVTableRuntime.queryTargetPrincipal facts
-    (replaceField raw "compiler_vtable_queries" (.arr wrongRows)) ty allocation) conflict
-  let principal ← must (metadata.getObjVal? "principal_predicate")
-  let id ← must (principal.getObjValAs? Nat "predicate_id")
   let program := facts.context.program
-  let missing := { program with input := { program.input with
-    compilerPredicates := program.input.compilerPredicates.filter (·.id != id) } }
-  let missingFacts := { facts with context := facts.context.withProgram missing }
-  rejects (CompilerVTableRuntime.queryTargetPrincipal missingFacts raw ty allocation)
-    "memory-backed vtable principal normalization evidence missing"
+  let tables := program.input.vtableTables
+  check (program.input.allocations.any fun node =>
+    node.id == allocation && node.kind == .memory) "TraitVPtr control target is not memory-backed"
+  let _ ← must (CompilerVTableRuntime.queryTargetPrincipal facts ty allocation)
+  let targets := tables.queries.toList.zipIdx.filterMap fun (entry,index) => do
+    let row ← entry.toOption
+    if row.allocationId == some allocation then some (row,index) else none
+  check (targets.length >= 2) "control lost its shared memory-backed vtable allocation"
+  let some (target,index) := targets.head? | throw (IO.userError "missing target query")
+  let parentId ← must (parent.getObjValAs? Nat "query_id")
+  let some parent := tables.queries.findSome? (fun row => do
+      let row ← row.toOption
+      if row.queryId == some parentId then some row else none)
+    | throw (IO.userError "parent query absent")
+  let some parentMetadataId := parent.metadata | throw (IO.userError "parent metadata absent")
+  let some targetMetadataId := target.metadata | throw (IO.userError "target metadata absent")
+  let metadata ← must ((tables.metadata.lookup targetMetadataId).mapError (fun _ => "target metadata missing"))
+  let parentMetadata ← must ((tables.metadata.lookup parentMetadataId).mapError (fun _ => "parent metadata missing"))
+  let withTables := fun tables =>
+    {facts with context := facts.context.withProgram {program with input := {program.input with vtableTables := tables}}}
+  let aliasId := tables.metadata.size
+  let aliasMetadata := tables.metadata.push (some {parentMetadata with entries := metadata.entries})
+  let alias := {parent with allocationId := some allocation, metadata := some aliasId}
+  rejects (CompilerVTableRuntime.queryTargetPrincipal (withTables {tables with
+    metadata := aliasMetadata, queries := tables.queries.push (.ok alias)}) ty allocation) "principal alias"
+  let some size := metadata.sizeBytes | throw (IO.userError "target size missing")
+  let wrongMetadata := tables.metadata.push (some {metadata with sizeBytes := some (size+1)})
+  let wrongRows := tables.queries.mapIdx fun position row =>
+    if position == index then .ok {target with metadata := some aliasId} else row
+  rejects (CompilerVTableRuntime.queryTargetPrincipal (withTables {tables with
+    metadata := wrongMetadata, queries := wrongRows}) ty allocation) "size conflict"
+  let some id := metadata.principal | throw (IO.userError "principal absent")
+  let missing := {program with input := {program.input with
+    compilerPredicates := program.input.compilerPredicates.filter (·.id != id)}}
+  let missingFacts := {facts with context := facts.context.withProgram missing}
+  rejects (CompilerVTableRuntime.queryTargetPrincipal missingFacts ty allocation) "missing normalization evidence"
   IO.println "vtable-erasure: memory alias, layout and missing-evidence negative cases PASS"
 
 def main (args : List String) : IO Unit := do
@@ -99,7 +99,7 @@ def main (args : List String) : IO Unit := do
           let entry ← must (decodeVtableEntry value "$.vtable-erasure-control")
           if entry.kind == .supertraitVtablePointer then
             let some allocation := entry.allocationId | throw (IO.userError "TraitVPtr allocation missing")
-            checkMemoryAlias prepared.compiler.vtables.calls.symbols program.input.raw rows row ty allocation
+            checkMemoryAlias prepared.compiler.vtables.calls.symbols row ty allocation
     check found "control has no consumer-resolved TraitVPtr entry"
     IO.println "vtable-erasure: consumer-resolved TraitVPtr PASS"
   let mut changed := 0

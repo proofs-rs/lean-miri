@@ -55,7 +55,7 @@ private theorem bound_copy (s : Static) (layout : LocalLayout) (dest : RuntimePl
     (remaining : Nat) (capacity : s.capacity = remaining+2) (positive : 0 < s.options.limits.validation)
     (older : Array LocalUnit.F) (caller frame : LocalUnit.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
-    (body : frame.body = s.loaded.body) (location : frame.location = .mir ⟨0,1⟩)
+    (body : Meaning.FrameMatches frame s.loaded) (location : frame.location = .mir ⟨0,1⟩)
     (locals : frame.locals = #[{value := .live (.immediate .uninit),layout := some s.abi.ret.layout}])
     (noClocks : frame.extra.dataRace = none) (frameTracked : frame.extra.borrowTracker = some {})
     (tracker : MachineHooks.BorrowState) (tracked : machine.borrowTracker = some tracker)
@@ -86,13 +86,18 @@ private theorem bound_copy (s : Static) (layout : LocalLayout) (dest : RuntimePl
     callerNoClocks ghost shallowAfter
   have cleanupEq := ReturnStep.cleanup s metadata remaining capacity frame (LocalUnit.current older caller finished)
     target unwind continuation locals varargs
-  have block : frame.body.basicBlocks[0]? = some Program.block := by rw [body,metadata.body]; rfl
+  have references := metadata.entry_references
+  have block : frame.body.basicBlocks[0]? = some metadata.entry.blockId := by
+    rw [body.1]; exact references.block
+  have blockNode : frame.mirTables.blocks.lookup metadata.entry.blockId.index = .ok metadata.entry.block := by
+    rw [body.2.2]; exact references.blockNode
+  have blockCleanup := (ReturnStep.block_observations s metadata).1
   rw [ReturnStep.source]
   generalize actualControl : ReturnStep.control s = hooks at readEq popEq copyEq cleanupEq ⊢
   cases hooks
   unfold ControlFlow.returnFromCurrentFrame
-  simp only [BodyStep.current,LocalUnit.current,Stack.currentFrame?,Array.back?_push,location,block,
-    Program.no_cleanup,Bool.false_bne,Bool.false_and,Bool.not_false,Bool.false_eq_true,
+  simp only [BodyStep.current,LocalUnit.current,Stack.currentFrame?,Array.back?_push,location,block,blockNode,
+    blockCleanup,Bool.false_bne,Bool.false_and,Bool.not_false,Bool.false_eq_true,
     bne_self_eq_false,Id.run,bind,Bind.bind,pure,Pure.pure,↓reduceIte]
   simp only [BodyStep.current,LocalUnit.current,finished] at readEq popEq copyEq cleanupEq
   erw [readEq]

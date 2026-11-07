@@ -8,11 +8,11 @@ on failure. No field write is treated as initialization of aggregate padding. -/
 namespace Miri.Interpreter
 open Miri.ABI Miri.Memory
 
-structure AggregateHooks (Prov S C V : Type) where
+structure AggregateHooks (Prov S C V : Type) (Operand : Type := MIR.Operand) where
   target : TargetDataLayout
   placeLayout : V → LocalLayout
-  evalOperand : C → MIR.Operand → Option LocalLayout → RvalueM S (OpTy Prov)
-  evalOperandAt : C → OperandPath → MIR.Operand → Option LocalLayout → RvalueM S (OpTy Prov) := fun c _ => evalOperand c
+  evalOperand : C → Operand → Option LocalLayout → RvalueM S (OpTy Prov)
+  evalOperandAt : C → OperandPath → Operand → Option LocalLayout → RvalueM S (OpTy Prov) := fun c _ => evalOperand c
   readPointer : C → OpTy Prov → RvalueM S (Pointer (Option Prov))
   readScalar : C → OpTy Prov → RvalueM S (Scalar Prov)
   projectDowncast : C → V → MIR.VariantIndex → RvalueM S V
@@ -39,8 +39,8 @@ private def aggregateLift (value : Except StepError A) : RvalueM S A :=
   | .ok value => pure value
   | .error error => throw error
 
-def writeAggregate (h : AggregateHooks P S C V) (choice : C)
-    (kind : MIR.AggregateKind) (operands : Array MIR.Operand) (dest : V) :
+def writeAggregate {Operand Arguments : Type} (h : AggregateHooks P S C V Operand) (choice : C)
+    (kind : MIR.AggregateForm Arguments) (operands : Array Operand) (dest : V) :
     RvalueM S Unit := do
   let (variant, variantDest, activeField) ← match kind with
     | .Adt _ variant _ _ activeField => do
@@ -77,8 +77,8 @@ def writeAggregate (h : AggregateHooks P S C V) (choice : C)
 first evaluate the operand and force allocation, then validate mutable access.
 Positive lengths copy once and replicate the resulting bytes; the source can
 alias the destination, so evaluating/copying every element would be incorrect. -/
-def writeRepeat (h : AggregateHooks P S C V) (choice : C)
-    (operand : MIR.Operand) (dest : V) : RvalueM S Unit := do
+def writeRepeat {Operand : Type} (h : AggregateHooks P S C V Operand) (choice : C)
+    (operand : Operand) (dest : V) : RvalueM S Unit := do
   let source ← h.evalOperandAt choice (OperandPath.rvalue "operand") operand none
   if !source.layout.layout.isSized then throw (.invalidProgram "repeat source is unsized")
   let dest ← h.forceAllocation choice dest

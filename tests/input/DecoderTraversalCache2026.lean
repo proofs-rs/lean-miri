@@ -1,3 +1,4 @@
+import MiriTests.Input.ReferenceDecoder
 import Miri.Input.Decoder
 
 open Lean Miri.Input
@@ -10,9 +11,10 @@ private def compare (name text : String) : IO Unit := do
     unless a.executionInput.isSome == b.executionInput.isSome &&
       a.blockingObligations == b.blockingObligations &&
       a.document.obligations == b.document.obligations &&
-      a.document.functionAbis.map (·.payload) == b.document.functionAbis.map (·.payload) &&
-      a.document.bodies.map (·.payload) == b.document.bodies.map (·.payload) do
-        throw (IO.userError s!"{name}: readiness, ordered obligations, ABI or body sequence changed")
+      decide (a.document.abiTables = b.document.abiTables) &&
+      a.document.bodies.map (·.defPath) == b.document.bodies.map (·.defPath) &&
+      a.document.mirTables == b.document.mirTables do
+        throw (IO.userError s!"{name}: readiness, ordered obligations, ABI, source body sequence or typed MIR changed")
   | _, _ => throw (IO.userError s!"{name}: decoder result class changed")
 
 private def set (j : Json) (key : String) (value : Json) : Json :=

@@ -93,8 +93,9 @@ theorem copy (s : Static) (metadata : Metadata s) (profile : Profile s)
     rw [sameCaller]
     exact input.callerNoClocks
   have normalized : CompilerFrameContext.normalizedLocalType s.prepared.compiler frame destination.localId = .ok destination.metadata.normalizedTy := by
-    simpa only [frame,ProjectedModel.caller,LocalImmediate.cached,CompilerFrameContext.normalizedLocalType,
-      CompilerFrameContext.normalizedBody,CompilerFrameContext.bodyOfFrame] using destination.metadata.normalization
+    rw [CompilerFrameContext.normalizedLocalType_congr s.prepared.compiler frame destination.caller
+      destination.localId rfl rfl rfl rfl]
+    exact destination.metadata.normalization
   have liveId : writtenMachine.memory.live.any (fun row => row.1 == id) = true := by
     change (reserved.live.push _).any (fun row => row.1 == id) = true
     simp [Array.any_push]

@@ -56,12 +56,13 @@ def bindValidation [DecidableEq K]
 validation dictionary must use bindValidity so copy/reset paths share this
 same stateful retag driver. Raw pointer and integer copies gain no extra retag. -/
 def bindRvalue [DecidableEq K]
-    (base : RvalueHooks Provenance (State K User) C (RuntimePlace Provenance))
+    (base : RvalueHooks Provenance (State K User) C (RuntimePlace Provenance) MIR.PlaceId MIR.OperandId MIR.AggregateNode MIR.OperandListId)
     (access : PlaceMachine.AccessConfig K User) (allocation : PlaceMachine.AllocationConfig K User)
     (compiler : PlaceMachine.CompilerHooks K User C) (queries : TypedRetag.Hooks K User)
     (budget : Nat) (copy : PlaceCopyHooks Provenance (State K User) C)
-    (evaluatePlace : C → MIR.Place → Bool → M K User (RuntimePlace Provenance)) :
-    RvalueHooks Provenance (State K User) C (RuntimePlace Provenance) :=
+    (evaluatePlace : C → MIR.PlaceId → Bool → M K User (RuntimePlace Provenance))
+    :
+    RvalueHooks Provenance (State K User) C (RuntimePlace Provenance) MIR.PlaceId MIR.OperandId MIR.AggregateNode MIR.OperandListId :=
   let place := PlaceMachine.placeHooks access allocation compiler
   let retag := retagHooks access queries
   { base with
@@ -107,7 +108,8 @@ def bindCall [DecidableEq K]
     (compiler : PlaceMachine.CompilerHooks K User C) (storage : MachineHooks.StorageHooks K User)
     (queries : TypedRetag.Hooks K User) (budget : Nat)
     (copy : PlaceCopyHooks Provenance (State K User) C)
-    (evaluatePlace : C → MIR.Place → Bool → M K User (RuntimePlace Provenance)) :
+    (evaluatePlace : C → MIR.PlaceId → Bool → M K User (RuntimePlace Provenance))
+    (evaluateLocalPlace : C → MIR.Place → Bool → M K User (RuntimePlace Provenance)) :
     CallHooks Provenance (State K User) C MachineHooks.FrameExtra Other Extern FnABI ArgABI :=
   let place := PlaceMachine.placeHooks access allocation compiler
   let retag := retagHooks access queries
@@ -120,6 +122,7 @@ def bindCall [DecidableEq K]
       | .ok index => pure index
       | .error error => throw (.stack error)
     evalPlace := fun c p skip => return (← evaluatePlace c p skip).stackView
+    evalLocalPlace := fun c p skip => return (← evaluateLocalPlace c p skip).stackView
     placeToOp := fun c view => do placeToOp place c view.toRuntimePlace
     forceAllocation := fun c view => do forceAllocation place c view.toRuntimePlace
     localLayout := PlaceMachine.layoutLocal compiler

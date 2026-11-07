@@ -16,12 +16,14 @@ structure RvalueImmTy (Prov : Type) where
 
 abbrev RvalueM (S A : Type) := EStateM StepError S A
 
-structure RvalueHooks (Prov S C V : Type) where
+structure RvalueHooks (Prov S C V : Type)
+    (Place : Type := MIR.Place) (Operand : Type := MIR.Operand)
+    (Aggregate : Type := MIR.AggregateKind) (Operands : Type := Array MIR.Operand) where
   placeLayout : V → TyAndLayout MIR.TyId
-  evalPlace : C → MIR.Place → Bool → RvalueM S V
-  evalOperand : C → MIR.Operand → Option (TyAndLayout MIR.TyId) → RvalueM S (OpTy Prov)
-  evalOperandAt : C → OperandPath → MIR.Operand → Option (TyAndLayout MIR.TyId) → RvalueM S (OpTy Prov) := fun c _ => evalOperand c
-  evalPlaceToOp : C → MIR.Place → Option (TyAndLayout MIR.TyId) → RvalueM S (OpTy Prov)
+  evalPlace : C → Place → Bool → RvalueM S V
+  evalOperand : C → Operand → Option (TyAndLayout MIR.TyId) → RvalueM S (OpTy Prov)
+  evalOperandAt : C → OperandPath → Operand → Option (TyAndLayout MIR.TyId) → RvalueM S (OpTy Prov) := fun c _ => evalOperand c
+  evalPlaceToOp : C → Place → Option (TyAndLayout MIR.TyId) → RvalueM S (OpTy Prov)
   readImmediate : C → OpTy Prov → RvalueM S (RvalueImmTy Prov)
   writeImmediate : C → Immediate Prov → V → RvalueM S Unit
   writePointer : C → Pointer (Option Prov) → V → RvalueM S Unit
@@ -31,13 +33,13 @@ structure RvalueHooks (Prov S C V : Type) where
   copyOpAllowTransmute : C → OpTy Prov → V → RvalueM S Unit
   binaryOp : C → MIR.BinOp → RvalueImmTy Prov → RvalueImmTy Prov → RvalueM S (RvalueImmTy Prov)
   unaryOp : C → MIR.UnOp → RvalueImmTy Prov → RvalueM S (RvalueImmTy Prov)
-  writeAggregate : C → MIR.AggregateKind → Array MIR.Operand → V → RvalueM S Unit
-  writeRepeat : C → MIR.Operand → V → RvalueM S Unit
+  writeAggregate : C → Aggregate → Operands → V → RvalueM S Unit
+  writeRepeat : C → Operand → V → RvalueM S Unit
   forceAllocation : C → V → RvalueM S (MemPlace Prov)
   toRef : C → MemPlace Prov → RvalueM S (Immediate Prov)
   enforceValidity : C → TyAndLayout MIR.TyId → RvalueM S Bool
   retagPtrValue : C → RvalueImmTy Prov → MIR.TyId → RvalueM S (Option (RvalueImmTy Prov))
-  placeBaseRaw : C → MIR.Place → RvalueM S Bool
+  placeBaseRaw : C → Place → RvalueM S Bool
   normalize : C → MIR.TyId → RvalueM S MIR.TyId
   cast : C → OpTy Prov → MIR.CastKind → MIR.TyId → V → RvalueM S Unit
   readDiscriminant : C → OpTy Prov → RvalueM S MIR.VariantIndex
@@ -48,8 +50,9 @@ private def assertRvalueLayout (actual expected : TyAndLayout MIR.TyId) : Rvalue
 
 /-- Destination evaluation is always first, with the source's skip-validity flag.
 No hook has a default implementation or a default successful outcome. -/
-def evalRvalueIntoPlace (h : RvalueHooks P S C V) (choice : C)
-    (rvalue : MIR.Rvalue) (place : MIR.Place) : RvalueM S Unit := do
+def evalRvalueIntoPlace {Place Operand Count Region Aggregate Operands : Type}
+    (h : RvalueHooks P S C V Place Operand Aggregate Operands) (choice : C)
+    (rvalue : MIR.RvalueForm Place Operand Count Region Aggregate Operands) (place : Place) : RvalueM S Unit := do
   let dest ← h.evalPlace choice place true
   let layout := h.placeLayout dest
   match rvalue with

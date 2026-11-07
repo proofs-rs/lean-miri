@@ -14,6 +14,40 @@ open Miri.ABI Miri.Memory
 namespace AllocationImage
 abbrev Result := Except String
 
+private def sameStaticInfo (left right : Option StaticGlobalInfo) : Bool :=
+  match left,right with
+  | none,none => true
+  | some left,some right =>
+    left.status == right.status && left.sizeBytes == right.sizeBytes && left.alignBytes == right.alignBytes &&
+    left.mutability == right.mutability && left.isStatic == right.isStatic &&
+    left.foreignItem == right.foreignItem && left.threadLocal == right.threadLocal && left.nested == right.nested
+  | _,_ => false
+
+private def sameData (left right : Option AllocationData) : Bool :=
+  match left,right with
+  | none,none => true
+  | some (.memory left),some (.memory right) => left == right
+  | some (.function left),some (.function right) =>
+    left.instanceId == right.instanceId && left.definitionId == right.definitionId
+  | some (.static left),some (.static right) =>
+    left.definitionId == right.definitionId && left.threadLocal == right.threadLocal &&
+    sameStaticInfo left.globalInfo right.globalInfo && left.initializer == right.initializer
+  | some (.vtable left),some (.vtable right) =>
+    left.typeId == right.typeId && left.layoutStatus == right.layoutStatus &&
+    left.sizeBytes == right.sizeBytes && left.alignBytes == right.alignBytes
+  | some (.typeId left),some (.typeId right) => left == right
+  | _,_ => false
+
+/-- The image owns physical allocation data and symbolic IDs. Complete function
+instances and vtable predicates/entries belong to the owning compiler's typed
+tables and are checked by its query leaves. Diagnostic JSON is never an image
+identity key. Preserve graph/raw identity, status, bytes and static predicates. -/
+def sameSource (left right : Array AllocationNode) : Bool :=
+  left.size == right.size && (left.zip right).all (fun (left,right) =>
+    left.id == right.id && left.sourceAllocId == right.sourceAllocId &&
+    left.status == right.status && left.kind == right.kind &&
+    left.memory == right.memory && sameData left.data right.data)
+
 private def checked (value : Except ε α) (showError : ε → String) : Result α :=
   value.mapError showError
 

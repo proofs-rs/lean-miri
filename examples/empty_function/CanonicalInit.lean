@@ -22,7 +22,7 @@ theorem push_actual (s : Static) (metadata : Metadata s) (profile : Profile s)
       (∃ previous, machine = FrameRelevance.pushedMachine p.before.stack.frames frame previous
         (s.cfg.lifecycle.freshLocalsIdentity p.before.machine).1) ∧
       frame.extra.borrowTracker = some {} ∧ frame.extra.dataRace = none ∧
-      frame.body = s.loaded.body ∧ frame.bodyIdentity = s.loaded.identity ∧
+      Meaning.FrameMatches frame s.loaded ∧ frame.bodyIdentity = s.loaded.identity ∧
       frame.functionInstance = s.functionInstance ∧ frame.location = .unwinding metadata.preamble ∧
       frame.returnContinuation = continuation ∧ frame.returnPlace = p.destination ∧
       frame.locals = #[{value := .dead,layout := none}] ∧ frame.vaList = #[] ∧
@@ -56,19 +56,19 @@ theorem push_actual (s : Static) (metadata : Metadata s) (profile : Profile s)
     continuation metadata.preamble s.prepared.compiler.lifecycle.frames s.options.userRelevantCrates definition
     s.prepared.compiler.lifecycle.lifecycle metadata.loweredBody fields.frameCompiler fields.preambleSpan
     fields.requiredConstants metadata.frameInlineAttribute metadata.frameTrackCaller definitionAt
-    metadata.lifecycleBody metadata.bodyContents metadata.lifecycleRow input.thread index active old cached selected
+    metadata.lifecycleBody metadata.bodyContents.2 metadata.bodyContents.1 metadata.lifecycleRow input.thread index active old cached selected
   refine ⟨frame,FrameRelevance.pushedMachine p.before.stack.frames frame old machine,?_,⟨old,rfl⟩,?_,?_,?_⟩
   · change CallMachine.pushRaw s.cfg.lifecycle s.cfg.compiler.debugAssertions s.functionInstance s.loaded
       p.destination continuation p.before = _
     rw [fields.debug,profile.debug]
     exact pushed
-  · simp only [frame,EmptyFunction.Init.created,CompilerFrameMetadata.resolvedFrame]
+  · simp only [Meaning.FrameMatches,frame,EmptyFunction.Init.created,CompilerFrameMetadata.resolvedFrame]
     have enabled := input.world.enabled
     simp only [machine,fields.freshLocalsIdentity] at *
     simp [enabled]
   · simp [frame,EmptyFunction.Init.created,CompilerFrameMetadata.resolvedFrame, fields.freshLocalsIdentity, runtime.noRace]
-  · have count : s.loaded.body.locals.size = 1 := by rw [metadata.body]; exact Program.one_local
-    simp only [frame,EmptyFunction.Init.created,CompilerFrameMetadata.resolvedFrame,EmptyFunction.Init.raw,Frame.create,count,
+  · have count : s.loaded.body.locals.size = 1 := by rw [(metadata.body_header s).2.1]; rfl
+    simp only [Meaning.FrameMatches,frame,EmptyFunction.Init.created,CompilerFrameMetadata.resolvedFrame,EmptyFunction.Init.raw,Frame.create,count,
       Array.replicate_succ,Array.replicate_zero]
     simp [FrameRelevance.pushedMachine,machine,fields.freshLocalsIdentity,runtime.noRace]
     split <;> constructor <;> rfl
@@ -87,7 +87,7 @@ theorem push_actual (s : Static) (metadata : Metadata s) (profile : Profile s)
     exact beq_self_eq_true _
   have arguments : hooks.abiArgs s.abi = #[] := metadata.noArguments
   have ret : hooks.abiReturn s.abi = s.abi.ret := rfl
-  have count : s.loaded.body.argumentCount = 0 := by rw [metadata.body]; exact Program.no_arguments
+  have count : s.loaded.body.argumentCount = 0 := (metadata.body_header s).1
   exact Call.zero_entry_core hooks () s.functionInstance s.loaded s.abi place continuation
     (MetadataBinding.caller_location s metadata capacity) (MetadataBinding.instance_abi s metadata capacity)
     (MetadataBinding.target_features s metadata capacity) memory (MetadataBinding.not_closure s metadata capacity)
@@ -132,8 +132,8 @@ theorem push_actual (s : Static) (metadata : Metadata s) (profile : Profile s)
     (frames : Array LocalUnit.F) (frame : LocalUnit.F)
     (machine : MachineHooks.MachineState MiriMemoryKind Configuration.RootUser)
     (identity : frame.bodyIdentity = s.loaded.identity) (function : frame.functionInstance = s.functionInstance)
-    (body : frame.body = s.loaded.body) :
-    (ExecutionMachine.callHooks s.cfg s.limits).localSpan s.loaded.body 0
+    (body : Meaning.FrameMatches frame s.loaded) :
+    (ExecutionMachine.callHooks s.cfg s.limits).localSpan s.loaded.identity 0
       (LocalUnit.current frames frame machine) =
       .ok metadata.localSpan (LocalUnit.current frames frame machine) := by
   obtain ⟨remaining,eq⟩ : ∃ n : Nat, s.capacity = n+1 := ⟨s.capacity-1,by omega⟩
@@ -141,16 +141,16 @@ theorem push_actual (s : Static) (metadata : Metadata s) (profile : Profile s)
     (Configuration.leaves s.prepared s.options.place.debugAssertions) remaining metadata.construction s.cfg
     (by simpa only [Configuration.rootConfig,eq] using s.built)
   obtain ⟨decl,declaration,indexed⟩ := metadata.localSourceSpan
-  change s.cfg.compiler.localSpan s.loaded.body 0 _ = _
+  change s.cfg.compiler.localSpan s.loaded.identity 0 _ = _
   rw [fields.localSpan]
   exact CompilerFrameContext.localSpan_known s.prepared.compiler s.loaded metadata.loweredBody
-    s.functionInstance decl metadata.localSpan metadata.bodyRow metadata.bodyContents metadata.loader
-    declaration indexed frames frame machine identity function body
+    s.functionInstance decl metadata.localSpan metadata.bodyRow metadata.bodyContents.2 metadata.bodyContents.1 metadata.loader
+    declaration indexed frames frame machine identity function body.1 body.2.1
 
  theorem push_done (s : Static) (metadata : Metadata s) (capacity : 0 < s.capacity)
     (frames : Array LocalUnit.F) (frame : LocalUnit.F)
     (machine : MachineHooks.MachineState MiriMemoryKind Configuration.RootUser)
-    (body : frame.body = s.loaded.body)
+    (body : Meaning.FrameMatches frame s.loaded)
     (locals : frame.locals = #[{value := .dead,layout := none}])
     (noClocks : frame.extra.dataRace = none) :
     (ExecutionMachine.callHooks s.cfg s.limits).pushDone () (LocalUnit.current frames frame machine) =
@@ -158,21 +158,29 @@ theorem push_actual (s : Static) (metadata : Metadata s) (profile : Profile s)
         locals := #[{value := .live (.immediate .uninit),layout := none}], location := .mir .start} machine) := by
   have fields := MetadataBinding.fields s metadata capacity
   have types : frame.body.locals = #[s.abi.ret.layout.ty] := by
-    rw [body]; exact BodyAssignment.raw_unit_local s metadata
+    rw [body.1]; exact BodyAssignment.raw_unit_local s metadata
   have trivial : s.cfg.lifecycle.storage.veryTriviallySized s.abi.ret.layout.ty = .ok true := by
     rw [fields.storageSized]; exact metadata.unitStorageSized
   have live := LocalUnit.storage_live_zero s.cfg.lifecycle.storage frames frame machine s.abi.ret.layout.ty
     locals types trivial noClocks
-  have vars : CallMachine.alwaysLiveVarsAndTemps frame.body = .ok #[] := by
-    rw [body,metadata.body]; rfl
-  have blocks : frame.body.basicBlocks.size = 1 := by rw [body,metadata.body]; exact Program.one_block
+  have vars : frame.body.alwaysLive = #[] := by
+    rw [body.1]
+    exact metadata.alwaysLive s
+  have blocks : frame.body.basicBlocks.size = 1 := by rw [body.1]; exact (metadata.body_header s).2.2
+  have blockAt : frame.body.basicBlocks[0]? = some metadata.entry.blockId := by
+    simpa only [body.1] using metadata.entry_references.block
+  have blockIndex : frame.body.basicBlocks[0]'(by omega) = metadata.entry.blockId := by
+    simpa only [Array.getElem?_eq_getElem, blocks, Nat.zero_lt_succ, ↓reduceDIte,
+      Option.some.injEq] using blockAt
+  have blockNode : frame.mirTables.blocks.lookup metadata.entry.blockId.index = .ok metadata.entry.block := by
+    simpa only [body.2.2] using metadata.entry_references.blockNode
   change CallMachine.pushDone s.cfg.lifecycle (LocalUnit.current frames frame machine) = _
   unfold CallMachine.pushDone
   simp only [bind,EStateM.bind]
   rw [live]
   simp [LocalUnit.current,MachineHooks.currentFrame,Stack.currentFrame?,vars,
     get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,
-    Stack.updateCurrentLocation,Frame.setLocation,blocks,Location.start,
+    Stack.updateCurrentLocation,Frame.setLocation,blocks,blockIndex,blockNode,Location.start,
     set,MonadStateOf.set,EStateM.set,Except.bind,Except.pure,Array.set_push]
 
  def spanAt (span : SpanRef) : MachineHooks.M MiriMemoryKind Configuration.RootUser Unit := do
@@ -192,7 +200,7 @@ theorem push_actual (s : Static) (metadata : Metadata s) (profile : Profile s)
     | .unwinding span => pure span
     | .mir _ => throw (StepError.invalidProgram "raw frame does not have preamble location")
   MachineHooks.setCurrentFrame {frame with trackCallerArg := none}
-  spanAt (← hooks.localSpan s.loaded.body 0)
+  spanAt (← hooks.localSpan s.loaded.identity 0)
   hooks.protectArgument () place
   spanAt preamble
   hooks.pushDone ()
@@ -248,7 +256,7 @@ theorem push_actual (s : Static) (metadata : Metadata s) (profile : Profile s)
     (integer : destination.place.mplace.ptr.provenance = none) :
     ∃ frame machine,
       WholeCall.install s p = .ok () (LocalUnit.current p.before.stack.frames frame machine) ∧
-      frame.body = s.loaded.body ∧ frame.bodyIdentity = s.loaded.identity ∧
+      Meaning.FrameMatches frame s.loaded ∧ frame.bodyIdentity = s.loaded.identity ∧
       frame.functionInstance = s.functionInstance ∧ frame.location = .mir ⟨0,0⟩ ∧
       frame.locals = #[{value := .live (.immediate .uninit),layout := none}] ∧
       frame.extra.borrowTracker = some {} ∧ frame.extra.dataRace = none ∧
@@ -296,7 +304,7 @@ theorem push_actual (s : Static) (metadata : Metadata s) (profile : Profile s)
         | .unwinding span => pure span
         | .mir _ => throw (StepError.invalidProgram "raw frame does not have preamble location")
       MachineHooks.setCurrentFrame {current with trackCallerArg := none}
-      spanAt (← (ExecutionMachine.callHooks s.cfg s.limits).localSpan s.loaded.body 0)
+      spanAt (← (ExecutionMachine.callHooks s.cfg s.limits).localSpan s.loaded.identity 0)
       (ExecutionMachine.callHooks s.cfg s.limits).protectArgument () destination.place
       spanAt preamble
       (ExecutionMachine.callHooks s.cfg s.limits).pushDone ())

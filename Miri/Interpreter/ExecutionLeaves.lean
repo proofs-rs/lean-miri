@@ -1,3 +1,4 @@
+import Miri.MIR.SyntaxTables
 import Miri.Interpreter.Rvalue
 import Miri.Interpreter.Discriminant
 
@@ -19,11 +20,11 @@ structure Discriminant (S C : Type) where
 def Discriminant.ofHooks (h : DiscriminantHooks Provenance S C V) : Discriminant S C :=
   ⟨h.discriminantLayout,h.tagLayout,h.discriminantValue,h.variantForDiscriminant,h.adtVariantCount,h.scalarMayBeNull⟩
 structure Operand (S C : Type) where
-  checkPlaceType : C → MIR.Place → OpTy Provenance → RvalueM S Unit
+  checkPlaceType : C → MIR.PlaceId → LocalLayout → RvalueM S Unit
   dereference : C → OpTy Provenance → RvalueM S (MPlaceTy Provenance)
   runtimeChecks : C → MIR.RuntimeChecks → RvalueM S Bool
   boolLayout : C → RvalueM S LocalLayout
-  constantAt : C → OperandPath → MIR.ConstOperand → Option LocalLayout → RvalueM S (OpTy Provenance)
+  constant : C → MIR.ConstantId → MIR.ConstOperand → Option LocalLayout → RvalueM S (OpTy Provenance)
 structure Control (P L E : Type) where
   bodySpan : Frame P L E → Except StepError MIR.SpanRef
 end Miri.Interpreter.ExecutionLeaves

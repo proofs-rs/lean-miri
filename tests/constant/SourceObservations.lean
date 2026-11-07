@@ -20,18 +20,18 @@ def main (args : List String) : IO Unit := do
   let path ← match args with | p :: _ => pure p | [] => throw (IO.userError "expected compiler fixture")
   let doc ← must (decodeJson (← IO.FS.readFile path))
   let runtime ← must ((RuntimeMetadata.ofDocument doc.document).mapError toString)
-  let some ty := doc.document.types.find? (fun t => t.layout.sizeBytes == some 4 && t.shapeKind == .uint)
+  let some ty := doc.document.types.find? (fun t => (doc.document.layoutTable.lookup t.layoutId).toOption.any (fun layout => layout.sizeBytes == some 4) && t.shapeKind == .uint)
     | throw (IO.userError "fixture requires u32 layout")
   let program ← must (lowerProgram doc.document)
   let own ← must (program.rootDefinitionId 0)
   let initial : MemoryState CtfeProvenance Unit Unit := { MemoryState.empty with nextAllocId := 100 }
   let registered := MemoryLifecycle.registerImportedGlobal initial () 0 .memory (.ofBytes 32) .ONE
   let _ ← must (registered.outcome.mapError toString)
-  let some pointerTy := doc.document.types.find? (fun t => t.layout.sizeBytes == some 8 && (t.shapeKind == .reference || t.shapeKind == .rawPointer))
+  let some pointerTy := doc.document.types.find? (fun t => (doc.document.layoutTable.lookup t.layoutId).toOption.any (fun layout => layout.sizeBytes == some 8) && (t.shapeKind == .reference || t.shapeKind == .rawPointer))
     | throw (IO.userError "fixture requires pointer layout")
-  let some zstTy := doc.document.types.find? (fun t => t.layout.sizeBytes == some 0)
+  let some zstTy := doc.document.types.find? (fun t => (doc.document.layoutTable.lookup t.layoutId).toOption.any (fun layout => layout.sizeBytes == some 0))
     | throw (IO.userError "fixture requires zero-sized layout")
-  let some sliceTy := doc.document.types.find? (fun t => t.layout.sizeBytes == some 16 && t.layout.backendReprKind == some .scalarPair)
+  let some sliceTy := doc.document.types.find? (fun t => (doc.document.layoutTable.lookup t.layoutId).toOption.any (fun layout => layout.sizeBytes == some 16) && (doc.document.layoutTable.lookup t.layoutId).toOption.any (fun layout => layout.backendRepresentation.map (·.kind) == some .scalarPair))
     | throw (IO.userError "fixture requires wide-pointer layout")
   let cases : Array (String × MIR.ConstValue × Nat) := #[("integer", .Scalar (.Int 7 4), ty.id),
     ("pointer", .Scalar (.Ptr (.Allocation 0 6 false false)), pointerTy.id), ("zst", .ZeroSized, zstTy.id),

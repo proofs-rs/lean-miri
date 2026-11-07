@@ -8,7 +8,7 @@ set_option autoImplicit false
 set_option maxRecDepth 65536
 set_option maxHeartbeats 800000
 
- theorem init_body (s : Static) (metadata : Metadata s) (profile : Profile s)
+ theorem init_body (s : Static) (metadata : Metadata s) [SuccessfulConstant metadata] (profile : Profile s)
     (p : Packet) (runtime : RuntimeProfile s p) (input : InputDraft.CurrentInputDraft s p)
     (resources : ResourceMargins s p)
     (destination : InputDraft.MemoryDestination s p input.tracker)
@@ -19,7 +19,7 @@ set_option maxHeartbeats 800000
       WholeCall.install s p = .ok () installed ∧ installed.stack.frames.size = WholeCall.depth p ∧
       ExecutionMachine.step s.cfg s.limits () installed =
         (LocalUnit.current p.before.stack.frames frame machine,.ok true) ∧
-      frame.body = s.loaded.body ∧ frame.bodyIdentity = s.loaded.identity ∧
+      Meaning.FrameMatches frame s.loaded ∧ frame.bodyIdentity = s.loaded.identity ∧
       frame.functionInstance = s.functionInstance ∧ frame.location = .mir ⟨0,1⟩ ∧
       frame.locals = #[{value := .live (.immediate .uninit),layout := some s.abi.ret.layout}] ∧
       frame.extra.borrowTracker = some {protectedTags := #[(id,input.tracker.global.nextPointerTag)]} ∧ frame.extra.dataRace = none ∧
@@ -48,7 +48,7 @@ set_option maxHeartbeats 800000
     ?_,?_,?_,?_,?_,noGhost,shallow,⟨previous,?_⟩⟩
   · simp [LocalUnit.current,WholeCall.depth]
   all_goals try rfl
-  all_goals try simpa only [next,BodyStep.withUnit,LocalUnit.withUnit] using body
+  all_goals try simpa only [Meaning.FrameMatches,next,BodyStep.withUnit,LocalUnit.withUnit] using body
   all_goals try simpa only [next,BodyStep.withUnit,LocalUnit.withUnit] using identity
   all_goals try simpa only [next,BodyStep.withUnit,LocalUnit.withUnit] using function
   all_goals try simpa only [next,BodyStep.withUnit,LocalUnit.withUnit] using tracked
@@ -121,7 +121,7 @@ private theorem initialized_fixed (s : Static) (metadata : Metadata s) (capacity
   rw [fields.freshLocalsIdentity]
   split <;> rfl
 
- theorem result (s : Static) (metadata : Metadata s) (profile : Profile s)
+ theorem result (s : Static) (metadata : Metadata s) [SuccessfulConstant metadata] (profile : Profile s)
     (p : Packet) (runtime : RuntimeProfile s p) (input : InputDraft.CurrentInputDraft s p)
     (resources : ResourceMargins s p)
     (destination : InputDraft.MemoryDestination s p input.tracker)

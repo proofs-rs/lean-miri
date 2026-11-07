@@ -39,7 +39,7 @@ structure CompilerHooks (S C : Type) where
   expectResolveForVTable : C → DefId → Array GenericArg → CallM S CallInstance
   resolveDropGlue : TyId → CallM S CallInstance
   requiresCallerLocation : CallInstance → CallM S Bool
-  sourceScope : BodyIdentity → CallInstance → Body → Nat → CallM S CallerScope
+  sourceScope : BodyIdentity → CallInstance → BodyId → Nat → CallM S CallerScope
   unitLayout : CallM S LocalLayout
 
 structure Hooks (P S C E : Type) where
@@ -169,7 +169,7 @@ def resolveVirtual [PointerProvenance P] (h : Hooks P S C E) (choice : C) (budge
 stopping inside the first non-track_caller callee; the incoming argument is a
 fallback only after the whole inlined chain has been considered. -/
 def callerLocationSpan (compiler : CompilerHooks S C) (bodyIdentity : BodyIdentity) (fnInstance : CallInstance)
-    (body : Body) (trackedCaller : Option SpanRef) : Nat → SourceInfo → CallM S SpanRef
+    (body : BodyId) (trackedCaller : Option SpanRef) : Nat → SourceInfo → CallM S SpanRef
   | 0, _ => throw (.resourceExhaustion "inlined caller-location scope traversal")
   | budget + 1, sourceInfo => do
     let scope ← compiler.sourceScope bodyIdentity fnInstance body sourceInfo.scope
@@ -185,18 +185,18 @@ def callerLocationSpan (compiler : CompilerHooks S C) (bodyIdentity : BodyIdenti
 span; inline-scope-aware compiler handling still receives trackCallerArg. -/
 def callerLocation (h : Hooks P S C E) (budget : Nat) : CallM S SpanRef := do
   let frame ← h.getFrame
-  let .mir location := frame.location | invalid "caller_location during unwinding"
-  let some block := frame.body.basicBlocks[location.block]? | invalid "caller_location block missing"
-  let sourceInfo ← if location.statementIndex == block.statements.size then
-      let sourceInfo := block.terminator.sourceInfo
-      match block.terminator.kind with
-      | .Call _ _ _ _ _ _ functionSpan => pure { sourceInfo with span := functionSpan }
-      | _ => pure sourceInfo
-    else
-      match block.statements[location.statementIndex]? with
-      | some statement => pure statement.sourceInfo
-      | none => invalid "caller_location statement missing"
-  callerLocationSpan h.compiler frame.bodyIdentity frame.functionInstance frame.body frame.trackCallerArg budget sourceInfo
+  let some instruction ← match frame.instruction? with
+      | .ok value => pure value
+      | .error error => throw (.stack error)
+    | invalid "caller_location during unwinding"
+  let sourceInfo := match instruction with
+    | .inl statement => statement.sourceInfo
+    | .inr terminator =>
+      match terminator.kind with
+      | .Call _ _ _ _ _ _ functionSpan => { terminator.sourceInfo with span := functionSpan }
+      | _ => terminator.sourceInfo
+
+  callerLocationSpan h.compiler frame.bodyIdentity frame.functionInstance frame.bodyId frame.trackCallerArg budget sourceInfo
 
 /-- Concrete dyn drop unpacks the symbolic vtable's type/layout with a wrapping
 zero offset and clears metadata, retaining the canonical pointer/misalignment. -/

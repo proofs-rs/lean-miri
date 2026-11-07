@@ -1,3 +1,6 @@
-import Miri.Input.RuntimeMetadata
+import Miri.Input.RuntimeProgram
 
-#print axioms Miri.Input.RuntimeMetadata.Indexed.matchesSourceLeft_eq
+theorem compiler_runtime_same_source (owner : Miri.Input.RuntimeProgram) :
+    owner.runtime.source = owner.program.input := rfl
+
+#print axioms compiler_runtime_same_source

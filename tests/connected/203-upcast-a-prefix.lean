@@ -289,8 +289,7 @@ private def runTraitUpcastPure (contents : String) (pageSize : UInt64)
     queries := {prepared.compiler.vtables.queries with traceQueries := traceVtables}}}
   let image := prepared.image
   let memory := attempt.memory
-  let bytes ← Input.CompilerGlobalBytes.prepare compiler.program compiler.runtime memory
-    (some compiler.sourceEquality)
+  let bytes ← Input.CompilerGlobalBytes.prepare compiler.owner memory
   let targetBits := compiler.runtime.target.base.pointerWidth.bits.toNat
   let arch ← (Input.EvalArchitectureMachine.targetArch compiler.intrinsics).mapError toString
   unless compiler.program.input.producer.targetTriple == "x86_64-unknown-linux-gnu" &&

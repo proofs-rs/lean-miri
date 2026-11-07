@@ -356,7 +356,7 @@ def main (args : List String) : IO Unit := do
   let unknown := runRvalue (ScalarOps.binary (scalarHooks metadata) () .Add
     ⟨.uninit, { returnedLayout with ty := 999999 }⟩ ⟨.uninit, returnedLayout⟩) initial
   check (!unknown.2.isOk) "unknown type accepted"
-  let missing := { metadata with layouts := #[], layoutCache := none }
+  let missing := { metadata with layouts := #[] }
   let rejected := execute missing 100 initial
   check (!rejected.2.isOk) "missing layout accepted"
   IO.println "returned=42"

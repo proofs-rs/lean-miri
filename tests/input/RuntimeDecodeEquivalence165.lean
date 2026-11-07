@@ -1,4 +1,4 @@
-import Miri.Input
+import Miri.Input.Decoder
 
 open Lean Miri.Input
 set_option maxRecDepth 32768
@@ -11,31 +11,19 @@ private def obj (fields : List (String × Json)) : Json := Json.mkObj fields
 
 private def statusJson (status : PayloadStatus) : Json := toJson (reprStr status)
 
-private partial def patternJson : CompilerPattern → Json
-  | .range start finish => obj [("range", Json.arr #[start, finish])]
-  | .or patterns => obj [("or", Json.arr (patterns.map patternJson))]
-  | .notNull => obj [("not_null", Json.bool true)]
-
-private def typeJson (node : TypeNode) : Json := obj [
+private def typeJson (layouts : Miri.MIR.SharedTable Layout) (node : TypeNode) : Json := obj [
   ("id", toJson node.id), ("display", toJson node.display),
   ("shape_status", statusJson node.shapeStatus), ("shape_kind", toJson (reprStr node.shapeKind)),
   ("shape_metadata", toJson (reprStr node.shapeMetadata)),
-  ("pattern", node.pattern.map patternJson |>.getD Json.null),
-  ("compiler_facts", node.compilerFacts.map (·.payload) |>.getD Json.null),
-  ("signature", match node.signature with
-    | none => Json.null
-    | some signature => obj [
-      ("inputs", toJson signature.inputs), ("output", toJson signature.output),
-      ("safety", toJson signature.safety.payload), ("abi", signature.abi.payload),
-      ("c_variadic", toJson signature.cVariadic)]),
-  ("layout_status", statusJson node.layout.status), ("layout_kind", toJson (reprStr node.layout.kind)),
-  ("layout", node.layout.payload), ("payload", node.payload)]
+  ("relations", .str (reprStr node.relations)),
+  ("compiler_facts", .str (reprStr node.compilerFacts)),
+  ("layout_id", toJson node.layoutId), ("layout", toJson (reprStr (layouts.lookup node.layoutId)))]
 
 private def predicateJson (row : CompilerPredicateEvidence) : Json := obj [
   ("id", toJson row.id), ("typing_environment", toJson row.typingEnvironment),
   ("stable_key", toJson row.stableKey), ("auto_trait", toJson row.autoTrait),
   ("normalization_status", statusJson row.normalizationStatus),
-  ("normalized_id", toJson row.normalizedId), ("original", row.original), ("payload", row.payload)]
+  ("normalized_id", toJson row.normalizedId), ("status", statusJson row.status), ("kind", .str (reprStr row.kind))]
 
 private def instanceJson (node : InstanceNode) : Json := obj [
   ("id", toJson node.id), ("status", statusJson node.status), ("kind", toJson (reprStr node.kind)),
@@ -45,17 +33,6 @@ private def instanceJson (node : InstanceNode) : Json := obj [
   ("body_template_is_polymorphic", toJson node.bodyTemplateIsPolymorphic),
   ("instance_args_are_monomorphic", toJson node.instanceArgsAreMonomorphic),
   ("body_payload", node.body.map (·.payload) |>.getD Json.null), ("payload", node.payload)]
-
-private def abiJson (abi : FunctionAbi) : Json := obj [
-  ("arguments", Json.arr (abi.arguments.map fun argument => obj [
-    ("type_id", toJson argument.typeId), ("layout", argument.layout.map (·.payload) |>.getD Json.null),
-    ("mode", argument.mode.payload), ("payload", argument.payload)])),
-  ("return", obj [("type_id", toJson abi.returnValue.typeId),
-    ("layout", abi.returnValue.layout.map (·.payload) |>.getD Json.null),
-    ("mode", abi.returnValue.mode.payload), ("payload", abi.returnValue.payload)]),
-  ("calling_convention", abi.callingConvention.payload), ("can_unwind", toJson abi.canUnwind),
-  ("c_variadic", toJson abi.cVariadic), ("fixed_count", toJson abi.fixedCount),
-  ("payload", abi.payload)]
 
 private def bodyJson (body : Body) : Json := obj [
   ("source_path", toJson body.sourcePath), ("def_path", toJson body.defPath),
@@ -73,7 +50,7 @@ private def coreJson (core : ImportDocumentCore) : Json := obj [
   ("runtime_target_data_layout", core.runtimeTargetDataLayout.map (fun layout =>
     obj [("status", statusJson layout.status), ("payload", layout.payload)]) |>.getD Json.null),
   ("completeness", statusJson core.completenessStatus),
-  ("types", Json.arr (core.types.map typeJson)),
+  ("types", Json.arr (core.types.map (typeJson core.layoutTable))),
   ("allocations", Json.arr (core.allocations.map fun allocation => obj [
     ("id", toJson allocation.id), ("source_alloc_id", toJson allocation.sourceAllocId),
     ("status", statusJson allocation.status), ("kind", toJson (reprStr allocation.kind)),
@@ -82,7 +59,7 @@ private def coreJson (core : ImportDocumentCore) : Json := obj [
   ("compiler_alloc_id_world", toJson (reprStr core.compilerAllocIdWorld)),
   ("instances", Json.arr (core.instances.map instanceJson)),
   ("selected_scope", core.selectedScope.map (·.payload) |>.getD Json.null),
-  ("function_abis", Json.arr (core.functionAbis.map abiJson)),
+  ("function_abis", .str (reprStr core.abiTables)),
   ("bodies", Json.arr (core.bodies.map bodyJson)),
   ("obligations", toJson (core.obligations.map fun item => (item.path, item.message))),
   ("shared_nodes", Json.arr core.sharedNodes),
@@ -97,7 +74,7 @@ private def sameBlock (left right : BasicBlock) : Bool := Id.run do
   return true
 
 private def sameBody (left right : Body) : Bool := Id.run do
-  if left.sourcePath != right.sourcePath || left.defPath != right.defPath ||
+  if left.syntaxObligations != right.syntaxObligations || left.sourcePath != right.sourcePath || left.defPath != right.defPath ||
       left.definitionId != right.definitionId || left.phase != right.phase ||
       left.injectionPhase != right.injectionPhase || left.argumentCount != right.argumentCount ||
       left.spreadArgument != right.spreadArgument || left.sourceScopes != right.sourceScopes ||
@@ -137,7 +114,24 @@ private def sameInstance (left right : InstanceNode) : Bool := Id.run do
   return true
 
 private def sameCore (left right : ImportDocumentCore) : Bool := Id.run do
-  if coreJson left != coreJson right || !(decide (left.compilerAllocIdWorld = right.compilerAllocIdWorld)) ||
+  if coreJson left != coreJson right ||
+      !(decide (left.compilerTypeCatalogs = right.compilerTypeCatalogs)) ||
+      !(decide (left.runtimeTargetDataLayout.map (·.runtime) = right.runtimeTargetDataLayout.map (·.runtime))) ||
+      left.rootSpanDeclared != right.rootSpanDeclared ||
+      left.validatedVtableProbeDiagnostics != right.validatedVtableProbeDiagnostics || !(decide (left.compilerAllocIdWorld = right.compilerAllocIdWorld)) ||
+      !(decide (left.mirTables = right.mirTables)) ||
+      !(decide (left.layoutTable = right.layoutTable)) ||
+      !(decide (left.projectionTables = right.projectionTables)) ||
+      !(decide (left.typeRelationTables = right.typeRelationTables)) ||
+      !(decide (left.compilerFactTables = right.compilerFactTables)) ||
+      !(decide (left.sourceSpans = right.sourceSpans)) || left.rootSpan != right.rootSpan ||
+      !(decide (left.vtableTables.allocationMetadata = right.vtableTables.allocationMetadata)) ||
+      !(decide (left.vtableTables.predicateLists = right.vtableTables.predicateLists)) ||
+      !(decide (left.vtableTables.entryLists = right.vtableTables.entryLists)) ||
+      !(decide (left.vtableTables.metadata = right.vtableTables.metadata)) ||
+      !(decide (left.vtableTables.queries = right.vtableTables.queries)) ||
+      !(decide (left.abiQueries = right.abiQueries)) ||
+      !(decide (left.covarianceQueries = right.covarianceQueries)) ||
       !sameSelectedScope left.selectedScope right.selectedScope || left.allocations.map (·.data) != right.allocations.map (·.data) ||
       left.instances.map (·.bodyInstantiation) != right.instances.map (·.bodyInstantiation) ||
       left.bodies.size != right.bodies.size || left.instances.size != right.instances.size then return false

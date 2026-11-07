@@ -30,7 +30,7 @@ private theorem prefixes (s : Static) (depth : Nat) (start middle finish : State
 
 /-- Internal assembly after lazy protection. Its initial-operation equation is
 provided by the actual raw initialization adapter, not an input validity field. -/
-theorem run (s : Static) (metadata : Metadata s) (profile : Profile s)
+theorem run (s : Static) (metadata : Metadata s) [SuccessfulConstant metadata] (profile : Profile s)
     (p : Packet) (input : InputDraft.CurrentInputDraft s p) (resources : ResourceMargins s p)
     (destination : InputDraft.MemoryDestination s p input.tracker)
     (globals : GlobalAllocationHooks Provenance BorrowTree MiriMemoryKind
@@ -42,7 +42,7 @@ theorem run (s : Static) (metadata : Metadata s) (profile : Profile s)
     (id : AllocId) (entry : InputDraft.Entry) (tree : BorrowTree)
     (protectedEq : tracker.global.protectedTags = input.tracker.global.protectedTags.insert input.tracker.global.nextPointerTag .StrongProtector)
     (released : tree.releaseProtector input.tracker.global.nextPointerTag tracker.global.protectedTags = ⟨tree,.Released⟩)
-    (body : frame.body = s.loaded.body) (identity : frame.bodyIdentity = s.loaded.identity)
+    (body : Meaning.FrameMatches frame s.loaded) (identity : frame.bodyIdentity = s.loaded.identity)
     (function : frame.functionInstance = s.functionInstance) (location : frame.location = .mir .start)
     (locals : frame.locals = #[{value := .live (.immediate .uninit),layout := none}])
     (noClocks : frame.extra.dataRace = none) (returnPlace : frame.returnPlace = p.destination)

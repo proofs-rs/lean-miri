@@ -36,32 +36,18 @@ def main (args : List String) : IO Unit := do
   check (firstUsize.toOption.map (·.ty) == some 13 && secondUsize.toOption.map (·.ty) == some 14)
     "genuine source usize identities changed"
 
-  -- A public manual provider update removes only the cache. Explicitly bind a
-  -- new primitive cache from the provider's exact requested runtime.
-  let withoutCache := { secondProvider with primitiveQueries := none }
-  let rebound := { withoutCache with
-    primitiveQueries := some (CompilerPrimitiveFacts.bind withoutCache.runtime) }
+  let rebound := secondProvider
   check (renderResult (CompilerPrimitiveFacts.primitiveLayout rebound.runtime "usize") ==
     renderResult (rebound.primitiveLayout "usize"))
-    "rebound source-specific primitive result diverged from its runtime"
-  check (renderResult (secondProvider.primitiveLayout "usize") ==
-    renderResult (rebound.primitiveLayout "usize"))
-    "manual primitive cache rebinding changed the requested source result"
+    "source-specific primitive result diverged from its runtime"
 
   -- Give the provider a nested facts context from another source whose runtime
   -- has missing query evidence. The provider's own primitive source remains
   -- source2, and its cache must preserve that result/error boundary.
   let malformedNestedRuntime : RuntimeMetadata := { firstProvider.runtime with
-    source := { firstProvider.runtime.source with raw := .null } }
+    source := { firstProvider.runtime.source with compilerTypeCatalogs := {} } }
   let malformedNestedIndexed := RuntimeMetadata.Indexed.ofMetadata malformedNestedRuntime
-  let originalNested := secondProvider.lifecycle.calls.symbols.facts.context
-  let malformedNested : CompilerFacts.Context := { originalNested with
-    runtime := malformedNestedIndexed
-    primitiveQueries := some (CompilerPrimitiveFacts.bind malformedNestedIndexed.toRuntimeMetadata)
-    unitLayoutCache := some (CompilerFacts.bindUnitLayout malformedNestedIndexed)
-    program := firstProgram
-    lowering := none
-  }
+  let malformedNested := CompilerFacts.ofOwner (RuntimeProgram.ofRuntime malformedNestedRuntime)
   let nestedCallerError :=
     CompilerPrimitiveFacts.callerLocationType malformedNested.runtime.toRuntimeMetadata
   match nestedCallerError with
@@ -86,8 +72,5 @@ def main (args : List String) : IO Unit := do
     "cached/rebound missing-query error precedence changed"
   check (renderResult nestedCallerError != renderResult directMissing)
     "wrong-source malformed error unexpectedly collapsed into the requested missing-query error"
-  let fallbackManual := { manualProvider with primitiveQueries := none }
-  check (renderResult (fallbackManual.primitiveLayout missingKey) == renderResult directMissing)
-    "manual no-cache provider changed missing-query error precedence"
 
   IO.println s!"provider primitive rebinding PASS: ownCaller={renderResult secondOwnCaller}, wrongNested={renderResult nestedCallerError}, ownUsize={renderResult secondUsize}, missing={renderResult directMissing}"

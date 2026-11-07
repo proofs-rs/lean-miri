@@ -1,3 +1,4 @@
+import Miri.Input.CompilerTables
 import Miri.Input.Model
 import Miri.Input.Decoder
 import Miri.MIR.Syntax
@@ -9,120 +10,58 @@ namespace Miri.Input
 
 abbrev LowerResult := Except String
 
-private def buildTypeSet (ids : Array TypeId) : Std.HashSet TypeId :=
-  ids.foldl (fun found id => found.insert id) {}
-
-private def buildAllocationSet (ids : Array AllocationId) : Std.HashSet AllocationId :=
-  ids.foldl (fun found id => found.insert id) {}
-
-/-- Preserve `Array.find?`'s first-row choice for duplicate scalar widths. -/
-private def buildScalarMap (sizes : Array (TypeId × Nat)) : Std.HashMap TypeId Nat :=
-  sizes.foldl (fun found (ty,size) =>
-    if (found.get? ty).isSome then found else found.insert ty size) {}
-
-set_option autoImplicit false in
-/-- Membership acceleration whose type ties it to the exact source array.
-Its constructor is private, and the exactness field proves that its value is
-the corresponding index built from that array. Any update must preserve this
-equality. -/
-structure LowerContextTypeIndex (source : Array TypeId) where
-  private mk ::
-  values : Std.HashSet TypeId
-  exact : values = buildTypeSet source
-
-set_option autoImplicit false in
-structure LowerContextAllocationIndex (source : Array AllocationId) where
-  private mk ::
-  values : Std.HashSet AllocationId
-  exact : values = buildAllocationSet source
-
-set_option autoImplicit false in
-structure LowerContextScalarIndex (source : Array (TypeId × Nat)) where
-  private mk ::
-  values : Std.HashMap TypeId Nat
-  exact : values = buildScalarMap source
-
-private def buildTypeIndex (ids : Array TypeId) : LowerContextTypeIndex ids :=
-  ⟨buildTypeSet ids, rfl⟩
-
-private def buildAllocationIndex (ids : Array AllocationId) : LowerContextAllocationIndex ids :=
-  ⟨buildAllocationSet ids, rfl⟩
-
-private def buildScalarIndex (sizes : Array (TypeId × Nat)) : LowerContextScalarIndex sizes :=
-  ⟨buildScalarMap sizes, rfl⟩
-
 structure LowerContext where
   /-- Each supplied type ID must refer to this compilation's metadata graph. -/
   typeIds : Array TypeId
   /-- Exact byte widths from compiler layout metadata; required for scalar constants. -/
-  scalarSizes : Array (TypeId × Nat)
+  scalarSizes : Array (Option Nat)
   allocationIds : Array AllocationId := #[]
   obligations : Array Obligation := #[]
   /-- Paired source for query metadata addressed by paths in decoded MIR. -/
   sourceDocument : Option Lean.Json := none
+  validatedVtableProbeDiagnostics : Array String := #[]
   compilerValueMemo : Option CompilerValueMemo := none
-  /-- Optional exact-array certificates; hand-built contexts default to the
-  original linear lookup behavior. -/
-  typeIndex : Option (LowerContextTypeIndex typeIds) := none
-  allocationIndex : Option (LowerContextAllocationIndex allocationIds) := none
-  scalarIndex : Option (LowerContextScalarIndex scalarSizes) := none
 
 /-- Consume complete import-time compiler values; manual contexts decode directly. -/
 def LowerContext.decodeCompilerValue (ctx : LowerContext) (raw : Lean.Json) : Except String TypedValue :=
   decodeCompilerValueWithMemo raw ctx.compilerValueMemo
 
 def LowerContext.containsTypeId (ctx : LowerContext) (id : TypeId) : Bool :=
-  match ctx.typeIndex with
-  | some index => index.values.contains id
-  | none => ctx.typeIds.contains id
+  ctx.typeIds[id]? == some id
 
 def LowerContext.containsAllocationId (ctx : LowerContext) (id : AllocationId) : Bool :=
-  match ctx.allocationIndex with
-  | some index => index.values.contains id
-  | none => ctx.allocationIds.contains id
+  ctx.allocationIds[id]? == some id
 
 def LowerContext.scalarSize (ctx : LowerContext) (id : TypeId) : Option Nat :=
-  match ctx.scalarIndex with
-  | some index => index.values.get? id
-  | none => (ctx.scalarSizes.find? (fun pair => pair.1 == id)).map Prod.snd
-
-/-- Rebase the source type universe and rebuild its private membership cache. -/
-def LowerContext.withTypeIds (ctx : LowerContext) (ids : Array TypeId) : LowerContext :=
-  { ctx with typeIds := ids, typeIndex := some (buildTypeIndex ids) }
-
-/-- Rebase the allocation universe and rebuild its private membership cache. -/
-def LowerContext.withAllocationIds (ctx : LowerContext) (ids : Array AllocationId) : LowerContext :=
-  { ctx with allocationIds := ids, allocationIndex := some (buildAllocationIndex ids) }
-
-/-- Rebase scalar layouts and rebuild the first-row-preserving width cache. -/
-def LowerContext.withScalarSizes (ctx : LowerContext) (sizes : Array (TypeId × Nat)) : LowerContext :=
-  { ctx with scalarSizes := sizes, scalarIndex := some (buildScalarIndex sizes) }
+  (ctx.scalarSizes[id]?).join
 
 /-- Derive scalar widths from compiler metadata, never from bits or host types. -/
-def LowerContext.ofTypes (types : Array TypeNode) : LowerContext := Id.run do
+def LowerContext.ofTypes (types : Array TypeNode) (layouts : Miri.MIR.SharedTable Layout) : LowerContext := Id.run do
   let typeIds := types.map (·.id)
-  let scalarSizes := types.filterMap fun ty =>
-    if ty.layout.status == .supported then ty.layout.sizeBytes.map (ty.id, ·) else none
+  let scalarSizes := types.map fun ty =>
+    match layouts.lookup ty.layoutId with
+    | .ok layout => if layout.status == .supported then layout.sizeBytes else none
+    | .error _ => none
   let obligations : Array Obligation := types.filterMap fun ty =>
       if ty.shapeStatus == .supported then none else
         some ⟨s!"types[{ty.id}].shape", "type shape metadata remains unresolved; its compilation-local identity is preserved"⟩
-  let mut ctx : LowerContext := {
+  return {
     typeIds
     scalarSizes
     allocationIds := #[]
     obligations
     sourceDocument := none
   }
-  ctx := { ctx with
-    typeIndex := some (buildTypeIndex typeIds)
-    scalarIndex := some (buildScalarIndex scalarSizes) }
-  return ctx
 
 /-- Resolve graph identities from the same decoded compilation. Metadata
 semantics remain independent from syntax lowering and its obligations. -/
 def LowerContext.ofDocument (document : ImportDocumentCore) : LowerContext :=
-  let ctx := (ofTypes document.types).withAllocationIds (document.allocations.map (·.id))
-  { ctx with sourceDocument := some document.raw, compilerValueMemo := document.compilerValueMemo }
+  let ctx := ofTypes document.types document.layoutTable
+  { ctx with
+    allocationIds := document.allocations.map (·.id)
+    sourceDocument := some document.raw
+    validatedVtableProbeDiagnostics := document.validatedVtableProbeDiagnostics
+    compilerValueMemo := document.compilerValueMemo }
 
 set_option autoImplicit false in
 /-- A prepared lowering context tied to one exact decoded source document.
@@ -138,7 +77,8 @@ def LowerContext.bindDocument (document : ImportDocumentCore) : LowerContext.Bou
   ⟨LowerContext.ofDocument document, rfl⟩
 
 structure LoweredBody where
-  body : MIR.Body
+  body : MIR.BodyNode
+  bodyId : MIR.BodyId
   spans : Array SourceSpanData
   input : BodyCore
   definitions : Array DefinitionId
@@ -159,35 +99,16 @@ def LoweredBody.ownDefinitionId (body : LoweredBody) : LowerResult MIR.DefId := 
   let some sourceId := body.input.definitionId | throw "body is missing its source definition identity"
   lookupDefinitionId body.definitions sourceId
 
-/-- Constructor inventory. `true` means a lowering branch exists, subject to
-child metadata checks; it does not mean execution semantics is implemented.
-Exhaustive matches make newly added input constructors require a decision. -/
-def rvalueLoweringBranch : RvalueVariant → Bool
-  | .use | .binaryOp | .unaryOp | .discriminant | .copyForDeref | .wrapUnsafeBinder => true
-  | .repeat | .ref | .threadLocalRef | .rawPtr | .cast | .aggregate | .reborrow => true
-  | .unknown _ => false
-
-def statementLoweringBranch : StatementVariant → Bool
-  | .assign | .setDiscriminant | .storageLive | .storageDead | .placeMention | .constEvalCounter | .nop => true
-  | .fakeRead | .ascribeUserType | .coverage | .intrinsic | .backwardIncompatibleDropHint => true
-  | .unknown _ => false
-
-def terminatorLoweringBranch : TerminatorVariant → Bool
-  | .goto | .unwindResume | .return | .unreachable | .assert | .coroutineDrop | .falseEdge => true
-  | .switchInt | .unwindTerminate | .drop | .call | .tailCall | .yield | .falseUnwind | .inlineAsm => true
-  | .unknown _ => false
-
-private abbrev Fields := Array (String × TypedValue)
 private structure LowerState where
   spans : Array SourceSpanData := #[]
   definitions : Array DefinitionId := #[]
   typeConstants : Array MIR.TypeConst := #[]
-  /-- Enabled only by `lowerBodies`; standalone lowering keeps the original
-  linear lookup path. Buckets are candidates, never substitutes for equality. -/
+  /-- Buckets narrow equality checks without treating a hash as identity. -/
   spanCandidates : Option (Std.HashMap (String × Nat × Nat) (Array Nat)) := none
   definitionCandidates : Option (Std.HashMap (Nat × Nat) Nat) := none
 
 private abbrev LowerM := StateT LowerState (Except String)
+private abbrev Fields := Array (String × TypedValue)
 
 private def get (fs : Fields) (key : String) : LowerResult TypedValue :=
   match fs.find? (fun entry => entry.1 == key) with
@@ -249,14 +170,7 @@ private def intern (span : SourceSpanData) : LowerM MIR.SpanRef := do
       StateT.set { state with spans := state.spans.push span, spanCandidates := some nextCandidates }
       pure ⟨i⟩
 
-private def source (info : SourceInfo) : LowerM MIR.SourceInfo := do
-  return ⟨← intern info.span, info.scope⟩
-
 private def optional (lower : TypedValue → LowerResult α) : TypedValue → LowerResult (Option α)
-  | .scalar .null => pure none
-  | value => some <$> lower value
-
-private def optionalM (lower : TypedValue → LowerM α) : TypedValue → LowerM (Option α)
   | .scalar .null => pure none
   | value => some <$> lower value
 
@@ -289,66 +203,9 @@ private def definition (v : TypedValue) : LowerM MIR.DefId := do
     StateT.set { state with definitions := state.definitions.push id, definitionCandidates := candidates }
     pure i
 
-private def hasDefinition (state : LowerState) (id : DefinitionId) : Bool :=
-  match state.definitionCandidates with
-  | some candidates => (candidates.get? (id.crateIndex,id.index)).isSome
-  | none => state.definitions.contains id
-
-private def addDefinition (state : LowerState) (id : DefinitionId) : LowerState :=
-  if hasDefinition state id then state
-  else
-    let index := state.definitions.size
-    let candidates := state.definitionCandidates.map
-      (·.insert (id.crateIndex,id.index) index)
-    { state with definitions := state.definitions.push id, definitionCandidates := candidates }
-
 private def spanRef : TypedValue → LowerM MIR.SpanRef
   | .sourceSpan span => intern span
   | _ => throw "missing typed source span"
-
-private def mutability (v : TypedValue) : LowerResult MIR.Mutability := do
-  match ← tag v with
-  | "mutable" => pure .Mut
-  | "immutable" => pure .Not
-  | _ => throw "unknown mutability"
-
-private def safety (v : TypedValue) : LowerResult MIR.Safety := do
-  match ← tag v with
-  | "safe" => pure .Safe
-  | "unsafe" => pure .Unsafe
-  | _ => throw "unknown safety"
-
-private def castKind (v : TypedValue) : LowerResult MIR.CastKind := do
-  let fs ← fields v
-  match ← tag v with
-  | "PointerExposeProvenance" => pure .PointerExposeProvenance
-  | "PointerWithExposedProvenance" => pure .PointerWithExposedProvenance
-  | "PointerCoercion" =>
-    let c ← get fs "coercion"
-    let cf ← fields c
-    let coercion ← (show LowerResult MIR.PointerCoercion from match ← tag c with
-      | "ReifyFnPointer" => return MIR.PointerCoercion.ReifyFnPointer (← safety (← get cf "safety"))
-      | "UnsafeFnPointer" => pure .UnsafeFnPointer
-      | "ClosureFnPointer" => return .ClosureFnPointer (← safety (← get cf "safety"))
-      | "MutToConstPointer" => pure .MutToConstPointer
-      | "ArrayToPointer" => pure .ArrayToPointer
-      | "Unsize" => pure .Unsize
-      | _ => throw "unknown pointer coercion")
-    let source ← match ← tag (← get fs "source") with
-      | "as_cast" => pure MIR.CoercionSource.AsCast
-      | "implicit" => pure .Implicit
-      | _ => throw "unknown coercion source"
-    pure (.PointerCoercion coercion source)
-  | "IntToInt" => pure .IntToInt
-  | "FloatToInt" => pure .FloatToInt
-  | "FloatToFloat" => pure .FloatToFloat
-  | "IntToFloat" => pure .IntToFloat
-  | "PtrToPtr" => pure .PtrToPtr
-  | "FnPtrToPtr" => pure .FnPtrToPtr
-  | "Transmute" => pure .Transmute
-  | "BoxDerefTransmute" => pure .BoxDerefTransmute
-  | "Subtype" => pure .Subtype
-  | _ => throw "unknown cast kind"
 
 private def boundIndex (v : TypedValue) : LowerResult MIR.BoundVarIndexKind := do
   let fs ← fields v
@@ -387,46 +244,6 @@ private def region (v : TypedValue) : LowerM MIR.Region := do
   | "erased" => pure .Erased
   | "error" => pure .Error
   | _ => throw "unknown region"
-
-private def borrow (v : TypedValue) : LowerResult MIR.BorrowKind := do
-  let fs ← fields v
-  match ← tag v with
-  | "shared" => pure .Shared
-  | "fake" =>
-    match ← tag (← get fs "fake_kind") with
-    | "shallow" => pure (.Fake .Shallow)
-    | "deep" => pure (.Fake .Deep)
-    | _ => throw "unknown fake borrow"
-  | "mutable" =>
-    match ← tag (← get fs "mutability_kind") with
-    | "default" => pure (.Mut .Default)
-    | "two_phase" => pure (.Mut .TwoPhaseBorrow)
-    | "closure_capture" => pure (.Mut .ClosureCapture)
-    | _ => throw "unknown mutable borrow"
-  | _ => throw "unknown borrow kind"
-
-private def projection (ctx : LowerContext) : TypedValue → LowerResult MIR.ProjectionElem
-  | .projection k fs => do
-    match k with
-    | .deref => pure .Deref
-    | .field => return .Field (← nat (← get fs "index")) (← typeId ctx (← get fs "field_type"))
-    | .index => return .Index (← nat (← get fs "local"))
-    | .constantIndex => return .ConstantIndex (← nat (← get fs "offset")) (← nat (← get fs "min_length")) (← bool (← get fs "from_end"))
-    | .subslice => return .Subslice (← nat (← get fs "from")) (← nat (← get fs "to")) (← bool (← get fs "from_end"))
-    | .downcast =>
-      let name ← match ← get fs "name" with
-        | .scalar .null => pure none
-        | v => some <$> text v
-      return .Downcast name (← nat (← get fs "variant_index"))
-    | .opaqueCast => return .OpaqueCast (← typeId ctx (← get fs "cast_type"))
-    | .unwrapUnsafeBinder => return .UnwrapUnsafeBinder (← typeId ctx (← get fs "inner_type"))
-    | .phantomDeref => pure .PhantomDeref
-    | .unknown name => throw s!"unknown projection {name}"
-  | _ => .error "expected projection"
-
-private def place (ctx : LowerContext) (v : TypedValue) : LowerResult MIR.Place := do
-  let fs ← fields v
-  return ⟨← nat (← get fs "local"), ← (← array (← get fs "projection")).mapM (projection ctx)⟩
 
 private def binOp (v : TypedValue) : LowerResult MIR.BinOp := do
   match v with
@@ -561,21 +378,6 @@ private def annotation (v : TypedValue) : LowerResult Nat := do
   | .scalar (.num _) => nat v
   | _ => let fs ← fields v; nat (← get fs "index")
 
-private def aggregate (ctx : LowerContext) (v : TypedValue) : LowerM MIR.AggregateKind := do
-  let fs ← fields v
-  match ← tag v with
-  | "Array" => return .Array (← typeId ctx (← get fs "element_type"))
-  | "Tuple" => pure .Tuple
-  | "Adt" =>
-    return .Adt (← definition (← get fs "def_id")) (← nat (← get fs "variant_index"))
-      (← genericArgs ctx (← get fs "generic_args")) (← optional annotation (← get fs "user_type_annotation"))
-      (← optional nat (← get fs "active_union_field"))
-  | "Closure" => return .Closure (← definition (← get fs "def_id")) (← genericArgs ctx (← get fs "generic_args"))
-  | "Coroutine" => return .Coroutine (← definition (← get fs "def_id")) (← genericArgs ctx (← get fs "generic_args"))
-  | "CoroutineClosure" => return .CoroutineClosure (← definition (← get fs "def_id")) (← genericArgs ctx (← get fs "generic_args"))
-  | "RawPtr" => return .RawPtr (← typeId ctx (← get fs "pointee_type")) (← mutability (← get fs "mutability"))
-  | _ => throw "unknown aggregate kind"
-
 private def allocationId (ctx : LowerContext) : TypedValue → LowerResult MIR.AllocationId
   | .allocationRef id => if ctx.containsAllocationId id then pure id else throw s!"unresolved allocation {id}"
   | _ => throw "unresolved allocation reference"
@@ -612,504 +414,12 @@ private def constOperand (ctx : LowerContext) (v : TypedValue) : LowerM MIR.Cons
     | _ => throw "unknown MIR constant source")
   pure ⟨span, userType, constant⟩
 
-private def operand (ctx : LowerContext) : TypedValue → LowerM MIR.Operand
-  | .operand k _ fs => do
-    match k with
-    | .copy => return .Copy (← place ctx (← get fs "place"))
-    | .move => return .Move (← place ctx (← get fs "place"))
-    | .runtimeChecks =>
-      let check ← tag (← get fs "check")
-      let check ← match check with
-        | "ub_checks" => pure MIR.RuntimeChecks.UbChecks
-        | "contract_checks" => pure .ContractChecks
-        | "overflow_checks" => pure .OverflowChecks
-        | _ => throw "unknown runtime check"
-      return .RuntimeChecks check
-    | .constant => return .Constant (← constOperand ctx (← get fs "constant"))
-    | .unknown name => throw s!"unknown operand {name}"
-  | _ => throw "unsupported or malformed operand"
-
-private def rvalue (ctx : LowerContext) : TypedValue → LowerM MIR.Rvalue
-  | .rvalue k _ fs => do
-    match k with
-    | .use =>
-      let retag ← tag (← get fs "retag")
-      let retag ← match retag with
-        | "yes" => pure MIR.WithRetag.Yes
-        | "no" => pure .No
-        | _ => throw "unknown retag mode"
-      return .Use (← operand ctx (← get fs "operand")) retag
-    | .binaryOp =>
-      let op ← match ← get fs "operator" with
-        | .binOperator op .supported => pure op
-        | _ => throw "unsupported binary operator"
-      return .BinaryOp op (← operand ctx (← get fs "left")) (← operand ctx (← get fs "right"))
-    | .unaryOp =>
-      let op ← match ← get fs "operator" with
-        | .unOperator op .supported => pure op
-        | _ => throw "unsupported unary operator"
-      return .UnaryOp op (← operand ctx (← get fs "operand"))
-    | .discriminant => return .Discriminant (← place ctx (← get fs "place"))
-    | .copyForDeref => return .CopyForDeref (← place ctx (← get fs "place"))
-    | .wrapUnsafeBinder => return .WrapUnsafeBinder (← operand ctx (← get fs "operand")) (← typeId ctx (← get fs "type"))
-    | .repeat => return .Repeat (← operand ctx (← get fs "operand")) (← typeConst ctx (← get fs "count"))
-    | .ref => return .Ref (← region (← get fs "region")) (← borrow (← get fs "borrow_kind")) (← place ctx (← get fs "place"))
-    | .threadLocalRef => return .ThreadLocalRef (← definition (← get fs "def_id"))
-    | .rawPtr =>
-      let kind ← (show LowerM MIR.RawPtrKind from match ← tag (← get fs "pointer_kind") with
-        | "mutable" => pure .Mut
-        | "constant" => pure .Const
-        | "metadata_only" => pure .FakeForPtrMetadata
-        | _ => throw "unknown raw pointer kind")
-      return .RawPtr kind (← place ctx (← get fs "place"))
-    | .cast => return .Cast (← castKind (← get fs "cast_kind")) (← operand ctx (← get fs "operand")) (← typeId ctx (← get fs "target_type"))
-    | .aggregate => return .Aggregate (← aggregate ctx (← get fs "aggregate_kind")) (← (← array (← get fs "operands")).mapM (operand ctx))
-    | .reborrow => return .Reborrow (← typeId ctx (← get fs "type")) (← mutability (← get fs "mutability")) (← place ctx (← get fs "place"))
-    | .unknown name => throw s!"unknown rvalue {name}"
-  | _ => throw "unsupported or malformed rvalue"
-
-private def fakeRead (v : TypedValue) : LowerM MIR.FakeReadCause := do
-  let fs ← fields v
-  match ← tag v with
-  | "match_guard" => pure .ForMatchGuard
-  | "matched_place" => return .ForMatchedPlace (← optionalM definition (← get fs "hoisted_from"))
-  | "guard_binding" => pure .ForGuardBinding
-  | "let_binding" => return .ForLet (← optionalM definition (← get fs "hoisted_from"))
-  | "index" => pure .ForIndex
-  | _ => throw "unknown fake read cause"
-
-private def variance (v : TypedValue) : LowerResult MIR.Variance := do
-  match ← tag v with
-  | "covariant" => pure .Covariant
-  | "contravariant" => pure .Contravariant
-  | "invariant" => pure .Invariant
-  | "bivariant" => pure .Bivariant
-  | _ => throw "unknown variance"
-
-private def userProjectionKind : UserTypeProjectionKind → LowerResult MIR.ProjectionKind
-  | .deref => pure .Deref
-  | .field i => pure (.Field i)
-  | .index => pure .Index
-  | .constantIndex a b c => pure (.ConstantIndex a b c)
-  | .subslice a b c => pure (.Subslice a b c)
-  | .downcast a b => pure (.Downcast a b)
-  | .opaqueCast => pure .OpaqueCast
-  | .unwrapUnsafeBinder => pure .UnwrapUnsafeBinder
-  | .phantomDeref => pure .PhantomDeref
-  | .unknown name => throw s!"unknown user projection {name}"
-
-private def userProjection : TypedValue → LowerResult MIR.UserTypeProjection
-  | .userTypeProjection p => do
-    unless p.status == .supported do throw "unsupported user projection"
-    let some base := p.baseIndex | throw "missing user projection base"
-    let some ps := p.projections | throw "missing user projections"
-    return ⟨base, ← ps.mapM userProjectionKind⟩
-  | _ => throw "missing typed user projection"
-
-private def coverage (v : TypedValue) : LowerM MIR.CoverageKind := do
-  let fs ← fields v
-  match ← tag v with
-  | "point" =>
-    let kind ← (show LowerM MIR.CoveragePointKind from match ← tag (← get fs "point_kind") with
-      | "expr" => pure .Expr
-      | "implicit_else" => pure .ImplicitElse
-      | "function_end" => pure .FunctionEnd
-      | _ => throw "unknown coverage point")
-    let hir ← fields (← get fs "hir_id")
-    return .Point kind ⟨← definition (← get hir "owner_def_id"), ← nat (← get hir "local_id")⟩
-  | "block_marker" => return .BlockMarker (← nat (← get fs "id"))
-  | "virtual_counter" => return .VirtualCounter (← nat (← get fs "bcb"))
-  | _ => throw "unknown coverage kind"
-
-private def statement (ctx : LowerContext) (node : MirNode) : LowerM MIR.Statement := do
-  let kind ← (show LowerM MIR.StatementKind from match node.value with
-    | .statement k _ fs => do
-      match k with
-      | .assign => return MIR.StatementKind.Assign (← place ctx (← get fs "place")) (← rvalue ctx (← get fs "rvalue"))
-      | .storageLive => return .StorageLive (← nat (← get fs "local"))
-      | .storageDead => return .StorageDead (← nat (← get fs "local"))
-      | .placeMention => return .PlaceMention (← place ctx (← get fs "place"))
-      | .setDiscriminant => return .SetDiscriminant (← place ctx (← get fs "place")) (← nat (← get fs "variant_index"))
-      | .constEvalCounter => pure .ConstEvalCounter
-      | .nop => pure .Nop
-      | .fakeRead => return .FakeRead (← fakeRead (← get fs "cause")) (← place ctx (← get fs "place"))
-      | .ascribeUserType => return .AscribeUserType (← place ctx (← get fs "place")) (← userProjection (← get fs "user_type_projection")) (← variance (← get fs "variance"))
-      | .coverage => return .Coverage (← coverage (← get fs "coverage"))
-      | .intrinsic =>
-        let intrinsic ← (show LowerM MIR.NonDivergingIntrinsic from match ← text (← get fs "intrinsic") with
-          | "Assume" => return .Assume (← operand ctx (← get fs "value"))
-          | "CopyNonOverlapping" => return .CopyNonOverlapping ⟨← operand ctx (← get fs "src"), ← operand ctx (← get fs "dst"), ← operand ctx (← get fs "count")⟩
-          | _ => throw "unknown nondiverging intrinsic")
-        pure (.Intrinsic intrinsic)
-      | .backwardIncompatibleDropHint =>
-        unless (← tag (← get fs "reason")) == "edition_2024" do throw "unknown backward drop reason"
-        return .BackwardIncompatibleDropHint (← place ctx (← get fs "place")) .Edition2024
-      | .unknown name => throw s!"unknown statement {name}"
-    | _ => throw "unsupported or malformed statement")
-  return ⟨← source node.sourceInfo, kind⟩
-
-private def unwindReason (v : TypedValue) : LowerResult MIR.UnwindTerminateReason := do
-  match ← tag v with
-  | "abi" => pure .Abi
-  | "in_cleanup" => pure .InCleanup
-  | _ => throw "unknown unwind termination reason"
-
-private def coroutine (v : TypedValue) : LowerResult MIR.CoroutineKind := do
-  let fs ← fields v
-  match ← tag v with
-  | "desugared" =>
-    let desugaring ← (show LowerResult MIR.CoroutineDesugaring from match ← text (← get fs "desugaring") with
-      | "async" => pure .Async
-      | "gen" => pure .Gen
-      | "async_gen" => pure .AsyncGen
-      | _ => throw "unknown coroutine desugaring")
-    let source ← (show LowerResult MIR.CoroutineSource from match ← text (← get fs "source") with
-      | "block" => pure .Block
-      | "closure" => pure .Closure
-      | "function" => pure .Fn
-      | _ => throw "unknown coroutine source")
-    pure (.Desugared desugaring source)
-  | "coroutine" =>
-    match ← text (← get fs "movability") with
-    | "static" => pure (.Coroutine .Static)
-    | "movable" => pure (.Coroutine .Movable)
-    | _ => throw "unknown coroutine movability"
-  | _ => throw "unknown coroutine kind"
-
-private def unwind (v : TypedValue) : LowerResult MIR.UnwindAction := do
-  let fs ← fields v
-  match ← text (← get fs "kind") with
-  | "Continue" => pure .Continue
-  | "Unreachable" => pure .Unreachable
-  | "Cleanup" => return .Cleanup (← nat (← get fs "target"))
-  | "Terminate" => return .Terminate (← unwindReason (← get fs "reason"))
-  | _ => throw "unknown unwind action"
-
-private def assertKind (ctx : LowerContext) (v : TypedValue) : LowerM MIR.AssertKind := do
-  let fs ← fields v
-  match ← tag v with
-  | "Overflow" =>
-    let op ← match ← get fs "operator" with
-      | .binOperator op .supported => pure op
-      | _ => throw "unsupported assertion operator"
-    return .Overflow op (← operand ctx (← get fs "left")) (← operand ctx (← get fs "right"))
-  | "BoundsCheck" => return .BoundsCheck (← operand ctx (← get fs "length")) (← operand ctx (← get fs "index"))
-  | "OverflowNeg" => return .OverflowNeg (← operand ctx (← get fs "operand"))
-  | "DivisionByZero" => return .DivisionByZero (← operand ctx (← get fs "operand"))
-  | "RemainderByZero" => return .RemainderByZero (← operand ctx (← get fs "operand"))
-  | "NullPointerDereference" => pure .NullPointerDereference
-  | "NullReferenceConstructed" => pure .NullReferenceConstructed
-  | "ResumedAfterReturn" => return .ResumedAfterReturn (← coroutine (← get fs "coroutine_kind"))
-  | "ResumedAfterPanic" => return .ResumedAfterPanic (← coroutine (← get fs "coroutine_kind"))
-  | "ResumedAfterDrop" => return .ResumedAfterDrop (← coroutine (← get fs "coroutine_kind"))
-  | "MisalignedPointerDereference" => return .MisalignedPointerDereference (← operand ctx (← get fs "required")) (← operand ctx (← get fs "found"))
-  | "InvalidEnumConstruction" => return .InvalidEnumConstruction (← operand ctx (← get fs "operand"))
-  | _ => throw "unknown assertion kind"
-
-private def loopHint (v : TypedValue) : LowerResult MIR.LoopHintAttr := do
-  let fs ← fields v
-  match ← text (← get fs "kind") with
-  | "Hint" => pure .Hint
-  | "Full" => pure .Full
-  | "Never" => pure .Never
-  | "Count" => return .Count (← nat (← get fs "count"))
-  | _ => throw "unknown loop hint"
-
-private def callSource (v : TypedValue) : LowerResult MIR.CallSource := do
-  match ← tag v with
-  | "overloaded_operator" => pure .OverloadedOperator
-  | "match_comparison" => pure .MatchCmp
-  | "miscellaneous_desugaring" => pure .Misc
-  | "clone_or_use" => pure .Use
-  | "normal_call" => pure .Normal
-  | _ => throw "unknown call source"
-
-private def spannedOperand (ctx : LowerContext) (v : TypedValue) : LowerM MIR.SpannedOperand := do
-  let fs ← fields v
-  return ⟨← spanRef (← get fs "span"), ← operand ctx (← get fs "operand")⟩
-
-private def asmArch (v : TypedValue) : LowerResult MIR.InlineAsmArch := do
-  match ← text v with
-  | "X86" => pure .X86
-  | "X86_64" => pure .X86_64
-  | "Arm" => pure .Arm
-  | "Arm64EC" => pure .Arm64EC
-  | "AArch64" => pure .AArch64
-  | "Amdgpu" => pure .Amdgpu
-  | "RiscV32" => pure .RiscV32
-  | "RiscV64" => pure .RiscV64
-  | "Nvptx64" => pure .Nvptx64
-  | "PowerPC" => pure .PowerPC
-  | "PowerPC64" => pure .PowerPC64
-  | "Hexagon" => pure .Hexagon
-  | "LoongArch32" => pure .LoongArch32
-  | "LoongArch64" => pure .LoongArch64
-  | "Mips" => pure .Mips
-  | "Mips64" => pure .Mips64
-  | "Xtensa" => pure .Xtensa
-  | "S390x" => pure .S390x
-  | "Sparc" => pure .Sparc
-  | "Sparc64" => pure .Sparc64
-  | "SpirV" => pure .SpirV
-  | "Wasm32" => pure .Wasm32
-  | "Wasm64" => pure .Wasm64
-  | "Bpf" => pure .Bpf
-  | "Avr" => pure .Avr
-  | "Msp430" => pure .Msp430
-  | "M68k" => pure .M68k
-  | "CSKY" => pure .CSky
-  | _ => throw "unknown assembly architecture"
-
-private def asmRegister (v : TypedValue) : LowerResult MIR.InlineAsmRegOrRegClass := do
-  let fs ← fields v
-  let arch ← asmArch (← get fs "arch")
-  let name ← text (← get fs "name")
-  match ← tag v with
-  | "register" => pure (.Reg arch name)
-  | "register_class" => pure (.RegClass arch name)
-  | _ => throw "unknown assembly register kind"
-
-private def asmPiece (v : TypedValue) : LowerM MIR.InlineAsmTemplatePiece := do
-  let fs ← fields v
-  match ← tag v with
-  | "string" => return .String (← text (← get fs "text"))
-  | "placeholder" =>
-    let modifier ← optional (fun value => do
-      let s ← text value
-      match s.toList with
-      | [c] => pure c
-      | _ => throw "assembly modifier must be one character") (← get fs "modifier")
-    return .Placeholder (← nat (← get fs "operand_index")) modifier (← spanRef (← get fs "span"))
-  | _ => throw "unknown assembly template piece"
-
-private def asmOperand (ctx : LowerContext) (v : TypedValue) : LowerM MIR.InlineAsmOperand := do
-  let fs ← fields v
-  match ← tag v with
-  | "in" => return .In (← asmRegister (← get fs "register")) (← operand ctx (← get fs "value"))
-  | "out" => return .Out (← asmRegister (← get fs "register")) (← bool (← get fs "late")) (← optional (place ctx) (← get fs "place"))
-  | "inout" => return .InOut (← asmRegister (← get fs "register")) (← bool (← get fs "late")) (← operand ctx (← get fs "input")) (← optional (place ctx) (← get fs "output"))
-  | "const" => return .Const (← constOperand ctx (← get fs "value"))
-  | "sym_fn" => return .SymFn (← constOperand ctx (← get fs "value"))
-  | "sym_static" => return .SymStatic (← definition (← get fs "def_id"))
-  | "label" => return .Label (← nat (← get fs "target_index"))
-  | _ => throw "unknown assembly operand"
-
-private def inlineAsm (ctx : LowerContext) (fs : Fields) : LowerM MIR.InlineAsmTerminator := do
-  let macroKind ← (show LowerM MIR.InlineAsmMacro from match ← text (← get fs "asm_macro") with
-    | "asm" => pure .Asm
-    | "naked_asm" => pure .NakedAsm
-    | _ => throw "unknown assembly macro")
-  let options ← fields (← get fs "options")
-  let options : MIR.InlineAsmOptions := ⟨← bool (← get options "pure"), ← bool (← get options "nomem"),
-    ← bool (← get options "readonly"), ← bool (← get options "preserves_flags"), ← bool (← get options "noreturn"),
-    ← bool (← get options "nostack"), ← bool (← get options "att_syntax"), ← bool (← get options "raw"), ← bool (← get options "may_unwind")⟩
-  let template ← (← array (← get fs "template")).mapM asmPiece
-  let operands ← (← array (← get fs "operands")).mapM (asmOperand ctx)
-  let spans ← (← array (← get fs "line_spans")).mapM spanRef
-  let targets ← ((← array (← get fs "targets")).mapM nat : LowerResult _)
-  for op in operands do
-    match op with
-    | .Label index => unless index < targets.size do throw "assembly label index exceeds target list"
-    | _ => pure ()
-  for piece in template do
-    match piece with
-    | .Placeholder index _ _ => unless index < operands.size do throw "assembly placeholder exceeds operand list"
-    | _ => pure ()
-  return ⟨macroKind, template, operands, options, spans, targets, ← unwind (← get fs "unwind")⟩
-
-private def terminator (ctx : LowerContext) (node : MirNode) : LowerM MIR.Terminator := do
-  let kind ← (show LowerM MIR.TerminatorKind from match node.value with
-    | .terminator k _ fs => do
-      match k with
-      | .return => pure MIR.TerminatorKind.Return
-      | .unreachable => pure .Unreachable
-      | .unwindResume => pure .UnwindResume
-      | .coroutineDrop => pure .CoroutineDrop
-      | .assert => return .Assert (← operand ctx (← get fs "condition")) (← bool (← get fs "expected")) (← assertKind ctx (← get fs "message")) (← nat (← get fs "target")) (← unwind (← get fs "unwind"))
-      | .falseEdge => return .FalseEdge (← nat (← get fs "real_target")) (← nat (← get fs "imaginary_target"))
-      | .goto =>
-        let hints ← array (← get fs "loop_hints")
-        let lowered ← (hints.mapM loopHint : LowerResult _ )
-        return .Goto (← nat (← get fs "target")) lowered
-      | .switchInt =>
-        let cases ← (← array (← get fs "targets")).mapM fun entry => do
-          let ef ← fields entry
-          pure (MIR.SwitchTarget.Case (← number (← get ef "value")) (← nat (← get ef "target")))
-        return .SwitchInt (← operand ctx (← get fs "discriminant")) ⟨cases, ← nat (← get fs "otherwise")⟩
-      | .unwindTerminate => return .UnwindTerminate (← unwindReason (← get fs "reason"))
-      | .drop => return .Drop (← place ctx (← get fs "place")) (← nat (← get fs "target")) (← unwind (← get fs "unwind")) (← bool (← get fs "replace")) (← optional nat (← get fs "async_drop"))
-      | .call => return .Call (← operand ctx (← get fs "function")) (← (← array (← get fs "args")).mapM (spannedOperand ctx)) (← place ctx (← get fs "destination")) (← optional nat (← get fs "target")) (← unwind (← get fs "unwind")) (← callSource (← get fs "call_source")) (← spanRef (← get fs "function_span"))
-      | .tailCall => return .TailCall (← operand ctx (← get fs "function")) (← (← array (← get fs "args")).mapM (spannedOperand ctx)) (← spanRef (← get fs "function_span"))
-      | .yield => return .Yield (← operand ctx (← get fs "value")) (← nat (← get fs "resume")) (← place ctx (← get fs "resume_arg")) (← optional nat (← get fs "drop"))
-      | .falseUnwind => return .FalseUnwind (← nat (← get fs "real_target")) (← unwind (← get fs "unwind"))
-      | .inlineAsm => return .InlineAsm (← inlineAsm ctx fs)
-      | .unknown name => throw s!"unknown terminator {name}"
-    | _ => throw "unsupported or malformed terminator")
-  return ⟨← source node.sourceInfo, kind⟩
-
-private def phase : TypedValue → LowerResult MIR.MirPhase
-  | .enumTag .mirPhase t fs => do
-    unless t.status == .supported do throw "unsupported MIR phase"
-    match t.tag with
-    | "built" => pure .Built
-    | "analysis" =>
-      match ← tag (← get fs "phase") with
-      | "initial" => pure (.Analysis .Initial)
-      | "post_cleanup" => pure (.Analysis .PostCleanup)
-      | _ => throw "unknown analysis phase"
-    | "runtime" =>
-      match ← tag (← get fs "phase") with
-      | "initial" => pure (.Runtime .Initial)
-      | "post_cleanup" => pure (.Runtime .PostCleanup)
-      | "optimized" => pure (.Runtime .Optimized)
-      | _ => throw "unknown runtime phase"
-    | _ => throw "unknown MIR phase"
-  | _ => .error "missing typed MIR phase"
-
-private partial def validateReferences (ctx : LowerContext) (locals blocks : Nat)
-    (v : TypedValue) : LowerResult Unit := do
-  match v with
-  | .typeRef id => unless ctx.containsTypeId id do throw s!"unresolved type {id}"
-  | .allocationRef id => unless ctx.containsAllocationId id do throw s!"unresolved allocation {id}"
-  | .localRef id => unless id < locals do throw s!"out-of-range local {id}"
-  | .blockRef id => unless id < blocks do throw s!"out-of-range block {id}"
-  | .array vs => for child in vs do validateReferences ctx locals blocks child
-  | .object fs | .statement _ _ fs | .terminator _ _ fs | .rvalue _ _ fs
-  | .operand _ _ fs | .projection _ fs | .enumTag _ _ fs =>
-    for (_, child) in fs do validateReferences ctx locals blocks child
-  | .unknownBinOperator name _ | .unknownUnOperator name _ => throw s!"unknown operator {name}"
-  | .diagnostic _ => pure ()
-  | _ => pure ()
-
-private def statusObligations (status : PayloadStatus) (path : String) : Array Obligation :=
-  if status == .supported then #[] else #[⟨path, s!"compiler payload status remains {repr status}; syntax construction does not discharge execution obligations"⟩]
-
-private def isValidatedProbeLeaf (sourceDocument : Option Lean.Json) (path : String) : Bool :=
-  match sourceDocument with
-  | some source => exactVtableProbeDiagnostic source path
-  | none => false
-
-private partial def payloadObligations (sourceDocument : Option Lean.Json)
-    (v : TypedValue) (path : String) : Array Obligation := Id.run do
-  match v with
-  | .array vs => return (vs.toList.zipIdx).foldl (fun out (child, i) => out ++ payloadObligations sourceDocument child s!"{path}[{i}]") #[]
-  | .diagnostic _ => return #[⟨path, "diagnostic-only compiler metadata remains unresolved"⟩]
-  | _ => pure ()
-  let (own, children) : Array Obligation × Fields := match v with
-    | .statement _ status fs | .terminator _ status fs | .rvalue _ status fs | .operand _ status fs => (statusObligations status path, fs)
-    | .enumTag _ t fs => (statusObligations t.status path, fs)
-    | .object fs | .projection _ fs => (#[], fs)
-    | _ => (#[], #[])
-  let mut out := own
-  for (key, child) in children do
-    if key == "status" then
-      match child with
-      | .scalar (.str status) =>
-        unless status == "supported" || status == "complete" ||
-            (status != "supported" && isValidatedProbeLeaf sourceDocument (path ++ ".status")) do
-          out := out.push ⟨path, s!"compiler metadata status remains {status}"⟩
-      | _ => pure ()
-    out := out ++ payloadObligations sourceDocument child (path ++ "." ++ key)
-  return out
-
-private def unwindTargets : MIR.UnwindAction → Array Nat
-  | .Cleanup target => #[target]
-  | .Continue | .Unreachable | .Terminate _ => #[]
-
-private def controlTargets : MIR.TerminatorKind → Array Nat
-  | .Goto target _ => #[target]
-  | .SwitchInt _ targets => targets.cases.map (fun (.Case _ target) => target) ++ #[targets.otherwise]
-  | .Drop _ target unwind _ asyncDrop => #[target] ++ unwindTargets unwind ++ asyncDrop.toArray
-  | .Call _ _ _ target unwind _ _ => target.toArray ++ unwindTargets unwind
-  | .Assert _ _ _ target unwind => #[target] ++ unwindTargets unwind
-  | .Yield _ resume _ drop => #[resume] ++ drop.toArray
-  | .FalseEdge real imaginary => #[real, imaginary]
-  | .FalseUnwind real unwind => #[real] ++ unwindTargets unwind
-  | .InlineAsm asm => asm.targets ++ unwindTargets asm.unwind
-  | .UnwindResume | .UnwindTerminate _ | .Return | .Unreachable | .TailCall .. | .CoroutineDrop => #[]
-
-/-- Construct source-shaped MIR, preserving its decoded envelope and interning
-actual source spans. Unsupported constructors and missing metadata are errors. -/
-private def lowerBodyState (ctx : LowerContext) (input : BodyCore) (initial : LowerState) : LowerResult (LoweredBody × LowerState) := do
-  let mirPhase ← phase input.phase
-  match input.injectionPhase with
-  | some value => let _ ← phase value; pure ()
-  | none => pure ()
-  unless !input.blocks.isEmpty do throw "body has no entry basic block"
-  let scopes ← match input.sourceScopes with
-    | some scopes => pure scopes
-    | none => throw "missing source scope metadata"
-  for decl in input.locals do
-    unless decl.sourceInfo.scope < scopes.size do throw "unresolved local source scope"
-  unless input.argumentCount < input.locals.size do throw "argument count exceeds locals"
-  for (decl, i) in input.locals.toList.zipIdx do
-    unless decl.id == i do throw "noncontiguous local IDs"
-    unless ctx.containsTypeId decl.typeId do throw s!"unresolved local type {decl.typeId}"
-  for (block, i) in input.blocks.toList.zipIdx do
-    unless block.id == i do throw "noncontiguous basic block IDs"
-    for node in block.statements.push block.terminator do
-      unless node.sourceInfo.scope < scopes.size do throw "unresolved instruction source scope"
-      validateReferences ctx input.locals.size input.blocks.size node.value
-  match input.spreadArgument with
-  | some arg => unless arg > 0 && arg ≤ input.argumentCount do throw "invalid spread argument"
-  | none => pure ()
-  let action : LowerM (Array MIR.BasicBlock) := input.blocks.mapM fun block => do
-    return ⟨← block.statements.mapM (statement ctx), ← terminator ctx block.terminator, block.cleanup⟩
-  let initial := match input.definitionId with
-    | some sourceId =>
-      addDefinition initial sourceId
-    | none => initial
-  let (blocks, state) ← action.run initial
-  for block in blocks do
-    for target in controlTargets block.terminator.kind do
-      unless target < blocks.size do throw s!"out-of-range control-flow target {target}"
-  let obligations := input.blocks.toList.zipIdx.foldl (fun out (block, blockIndex) => Id.run do
-    let bodyPrefix := if input.sourcePath.isEmpty then "" else input.sourcePath ++ "."
-    let blockPrefix := s!"{bodyPrefix}basic_blocks[{blockIndex}]"
-    let statements := block.statements.toList.zipIdx.foldl (fun issues (node, statementIndex) =>
-      issues ++ payloadObligations ctx.sourceDocument node.value
-        s!"{blockPrefix}.statements[{statementIndex}].kind") #[]
-    let terminator := payloadObligations ctx.sourceDocument block.terminator.value
-      s!"{blockPrefix}.terminator.kind"
-    return out ++ statements ++ terminator) ctx.obligations
-  let obligations := if input.definitionId.isSome then obligations else
-    obligations.push ⟨"body.definitionId", "source definition identity is missing; runtime frame initialization must fail until supplied"⟩
-  return (⟨⟨mirPhase, input.argumentCount, input.spreadArgument, input.locals.map (·.typeId), blocks⟩, state.spans, input, state.definitions, state.typeConstants, obligations⟩, state)
-
-/-- A standalone body's definition/type-constant/span IDs are local to this
-result. Use `lowerBodies` or `lowerProgram` for cross-function linking. -/
-def lowerBody (ctx : LowerContext) (input : BodyCore) : LowerResult LoweredBody :=
-  (lowerBodyState ctx input {}).map Prod.fst
 
 structure LoweredBodies where
   bodies : Array LoweredBody
   spans : Array SourceSpanData
   definitions : Array DefinitionId
   typeConstants : Array MIR.TypeConst
-
-/-- Lower a compilation's bodies through one shared interner, including
-mutually recursive references. Every returned body uses the same ID tables. -/
-def lowerBodies (ctx : LowerContext) (inputs : Array BodyCore)
-    (seedDefinitions : Array DefinitionId := #[]) : LowerResult LoweredBodies := do
-  let mut state : LowerState := { spanCandidates := some {}, definitionCandidates := some {} }
-  for id in seedDefinitions do
-    state := addDefinition state id
-  -- Seed definition identities before traversing instructions: references to
-  -- later and mutually recursive bodies resolve to the same dense identities.
-  for input in inputs do
-    if let some id := input.definitionId then
-      state := addDefinition state id
-  let mut bodies := #[]
-  for input in inputs do
-    let (body, next) ← lowerBodyState ctx input state
-    bodies := bodies.push body
-    state := next
-  bodies := bodies.map fun body =>
-    { body with
-      spans := state.spans
-      definitions := state.definitions
-      typeConstants := state.typeConstants }
-  pure ⟨bodies, state.spans, state.definitions, state.typeConstants⟩
 
 structure LoweredProgram where
   bundle : LoweredBodies
@@ -1156,21 +466,33 @@ def lowerCoreProgram (input : ImportDocumentCore) : LowerResult LoweredProgram :
           inputs := inputs.push childBody
   -- The complete source body list includes root/instance/promoted identities;
   -- seed all of them explicitly, plus graph instances that have no MIR body.
-  let definitions := inputs.filterMap (·.definitionId) ++ input.instances.filterMap (·.definitionId)
-  pure ⟨← lowerBodies (LowerContext.ofDocument input) inputs definitions, roots, instances, promoted, input⟩
+  unless input.mirTables.bodies.size == inputs.size do throw "MIR body table does not match source body catalog"
+  let tables := input.mirTables.compiler
+  let ctx := LowerContext.ofDocument input
+  let mut bodies := #[]
+  for (source,index) in inputs.toList.zipIdx do
+    let bodyId ← input.mirTables.bodyId index
+    let body ← input.mirTables.body index
+    let mut obligations := ctx.obligations
+    match source.syntaxObligations with
+    | some extracted => obligations := obligations ++ extracted
+    | none =>
+      for (block,blockIndex) in source.blocks.toList.zipIdx do
+        let bodyPath := if source.sourcePath.isEmpty then "" else source.sourcePath ++ "."
+        let path := s!"{bodyPath}basic_blocks[{blockIndex}]"
+        for (node,statementIndex) in block.statements.toList.zipIdx do
+          obligations := obligations ++ DecoderValues.syntaxPayloadObligations ctx.validatedVtableProbeDiagnostics.contains node.value s!"{path}.statements[{statementIndex}].kind"
+        obligations := obligations ++ DecoderValues.syntaxPayloadObligations ctx.validatedVtableProbeDiagnostics.contains block.terminator.value s!"{path}.terminator.kind"
+    unless source.definitionId.isSome do
+      obligations := obligations.push ⟨"body.definitionId", "source definition identity is missing"⟩
+    bodies := bodies.push {
+      body, bodyId, input := source, obligations
+      spans := tables.spans, definitions := tables.definitions, typeConstants := tables.typeConstants }
+  pure ⟨⟨bodies, tables.spans, tables.definitions, tables.typeConstants⟩, roots, instances, promoted, input⟩
 
-/-- Compatibility entrypoint for full diagnostic documents. Runtime clients
-that decode without retaining the typed JSON tree should call
-`lowerCoreProgram`. -/
+
 def lowerProgram (input : ImportDocument) : LowerResult LoweredProgram :=
   lowerCoreProgram input.toCore
-
-/-- Interner state shared by metadata-query lowering and MIR syntax. Appending
-entries preserves every previously lowered ID. -/
-structure CompilerTables where
-  spans : Array SourceSpanData
-  definitions : Array DefinitionId
-  typeConstants : Array MIR.TypeConst
 
 def LoweredProgram.compilerTables (program : LoweredProgram) : CompilerTables :=
   ⟨program.bundle.spans, program.bundle.definitions, program.bundle.typeConstants⟩
@@ -1293,10 +615,5 @@ def lowerCompilerConstOperandWithInterner (ctx : LowerContext)
   let tables : CompilerTables := ⟨state.spans, state.definitions, state.typeConstants⟩
   return (operand, ⟨tables, state.spanCandidates.getD interner.candidates,
     .prepare state.spans⟩)
-
-/-- Decode the source place key for compiler query evidence. Projection types
-must already belong to the shared input type graph. -/
-def lowerCompilerPlace (ctx : LowerContext) (value : TypedValue) : LowerResult MIR.Place :=
-  place ctx value
 
 end Miri.Input

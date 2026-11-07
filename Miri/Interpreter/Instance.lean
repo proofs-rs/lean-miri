@@ -68,4 +68,12 @@ def defId (self : CallInstance) : DefId := self.kind.defId
 
 end CallInstance
 
+/-- Function-kind query after signature normalization, before callee resolution. -/
+inductive CallFunctionKind where
+  | FnPtr
+  | FnDef (definition : DefId) (args : Array GenericArg)
+  | invalid
+  deriving Repr, DecidableEq
+
+
 end Miri.Interpreter

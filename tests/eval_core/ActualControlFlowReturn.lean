@@ -205,7 +205,7 @@ private def runPrepared (prepared : Input.CompilerProviders.Prepared) : Except S
   let inner := ExecutionStateTransport.inward initial
   let bytesAction : MachineHooks.M MiriMemoryKind CoreUser
       Input.CompilerGlobalBytes.Prepared :=
-    Input.CompilerGlobalBytes.attach prepared.program prepared.runtime
+    Input.CompilerGlobalBytes.attach prepared.owner
   let (inner, bytes) ← checkedState (MachineHooks.run bytesAction inner)
   let coreLeaves := leaves dummy
   match Input.EvalConfigurationCore.make prepared image bytes options coreLeaves () 256 with

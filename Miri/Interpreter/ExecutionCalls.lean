@@ -1,3 +1,5 @@
+import Miri.Interpreter.PlaceTable
+import Miri.Interpreter.OperandTable
 import Miri.Interpreter.FunctionPointers
 import Miri.Interpreter.ExecutionCallLeaves
 import Miri.Interpreter.CallMachine
@@ -69,9 +71,13 @@ def make [DecidableEq K] (leaves : ExecutionCallLeaves.Hooks (State K U) C Other
    setFrame := MachineHooks.setCurrentFrame
    frameIndex := do match (← get).stack.frameIndex with
       | .ok index => pure index | .error error => throw (.stack error)
-   evalOperand := fun c operand => OperandMachine.evalOperand operands c operand none
-   evalOperandAt := fun c path operand => OperandMachine.evalOperandAt operands c path operand none
-   evalPlace := fun c dest skip => return (← PlaceDynamic.evalPlace projection c dest skip).stackView
+   evalOperand := fun c operand => OperandTable.evalOperand operands c operand none
+   evalOperandAt := fun c path operand => OperandTable.evalOperandAt operands c path operand none
+   evalPlace := fun c dest skip => do
+     let frame ← MachineHooks.currentFrame
+     return (← PlaceTable.eval frame.mirTables projection
+       (fun c id value => operands.checkPlaceType c id value.layout) c dest skip).stackView
+   evalLocalPlace := fun c dest skip => return (← PlaceDynamic.evalPlace projection c dest skip).stackView
    placeToOp := fun c dest => placeToOp place c dest.toRuntimePlace
    forceAllocation := fun c dest => forceAllocation place c dest.toRuntimePlace
    functionSignature := leaves.compiler.functionSignature

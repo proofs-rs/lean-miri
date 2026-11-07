@@ -31,10 +31,8 @@ def dynamicData (prepared : CompilerFactAdapters.Prepared) (id : TypeId) :
   let token ← match ← CompilerFactAdapters.validityKind prepared id with
     | .dynamic token => pure token
     | _ => throw "dynamic predicate-array identity mismatch"
-  let shape ← node.payload.getObjVal? "shape"
-  let principal ← shape.getObjVal? "principal_predicate"
-  let principal : Option Nat ← if principal == Lean.Json.null then pure none else do
-    pure (some (← (← principal.getObjVal? "predicate_id").getNat?))
+  let list ← prepared.dynamicPredicates.lookup token |>.mapError (fun id => s!"invalid predicate list {id}")
+  let some principal := list.principal | throw "compiler principal evidence absent"
   return some ⟨token,principal⟩
 
 private def lift (value : Result A) : EStateM StepError S A :=
@@ -72,17 +70,13 @@ def inlineAttribute (prepared : CompilerScopes.Prepared) (fnInstance : CallInsta
             found := some value
   return found
 
-/-- The canonical body key comes directly from the saved frame. Body equality
-is only a consistency assertion after indexing, never a body lookup strategy.
-A non-inlined instance's attribute still uses the mandatory base query. -/
+/-- Non-inlined instances still require their own compiler attribute query. -/
 def scopeHooks (prepared : CompilerScopes.Prepared) (base : VirtualCalls.CompilerHooks S C) :
     VirtualCalls.CompilerHooks S C :=
   { base with
     sourceScope := fun identity _ body scope => do
-      let actual ← lift (match prepared.program.bundle.bodies[identity.index]? with
-        | some value => .ok value
-        | none => .error "canonical frame body identity is absent")
-      unless actual.body == body do throw (.invalidProgram "frame body identity/content mismatch")
+      let actual ← lift (prepared.program.input.mirTables.bodyId identity.index)
+      unless actual == body do throw (.invalidProgram "frame body ID mismatch")
       lift (CompilerScopes.sourceScope prepared identity.index scope)
     requiresCallerLocation := fun fnInstance => do
       match ← lift (inlineAttribute prepared fnInstance) with

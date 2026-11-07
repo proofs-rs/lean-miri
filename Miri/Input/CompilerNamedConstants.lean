@@ -1,59 +1,30 @@
+import Miri.Input.RuntimeProgram
 import Miri.Input.CompilerInstance
 import Miri.Interpreter.Constant
 
 /-! Actual compiler ValueNS path resolution and const_eval_instance evidence
 for helpers.rs::eval_path_scalar/eval_libc. Original full constant identity,
-query environment, type, value and raw payload remain available. Allocation
+query environment, type, value and exact source path remain available. Allocation
 values use the canonical Constant pipeline, preserving graph provenance.
 -/
 namespace Miri.Input.CompilerNamedConstants
 open Lean Miri.ABI Miri.Memory Miri.Interpreter
-structure Value where
-  sourceInstance : CallInstance
-  ty : MIR.TyId
-  value : MIR.ConstValue
-structure Entry where
-  name : String
-  result : Except String Value
-  payload : Json
+abbrev Value := NamedConstantValueData
+abbrev Entry := NamedConstantQueryData
 structure Prepared where
-  program : LoweredProgram
-  runtime : RuntimeMetadata
+  owner : RuntimeProgram
   entries : Array Entry
-private def supported (j : Json) : Except String Unit := do
-  unless (← (← j.getObjVal? "status").getStr?) == "supported" do
-    throw s!"named compiler constant unavailable: {((j.getObjVal? "reason").bind Json.getStr?).toOption}"
+@[inline] def Prepared.program (prepared : Prepared) : LoweredProgram := prepared.owner.program
+@[inline] def Prepared.runtime (prepared : Prepared) : RuntimeMetadata := prepared.owner.runtime
 
-def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : Except String Prepared := do
-  unless RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality program.input.raw do
-    throw "named constant metadata document mismatch"
-  let records ← (← program.input.raw.getObjVal? "compiler_named_constants").getArr?
-  let ctx := LowerContext.ofDocument program.input
-  let mut tables := program.compilerTables
-  let mut entries := #[]
-  for record in records do
-    let name ← (← record.getObjVal? "name").getStr?
-    unless !(entries.any (·.name == name)) do throw "duplicate compiler named constant query"
-    unless (← (← record.getObjVal? "typing_env").getStr?) == "fully_monomorphized" do
-      throw "named constant compiler environment mismatch"
-    let query ← record.getObjVal? "query"
-    let origin := do
-      supported query
-      CompilerInstance.decode ctx tables query
-    let result ← match origin with
-      | .error reason => pure (.error reason)
-      | .ok (sourceInstance,next) =>
-        tables := next
-        pure (do
-          let ty ← (← (← query.getObjVal? "type").getObjVal? "type_id").getNat?
-          unless ctx.containsTypeId ty do throw "named constant references missing compiler type"
-          let evaluated ← query.getObjVal? "evaluation"
-          supported evaluated
-          let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue (← evaluated.getObjVal? "value"))
-          pure (⟨sourceInstance,ty,value⟩ : Value))
-    entries := entries.push ⟨name,result,record⟩
-  pure ⟨program.withCompilerTables tables,runtime,entries⟩
+def Prepared.withProgram (prepared : Prepared) (program : LoweredProgram) : Prepared :=
+  {prepared with owner := prepared.owner.withProgram program}
+
+def prepare (owner : RuntimeProgram) : Except String Prepared := do
+  let program := owner.program
+  let runtime := owner.runtime
+  let entries ← program.input.mirTables.namedConstants
+  return ⟨owner,entries⟩
 
 def value (prepared : Prepared) (name : String) : Except String Value := do
   let some entry := prepared.entries.find? (·.name == name)

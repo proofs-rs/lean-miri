@@ -10,7 +10,7 @@ set_option autoImplicit false
 classification is stated solely over original candidate geometry and original
 source/target descriptors. Other source and target kinds remain separate
 families of the full current-caller goal. -/
-theorem result (s : Static) (metadata : Metadata s) (profile : Profile s)
+theorem result (s : Static) (metadata : Metadata s) [SuccessfulConstant metadata] (profile : Profile s)
     (p : Packet) (runtime : RuntimeProfile s p) (input : InputDraft.CurrentInputDraft s p)
     (resources : ResourceMargins s p) (destination : InputDraft.MemoryDestination s p input.tracker)
     (ordinary : CanonicalLatentPreflight.Ordinary s p) :

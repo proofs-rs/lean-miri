@@ -1,57 +1,33 @@
 import Miri.Input.CompilerFrameContext
 
-/-! Exact debug-only place/operand type checks, place.rs:626–643 and
-operand.rs:805–830. The compiler's instantiated body supplies each expected
-place type. Runtime projection/layouts never substitute for that query. -/
 namespace Miri.Input.CompilerPlaceTypes
-open Lean Miri.ABI Miri.Interpreter Miri.Memory
-
-private def scan (ctx : LowerContext) (requested : MIR.Place) :
-    Nat → Json → Json → Except String (Array MIR.TyId)
-  | 0,_,_ => throw "place query traversal budget exhausted"
-  | fuel+1,source,normalized => do
-    let mut found := #[]
-    if (source.getObjVal? "local").isOk && (source.getObjVal? "projection").isOk then
-      let key ← lowerCompilerPlace ctx (← ctx.decodeCompilerValue source)
-      if key == requested then
-        found := found.push (← (← normalized.getObjVal? "type").getObjValAs? Nat "type_id")
-    match source with
-    | .arr values =>
-      let counterparts ← normalized.getArr?
-      unless values.size == counterparts.size do throw "normalization changed source place container length"
-      for index in [:values.size] do
-        let some original := values[index]? | throw "source traversal index absent"
-        let some actual := counterparts[index]? | throw "normalized traversal index absent"
-        found := found ++ (← scan ctx requested fuel original actual)
-    | .obj fields =>
-      for (key,value) in fields.toList do
-        -- Scalar metadata may legitimately change during normalization. Only
-        -- containers can contain further source places.
-        match value with
-        | .arr _ | .obj _ =>
-          found := found ++ (← scan ctx requested fuel value (← normalized.getObjVal? key))
-        | _ => pure ()
-    | _ => pure ()
-    pure found
+open Miri.ABI Miri.Interpreter Miri.Memory
 
 def expectedLayout (p : CompilerProviders.Prepared) (frame : CompilerFrameContext.ActualFrame)
-    (requested : MIR.Place) : Except String LocalLayout := do
-  let body ← CompilerFrameContext.bodyOfFrame p frame
-  let source ← body.input.payload.getObjVal? "basic_blocks"
-  let normalized ← (← CompilerFrameContext.normalizedBody p frame).getObjVal? "basic_blocks"
-  let ids ← scan p.loweringContext requested
-    (source.compress.length+1) source normalized
-  let some id := ids[0]? | throw "place has no exact compiler normalization evidence in canonical body"
-  unless ids.all (· == id) do throw "same source place has conflicting normalized compiler types"
+    (requested : MIR.PlaceId) : Except String LocalLayout := do
+  let _ ← CompilerFrameContext.bodyOfFrame p frame
+  let some types := p.program.input.mirTables.normalization[frame.bodyIdentity.index]?
+    | throw "canonical body place types absent"
+  let id ← (← types).places.lookup requested.index |>.mapError (fun id => s!"place {id} has no compiler normalization evidence in this body")
   p.runtime.lookup id |>.mapError toString
 
-def check (p : CompilerProviders.Prepared) (debugAssertions : Bool)
-    (relateCovariantly : LocalLayout → LocalLayout → MachineHooks.M K U Bool)
-    (requested : MIR.Place) (actual : LocalLayout) : MachineHooks.M K U Unit := do
-  if !debugAssertions then return
-  let expected ← match expectedLayout p (← MachineHooks.currentFrame) requested with
-    | .ok value => pure value
-    | .error reason => throw (.unsupported s!"compiler place type query: {reason}")
+private def localLayout (p : CompilerProviders.Prepared) (frame : CompilerFrameContext.ActualFrame)
+    (requested : MIR.Place) : Except String LocalLayout := do
+  let mut ty ← CompilerFrameContext.normalizedLocalType p frame requested.localId
+  for projection in requested.projection do
+    ty ← match projection with
+      | .Field _ fieldType | .OpaqueCast fieldType | .UnwrapUnsafeBinder fieldType => pure fieldType
+      | .Deref | .Index _ | .ConstantIndex .. => do
+        let some node := p.program.input.types[ty]? | throw "local projection type absent"
+        let next := if projection == .Deref then node.relations.pointee else node.relations.element
+        let some next := next | throw "local projection compiler type absent"
+        pure next
+      | .Downcast .. => pure ty
+      | .Subslice .. | .PhantomDeref => throw "unsupported synthetic local projection"
+  p.runtime.lookup ty |>.mapError toString
+
+private def checkLayout (relateCovariantly : LocalLayout → LocalLayout → MachineHooks.M K U Bool)
+    (expected actual : LocalLayout) : MachineHooks.M K U Unit := do
   let related ← if expected.ty == actual.ty then pure true else relateCovariantly expected actual
   unless related do throw (.invalidProgram "MIR place compiler type differs from evaluated place type")
   unless expected.layout == actual.layout do
@@ -59,11 +35,21 @@ def check (p : CompilerProviders.Prepared) (debugAssertions : Bool)
 
 def operand (p : CompilerProviders.Prepared) (debugAssertions : Bool)
     (relateCovariantly : LocalLayout → LocalLayout → MachineHooks.M K U Bool)
-    (_ : C) (requested : MIR.Place) (value : OpTy Provenance) : MachineHooks.M K U Unit :=
-  check p debugAssertions relateCovariantly requested value.layout
+    (_ : C) (requested : MIR.PlaceId) (actual : LocalLayout) : MachineHooks.M K U Unit := do
+  if !debugAssertions then return
+  let expected ← match expectedLayout p (← MachineHooks.currentFrame) requested with
+    | .ok value => pure value
+    | .error reason => throw (.unsupported s!"compiler place type query: {reason}")
+  checkLayout relateCovariantly expected actual
 
-def place (p : CompilerProviders.Prepared) (debugAssertions : Bool)
+-- Argument initialization constructs local places rather than referencing MIR nodes.
+def dynamicPlace (p : CompilerProviders.Prepared) (debugAssertions : Bool)
     (relateCovariantly : LocalLayout → LocalLayout → MachineHooks.M K U Bool)
-    (_ : C) (requested : MIR.Place) (value : RuntimePlace Provenance) : MachineHooks.M K U Unit :=
-  check p debugAssertions relateCovariantly requested value.layout
+    (_ : C) (requested : MIR.Place) (value : RuntimePlace Provenance) : MachineHooks.M K U Unit := do
+  if !debugAssertions then return
+  let expected ← match localLayout p (← MachineHooks.currentFrame) requested with
+    | .ok value => pure value
+    | .error reason => throw (.unsupported s!"compiler local place type query: {reason}")
+  checkLayout relateCovariantly expected value.layout
+
 end Miri.Input.CompilerPlaceTypes

@@ -12,8 +12,8 @@ open Miri Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
 set_option synthInstance.maxSize 4096
 
 namespace ExactStateCodec207
-instance compilerPatternDecidableEq : DecidableEq Miri.Input.CompilerPattern :=
-  PatternEquality219.compilerPatternDecEqInstance
+-- Runtime compiler patterns compare their exact table IDs and child-ID arrays.
+example : DecidableEq Miri.Input.PatternData := inferInstance
 
 abbrev Os := ByteArray
 abbrev R := Unit

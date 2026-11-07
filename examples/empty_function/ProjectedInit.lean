@@ -16,7 +16,7 @@ set_option linter.unusedSimpArgs false
       (frame : LocalUnit.F) (machine : MachineHooks.MachineState MiriMemoryKind RootUser),
       p.before.stack.frames = older.push destination.caller ∧
       WholeCall.install s p = .ok () (LocalUnit.current (LocalCachedPush.cachedState s p input.tracker destination older bound).stack.frames frame machine) ∧
-      frame.body = s.loaded.body ∧ frame.bodyIdentity = s.loaded.identity ∧
+      Meaning.FrameMatches frame s.loaded ∧ frame.bodyIdentity = s.loaded.identity ∧
       frame.functionInstance = s.functionInstance ∧ frame.location = .mir ⟨0,0⟩ ∧
       frame.locals = #[{value := .live (.immediate .uninit),layout := none}] ∧
       frame.extra.borrowTracker = some {} ∧ frame.extra.dataRace = none ∧ frame.returnPlace = p.destination ∧
@@ -41,7 +41,7 @@ set_option linter.unusedSimpArgs false
     (MetadataBinding.instance_abi s metadata capacity) (MetadataBinding.target_features s metadata capacity)
     preflight (MetadataBinding.not_closure s metadata capacity) metadata.notVariadic
     (show (ExecutionMachine.callHooks s.cfg s.limits).sameConvention s.abi s.abi = true from beq_self_eq_true _)
-    metadata.noArguments rfl (by rw [metadata.body]; exact Program.no_arguments)
+    metadata.noArguments rfl ((metadata.body_header s).1)
   rw [LocalInit.core_reduction s metadata capacity] at initial
   obtain ⟨frame,machine,push,⟨previous,machineEq⟩,tracked,frameNoClocks,body,identity,function,location,
     returning,returnPlace,locals,varargs,callerArg,machineTracker,machineRace⟩ :=

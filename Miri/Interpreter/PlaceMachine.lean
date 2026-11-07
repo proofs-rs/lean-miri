@@ -248,7 +248,7 @@ structure CompilerHooks (K User C : Type) where
   checkPlaceType : C → MIR.Place → RuntimePlace Provenance → M K User Unit
   memoryOffset : C → MemPlace Provenance → Size → OffsetMode → MemPlaceMeta Provenance → M K User (MemPlace Provenance)
   debugAbiCheck : Immediate Provenance → LocalLayout → M K User Unit
-  localSpan : MIR.Body → MIR.LocalId → M K User MIR.SpanRef
+  localSpan : BodyIdentity → MIR.LocalId → M K User MIR.SpanRef
   enforceValidity : C → LocalLayout → M K User Bool
   validate : C → RuntimePlace Provenance → M K User Unit
   willValidateMemory : MemoryOperandLayout → Bool

@@ -77,7 +77,7 @@ def released {p : Packet} {tracker : MachineHooks.BorrowState}
   | .nondata _ _ => machine
   | .live id entry _ tree _ _ => {machine with memory := UnitRetag.replaceTree machine.memory id entry tree}
 
-theorem result (s : Static) (metadata : Metadata s) (profile : Profile s)
+theorem result (s : Static) (metadata : Metadata s) [SuccessfulConstant metadata] (profile : Profile s)
     (p : Packet) (runtime : RuntimeProfile s p) (input : InputDraft.CurrentInputDraft s p)
     (resources : ResourceMargins s p)
     (destination : InputDraft.MemoryDestination s p input.tracker)
@@ -100,7 +100,7 @@ theorem result (s : Static) (metadata : Metadata s) (profile : Profile s)
   let installed := LocalUnit.current p.before.stack.frames entry.frame entry.machine
   let middle := LocalUnit.current p.before.stack.frames frame entry.machine
   have depthEq : installed.stack.frames.size = depth p := by simp [installed,LocalUnit.current,depth]
-  have body : frame.body = s.loaded.body := entry.body
+  have body : Meaning.FrameMatches frame s.loaded := entry.body
   have location : frame.location = .mir ⟨0,1⟩ := rfl
   have locals : frame.locals = #[{value := .live (.immediate .uninit),layout := some s.abi.ret.layout}] := rfl
   have noClocks : frame.extra.dataRace = none := entry.noClocks

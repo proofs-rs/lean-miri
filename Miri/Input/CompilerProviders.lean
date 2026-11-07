@@ -25,26 +25,12 @@ final tables; source failures remain failures, not execution-readiness claims.
 namespace Miri.Input.CompilerProviders
 open Lean Miri.ABI Miri.Memory Miri.Interpreter
 structure Prepared where
-  program : LoweredProgram
-  /-- Prepared lowering indices certified for this provider's exact input.
-  Publicly assembled providers may omit the cache; their accessor preserves
-  the historical behavior by deriving from `program.input`. -/
-  lowering : Option (LowerContext.Bound program.input) := none
-  runtime : RuntimeMetadata
-  /-- Direct source primitive references prepared for this exact runtime.
-  Publicly assembled providers may omit it and retain the linear query path. -/
-  primitiveQueries : Option (CompilerPrimitiveFacts.Bound runtime) := none
-  /-- Reflexive-comparison certificate created once by the shared call pipeline
-  and retained for every provider check against this source document. -/
-  sourceEquality : RuntimeMetadata.JsonReflexivity runtime.source.raw
+  owner : RuntimeProgram
   lifecycle : CompilerLifecyclePipeline.Prepared
   functions : CompilerFunctionFacts.Prepared
   main : CompilerMain.Prepared
   intrinsics : CompilerIntrinsicFacts.Prepared
   constants : CompilerConstantQueries.Prepared
-  /-- Exact compatibility computed once from the values above. Keeping the
-  indices dependent makes later record updates unable to reuse a stale result. -/
-  constantBinding : CompilerConstantQueries.Binding constants runtime
   namedConstants : CompilerNamedConstants.Prepared
   namedGlobals : CompilerNamedGlobals.Prepared
   externStatics : CompilerExternStatic.Prepared
@@ -56,39 +42,27 @@ structure Prepared where
   foreignSymbols : Except String CompilerForeignSymbolTables.Prepared
   /-- Source-ordered exact lookup index. Global row parse errors remain stored
   and are reported only when a non-reflexive covariance query is demanded. -/
-  covarianceIndex : CompilerQueryIndices.Covariance program.input.raw
+  covarianceIndex : CompilerQueryIndices.Covariance owner.input.covarianceQueries
   /-- Parsed helper-signature keys and exact duplicate rows, retaining the
   first malformed source row for demand-time error ordering. -/
-  signatureAbiIndex : CompilerQueryIndices.SignatureAbi runtime program.input.raw
+  signatureAbiIndex : CompilerQueryIndices.SignatureAbi owner.runtime
   /-- Initial persistent interner. Runtime execution must thread its updated World. -/
   initialArrays : Except String RuntimeArrayTypes.World
   tls : Except String (Array CompilerThreadLocal.Entry)
 
-/-- Reuse lowering indices only when certified for this provider's own source
-document. This remains correct for manually assembled records whose nested
-fact context happens to refer to a different program. -/
-def Prepared.loweringContext (p : Prepared) : LowerContext :=
-  match p.lowering with
-  | some prepared => prepared.value
-  | none => LowerContext.ofDocument p.program.input
+@[inline] def Prepared.program (prepared : Prepared) : LoweredProgram := prepared.owner.program
+@[inline] def Prepared.runtime (prepared : Prepared) : RuntimeMetadata := prepared.owner.runtime
 
-/-- Demand one exact compiler primitive using the provider-owned cache when
-available; manual providers retain the original query path. -/
+/-- Demand the exact primitive identity from the typed compiler catalog. -/
 def Prepared.primitiveLayout (p : Prepared) (key : String) :
     Except String (TyAndLayout TypeId) :=
-  match p.primitiveQueries with
-  | some cache => CompilerPrimitiveFacts.primitiveLayoutBound p.runtime cache key
-  | none => CompilerPrimitiveFacts.primitiveLayout p.runtime key
+  CompilerPrimitiveFacts.primitiveLayout p.runtime key
 
 def Prepared.orderingLayout (p : Prepared) : Except String (TyAndLayout TypeId) :=
-  match p.primitiveQueries with
-  | some cache => CompilerPrimitiveFacts.orderingLayoutBound p.runtime cache
-  | none => CompilerPrimitiveFacts.orderingLayout p.runtime
+  CompilerPrimitiveFacts.orderingLayout p.runtime
 
 def Prepared.callerLocationType (p : Prepared) : Except String TypeId :=
-  match p.primitiveQueries with
-  | some cache => CompilerPrimitiveFacts.callerLocationTypeBound p.runtime cache
-  | none => CompilerPrimitiveFacts.callerLocationType p.runtime
+  CompilerPrimitiveFacts.callerLocationType p.runtime
 
 /-- Check index preservation at each append stage, including exact source spans.
 No table contents may be normalized, reordered or silently replaced. -/
@@ -101,7 +75,7 @@ private def extension (old fresh : CompilerTables) : Except String Unit := do
     throw "compiler provider preparation changed existing type-constant identities"
 
 private def rebindCalls (p : CompilerCallPipeline.Prepared) (program : LoweredProgram) : CompilerCallPipeline.Prepared :=
-  {p with calls := {p.calls with program}
+  {p with calls := p.calls.withProgram program
           scopes := {p.scopes with program}
           runtime := {p.runtime with program}
           symbols := {p.symbols with facts := {p.symbols.facts with
@@ -120,10 +94,10 @@ FactAdapters preparation, then consumed by vtable adapters without re-interning.
 -/
 def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except String Prepared := do
   let input ← profileit "preparation.providers.panic_facts" profile fun _ => CompilerPanicFacts.prepareProgram input
-  -- Legacy documents retain explicit missing root-span evidence at the query
-  -- accessor; a present compiler span is always interned before all providers.
+  -- The reader records declaration presence separately from a successful
+  -- span lookup, so an explicitly declared null span cannot bypass its query.
   let seeded ← profileit "preparation.providers.context_span" profile fun _ => do
-    if ((input.input.raw.getObjVal? "compiler_session_queries").bind (·.getObjVal? "root_span")).isOk then
+    if input.input.rootSpanDeclared then
       CompilerContextSpan.prepare input
     else pure input
   let calls ← profileit "preparation.providers.call_pipeline" profile fun _ =>
@@ -135,37 +109,38 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
   let program := lifecycle.backtrace.program
   profileit "preparation.providers.extension_after_lifecycle" profile fun _ =>
     extension calls.calls.program.compilerTables program.compilerTables
-  let runtime := lifecycle.calls.calls.runtime
+  let owner := lifecycle.calls.calls.owner.withProgram program
+  let runtime := owner.runtime
   let abiCache := some lifecycle.calls.calls.functionAbiCache
-  let sourceEquality := lifecycle.calls.sourceEquality
   let functions ← profileit "preparation.providers.function_facts" profile fun _ =>
-    CompilerFunctionFacts.prepare runtime program (some sourceEquality) abiCache
+    CompilerFunctionFacts.prepare owner abiCache
   profileit "preparation.providers.extension_after_functions" profile fun _ =>
     extension program.compilerTables functions.program.compilerTables
   let main ← profileit "preparation.providers.main" profile fun _ =>
-    CompilerMain.prepare runtime functions.program (some sourceEquality)
+    CompilerMain.prepare (owner.withProgram functions.program)
   profileit "preparation.providers.extension_after_main" profile fun _ =>
     extension functions.program.compilerTables main.program.compilerTables
-  let intrinsics ← profileit "preparation.providers.intrinsics" profile fun _ => CompilerIntrinsicFacts.prepare main.program
+  let intrinsics ← profileit "preparation.providers.intrinsics" profile fun _ => CompilerIntrinsicFacts.prepare (lifecycle.calls.symbols.facts.context.withProgram main.program)
   profileit "preparation.providers.extension_after_intrinsics" profile fun _ =>
     extension main.program.compilerTables intrinsics.program.compilerTables
   let constants ← profileit "preparation.providers.constants" profile fun _ =>
-    CompilerConstantQueries.prepareProfiled profile intrinsics.program
+    CompilerConstantQueries.prepareProfiled profile (owner.withProgram intrinsics.program)
   profileit "preparation.providers.extension_after_constants" profile fun _ =>
     extension intrinsics.program.compilerTables constants.program.compilerTables
   let namedConstants ← profileit "preparation.providers.named_constants" profile fun _ =>
-    CompilerNamedConstants.prepare runtime constants.program (some sourceEquality)
+    CompilerNamedConstants.prepare (owner.withProgram constants.program)
   profileit "preparation.providers.extension_after_named_constants" profile fun _ =>
     extension constants.program.compilerTables namedConstants.program.compilerTables
   let namedGlobals ← profileit "preparation.providers.named_globals" profile fun _ =>
-    CompilerNamedGlobals.prepare runtime namedConstants.program (some sourceEquality)
+    CompilerNamedGlobals.prepare (owner.withProgram namedConstants.program)
   profileit "preparation.providers.extension_after_named_globals" profile fun _ =>
     extension namedConstants.program.compilerTables namedGlobals.program.compilerTables
   let externStatics ← profileit "preparation.providers.extern_statics" profile fun _ =>
-    CompilerExternStatic.prepare runtime namedGlobals.program (some sourceEquality)
+    CompilerExternStatic.prepare (owner.withProgram namedGlobals.program)
   profileit "preparation.providers.extension_after_extern_statics" profile fun _ =>
     extension namedGlobals.program.compilerTables externStatics.program.compilerTables
-  let program := externStatics.program
+  let owner := owner.withProgram externStatics.program
+  let program := owner.program
   let lifecycle := profileit "preparation.providers.rebind_lifecycle" profile fun _ => rebindLifecycle lifecycle program
   let pointers ← profileit "preparation.providers.function_pointers" profile fun _ => CompilerFunctionPointers.prepare lifecycle.calls
   let vtables ← profileit "preparation.providers.vtable_machine" profile fun _ => CompilerVTableMachine.prepare lifecycle.calls
@@ -173,30 +148,23 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
   let foreignSymbols := profileit "preparation.providers.foreign_symbols" profile fun _ =>
     CompilerForeignSymbolTables.prepare lifecycle.calls.symbols
   let covarianceIndex := profileit "preparation.providers.covariance_index" profile fun _ =>
-    CompilerQueryIndices.covariance program.input.raw
+    CompilerQueryIndices.covariance program.input.covarianceQueries
   let signatureAbiIndex := profileit "preparation.providers.signature_abi_index" profile fun _ =>
-    CompilerQueryIndices.signatureAbi runtime program.input.raw abiCache
+    CompilerQueryIndices.signatureAbi runtime abiCache
   let arrays := profileit "preparation.providers.runtime_arrays" profile fun _ =>
-    RuntimeArrayTypes.create runtime |>.mapError reprStr
+    RuntimeArrayTypes.create owner |>.mapError reprStr
   let tls := profileit "preparation.providers.thread_local" profile fun _ => CompilerThreadLocal.ofProgram program
-  let constants := profileit "preparation.providers.rebind_constants" profile fun _ => {constants with program}
-  let constantBinding := profileit "preparation.providers.constant_binding" profile fun _ =>
-    CompilerConstantQueries.bind constants runtime (some sourceEquality)
+  let constants := profileit "preparation.providers.rebind_constants" profile fun _ => constants.withProgram program
   return {
-    program
-    lowering := some (LowerContext.bindDocument program.input)
-    runtime
-    primitiveQueries := some (CompilerPrimitiveFacts.bind runtime)
-    sourceEquality
+    owner
     lifecycle
     functions := {functions with program}
-    main := {main with program}
-    intrinsics := {intrinsics with program}
+    main := main.withProgram program
+    intrinsics := intrinsics.withProgram program
     constants
-    constantBinding
-    namedConstants
-    namedGlobals
-    externStatics
+    namedConstants := namedConstants.withProgram program
+    namedGlobals := namedGlobals.withProgram program
+    externStatics := externStatics.withProgram program
     pointers
     vtables
     namedAbi
@@ -210,7 +178,7 @@ def prepare (input : LoweredProgram) : Except String Prepared :=
   prepareProfiled {} input
 
 /-- The canonical predicate table belonging to all prepared vtable/cast facts. -/
-def predicates (p : Prepared) : Array Json := p.lifecycle.calls.symbols.facts.dynamicPredicates
+def predicates (p : Prepared) : MIR.SharedTable PredicateListData := p.lifecycle.calls.symbols.facts.dynamicPredicates
 
 private def lift (query : Except String A) : MachineHooks.M K User A :=
   match query with
@@ -226,16 +194,20 @@ def resolveCurrent (p : Prepared) (definition : MIR.DefId) (args : Array MIR.Gen
   let .mir location := frame.location | throw (.invalidProgram "callee resolution outside a MIR source location")
   let body ← lift do
     let some body := p.program.bundle.bodies[frame.bodyIdentity.index]? | throw "missing canonical source body"
-    unless body.body == frame.body do throw "callee resolution canonical body/content mismatch"
+    unless (← p.program.input.mirTables.bodyId frame.bodyIdentity.index) == frame.bodyId do
+      throw "callee resolution canonical body ID mismatch"
+    unless (← p.program.input.mirTables.body frame.bodyIdentity.index) == frame.body do
+      throw "callee resolution canonical body metadata mismatch"
     let loaded ← CallResolution.loadedBodyOfInstance p.lifecycle.calls.calls frame.functionInstance
     unless loaded.identity == frame.bodyIdentity do throw "callee resolution current full-instance/body mismatch"
     pure body
-  let some block := body.body.basicBlocks[location.block]? | throw (.invalidProgram "callee resolution source block absent")
+  let some id := body.body.basicBlocks[location.block]? | throw (.invalidProgram "callee resolution source block absent")
+  let block ← lift (p.program.input.mirTables.mir.blocks.lookup id.index |>.mapError (fun id => s!"invalid callee-resolution block ID {id}"))
   unless location.statementIndex == block.statements.size do
     throw (.invalidProgram "callee resolution does not refer to a source terminator")
   lift do
     let resolution ← CallResolution.atSite p.lifecycle.calls.calls ⟨frame.bodyIdentity.index,location.block⟩
-    let ty ← (← (← resolution.source.getObjVal? "function_type").getObjVal? "type_id").getNat?
+    let ty ← resolution.functionType
     match ← CompilerFunctionFacts.kind p.functions ty with
     | .FnDef expected expectedArgs =>
       unless definition == expected && args == expectedArgs do throw "original compiler FnDef request differs from current source call"
@@ -255,7 +227,7 @@ def executionHooks (p : Prepared) (image : AllocationImage.Imported)
     resolve := fun _ definition args => resolveCurrent p definition args
     functionSignature := fun _ layout => lift do
       let (count,abi) ← CompilerFunctionFacts.signature p.functions layout.ty
-      pure (count,← CompilerExternAbi.decode abi)
+      pure (count,abi)
     functionKind := fun ty => lift (CompilerFunctionFacts.kind p.functions ty)
     fnAbiOfFnPtr := fun _ layout extra => lift (CompilerFunctionFacts.pointerAbi p.functions layout.ty extra)
     fnAbiOfInstance := fun _ callee extra =>

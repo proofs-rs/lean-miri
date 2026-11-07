@@ -31,7 +31,7 @@ theorem tail_ok (s : Static) (metadata : Metadata s) (place : MPlaceTy Provenanc
     (machine : Machine)
     (protection : (ExecutionMachine.callHooks s.cfg s.limits).protectArgument () place before =
       .ok () (LocalUnit.current frames frame machine))
-    (body : frame.body = s.loaded.body)
+    (body : Meaning.FrameMatches frame s.loaded)
     (locals : frame.locals = #[{value := .dead,layout := none}])
     (noClocks : frame.extra.dataRace = none) :
     InitializationPrefix.protectedTail s place span before =
@@ -53,7 +53,7 @@ structure Prefix (s : Static) (metadata : Metadata s) (p : Packet)
   machine : Machine
   actual : install s p = InitializationPrefix.protectedTail s destination.place metadata.preamble
     (LocalUnit.current p.before.stack.frames {frame with location := .unwinding metadata.localSpan} machine)
-  body : frame.body = s.loaded.body
+  body : Meaning.FrameMatches frame s.loaded
   identity : frame.bodyIdentity = s.loaded.identity
   function : frame.functionInstance = s.functionInstance
   location : frame.location = .unwinding metadata.preamble
@@ -112,7 +112,7 @@ theorem memory_outcome (s : Static) (metadata : Metadata s) (profile : Profile s
         Post changedFrame changed ∧
         install s p = .ok () (LocalUnit.current p.before.stack.frames (readyFrame changedFrame) changed) ∧
         (LocalUnit.current p.before.stack.frames (readyFrame changedFrame) changed).stack.frames.size = depth p ∧
-        changedFrame.body = s.loaded.body ∧ changedFrame.bodyIdentity = s.loaded.identity ∧
+        Meaning.FrameMatches changedFrame s.loaded ∧ changedFrame.bodyIdentity = s.loaded.identity ∧
         changedFrame.functionInstance = s.functionInstance ∧
         changedFrame.locals = #[{value := .dead,layout := none}] ∧ changedFrame.extra.dataRace = none) := by
   obtain ⟨entry⟩ := from_current s metadata profile p runtime input destination
@@ -122,7 +122,7 @@ theorem memory_outcome (s : Static) (metadata : Metadata s) (profile : Profile s
     exact ⟨error,failed,entry.actual.trans
       (tail_error s destination.place metadata.preamble _ failed error actual),nonUB⟩
   · obtain ⟨changedFrame,changed,actual,same,post⟩ := succeeded
-    have body : changedFrame.body = s.loaded.body := by rw [same];exact entry.body
+    have body : Meaning.FrameMatches changedFrame s.loaded := by rw [same];exact entry.body
     have identity : changedFrame.bodyIdentity = s.loaded.identity := by rw [same];exact entry.identity
     have function : changedFrame.functionInstance = s.functionInstance := by rw [same];exact entry.function
     have locals : changedFrame.locals = #[{value := .dead,layout := none}] := by rw [same];exact entry.locals

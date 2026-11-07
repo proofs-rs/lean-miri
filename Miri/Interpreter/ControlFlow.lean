@@ -70,7 +70,10 @@ def returnFromCurrentFrame (hooks : Hooks) (choice : C) (unwinding : Bool)
     | .mir loc =>
       match frame.body.basicBlocks[loc.block]? with
       | none => return (state, .error (.invalidBlock loc.block))
-      | some block => pure block.cleanup
+      | some id =>
+        match frame.mirTables.blocks.lookup id.index with
+        | .ok block => pure block.cleanup
+        | .error _ => return (state, .error (.invalidProgram s!"invalid MIR block ID {id.index}"))
   if unwinding != isCleanup then
     return (state, .error (.invalidProgram "return/unwind cleanup assertion failed"))
   if unwinding && state.stack.frames.size == 1 then
@@ -114,20 +117,20 @@ def returnFromCurrentFrame (hooks : Hooks) (choice : C) (unwinding : Bool)
 end ControlFlow
 
 structure TerminatorHooks (P L E M C Op Imm : Type) extends ControlHooks P L E M C Op where
-  evalDiscriminant : C → MIR.Operand → StepState P L E M →
+  evalDiscriminant : C → MIR.OperandId → StepState P L E M →
     StepResult (StepState P L E M) Imm
   /-- Must run MIR Eq against a same-layout `ImmTy::from_uint`, then to_bool;
   raw pointer discriminants must not be converted to integer addresses here. -/
   compareSwitchCase : C → Imm → Nat → StepState P L E M →
     StepResult (StepState P L E M) Bool
-  call : C → Terminator → StepState P L E M → StepResult (StepState P L E M) Unit
-  tailCall : C → Terminator → StepState P L E M → StepResult (StepState P L E M) Unit
-  drop : C → Place → BasicBlockId → UnwindAction → StepState P L E M →
+  call : C → TerminatorNode → StepState P L E M → StepResult (StepState P L E M) Unit
+  tailCall : C → TerminatorNode → StepState P L E M → StepResult (StepState P L E M) Unit
+  drop : C → PlaceId → BasicBlockId → UnwindAction → StepState P L E M →
     StepResult (StepState P L E M) Unit
   ignoreOptionalOverflowChecks : StepState P L E M → Bool
-  readAssertCondition : C → MIR.Operand → StepState P L E M →
+  readAssertCondition : C → MIR.OperandId → StepState P L E M →
     StepResult (StepState P L E M) Bool
-  assertPanic : C → AssertKind → UnwindAction → StepState P L E M →
+  assertPanic : C → AssertNode → UnwindAction → StepState P L E M →
     StepResult (StepState P L E M) Unit
 
 namespace ControlFlow
@@ -135,13 +138,13 @@ variable {P L E M C Op Imm : Type}
 local notation "State" => StepState P L E M
 
 /-- rustc's optional overflow checks are arithmetic overflow and negation. -/
-def isOptionalOverflowCheck : AssertKind → Bool
+def isOptionalOverflowCheck : AssertNode → Bool
   | .Overflow .Add .. | .Overflow .Sub .. | .Overflow .Mul ..
   | .Overflow .Shl .. | .Overflow .Shr .. | .OverflowNeg .. => true
   | _ => false
 
 def evalTerminator (hooks : TerminatorHooks P L E M C Op Imm) (choice : C)
-    (terminator : Terminator) (state : State) : StepResult State Unit := Id.run do
+    (terminator : TerminatorNode) (state : State) : StepResult State Unit := Id.run do
   match terminator.kind with
   | .Goto target _ => return goToBlock target state
   | .Return => return returnFromCurrentFrame hooks.toControlHooks choice false state

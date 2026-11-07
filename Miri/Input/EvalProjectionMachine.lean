@@ -35,12 +35,8 @@ private def shape (runtime : RuntimeMetadata) (ty : TyId) : Except ProjectionErr
 def packed (runtime : RuntimeMetadata) (ty : TyId) : Except ProjectionError (Option Align) := do
   let node ← shape runtime ty
   if node.shapeKind != .adt then return none
-  let repr ← query ((node.payload.getObjVal? "shape").bind fun s => s.getObjVal? "representation")
-  let status ← query ((repr.getObjVal? "status").bind Json.getStr?)
-  unless status == "supported" do throw (.obligation "compiler repr packing unavailable")
-  let pack ← query (repr.getObjVal? "pack_bytes")
-  if pack == .null then return none
-  let bytes ← query pack.getNat?
+  let repr ← metadataResult (runtime.typeRepresentation ty)
+  let some bytes := repr.packBytes | return none
   if bytes >= 2^64 then throw (.invariant "compiler packing exceeds u64")
   let align ← Align.fromBytes (UInt64.ofNat bytes) |>.mapError ProjectionError.align
   pure (some align)
@@ -142,8 +138,8 @@ def dynamicKind (prepared : CompilerFactAdapters.Prepared) (ty : TyId) : Except 
   let node ← shape prepared.context.runtime ty
   match node.shapeKind with
   | .adt =>
-    let simd ← query (((node.payload.getObjVal? "shape").bind fun s => s.getObjVal? "representation").bind
-      fun r => (r.getObjVal? "simd").bind Json.getBool?)
+    let repr ← metadataResult (RuntimeMetadata.typeRepresentation prepared.context.runtime ty)
+    let simd := repr.simd
     pure (.adt simd)
   | .tuple => pure (.tuple false)
   | .dynamicTraitObject =>

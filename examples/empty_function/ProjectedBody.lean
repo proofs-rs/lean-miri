@@ -24,7 +24,7 @@ set_option autoImplicit false
 set_option maxRecDepth 65536
 set_option maxHeartbeats 1000000
 set_option linter.unusedSimpArgs false
- theorem init_body (s : Static) (metadata : Metadata s) (profile : Profile s)
+ theorem init_body (s : Static) (metadata : Metadata s) [SuccessfulConstant metadata] (profile : Profile s)
     (p : Packet) (runtime : RuntimeProfile s p) (input : InputDraft.CurrentInputDraft s p)
     {choiceCondition : Prop} (resources : ResourceMargins s p choiceCondition) (destination : InputDraft.LocalDestination s p input.tracker)
     (offset : Size) (projected : destination.offset = some offset)
@@ -35,7 +35,7 @@ set_option linter.unusedSimpArgs false
       WholeCall.install s p = .ok () installed ∧ installed.stack.frames.size = depth p ∧
       ExecutionMachine.step s.cfg s.limits () installed =
         (LocalUnit.current (older.push (ProjectedModel.caller s p input.tracker destination bound)) frame machine,.ok true) ∧
-      frame.body = s.loaded.body ∧ frame.bodyIdentity = s.loaded.identity ∧
+      Meaning.FrameMatches frame s.loaded ∧ frame.bodyIdentity = s.loaded.identity ∧
       frame.functionInstance = s.functionInstance ∧ frame.location = .mir ⟨0,1⟩ ∧
       frame.locals = #[{value := .live (.immediate .uninit),layout := some s.abi.ret.layout}] ∧
       frame.extra.borrowTracker = some {} ∧ frame.extra.dataRace = none ∧ frame.returnPlace = p.destination ∧
@@ -61,7 +61,7 @@ set_option linter.unusedSimpArgs false
     ?_,?_,?_,?_,?_,?_,?_,?_,?_,?_,noGhost,shallow,⟨previous,?_⟩,machineTracked⟩
   · simp [LocalUnit.current,frames,depth,original]
   all_goals try rfl
-  all_goals try simpa only [next,BodyStep.withUnit,LocalUnit.withUnit] using body
+  all_goals try simpa only [Meaning.FrameMatches,next,BodyStep.withUnit,LocalUnit.withUnit] using body
   all_goals try simpa only [next,BodyStep.withUnit,LocalUnit.withUnit] using identity
   all_goals try simpa only [next,BodyStep.withUnit,LocalUnit.withUnit] using function
   all_goals try simpa only [next,BodyStep.withUnit,LocalUnit.withUnit] using tracked

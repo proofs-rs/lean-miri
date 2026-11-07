@@ -20,7 +20,7 @@ structure Prepared where
 private def rebind (p : CompilerCallPipeline.Prepared) (program : LoweredProgram) :
     CompilerCallPipeline.Prepared :=
   {p with
-    calls := {p.calls with program}
+    calls := p.calls.withProgram program
     scopes := {p.scopes with program}
     runtime := {p.runtime with program}
     symbols := {p.symbols with facts := {p.symbols.facts with
@@ -29,8 +29,7 @@ private def rebind (p : CompilerCallPipeline.Prepared) (program : LoweredProgram
 def prepareProfiled (profile : Lean.Options) (calls : CompilerCallPipeline.Prepared) : Except String Prepared := do
   let runtime := calls.calls.runtime
   let instances ← profileit "preparation.lifecycle.instance_abi" profile fun _ =>
-    CompilerInstanceAbi.prepare runtime calls.calls.program
-      (some calls.sourceEquality) (some calls.calls.functionAbiCache)
+    CompilerInstanceAbi.prepare calls.calls.owner (some calls.calls.functionAbiCache)
   let lifecycle := profileit "preparation.lifecycle.compiler_lifecycle" profile fun _ =>
     CompilerLifecycle.prepare instances.program
   let backtrace ← profileit "preparation.lifecycle.backtrace_source" profile fun _ =>

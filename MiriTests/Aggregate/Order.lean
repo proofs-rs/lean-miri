@@ -48,24 +48,24 @@ def logOf (action : RvalueM Log Unit) : Log :=
   | .ok _ state | .error _ state => state
 
 #eval (do
-  unless logOf (writeAggregate (hooks 0) () .Tuple #[operand 1, operand 2] 0) ==
+  unless logOf (writeAggregate (Arguments := Array MIR.GenericArg) (hooks 0) () .Tuple #[operand 1, operand 2] 0) ==
   #["field:0", "eval:1:true", "copy-raw:false", "field:1", "eval:2:true", "copy-raw:false",
     "discriminant:0", "enforce", "validate-reset"] do
     throw (IO.userError "aggregate source order mismatch") : IO Unit)
 #eval (do
-  unless logOf (writeAggregate (hooks 0) () (.Adt 0 3 #[] none (some 7)) #[operand 1] 0) ==
+  unless logOf (writeAggregate (Arguments := Array MIR.GenericArg) (hooks 0) () (.Adt 0 3 #[] none (some 7)) #[operand 1] 0) ==
   #["downcast:3", "field:7", "eval:1:true", "copy-raw:false", "discriminant:3", "enforce", "validate-reset"] do
     throw (IO.userError "aggregate source order mismatch") : IO Unit)
 #eval (do
-  unless logOf (writeAggregate (hooks 0 (some "copy")) () .Tuple #[operand 1, operand 2] 0) ==
+  unless logOf (writeAggregate (Arguments := Array MIR.GenericArg) (hooks 0 (some "copy")) () .Tuple #[operand 1, operand 2] 0) ==
   #["field:0", "eval:1:true", "copy-raw:false"] do
     throw (IO.userError "aggregate source order mismatch") : IO Unit)
 #eval (do
-  unless logOf (writeAggregate (hooks 0) () (.RawPtr 0 .Not) #[operand 1, operand 2] 0) ==
+  unless logOf (writeAggregate (Arguments := Array MIR.GenericArg) (hooks 0) () (.RawPtr 0 .Not) #[operand 1, operand 2] 0) ==
   #["eval:1:false", "pointer", "eval:2:false", "copy"] do
     throw (IO.userError "aggregate source order mismatch") : IO Unit)
 #eval (do
-  unless logOf (writeAggregate (hooks 0 none false) () (.RawPtr 0 .Not) #[operand 1, operand 2] 0) ==
+  unless logOf (writeAggregate (Arguments := Array MIR.GenericArg) (hooks 0 none false) () (.RawPtr 0 .Not) #[operand 1, operand 2] 0) ==
   #["eval:1:false", "pointer", "eval:2:false", "scalar", "copy"] do
     throw (IO.userError "aggregate source order mismatch") : IO Unit)
 #eval (do
@@ -88,13 +88,13 @@ def logOf (action : RvalueM Log Unit) : Log :=
 def main : IO Unit := IO.println "aggregate and repeat source-order tests passed"
 
 #eval (do
-  for kind in [MIR.AggregateKind.Array 0, .Closure 0 #[], .Coroutine 0 #[], .CoroutineClosure 0 #[]] do
-    unless logOf (writeAggregate (hooks 0) () kind #[] 0) ==
+  for kind in [MIR.AggregateForm.Array 0, .Closure 0 #[], .Coroutine 0 #[], .CoroutineClosure 0 #[]] do
+    unless logOf (writeAggregate (Arguments := Array MIR.GenericArg) (hooks 0) () kind #[] 0) ==
         #["discriminant:0", "enforce", "validate-reset"] do
       throw (IO.userError "non-ADT aggregate branch")
-  unless logOf (writeAggregate (hooks 0) () (.Adt 0 2 #[] none (some 0)) #[] 0) == #["downcast:2"] do
+  unless logOf (writeAggregate (Arguments := Array MIR.GenericArg) (hooks 0) () (.Adt 0 2 #[] none (some 0)) #[] 0) == #["downcast:2"] do
     throw (IO.userError "union arity must follow downcast")
-  match writeAggregate (hooks 0) () (.RawPtr 0 .Not) #[operand 1] 0 #[] with
+  match writeAggregate (Arguments := Array MIR.GenericArg) (hooks 0) () (.RawPtr 0 .Not) #[operand 1] 0 #[] with
   | .ok _ _ => throw (IO.userError "raw pointer arity accepted")
   | .error _ state => unless state.isEmpty do throw (IO.userError "raw pointer arity touched operands")
   : IO Unit)

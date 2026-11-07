@@ -7,6 +7,14 @@ open Miri.Input
 
 namespace PatternEquality219
 
+/-- Source-shaped comparison adapter for the recursive equality proof below.
+Production compiler patterns are ID-indexed `PatternData` nodes; this adapter
+retains the recursive JSON equality obligation independently of that storage. -/
+inductive CompilerPattern where
+  | range (start finish : Lean.Json)
+  | or (patterns : Array CompilerPattern)
+  | notNull
+
 private theorem orSize (patterns : Array CompilerPattern) :
     sizeOf (CompilerPattern.or patterns) = sizeOf patterns + 1 := by
   cases patterns using Array.rec with

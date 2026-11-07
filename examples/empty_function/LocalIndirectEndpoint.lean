@@ -88,7 +88,7 @@ def finishedMachine (s : Static) (p : Packet) (tracker : MachineHooks.BorrowStat
     (initializedMachine s p tracker destination older bound frame previous room))).machine
   FrameExit.afterRelevanceAt frames frame (WildcardEndpoint.released choice base) index
 
-theorem run_operations (s : Static) (metadata : Metadata s) (profile : Profile s)
+theorem run_operations (s : Static) (metadata : Metadata s) [SuccessfulConstant metadata] (profile : Profile s)
     (p : Packet) (runtime : RuntimeProfile s p) (input : InputDraft.CurrentInputDraft s p)
     (resources : ResourceMargins s p)
     (destination : InputDraft.LocalDestination s p input.tracker)
@@ -124,7 +124,7 @@ theorem run_operations (s : Static) (metadata : Metadata s) (profile : Profile s
   let installed := LocalUnit.current frames entry.frame entry.machine
   let middle := LocalUnit.current frames frame entry.machine
   have depthEq : installed.stack.frames.size = depth p := by simp [installed,LocalUnit.current,depth,frames,caller,LocalModel.caller,LocalInit.cachedState,original]
-  have body : frame.body = s.loaded.body := entry.body
+  have body : Meaning.FrameMatches frame s.loaded := entry.body
   have location : frame.location = .mir ⟨0,1⟩ := rfl
   have locals : frame.locals = #[{value := .live (.immediate .uninit),layout := some s.abi.ret.layout}] := rfl
   have noClocks : frame.extra.dataRace = none := entry.noClocks

@@ -1,3 +1,4 @@
+import MiriTests.Input.SharedPayloads
 import Miri.Input
 import Miri.Interpreter.FunctionCalls
 
@@ -49,20 +50,49 @@ private def replaceCovarianceAt (raw : Json) (index : Nat) (row : Json) : Except
   if index ≥ rows.size then throw "covariance test row out of range"
   setField raw "compiler_covariance_queries" (.arr (rows.set! index row))
 
+
+/-- Re-emit mutated oracle JSON in the current ID wire format. Each composite
+has a checked table slot; this deliberately performs no producer-ID assertions. -/
+private partial def internWire (input : Json) : StateM (Array Json) Json := do
+  let value ← match input with
+    | .arr values => pure (Json.arr (← values.mapM internWire))
+    | .obj fields => pure (Json.mkObj (← fields.toList.mapM fun (key,value) => do
+        pure (key,← internWire value)))
+    | _ => return input
+  let nodes ← get
+  set (nodes.push value)
+  return Json.mkObj [("$lean_miri_shared_ref",toJson nodes.size)]
+
+private def currentWire (root : Json) : Json := Id.run do
+  let .obj fields := root | return root
+  let encode : StateM (Array Json) (List (String × Json)) :=
+    (fields.toList.filter (fun entry => entry.1 != "shared_payloads")).mapM fun (key,value) => do
+      pure (key,← internWire value)
+  let (encodedFields,nodes) := encode.run #[]
+  return Json.mkObj (("shared_payloads",Json.mkObj [("schema_version",toJson (2 : Nat)),
+    ("nodes",.arr nodes)]) :: encodedFields)
+
 private def prepared (raw : Json) : IO CompilerProviders.Prepared := do
-  let decoded ← must (decodeJson raw.compress)
+  let decoded ← must (decodeJson (currentWire raw).compress)
   let program ← must (lowerProgram decoded.document)
   must (CompilerProviders.prepare program)
 
+/-- Failure diagnostics now originate at the typed reader boundary. Compare
+acceptance and successful values; dedicated checks below require rejection. -/
 private def resultText [Repr α] (result : Except String α) : String :=
   match result with
   | .ok value => "ok: " ++ reprStr value
-  | .error error => "error: " ++ error
+  | .error _ => "error"
+
+private def legacyRoot (p : CompilerProviders.Prepared) : Except String Json := do
+  let envelope ← setField p.program.input.raw "shared_payloads" (Json.mkObj [
+    ("schema_version",toJson (2 : Nat)),("nodes",.arr p.program.input.sharedNodes)])
+  SharedPayloads.resolveCatalog envelope
 
 private def legacyCovariance (p : CompilerProviders.Prepared) (source target : MIR.TyId) :
     Except String Bool := do
   if source == target then return true
-  let entries ← (← p.program.input.raw.getObjVal? "compiler_covariance_queries").getArr?
+  let entries ← (← (← legacyRoot p).getObjVal? "compiler_covariance_queries").getArr?
   let mut found := none
   for entry in entries do
     let a ← (← entry.getObjVal? "source_type").getObjValAs? Nat "type_id"
@@ -106,7 +136,7 @@ private def requestOf (p : CompilerProviders.Prepared) (record : Json) :
 
 private def legacySignatureAbi (p : CompilerProviders.Prepared)
     (request : FunctionCalls.SignatureRequest ABI.ExternAbi) : Except String (FnAbi MIR.TyId) := do
-  let records ← (← (← p.program.input.raw.getObjVal? "compiler_function_facts").getObjVal? "helper_signatures").getArr?
+  let records ← (← (← (← legacyRoot p).getObjVal? "compiler_function_facts").getObjVal? "helper_signatures").getArr?
   let mut found : Option Json := none
   for record in records do
     unless (← record.getObjValAs? String "typing_env") == "fully_monomorphized" do
@@ -177,7 +207,10 @@ def main (args : List String) : IO Unit := do
   let covarianceMutated ← must (replaceCovarianceAt covarianceMutated 1 unsupportedCovarianceRow)
   let malformedUnrelatedCovariance ← must (setField thirdCovarianceRow "status" (toJson "malformed-but-unrelated"))
   let covarianceMutated ← must (replaceCovarianceAt covarianceMutated 2 malformedUnrelatedCovariance)
-  let covarianceMutated ← must (appendRootArray covarianceMutated "compiler_covariance_queries" Json.null)
+  let malformedCatalog ← must (Reader.Catalog.parse (currentWire (← must
+    (appendRootArray raw "compiler_covariance_queries" Json.null))))
+  check (!(malformedCatalog.readCovariance baseline.program.input.types.size).isOk)
+    "malformed covariance row was accepted at the typed reader boundary"
   let covariancePrepared ← prepared covarianceMutated
   check (CompilerCovariance.relationWithIndex covariancePrepared.covarianceIndex source source == .ok true)
     "reflexive covariance query did not bypass the catalog's malformed row"
@@ -285,17 +318,17 @@ def main (args : List String) : IO Unit := do
   let legacyMissing := legacySignatureAbi signaturePrepared missingRequest
   check (resultText currentMissing == resultText legacyMissing)
     s!"missing exact signature row changed old scan result/error: current={resultText currentMissing}; legacy={resultText legacyMissing}"
-  IO.println "prepared compiler query indices preserve source scan results and diagnostics on authentic export mutations"
+  IO.println "typed compiler query indices preserve accepted values and reject conflicting, unsupported and malformed export mutations"
 
-/- The type indices carry their raw/runtime source values in the type. This
+/- The type indices carry their typed query/runtime source values in the type. This
 expected diagnostic makes accidental cache rebinding fail the normal test
 module if an index can be supplied for a distinct source value. -/
 /-- error: Type mismatch -/
 #guard_msgs (error, substring := true) in
-#check (CompilerQueryIndices.covariance Json.null : CompilerQueryIndices.Covariance (Json.str "changed"))
+#check (CompilerQueryIndices.covariance (.ok #[]) : CompilerQueryIndices.Covariance (.error "changed"))
 
 /-- error: Type mismatch -/
 #guard_msgs (error, substring := true) in
-example (runtime₁ runtime₂ : RuntimeMetadata) (raw : Json) :
-    CompilerQueryIndices.SignatureAbi runtime₂ raw :=
-  CompilerQueryIndices.signatureAbi runtime₁ raw
+example (runtime₁ runtime₂ : RuntimeMetadata) :
+    CompilerQueryIndices.SignatureAbi runtime₂ :=
+  CompilerQueryIndices.signatureAbi runtime₁

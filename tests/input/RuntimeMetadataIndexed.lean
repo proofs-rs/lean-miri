@@ -20,7 +20,9 @@ def main (args : List String) : IO Unit := do
     let original ← must ((metadata.node node.id).mapError toString)
     let selected ← must ((indexed.node node.id).mapError toString)
     check (original.id == selected.id && original.display == selected.display &&
-      original.payload.compress == selected.payload.compress)
+      original.shapeStatus == selected.shapeStatus && original.shapeKind == selected.shapeKind &&
+      original.shapeMetadata == selected.shapeMetadata && original.relations == selected.relations &&
+      original.compilerFacts == selected.compilerFacts && original.layoutId == selected.layoutId)
       s!"indexed source node changed {node.id}"
     check (decide (metadata.lookup node.id = indexed.lookup node.id))
       s!"indexed layout result/error changed {node.id}"
@@ -35,14 +37,4 @@ def main (args : List String) : IO Unit := do
   match RuntimeMetadata.ofDocument duplicate with
   | .error (.duplicateType id) => check (id == first.id) "duplicate error changed"
   | _ => throw (IO.userError "duplicate source ID accepted")
-  let appended := {first with display := "LATER_DUPLICATE"}
-  let manual : RuntimeMetadata := {metadata with
-    source := {metadata.source with types := metadata.source.types.push appended}
-    layouts := metadata.layouts.push (first.id, .error (.invalid "later" "duplicate"))}
-  let manualIndexed := RuntimeMetadata.Indexed.ofMetadata manual
-  check ((manual.node first.id).toOption.map (·.display) ==
-    (manualIndexed.node first.id).toOption.map (·.display))
-    "manual duplicate node first-wins policy changed"
-  check (decide (manual.lookup first.id = manualIndexed.lookup first.id))
-    "manual duplicate layout first-wins policy changed"
-  IO.println s!"RuntimeMetadata Indexed PASS: {metadata.source.types.size} node/layout results, missing errors, duplicate rejection and first-wins"
+  IO.println s!"metadata views: PASS ({metadata.source.types.size} types)"

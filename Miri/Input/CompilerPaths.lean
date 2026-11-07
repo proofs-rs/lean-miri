@@ -8,22 +8,15 @@ evidence reports no binding name, as in the source fallback. -/
 namespace Miri.Input.CompilerPaths
 open Lean Miri.ABI Miri.Memory Miri.Interpreter
 abbrev Result := Except String
-private def field (j : Json) (key : String) : Result Json := j.getObjVal? key
-private def array (j : Json) (key : String) : Result (Array Json) := do (← field j key).getArr?
-private def natural (j : Json) (key : String) : Result Nat := do (← field j key).getNat?
-private def string (j : Json) (key : String) : Result String := do (← field j key).getStr?
 private def node (context : CompilerFacts.Context) (id : TypeId) : Result TypeNode :=
   (context.runtime.node id).mapError toString
-private def sourceVariant (source : TypeNode) (index : Nat) : Result Json := do
-  let variants ← array (← field source.payload "shape") "variants"
-  let some variant := variants.find? (fun item => (natural item "index").toOption == some index)
-    | throw "compiler variant identity missing"
-  pure variant
+private def sourceVariant (context : CompilerFacts.Context) (source : TypeNode) (index : Nat) : Result TypeVariant :=
+  RuntimeMetadata.typeVariant context.runtime source.id index |>.mapError toString
 
 def variantPath (context : CompilerFacts.Context) (layout : TyAndLayout TypeId) (index : Nat) : Result PathElem := do
   let source ← node context layout.ty
   match source.shapeKind with
-  | .adt => return .variant (← string (← sourceVariant source index) "name")
+  | .adt => return .variant (← sourceVariant context source index).name
   | .coroutine => pure (.coroutineState index)
   | _ => throw "source invariant: variant path requested for non-variant type"
 
@@ -39,7 +32,8 @@ def fieldPath (context : CompilerFacts.Context) (layout : TyAndLayout TypeId)
   | .closure | .coroutine | .coroutineClosure =>
     let some facts := source.compilerFacts | throw "capture-name compiler evidence missing"
     unless facts.captureNamesStatus == some .supported do throw "capture-name compiler query unresolved"
-    let some names := facts.captureNames | throw "capture-name compiler array evidence missing"
+    let some namesId := facts.captureNames | throw "capture-name compiler array evidence missing"
+    let names ← context.runtime.source.compilerFactTables.captureNames.lookup namesId |>.mapError (fun id => s!"invalid capture-name list {id}")
     let name := match names[index]? with
       | none | some none => toString index
       | some (some name) => name
@@ -50,10 +44,10 @@ def fieldPath (context : CompilerFacts.Context) (layout : TyAndLayout TypeId)
       | .Single index => pure index
       | .Empty => throw "source invariant: field path in Variants::Empty"
       | .Multiple .. => throw "source invariant: non-tag field path before variant selection"
-    let fields ← array (← sourceVariant source variantIndex) "fields"
-    let some item := fields.find? (fun item => (natural item "index").toOption == some index)
-      | throw "compiler ADT field identity missing"
-    return .field (← string item "name")
+    let fields ← RuntimeMetadata.typeFields context.runtime (← sourceVariant context source variantIndex) |>.mapError toString
+    let some item := fields[index]? | throw "compiler ADT field identity missing"
+    unless item.index == index do throw "compiler ADT field index mismatch"
+    return .field item.name
   | .array | .slice => pure (.arrayElem index)
   | .dynamicTraitObject =>
     unless index == 0 do throw "source invariant: dyn projected field index is not zero"

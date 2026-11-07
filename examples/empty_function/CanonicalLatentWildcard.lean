@@ -14,7 +14,7 @@ set_option linter.unusedSimpArgs false
 /-- Ordinary latent wildcard sources enter and leave the actual fixed machine.
 All conditions below classify initial metadata; no operation-success law is
 added to the original current-caller input. -/
-theorem result (s : Static) (metadata : Metadata s) (profile : Profile s)
+theorem result (s : Static) (metadata : Metadata s) [SuccessfulConstant metadata] (profile : Profile s)
     (p : Packet) (runtimeProfile : RuntimeProfile s p) (input : InputDraft.CurrentInputDraft s p)
     (resources : ResourceMargins s p) (destination : InputDraft.MemoryDestination s p input.tracker)
     (wild : destination.place.mplace.ptr.provenance = some .wildcard)

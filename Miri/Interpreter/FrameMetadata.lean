@@ -14,7 +14,7 @@ structure CompilerHooks (K User : Type) where
   definitionCrate : CallInstance → M K User Nat
   userRelevantCrate : Nat → M K User Bool
   crateName : Nat → M K User String
-  sourceScope : BodyIdentity → CallInstance → Body → Nat → M K User VirtualCalls.CallerScope
+  sourceScope : BodyIdentity → CallInstance → BodyId → Nat → M K User VirtualCalls.CallerScope
 
 def userRelevance (h : CompilerHooks K User) (frame : Frame P LocalLayout E) : M K User UInt8 := do
   if ← h.requiresCallerLocation frame.functionInstance then return 0
@@ -23,15 +23,10 @@ def userRelevance (h : CompilerHooks K User) (frame : Frame P LocalLayout E) : M
   return 1
 
 private def sourceInfo (frame : Frame P LocalLayout E) : Except StepError (Option SourceInfo) := do
-  match frame.location with
-  | .unwinding _ => return none
-  | .mir location =>
-    let some block := frame.body.basicBlocks[location.block]?
-      | throw (.invalidProgram "frame source block missing")
-    if location.statementIndex == block.statements.size then return some block.terminator.sourceInfo
-    let some statement := block.statements[location.statementIndex]?
-      | throw (.invalidProgram "frame source statement missing")
-    return some statement.sourceInfo
+  match ← frame.instruction? |>.mapError StepError.stack with
+  | none => return none
+  | some (.inl statement) => return some statement.sourceInfo
+  | some (.inr terminator) => return some terminator.sourceInfo
 
 private def lift (result : Except StepError A) : M K User A :=
   match result with | .ok value => pure value | .error error => throw error
@@ -40,9 +35,9 @@ def frameInStd (h : CompilerHooks K User) : M K User Bool := do
   let frame ← currentFrame
   let mut calleeInstance := frame.functionInstance
   if let some info ← lift (sourceInfo frame) then
-    let scope ← h.sourceScope frame.bodyIdentity frame.functionInstance frame.body info.scope
+    let scope ← h.sourceScope frame.bodyIdentity frame.functionInstance frame.bodyId info.scope
     if let some parent := scope.inlinedParentScope then
-      let parent ← h.sourceScope frame.bodyIdentity frame.functionInstance frame.body parent
+      let parent ← h.sourceScope frame.bodyIdentity frame.functionInstance frame.bodyId parent
       let some (callee, _) := parent.inlined
         | throw (.invalidProgram "inlined_parent_scope points to scope without inline info")
       calleeInstance := callee

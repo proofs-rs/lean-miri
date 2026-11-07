@@ -7,9 +7,6 @@ Compiler inference subtypes absent from the input remain explicit obligations. -
 namespace Miri.Input.CompilerStorage
 open Lean Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
 
-private def metadata (value : Except String A) : Except StepError A :=
-  value.mapError (fun reason => .unsupported s!"storage type metadata: {reason}")
-
 private def trivial (runtime : RuntimeMetadata) : Nat → TyId → Except StepError Bool
   | 0, _ => .error (.invalidProgram "cyclic compiler type in storage sizedness traversal")
   | fuel + 1, ty => do
@@ -21,18 +18,16 @@ private def trivial (runtime : RuntimeMetadata) : Nat → TyId → Except StepEr
     | .str | .slice | .dynamicTraitObject | .foreign | .adt | .alias
     | .parameter | .placeholderType => pure false
     | .tuple =>
-      let elements ← metadata ((node.payload.getObjVal? "shape").bind fun shape =>
-        (shape.getObjVal? "elements").bind Json.getArr?)
+      let some id := node.relations.elements | throw (.invalidProgram "tuple elements absent")
+      let elements ← runtime.source.typeRelationTables.typeLists.lookup id |>.mapError
+        (fun id => StepError.invalidProgram s!"invalid tuple element list {id}")
       if elements.isEmpty then return true
       let some tail := elements[elements.size - 1]?
         | throw (.invalidProgram "nonempty compiler tuple has no tail")
-      let tail ← metadata (tail.getObjValAs? Nat "type_id")
       trivial runtime fuel tail
     | .patternType | .unsafeBinder =>
-      let key := if node.shapeKind == .patternType then "base" else "inner"
-      let inner ← metadata do
-        let shape ← node.payload.getObjVal? "shape"
-        (← shape.getObjVal? key).getObjValAs? Nat "type_id"
+      let some inner := if node.shapeKind == .patternType then node.relations.base else node.relations.inner
+        | throw (.invalidProgram "storage child type absent")
       trivial runtime fuel inner
     | .boundType => throw (.invalidProgram "is_very_trivially_sized applied to bound type")
     | .inferenceType => throw (.unsupported "storage sizedness requires exact compiler inference subtype")

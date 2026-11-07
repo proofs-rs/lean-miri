@@ -1,3 +1,6 @@
+import MiriTests.Input.ReferenceDecoder
+import MiriTests.Input.SharedPayloads
+import MiriTests.Input.ReferenceTraversal
 import MiriTests.ABI.ABIPrimitives
 import MiriTests.ABI.RuntimeLayout
 import MiriTests.Cast.Typed
@@ -39,3 +42,4 @@ import MiriTests.Safety.OperationalSafety
 import MiriTests.ScalarOps.ScalarOps
 import MiriTests.Scheduling.Stateful
 import MiriTests.Step.Driver
+import MiriTests.Input.LoweringOracle

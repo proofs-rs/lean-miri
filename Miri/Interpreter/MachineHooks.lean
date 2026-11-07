@@ -183,6 +183,7 @@ def initFrame (relevance : Frame Provenance LocalLayout Unit → M K User UInt8)
   let dataRace := (← get).machine.dataRace.map fun _ => {}
   return {
     body := frame.body, bodyIdentity := frame.bodyIdentity
+    bodyId := frame.bodyId, mirTables := frame.mirTables
     functionInstance := frame.functionInstance
     extra := {
       borrowTracker, catchUnwind := none, userRelevance, dataRace }
@@ -194,12 +195,12 @@ def initFrame (relevance : Frame Provenance LocalLayout Unit → M K User UInt8)
 /-- Source after_local_moved_to_memory records declaration span before fetching
 allocation extras, then transfers local timestamps to every byte. -/
 def afterLocalMovedToMemory (localId : LocalId) (place : MPlaceTy Provenance)
-    (localSpan : Body → LocalId → M K User SpanRef) : M K User Unit := do
+    (localSpan : BodyIdentity → LocalId → M K User SpanRef) : M K User Unit := do
   let allocId ← match place.mplace.ptr.provenance with
     | some (.concrete allocId _) => pure allocId
     | _ => throw (.invalidProgram "after_local_moved_to_memory requires fresh concrete allocation")
   let frame ← currentFrame
-  let span ← localSpan frame.body localId
+  let span ← localSpan frame.bodyIdentity localId
   modify fun state => { state with machine := { state.machine with allocationSpans :=
     (state.machine.allocationSpans.filter fun entry => entry.1 != allocId).push (allocId, span, none) } }
   let state ← get

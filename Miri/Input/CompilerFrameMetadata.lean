@@ -11,16 +11,8 @@ structure Prepared where
   crates : Array (Nat × String)
 
 def prepare (calls : CompilerCallPipeline.Prepared) : Except String Prepared := do
-  let raw ← calls.calls.program.input.raw.getObjVal? "compiler_frame_metadata"
-  let localId ← (← raw.getObjVal? "local_crate").getNat?
-  let mut crates := #[]
-  for entry in (← (← raw.getObjVal? "crates").getArr?) do
-    let id ← (← entry.getObjVal? "crate").getNat?
-    let name ← (← entry.getObjVal? "name").getStr?
-    if crates.any (·.1 == id) then throw "duplicate compiler crate identity"
-    crates := crates.push (id,name)
-  unless crates.any (·.1 == localId) do throw "local compiler crate name absent"
-  return ⟨calls,localId,crates⟩
+  let metadata ← calls.calls.program.input.mirTables.frameMetadata
+  return ⟨calls,metadata.localCrate,metadata.crates⟩
 
 private def lift (result : Except String A) : MachineHooks.M K User A :=
   match result with
@@ -44,11 +36,8 @@ def hooks (p : Prepared) (userRelevantCrates : Array Nat) : FrameMetadata.Compil
     let some (_,name) := p.crates.find? (·.1 == id) | throw "compiler crate name absent"
     return name
   sourceScope := fun identity _ body scope => do
-    let actual ← lift do
-      let some actual := p.calls.scopes.program.bundle.bodies[identity.index]?
-        | throw "canonical frame body identity absent"
-      return actual
-    unless actual.body == body do throw (.invalidProgram "frame body identity/content mismatch")
+    let actual ← lift (p.calls.scopes.program.input.mirTables.bodyId identity.index)
+    unless actual == body do throw (.invalidProgram "frame body ID mismatch")
     lift (CompilerScopes.sourceScope p.calls.scopes identity.index scope) }
 
 end Miri.Input.CompilerFrameMetadata
@@ -96,6 +85,8 @@ def resolvedRank (localCrate definitionCrate : Nat) (relevant : Array Nat) : UIn
     (machine : MachineHooks.MachineState K U) (rank : UInt8) :
     Frame Provenance LocalLayout MachineHooks.FrameExtra := {
   body := frame.body
+  bodyId := frame.bodyId
+  mirTables := frame.mirTables
   bodyIdentity := frame.bodyIdentity
   functionInstance := frame.functionInstance
   extra := { borrowTracker := machine.borrowTracker.map (fun _ => {})

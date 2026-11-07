@@ -23,7 +23,7 @@ def initializedMachine (s : Static) (p : Packet) (frame previous : LocalUnit.F)
     (registry : NondataProtection.Registry p.before id) :
     ∃ frame machine,
       WholeCall.install s p = .ok () (LocalUnit.current p.before.stack.frames frame machine) ∧
-      frame.body = s.loaded.body ∧ frame.bodyIdentity = s.loaded.identity ∧
+      Meaning.FrameMatches frame s.loaded ∧ frame.bodyIdentity = s.loaded.identity ∧
       frame.functionInstance = s.functionInstance ∧ frame.location = .mir ⟨0,0⟩ ∧
       frame.locals = #[{value := .live (.immediate .uninit),layout := none}] ∧
       frame.extra.borrowTracker = some {protectedTags := #[(id,input.tracker.global.nextPointerTag)]} ∧
@@ -78,7 +78,7 @@ def initializedMachine (s : Static) (p : Packet) (frame previous : LocalUnit.F)
         | .unwinding span => pure span
         | .mir _ => throw (StepError.invalidProgram "raw frame does not have preamble location")
       MachineHooks.setCurrentFrame {current with trackCallerArg := none}
-      CanonicalInit.spanAt (← (ExecutionMachine.callHooks s.cfg s.limits).localSpan s.loaded.body 0)
+      CanonicalInit.spanAt (← (ExecutionMachine.callHooks s.cfg s.limits).localSpan s.loaded.identity 0)
       (ExecutionMachine.callHooks s.cfg s.limits).protectArgument () destination.place
       CanonicalInit.spanAt preamble
       (ExecutionMachine.callHooks s.cfg s.limits).pushDone ())

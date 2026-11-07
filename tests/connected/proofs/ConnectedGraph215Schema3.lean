@@ -491,8 +491,7 @@ private def runScLitmusPure [DecidableEq OuterState] (contents : String) (nodeBu
   let compiler := prepared.compiler
   let image := prepared.image
   let memory := attempt.memory
-  let bytes ← must (Input.CompilerGlobalBytes.prepare compiler.program compiler.runtime memory
-    (some compiler.sourceEquality))
+  let bytes ← must (Input.CompilerGlobalBytes.prepare compiler.owner memory)
   let targetBits := compiler.runtime.target.base.pointerWidth.bits.toNat
   let arch ← must (Input.EvalArchitectureMachine.targetArch compiler.intrinsics)
   unless compiler.program.input.producer.targetTriple == "x86_64-unknown-linux-gnu" &&
@@ -641,25 +640,22 @@ private def runScLitmusPure [DecidableEq OuterState] (contents : String) (nodeBu
         let changedLedgerEq := decide (afterCallbacks = changedLedgerState)
         let world := afterCallbacks.machine.user.user.payload.payload
         let source := world.types.metadata.source
-        let withSource := fun (changedSource : Input.ImportDocumentCore)
-            (nodeCache : Option (Input.RuntimeNodeLookupCache changedSource.types)) =>
-          let changedMetadata := {world.types.metadata with source := changedSource, nodeCache}
+        let withSource := fun (changedSource : Input.ImportDocumentCore) =>
+          let changedMetadata := {world.types.metadata with source := changedSource}
           let changedTypes := {world.types with metadata := changedMetadata}
           let changedWorld := {world with types := changedTypes}
           let changedValidity := {afterCallbacks.machine.user.user with
             payload := {afterCallbacks.machine.user.user.payload with payload := changedWorld}}
           let changedStorage := {afterCallbacks.machine.user with user := changedValidity}
           {afterCallbacks with machine := {afterCallbacks.machine with user := changedStorage}}
-        -- A changed shared-node array cannot retain its old dependent ABI cache.
         let changedSharedNodesState := withSource
           {source with
             sharedNodes := source.sharedNodes.push Lean.Json.null
-            compilerFunctionAbiTable := none} world.types.metadata.nodeCache
+            }
         let changedSharedNodesEq := decide (afterCallbacks = changedSharedNodesState)
         unless source.raw != Lean.Json.null do
           throw "fixture unexpectedly has a null source document"
         let changedRawState := withSource {source with raw := Lean.Json.null}
-          world.types.metadata.nodeCache
         let changedRawEq := decide (afterCallbacks = changedRawState)
         let timestampRead := Miri.Concurrency.VTimestamp.ofPacked 2 (by decide)
         let timestampRetag := Miri.Concurrency.VTimestamp.ofPacked 3 (by decide)

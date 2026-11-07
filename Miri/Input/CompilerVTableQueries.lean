@@ -18,23 +18,17 @@ structure Prepared where
   facts : CompilerFactAdapters.Prepared
   entries : Array Entry
   traceQueries : Bool := false
-private def ref (facts : CompilerFactAdapters.Prepared) (j : Json) (key : String) : Except String TypeId := do
-  let id ← (← (← j.getObjVal? key).getObjVal? "type_id").getNat?
-  let _ ← facts.context.runtime.node id |>.mapError toString
-  pure id
-
 def prepare (facts : CompilerFactAdapters.Prepared) : Except String Prepared := do
-  let records ← (← facts.context.program.input.raw.getObjVal? "compiler_vtable_queries").getArr?
+  let records := facts.context.program.input.vtableTables.queries
   let mut entries := #[]
   for record in records do
-    unless (← (← record.getObjVal? "status").getStr?) == "supported" do
-      throw "vtable region-erasure query unavailable"
-    let input ← ref facts record "input_type"
-    let output ← ref facts record "output_type"
-    let before ← CompilerVTableFacts.exportedArrayToken facts (← record.getObjVal? "input_predicates")
-    let after ← CompilerVTableFacts.exportedArrayToken facts (← record.getObjVal? "output_predicates")
-    let typeMono ← (← record.getObjVal? "output_type_monomorphic_enough").getBool?
-    let dynMono ← (← record.getObjVal? "output_predicates_monomorphic_enough").getBool?
+    let record ← record
+    let input := record.inputTypeId
+    let output := record.outputTypeId
+    let before := record.inputPredicates
+    let after := record.outputPredicates
+    let typeMono := record.typeMonomorphic
+    let dynMono := record.predicatesMonomorphic
     unless (← CompilerFacts.boolean facts.context output "is_monomorphic_enough") == typeMono do
       throw "vtable output monomorphization query conflict"
     if let some prior := entries.find? (fun entry => entry.inputType == input && entry.inputPredicates == before) then
@@ -42,7 +36,7 @@ def prepare (facts : CompilerFactAdapters.Prepared) : Except String Prepared := 
           prior.typeMonomorphic == typeMono && prior.predicatesMonomorphic == dynMono do
         throw "conflicting complete-pair vtable erasure queries"
     else entries := entries.push ⟨input,before,output,after,typeMono,dynMono,
-      ((record.getObjVal? "query_id").bind Json.getNat?).toOption⟩
+      record.queryId⟩
   pure ⟨facts,entries,false⟩
 
 def eraseAndAnonymize (prepared : Prepared) (ty : TypeId) (predicates : Nat) : Except String (TypeId × Nat) := do

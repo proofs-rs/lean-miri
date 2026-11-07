@@ -13,12 +13,13 @@ def layout : LocalLayout := ⟨0, {
   size := Size.ofBytes 1, maxReprAlign := none, unadjustedAbiAlign := Align.ONE,
   reprC := false, randomizationSeed := 0 }⟩
 def place : MPlaceTy Provenance := ⟨⟨⟨Size.ZERO, some (.concrete allocId rootTag)⟩, .none, none⟩, layout⟩
-def fixtureBodies : Array MIR.Body := #[⟨.Built, 0, none, #[layout.ty, layout.ty], #[]⟩]
-def fixtureLoaded : LoadedBody := ⟨BodyIdentity.ofCanonicalIndex 0, fixtureBodies[0]⟩
+def fixtureBody : MIR.BodyNode := ⟨.Built, 0, none, #[layout.ty, layout.ty], #[], 0, #[]⟩
 def fixtureIdentity : LocalsIdentity := (LocalsIdentitySupply.allocate ⟨0⟩).2
 def frame : Frame Provenance LocalLayout MachineHooks.FrameExtra :=
-  { body := fixtureLoaded.body
-    bodyIdentity := fixtureLoaded.identity
+  { body := fixtureBody
+    bodyId := ⟨0⟩
+    mirTables := { bodies := #[some fixtureBody] }
+    bodyIdentity := BodyIdentity.ofCanonicalIndex 0
     localsIdentity := fixtureIdentity
     functionInstance := ⟨.Item 0, #[]⟩
     extra := { borrowTracker := some {}, catchUnwind := none, userRelevance := 0, dataRace := some {} }

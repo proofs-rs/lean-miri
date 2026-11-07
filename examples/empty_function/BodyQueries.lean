@@ -68,15 +68,14 @@ def leaves (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
       (ValidityMachine.Control (EvalCoreMachine.Stored Unit Unit Unit Unit Unit Unit Unit Unit MinimalHost)))
     (state : MachineHooks.State MiriMemoryKind RootUser) (ty : TyId)
     (notArray : state.machine.user.payload.payload.user.types.entries.any (·.value.ty == ty) = false)
-    (compatible : p.lifecycle.calls.symbols.facts.context.runtime.matchesSourceLeft
-      state.machine.user.payload.payload.user.types.metadata.source.raw = true)
-    (value : CompilerFacts.boolean p.lifecycle.calls.symbols.facts.context ty "opsem_inhabited" = .ok true) :
+    (value : CompilerFacts.booleanRuntime state.machine.user.payload.payload.user.types.metadata
+      ty "opsem_inhabited" = .ok true) :
     (leaves p image projection pointers).opsemInhabited () ty state = .ok true state := by
   have absent : state.machine.user.payload.payload.user.types.entries.find? (·.value.ty == ty) = none := by
     apply Array.find?_eq_none.mpr
     exact Array.any_eq_false'.mp notArray
   simp [leaves, CompilerValidityLeaves.make, RuntimeArrayFacts.opsemInhabited,
-    EvalProjectionMachine.arrays, absent, compatible, value,
+    EvalProjectionMachine.arrays, absent, value,
     get, getThe, MonadStateOf.get, EStateM.get, bind, Bind.bind, EStateM.bind,
     pure, Pure.pure, EStateM.pure, Except.mapError]
   rfl

@@ -1,10 +1,12 @@
+import Miri.Input.Reader.JsonFields
 import Miri.Input.Model.Types
-import Miri.Input.SharedPayloads
 import Miri.Input.JsonTraversalCache
 
 namespace Miri.Input.DecoderValues
 
 open Lean
+open Reader (inspectJson jsonField? jsonFieldAs?)
+variable [Reader.JsonFields]
 
 def expectedMiriCommit : String := "7fa591d7d4dd9af8154becbc8332f8096f8323b1"
 def expectedRustcCommit : String := "8144389c895da997dbdecaa635e41d6a50be6ffd"
@@ -26,46 +28,46 @@ def joinPath (path key : String) : String :=
   if path.isEmpty then key else path ++ "." ++ key
 
 def field (j : Json) (key path : String) : Except String Json := do
-  j.getObjVal? key |>.mapError fun e => s!"{path}: missing/invalid field `{key}` ({e})"
+  (jsonField? j) key |>.mapError fun e => s!"{path}: missing/invalid field `{key}` ({e})"
 
 def fieldNat (j : Json) (key path : String) : Except String Nat := do
   let v ← field j key path
-  v.getNat? |>.mapError fun e => s!"{joinPath path key}: expected unsigned integer ({e})"
+  (inspectJson v).getNat? |>.mapError fun e => s!"{joinPath path key}: expected unsigned integer ({e})"
 
 def fieldString (j : Json) (key path : String) : Except String String := do
   let v ← field j key path
-  v.getStr? |>.mapError fun e => s!"{joinPath path key}: expected string ({e})"
+  (inspectJson v).getStr? |>.mapError fun e => s!"{joinPath path key}: expected string ({e})"
 
 def fieldBool (j : Json) (key path : String) : Except String Bool := do
   let v ← field j key path
-  v.getBool? |>.mapError fun e => s!"{joinPath path key}: expected boolean ({e})"
+  (inspectJson v).getBool? |>.mapError fun e => s!"{joinPath path key}: expected boolean ({e})"
 
 def arrayField (j : Json) (key path : String) : Except String (Array Json) := do
   let v ← field j key path
-  v.getArr? |>.mapError fun e => s!"{joinPath path key}: expected array ({e})"
+  (inspectJson v).getArr? |>.mapError fun e => s!"{joinPath path key}: expected array ({e})"
 
 def optionalNatField (j : Json) (key path : String) : Except String (Option Nat) := do
   let v ← field j key path
   if v == .null then pure none else
-    (v.getNat?).map some |>.mapError fun e => s!"{joinPath path key}: expected unsigned integer or null ({e})"
+    ((inspectJson v).getNat?).map some |>.mapError fun e => s!"{joinPath path key}: expected unsigned integer or null ({e})"
 
 def optionalField (j : Json) (key : String) : Option Json :=
-  (j.getObjVal? key).toOption
+  ((jsonField? j) key).toOption
 
 def optionalString (j : Json) (key path : String) : Except String (Option String) := do
   match optionalField j key with
   | none | some .null => pure none
-  | some value => (value.getStr?).map some |>.mapError fun e => s!"{joinPath path key}: expected string ({e})"
+  | some value => ((inspectJson value).getStr?).map some |>.mapError fun e => s!"{joinPath path key}: expected string ({e})"
 
 def objectFields (j : Json) : Except String (Array (String × Json)) := do
-  match j with
+  match inspectJson j with
   | .obj fields => pure fields.toList.toArray
   | _ => throw "expected object"
 
 def statusOf? (j : Json) : Option String :=
   match optionalField j "status" with
   | none => none
-  | some value => match value.getStr? with | .ok text => some text | .error _ => none
+  | some value => match (inspectJson value).getStr? with | .ok text => some text | .error _ => none
 
 def parseStatus (value : String) : PayloadStatus :=
   match value with
@@ -93,7 +95,6 @@ structure DecodeMemo where
   private mk ::
   private sourceSpans : Std.HashMap Json SourceSpanData := {}
   private layouts : Std.HashMap Json Layout := {}
-  private functionAbis : Std.HashMap Json FunctionAbi := {}
 
 def emptyDecodeMemo : DecodeMemo := {}
 
@@ -104,12 +105,11 @@ def parseSourcePosition (j : Json) (path : String) : Except String SourcePositio
   }
 
 def parseSourceSpanUncached (j : Json) (path : String) : Except String SourceSpanData := do
-  if (j.getObjVal? "$lean_miri_shared_ref").isOk then
+  if ((jsonField? j) "$lean_miri_shared_ref").isOk then
     throw s!"{path}: shared span reference requires a shared_payloads catalog"
   let start ← parseSourcePosition (← field j "start" path) (joinPath path "start")
   let endPos ← parseSourcePosition (← field j "end" path) (joinPath path "end")
   return {
-    originalPayload := j.compress
     lo := ← fieldNat j "lo" path
     hi := ← fieldNat j "hi" path
     start := start
@@ -129,7 +129,7 @@ def parseSourceInfo (j : Json) (path : String) (memo : DecodeMemo := {}) : Excep
     scope := ← fieldNat j "scope" path
   }
 
-def hasField (j : Json) (key : String) : Bool := (j.getObjVal? key).isOk
+def hasField (j : Json) (key : String) : Bool := ((jsonField? j) key).isOk
 
 def isSourceSpanJson (j : Json) : Bool :=
   hasField j "lo" && hasField j "hi" && hasField j "start" && hasField j "end" &&
@@ -270,7 +270,7 @@ def decodeValueKey (j : Json) (path : String) (domain : Domain)
 def asTag? (j : Json) (key : String) : Option String :=
   match optionalField j key with
   | none => none
-  | some value => match value.getStr? with | .ok text => some text | .error _ => none
+  | some value => match (inspectJson value).getStr? with | .ok text => some text | .error _ => none
 
 def singletonRef (j : Json) (key : String) : Option Nat :=
   match objectFields j with
@@ -279,7 +279,7 @@ def singletonRef (j : Json) (key : String) : Option Nat :=
     match fields.toList with
     | [(name, value)] =>
       if name != key then none else
-        match value.getNat? with | .ok id => some id | .error _ => none
+        match (inspectJson value).getNat? with | .ok id => some id | .error _ => none
     | _ => none
 
 def isTypeRef (j : Json) : Option Nat := singletonRef j "type_id"
@@ -332,7 +332,7 @@ def domainTag (j : Json) (domain : Domain) : Option String :=
   | .any => none
 
 def isStringJson (j : Json) : Bool :=
-  match j with | .str _ => true | _ => false
+  match inspectJson j with | .str _ => true | _ => false
 
 def integerTypeTag (text : String) : IntegerTypeTag :=
   match text with
@@ -386,11 +386,11 @@ def statusField (j : Json) (path : String) (optional : Bool := false)
     if optional then pure .supported
     else throw s!"{joinPath path "status"}: missing required status tag"
   | some value =>
-    let text ← value.getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})"
+    let text ← (inspectJson value).getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})"
     pure (parseStatus text)
 
 def parseOperatorTag (j : Json) (path : String) : Except String (String × PayloadStatus) := do
-  match j with
+  match inspectJson j with
   | .str tag => pure (tag, .supported)
   | .obj _ =>
     let tag ← fieldString j "kind" path
@@ -440,13 +440,13 @@ def typedEnumCategory? (key path : String) (parentTag : Option String) (j : Json
   | _ => none
 
 def parseInlineTag (j : Json) (path : String) : Except String TaggedNode := do
-  match j with
+  match inspectJson j with
   | .str tag => return ⟨.supported, tag, j⟩
   | .obj _ =>
     let tag ← fieldString j "kind" path
     let status ← match optionalField j "status" with
       | none => pure .supported
-      | some value => parseStatus <$> (value.getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})")
+      | some value => parseStatus <$> ((inspectJson value).getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})")
     return ⟨status, tag, j⟩
   | _ => throw s!"{path}: expected enum tag object or string"
 
@@ -466,7 +466,7 @@ def userTypeProjectionKind (j : Json) (path : String) : Except String UserTypePr
     let nameValue ← field j "name" path
     let name ← match nameValue with
       | .null => pure none
-      | _ => (nameValue.getStr?).map some |>.mapError fun e => s!"{joinPath path "name"}: expected string or null ({e})"
+      | _ => ((inspectJson nameValue).getStr?).map some |>.mapError fun e => s!"{joinPath path "name"}: expected string or null ({e})"
     pure (.downcast name (← fieldNat j "variant_index" path))
   | "OpaqueCast" => pure .opaqueCast
   | "UnwrapUnsafeBinder" => pure .unwrapUnsafeBinder
@@ -477,7 +477,7 @@ def parseUserTypeProjection (j : Json) (path : String) : Except String UserTypeP
   let status ← statusField j path
   let baseIndex ← match optionalField j "base_index" with
     | none | some .null => pure none
-    | some value => (value.getNat?).map some |>.mapError fun e => s!"{joinPath path "base_index"}: expected unsigned integer ({e})"
+    | some value => ((inspectJson value).getNat?).map some |>.mapError fun e => s!"{joinPath path "base_index"}: expected unsigned integer ({e})"
   let projections ← match optionalField j "projections" with
     | none | some .null => pure none
     | some _ =>
@@ -506,7 +506,7 @@ partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
   if let some id := isTypeRef j then return .typeRef id
   if let some id := isAllocationRef j then return .allocationRef id
   if statusOf? j == some "debug_payload" then return .diagnostic j
-  match j with
+  match inspectJson j with
   | .arr values =>
     let mut decoded := #[]
     let mut index := 0
@@ -546,12 +546,12 @@ partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
         | _ => false
       let decoded := match key, value with
         | "instance_id", .num _ =>
-          match value.getNat? with | .ok id => .instanceRef id | .error _ => decoded
+          match (inspectJson value).getNat? with | .ok id => .instanceRef id | .error _ => decoded
         | "local", .num _ =>
-          match value.getNat? with | .ok id => .localRef id | .error _ => decoded
+          match (inspectJson value).getNat? with | .ok id => .localRef id | .error _ => decoded
         | "block", .num _ | "target", .num _ | "otherwise", .num _
         | "real_target", .num _ | "imaginary_target", .num _ | "resume", .num _ =>
-          match value.getNat? with | .ok id => .blockRef id | .error _ => decoded
+          match (inspectJson value).getNat? with | .ok id => .blockRef id | .error _ => decoded
         | _, _ => decoded
       if !isTagField then decodedFields := decodedFields.push (key, decoded)
     match effectiveDomain with
@@ -969,7 +969,7 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
   if statusOf? j == some "debug_payload" then
     let value := TypedValue.diagnostic j
     return ⟨value, runtimeLocalObligations value path⟩
-  match j with
+  match inspectJson j with
   | .arr values =>
     let mut obligations : Option RuntimeObligationSequence := none
     let mut index := 0
@@ -1035,15 +1035,15 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
       if !isTagField && (runtimeSummaryKeys.contains key ||
           path.endsWith ".hir_id" && (key == "owner_def_id" || key == "local_id")) then
         let childSummary := match key, value with
-          | "instance_id", .num _ => match value.getNat? with
+          | "instance_id", .num _ => match (inspectJson value).getNat? with
             | .ok id => TypedValue.instanceRef id
             | .error _ => runtimeSummaryChild key child.summary
-          | "local", .num _ => match value.getNat? with
+          | "local", .num _ => match (inspectJson value).getNat? with
             | .ok id => TypedValue.localRef id
             | .error _ => runtimeSummaryChild key child.summary
           | "block", .num _ | "target", .num _ | "otherwise", .num _
           | "real_target", .num _ | "imaginary_target", .num _ | "resume", .num _ =>
-            match value.getNat? with
+            match (inspectJson value).getNat? with
             | .ok id => TypedValue.blockRef id
             | .error _ => runtimeSummaryChild key child.summary
           | _, _ => runtimeSummaryChild key child.summary
@@ -1094,21 +1094,21 @@ def decodeRuntimeValue (node : JsonTraversalCache.Node) (path : String) (domain 
   (decodeRuntimeValueM node path domain tagCategory memo).run' {}
 
 def jsonArray (j : Json) (path : String) : Except String (Array Json) :=
-  j.getArr? |>.mapError fun e => s!"{path}: expected array ({e})"
+  (inspectJson j).getArr? |>.mapError fun e => s!"{path}: expected array ({e})"
 
 def natArray (j : Json) (path : String) : Except String (Array Nat) := do
   let values ← jsonArray j path
   let mut out := #[]
   let mut index := 0
   for value in values do
-    out := out.push (← value.getNat? |>.mapError fun e => s!"{path}[{index}]: expected unsigned integer ({e})")
+    out := out.push (← (inspectJson value).getNat? |>.mapError fun e => s!"{path}[{index}]: expected unsigned integer ({e})")
     index := index + 1
   return out
 
 def optionalNat (j : Json) (key path : String) : Except String (Option Nat) := do
   match optionalField j key with
   | none | some .null => pure none
-  | some value => (value.getNat?).map some |>.mapError fun e => s!"{joinPath path key}: expected unsigned integer or null ({e})"
+  | some value => ((inspectJson value).getNat?).map some |>.mapError fun e => s!"{joinPath path key}: expected unsigned integer or null ({e})"
 
 def optionalJson (j : Json) (key : String) : Option Json :=
   optionalField j key |>.filter (· != .null)
@@ -1117,21 +1117,21 @@ def parseTagged (j : Json) (path : String) : Except String TaggedNode := do
   let tag ← fieldString j "kind" path
   let status ← match optionalField j "status" with
     | none => pure .supported
-    | some value => parseStatus <$> (value.getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})")
+    | some value => parseStatus <$> ((inspectJson value).getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})")
   return ⟨status, tag, j⟩
 
 def parseAbiTag (j : Json) (path : String) : Except String TaggedNode := do
-  match j with
+  match inspectJson j with
   | .str tag => return ⟨.supported, tag, j⟩
   | .obj _ =>
     let tag ← match optionalField j "kind" with
-      | some value => value.getStr? |>.mapError fun e => s!"{joinPath path "kind"}: expected string enum tag ({e})"
+      | some value => (inspectJson value).getStr? |>.mapError fun e => s!"{joinPath path "kind"}: expected string enum tag ({e})"
       | none => match optionalField j "variant" with
-        | some value => value.getStr? |>.mapError fun e => s!"{joinPath path "variant"}: expected string enum tag ({e})"
+        | some value => (inspectJson value).getStr? |>.mapError fun e => s!"{joinPath path "variant"}: expected string enum tag ({e})"
         | none => throw s!"{path}: enum object is missing its kind tag"
     let status ← match optionalField j "status" with
       | none => pure .supported
-      | some value => parseStatus <$> (value.getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})")
+      | some value => parseStatus <$> ((inspectJson value).getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})")
     return ⟨status, tag, j⟩
   | _ => throw s!"{path}: expected enum tag string or tagged object"
 
@@ -1154,7 +1154,7 @@ def backendReprKind (tag : String) : BackendReprKind :=
 def optionalNatBefore (j : Json) (key path : String) : Except String (Option Nat) := do
   match optionalField j key with
   | none | some .null => pure none
-  | some value => (value.getNat?).map some |>.mapError fun e => s!"{joinPath path key}: expected unsigned integer or null ({e})"
+  | some value => ((inspectJson value).getNat?).map some |>.mapError fun e => s!"{joinPath path key}: expected unsigned integer or null ({e})"
 
 def parsePrimitiveLayout (j : Json) (path : String) : Except String PrimitiveLayout := do
   let tag ← fieldString j "kind" path
@@ -1167,7 +1167,7 @@ def parsePrimitiveLayout (j : Json) (path : String) : Except String PrimitiveLay
   let integerKind := integerKindText.map integerTypeTag
   let signed ← match optionalField j "signed" with
     | none | some .null => pure none
-    | some value => (value.getBool?).map some |>.mapError fun e => s!"{joinPath path "signed"}: expected boolean ({e})"
+    | some value => ((inspectJson value).getBool?).map some |>.mapError fun e => s!"{joinPath path "signed"}: expected boolean ({e})"
   let floatKindText ← optionalString j "float_kind" path
   let floatKind := floatKindText.map floatTypeTag
   let addressSpace ← optionalNatBefore j "address_space" path
@@ -1178,18 +1178,17 @@ def parsePrimitiveLayout (j : Json) (path : String) : Except String PrimitiveLay
     signed := signed
     floatKind := floatKind
     addressSpace := addressSpace
-    payload := j
   }
 
 /-- Exact compiler u128 encoding; preserve legacy JSON naturals while allowing
 full-width decimal strings that serde_json cannot represent as numbers. -/
 def parseU128Natural (j : Json) (path : String) : Except String Nat := do
-  let value ← match j with
+  let value ← match inspectJson j with
     | .str text => do
       unless !text.isEmpty && text.toList.all Char.isDigit do throw s!"{path}: expected exact unsigned decimal string"
       let some value := text.toNat? | throw s!"{path}: invalid unsigned decimal"
       pure value
-    | _ => j.getNat? |>.mapError fun error => s!"{path}: expected unsigned integer ({error})"
+    | _ => (inspectJson j).getNat? |>.mapError fun error => s!"{path}: expected unsigned integer ({error})"
   unless value < 2^128 do throw s!"{path}: u128 overflow"
   pure value
 
@@ -1206,11 +1205,11 @@ def parseScalarLayout (j : Json) (path : String) : Except String ScalarLayout :=
     kind := kind
     primitive := ← parsePrimitiveLayout (← field j "primitive" path) (joinPath path "primitive")
     validRange := range
-    payload := j
   }
 
 def parseBackendRepr (j : Json) (path : String) : Except String BackendRepr := do
-  let tag ← fieldString j "kind" path
+  let node ← parseTagged j path
+  let tag := node.tag
   let kind := backendReprKind tag
   let scalar ← match optionalJson j "scalar" with
     | none => pure none
@@ -1226,7 +1225,7 @@ def parseBackendRepr (j : Json) (path : String) : Except String BackendRepr := d
     | some value => pure (some (← parseScalarLayout value (joinPath path "element")))
   let sized ← match optionalField j "sized" with
     | none | some .null => pure none
-    | some value => (value.getBool?).map some |>.mapError fun e => s!"{joinPath path "sized"}: expected boolean ({e})"
+    | some value => ((inspectJson value).getBool?).map some |>.mapError fun e => s!"{joinPath path "sized"}: expected boolean ({e})"
   let secondOffsetBytes ← optionalNatBefore j "second_offset_bytes" path
   let laneCount ← optionalNatBefore j "lane_count" path
   let vectorCount ← optionalNatBefore j "vector_count" path
@@ -1240,6 +1239,7 @@ def parseBackendRepr (j : Json) (path : String) : Except String BackendRepr := d
     if element.isNone || laneCount.isNone then throw s!"{path}: SIMD backend representation is incomplete"
   | .unknown _ => pure ()
   return {
+    status := node.status
     kind := kind
     sized := sized
     scalar := scalar
@@ -1249,7 +1249,6 @@ def parseBackendRepr (j : Json) (path : String) : Except String BackendRepr := d
     element := element
     laneCount := laneCount
     vectorCount := vectorCount
-    payload := j
   }
 
 def parseFieldShape (j : Json) (path : String) : Except String FieldShape := do
@@ -1285,8 +1284,16 @@ def parseFieldShape (j : Json) (path : String) : Except String FieldShape := do
     strideBytes := strideBytes
     offsetsBytes := offsetsBytes
     memoryOrder := memoryOrder
-    payload := j
   }
+
+def parseNicheLayout (j : Json) (path : String) : Except String (Option NicheLayout) := do
+  if j == .null then return none
+  let range ← field j "valid_range" path
+  return some {
+    offsetBytes := ← fieldNat j "offset_bytes" path
+    primitive := ← parsePrimitiveLayout (← field j "primitive" path) (joinPath path "primitive")
+    validRange := (← parseU128Natural (← field range "start" path) (joinPath path "valid_range.start"),
+      ← parseU128Natural (← field range "end" path) (joinPath path "valid_range.end")) }
 
 def parseLayoutVariant (j : Json) (path : String) : Except String LayoutVariant := do
   return {
@@ -1294,8 +1301,9 @@ def parseLayoutVariant (j : Json) (path : String) : Except String LayoutVariant 
     sizeBytes := ← fieldNat j "size_bytes" path
     backendRepr := ← parseBackendRepr (← field j "backend_repr" path) (joinPath path "backend_repr")
     fieldOffsetsBytes := ← natArray (← field j "field_offsets_bytes" path) (joinPath path "field_offsets_bytes")
+    fieldShape := ← parseFieldShape (← field j "fields" path) (joinPath path "fields")
+    largestNiche := ← parseNicheLayout (← field j "largest_niche" path) (joinPath path "largest_niche")
     uninhabited := ← fieldBool j "uninhabited" path
-    payload := j
   }
 
 def decimalNat (text path : String) : Except String Nat := do
@@ -1307,9 +1315,9 @@ def decimalNat (text path : String) : Except String Nat := do
   return value
 
 def parseTagEncoding (j : Json) (path : String) : Except String TagEncoding := do
-  match j with
+  match inspectJson j with
   | .str legacy =>
-    return ⟨.incomplete, .unknown s!"legacy_debug:{legacy}", none, none, none, j⟩
+    return ⟨.incomplete, .unknown s!"legacy_debug:{legacy}", none, none, none⟩
   | .obj _ =>
     let tag ← fieldString j "kind" path
     let status := parseStatus (← fieldString j "status" path)
@@ -1324,7 +1332,7 @@ def parseTagEncoding (j : Json) (path : String) : Except String TagEncoding := d
     let nicheStart ← match optionalField j "niche_start" with
       | none | some .null => pure none
       | some value =>
-        let text ← value.getStr? |>.mapError fun e => s!"{joinPath path "niche_start"}: expected exact decimal string ({e})"
+        let text ← (inspectJson value).getStr? |>.mapError fun e => s!"{joinPath path "niche_start"}: expected exact decimal string ({e})"
         pure (some (← decimalNat text (joinPath path "niche_start")))
     match kind with
     | .direct => pure ()
@@ -1332,11 +1340,12 @@ def parseTagEncoding (j : Json) (path : String) : Except String TagEncoding := d
       if status == .supported && (untaggedVariant.isNone || nicheVariants.isNone || nicheStart.isNone) then
         throw s!"{path}: supported niche tag encoding is missing its range or start value"
     | .unknown _ => pure ()
-    return ⟨status, kind, untaggedVariant, nicheVariants, nicheStart, j⟩
+    return ⟨status, kind, untaggedVariant, nicheVariants, nicheStart⟩
   | _ => throw s!"{path}: expected structured tag encoding"
 
 def parseVariantsLayout (j : Json) (path : String) : Except String VariantsLayout := do
-  let tag ← fieldString j "kind" path
+  let node ← parseTagged j path
+  let tag := node.tag
   let kind := layoutVariantsKind tag
   let variantIndex ← optionalNatBefore j "variant_index" path
   let scalarTag ← match optionalJson j "tag" with
@@ -1360,17 +1369,17 @@ def parseVariantsLayout (j : Json) (path : String) : Except String VariantsLayou
   | .empty => pure ()
   | .unknown _ => pure ()
   return {
+    status := node.status
     kind := kind
     variantIndex := variantIndex
     tag := scalarTag
     tagEncoding := tagEncoding
     tagFieldIndex := tagFieldIndex
     variants := variants
-    payload := j
   }
 
 def parseLayoutUncached (j : Json) (path : String) : Except String Layout := do
-  if (j.getObjVal? "$lean_miri_shared_ref").isOk then
+  if ((jsonField? j) "$lean_miri_shared_ref").isOk then
     throw s!"{path}: shared layout reference requires a shared_payloads catalog"
   let statusText ← fieldString j "status" path
   let status := parseStatus statusText
@@ -1383,12 +1392,6 @@ def parseLayoutUncached (j : Json) (path : String) : Except String Layout := do
     else match optionalJson j "field_offsets_bytes" with
       | none => pure #[]
       | some value => natArray value (joinPath path "field_offsets_bytes")
-  let variants ← match optionalJson j "variants" with
-    | none => pure none
-    | some value => pure (some (← parseTagged value (joinPath path "variants")))
-  let backend ← match optionalJson j "backend_repr" with
-    | none => pure none
-    | some value => pure (some (← parseTagged value (joinPath path "backend_repr")))
   let fields ← match optionalJson j "fields" with
     | none => pure none
     | some value => pure (some (← parseFieldShape value (joinPath path "fields")))
@@ -1401,8 +1404,25 @@ def parseLayoutUncached (j : Json) (path : String) : Except String Layout := do
   let sizeBytes ← optionalNat j "size_bytes" path
   let abiAlignBytes ← optionalNat j "abi_align_bytes" path
   let unadjustedAbiAlignBytes ← optionalNat j "unadjusted_abi_align_bytes" path
-  let variantsKind := variants.map fun value => layoutVariantsKind value.tag
-  let backendReprKind := backend.map fun value => backendReprKind value.tag
+  let maxReprAlignBytes ← if status == .supported then do
+      let value ← field j "max_repr_align_bytes" path
+      if value == .null then pure none else pure (some (← (inspectJson value).getNat?))
+    else optionalNatBefore j "max_repr_align_bytes" path
+  let boolean key := do
+    match optionalField j key with
+    | none | some .null =>
+      if status == .supported then throw s!"{joinPath path key}: missing boolean"
+      return none
+    | some value => return some (← (inspectJson value).getBool?)
+  let uninhabited ← boolean "uninhabited"
+  let reprC ← boolean "repr_c"
+  let randomizationSeed ← if status == .supported then some <$> fieldNat j "randomization_seed" path
+    else optionalNatBefore j "randomization_seed" path
+  let largestNiche ← if status == .supported then
+      parseNicheLayout (← field j "largest_niche" path) (joinPath path "largest_niche")
+    else match optionalJson j "largest_niche" with
+      | none => pure none
+      | some value => parseNicheLayout value (joinPath path "largest_niche")
   if status == .supported && (sizeBytes.isNone || abiAlignBytes.isNone || unadjustedAbiAlignBytes.isNone) then
     throw s!"{path}: supported layout is missing size/alignment fields"
   if status == .supported && (fields.isNone || variantsLayout.isNone || backendRepresentation.isNone) then
@@ -1418,15 +1438,15 @@ def parseLayoutUncached (j : Json) (path : String) : Except String Layout := do
     sizeBytes := sizeBytes
     abiAlignBytes := abiAlignBytes
     unadjustedAbiAlignBytes := unadjustedAbiAlignBytes
+    maxReprAlignBytes := maxReprAlignBytes
+    uninhabited := uninhabited
+    reprC := reprC
+    randomizationSeed := randomizationSeed
+    largestNiche := largestNiche
     fieldOffsetsBytes := offsets
     fields := fields
     variantsLayout := variantsLayout
     backendRepresentation := backendRepresentation
-    variantsKind := variantsKind
-    backendReprKind := backendReprKind
-    variants := variants
-    backendRepr := backend
-    payload := j
   }
 
 def parseLayout (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String Layout := do
@@ -1470,154 +1490,13 @@ def sharedDecodeMemo (nodes : Array Json) : DecodeMemo := Id.run do
     memo := collectSharedDecodeMemo node s!"$.shared_payloads.nodes[{index}]" memo
   return memo
 
-def compilerFunctionAbiDecodeMemo (nodes : Array Json) : DecodeMemo := Id.run do
-  let mut memo : DecodeMemo := {}
-  for (node, index) in nodes.toList.zipIdx do
-    if !isSourceSpanJson node && isLayoutPayload node && hasCanonicalJsonObjectKeys node then
-      if let .ok layout := parseLayoutUncached node s!"$.shared_payloads.nodes[{index}]" then
-        memo := { memo with layouts := memo.layouts.insert node layout }
-  return memo
+def vtablePredicateKind (tag : String) : VtablePredicateKind :=
+  match tag with
+  | "trait" => .trait
+  | "auto_trait" => .autoTrait
+  | "projection" => .projection
+  | other => .unknown other
 
-/-- Opaque success-only layout memo for repeated decoding of compiler FnAbi
-payloads from one shared-payload node table. The constructor ensures
-callers can prepare only the decoder's checked memo representation. -/
-structure CompilerFunctionAbiMemo where
-  private mk ::
-  private memo : DecodeMemo
-
-/-- Prepare a reusable FnAbi decoder memo from a runtime's shared payloads.
-Malformed layouts are deliberately not cached, preserving occurrence paths. -/
-def prepareCompilerFunctionAbiMemo (nodes : Array Json) : CompilerFunctionAbiMemo :=
-  ⟨compilerFunctionAbiDecodeMemo nodes⟩
-
-def parseFunctionSignature (j : Json) (path : String) : Except String FunctionSignature := do
-  let inputsJson ← arrayField j "inputs" path
-  let mut inputs := #[]
-  let mut index := 0
-  for input in inputsJson do
-    let id ← match isTypeRef input with
-      | some id => pure id
-      | none => throw s!"{joinPath path "inputs"}[{index}]: expected type reference"
-    inputs := inputs.push id
-    index := index + 1
-  let outputJson ← field j "output" path
-  let output ← match isTypeRef outputJson with
-    | some id => pure id
-    | none => throw s!"{joinPath path "output"}: expected type reference"
-  let abiJson ← field j "abi" path
-  let unwind ← match optionalField abiJson "unwind" with
-    | none | some .null => pure none
-    | some value => (value.getBool?).map some |>.mapError fun e => s!"{joinPath (joinPath path "abi") "unwind"}: expected boolean or null ({e})"
-  let externAbi : ExternAbi := {
-    kind := ← parseAbiTag abiJson (joinPath path "abi")
-    unwind := unwind
-    sourceSpelling := ← optionalString abiJson "source_spelling" (joinPath path "abi")
-    payload := abiJson
-  }
-  return {
-    inputs := inputs
-    output := output
-    safety := ← parseAbiTag (← field j "safety" path) (joinPath path "safety")
-    abi := externAbi
-    cVariadic := ← fieldBool j "c_variadic" path
-  }
-
-def decodeCompilerPredicateEvidence (j : Json) : Except String CompilerPredicateEvidence := do
-  let normalization ← field j "normalization" "$predicate"
-  let normalized ← match ← field normalization "value" "$predicate.normalization" with
-    | .null => pure none
-    | value => value.getNat?.map some
-  pure {
-    id := ← fieldNat j "predicate_id" "$predicate"
-    typingEnvironment := ← fieldString j "typing_env" "$predicate"
-    stableKey := ← fieldNat j "stable_key" "$predicate"
-    autoTrait := ← fieldBool j "auto_trait" "$predicate"
-    normalizationStatus := parseStatus (← fieldString normalization "status" "$predicate.normalization")
-    normalizedId := normalized
-    original := ← field j "original" "$predicate"
-    payload := j }
-
-/-- Decode all source PatternKind branches; unknown kinds fail explicitly. -/
-partial def decodeCompilerPattern (j : Json) : Except String CompilerPattern := do
-  unless (← fieldString j "status" "$pattern") == "supported" do throw "unsupported compiler pattern"
-  match ← fieldString j "kind" "$pattern" with
-  | "range" => return .range (← field j "start" "$pattern") (← field j "end" "$pattern")
-  | "or" => return .or (← (← arrayField j "patterns" "$pattern").mapM decodeCompilerPattern)
-  | "not_null" => pure .notNull
-  | _ => throw "unknown compiler PatternKind"
-
-/-- Preserve the compiler query's exact type and typing-environment key. -/
-def decodeTypeCompilerFacts (j : Json) (path : String := "$compiler_facts") : Except String TypeCompilerFacts := do
-  let some inputType := isTypeRef (← field j "input_type" path) | throw "compiler fact input_type is not a type reference"
-  let mut booleans := #[]
-  for (name,value) in ← objectFields (← field j "boolean_queries" path) do
-    let result ← match ← field value "value" path with
-      | .null => pure none
-      | value => value.getBool?.map some
-    booleans := booleans.push (name, {
-      status := parseStatus (← fieldString value "status" path), value := result,
-      reason := ← optionalString value "reason" path, payload := value })
-  let mut types := #[]
-  for (name,value) in ← objectFields (← field j "type_queries" path) do
-    let result ← match ← field value "value" path with
-      | .null => pure none
-      | value => match isTypeRef value with
-        | some id => pure (some id)
-        | none => throw "compiler type query value is not a type reference or null"
-    types := types.push (name, {
-      status := parseStatus (← fieldString value "status" path), value := result,
-      reason := ← optionalString value "reason" path, payload := value })
-  let (captureNames,captureStatus) ← match optionalField j "capture_names" with
-    | none => pure (none,none)
-    | some query => do
-      let status := parseStatus (← fieldString query "status" path)
-      let names ← match ← field query "value" path with
-        | .null => pure none
-        | .arr names => (names.mapM fun (name : Json) => match name with
-            | .null => pure none
-            | name => name.getStr?.map some).map some
-        | _ => throw "capture_names must be null or array"
-      pure (names,some status)
-  pure {
-    captureNames := captureNames, captureNamesStatus := captureStatus,
-    typingEnvironment := ← fieldString j "typing_env" path, inputTypeId := inputType,
-    booleanQueries := booleans, typeQueries := types,
-    adtPayload := match ← field j "adt" path with | .null => none | value => some value,
-    payload := j }
-
-def parseTypeNode (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String TypeNode := do
-  let shape ← field j "shape" path
-  let shapeStatus := parseStatus (← fieldString shape "status" (joinPath path "shape"))
-  let shapeKindText ← fieldString shape "kind" (joinPath path "shape")
-  let signedKindText ← optionalString shape "signed_kind" (joinPath path "shape")
-  let unsignedKindText ← optionalString shape "unsigned_kind" (joinPath path "shape")
-  let floatKindText ← optionalString shape "float_kind" (joinPath path "shape")
-  let adtKindText ← optionalString shape "adt_kind" (joinPath path "shape")
-  let shapeMetadata : TypeShapeMetadata := {
-    signedKind := signedKindText.map integerTypeTag
-    unsignedKind := unsignedKindText.map integerTypeTag
-    floatKind := floatKindText.map floatTypeTag
-    adtKind := adtKindText.map adtKindTag
-  }
-  let signature ← match optionalJson shape "signature" with
-    | none => pure none
-    | some signature => pure (some (← parseFunctionSignature signature (joinPath path "shape.signature")))
-  return {
-    pattern := ← match optionalField shape "pattern" with
-      | none => pure none
-      | some value => (decodeCompilerPattern value).map some
-    compilerFacts := ← match optionalField j "compiler_facts" with
-      | none => pure none
-      | some value => (decodeTypeCompilerFacts value (joinPath path "compiler_facts")).map some
-    id := ← fieldNat j "type_id" path
-    display := ← fieldString j "display" path
-    shapeStatus := shapeStatus
-    shapeKind := typeShapeKind shapeKindText
-    shapeMetadata := shapeMetadata
-    signature := signature
-    layout := ← parseLayout (← field j "layout" path) (joinPath path "layout") memo
-    payload := j
-  }
 
 def hexDigit (c : Char) : Bool :=
   c.isDigit || ('a' ≤ c && c ≤ 'f') || ('A' ≤ c && c ≤ 'F')
@@ -1755,12 +1634,6 @@ def parseSelectedScope (j : Json) (path : String) : Except String SelectedScope 
     payload := j
   }
 
-def vtablePredicateKind (tag : String) : VtablePredicateKind :=
-  match tag with
-  | "trait" => .trait
-  | "auto_trait" => .autoTrait
-  | "projection" => .projection
-  | other => .unknown other
 
 def parseVtablePredicate (j : Json) (path : String) : Except String VtablePredicate := do
   let tag ← fieldString j "kind" path
@@ -1840,6 +1713,7 @@ def decodeStaticGlobalInfo (j : Json) (path : String := "$static_global_info") :
     foreignItem := ← fieldBool j "is_foreign_item" path
     threadLocal := ← fieldBool j "thread_local" path
     payload := j
+    nested := fieldBool j "nested" path
   }
 
 def parseAllocation (j : Json) (path : String) : Except String AllocationNode := do
@@ -2291,7 +2165,7 @@ def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except
   let mut completeFamilies := #[]
   let families ← arrayField j "complete_key_families" path
   for (family, index) in families.toList.zipIdx do
-    let name ← family.getStr? |>.mapError fun _ => s!"$.compiler_alloc_id_world.complete_key_families[{index}]: expected string"
+    let name ← (inspectJson family).getStr? |>.mapError fun _ => s!"$.compiler_alloc_id_world.complete_key_families[{index}]: expected string"
     unless name == "byte_memory" do
       throw s!"$.compiler_alloc_id_world.complete_key_families[{index}]: this decoder only recognizes the source-validated byte_memory family"
     let kind := SourceAllocIdDedupKind.bytes
@@ -2302,7 +2176,7 @@ def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except
   let unsupportedJson ← arrayField j "unsupported_key_families" path
   let mut unsupportedFamilies := #[]
   for (family, index) in unsupportedJson.toList.zipIdx do
-    let name ← family.getStr? |>.mapError fun _ => s!"$.compiler_alloc_id_world.unsupported_key_families[{index}]: expected string"
+    let name ← (inspectJson family).getStr? |>.mapError fun _ => s!"$.compiler_alloc_id_world.unsupported_key_families[{index}]: expected string"
     let kind ← parseSourceAllocIdDedupKind name s!"$.compiler_alloc_id_world.unsupported_key_families[{index}]"
     unless #[.function, .vtable, .static, .typeId, .memory].contains kind do
       throw s!"$.compiler_alloc_id_world.unsupported_key_families[{index}]: unknown or inapplicable unsupported family"
@@ -2341,31 +2215,6 @@ def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except
     unsupportedKeyFamilies := unsupportedFamilies
   }
 
-/-- Revalidate allocation identity metadata against the exact retained raw
-document. Public model records can be assembled or updated by callers, so the
-prepared runtime must not trust the decoder's prior validation as a flag. -/
-def validateCompilerAllocIdWorldRaw (raw : Json) (nodes : Array AllocationNode)
-    (world : Option CompilerAllocIdWorld) : Except String Unit := do
-  match optionalJson raw "compiler_alloc_id_world" with
-  | none =>
-    unless world.isNone do throw "source AllocId profile model is present but absent from its raw document"
-  | some rawWorld =>
-    let some world := world | throw "raw document contains a source AllocId profile absent from its typed model"
-    let allocationsJson ← arrayField raw "allocations" "$"
-    unless allocationsJson.size == nodes.size do
-      throw "source AllocId profile no longer matches the raw allocation table"
-    for (value, index) in allocationsJson.toList.zipIdx do
-      let parsed ← parseAllocation value s!"$.allocations[{index}]"
-      let some supplied := nodes[index]? | throw s!"$.allocations[{index}]: typed allocation row is absent"
-      unless parsed.id == supplied.id && parsed.sourceAllocId == supplied.sourceAllocId &&
-          parsed.status == supplied.status && parsed.kind == supplied.kind &&
-          parsed.memory == supplied.memory && parsed.data == supplied.data &&
-          parsed.payload.compress == supplied.payload.compress do
-        throw s!"$.allocations[{index}]: source AllocId profile does not match the exact raw allocation node"
-    let verified ← parseCompilerAllocIdWorld rawWorld nodes
-    unless verified == world do
-      throw "source AllocId profile model does not match its exact raw document object"
-
 def parseLocal (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String LocalDecl := do
   let type ← field j "type" path
   let typeId ← match isTypeRef type with
@@ -2402,7 +2251,35 @@ def parseBasicBlock (j : Json) (path : String) (memo : DecodeMemo := {}) : Excep
     payload := j
   }
 
-def parseBodyCore (j : Json) (path fallbackName : String) (memo : DecodeMemo := {}) : Except String BodyCore := do
+private def syntaxStatusObligations (status : PayloadStatus) (path : String) : Array Obligation :=
+  if status == .supported then #[] else #[⟨path, s!"compiler payload status remains {repr status}; syntax construction does not discharge execution obligations"⟩]
+
+partial def syntaxPayloadObligations (validatedProbe : String → Bool)
+    (v : TypedValue) (path : String) : Array Obligation := Id.run do
+  match v with
+  | .array vs => return (vs.toList.zipIdx).foldl (fun out (child, i) => out ++ syntaxPayloadObligations validatedProbe child s!"{path}[{i}]") #[]
+  | .diagnostic _ => return #[⟨path, "diagnostic-only compiler metadata remains unresolved"⟩]
+  | _ => pure ()
+  let (own, children) : Array Obligation × Array (String × TypedValue) := match v with
+    | .statement _ status fs | .terminator _ status fs | .rvalue _ status fs | .operand _ status fs => (syntaxStatusObligations status path, fs)
+    | .enumTag _ t fs => (syntaxStatusObligations t.status path, fs)
+    | .object fs | .projection _ fs => (#[], fs)
+    | _ => (#[], #[])
+  let mut out := own
+  for (key, child) in children do
+    if key == "status" then
+      match child with
+      | .scalar (.str status) =>
+        unless status == "supported" || status == "complete" ||
+            (status != "supported" && validatedProbe (path ++ ".status")) do
+          out := out.push ⟨path, s!"compiler metadata status remains {status}"⟩
+      | _ => pure ()
+    out := out ++ syntaxPayloadObligations validatedProbe child (path ++ "." ++ key)
+  return out
+
+
+def parseBodyCore (j : Json) (path fallbackName : String) (memo : DecodeMemo := {})
+    (retainSyntax : Bool := true) (validatedProbe : String → Bool := fun _ => false) : Except String BodyCore := do
   let localsJson ← arrayField j "locals" path
   let mut locals := #[]
   let mut index := 0
@@ -2412,8 +2289,19 @@ def parseBodyCore (j : Json) (path fallbackName : String) (memo : DecodeMemo := 
   let blocksJson ← arrayField j "basic_blocks" path
   let mut blocks := #[]
   index := 0
+  let mut syntaxObligations := #[]
   for block in blocksJson do
-    blocks := blocks.push (← parseBasicBlock block s!"{joinPath path "basic_blocks"}[{index}]" memo)
+    let blockPath := s!"{joinPath path "basic_blocks"}[{index}]"
+    let block ← parseBasicBlock block blockPath memo
+    for (statement,statementIndex) in block.statements.toList.zipIdx do
+      syntaxObligations := syntaxObligations ++ syntaxPayloadObligations validatedProbe
+        statement.value s!"{blockPath}.statements[{statementIndex}].kind"
+    syntaxObligations := syntaxObligations ++ syntaxPayloadObligations validatedProbe
+      block.terminator.value s!"{blockPath}.terminator.kind"
+    let stored := if retainSyntax then block else {block with
+      statements := block.statements.map fun node => {node with value := .diagnostic .null}
+      terminator := {block.terminator with value := .diagnostic .null}}
+    blocks := blocks.push stored
     index := index + 1
   let defPath ← optionalString j "def_path" path
   let definitionId ← match optionalJson j "def_id" with
@@ -2429,6 +2317,7 @@ def parseBodyCore (j : Json) (path fallbackName : String) (memo : DecodeMemo := 
     | none => pure none
     | some value => some <$> jsonArray value (joinPath path "source_scopes")
   return {
+    syntaxObligations := if retainSyntax then none else some syntaxObligations
     sourcePath := path
     defPath := match defPath with | some name => name | none => fallbackName
     definitionId := definitionId
@@ -2442,7 +2331,8 @@ def parseBodyCore (j : Json) (path fallbackName : String) (memo : DecodeMemo := 
     payload := j
   }
 
-def parsePromotedBodies (j : Json) (path fallbackName : String) (memo : DecodeMemo := {}) : Except String (Array PromotedBody) := do
+def parsePromotedBodies (j : Json) (path fallbackName : String) (memo : DecodeMemo := {})
+    (retainSyntax : Bool := true) (validatedProbe : String → Bool := fun _ => false) : Except String (Array PromotedBody) := do
   let promotedJson ← match optionalJson j "promoted_bodies" with
     | none => pure #[]
     | some value => jsonArray value (joinPath path "promoted_bodies")
@@ -2451,22 +2341,24 @@ def parsePromotedBodies (j : Json) (path fallbackName : String) (memo : DecodeMe
     let promotedPath := s!"{joinPath path "promoted_bodies"}[{index}]"
     let promotedIndex ← match optionalField entry "promoted_index" with
       | none => pure index
-      | some value => value.getNat? |>.mapError fun e => s!"{joinPath promotedPath "promoted_index"}: expected unsigned integer ({e})"
+      | some value => (inspectJson value).getNat? |>.mapError fun e => s!"{joinPath promotedPath "promoted_index"}: expected unsigned integer ({e})"
     let status ← match optionalField entry "status" with
       | none => pure (if (optionalField entry "body").isSome then .supported else .incomplete)
-      | some value => parseStatus <$> (value.getStr? |>.mapError fun e => s!"{joinPath promotedPath "status"}: expected string ({e})")
+      | some value => parseStatus <$> ((inspectJson value).getStr? |>.mapError fun e => s!"{joinPath promotedPath "status"}: expected string ({e})")
     let body ← match optionalJson entry "body" with
       | none => pure none
-      | some value => pure (some (← parseBodyCore value (joinPath promotedPath "body") s!"{fallbackName}::promoted[{promotedIndex}]" memo))
+      | some value => pure (some (← parseBodyCore value (joinPath promotedPath "body") s!"{fallbackName}::promoted[{promotedIndex}]" memo retainSyntax validatedProbe))
     promotedBodies := promotedBodies.push ⟨promotedIndex, status, body, entry⟩
   return promotedBodies
 
-def parseBody (j : Json) (path fallbackName : String) (memo : DecodeMemo := {}) : Except String Body := do
-  let core ← parseBodyCore j path fallbackName memo
-  let promotedBodies ← parsePromotedBodies j path fallbackName memo
+def parseBody (j : Json) (path fallbackName : String) (memo : DecodeMemo := {})
+    (retainSyntax : Bool := true) (validatedProbe : String → Bool := fun _ => false) : Except String Body := do
+  let core ← parseBodyCore j path fallbackName memo retainSyntax validatedProbe
+  let promotedBodies ← parsePromotedBodies j path fallbackName memo retainSyntax validatedProbe
   return { core with promotedBodies := promotedBodies }
 
-def parseInstance (j : Json) (path : String) : Except String InstanceNode := do
+def parseInstance (j : Json) (path : String)
+    (retainSyntax : Bool := true) (validatedProbe : String → Bool := fun _ => false) : Except String InstanceNode := do
   let kindText ← fieldString j "kind" path
   let kind := match kindText with
     | "instance_mir" => .instanceMir
@@ -2492,14 +2384,14 @@ def parseInstance (j : Json) (path : String) : Except String InstanceNode := do
     | some value => pure (some (← parseAbiTag value (joinPath path "body_instantiation")))
   let bodyTemplateIsPolymorphic ← match optionalField j "body_template_is_polymorphic" with
     | none | some .null => pure none
-    | some value => (value.getBool?).map some |>.mapError fun e => s!"{joinPath path "body_template_is_polymorphic"}: expected boolean ({e})"
+    | some value => ((inspectJson value).getBool?).map some |>.mapError fun e => s!"{joinPath path "body_template_is_polymorphic"}: expected boolean ({e})"
   let instanceArgsAreMonomorphic ← match optionalField j "instance_args_are_monomorphic" with
     | none | some .null => pure none
-    | some value => (value.getBool?).map some |>.mapError fun e => s!"{joinPath path "instance_args_are_monomorphic"}: expected boolean ({e})"
+    | some value => ((inspectJson value).getBool?).map some |>.mapError fun e => s!"{joinPath path "instance_args_are_monomorphic"}: expected boolean ({e})"
   let body ← match optionalJson j "body" with
     | none => pure none
-    | some value => pure (some (← parseBody value (joinPath path "body") fallback))
-  let promotedBodies ← parsePromotedBodies j path fallback
+    | some value => pure (some (← parseBody value (joinPath path "body") fallback {} retainSyntax validatedProbe))
+  let promotedBodies ← parsePromotedBodies j path fallback {} retainSyntax validatedProbe
   return {
     id := id
     status := parseStatus (← fieldString j "status" path)
@@ -2524,6 +2416,10 @@ def passModeKind (tag : String) : PassModeKind :=
   | "IndirectUnsized" => .indirectUnsized
   | other => .unknown other
 
+private def semanticAbiTag (j : Json) (path : String) : Except String AbiTag := do
+  let tag ← parseAbiTag j path
+  return ⟨tag.status,tag.tag⟩
+
 def parseAbiAttributes (j : Json) (path : String) : Except String AbiAttributes := do
   return {
     noAlias := ← fieldBool j "no_alias" path
@@ -2536,8 +2432,8 @@ def parseAbiAttributes (j : Json) (path : String) : Except String AbiAttributes 
     regularBits := ← fieldNat j "regular_bits" path
     pointeeSizeBytes := ← fieldNat j "pointee_size_bytes" path
     pointeeAlignBytes := ← optionalNat j "pointee_align_bytes" path
-    argExtension := ← parseAbiTag (← field j "arg_extension" path) (joinPath path "arg_extension")
-    captures := ← parseAbiTag (← field j "captures" path) (joinPath path "captures")
+    argExtension := ← semanticAbiTag (← field j "arg_extension" path) (joinPath path "arg_extension")
+    captures := ← semanticAbiTag (← field j "captures" path) (joinPath path "captures")
   }
 
 def abiRegisterKind (tag : String) : AbiRegisterKind :=
@@ -2598,20 +2494,29 @@ def parseCanonicalAbi (j : Json) (path : String) : Except String CanonicalAbi :=
     armCall := (← optionalString j "arm_call" path).map armCallKind
     interruptKind := (← optionalString j "interrupt_kind" path).map interruptCallKind
     x86Call := (← optionalString j "x86_call" path).map x86CallKind
-    payload := j
   }
+
+def parseAbiHintElement (j : Json) (path : String) : Except String AbiHintElement := do
+  let tag ← parseAbiTag j path
+  let kind ← match tag.tag with
+  | "integer" =>
+    let kind ← fieldString j "integer_kind" path
+    pure (AbiHintKind.integer (integerTypeTag kind) (← fieldBool j "signed" path))
+  | "float" => pure (.float (floatTypeTag (← fieldString j "float_kind" path)))
+  | "pointer" => pure (.pointer (← fieldNat j "address_space" path))
+  | other => pure (.unsupported other)
+  return ⟨tag.status, kind⟩
 
 def parseAbiRegister (j : Json) (path : String) : Except String AbiRegister := do
   let kindNode ← field j "kind" path
   let kindTag ← fieldString kindNode "kind" (joinPath path "kind")
   let hintElement ← match optionalJson kindNode "hint_element" with
     | none => pure none
-    | some value => pure (some (← parseAbiTag value (joinPath path "kind.hint_element")))
+    | some value => pure (some (← parseAbiHintElement value (joinPath path "kind.hint_element")))
   return {
     kind := abiRegisterKind kindTag
     sizeBits := ← fieldNat j "size_bits" path
     hintElement := hintElement
-    payload := j
   }
 
 def parseAbiCastTarget (j : Json) (path : String) : Except String AbiCastTarget := do
@@ -2626,7 +2531,6 @@ def parseAbiCastTarget (j : Json) (path : String) : Except String AbiCastTarget 
     restTotalBytes := ← fieldNat j "rest_total_bytes" path
     restIsConsecutive := ← fieldBool j "rest_is_consecutive" path
     attributes := ← parseAbiAttributes (← field j "attributes" path) (joinPath path "attributes")
-    payload := j
   }
 
 def parseAbiPassMode (j : Json) (path : String) : Except String AbiPassMode := do
@@ -2643,7 +2547,7 @@ def parseAbiPassMode (j : Json) (path : String) : Except String AbiPassMode := d
     | some value => pure (some (← parseAbiCastTarget value (joinPath path "target")))
   let indirectMode ← match optionalJson j "mode" with
     | none => pure none
-    | some value => pure (some (← parseAbiTag value (joinPath path "mode")))
+    | some value => pure (some (← semanticAbiTag value (joinPath path "mode")))
   let padI32Count ← optionalNat j "pad_i32_count" path
   let addressSpace ← optionalNat j "address_space" path
   let kind := passModeKind tag
@@ -2658,7 +2562,6 @@ def parseAbiPassMode (j : Json) (path : String) : Except String AbiPassMode := d
     padI32Count := padI32Count
     addressSpace := addressSpace
     indirectMode := indirectMode
-    payload := j
   }
 
 def parseAbiArgument (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String AbiArgument := do
@@ -2673,7 +2576,6 @@ def parseAbiArgument (j : Json) (path : String) (memo : DecodeMemo := {}) : Exce
     typeId := typeId
     layout := layout
     mode := ← parseAbiPassMode (← field j "mode" path) (joinPath path "mode")
-    payload := j
   }
 
 private def parseFunctionAbiUncached (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String FunctionAbi := do
@@ -2691,13 +2593,10 @@ private def parseFunctionAbiUncached (j : Json) (path : String) (memo : DecodeMe
     canUnwind := ← fieldBool j "can_unwind" path
     cVariadic := ← fieldBool j "c_variadic" path
     fixedCount := ← fieldNat j "fixed_count" path
-    payload := j
   }
 
 def parseFunctionAbi (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String FunctionAbi :=
-  match memo.functionAbis[j]? with
-  | some abi => pure abi
-  | none => parseFunctionAbiUncached j path memo
+  parseFunctionAbiUncached j path memo
 
 /-- Decode an exact compiler projection layout using the canonical schema. -/
 def decodeCompilerLayout (j : Json) : Except String Layout :=
@@ -2707,51 +2606,9 @@ def decodeCompilerLayout (j : Json) : Except String Layout :=
 def decodeCompilerFunctionAbi (j : Json) : Except String FunctionAbi :=
   parseFunctionAbi j "$.compiler_fn_abi"
 
-/-- Decode a compiler FnAbi using successful layouts collected from the same
-shared-payload table. Failures and diagnostics follow the uncached decoder. -/
-def decodeCompilerFunctionAbiWithMemo (j : Json) (memo : CompilerFunctionAbiMemo) :
-    Except String FunctionAbi :=
-  parseFunctionAbi j "$.compiler_fn_abi" memo.memo
-
-
 def isFunctionAbiCandidate (raw : Json) : Bool :=
   ["arguments", "return", "calling_convention", "can_unwind", "c_variadic", "fixed_count"]
-    |>.all fun key => (raw.getObjVal? key).isOk
-
-private def buildCompilerFunctionAbiEntries (nodes : Array Json) (memo : CompilerFunctionAbiMemo) :
-    Array (Json × Except String FunctionAbi) := Id.run do
-  let mut entries := #[]
-  for raw in nodes do
-    if isFunctionAbiCandidate raw then
-      entries := entries.push (raw, decodeCompilerFunctionAbiWithMemo raw memo)
-  return entries
-
-/-- A typed projection bound to the exact immutable shared-node table. The
-constructor cannot install results from another decoder or another document. -/
-structure CompilerFunctionAbiTable (nodes : Array Json) where
-  private mk ::
-  entries : Array (Json × Except String FunctionAbi)
-  /-- Existential evidence is erased; the large temporary decode memo is not
-  retained in the imported document. -/
-  private exact : ∃ memo : CompilerFunctionAbiMemo,
-    entries = buildCompilerFunctionAbiEntries nodes memo
-
-/-- Reuse the importer's successful layout memo. Failed query decodes are values,
-not import failures, and keep the canonical demand-time diagnostic path. -/
-def prepareCompilerFunctionAbiTableUsing (nodes : Array Json) (memo : DecodeMemo) :
-    CompilerFunctionAbiTable nodes :=
-  ⟨buildCompilerFunctionAbiEntries nodes ⟨memo⟩, ⟨⟨memo⟩, rfl⟩⟩
-
-/-- Successful projections can also serve the occurrence-sensitive collector.
-Failures deliberately fall through so its original path and first error survive. -/
-def CompilerFunctionAbiTable.extendDecodeMemo (table : CompilerFunctionAbiTable nodes)
-    (base : DecodeMemo) : DecodeMemo := Id.run do
-  let mut result := base
-  for (raw, decoded) in table.entries do
-    if let .ok abi := decoded then
-      if hasCanonicalJsonObjectKeys raw then
-        result := { result with functionAbis := result.functionAbis.insert raw abi }
-  return result
+    |>.all fun key => ((jsonField? raw) key).isOk
 
 /-- The context used by compiler adapters is separate from runtime-readiness
 summaries. These are complete typed values, including source coordinates. -/
@@ -2776,10 +2633,10 @@ structure CompilerValueMemo where
   private mk ::
   private entries : Std.HashMap Json (Except String TypedValue)
   private exact : ∃ (nodes : Array Json) (memo : DecodeMemo),
-    entries = buildCompilerValueEntries nodes memo
+    entries = @buildCompilerValueEntries Reader.rawJsonFields nodes memo
 
 def prepareCompilerValueMemoUsing (nodes : Array Json) (memo : DecodeMemo) : CompilerValueMemo :=
-  ⟨buildCompilerValueEntries nodes memo, ⟨nodes, memo, rfl⟩⟩
+  ⟨@buildCompilerValueEntries Reader.rawJsonFields nodes memo, ⟨nodes, memo, rfl⟩⟩
 
 def decodeCompilerValueWithMemo (raw : Json) (memo : Option CompilerValueMemo) : Except String TypedValue :=
   match memo with
@@ -2793,5 +2650,5 @@ def decodeCompilerValueWithMemo (raw : Json) (memo : Option CompilerValueMemo) :
 end Miri.Input.DecoderValues
 
 namespace Miri.Input
-export DecoderValues (expectedMiriCommit expectedRustcCommit expectedSchema expectedSchemaVersion expectedCompilerAbiLayoutSchema CompilerFunctionAbiMemo prepareCompilerFunctionAbiMemo decodeCompilerPredicateEvidence decodeCompilerPattern decodeTypeCompilerFacts decodeVtableEntry decodeStaticGlobalInfo validateCompilerAllocIdWorldRaw decodeCompilerLayout decodeCompilerFunctionAbi decodeCompilerFunctionAbiWithMemo CompilerFunctionAbiTable CompilerValueMemo decodeCompilerValue decodeCompilerValueWithMemo)
+export DecoderValues (expectedMiriCommit expectedRustcCommit expectedSchema expectedSchemaVersion expectedCompilerAbiLayoutSchema decodeVtableEntry decodeStaticGlobalInfo decodeCompilerLayout decodeCompilerFunctionAbi CompilerValueMemo decodeCompilerValue decodeCompilerValueWithMemo)
 end Miri.Input

@@ -5,7 +5,7 @@ short-circuit the relation; other pairs require exact rustc Covariant evidence.
 Successful relation checks retain the source layout-equality assertion. -/
 namespace Miri.Input.CompilerCovariance
 open Lean Miri.ABI Miri.Interpreter
-def relationWithIndex {raw : Json} (index : CompilerQueryIndices.Covariance raw)
+def relationWithIndex {queries : Except String (Array CovarianceQuery)} (index : CompilerQueryIndices.Covariance queries)
     (source target : MIR.TyId) : Except String Bool := do
   if source == target then return true
   match index.data.headerError with
@@ -13,17 +13,11 @@ def relationWithIndex {raw : Json} (index : CompilerQueryIndices.Covariance raw)
   | none => pure ()
   let mut found := none
   for (_,entry) in CompilerQueryIndices.covarianceRows index source target do
-    unless (← entry.getObjValAs? String "typing_env") == "fully_monomorphized" &&
-        (← entry.getObjValAs? String "variance") == "covariant" do
-      throw s!"compiler covariance query key/environment mismatch (source={source}, target={target})"
-    unless (← entry.getObjValAs? String "status") == "supported" do
-      throw s!"compiler covariance query unresolved (source={source}, target={target})"
-    let value ← entry.getObjValAs? Bool "value"
+    let value ← entry.outcome
     if let some old := found then
       unless old == value do
         throw s!"conflicting compiler covariance query results (source={source}, target={target})"
     found := some value
-  if let some (_,error) := index.data.firstRowError then throw error
   let some value := found |
     throw s!"missing exact rustc covariance relation query (source={source}, target={target})"
   pure value

@@ -1,73 +1,31 @@
 import Miri.Input.CompilerConstantMachine
 
-/-! Negative regression for the cached compiler/runtime document binding.
-The deliberately invalid site and absent frame ensure the mismatch guard
-remains the first observable failure. -/
+/-! One compiler/runtime owner makes source mixing unrepresentable. Numeric
+constant IDs still select evidence only: exact semantic query keys are checked. -/
+open Miri Miri.Input Miri.Interpreter Miri.MIR
 
-open Miri.Input Miri.Interpreter
+example (owner : RuntimeProgram) : owner.runtime.source = owner.program.input := rfl
+example (owner : RuntimeProgram) (program : LoweredProgram) :
+    (owner.withProgram program).runtime.source = owner.runtime.source := rfl
+example (prepared : CompilerConstantQueries.Prepared) :
+    prepared.runtime.source = prepared.program.input := rfl
 
-private def document (raw : Lean.Json) : ImportDocument :=
-  { producer := ⟨"miri", "rustc", "version", "target"⟩
-    completenessStatus := .supported
-    types := #[]
-    allocations := #[]
-    instances := #[]
-    selectedScope := none
-    functionAbis := #[]
-    bodies := #[]
-    typedTree := .scalar .null
-    obligations := #[]
-    raw := raw }
+ theorem normalization_rejects_wrong_key (evidence : CompilerConstantEvidence)
+    (callee : CallInstance) (original : MirConst)
+    (different : (evidence.fnInstance == callee && evidence.original == original) = false) :
+    normalizationFromEvidence #[evidence] callee original =
+      .error (.query "missing compiler current-frame normalization evidence") := by
+  simp [normalizationFromEvidence, different]
+  rfl
 
-private def target : Miri.ABI.RuntimeTargetDataLayout := Id.run do
-  let size : Miri.ABI.Size := ⟨8⟩
-  let ptr : Miri.ABI.PointerSpec := ⟨size, .ONE, size, false⟩
-  return ⟨⟨.little, .w64⟩, .ONE, .ONE, .ONE, .ONE, .ONE, .ONE,
-    .ONE, .ONE, .ONE, .ONE, .ONE, #[], .ZERO, ptr, #[], .ZERO, .I32⟩
+ theorem evaluation_rejects_wrong_key (evidence : CompilerConstantEvidence)
+    (callee : CallInstance) (normalized : MirConst) (span : SpanRef)
+    (different : (evidence.fnInstance == callee && evidence.normalized == normalized &&
+      evidence.span == span) = false) :
+    evaluationFromEvidence #[evidence] callee normalized span =
+      .error (.query "missing compiler constant evaluation evidence") := by
+  simp [evaluationFromEvidence, different]
+  rfl
 
-private def runtime : RuntimeMetadata :=
-  { source := document (.str "runtime"), target, layouts := #[] }
-
-private def prepared : CompilerConstantQueries.Prepared :=
-  ⟨⟨⟨#[],#[],#[],#[]⟩, #[], #[], #[], document (.str "compiler")⟩, #[], #[]⟩
-
-private def binding := CompilerConstantQueries.bind prepared runtime
-
-#guard binding.compatible == false
-
-private def functions : FunctionPointers.Hooks Unit Unit Unit :=
-  { registry := fun _ => .empty
-    putRegistry := fun _ _ => ()
-    crossCrateInlineAlways := false
-    inlineNever := fun _ => pure false
-    chooseSalt := pure ⟨0, by decide⟩
-    ptrGetAlloc := fun _ => pure none
-    adjustRootPointer := fun alloc tag => pure ⟨⟨0⟩, .concrete alloc tag⟩
-    importedFunction := fun _ => pure none }
-
-private def initialState : MachineHooks.State Unit Unit :=
-  ⟨.empty, ⟨Miri.Memory.MemoryState.empty, none, none, ⟨.MAIN_THREAD, [], [], false, false⟩, #[], #[], ()⟩⟩
-
-private def boundMismatchResult :=
-  (CompilerConstantMachine.evalAtBound binding ⟨0, ⟨0,0⟩, #[]⟩
-    functions ⟨⟨8⟩⟩ (fun _ => pure ⟨⟨0⟩, .wildcard⟩)
-    (fun _ => .unsupported "unused classifier")
-    ⟨⟨0⟩, none, .Val .ZeroSized 0⟩).run initialState
-
-private def legacyMismatchResult :=
-  (CompilerConstantMachine.evalAt prepared runtime ⟨0, ⟨0,0⟩, #[]⟩
-    functions ⟨⟨8⟩⟩ (fun _ => pure ⟨⟨0⟩, .wildcard⟩)
-    (fun _ => .unsupported "unused classifier")
-    ⟨⟨0⟩, none, .Val .ZeroSized 0⟩).run initialState
-
-private def isMismatch (result : EStateM.Result StepError
-    (MachineHooks.State Unit Unit) (OpTy Provenance)) : Bool :=
-  match result with
-  | .error (.invalidProgram message) _ =>
-      message == "constant runtime/compiler evidence document mismatch"
-  | _ => false
-
-#guard isMismatch boundMismatchResult
-#guard isMismatch legacyMismatchResult
-
-#print axioms Miri.Input.RuntimeMetadata.Indexed.matchesSourceLeft_eq
+#print axioms normalization_rejects_wrong_key
+#print axioms evaluation_rejects_wrong_key

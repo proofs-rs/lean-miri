@@ -43,9 +43,15 @@ def main (args : List String) : IO Unit := do
     unless !generic.obligations.isEmpty do throw (IO.userError "generic const parameter obligation disappeared")
   let knownTLS := program.bundle.bodies.find? (fun body => body.input.defPath.endsWith "read_tls")
   if let some tls := knownTLS then
-    unless tls.body.basicBlocks.any (fun block => block.statements.any fun statement =>
-        match statement.kind with
-        | .Assign _ (.ThreadLocalRef _) => true
-        | _ => false) do
+    let hasTLS := tls.body.basicBlocks.any fun id => match program.input.mirTables.mir.blocks.lookup id.index with
+      | .error _ => false
+      | .ok block => block.statements.any fun id => match program.input.mirTables.mir.statements.lookup id.index with
+        | .error _ => false
+        | .ok statement => match statement.kind with
+          | .Assign _ rvalue => match program.input.mirTables.mir.rvalues.lookup rvalue.index with
+            | .ok (.ThreadLocalRef _) => true
+            | _ => false
+          | _ => false
+    unless hasTLS do
       throw (IO.userError "concrete TLS reference disappeared from lowered MIR")
   IO.println s!"program syntax lowered: {program.bundle.bodies.size} bodies, {program.roots.size} roots, {program.instances.size} instances, {program.promoted.size} promoted; global compiler tables and target evidence retained"

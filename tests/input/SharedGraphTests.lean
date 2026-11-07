@@ -1,4 +1,4 @@
-import Miri.Input.SharedPayloads
+import MiriTests.Input.SharedPayloads
 
 open Lean
 open Miri.Input.SharedPayloads

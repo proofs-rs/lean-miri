@@ -1,5 +1,5 @@
 import Lean
-import Miri.Input.JsonTraversalCache
+import MiriTests.Input.ReferenceTraversal
 
 /-! Diagnostic for structural hashing of shared JSON DAGs. This does not change
 or bypass a decoder check. Each level retains two references to the same child;
@@ -21,7 +21,7 @@ def main : IO Unit := do
       ("shared_payloads",Json.mkObj [("schema_version",toJson (2 : Nat)),("nodes",.arr nodes)]),
       ("value",Json.mkObj [("$lean_miri_shared_ref",toJson depth)])]
     let result := Lean.profileit s!"json_cached_build_and_hash.depth_{depth}" opts fun _ => do
-      let (_,root) ← Miri.Input.JsonTraversalCache.resolve document
+      let (_,root) ← MiriTests.Input.ReferenceTraversal.resolve document
       let child := root.field "value" .null
       pure (hash child.key, root.key.digest, root.value)
     let .ok (cached,rootHash,rootValue) := result | throw (IO.userError "cached graph failed")

@@ -38,6 +38,7 @@ inductive StackError where
   | rootFrameCondition (stackWasEmpty : Bool) (continuationIsStop : Bool)
   | invalidLocal (localId : LocalId) (localCount : Nat)
   | invalidLocation (location : MIR.Location)
+  | invalidMirReference (kind : String) (id : Nat)
   | cannotMakeReturnPlaceDead
   | localExpectedLive (localId : LocalId)
   | missingLocalType (localId : LocalId)
@@ -59,6 +60,7 @@ instance : ToString StackError where
     | .invalidLocal localId count => s!"local {localId} is outside local array of length {count}"
     | .invalidLocation location =>
         s!"MIR location {location.block}[{location.statementIndex}] is outside its body"
+    | .invalidMirReference kind id => s!"invalid MIR {kind} ID {id}"
     | .cannotMakeReturnPlaceDead => "cannot make MIR return place dead"
     | .localExpectedLive localId => s!"local {localId} is dead"
     | .missingLocalType localId => s!"body has no type entry for local {localId}"
@@ -76,7 +78,9 @@ instance : ToString StackError where
         s!"indirect local {localId} has no allocation provenance"
 
 structure Frame (Prov Layout Extra : Type) where
-  body : MIR.Body
+  body : MIR.BodyNode
+  bodyId : MIR.BodyId
+  mirTables : MIR.SyntaxTables
   bodyIdentity : BodyIdentity
   functionInstance : FrameInstance
   extra : Extra
@@ -99,6 +103,8 @@ def create (loadedBody : LoadedBody) (functionInstance : FrameInstance) (extra :
     (returnContinuation : ReturnContinuation) (returnPlace : RuntimeStackPlace Prov)
     (initialSpan : SpanRef) (localsIdentity : LocalsIdentity) : Frame Prov Layout Extra :=
   { body := loadedBody.body
+    bodyId := loadedBody.bodyId
+    mirTables := loadedBody.tables
     bodyIdentity := loadedBody.identity
     functionInstance
     extra
@@ -112,6 +118,30 @@ def create (loadedBody : LoadedBody) (functionInstance : FrameInstance) (extra :
     location := .unwinding initialSpan }
 
 def currentLoc (self : Frame Prov Layout Extra) : FrameLocation := self.location
+
+private def mirEntry (table : MIR.SharedTable A) (id : Nat) (kind : String) : Except StackError A :=
+  (table.lookup id).mapError (fun id => .invalidMirReference kind id)
+
+def instruction? (self : Frame Prov Layout Extra) :
+    Except StackError (Option (Sum MIR.StatementNode MIR.TerminatorNode)) := do
+  match self.location with
+  | .unwinding _ => return none
+  | .mir location =>
+    let some id := self.body.basicBlocks[location.block]? | throw (.invalidLocation location)
+    let block ← mirEntry self.mirTables.blocks id.index "block"
+    if let some id := block.statements[location.statementIndex]? then
+      return some (.inl (← mirEntry self.mirTables.statements id.index "statement"))
+    unless location.statementIndex == block.statements.size do throw (.invalidLocation location)
+    return some (.inr (← mirEntry self.mirTables.terminators block.terminator.index "terminator"))
+
+def currentSpan (self : Frame Prov Layout Extra) : Except StackError SpanRef := do
+  match self.location with
+  | .unwinding span => return span
+  | .mir location =>
+    match ← self.instruction? with
+    | some (.inl statement) => return statement.sourceInfo.span
+    | some (.inr terminator) => return terminator.sourceInfo.span
+    | none => throw (.invalidLocation location)
 
 def getLocal (self : Frame Prov Layout Extra) (localId : LocalId) :
     Except StackError (LocalState Prov Layout) := do
@@ -164,10 +194,19 @@ def setLocation (self : Frame Prov Layout Extra) (location : FrameLocation) :
   | .unwinding _ => return { self with location }
   | .mir loc =>
     if h : loc.block < self.body.basicBlocks.size then
-      let block := self.body.basicBlocks[loc.block]
-      if loc.statementIndex ≤ block.statements.size then
-        return { self with location }
+      let id := self.body.basicBlocks[loc.block]
+      if let .ok block := self.mirTables.blocks.lookup id.index then
+        if loc.statementIndex ≤ block.statements.size then
+          return { self with location }
     throw (.invalidLocation loc)
+
+theorem instruction_missing_block (self : Frame Prov Layout Extra) (location : MIR.Location)
+    (id : MIR.BlockNodeId) (atLocation : self.location = .mir location)
+    (selected : self.body.basicBlocks[location.block]? = some id)
+    (absent : self.mirTables.blocks.lookup id.index = .error id.index) :
+    self.instruction? = .error (.invalidMirReference "block" id.index) := by
+  simp [instruction?, atLocation, selected, mirEntry, absent, Except.mapError,
+    bind, Except.bind]
 
 end Frame
 
@@ -354,7 +393,6 @@ structure StackLifecycleHooks (Prov Layout Extra State : Type) where
   beforePop : Stack Prov Layout Extra → State → StackRunResult Prov Layout Extra State Unit
   afterPop : Stack Prov Layout Extra → State → Frame Prov Layout Extra → Bool →
     StackRunResult Prov Layout Extra State ReturnAction
-  alwaysLiveVarsAndTemps : MIR.Body → Except StackError (Array LocalId)
   deallocateVararg : State → MemoryOperandPlace Prov → StackEffect State Unit
 
 namespace Stack
@@ -440,9 +478,7 @@ def pushStackFrameDone (self : Stack Prov Layout Extra) (state : State)
   match result.outcome with
   | .error error => return ⟨stack, state, .error error⟩
   | .ok () => pure ()
-  let locals ← match hooks.alwaysLiveVarsAndTemps frame.body with
-    | .error error => return ⟨stack, state, .error error⟩
-    | .ok locals => pure locals
+  let locals := frame.body.alwaysLive
   for localId in locals do
     let frame ← match stack.currentFrame? with
       | none => return ⟨stack, state, .error .emptyStack⟩

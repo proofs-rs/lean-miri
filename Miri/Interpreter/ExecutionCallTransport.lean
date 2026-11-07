@@ -16,6 +16,7 @@ def calls (h : CallHooks P (MachineHooks.State K (Inner U)) C E O X F A) :
   evalOperand := fun a0 a1 => action (h.evalOperand a0 a1)
   evalOperandAt := fun a0 a1 a2 => action (h.evalOperandAt a0 a1 a2)
   evalPlace := fun a0 a1 a2 => action (h.evalPlace a0 a1 a2)
+  evalLocalPlace := fun a0 a1 a2 => action (h.evalLocalPlace a0 a1 a2)
   placeToOp := fun a0 a1 => action (h.placeToOp a0 a1)
   forceAllocation := fun a0 a1 => action (h.forceAllocation a0 a1)
   functionSignature := fun a0 a1 => action (h.functionSignature a0 a1)

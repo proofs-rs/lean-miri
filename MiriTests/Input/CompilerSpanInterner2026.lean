@@ -18,15 +18,15 @@ theorem definitionArrayIdxOfEqList (definitions : Array DefinitionId) (id : Defi
 #print axioms definitionArrayIdxOfEqList
 
 private def spanA : SourceSpanData := {
-  originalPayload := "a", lo := 3, hi := 8,
+  lo := 3, hi := 8,
   start := ⟨1, 2⟩, «end» := ⟨1, 7⟩, context := "ctx-a", file := "src.rs" }
 
 private def spanAOther : SourceSpanData := {
-  originalPayload := "a", lo := 3, hi := 8,
+  lo := 3, hi := 8,
   start := ⟨1, 2⟩, «end» := ⟨1, 7⟩, context := "ctx-b", file := "src.rs" }
 
 private def spanB : SourceSpanData := {
-  originalPayload := "b", lo := 9, hi := 11,
+  lo := 9, hi := 11,
   start := ⟨2, 0⟩, «end» := ⟨2, 2⟩, context := "ctx-c", file := "src.rs" }
 
 private def scanSequence (tables : CompilerTables) (values : Array TypedValue) :

@@ -356,7 +356,6 @@ private def parseSpan (j : Lean.Json) : Except StepError Input.SourceSpanData :=
   let start ← compiler (jfield j "start")
   let stop ← compiler (jfield j "end")
   return {
-    originalPayload := j.compress
     lo := ← compiler (jnat j "lo"), hi := ← compiler (jnat j "hi")
     start := ⟨← compiler (jnat start "line"), ← compiler (jnat start "column")⟩
     «end» := ⟨← compiler (jnat stop "line"), ← compiler (jnat stop "column")⟩
@@ -447,7 +446,7 @@ private def resolutionFor (p : Program) (fnInstance : CallInstance) : Except Ste
 private def getAbi (p : Program) (fnInstance : CallInstance) : Exec FnABI := do
   let (resolution,_) ← lift (resolutionFor p fnInstance)
   let raw ← lift (compiler (jfield resolution "fn_abi"))
-  let source ← lift ((p.lowered.input.functionAbis.find? (·.payload == raw)).toExcept (.unsupported "compiler FnABI"))
+  let source ← lift (compiler (Input.decodeCompilerFunctionAbi raw))
   if source.callingConvention.status != .supported || source.callingConvention.kind != .rust || source.cVariadic then
     block "unsupported calling convention or varargs"
   let arg (source : Input.AbiArgument) : Except StepError ArgABI := do
@@ -602,7 +601,7 @@ private def callHooks (p : Program) : CallHooks CtfeProvenance State Unit Nat Un
   abiFixedCount := fun abi => abi.source.fixedCount
   abiArgs := FnABI.args
   abiReturn := FnABI.ret
-  sameConvention := fun a b => a.source.callingConvention.payload == b.source.callingConvention.payload
+  sameConvention := fun a b => decide (a.source.callingConvention = b.source.callingConvention)
   isRustCall := fun abi => abi.kind.tag == "rust_call"
   rustAbi := p.rustAbi
   argLayout := ArgABI.layout
@@ -613,7 +612,7 @@ private def callHooks (p : Program) : CallHooks CtfeProvenance State Unit Nat Un
     -- Restricted source layout_compat: identical u32 types, layout and eq_abi;
     -- ABI mode and every compiler attribute payload must also agree.
     pure (a.layout.ty == b.layout.ty && a.layout.layout == b.layout.layout &&
-      a.layout.layout.eqAbi b.layout.layout && a.source.mode.payload == b.source.mode.payload)
+      a.layout.layout.eqAbi b.layout.layout && decide (a.source.mode = b.source.mode))
   checkTargetFeatures := fun _ fnInstance => do
     let (_,id) ← lift (resolutionFor p fnInstance)
     let node ← lift ((p.lowered.input.instances.find? (·.id == id)).toExcept (.unsupported "source fnInstance"))

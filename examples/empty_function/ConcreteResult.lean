@@ -6,7 +6,7 @@ set_option autoImplicit false
 set_option maxRecDepth 65536
 set_option maxHeartbeats 8000000
 
-theorem result (s : Static) (metadata : Metadata s) (profile : Profile s)
+theorem result (s : Static) (metadata : Metadata s) [SuccessfulConstant metadata] (profile : Profile s)
     (p : Packet) (runtime : RuntimeProfile s p) (input : InputDraft.CurrentInputDraft s p)
     (resources : ResourceMargins s p)
     (destination : InputDraft.MemoryDestination s p input.tracker)

@@ -17,8 +17,7 @@ private def liftQuery (query : Except String A) : EStateM StepError S A :=
 
 /-- Exact compiler session target.arch, added independently of target triple. -/
 def targetArch (prepared : CompilerIntrinsicFacts.Prepared) : Except String String := do
-  let session ← prepared.program.input.raw.getObjVal? "compiler_session_queries"
-  (← session.getObjVal? "target_arch").getStr?
+  (← prepared.program.input.mirTables.sessionMetadata).targetArch
 
 /-- helpers.rs:940–952: absent enabled ISA feature is UB, whereas absent
 compiler evidence is an unresolved input obligation. -/
@@ -77,7 +76,7 @@ def bind
 layout-constructor callbacks. Signature symbol-clash and host math are the
 same source policies used by the enclosing foreign/intrinsic factory. -/
 def compilerDispatcher
-    (context : CompilerFacts.Context) (prepared : CompilerIntrinsicFacts.Prepared)
+    (prepared : CompilerIntrinsicFacts.Prepared)
     (pointers : PointerMachine.Hooks MiriMemoryKind
       (ValidityMachine.Control (EvalCoreMachine.Stored Os R P H D O Aff B Host)))
     (checkSymbolClash : String → RvalueM (EvalCoreMachine.State Os R P H D O Aff B Host) Unit)
@@ -87,8 +86,7 @@ def compilerDispatcher
     (simdBase : IntrinsicSimdHooks Provenance (EvalCoreMachine.State Os R P H D O Aff B Host) C (RuntimePlace Provenance))
     (unsupportedForeignItem : String → String → StepError) :
     Except String (IntrinsicArchitecture.DispatchHooks Provenance (EvalCoreMachine.State Os R P H D O Aff B Host) C (RuntimePlace Provenance)) := do
-  unless context.runtime.source.raw == prepared.program.input.raw do
-    throw "architecture runtime/compiler facts are from different documents"
+  let context := prepared.context
   let boolLayout ← context.primitiveLayout "bool"
   let u8Layout ← context.primitiveLayout "u8"
   match context.primitiveLayout "u128", targetArch prepared,
@@ -131,7 +129,7 @@ def compilerDispatcher
 
 /-- Install the same direct constructor in an already assembled configuration. -/
 def bindCompiler
-    (context : CompilerFacts.Context) (prepared : CompilerIntrinsicFacts.Prepared)
+    (prepared : CompilerIntrinsicFacts.Prepared)
     (pointers : PointerMachine.Hooks MiriMemoryKind
       (ValidityMachine.Control (EvalCoreMachine.Stored Os R P H D O Aff B Host)))
     (checkSymbolClash : String → RvalueM (EvalCoreMachine.State Os R P H D O Aff B Host) Unit)
@@ -140,7 +138,7 @@ def bindCompiler
     Except String (ExecutionMachine.Config MiriMemoryKind (EvalCoreMachine.User Os R P H D O Aff B Host) C O X ClockHost) :=
   pure {base with calls := {base.calls with llvm := fun callee => do
     let original ← base.calls.llvm callee
-    match compilerDispatcher context prepared pointers checkSymbolClash math base.access base.projection
+    match compilerDispatcher prepared pointers checkSymbolClash math base.access base.projection
         (base.intrinsics callee).simdHooks original.unsupportedForeignItem with
     | .ok llvm => pure llvm
     | .error reason => throw (.unsupported reason)}}

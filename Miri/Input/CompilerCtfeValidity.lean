@@ -28,7 +28,7 @@ private def staticKind (p : CompilerProviders.Prepared) (image : AllocationImage
   unless info.size == global.size && info.align == global.align && info.mutability == global.mutability &&
       info.foreignItem == foreignItem do throw "CTFE static compiler metadata disagrees with canonical global"
   let some evidence := source.globalInfo | throw "CTFE nested-static compiler evidence missing"
-  let nested ← evidence.payload.getObjValAs? Bool "nested"
+  let nested ← evidence.nested
   pure (.static nested foreignItem)
 
 /-- Source ptr_try_get_alloc_id errors mean there is no allocation identity;

@@ -7,16 +7,16 @@ Preparation is reflected as safe constructor data, within the same explicitly
 trusted compiler/import boundary as Program. This is not a safety proof. -/
 namespace EmptyFunction.SourceFacts
 open Lean Miri Miri.Input Miri.Interpreter Miri.MIR
+set_option maxRecDepth 65536
+set_option maxHeartbeats 4000000
 
 /-- The fixed exported instruction requests Default-mode provenance resetting.
 Requiring `.No` in the metadata contract would contradict this exact MIR. -/
 theorem literal_retag_yes : ∃ destination literal,
-    (Program.block.statements[0]'(by decide)).kind =
+    ((Program.contents.basicBlocks[0]'(by with_unfolding_all decide)).statements[0]'(by with_unfolding_all decide)).kind =
       .Assign destination (.Use (.Constant literal) .Yes) := by
-  exact ⟨_, _, rfl⟩
+  with_unfolding_all exact ⟨_, _, rfl⟩
 
-deriving instance ToExpr for CompilerConstantQueries.PathElement
-deriving instance ToExpr for Miri.MIR.Location
 deriving instance ToExpr for CompilerConstantQueries.Site
 
 private def prepareSites : IO (Except String (Array CompilerConstantQueries.Site)) := do
@@ -24,8 +24,15 @@ private def prepareSites : IO (Except String (Array CompilerConstantQueries.Site
   return do
     let decoded ← decoded
     let lowered ← Input.lowerProgram decoded.document
-    let prepared ← CompilerConstantQueries.prepare (CompilerGlobals.prepareProgram lowered)
-    pure (prepared.evidence.map (·.site))
+    let owner ← RuntimeProgram.ofProgram (CompilerGlobals.prepareProgram lowered)
+    let prepared ← CompilerConstantQueries.prepare owner
+    let mut sites := #[]
+    for bodyIndex in [:prepared.bodies.size] do
+      if let some (.ok table) := prepared.bodies[bodyIndex]? then
+        for constantIndex in [:table.size] do
+          if let some (some (.ok _)) := table[constantIndex]? then
+            sites := sites.push (⟨bodyIndex,⟨constantIndex⟩⟩ : CompilerConstantQueries.Site)
+    pure sites
 
 open Lean Elab Command in
 run_cmd do
@@ -39,8 +46,10 @@ run_cmd do
     value := toExpr sites, hints := .regular 0, safety := .safe }
 
 theorem constant_envelope_site :
-    constantSites[1]? = some ⟨Program.root.loaded.identity.index, ⟨0,0⟩,
-      #[.field "kind", .field "rvalue", .field "operand", .field "constant"]⟩ := by rfl
+    ∃ (index : Nat) (id : ConstantId),
+      constantSites[index]? = some (⟨Program.root.loaded.identity.index,id⟩ : CompilerConstantQueries.Site) ∧
+      Meaning.firstConstantId Program.root.loaded.tables Program.root.loaded.body = .ok id := by
+  with_unfolding_all exact ⟨1,_,rfl,rfl⟩
 
 open Lean Elab Command in
 run_cmd do

@@ -116,16 +116,22 @@ private def copyHooks : PlaceCopyHooks AllocId S Unit := {
       memoryCopyHooks S.memory S.events putMemory src dest
   validateSource := fun _ _ _ => emit "validate-source" }
 
-private def fixtureBodies : Array MIR.Body := #[
-  ⟨.Built, 0, none, #[pairLayout.ty, pairLayout.ty], #[]⟩,
-  ⟨.Built, 0, none, #[3, 3], #[]⟩]
+private def fixtureBodies : Array MIR.BodyNode := #[
+  ⟨.Built, 0, none, #[pairLayout.ty, pairLayout.ty], #[], 0, #[]⟩,
+  ⟨.Built, 0, none, #[3, 3], #[], 0, #[]⟩]
 private def fixtureLoaded (key : Fin fixtureBodies.size) : LoadedBody :=
-  ⟨BodyIdentity.ofCanonicalIndex key.val, fixtureBodies[key]⟩
+  (LoadedBody.ofTables (BodyIdentity.ofCanonicalIndex key.val)
+    { bodies := fixtureBodies.map some } ⟨key.val⟩).toOption.get (by
+      rcases key with ⟨n, h⟩
+      have hn : n = 0 ∨ n = 1 := by simp [fixtureBodies] at h; omega
+      rcases hn with rfl | rfl <;>
+        simp [LoadedBody.ofTables, fixtureBodies, Miri.MIR.SharedTable.lookup, Except.mapError, bind, Except.bind, pure, Except.pure, Except.toOption])
 private def fixtureIdentity : LocalsIdentity := (LocalsIdentitySupply.allocate ⟨0⟩).2
 private def initial : Except StepError S := do
   let a ← scalar 10
   let b ← scalar 20
   let frame : Frame AllocId LocalLayout Nat := {
+    bodyId := ⟨0⟩, mirTables := (fixtureLoaded ⟨0, by decide⟩).tables,
     body := (fixtureLoaded ⟨0, by decide⟩).body, bodyIdentity := (fixtureLoaded ⟨0, by decide⟩).identity, localsIdentity := fixtureIdentity, functionInstance := ⟨.Item 0, #[]⟩, extra := 0
     returnContinuation := .stop true, returnPlace := .frameLocal 0 0 none pairLayout fixtureIdentity
     locals := #[⟨.live (.immediate (.scalarPair a b)), some pairLayout⟩,
@@ -163,6 +169,8 @@ def main : IO Unit := do
     let .ok (.immediate _) := state.frame.getLocalOperand 0 | throw (IO.userError "local replaced before hook success")
   let big : LocalLayout := ⟨3, { pairLayout.layout with size := Size.ofBytes 12, backendRepr := .Memory (sized := true) }⟩
   let nextFrame := { s.frame with
+    bodyId := ⟨1⟩
+    mirTables := (fixtureLoaded ⟨1, by decide⟩).tables
     body := (fixtureLoaded ⟨1, by decide⟩).body
     bodyIdentity := (fixtureLoaded ⟨1, by decide⟩).identity
     localsIdentity := (LocalsIdentitySupply.allocate ⟨1⟩).2

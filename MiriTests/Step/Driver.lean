@@ -22,22 +22,35 @@ def hooks (fail : Bool := false) : H where
   terminator := fun _ _ => event 10 fail
 
 def source : SourceInfo := ⟨⟨0⟩, 0⟩
-def stmt (kind : StatementKind) : Statement := ⟨source, kind⟩
+def stmt (kind : StatementKindNode) : StatementNode := ⟨source, kind⟩
 def empty : S := ⟨Stack.empty, []⟩
 example : (Step.step hooks () empty).2 = .ok false := by decide
 example : (Step.evalStatement hooks () (stmt .Nop) empty).1.machine = [] := by decide
 example : (Step.evalStatement (hooks true) () (stmt (.StorageLive 0)) empty).1.machine = [4] := by decide
 example : (Step.evalStatement (hooks true) () (stmt (.StorageLive 0)) empty).2 =
     .error (.callback "stop") := by decide
-example : (Step.evalStatement hooks () (stmt (.SetDiscriminant ⟨0, #[]⟩ 0)) empty).1.machine = [2, 3] := by decide
-example : (Step.evalStatement (hooks true) () (stmt (.SetDiscriminant ⟨0, #[]⟩ 0)) empty).1.machine = [2] := by decide
-example : (Step.evalStatement hooks () (stmt (.PlaceMention ⟨0, #[]⟩)) empty).1.machine = [2] := by decide
+example : (Step.evalStatement hooks () (stmt (.SetDiscriminant ⟨0⟩ 0)) empty).1.machine = [2, 3] := by decide
+example : (Step.evalStatement (hooks true) () (stmt (.SetDiscriminant ⟨0⟩ 0)) empty).1.machine = [2] := by decide
+example : (Step.evalStatement hooks () (stmt (.PlaceMention ⟨0⟩)) empty).1.machine = [2] := by decide
+
+private def statementTable : List StatementNode → SharedTable StatementNode
+  | [] => #[]
+  | statement :: rest => #[some statement] ++ statementTable rest
+
+private def statementIds : List StatementNode → Nat → Array StatementId
+  | [], _ => #[]
+  | _ :: rest, index => #[⟨index⟩] ++ statementIds rest (index + 1)
 
 -- A supplied frame's opaque metadata is irrelevant to driver order.
-def prepared (frame : Frame Unit Unit Unit) (statements : Array Statement)
+def prepared (frame : Frame Unit Unit Unit) (statements : Array StatementNode)
     (location : FrameLocation := .mir ⟨0, 0⟩) : S :=
-  ⟨⟨#[{ frame with location, body := { frame.body with basicBlocks :=
-    #[⟨statements, ⟨source, .Unreachable⟩, false⟩] } }]⟩, []⟩
+  ⟨⟨#[{ frame with
+    location
+    body := { frame.body with basicBlocks := #[⟨0⟩] }
+    mirTables := {
+      statements := statementTable statements.toList
+      blocks := #[some ⟨statementIds statements.toList 0, ⟨0⟩, false⟩]
+      terminators := #[some ⟨source, .Unreachable⟩] } }]⟩, []⟩
 example (frame : Frame Unit Unit Unit) :
     (Step.step hooks () (prepared frame #[] (.unwinding ⟨0⟩))).1.machine = [8] := by rfl
 example (frame : Frame Unit Unit Unit) :
@@ -50,13 +63,13 @@ example (frame : Frame Unit Unit Unit) :
 example (frame : Frame Unit Unit Unit) :
     (Step.step (hooks true) () (prepared frame #[stmt (.StorageLive 0)])).1.stack.currentFrame?.map
       (fun f => f.location) = some (.mir ⟨0, 0⟩) := by rfl
-example (cause : FakeReadCause) (place : Place) :
+example (cause : FakeReadCause) (place : PlaceId) :
     Step.evalStatement hooks () (stmt (.FakeRead cause place)) empty = (empty, .ok ()) := rfl
-example (place : Place) (projection : UserTypeProjection) (variance : Variance) :
+example (place : PlaceId) (projection : UserTypeProjection) (variance : Variance) :
     Step.evalStatement hooks () (stmt (.AscribeUserType place projection variance)) empty = (empty, .ok ()) := rfl
 example (coverage : CoverageKind) :
     Step.evalStatement hooks () (stmt (.Coverage coverage)) empty = (empty, .ok ()) := rfl
-example (place : Place) (reason : BackwardIncompatibleDropReason) :
+example (place : PlaceId) (reason : BackwardIncompatibleDropReason) :
     Step.evalStatement hooks () (stmt (.BackwardIncompatibleDropHint place reason)) empty = (empty, .ok ()) := rfl
 
 def changedLocationHooks : H := { hooks with

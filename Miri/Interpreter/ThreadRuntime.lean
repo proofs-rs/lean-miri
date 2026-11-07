@@ -18,7 +18,8 @@ structure Configuration (K U C O X F A Aff Payload : Type) where
   retag : TypedRetag.Hooks K (ThreadStacks.Storage U)
   retagBudget : Nat
   copy : PlaceCopyHooks Provenance (ThreadStacks.State K U) C
-  evaluatePlace : C → MIR.Place → Bool → ThreadStacks.M K U (RuntimePlace Provenance)
+  evaluatePlace : C → MIR.PlaceId → Bool → ThreadStacks.M K U (RuntimePlace Provenance)
+  evaluateLocalPlace : C → MIR.Place → Bool → ThreadStacks.M K U (RuntimePlace Provenance)
   extras : MemoryExtras.Hooks K (ThreadStacks.Storage U) Payload
   weakMemory : Bool
 
@@ -31,7 +32,7 @@ def thread [DecidableEq K] (config : Configuration K U C O X F A Aff Payload) :
   let allocation := MemoryExtras.bindAllocation config.extras config.weakMemory config.thread.allocation
   let lifecycle := CallMachine.withUnwind config.lifecycle config.unwind
   let call := CallMachine.threadedHooks config.thread.functions.call lifecycle access allocation config.compiler
-    config.retag config.retagBudget config.copy config.evaluatePlace
+    config.retag config.retagBudget config.copy config.evaluatePlace config.evaluateLocalPlace
   let functions := {config.thread.functions with call}
   let spans := {config.thread.spans with debugAssertions := config.compiler.debugAssertions}
   ThreadShimMachine.bindMemory {config.thread with allocation, functions, spans}

@@ -1,3 +1,4 @@
+import Miri.Interpreter.ShimSignature
 import Miri.ABI.FnAbi
 import Miri.Interpreter.Rvalue
 
@@ -13,15 +14,6 @@ inductive EmulateItemResult where
 inductive Family where | unix | windows | other deriving DecidableEq, Repr
 inductive Init where | uninit | zero deriving DecidableEq, Repr
 inductive AllocationKind where | rust | c | miri | mmap deriving DecidableEq, Repr
-inductive SignatureType where
-  | unit | usize | isize | i32 | u32 | pointer | unitPointer | alignment | never
-  | u64 | u8 | bool | byteSlice | functionPointer
-  deriving DecidableEq, Repr
-structure Signature where
-  conv : CanonAbi
-  args : Array SignatureType
-  ret : SignatureType
-  deriving DecidableEq, Repr
 inductive SpecialAllocatorMethod where
   | Alloc | AllocZeroed | Dealloc | Realloc
   deriving DecidableEq, Repr

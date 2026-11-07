@@ -14,7 +14,7 @@ export PATH="$ROOT/.elan/bin:$SYSROOT/bin:$CARGO_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$SYSROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 "$CARGO_HOME/bin/cargo" +"$TOOLCHAIN" build --offline --manifest-path "$ROOT/exporter/Cargo.toml"
-flock --no-fork /tmp/lean-miri-lake-build.lock lake build Miri.Input
+flock --no-fork /tmp/lean-miri-lake-build.lock lake build Miri.Input MiriTests.Input.LoweringOracle
 lake env lean "$ROOT/MiriTests/Input/CompilerForeignSymbolTables.lean"
 lake env lean "$ROOT/MiriTests/Input/DefinitionLookup2026.lean"
 lake env lean "$ROOT/MiriTests/Input/DecoderProfile2026.lean"
@@ -39,8 +39,40 @@ lake env lean --run "$ROOT/tests/input/RuntimeDecodeEquivalence165.lean" "$OUT"
 lake env lean --run "$ROOT/tests/input/DecoderTests.lean" "$OUT"
 lake env lean --run "$ROOT/tests/input/SharedGraphDecoderTests.lean" "$OUT"
 lake env lean --run "$ROOT/tests/input/DecoderDynamicScan2026.lean" "$OUT"
-lake env lean --run "$ROOT/tests/input/SharedFunctionAbiTests.lean" "$OUT"
-lake env lean --run "$ROOT/tests/input/CompilerFunctionAbiMemoTests2026.lean" "$OUT"
+lake env lean --run "$ROOT/tests/input/AbiIDs.lean" "$OUT"
+lake env lean --run "$ROOT/tests/input/AbiTableFailures.lean" "$OUT"
+lake env lean --run "$ROOT/tests/input/LayoutIDs.lean" "$OUT"
+lake env lean --run "$ROOT/tests/input/SymbolicTypeConstants.lean"
+lake env lean --run "$ROOT/tests/input/BorrowKindTags.lean"
+lake env lean --run "$ROOT/tests/input/RequiredConstantIDs.lean"
+lake env lean --run "$ROOT/tests/input/SessionMetadataTables.lean"
+lake env lean --run "$ROOT/tests/input/StartupQueryTables.lean"
+lake env lean "$ROOT/tests/regression/RuntimeArrayOwner.lean"
+lake env lean --run "$ROOT/tests/input/SessionRuntimeChecks.lean"
+lake env lean --run "$ROOT/tests/input/RetagAttributeTables.lean"
+lake env lean --run "$ROOT/tests/input/ThreadLocalTables.lean"
+lake env lean --run "$ROOT/tests/input/StaticNestedQuery.lean"
+lake env lean --run "$ROOT/tests/input/PanicQueryTables.lean"
+lake env lean --run "$ROOT/tests/input/NamedGlobalTables.lean"
+lake env lean --run "$ROOT/tests/input/ExternStaticTables.lean"
+lake env lean --run "$ROOT/tests/input/NamedConstantTables.lean"
+lake env lean --run "$ROOT/tests/input/MainQueryTables.lean"
+lake env lean --run "$ROOT/tests/input/CastQueryTables.lean"
+lake env lean --run "$ROOT/tests/input/GlobalByteTables.lean"
+lake env lean --run "$ROOT/tests/input/ValueConstantTables.lean"
+lake env lean --run "$ROOT/tests/input/ReferenceValidationIDs.lean"
+lake env lean --run "$ROOT/tests/input/BodyValidationIDs.lean" "$OUT"
+lake env lean --run "$ROOT/tests/input/UnexpandedTransport.lean" "$OUT"
+lake env lean --run "$ROOT/tests/input/TargetLayoutIDs.lean" "$OUT"
+lake env lean --run "$ROOT/tests/input/CallSiteIDs.lean" "$OUT"
+lake env lean --run "$ROOT/tests/input/CanonicalFrameTables.lean" "$OUT"
+lake env lean --run "$ROOT/tests/input/AllocationMemoryIDs.lean" "$OUT"
+lake env lean --run "$ROOT/tests/input/ProjectionIDs.lean" "$OUT"
+lake env lean --run "$ROOT/tests/input/SourceSpanTables.lean" "$OUT"
+lake env lean --run "$ROOT/tests/input/RuntimeMetadataIndexing.lean" "$OUT"
+lake env lean --run "$ROOT/tests/input/TypeRelationIDs.lean" "$OUT"
+lake env lean --run "$ROOT/tests/input/TypeShapeSemantics.lean" "$OUT"
+lake env lean --run "$ROOT/tests/input/CompilerFactIDs.lean" "$OUT"
 lake env lean --run "$ROOT/tests/input/CompilerBacktraceIndexTests2026.lean" "$OUT"
 lake env lean --run "$ROOT/tests/input/CompilerPreparationInterner2026.lean" "$OUT"
 lake env lean --run "$ROOT/tests/input/ImportCLI.lean" "$OUT"
@@ -78,6 +110,8 @@ LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1 "$ROOT/exporter/target/debug/lean-miri-mir-e
 python3 "$ROOT/exporter/tests/validate_selected_alloc_world157.py" "$ALLOC_WORLD_OUT"
 lake env lean --run "$ROOT/tests/input/SelectedAllocIdCatalog157.lean" "$ALLOC_WORLD_OUT" selected
 lake env lean --run "$ROOT/tests/input/AllocWorldRuntime161.lean" "$ALLOC_WORLD_OUT"
+lake env lean --run "$ROOT/tests/input/AllocationMemoryIDs.lean" "$ALLOC_WORLD_OUT"
+lake env lean --run "$ROOT/tests/input/AllocWorldTypedValidation.lean" "$ALLOC_WORLD_OUT"
 
 LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1 "$ROOT/exporter/target/debug/lean-miri-mir-exporter" \
   --output "$ROOT_WORLD_OUT" --root root_u32 -- \
@@ -95,3 +129,13 @@ LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1 "$ROOT/exporter/target/debug/lean-miri-mir-e
   -Zmir-opt-level=0 --sysroot "$MIRI_SYSROOT" --cfg=miri -Zalways-encode-mir
 python3 "$ROOT/exporter/tests/validate_selected_static_typeid162.py" "$ALLOC_WORLD_OUT"
 lake env lean --run "$ROOT/tests/input/SelectedStaticTypeIdRuntime162.lean" "$ALLOC_WORLD_OUT"
+
+# Source coordinates in retained diagnostics are transport positions, not IDs.
+SOURCE_ORDER_OUT="$(mktemp "${TMPDIR:-/tmp}/lean-miri-input-source-order-XXXXXX.json")"
+"$ROOT/exporter/target/debug/lean-miri-mir-exporter" \
+  --output "$SOURCE_ORDER_OUT" --root miri_start -- \
+  "$ROOT/tests/repro/vtable-erasure/hrtb-trait-read.rs" \
+  --crate-type=lib --crate-name=source_order -Cpanic=abort --edition=2024 \
+  -Zmir-opt-level=0 --sysroot "$MIRI_SYSROOT" --cfg=miri -Zalways-encode-mir
+lake env lean --run "$ROOT/tests/input/SourceOrderDiagnostics.lean" "$SOURCE_ORDER_OUT"
+rm -f "$SOURCE_ORDER_OUT"

@@ -9,64 +9,29 @@ normalization/stable-comparison queries. -/
 namespace Miri.Input.CompilerFactAdapters
 open Lean Miri.ABI Miri.Memory Miri.Interpreter
 abbrev Result := Except String
-/-- Canonical source pattern identities; range constants share the program's
-TypeConst table and Or children share this pattern table. -/
-inductive PatternIdentity where
-  | range (start finish : MIR.TypeConstId)
-  | or (children : Array Nat)
-  | notNull
-  deriving Repr, DecidableEq
-
-private partial def lowerPattern (ctx : LowerContext) (tables : CompilerTables)
-    (nodes : Array PatternIdentity) (pattern : CompilerPattern) : Result (Nat × CompilerTables × Array PatternIdentity) := do
-  let (value,tables,nodes) ← match pattern with
-    | .range start finish => do
-      let (start,tables) ← lowerCompilerTypeConst ctx tables (← decodeCompilerValue start)
-      let (finish,tables) ← lowerCompilerTypeConst ctx tables (← decodeCompilerValue finish)
-      pure (PatternIdentity.range start finish,tables,nodes)
-    | .or children => do
-      let mut tables := tables
-      let mut nodes := nodes
-      let mut ids := #[]
-      for child in children do
-        let (id,nextTables,nextNodes) ← lowerPattern ctx tables nodes child
-        tables := nextTables; nodes := nextNodes; ids := ids.push id
-      pure (PatternIdentity.or ids,tables,nodes)
-    | .notNull => pure (PatternIdentity.notNull,tables,nodes)
-  match nodes.toList.idxOf? value with
-  | some id => pure (id,tables,nodes)
-  | none => pure (nodes.size,tables,nodes.push value)
-
 structure Prepared where
   context : CompilerFacts.Context
-  dynamicPredicates : Array Json
-  patterns : Array PatternIdentity
+  dynamicPredicates : MIR.SharedTable PredicateListData
   castTypes : Array (TypeId × Result CastTypeInfo)
   obligations : Array Obligation
 
 private def field (j : Json) (key : String) : Result Json := j.getObjVal? key
-private def natural (j : Json) (key : String) : Result Nat := do (← field j key).getNat?
-private def string (j : Json) (key : String) : Result String := do (← field j key).getStr?
-private def array (j : Json) (key : String) : Result (Array Json) := do (← field j key).getArr?
 private def source (context : CompilerFacts.Context) (id : TypeId) : Result TypeNode :=
   (context.runtime.node id).mapError toString
-private def shape (context : CompilerFacts.Context) (id : TypeId) : Result Json := do field (← source context id).payload "shape"
-private def typeRef (context : CompilerFacts.Context) (j : Json) : Result TypeId := do
-  let id ← natural j "type_id"
-  let _ ← source context id
-  pure id
 private def sourceDefinition (node : TypeNode) : Result DefinitionId := do
   let some facts := node.compilerFacts | throw "type compiler definition evidence missing"
-  let value ← field facts.payload "definition"
-  pure ⟨← natural value "crate",← natural value "index"⟩
+  let some value := facts.definition | throw "compiler definition absent"
+  pure value
 private def ensureDefinition (tables : CompilerTables) (id : DefinitionId) : CompilerTables :=
   if tables.definitions.contains id then tables else { tables with definitions := tables.definitions.push id }
 
-private def castType (context : CompilerFacts.Context) (tables : CompilerTables) (predicates : Array Json)
-    (patternIds : Array (TypeId × Nat)) (id : TypeId) : Result (CastTypeInfo × CompilerTables) := do
+private def castType (context : CompilerFacts.Context) (tables : CompilerTables) (predicates : MIR.SharedTable PredicateListData)
+    (patternIds : Array (Option Nat)) (id : TypeId) : Result (CastTypeInfo × CompilerTables) := do
   let node ← source context id
-  let value ← shape context id
-  let ty key := do typeRef context (← field value key)
+  let child (value : Option TypeId) := do
+    let some id := value | throw "compiler child type absent"
+    let _ ← source context id
+    pure id
   let unchanged value := pure (value,tables)
   match node.shapeKind with
   | .int | .uint =>
@@ -80,98 +45,76 @@ private def castType (context : CompilerFacts.Context) (tables : CompilerTables)
       | _ => throw "unsupported compiler float format"
     unchanged (.floating format)
   | .bool => unchanged .boolean | .char => unchanged .character
-  | .rawPointer => unchanged (.rawPointer (← ty "pointee"))
-  | .reference => unchanged (.reference (← ty "pointee"))
+  | .rawPointer => unchanged (.rawPointer (← child node.relations.pointee))
+  | .reference => unchanged (.reference (← child node.relations.pointee))
   | .functionPointer => unchanged .fnPointer
   | .adt =>
     let definition ← sourceDefinition node
     let tables := ensureDefinition tables definition
     pure (.adt (← lookupDefinitionId tables.definitions definition),tables)
   | .functionDefinition | .closure =>
-    let definition ← sourceDefinition node
-    let tables := ensureDefinition tables definition
-    let (args,tables) ← lowerCompilerGenericArgs context.loweringContext tables
-      (← context.loweringContext.decodeCompilerValue (← field value "generic_args"))
-    let definition ← lookupDefinitionId tables.definitions definition
-    if node.shapeKind == .functionDefinition then pure (.fnDefinition definition args,tables)
-    else pure (.closure definition args (← natural value "upvar_count"),tables)
+    let value ← context.runtime.source.mirTables.functionType id
+    if node.shapeKind == .functionDefinition then unchanged (.fnDefinition value.definition value.args)
+    else
+      let some count := node.relations.upvarCount | throw "closure upvar count absent"
+      unchanged (.closure value.definition value.args count)
   | .array =>
     let layout ← CompilerFacts.layoutOf context id
     let .Array _ count := layout.layout.fields | throw "array compiler layout lacks source array count"
-    unchanged (.array (← ty "element") count)
-  | .slice => unchanged (.slice (← ty "element"))
+    unchanged (.array (← child node.relations.element) count)
+  | .slice => unchanged (.slice (← child node.relations.element))
   | .dynamicTraitObject =>
-    let value ← field value "predicates"
-    let some token := predicates.toList.idxOf? value | throw "dynamic predicate table identity missing"
+    let some token := node.relations.predicates | throw "dynamic predicate list absent"
+    let _ ← predicates.lookup token |>.mapError (fun id => s!"invalid predicate list {id}")
     unchanged (.dynamic token)
   | .patternType =>
-    let some (_,id) := patternIds.find? (·.1 == id) | throw "canonical compiler pattern identity missing"
-    unchanged (.pattern (← ty "base") id)
+    let some (some token) := patternIds[id]? | throw "canonical compiler pattern identity missing"
+    let some _ := context.runtime.source.mirTables.patterns[token]? | throw "invalid canonical compiler pattern ID"
+    unchanged (.pattern (← child node.relations.base) token)
   | _ => throw "type kind is outside the cast operand domain"
 
 def prepare (context : CompilerFacts.Context) : Result Prepared := do
-  let loweringContext := context.loweringContext
-  let mut predicates := #[]
-  for node in context.runtime.source.types do
-    if node.shapeKind == .dynamicTraitObject then
-      let value ← field (← field node.payload "shape") "predicates"
-      unless predicates.contains value do predicates := predicates.push value
-  for allocation in context.program.input.allocations do
-    if let some (.vtable source) := allocation.data then
-      let value ← field source.payload "predicates"
-      unless predicates.contains value do predicates := predicates.push value
-  -- Region-erased/anonymized outputs share this same predicate-array table.
-  -- Existing source tokens keep their indices; newly exported outputs append.
-  if let .ok queries := context.program.input.raw.getObjVal? "compiler_vtable_queries" then
-    for query in (← queries.getArr?) do
-      for key in #["input_predicates","output_predicates"] do
-        let value ← field query key
-        let _ ← value.getArr?
-        unless predicates.contains value do predicates := predicates.push value
+  let predicates := context.program.input.vtableTables.predicateLists
   let mut tables := context.program.compilerTables
   let mut casts := #[]
   let mut obligations := #[]
-  let mut patterns := #[]
-  let mut patternIds := #[]
-  for node in context.runtime.source.types do
-    if let some pattern := node.pattern then
-      match lowerPattern loweringContext tables patterns pattern with
-      | .ok (id,nextTables,nextPatterns) =>
-        tables := nextTables; patterns := nextPatterns; patternIds := patternIds.push (node.id,id)
-      | .error error => obligations := obligations.push ⟨s!"types[{node.id}].pattern",error⟩
+  let patternIds := context.program.input.mirTables.patternIds
   for node in context.runtime.source.types do
     match castType context tables predicates patternIds node.id with
     | .ok (kind,next) => casts := casts.push (node.id,.ok kind); tables := next
     | .error error =>
       casts := casts.push (node.id,.error error)
       obligations := obligations.push ⟨s!"types[{node.id}].cast",error⟩
-  pure ⟨context.withProgram (context.program.withCompilerTables tables),predicates,patterns,casts,obligations⟩
+  pure ⟨context.withProgram (context.program.withCompilerTables tables),predicates,casts,obligations⟩
 
 def castTypeInfo (prepared : Prepared) (id : TypeId) : Result CastTypeInfo := do
   let some (_,result) := prepared.castTypes.find? (·.1 == id) | throw "compiler cast type identity missing"
   result
 private def dynamicToken (prepared : Prepared) (id : TypeId) : Result Nat := do
-  let value ← field (← shape prepared.context id) "predicates"
-  let some token := prepared.dynamicPredicates.toList.idxOf? value | throw "dynamic predicate identity missing"
+  let node ← source prepared.context id
+  let some token := node.relations.predicates | throw "dynamic predicate list absent"
+  let _ ← prepared.dynamicPredicates.lookup token |>.mapError (fun id => s!"invalid predicate list {id}")
   pure token
 
 def validityKind (prepared : Prepared) (id : TypeId) : Result ValidityVisitor.TypeKind := do
   let context := prepared.context
   let node ← source context id
-  let value ← shape context id
-  let ty key := do typeRef context (← field value key)
+  let child (value : Option TypeId) := do
+    let some id := value | throw "compiler child type absent"
+    let _ ← source context id
+    pure id
   match node.shapeKind with
   | .bool => pure .boolean | .char => pure .character | .int | .uint => pure .integer
   | .float => pure .float | .functionPointer => pure .functionPointer | .never => pure .never
   | .foreign => pure .foreign | .functionDefinition => pure .functionDefinition
   | .rawPointer =>
-    let pointee ← ty "pointee"
+    let pointee ← child node.relations.pointee
     return .rawPointer pointee (← CompilerFacts.boolean context pointee "is_sized")
   | .reference => return .reference ((← CompilerFacts.referencePointee context id).2 == .Mut)
   | .str => pure .string
-  | .array | .slice => return .sequence (← ty "element")
+  | .array | .slice => return .sequence (← child node.relations.element)
   | .dynamicTraitObject => return .dynamic (← dynamicToken prepared id)
-  | .patternType => return .pattern (← ty "base")
+  | .patternType => return .pattern (← child node.relations.base)
   | .unsafeBinder => pure .unsafeBinder
   | .adt | .tuple | .closure | .coroutine | .coroutineClosure =>
     if ← CompilerFacts.boolean context id "is_box" then pure .box else

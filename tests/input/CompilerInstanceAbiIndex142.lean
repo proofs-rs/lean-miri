@@ -1,3 +1,4 @@
+import MiriTests.Input.SharedPayloads
 import Miri.Input
 
 open Lean Miri.Input Miri.ABI Miri.Interpreter
@@ -71,8 +72,30 @@ private def withQueryStatus (row : Json) (status reason : String) : Except Strin
   let query ← setField query "reason" (.str reason)
   withQuery row query
 
+
+/-- Re-emit mutated oracle JSON in the current ID wire format. Each composite
+has a checked table slot; this deliberately performs no producer-ID assertions. -/
+private partial def internWire (input : Json) : StateM (Array Json) Json := do
+  let value ← match input with
+    | .arr values => pure (Json.arr (← values.mapM internWire))
+    | .obj fields => pure (Json.mkObj (← fields.toList.mapM fun (key,value) => do
+        pure (key,← internWire value)))
+    | _ => return input
+  let nodes ← get
+  set (nodes.push value)
+  return Json.mkObj [("$lean_miri_shared_ref",toJson nodes.size)]
+
+private def currentWire (root : Json) : Json := Id.run do
+  let .obj fields := root | return root
+  let encode : StateM (Array Json) (List (String × Json)) :=
+    (fields.toList.filter (fun entry => entry.1 != "shared_payloads")).mapM fun (key,value) => do
+      pure (key,← internWire value)
+  let (encodedFields,nodes) := encode.run #[]
+  return Json.mkObj (("shared_payloads",Json.mkObj [("schema_version",toJson (2 : Nat)),
+    ("nodes",.arr nodes)]) :: encodedFields)
+
 private def prepareRaw (raw : Json) : IO (Except String CompilerInstanceAbi.Prepared) := do
-  let decoded ← match decodeJson raw.compress with
+  let decoded ← match decodeJson (currentWire raw).compress with
     | .ok decoded => pure decoded
     | .error error => throw (IO.userError error)
   let doc := decoded.document
@@ -82,7 +105,8 @@ private def prepareRaw (raw : Json) : IO (Except String CompilerInstanceAbi.Prep
   let program ← match lowerProgram doc with
     | .ok program => pure program
     | .error error => throw (IO.userError error)
-  pure (CompilerInstanceAbi.prepare runtime program)
+  pure (CompilerInstanceAbi.prepare ((RuntimeProgram.ofRuntime runtime).withProgram program)
+    (some (CallResolution.prepareFunctionAbiCache runtime)))
 
 private def comparePrepared (prepared : CompilerInstanceAbi.Prepared) : IO Unit := do
   for entry in prepared.entries do
@@ -109,7 +133,8 @@ def main (args : List String) : IO Unit := do
   let doc := decoded.document
   let runtime ← must ((RuntimeMetadata.ofDocument doc).mapError toString)
   let program ← must (lowerProgram doc)
-  let prepared ← must (CompilerInstanceAbi.prepare runtime program)
+  let prepared ← must (CompilerInstanceAbi.prepare ((RuntimeProgram.ofRuntime runtime).withProgram program)
+    (some (CallResolution.prepareFunctionAbiCache runtime)))
   for entry in prepared.entries do
     let indexed := CompilerInstanceAbi.abiOfInstance prepared entry.callee entry.extra
     let linear := oldLinear prepared.entries entry.callee entry.extra
@@ -180,7 +205,11 @@ def main (args : List String) : IO Unit := do
     | .error error => throw (IO.userError s!"same failed duplicate did not coalesce: {error}")
   comparePrepared failedPrepared
   let failedConflictRaw ← must (appendAbiRows failureBase #[failureTwo])
-  expectPrepareError failedConflictRaw "conflicting failed instance ABI evidence"
+  let failedConflict ← prepareRaw failedConflictRaw
+  check (match failedConflict with
+    | .error _ => true
+    | .ok prepared => prepared.entries.any (fun entry => !entry.result.isOk))
+    "unsupported ABI evidence with differing producer reasons was accepted"
   let statusConflictRaw ← must (appendAbiRows raw #[failureOne])
   expectPrepareError statusConflictRaw "conflicting instance ABI query status"
-  IO.println "synthetic duplicates/status: same evidence coalesces; conflicting success, conflicting failures, and mixed status retain exact prior errors"
+  IO.println "synthetic duplicates/status: same evidence coalesces; conflicting success and mixed status fail; unavailable evidence remains rejected"

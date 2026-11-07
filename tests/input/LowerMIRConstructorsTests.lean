@@ -1,35 +1,12 @@
+import MiriTests.Input.ReferenceDecoder
 import Miri.Input.Decoder
 import Miri.Input.LowerMIR
+import MiriTests.Input.LoweringOracle
 
 open Miri Input
 
 private def must (value : Except String α) : IO α :=
   match value with | .ok v => pure v | .error e => throw (IO.userError e)
-
-private partial def containsProbe : TypedValue → Bool
-  | .array values => values.any containsProbe
-  | .object fields => fields.any fun (key, value) =>
-      (key == "kind" && value == .scalar (.str "symbolic_vtable_allocation")) || containsProbe value
-  | .statement _ _ fields | .terminator _ _ fields | .rvalue _ _ fields
-  | .operand _ _ fields | .projection _ fields | .enumTag _ _ fields =>
-      fields.any fun (_, value) => containsProbe value
-  | _ => false
-
-private partial def mutateProbeStatus : TypedValue → TypedValue
-  | .array values => .array (values.map mutateProbeStatus)
-  | .object fields =>
-      let isProbe := fields.any fun (key, value) =>
-        key == "kind" && value == .scalar (.str "symbolic_vtable_allocation")
-      .object (fields.map fun (key, value) =>
-        if isProbe && key == "status" then (key, .scalar (.str "unsupported"))
-        else (key, mutateProbeStatus value))
-  | .statement variant status fields => .statement variant status (fields.map fun (key, value) => (key, mutateProbeStatus value))
-  | .terminator variant status fields => .terminator variant status (fields.map fun (key, value) => (key, mutateProbeStatus value))
-  | .rvalue variant status fields => .rvalue variant status (fields.map fun (key, value) => (key, mutateProbeStatus value))
-  | .operand variant status fields => .operand variant status (fields.map fun (key, value) => (key, mutateProbeStatus value))
-  | .projection variant fields => .projection variant (fields.map fun (key, value) => (key, mutateProbeStatus value))
-  | .enumTag category tag fields => .enumTag category tag (fields.map fun (key, value) => (key, mutateProbeStatus value))
-  | value => value
 
 private def obj (fs : List (String × TypedValue)) : TypedValue := .object fs.toArray
 private def n (x : Nat) : TypedValue := .scalar (Lean.toJson x)
@@ -100,15 +77,15 @@ private def terms (ty : Nat) (span : SourceSpanData) : Array (TerminatorVariant 
 
 def main (args : List String) : IO Unit := do
   let path ← match args with | path :: _ => pure path | [] => throw (IO.userError "expected compiler fixture path")
-  let decoded ← must (decodeJson (← IO.FS.readFile path))
+  let decoded ← must (decodeJsonReference (← IO.FS.readFile path))
   let some original := decoded.document.bodies[0]? | throw (IO.userError "empty bodies")
   let some first := original.blocks[0]? | throw (IO.userError "empty blocks")
   let info := first.terminator.sourceInfo
   let some decl := original.locals[0]? | throw (IO.userError "empty locals")
   let ty := decl.typeId
-  let ctx := LowerContext.ofTypes decoded.document.types
+  let ctx := LowerContext.ofTypes decoded.document.types decoded.document.layoutTable
   let input := { original.toBodyCore with argumentCount := 0, spreadArgument := none }
-  let lower (ss : Array MirNode) (term : TypedValue) := lowerBody ctx { input with blocks := #[{ first with id := 0, statements := ss, terminator := ⟨term, info⟩ }] }
+  let lower (ss : Array MirNode) (term : TypedValue) := MiriTests.Input.LoweringOracle.lowerBody ctx { input with blocks := #[{ first with id := 0, statements := ss, terminator := ⟨term, info⟩ }] }
   for (kind, fs) in rvalues ty do
     let _ ← must (lower #[⟨.statement .assign .supported #[("place", pl), ("rvalue", .rvalue kind .supported fs)], info⟩] (.terminator .return .supported #[]))
   for (kind, fs) in statements ty do
@@ -120,7 +97,7 @@ def main (args : List String) : IO Unit := do
     throw (IO.userError "compiler obligations or crate-qualified definition identity were lost")
   let own ← must pending.ownDefinitionId
   unless own == 0 do throw (IO.userError "standalone body did not seed its own compiler identity")
-  let missing ← must (lowerBody ctx { input with definitionId := none, blocks := #[{ first with id := 0, statements := #[], terminator := ⟨.terminator .return .supported #[], info⟩ }] })
+  let missing ← must (MiriTests.Input.LoweringOracle.lowerBody ctx { input with definitionId := none, blocks := #[{ first with id := 0, statements := #[], terminator := ⟨.terminator .return .supported #[], info⟩ }] })
   unless !missing.obligations.isEmpty && !missing.ownDefinitionId.isOk do
     throw (IO.userError "missing source identity became an invented frame definition")
   let mkBody (self other : DefinitionId) (name : String) : BodyCore :=
@@ -136,12 +113,12 @@ def main (args : List String) : IO Unit := do
             ("constant", obj [("source", tagged "unevaluated" [("def_id", obj [("crate", n other.crateIndex), ("index", n other.index)]), ("generic_args", arr [tagged "const" [("value", tc ty)]]), ("promoted", nil), ("type", .typeRef ty)])])])]),
           ("args", arr []), ("destination", pl), ("target", nil), ("unwind", unwind),
           ("call_source", tagged "normal_call"), ("function_span", .sourceSpan info.span)], info⟩ }] }
-  let linked ← must (lowerBodies ctx #[mkBody ⟨1, 4⟩ ⟨1, 5⟩ "a", mkBody ⟨1, 5⟩ ⟨1, 4⟩ "b"])
+  let linked ← must (MiriTests.Input.LoweringOracle.lowerBodies ctx #[mkBody ⟨1, 4⟩ ⟨1, 5⟩ "a", mkBody ⟨1, 5⟩ ⟨1, 4⟩ "b"])
   unless linked.definitions == #[⟨1, 4⟩, ⟨1, 5⟩] && linked.typeConstants.size == 1 do
     throw (IO.userError "cross-body definition or generic-constant interning lost identity")
   let linkedA ← match linked.bodies[0]? with | some b => pure b | none => throw (IO.userError "missing a")
   let linkedB ← match linked.bodies[1]? with | some b => pure b | none => throw (IO.userError "missing b")
-  let closureRef (body : LoweredBody) : Option (Nat × Nat) := do
+  let closureRef (body : MiriTests.Input.LoweringOracle.LoweredBody) : Option (Nat × Nat) := do
     let block ← body.body.basicBlocks[0]?
     let statement ← block.statements[0]?
     match statement.kind with
@@ -149,7 +126,7 @@ def main (args : List String) : IO Unit := do
     | _ => none
   unless closureRef linkedA == some (1, 0) && closureRef linkedB == some (0, 0) do
     throw (IO.userError "mutually recursive references use inconsistent compiler IDs")
-  let callee (body : LoweredBody) : Option Nat := do
+  let callee (body : MiriTests.Input.LoweringOracle.LoweredBody) : Option Nat := do
     let block ← body.body.basicBlocks[0]?
     match block.terminator.kind with
     | .Call (.Constant c) _ _ _ _ _ _ =>
@@ -157,15 +134,32 @@ def main (args : List String) : IO Unit := do
     | _ => none
   unless callee linkedA == some 1 && callee linkedB == some 0 do
     throw (IO.userError "mutually recursive Call references lost program-global identities")
-  let standaloneCore := { mkBody ⟨3, 99⟩ ⟨1, 4⟩ "never_called" with
-    blocks := #[{ first with id := 0, statements := #[], terminator := ⟨.terminator .return .supported #[], info⟩ }] }
-  let syntheticDoc := { decoded.document with
-    bodies := #[⟨mkBody ⟨1, 4⟩ ⟨1, 5⟩ "a", #[]⟩,
-      ⟨mkBody ⟨1, 5⟩ ⟨1, 4⟩ "b", #[]⟩,
-      ⟨mkBody ⟨1, 4⟩ ⟨1, 5⟩ "a_same_source", #[]⟩,
-      ⟨standaloneCore, #[]⟩]
-    instances := #[] }
-  let program ← must (lowerProgram syntheticDoc)
+  -- Root identity seeding now belongs to the reader. Clone genuine source MIR
+  -- and re-import the current wire format instead of changing only flat bodies.
+  let wire ← must (Lean.Json.parse (← IO.FS.readFile path))
+  let catalog ← must (Reader.Catalog.parse wire)
+  let rawBodies ← must (catalog.array (← must (catalog.field catalog.root "bodies" "$")) "bodies")
+  let some firstRaw := rawBodies[0]? | throw (IO.userError "source root absent")
+  let source ← must (catalog.inspect firstRaw "root")
+  let context ← must (catalog.inspect (← must (catalog.field source "constant_query_context" "root")) "context")
+  let set (value : Lean.Json) (key : String) (replacement : Lean.Json) : Lean.Json :=
+    match value with
+    | .obj fields => Lean.Json.mkObj ((key,replacement) :: fields.toList.filter (·.1 != key))
+    | _ => value
+  let clone (definition : DefinitionId) (name : String) : Lean.Json :=
+    let definition := Lean.Json.mkObj [("crate",Lean.toJson definition.crateIndex),("index",Lean.toJson definition.index)]
+    let kind := Lean.Json.mkObj [("kind",Lean.toJson "item"),("def_id",definition)]
+    let normalization := Lean.Json.mkObj [("status",Lean.toJson "supported"),("body_ref",Lean.toJson "source_body")]
+    let context := set (set context "instance_kind" kind) "normalization" normalization
+    let source := set (set (set source "def_id" definition) "source_def_id" definition) "def_path" (Lean.toJson name)
+    let source := set (set source "source_instance_kind" kind) "entry_instance" .null
+    set (set source "constant_query_context" context) "promoted_bodies" (.arr #[])
+  unless !decoded.document.mirTables.compiler.definitions.contains ⟨3,99⟩ do
+    throw (IO.userError "never-called fixture identity already belongs to a genuine source item")
+  let syntheticWire := set wire "bodies" (.arr #[clone ⟨1,4⟩ "a",clone ⟨1,5⟩ "b",
+    clone ⟨1,4⟩ "a_same_source",clone ⟨3,99⟩ "never_called"])
+  let synthetic ← must (decodeJson syntheticWire.compress)
+  let program ← must (lowerProgram synthetic.document)
   let rootA ← must (program.rootDefinitionId 0)
   let rootB ← must (program.rootDefinitionId 1)
   let sameA ← must (program.rootDefinitionId 2)
@@ -175,19 +169,33 @@ def main (args : List String) : IO Unit := do
   for lowered in program.bundle.bodies do
     unless lowered.definitions == program.bundle.definitions && lowered.typeConstants == program.bundle.typeConstants && lowered.spans == program.bundle.spans do
       throw (IO.userError "identity seeding rewrote shared constant/span tables inconsistently")
-  let probeInstance? := decoded.document.instances.find? fun instNode =>
-    match instNode.body with
-    | some body => body.blocks.any fun block =>
-        block.statements.any (fun node => containsProbe node.value) || containsProbe block.terminator.value
-    | none => false
-  let some probeInstance := probeInstance? | throw (IO.userError "fixture has no exact vtable probe to mutate")
-  let some probeBody := probeInstance.body | throw (IO.userError "probe instance body disappeared")
-  let mutatedCore := { probeBody.toBodyCore with blocks := probeBody.blocks.map fun block =>
-    { block with
-      statements := block.statements.map fun node => { node with value := mutateProbeStatus node.value }
-      terminator := { block.terminator with value := mutateProbeStatus block.terminator.value } } }
-  let mutatedLowering ← must (lowerBody (LowerContext.ofDocument decoded.document) mutatedCore)
-  unless mutatedLowering.obligations.any (fun obligation =>
-      obligation.message == "compiler metadata status remains unsupported") do
-    throw (IO.userError "mutated typed MIR inherited a raw-document vtable-probe exemption")
+  -- Production has one authoritative wire/ID representation, so the removed
+  -- flat/raw dual-input contract is tested at the reader boundary instead.
+  -- Only the exact incomplete probe diagnostic is exempt; unsupported remains
+  -- a meaningful failure even when its corroborating query is otherwise valid.
+  let ordinary ← must (decodeRuntimeJson wire.compress)
+  let some validatedPath := ordinary.document.validatedVtableProbeDiagnostics.find?
+      (fun path => path.endsWith ".vtable_probe.status") |
+    throw (IO.userError "fixture has no exact validated vtable probe")
+  let obligationPath := (validatedPath.dropEnd ".status".length).toString
+  let ordinaryProgram ← must (lowerCoreProgram ordinary.document)
+  let hasUnsupported := fun (program : LoweredProgram) => program.bundle.bodies.any fun body =>
+    body.obligations.any fun obligation => obligation.path == obligationPath &&
+      obligation.message == "compiler metadata status remains unsupported"
+  unless !hasUnsupported ordinaryProgram do
+    throw (IO.userError "validated incomplete probe lost its precise diagnostic exemption")
+  let shared ← must (wire.getObjVal? "shared_payloads")
+  let nodes ← must ((← must (shared.getObjVal? "nodes")).getArr?)
+  let some probeIndex := nodes.findIdx? (fun node =>
+      node.getObjValAs? String "kind" == .ok "symbolic_vtable_allocation") |
+    throw (IO.userError "fixture has no wire vtable probe to mutate")
+  let some probe := nodes[probeIndex]? | throw (IO.userError "wire probe disappeared")
+  let nodes := nodes.set! probeIndex (set probe "status" (Lean.toJson "unsupported"))
+  let mutatedWire := set wire "shared_payloads" (set shared "nodes" (.arr nodes))
+  let mutated ← must (decodeRuntimeJson mutatedWire.compress)
+  unless !mutated.document.validatedVtableProbeDiagnostics.contains validatedPath do
+    throw (IO.userError "unsupported probe inherited its former incomplete diagnostic exemption")
+  let mutatedProgram ← must (lowerCoreProgram mutated.document)
+  unless hasUnsupported mutatedProgram do
+    throw (IO.userError "mutated source MIR inherited a stale vtable-probe exemption")
   IO.println "all 13 rvalue, 12 statement, 15 terminator source constructor branches lowered; typed metadata and execution obligations retained"
