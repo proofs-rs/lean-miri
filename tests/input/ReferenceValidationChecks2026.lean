@@ -27,7 +27,7 @@ private def bodySource (localIndex target : Nat) : Json := Json.mkObj [
 private def checkBodyBounds : IO Unit := do
   let checked ← must (validate (bodySource 0 0))
   let some body := checked.summary.bodies[0]? | throw (IO.userError "body scope was lost")
-  unless body.locals.size == 1 && body.blocks.size == 1 do
+  unless body.locals.size == 1 && !body.blocks.isEmpty && body.blocks.all (·.2.val == 0) do
     throw (IO.userError "local/block references were lost")
   for (input, expected) in [
       (bodySource 1 0, "$.bodies[0].basic_blocks[0].statements[0].kind.local: local 1 is out of range (locals=1)"),

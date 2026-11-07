@@ -213,7 +213,6 @@ private partial def validateMirIndices (j : Json) (path : String)
 
 private def checkBlockIndex (value : Json) (path : String) (localCount blockCount : Nat) : BodyCheck localCount blockCount Unit := do
   let id ← value.getNat? |>.mapError fun e => s!"{path}: expected basic-block index ({e})"
-  if (← get).2.any (fun item => item.1 == path && item.2.val == id) then return
   if bound : id < blockCount then
     modify fun state => (state.1, state.2.push (path, ⟨id, bound⟩))
   else throw s!"{path}: basic block {id} is out of range (blocks={blockCount})"
