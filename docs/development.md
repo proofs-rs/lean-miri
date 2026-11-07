@@ -244,8 +244,8 @@ The common validator covers these source references:
 
 Type/allocation references use the singleton-object syntax above. Bare numeric
 aliases such as `compiler_runtime_queries.types[].input_type_id`,
-`original_instance_id` and `vtable_allocation_id` retain their existing individual
-checks. The validator skips `debug_payload`; other unsupported/unresolved nodes
+`original_instance_id`, `vtable_allocation_id` and `covered_allocation_ids`
+retain their existing individual checks. The validator skips `debug_payload`; other unsupported/unresolved nodes
 are not skipped wholesale. Reference existence supplies no missing semantic fact.
 
 Other identities retain their existing representations and checks:
@@ -255,11 +255,16 @@ Other identities retain their existing representations and checks:
 | Shared payloads | `$lean_miri_shared_ref` refers to the position in `shared_payloads.nodes`; the existing transport resolver checks its schema and predecessor bounds. Retaining these as `Fin` node references would change that transport boundary. |
 | Rust definitions and HIR | `def_id`, `source_def_id`, `trait_def_id`, `{crate,index}`, `hir_id.owner_def_id/local_id`. These source identities are sparse; bounded references need an explicit emitted/interned table and unresolved cases. |
 | Rust allocations | `source_alloc_id`, raw pool/frontier/sentinel IDs, `opaque_allocation_id`, `key_allocation_id`. `parseCompilerAllocIdWorld` checks the captured nonzero-u64 pool, graph correspondence and dedup data. Typed snapshot references must remain separate from dynamic allocation lifetime and permissions. |
-| Compiler queries | `predicate_id`, predicate normalization IDs, `query_id`, `input_type_id`, `original_instance_id`, `vtable_allocation_id`. Their existing compiler metadata checks remain; checked references need the corresponding predicate/query/global table shape. Diagnostic sidecar query origins are separate from the normal input wire. |
+| Compiler queries | `predicate_id`, predicate normalization IDs, `query_id`, `candidate_query_ids`, `input_type_id`, `original_instance_id`, `vtable_allocation_id`, `covered_allocation_ids`. Their existing compiler metadata checks remain; checked references need the corresponding predicate/query/global table shape. Diagnostic sidecar query origins are separate from the normal input wire. |
 | Body source and promoted metadata | Source `scope`, `parent`, `inlined_parent_scope`, `source_promoted`, `promoted`, `promoted_index`. Checked indices need the owning body's scope/promoted table lengths and correspondence. |
-| Type-dependent positions | Field/variant indices, `active_union_field`, `tag_field_index`, `untagged_variant`, user projection `base_index`, binder `debruijn_index/variable_index`. These need their owning type/layout/binder shape rather than a single global ID bound. |
+| Type-dependent positions | Field/variant indices, `active_union_field`, `tag_field_index`, `untagged_variant`, user projection `base_index`, generic parameter indices, binder `debruijn_index/variable_index`, placeholder `universe`, and virtual `dispatch_slot`/supertrait slots. These need their owning type/layout/binder shape rather than a single global ID bound. |
 | Instruction-local positions | Inline assembly `operand_index` and label `target_index`, and ABI argument positions. Checked indices need the specific instruction/ABI arrays. |
 | Coverage/diagnostic identities | Coverage block-marker `id`, virtual-counter `bcb`, diagnostic iteration/query-origin indices. These are not the MIR basic-block table and require separate domains if used as references. |
+
+The current wire does not supply a typed HIR/coverage node universe, and
+`user_type_annotations` is a debug payload. Checking references into such tables
+requires additional exporter evidence; binder indices need their binder-stack
+context. The exporter's temporary `_query_key` is removed before wire emission.
 
 Structured type/allocation/query metadata and the backend still retain Nat IDs,
 even when their source JSON references were checked. Intrinsic `type_id_hash`,
