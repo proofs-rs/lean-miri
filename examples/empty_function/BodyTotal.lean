@@ -1,4 +1,4 @@
-import empty_function.BodyFailures
+import empty_function.BodyQueryFailure
 
 namespace EmptyFunction.BodyTotal
 open Miri Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter Miri.Input
@@ -22,12 +22,12 @@ theorem capacity_positive (s : Static) : 0 < s.capacity := by
   · omega
 
 /-- The actual exported assignment either advances to Return or stops with a
-classified resource error. This statement has no fuel/headroom premise. -/
+classified non-UB error. This statement has no fuel/headroom premise. -/
 theorem step (s : Static) (metadata : Metadata s) (profile : Profile s)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (bodyIdentity : frame.bodyIdentity = s.loaded.identity)
-    (body : frame.body = s.loaded.body)
+    (body : Meaning.FrameMatches frame s.loaded)
     (function : frame.functionInstance = s.functionInstance)
     (location : frame.location = .mir ⟨0,0⟩)
     (noClocks : frame.extra.dataRace = none)
@@ -37,26 +37,34 @@ theorem step (s : Static) (metadata : Metadata s) (profile : Profile s)
         (BodyStep.current frames (BodyStep.withUnit frame .uninit none) machine) =
       (BodyStep.current frames {(BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) with
         location := .mir ⟨0,1⟩} machine,.ok true) ∨
-    ∃ reason, ExecutionMachine.step s.cfg s.limits ()
+    ∃ error, RunLoop.reportsUB error = false ∧ ExecutionMachine.step s.cfg s.limits ()
         (BodyStep.current frames (BodyStep.withUnit frame .uninit none) machine) =
       (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine,
-        .error (.resourceExhaustion reason)) := by
+        .error error) := by
   have positive := capacity_positive s
-  by_cases one : s.capacity = 1
-  · exact Or.inr ⟨_,BodyFailures.step_capacity_one s metadata profile one frames frame machine
-      bodyIdentity body function location noClocks noGhost shallow⟩
-  · have capacity : s.capacity = (s.capacity-2)+2 := by omega
-    by_cases zero : s.options.limits.validation = 0
-    · exact Or.inr ⟨_,BodyFailures.step_validation_zero s metadata profile (s.capacity-2) capacity zero
-        frames frame machine bodyIdentity body function location noClocks noGhost shallow⟩
-    · exact Or.inl (BodyAssignment.step s metadata profile (s.capacity-2) capacity (by omega)
-        frames frame machine bodyIdentity body function location noClocks noGhost shallow)
+  cases query : CompilerConstantQueries.lookup s.prepared.compiler.constants
+      ⟨s.loaded.identity.index,metadata.literalId⟩ with
+  | error message =>
+    exact Or.inr ⟨BodyQueryFailure.queryError message,rfl,
+      BodyQueryFailure.step s metadata profile (s.capacity-1) (by omega) frames frame machine
+        bodyIdentity body function location noClocks noGhost shallow message query⟩
+  | ok evidence =>
+    letI : SuccessfulConstant metadata := ⟨⟨evidence,query⟩⟩
+    by_cases one : s.capacity = 1
+    · exact Or.inr ⟨.resourceExhaustion _,rfl,BodyFailures.step_capacity_one s metadata profile one frames frame machine
+        bodyIdentity body function location noClocks noGhost shallow⟩
+    · have capacity : s.capacity = (s.capacity-2)+2 := by omega
+      by_cases zero : s.options.limits.validation = 0
+      · exact Or.inr ⟨.resourceExhaustion _,rfl,BodyFailures.step_validation_zero s metadata profile (s.capacity-2) capacity zero
+          frames frame machine bodyIdentity body function location noClocks noGhost shallow⟩
+      · exact Or.inl (BodyAssignment.step s metadata profile (s.capacity-2) capacity (by omega)
+          frames frame machine bodyIdentity body function location noClocks noGhost shallow)
 
 theorem of_success (s : Static) (metadata : Metadata s) (profile : Profile s)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (bodyIdentity : frame.bodyIdentity = s.loaded.identity)
-    (body : frame.body = s.loaded.body)
+    (body : Meaning.FrameMatches frame s.loaded)
     (function : frame.functionInstance = s.functionInstance)
     (location : frame.location = .mir ⟨0,0⟩)
     (noClocks : frame.extra.dataRace = none)
@@ -65,28 +73,37 @@ theorem of_success (s : Static) (metadata : Metadata s) (profile : Profile s)
     (after : State)
     (actual : ExecutionMachine.step s.cfg s.limits ()
       (BodyStep.current frames (BodyStep.withUnit frame .uninit none) machine) = (after,.ok true)) :
-    ∃ remaining, s.capacity = remaining+2 ∧ 0 < s.options.limits.validation ∧
+    ∃ available : SuccessfulConstant metadata, ∃ remaining, s.capacity = remaining+2 ∧ 0 < s.options.limits.validation ∧
       after = BodyStep.current frames {(BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) with
         location := .mir ⟨0,1⟩} machine := by
   have positive := capacity_positive s
-  have notOne : s.capacity ≠ 1 := by
-    intro one
-    have failure := BodyFailures.step_capacity_one s metadata profile one frames frame machine
-      bodyIdentity body function location noClocks noGhost shallow
-    rw [actual] at failure
-    cases failure
-  have capacity : s.capacity = (s.capacity-2)+2 := by omega
-  have validation : 0 < s.options.limits.validation := by
-    by_cases zero : s.options.limits.validation = 0
-    · have failure := BodyFailures.step_validation_zero s metadata profile (s.capacity-2) capacity zero
-        frames frame machine bodyIdentity body function location noClocks noGhost shallow
+  cases query : CompilerConstantQueries.lookup s.prepared.compiler.constants
+      ⟨s.loaded.identity.index,metadata.literalId⟩ with
+  | error message =>
+    have failed := BodyQueryFailure.step s metadata profile (s.capacity-1) (by omega) frames frame machine
+      bodyIdentity body function location noClocks noGhost shallow message query
+    rw [actual] at failed
+    cases failed
+  | ok evidence =>
+    letI : SuccessfulConstant metadata := ⟨⟨evidence,query⟩⟩
+    have notOne : s.capacity ≠ 1 := by
+      intro one
+      have failure := BodyFailures.step_capacity_one s metadata profile one frames frame machine
+        bodyIdentity body function location noClocks noGhost shallow
       rw [actual] at failure
       cases failure
-    · omega
-  have exactStep := BodyAssignment.step s metadata profile (s.capacity-2) capacity validation
-    frames frame machine bodyIdentity body function location noClocks noGhost shallow
-  rw [actual] at exactStep
-  exact ⟨s.capacity-2,capacity,validation,congrArg Prod.fst exactStep⟩
+    have capacity : s.capacity = (s.capacity-2)+2 := by omega
+    have validation : 0 < s.options.limits.validation := by
+      by_cases zero : s.options.limits.validation = 0
+      · have failure := BodyFailures.step_validation_zero s metadata profile (s.capacity-2) capacity zero
+          frames frame machine bodyIdentity body function location noClocks noGhost shallow
+        rw [actual] at failure
+        cases failure
+      · omega
+    have exactStep := BodyAssignment.step s metadata profile (s.capacity-2) capacity validation
+      frames frame machine bodyIdentity body function location noClocks noGhost shallow
+    rw [actual] at exactStep
+    exact ⟨inferInstance,s.capacity-2,capacity,validation,congrArg Prod.fst exactStep⟩
 
 open Lean Elab Command in
 run_cmd do

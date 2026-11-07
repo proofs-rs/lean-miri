@@ -14,7 +14,7 @@ def rawCore (s : Static) (destination : RuntimeStackPlace Provenance) (place : M
     | .unwinding span => pure span
     | .mir _ => throw (StepError.invalidProgram "raw frame does not have preamble location")
   MachineHooks.setCurrentFrame {frame with trackCallerArg := none}
-  CanonicalInit.spanAt (← hooks.localSpan s.loaded.body 0)
+  CanonicalInit.spanAt (← hooks.localSpan s.loaded.identity 0)
   hooks.protectArgument () place
   CanonicalInit.spanAt preamble
   hooks.pushDone ()
@@ -50,7 +50,7 @@ theorem entry_core (s : Static) (metadata : Metadata s) (capacity : 0 < s.capaci
     exact beq_self_eq_true _
   have arguments : hooks.abiArgs s.abi = #[] := metadata.noArguments
   have ret : hooks.abiReturn s.abi = s.abi.ret := rfl
-  have count : s.loaded.body.argumentCount = 0 := by rw [metadata.body]; exact Program.no_arguments
+  have count : s.loaded.body.argumentCount = 0 := (metadata.body_header s).1
   rw [Call.zero_entry_indirect hooks () s.functionInstance s.loaded s.abi destination continuation before cached place
     (MetadataBinding.caller_location s metadata capacity) (MetadataBinding.instance_abi s metadata capacity)
     (MetadataBinding.target_features s metadata capacity) preflight (MetadataBinding.not_closure s metadata capacity)

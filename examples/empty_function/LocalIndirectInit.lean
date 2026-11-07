@@ -14,7 +14,7 @@ structure Entry (s : Static) (p : Packet) (frames : Array LocalUnit.F) (tracker 
   previous : LocalUnit.F
   machine : MachineHooks.MachineState MiriMemoryKind RootUser
   installed : WholeCall.install s p = .ok () (LocalUnit.current frames frame machine)
-  body : frame.body = s.loaded.body
+  body : Meaning.FrameMatches frame s.loaded
   identity : frame.bodyIdentity = s.loaded.identity
   function : frame.functionInstance = s.functionInstance
   location : frame.location = .mir ⟨0,0⟩

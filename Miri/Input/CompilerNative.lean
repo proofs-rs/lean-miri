@@ -13,9 +13,8 @@ private def shape (p : CompilerProviders.Prepared) (layout : LocalLayout) : Exce
   let source ← p.runtime.node layout.ty |>.mapError toString
   unless source.shapeStatus == .supported do throw "native type shape evidence unresolved"
   if source.shapeKind == .adt then
-    let value ← source.payload.getObjVal? "shape"
-    let repr ← value.getObjVal? "representation"
-    let reprC ← repr.getObjValAs? Bool "c"
+    let representation ← p.runtime.typeRepresentation layout.ty |>.mapError toString
+    let reprC := representation.c
     let (isEnum,isStruct) ← match source.shapeMetadata.adtKind with
       | some .enumKind => pure (true,false)
       | some .structKind => pure (false,true)
@@ -29,8 +28,7 @@ private def shape (p : CompilerProviders.Prepared) (layout : LocalLayout) : Exce
     let some fields := info.variants[0]? | throw "native struct fields unavailable"
     pure (.adt isEnum isStruct reprC (fields.map (·.ty)))
   else if source.shapeKind == .tuple then
-    let value ← source.payload.getObjVal? "shape"
-    let elements ← (← value.getObjVal? "elements").getArr?
+    let elements ← p.runtime.typeElements layout.ty |>.mapError toString
     pure (if elements.isEmpty then .emptyTuple else .other)
   else pure .other
 
@@ -51,7 +49,8 @@ def abiQueries (p : CompilerProviders.Prepared)
     if world.entries.any (·.value.ty == ty) then
       return .ok (← lift ((RuntimeArrayTypes.lookup world ty).mapError reprStr))
     let node ← lift (p.runtime.node ty |>.mapError toString)
-    if node.layout.kind == .layoutQueryError then return .error ()
+    let source ← lift (p.runtime.source.layoutTable.lookup node.layoutId |>.mapError (fun id => s!"invalid layout {id}"))
+    if source.kind == .layoutQueryError then return .error ()
     return .ok (← lift (p.runtime.lookup ty |>.mapError toString))
 /-- The same genuine compiler queries work on full-state native calls and
 machine-only closure construction, without introducing an artificial frame. -/

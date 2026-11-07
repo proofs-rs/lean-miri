@@ -1,3 +1,4 @@
+import Miri.Input.RuntimeProgram
 import Miri.Input.CallResolution
 
 /-! Exact fn_abi_of_instance evidence. A full instance, ordered additional
@@ -44,30 +45,17 @@ private def matchingIndex (entries : Array Entry) (indices : Array Nat)
     (callee : CallInstance) (extra : Array MIR.TyId) : Option Nat :=
   indices.find? fun index => keyMatches entries index callee extra
 
-def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none)
-    (abiCache : Option (CallResolution.FunctionAbiCache runtime) := none) : Except String Prepared := do
-  unless RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality program.input.raw do
-    throw "instance ABI metadata document mismatch"
-  let records ← (← program.input.raw.getObjVal? "compiler_instance_abis").getArr?
-  let ctx := LowerContext.ofDocument program.input
-  let mut tables := program.compilerTables
+def prepare (owner : RuntimeProgram)
+    (abiCache : Option (CallResolution.FunctionAbiCache owner.runtime) := none) : Except String Prepared := do
+  let program := owner.program
+  let runtime := owner.runtime
+  let records ← program.input.abiQueries.instances
   let mut entries := #[]
   let mut buckets : Std.HashMap Nat (Array Nat) := {}
-  for record in records do
-    unless (← (← record.getObjVal? "typing_env").getStr?) == "fully_monomorphized" do
-      throw "instance ABI query typing environment mismatch"
-    let (callee,next) ← CompilerInstance.decode ctx tables record
-    tables := next
-    let extra ← (← (← record.getObjVal? "extra_argument_types").getArr?).mapM fun ty => do
-      let id ← (← ty.getObjVal? "type_id").getNat?
-      unless ctx.containsTypeId id do throw "extra ABI argument references missing compiler type"
-      pure id
-    let result := do
-      let query ← record.getObjVal? "abi_query"
-      unless (← (← query.getObjVal? "status").getStr?) == "supported" do
-        throw s!"unresolved exact instance ABI query: {((query.getObjVal? "reason").bind Json.getStr?).toOption}"
-      CallResolution.functionAbiJson runtime (← query.getObjVal? "value") abiCache
+  for row in records do
+    let callee := row.callee
+    let extra := row.extra
+    let result := row.abi.bind (fun id => CallResolution.functionAbiId runtime id abiCache)
     let candidates := buckets.getD callee.defId #[]
     if let some previousIndex := matchingIndex entries candidates callee extra then
       let some previous := entries[previousIndex]? | throw "instance ABI bucket index invariant"
@@ -79,7 +67,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
       let index := entries.size
       entries := entries.push ⟨callee,extra,result⟩
       buckets := buckets.insert callee.defId ((buckets.getD callee.defId #[]).push index)
-  pure ⟨program.withCompilerTables tables,entries,some (instanceBuckets entries)⟩
+  pure ⟨program,entries,some (instanceBuckets entries)⟩
 
 def abiOfInstance (prepared : Prepared) (callee : CallInstance) (extra : Array MIR.TyId) :
     Except String (FnAbi MIR.TyId) := do

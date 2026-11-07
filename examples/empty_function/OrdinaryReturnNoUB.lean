@@ -27,7 +27,7 @@ def CopyOutcome (s : Static) (older : Array LocalUnit.F) (caller frame : LocalUn
 theorem return_outcome (s : Static) (metadata : Metadata s) (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+2)
     (older : Array LocalUnit.F) (caller frame : LocalUnit.F) (before poppedMachine : Machine)
-    (body : frame.body = s.loaded.body) (location : frame.location = .mir ⟨0,1⟩)
+    (body : Meaning.FrameMatches frame s.loaded) (location : frame.location = .mir ⟨0,1⟩)
     (locals : frame.locals = #[{value := .live (.immediate .uninit),layout := some s.abi.ret.layout}])
     (noClocks : frame.extra.dataRace = none)
     (popped : (ReturnStep.control s).popFrame () (LocalUnit.current (older.push caller) frame before) =
@@ -44,7 +44,12 @@ theorem return_outcome (s : Static) (metadata : Metadata s) (profile : Profile s
         (LocalUnit.current (older.push caller) frame before) =
         (ReturnContinuation.resume older updated copied target,.ok ())) := by
   have readEq := ReturnStep.read s metadata profile remaining capacity (older.push caller) frame before locals noClocks
-  have block : frame.body.basicBlocks[0]? = some Program.block := by rw [body,metadata.body]; rfl
+  have references := metadata.entry_references
+  have block : frame.body.basicBlocks[0]? = some metadata.entry.blockId := by
+    rw [body.1]; exact references.block
+  have blockNode : frame.mirTables.blocks.lookup metadata.entry.blockId.index = .ok metadata.entry.block := by
+    rw [body.2.2]; exact references.blockNode
+  have blockCleanup := (ReturnStep.block_observations s metadata).1
   rcases copy with ⟨error,failed,copied,nonUB⟩ | ⟨updated,copiedMachine,copied⟩
   · left
     refine ⟨error,failed,?_,nonUB⟩
@@ -52,8 +57,8 @@ theorem return_outcome (s : Static) (metadata : Metadata s) (profile : Profile s
     generalize actualControl : ReturnStep.control s = hooks at readEq popped copied ⊢
     cases hooks
     unfold ControlFlow.returnFromCurrentFrame
-    simp only [BodyStep.current,LocalUnit.current,Stack.currentFrame?,Array.back?_push,location,block,
-      Program.no_cleanup,Bool.false_bne,Bool.false_and,Bool.not_false,Bool.false_eq_true,
+    simp only [BodyStep.current,LocalUnit.current,Stack.currentFrame?,Array.back?_push,location,block,blockNode,
+      blockCleanup,Bool.false_bne,Bool.false_and,Bool.not_false,Bool.false_eq_true,
       bne_self_eq_false,Id.run,bind,Bind.bind,pure,Pure.pure,↓reduceIte]
     simp only [BodyStep.current,LocalUnit.current] at readEq popped copied
     erw [readEq]
@@ -69,8 +74,8 @@ theorem return_outcome (s : Static) (metadata : Metadata s) (profile : Profile s
     generalize actualControl : ReturnStep.control s = hooks at readEq popped copied cleanup ⊢
     cases hooks
     unfold ControlFlow.returnFromCurrentFrame
-    simp only [BodyStep.current,LocalUnit.current,Stack.currentFrame?,Array.back?_push,location,block,
-      Program.no_cleanup,Bool.false_bne,Bool.false_and,Bool.not_false,Bool.false_eq_true,
+    simp only [BodyStep.current,LocalUnit.current,Stack.currentFrame?,Array.back?_push,location,block,blockNode,
+      blockCleanup,Bool.false_bne,Bool.false_and,Bool.not_false,Bool.false_eq_true,
       bne_self_eq_false,Id.run,bind,Bind.bind,pure,Pure.pure,↓reduceIte]
     simp only [BodyStep.current,LocalUnit.current] at readEq popped copied cleanup
     erw [readEq]
@@ -88,22 +93,30 @@ theorem return_outcome (s : Static) (metadata : Metadata s) (profile : Profile s
 state. No Return callback executes after this failure. -/
 theorem step_hook_error (s : Static) (metadata : Metadata s)
     (frames : Array LocalUnit.F) (frame : LocalUnit.F) (before : Machine)
-    (body : frame.body = s.loaded.body) (location : frame.location = .mir ⟨0,1⟩)
+    (body : Meaning.FrameMatches frame s.loaded) (location : frame.location = .mir ⟨0,1⟩)
     (failed : State) (error : StepError)
     (hook : (ExecutionMachine.stepHooks s.cfg s.limits).beforeTerminator ()
       (LocalUnit.current frames frame before) = (failed,.error error)) :
     ExecutionMachine.step s.cfg s.limits () (LocalUnit.current frames frame before) = (failed,.error error) := by
-  have block : frame.body.basicBlocks[0]? = some Program.block := by rw [body,metadata.body]; rfl
-  have absent : Program.block.statements[1]? = none := rfl
+  have references := metadata.entry_references
+  have block : frame.body.basicBlocks[0]? = some metadata.entry.blockId := by
+    rw [body.1]; exact references.block
+  have blockNode : frame.mirTables.blocks.lookup metadata.entry.blockId.index = .ok metadata.entry.block := by
+    rw [body.2.2]; exact references.blockNode
+  have blockCleanup := (ReturnStep.block_observations s metadata).1
+  obtain ⟨_,count,termNode,termAt,termKind⟩ := ReturnStep.block_observations s metadata
+  have terminator : frame.mirTables.terminators.lookup metadata.entry.block.terminator.index = .ok termNode := by
+    rw [body.2.2]; exact termAt
+  have absent : metadata.entry.block.statements[1]? = none := Array.getElem?_eq_none (by omega)
   unfold ExecutionMachine.step
   generalize actualHooks : ExecutionMachine.stepHooks s.cfg s.limits = hooks at hook ⊢
   cases hooks
   unfold Step.step
-  simp only [LocalUnit.current,Stack.currentFrame?,Array.back?_push,location,block,absent,
+  simp only [LocalUnit.current,Stack.currentFrame?,Array.back?_push,location,block,blockNode,absent,terminator,
     Id.run,bind,Bind.bind,pure,Pure.pure] at hook ⊢
   rw [hook]
 
-private theorem return_terminator (s : Static) (term : Terminator) (kind : term.kind = .Return) :
+private theorem return_terminator (s : Static) (term : TerminatorNode) (kind : term.kind = .Return) :
     (ExecutionMachine.stepHooks s.cfg s.limits).terminator () term =
       (ExecutionMachine.stepHooks s.cfg s.limits).returnFromCurrentFrame () false := by
   funext state
@@ -113,21 +126,29 @@ private theorem return_terminator (s : Static) (term : Terminator) (kind : term.
 
 theorem step_return_error (s : Static) (metadata : Metadata s)
     (frames : Array LocalUnit.F) (frame : LocalUnit.F) (before afterHook : Machine)
-    (body : frame.body = s.loaded.body) (location : frame.location = .mir ⟨0,1⟩)
+    (body : Meaning.FrameMatches frame s.loaded) (location : frame.location = .mir ⟨0,1⟩)
     (hook : (ExecutionMachine.stepHooks s.cfg s.limits).beforeTerminator ()
       (LocalUnit.current frames frame before) = (LocalUnit.current frames frame afterHook,.ok ()))
     (failed : State) (error : StepError)
     (returned : (ExecutionMachine.stepHooks s.cfg s.limits).returnFromCurrentFrame () false
       (LocalUnit.current frames frame afterHook) = (failed,.error error)) :
     ExecutionMachine.step s.cfg s.limits () (LocalUnit.current frames frame before) = (failed,.error error) := by
-  have term := return_terminator s Program.block.terminator Program.normal_return
-  have block : frame.body.basicBlocks[0]? = some Program.block := by rw [body,metadata.body]; rfl
-  have absent : Program.block.statements[1]? = none := rfl
+  have references := metadata.entry_references
+  have block : frame.body.basicBlocks[0]? = some metadata.entry.blockId := by
+    rw [body.1]; exact references.block
+  have blockNode : frame.mirTables.blocks.lookup metadata.entry.blockId.index = .ok metadata.entry.block := by
+    rw [body.2.2]; exact references.blockNode
+  have blockCleanup := (ReturnStep.block_observations s metadata).1
+  obtain ⟨_,count,termNode,termAt,termKind⟩ := ReturnStep.block_observations s metadata
+  have terminator : frame.mirTables.terminators.lookup metadata.entry.block.terminator.index = .ok termNode := by
+    rw [body.2.2]; exact termAt
+  have absent : metadata.entry.block.statements[1]? = none := Array.getElem?_eq_none (by omega)
+  have term := return_terminator s termNode termKind
   unfold ExecutionMachine.step
   generalize actualHooks : ExecutionMachine.stepHooks s.cfg s.limits = hooks at hook returned term ⊢
   cases hooks
   unfold Step.step
-  simp only [LocalUnit.current,Stack.currentFrame?,Array.back?_push,location,block,absent,
+  simp only [LocalUnit.current,Stack.currentFrame?,Array.back?_push,location,block,blockNode,absent,terminator,
     Id.run,bind,Bind.bind,pure,Pure.pure] at hook returned term ⊢
   rw [hook,term,returned]
   rfl
@@ -137,7 +158,7 @@ reports its exact non-UB copy error. -/
 theorem step_outcome (s : Static) (metadata : Metadata s) (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+2)
     (older : Array LocalUnit.F) (caller frame : LocalUnit.F) (before afterHook poppedMachine : Machine)
-    (body : frame.body = s.loaded.body) (location : frame.location = .mir ⟨0,1⟩)
+    (body : Meaning.FrameMatches frame s.loaded) (location : frame.location = .mir ⟨0,1⟩)
     (locals : frame.locals = #[{value := .live (.immediate .uninit),layout := some s.abi.ret.layout}])
     (noClocks : frame.extra.dataRace = none)
     (hook : (ExecutionMachine.stepHooks s.cfg s.limits).beforeTerminator ()

@@ -1,3 +1,4 @@
+import Miri.Interpreter.OperandTable
 import Miri.Input.EvalConfiguration
 import Miri.Interpreter.Panic
 
@@ -70,6 +71,6 @@ def panic (p : CompilerProviders.Prepared) (queries : PanicQueries K U C)
   toImmediatePointer := fun _ => toImmediatePointer p target
   langItem := queries.langItem
   genericParameters := queries.genericParameters
-  evalOperand := fun c op => OperandMachine.evalOperand operands c op none
-  evalOperandAt := fun c path op => OperandMachine.evalOperandAt operands c path op none
+  evalOperand := fun c op => OperandTable.evalOperand operands c op none
+  evalOperandAt := fun c path op => OperandTable.evalOperandAt operands c path op none
 end Miri.Input.EvalCallRuntime

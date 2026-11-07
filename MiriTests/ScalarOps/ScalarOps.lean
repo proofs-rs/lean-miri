@@ -110,10 +110,10 @@ private def rvalueHooks : RvalueHooks AllocId Trace Unit Unit where
   cast := fun _ _ _ _ _ => blocked "cast"
   readDiscriminant := fun _ _ => blocked "discriminant"
   discriminantForVariant := fun _ _ _ => blocked "discriminantValue"
-example : trace (evalRvalueIntoPlace rvalueHooks ()
+example : trace (evalRvalueIntoPlace (Count := MIR.TypeConst) (Region := MIR.Region) rvalueHooks ()
     (.BinaryOp .Add (.Copy place) (.Copy place)) place) =
     ["place", "operand", "read", "operand", "read", "classify:0", "classify:0", "write:4"] := by decide
-example : result (evalRvalueIntoPlace rvalueHooks ()
+example : result (evalRvalueIntoPlace (Count := MIR.TypeConst) (Region := MIR.Region) rvalueHooks ()
     (.BinaryOp .Add (.Copy place) (.Copy place)) place) = .ok () := by decide
 
 -- Missing result metadata fails after arithmetic, preserving query state.

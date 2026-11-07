@@ -44,7 +44,7 @@ theorem memory_at_protection (s : Static) (metadata : Metadata s) (p : Packet)
     (push : (ExecutionMachine.callHooks s.cfg s.limits).pushRaw () s.functionInstance s.loaded
       p.destination (CanonicalInit.normalizedContinuation s (.goto (some p.returnBlock) p.unwind)) p.before =
       .ok () (LocalUnit.current p.before.stack.frames frame machine))
-    (body : frame.body = s.loaded.body) (identity : frame.bodyIdentity = s.loaded.identity)
+    (body : Meaning.FrameMatches frame s.loaded) (identity : frame.bodyIdentity = s.loaded.identity)
     (function : frame.functionInstance = s.functionInstance)
     (location : frame.location = .unwinding metadata.preamble) (callerArg : frame.trackCallerArg = none) :
     install s p = protectedTail s place metadata.preamble
@@ -62,7 +62,7 @@ theorem memory_at_protection (s : Static) (metadata : Metadata s) (p : Packet)
       | .unwinding span => pure span
       | .mir _ => throw (StepError.invalidProgram "raw frame does not have preamble location")
     MachineHooks.setCurrentFrame {current with trackCallerArg := none}
-    CanonicalInit.spanAt (← (ExecutionMachine.callHooks s.cfg s.limits).localSpan s.loaded.body 0)
+    CanonicalInit.spanAt (← (ExecutionMachine.callHooks s.cfg s.limits).localSpan s.loaded.identity 0)
     (ExecutionMachine.callHooks s.cfg s.limits).protectArgument () place
     CanonicalInit.spanAt preamble
     (ExecutionMachine.callHooks s.cfg s.limits).pushDone ())
@@ -85,7 +85,7 @@ theorem memory_prefix (s : Static) (metadata : Metadata s) (profile : Profile s)
     ∃ frame machine,
       install s p = protectedTail s destination.place metadata.preamble
         (LocalUnit.current p.before.stack.frames {frame with location := .unwinding metadata.localSpan} machine) ∧
-      frame.body = s.loaded.body ∧ frame.bodyIdentity = s.loaded.identity ∧
+      Meaning.FrameMatches frame s.loaded ∧ frame.bodyIdentity = s.loaded.identity ∧
       frame.functionInstance = s.functionInstance ∧ frame.location = .unwinding metadata.preamble ∧
       frame.locals = #[{value := .dead,layout := none}] ∧
       frame.extra.borrowTracker = some {} ∧ frame.extra.dataRace = none ∧

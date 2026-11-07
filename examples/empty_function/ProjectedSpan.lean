@@ -31,7 +31,7 @@ set_option linter.unusedSimpArgs false
     (frames : Array LocalUnit.F) (frame : LocalUnit.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser) (id : MIR.LocalId) (ty : TyId)
     (normalized : CompilerFrameContext.normalizedLocalType s.prepared.compiler frame id = .ok ty) :
-    ∃ span, s.cfg.compiler.localSpan frame.body id (LocalUnit.current frames frame machine) =
+    ∃ span, s.cfg.compiler.localSpan frame.bodyIdentity id (LocalUnit.current frames frame machine) =
       .ok span (LocalUnit.current frames frame machine) := by
   obtain ⟨body,decl,bodyEq,declEq,member⟩ := declaration s.prepared.compiler frame id ty normalized
   have declMember := Array.mem_of_getElem? declEq

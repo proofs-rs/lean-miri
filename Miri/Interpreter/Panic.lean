@@ -38,7 +38,7 @@ private def afterDrop : CoroutineKind → LangItem
 
 /-- Exact source mapping; bounds/misalignment use their argument-bearing
 special handlers and impossible overflowing operators are compiler errors. -/
-def assertLangItem : AssertKind → Except StepError LangItem
+def assertLangItem : AssertNode → Except StepError LangItem
   | .Overflow .Add .. => .ok .PanicAddOverflow
   | .Overflow .Sub .. => .ok .PanicSubOverflow
   | .Overflow .Mul .. => .ok .PanicMulOverflow
@@ -65,8 +65,8 @@ structure Hooks (K User C Other : Type) where
   toImmediatePointer : C → MPlaceTy Provenance → M K User (RvalueImmTy Provenance)
   langItem : C → LangItem → M K User (Option DefId)
   genericParameters : C → DefId → M K User (Array MainGenericParameter)
-  evalOperand : C → MIR.Operand → M K User (OpTy Provenance)
-  evalOperandAt : C → OperandPath → MIR.Operand → M K User (OpTy Provenance) := fun c _ => evalOperand c
+  evalOperand : C → MIR.OperandId → M K User (OpTy Provenance)
+  evalOperandAt : C → OperandPath → MIR.OperandId → M K User (OpTy Provenance) := fun c _ => evalOperand c
 
 private def mono (h : Hooks K User C Other) (choice : C) (item : LangItem) : M K User CallInstance := do
   let some definition ← h.langItem choice item |
@@ -101,7 +101,7 @@ def startNounwind (h : Hooks K User C Other) (choice : C) (message : String) : M
 /-- Read only the operands read by the source: index before length for bounds,
 required before found for alignment, no diagnostic operand reads otherwise. -/
 def assertPanic (h : Hooks K User C Other) (choice : C)
-    (message : AssertKind) (unwind : UnwindAction) : M K User Unit := do
+    (message : AssertNode) (unwind : UnwindAction) : M K User Unit := do
   match message with
   | .BoundsCheck len index =>
     let index ← h.driver.readImmediate choice (← h.evalOperandAt choice (OperandPath.assertion "index") index)

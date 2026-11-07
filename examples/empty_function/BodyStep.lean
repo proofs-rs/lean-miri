@@ -18,6 +18,28 @@ abbrev withUnit := LocalUnit.withUnit
 def destination (frames : Array F) (frame : F) (unit : LocalLayout) : RuntimePlace Provenance :=
   ⟨.local frames.size 0 none frame.localsIdentity,unit⟩
 
+theorem evalPlace_current {O X Host : Type}
+    (config : ExecutionMachine.Config K U C O X Host) (choice : C)
+    (frames : Array F) (frame : F) (machine : MachineHooks.MachineState K U)
+    (id : PlaceId) (skip : Bool) :
+    ExecutionMachine.evalPlace config choice id skip (current frames frame machine) =
+      PlaceTable.eval frame.mirTables (ExecutionMachine.projectionHooks config)
+        (fun c id value => (ExecutionMachine.operandHooks config).checkPlaceType c id value.layout)
+        choice id skip (current frames frame machine) := by
+  simp [ExecutionMachine.evalPlace, MachineHooks.currentFrame, current, LocalUnit.current,
+    Stack.currentFrame?, get, getThe, MonadStateOf.get, EStateM.get,
+    bind, Bind.bind, EStateM.bind, pure, Pure.pure, EStateM.pure]
+
+theorem evalOperandAt_current (hooks : OperandMachine.Hooks K U C) (choice : C)
+    (frames : Array F) (frame : F) (machine : MachineHooks.MachineState K U)
+    (path : OperandPath) (id : OperandId) (known : Option LocalLayout) :
+    OperandTable.evalOperandAt hooks choice path id known (current frames frame machine) =
+      OperandTable.eval frame.mirTables hooks (fun c id value => hooks.checkPlaceType c id value.layout)
+        choice id known (some path) (current frames frame machine) := by
+  simp [OperandTable.evalOperandAt, MachineHooks.currentFrame, current, LocalUnit.current,
+    Stack.currentFrame?, get, getThe, MonadStateOf.get, EStateM.get,
+    bind, Bind.bind, EStateM.bind, pure, Pure.pure, EStateM.pure]
+
 /-- The destination lookup caches only the computed unit layout. -/
 theorem layout_zero (compiler : PlaceMachine.CompilerHooks K U C) (choice : C)
     (frames : Array F) (frame : F) (machine : MachineHooks.MachineState K U)
@@ -185,17 +207,31 @@ theorem copy_zero_no_validate (access : ValidityMachine.Access K U)
   exact write_place_zero access allocation compiler choice frames frame machine unit sized
     debugOff abiOff noClocks
 
+theorem step_missing_block (hooks : StepHooks Provenance LocalLayout MachineHooks.FrameExtra
+      (MachineHooks.MachineState K U) C (RuntimePlace Provenance)) (choice : C)
+    (frames : Array F) (frame : F) (machine : MachineHooks.MachineState K U)
+    (location : MIR.Location) (id : MIR.BlockNodeId)
+    (atLocation : frame.location = .mir location)
+    (selected : frame.body.basicBlocks[location.block]? = some id)
+    (absent : frame.mirTables.blocks.lookup id.index = .error id.index) :
+    Step.step hooks choice (current frames frame machine) =
+      (current frames frame machine, .error (.invalidProgram s!"invalid MIR block ID {id.index}")) := by
+  simp [Step.step, current, LocalUnit.current, Stack.currentFrame?, atLocation, selected, absent]
+
 /-- The real statement driver advances the freshly installed frame after its
 assignment, without scheduling or executing a caller instruction. The assignment
 premise is an internal composition edge, not an initial-input condition. -/
 theorem assignment_driver (hooks : StepHooks Provenance LocalLayout MachineHooks.FrameExtra
       (MachineHooks.MachineState K U) C (RuntimePlace Provenance)) (choice : C)
     (frames : Array F) (before after : F) (machine : MachineHooks.MachineState K U)
-    (block : BasicBlock) (statement : Statement) (place : MIR.Place) (value : Rvalue)
+    (blockId : MIR.BlockNodeId) (statementId : MIR.StatementId)
+    (block : MIR.BlockNode) (statement : MIR.StatementNode) (place : MIR.PlaceId) (value : MIR.RvalueId)
     (beforeLoc : before.location = .mir ⟨0,0⟩)
     (afterLoc : after.location = .mir ⟨0,0⟩)
-    (found : before.body.basicBlocks[0]? = some block)
-    (first : block.statements[0]? = some statement)
+    (found : before.body.basicBlocks[0]? = some blockId)
+    (blockFound : before.mirTables.blocks.lookup blockId.index = .ok block)
+    (first : block.statements[0]? = some statementId)
+    (statementFound : before.mirTables.statements.lookup statementId.index = .ok statement)
     (kind : statement.kind = .Assign place value)
     (assign : hooks.assign choice place value (current frames before machine) =
       (current frames after machine,.ok ())) :
@@ -206,7 +242,7 @@ theorem assignment_driver (hooks : StepHooks Provenance LocalLayout MachineHooks
     simpa only [Step.evalStatement,kind] using assign
   unfold Step.step
   simp only [Stack.currentFrame?, current, LocalUnit.current, Array.back?_push,
-    beforeLoc, found, first]
+    beforeLoc, found, blockFound, first, statementFound]
   simp only [current, LocalUnit.current] at evaluated
   erw [evaluated]
   simp [current, LocalUnit.current, Stack.currentFrame?, afterLoc, Array.set_push]

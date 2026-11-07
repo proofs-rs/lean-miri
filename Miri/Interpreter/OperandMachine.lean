@@ -1,3 +1,4 @@
+import Miri.MIR.SyntaxTables
 import Miri.Interpreter.OperandPath
 import Miri.Interpreter.PlaceDynamic
 import Miri.Interpreter.PlaceMachine
@@ -11,12 +12,12 @@ structure Hooks (K User C : Type) where
   compiler : PlaceMachine.CompilerHooks K User C
   projection : PlaceProjectionHooks Provenance (State K User) C MachineHooks.FrameExtra
   layoutCompatible : LocalLayout → LocalLayout → Except StepError Bool
-  checkPlaceType : C → Place → OpTy Provenance → M K User Unit
+  checkPlaceType : C → PlaceId → LocalLayout → M K User Unit
   dereference : C → OpTy Provenance → M K User (MPlaceTy Provenance)
   runtimeChecks : C → RuntimeChecks → M K User Bool
   boolLayout : C → M K User LocalLayout
-  constant : C → ConstOperand → Option LocalLayout → M K User (OpTy Provenance)
-  constantAt : C → OperandPath → ConstOperand → Option LocalLayout → M K User (OpTy Provenance) := fun c _ => constant c
+  constant : C → ConstantId → ConstOperand → Option LocalLayout → M K User (OpTy Provenance)
+  constantAt : C → OperandPath → ConstantId → ConstOperand → Option LocalLayout → M K User (OpTy Provenance) := fun c _ => constant c
 
 private def lift (result : Except StepError A) : M K User A :=
   match result with | .ok value => pure value | .error error => throw error
@@ -88,29 +89,4 @@ def project (h : Hooks K User C) (c : C) (base : OpTy Provenance) (elem : Projec
       projection (projectIndex cx base index)
     | _ => projection (Miri.Interpreter.project cx base elem)
 
-def evalPlaceToOp (h : Hooks K User C) (c : C) (place : Place) (known : Option LocalLayout) : M K User (OpTy Provenance) := do
-  let mut op ← localToOp h c place.localId (if place.projection.isEmpty then known else none)
-  for elem in place.projection do op ← project h c op elem
-  h.checkPlaceType c place op
-  return op
-
-/-- Copy and Move share source behavior; no invented move invalidation. -/
-def evalOperand (h : Hooks K User C) (c : C) (operand : MIR.Operand) (known : Option LocalLayout) : M K User (OpTy Provenance) := do
-  match operand with
-  | .Copy place | .Move place => evalPlaceToOp h c place known
-  | .Constant value => h.constant c value known
-  | .RuntimeChecks checks =>
-    let value ← h.runtimeChecks c checks
-    let layout ← h.boolLayout c
-    return ⟨.immediate (.scalar (.fromBool value)),layout⟩
-/-- The path is carried by the structural caller, not recovered from the operand. -/
-def evalOperandAt (h : Hooks K User C) (c : C) (path : OperandPath)
-    (operand : MIR.Operand) (known : Option LocalLayout) : M K User (OpTy Provenance) :=
-  match operand with
-  | .Constant value =>
-    -- OperandPath identifies the field holding the MIR Operand. Exported
-    -- ConstOperand query evidence is keyed at its nested `constant` payload,
-    -- so carry the final constructor edge rather than querying the wrapper.
-    h.constantAt c (path.push (.field "constant")) value known
-  | _ => evalOperand h c operand known
 end Miri.Interpreter.OperandMachine

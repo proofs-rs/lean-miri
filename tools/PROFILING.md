@@ -109,9 +109,10 @@ in hashing or establish an application speedup.
 The decoder retains the exporter's document-local shared-node IDs. Runtime-value
 memoization and validation visits use those IDs; inline values and cheap scalars
 are traversed directly. Context flags and diagnostic rebasing remain per
-occurrence. Structural hashes remain for value-based ABI deduplication, and
-noncanonical Raw objects retain the original full-value key comparison/hash.
-`decodeRuntimeJsonReference` and `decodeJsonReference` run the uncached traversal
+occurrence. Production traversal follows checked catalog IDs; it has no expanded-JSON
+resolver fallback. Typed semantic query fields determine duplicate evidence.
+The test-only `MiriTests.Input.ReferenceDecoder` APIs
+`decodeRuntimeJsonReference` and `decodeJsonReference` run the expanded traversal
 path for regression checks; neither bypasses validation.
 
 Import-time `decoder.compiler_abi_queries` and `decoder.compiler_values` spans

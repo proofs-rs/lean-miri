@@ -11,9 +11,9 @@ theorem lifecycleProfiledIdentity (profile : Lean.Options)
   rfl
 
 theorem constantsProfiledIdentity (profile : Lean.Options)
-    (program : LoweredProgram) :
-    CompilerConstantQueries.prepareProfiled profile program =
-      CompilerConstantQueries.prepare program := by
+    (owner : RuntimeProgram) :
+    CompilerConstantQueries.prepareProfiled profile owner =
+      CompilerConstantQueries.prepare owner := by
   rfl
 
 theorem callPipelineProfiledIdentity (profile : Lean.Options)

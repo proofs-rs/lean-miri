@@ -24,23 +24,17 @@ def attributes (source : AbiAttributes) : Result ArgAttributes := do
   let align ← source.pointeeAlignBytes.mapM RuntimeMetadata.alignment
   return ⟨regular,extension,← RuntimeMetadata.size source.pointeeSizeBytes,align⟩
 
-private def hintPrimitive (source : TaggedNode) : Result Primitive := do
-  let j := source.payload
-  match source.tag with
-  | "integer" =>
-    let integer ← match ← RuntimeMetadata.text j "integer_kind" with
-      | "i8" => pure Integer.I8 | "i16" => pure .I16 | "i32" => pure .I32
-      | "i64" => pure .I64 | "i128" => pure .I128
+private def hintPrimitive (source : AbiHintElement) : Result Primitive := do
+  match source.kind with
+  | .integer kind signed =>
+    let integer ← match kind with
+      | .known .i8 => pure Integer.I8 | .known .i16 => pure .I16 | .known .i32 => pure .I32
+      | .known .i64 => pure .I64 | .known .i128 => pure .I128
       | _ => throw (.unsupported "register hint integer")
-    return .Int integer (← RuntimeMetadata.truth j "signed")
-  | "float" =>
-    let float ← match ← RuntimeMetadata.text j "float_kind" with
-      | "f16" => pure ABI.Float.F16 | "f16b" => pure .F16B | "f32" => pure .F32
-      | "f64" => pure .F64 | "f128" => pure .F128 | "ppcf128" => pure .PpcF128
-      | _ => throw (.unsupported "register hint float")
-    return .Float float
-  | "pointer" => return .Pointer ⟨← RuntimeMetadata.u32 (← RuntimeMetadata.number j "address_space") "hint address space"⟩
-  | _ => throw (.unsupported "register hint primitive")
+    return .Int integer signed
+  | .float kind => return .Float (← RuntimeMetadata.float kind)
+  | .pointer addressSpace => return .Pointer ⟨← RuntimeMetadata.u32 addressSpace "hint address space"⟩
+  | .unsupported _ => throw (.unsupported "register hint primitive")
 
 def register (source : AbiRegister) : Result Reg := do
   let kind ← match source.kind with
@@ -92,6 +86,13 @@ def argument (runtime : RuntimeMetadata) (source : AbiArgument) : Result (ArgAbi
     | some layout => (RuntimeMetadata.layout runtime.target layout).mapError id
   return ⟨⟨source.typeId,layout⟩,← passMode source.mode⟩
 
+def argumentData (runtime : RuntimeMetadata) (source : AbiArgumentData) : Result (ArgAbi TypeId) := do
+  let _ ← runtime.node source.typeId
+  let layoutId ← require source.layoutId "physical compiler argument layout"
+  let result ← runtime.layouts.lookup layoutId
+    |>.mapError fun id => RuntimeMetadataError.invalid "argument layout" s!"missing ID {id}"
+  return ⟨⟨source.typeId, ← result⟩, ← passMode source.mode⟩
+
 /-- These source compiler queries are absent or only partially represented by
 the exporter. Each consumer must supply exact-key evidence or explicit errors.
 In particular, item names are not reconstructed from diagnostic def paths. -/
@@ -107,23 +108,18 @@ structure Evidence (S : Type) where
 
 private def lift (value : Result A) : Miri.Interpreter.LayoutCompat.M S A :=
   match value with | .ok value => pure value | .error e => throw (.unsupported (toString e))
-private def shape (runtime : RuntimeMetadata) (id : TypeId) : Result (TypeNode × Lean.Json) := do
-  let node ← runtime.node id
-  return (node,← RuntimeMetadata.jsonField node.payload "shape")
-private def typeRef (j : Lean.Json) : Result TypeId := RuntimeMetadata.number j "type_id"
-
 def kind (runtime : RuntimeMetadata) (id : TypeId) : Result (Miri.Interpreter.LayoutCompat.TypeKind TypeId) := do
-  let (node,source) ← shape runtime id
+  let node ← runtime.node id
   match node.shapeKind with
   | .tuple => pure .tuple | .never => pure .never | .functionDefinition => pure .functionDefinition
   | .closure => pure .closure | .coroutine => pure .coroutine | .coroutineClosure => pure .coroutineClosure
-  | .array => return .array (← typeRef (← RuntimeMetadata.jsonField source "element"))
+  | .array => return .array (← require node.relations.element "array element")
   | .adt => pure .adt
-  | .patternType => return .pattern (← typeRef (← RuntimeMetadata.jsonField source "base"))
+  | .patternType => return .pattern (← require node.relations.base "pattern base")
   | .unsafeBinder => pure .unsafeBinder
   | .alias => pure .alias
-  | .reference => return .reference (← typeRef (← RuntimeMetadata.jsonField source "pointee"))
-  | .rawPointer => return .rawPointer (← typeRef (← RuntimeMetadata.jsonField source "pointee"))
+  | .reference => return .reference (← require node.relations.pointee "pointee type")
+  | .rawPointer => return .rawPointer (← require node.relations.pointee "pointee type")
   | .functionPointer => pure .functionPointer
   | .int | .uint =>
     let tag ← require (if node.shapeKind == .int then node.shapeMetadata.signedKind else node.shapeMetadata.unsignedKind) "integer type tag"
@@ -136,35 +132,25 @@ def kind (runtime : RuntimeMetadata) (id : TypeId) : Result (Miri.Interpreter.La
   | .parameter | .boundType | .placeholderType | .inferenceType | .errorType => pure .other
 
 def adt (runtime : RuntimeMetadata) (id : TypeId) : Result (Miri.Interpreter.LayoutCompat.AdtInfo TypeId) := do
-  let (node,source) ← shape runtime id
+  let node ← runtime.node id
   if node.shapeKind != .adt then throw (.unsupported "non-ADT compiler query")
   let kind ← match ← require node.shapeMetadata.adtKind "ADT kind" with
     | .structKind => pure Miri.Interpreter.LayoutCompat.AdtKind.Struct | .unionKind => pure .Union | .enumKind => pure .Enum
     | .unknown _ => throw (.unsupported "unknown ADT kind")
-  let repr ← RuntimeMetadata.jsonField source "representation"
-  if (← RuntimeMetadata.text repr "status") != "supported" then throw (.unsupported "ADT repr")
-  let sourceVariants ← RuntimeMetadata.array source "variants"
+  let repr ← runtime.typeRepresentation id
+  let sourceVariants ← runtime.typeVariants id
   let mut variants := #[]
-  for sourceVariant in sourceVariants do
-    if (← RuntimeMetadata.number sourceVariant "index") != variants.size then
-      throw (invalid "ADT variant" "noncontiguous indices")
-    let mut fields := #[]
-    for sourceField in ← RuntimeMetadata.array sourceVariant "fields" do
-      if (← RuntimeMetadata.number sourceField "index") != fields.size then
-        throw (invalid "ADT field" "noncontiguous indices")
-      fields := fields.push ({
-        name := ← RuntimeMetadata.text sourceField "name"
-        ty := ← typeRef (← RuntimeMetadata.jsonField sourceField "type") } : Miri.Interpreter.LayoutCompat.Field TypeId)
-    variants := variants.push fields
-  return ⟨kind,← RuntimeMetadata.truth repr "transparent",← RuntimeMetadata.truth repr "c",
-    ← RuntimeMetadata.truth repr "rust",variants⟩
+  for index in [:sourceVariants.size] do
+    let fields ← runtime.typeFields (← runtime.typeVariant id index)
+    variants := variants.push (fields.map fun field =>
+      ({name := field.name, ty := field.typeId} : Miri.Interpreter.LayoutCompat.Field TypeId))
+  return ⟨kind,repr.transparent,repr.c,repr.rust,variants⟩
 
 private def unitLayout (runtime : RuntimeMetadata) : Result (TyAndLayout TypeId) := do
   let mut found := none
   for node in runtime.source.types do
     if node.shapeKind == .tuple then
-      let (_,source) ← shape runtime node.id
-      if (← RuntimeMetadata.array source "elements").isEmpty then
+      if (← runtime.typeElements node.id).isEmpty then
         if found.isSome then throw (invalid "unit type" "multiple compiler identities")
         found := some node.id
   runtime.lookup (← require found "compiler unit type")

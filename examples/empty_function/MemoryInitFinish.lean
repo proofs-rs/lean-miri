@@ -15,7 +15,7 @@ theorem finish (s : Static) (metadata : Metadata s) (capacity : 0 < s.capacity)
     (push : (ExecutionMachine.callHooks s.cfg s.limits).pushRaw () s.functionInstance s.loaded
       p.destination (CanonicalInit.normalizedContinuation s (.goto (some p.returnBlock) p.unwind)) p.before =
       .ok () (LocalUnit.current p.before.stack.frames frame machine))
-    (body : frame.body = s.loaded.body) (identity : frame.bodyIdentity = s.loaded.identity)
+    (body : Meaning.FrameMatches frame s.loaded) (identity : frame.bodyIdentity = s.loaded.identity)
     (function : frame.functionInstance = s.functionInstance)
     (location : frame.location = .unwinding metadata.preamble)
     (locals : frame.locals = #[{value := .dead,layout := none}])
@@ -47,7 +47,7 @@ theorem finish (s : Static) (metadata : Metadata s) (capacity : 0 < s.capacity)
         | .unwinding span => pure span
         | .mir _ => throw (StepError.invalidProgram "raw frame does not have preamble location")
       MachineHooks.setCurrentFrame {current with trackCallerArg := none}
-      CanonicalInit.spanAt (← (ExecutionMachine.callHooks s.cfg s.limits).localSpan s.loaded.body 0)
+      CanonicalInit.spanAt (← (ExecutionMachine.callHooks s.cfg s.limits).localSpan s.loaded.identity 0)
       (ExecutionMachine.callHooks s.cfg s.limits).protectArgument () destination
       CanonicalInit.spanAt preamble
       (ExecutionMachine.callHooks s.cfg s.limits).pushDone ())

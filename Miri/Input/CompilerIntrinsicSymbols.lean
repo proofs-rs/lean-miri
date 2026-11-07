@@ -1,3 +1,4 @@
+import Miri.Input.AllocIdWorldValidation
 import Lean.Util.Profile
 import Miri.Input.CompilerProviders
 import Miri.Input.Decoder
@@ -15,13 +16,7 @@ private def lift (value : Except String A) : MachineHooks.M K U A :=
 def typeHash (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except String U128 := do
   let source ← p.runtime.node ty |>.mapError toString
   let some facts := source.compilerFacts | throw "compiler TypeId hash evidence missing"
-  let query ← facts.payload.getObjVal? "type_id_hash"
-  unless (← query.getObjValAs? String "status") == "supported" do
-    throw "compiler TypeId hash query unsupported"
-  let text ← (← query.getObjVal? "value").getStr?
-  unless !text.isEmpty && text.toList.all (fun c => c >= '0' && c <= '9') do
-    throw "invalid compiler TypeId hash decimal encoding"
-  let some value := text.toNat? | throw "invalid compiler TypeId hash value"
+  let value ← facts.typeHash
   unless value < 2^128 do throw "compiler TypeId hash exceeds u128"
   pure (BitVec.ofNat 128 value)
 
@@ -50,13 +45,11 @@ def seedImported (p : CompilerProviders.Prepared) (image : AllocationImage.Impor
     Except String IntrinsicSymbolsMachine.Registry := do
   let input := p.program.input
   if let some world := input.compilerAllocIdWorld then
-    unless RuntimeMetadata.JsonReflexivity.matchesRightOr (some p.sourceEquality) input.raw do
-      throw "prepared TypeId catalog runtime metadata differs from its owning program"
     unless memory.sourceAllocIdWorldActive do
       throw "prepared TypeId catalog requires the active source AllocId world"
-    unless image.source == input.allocations.filter (·.status == .supported) do
+    unless AllocationImage.sameSource image.source (input.allocations.filter (·.status == .supported)) do
       throw "prepared TypeId catalog allocation image differs from its owning program"
-    Miri.Input.validateCompilerAllocIdWorldRaw input.raw input.allocations (some world)
+    AllocIdWorldValidation.validate input
       |>.mapError fun error => s!"prepared AllocId world: {error}"
     -- Build the prepared key set independently of existing machine state so
     -- preseeded entries cannot validate themselves.

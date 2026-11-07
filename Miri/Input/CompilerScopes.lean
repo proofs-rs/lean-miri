@@ -3,7 +3,7 @@ import Miri.Interpreter.VirtualCalls
 
 /-! Exact SourceScopeData evidence for Body::caller_location_span (mir/mod.rs).
 Body indices are explicit source identities; structural Body equality is never
-used to discover an identity. Legacy absent inline metadata fails closed. -/
+used to discover an identity. Missing inline metadata remains an error. -/
 namespace Miri.Input.CompilerScopes
 open Lean Miri.Interpreter
 structure Entry where
@@ -12,42 +12,10 @@ structure Entry where
 structure Prepared where
   program : LoweredProgram
   scopes : Array (Array (Except String Entry))
-private def decodeEntry (ctx : LowerContext) (tables : CompilerTables) (j : Json) :
-    Except String (Entry × CompilerTables) := do
-  let inlined ← j.getObjVal? "inlined"
-  let parent ← j.getObjVal? "inlined_parent_scope"
-  let parent ← if parent == Json.null then pure none else parent.getNat? |>.map some
-  if inlined == Json.null then
-    pure (⟨⟨none,parent⟩,none⟩,tables)
-  else
-    let (fnInstance,tables) ← CompilerInstance.decode ctx tables inlined
-    let span ← ctx.decodeCompilerValue (← inlined.getObjVal? "callsite_span")
-    let (span,tables) ← lowerCompilerSpan tables span
-    let track ← (← inlined.getObjVal? "requires_caller_location").getBool?
-    pure (⟨⟨some (fnInstance,span),parent⟩,some track⟩,tables)
-
-def prepare (program : LoweredProgram) : Prepared := Id.run do
-  let ctx := LowerContext.ofDocument program.input
-  let mut tables := program.compilerTables
-  let mut all := #[]
-  for body in program.bundle.bodies do
-    let mut entries := #[]
-    match body.input.sourceScopes with
-    | none => entries := #[.error "missing source_scopes compiler metadata"]
-    | some scopes =>
-      for index in [:scopes.size] do
-        let result := do
-          let some scope := scopes[index]? | throw "source scope canonical index missing"
-          unless (← (← scope.getObjVal? "scope").getNat?) == index do
-            throw "source scope index does not match canonical position"
-          decodeEntry ctx tables scope
-        match result with
-        | .error e => entries := entries.push (.error e)
-        | .ok (entry,next) =>
-          tables := next
-          entries := entries.push (.ok entry)
-    all := all.push entries
-  return ⟨program.withCompilerTables tables,all⟩
+def prepare (program : LoweredProgram) : Prepared :=
+  let scopes := program.input.mirTables.bodySources.map fun body => body.scopes.map fun source =>
+    source.map fun entry => ⟨⟨entry.inlined,entry.parent⟩,entry.trackCaller⟩
+  ⟨program,scopes⟩
 
 /-- The caller supplies the canonical body index from its frame identity map.
 No fallback chooses a root, promoted body, or template by structural equality. -/

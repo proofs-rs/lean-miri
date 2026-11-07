@@ -24,7 +24,7 @@ structure Fields (p : CompilerProviders.Prepared) (image : AllocationImage.Impor
   projection : config.projection.place = ValidityMachine.placeHooks config.access config.allocation config.compiler
   compatible : config.copy.compatible = CompilerCovariance.compatible p options.place.debugAssertions
   padding : config.copy.hasPadding = CompilerCopy.hasPadding p.runtime options.place.debugAssertions
-  checkPlace : config.compiler.checkPlaceType = CompilerPlaceTypes.place p options.place.debugAssertions
+  checkPlace : config.compiler.checkPlaceType = CompilerPlaceTypes.dynamicPlace p options.place.debugAssertions
     (CompilerCovariance.hook p options.place.debugAssertions)
   enforce : config.compiler.enforceValidity = fun _ _ => ValidityMachine.enforceValidity
   localSpan : config.compiler.localSpan = CompilerFrameContext.localSpan p

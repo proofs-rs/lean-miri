@@ -57,16 +57,8 @@ private def lift (result : Except StepError A) : M S A :=
   match result with | .ok value => pure value | .error error => throw error
 
 /-- stack.rs Frame::current_span, including the unwinding-span path. -/
-def currentSpan (frame : Frame P LocalLayout E) : Except StepError SpanRef := do
-  match frame.location with
-  | .unwinding span => pure span
-  | .mir location =>
-    let some block := frame.body.basicBlocks[location.block]?
-      | throw (.invalidProgram "backtrace frame block missing")
-    if location.statementIndex == block.statements.size then return block.terminator.sourceInfo.span
-    let some statement := block.statements[location.statementIndex]?
-      | throw (.invalidProgram "backtrace frame statement missing")
-    return statement.sourceInfo.span
+def currentSpan (frame : Frame P LocalLayout E) : Except StepError SpanRef :=
+  frame.currentSpan.mapError StepError.stack
 
 private def scalar (value : Nat) (size : Size) : M S (Scalar P) :=
   match Scalar.fromUInt (BitVec.ofNat 128 value) size with

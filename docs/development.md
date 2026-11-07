@@ -38,6 +38,8 @@ Miri binary or old working checkouts.
 See [tests/README.md](../tests/README.md) for the detailed directory map,
 `check.sh` inclusion and exclusions, standalone checks and change-based selection.
 There is currently no single command that runs every test.
+The [shared input table design](input-tables.md) describes the runtime import
+representation, its independent comparison oracle and its validation boundary.
 
 `lake build` checks the default library targets and their theorem declarations.
 It does not run every test under `tests/`, and typechecking an interpreter does

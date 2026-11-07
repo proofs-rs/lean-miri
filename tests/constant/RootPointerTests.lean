@@ -26,7 +26,7 @@ def main (args : List String) : IO Unit := do
   let runtime ← must ((RuntimeMetadata.ofDocument doc.document).mapError toString)
   let program ← must (lowerProgram doc.document)
   let fnInstance : CallInstance := ⟨.Item (← must (program.rootDefinitionId 0)), #[]⟩
-  let some ty := doc.document.types.find? (fun t => t.layout.sizeBytes == some 8 && (t.shapeKind == .reference || t.shapeKind == .rawPointer))
+  let some ty := doc.document.types.find? (fun t => (doc.document.layoutTable.lookup t.layoutId).toOption.any (fun layout => layout.sizeBytes == some 8) && (t.shapeKind == .reference || t.shapeKind == .rawPointer))
     | throw (IO.userError "fixture lacks pointer layout")
   let makeState (tls foreign : Bool) : Except String (ConstantState CtfeProvenance Unit Unit (Array String)) := do
     let initial : MemoryState CtfeProvenance Unit Unit := { MemoryState.empty with nextAllocId := 100 }

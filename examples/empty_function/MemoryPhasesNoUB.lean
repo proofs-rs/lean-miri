@@ -68,7 +68,7 @@ theorem noUB (s : Static) (metadata : Metadata s) (profile : Profile s)
   · let protectedFrame : LocalUnit.F := {initialFrame with extra := {initialFrame.extra with borrowTracker := some borrow}}
     let frame := MemoryInitOutcome.readyFrame protectedFrame
     let installed := LocalUnit.current frames frame changed
-    have body : frame.body = s.loaded.body := entry.body
+    have body : Meaning.FrameMatches frame s.loaded := entry.body
     have identity : frame.bodyIdentity = s.loaded.identity := entry.identity
     have function : frame.functionInstance = s.functionInstance := entry.function
     have location : frame.location = .mir ⟨0,0⟩ := rfl
@@ -89,14 +89,15 @@ theorem noUB (s : Static) (metadata : Metadata s) (profile : Profile s)
     have total := BodyTotal.step s metadata profile frames frame changed identity body function location noClocks noGhost shallow
     rw [entrySame] at total
     have prefixSafe : ScopedSafety.NoUB s.cfg s.limits (fun _ _ => True) (depth p) installed := by
-      rcases total with first | ⟨reason,failed⟩
+      rcases total with first | ⟨reportedError,classified,failed⟩
       · have firstRaw := first
         rw [←entrySame] at firstRaw
-        obtain ⟨remaining,capacity,validation,successor⟩ := BodyTotal.of_success s metadata profile frames frame changed
+        obtain ⟨available,remaining,capacity,validation,successor⟩ := BodyTotal.of_success s metadata profile frames frame changed
           identity body function location noClocks noGhost shallow _ firstRaw
+        letI := available
         let middleFrame : LocalUnit.F := {BodyStep.withUnit frame .uninit (some s.abi.ret.layout) with location := .mir ⟨0,1⟩}
         let middle := LocalUnit.current frames middleFrame changed
-        have middleBody : middleFrame.body = s.loaded.body := body
+        have middleBody : Meaning.FrameMatches middleFrame s.loaded := body
         have middleLoc : middleFrame.location = .mir ⟨0,1⟩ := rfl
         have middleLocals : middleFrame.locals = #[{value := .live (.immediate .uninit),layout := some s.abi.ret.layout}] := rfl
         have middleClocks : middleFrame.extra.dataRace = none := noClocks
@@ -156,7 +157,7 @@ theorem noUB (s : Static) (metadata : Metadata s) (profile : Profile s)
           · rw [step] at actual;cases actual;exact nonUB
           · rw [step] at actual;cases actual
       · apply OrdinaryReturnNoUB.scoped_of_step_outcome s (depth p) installed
-        exact Or.inl ⟨.resourceExhaustion reason,_,failed,rfl⟩
+        exact Or.inl ⟨reportedError,_,failed,classified⟩
     apply (CallLevelNoUB.noUB_iff_initialization_and_scoped s p).mpr
     constructor
     · intro error failed outcome

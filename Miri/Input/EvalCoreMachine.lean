@@ -66,7 +66,7 @@ def config
     projection.dynamicFuel (ValidityMachine.compilerPolicy compiler)
   let projection := {projection with dynamic,place := ValidityMachine.placeHooks access allocation compiler}
   let validityBase := {base.validity with projection,vtable}
-  let retag := RuntimeArrayFacts.retagHooks EvalProjectionMachine.arrays prepared.context
+  let retag := RuntimeArrayFacts.retagHooks EvalProjectionMachine.arrays
     (TypedValidityProviders.retagHooks prepared runtime access projection vtable pointers choice base.retag)
   let validity := RuntimeArrayQueries.validityHooks EvalProjectionMachine.arrays
     (TypedValidityProviders.visitor prepared runtime access allocation compiler pointers retag limits.retag validityBase)

@@ -1,3 +1,4 @@
+import Miri.Input.RuntimeMetadataError
 import Miri.Input.Model
 import Miri.Input.Decoder
 import Miri.ABI.Layout
@@ -9,69 +10,9 @@ remain available beside every canonical layout result. -/
 namespace Miri.Input
 open Miri.ABI
 
-inductive RuntimeMetadataError where
-  | missing (path : String)
-  | unsupported (path : String)
-  | invalid (path message : String)
-  | duplicateType (id : TypeId)
-  | unknownType (id : TypeId)
-  deriving DecidableEq, Repr
-instance : ToString RuntimeMetadataError where
-  toString e := reprStr e
 
 namespace RuntimeMetadata
 
-/-- A private, checked certificate that one immutable JSON tree compares equal
-to itself. JSON's `BEq` is not assumed lawful: a malformed tree may fail this
-test, in which case comparisons must retain their ordinary recursive path. -/
-structure JsonReflexivity (left : Lean.Json) where
-  private mk ::
-  reflexive : Option (PLift ((left == left) = true))
-
-namespace JsonReflexivity
-
-def prepare {left : Lean.Json} : JsonReflexivity left :=
-  ⟨if h : left == left then some ⟨h⟩ else none⟩
-
-/-- Compare in the source-left orientation, preserving `left == candidate`. -/
-def matchesRight {left : Lean.Json} (certificate : JsonReflexivity left) (candidate : Lean.Json) : Bool :=
-  match certificate.reflexive with
-  | none => left == candidate
-  | some ⟨reflexive⟩ =>
-      withPtrEq left candidate (fun _ => left == candidate)
-        (by intro equal; cases equal; exact reflexive)
-
-/-- Compare in the candidate-left orientation, preserving `candidate == left`. -/
-def matchesLeft {left : Lean.Json} (certificate : JsonReflexivity left) (candidate : Lean.Json) : Bool :=
-  match certificate.reflexive with
-  | none => candidate == left
-  | some ⟨reflexive⟩ =>
-      withPtrEq candidate left (fun _ => candidate == left)
-        (by intro equal; cases equal; exact reflexive)
-
-/-- Optional-cache entry point for callers that keep their historical API. -/
-def matchesRightOr {left : Lean.Json} (certificate : Option (JsonReflexivity left)) (candidate : Lean.Json) : Bool :=
-  match certificate with
-  | none => left == candidate
-  | some certificate => certificate.matchesRight candidate
-
-theorem matchesRight_eq {left : Lean.Json} (certificate : JsonReflexivity left) (candidate : Lean.Json) :
-    certificate.matchesRight candidate = (left == candidate) := by
-  cases h : certificate.reflexive <;>
-    simp [matchesRight, h, withPtrEq]
-
-theorem matchesLeft_eq {left : Lean.Json} (certificate : JsonReflexivity left) (candidate : Lean.Json) :
-    certificate.matchesLeft candidate = (candidate == left) := by
-  cases h : certificate.reflexive <;>
-    simp [matchesLeft, h, withPtrEq]
-
-theorem matchesRightOr_eq {left : Lean.Json} (certificate : Option (JsonReflexivity left)) (candidate : Lean.Json) :
-    matchesRightOr certificate candidate = (left == candidate) := by
-  cases certificate with
-  | none => rfl
-  | some certificate => exact certificate.matchesRight_eq candidate
-
-end JsonReflexivity
 abbrev Result := Except RuntimeMetadataError
 
 def require (value : Option A) (path : String) : Result A :=
@@ -156,6 +97,7 @@ def scalar (target : RuntimeTargetDataLayout) (source : ScalarLayout) : Result A
   | .unknown _ => throw (.unsupported "scalar kind")
 
 def backend (target : RuntimeTargetDataLayout) (source : Input.BackendRepr) : Result ABI.BackendRepr := do
+  unless source.status == .supported do throw (.unsupported "backend representation status")
   match source.kind with
   | .scalar => return .Scalar (← scalar target (← require source.scalar "backend.scalar"))
   | .scalarPair =>
@@ -192,40 +134,18 @@ def fields (source : FieldShape) : Result FieldsShape := do
   result.validate.mapError (fun e => .invalid "fields" (reprStr e))
   pure result
 
-/-- Scalar/niche leaves have the same compiler representation; no target size
-or validity metadata is synthesized by this raw source-payload reader. -/
-private def rawPrimitive (target : RuntimeTargetDataLayout) (j : Lean.Json) : Result Primitive := do
-  match ← text j "kind" with
-  | "integer" =>
-    let tag ← text j "integer_kind"
-    let integer ← match tag with
-      | "i8" => pure Integer.I8 | "i16" => pure .I16 | "i32" => pure .I32
-      | "i64" => pure .I64 | "i128" => pure .I128
-      | _ => throw (.unsupported "niche integer tag")
-    if integer.size != (← size (← number j "size_bytes")) then throw (.invalid "niche" "integer size mismatch")
-    return .Int integer (← truth j "signed")
-  | "float" =>
-    let float ← match ← text j "float_kind" with
-      | "f16" => pure ABI.Float.F16 | "f16b" => pure .F16B | "f32" => pure .F32
-      | "f64" => pure .F64 | "f128" => pure .F128 | "ppcf128" => pure .PpcF128
-      | _ => throw (.unsupported "niche float tag")
-    if float.size != (← size (← number j "size_bytes")) then throw (.invalid "niche" "float size mismatch")
-    return .Float float
-  | "pointer" =>
-    let space := AddressSpace.mk (← u32 (← number j "address_space") "address space")
-    let expected ← target.pointerSizeIn space |>.mapError (fun e => .invalid "niche pointer" (toString e))
-    if expected != (← size (← number j "size_bytes")) then throw (.invalid "niche" "pointer size mismatch")
-    return .Pointer space
-  | _ => throw (.unsupported "niche primitive")
-
-def niche (target : RuntimeTargetDataLayout) (j : Lean.Json) : Result (Option Niche) := do
-  if j == .null then return none
-  let value ← rawPrimitive target (← jsonField j "primitive")
-  let range ← jsonField j "valid_range"
-  let range : WrappingRange := ⟨← u128 (← u128Number range "start") "niche.start", ← u128 (← u128Number range "end") "niche.end"⟩
+def niche (target : RuntimeTargetDataLayout) (source : Option NicheLayout) : Result (Option Niche) := do
+  let some source := source | return none
+  if source.primitive.kind == .integer then
+    match source.primitive.integerKind with
+    | some (.known .i8) | some (.known .i16) | some (.known .i32)
+    | some (.known .i64) | some (.known .i128) => pure ()
+    | _ => throw (.unsupported "niche integer tag")
+  let value ← primitive target source.primitive
+  let range : WrappingRange := ⟨← u128 source.validRange.1 "niche.start", ← u128 source.validRange.2 "niche.end"⟩
   let width ← value.size target |>.mapError (fun e => .invalid "niche size" (toString e))
   let _ ← range.isFullFor width |>.mapError (fun e => .invalid "niche range" (reprStr e))
-  return some ⟨← size (← number j "offset_bytes"), value, range⟩
+  return some ⟨← size source.offsetBytes, value, range⟩
 
 def encoding (source : Input.TagEncoding) : Result ABI.TagEncoding := do
   if source.status != .supported then throw (.unsupported "tag encoding status")
@@ -239,20 +159,21 @@ def encoding (source : Input.TagEncoding) : Result ABI.TagEncoding := do
   | .unknown _ => throw (.unsupported "tag encoding")
 
 private def variant (target : RuntimeTargetDataLayout) (source : Input.LayoutVariant) : Result ABI.VariantLayout := do
-  let shape ← jsonField source.payload "fields"
-  if (← text shape "kind") != "arbitrary" then throw (.invalid "variant fields" "not arbitrary")
+  let shape := source.fieldShape
+  if shape.kind != .arbitrary then throw (.invalid "variant fields" "not arbitrary")
   let offsets ← source.fieldOffsetsBytes.mapM size
-  let memoryOrder ← (← array shape "memory_order").mapM (fun value => convert "variant memory order" value.getNat?)
-  let rawOffsets ← (← array shape "offsets_bytes").mapM (fun value => convert "variant offsets" value.getNat?)
+  let memoryOrder := shape.memoryOrder
+  let rawOffsets := shape.offsetsBytes
   if rawOffsets != source.fieldOffsetsBytes then throw (.invalid "variant offsets" "duplicate metadata mismatch")
-  if (← number shape "field_count") != offsets.size then throw (.invalid "variant fields" "count mismatch")
+  if shape.fieldCount != offsets.size then throw (.invalid "variant fields" "count mismatch")
   (FieldsShape.Arbitrary offsets memoryOrder).validate.mapError (fun e => .invalid "variant fields" (reprStr e))
   return {
     size := ← size source.sizeBytes, backendRepr := ← backend target source.backendRepr,
     fieldOffsets := offsets, fieldsInMemoryOrder := memoryOrder,
-    largestNiche := ← niche target (← jsonField source.payload "largest_niche"), uninhabited := source.uninhabited }
+    largestNiche := ← niche target source.largestNiche, uninhabited := source.uninhabited }
 
 def variants (target : RuntimeTargetDataLayout) (source : VariantsLayout) : Result ABI.Variants := do
+  unless source.status == .supported do throw (.unsupported "variants status")
   match source.kind with
   | .empty => pure .Empty
   | .single => return .Single (← require source.variantIndex "variant index")
@@ -268,9 +189,7 @@ def variants (target : RuntimeTargetDataLayout) (source : VariantsLayout) : Resu
 
 def layout (target : RuntimeTargetDataLayout) (source : Input.Layout) : Result LayoutData := do
   if source.status != .supported || source.kind != .layout then throw (.unsupported "layout query")
-  let max ← jsonField source.payload "max_repr_align_bytes"
-  let maxAlign ← if max == .null then pure none else do
-    pure (some (← alignment (← convert "max_repr_align" max.getNat?)))
+  let maxAlign ← source.maxReprAlignBytes.mapM alignment
   let fields ← fields (← require source.fields "layout.fields")
   let duplicateOffsets ← source.fieldOffsetsBytes.mapM size
   if fields.count != duplicateOffsets.size then throw (.invalid "field offsets" "count mismatch")
@@ -278,15 +197,16 @@ def layout (target : RuntimeTargetDataLayout) (source : Input.Layout) : Result L
     let offset ← fields.offset index |>.mapError (fun e => .invalid "field offset" (reprStr e))
     if duplicateOffsets[index]? != some offset then throw (.invalid "field offsets" "mismatch")
   let variants ← variants target (← require source.variantsLayout "layout.variants")
-  let uninhabited ← truth source.payload "uninhabited"
+  let uninhabited ← require source.uninhabited "layout.uninhabited"
   if variants == .Empty && !uninhabited then throw (.invalid "empty variants" "inhabited layout")
   return {
     fields, variants, backendRepr := ← backend target (← require source.backendRepresentation "layout.backend"),
-    largestNiche := ← niche target (← jsonField source.payload "largest_niche"), uninhabited,
+    largestNiche := ← niche target source.largestNiche, uninhabited,
     align := .new (← alignment (← require source.abiAlignBytes "layout.align")),
     size := ← size (← require source.sizeBytes "layout.size"), maxReprAlign := maxAlign,
     unadjustedAbiAlign := ← alignment (← require source.unadjustedAbiAlignBytes "layout.unadjusted_align"),
-    reprC := ← truth source.payload "repr_c", randomizationSeed := ← u64 (← number source.payload "randomization_seed") "seed" }
+    reprC := ← require source.reprC "layout.repr_c",
+    randomizationSeed := ← u64 (← require source.randomizationSeed "layout.randomization_seed") "seed" }
 
 
 private def pointerSpec (j : Lean.Json) : Result PointerSpec := do
@@ -332,144 +252,59 @@ def importTarget (j : Lean.Json) : Result RuntimeTargetDataLayout := do
 
 end RuntimeMetadata
 
-private def canonicalNodeLookup (nodes : Array TypeNode) : Std.HashMap TypeId TypeNode := Id.run do
-  let mut entries : Std.HashMap TypeId TypeNode := {}
-  for node in nodes do
-    if !(entries.contains node.id) then entries := entries.insert node.id node
-  return entries
-
-set_option autoImplicit false in
-/-- A prepared type-node table is tied to the exact source array it summarizes,
-and its table must equal the canonical first-row-wins map for that array. -/
-structure RuntimeNodeLookupCache (nodes : Array TypeNode) where
-  private mk ::
-  entries : Std.HashMap TypeId TypeNode
-  exact : entries = canonicalNodeLookup nodes
-
-/-- Build a first-row-wins index, matching `Array.find?` on `nodes`. -/
-def RuntimeNodeLookupCache.build (nodes : Array TypeNode) : RuntimeNodeLookupCache nodes :=
-  let entries := canonicalNodeLookup nodes
-  ⟨entries, rfl⟩
-
-private def canonicalLayoutLookup
-    (layouts : Array (TypeId × Except RuntimeMetadataError (TyAndLayout TypeId))) :
-    Std.HashMap TypeId (Except RuntimeMetadataError (TyAndLayout TypeId)) := Id.run do
-  let mut entries : Std.HashMap TypeId (Except RuntimeMetadataError (TyAndLayout TypeId)) := {}
-  for (id, result) in layouts do
-    if !(entries.contains id) then entries := entries.insert id result
-  return entries
-
-set_option autoImplicit false in
-/-- A prepared layout table indexed by the exact layout array it summarizes.
-Its entries equal the canonical first-row-wins map, retaining first-row errors. -/
-structure RuntimeLayoutLookupCache
-    (layouts : Array (TypeId × Except RuntimeMetadataError (TyAndLayout TypeId))) where
-  private mk ::
-  entries : Std.HashMap TypeId (Except RuntimeMetadataError (TyAndLayout TypeId))
-  exact : entries = canonicalLayoutLookup layouts
-
-/-- Build a first-row-wins index, matching `Array.find?` on `layouts`. -/
-def RuntimeLayoutLookupCache.build
-    (layouts : Array (TypeId × Except RuntimeMetadataError (TyAndLayout TypeId))) :
-    RuntimeLayoutLookupCache layouts :=
-  let entries := canonicalLayoutLookup layouts
-  ⟨entries, rfl⟩
-
 /-- Internal metadata cache. A failed type-layout conversion remains a stored
 obligation; successful import never marks the document execution-ready. -/
 structure RuntimeMetadata where
   source : ImportDocumentCore
   target : RuntimeTargetDataLayout
-  layouts : Array (TypeId × Except RuntimeMetadataError (TyAndLayout TypeId))
-  nodeCache : Option (RuntimeNodeLookupCache source.types) := none
-  layoutCache : Option (RuntimeLayoutLookupCache layouts) := none
+  layouts : Miri.MIR.SharedTable (Except RuntimeMetadataError LayoutData)
 
 namespace RuntimeMetadata
 
-/-- Preparation-only immutable lookup view. The public base record remains an
-array-backed value, so existing direct construction and record updates retain
-their old semantics. The index is constructed from one fixed metadata value;
-its first-entry policy matches the base `.find?` lookups for manually built
-records that contain duplicate keys. -/
+/-- Thin indexed view of the same checked layout arrays. -/
 structure Indexed extends RuntimeMetadata where
   private mk ::
-  nodeIndex : Std.HashMap TypeId TypeNode := {}
-  layoutIndex : Std.HashMap TypeId (Except RuntimeMetadataError (TyAndLayout TypeId)) := {}
-  /-- A checked fast-path certificate for reflexive source-document equality.
-  JSON equality is not assumed lawful: malformed trees may fail even `raw == raw`.
-  When absent, consumers must run the original full comparator. -/
-  rawReflexivity : JsonReflexivity source.raw
 
-/-- Build exact-key tables for repeated source/compiler fact lookups. Duplicate
-keys in manually constructed records preserve the first source-order entry. -/
-def Indexed.ofMetadata (metadata : RuntimeMetadata)
-    (sourceEquality : Option (JsonReflexivity metadata.source.raw) := none) : Indexed := Id.run do
-  let nodes := match metadata.nodeCache with
-    | some cache => cache.entries
-    | none => (RuntimeNodeLookupCache.build metadata.source.types).entries
-  let layouts := match metadata.layoutCache with
-    | some cache => cache.entries
-    | none => (RuntimeLayoutLookupCache.build metadata.layouts).entries
-  let rawReflexivity := match sourceEquality with
-    | some certificate => certificate
-    | none => JsonReflexivity.prepare (left := metadata.source.raw)
-  return { toRuntimeMetadata := metadata, nodeIndex := nodes, layoutIndex := layouts, rawReflexivity := rawReflexivity }
-
-/-- Compare a candidate document using the exact original JSON equality. The
-checked self-equality certificate permits Lean's safe `withPtrEq` fast path
-when the indexed metadata object is reused by the source world. -/
-def Indexed.matchesSourceLeft (metadata : Indexed) (left : Lean.Json) : Bool :=
-  metadata.rawReflexivity.matchesLeft left
-
-theorem Indexed.matchesSourceLeft_eq (metadata : Indexed) (left : Lean.Json) :
-    metadata.matchesSourceLeft left = (left == metadata.source.raw) := by
-  simpa [Indexed.matchesSourceLeft] using metadata.rawReflexivity.matchesLeft_eq left
+@[inline] def Indexed.ofMetadata (metadata : RuntimeMetadata) : Indexed := ⟨metadata⟩
 
 instance : Coe Indexed RuntimeMetadata where
   coe := Indexed.toRuntimeMetadata
 
 def ofDocument (document : ImportDocumentCore) : Result RuntimeMetadata := do
-  let target ← importTarget (← jsonField document.raw "runtime_target_data_layout")
-  let mut seen : Std.HashSet TypeId := {}
-  let mut layouts := #[]
-  for node in document.types do
-    if seen.contains node.id then throw (.duplicateType node.id)
-    seen := seen.insert node.id
-    let result := do
-      let data ← layout target node.layout
-      return ({ ty := node.id, layout := data } : TyAndLayout TypeId)
-    layouts := layouts.push (node.id, result)
+  let source ← require document.runtimeTargetDataLayout "runtime_target_data_layout"
+  let target ← source.runtime
+  for (node, index) in document.types.toList.zipIdx do
+    if node.id < index then throw (.duplicateType node.id)
+    unless node.id == index do throw (.invalid s!"type {node.id}" "type ID does not match array index")
+  let layouts := document.layoutTable.map (fun source => source.map (layout target))
   return {
     source := document
-    nodeCache := some (RuntimeNodeLookupCache.build document.types)
     target := target
     layouts := layouts
-    layoutCache := some (RuntimeLayoutLookupCache.build layouts)
   }
 
-def node (metadata : RuntimeMetadata) (id : TypeId) : Result TypeNode :=
-  match metadata.nodeCache with
-  | some cache => require cache.entries[id]? s!"type {id}"
-  | none => require (metadata.source.types.find? (·.id == id)) s!"type {id}"
+def node (metadata : RuntimeMetadata) (id : TypeId) : Result TypeNode := do
+  let value ← require metadata.source.types[id]? s!"type {id}"
+  unless value.id == id do throw (.invalid s!"type {id}" "type ID does not match array index")
+  return value
 
 def lookup (metadata : RuntimeMetadata) (id : TypeId) : Result (TyAndLayout TypeId) := do
-  let result : Option (Except RuntimeMetadataError (TyAndLayout TypeId)) := match metadata.layoutCache with
-    | some cache => cache.entries[id]?
-    | none => (metadata.layouts.find? (·.1 == id)).map Prod.snd
-  let layout ← require result s!"layout {id}"
-  layout
+  let source ← metadata.node id
+  let result ← metadata.layouts.lookup source.layoutId
+    |>.mapError fun layoutId => RuntimeMetadataError.invalid s!"layout {layoutId}" "layout table entry missing"
+  return ⟨id, ← result⟩
 
 def Indexed.node (metadata : Indexed) (id : TypeId) : Result TypeNode :=
-  require (metadata.nodeIndex[id]?) s!"type {id}"
+  metadata.toRuntimeMetadata.node id
 
-def Indexed.lookup (metadata : Indexed) (id : TypeId) : Result (TyAndLayout TypeId) := do
-  let entry ← require (metadata.layoutIndex[id]?) s!"layout {id}"
-  entry
+def Indexed.lookup (metadata : Indexed) (id : TypeId) : Result (TyAndLayout TypeId) :=
+  metadata.toRuntimeMetadata.lookup id
 
 /-- This is an explicit diagnostic inventory, not an execution-readiness test. -/
 def obligations (metadata : RuntimeMetadata) : Array (TypeId × RuntimeMetadataError) :=
-  metadata.layouts.filterMap fun (id,result) => match result with
-    | .error e => some (id,e) | .ok _ => none
+  metadata.source.types.filterMap fun source => match metadata.lookup source.id with
+    | .error error => some (source.id, error)
+    | .ok _ => none
 
 def findKind (metadata : RuntimeMetadata) (kind : TypeShapeKind) : Result (TyAndLayout TypeId) := do
   let nodes := metadata.source.types.filter (·.shapeKind == kind)
@@ -503,9 +338,9 @@ def tupleLayout (metadata : RuntimeMetadata) (elements : Array TypeId) : Result 
   let mut candidates := #[]
   for node in metadata.source.types do
     if node.shapeKind == .tuple && node.shapeStatus == .supported then
-      let shape ← jsonField node.payload "shape"
-      let values ← array shape "elements"
-      let ids ← values.mapM fun value => number value "type_id"
+      let id ← require node.relations.elements "tuple element list"
+      let ids ← metadata.source.typeRelationTables.typeLists.lookup id |>.mapError
+        (fun id => RuntimeMetadataError.invalid "tuple elements" s!"missing ID {id}")
       if ids == elements then candidates := candidates.push node.id
   unless candidates.size == 1 do throw (.unsupported "ambiguous or absent exact tuple type")
   metadata.lookup (← require candidates[0]? "tuple type")
@@ -514,59 +349,91 @@ def overflowTupleLayout (metadata : RuntimeMetadata) (element : TyAndLayout Type
   let boolean ← metadata.findKind .bool
   metadata.tupleLayout #[element.ty,boolean.ty]
 
-private def typeRef (source : Lean.Json) : Result TypeId := number source "type_id"
+private def projectionEntry (table : Miri.MIR.SharedTable A) (id : Nat) (kind : String) : Result A :=
+  table.lookup id |>.mapError fun id => RuntimeMetadataError.invalid kind s!"missing ID {id}"
 
-private def projectionParents (metadata : RuntimeMetadata) (id : TypeId) : Result (Array Lean.Json) := do
+def typeElements (metadata : RuntimeMetadata) (id : TypeId) : Result (Array TypeId) := do
+  let node ← metadata.node id
+  projectionEntry metadata.source.typeRelationTables.typeLists (← require node.relations.elements "type elements") "type elements"
+
+def typeRepresentation (metadata : RuntimeMetadata) (id : TypeId) : Result TypeRepresentation := do
+  let node ← metadata.node id
+  let value ← projectionEntry metadata.source.typeRelationTables.representations
+    (← require node.relations.representation "type representation") "type representation"
+  unless value.status == .supported do throw (.unsupported "type representation")
+  return value
+
+def typeVariants (metadata : RuntimeMetadata) (id : TypeId) : Result (Array Nat) := do
+  let node ← metadata.node id
+  projectionEntry metadata.source.typeRelationTables.variantLists (← require node.relations.variants "type variants") "type variants"
+
+def typeVariant (metadata : RuntimeMetadata) (id : TypeId) (index : Nat) : Result TypeVariant := do
+  let variants ← metadata.typeVariants id
+  let variant ← projectionEntry metadata.source.typeRelationTables.variants (← require variants[index]? "type variant") "type variant"
+  unless variant.index == index do throw (.invalid "type variant" "index mismatch")
+  return variant
+
+def typeFields (metadata : RuntimeMetadata) (variant : TypeVariant) : Result (Array TypeField) := do
+  let ids ← projectionEntry metadata.source.typeRelationTables.fieldLists variant.fields "type fields"
+  ids.mapM fun id => projectionEntry metadata.source.typeRelationTables.fields id "type field"
+
+private def projectionParents (metadata : RuntimeMetadata) (id : TypeId) : Result (Array Nat) := do
   let node ← metadata.node id
   let some facts := node.compilerFacts | return #[]
-  let query ← match facts.payload.getObjVal? "projection_queries" with
-    | .error _ => return #[]
-    | .ok value => pure value
-  unless (← convert "projection query status" ((← jsonField query "status").getStr?)) == "supported" do
-    throw (.unsupported "compiler projection queries")
-  let value ← jsonField query "value"
-  if value == .null then return #[]
-  unless (← convert "projection typing environment" ((← jsonField value "typing_env").getStr?)) == "fully_monomorphized" do
+  let some queryId := facts.projectionQuery | return #[]
+  let tables := metadata.source.projectionTables
+  let query ← projectionEntry tables.queries queryId "projection query"
+  unless query.status == .supported do throw (.unsupported "compiler projection queries")
+  let some valueId := query.value | return #[]
+  let value ← projectionEntry tables.values valueId "projection value"
+  unless value.typingEnvironment == "fully_monomorphized" do
     throw (.invalid "projection query" "typing environment mismatch")
-  array value "parents"
-private def projectionLayout (metadata : RuntimeMetadata) (id : TypeId) (record : Lean.Json) :
+  projectionEntry tables.parentLists value.parents "projection parents"
+
+private def projectionLayout (metadata : RuntimeMetadata) (id : TypeId) (layoutId : LayoutId) :
     Result (TyAndLayout TypeId) := do
-  let source ← convert "compiler projection layout" (decodeCompilerLayout (← jsonField record "layout"))
-  return ⟨id,← layout metadata.target source⟩
+  let result ← projectionEntry metadata.layouts layoutId "projection layout"
+  return ⟨id, ← result⟩
 
 /-- Source type relationships are read from typed compiler payloads, never
 from display/debug strings. ADT field selection uses the selected variant. -/
 def field (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index : Nat) :
     Result (TyAndLayout TypeId) := do
   let node ← metadata.node parent.ty
-  for record in ← projectionParents metadata parent.ty do
-    let queried ← projectionLayout metadata parent.ty record
+  let tables := metadata.source.projectionTables
+  for recordId in ← projectionParents metadata parent.ty do
+    let record ← projectionEntry tables.parents recordId "projection parent"
+    let queried ← projectionLayout metadata parent.ty record.layoutId
     if queried == parent then
-      let fields ← array record "fields"
+      let fields ← projectionEntry tables.fieldLists record.fields "projection fields"
       -- The source `str` branch ignores the requested index and always
       -- returns u8. The producer represents that single exact query result
       -- at row zero; do not infer a fictitious field count from it.
       let sourceIndex := if node.shapeKind == .str then 0 else index
-      let source ← require (fields.find? fun f => (number f "index").toOption == some sourceIndex) "compiler projection field"
-      let id ← typeRef (← jsonField source "type")
-      let _ ← metadata.node id
-      return ← projectionLayout metadata id source
+      let sourceId ← require fields[sourceIndex]? "compiler projection field"
+      let source ← projectionEntry tables.fields sourceId "projection field"
+      unless source.index == sourceIndex do throw (.invalid "projection field" "field index mismatch")
+      let _ ← metadata.node source.typeId
+      return ← projectionLayout metadata source.typeId source.layoutId
   if node.shapeStatus != .supported then throw (.unsupported "type shape")
-  let shape ← jsonField node.payload "shape"
   let id ← match node.shapeKind with
     | .tuple => do
-      let values ← array shape "elements"
-      typeRef (← require values[index]? "tuple field")
-    | .array | .slice => typeRef (← jsonField shape "element")
+      let id ← require node.relations.elements "tuple element list"
+      let values ← projectionEntry metadata.source.typeRelationTables.typeLists id "tuple elements"
+      require values[index]? "tuple field"
+    | .array | .slice => require node.relations.element "element type"
     | .str => return ← stringElementLayout metadata
     | .adt => do
       let .Single selected := parent.layout.variants
         | throw (.unsupported "ADT field needs selected variant")
-      let variants ← array shape "variants"
-      let variant ← require (variants.find? fun v => (number v "index").toOption == some selected) "ADT variant"
-      let fields ← array variant "fields"
-      let source ← require (fields.find? fun f => (number f "index").toOption == some index) "ADT field"
-      typeRef (← jsonField source "type")
+      let tables := metadata.source.typeRelationTables
+      let variants ← projectionEntry tables.variantLists (← require node.relations.variants "ADT variants") "ADT variants"
+      let variant ← projectionEntry tables.variants (← require variants[selected]? "ADT variant") "ADT variant"
+      unless variant.index == selected do throw (.invalid "ADT variant" "index mismatch")
+      let fields ← projectionEntry tables.fieldLists variant.fields "ADT fields"
+      let field ← projectionEntry tables.fields (← require fields[index]? "ADT field") "ADT field"
+      unless field.index == index do throw (.invalid "ADT field" "index mismatch")
+      pure field.typeId
     | _ => throw (.unsupported "type field query")
   metadata.lookup id
 
@@ -576,18 +443,19 @@ remain obligations instead of fabricated field metadata. -/
 def forVariant (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index : Nat) :
     Result (TyAndLayout TypeId) := do
   let _ ← metadata.node parent.ty
-  for record in ← projectionParents metadata parent.ty do
-    if ((record.getObjVal? "variant").bind Lean.Json.getNat?).toOption == some index then
-      -- Validate the supplied parent against a source default/variant result
-      -- before applying another query; structural resemblance is not a key.
-      let canonical ← metadata.lookup parent.ty
-      unless canonical == parent do
-        match parent.layout.variants with
-        | .Single actual =>
-          if actual == index then return parent
-          throw (.invalid "compiler variant projection" "cannot apply for_variant twice to a selected parent")
-        | _ => throw (.invalid "compiler variant projection" "parent differs from exact source layout")
-      return ← projectionLayout metadata parent.ty record
+  let tables := metadata.source.projectionTables
+  let records ← projectionParents metadata parent.ty
+  if let some recordId := records[index + 1]? then
+    let record ← projectionEntry tables.parents recordId "projection variant"
+    unless record.variant == some index do throw (.invalid "projection variant" "variant index mismatch")
+    let canonical ← metadata.lookup parent.ty
+    unless canonical == parent do
+      match parent.layout.variants with
+      | .Single actual =>
+        if actual == index then return parent
+        throw (.invalid "compiler variant projection" "cannot apply for_variant twice to a selected parent")
+      | _ => throw (.invalid "compiler variant projection" "parent differs from exact source layout")
+    return ← projectionLayout metadata parent.ty record.layoutId
   match parent.layout.variants with
   | .Single actual =>
     if actual == index then return parent
@@ -610,8 +478,7 @@ def pointee (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) :
   if node.shapeStatus != .supported then throw (.unsupported "pointee shape")
   match node.shapeKind with
   | .rawPointer | .reference =>
-    let shape ← jsonField node.payload "shape"
-    metadata.lookup (← typeRef (← jsonField shape "pointee"))
+    metadata.lookup (← require node.relations.pointee "pointee type")
   | _ => throw (.unsupported "non-pointer pointee query")
 
 /-- Boundary adapter preserves missing compiler metadata as explicit failures. -/

@@ -40,30 +40,12 @@ def pushRaw (h : Lifecycle K User C) (debugAssertions : Bool)
   h.requiredConstants body
   FrameRelevance.afterStackPush debugAssertions
 
-/-- Source mir/syntax.rs StorageLive contract and Body::vars_and_temps_iter:
-only variables/temporaries with no StorageLive or StorageDead anywhere in the
-body are implicitly live. Argument and return slots are excluded here. -/
-def alwaysLiveVarsAndTemps (body : Body) : Except StepError (Array LocalId) := do
-  let mut annotated := #[]
-  for block in body.basicBlocks do
-    for statement in block.statements do
-      let localId := match statement.kind with
-        | .StorageLive id | .StorageDead id => some id
-        | _ => none
-      if let some id := localId then
-        if id >= body.locals.size then throw (.invalidProgram "storage annotation local out of bounds")
-        annotated := annotated.push id
-  return ((List.range body.locals.size).filter fun id =>
-    id > body.argumentCount && !annotated.contains id).toArray
-
 /-- Source push_stack_frame_done with actual local clocks retained after each
 storage-live event, including failure prefixes. -/
 def pushDone (h : Lifecycle K User C) : M K User Unit := do
   MachineHooks.storageLiveDyn h.storage 0 .none
   let frame ← MachineHooks.currentFrame
-  let locals ← match alwaysLiveVarsAndTemps frame.body with
-    | .ok locals => pure locals
-    | .error error => throw error
+  let locals := frame.body.alwaysLive
   for localId in locals do MachineHooks.storageLiveDyn h.storage localId .none
   let state ← get
   match state.stack.updateCurrentLocation (.mir .start) with
@@ -101,10 +83,11 @@ def hooks [DecidableEq K]
     (compiler : PlaceMachine.CompilerHooks K User C)
     (queries : TypedRetag.Hooks K User) (retagBudget : Nat)
     (copy : PlaceCopyHooks Provenance (State K User) C)
-    (evaluatePlace : C → MIR.Place → Bool → M K User (RuntimePlace Provenance)) :
+    (evaluatePlace : C → MIR.PlaceId → Bool → M K User (RuntimePlace Provenance))
+    (evaluateLocalPlace : C → MIR.Place → Bool → M K User (RuntimePlace Provenance)) :
     CallHooks Provenance (State K User) C FrameExtra Other Extern FnABI ArgABI :=
   let bound := TypedMachineBindings.bindCall base access allocation compiler lifecycle.storage
-    queries retagBudget copy evaluatePlace
+    queries retagBudget copy evaluatePlace evaluateLocalPlace
   {bound with
     pushRaw := fun _ => pushRaw lifecycle compiler.debugAssertions
     pushDone := fun _ => pushDone lifecycle
@@ -137,10 +120,11 @@ def threadedHooks [DecidableEq K]
     (compiler : PlaceMachine.CompilerHooks K (ThreadStacks.Storage User) C)
     (queries : TypedRetag.Hooks K (ThreadStacks.Storage User)) (retagBudget : Nat)
     (copy : PlaceCopyHooks Provenance (ThreadStacks.State K User) C)
-    (evaluatePlace : C → MIR.Place → Bool → ThreadStacks.M K User (RuntimePlace Provenance)) :
+    (evaluatePlace : C → MIR.PlaceId → Bool → ThreadStacks.M K User (RuntimePlace Provenance))
+    (evaluateLocalPlace : C → MIR.Place → Bool → ThreadStacks.M K User (RuntimePlace Provenance)) :
     CallHooks Provenance (ThreadStacks.State K User) C FrameExtra Other Extern FnABI ArgABI :=
   ThreadStacks.bindCall (hooks base {lifecycle with freshLocalsIdentity := ThreadStacks.freshLocalsIdentity}
-    access allocation compiler queries retagBudget copy evaluatePlace)
+    access allocation compiler queries retagBudget copy evaluatePlace evaluateLocalPlace)
 /-- Threaded return/unwind factory keeps the registry coherent on every
 protector-release, deallocation and catch-unwind failure prefix. -/
 def threadedControlHooks [DecidableEq K]

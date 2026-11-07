@@ -1,30 +1,10 @@
 import Miri.Input.CompilerForeignSymbolTables
-import Miri.Input.CompilerFactAdapters
+import Miri.Input.Reader.ForeignSymbols
 
-/-! Parser regression for compiler foreign symbol tables, including callable
-exports sharing a lowering context. The fixtures exercise raw `foreign_symbols`
-JSON through `prepare`, rather than preconstructed Prepared entries. -/
+/-! Parser regression for typed compiler foreign symbol tables, including
+callable exports checked against the finalized definition table. -/
 
 open Lean Miri.Input Miri.Interpreter
-
-private def document (raw : Json) : ImportDocument :=
-  { producer := ⟨"miri", "rustc", "version", "target"⟩
-    completenessStatus := .supported
-    types := #[]
-    allocations := #[]
-    instances := #[]
-    selectedScope := none
-    functionAbis := #[]
-    bodies := #[]
-    typedTree := .scalar .null
-    obligations := #[]
-    raw := raw }
-
-private def target : Miri.ABI.RuntimeTargetDataLayout := Id.run do
-  let size : Miri.ABI.Size := ⟨8⟩
-  let ptr : Miri.ABI.PointerSpec := ⟨size, .ONE, size, false⟩
-  return ⟨⟨.little, .w64⟩, .ONE, .ONE, .ONE, .ONE, .ONE, .ONE,
-    .ONE, .ONE, .ONE, .ONE, .ONE, #[], .ZERO, ptr, #[], .ZERO, .I32⟩
 
 private def rawSymbols (allocators : Json) (candidates : Array Json := #[]) : Json :=
   Json.mkObj [("compiler_runtime_queries", Json.mkObj [("foreign_symbols",
@@ -43,22 +23,15 @@ private def special (method : String) : Json :=
 private def redirect (symbol : String) : Json :=
   Json.mkObj [("kind", toJson "redirect"), ("symbol", toJson symbol)]
 
-private def prepare (raw : Json) (definitions : Array DefinitionId := #[]) :
-    Except String CompilerForeignSymbolTables.Prepared := Id.run do
-  let source := document raw
-  let program : LoweredProgram := ⟨⟨#[], #[], definitions, #[]⟩, #[], #[], #[], source⟩
-  let runtime : RuntimeMetadata := {
-    source := source.toCore
-    target := target
-    layouts := #[]
-  }
-  let context : CompilerFacts.Context := {
-    runtime := RuntimeMetadata.Indexed.ofMetadata runtime
-    program := program
-  }
-  let facts : CompilerFactAdapters.Prepared := ⟨context, #[], #[], #[], #[]⟩
-  let instances : CompilerVTableRuntime.Prepared := ⟨facts, #[], #[]⟩
-  return CompilerForeignSymbolTables.prepare instances
+private def prepare (raw : Json) (definitions : Array DefinitionId := #[]) (nodes : Array Json := #[]) :
+    Except String CompilerForeignSymbolTables.Prepared := do
+  let .obj fields := raw | throw "expected object"
+  let input := Json.mkObj (("shared_payloads", Json.mkObj [
+    ("schema_version", toJson (2 : Nat)), ("nodes", Json.arr nodes)]) :: fields.toList)
+  let catalog ← Reader.Catalog.parse input
+  let (result,_) ← (Reader.ForeignSymbolReader.read catalog 0).run
+    (Reader.MIRReader.initial catalog.nodes.size {definitions})
+  result
 
 private def allocatorRows : Array Json := #[
   allocator "_RNvCsaeuD6Zm55dc_7___rustc12___rust_alloc" (special "alloc"),
@@ -120,3 +93,10 @@ private def callableDefinitions : Array DefinitionId := #[⟨1,7⟩, ⟨1,8⟩]
     callableDefinitions with
   | .error message => message == "exported callable identity is absent from finalized compiler tables"
   | .ok _ => false
+
+-- A shared array and shared allocator target are read only at the boundary.
+#guard match prepare (rawSymbols (Json.mkObj [("$lean_miri_shared_ref",toJson (1 : Nat))])) #[]
+    #[special "alloc", Json.arr #[allocator "shared_alloc"
+      (Json.mkObj [("$lean_miri_shared_ref",toJson (0 : Nat))])]] with
+  | .ok prepared => allocatorIs prepared "shared_alloc" (.special .Alloc)
+  | .error _ => false

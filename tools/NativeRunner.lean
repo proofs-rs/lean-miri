@@ -280,15 +280,7 @@ private def terminalDiagnostic (prepared : Input.EvalPreparation.Prepared)
     | .failed state error => ("failed", reprStr error, state)
     | .pending state cause => ("pending", reprStr cause, state)
   let frames := state.stack.frames.map fun frame => Id.run do
-    let span? : Option SpanRef := match frame.location with
-      | .unwinding span => some span
-      | .mir location => do
-        let block ← frame.body.basicBlocks[location.block]?
-        if location.statementIndex == block.statements.size then
-          some block.terminator.sourceInfo.span
-        else do
-          let statement ← block.statements[location.statementIndex]?
-          pure statement.sourceInfo.span
+    let span? : Option SpanRef := frame.currentSpan.toOption
     let source? := span?.bind fun span => prepared.compiler.program.bundle.spans[span.id]?
     return match source? with
     | none => Lean.Json.null
@@ -311,8 +303,7 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
   let selectedEntry ← (Input.CompilerMain.sourceCompilerEntry compiler.main).mapError toString
   let some (definition, .rustcMain sigpipe) := selectedEntry
     | throw "compiler did not select an rustc_main entry"
-  let bytes ← (Input.CompilerGlobalBytes.prepare compiler.program compiler.runtime initialMemory
-    (some compiler.sourceEquality)).mapError toString
+  let bytes ← (Input.CompilerGlobalBytes.prepare compiler.owner initialMemory).mapError toString
   let arrays ← compiler.initialArrays
   let targetBits := compiler.runtime.target.base.pointerWidth.bits.toNat
   let arch ← (Input.EvalArchitectureMachine.targetArch compiler.intrinsics).mapError toString

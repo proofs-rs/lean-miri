@@ -1,3 +1,4 @@
+import Miri.MIR.SyntaxTables
 import Miri.Interpreter.OperandPath
 import Miri.Interpreter.Cast
 import Miri.Interpreter.IntrinsicFloat
@@ -32,8 +33,8 @@ structure IntrinsicHooks (P S C V : Type) where
   usizeLayout : C → RvalueM S (TyAndLayout TyId)
   isizeLayout : C → RvalueM S (TyAndLayout TyId)
   readImmediate : C → OpTy P → RvalueM S (RvalueImmTy P)
-  evalOperand : C → MIR.Operand → RvalueM S (OpTy P)
-  evalOperandAt : C → OperandPath → MIR.Operand → RvalueM S (OpTy P) := fun c _ => evalOperand c
+  evalOperand : C → MIR.OperandId → RvalueM S (OpTy P)
+  evalOperandAt : C → OperandPath → MIR.OperandId → RvalueM S (OpTy P) := fun c _ => evalOperand c
   writeImmediate : C → Immediate P → V → RvalueM S Unit
   writePointer : C → Pointer (Option P) → V → RvalueM S Unit
   copyOp : C → OpTy P → V → RvalueM S Unit
@@ -559,8 +560,8 @@ def memoryCopyAdapter [DecidableEq K]
 
 /-- Source statement intrinsics preserve operand evaluation order and UB. -/
 def evalNondivergingWith [PointerProvenance P] (h : MemoryIntrinsicHooks P S C)
-    (evalOperandAt : C → OperandPath → MIR.Operand → RvalueM S (OpTy P)) (choice : C)
-    (intrinsic : NonDivergingIntrinsic) : RvalueM S Unit := do
+    (evalOperandAt : C → OperandPath → MIR.OperandId → RvalueM S (OpTy P)) (choice : C)
+    (intrinsic : IntrinsicNode) : RvalueM S Unit := do
   match intrinsic with
   | .Assume condition =>
     let op ← evalOperandAt choice (OperandPath.instruction "value") condition
@@ -575,7 +576,7 @@ def evalNondivergingWith [PointerProvenance P] (h : MemoryIntrinsicHooks P S C)
     copyWith h choice source dest count true
 
 def evalNondiverging [PointerProvenance P] (h : IntrinsicHooks P S C V) (choice : C)
-    (intrinsic : NonDivergingIntrinsic) : RvalueM S Unit :=
+    (intrinsic : IntrinsicNode) : RvalueM S Unit :=
   evalNondivergingWith h.memory h.evalOperandAt choice intrinsic
 
 end Intrinsics

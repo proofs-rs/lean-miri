@@ -25,7 +25,7 @@ theorem push_cached (s : Static) (metadata : Metadata s) (profile : Profile s)
       (∃ previous, machine = FrameRelevance.pushedMachine (cachedState s p input.tracker destination older bound).stack.frames frame previous
         (s.cfg.lifecycle.freshLocalsIdentity (cachedState s p input.tracker destination older bound).machine).1) ∧
       frame.extra.borrowTracker = some {} ∧ frame.extra.dataRace = none ∧
-      frame.body = s.loaded.body ∧ frame.bodyIdentity = s.loaded.identity ∧
+      Meaning.FrameMatches frame s.loaded ∧ frame.bodyIdentity = s.loaded.identity ∧
       frame.functionInstance = s.functionInstance ∧ frame.location = .unwinding metadata.preamble ∧
       frame.returnContinuation = continuation ∧ frame.returnPlace = p.destination ∧
       frame.locals = #[{value := .dead,layout := none}] ∧ frame.vaList = #[] ∧
@@ -61,19 +61,19 @@ theorem push_cached (s : Static) (metadata : Metadata s) (profile : Profile s)
     continuation metadata.preamble s.prepared.compiler.lifecycle.frames s.options.userRelevantCrates definition
     s.prepared.compiler.lifecycle.lifecycle metadata.loweredBody fields.frameCompiler fields.preambleSpan
     fields.requiredConstants metadata.frameInlineAttribute metadata.frameTrackCaller definitionAt
-    metadata.lifecycleBody metadata.bodyContents metadata.lifecycleRow input.thread index active old cached selected
+    metadata.lifecycleBody metadata.bodyContents.2 metadata.bodyContents.1 metadata.lifecycleRow input.thread index active old cached selected
   refine ⟨frame,FrameRelevance.pushedMachine (cachedState s p input.tracker destination older bound).stack.frames frame old machine,?_,⟨old,rfl⟩,?_,?_,?_⟩
   · change CallMachine.pushRaw s.cfg.lifecycle s.cfg.compiler.debugAssertions s.functionInstance s.loaded
       p.destination continuation (cachedState s p input.tracker destination older bound) = _
     rw [fields.debug,profile.debug]
     exact pushed
-  · simp only [frame,EmptyFunction.Init.created,CompilerFrameMetadata.resolvedFrame]
+  · simp only [Meaning.FrameMatches,frame,EmptyFunction.Init.created,CompilerFrameMetadata.resolvedFrame]
     have enabled := input.world.enabled
     simp only [machine,fields.freshLocalsIdentity] at *
     simp [enabled,cachedState,LocalUnit.current]
   · simp [frame,EmptyFunction.Init.created,CompilerFrameMetadata.resolvedFrame, fields.freshLocalsIdentity,cachedState,LocalUnit.current,runtime.noRace]
-  · have count : s.loaded.body.locals.size = 1 := by rw [metadata.body]; exact Program.one_local
-    simp only [frame,EmptyFunction.Init.created,CompilerFrameMetadata.resolvedFrame,EmptyFunction.Init.raw,Frame.create,count,
+  · have count : s.loaded.body.locals.size = 1 := by rw [(metadata.body_header s).2.1]; rfl
+    simp only [Meaning.FrameMatches,frame,EmptyFunction.Init.created,CompilerFrameMetadata.resolvedFrame,EmptyFunction.Init.raw,Frame.create,count,
       Array.replicate_succ,Array.replicate_zero]
     simp [FrameRelevance.pushedMachine,machine,fields.freshLocalsIdentity,cachedState,LocalUnit.current,runtime.noRace]
     split <;> constructor <;> rfl

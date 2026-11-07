@@ -43,17 +43,38 @@ shallow validation, and the specified debug, retag, and control configuration.
 The observer ends after returning to the caller; arbitrary scheduler
 interleavings and later caller execution are outside this theorem.
 
-Miri source additions expose proof-only APIs; the interpreter implementation
-is unchanged by this example. The fixed Rust/MIR hashes are recorded in
-`SHA256SUMS`. The proof-only reflected MIR block is `noncomputable` to avoid
-a Lean native-code-generation boxing panic; no native executable validation
-of that block is claimed.
+The proof follows production lowering and execution through typed MIR IDs and
+syntax tables. `Metadata.body` fixes the checked source meaning of the selected
+body rather than its table numbering. Its normalized-local query premise also
+derives agreement between the selected lowered body and loaded body; this
+agreement is not an additional assumption. Constant evidence is checked by its
+instance, constant and span keys. Caller frames retain the existing explicit
+domain; a general transport theorem from arbitrary old flat MIR states to table
+states has not been proved. The literal's ID and successful syntax reference are
+derived from the source-shaped assignment. Constant normalization is required
+only when the typed evidence lookup succeeds. Missing evidence is admitted and
+produces the actual checked `Unsupported` stop. `SuccessfulConstant` is used by
+successful intermediate results; it is obtained from actual step success and
+is not a premise of `ActualNoUBFinal.noUB` or `Target`.
+
+`ConstantTransport` proves that an old source-site evidence list with successful
+normalization has an indexed encoding satisfying the conditional metadata
+requirement. This local domain-inclusion result does not prove equivalence of
+the complete old and new reader/preparation pipelines.
+
+`Program.root` reflects actual decoding, lowering and body loading into safe
+constructor constants. The source-shaped `Program.contents` observation is
+`noncomputable` and used only by proofs; execution reads the original IDs and
+tables. The fixed Rust/MIR hashes are recorded in `SHA256SUMS`. Reflection is
+part of the trusted compiler/import boundary, not a proof of exporter correctness.
+Missing table entries remain checked errors, including at instruction lookup;
+they are not treated as successful completion.
 
 Run `bash tools/check-empty-function.sh` to compile the committed root and its source
 closure, check the final target type, and audit imported EmptyFunction/Miri declarations
 (including private/generated declarations) for transitive axioms. Only
 `propext`, `Quot.sound`, and `Classical.choice` are permitted.
-See [STATUS.md](../../STATUS.md#empty-function-call-safety).
+See [STATUS.md](../../STATUS.md#empty-function-caller-domain-transport).
 
 ## Continuous integration
 

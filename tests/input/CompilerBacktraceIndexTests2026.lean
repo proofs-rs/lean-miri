@@ -1,4 +1,7 @@
+import MiriTests.Input.ReferenceDecoder
 import Miri.Input.CompilerBacktraceSource
+import Miri.Input.Reader.BodyMetadata
+import Miri.Input.Reader.RuntimeQueries
 
 /-! Compatibility checks for the indexed compiler backtrace preparation path.
 The executable accepts a retained producer export, compares indexed preparation
@@ -92,7 +95,18 @@ private def replaceBodyPayload (program : LoweredProgram) (index : Nat) (payload
     Except String LoweredProgram := do
   let some body := program.bundle.bodies[index]? | throw "test body index absent"
   let bodies := program.bundle.bodies.set! index { body with input := { body.input with payload } }
-  return { program with bundle := { program.bundle with bodies } }
+  let catalog ← Reader.Catalog.parse (Json.mkObj [("body",payload),
+    ("shared_payloads",Json.mkObj [("schema_version",toJson (2 : Nat)),("nodes",.arr #[])])])
+  let result := (Reader.BodyMetadataReader.backtraceSpans catalog payload "body").run
+    (Reader.MIRReader.initial catalog.nodes.size program.compilerTables)
+  let some source := program.input.mirTables.bodySources[index]? | throw "typed body source absent"
+  let (spans,tables) := match result with
+    | .ok (entries,state) => (Except.ok entries,state.compiler)
+    | .error reason => (Except.error reason,program.compilerTables)
+  let sources := program.input.mirTables.bodySources.set! index {source with backtraceSpans := spans}
+  return ({program with
+    bundle := {program.bundle with bodies}
+    input := {program.input with mirTables := {program.input.mirTables with bodySources := sources}}}).withCompilerTables tables
 
 private def replaceBacktraceSpans (program : LoweredProgram) (index : Nat)
     (records : Array Json) : Except String LoweredProgram := do
@@ -105,7 +119,12 @@ private def mutateInstanceName (program : LoweredProgram) (record : Json) : Exce
   let records ← (← field queries "instances").getArr?
   let queries ← setField queries "instances" (.arr (records.push record))
   let raw ← setField program.input.raw "compiler_runtime_queries" queries
-  return { program with input := { program.input with raw } }
+  let envelope ← setField raw "shared_payloads" (Json.mkObj [("schema_version",toJson (2 : Nat)),("nodes",.arr #[])])
+  let catalog ← Reader.Catalog.parse envelope
+  let instances := catalog.readRuntimeInstances program.input.mirTables.instances.size
+  return {program with input := {program.input with
+    raw := raw
+    mirTables := {program.input.mirTables with runtimeInstances := instances}}}
 
 private def hasBacktraceRows (body : LoweredBody) : Bool :=
   match (body.input.payload.getObjVal? "backtrace_spans").bind Json.getArr? with
@@ -114,8 +133,13 @@ private def hasBacktraceRows (body : LoweredBody) : Bool :=
 
 def main (args : List String) : IO Unit := do
   let some path := args.head? | throw (IO.userError "retained producer export path required")
-  let decoded ← must (decodeRuntimeJson (← IO.FS.readFile path))
+  let text ← IO.FS.readFile path
+  let ordinary ← must (decodeRuntimeJson text)
+  let direct ← must (lowerCoreProgram ordinary.document)
+  let decoded ← must (decodeRuntimeJsonReference text)
   let program ← must (lowerCoreProgram decoded.document)
+  check (signature (CompilerBacktraceSource.prepare direct) == signature (legacyPrepare program))
+    "unexpanded typed preparation differs from independent ordered scan reference"
   check (signature (CompilerBacktraceSource.prepare program) == signature (legacyPrepare program))
     "ordinary preparation differs from ordered scan reference"
 
@@ -166,7 +190,7 @@ def main (args : List String) : IO Unit := do
     "cross-body same-offset conflict did not retain its exact diagnostic"
 
   let spanJson ← must (field firstRow "span")
-  let changedSpan ← must (setField spanJson "ctxt" (toJson "rollback-only-span"))
+  let changedSpan ← must (setField spanJson "ctxt" (Json.mkObj [("status",.str "debug_payload"),("rustc_debug",.str "rollback-only-span")]))
   let novelRow ← must (setField firstRow "span" changedSpan)
   let collapsedLo ← must (natural firstRow "collapsed_lo")
   let badRow ← must (setField firstRow "collapsed_lo" (toJson (collapsedLo + 1)))

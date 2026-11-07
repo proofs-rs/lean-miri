@@ -25,14 +25,16 @@ def hooks (action : ReturnAction := .normal) : H where
   assertPanic := fun _ _ _ s => (log 8 s, .ok ())
 
 def source : SourceInfo := ⟨⟨0⟩, 0⟩
-def block (statements : Array Statement) (kind : TerminatorKind) (cleanup := false) : BasicBlock :=
-  ⟨statements, ⟨source, kind⟩, cleanup⟩
+def returnTables : SyntaxTables := {
+  terminators := #[some ⟨source, .Return⟩]
+  blocks := #[some ⟨#[], ⟨0⟩, false⟩] }
 def prep (f : Frame Unit Unit Unit) (continuation : ReturnContinuation)
     (location : FrameLocation := .mir ⟨0, 0⟩) : Frame Unit Unit Unit :=
   { f with
     location := location
     returnContinuation := continuation
-    body := { f.body with basicBlocks := #[block #[] .Return] } }
+    body := { f.body with basicBlocks := #[⟨0⟩] }
+    mirTables := returnTables }
 def pair (f : Frame Unit Unit Unit) : S :=
   ⟨⟨#[prep f (.stop true), prep f (.goto (some 8) .Continue)]⟩, []⟩
 def root (f : Frame Unit Unit Unit) : S := ⟨⟨#[prep f (.stop true)]⟩, []⟩
@@ -64,8 +66,8 @@ example (f : Frame Unit Unit Unit) :
     (ControlFlow.unwindToBlock hooks.toControlHooks () (.Terminate .Abi) (root f)).1.stack.currentFrame?.map (·.location) =
       some (.unwinding ⟨123⟩) := rfl
 
-def discr : Miri.MIR.Operand := .Copy ⟨0, #[]⟩
-def switch : Terminator := ⟨source, .SwitchInt discr ⟨#[.Case 10 1, .Case 20 2, .Case 30 3], 4⟩⟩
+def discr : OperandId := ⟨0⟩
+def switch : TerminatorNode := ⟨source, .SwitchInt discr ⟨#[.Case 10 1, .Case 20 2, .Case 30 3], 4⟩⟩
 example (f : Frame Unit Unit Unit) :
     (ControlFlow.evalTerminator hooks () switch (root f)).1.machine = [6,10,20] := rfl
 example (f : Frame Unit Unit Unit) :
@@ -88,21 +90,25 @@ def stepHooks : StepHooks Unit Unit Unit (List Nat) Unit Unit where
 
 def program (f : Frame Unit Unit Unit) : S :=
   let f := prep f (.stop true)
-  ⟨⟨#[{ f with body := { f.body with basicBlocks :=
-    #[block #[] (.Goto 1 #[]), block #[⟨source, .Nop⟩] .Return] } }]⟩, []⟩
+  ⟨⟨#[{ f with
+    body := { f.body with basicBlocks := #[⟨0⟩, ⟨1⟩] }
+    mirTables := {
+      statements := #[some ⟨source, .Nop⟩]
+      terminators := #[some ⟨source, .Goto 1 #[]⟩, some ⟨source, .Return⟩]
+      blocks := #[some ⟨#[], ⟨0⟩, false⟩, some ⟨#[⟨0⟩], ⟨1⟩, false⟩] } }]⟩, []⟩
 def run3 (s : S) : S :=
   (Step.step stepHooks () (Step.step stepHooks () (Step.step stepHooks () s).1).1).1
-def fixtureBody : Body := ⟨.Built, 0, none, #[0], #[]⟩
-def fixtureBodies : Array Body := #[fixtureBody]
-def fixtureLoaded : LoadedBody := ⟨BodyIdentity.ofCanonicalIndex 0, fixtureBodies[0]⟩
+def fixtureBody : BodyNode := ⟨.Built, 0, none, #[0], #[], 0, #[]⟩
 def returnLayout : LocalLayout := ⟨fixtureBody.locals[0], {
     fields := .Primitive, variants := .Single 0, backendRepr := .Memory (sized := true),
     largestNiche := none, uninhabited := false, align := .new Align.ONE, size := Size.ZERO,
     maxReprAlign := none, unadjustedAbiAlign := Align.ONE, reprC := false, randomizationSeed := 0 }⟩
 def fixtureIdentity : LocalsIdentity := (LocalsIdentitySupply.allocate ⟨0⟩).2
 def fixture : Frame Unit Unit Unit where
-  body := fixtureLoaded.body
-  bodyIdentity := fixtureLoaded.identity
+  body := fixtureBody
+  bodyId := ⟨0⟩
+  mirTables := { bodies := #[some fixtureBody] }
+  bodyIdentity := BodyIdentity.ofCanonicalIndex 0
   functionInstance := ⟨.Item 0, #[]⟩
   extra := ()
   returnContinuation := .stop true

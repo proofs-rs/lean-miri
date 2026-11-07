@@ -32,6 +32,7 @@ instance : ToExpr Memory.CtfeProvenance where
   toExpr prov := mkApp4 (mkConst ``checkedCtfe) (toExpr prov.allocId)
     (toExpr prov.immutable) (toExpr prov.sharedRef) trueRefl
 
+deriving instance ToExpr for Except
 deriving instance ToExpr for JsonNumber
 
 private def exprList (type : Expr) (items : List Expr) : Expr :=
@@ -60,111 +61,288 @@ instance : ToExpr Json where
   toTypeExpr := mkConst ``Json
   toExpr := jsonExpr {}
 
+open Lean Elab Command in
+private partial def deriveQuote (name : Name) : StateT NameSet CommandElabM Unit := do
+  if (← get).contains name then return
+  modify (·.insert name)
+  let some info := (← getEnv).find? name | return
+  if !name.toString.startsWith "Miri." then return
+  match info with
+  | .inductInfo indInfo =>
+    let existing ← liftM <| liftTermElabM <| Meta.forallTelescopeReducing indInfo.type fun xs _ => do
+      Meta.synthInstance? (← Meta.mkAppM ``ToExpr
+        #[mkAppN (mkConst name (indInfo.levelParams.map Level.param)) xs])
+    if existing.isSome then return
+    for ctor in indInfo.ctors do
+      for dependency in (← getConstInfo ctor).type.getUsedConstants do
+        if dependency != name then deriveQuote dependency
+    liftM <| elabCommand (← `(deriving instance ToExpr for $(mkIdent name)))
+  | .defnInfo definition =>
+    let typeFormer ← liftM <| liftTermElabM <|
+      Meta.forallTelescopeReducing definition.type fun _ body => pure body.isSort
+    if typeFormer then
+      for dependency in definition.value.getUsedConstants do
+        if dependency != name then deriveQuote dependency
+  | _ => pure ()
+
 section
 -- Propagate the import-local JSON quotation table through all derived quoters.
 variable [ToExpr Json]
 
-deriving instance ToExpr for MIR.IntegerKind
-deriving instance ToExpr for MIR.BinOp
-deriving instance ToExpr for MIR.UnOp
-deriving instance ToExpr for Input.PayloadStatus
-deriving instance ToExpr for Input.TypeShapeKind
-deriving instance ToExpr for Input.StatementVariant
-deriving instance ToExpr for Input.TerminatorVariant
-deriving instance ToExpr for Input.RvalueVariant
-deriving instance ToExpr for Input.OperandVariant
-deriving instance ToExpr for Input.ProjectionVariant
-deriving instance ToExpr for Input.LayoutKind
-deriving instance ToExpr for Input.LayoutVariantsKind
-deriving instance ToExpr for Input.BackendReprKind
-deriving instance ToExpr for Input.FieldShapeKind
-deriving instance ToExpr for Input.IntegerTypeTag
-deriving instance ToExpr for Input.FloatTypeTag
-deriving instance ToExpr for Input.AdtKind
-deriving instance ToExpr for Input.TypeShapeMetadata
-deriving instance ToExpr for Input.PrimitiveKind
-deriving instance ToExpr for Input.ScalarShapeKind
-deriving instance ToExpr for Input.PassModeKind
-deriving instance ToExpr for Input.AllocationKind
-deriving instance ToExpr for Input.InstanceKind
-deriving instance ToExpr for Input.Obligation
-deriving instance ToExpr for Input.SourcePosition
-deriving instance ToExpr for Input.SourceSpanData
-deriving instance ToExpr for Input.SourceInfo
-deriving instance ToExpr for Input.Producer
-deriving instance ToExpr for Input.TaggedNode
-deriving instance ToExpr for Input.FieldShape
-deriving instance ToExpr for Input.PrimitiveLayout
-deriving instance ToExpr for Input.ScalarLayout
-deriving instance ToExpr for Input.BackendRepr
-deriving instance ToExpr for Input.LayoutVariant
-deriving instance ToExpr for Input.TagEncodingKind
-deriving instance ToExpr for Input.TagEncoding
-deriving instance ToExpr for Input.VariantsLayout
-deriving instance ToExpr for Input.Layout
-deriving instance ToExpr for Input.ExternAbi
-deriving instance ToExpr for Input.ArmCallKind
-deriving instance ToExpr for Input.InterruptCallKind
-deriving instance ToExpr for Input.X86CallKind
-deriving instance ToExpr for Input.CanonicalAbiKind
-deriving instance ToExpr for Input.CanonicalAbi
-deriving instance ToExpr for Input.TypedEnumTag
-deriving instance ToExpr for Input.UserTypeProjectionKind
-deriving instance ToExpr for Input.UserTypeProjection
-deriving instance ToExpr for Input.FunctionSignature
-deriving instance ToExpr for Input.CompilerPattern
-deriving instance ToExpr for Input.CompilerBooleanEvidence
-deriving instance ToExpr for Input.CompilerTypeEvidence
-deriving instance ToExpr for Input.TypeCompilerFacts
-deriving instance ToExpr for Input.TypeNode
-deriving instance ToExpr for Input.InitRange
-deriving instance ToExpr for Input.Relocation
-deriving instance ToExpr for Input.MemoryMutability
-deriving instance ToExpr for Input.AllocationMemory
-deriving instance ToExpr for Input.AbiAttributes
-deriving instance ToExpr for Input.AbiRegisterKind
-deriving instance ToExpr for Input.AbiRegister
-deriving instance ToExpr for Input.AbiCastTarget
-deriving instance ToExpr for Input.AbiPassMode
-deriving instance ToExpr for Input.AbiArgument
-deriving instance ToExpr for Input.FunctionAbi
-deriving instance ToExpr for Input.TypedValue
+run_cmd discard <| (deriveQuote ``MIR.IntegerKind).run {}
+run_cmd discard <| (deriveQuote ``MIR.BinOp).run {}
+run_cmd discard <| (deriveQuote ``MIR.UnOp).run {}
+run_cmd discard <| (deriveQuote ``Input.PayloadStatus).run {}
+run_cmd discard <| (deriveQuote ``Input.TypeShapeKind).run {}
+run_cmd discard <| (deriveQuote ``Input.StatementVariant).run {}
+run_cmd discard <| (deriveQuote ``Input.TerminatorVariant).run {}
+run_cmd discard <| (deriveQuote ``Input.RvalueVariant).run {}
+run_cmd discard <| (deriveQuote ``Input.OperandVariant).run {}
+run_cmd discard <| (deriveQuote ``Input.ProjectionVariant).run {}
+run_cmd discard <| (deriveQuote ``Input.LayoutKind).run {}
+run_cmd discard <| (deriveQuote ``Input.LayoutVariantsKind).run {}
+run_cmd discard <| (deriveQuote ``Input.BackendReprKind).run {}
+run_cmd discard <| (deriveQuote ``Input.FieldShapeKind).run {}
+run_cmd discard <| (deriveQuote ``Input.IntegerTypeTag).run {}
+run_cmd discard <| (deriveQuote ``Input.FloatTypeTag).run {}
+run_cmd discard <| (deriveQuote ``Input.AdtKind).run {}
+run_cmd discard <| (deriveQuote ``Input.TypeShapeMetadata).run {}
+run_cmd discard <| (deriveQuote ``Input.PrimitiveKind).run {}
+run_cmd discard <| (deriveQuote ``Input.ScalarShapeKind).run {}
+run_cmd discard <| (deriveQuote ``Input.PassModeKind).run {}
+run_cmd discard <| (deriveQuote ``Input.AllocationKind).run {}
+run_cmd discard <| (deriveQuote ``Input.InstanceKind).run {}
+run_cmd discard <| (deriveQuote ``Input.Obligation).run {}
+run_cmd discard <| (deriveQuote ``Input.SourcePosition).run {}
+run_cmd discard <| (deriveQuote ``Input.SourceSpanData).run {}
+run_cmd discard <| (deriveQuote ``Input.SourceInfo).run {}
+run_cmd discard <| (deriveQuote ``Input.Producer).run {}
+run_cmd discard <| (deriveQuote ``Input.TaggedNode).run {}
+run_cmd discard <| (deriveQuote ``Input.FieldShape).run {}
+run_cmd discard <| (deriveQuote ``Input.PrimitiveLayout).run {}
+run_cmd discard <| (deriveQuote ``Input.ScalarLayout).run {}
+run_cmd discard <| (deriveQuote ``Input.BackendRepr).run {}
+run_cmd discard <| (deriveQuote ``Input.NicheLayout).run {}
+run_cmd discard <| (deriveQuote ``Input.LayoutVariant).run {}
+run_cmd discard <| (deriveQuote ``Input.TagEncodingKind).run {}
+run_cmd discard <| (deriveQuote ``Input.TagEncoding).run {}
+run_cmd discard <| (deriveQuote ``Input.VariantsLayout).run {}
+run_cmd discard <| (deriveQuote ``Input.Layout).run {}
+run_cmd discard <| (deriveQuote ``Input.ArmCallKind).run {}
+run_cmd discard <| (deriveQuote ``Input.InterruptCallKind).run {}
+run_cmd discard <| (deriveQuote ``Input.X86CallKind).run {}
+run_cmd discard <| (deriveQuote ``Input.CanonicalAbiKind).run {}
+run_cmd discard <| (deriveQuote ``Input.CanonicalAbi).run {}
+run_cmd discard <| (deriveQuote ``Input.TypedEnumTag).run {}
+run_cmd discard <| (deriveQuote ``Input.UserTypeProjectionKind).run {}
+run_cmd discard <| (deriveQuote ``Input.UserTypeProjection).run {}
+run_cmd discard <| (deriveQuote ``Input.CompilerBooleanEvidence).run {}
+run_cmd discard <| (deriveQuote ``Input.CompilerTypeEvidence).run {}
+run_cmd discard <| (deriveQuote ``Input.ProjectionField).run {}
+run_cmd discard <| (deriveQuote ``Input.ProjectionParent).run {}
+run_cmd discard <| (deriveQuote ``Input.ProjectionValue).run {}
+run_cmd discard <| (deriveQuote ``Input.ProjectionEvidence).run {}
+run_cmd discard <| (deriveQuote ``Input.ProjectionTables).run {}
+run_cmd discard <| (deriveQuote ``Input.DefinitionId).run {}
+run_cmd discard <| (deriveQuote ``Input.CompilerAdtFacts).run {}
+run_cmd discard <| (deriveQuote ``Input.CompilerDiscriminantValue).run {}
+run_cmd discard <| (deriveQuote ``Input.CompilerDiscriminants).run {}
+run_cmd discard <| (deriveQuote ``Input.CompilerFactTables).run {}
+run_cmd discard <| (deriveQuote ``Input.TypeCompilerFacts).run {}
+run_cmd discard <| (deriveQuote ``Input.TypeField).run {}
+run_cmd discard <| (deriveQuote ``Input.TypeVariant).run {}
+run_cmd discard <| (deriveQuote ``Input.RepresentationInteger).run {}
+run_cmd discard <| (deriveQuote ``Input.ScalableRepresentation).run {}
+run_cmd discard <| (deriveQuote ``Input.TypeRepresentation).run {}
+run_cmd discard <| (deriveQuote ``Input.ArrayConstructorEvidence).run {}
+run_cmd discard <| (deriveQuote ``Input.PredicateListData).run {}
+run_cmd discard <| (deriveQuote ``Input.TypeRelations).run {}
+run_cmd discard <| (deriveQuote ``Input.TypeRelationTables).run {}
+run_cmd discard <| (deriveQuote ``Input.TypeNode).run {}
+run_cmd discard <| (deriveQuote ``Input.InitRange).run {}
+run_cmd discard <| (deriveQuote ``Input.Relocation).run {}
+run_cmd discard <| (deriveQuote ``Input.MemoryMutability).run {}
+run_cmd discard <| (deriveQuote ``Input.AllocationMemory).run {}
+run_cmd discard <| (deriveQuote ``Input.AbiTag).run {}
+run_cmd discard <| (deriveQuote ``Input.AbiAttributes).run {}
+run_cmd discard <| (deriveQuote ``Input.AbiRegisterKind).run {}
+run_cmd discard <| (deriveQuote ``Input.AbiHintKind).run {}
+run_cmd discard <| (deriveQuote ``Input.AbiHintElement).run {}
+run_cmd discard <| (deriveQuote ``Input.AbiRegister).run {}
+run_cmd discard <| (deriveQuote ``Input.AbiCastTarget).run {}
+run_cmd discard <| (deriveQuote ``Input.AbiPassMode).run {}
+run_cmd discard <| (deriveQuote ``Input.AbiArgument).run {}
+run_cmd discard <| (deriveQuote ``Input.FunctionAbi).run {}
+run_cmd discard <| (deriveQuote ``Input.AbiArgumentData).run {}
+run_cmd discard <| (deriveQuote ``Input.FunctionAbiData).run {}
+run_cmd discard <| (deriveQuote ``Input.AbiTables).run {}
+run_cmd discard <| (deriveQuote ``Input.TypedValue).run {}
 
 section
 variable [ToExpr Input.TypedValue]
-deriving instance ToExpr for Input.DefinitionId
-deriving instance ToExpr for Input.VtableEntryKind
-deriving instance ToExpr for Input.VtablePredicateKind
-deriving instance ToExpr for Input.FunctionAllocation
-deriving instance ToExpr for Input.StaticGlobalInfo
-deriving instance ToExpr for Input.StaticAllocation
-deriving instance ToExpr for Input.VtablePredicate
-deriving instance ToExpr for Input.VtableEntry
-deriving instance ToExpr for Input.VtableAllocation
-deriving instance ToExpr for Input.AllocationData
-deriving instance ToExpr for Input.AllocationNode
-deriving instance ToExpr for Input.MirNode
-deriving instance ToExpr for Input.BasicBlock
-deriving instance ToExpr for Input.LocalDecl
-deriving instance ToExpr for Input.BodyCore
-deriving instance ToExpr for Input.PromotedBody
-deriving instance ToExpr for Input.Body
-deriving instance ToExpr for Input.InstanceNode
-deriving instance ToExpr for Input.ScopeRoot
-deriving instance ToExpr for Input.SelectedScope
-deriving instance ToExpr for Input.TargetDataLayoutEvidence
-deriving instance ToExpr for Input.CompilerPredicateEvidence
-deriving instance ToExpr for Input.SourceAllocIdKind
-deriving instance ToExpr for Input.SourceAllocIdStatus
-deriving instance ToExpr for Input.SourceAllocIdPoolRow
-deriving instance ToExpr for Input.SourceAllocIdDedupKind
-deriving instance ToExpr for Input.SourceAllocIdProbeOutcome
-deriving instance ToExpr for Input.SourceAllocIdSaltResult
-deriving instance ToExpr for Input.SourceAllocIdDedupRow
-deriving instance ToExpr for Input.CompilerAllocIdWorld
-deriving instance ToExpr for Input.ImportDocument
-deriving instance ToExpr for Input.ExecutionInput
-deriving instance ToExpr for Input.DecodeResult
+run_cmd discard <| (deriveQuote ``Input.VtableEntryKind).run {}
+run_cmd discard <| (deriveQuote ``Input.VtablePredicateKind).run {}
+run_cmd discard <| (deriveQuote ``Input.FunctionAllocation).run {}
+run_cmd discard <| (deriveQuote ``Input.StaticGlobalInfo).run {}
+run_cmd discard <| (deriveQuote ``Input.StaticAllocation).run {}
+run_cmd discard <| (deriveQuote ``Input.VtablePredicate).run {}
+run_cmd discard <| (deriveQuote ``Input.VtableEntry).run {}
+run_cmd discard <| (deriveQuote ``Input.VtableEntryData).run {}
+run_cmd discard <| (deriveQuote ``Input.VtableMetadataData).run {}
+run_cmd discard <| (deriveQuote ``Input.VtableQueryData).run {}
+run_cmd discard <| (deriveQuote ``Input.VtableTables).run {}
+run_cmd discard <| (deriveQuote ``Input.VtableAllocation).run {}
+run_cmd discard <| (deriveQuote ``Input.AllocationData).run {}
+run_cmd discard <| (deriveQuote ``Input.AllocationNode).run {}
+run_cmd discard <| (deriveQuote ``Input.MirNode).run {}
+run_cmd discard <| (deriveQuote ``Input.BasicBlock).run {}
+run_cmd discard <| (deriveQuote ``Input.LocalDecl).run {}
+run_cmd discard <| (deriveQuote ``Input.BodyCore).run {}
+run_cmd discard <| (deriveQuote ``Input.PromotedBody).run {}
+run_cmd discard <| (deriveQuote ``Input.Body).run {}
+run_cmd discard <| (deriveQuote ``Input.InstanceNode).run {}
+run_cmd discard <| (deriveQuote ``Input.ScopeRoot).run {}
+run_cmd discard <| (deriveQuote ``Input.SelectedScope).run {}
+run_cmd discard <| (deriveQuote ``Input.TargetDataLayoutEvidence).run {}
+run_cmd discard <| (deriveQuote ``Input.CompilerPredicateEvidence).run {}
+run_cmd discard <| (deriveQuote ``Input.SourceAllocIdKind).run {}
+run_cmd discard <| (deriveQuote ``Input.SourceAllocIdStatus).run {}
+run_cmd discard <| (deriveQuote ``Input.SourceAllocIdPoolRow).run {}
+run_cmd discard <| (deriveQuote ``Input.SourceAllocIdDedupKind).run {}
+run_cmd discard <| (deriveQuote ``Input.SourceAllocIdProbeOutcome).run {}
+run_cmd discard <| (deriveQuote ``Input.SourceAllocIdSaltResult).run {}
+run_cmd discard <| (deriveQuote ``Input.SourceAllocIdDedupRow).run {}
+run_cmd discard <| (deriveQuote ``Input.CompilerAllocIdWorld).run {}
+run_cmd discard <| (deriveQuote ``MIR.Location).run {}
+run_cmd discard <| (deriveQuote ``MIR.SpanRef).run {}
+run_cmd discard <| (deriveQuote ``MIR.Mutability).run {}
+run_cmd discard <| (deriveQuote ``MIR.Safety).run {}
+run_cmd discard <| (deriveQuote ``MIR.Variance).run {}
+run_cmd discard <| (deriveQuote ``MIR.PointerCoercion).run {}
+run_cmd discard <| (deriveQuote ``MIR.CoercionSource).run {}
+run_cmd discard <| (deriveQuote ``MIR.CastKind).run {}
+run_cmd discard <| (deriveQuote ``MIR.FakeBorrowKind).run {}
+run_cmd discard <| (deriveQuote ``MIR.MutBorrowKind).run {}
+run_cmd discard <| (deriveQuote ``MIR.BorrowKind).run {}
+run_cmd discard <| (deriveQuote ``MIR.RawPtrKind).run {}
+run_cmd discard <| (deriveQuote ``MIR.WithRetag).run {}
+run_cmd discard <| (deriveQuote ``MIR.RuntimeChecks).run {}
+run_cmd discard <| (deriveQuote ``MIR.LoopHintAttr).run {}
+run_cmd discard <| (deriveQuote ``MIR.FakeReadCause).run {}
+run_cmd discard <| (deriveQuote ``MIR.CallSource).run {}
+run_cmd discard <| (deriveQuote ``MIR.InlineAsmMacro).run {}
+run_cmd discard <| (deriveQuote ``MIR.UnwindTerminateReason).run {}
+run_cmd discard <| (deriveQuote ``MIR.UnwindAction).run {}
+run_cmd discard <| (deriveQuote ``MIR.CoroutineSource).run {}
+run_cmd discard <| (deriveQuote ``MIR.CoroutineDesugaring).run {}
+run_cmd discard <| (deriveQuote ``MIR.Movability).run {}
+run_cmd discard <| (deriveQuote ``MIR.CoroutineKind).run {}
+run_cmd discard <| (deriveQuote ``MIR.HirId).run {}
+run_cmd discard <| (deriveQuote ``MIR.CoveragePointKind).run {}
+run_cmd discard <| (deriveQuote ``MIR.CoverageKind).run {}
+run_cmd discard <| (deriveQuote ``MIR.BackwardIncompatibleDropReason).run {}
+run_cmd discard <| (deriveQuote ``MIR.ProjectionKind).run {}
+run_cmd discard <| (deriveQuote ``MIR.UserTypeProjection).run {}
+run_cmd discard <| (deriveQuote ``MIR.AnalysisPhase).run {}
+run_cmd discard <| (deriveQuote ``MIR.RuntimePhase).run {}
+run_cmd discard <| (deriveQuote ``MIR.MirPhase).run {}
+run_cmd discard <| (deriveQuote ``MIR.ConstPointer).run {}
+run_cmd discard <| (deriveQuote ``MIR.ScalarValue).run {}
+run_cmd discard <| (deriveQuote ``MIR.ConstValue).run {}
+run_cmd discard <| (deriveQuote ``MIR.ConstAliasKind).run {}
+run_cmd discard <| (deriveQuote ``MIR.ConstExpressionCastKind).run {}
+run_cmd discard <| (deriveQuote ``MIR.ConstExpressionKind).run {}
+run_cmd discard <| (deriveQuote ``MIR.BoundVarIndexKind).run {}
+run_cmd discard <| (deriveQuote ``MIR.BoundRegionKind).run {}
+run_cmd discard <| (deriveQuote ``MIR.BoundTypeKind).run {}
+run_cmd discard <| (deriveQuote ``MIR.BoundVariableKind).run {}
+run_cmd discard <| (deriveQuote ``MIR.LateParamRegionKind).run {}
+run_cmd discard <| (deriveQuote ``MIR.Region).run {}
+run_cmd discard <| (deriveQuote ``MIR.GenericArg).run {}
+run_cmd discard <| (deriveQuote ``MIR.ValTreeNode).run {}
+run_cmd discard <| (deriveQuote ``MIR.ValTree).run {}
+run_cmd discard <| (deriveQuote ``MIR.TypeConst).run {}
+run_cmd discard <| (deriveQuote ``MIR.UnevaluatedConst).run {}
+run_cmd discard <| (deriveQuote ``MIR.MirConst).run {}
+run_cmd discard <| (deriveQuote ``MIR.ConstOperand).run {}
+run_cmd discard <| (deriveQuote ``MIR.ProjectionElem).run {}
+run_cmd discard <| (deriveQuote ``MIR.Place).run {}
+run_cmd discard <| (deriveQuote ``MIR.Operand).run {}
+run_cmd discard <| (deriveQuote ``MIR.CopyNonOverlappingForm).run {}
+run_cmd discard <| (deriveQuote ``MIR.NonDivergingIntrinsicForm).run {}
+run_cmd discard <| (deriveQuote ``MIR.AggregateForm).run {}
+run_cmd discard <| (deriveQuote ``MIR.RvalueForm).run {}
+run_cmd discard <| (deriveQuote ``MIR.StatementKindForm).run {}
+run_cmd discard <| (deriveQuote ``MIR.SwitchTarget).run {}
+run_cmd discard <| (deriveQuote ``MIR.SwitchTargets).run {}
+run_cmd discard <| (deriveQuote ``MIR.SpannedOperandForm).run {}
+run_cmd discard <| (deriveQuote ``MIR.InlineAsmOptions).run {}
+run_cmd discard <| (deriveQuote ``MIR.InlineAsmTemplatePiece).run {}
+run_cmd discard <| (deriveQuote ``MIR.InlineAsmArch).run {}
+run_cmd discard <| (deriveQuote ``MIR.InlineAsmRegOrRegClass).run {}
+run_cmd discard <| (deriveQuote ``MIR.InlineAsmOperandForm).run {}
+run_cmd discard <| (deriveQuote ``MIR.InlineAsmTerminatorForm).run {}
+run_cmd discard <| (deriveQuote ``MIR.AssertKindForm).run {}
+run_cmd discard <| (deriveQuote ``MIR.TerminatorKindForm).run {}
+run_cmd discard <| (deriveQuote ``MIR.SourceInfo).run {}
+run_cmd discard <| (deriveQuote ``MIR.Statement).run {}
+run_cmd discard <| (deriveQuote ``MIR.Terminator).run {}
+run_cmd discard <| (deriveQuote ``MIR.BasicBlock).run {}
+run_cmd discard <| (deriveQuote ``MIR.Body).run {}
+run_cmd discard <| (deriveQuote ``MIR.PlaceId).run {}
+run_cmd discard <| (deriveQuote ``MIR.ProjectionId).run {}
+run_cmd discard <| (deriveQuote ``MIR.ProjectionListId).run {}
+run_cmd discard <| (deriveQuote ``MIR.OperandId).run {}
+run_cmd discard <| (deriveQuote ``MIR.OperandListId).run {}
+run_cmd discard <| (deriveQuote ``MIR.ConstantId).run {}
+run_cmd discard <| (deriveQuote ``MIR.RvalueId).run {}
+run_cmd discard <| (deriveQuote ``MIR.StatementId).run {}
+run_cmd discard <| (deriveQuote ``MIR.TerminatorId).run {}
+run_cmd discard <| (deriveQuote ``MIR.BlockNodeId).run {}
+run_cmd discard <| (deriveQuote ``MIR.BodyId).run {}
+run_cmd discard <| (deriveQuote ``MIR.ConstantNode).run {}
+run_cmd discard <| (deriveQuote ``MIR.PlaceNode).run {}
+run_cmd discard <| (deriveQuote ``MIR.OperandNode).run {}
+run_cmd discard <| (deriveQuote ``MIR.StatementNode).run {}
+run_cmd discard <| (deriveQuote ``MIR.TerminatorNode).run {}
+run_cmd discard <| (deriveQuote ``MIR.BlockNode).run {}
+run_cmd discard <| (deriveQuote ``MIR.BodyNode).run {}
+run_cmd discard <| (deriveQuote ``MIR.SyntaxTables).run {}
+run_cmd discard <| (deriveQuote ``Miri.Interpreter.CallReifyReason).run {}
+run_cmd discard <| (deriveQuote ``Miri.Interpreter.CallShimKind).run {}
+run_cmd discard <| (deriveQuote ``Miri.Interpreter.CallInstanceKind).run {}
+run_cmd discard <| (deriveQuote ``Miri.Interpreter.CallInstance).run {}
+run_cmd discard <| (deriveQuote ``Miri.Interpreter.CallFunctionKind).run {}
+run_cmd discard <| (deriveQuote ``Miri.ABI.ExternAbi).run {}
+run_cmd discard <| (deriveQuote ``Input.FunctionTypeData).run {}
+run_cmd discard <| (deriveQuote ``Input.FunctionQueryData).run {}
+run_cmd discard <| (deriveQuote ``Miri.ABI.ArmCall).run {}
+run_cmd discard <| (deriveQuote ``Miri.ABI.InterruptKind).run {}
+run_cmd discard <| (deriveQuote ``Miri.ABI.X86Call).run {}
+run_cmd discard <| (deriveQuote ``Miri.ABI.CanonAbi).run {}
+run_cmd discard <| (deriveQuote ``Miri.Interpreter.ForeignItems.SignatureType).run {}
+run_cmd discard <| (deriveQuote ``Miri.Interpreter.ForeignItems.Signature).run {}
+run_cmd discard <| (deriveQuote ``Input.InstanceAbiQuery).run {}
+run_cmd discard <| (deriveQuote ``Input.ShimAbiQuery).run {}
+run_cmd discard <| (deriveQuote ``Input.NamedShimAbiQuery).run {}
+run_cmd discard <| (deriveQuote ``Input.PointerAbiQuery).run {}
+run_cmd discard <| (deriveQuote ``Input.SignatureAbiQuery).run {}
+run_cmd discard <| (deriveQuote ``Input.CovarianceQuery).run {}
+run_cmd discard <| (deriveQuote ``Input.AbiQueries).run {}
+run_cmd discard <| (deriveQuote ``Input.IntrinsicData).run {}
+run_cmd discard <| (deriveQuote ``Input.RuntimeTypeData).run {}
+run_cmd discard <| (deriveQuote ``Input.RuntimeVirtualData).run {}
+run_cmd discard <| (deriveQuote ``Input.NativeSignatureData).run {}
+run_cmd discard <| (deriveQuote ``Input.RuntimeInstanceData).run {}
+run_cmd discard <| (deriveQuote ``Input.CompilerTables).run {}
+run_cmd discard <| (deriveQuote ``Input.SourceScopeData).run {}
+run_cmd discard <| (deriveQuote ``Input.BodySourceData).run {}
+run_cmd discard <| (deriveQuote ``Input.PatternData).run {}
+run_cmd discard <| (deriveQuote ``Input.NormalizationData).run {}
+run_cmd discard <| (deriveQuote ``Input.MIRInputTables).run {}
+run_cmd discard <| (deriveQuote ``Input.ImportDocument).run {}
+run_cmd discard <| (deriveQuote ``Input.ExecutionInput).run {}
+run_cmd discard <| (deriveQuote ``Input.DecodeResult).run {}
 
 end
 end

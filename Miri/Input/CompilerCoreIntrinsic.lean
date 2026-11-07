@@ -18,8 +18,7 @@ def variantCount (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except StepE
     pure source
   let source ← get ty
   let source ← if source.shapeKind == .patternType then do
-      let id ← ((source.payload.getObjVal? "shape").bind (·.getObjVal? "base") >>= fun value =>
-        value.getObjValAs? Nat "type_id").mapError StepError.unsupported
+      let some id := source.relations.base | throw (.unsupported "pattern base compiler type absent")
       get id
     else pure source
   match source.shapeKind with
@@ -28,7 +27,7 @@ def variantCount (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except StepE
   | .patternType | .boundType => throw (.invalidProgram "source invariant: invalid nested pattern/bound type in variant_count")
   | .unknown _ => throw (.unsupported "variant_count compiler shape unknown")
   | .adt =>
-    let variants ← ((source.payload.getObjVal? "shape").bind (·.getObjVal? "variants") >>= Json.getArr?).mapError StepError.unsupported
+    let variants ← p.runtime.typeVariants source.id |>.mapError (fun error => StepError.unsupported (toString error))
     pure variants.size
   | _ => pure 0
 

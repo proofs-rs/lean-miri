@@ -10,23 +10,32 @@ private def replace (j : Json) (key : String) (value : Json) : Except String Jso
   match j with
   | .obj fields => .ok (Json.mkObj ((key, value) :: fields.toList.filter (·.1 != key)))
   | _ => .error "expected object"
-private def changeEnd (root : Json) (id : Nat) (last : Json) : Except String Json := do
-  let types ← (← field root "types").getArr?
-  let types ← types.mapM fun ty => do
-    if (← (← field ty "type_id").getNat?) != id then return ty
-    let layout ← field ty "layout"
-    let backend ← field layout "backend_repr"
-    let scalar ← field backend "scalar"
-    let range ← field scalar "valid_range"
-    let range ← replace range "end" last
-    let scalar ← replace scalar "valid_range" range
-    let backend ← replace backend "scalar" scalar
-    let layout ← replace layout "backend_repr" backend
-    replace ty "layout" layout
-  replace root "types" (.arr types)
+private def changeEnd (root : Json) (id : Nat) (last : Json) (nicheMode : Bool := false) : Except String Json := do
+  let catalog ← Reader.Catalog.parse root
+  let rows ← catalog.array (← catalog.field catalog.root "types" "$") "types"
+  let mut selected := none
+  for row in rows do
+    if (← catalog.natural (← catalog.field row "type_id" "type") "type_id") == id then
+      selected := some row
+  let some row := selected | throw "source type missing"
+  let layout ← catalog.field row "layout" "type"
+  let range ← if nicheMode then
+      catalog.field (← catalog.field layout "largest_niche" "layout") "valid_range" "niche"
+    else do
+      let backend ← catalog.field layout "backend_repr" "layout"
+      catalog.field (← catalog.field backend "scalar" "backend") "valid_range" "scalar"
+  let slot ← catalog.sharedId? range "valid_range"
+  let some slot := slot | throw "fixture range must be a shared entry"
+  let edited ← replace (← catalog.inspect range "valid_range") "end" last
+  if bound : slot < catalog.nodes.size then
+    let nodes := catalog.nodes.set slot edited bound
+    let shared ← replace (← field root "shared_payloads") "nodes" (.arr nodes)
+    replace root "shared_payloads" shared
+  else throw "range table index invalid"
 private def rangeOf (document : ImportDocument) (id : Nat) : Except String (Nat × Nat) := do
   let some ty := document.types.find? (·.id == id) | throw "source u128 type missing"
-  let some backend := ty.layout.backendRepresentation | throw "scalar backend missing"
+  let layout ← document.layoutTable.lookup ty.layoutId |>.mapError (fun id => s!"missing layout {id}")
+  let some backend := layout.backendRepresentation | throw "scalar backend missing"
   let some scalar := backend.scalar | throw "scalar missing"
   let some range := scalar.validRange | throw "range missing"
   pure range
@@ -34,13 +43,10 @@ private def rangeOf (document : ImportDocument) (id : Nat) : Except String (Nat 
 def main (args : List String) : IO Unit := do
   let path::_ := args | throw (IO.userError "missing exported JSON")
   let source ← IO.FS.readFile path
-  -- Inspect and mutate semantic values after resolving shared transport. Keep
-  -- an empty catalog so edited documents reach the scalar/niche validators.
-  let original ← must (SharedPayloads.resolveCatalog (← must (Json.parse source)))
-  let original ← must (replace original "shared_payloads"
-    (Json.mkObj [("schema_version", toJson (2 : Nat)), ("nodes", toJson (#[] : Array Json))]))
-  let primitive ← must (field (← must (field original "compiler_runtime_primitives")) "u128")
-  let id ← must ((← must (field primitive "type_id")).getNat?)
+  let original ← must (Json.parse source)
+  let catalog ← must (Reader.Catalog.parse original)
+  let primitive ← must (catalog.field (← must (catalog.field catalog.root "compiler_runtime_primitives" "$")) "u128" "primitives")
+  let id ← must (catalog.natural (← must (catalog.field primitive "type_id" "u128")) "type_id")
   let decoded ← must (decodeJson source)
   let range ← must (rangeOf decoded.document id)
   check (range == (0,2^128-1)) "actual compiler u128 range was clipped"
@@ -54,27 +60,20 @@ def main (args : List String) : IO Unit := do
     for encoded in [Json.str (toString value), toJson value] do
       let edited ← must (changeEnd original id encoded)
       let decoded ← must (decodeJson edited.compress)
-      check ((← must (rangeOf decoded.document id)).2 == value) "decimal/legacy natural changed"
-  check (metadata.layouts.any fun (_, entry) =>
-    entry.toOption.any fun value => value.layout.largestNiche.any fun niche =>
+      check ((← must (rangeOf decoded.document id)).2 == value) "decimal/natural value changed"
+  check (metadata.source.types.any fun ty =>
+    (metadata.lookup ty.id).toOption.any fun value => value.layout.largestNiche.any fun niche =>
       niche.value == .Int .I128 false && niche.validRange.start.toNat == 1 &&
         niche.validRange.end.toNat == 2^128-1) "actual compiler u128 niche range changed"
   let some nicheType := decoded.document.types.find? (fun ty =>
-    match ty.layout.payload.getObjValAs? Json "largest_niche" with
-    | .ok niche => match niche.getObjVal? "valid_range" with
-      | .ok range => (range.getObjValAs? String "end").toOption == some (toString (2^128-1 : Nat))
-      | _ => false
-    | _ => false) | throw (IO.userError "actual NonZeroU128 niche missing")
+      (decoded.document.layoutTable.lookup ty.layoutId).toOption.any fun layout =>
+        layout.largestNiche.any (·.validRange.2 == 2^128-1))
+    | throw (IO.userError "actual NonZeroU128 niche missing")
   let invalid : List Json := [Json.str "", .str "-1", .str "+1", .str "1_0", .str "0xFF", .str "1.0",
     .str (toString (2^128 : Nat)), toJson (2^128 : Nat), toJson (-1 : Int), .bool true, .null]
   for encoded in invalid do
     let edited ← must (changeEnd original id encoded)
     check (!(decodeJson edited.compress).isOk) s!"invalid u128 range accepted: {encoded.compress}"
-    let niche ← must (field nicheType.layout.payload "largest_niche")
-    let range ← must (field niche "valid_range")
-    let range ← must (replace range "end" encoded)
-    let niche ← must (replace niche "valid_range" range)
-    let payload ← must (replace nicheType.layout.payload "largest_niche" niche)
-    check (!(RuntimeMetadata.layout metadata.target { nicheType.layout with payload }).isOk)
-      s!"invalid raw niche endpoint accepted: {encoded.compress}"
-  IO.println "actual u128 compiler/runtime range exact; 6 decimal/legacy cases preserved and 11 malformed/overflow scalar and niche cases rejected"
+    let edited ← must (changeEnd original nicheType.id encoded true)
+    check (!(decodeJson edited.compress).isOk) s!"invalid niche endpoint accepted: {encoded.compress}"
+  IO.println "actual u128 compiler/runtime range exact; 6 decimal/natural cases preserved and 11 malformed/overflow scalar and niche cases rejected"

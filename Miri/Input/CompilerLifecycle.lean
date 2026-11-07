@@ -13,73 +13,35 @@ structure Prepared where
   program : LoweredProgram
   entries : Array Entry
 
-private def supported (j : Json) : Except String Unit := do
-  unless (← (← j.getObjVal? "status").getStr?) == "supported" do
-    throw s!"unresolved compiler lifecycle query: {j.compress}"
-
-private def decodeChecks (ctx : LowerContext) (interner : CompilerSpanInterner)
-    (callee : CallInstance) (payload : Json) :
-    Except String (Array (Except StepError CompilerConstantEvidence) × CompilerSpanInterner) := do
-  let original ← (← payload.getObjVal? "required_consts").getArr?
-  let query ← (← payload.getObjVal? "constant_query_context").getObjVal? "required_constant_checks"
-  supported query
-  unless (← (← query.getObjVal? "typing_env").getStr?) == "body_typing_env" do
-    throw "required-constant typing environment mismatch"
-  let checks ← (← query.getObjVal? "checks").getArr?
-  unless checks.size == original.size do throw "required-constant query count mismatch"
-  let mut interner := interner
-  let mut evidence := #[]
-  for index in [:checks.size] do
-    let some check := checks[index]? | throw "required check absent"
-    let some source := original[index]? | throw "required source operand absent"
-    unless (← (← check.getObjVal? "index").getNat?) == index do throw "required-constant source order mismatch"
-    unless (← check.getObjVal? "span") == (← source.getObjVal? "span") do
-      throw "required-constant source span mismatch"
-    let result ← check.getObjVal? "result"
-    if ((result.getObjVal? "status").bind Json.getStr?).toOption == some "supported" then
-      let normalized ← result.getObjVal? "normalized_operand"
-      unless (← normalized.getObjVal? "span") == (← source.getObjVal? "span") do
-        throw "required constant normalization changed source span"
-      let (source,nextInterner) ← lowerCompilerConstOperandWithInterner ctx interner (← ctx.decodeCompilerValue source)
-      let (normal,nextInterner) ← lowerCompilerConstOperandWithInterner ctx nextInterner (← ctx.decodeCompilerValue normalized)
-      let ty ← (← normalized.getObjVal? "type").getObjValAs? Nat "type_id"
-      let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue (← result.getObjVal? "value"))
-      interner := nextInterner
-      evidence := evidence.push (.ok ⟨callee,source.value,normal.value,normal.span,value⟩)
-    else
-      let kind := ((result.getObjVal? "kind").bind Json.getStr?).toOption
-      let error := if kind == some "required_const_normalization_error" ||
-          kind == some "required_const_evaluation_error" then
-        StepError.invalidProgram s!"required constant compiler failure: {result.compress}"
-        else StepError.unsupported s!"required constant unresolved: {result.compress}"
-      evidence := evidence.push (.error error)
-  return (evidence,interner)
+private def decodeChecks (tables : MIRInputTables) (index : Nat) (callee : CallInstance) :
+    Except String (Array (Except StepError CompilerConstantEvidence)) := do
+  let some source := tables.bodySources[index]? | throw "body compiler metadata absent"
+  (← source.requiredConstants).mapM fun check => do
+    match check with
+    | .error (.invalidProgram reason) => return .error (.invalidProgram reason)
+    | .error (.unsupported reason) => return .error (.unsupported reason)
+    | .ok check =>
+      let source ← tables.mir.constants.lookup check.source.index |>.mapError (fun id => s!"invalid required source constant {id}")
+      let normalized ← tables.mir.constants.lookup check.normalized.index |>.mapError (fun id => s!"invalid normalized required constant {id}")
+      return .ok ⟨callee,source.operand.value,normalized.operand.value,normalized.operand.span,check.value⟩
 
 def prepare (program : LoweredProgram) : Prepared := Id.run do
-  let ctx := LowerContext.ofDocument program.input
   let mut interner := CompilerSpanInterner.ofTables program.compilerTables
   let mut entries := #[]
   for body in program.bundle.bodies do
     let preamble := do
-      lowerCompilerSpanWithInterner interner (← ctx.decodeCompilerValue (← body.input.payload.getObjVal? "preamble_def_span"))
+      let some id := body.input.definitionSpan | throw "compiler definition span absent"
+      let span ← program.input.sourceSpans.lookup id |>.mapError fun id => s!"invalid definition span {id}"
+      lowerCompilerSpanWithInterner interner (.sourceSpan span)
     let preamble ← match preamble with
       | .error error => pure (.error error)
       | .ok (span,next) =>
         interner := next
         pure (.ok span)
-    let decoded := do
-      CompilerInstance.decode ctx interner.getTables (← body.input.payload.getObjVal? "constant_query_context")
-    let callee ← match decoded with
-      | .error error => pure (.error error)
-      | .ok (callee,next) =>
-        interner := interner.rebind next
-        pure (.ok callee)
-    let checks := do decodeChecks ctx interner (← callee) body.input.payload
-    let checks ← match checks with
-      | .error error => pure (.error error)
-      | .ok (checks,next) =>
-        interner := next
-        pure (.ok checks)
+    let callee := do
+      let some source := program.input.mirTables.bodySources[entries.size]? | throw "body compiler instance absent"
+      source.callee
+    let checks := do decodeChecks program.input.mirTables entries.size (← callee)
     entries := entries.push ⟨preamble,callee,checks⟩
   return ⟨program.withCompilerTables interner.getTables,entries⟩
 
@@ -89,7 +51,10 @@ private def lift (query : Except String A) : MachineHooks.M K User A :=
   | .error error => throw (.unsupported s!"compiler lifecycle: {error}")
 private def entry (p : Prepared) (body : LoadedBody) : Except String Entry := do
   let some actual := p.program.bundle.bodies[body.identity.index]? | throw "canonical body identity absent"
-  unless actual.body == body.body do throw "canonical body identity/content mismatch"
+  unless actual.bodyId == body.bodyId do
+    throw "canonical body ID mismatch"
+  unless actual.body == body.body do
+    throw "canonical body metadata mismatch"
   let some entry := p.entries[body.identity.index]? | throw "body lifecycle evidence absent"
   return entry
 
@@ -119,14 +84,16 @@ theorem preamble_known (p : Prepared) (body : LoadedBody) (actual : LoweredBody)
     (span : SpanRef) (fnInstance : CallInstance)
     (row : p.program.bundle.bodies[body.identity.index]? = some actual)
     (contents : actual.body = body.body)
+    (wire : actual.bodyId = body.bodyId)
     (evidence : p.entries[body.identity.index]? = some ⟨.ok span,.ok fnInstance,.ok #[]⟩) :
     (preambleSpan p body : MachineHooks.M K U SpanRef) = pure span := by
-  simp [preambleSpan, entry, lift, row, contents, evidence,
+  simp [preambleSpan, entry, lift, row, contents, wire, evidence,
     bind, Except.bind, pure, Except.pure]
  theorem required_empty (p : Prepared) (body : LoadedBody) (actual : LoweredBody)
     (span : SpanRef) (fnInstance : CallInstance)
     (row : p.program.bundle.bodies[body.identity.index]? = some actual)
     (contents : actual.body = body.body)
+    (wire : actual.bodyId = body.bodyId)
     (evidence : p.entries[body.identity.index]? = some ⟨.ok span,.ok fnInstance,.ok #[]⟩)
     (frames : Array (Frame Provenance LocalLayout MachineHooks.FrameExtra))
     (frame : Frame Provenance LocalLayout MachineHooks.FrameExtra)
@@ -135,7 +102,7 @@ theorem preamble_known (p : Prepared) (body : LoadedBody) (actual : LoweredBody)
     (function : frame.functionInstance = fnInstance) :
     requiredConstants p body (⟨⟨frames.push frame⟩,machine⟩ : MachineHooks.State K U) =
       .ok () ⟨⟨frames.push frame⟩,machine⟩ := by
-  simp [requiredConstants, entry, lift, row, contents, evidence,
+  simp [requiredConstants, entry, lift, row, contents, wire, evidence,
     MachineHooks.currentFrame, Stack.currentFrame?, identity, function,
     get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,
     Except.bind,Except.pure]

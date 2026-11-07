@@ -26,9 +26,8 @@ def make (p : CompilerCallPipeline.Prepared) : VirtualCalls.CompilerHooks S C :=
     resolveDropGlue := fun ty => lift (CompilerRuntimeQueries.resolveDropGlue p.runtime ty)
     requiresCallerLocation := fun callee => lift (CompilerRuntimeQueries.requiresCallerLocation p.runtime callee)
     sourceScope := fun identity _ body index => do
-      let some actual := p.scopes.program.bundle.bodies[identity.index]?
-        | throw (.unsupported "canonical frame body identity is absent")
-      unless actual.body == body do throw (.invalidProgram "frame body identity/content mismatch")
+      let actual ← lift (p.scopes.program.input.mirTables.bodyId identity.index)
+      unless actual == body do throw (.invalidProgram "frame body ID mismatch")
       lift (CompilerScopes.sourceScope p.scopes identity.index index)
     unitLayout := lift (CompilerFacts.unitLayout facts.context) }
 end Miri.Input.CompilerVirtualLeaves

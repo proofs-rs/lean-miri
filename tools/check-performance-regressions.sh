@@ -14,7 +14,7 @@ done
 for test in CompilerSpanInterner2026 AllocationImageIndexed2026 JsonTraversalCache2026; do
   lake env lean --run "MiriTests/Input/$test.lean"
 done
-for test in DecoderDynamicScan2026 CompilerFunctionAbiMemoTests2026 CompilerBacktraceIndexTests2026 CompilerPreparationInterner2026; do
+for test in DecoderDynamicScan2026 AbiTableFailures CompilerBacktraceIndexTests2026 CompilerPreparationInterner2026; do
   lake env lean --run "tests/input/$test.lean" scratch/decoder-id-inputs/genuine-mir-features.json
 done
 lake env lean --run tests/constant/AllocationImageTests.lean scratch/decoder-id-inputs/genuine-mir-features.json

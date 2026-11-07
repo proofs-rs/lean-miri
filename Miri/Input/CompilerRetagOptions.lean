@@ -17,20 +17,10 @@ structure Options where
 def rustcNoWritable (p : CompilerProviders.Prepared) (id : DefId) : Except String Bool := do
   let some definition := p.program.compilerTables.definitions[id]?
     | throw "retag frame absent from canonical compiler definition table"
-  let rows ← (← p.program.input.raw.getObjVal? "compiler_retag_queries").getArr?
-  let mut selected : Option Bool := none
-  let mut seen : Array DefinitionId := #[]
-  for row in rows do
-    let value ← row.getObjVal? "definition"
-    let key : DefinitionId := ⟨← value.getObjValAs? Nat "crate", ← value.getObjValAs? Nat "index"⟩
-    if seen.contains key then throw "duplicate compiler retag definition query"
-    seen := seen.push key
-    if key == definition then
-      unless (← row.getObjValAs? String "status") == "supported" do
-        throw "compiler rustc_no_writable attribute query unavailable"
-      selected := some (← row.getObjValAs? Bool "rustc_no_writable")
-  let some value := selected | throw "exact compiler retag frame attribute query absent"
-  pure value
+  let table ← p.program.input.mirTables.retagAttributes
+  let some (key,value) := table.entries[id]? | return ← table.absent
+  unless key == definition do throw "retag compiler definition table identity mismatch"
+  value
 
 def make (p : CompilerProviders.Prepared) (options : Options) : EvalRetagMachine.Leaves K U where
   implicitWrites := pure options.implicitWrites

@@ -1,3 +1,4 @@
+import Miri.Input.AllocIdWorldValidation
 import Lean.Util.Profile
 import Miri.Input.CompilerLifecyclePipeline
 import Miri.Interpreter.FunctionPointers
@@ -60,16 +61,13 @@ def inlineNeverUsing (lookup : InlineLookup prepared) (callee : CallInstance) :
   return none
 
 def prepare (calls : CompilerCallPipeline.Prepared) : Except String Prepared := do
-  let raw ← (← (← calls.calls.program.input.raw.getObjVal? "compiler_runtime_queries").getObjVal? "instances").getArr?
-  let ctx := LowerContext.ofDocument calls.calls.program.input
-  let tables := calls.calls.program.compilerTables
+  let program := calls.calls.program
+  let records ← program.input.mirTables.runtimeInstances
   let mut entries := #[]
   let mut indexed : InlineIndex := {}
-  for record in raw do
-    let (callee,next) ← CompilerInstance.decode ctx tables record
-    unless next.definitions == tables.definitions && next.typeConstants == tables.typeConstants do
-      throw "function inline query requires unprepared shared compiler identities"
-    let never ← (← record.getObjVal? "inline_never").getBool?
+  for record in records do
+    let callee ← program.input.mirTables.instance record.instanceId
+    let never := record.inlineNever
     let key := callee.defId
     let bucket := (indexed[key]?).getD #[]
     if let some (_,old) := bucket.find? (fun e : CallInstance × Bool => e.1 == callee) then
@@ -110,9 +108,9 @@ private def seedImportedImpl (p : Prepared) (image : AllocationImage.Imported)
   if let some world := world? then
     unless memory.sourceAllocIdWorldActive do
       throw "prepared function catalog requires the active source AllocId world"
-    unless image.source == input.allocations.filter (·.status == .supported) do
+    unless AllocationImage.sameSource image.source (input.allocations.filter (·.status == .supported)) do
       throw "prepared function catalog allocation image differs from its owning program"
-    Miri.Input.validateCompilerAllocIdWorldRaw input.raw input.allocations (some world)
+    AllocIdWorldValidation.validate input
       |>.mapError fun error => s!"prepared AllocId world: {error}"
   else
     for (_,id) in memory.importedGlobalIds do

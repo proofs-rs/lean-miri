@@ -1,9 +1,13 @@
 import Miri.Interpreter.Stack
 open Miri.Interpreter Miri.Memory Miri.ABI Miri.MIR
 
-def body : Body := ⟨.Built, 0, none, #[0, 0], #[⟨#[], ⟨⟨⟨0⟩, 0⟩, .Return⟩, false⟩]⟩
-def fixtureBodies : Array Body := #[body]
-def fixtureLoaded : LoadedBody := ⟨BodyIdentity.ofCanonicalIndex 0, fixtureBodies[0]⟩
+def body : BodyNode := ⟨.Built, 0, none, #[0, 0], #[⟨0⟩], 0, #[1]⟩
+def fixtureTables : SyntaxTables := {
+  bodies := #[some body]
+  blocks := #[some ⟨#[], ⟨0⟩, false⟩]
+  terminators := #[some ⟨⟨⟨0⟩, 0⟩, .Return⟩] }
+def fixtureLoaded : LoadedBody :=
+  (LoadedBody.ofTables (BodyIdentity.ofCanonicalIndex 0) fixtureTables ⟨0⟩).toOption.get (by simp [LoadedBody.ofTables, fixtureTables, body, Miri.MIR.SharedTable.lookup, Except.mapError, bind, Except.bind, pure, Except.pure, Except.toOption])
 def returnLayout : LocalLayout := ⟨body.locals[0], {
     fields := .Primitive, variants := .Single 0, backendRepr := .Memory (sized := true),
     largestNiche := none, uninhabited := false, align := .new Align.ONE, size := Size.ZERO,
@@ -25,7 +29,6 @@ def lifecycle : StackLifecycleHooks Unit Bool Unit Nat :=
     afterPush := fun st s => ⟨st, s + 100, .ok ()⟩
     beforePop := fun st s => ⟨st, s + 1000, .ok ()⟩
     afterPop := fun st s _ unwinding => ⟨st, s + (if unwinding then 10000 else 100000), .ok .normal⟩
-    alwaysLiveVarsAndTemps := fun _ => .ok #[1]
     deallocateVararg := fun s _ => ⟨s + 1000000, .ok ()⟩ }
 def check (ok : Bool) (message : String) : IO Unit :=
   unless ok do throw (IO.userError message)

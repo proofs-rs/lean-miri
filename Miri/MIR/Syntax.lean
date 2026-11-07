@@ -400,31 +400,37 @@ inductive Operand where
   | RuntimeChecks (check : RuntimeChecks)
   deriving Repr, DecidableEq
 
-structure CopyNonOverlapping where
+structure CopyNonOverlappingForm (Operand : Type) where
   source : Operand
   destination : Operand
   count : Operand
   deriving Repr, DecidableEq
 
-inductive NonDivergingIntrinsic where
+abbrev CopyNonOverlapping := CopyNonOverlappingForm Operand
+
+inductive NonDivergingIntrinsicForm (Operand : Type) where
   | Assume (condition : Operand)
-  | CopyNonOverlapping (args : CopyNonOverlapping)
+  | CopyNonOverlapping (args : CopyNonOverlappingForm Operand)
   deriving Repr, DecidableEq
 
-inductive AggregateKind where
+abbrev NonDivergingIntrinsic := NonDivergingIntrinsicForm Operand
+
+inductive AggregateForm (Arguments : Type) where
   | Array (elementType : TyId)
   | Tuple
-  | Adt (definition : DefId) (variant : VariantIndex) (arguments : Array GenericArg)
+  | Adt (definition : DefId) (variant : VariantIndex) (arguments : Arguments)
       (userType : Option UserTypeAnnotationIndex) (activeField : Option FieldIndex)
-  | Closure (definition : DefId) (arguments : Array GenericArg)
-  | Coroutine (definition : DefId) (arguments : Array GenericArg)
-  | CoroutineClosure (definition : DefId) (arguments : Array GenericArg)
+  | Closure (definition : DefId) (arguments : Arguments)
+  | Coroutine (definition : DefId) (arguments : Arguments)
+  | CoroutineClosure (definition : DefId) (arguments : Arguments)
   | RawPtr (pointeeType : TyId) (mutability : Mutability)
   deriving Repr, DecidableEq
 
-inductive Rvalue where
+abbrev AggregateKind := AggregateForm (Array GenericArg)
+
+inductive RvalueForm (Place Operand Count Region Aggregate Operands : Type) where
   | Use (operand : Operand) (retag : WithRetag)
-  | Repeat (operand : Operand) (count : TypeConst)
+  | Repeat (operand : Operand) (count : Count)
   | Ref (region : Region) (borrow : BorrowKind) (place : Place)
   | ThreadLocalRef (definition : DefId)
   | RawPtr (kind : RawPtrKind) (place : Place)
@@ -432,13 +438,15 @@ inductive Rvalue where
   | BinaryOp (operator : BinOp) (left right : Operand)
   | UnaryOp (operator : UnOp) (operand : Operand)
   | Discriminant (place : Place)
-  | Aggregate (kind : AggregateKind) (operands : Array Operand)
+  | Aggregate (kind : Aggregate) (operands : Operands)
   | CopyForDeref (place : Place)
   | WrapUnsafeBinder (operand : Operand) (targetType : TyId)
   | Reborrow (ty : TyId) (mutability : Mutability) (place : Place)
   deriving Repr, DecidableEq
 
-inductive StatementKind where
+abbrev Rvalue := RvalueForm Place Operand TypeConst Region AggregateKind (Array Operand)
+
+inductive StatementKindForm (Place Rvalue Intrinsic : Type) where
   | Assign (destination : Place) (value : Rvalue)
   | FakeRead (cause : FakeReadCause) (place : Place)
   | SetDiscriminant (place : Place) (variant : VariantIndex)
@@ -447,11 +455,13 @@ inductive StatementKind where
   | PlaceMention (place : Place)
   | AscribeUserType (place : Place) (projection : UserTypeProjection) (variance : Variance)
   | Coverage (coverage : CoverageKind)
-  | Intrinsic (intrinsic : NonDivergingIntrinsic)
+  | Intrinsic (intrinsic : Intrinsic)
   | ConstEvalCounter
   | Nop
   | BackwardIncompatibleDropHint (place : Place) (reason : BackwardIncompatibleDropReason)
   deriving Repr, DecidableEq
+
+abbrev StatementKind := StatementKindForm Place Rvalue NonDivergingIntrinsic
 
 inductive SwitchTarget where
   | Case (value : Nat) (target : BasicBlockId)
@@ -462,10 +472,12 @@ structure SwitchTargets where
   otherwise : BasicBlockId
   deriving Repr, DecidableEq
 
-structure SpannedOperand where
+structure SpannedOperandForm (Operand : Type) where
   span : SpanRef
   operand : Operand
   deriving Repr, DecidableEq
+
+abbrev SpannedOperand := SpannedOperandForm Operand
 
 structure InlineAsmOptions where
   pure : Bool
@@ -501,28 +513,32 @@ inductive InlineAsmRegOrRegClass where
   | RegClass (arch : InlineAsmArch) (resolvedClass : String)
   deriving Repr, DecidableEq
 
-inductive InlineAsmOperand where
+inductive InlineAsmOperandForm (Place Operand Constant : Type) where
   | In (register : InlineAsmRegOrRegClass) (value : Operand)
   | Out (register : InlineAsmRegOrRegClass) (late : Bool) (place : Option Place)
   | InOut (register : InlineAsmRegOrRegClass) (late : Bool) (input : Operand)
       (output : Option Place)
-  | Const (value : ConstOperand)
-  | SymFn (value : ConstOperand)
+  | Const (value : Constant)
+  | SymFn (value : Constant)
   | SymStatic (definition : DefId)
   | Label (targetIndex : Nat)
   deriving Repr, DecidableEq
 
-structure InlineAsmTerminator where
+abbrev InlineAsmOperand := InlineAsmOperandForm Place Operand ConstOperand
+
+structure InlineAsmTerminatorForm (Operand : Type) where
   asmMacro : InlineAsmMacro
   template : Array InlineAsmTemplatePiece
-  operands : Array InlineAsmOperand
+  operands : Array Operand
   options : InlineAsmOptions
   lineSpans : Array SpanRef
   targets : Array BasicBlockId
   unwind : UnwindAction
   deriving Repr, DecidableEq
 
-inductive AssertKind where
+abbrev InlineAsmTerminator := InlineAsmTerminatorForm InlineAsmOperand
+
+inductive AssertKindForm (Operand : Type) where
   | BoundsCheck (length index : Operand)
   | Overflow (operator : BinOp) (left right : Operand)
   | OverflowNeg (operand : Operand)
@@ -537,7 +553,9 @@ inductive AssertKind where
   | InvalidEnumConstruction (operand : Operand)
   deriving Repr, DecidableEq
 
-inductive TerminatorKind where
+abbrev AssertKind := AssertKindForm Operand
+
+inductive TerminatorKindForm (Place Operand SpannedOperand Assert InlineAsm : Type) where
   | Goto (target : BasicBlockId) (loopHints : Array LoopHintAttr)
   | SwitchInt (discriminant : Operand) (targets : SwitchTargets)
   | UnwindResume
@@ -550,15 +568,17 @@ inductive TerminatorKind where
       (target : Option BasicBlockId) (unwind : UnwindAction) (source : CallSource)
       (functionSpan : SpanRef)
   | TailCall (function : Operand) (arguments : Array SpannedOperand) (functionSpan : SpanRef)
-  | Assert (condition : Operand) (expected : Bool) (message : AssertKind)
+  | Assert (condition : Operand) (expected : Bool) (message : Assert)
       (target : BasicBlockId) (unwind : UnwindAction)
   | Yield (value : Operand) (resume : BasicBlockId) (resumeArgument : Place)
       (drop : Option BasicBlockId)
   | CoroutineDrop
   | FalseEdge (realTarget imaginaryTarget : BasicBlockId)
   | FalseUnwind (realTarget : BasicBlockId) (unwind : UnwindAction)
-  | InlineAsm (asm : InlineAsmTerminator)
+  | InlineAsm (asm : InlineAsm)
   deriving Repr, DecidableEq
+
+abbrev TerminatorKind := TerminatorKindForm Place Operand SpannedOperand AssertKind InlineAsmTerminator
 
 structure SourceInfo where
   span : SpanRef

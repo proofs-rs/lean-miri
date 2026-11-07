@@ -539,25 +539,21 @@ def directoriesFromSource [DecidableEq MiriMemoryKind]
       | .error error => throw (.unsupported s!"compiler type shape for optional dirent field: {error}")
     unless node.shapeStatus == .supported do
       throw (.unsupported "compiler type shape for optional dirent field")
-    let shape ← match node.payload.getObjVal? "shape" with
-      | .ok value => pure value
-      | .error error => throw (.invalidProgram s!"compiler dirent shape field: {error}")
-    let variants ← match shape.getObjVal? "variants" >>= Lean.Json.getArr? with
+    let variants ← match p.runtime.typeVariants parent.layout.ty with
       | .ok value => pure value
       | .error error => throw (.invalidProgram s!"compiler dirent variants: {error}")
     if variants.size != 1 then throw (.unsupported "optional dirent fields require non-enum compiler ADT")
-    let some variant := variants[0]? | throw (.invalidProgram "compiler dirent missing variant")
-    let fields ← match variant.getObjVal? "fields" >>= Lean.Json.getArr? with
+    let variant ← match p.runtime.typeVariant parent.layout.ty 0 with
+      | .ok value => pure value
+      | .error error => throw (.invalidProgram s!"compiler dirent variant: {error}")
+    let fields ← match p.runtime.typeFields variant with
       | .ok value => pure value
       | .error error => throw (.invalidProgram s!"compiler dirent fields: {error}")
-    let matching := fields.filter fun field =>
-      ((field.getObjVal? "name").bind Lean.Json.getStr?).toOption == some name
+    let matching := fields.filter (fun field => field.name == some name)
     if matching.isEmpty then return none
     if matching.size != 1 then throw (.invalidProgram s!"ambiguous compiler dirent field {name}")
     let some field := matching[0]? | throw (.invalidProgram "compiler dirent field lookup failed")
-    let index ← match field.getObjVal? "index" >>= Lean.Json.getNat? with
-      | .ok value => pure value
-      | .error error => throw (.invalidProgram s!"compiler dirent field index: {error}")
+    let index := field.index
     let _ ← match p.runtime.field parent.layout index with
       | .ok value => pure value
       | .error error => throw (.unsupported s!"compiler dirent field layout: {error}")

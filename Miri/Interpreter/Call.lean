@@ -31,13 +31,6 @@ inductive FnVal (Other : Type) where
   | Other (value : Other)
   deriving Repr
 
-/-- Function-kind query after signature normalization, before callee resolution. -/
-inductive CallFunctionKind where
-  | FnPtr
-  | FnDef (definition : DefId) (args : Array GenericArg)
-  | invalid
-  deriving Repr
-
 structure CallRequest (P Other Extern FnABI : Type) where
   callee : FnVal Other
   callerAbi : Extern
@@ -66,9 +59,10 @@ structure CallHooks (P S C E Other Extern FnABI ArgABI : Type) where
   getFrame : CallM S (Frame P LocalLayout E)
   setFrame : Frame P LocalLayout E → CallM S Unit
   frameIndex : CallM S Nat
-  evalOperand : C → MIR.Operand → CallM S (OpTy P)
-  evalOperandAt : C → OperandPath → MIR.Operand → CallM S (OpTy P) := fun c _ => evalOperand c
-  evalPlace : C → MIR.Place → Bool → CallM S (RuntimeStackPlace P)
+  evalOperand : C → MIR.OperandId → CallM S (OpTy P)
+  evalOperandAt : C → OperandPath → MIR.OperandId → CallM S (OpTy P) := fun c _ => evalOperand c
+  evalPlace : C → MIR.PlaceId → Bool → CallM S (RuntimeStackPlace P)
+  evalLocalPlace : C → MIR.Place → Bool → CallM S (RuntimeStackPlace P)
   placeToOp : C → RuntimeStackPlace P → CallM S (OpTy P)
   forceAllocation : C → RuntimeStackPlace P → CallM S (MPlaceTy P)
   functionSignature : C → LocalLayout → CallM S (Nat × Extern)
@@ -96,7 +90,7 @@ structure CallHooks (P S C E Other Extern FnABI ArgABI : Type) where
   tupleFields : TyId → CallM S (Array TyId)
   projectFnArg : C → FnArg P → Nat → CallM S (FnArg P)
   localLayout : C → LocalId → CallM S LocalLayout
-  localSpan : Body → LocalId → CallM S SpanRef
+  localSpan : BodyIdentity → LocalId → CallM S SpanRef
   storageLiveDyn : C → LocalId → MemPlaceMeta P → CallM S Unit
   copyAllowTransmute : C → OpTy P → RuntimeStackPlace P → CallM S Unit
   protectArgument : C → MPlaceTy P → CallM S Unit
@@ -150,20 +144,46 @@ private def setSpan (h : Hooks) (span : SpanRef) : M Unit := do
   let frame ← h.getFrame
   h.setFrame { frame with location := .unwinding span }
 
-def moveDefinitelyDisjoint (args : Array SpannedOperand) (dest : Place) : Bool := Id.run do
+inductive MoveDestination where
+  | mir (id : PlaceId)
+  | returnLocal
+
+private def tableEntry (table : SharedTable A) (id : Nat) (kind : String) : Except StepError A :=
+  (table.lookup id).mapError (fun id => .invalidProgram s!"invalid MIR {kind} ID {id}")
+
+private def movePlace (tables : SyntaxTables) (id : PlaceId) : Except StepError (LocalId × Bool) := do
+  let place ← tableEntry tables.places id.index "place"
+  let projections ← tableEntry tables.projectionLists place.projection.index "projection list"
+  let deref ← match projections[0]? with
+    | none => pure false
+    | some id => do
+      let value ← tableEntry tables.projections id.index "projection"
+      pure (value == .Deref)
+  return (place.localId, deref)
+
+def moveDefinitelyDisjoint (tables : SyntaxTables) (args : Array SpannedOperandNode)
+    (dest : MoveDestination) : Except StepError Bool := do
   let mut seen : Array LocalId := #[]
-  let mut places : Array Place := #[]
+  let mut places : Array PlaceId := #[]
   for arg in args do
-    if let .Move place := arg.operand then places := places.push place
-  places := places.push dest
-  for place in places do
-    if place.projection[0]? == some .Deref || seen.contains place.localId then return false
-    seen := seen.push place.localId
+    if let .Move place := ← tableEntry tables.operands arg.operand.index "operand" then
+      places := places.push place
+  match dest with
+  | .mir id => places := places.push id
+  | .returnLocal => seen := #[0]
+  for id in places do
+    let (localId, deref) ← movePlace tables id
+    if deref || seen.contains localId then return false
+    seen := seen.push localId
   return true
 
-def evalFnCallArgumentAt (h : Hooks) (choice : C) (operand : MIR.Operand)
+def evalFnCallArgumentAt (h : Hooks) (choice : C) (operand : MIR.OperandId)
     (disjoint : Bool) (path : OperandPath) : M (FnArg P) := do
-  match operand with
+  let frame ← h.getFrame
+  let node ← match tableEntry frame.mirTables.operands operand.index "operand" with
+    | .ok value => pure value
+    | .error error => throw error
+  match node with
   | .Copy _ | .Constant _ | .RuntimeChecks _ => return .Copy (← h.evalOperandAt choice path operand)
   | .Move place =>
     let place ← h.evalPlace choice place true
@@ -174,14 +194,17 @@ def evalFnCallArgumentAt (h : Hooks) (choice : C) (operand : MIR.Operand)
       | .immediate _ => return .Copy op
     else return .InPlace (← h.forceAllocation choice place)
 
-def evalFnCallArgument (h : Hooks) (choice : C) (operand : MIR.Operand)
+def evalFnCallArgument (h : Hooks) (choice : C) (operand : MIR.OperandId)
     (disjoint : Bool) : M (FnArg P) :=
   evalFnCallArgumentAt h choice operand disjoint #[]
 
-def evalCalleeAndArgs (h : Hooks) (choice : C) (func : MIR.Operand)
-    (args : Array SpannedOperand) (dest : Place) : M (EvaluatedCall P Other Extern FnABI) := do
+def evalCalleeAndArgs (h : Hooks) (choice : C) (func : MIR.OperandId)
+    (args : Array SpannedOperandNode) (dest : MoveDestination) : M (EvaluatedCall P Other Extern FnABI) := do
   let func ← h.evalOperandAt choice (OperandPath.instruction "function") func
-  let disjoint := moveDefinitelyDisjoint args dest
+  let frame ← h.getFrame
+  let disjoint ← match moveDefinitelyDisjoint frame.mirTables args dest with
+    | .ok value => pure value
+    | .error error => throw error
   let mut evaluated := #[]
   for index in [:args.size] do
     let some arg := args[index]? | throw (.invalidProgram "missing source call argument")
@@ -207,7 +230,7 @@ def evalCalleeAndArgs (h : Hooks) (choice : C) (func : MIR.Operand)
 
 /-- Argument copy precedes protection; StorageLive precedes evaluating callee place. -/
 def passArgument (h : Hooks) (choice : C) (caller : FnArg P) (callerAbi calleeAbi : ArgABI)
-    (calleeIndex : Nat) (dest : Place) (calleeTy : TyId) (alreadyLive : Bool) : M Unit := do
+    (calleeIndex : Nat) (dest : MIR.Place) (calleeTy : TyId) (alreadyLive : Bool) : M Unit := do
   require (calleeTy == (h.argLayout calleeAbi).ty) "callee type does not match ABI"
   require (caller.layout.layout == (h.argLayout callerAbi).layout) "caller layout does not match ABI"
   unless ← h.checkArgumentCompat choice callerAbi calleeAbi do
@@ -217,7 +240,7 @@ def passArgument (h : Hooks) (choice : C) (caller : FnArg P) (callerAbi calleeAb
     require dest.projection.isEmpty "nonlocal destination in storage_live_dyn"
     require (!copied.metadata.hasMeta || copied.layout.ty == calleeTy) "argument metadata type mismatch"
     h.storageLiveDyn choice dest.localId copied.metadata
-  let dest ← h.evalPlace choice dest false
+  let dest ← h.evalLocalPlace choice dest false
   h.copyAllowTransmute choice copied dest
   if let .InPlace place := caller then h.protectArgument choice place
 
@@ -283,8 +306,8 @@ def initStackFrame (h : Hooks) (choice : C) (fnInstance : CallInstance) (loadedB
     let mut calleeIndex := 0
     for zeroIndex in [:body.argumentCount] do
       let localId := zeroIndex + 1
-      setSpan h (← h.localSpan body localId)
-      let dest : Place := ⟨localId, #[]⟩
+      setSpan h (← h.localSpan loadedBody.identity localId)
+      let dest : MIR.Place := ⟨localId, #[]⟩
       let ty := (← h.localLayout choice localId).ty
       if nonCapturing && localId == 1 then
         require (vaListArg.isNone && body.spreadArgument != some localId) "special closure argument conflict"
@@ -301,7 +324,7 @@ def initStackFrame (h : Hooks) (choice : C) (fnInstance : CallInstance) (loadedB
           require (h.argIsIgnore callerAbi) "closure caller ABI not ignored"
       else if vaListArg == some localId then
         h.storageLiveDyn choice localId .none
-        let dest ← h.evalPlace choice dest false
+        let dest ← h.evalLocalPlace choice dest false
         let mplace ← h.forceAllocation choice dest
         let mut remaining := #[]
         for idx in [callerIndex:args.size] do
@@ -341,7 +364,7 @@ def initStackFrame (h : Hooks) (choice : C) (fnInstance : CallInstance) (loadedB
         callerIndex := callerIndex + 1
         calleeIndex := calleeIndex + 1
     pure (callerIndex, calleeIndex)
-  setSpan h (← h.localSpan body 0)
+  setSpan h (← h.localSpan loadedBody.identity 0)
   unless ← h.checkArgumentCompat choice (h.abiReturn callerFnAbi) (h.abiReturn calleeFnAbi) do
     throw (.undefinedBehavior "AbiMismatchReturn")
   if let some mplace := destinationMplace then h.protectArgument choice mplace
@@ -445,13 +468,13 @@ def initFnTailCall (h : Hooks) (choice : C) (budget : Nat)
   let action ← h.cleanup choice false frame
   require (action == .normal) "tailcall cleanup must return Normal"
 
-def evalCallTerminator (h : Hooks) (choice : C) (budget : Nat) (terminator : Terminator) : M Unit := do
+def evalCallTerminator (h : Hooks) (choice : C) (budget : Nat) (terminator : TerminatorNode) : M Unit := do
   match terminator.kind with
   | .Call func args dest target unwind _ _ =>
     let oldIndex ← h.frameIndex
     let oldLoc := (← h.getFrame).location
     let destPlace ← h.evalPlace choice dest false
-    let evaluated ← evalCalleeAndArgs h choice func args dest
+    let evaluated ← evalCalleeAndArgs h choice func args (.mir dest)
     initFnCall h choice budget ⟨evaluated.callee, evaluated.callerAbi, evaluated.fnAbi, evaluated.args,
       evaluated.withCallerLocation, destPlace, target,
       if evaluated.fnAbi.any h.abiCanUnwind then unwind else .Unreachable⟩
@@ -461,11 +484,11 @@ def evalCallTerminator (h : Hooks) (choice : C) (budget : Nat) (terminator : Ter
           throw (.invalidProgram "evaluating this call made no progress")
   | _ => throw (.invalidProgram "call hook received a non-Call terminator")
 
-def evalTailCallTerminator (h : Hooks) (choice : C) (budget : Nat) (terminator : Terminator) : M Unit := do
+def evalTailCallTerminator (h : Hooks) (choice : C) (budget : Nat) (terminator : TerminatorNode) : M Unit := do
   match terminator.kind with
   | .TailCall func args _ =>
     let oldIndex ← h.frameIndex
-    let evaluated ← evalCalleeAndArgs h choice func args ⟨0, #[]⟩
+    let evaluated ← evalCalleeAndArgs h choice func args .returnLocal
     initFnTailCall h choice budget evaluated
     require ((← h.frameIndex) == oldIndex) "evaluating this tail call pushed a new stack frame"
   | _ => throw (.invalidProgram "tailCall hook received a non-TailCall terminator")
@@ -497,10 +520,10 @@ def liftStackResult (operation : Stack P LocalLayout E → Machine →
   | .error error => throw (.stack error)
 
 def pushRawFromStack (hooks : StackLifecycleHooks P LocalLayout E Machine)
-    (bodySpan : Body → Except StepError SpanRef)
+    (bodySpan : BodyIdentity → Except StepError SpanRef)
     (fnInstance : CallInstance) (body : LoadedBody) (destination : RuntimeStackPlace P)
     (cont : ReturnContinuation) : CallM (StepState P LocalLayout E Machine) Unit := do
-  let span ← match bodySpan body.body with
+  let span ← match bodySpan body.identity with
     | .ok value => pure value
     | .error error => throw error
   liftStackResult fun stack state => stack.pushStackFrameRaw state hooks body fnInstance cont destination span
@@ -545,7 +568,7 @@ abbrev ZeroHooks (P S C E Other Extern : Type) := CallHooks P S C E Other Extern
     | .mir _ => throw (.invalidProgram "raw frame does not have preamble location")
   h.setFrame {frame with trackCallerArg := none}
   let (_,calleeIndex) ← h.withRetagMode choice .FnEntry (pure (0,0))
-  setSpan h (← h.localSpan body.body 0)
+  setSpan h (← h.localSpan body.identity 0)
   unless ← h.checkArgumentCompat choice abi.ret abi.ret do
     throw (.undefinedBehavior "AbiMismatchReturn")
   h.protectArgument choice destination
@@ -584,7 +607,7 @@ def zeroImmediateCore (h : ZeroHooks P S C E Other Extern) (choice : C)
     | .mir _ => throw (.invalidProgram "raw frame does not have preamble location")
   h.setFrame {frame with trackCallerArg := none}
   let (_,calleeIndex) ← h.withRetagMode choice .FnEntry (pure (0,0))
-  setSpan h (← h.localSpan body.body 0)
+  setSpan h (← h.localSpan body.identity 0)
   unless ← h.checkArgumentCompat choice abi.ret abi.ret do
     throw (.undefinedBehavior "AbiMismatchReturn")
   setSpan h preamble
@@ -625,7 +648,7 @@ def zeroIndirectCore (h : ZeroHooks P S C E Other Extern) (choice : C) (fnInstan
     | .mir _ => throw (.invalidProgram "raw frame does not have preamble location")
   h.setFrame {frame with trackCallerArg := none}
   let (_,calleeIndex) ← h.withRetagMode choice .FnEntry (pure (0,0))
-  setSpan h (← h.localSpan body.body 0)
+  setSpan h (← h.localSpan body.identity 0)
   unless ← h.checkArgumentCompat choice abi.ret abi.ret do
     throw (.undefinedBehavior "AbiMismatchReturn")
   h.protectArgument choice memory

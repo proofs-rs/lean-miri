@@ -16,17 +16,8 @@ structure SpanHooks where
   dummy : SpanRef
   debugAssertions : Bool
 
-def frameSpan (frame : ActualFrame) : Except StepError SpanRef := do
-  match frame.location with
-  | .unwinding span => return span
-  | .mir location =>
-    let some block := frame.body.basicBlocks[location.block]? |
-      throw (.stack (.invalidLocation location))
-    if let some statement := block.statements[location.statementIndex]? then
-      return statement.sourceInfo.span
-    if location.statementIndex == block.statements.size then
-      return block.terminator.sourceInfo.span
-    throw (.stack (.invalidLocation location))
+def frameSpan (frame : ActualFrame) : Except StepError SpanRef :=
+  frame.currentSpan.mapError StepError.stack
 
 /-- Read the source-maintained cache belonging to the actual active thread. -/
 def currentUserRelevantSpan (h : SpanHooks) : MachineHooks.M K User SpanRef :=

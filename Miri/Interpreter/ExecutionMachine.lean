@@ -1,3 +1,6 @@
+import Miri.Interpreter.PlaceTable
+import Miri.Interpreter.RvalueTable
+import Miri.Interpreter.OperandTable
 import Miri.Interpreter.ExecutionCalls
 import Miri.Interpreter.ExecutionControl
 import Miri.Interpreter.ExecutionCast
@@ -107,8 +110,7 @@ private def operandBase (h : Config K U C O X Host) : OperandMachine.Hooks K U C
   dereference := h.operands.dereference
   runtimeChecks := h.operands.runtimeChecks
   boolLayout := h.operands.boolLayout
-  constant := fun _ _ _ => throw (.unsupported "constant operand requires an exact structural source site")
-  constantAt := h.operands.constantAt
+  constant := h.operands.constant
 
 def projectionHooks [DecidableEq K] (h : Config K U C O X Host) :
     PlaceProjectionHooks Provenance (State K U) C FrameExtra :=
@@ -123,6 +125,12 @@ def operandHooks [DecidableEq K] (h : Config K U C O X Host) : OperandMachine.Ho
     projection := projectionHooks h
     checkPlaceType := fun c place value => do
       if h.compiler.debugAssertions then h.operands.checkPlaceType c place value}
+
+def evalPlace [DecidableEq K] (h : Config K U C O X Host) (choice : C)
+    (id : PlaceId) (skip : Bool) : M K U Value := do
+  let frame ← MachineHooks.currentFrame
+  PlaceTable.eval frame.mirTables (projectionHooks h)
+    (fun c id value => (operandHooks h).checkPlaceType c id value.layout) choice id skip
 
 private def mutableAccess [DecidableEq K] (h : Config K U C O X Host) (c : C) (dest : Value) : M K U Unit := do
   let .memory memory := dest.ref | throw (.invalidProgram "repeat mutable access requires memory")
@@ -164,18 +172,18 @@ def castHooks [DecidableEq K] (h : Config K U C O X Host) (limits : Limits) :
 /-- Core expression dictionaries. Genuine compiler type/layout predicates and
 host/platform leaves in base records survive; operational actions are replaced. -/
 def rvalueHooks [DecidableEq K] (h : Config K U C O X Host) (limits : Limits) :
-    RvalueHooks Provenance (State K U) C Value :=
+    RvalueHooks Provenance (State K U) C Value PlaceId OperandId AggregateNode OperandListId :=
   let h := withValidation h limits
   let place := (projectionHooks h).place
   let operands := operandHooks h
-  let eval := OperandMachine.evalOperand operands
-  let evaluate := PlaceDynamic.evalPlace (projectionHooks h)
+  let eval := OperandTable.evalOperand operands
+  let evaluate := evalPlace h
   let discr := discriminantHooks h
-  let aggregate : AggregateHooks Provenance (State K U) C Value := {
+  let aggregate : AggregateHooks Provenance (State K U) C Value OperandId := {
     target := h.access.runtime.base
     placeLayout := RuntimePlace.layout
     evalOperand := eval
-    evalOperandAt := OperandMachine.evalOperandAt operands
+    evalOperandAt := OperandTable.evalOperandAt operands
     readPointer := fun _ op => do lift ((← scalar (← PlaceMachine.readImmediate h.access op)).toPointer h.access.runtime.base |>.mapError ScalarOps.scalarError)
     readScalar := fun _ op => do scalar (← PlaceMachine.readImmediate h.access op)
     projectDowncast := PlaceDynamic.downcast (projectionHooks h)
@@ -215,19 +223,28 @@ def rvalueHooks [DecidableEq K] (h : Config K U C O X Host) (limits : Limits) :
       fun error => .invalidProgram s!"place reference: {reprStr error}")
     enforceValidity := h.compiler.enforceValidity
     retagPtrValue := fun _ value ty => TypedRetag.machineRetagPtrValue retag limits.retag value ty
-    placeBaseRaw := fun c mirPlace => do
-      if mirPlace.projection[0]? == some .Deref then
-        let frame ← MachineHooks.currentFrame
-        let some ty := frame.body.locals[mirPlace.localId]?
-          | throw (.invalidProgram "raw place base local missing")
+    placeBaseRaw := fun c id => do
+      let frame ← MachineHooks.currentFrame
+      let node ← lift (frame.mirTables.places.lookup id.index |>.mapError (fun id => .invalidProgram s!"invalid MIR place ID {id}"))
+      let projections ← lift (frame.mirTables.projectionLists.lookup node.projection.index |>.mapError (fun id => .invalidProgram s!"invalid MIR projection list ID {id}"))
+      let first ← match projections[0]? with
+        | none => pure none
+        | some id => do
+          let value ← lift (frame.mirTables.projections.lookup id.index |>.mapError (fun id => .invalidProgram s!"invalid MIR projection ID {id}"))
+          pure (some value)
+      if first == some .Deref then
+        let some ty := frame.body.locals[node.localId]? | throw (.invalidProgram "raw place base local missing")
         h.isRawPointer c ty
       else pure false
     evalOperand := eval
-    evalOperandAt := OperandMachine.evalOperandAt operands
-    evalPlaceToOp := OperandMachine.evalPlaceToOp operands
+    evalOperandAt := OperandTable.evalOperandAt operands
+    evalPlaceToOp := OperandTable.evalPlaceToOp operands
     binaryOp := ScalarOps.binary (scalarHooks h)
     unaryOp := ScalarOps.unary (scalarHooks h)
-    writeAggregate := writeAggregate aggregate
+    writeAggregate := fun c kind ids dest => do
+      let frame ← MachineHooks.currentFrame
+      let values ← lift (frame.mirTables.operandLists.lookup ids.index |>.mapError (fun id => .invalidProgram s!"invalid MIR operand list ID {id}"))
+      writeAggregate aggregate c kind values dest
     writeRepeat := writeRepeat aggregate
     cast := fun c op kind ty dest => Cast.cast casts c limits.casts op kind ty dest
     readDiscriminant := Discriminant.readDiscriminant discr
@@ -237,7 +254,7 @@ private def intrinsicHooks [DecidableEq K] (h : Config K U C O X Host) (limits :
     (context : IntrinsicHooks Provenance (State K U) C Value) :
     IntrinsicHooks Provenance (State K U) C Value :=
   let place := (projectionHooks h).place
-  let eval := OperandMachine.evalOperand (operandHooks h)
+  let eval := OperandTable.evalOperand (operandHooks h)
   {context with
     target := h.access.runtime.base
     pointerOffset := h.access.runtime.pointerOffset
@@ -263,7 +280,7 @@ private def intrinsicHooks [DecidableEq K] (h : Config K U C O X Host) (limits :
     readBytesStripProvenance := fun _ pointer size => do
       return (← RawMemoryMachine.readBytes h.access h.arithmetic pointer size.bytes).data
     evalOperand := fun c op => eval c op none
-    evalOperandAt := fun c path op => OperandMachine.evalOperandAt (operandHooks h) c path op none
+    evalOperandAt := fun c path op => OperandTable.evalOperandAt (operandHooks h) c path op none
     scalarOps := scalarHooks h
     readImmediate := fun _ => PlaceMachine.readImmediate h.access
     writeImmediate := writePlaceImmediate place
@@ -302,14 +319,14 @@ def stepHooks [DecidableEq K] (h : Config K U C O X Host) (limits : Limits) :
     StepHooks Provenance LocalLayout FrameExtra (MachineHooks.MachineState K U) C Value :=
   let h := withValidation h limits
   let operands := operandHooks h
-  let eval := fun c op => OperandMachine.evalOperand operands c op none
+  let eval := fun c op => OperandTable.evalOperand operands c op none
   let read := fun c path op => do
-    PlaceMachine.readImmediate h.access (← OperandMachine.evalOperandAt operands c path op none)
+    PlaceMachine.readImmediate h.access (← OperandTable.evalOperandAt operands c path op none)
   let calls := callHooks h limits
   let helpers := ExecutionCalls.helpers h.helpers calls
   let panic := {h.panic with
     evalOperand := eval
-    evalOperandAt := fun c path op => OperandMachine.evalOperandAt operands c path op none
+    evalOperandAt := fun c path op => OperandTable.evalOperandAt operands c path op none
     driver := FunctionCalls.bindUnwind h.panic.driver helpers}
   let control := ExecutionControl.hooks h.control.bodySpan h.lifecycle h.access
     (projectionHooks h).place h.copy h.retag helpers h.unwindTerminateFunction
@@ -325,7 +342,7 @@ def stepHooks [DecidableEq K] (h : Config K U C O X Host) (limits : Limits) :
     call := fun c terminator => MachineHooks.run (Call.evalCallTerminator calls c limits.callDispatch terminator)
     tailCall := fun c terminator => MachineHooks.run (Call.evalTailCallTerminator calls c limits.callDispatch terminator)
     drop := fun c mirPlace target unwind => MachineHooks.run do
-      let dest ← PlaceDynamic.evalPlace (projectionHooks h) c mirPlace false
+      let dest ← evalPlace h c mirPlace false
       let callee ← calls.resolveDropGlue c dest.layout.ty
       match callee.kind with
       | .Shim (.DropGlue _ none) =>
@@ -338,8 +355,10 @@ def stepHooks [DecidableEq K] (h : Config K U C O X Host) (limits : Limits) :
     readAssertCondition := fun c op => MachineHooks.run do lift ((← scalar (← read c (OperandPath.instruction "condition") op)).toBool.mapError ScalarOps.scalarError)
     assertPanic := fun c message unwind => MachineHooks.run (Panic.assertPanic panic c message unwind) }
   {
-    assign := fun c dest value => MachineHooks.run (evalRvalueIntoPlace (rvalueHooks h limits) c value dest)
-    evalPlace := fun c dest skip => MachineHooks.run (PlaceDynamic.evalPlace (projectionHooks h) c dest skip)
+    assign := fun c dest value => MachineHooks.run do
+      let frame ← MachineHooks.currentFrame
+      RvalueTable.eval frame.mirTables (rvalueHooks h limits) c value dest
+    evalPlace := fun c dest skip => MachineHooks.run (evalPlace h c dest skip)
     writeDiscriminant := fun c variant dest => MachineHooks.run (Discriminant.writeDiscriminant discr c variant dest)
     storageLive := fun _ id => MachineHooks.run (MachineHooks.storageLiveDyn h.lifecycle.storage id .none)
     storageDead := fun _ id => MachineHooks.run (MachineHooks.storageDead h.lifecycle.storage id)
@@ -355,7 +374,7 @@ def stepHooks [DecidableEq K] (h : Config K U C O X Host) (limits : Limits) :
       checkAlign := h.atomics.checkPointerAlign
       memCopy := fun _ source dest size nonoverlap =>
         GlobalMemoryCopyMachine.genericCopy h.access h.addresses h.arithmetic source dest size 1 nonoverlap}
-      (fun c path op => OperandMachine.evalOperandAt operands c path op none) c intrinsic)
+      (fun c path op => OperandTable.evalOperandAt operands c path op none) c intrinsic)
     -- Pinned Miri inherits rustc's empty counter hook.
     incrementConstEvalCounter := fun _ state => (state,.ok ())
     returnFromCurrentFrame := ControlFlow.returnFromCurrentFrame control

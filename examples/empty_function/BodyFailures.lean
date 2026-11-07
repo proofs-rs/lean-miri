@@ -118,14 +118,14 @@ theorem validate_capacity_one (s : Static) (metadata : Metadata s)
   simpa only [BodyStep.current,LocalUnit.current] using valid
 
 
- theorem constant_positive (s : Static) (metadata : Metadata s) (profile : Profile s)
+ theorem constant_positive (s : Static) (metadata : Metadata s) [SuccessfulConstant metadata] (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+1)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (bodyIdentity : frame.bodyIdentity = s.loaded.identity)
     (function : frame.functionInstance = s.functionInstance)
     (location : frame.location = .mir ⟨0,0⟩) :
-    s.cfg.operands.constantAt () ((OperandPath.rvalue "operand").push (.field "constant"))
+    s.cfg.operands.constant () metadata.literalId
       metadata.literal (some s.abi.ret.layout)
       (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) =
       .ok ⟨.immediate .uninit,s.abi.ret.layout⟩
@@ -137,20 +137,18 @@ theorem validate_capacity_one (s : Static) (metadata : Metadata s)
   have source := BodyConstantDictionary.fields_of_make s.prepared.compiler s.prepared.image s.bytes
     s.options leaves remaining metadata.construction s.cfg outer
   obtain ⟨functions, arithmetic, external, callback⟩ := source.constants
-  let site : CompilerConstantQueries.Site := ⟨s.loaded.identity.index,⟨0,0⟩,
-    #[.field "kind",.field "rvalue",.field "operand",.field "constant"]⟩
-  have literal := Literal.eval_unit s.prepared.compiler.constantBinding site functions arithmetic external
+  let site : CompilerConstantQueries.Site := ⟨s.loaded.identity.index,metadata.literalId⟩
+  have literal := Literal.eval_unit s.prepared.compiler.constants site functions arithmetic external
     MemoryErrors.constant metadata.literal s.abi.ret.layout
     (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) frames machine
-    metadata.constantBinding
+    metadata.literalEvidence
     (by simp [BodyStep.withUnit, LocalUnit.withUnit, bodyIdentity, site])
-    (by simp [BodyStep.withUnit, LocalUnit.withUnit, location, site])
-    metadata.literalShape
+    metadata.literalQuery metadata.literalShape
     (by simpa only [BodyStep.withUnit, LocalUnit.withUnit, function, site] using metadata.literalNormalization)
   rw [callback profile.debug]
   simp only [CompilerOperandSites.current, MachineHooks.currentFrame,
     BodyStep.current, LocalUnit.current, Stack.currentFrame?, Array.back?_push,
-    BodyStep.withUnit, LocalUnit.withUnit, location, bodyIdentity, OperandPath.rvalue,
+    BodyStep.withUnit, LocalUnit.withUnit, location, bodyIdentity,
     get, getThe, MonadStateOf.get, EStateM.get, bind, Bind.bind, EStateM.bind,
     pure, Pure.pure, EStateM.pure]
   simpa [site, BodyStep.current, LocalUnit.current, BodyStep.withUnit, LocalUnit.withUnit,
@@ -251,12 +249,12 @@ private theorem bound_copy_eq (s : Static) (layout : LocalLayout)
       rw [←trackerEq]
     simpa only [restored]
 
- theorem rvalue_error (s : Static) (metadata : Metadata s) (profile : Profile s)
+ theorem rvalue_error (s : Static) (metadata : Metadata s) [SuccessfulConstant metadata] (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+1)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (bodyIdentity : frame.bodyIdentity = s.loaded.identity)
-    (body : frame.body = s.loaded.body)
+    (body : Meaning.FrameMatches frame s.loaded)
     (function : frame.functionInstance = s.functionInstance)
     (location : frame.location = .mir ⟨0,0⟩)
     (noClocks : frame.extra.dataRace = none)
@@ -269,7 +267,7 @@ private theorem bound_copy_eq (s : Static) (layout : LocalLayout)
         (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) =
         .error error (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine)) :
     evalRvalueIntoPlace (ExecutionMachine.rvalueHooks (ExecutionMachine.withValidation s.cfg s.limits) s.limits)
-      () (.Use (.Constant metadata.literal) .Yes) ⟨0,#[]⟩
+      () ((.Use metadata.entry.operand .Yes) : RvalueNode) metadata.entry.destination
       (BodyStep.current frames (BodyStep.withUnit frame .uninit none) machine) =
       .error error (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
@@ -290,7 +288,7 @@ private theorem bound_copy_eq (s : Static) (layout : LocalLayout)
   have check : s.cfg.compiler.checkPlaceType = fun _ _ _ => pure () := by
     rw [source.checkPlace]
     funext choice place value state
-    simp [CompilerPlaceTypes.place, CompilerPlaceTypes.check, profile.debug,
+    simp [CompilerPlaceTypes.dynamicPlace, profile.debug,
       bind, Bind.bind, EStateM.bind, pure, Pure.pure, EStateM.pure]
   have computed : s.cfg.compiler.layout () 0
       (BodyStep.current frames (BodyStep.withUnit frame .uninit none) machine) =
@@ -299,46 +297,70 @@ private theorem bound_copy_eq (s : Static) (layout : LocalLayout)
     apply BodyQueries.local_layout s.prepared.compiler s.abi.ret.layout frames frame machine
     · apply metadata.normalizedLocal
       · simpa only [BodyStep.withUnit,LocalUnit.withUnit] using bodyIdentity
-      · simpa only [BodyStep.withUnit,LocalUnit.withUnit] using body
+      · simpa only [BodyStep.withUnit,LocalUnit.withUnit, Meaning.FrameMatches] using body
       · simpa only [BodyStep.withUnit,LocalUnit.withUnit] using function
     · exact metadata.unitLookup
   let h := ExecutionMachine.rvalueHooks (ExecutionMachine.withValidation s.cfg s.limits) s.limits
-  have destination : h.evalPlace () ⟨0,#[]⟩ true
+  let hc := ExecutionMachine.withValidation (ExecutionMachine.withValidation s.cfg s.limits) s.limits
+  obtain ⟨placeNode, placeAt, localId, projections⟩ := Meaning.place_empty
+    s.loaded.tables metadata.entry.destination 0 metadata.entry_observations.1
+  have destination : h.evalPlace () metadata.entry.destination true
       (BodyStep.current frames (BodyStep.withUnit frame .uninit none) machine) =
       .ok (BodyStep.destination frames frame s.abi.ret.layout)
         (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) := by
+    change ExecutionMachine.evalPlace hc () metadata.entry.destination true _ = _
+    rw [BodyStep.evalPlace_current]
+    have selected : (BodyStep.withUnit frame .uninit none).mirTables.places.lookup
+        metadata.entry.destination.index = .ok placeNode := by
+      simpa only [BodyStep.withUnit, LocalUnit.withUnit, body.2.2] using placeAt
+    have projectionAt : (BodyStep.withUnit frame .uninit none).mirTables.projectionLists.lookup
+        placeNode.projection.index = .ok #[] := by
+      simpa only [BodyStep.withUnit, LocalUnit.withUnit, body.2.2] using projections
+    rw [PlaceTable.eval_empty _ _ _ () _ placeNode selected projectionAt
+      (by intro place; simp [hc, ExecutionMachine.operandHooks, ExecutionMachine.withValidation,
+        TypedMachineBindings.bindValidation, dictionaries.debug, profile.debug])
+      (by intro place; simp only [ExecutionMachine.projectionHooks, hc,
+        ExecutionMachine.withValidation, source.projection, ValidityMachine.placeHooks,
+        PlaceMachine.placeHooks, ValidityMachine.compilerPolicy, check])]
+    rw [localId]
     apply BodyStep.evaluate_zero s.cfg.access s.cfg.allocation s.cfg.compiler
-      (ExecutionMachine.projectionHooks (ExecutionMachine.withValidation
-        (ExecutionMachine.withValidation s.cfg s.limits) s.limits)) () frames frame machine
+      (ExecutionMachine.projectionHooks hc) () frames frame machine
       s.abi.ret.layout metadata.unitSized
     · exact source.projection
     · exact check
     · exact computed
-  have literal : h.evalOperandAt () (OperandPath.rvalue "operand") (.Constant metadata.literal)
+  obtain ⟨constantNode, constantAt, constantValue⟩ := Meaning.constant_node s.loaded.tables
+    metadata.entry.constant metadata.literal metadata.entry_observations.2.2
+  have literal : h.evalOperandAt () (OperandPath.rvalue "operand") metadata.entry.operand
       (some s.abi.ret.layout)
       (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) =
       .ok ⟨.immediate .uninit,s.abi.ret.layout⟩
         (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) := by
-    change s.cfg.operands.constantAt () ((OperandPath.rvalue "operand").push (.field "constant"))
-      metadata.literal (some s.abi.ret.layout) _ = _
+    change OperandTable.evalOperandAt (ExecutionMachine.operandHooks hc) () _ _ _ _ = _
+    rw [BodyStep.evalOperandAt_current]
+    rw [OperandTable.eval_constant _ _ _ () _ metadata.entry.constant constantNode _ _
+      (by simpa only [BodyStep.withUnit,LocalUnit.withUnit,body.2.2] using metadata.entry_references.operand)
+      (by simpa only [BodyStep.withUnit,LocalUnit.withUnit,body.2.2] using constantAt)]
+    change s.cfg.operands.constant () metadata.entry.constant constantNode.operand _ _ = _
+    rw [metadata.entry_constant, constantValue]
     exact constant_positive s metadata profile remaining capacity frames frame machine bodyIdentity function location
   have transfer := bound_copy_eq s s.abi.ret.layout frames frame compatible padding metadata.unitSized
   change evalRvalueIntoPlace h () _ _ _ = _
   unfold evalRvalueIntoPlace
   simp only [bind, Bind.bind, EStateM.bind, destination]
-  change (h.evalOperandAt () (OperandPath.rvalue "operand") (.Constant metadata.literal)
+  change (h.evalOperandAt () (OperandPath.rvalue "operand") metadata.entry.operand
       (some s.abi.ret.layout) >>= fun op => MachineHooks.withRetagMode .Default
         (h.copyOp () op (BodyStep.destination frames frame s.abi.ret.layout))) _ = _
   simp only [bind, Bind.bind, EStateM.bind, literal]
   rw [transfer]
   exact scoped_copy_error s metadata profile remaining capacity frames frame machine noClocks noGhost shallow error failed
 
- theorem statement_error (s : Static) (metadata : Metadata s) (profile : Profile s)
+ theorem statement_error (s : Static) (metadata : Metadata s) [SuccessfulConstant metadata] (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+1)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (bodyIdentity : frame.bodyIdentity = s.loaded.identity)
-    (body : frame.body = s.loaded.body)
+    (body : Meaning.FrameMatches frame s.loaded)
     (function : frame.functionInstance = s.functionInstance)
     (location : frame.location = .mir ⟨0,0⟩)
     (noClocks : frame.extra.dataRace = none)
@@ -350,23 +372,32 @@ private theorem bound_copy_eq (s : Static) (layout : LocalLayout)
       s.cfg.projection.place.validate () (BodyStep.destination frames frame s.abi.ret.layout)
         (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) =
         .error error (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine)) :
-    (ExecutionMachine.stepHooks s.cfg s.limits).assign () ⟨0,#[]⟩
-      (.Use (.Constant metadata.literal) .Yes)
+    (ExecutionMachine.stepHooks s.cfg s.limits).assign () metadata.entry.destination
+      metadata.entry.rvalue
       (BodyStep.current frames (BodyStep.withUnit frame .uninit none) machine) =
       (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine,.error error) := by
   have assigned := rvalue_error s metadata profile remaining capacity frames frame machine
     bodyIdentity body function location noClocks noGhost shallow error failed
-  change MachineHooks.run (evalRvalueIntoPlace
-    (ExecutionMachine.rvalueHooks (ExecutionMachine.withValidation s.cfg s.limits) s.limits)
-    () (.Use (.Constant metadata.literal) .Yes) ⟨0,#[]⟩) _ = _
-  simp only [MachineHooks.run, Call.run, assigned]
+  change MachineHooks.run (do
+    let frame ← MachineHooks.currentFrame
+    RvalueTable.eval frame.mirTables
+      (ExecutionMachine.rvalueHooks (ExecutionMachine.withValidation s.cfg s.limits) s.limits)
+      () metadata.entry.rvalue metadata.entry.destination) _ = _
+  simp only [MachineHooks.run, Call.run, MachineHooks.currentFrame, BodyStep.current, LocalUnit.current, Stack.currentFrame?,
+    Array.back?_push, get, getThe, MonadStateOf.get, EStateM.get,
+    bind, Bind.bind, EStateM.bind, pure, Pure.pure, EStateM.pure]
+  rw [RvalueTable.eval_known _ _ () _ _ ((.Use metadata.entry.operand .Yes) : RvalueNode)
+    (by simpa only [BodyStep.withUnit,LocalUnit.withUnit,body.2.2,
+      metadata.entry_observations.2.1] using metadata.entry_references.rvalue)]
+  simp only [BodyStep.current, LocalUnit.current] at assigned
+  rw [assigned]
 
- theorem step_error (s : Static) (metadata : Metadata s) (profile : Profile s)
+ theorem step_error (s : Static) (metadata : Metadata s) [SuccessfulConstant metadata] (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+1)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (bodyIdentity : frame.bodyIdentity = s.loaded.identity)
-    (body : frame.body = s.loaded.body)
+    (body : Meaning.FrameMatches frame s.loaded)
     (function : frame.functionInstance = s.functionInstance)
     (location : frame.location = .mir ⟨0,0⟩)
     (noClocks : frame.extra.dataRace = none)
@@ -383,36 +414,34 @@ private theorem bound_copy_eq (s : Static) (layout : LocalLayout)
       (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine,.error error) := by
   have assigned := statement_error s metadata profile remaining capacity frames frame machine
     bodyIdentity body function location noClocks noGhost shallow error failed
-  have instruction := metadata.literalStatement
-  cases found : s.loaded.body.basicBlocks[0]? with
-  | none => simp [found] at instruction
-  | some block =>
-    cases first : block.statements[0]? with
-    | none => simp [found,first] at instruction
-    | some stmt =>
-      have kind : stmt.kind = .Assign ⟨0,#[]⟩ (.Use (.Constant metadata.literal) .Yes) := by
-        simpa only [found,Option.bind_some,first,Option.map_some,Option.some.injEq] using instruction
-      have evaluated : Step.evalStatement (ExecutionMachine.stepHooks s.cfg s.limits) () stmt
-          (BodyStep.current frames (BodyStep.withUnit frame .uninit none) machine) =
-          (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine,.error error) := by
-        simpa only [Step.evalStatement,kind] using assigned
-      have beforeLoc : (BodyStep.withUnit frame .uninit none).location = .mir ⟨0,0⟩ := location
-      have beforeFound : (BodyStep.withUnit frame .uninit none).body.basicBlocks[0]? = some block := by
-        simpa only [BodyStep.withUnit,LocalUnit.withUnit,body] using found
-      change Step.step (ExecutionMachine.stepHooks s.cfg s.limits) () _ = _
-      unfold Step.step
-      simp only [Stack.currentFrame?,BodyStep.current,LocalUnit.current,Array.back?_push,
-        beforeLoc,beforeFound,first]
-      simp only [BodyStep.current,LocalUnit.current] at evaluated
-      erw [evaluated]
-      rfl
+  have evaluated : Step.evalStatement (ExecutionMachine.stepHooks s.cfg s.limits) () metadata.entry.statement
+      (BodyStep.current frames (BodyStep.withUnit frame .uninit none) machine) =
+      (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine,.error error) := by
+    simpa only [Step.evalStatement, metadata.entry_references.kind] using assigned
+  have beforeLoc : (BodyStep.withUnit frame .uninit none).location = .mir ⟨0,0⟩ := location
+  have beforeFound : (BodyStep.withUnit frame .uninit none).body.basicBlocks[0]? =
+      some metadata.entry.blockId := by
+    simpa only [BodyStep.withUnit,LocalUnit.withUnit,body.1] using metadata.entry_references.block
+  have blockAt : (BodyStep.withUnit frame .uninit none).mirTables.blocks.lookup
+      metadata.entry.blockId.index = .ok metadata.entry.block := by
+    simpa only [BodyStep.withUnit,LocalUnit.withUnit,body.2.2] using metadata.entry_references.blockNode
+  have statementAt : (BodyStep.withUnit frame .uninit none).mirTables.statements.lookup
+      metadata.entry.statementId.index = .ok metadata.entry.statement := by
+    simpa only [BodyStep.withUnit,LocalUnit.withUnit,body.2.2] using metadata.entry_references.statement
+  change Step.step (ExecutionMachine.stepHooks s.cfg s.limits) () _ = _
+  unfold Step.step
+  simp only [Stack.currentFrame?,BodyStep.current,LocalUnit.current,Array.back?_push,
+    beforeLoc,beforeFound,blockAt,metadata.entry_references.first,statementAt]
+  simp only [BodyStep.current,LocalUnit.current] at evaluated
+  erw [evaluated]
+  rfl
 
- theorem step_capacity_one (s : Static) (metadata : Metadata s) (profile : Profile s)
+ theorem step_capacity_one (s : Static) (metadata : Metadata s) [SuccessfulConstant metadata] (profile : Profile s)
     (capacity : s.capacity = 1)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (bodyIdentity : frame.bodyIdentity = s.loaded.identity)
-    (body : frame.body = s.loaded.body)
+    (body : Meaning.FrameMatches frame s.loaded)
     (function : frame.functionInstance = s.functionInstance)
     (location : frame.location = .mir ⟨0,0⟩)
     (noClocks : frame.extra.dataRace = none)
@@ -428,13 +457,13 @@ private theorem bound_copy_eq (s : Static) (layout : LocalLayout)
   intro machine _ _
   exact validate_capacity_one s metadata capacity () _ _
 
- theorem step_validation_zero (s : Static) (metadata : Metadata s) (profile : Profile s)
+ theorem step_validation_zero (s : Static) (metadata : Metadata s) [SuccessfulConstant metadata] (profile : Profile s)
     (remaining : Nat) (capacity : s.capacity = remaining+2)
     (zeroBudget : s.options.limits.validation = 0)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (bodyIdentity : frame.bodyIdentity = s.loaded.identity)
-    (body : frame.body = s.loaded.body)
+    (body : Meaning.FrameMatches frame s.loaded)
     (function : frame.functionInstance = s.functionInstance)
     (location : frame.location = .mir ⟨0,0⟩)
     (noClocks : frame.extra.dataRace = none)

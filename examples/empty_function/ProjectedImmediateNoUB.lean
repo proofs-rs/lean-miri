@@ -33,11 +33,12 @@ theorem noUB (s : Static) (metadata : Metadata s) (profile : Profile s)
   have total := BodyTotal.step s metadata profile frames entry machine identity body function location noClocks noGhost shallow
   rw [entrySame] at total
   have prefixSafe : ScopedSafety.NoUB s.cfg s.limits (fun _ _ => True) (depth p) installed := by
-    rcases total with first | ⟨reason,failed⟩
+    rcases total with first | ⟨reportedError,classified,failed⟩
     · have firstRaw := first
       rw [←entrySame] at firstRaw
-      obtain ⟨remaining,capacity,validation,successor⟩ := BodyTotal.of_success s metadata profile frames entry machine
+      obtain ⟨available,remaining,capacity,validation,successor⟩ := BodyTotal.of_success s metadata profile frames entry machine
         identity body function location noClocks noGhost shallow _ firstRaw
+      letI := available
       let frame : LocalUnit.F := {BodyStep.withUnit entry .uninit (some s.abi.ret.layout) with location := .mir ⟨0,1⟩}
       have machineEq : machine = ProjectedModel.initializedMachine s p input.tracker destination older bound frame previous := by
         rw [pushed];rfl
@@ -55,7 +56,7 @@ theorem noUB (s : Static) (metadata : Metadata s) (profile : Profile s)
           unfold popped ProjectedReady.popped FrameExit.afterRelevanceAt
           split <;>rfl
         exact same.symm.trans raw.2.2.1
-      have bodyFrame : frame.body = s.loaded.body := body
+      have bodyFrame : Meaning.FrameMatches frame s.loaded := body
       have locFrame : frame.location = .mir ⟨0,1⟩ := rfl
       have localsFrame : frame.locals = #[{value := .live (.immediate .uninit),layout := some s.abi.ret.layout}] := rfl
       have clocksFrame : frame.extra.dataRace = none := noClocks
@@ -104,7 +105,7 @@ theorem noUB (s : Static) (metadata : Metadata s) (profile : Profile s)
         · rw [step] at observed;cases observed;exact nonUB
         · rw [step] at observed;cases observed
     · apply OrdinaryReturnNoUB.scoped_of_step_outcome s (depth p) installed
-      exact Or.inl ⟨.resourceExhaustion reason,_,failed,rfl⟩
+      exact Or.inl ⟨reportedError,_,failed,classified⟩
   apply (CallLevelNoUB.noUB_iff_initialization_and_scoped s p).mpr
   constructor
   · intro error failed observed

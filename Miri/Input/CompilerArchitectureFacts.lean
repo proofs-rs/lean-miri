@@ -17,33 +17,25 @@ def integerLayoutContext (context : CompilerFacts.Context) (bits : Nat) (signed 
   unless [8,16,32,64,128].contains bits do throw "architecture integer constructor has unsupported width"
   context.primitiveLayout s!"{if signed then "i" else "u"}{bits}"
 
-def twiceWideLayout (runtime : RuntimeMetadata) (id : TyId) : Except String LocalLayout := do
-  let node ← runtime.node id |>.mapError toString
+private def twiceWidth (node : TypeNode) : Except String (Nat × Bool) := do
   unless node.shapeStatus == .supported do throw "missing integer type shape for twice-wide constructor"
-  let shape ← node.payload.getObjVal? "shape"
   let (kind,signed) ← match node.shapeKind with
-    | .int => pure (← (← shape.getObjVal? "signed_kind").getStr?,true)
-    | .uint => pure (← (← shape.getObjVal? "unsigned_kind").getStr?,false)
+    | .int => pure (node.shapeMetadata.signedKind,true)
+    | .uint => pure (node.shapeMetadata.unsignedKind,false)
     | _ => throw "twice-wide source helper requires fixed integer type"
+  let some (.known kind) := kind | throw "twice-wide integer kind absent"
   let bits ← match kind with
-    | "u8" | "i8" => pure 16 | "u16" | "i16" => pure 32
-    | "u32" | "i32" => pure 64 | "u64" | "i64" => pure 128
+    | .u8 | .i8 => pure 16 | .u16 | .i16 => pure 32
+    | .u32 | .i32 => pure 64 | .u64 | .i64 => pure 128
     | _ => throw "twice-wide source helper rejects this integer kind"
+  return (bits,signed)
+
+def twiceWideLayout (runtime : RuntimeMetadata) (id : TyId) : Except String LocalLayout := do
+  let (bits,signed) ← twiceWidth (← runtime.node id |>.mapError toString)
   integerLayout runtime bits signed
 
-def twiceWideLayoutContext (context : CompilerFacts.Context) (id : TyId) :
-    Except String LocalLayout := do
-  let node ← context.runtime.node id |>.mapError toString
-  unless node.shapeStatus == .supported do throw "missing integer type shape for twice-wide constructor"
-  let shape ← node.payload.getObjVal? "shape"
-  let (kind,signed) ← match node.shapeKind with
-    | .int => pure (← (← shape.getObjVal? "signed_kind").getStr?,true)
-    | .uint => pure (← (← shape.getObjVal? "unsigned_kind").getStr?,false)
-    | _ => throw "twice-wide source helper requires fixed integer type"
-  let bits ← match kind with
-    | "u8" | "i8" => pure 16 | "u16" | "i16" => pure 32
-    | "u32" | "i32" => pure 64 | "u64" | "i64" => pure 128
-    | _ => throw "twice-wide source helper rejects this integer kind"
+def twiceWideLayoutContext (context : CompilerFacts.Context) (id : TyId) : Except String LocalLayout := do
+  let (bits,signed) ← twiceWidth (← context.runtime.node id |>.mapError toString)
   integerLayoutContext context bits signed
 
 def isSimd (context : CompilerFacts.Context) (id : TyId) : Except String Bool :=
@@ -55,12 +47,8 @@ def simdSizeAndType (context : CompilerFacts.Context) (id : TyId) : Except Strin
   unless ← isSimd context id do throw "simd_size_and_type requested for non-SIMD compiler type"
   let node ← context.runtime.node id |>.mapError toString
   let some facts := node.compilerFacts | throw "missing SIMD compiler facts"
-  let query ← facts.payload.getObjVal? "simd_size_and_type"
-  unless (← (← query.getObjVal? "status").getStr?) == "supported" do throw "SIMD lane compiler query unavailable"
-  let value ← query.getObjVal? "value"
-  let count ← (← value.getObjVal? "count").getNat?
+  let some (count,element) ← facts.simdSizeAndType | throw "SIMD lane compiler query has no value"
   unless count < 2^64 do throw "SIMD lane count exceeds source u64"
-  let element ← (← (← value.getObjVal? "element").getObjVal? "type_id").getNat?
   let _ ← context.runtime.lookup element |>.mapError toString
   pure (UInt64.ofNat count,element)
 

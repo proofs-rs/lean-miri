@@ -46,6 +46,6 @@ def make (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
       else throw (.invalidProgram "vtable source salt outside 0..32")
     globalRootPointer := fun _ id => return (← FunctionPointers.rootPointer engine.functions id).withOptionalProvenance
     entries := fun _ principal ty => lift
-      (CompilerVTableRuntime.entriesUsing p.lifecycle.calls.symbols lookup principal ty)
+      (CompilerVTableRuntime.entries p.lifecycle.calls.symbols principal ty)
     assertVirtualInstanceMatches := VirtualCalls.assertConcrete (CompilerVirtualLeaves.make p.lifecycle.calls) }
 end Miri.Input.CompilerVTableLeaves

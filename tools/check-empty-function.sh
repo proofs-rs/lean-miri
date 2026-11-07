@@ -24,9 +24,10 @@ def visit(name):
     (out/'source/empty_function'/source.name).write_bytes(data)
     ordered.append(name)
 for root in roots: visit(root)
+(out/'source/FrameTableLocation.lean').write_bytes(Path('tests/input/FrameTableLocation.lean').read_bytes())
 (out/'modules').write_text('\n'.join(ordered)+'\n')
-libraries={'Miri.Frontend.ImportMIR'}
-for source in (out/'source/empty_function').glob('*.lean'):
+libraries=set()
+for source in [*(out/'source/empty_function').glob('*.lean'),out/'source/FrameTableLocation.lean']:
     libraries.update(x.decode() for x in re.findall(rb'^import (Miri(?:\.[A-Za-z0-9_]+)*)',source.read_bytes(),re.M))
 (out/'library-modules').write_text('\n'.join(sorted(libraries))+'\n')
 print(f'Frozen {len(ordered)} roots/dependencies: {out}',flush=True)
@@ -38,15 +39,21 @@ mapfile -t library_modules < "$out/library-modules"
 flock --no-fork /tmp/lean-miri-lake-build.lock lake build "${library_modules[@]}"
 base="$(lake env printenv LEAN_PATH)"
 export LEAN_PATH="$out:$base"
+lean -j1 "$out/source/FrameTableLocation.lean"
 while IFS= read -r module; do
   echo "Checking empty_function.$module"
   lean -j1 --root="$out/source" -o "$out/empty_function/$module.olean" \
     "$out/source/empty_function/$module.lean"
 done < "$out/modules"
+cmp "$out/source/FrameTableLocation.lean" tests/input/FrameTableLocation.lean
 while IFS= read -r module; do
   cmp "$out/source/empty_function/$module.lean" "examples/empty_function/$module.lean"
 done < "$out/modules"
 cmp "$out/input-SHA256SUMS" examples/empty_function/SHA256SUMS
 sha256sum --check "$out/input-SHA256SUMS"
 sha256sum --check --status "$out/library-SHA256SUMS"
-echo "empty_function UB freedom checked for the explicit current-input/profile domain; see examples/empty_function/README.md."
+if [[ $# -eq 0 || ( $# -eq 1 && "$1" == Check ) ]]; then
+  echo "empty_function UB freedom checked for the explicit current-input/profile domain; see examples/empty_function/README.md."
+else
+  echo "Selected empty_function proof roots checked: $*"
+fi

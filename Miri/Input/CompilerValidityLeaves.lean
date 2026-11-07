@@ -39,8 +39,8 @@ def make (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
       pure (← lift (context.runtime.node ty |>.mapError toString)).display
     opsemInhabited := fun _ ty => do
       let world := arrays.get (← get)
-      lift (RuntimeArrayFacts.opsemInhabited context world ty (world.entries.size+1))
-    isFreeze := fun _ ty => do lift (RuntimeArrayFacts.boolean context (arrays.get (← get)) ty "is_freeze")
+      lift (RuntimeArrayFacts.opsemInhabited world ty (world.entries.size+1))
+    isFreeze := fun _ ty => do lift (RuntimeArrayFacts.boolean (arrays.get (← get)) ty "is_freeze")
     fieldPath := fun _ layout index child => do
       if ← constructed layout.ty then pure (.arrayElem index)
       else lift (CompilerPaths.fieldPath context layout index child)

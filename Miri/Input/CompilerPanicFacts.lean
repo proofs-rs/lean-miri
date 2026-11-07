@@ -41,39 +41,23 @@ def name : Panic.LangItem → String
 private def parameterTag : MainGenericParameter → Nat
   | .lifetime => 0 | .typeParameter => 1 | .constParameter => 2
 
-private def definition (source : Json) : Except String DefinitionId := do
-  pure ⟨← source.getObjValAs? Nat "crate",← source.getObjValAs? Nat "index"⟩
-private def rows (p : LoweredProgram) : Except String (Array Json) := do
-  (← p.input.raw.getObjVal? "compiler_panic_queries").getArr?
+private def rows (p : LoweredProgram) : Except String (Array PanicQueryData) := do
+  let some result := p.input.mirTables.panicQueries | throw "compiler panic metadata absent"
+  result
 
-/-- An absent catalog is not demanded by preparing an unrelated function.
-Actual panic queries still fail. Present definitions join the final shared
-append-only table; no returned compiler DefId is invented at the call event. -/
+/-- The reader interns all present supported definitions into the shared table.
+An absent catalog remains demand-only; malformed present catalogs still fail
+preparation, as before. -/
 def prepareProgram (program : LoweredProgram) : Except String LoweredProgram := do
-  let source ← match program.input.raw.getObjVal? "compiler_panic_queries" with
-    | .error _ => return program | .ok value => pure value
-  let mut definitions := program.compilerTables.definitions
-  let mut tags : Array String := #[]
-  for row in ← source.getArr? do
-    let tag ← row.getObjValAs? String "lang_item"
-    if tags.contains tag then throw "duplicate panic language-item query"
-    tags := tags.push tag
-    if (← row.getObjValAs? String "status") == "supported" then
-      let item ← row.getObjVal? "definition"
-      unless item == .null do
-        let source ← definition item
-        unless definitions.contains source do definitions := definitions.push source
-  pure (program.withCompilerTables {program.compilerTables with definitions})
+  if let some result := program.input.mirTables.panicQueries then
+    let _ ← result
+  pure program
 
 def langItemByName (program : LoweredProgram) (tag : String) : Except String (Option MIR.DefId) := do
-  let selected := (← rows program).filter fun row =>
-    (row.getObjValAs? String "lang_item").toOption == some tag
+  let selected := (← rows program).filter (·.langItem == tag)
   unless selected.size == 1 do throw "exact panic language-item query is missing or duplicated"
   let some row := selected[0]? | throw "panic language-item query absent"
-  unless (← row.getObjValAs? String "status") == "supported" do throw "panic language-item query unresolved"
-  let value ← row.getObjVal? "definition"
-  if value == .null then return none
-  pure (some (← lookupDefinitionId program.compilerTables.definitions (← definition value)))
+  row.definition
 
 def langItem (program : LoweredProgram) (item : Panic.LangItem) : Except String (Option MIR.DefId) :=
   langItemByName program (name item)
@@ -82,17 +66,13 @@ def genericParameters (program : LoweredProgram) (requested : MIR.DefId) :
     Except String (Array MainGenericParameter) := do
   let mut found : Option (Array MainGenericParameter) := none
   for row in ← rows program do
-    unless (← row.getObjValAs? String "status") == "supported" do continue
-    let value ← row.getObjVal? "definition"
-    if value == .null then continue
-    let id ← lookupDefinitionId program.compilerTables.definitions (← definition value)
+    let .ok (some id) := row.definition | continue
     unless id == requested do continue
-    let params ← (← (← row.getObjVal? "generic_parameters").getArr?).mapM fun value => do
-      match ← value.getStr? with
-      | "lifetime" => pure MainGenericParameter.lifetime
-      | "type_parameter" => pure .typeParameter
-      | "const_parameter" => pure .constParameter
-      | _ => throw "unknown compiler panic generic parameter kind"
+    let params := (← row.genericParameters).map fun value =>
+      match value with
+      | .lifetime => MainGenericParameter.lifetime
+      | .typeParameter => .typeParameter
+      | .constParameter => .constParameter
     if let some earlier := found then
       unless earlier.map parameterTag == params.map parameterTag do throw "conflicting compiler generic parameters for panic definition"
     found := some params

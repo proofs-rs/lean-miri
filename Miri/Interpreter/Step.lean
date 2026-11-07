@@ -32,9 +32,9 @@ abbrev StepResult (S A : Type) := S × Except StepError A
 has a default successful implementation. `evalPlace` receives the source's
 `skip_validity_for_simple_deref = false` argument. -/
 structure StepHooks (Prov Layout Extra Machine Choice PlaceValue : Type) where
-  assign : Choice → Place → Rvalue → StepState Prov Layout Extra Machine →
+  assign : Choice → PlaceId → RvalueId → StepState Prov Layout Extra Machine →
     StepResult (StepState Prov Layout Extra Machine) Unit
-  evalPlace : Choice → Place → Bool → StepState Prov Layout Extra Machine →
+  evalPlace : Choice → PlaceId → Bool → StepState Prov Layout Extra Machine →
     StepResult (StepState Prov Layout Extra Machine) PlaceValue
   writeDiscriminant : Choice → VariantIndex → PlaceValue → StepState Prov Layout Extra Machine →
     StepResult (StepState Prov Layout Extra Machine) Unit
@@ -42,7 +42,7 @@ structure StepHooks (Prov Layout Extra Machine Choice PlaceValue : Type) where
     StepResult (StepState Prov Layout Extra Machine) Unit
   storageDead : Choice → LocalId → StepState Prov Layout Extra Machine →
     StepResult (StepState Prov Layout Extra Machine) Unit
-  intrinsic : Choice → NonDivergingIntrinsic → StepState Prov Layout Extra Machine →
+  intrinsic : Choice → IntrinsicNode → StepState Prov Layout Extra Machine →
     StepResult (StepState Prov Layout Extra Machine) Unit
   incrementConstEvalCounter : Choice → StepState Prov Layout Extra Machine →
     StepResult (StepState Prov Layout Extra Machine) Unit
@@ -50,7 +50,7 @@ structure StepHooks (Prov Layout Extra Machine Choice PlaceValue : Type) where
     StepResult (StepState Prov Layout Extra Machine) Unit
   beforeTerminator : Choice → StepState Prov Layout Extra Machine →
     StepResult (StepState Prov Layout Extra Machine) Unit
-  terminator : Choice → Terminator → StepState Prov Layout Extra Machine →
+  terminator : Choice → TerminatorNode → StepState Prov Layout Extra Machine →
     StepResult (StepState Prov Layout Extra Machine) Unit
 
 namespace Step
@@ -58,7 +58,7 @@ variable {P L E M C V : Type}
 local notation "State" => StepState P L E M
 local notation "Hooks" => StepHooks P L E M C V
 
-def evalStatement (hooks : Hooks) (choice : C) (stmt : Statement)
+def evalStatement (hooks : Hooks) (choice : C) (stmt : StatementNode)
     (state : State) : StepResult State Unit :=
   match stmt.kind with
   | .Assign place value => hooks.assign choice place value state
@@ -89,10 +89,14 @@ def step (hooks : Hooks) (choice : C) (state : State) : StepResult State Bool :=
     match frame.location with
     | .unwinding _ => return finish (hooks.returnFromCurrentFrame choice true state)
     | .mir loc =>
-      let some block := frame.body.basicBlocks[loc.block]? |
+      let some blockId := frame.body.basicBlocks[loc.block]? |
         return (state, .error (.invalidBlock loc.block))
+      let .ok block := frame.mirTables.blocks.lookup blockId.index |
+        return (state, .error (.invalidProgram s!"invalid MIR block ID {blockId.index}"))
       match block.statements[loc.statementIndex]? with
-      | some stmt =>
+      | some statementId =>
+        let .ok stmt := frame.mirTables.statements.lookup statementId.index |
+          return (state, .error (.invalidProgram s!"invalid MIR statement ID {statementId.index}"))
         let oldIndex := state.stack.frames.size - 1
         let (state, result) := evalStatement hooks choice stmt state
         match result with
@@ -115,10 +119,12 @@ def step (hooks : Hooks) (choice : C) (state : State) : StepResult State Bool :=
             return ({ state with stack }, .ok true)
           return (state, .error (.stack .emptyStack))
       | none =>
+        let .ok terminator := frame.mirTables.terminators.lookup block.terminator.index |
+          return (state, .error (.invalidProgram s!"invalid MIR terminator ID {block.terminator.index}"))
         let (state, result) := hooks.beforeTerminator choice state
         match result with
         | .error error => return (state, .error error)
-        | .ok () => return finish (hooks.terminator choice block.terminator state)
+        | .ok () => return finish (hooks.terminator choice terminator state)
 
 /-- Relational semantics quantifies over permitted explicit choice inputs.
 No enumeration or finite-support assumption is imposed on machine choices. -/

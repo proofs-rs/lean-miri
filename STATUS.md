@@ -20,6 +20,18 @@ every Rust-valid caller state satisfies this domain remains absent. The domain
 includes raw caller, representation, pointer/source, memory/borrow, address/ID
 and runtime coherence; agreed pure metadata facts remain explicit assumptions.
 Compiler/exporter correctness and Rust/interpreter correspondence remain trusted.
+The migrated proof uses production MIR IDs and checked source observations;
+canonical lowered/loaded-body agreement is derived from its existing local-type
+query premise. No new constant-body or caller-table premise was added. A general
+old-flat-state/table-state transport theorem remains unproved, separately from
+the Rust-valid-caller domain gap above. The final target and imported declaration
+audit permit only `propext`, `Quot.sound` and `Classical.choice`.
+Literal ID/reference facts are derived from the checked source assignment.
+Constant normalization is conditional on successful evidence lookup; missing
+queries are admitted checked non-UB stops. Successful intermediate results use
+`SuccessfulConstant`, while the final noUB/Target premises do not require it.
+`ConstantTransport` gives a local domain-inclusion encoding of successful legacy
+evidence; complete old/new reader/preparation equivalence remains unproved.
 
 The target admits checked non-UB stops, including resource exhaustion; it does
 not claim normal return or NoErrors for every resource supply. Allocator
@@ -160,29 +172,50 @@ provider lies outside the selected local rustc source corpus.
 
 ### Performance and optimization assurance
 
-Remaining performance work includes runtime-value decoding, residual equality
-and validation work, and preparation outside the optimized call-resolution
-lookup. Caller-location still scans its catalog; optimization must retain
-source-order diagnostics, malformed-row handling and fresh Location allocations.
-Measure current immutable artifacts with the protocol in [AGENTS](AGENTS.md);
-old timings and shared-host samples do not establish a general speedup.
+Runtime import now keeps transport references and extracts typed ID tables once.
+The interpreter and compiler adapters use these checked tables. The expanding
+resolver and comparison decoder live only under `MiriTests/Input`; production
+has no resolver phase or alternative expansion branch. Caller-location and cast
+query duplicates are compared by typed semantic fields, ignoring unrelated debug
+JSON. Producer source paths retain transport-array coordinates even when typed
+tables are indexed by explicit IDs.
 
-No full generic indexed-query/decoder equivalence proof exists. Component
-identities, cached/reference parity and finite guest comparisons do not imply
-whole-decoder equivalence or all-choice safety. The shared-ID cache partition
-supersedes the earlier structural-key comparison identity; local Raw-fallback
-identities do not prove the new whole-decoder implementation equivalent.
-Native profiling identities preserve Lean states/outcomes, not native C compiler
-correctness. The large catch guest still needs a fresh same-prepared-TyCtxt
-reference comparison; native completion of a diagnostic trace does not prove UB
-freedom over every permitted choice.
+No generic whole-reader/whole-decoder equivalence proof exists. Component
+identities, the test-only expanded oracle and finite guest comparisons do not
+imply exporter correctness or all-choice safety. The empty-function result and
+its local conditional evidence transport are scoped above and in its README.
 
-Import-time typing remains selective: query envelopes, layout extras and some
-specialized adapters still inspect source payloads. Any prepared-input reuse
-across seeds must bind input/version/configuration and create fresh guest state;
-it must not reuse guest pointers or allocation identities or replace first-run
-improvements. Preserve validation, context-sensitive memo keys, diagnostic
-rebasing and uncached compatibility paths when extending caching.
+Performance validation uses immutable VM artifacts on one pinned CPU, fresh
+exports, alternating baseline/head rounds and a shared host. Native executable
+comparison remains unmeasured: the baseline native build did not complete and
+storage prevented completing both binaries. An ordinary std-main pilot exceeded
+the existing memory guard; it supplies no completed benchmark. Final three-sample VM medians for the two small no_std/custom-start cases were
+6.656→5.982s and 8.398→7.449s (observed −10.1%/−11.3%), with peak RSS approximately
+4–5% higher. These shared-host samples do not establish a general speedup;
+see [protocol and results](docs/input-tables.md).
+
+A 25MB symbolic-repeat input originally spent approximately nine minutes before
+an incorrect readiness rejection. That run lacked a matching baseline and is
+not a regression measurement. The source-coordinate correction has a genuine
+reordered-input regression; a subsequent isolated decode-only run completed in
+58.637 seconds (CPU 58.614 seconds, peak child RSS 2.09GB), with no blocking
+obligations. The final-source full VM guest subsequently completed with exit 0 in 96.217
+seconds (CPU 96.196 seconds, peak RSS 3.03GB), matching the independent Miri
+execution's expected assertion result. Neither run has a corresponding large
+baseline measurement; they establish finite completion, not a speedup claim.
+Runtime-value decoding and remaining linear interners still require
+representative scaling measurements.
+
+The packed-reference negative depends on allowed address choices: equal numeric
+seeds across separately prepared Lean/Miri runs do not establish identical
+choice traces. A separate align(4) container puts the u32 reference at offset 1
+and guarantees misalignment; both implementations reject that selected case.
+These executions do not establish UB freedom over all permitted choices.
+
+Any future prepared-input reuse across seeds must bind input/version/configuration
+and create fresh guest state; it must not reuse guest pointers or allocation
+identities. Preserve complete semantic query keys, checked failure paths,
+context-sensitive memoization and diagnostic coordinates.
 
 ## Feature support outside the current acceptance scope
 

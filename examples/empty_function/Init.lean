@@ -35,6 +35,7 @@ theorem push_raw (h : CallMachine.Lifecycle K U C) (before : MachineHooks.State 
     (definitionAt : metadata.calls.calls.program.compilerTables.definitions[fnInstance.defId]? = some definition)
     (row : lifecycle.program.bundle.bodies[body.identity.index]? = some actual)
     (contents : actual.body = body.body)
+    (wire : actual.bodyId = body.bodyId)
     (evidence : lifecycle.entries[body.identity.index]? = some ⟨.ok span,.ok fnInstance,.ok #[]⟩)
     (thread : ThreadRecord) (index : Nat)
     (active : (h.freshLocalsIdentity before.machine).1.threads.activeThread? = some thread)
@@ -51,11 +52,11 @@ theorem push_raw (h : CallMachine.Lifecycle K U C) (before : MachineHooks.State 
           (created h before body fnInstance destination continuation span metadata relevant definition)
           previous (h.freshLocalsIdentity before.machine).1⟩ := by
   have spanQuery := CompilerLifecycle.preamble_known (K := K) (U := U)
-    lifecycle body actual span fnInstance row contents evidence
+    lifecycle body actual span fnInstance row contents wire evidence
   have initialized := CompilerFrameMetadata.initFrame_explicit metadata relevant
     (raw h before body fnInstance destination continuation span) definition inline track definitionAt
     ({before with machine := (h.freshLocalsIdentity before.machine).1})
-  have constants := CompilerLifecycle.required_empty lifecycle body actual span fnInstance row contents evidence
+  have constants := CompilerLifecycle.required_empty lifecycle body actual span fnInstance row contents wire evidence
     before.stack.frames (created h before body fnInstance destination continuation span metadata relevant definition)
     (h.freshLocalsIdentity before.machine).1 rfl rfl
   have relevance := FrameRelevance.afterPush_known before.stack.frames

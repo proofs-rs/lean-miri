@@ -1,3 +1,4 @@
+import Miri.Input.RuntimeProgram
 import Miri.Input.CompilerInstance
 import Miri.Input.CompilerExternAbi
 import Miri.Interpreter.MainMachine
@@ -23,8 +24,7 @@ structure SectionQuery where
   name : String
   result : Except String Section
 structure Prepared where
-  program : LoweredProgram
-  runtime : RuntimeMetadata
+  owner : RuntimeProgram
   start : Option MIR.DefId
   compilerEntry : Option MIR.DefId
   /-- Exact rustc EntryFnType attached to tcx.entry_fn. When absent, the
@@ -33,110 +33,30 @@ structure Prepared where
   compilerEntryType : Except String (Option (MIR.DefId × MainEntryType))
   entries : Array Entry
   sections : Except String (Array SectionQuery)
-private def intern (tables : CompilerTables) (value : Json) : Except String (MIR.DefId × CompilerTables) := do
-  let source : DefinitionId := ⟨← (← value.getObjVal? "crate").getNat?,← (← value.getObjVal? "index").getNat?⟩
-  match lookupDefinitionId tables.definitions source with
-  | .ok id => pure (id,tables)
-  | .error _ => pure (tables.definitions.size,{tables with definitions := tables.definitions.push source})
-private def supported (query : Json) : Except String Json := do
-  unless (← (← query.getObjVal? "status").getStr?) == "supported" do throw "main compiler query is unresolved"
-  query.getObjVal? "value"
-private def typeId (context : LowerContext) (j : Json) : Except String MIR.TyId := do
-  let id ← (← j.getObjVal? "type_id").getNat?
-  unless context.containsTypeId id do throw "main compiler query references missing type"
-  pure id
+@[inline] def Prepared.program (prepared : Prepared) : LoweredProgram := prepared.owner.program
+@[inline] def Prepared.runtime (prepared : Prepared) : RuntimeMetadata := prepared.owner.runtime
 
-def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : Except String Prepared := do
-  unless RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality program.input.raw do
-    throw "main query metadata document mismatch"
-  let source ← program.input.raw.getObjVal? "compiler_main_queries"
-  unless (← (← source.getObjVal? "typing_env").getStr?) == "fully_monomorphized" do throw "main query environment mismatch"
-  let ctx := LowerContext.ofDocument program.input
-  let mut tables := program.compilerTables
-  let startSource ← source.getObjVal? "start_lang_item"
-  let start ← if startSource == .null then pure none else do
-    let (id,next) ← intern tables startSource
-    tables := next
-    pure (some id)
-  let entrySource ← source.getObjVal? "compiler_entry"
-  let compilerEntry ← if entrySource == .null then pure none else do
-    let (id,next) ← intern tables entrySource
-    tables := next
-    pure (some id)
-  let compilerEntryType : Except String (Option (MIR.DefId × MainEntryType)) := do
-    match source.getObjVal? "compiler_entry_type" with
-      | .error _ =>
-        if compilerEntry.isSome then throw "rustc selected main lacks exact EntryFnType query"
-        else pure none
-      | .ok query => do
-        let value ← supported query
-        if value == .null then
-          if compilerEntry.isSome then throw "rustc selected main lacks exact EntryFnType"
-          pure none
-        else do
-          let definitionJson ← value.getObjVal? "definition"
-          let sourceDefinition : DefinitionId := ⟨
-            ← (← definitionJson.getObjVal? "crate").getNat?,
-            ← (← definitionJson.getObjVal? "index").getNat?⟩
-          let definition ← lookupDefinitionId tables.definitions sourceDefinition
-          unless compilerEntry == some definition do
-            throw "rustc EntryFnType definition differs from compiler-selected entry"
-          let kind ← (← value.getObjVal? "kind").getStr?
-          unless kind == "rustc_main" do throw s!"unsupported rustc EntryFnType `{kind}`"
-          let sigpipe ← (← value.getObjVal? "sigpipe").getNat?
-          unless sigpipe <= 255 do throw "rustc EntryFnType sigpipe does not fit u8"
-          pure (some (definition,.rustcMain (UInt8.ofNat sigpipe)))
-  let mut entries : Array Entry := #[]
-  for record in ← (← source.getObjVal? "entries").getArr? do
-    let (definition,next) ← intern tables (← record.getObjVal? "definition")
-    tables := next
-    if entries.any (·.definition == definition) then throw "duplicate source main definition key"
-    let parameters ← (← (← record.getObjVal? "generic_parameters").getArr?).mapM fun value => do
-      match ← value.getStr? with
-      | "lifetime" => pure MainGenericParameter.lifetime
-      | "type_parameter" => pure .typeParameter | "const_parameter" => pure .constParameter
-      | _ => throw "unknown main generic parameter kind"
-    let signature := do
-      let value ← supported (← record.getObjVal? "signature_query")
-      pure (⟨← (← value.getObjVal? "has_bound_variables").getBool?,
-        ← (← value.getObjVal? "output_has_bound_variables").getBool?,
-        ← typeId ctx (← value.getObjVal? "return_type"),
-        ← typeId ctx (← value.getObjVal? "function_pointer_type")⟩ : MainSignature)
-    let resolution := do
-      let value ← supported (← record.getObjVal? "signature_query")
-      unless (← (← value.getObjVal? "compiler_selected_entry").getBool?) do
-        throw "lang_start query not requested for a non-compiler-selected entry"
-      supported (← value.getObjVal? "start_resolution")
-    let outcome : Except String (Option CallInstance) ← match resolution with
-      | .error error => pure (.error error)
-      | .ok value =>
-        if value == .null then pure (.ok none) else
-          match CompilerInstance.decode ctx tables value with
-          | .error error => pure (.error error)
-          | .ok (callee,next) => tables := next; pure (.ok (some callee))
-    entries := entries.push ⟨definition,parameters,signature,outcome⟩
-  let sectionSources := do (← supported (← source.getObjVal? "link_sections")).getArr?
-  let mut sections : Array SectionQuery := #[]
-  let sectionsResult : Except String (Array SectionQuery) ← match sectionSources with
-    | .error error => pure (.error error)
-    | .ok records =>
-      for record in records do
-        let name ← (← record.getObjVal? "section").getStr?
-        let decoded := do
-          let (definition,next) ← intern tables (← record.getObjVal? "definition")
-          let (span,next) ← lowerCompilerSpan next (← ctx.decodeCompilerValue (← record.getObjVal? "span"))
-          let value ← supported (← record.getObjVal? "global_query")
-          let ty ← typeId ctx (← value.getObjVal? "type")
-          let allocation ← (← (← value.getObjVal? "allocation").getObjVal? "allocation_id").getNat?
-          unless ctx.containsAllocationId allocation do throw "link-section static allocation missing from compiler graph"
-          pure ((⟨definition,span,ty,allocation⟩ : Section),next)
-        let result ← match decoded with
-          | .error error => pure (.error error)
-          | .ok (value,next) => tables := next; pure (.ok value)
-        sections := sections.push ⟨name,result⟩
-      pure (.ok sections)
-  pure ⟨program.withCompilerTables tables,runtime,start,compilerEntry,compilerEntryType,entries,sectionsResult⟩
+def Prepared.withProgram (prepared : Prepared) (program : LoweredProgram) : Prepared :=
+  {prepared with owner := prepared.owner.withProgram program}
+
+def prepare (owner : RuntimeProgram) : Except String Prepared := do
+  let program := owner.program
+  let runtime := owner.runtime
+  let source ← program.input.mirTables.mainQueries
+  let entries := source.entries.map fun entry =>
+    let parameters := entry.parameters.map fun parameter =>
+      match parameter with
+      | .lifetime => MainGenericParameter.lifetime
+      | .typeParameter => .typeParameter
+      | .constParameter => .constParameter
+    let signature := entry.signature.map fun value =>
+      (⟨value.hasBoundVariables,value.outputHasBoundVariables,value.returnType,value.fnPointerType⟩ : MainSignature)
+    (⟨entry.definition,parameters,signature,entry.start⟩ : Entry)
+  let sections := source.sections.map fun entries => entries.map fun entry =>
+    (⟨entry.name,entry.result.map fun value => (⟨value.definition,value.span,value.ty,value.allocation⟩ : Section)⟩ : SectionQuery)
+  let entryType := source.compilerEntryType.map fun value => value.map fun (definition,sigpipe) =>
+    (definition,MainEntryType.rustcMain sigpipe)
+  return ⟨owner,source.start,source.compilerEntry,entryType,entries,sections⟩
 private def entry (p : Prepared) (definition : MIR.DefId) : Except String Entry := do
   let some entry := p.entries.find? (·.definition == definition) | throw "missing exact source main entry query"
   pure entry

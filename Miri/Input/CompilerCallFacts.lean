@@ -6,26 +6,19 @@ definition paths nor debug displays substitute for tcx.symbol_name(instance).
 -/
 namespace Miri.Input.CompilerCallFacts
 open Lean Miri.Interpreter
-private def entry (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) : Except String Json := do
+private def entry (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) : Except String RuntimeInstanceData := do
   let some value := p.entries.find? (·.callee == callee) | throw "missing exact full-instance call facts"
-  pure value.payload
+  pure value.data
 
-def isForeignItem (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) : Except String Bool := do
-  (← (← entry p callee).getObjVal? "is_foreign_item").getBool?
+def isForeignItem (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) : Except String Bool :=
+  return (← entry p callee).foreignItem
 
-def isClosureLike (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) : Except String Bool := do
-  (← (← entry p callee).getObjVal? "is_closure_like").getBool?
+def isClosureLike (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) : Except String Bool :=
+  return (← entry p callee).closureLike
 
 def symbolName (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) : Except String String := do
-  let query ← (← entry p callee).getObjVal? "symbol_name"
-  unless (← (← query.getObjVal? "status").getStr?) == "supported" do
-    throw "compiler symbol name query requires a complete concrete callable instance"
-  (← query.getObjVal? "value").getStr?
-/-- LLVM source dispatch reads codegen attributes, not mangled symbol_name. -/
+  (← entry p callee).symbolName
+
 def codegenSymbolName (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) : Except String (Option String) := do
-  let query ← (← entry p callee).getObjVal? "codegen_symbol_name"
-  unless (← (← query.getObjVal? "status").getStr?) == "supported" do
-    throw "definition does not support exact codegen symbol attributes"
-  let value ← query.getObjVal? "value"
-  if value == .null then pure none else return some (← value.getStr?)
+  (← entry p callee).codegenSymbolName
 end Miri.Input.CompilerCallFacts

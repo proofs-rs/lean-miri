@@ -11,6 +11,17 @@ set_option maxRecDepth 65536
 set_option maxHeartbeats 4000000
 set_option linter.unusedSimpArgs false
 
+/-- Return observations follow from the checked source meaning, independently
+of the compiler's choice of syntax IDs. -/
+theorem block_observations (s : Static) (metadata : Metadata s) :
+    metadata.entry.block.cleanup = false ∧ metadata.entry.block.statements.size = 1 ∧
+      ∃ term : TerminatorNode,
+        s.loaded.tables.terminators.lookup metadata.entry.block.terminator.index = .ok term ∧
+          term.kind = .Return := by
+  exact Meaning.entry_return s.loaded.tables s.loaded.body Program.contents metadata.entry
+    metadata.body metadata.entry_references Program.contents_cleanup
+    Program.contents_statement_count Program.contents_return
+
 def control (s : Static) : ControlHooks Provenance LocalLayout MachineHooks.FrameExtra
     (MachineHooks.MachineState MiriMemoryKind RootUser) Unit (OpTy Provenance) :=
   let h := ExecutionMachine.withValidation s.cfg s.limits
@@ -135,7 +146,7 @@ bookkeeping and caller continuation restoration. -/
     (remaining : Nat) (capacity : s.capacity = remaining+2) (positive : 0 < s.options.limits.validation)
     (older : Array BodyStep.F) (caller frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
-    (body : frame.body = s.loaded.body) (location : frame.location = .mir ⟨0,1⟩)
+    (body : Meaning.FrameMatches frame s.loaded) (location : frame.location = .mir ⟨0,1⟩)
     (locals : frame.locals = #[{value := .live (.immediate .uninit),layout := some s.abi.ret.layout}])
     (noClocks : frame.extra.dataRace = none) (frameTracked : frame.extra.borrowTracker = some {})
     (tracker : MachineHooks.BorrowState) (tracked : machine.borrowTracker = some tracker)
@@ -166,13 +177,18 @@ bookkeeping and caller continuation restoration. -/
     (⟨⟨frames⟩,finished⟩ : WholeCall.State) place layout noMeta aligned ghostAfter shallowAfter
   have cleanupEq := cleanup s metadata remaining capacity frame (⟨⟨frames⟩,finished⟩ : WholeCall.State)
     target unwind continuation locals varargs
-  have block : frame.body.basicBlocks[0]? = some Program.block := by rw [body,metadata.body]; rfl
+  have references := metadata.entry_references
+  have block : frame.body.basicBlocks[0]? = some metadata.entry.blockId := by
+    rw [body.1]; exact references.block
+  have blockNode : frame.mirTables.blocks.lookup metadata.entry.blockId.index = .ok metadata.entry.block := by
+    rw [body.2.2]; exact references.blockNode
+  have cleanup := (block_observations s metadata).1
   rw [source]
   generalize actualControl : control s = hooks at readEq popEq copyEq cleanupEq ⊢
   cases hooks
   unfold ControlFlow.returnFromCurrentFrame
   simp only [BodyStep.current,LocalUnit.current,Stack.currentFrame?,Array.back?_push,
-    location,block,Program.no_cleanup,Bool.false_bne,Bool.false_and,Bool.not_false,
+    location,block,blockNode,cleanup,Bool.false_bne,Bool.false_and,Bool.not_false,
     Bool.false_eq_true,bne_self_eq_false,Id.run,bind,Bind.bind,pure,Pure.pure,↓reduceIte]
   simp only [frames,finished,BodyStep.current,LocalUnit.current] at readEq popEq copyEq cleanupEq
   erw [readEq]
@@ -183,7 +199,7 @@ bookkeeping and caller continuation restoration. -/
   simp only [continuation]
   simpa only [frames,finished] using ReturnContinuation.returnToBlock_push older caller finished target
 
-private theorem return_terminator (s : Static) (term : Terminator) (kind : term.kind = .Return) :
+private theorem return_terminator (s : Static) (term : TerminatorNode) (kind : term.kind = .Return) :
     (ExecutionMachine.stepHooks s.cfg s.limits).terminator () term =
       (ExecutionMachine.stepHooks s.cfg s.limits).returnFromCurrentFrame () false := by
   funext state
@@ -197,21 +213,29 @@ initial-input validity or metadata assumptions. -/
  theorem compose (s : Static) (metadata : Metadata s)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (before afterHook : MachineHooks.MachineState MiriMemoryKind RootUser) (after : WholeCall.State)
-    (body : frame.body = s.loaded.body) (location : frame.location = .mir ⟨0,1⟩)
+    (body : Meaning.FrameMatches frame s.loaded) (location : frame.location = .mir ⟨0,1⟩)
     (hook : (ExecutionMachine.stepHooks s.cfg s.limits).beforeTerminator ()
       (BodyStep.current frames frame before) = (BodyStep.current frames frame afterHook,.ok ()))
     (returned : (ExecutionMachine.stepHooks s.cfg s.limits).returnFromCurrentFrame () false
       (BodyStep.current frames frame afterHook) = (after,.ok ())) :
     ExecutionMachine.step s.cfg s.limits () (BodyStep.current frames frame before) = (after,.ok true) := by
-  have term := return_terminator s Program.block.terminator Program.normal_return
-  have block : frame.body.basicBlocks[0]? = some Program.block := by rw [body,metadata.body]; rfl
-  have absent : Program.block.statements[1]? = none := by rfl
+  obtain ⟨cleanup, count, termNode, termAt, termKind⟩ := block_observations s metadata
+  have term := return_terminator s termNode termKind
+  have references := metadata.entry_references
+  have block : frame.body.basicBlocks[0]? = some metadata.entry.blockId := by
+    rw [body.1]; exact references.block
+  have blockNode : frame.mirTables.blocks.lookup metadata.entry.blockId.index = .ok metadata.entry.block := by
+    rw [body.2.2]; exact references.blockNode
+  have terminator : frame.mirTables.terminators.lookup metadata.entry.block.terminator.index = .ok termNode := by
+    rw [body.2.2]; exact termAt
+  have absent : metadata.entry.block.statements[1]? = none :=
+    Array.getElem?_eq_none (by omega)
   unfold ExecutionMachine.step
   generalize actualHooks : ExecutionMachine.stepHooks s.cfg s.limits = hooks at hook returned term ⊢
   cases hooks
   unfold Step.step
   simp only [BodyStep.current,LocalUnit.current,Stack.currentFrame?,Array.back?_push,
-    location,block,absent,Id.run,bind,Bind.bind,pure,Pure.pure]
+    location,block,blockNode,absent,terminator,Id.run,bind,Bind.bind,pure,Pure.pure]
   simp only [BodyStep.current,LocalUnit.current] at hook returned term
   rw [hook]
   rw [term]

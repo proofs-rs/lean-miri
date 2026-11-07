@@ -16,17 +16,15 @@ def tupleFields (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except String
   let node ← p.runtime.node ty |>.mapError toString
   unless node.shapeStatus == .supported && node.shapeKind == .tuple do
     throw "source RustCall spreading requires the exact tuple type"
-  let elements ← (← (← node.payload.getObjVal? "shape").getObjVal? "elements").getArr?
-  elements.mapM fun value => do
-    let id ← (← value.getObjVal? "type_id").getNat?
-    let _ ← p.runtime.node id |>.mapError toString
-    pure id
+  let some id := node.relations.elements | throw "tuple element list absent"
+  p.runtime.source.typeRelationTables.typeLists.lookup id |>.mapError (fun id => s!"invalid tuple element list {id}")
 
 def closureUpvarCount (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except String (Option Nat) := do
   let node ← p.runtime.node ty |>.mapError toString
   unless node.shapeStatus == .supported do throw "closure-kind compiler evidence is unavailable"
   if node.shapeKind != .closure then return none
-  return some (← (← (← node.payload.getObjVal? "shape").getObjVal? "upvar_count").getNat?)
+  let some count := node.relations.upvarCount | throw "closure upvar count absent"
+  return some count
 
 /-- Exact source ExternAbi identity, canonical FnAbi records, shared DefIds/
 TypeConstIds and actual current BodyIdentity all belong to this same program. -/
@@ -34,7 +32,7 @@ def make (p : CompilerProviders.Prepared) (compatibilityBudget : Nat) :
     ExecutionCallLeaves.Compiler (MachineHooks.State K U) C ABI.ExternAbi := {
   functionSignature := fun _ layout => lift do
     let (count,sourceAbi) ← CompilerFunctionFacts.signature p.functions layout.ty
-    pure (count,← CompilerExternAbi.decode sourceAbi)
+    pure (count,sourceAbi)
   functionKind := fun ty => lift (CompilerFunctionFacts.kind p.functions ty)
   resolve := fun _ definition args => CompilerProviders.resolveCurrent p definition args
   fnAbiOfFnPtr := fun _ layout extra => lift (CompilerFunctionFacts.pointerAbi p.functions layout.ty extra)

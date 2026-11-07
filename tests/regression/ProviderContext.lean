@@ -22,24 +22,16 @@ def main (args : List String) : IO Unit := do
   check (firstProgram.input.raw != secondProgram.input.raw)
     "two distinct genuine documents unexpectedly equal"
   let prepared ← must (CompilerProviders.prepare firstProgram)
-  check (prepared.loweringContext.sourceDocument == some firstProgram.input.raw)
-    "prepared provider cache does not point at own program"
+  check (prepared.runtime.source.raw == firstProgram.input.raw)
+    "provider runtime does not use its owner source"
   let nested := prepared.lifecycle.calls.symbols.facts.context
-  let wrongNested : CompilerFacts.Context := { nested with
-    program := secondProgram, lowering := none }
-  check (wrongNested.loweringContext.sourceDocument == some secondProgram.input.raw)
-    "manual nested facts context did not preserve fallback source"
-  let wrongFacts := { prepared.lifecycle.calls.symbols.facts with context := wrongNested }
-  let wrongSymbols := { prepared.lifecycle.calls.symbols with facts := wrongFacts }
-  let wrongCalls := { prepared.lifecycle.calls with symbols := wrongSymbols }
-  let wrongLifecycle := { prepared.lifecycle with calls := wrongCalls }
-  let manualProvider := { prepared with lifecycle := wrongLifecycle, lowering := none }
-  check (manualProvider.loweringContext.sourceDocument == some firstProgram.input.raw)
-    "manual provider incorrectly followed its mismatched nested context"
-  check (manualProvider.lifecycle.calls.symbols.facts.context.loweringContext.sourceDocument ==
-    some secondProgram.input.raw)
-    "mismatched nested context unexpectedly changed"
-  let rebound := wrongNested.withProgram firstProgram
-  check (rebound.loweringContext.sourceDocument == some firstProgram.input.raw)
-    "withProgram left a stale context certificate"
-  IO.println "source147 provider-own-program and nested-context fallback PASS"
+  let updated := nested.withProgram secondProgram
+  check (updated.runtime.source.raw == nested.runtime.source.raw &&
+      updated.program.input.raw == nested.program.input.raw)
+    "replacing the lowered view changed its source owner"
+  check (updated.program.bundle.bodies.size == secondProgram.bundle.bodies.size)
+    "replacing lowered tables did not update the body view"
+  let independent ← must (CompilerFacts.ofProgram secondProgram)
+  check (independent.runtime.source.raw == secondProgram.input.raw)
+    "independent source owner did not retain its input"
+  IO.println "single source provider owner PASS"

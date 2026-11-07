@@ -1,3 +1,4 @@
+import Miri.Input.CompilerTables
 import Miri.Input.DecoderValues
 
 namespace Miri.Input
@@ -10,20 +11,34 @@ structure ImportDocumentCore where
   runtimeTargetDataLayout : Option TargetDataLayoutEvidence := none
   completenessStatus : PayloadStatus
   types : Array TypeNode
+  layoutTable : Miri.MIR.SharedTable Layout := #[]
+  projectionTables : ProjectionTables := {}
+  typeRelationTables : TypeRelationTables := {}
+  compilerFactTables : CompilerFactTables := {}
+  compilerTypeCatalogs : CompilerTypeCatalogs := {}
+  abiTables : AbiTables := {}
+  abiQueries : AbiQueries := {}
+  covarianceQueries : Except String (Array CovarianceQuery) := .error "covariance queries absent"
+  vtableTables : VtableTables := {}
+  mirTables : MIRInputTables := {}
   allocations : Array AllocationNode
   compilerAllocIdWorld : Option CompilerAllocIdWorld := none
   instances : Array InstanceNode
   selectedScope : Option SelectedScope
-  functionAbis : Array FunctionAbi
   bodies : Array Body
+  sourceSpans : Miri.MIR.SharedTable SourceSpanData := #[]
+  rootSpan : Option Nat := none
+  rootSpanDeclared : Bool := false
+  validatedVtableProbeDiagnostics : Array String := #[]
   obligations : Array Obligation
   raw : Lean.Json
-  /-- Resolved source nodes from the mandatory shared-payload graph. Each node
-  is retained once so downstream consumers can reuse the document's DAG. -/
+  /-- Original transport nodes. Children retain the producer's shared IDs. -/
   sharedNodes : Array Lean.Json := #[]
-  /-- Checked import-time ABI queries; failures remain deferred until demand. -/
-  compilerFunctionAbiTable : Option (CompilerFunctionAbiTable sharedNodes) := none
   compilerValueMemo : Option CompilerValueMemo := none
+
+def ImportDocumentCore.instance (document : ImportDocumentCore) (id : InstanceId) : Except String InstanceNode := do
+  let some value := document.instances[id]? | throw s!"invalid instance ID {id}"
+  return value
 
 /-- Full diagnostic import retained for callers that inspect the typed JSON
 projection. Runtime decoding uses `ImportDocumentCore` and does not retain this
@@ -36,16 +51,29 @@ structure ImportDocument where
   runtimeTargetDataLayout : Option TargetDataLayoutEvidence := none
   completenessStatus : PayloadStatus
   types : Array TypeNode
+  layoutTable : Miri.MIR.SharedTable Layout := #[]
+  projectionTables : ProjectionTables := {}
+  typeRelationTables : TypeRelationTables := {}
+  compilerFactTables : CompilerFactTables := {}
+  compilerTypeCatalogs : CompilerTypeCatalogs := {}
+  abiTables : AbiTables := {}
+  abiQueries : AbiQueries := {}
+  covarianceQueries : Except String (Array CovarianceQuery) := .error "covariance queries absent"
+  vtableTables : VtableTables := {}
+  mirTables : MIRInputTables := {}
   allocations : Array AllocationNode
   compilerAllocIdWorld : Option CompilerAllocIdWorld := none
   instances : Array InstanceNode
   selectedScope : Option SelectedScope
-  functionAbis : Array FunctionAbi
   bodies : Array Body
+  sourceSpans : Miri.MIR.SharedTable SourceSpanData := #[]
+  rootSpan : Option Nat := none
+  rootSpanDeclared : Bool := false
   typedTree : TypedValue
+  validatedVtableProbeDiagnostics : Array String := #[]
   obligations : Array Obligation
   raw : Lean.Json
-  /-- Resolved source nodes from the mandatory shared-payload graph. -/
+  /-- Original transport nodes; references are not expanded. -/
   sharedNodes : Array Lean.Json := #[]
 
 /-- Diagnostic/reflected imports contain schema data only. Their runtime view
@@ -58,12 +86,25 @@ def ImportDocument.toCore (document : ImportDocument) : ImportDocumentCore := {
   runtimeTargetDataLayout := document.runtimeTargetDataLayout
   completenessStatus := document.completenessStatus
   types := document.types
+  layoutTable := document.layoutTable
+  projectionTables := document.projectionTables
+  typeRelationTables := document.typeRelationTables
+  compilerFactTables := document.compilerFactTables
+  compilerTypeCatalogs := document.compilerTypeCatalogs
+  abiTables := document.abiTables
+  abiQueries := document.abiQueries
+  covarianceQueries := document.covarianceQueries
+  vtableTables := document.vtableTables
+  mirTables := document.mirTables
   allocations := document.allocations
   compilerAllocIdWorld := document.compilerAllocIdWorld
   instances := document.instances
   selectedScope := document.selectedScope
-  functionAbis := document.functionAbis
   bodies := document.bodies
+  sourceSpans := document.sourceSpans
+  rootSpan := document.rootSpan
+  rootSpanDeclared := document.rootSpanDeclared
+  validatedVtableProbeDiagnostics := document.validatedVtableProbeDiagnostics
   obligations := document.obligations
   raw := document.raw
   sharedNodes := document.sharedNodes
@@ -80,13 +121,26 @@ def ImportDocumentCore.withTypedTree (core : ImportDocumentCore) (typedTree : Ty
   runtimeTargetDataLayout := core.runtimeTargetDataLayout
   completenessStatus := core.completenessStatus
   types := core.types
+  layoutTable := core.layoutTable
+  projectionTables := core.projectionTables
+  typeRelationTables := core.typeRelationTables
+  compilerFactTables := core.compilerFactTables
+  compilerTypeCatalogs := core.compilerTypeCatalogs
+  abiTables := core.abiTables
+  abiQueries := core.abiQueries
+  covarianceQueries := core.covarianceQueries
+  vtableTables := core.vtableTables
+  mirTables := core.mirTables
   allocations := core.allocations
   compilerAllocIdWorld := core.compilerAllocIdWorld
   instances := core.instances
   selectedScope := core.selectedScope
-  functionAbis := core.functionAbis
   bodies := core.bodies
+  sourceSpans := core.sourceSpans
+  rootSpan := core.rootSpan
+  rootSpanDeclared := core.rootSpanDeclared
   typedTree := typedTree
+  validatedVtableProbeDiagnostics := core.validatedVtableProbeDiagnostics
   obligations := core.obligations
   raw := core.raw
   sharedNodes := core.sharedNodes

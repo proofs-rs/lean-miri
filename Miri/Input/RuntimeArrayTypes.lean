@@ -1,4 +1,5 @@
-import Miri.Input.RuntimeMetadata
+import Miri.Input.CompilerPrimitiveFacts
+import Miri.Input.RuntimeProgram
 
 /-! Runtime canonical array constructors, including OsStr and argv arrays.
 Sources: rustc_middle ty/sty.rs::Ty::new_array, rustc_type_ir sty/consts.rs
@@ -25,6 +26,8 @@ structure Entry where
   value : TyAndLayout TypeId
   origin : Origin
 structure World where
+  /-- The compiler source view obtained from the program owner at creation.
+  Array facts use this view directly; no independent context is reconciled. -/
   metadata : RuntimeMetadata
   byteLayout : TyAndLayout TypeId
   wideLayout : TyAndLayout TypeId
@@ -63,9 +66,9 @@ def calculate (target : RuntimeTargetDataLayout) (element : LayoutData)
     unadjustedAbiAlign := element.align.abi
     reprC := element.reprC
     randomizationSeed := element.randomizationSeed + count }
-private def primitive (runtime : RuntimeMetadata) (refs : Json) (key : String)
+private def primitive (runtime : RuntimeMetadata) (key : String)
     (kind : Miri.MIR.IntegerKind) : Except Error (TyAndLayout TypeId) := do
-  let id ← convert ((refs.getObjVal? key).bind fun value => (value.getObjVal? "type_id").bind Json.getNat?)
+  let id ← convert (CompilerPrimitiveFacts.primitiveType runtime key)
   let source ← metadata (runtime.node id)
   unless source.shapeStatus == .supported && source.shapeMetadata.unsignedKind == some (.known kind) do
     throw (.metadata s!"runtime primitive {key} is not the exact compiler unsigned type")
@@ -87,10 +90,10 @@ private def elementLayout (world : World) : Element → Except Error (TyAndLayou
 /-- Seed exact constructor aliases before computing any layouts. Layout failures
 in unrelated compiler catalog entries do not turn World creation into execution
 of those types; requesting their constructors still fails explicitly. -/
-def create (runtime : RuntimeMetadata) : Except Error World := do
-  let refs ← convert (runtime.source.raw.getObjVal? "compiler_runtime_primitives")
-  let byte ← primitive runtime refs "u8" .u8
-  let wide ← primitive runtime refs "u16" .u16
+def create (owner : RuntimeProgram) : Except Error World := do
+  let runtime := owner.runtime
+  let byte ← primitive runtime "u8" .u8
+  let wide ← primitive runtime "u16" .u16
   let next := runtime.source.types.foldl (fun next node => max next (node.id + 1)) 0
   let mut world : World := {
     metadata := runtime
@@ -101,17 +104,15 @@ def create (runtime : RuntimeMetadata) : Except Error World := do
     obligations := #[] }
   for node in runtime.source.types do
     if node.shapeKind == .array then
-      let shape ← convert (node.payload.getObjVal? "shape")
-      let element ← convert ((shape.getObjVal? "element").bind fun value => (value.getObjVal? "type_id").bind Json.getNat?)
-      let evidence := do
-        let evidence ← shape.getObjVal? "constructor_identity"
-        unless (← (← evidence.getObjVal? "status").getStr?) == "supported" do
-          throw "unresolved compiler array constructor identity"
-        unless (← (← evidence.getObjVal? "canonical_value_constructor").getBool?) do
-          throw "source array is not the canonical value-length constructor"
-        let count ← (← evidence.getObjVal? "count").getNat?
-        unless count < 2^64 do throw "compiler array count exceeds u64"
-        pure (UInt64.ofNat count)
+      let some element := node.relations.element | throw (.metadata "invalid program: array element type absent")
+      let evidence : Except String UInt64 := do
+        let some id := node.relations.arrayConstructor | throw "compiler array constructor identity absent"
+        let value ← runtime.source.typeRelationTables.arrayConstructors.lookup id |>.mapError
+          (fun id => s!"invalid array constructor {id}")
+        unless value.status == .supported do throw "unresolved compiler array constructor identity"
+        unless value.canonical do throw "source array is not the canonical value-length constructor"
+        unless value.count < 2^64 do throw "compiler array count exceeds u64"
+        pure (UInt64.ofNat value.count)
       match evidence with
       | .error reason => world := {world with obligations := world.obligations.push s!"type {node.id}: {reason}"}
       | .ok count =>

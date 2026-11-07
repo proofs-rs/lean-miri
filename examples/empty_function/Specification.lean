@@ -20,7 +20,8 @@ exported empty_function body; ABI/layout identities retain that instance's compi
 No whole compiler-document equality excludes additional caller metadata. -/
 structure Metadata (s : Static) where
   construction : CanonicalDictionaries.Construction s.prepared.compiler
-  body : s.loaded.body = Program.root.loaded.body
+  /-- Source meaning is fixed while compilation-local syntax IDs may differ. -/
+  body : Contents.body s.loaded.tables #[] s.loaded.body = .ok Program.contents
   loader : CallResolution.loadedBodyOfInstance s.prepared.compiler.lifecycle.calls.calls
     s.functionInstance = .ok s.loaded
   abi : CompilerInstanceAbi.abiOfInstance s.prepared.compiler.lifecycle.instances
@@ -71,12 +72,11 @@ structure Metadata (s : Static) where
   /-- Normalization depends on the current frame's static body/instance key,
   while locals, memory, thread state and caches are unconstrained by this fact. -/
   normalizedLocal : ∀ frame : CompilerFrameContext.ActualFrame,
-    frame.bodyIdentity = s.loaded.identity → frame.body = s.loaded.body →
+    frame.bodyIdentity = s.loaded.identity → Meaning.FrameMatches frame s.loaded →
     frame.functionInstance = s.functionInstance →
     CompilerFrameContext.normalizedLocalType s.prepared.compiler frame 0 = .ok s.abi.ret.layout.ty
   loweredBody : LoweredBody
   bodyRow : s.prepared.compiler.program.bundle.bodies[s.loaded.identity.index]? = some loweredBody
-  bodyContents : loweredBody.body = s.loaded.body
   lifecycleBody : s.prepared.compiler.lifecycle.lifecycle.program.bundle.bodies[s.loaded.identity.index]? =
     some loweredBody
   preamble : SpanRef
@@ -89,14 +89,15 @@ structure Metadata (s : Static) where
   operational result. Its exact structural site selects compiler evidence. -/
   literal : ConstOperand
   literalShape : literal.value = .Val .ZeroSized s.abi.ret.layout.ty
-  literalStatement : ((s.loaded.body.basicBlocks[0]?).bind (fun block => block.statements[0]?)).map
+  literalStatement : ((Program.contents.basicBlocks[0]?).bind (fun block => block.statements[0]?)).map
     (fun statement => statement.kind) = some (.Assign ⟨0,#[]⟩ (.Use (.Constant literal) .Yes))
-  constantBinding : s.prepared.compiler.constantBinding.compatible = true
-  literalNormalization : normalizationFromEvidence
-    ((s.prepared.compiler.constants.evidence.filter (fun entry => entry.site ==
-      (⟨s.loaded.identity.index,⟨0,0⟩,#[.field "kind",.field "rvalue",.field "operand",.field "constant"]⟩ :
-        CompilerConstantQueries.Site))).map (fun entry => entry.query))
-    s.functionInstance literal.value = .ok literal.value
+  /-- Missing query evidence is a checked stop. Successful evidence must retain
+  the exported unit constant's normalization. -/
+  constantNormalization : ∀ evidence,
+    CompilerConstantQueries.lookup s.prepared.compiler.constants
+      ⟨s.loaded.identity.index,Meaning.unitConstantId s.loaded.tables s.loaded.body
+        Program.contents literal body literalStatement⟩ = .ok evidence →
+    normalizationFromEvidence #[evidence] s.functionInstance literal.value = .ok literal.value
 
   /-- The default address-space pointer width agrees with the selected x86_64 target. -/
   pointerSize : s.prepared.compiler.runtime.target.pointerSize = Size.ofBytes 8
@@ -113,6 +114,103 @@ structure Metadata (s : Static) where
   compilerLocalSourceSpans : ∀ body ∈ s.prepared.compiler.program.bundle.bodies,
     ∀ decl ∈ body.input.locals, ∃ index,
       s.prepared.compiler.program.bundle.spans.toList.idxOf? decl.sourceInfo.span = some index
+
+noncomputable def Metadata.literalId {s : Static} (metadata : Metadata s) : ConstantId :=
+  Meaning.unitConstantId s.loaded.tables s.loaded.body Program.contents metadata.literal
+    metadata.body metadata.literalStatement
+
+theorem Metadata.literalReference {s : Static} (metadata : Metadata s) :
+    Meaning.firstConstantId s.loaded.tables s.loaded.body = .ok metadata.literalId :=
+  Meaning.unitConstantId_reference s.loaded.tables s.loaded.body Program.contents metadata.literal
+    metadata.body metadata.literalStatement
+
+/-- Availability is required by successful intermediate results, not by the
+UB-freedom target. -/
+class SuccessfulConstant {s : Static} (metadata : Metadata s) : Prop where
+  query : ∃ evidence, CompilerConstantQueries.lookup s.prepared.compiler.constants
+    ⟨s.loaded.identity.index,metadata.literalId⟩ = .ok evidence
+
+noncomputable def Metadata.literalEvidence {s : Static} (metadata : Metadata s)
+    [successful : SuccessfulConstant metadata] : CompilerConstantEvidence :=
+  Classical.choose successful.query
+
+theorem Metadata.literalQuery {s : Static} (metadata : Metadata s)
+    [successful : SuccessfulConstant metadata] :
+    CompilerConstantQueries.lookup s.prepared.compiler.constants
+      ⟨s.loaded.identity.index,metadata.literalId⟩ = .ok metadata.literalEvidence :=
+  Classical.choose_spec successful.query
+
+theorem Metadata.literalNormalization {s : Static} (metadata : Metadata s)
+    [SuccessfulConstant metadata] :
+    normalizationFromEvidence #[metadata.literalEvidence]
+      s.functionInstance metadata.literal.value = .ok metadata.literal.value :=
+  metadata.constantNormalization metadata.literalEvidence metadata.literalQuery
+
+theorem Metadata.bodyContents {s : Static} (metadata : Metadata s) :
+    metadata.loweredBody.bodyId = s.loaded.bodyId ∧ metadata.loweredBody.body = s.loaded.body := by
+  let token := LocalsIdentity.ofAllocationToken 0
+  let frame : CompilerFrameContext.ActualFrame := Frame.create s.loaded s.functionInstance
+    ⟨none,none,0,none⟩ (.stop false) (.frameLocal 0 0 none s.abi.ret.layout token)
+    metadata.preamble token
+  have known := metadata.normalizedLocal frame rfl (by exact ⟨rfl,rfl,rfl⟩) rfl
+  have wire := CompilerFrameContext.normalizedLocalType_body s.prepared.compiler frame 0
+    s.abi.ret.layout.ty metadata.loweredBody (by exact metadata.bodyRow) known
+  exact wire
+
+noncomputable def Metadata.entry {s : Static} (metadata : Metadata s) : Meaning.Entry :=
+  Classical.choose (Meaning.firstConstantId_entry s.loaded.tables s.loaded.body
+    metadata.literalId metadata.literalReference)
+
+theorem Metadata.entry_constant {s : Static} (metadata : Metadata s) :
+    metadata.entry.constant = metadata.literalId :=
+  (Classical.choose_spec (Meaning.firstConstantId_entry s.loaded.tables s.loaded.body
+    metadata.literalId metadata.literalReference)).1
+
+theorem Metadata.entry_references {s : Static} (metadata : Metadata s) :
+    metadata.entry.References s.loaded.tables s.loaded.body :=
+  (Classical.choose_spec (Meaning.firstConstantId_entry s.loaded.tables s.loaded.body
+    metadata.literalId metadata.literalReference)).2
+
+theorem Metadata.entry_observations {s : Static} (metadata : Metadata s) :
+    Contents.place s.loaded.tables metadata.entry.destination = .ok ⟨0,#[]⟩ ∧
+      metadata.entry.retag = .Yes ∧
+      Contents.constant s.loaded.tables metadata.entry.constant = .ok metadata.literal :=
+  Meaning.entry_observations s.loaded.tables s.loaded.body Program.contents metadata.entry
+    metadata.literal metadata.body metadata.entry_references metadata.literalStatement
+
+/-- Header facts follow from the checked source meaning, independently of the
+compilation-local numbers used for the referenced syntax nodes. -/
+theorem Metadata.body_header (s : Static) (metadata : Metadata s) :
+    s.loaded.body.argumentCount = 0 ∧ s.loaded.body.locals = #[0] ∧
+      s.loaded.body.basicBlocks.size = 1 := by
+  have actual := Meaning.body_metadata s.loaded.tables #[] s.loaded.body Program.contents metadata.body
+  have fixed := Meaning.body_metadata Program.root.loaded.tables #[] Program.root.loaded.body
+    Program.contents Program.contents_checked
+  have blocks := Meaning.array_mapM_size _ _ _
+    (Meaning.body_blocks s.loaded.tables #[] s.loaded.body Program.contents metadata.body)
+  have fixedBlocks := Meaning.array_mapM_size _ _ _
+    (Meaning.body_blocks Program.root.loaded.tables #[] Program.root.loaded.body Program.contents
+      Program.contents_checked)
+  refine ⟨actual.2.1.trans (fixed.2.1.symm.trans Program.no_arguments), ?_, ?_⟩
+  · exact actual.2.2.2.trans (fixed.2.2.2.symm.trans (by rfl))
+  · exact blocks.trans (fixedBlocks.symm.trans Program.one_block)
+
+
+/-- The existing successful loader premise supplies cache validity; the checked
+unit body's local range then leaves no implicit local to activate. -/
+theorem Metadata.alwaysLive (s : Static) (metadata : Metadata s) :
+    s.loaded.body.alwaysLive = #[] := by
+  have valid := (CallResolution.loadedBodyOfInstance_tables
+    s.prepared.compiler.lifecycle.calls.calls s.functionInstance s.loaded metadata.loader).2.2.2
+  rw [Array.all_eq_true'] at valid
+  apply Array.eq_empty_iff_forall_not_mem.mpr
+  intro id selected
+  have bounds := valid id selected
+  simp only [(metadata.body_header s).1, (metadata.body_header s).2.1,
+    Bool.and_eq_true, decide_eq_true_eq] at bounds
+  change 0 < id ∧ id < 1 at bounds
+  exact (Nat.not_lt_of_ge bounds.1) bounds.2
+
 
 structure Profile (s : Static) : Prop where
   debug : s.options.place.debugAssertions = false

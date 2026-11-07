@@ -2,12 +2,13 @@ import Miri.Interpreter.LocalAccess
 open Miri.Interpreter Miri.Memory Miri.ABI
 
 def layout : LocalLayout := ⟨17, ⟨.Arbitrary #[] #[], .Single 0, .Memory (sized := true), none, false, ⟨.ONE⟩, Size.ZERO, none, .ONE, false, 0⟩⟩
-def fixtureBodies : Array Miri.MIR.Body := #[⟨.Built, 0, none, #[layout.ty], #[]⟩]
-def fixtureLoaded : LoadedBody := ⟨BodyIdentity.ofCanonicalIndex 0, fixtureBodies[0]⟩
+def fixtureBody : Miri.MIR.BodyNode := ⟨.Built, 0, none, #[layout.ty], #[], 0, #[]⟩
 def fixtureIdentity : LocalsIdentity := (LocalsIdentitySupply.allocate ⟨0⟩).2
 def frame (value : LocalValue Unit) (cached : Bool) : Frame Unit LocalLayout Unit :=
-  { body := fixtureLoaded.body
-    bodyIdentity := fixtureLoaded.identity
+  { body := fixtureBody
+    bodyId := ⟨0⟩
+    mirTables := { bodies := #[some fixtureBody] }
+    bodyIdentity := BodyIdentity.ofCanonicalIndex 0
     localsIdentity := fixtureIdentity
     functionInstance := ⟨.Item 0, #[]⟩, extra := (), returnContinuation := .stop true
     returnPlace := .frameLocal 0 0 none layout fixtureIdentity

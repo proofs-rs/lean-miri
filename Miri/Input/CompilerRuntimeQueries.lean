@@ -18,79 +18,29 @@ structure VirtualEntry where
   resolved : Except String CallInstance
 structure Prepared where
   program : LoweredProgram
-  types : Array TypeEntry
+  types : Array (Option TypeEntry)
   callerLocation : Array (CallInstance × Bool)
   virtualQueries : Array VirtualEntry
-private def value (j : Json) (key : String) : Except String Json := do
-  let entry ← j.getObjVal? key
-  unless (← (← entry.getObjVal? "status").getStr?) == "supported" do
-    throw s!"unresolved compiler runtime query {key}"
-  entry.getObjVal? "value"
-private def typeId (ctx : LowerContext) (j : Json) : Except String Nat := do
-  let id ← (← j.getObjVal? "type_id").getNat?
-  unless ctx.containsTypeId id do throw "runtime query references absent compiler type"
-  pure id
-
-private def definition (tables : CompilerTables) (j : Json) :
-    Except String (MIR.DefId × CompilerTables) := do
-  let id : DefinitionId := ⟨← (← j.getObjVal? "crate").getNat?, ← (← j.getObjVal? "index").getNat?⟩
-  match lookupDefinitionId tables.definitions id with
-  | .ok id => pure (id,tables)
-  | .error _ => pure (tables.definitions.size,{tables with definitions := tables.definitions.push id})
-
 def prepare (program : LoweredProgram) : Except String Prepared := do
-  let raw ← program.input.raw.getObjVal? "compiler_runtime_queries"
-  let ctx := LowerContext.ofDocument program.input
-  let mut tables := program.compilerTables
-  let mut types := #[]
-  for entry in (← (← raw.getObjVal? "types").getArr?) do
-    unless (← (← entry.getObjVal? "typing_env").getStr?) == "fully_monomorphized" do
-      throw "runtime query typing environment mismatch"
-    let id ← (← entry.getObjVal? "input_type_id").getNat?
-    unless ctx.containsTypeId id do throw "runtime query input type absent"
-    let pointer ← typeId ctx (← value entry "mut_pointer_type")
-    let reference ← typeId ctx (← value entry "mut_reference_type")
-    let dropResult := do CompilerInstance.decode ctx tables (← value entry "drop_glue")
-    let drop ← match dropResult with
-      | .error e => pure (.error e)
-      | .ok (callee,next) =>
-        tables := next
-        pure (.ok callee)
-    unless !(types.any (·.typeId == id)) do throw "duplicate compiler runtime type query"
-    types := types.push ⟨id,pointer,reference,drop⟩
+  let tables := program.input.mirTables
+  let types : Array (Option TypeEntry) ← (← tables.runtimeTypes).mapIdxM fun id value => do
+    let some value := value | pure none
+    let drop := value.dropGlue.bind tables.instance
+    pure (some ⟨id,value.pointerType,value.referenceType,drop⟩)
   let mut callers := #[]
-  for entry in (← (← raw.getObjVal? "instances").getArr?) do
-    let (callee,next) ← CompilerInstance.decode ctx tables entry
-    tables := next
-    let track ← (← entry.getObjVal? "requires_caller_location").getBool?
+  for entry in (← tables.runtimeInstances) do
+    let callee ← tables.instance entry.instanceId
+    let track := entry.callerLocation
     if let some (_,prior) := callers.find? (·.1 == callee) then
       unless prior == track do throw "conflicting full-instance caller-location query"
     else callers := callers.push (callee,track)
-  let mut virtualQueries := #[]
-  for query in (← (← raw.getObjVal? "virtual").getArr?) do
-    unless (← (← query.getObjVal? "typing_env").getStr?) == "fully_monomorphized" do
-      throw "virtual query typing environment mismatch"
-    let (original,next) ← CompilerInstance.decode ctx tables (← query.getObjVal? "original")
-    tables := next
-    let (method,next) ← definition tables (← query.getObjVal? "method_definition")
-    tables := next
-    let (parent,next) ← definition tables (← query.getObjVal? "parent_trait")
-    tables := next
-    let concrete ← typeId ctx (← query.getObjVal? "concrete_type")
-    let args ← ctx.decodeCompilerValue (← query.getObjVal? "rebased_args")
-    let (args,next) ← lowerCompilerGenericArgs ctx tables args
-    tables := next
-    let outcome := do CompilerInstance.decode ctx tables (← value query "resolved")
-    let resolved ← match outcome with
-      | .error e => pure (.error e)
-      | .ok (callee,next) =>
-        tables := next
-        pure (.ok callee)
-    virtualQueries := virtualQueries.push ⟨original,method,parent,concrete,args,resolved⟩
-  pure ⟨program.withCompilerTables tables,types,callers,virtualQueries⟩
+  let virtualQueries : Array VirtualEntry ← (← tables.runtimeVirtual).mapM fun query => do
+    let original ← tables.instance query.original
+    let resolved := query.resolved.bind tables.instance
+    pure ⟨original,query.methodDefinition,query.parentTrait,query.concreteType,query.rebasedArgs,resolved⟩
+  pure ⟨program,types,callers,virtualQueries⟩
 private def entry (prepared : Prepared) (id : Nat) : Except String TypeEntry := do
-  let some entry := prepared.types.find? (·.typeId == id)
-    | throw "missing exact compiler runtime type query"
+  let some (some entry) := prepared.types[id]? | throw "missing exact compiler runtime type query"
   pure entry
 
 def mutPointerType (prepared : Prepared) (id : Nat) : Except String Nat :=

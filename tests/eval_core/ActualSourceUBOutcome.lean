@@ -235,7 +235,7 @@ private def runPrepared (prepared : Input.EvalPreparation.Prepared)
     (H := Unit) (D := Unit) (O := String) (Aff := Unit) (B := Unit)
     machineConfig initialMemory arrays addressChoices host).mapError reprStr
   let initial : OuterState := initial
-  let bytes ← (Input.CompilerGlobalBytes.prepare compiler.program compiler.runtime initialMemory).mapError toString
+  let bytes ← (Input.CompilerGlobalBytes.prepare compiler.owner initialMemory).mapError toString
   let coreLeaves := leaves dummy
   match Input.EvalConfigurationCore.make compiler image bytes options coreLeaves () 256 with
   | .error error => .error (reprStr error)

@@ -1,3 +1,4 @@
+import Miri.Input.AllocIdWorldValidation
 import Lean.Util.Profile
 import Miri.Interpreter.ExecutionCallLeaves
 import Miri.Interpreter.FunctionPointerConsumers
@@ -64,9 +65,9 @@ private def seedImportedImpl (p : Prepared) (image : AllocationImage.Imported)
   if let some world := world? then
     unless memory.sourceAllocIdWorldActive do
       throw "prepared vtable catalog requires the active source AllocId world"
-    unless image.source == input.allocations.filter (·.status == .supported) do
+    unless AllocationImage.sameSource image.source (input.allocations.filter (·.status == .supported)) do
       throw "prepared vtable catalog allocation image differs from its owning program"
-    Miri.Input.validateCompilerAllocIdWorldRaw input.raw input.allocations (some world)
+    AllocIdWorldValidation.validate input
       |>.mapError fun error => s!"prepared AllocId world: {error}"
   else
     for (_,id) in memory.importedGlobalIds do

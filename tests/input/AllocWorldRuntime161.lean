@@ -1,3 +1,4 @@
+import MiriTests.Input.ReferenceDecoder
 import Miri.Input.EvalPreparation
 import Miri.Input.CompilerGlobalBytes
 import Miri.Input.CompilerFunctionPointers
@@ -37,10 +38,14 @@ private def legacySourceNode (image : AllocationImage.Imported)
 
 private def legacyFunctionInstance (prepared : CompilerVTableRuntime.Prepared)
     (id : InstanceId) : Except String CallInstance := do
-  let candidates := prepared.instances.filter (·.id == id)
+  let program := prepared.facts.context.program
+  let candidates := program.input.instances.filter (·.id == id)
   unless candidates.size == 1 do throw "missing or ambiguous complete compiler function instance"
   let some value := candidates[0]? | throw "compiler function instance missing"
-  value.outcome
+  let (fnInstance,tables) ← CompilerInstance.decode (LowerContext.ofDocument program.input)
+    program.compilerTables value.payload
+  unless tables = program.compilerTables do throw "function instance requires unprepared compiler identities"
+  pure fnInstance
 
 private def legacyGlobalFunction (prepared : CompilerVTableRuntime.Prepared)
     (image : AllocationImage.Imported)
@@ -59,14 +64,14 @@ private def legacyGlobalFunction (prepared : CompilerVTableRuntime.Prepared)
   let tables := prepared.facts.context.program.compilerTables
   let definition ← lookupDefinitionId tables.definitions source.definitionId
   unless fnInstance.defId == definition do throw "global function/full-instance definition mismatch"
-  let (args,next) ← lowerCompilerGenericArgs prepared.facts.context.loweringContext
+  let (args,next) ← lowerCompilerGenericArgs (LowerContext.ofDocument prepared.facts.context.program.input)
     tables source.genericArgs
   unless next.definitions == tables.definitions && next.typeConstants == tables.typeConstants do
     throw "global function arguments require unprepared compiler identities"
   unless args == fnInstance.args do throw "global function/full-instance generic arguments mismatch"
   pure (some fnInstance)
 
-private def legacyGlobalVTable (prepared : CompilerVTableRuntime.Prepared)
+private def legacyGlobalVTable (catalog : Reader.Catalog) (prepared : CompilerVTableRuntime.Prepared)
     (image : AllocationImage.Imported)
     (memory : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind)
     (id : AllocId) : Except String (Option (Nat × Nat)) := do
@@ -80,8 +85,20 @@ private def legacyGlobalVTable (prepared : CompilerVTableRuntime.Prepared)
     | return none
   let some (.vtable source) := node.data | return none
   let _ ← prepared.facts.context.runtime.node source.typeId |>.mapError toString
-  let predicates ← source.payload.getObjVal? "predicates"
-  let token ← CompilerVTableFacts.exportedArrayToken prepared.facts predicates
+  let inputs ← catalog.array (← catalog.field catalog.root "allocations" "$") "allocations"
+  let some input := inputs[node.id]? | throw "vtable source allocation absent"
+  let predicates ← catalog.field input "predicates" "vtable"
+  let expected ← source.predicates.mapM fun predicate => predicate.payload.getObjValAs? Nat "predicate_id"
+  let token ← match ← catalog.sharedId? predicates "predicates" with
+    | some token => pure token
+    | none =>
+      let candidates := prepared.facts.dynamicPredicates.toList.zipIdx.filterMap fun (value,id) =>
+        if value.map (·.values) == some expected then some id else none
+      match candidates with
+      | [id] => pure id
+      | _ => throw "fixture lacks an unambiguous source predicate identity"
+  let actual ← prepared.facts.dynamicPredicates.lookup token |>.mapError (fun id => s!"predicate token {id} absent")
+  unless actual.values == expected do throw "source predicate semantics changed"
   pure (some (source.typeId, token))
 
 private def legacySeedFunctions (prepared : CompilerFunctionPointers.Prepared)
@@ -95,7 +112,7 @@ private def legacySeedFunctions (prepared : CompilerFunctionPointers.Prepared)
   unless memory.sourceAllocIdWorldActive do throw "prepared function catalog requires the active source AllocId world"
   unless image.source == input.allocations.filter (·.status == .supported) do
     throw "prepared function catalog allocation image differs from its owning program"
-  validateCompilerAllocIdWorldRaw input.raw input.allocations (some world)
+  AllocIdWorldValidation.validate input
     |>.mapError fun error => s!"prepared AllocId world: {error}"
   for row in world.dedupCatalog do
     if row.keyKind == .function then
@@ -122,7 +139,7 @@ private def legacySeedFunctions (prepared : CompilerFunctionPointers.Prepared)
         else throw "prepared function salt is outside the source key domain"
   pure registry
 
-private def legacySeedVTables (prepared : CompilerVTableMachine.Prepared)
+private def legacySeedVTables (catalog : Reader.Catalog) (prepared : CompilerVTableMachine.Prepared)
     (image : AllocationImage.Imported)
     (memory : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind)
     (initial : VTableMachine.Registry) : Except String VTableMachine.Registry := do
@@ -132,19 +149,19 @@ private def legacySeedVTables (prepared : CompilerVTableMachine.Prepared)
   unless memory.sourceAllocIdWorldActive do throw "prepared vtable catalog requires the active source AllocId world"
   unless image.source == input.allocations.filter (·.status == .supported) do
     throw "prepared vtable catalog allocation image differs from its owning program"
-  validateCompilerAllocIdWorldRaw input.raw input.allocations (some world)
+  AllocIdWorldValidation.validate input
     |>.mapError fun error => s!"prepared AllocId world: {error}"
   for row in world.dedupCatalog do
     if row.keyKind == .vtable then
       let keyRuntime ← AllocationImage.runtimeId memory row.keyAllocationId
-      let some key ← legacyGlobalVTable prepared.calls.symbols image memory keyRuntime
+      let some key ← legacyGlobalVTable catalog prepared.calls.symbols image memory keyRuntime
         | throw "prepared vtable key witness is not a symbolic vtable"
       for result in row.salts do
         if saltBound : result.salt < 32 then
           let resultRuntime ← AllocationImage.runtimeId memory result.allocationId
           unless memory.sourceAllocIdForRuntime? resultRuntime == some result.sourceAllocId do
             throw "prepared vtable result raw AllocId does not match the active memory world"
-          let some resultKey ← legacyGlobalVTable prepared.calls.symbols image memory resultRuntime
+          let some resultKey ← legacyGlobalVTable catalog prepared.calls.symbols image memory resultRuntime
             | throw "prepared vtable salt result is not a symbolic vtable"
           unless resultKey == key do
             throw "prepared vtable salt result does not match its exact type/predicate key"
@@ -189,7 +206,9 @@ private def vtableHooks (prepared : EvalPreparation.Prepared)
 }
 
 private def runSelected (path : String) : IO Unit := do
-  let decoded ← must (decodeJson (← IO.FS.readFile path))
+  let text ← IO.FS.readFile path
+  let catalog ← must (Reader.Catalog.parse (← must (Lean.Json.parse text)))
+  let decoded ← must (decodeJson text)
   let program ← must (lowerProgram decoded.document)
   let attempt := EvalPreparation.prepare program
   let prepared ← must attempt.outcome
@@ -216,9 +235,12 @@ private def runSelected (path : String) : IO Unit := do
     (FunctionPointers.Registry.empty (Other := Unit)))
   let vtableRegistry ← must (CompilerVTableMachine.seedImported prepared.compiler.vtables image memory
     VTableMachine.Registry.empty)
-  let legacyFunctionRegistry ← must (legacySeedFunctions prepared.compiler.pointers image memory
+  let reference ← must (decodeJsonReference text)
+  let referenceProgram ← must (lowerProgram reference.document)
+  let referencePrepared ← must (EvalPreparation.prepare referenceProgram).outcome
+  let legacyFunctionRegistry ← must (legacySeedFunctions referencePrepared.compiler.pointers referencePrepared.image memory
     (FunctionPointers.Registry.empty (Other := Unit)))
-  let legacyVtableRegistry ← must (legacySeedVTables prepared.compiler.vtables image memory
+  let legacyVtableRegistry ← must (legacySeedVTables catalog referencePrepared.compiler.vtables referencePrepared.image memory
     VTableMachine.Registry.empty)
   check (functionRegistry.functions.size == legacyFunctionRegistry.functions.size)
     "indexed function seed changed registry size from the legacy scan"
@@ -240,7 +262,7 @@ private def runSelected (path : String) : IO Unit := do
   let some functionSalt := functionRow.salts[0]? | throw (IO.userError "function conflict salt missing")
   let functionRuntime ← must (AllocationImage.runtimeId memory functionSalt.allocationId)
   let functionKeyRuntime ← must (AllocationImage.runtimeId memory functionRow.keyAllocationId)
-  let some functionKey ← must (legacyGlobalFunction prepared.compiler.lifecycle.calls.symbols image memory functionKeyRuntime)
+  let some functionKey ← must (legacyGlobalFunction referencePrepared.compiler.lifecycle.calls.symbols referencePrepared.image memory functionKeyRuntime)
     | throw (IO.userError "function conflict key has no exact instance")
   let some wrongAllocation := AllocId.ofUInt64 (UInt64.ofNat (2^64 - 1))
     | throw (IO.userError "function conflict AllocId is zero")
@@ -250,7 +272,7 @@ private def runSelected (path : String) : IO Unit := do
         ⟨functionKey,⟨functionSalt.salt,saltBound⟩,functionRuntime⟩]
       extras := #[] }
     let indexedConflict := CompilerFunctionPointers.seedImported prepared.compiler.pointers image memory duplicateKey
-    let legacyConflict := legacySeedFunctions prepared.compiler.pointers image memory duplicateKey
+    let legacyConflict := legacySeedFunctions referencePrepared.compiler.pointers referencePrepared.image memory duplicateKey
     match indexedConflict, legacyConflict with
     | .error indexed, .error legacy => do
         check (indexed == legacy) "indexed function conflict changed the legacy first-duplicate error"
@@ -261,14 +283,14 @@ private def runSelected (path : String) : IO Unit := do
   let some vtableSalt := vtableRow.salts[0]? | throw (IO.userError "vtable conflict salt missing")
   let vtableRuntime ← must (AllocationImage.runtimeId memory vtableSalt.allocationId)
   let vtableKeyRuntime ← must (AllocationImage.runtimeId memory vtableRow.keyAllocationId)
-  let some vtableKey ← must (legacyGlobalVTable prepared.compiler.lifecycle.calls.symbols image memory vtableKeyRuntime)
+  let some vtableKey ← must (legacyGlobalVTable catalog referencePrepared.compiler.lifecycle.calls.symbols referencePrepared.image memory vtableKeyRuntime)
     | throw (IO.userError "vtable conflict key has no exact type/predicate")
   if saltBound : vtableSalt.salt < 32 then
     let duplicateKey : VTableMachine.Registry := {
       entries := #[⟨vtableKey.1,vtableKey.2,⟨vtableSalt.salt,saltBound⟩,wrongAllocation⟩,
         ⟨vtableKey.1,vtableKey.2,⟨vtableSalt.salt,saltBound⟩,vtableRuntime⟩] }
     let indexedConflict := CompilerVTableMachine.seedImported prepared.compiler.vtables image memory duplicateKey
-    let legacyConflict := legacySeedVTables prepared.compiler.vtables image memory duplicateKey
+    let legacyConflict := legacySeedVTables catalog referencePrepared.compiler.vtables referencePrepared.image memory duplicateKey
     match indexedConflict, legacyConflict with
     | .error indexed, .error legacy => do
         check (indexed == legacy) "indexed vtable conflict changed the legacy first-duplicate error"
@@ -278,7 +300,7 @@ private def runSelected (path : String) : IO Unit := do
   let mismatchedImage := AllocationImage.Imported.ofSource #[] image.initializers
   let indexedPrefix := CompilerFunctionPointers.seedImported prepared.compiler.pointers mismatchedImage memory
     (FunctionPointers.Registry.empty (Other := Unit))
-  let legacyPrefix := legacySeedFunctions prepared.compiler.pointers mismatchedImage memory
+  let legacyPrefix := legacySeedFunctions referencePrepared.compiler.pointers (AllocationImage.Imported.ofSource #[] referencePrepared.image.initializers) memory
     (FunctionPointers.Registry.empty (Other := Unit))
   match indexedPrefix, legacyPrefix with
   | .error indexed, .error legacy => do
@@ -418,7 +440,7 @@ private def runSelected (path : String) : IO Unit := do
     "source identity lookups mutated the fresh allocation frontier"
 
   let (byteState, byteAttach) := MachineHooks.run
-    (CompilerGlobalBytes.attach prepared.compiler.program prepared.compiler.runtime) initial
+    (CompilerGlobalBytes.attach prepared.compiler.owner) initial
   match byteAttach with
   | .error error => throw (IO.userError s!"byte-key attachment failed: {reprStr error}")
   | .ok _ => pure ()

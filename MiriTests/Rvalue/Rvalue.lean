@@ -49,7 +49,7 @@ private def hooks : RvalueHooks Unit Trace Unit Unit := {
   discriminantForVariant := fun _ _ _ => blocked "discriminantForVariant" }
 
 private def trace (value : MIR.Rvalue) : Trace :=
-  (runRvalue (evalRvalueIntoPlace hooks () value place) []).1
+  (runRvalue (evalRvalueIntoPlace (Count := MIR.TypeConst) (Region := MIR.Region) hooks () value place) []).1
 
 #eval show IO Unit from do
   unless (trace (.BinaryOp .Add operand operand) =
@@ -70,7 +70,7 @@ private def trace (value : MIR.Rvalue) : Trace :=
 #eval show IO Unit from do
   unless (trace (.Aggregate .Tuple #[]) == ["place:true", "aggregate"]) do throw (IO.userError "runtime assertion failed")
 #eval show IO Unit from do
-  unless ((runRvalue (evalRvalueIntoPlace hooks () (.ThreadLocalRef 0) place) []).2 =
+  unless ((runRvalue (evalRvalueIntoPlace (Count := MIR.TypeConst) (Region := MIR.Region) hooks () (.ThreadLocalRef 0) place) []).2 =
     Except.error (StepError.unsupported "threadLocalPointer")) do throw (IO.userError "runtime assertion failed")
 
 #eval show IO Unit from do
@@ -90,7 +90,7 @@ private def allocated : RvalueHooks Unit Trace Unit Unit := {
   enforceValidity := fun _ _ => log "enforceValidity" false
   retagPtrValue := fun _ _ _ => log "retag" (some imm) }
 private def allocatedTrace (value : MIR.Rvalue) : Trace :=
-  (runRvalue (evalRvalueIntoPlace allocated () value place) []).1
+  (runRvalue (evalRvalueIntoPlace (Count := MIR.TypeConst) (Region := MIR.Region) allocated () value place) []).1
 #eval show IO Unit from do
   unless (allocatedTrace (.Ref .Erased (.Mut .TwoPhaseBorrow) place) =
     ["place:true", "place:true", "forceAllocation", "toRef", "mode:Miri.TreeBorrows.RetagPolicy.RetagMode.TwoPhase", "enforceValidity", "retag", "writeImmediate", "restoreMode"]) do throw (IO.userError "runtime assertion failed")
@@ -100,10 +100,10 @@ private def allocatedTrace (value : MIR.Rvalue) : Trace :=
 private def freshRaw : RvalueHooks Unit Trace Unit Unit := {
   allocated with placeBaseRaw := fun _ _ => log "baseRaw" false }
 #eval show IO Unit from do
-  unless ((runRvalue (evalRvalueIntoPlace freshRaw () (.RawPtr .Const place) place) []).1 =
+  unless ((runRvalue (evalRvalueIntoPlace (Count := MIR.TypeConst) (Region := MIR.Region) freshRaw () (.RawPtr .Const place) place) []).1 =
     ["place:true", "baseRaw", "place:false", "forceAllocation", "toRef", "mode:Miri.TreeBorrows.RetagPolicy.RetagMode.Raw", "retag", "restoreMode", "writeImmediate"]) do throw (IO.userError "runtime assertion failed")
 #eval show IO Unit from do
-  unless ((runRvalue (evalRvalueIntoPlace freshRaw () (.RawPtr .FakeForPtrMetadata place) place) []).1 =
+  unless ((runRvalue (evalRvalueIntoPlace (Count := MIR.TypeConst) (Region := MIR.Region) freshRaw () (.RawPtr .FakeForPtrMetadata place) place) []).1 =
     ["place:true", "baseRaw", "place:false", "forceAllocation", "toRef", "writeImmediate"]) do throw (IO.userError "runtime assertion failed")
 #eval show IO Unit from do
   unless (trace (.Cast .IntToInt operand 0) =
@@ -119,8 +119,8 @@ private def freshRaw : RvalueHooks Unit Trace Unit Unit := {
 private def mismatch : RvalueHooks Unit Trace Unit Unit := {
   hooks with binaryOp := fun _ _ _ _ => log "binary" { imm with layout := { layout with ty := 1 } } }
 #eval show IO Unit from do
-  unless ((runRvalue (evalRvalueIntoPlace mismatch () (.BinaryOp .Add operand operand) place) []).2 =
+  unless ((runRvalue (evalRvalueIntoPlace (Count := MIR.TypeConst) (Region := MIR.Region) mismatch () (.BinaryOp .Add operand operand) place) []).2 =
     Except.error (StepError.invalidProgram "rvalue result layout mismatch")) do throw (IO.userError "runtime assertion failed")
 #eval show IO Unit from do
-  unless ((runRvalue (evalRvalueIntoPlace mismatch () (.BinaryOp .Add operand operand) place) []).1 =
+  unless ((runRvalue (evalRvalueIntoPlace (Count := MIR.TypeConst) (Region := MIR.Region) mismatch () (.BinaryOp .Add operand operand) place) []).1 =
     ["place:true", "operand:true", "readImmediate", "operand:true", "readImmediate", "binary"]) do throw (IO.userError "runtime assertion failed")
