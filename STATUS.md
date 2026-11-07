@@ -11,6 +11,14 @@ and exit, threads, synchronization, atomics, weak memory and data races. Finite
 QA and general whole-machine proofs are separate goals. Overall completion and
 the ability to verify arbitrary Rust are not claimed.
 
+## Bounded references after data construction
+
+The reference validator retains source-bound existence and range evidence.
+The current MIR construction and interpreter still use their existing IDs.
+A construction-correspondence theorem and propagation of bounded references
+through compiler queries, MIR and evaluation remain future work; the validator
+alone does not justify removing their reference checks.
+
 ## Empty-function caller-domain transport
 
 The [empty-function proof](examples/empty_function/README.md) covers actual call

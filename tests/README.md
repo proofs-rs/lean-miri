@@ -363,3 +363,7 @@ whole-machine claim.
 `bash tools/check-lowering-reader.sh [INPUT.json ...]` checks full/runtime
 lowering agreement and source paths for root, instance and promoted bodies.
 The default input is the fixed empty-function fixture.
+
+`bash tools/check-reference-validation.sh [INPUT.json ...]` checks permuted
+source IDs, dangling-reference diagnostics and evidence retention in both
+reader views. Existing decoder-ID fixtures cover the diagnostic boundary.

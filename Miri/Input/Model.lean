@@ -1,4 +1,4 @@
-import Miri.Input.DecoderValues
+import Miri.Input.ReferenceValidation
 
 namespace Miri.Input
 
@@ -18,6 +18,7 @@ structure ImportDocumentCore where
   bodies : Array Body
   obligations : Array Obligation
   raw : Lean.Json
+  checkedReferences : Option (ReferenceValidation.ForSource raw) := none
   /-- Resolved source nodes from the mandatory shared-payload graph. Each node
   is retained once so downstream consumers can reuse the document's DAG. -/
   sharedNodes : Array Lean.Json := #[]
@@ -45,6 +46,7 @@ structure ImportDocument where
   typedTree : TypedValue
   obligations : Array Obligation
   raw : Lean.Json
+  checkedReferences : Option (ReferenceValidation.ForSource raw) := none
   /-- Resolved source nodes from the mandatory shared-payload graph. -/
   sharedNodes : Array Lean.Json := #[]
 
@@ -66,6 +68,7 @@ def ImportDocument.toCore (document : ImportDocument) : ImportDocumentCore := {
   bodies := document.bodies
   obligations := document.obligations
   raw := document.raw
+  checkedReferences := document.checkedReferences
   sharedNodes := document.sharedNodes
 }
 
@@ -89,6 +92,7 @@ def ImportDocumentCore.withTypedTree (core : ImportDocumentCore) (typedTree : Ty
   typedTree := typedTree
   obligations := core.obligations
   raw := core.raw
+  checkedReferences := core.checkedReferences
   sharedNodes := core.sharedNodes
 }
 

@@ -204,3 +204,21 @@ agreement between full and runtime decoding after lowering, including MIR,
 identity tables, spans and ordered obligations. The default input is the fixed
 empty-function fixture. Run `bash tools/check-empty-function.sh` for its
 UB-freedom proof and axiom audit.
+
+## Reference validation
+
+`ReferenceValidation.validate` checks references in the resolved JSON document
+and returns evidence tied to that source. Global references retain their source
+ID, table position and row-ID equality proof, including permuted dense tables.
+Local and block references retain a body scope and bounds proofs. Missing and
+unsupported compiler facts remain separate from reference existence; allocation
+liveness, provenance and permissions remain runtime checks.
+
+The decoder uses this phase's source for data construction and retains the
+evidence in both runtime document views. Reflected Lean constants contain schema
+data without the runtime validation witness. Payload errors retain their previous priority
+over reference errors. Lowering still checks its constructed MIR: a theorem
+connecting that construction to the reference evidence is future work.
+
+Run `bash tools/check-reference-validation.sh [INPUT.json ...]` for validator
+checks, reader evidence retention and the selected witness declarations' axiom audit.

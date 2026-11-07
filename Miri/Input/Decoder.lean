@@ -59,203 +59,6 @@ private partial def collectFunctionAbisAux (node : JsonTraversalCache.Node) (pat
 private def collectFunctionAbis (node : JsonTraversalCache.Node) (path : String) (memo : DecodeMemo := emptyDecodeMemo) : Except String (Array FunctionAbi) := do
   return (← collectFunctionAbisAux node path memo).1
 
-private def validateDense (ids : Array Nat) (what : String) : Except String Unit := do
-  let mut seen : Std.HashSet Nat := {}
-  for id in ids do
-    if seen.contains id then throw s!"{what}: duplicate IDs"
-    seen := seen.insert id
-  for id in ids do
-    if id >= ids.size then throw s!"{what}: IDs must be dense from zero; found {id} with {ids.size} entries"
-
-/-- The bounds encode ID membership only after all three source ID arrays pass
-`validateDense`; each dense array then denotes exactly the natural range below
-its size, independent of row order. -/
-private partial def validateReferencesAux (node : JsonTraversalCache.Node) (path : String)
-    (typeCount allocationCount instanceCount : Nat) (visited : Std.HashSet JsonTraversalCache.IdentityKey)
-    : Except String (Std.HashSet JsonTraversalCache.IdentityKey) := do
-  let j := node.value
-  let memoKey := node.identity
-  if statusOf? j == some "debug_payload" then return visited
-  let isContainer := match j with | .arr _ | .obj _ => true | _ => false
-  if isContainer && node.shouldMemo && visited.contains memoKey then return visited
-  match j with
-  | .arr values =>
-    let mut index := 0
-    let mut visited := visited
-    for value in values do
-      visited ← validateReferencesAux (node.child index value) s!"{path}[{index}]" typeCount allocationCount instanceCount visited
-      index := index + 1
-    return if node.shouldMemo then visited.insert memoKey else visited
-  | .obj fields =>
-    let entries := fields.toList
-    match entries with
-    | [("type_id", idJson)] =>
-      let id ← idJson.getNat? |>.mapError fun e => s!"{path}.type_id: malformed type reference ({e})"
-      if id >= typeCount then throw s!"{path}: dangling type reference {id}"
-      return if node.shouldMemo then visited.insert memoKey else visited
-    | [("allocation_id", idJson)] =>
-      let id ← idJson.getNat? |>.mapError fun e => s!"{path}.allocation_id: malformed allocation reference ({e})"
-      if id >= allocationCount then throw s!"{path}: dangling allocation reference {id}"
-      return if node.shouldMemo then visited.insert memoKey else visited
-    | _ => pure ()
-    let mut visited := visited
-    for ((key, value), childIndex) in entries.zipIdx do
-      if key == "instance_id" then
-        let id ← value.getNat? |>.mapError fun e => s!"{joinPath path key}: malformed instance ID ({e})"
-        if id >= instanceCount then throw s!"{joinPath path key}: dangling instance reference {id}"
-      visited ← validateReferencesAux (node.child childIndex value) (joinPath path key) typeCount allocationCount instanceCount visited
-    return if node.shouldMemo then visited.insert memoKey else visited
-  | _ => return visited
-
-private def validateReferences (node : JsonTraversalCache.Node) (path : String)
-    (typeCount allocationCount instanceCount : Nat) : Except String Unit := do
-  let _ ← validateReferencesAux node path typeCount allocationCount instanceCount {}
-
-private partial def validateMirIndices (j : Json) (path : String)
-    (localCount : Nat) : Except String Unit := do
-  if statusOf? j == some "debug_payload" then return
-  match j with
-  | .arr values =>
-    let mut index := 0
-    for value in values do
-      validateMirIndices value s!"{path}[{index}]" localCount
-      index := index + 1
-  | .obj fields =>
-    for (key, value) in fields.toList do
-      if key == "local" then
-        let id ← value.getNat? |>.mapError fun e => s!"{joinPath path key}: expected local index ({e})"
-        if id >= localCount then throw s!"{joinPath path key}: local {id} is out of range (locals={localCount})"
-      if key == "projection" then
-        let projections ← value.getArr? |>.mapError fun e => s!"{joinPath path key}: expected projection array ({e})"
-        for (projection, index) in projections.toList.zipIdx do
-          let pPath := s!"{joinPath path key}[{index}]"
-          let kind ← fieldString projection "kind" pPath
-          if kind == "Index" then
-            let id ← fieldNat projection "local" pPath
-            if id >= localCount then throw s!"{pPath}.local: local {id} is out of range (locals={localCount})"
-          if kind == "ConstantIndex" then
-            let _ ← fieldNat projection "offset" pPath
-            let _ ← fieldNat projection "min_length" pPath
-            let _ ← fieldBool projection "from_end" pPath
-          if kind == "Subslice" then
-            let _ ← fieldNat projection "from" pPath
-            let _ ← fieldNat projection "to" pPath
-            let _ ← fieldBool projection "from_end" pPath
-          if kind == "Field" then
-            let _ ← fieldNat projection "index" pPath
-            let _ ← field projection "field_type" pPath
-          if kind == "Downcast" then
-            let _ ← fieldNat projection "variant_index" pPath
-          if kind == "OpaqueCast" then let _ ← field projection "cast_type" pPath
-          if kind == "UnwrapUnsafeBinder" then let _ ← field projection "inner_type" pPath
-          if isKnownProjection kind then let _ ← field projection "resulting_type" pPath
-      validateMirIndices value (joinPath path key) localCount
-  | _ => pure ()
-
-private def checkBlockIndex (value : Json) (path : String) (blockCount : Nat) : Except String Unit := do
-  let id ← value.getNat? |>.mapError fun e => s!"{path}: expected basic-block index ({e})"
-  if id >= blockCount then throw s!"{path}: basic block {id} is out of range (blocks={blockCount})"
-
-private def checkRequiredEdge (j : Json) (key path : String) (blockCount : Nat) : Except String Unit := do
-  checkBlockIndex (← field j key path) (joinPath path key) blockCount
-
-private def checkOptionalEdge (j : Json) (key path : String) (blockCount : Nat) : Except String Unit := do
-  match optionalField j key with
-  | none => throw s!"{path}: missing optional edge field `{key}`"
-  | some .null => pure ()
-  | some value => checkBlockIndex value (joinPath path key) blockCount
-
-private def validateUnwind (j : Json) (path : String) (blockCount : Nat) : Except String Unit := do
-  let kind ← fieldString j "kind" path
-  if kind == "Cleanup" then checkRequiredEdge j "target" path blockCount
-
-private def validateTerminatorEdges (j : Json) (path : String) (blockCount : Nat) : Except String Unit := do
-  let variant ← fieldString j "variant" path
-  match variant with
-  | "Goto" => checkRequiredEdge j "target" path blockCount
-  | "SwitchInt" =>
-    checkRequiredEdge j "otherwise" path blockCount
-    let targets ← arrayField j "targets" path
-    for (target, index) in targets.toList.zipIdx do
-      checkRequiredEdge target "target" s!"{joinPath path "targets"}[{index}]" blockCount
-  | "Drop" =>
-    checkRequiredEdge j "target" path blockCount
-    checkOptionalEdge j "async_drop" path blockCount
-    validateUnwind (← field j "unwind" path) (joinPath path "unwind") blockCount
-  | "Call" =>
-    checkOptionalEdge j "target" path blockCount
-    validateUnwind (← field j "unwind" path) (joinPath path "unwind") blockCount
-  | "Assert" =>
-    checkRequiredEdge j "target" path blockCount
-    validateUnwind (← field j "unwind" path) (joinPath path "unwind") blockCount
-  | "Yield" =>
-    checkRequiredEdge j "resume" path blockCount
-    checkOptionalEdge j "drop" path blockCount
-  | "FalseEdge" =>
-    checkRequiredEdge j "real_target" path blockCount
-    checkRequiredEdge j "imaginary_target" path blockCount
-  | "FalseUnwind" =>
-    checkRequiredEdge j "real_target" path blockCount
-    validateUnwind (← field j "unwind" path) (joinPath path "unwind") blockCount
-  | _ => pure ()
-
-private def validateBody (j : Json) (path : String) : Except String Unit := do
-  let locals ← arrayField j "locals" path
-  let blocks ← arrayField j "basic_blocks" path
-  if locals.isEmpty then throw s!"{joinPath path "locals"}: MIR body must declare the return local"
-  if blocks.isEmpty then throw s!"{joinPath path "basic_blocks"}: MIR body must contain a start block"
-  let mut index := 0
-  for localDecl in locals do
-    let id ← fieldNat localDecl "local" s!"{joinPath path "locals"}[{index}]"
-    if id != index then throw s!"{joinPath path "locals"}[{index}]: local declarations must be densely ordered"
-    index := index + 1
-  index := 0
-  for block in blocks do
-    let blockPath := s!"{joinPath path "basic_blocks"}[{index}]"
-    let id ← fieldNat block "block" blockPath
-    if id != index then throw s!"{blockPath}: basic blocks must be densely ordered"
-    let statements ← arrayField block "statements" blockPath
-    for (statement, stmtIndex) in statements.toList.zipIdx do
-      let kind ← field statement "kind" s!"{blockPath}.statements[{stmtIndex}]"
-      validateMirIndices kind s!"{blockPath}.statements[{stmtIndex}].kind" locals.size
-    let termWrapper ← field block "terminator" blockPath
-    if termWrapper == .null then throw s!"{blockPath}: missing terminator"
-    let term ← field termWrapper "kind" s!"{blockPath}.terminator"
-    validateMirIndices term s!"{blockPath}.terminator.kind" locals.size
-    validateTerminatorEdges term s!"{blockPath}.terminator.kind" blocks.size
-    index := index + 1
-
-private partial def validateAllBodiesAux (node : JsonTraversalCache.Node) (path : String) (visited : Std.HashSet JsonTraversalCache.IdentityKey)
-    : Except String (Std.HashSet JsonTraversalCache.IdentityKey) := do
-  let j := node.value
-  let memoKey := node.identity
-  if statusOf? j == some "debug_payload" then return visited
-  let isContainer := match j with | .arr _ | .obj _ => true | _ => false
-  if isContainer && node.shouldMemo && visited.contains memoKey then return visited
-  match j with
-  | .arr values =>
-    let mut index := 0
-    let mut visited := visited
-    for value in values do
-      visited ← validateAllBodiesAux (node.child index value) s!"{path}[{index}]" visited
-      index := index + 1
-    return if node.shouldMemo then visited.insert memoKey else visited
-  | .obj fields =>
-    let hasLocals := (j.getObjVal? "locals").isOk
-    let hasBlocks := (j.getObjVal? "basic_blocks").isOk
-    if hasLocals != hasBlocks then throw s!"{path}: body requires both locals and basic_blocks"
-    if hasLocals && hasBlocks then validateBody j path
-    let mut visited := visited
-    for ((key, value), childIndex) in fields.toList.zipIdx do
-      visited ← validateAllBodiesAux (node.child childIndex value) (joinPath path key) visited
-    return if node.shouldMemo then visited.insert memoKey else visited
-  | _ => return visited
-
-private def validateAllBodies (node : JsonTraversalCache.Node) (path : String) : Except String Unit := do
-  let _ ← validateAllBodiesAux node path {}
-
-private def jsonToNatArray (nodes : Array α) (getId : α → Nat) : Array Nat := nodes.map getId
-
 private def primitiveLayoutObligations (primitive : PrimitiveLayout) (path : String) : Array Obligation := Id.run do
   let mut issues := #[]
   match primitive.kind with
@@ -1502,7 +1305,12 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     (profile : Options := {}) (cachedTraversal : Bool := true) : Except String ParsedDocument := do
   let (resolved,traversal) ← profileit "decoder.shared_payload_resolution" profile fun _ =>
     JsonTraversalCache.resolve input cachedTraversal profile
-  let j := resolved.root
+  let referenceValidation := profileit "decoder.reference_validation" profile fun _ =>
+    ReferenceValidation.validateUsing traversal
+  -- Keep payload diagnostics ahead of reference diagnostics for invalid input.
+  let j := match referenceValidation with
+    | .ok checked => checked.source
+    | .error _ => resolved.root
   let memo := profileit "decoder.shared_decode_memo" profile fun _ => sharedDecodeMemo resolved.nodes
   if (← fieldString j "schema" "$") != expectedSchema then
     throw s!"$.schema: expected `{expectedSchema}`"
@@ -1553,15 +1361,9 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
   let bodiesJson ← arrayField j "bodies" "$"
   if bodiesJson.isEmpty then throw "$.bodies: input has no MIR bodies; refusing an empty import"
   let bodies ← profileit "decoder.bodies" profile fun _ => parseBodyArray bodiesJson memo
-  let typeIds := jsonToNatArray types (·.id)
-  let allocationIds := jsonToNatArray allocations (·.id)
-  let instanceIds := jsonToNatArray instances (·.id)
-  profileit "decoder.validate_dense_type_ids" profile fun _ => validateDense typeIds "type IDs"
-  profileit "decoder.validate_dense_allocation_ids" profile fun _ => validateDense allocationIds "allocation IDs"
-  profileit "decoder.validate_dense_instance_ids" profile fun _ => validateDense instanceIds "instance IDs"
-  profileit "decoder.validate_all_bodies" profile fun _ => validateAllBodies traversal "$"
-  profileit "decoder.validate_references" profile fun _ =>
-    validateReferences traversal "$" types.size allocations.size instances.size
+  let checkedReferences ← match validationResult : referenceValidation with
+    | .error error => throw error
+    | .ok checked => pure (checked.forSource j (by simp [j, validationResult, ReferenceValidation.Checked.source]))
   let (typedTree?, valueIssues) ← if runtimeOnly then
       let decoded ← profileit "decoder.runtime_value" profile fun _ =>
         decodeRuntimeValue traversal "$" .any .none memo
@@ -1619,6 +1421,7 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     obligations := obligations
     raw := j
     sharedNodes := resolved.nodes
+    checkedReferences := some checkedReferences
     compilerFunctionAbiTable := some compilerFunctionAbiTable
     compilerValueMemo := if runtimeOnly then some (profileit "decoder.compiler_values" profile fun _ =>
       prepareCompilerValueMemoUsing resolved.nodes memo) else none

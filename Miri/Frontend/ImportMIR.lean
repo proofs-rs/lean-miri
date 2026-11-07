@@ -162,7 +162,22 @@ deriving instance ToExpr for Input.SourceAllocIdProbeOutcome
 deriving instance ToExpr for Input.SourceAllocIdSaltResult
 deriving instance ToExpr for Input.SourceAllocIdDedupRow
 deriving instance ToExpr for Input.CompilerAllocIdWorld
-deriving instance ToExpr for Input.ImportDocument
+-- Reflection keeps schema data; runtime validation witnesses are not quoted.
+instance : ToExpr Input.ImportDocument where
+  toTypeExpr := mkConst ``Input.ImportDocument
+  toExpr document :=
+    let raw := toExpr document.raw
+    let noReferences := mkApp (mkConst ``Option.none [0])
+      (mkApp (mkConst ``Input.ReferenceValidation.ForSource) raw)
+    mkAppN (mkConst ``Input.ImportDocument.mk) #[
+      toExpr document.compilerPredicates, toExpr document.compilerAbiLayoutSchema,
+      toExpr document.producer, toExpr document.runtimeTargetDataLayout,
+      toExpr document.completenessStatus, toExpr document.types,
+      toExpr document.allocations, toExpr document.compilerAllocIdWorld,
+      toExpr document.instances, toExpr document.selectedScope,
+      toExpr document.functionAbis, toExpr document.bodies,
+      toExpr document.typedTree, toExpr document.obligations, raw,
+      noReferences, toExpr document.sharedNodes]
 deriving instance ToExpr for Input.ExecutionInput
 deriving instance ToExpr for Input.DecodeResult
 
