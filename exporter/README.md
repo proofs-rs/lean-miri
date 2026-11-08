@@ -66,6 +66,27 @@ A successful export describes the requested compiler data. Runtime values, inclu
 virtual call's receiver and vtable, still determine execution. Export success is
 neither a proof of interpreter correspondence nor a proof of UB freedom.
 
+
+Collection uses immutable, structurally interned JSON values. Every producer,
+including bodies, instances and compiler catalogs, shares children as it builds
+them; cloning a collected container copies an `Arc`, and mutation copies only
+the affected container. There is no sharing traversal of a completed expanded
+document. Final output marks reachable arena IDs and writes each live node
+once. Unused intermediate IDs remain `null` slots, so construction-time IDs and
+backward references do not change. The arena moves with deferred callback output
+and is released before same-TyCtxt reference execution.
+
+Vtable query IDs are reserved at their first source reference. Compiler queries
+keep their existing evaluation order; the exported query table is indexed by
+reserved ID. Virtual candidates are a separate
+`compiler_virtual_candidates: {schema_version: 1, by_instance: [...]}` table,
+indexed directly by dense original instance ID. `null` means no virtual entry;
+`[]` means a registered virtual instance with zero candidates. Lean retains
+this table opaque and checks the requested slot, query membership and exact
+compiler query key at use. Candidates are not copied into each call site.
+The general shared-payload decoder still expands its existing semantic view;
+this change does not remove that expansion.
+
 Specify `LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1` for prepared execution such as
 main. Building with `--features miri-reference` and adding
 `LEAN_MIRI_RUN_PREPARED_MIRI=1` also generates a reference Miri sidecar by
@@ -139,3 +160,21 @@ EXPORTER_BIN=exporter/target/release/lean-miri-mir-exporter \
 lake env lean --run tests/input/SelectedKeyCoverageStrict.lean scratch/selected-keys.json
 lake env lean --run tests/input/AllocWorldRuntime161.lean scratch/selected-keys.json
 ```
+
+For an exporter-only comparison, build the baseline and candidate in separate
+Cargo target directories with the pinned toolchain, then run:
+
+```bash
+python3 tools/measure-online-exporter.py --baseline /path/to/baseline-exporter \
+  --candidate /path/to/candidate-exporter --source exporter/fixtures/mir_features.rs \
+  --output-dir scratch/online-exporter-measurement
+```
+
+`--body-stress` replaces `--source` with a generated no_std input containing 300
+functions of 24 wrapping additions. The script records one warmup followed by
+four measured alternating trials, CPU affinity, wall/CPU time, peak RSS, selected
+CPU steal and cgroup throttling counters, and input/binary hashes. This measures
+compiler/export collection and output, rather than Lean guest execution. Compare
+fresh outputs with `exporter/tests/compare_online_collection.py`; it validates
+the candidate-index migration and permits only vtable ID renaming, invocation
+paths and the existing unordered instance ABI catalog ordering to differ.

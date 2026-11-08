@@ -23,6 +23,7 @@ import MiriTests.Constant.RuntimeArrayEqualityAxioms
 import MiriTests.ControlFlow.Transitions
 import MiriTests.FloatOps.Typed
 import MiriTests.Input.CompilerForeignSymbolTables
+import MiriTests.Input.CompilerVirtualCandidates
 import MiriTests.Input.DecoderProfile2026
 import MiriTests.Input.DefinitionLookup2026
 import MiriTests.Input.FinalizationProfileIdentity2026

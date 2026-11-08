@@ -46,7 +46,12 @@ for call in calls:
     # An opaque input has no compiler-created concrete vtable candidate.
     # Runtime selection remains demand-local and returns Unsupported when the
     # actual receiver's table or matching method entry is absent.
-    assert call["virtual_resolution"].get("candidate_query_ids") == []
+    resolution = call["virtual_resolution"]
+    assert "candidate_query_ids" not in resolution
+    index = doc["compiler_virtual_candidates"]
+    assert index["schema_version"] == 1
+    assert len(index["by_instance"]) == len(doc["instances"])
+    assert index["by_instance"][resolution["instance_id"]] == []
 
 assert "status" not in scope
 assert "unresolved_obligations" not in scope

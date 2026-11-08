@@ -104,7 +104,7 @@ pub(super) fn export<'tcx>(
     pairs.sort_by_key(|(source, target)| (format!("{source:?}"), format!("{target:?}")));
     pairs.dedup();
     pairs.sort_by_key(|(a, b)| (context.type_id(*a), context.type_id(*b)));
-    Ok::<_, String>(Value::Array(pairs.into_iter().map(|(source,target)|{ Ok::<_, String>(json!({
+    Ok::<_, String>(Value::array(pairs.into_iter().map(|(source,target)|{ Ok::<_, String>(json!({
         "typing_env":"fully_monomorphized","variance":"covariant",
         // These are inputs to a projected relation query. Their genuine
         // runtime type-query demand is registered by source MIR/cast/vtable

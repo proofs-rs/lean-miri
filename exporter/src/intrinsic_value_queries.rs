@@ -16,7 +16,7 @@ pub(super) fn type_names<'tcx>(
     requested.sort_by_key(|ty| context.type_id(*ty));
     requested.dedup();
     let result_type = ty::Ty::new_imm_ref(tcx, tcx.lifetimes.re_erased, tcx.types.str_);
-    Ok::<_, String>(Value::Array(
+    Ok::<_, String>(Value::array(
         requested
             .into_iter()
             .map(|input| {
@@ -83,7 +83,7 @@ pub(super) fn caller_locations<'tcx>(
         {
             return unavailable_compiler_fact("track_caller requires PanicLocation language item");
         }
-        return Ok(Value::Array(Vec::new()));
+        return Ok(Value::array(Vec::new()));
     }
     let spans = context.caller_location_spans.clone();
     for span in spans.iter().copied() {
@@ -117,7 +117,7 @@ pub(super) fn caller_locations<'tcx>(
         context.caller_location_constant_rows.insert(span, result);
     }
     // Preserve source span discovery order on every returned catalog snapshot.
-    Ok::<_, String>(Value::Array(
+    Ok::<_, String>(Value::array(
         spans
             .iter()
             .map(|span| context.caller_location_constant_rows[span].clone())

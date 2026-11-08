@@ -192,7 +192,7 @@ pub(super) fn write_report(
         hash: 0xcbf29ce484222325,
         length: 0,
     };
-    serde_json::to_writer(&mut fingerprint, document).map_err(|e| e.to_string())?;
+    serde_json::to_writer(&mut fingerprint, &crate::payload_sharing::Document::new(document)?).map_err(|e| e.to_string())?;
     report["snapshot_fnv1a64"] = json!(format!("{:016x}", fingerprint.hash));
     report["snapshot_byte_length"] = json!(fingerprint.length);
     // Refuse to replace an earlier diagnostic run or an export input.
@@ -201,5 +201,5 @@ pub(super) fn write_report(
         .create_new(true)
         .open(&path)
         .map_err(|e| format!("cannot create vtable diagnostics {}: {e}", path.display()))?;
-    serde_json::to_writer_pretty(&mut file, &report).map_err(|e| e.to_string())
+    serde_json::to_writer_pretty(&mut file, &crate::payload_value::Plain(&report)).map_err(|e| e.to_string())
 }

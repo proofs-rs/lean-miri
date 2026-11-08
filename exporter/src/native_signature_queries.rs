@@ -26,7 +26,7 @@ pub(super) fn export<'tcx>(
         .map(|(instance, id)| (*id, *instance))
         .collect::<Vec<_>>();
     requests.sort_by_key(|(id, _)| *id);
-    Ok::<_, String>(Value::Array(requests.into_iter().map(|(id,instance)| { {
+    Ok::<_, String>(Value::array(requests.into_iter().map(|(id,instance)| { {
         let closed=!instance.args.has_non_region_param() && !instance.args.has_escaping_bound_vars()
             && !instance.args.has_infer() && !instance.args.has_placeholders() && !instance.args.references_error();
         let def_kind=tcx.def_kind(instance.def_id());

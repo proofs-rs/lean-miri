@@ -138,7 +138,7 @@ pub(super) fn export<'tcx>(
         result["input_type"] = type_json(context, tcx, input)?;
         records.push(result);
     }
-    Ok::<_, String>(Value::Array(records))
+    Ok::<_, String>(Value::array(records))
 }
 
 #[cfg(test)]

@@ -98,7 +98,7 @@ pub(super) fn export(tcx:TyCtxt<'_>)->Value {
         ("PanicAsyncGenFnResumedDrop",rustc_attr_ir::LangItem::PanicAsyncGenFnResumedDrop),
         ("PanicGenFnNoneDrop",rustc_attr_ir::LangItem::PanicGenFnNoneDrop),
 ];
-    Value::Array(items.into_iter().map(|(name,item)|{
+    Value::array(items.into_iter().map(|(name,item)|{
         let definition=tcx.lang_items().get(item);
         let parameters=definition.map(|def|ty::GenericArgs::identity_for_item(tcx,def).iter().map(|arg|match arg.kind(){
             ty::GenericArgKind::Lifetime(_)=>"lifetime",ty::GenericArgKind::Type(_)=>"type_parameter",ty::GenericArgKind::Const(_)=>"const_parameter",

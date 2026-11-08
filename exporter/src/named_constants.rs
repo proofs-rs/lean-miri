@@ -386,7 +386,7 @@ pub(super) fn export<'tcx>(
         "_SC_PAGE_SIZE",
         "kCCSuccess",
     ]);
-    Ok::<_, String>(Value::Array(
+    Ok::<_, String>(Value::array(
         names
             .into_iter()
             .filter(|name| required_on(&tcx.sess.target.os, name))

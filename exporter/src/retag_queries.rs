@@ -7,7 +7,7 @@ pub(super) fn export(tcx: TyCtxt<'_>, context: &ExportContext<'_>) -> Value {
         .map(|instance| instance.def_id()).collect::<Vec<_>>();
     definitions.sort_by_key(|definition| (definition.krate.as_u32(), definition.index.as_u32()));
     definitions.dedup();
-    Value::Array(definitions.into_iter().map(|definition| json!({
+    Value::array(definitions.into_iter().map(|definition| json!({
         "definition": def_json(definition),
         "rustc_no_writable": rustc_attr_ir::find_attr!(tcx, definition, RustcNoWritable),
     })).collect())
