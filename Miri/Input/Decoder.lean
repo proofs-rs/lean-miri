@@ -889,19 +889,17 @@ private def exactDynamicVtableUpcast? (j node descriptor : Json) : Bool := Id.ru
       castUnsizingPointeeType? j targetTypeId == some targetPointeeId do return false
 
   let some fullLockstep := exactLockstepTails? j sourceTypeId targetTypeId | return false
-  let some fullValue := (fullLockstep.getObjVal? "value").toOption | return false
-  let some fullSourceTail := ((fullValue.getObjVal? "source_tail").toOption.bind jsonTypeId?) | return false
-  let some fullTargetTail := ((fullValue.getObjVal? "target_tail").toOption.bind jsonTypeId?) | return false
+  let some fullSourceTail := ((fullLockstep.getObjVal? "source_tail").toOption.bind jsonTypeId?) | return false
+  let some fullTargetTail := ((fullLockstep.getObjVal? "target_tail").toOption.bind jsonTypeId?) | return false
   unless fullSourceTail == sourceTypeId && fullTargetTail == targetTypeId do return false
 
   let some sourcePointeeLockstep := exactLockstepTails? j sourcePointeeId targetPointeeId | return false
-  let some pointeeValue := (sourcePointeeLockstep.getObjVal? "value").toOption | return false
   let some sourceTail := (descriptor.getObjVal? "source_tail_type").toOption | return false
   let some sourceTailId := jsonTypeId? sourceTail | return false
   let some targetTail := (descriptor.getObjVal? "target_tail_type").toOption | return false
   let some targetTailId := jsonTypeId? targetTail | return false
-  unless ((pointeeValue.getObjVal? "source_tail").toOption.bind jsonTypeId?) == some sourceTailId &&
-      ((pointeeValue.getObjVal? "target_tail").toOption.bind jsonTypeId?) == some targetTailId do return false
+  unless ((sourcePointeeLockstep.getObjVal? "source_tail").toOption.bind jsonTypeId?) == some sourceTailId &&
+      ((sourcePointeeLockstep.getObjVal? "target_tail").toOption.bind jsonTypeId?) == some targetTailId do return false
   unless (dynamicPredicateArray? j sourceTailId).isSome &&
       (dynamicPredicateArray? j targetTailId).isSome do return false
 
