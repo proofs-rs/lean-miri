@@ -25,12 +25,13 @@ private def value (j : Json) (key : String) : Except String Json := do
   let entry ← j.getObjVal? key
   pure entry
 private def typeId (ctx : LowerContext) (j : Json) : Except String Nat := do
-  let id ← (← j.getObjVal? "type_id").getNat?
+  let id ← j.getNat?
   unless ctx.containsTypeId id do throw "runtime query references absent compiler type"
   pure id
 
-private def definition (tables : CompilerTables) (j : Json) :
+private def definition (ctx : LowerContext) (tables : CompilerTables) (j : Json) :
     Except String (MIR.DefId × CompilerTables) := do
+  let j ← ctx.resolveSemantic .definition j
   let id : DefinitionId := ⟨← (← j.getObjVal? "crate").getNat?, ← (← j.getObjVal? "index").getNat?⟩
   match lookupDefinitionId tables.definitions id with
   | .ok id => pure (id,tables)
@@ -70,12 +71,12 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
       throw "virtual query typing environment mismatch"
     let (original,next) ← CompilerInstance.decode ctx tables (← query.getObjVal? "original")
     tables := next
-    let (method,next) ← definition tables (← query.getObjVal? "method_definition")
+    let (method,next) ← definition ctx tables (← query.getObjVal? "method_definition")
     tables := next
-    let (parent,next) ← definition tables (← query.getObjVal? "parent_trait")
+    let (parent,next) ← definition ctx tables (← query.getObjVal? "parent_trait")
     tables := next
     let concrete ← typeId ctx (← query.getObjVal? "concrete_type")
-    let args ← ctx.decodeCompilerValue (← query.getObjVal? "rebased_args")
+    let args ← ctx.decodeSemanticValue .genericArgs (← query.getObjVal? "rebased_args")
     let (args,next) ← lowerCompilerGenericArgs ctx tables args
     tables := next
     let outcome := do CompilerInstance.decode ctx tables (← value query "resolved")

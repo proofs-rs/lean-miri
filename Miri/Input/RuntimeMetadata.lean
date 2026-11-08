@@ -495,7 +495,7 @@ def tupleLayout (metadata : RuntimeMetadata) (elements : Array TypeId) : Result 
     if node.shapeKind == .tuple then
       let shape ← jsonField node.payload "shape"
       let values ← array shape "elements"
-      let ids ← values.mapM fun value => number value "type_id"
+      let ids ← values.mapM fun value => convert "numeric tuple element type reference" value.getNat?
       if ids == elements then candidates := candidates.push node.id
   unless candidates.size == 1 do throw (.unsupported "ambiguous or absent exact tuple type")
   metadata.lookup (← require candidates[0]? "tuple type")
@@ -504,7 +504,8 @@ def overflowTupleLayout (metadata : RuntimeMetadata) (element : TyAndLayout Type
   let boolean ← metadata.findKind .bool
   metadata.tupleLayout #[element.ty,boolean.ty]
 
-private def typeRef (source : Lean.Json) : Result TypeId := number source "type_id"
+private def typeRef (source : Lean.Json) : Result TypeId :=
+  convert "numeric type reference" source.getNat?
 
 private def projectionParents (metadata : RuntimeMetadata) (id : TypeId) : Result (Array Lean.Json) := do
   let node ← metadata.node id
@@ -519,7 +520,8 @@ private def projectionParents (metadata : RuntimeMetadata) (id : TypeId) : Resul
   array value "parents"
 private def projectionLayout (metadata : RuntimeMetadata) (id : TypeId) (record : Lean.Json) :
     Result (TyAndLayout TypeId) := do
-  let source ← convert "compiler projection layout" (decodeCompilerLayout (← jsonField record "layout"))
+  let source ← convert "compiler projection layout" (DecoderValues.parseLayout (← jsonField record "layout") "$compiler_projection_layout"
+    (DecoderValues.semanticDecodeMemo metadata.source.semanticTables))
   return ⟨id,← layout metadata.target source⟩
 
 /-- Source type relationships are read from typed compiler payloads, never

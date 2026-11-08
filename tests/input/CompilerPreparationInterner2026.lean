@@ -17,16 +17,26 @@ private def natural (j : Json) (key : String) : Except String Nat := do (← fie
 private def array (j : Json) (key : String) : Except String (Array Json) := do (← field j key).getArr?
 private def arrayOrEmpty (j : Json) : Array Json := (j.getArr?).toOption.getD #[]
 
-private partial def constants (j : Json) (path : Array CompilerConstantQueries.PathElement := #[]) :
-    Array (Array CompilerConstantQueries.PathElement × Json) :=
-  if ((j.getObjVal? "constant").bind (fun c => c.getObjValAs? String "kind")).toOption == some "evaluated_const" then
-    #[(path,j)]
-  else match j with
-  | .arr values => (values.mapIdx fun i value => constants value (path.push (.index i))).flatten
-  | .obj fields => (fields.toList.toArray.map fun (name,value) => constants value (path.push (.field name))).flatten
-  | _ => #[]
+private partial def constants (ctx : LowerContext) (j : Json)
+    (path : Array CompilerConstantQueries.PathElement := #[]) :
+    Except String (Array (Array CompilerConstantQueries.PathElement × Json)) := do
+  if let .ok reference := j.getObjVal? "constant" then
+    let value ← ctx.resolveSemantic .constant reference
+    if (value.getObjValAs? String "kind").toOption == some "evaluated_const" then return #[(path,j)]
+  match j with
+  | .arr values =>
+    let found ← values.mapIdxM fun i value => constants ctx value (path.push (.index i))
+    return found.flatten
+  | .obj fields =>
+    let mut found := #[]
+    for (name, raw) in fields.toList do
+      let value ← if SemanticTables.fieldKind? name j == some .constant then
+          ctx.resolveSemantic .constant raw else pure raw
+      found := found ++ (← constants ctx value (path.push (.field name)))
+    return found
+  | _ => return #[]
 
-private def sourceConstants (bodyIndex : Nat) (body : Json) :
+private def sourceConstants (ctx : LowerContext) (bodyIndex : Nat) (body : Json) :
     Except String (Array (CompilerConstantQueries.Site × Json)) := do
   let mut found := #[]
   for block in ← array body "basic_blocks" do
@@ -34,11 +44,11 @@ private def sourceConstants (bodyIndex : Nat) (body : Json) :
     let statements ← array block "statements"
     for i in [:statements.size] do
       let some statement := statements[i]? | throw "statement array changed"
-      for (path,value) in constants statement do
+      for (path,value) in ← constants ctx statement do
         found := found.push (⟨bodyIndex, ⟨blockId,i⟩, path⟩,value)
-    for (path,value) in constants (← field block "terminator") do
+    for (path,value) in ← constants ctx (← field block "terminator") do
       found := found.push (⟨bodyIndex, ⟨blockId,statements.size⟩, path⟩,value)
-  pure found
+  return found
 
 private def lookupPath (j : Json) (path : Array CompilerConstantQueries.PathElement) : Except String Json :=
   path.foldlM (fun value key => match key with
@@ -66,13 +76,15 @@ private def normalizedOperand (body : Json) (site : CompilerConstantQueries.Site
 private def legacyEvidenceAt (ctx : LowerContext) (tables : CompilerTables)
     (fnInstance : CallInstance) (site : CompilerConstantQueries.Site)
     (original normalized : Json) : Except String (CompilerConstantQueries.Evidence × CompilerTables) := do
+  let original ← ctx.resolveSemantic .constant original
+  let normalized ← ctx.resolveSemantic .constant normalized
   unless (← field original "span") == (← field normalized "span") do
     throw "normalization changed constant source span"
-  let (source,tables) ← lowerCompilerConstOperand ctx tables (← decodeCompilerValue original)
-  let (normal,tables) ← lowerCompilerConstOperand ctx tables (← decodeCompilerValue normalized)
-  let evaluated ← field normalized "constant"
-  let ty ← natural (← field normalized "type") "type_id"
-  let value ← lowerCompilerConstValue ctx ty (← decodeCompilerValue (← field evaluated "value"))
+  let (source,tables) ← lowerCompilerConstOperand ctx tables (← ctx.decodeCompilerValue original)
+  let (normal,tables) ← lowerCompilerConstOperand ctx tables (← ctx.decodeCompilerValue normalized)
+  let evaluated ← ctx.resolveSemantic .constant (← field normalized "constant")
+  let ty ← (← field normalized "type").getNat?
+  let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue (← field evaluated "value"))
   pure (⟨site, ⟨fnInstance,source.value,normal.value,normal.span,value⟩,original,normalized⟩,tables)
 
 private def legacyConstantsPrepare (input : LoweredProgram) : Except String CompilerConstantQueries.Prepared := do
@@ -96,7 +108,7 @@ private def legacyConstantsPrepare (input : LoweredProgram) : Except String Comp
           "compiler current-instance normalization query failed"⟩
       else
         let normalizedBody ← NormalizationBody.resolve normalization body.input.payload
-        for (site,original) in ← sourceConstants bodyIndex body.input.payload do
+        for (site,original) in ← sourceConstants ctx bodyIndex body.input.payload do
           let result := do
             let normalized ← normalizedOperand normalizedBody site
             legacyEvidenceAt ctx tables fnInstance site original normalized
@@ -124,19 +136,20 @@ private def legacyLifecycleChecks (ctx : LowerContext) (tables : CompilerTables)
   for index in [:checks.size] do
     let some check := checks[index]? | throw "required check absent"
     let some source := original[index]? | throw "required source operand absent"
+    let source ← ctx.resolveSemantic .constant source
     unless (← (← check.getObjVal? "index").getNat?) == index do
       throw "required-constant source order mismatch"
     unless (← check.getObjVal? "span") == (← source.getObjVal? "span") do
       throw "required-constant source span mismatch"
     let result ← check.getObjVal? "result"
     if (result.getObjVal? "normalized_operand").isOk then
-      let normalized ← result.getObjVal? "normalized_operand"
+      let normalized ← ctx.resolveSemantic .constant (← result.getObjVal? "normalized_operand")
       unless (← normalized.getObjVal? "span") == (← source.getObjVal? "span") do
         throw "required constant normalization changed source span"
-      let (source,tables') ← lowerCompilerConstOperand ctx tables (← decodeCompilerValue source)
-      let (normal,tables') ← lowerCompilerConstOperand ctx tables' (← decodeCompilerValue normalized)
-      let ty ← (← normalized.getObjVal? "type").getObjValAs? Nat "type_id"
-      let value ← lowerCompilerConstValue ctx ty (← decodeCompilerValue (← result.getObjVal? "value"))
+      let (source,tables') ← lowerCompilerConstOperand ctx tables (← ctx.decodeCompilerValue source)
+      let (normal,tables') ← lowerCompilerConstOperand ctx tables' (← ctx.decodeCompilerValue normalized)
+      let ty ← (← normalized.getObjVal? "type").getNat?
+      let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue (← result.getObjVal? "value"))
       tables := tables'
       evidence := evidence.push (.ok ⟨callee,source.value,normal.value,normal.span,value⟩)
     else
@@ -154,7 +167,7 @@ private def legacyLifecyclePrepare (program : LoweredProgram) : CompilerLifecycl
   let mut entries := #[]
   for body in program.bundle.bodies do
     let preamble := do
-      lowerCompilerSpan tables (← decodeCompilerValue (← body.input.payload.getObjVal? "preamble_def_span"))
+      lowerCompilerSpan tables (← ctx.decodeSemanticValue .span (← body.input.payload.getObjVal? "preamble_def_span"))
     let preamble ← match preamble with
       | .error error => pure (.error error)
       | .ok (span,next) => tables := next; pure (.ok span)
@@ -253,6 +266,7 @@ private def modifyAtSite (body : Json) (site : CompilerConstantQueries.Site)
 
 private def spanAppendFailureProgram (program : LoweredProgram) :
     Except String (LoweredProgram × SourceSpanData) := do
+  let ctx := LowerContext.ofDocument program.input
   let mut firstSite : Option (Nat × CompilerConstantQueries.Site × Json) := none
   for bodyIndex in [:program.bundle.bodies.size] do
     if firstSite.isNone then
@@ -261,7 +275,7 @@ private def spanAppendFailureProgram (program : LoweredProgram) :
           if let .ok normalization := field context "normalization" then
             if (NormalizationBody.resolve normalization body.input.payload).isOk then
               if let .ok _ := NormalizationBody.resolve normalization body.input.payload then
-                if let .ok values := sourceConstants bodyIndex body.input.payload then
+                if let .ok values := sourceConstants ctx bodyIndex body.input.payload then
                   if let some (site,value) := values[0]? then
                     firstSite := some (bodyIndex,site,value)
   let some (bodyIndex,site,_) := firstSite
@@ -275,7 +289,9 @@ private def spanAppendFailureProgram (program : LoweredProgram) :
     (fun error => s!"source envelope: {error}")
   let original ← (lookupPath originalEnvelope site.path).mapError
     (fun error => s!"lookup source constant: {error}")
+  let original ← ctx.resolveSemantic .constant original
   let span ← (field original "span").mapError (fun error => s!"source constant span: {error}")
+  let span ← ctx.resolveSemantic .span span
   let uniqueSpan := customSpan span
   let uniqueSpanData ← match decodeCompilerValue uniqueSpan with
     | .ok (.sourceSpan decoded) => pure decoded
@@ -283,11 +299,13 @@ private def spanAppendFailureProgram (program : LoweredProgram) :
   if program.bundle.spans.contains uniqueSpanData then
     throw "custom source span unexpectedly already occurs in the initial span table"
   let changedOriginal ← modifyAtSite body.input.payload site fun constant =>
+    let constant := (ctx.resolveSemantic .constant constant).toOption.getD .null
     setField constant "span" uniqueSpan
   let changedNormalizedBody ← modifyAtSite normalizedBody site fun constant =>
+    let constant := (ctx.resolveSemantic .constant constant).toOption.getD .null
     setField constant "span" uniqueSpan
   let changedNormalizedBody ← modifyAtSite changedNormalizedBody site fun constant =>
-    let evaluated := (constant.getObjVal? "constant").toOption.getD Json.null
+    let evaluated := ((constant.getObjVal? "constant").bind (fun raw => ctx.resolveSemantic .constant raw)).toOption.getD Json.null
     setField constant "constant" (setField evaluated "value" (Json.mkObj [("kind", toJson "missing_constant_value")]))
   let changedNormalization := setField (eraseField normalization "body_ref") "body" changedNormalizedBody
   let changedContext := setField context "normalization" changedNormalization
@@ -296,6 +314,7 @@ private def spanAppendFailureProgram (program : LoweredProgram) :
 
 private def lifecycleBatchFailureProgram (program : LoweredProgram) :
     Except String (LoweredProgram × SourceSpanData) := do
+  let ctx := LowerContext.ofDocument program.input
   let mut found : Option (Nat × Nat × Json × Json × Json) := none
   for bodyIndex in [:program.bundle.bodies.size] do
     if found.isNone then
@@ -316,8 +335,8 @@ private def lifecycleBatchFailureProgram (program : LoweredProgram) :
     | throw "mir_features fixture contains no supported required-constant check"
   let some body := program.bundle.bodies[bodyIndex]? | throw "selected lifecycle body disappeared"
   let originalArray := originals.getArr?.toOption.getD #[]
-  let original := originalArray[index]!
-  let sourceSpan ← field original "span"
+  let original ← ctx.resolveSemantic .constant originalArray[index]!
+  let sourceSpan ← ctx.resolveSemantic .span (← field original "span")
   let uniqueSpan := customSpan sourceSpan
   let .sourceSpan uniqueSpanData ← decodeCompilerValue uniqueSpan
     | throw "custom lifecycle source span did not decode"
@@ -328,7 +347,7 @@ private def lifecycleBatchFailureProgram (program : LoweredProgram) :
   let query := (context.getObjVal? "required_constant_checks").toOption.getD Json.null
   let checks := arrayOrEmpty ((query.getObjVal? "checks").toOption.getD Json.null)
   let result := (check.getObjVal? "result").toOption.getD Json.null
-  let normalized := (result.getObjVal? "normalized_operand").toOption.getD Json.null
+  let normalized := ((result.getObjVal? "normalized_operand").bind (fun raw => ctx.resolveSemantic .constant raw)).toOption.getD Json.null
   let normalized := setField normalized "span" uniqueSpan
   let result := setField (setField result "normalized_operand" normalized) "value" Json.null
   let check := setField (setField check "result" result) "span" uniqueSpan

@@ -49,12 +49,23 @@ def bind (prepared : Prepared) (runtime : RuntimeMetadata)
 private def field (j : Json) (key : String) : Except String Json := j.getObjVal? key
 private def natural (j : Json) (key : String) : Except String Nat := do (← field j key).getNat?
 private def array (j : Json) (key : String) : Except String (Array Json) := do (← field j key).getArr?
-private partial def constants (j : Json) (path : Array PathElement := #[]) : Array (Array PathElement × Json) :=
-  if ((j.getObjVal? "constant").bind (fun c => c.getObjValAs? String "kind")).toOption == some "evaluated_const" then #[(path,j)]
-  else match j with
-  | .arr values => (values.mapIdx fun i value => constants value (path.push (.index i))).flatten
-  | .obj fields => (fields.toList.toArray.map fun (name,value) => constants value (path.push (.field name))).flatten
-  | _ => #[]
+private partial def constants (ctx : LowerContext) (j : Json)
+    (path : Array PathElement := #[]) : Except String (Array (Array PathElement × Json)) := do
+  if let .ok reference := j.getObjVal? "constant" then
+    let constant ← ctx.resolveSemantic .constant reference
+    if (constant.getObjValAs? String "kind").toOption == some "evaluated_const" then
+      return #[(path,j)]
+  match j with
+  | .arr values =>
+    let found ← values.mapIdxM fun i value => constants ctx value (path.push (.index i))
+    return found.flatten
+  | .obj fields =>
+    let found ← fields.toList.toArray.mapM fun (name,value) => do
+      let value ← if SemanticTables.fieldKind? name j == some .constant then
+        ctx.resolveSemantic .constant value else pure value
+      constants ctx value (path.push (.field name))
+    return found.flatten
+  | _ => return #[]
 
 private def lookupPath (j : Json) (path : Array PathElement) : Except String Json :=
   path.foldlM (fun value key => match key with
@@ -65,16 +76,16 @@ private def lookupPath (j : Json) (path : Array PathElement) : Except String Jso
       | some value => pure value
       | none => throw "normalized query changed operand structural path") j
 
-private def sourceConstants (bodyIndex : Nat) (body : Json) : Except String (Array (Site × Json)) := do
+private def sourceConstants (ctx : LowerContext) (bodyIndex : Nat) (body : Json) : Except String (Array (Site × Json)) := do
   let mut found := #[]
   for block in ← array body "basic_blocks" do
     let blockId ← natural block "block"
     let statements ← array block "statements"
     for i in [:statements.size] do
       let some statement := statements[i]? | throw "statement array changed"
-      for (path, value) in constants statement do
+      for (path, value) in ← constants ctx statement do
         found := found.push (⟨bodyIndex, ⟨blockId,i⟩, path⟩,value)
-    for (path,value) in constants (← field block "terminator") do
+    for (path,value) in ← constants ctx (← field block "terminator") do
       found := found.push (⟨bodyIndex, ⟨blockId,statements.size⟩,path⟩,value)
   pure found
 
@@ -91,11 +102,12 @@ private def normalizedOperand (body : Json) (site : Site) : Except String Json :
 
 private def evidenceAt (ctx : LowerContext) (interner : CompilerSpanInterner) (fnInstance : CallInstance)
     (site : Site) (original normalized : Json) : Except String (Evidence × CompilerSpanInterner) := do
+  let normalized ← ctx.resolveSemantic .constant normalized
   unless (← field original "span") == (← field normalized "span") do throw "normalization changed constant source span"
   let (source,interner) ← lowerCompilerConstOperandWithInterner ctx interner (← ctx.decodeCompilerValue original)
   let (normal,interner) ← lowerCompilerConstOperandWithInterner ctx interner (← ctx.decodeCompilerValue normalized)
-  let evaluated ← field normalized "constant"
-  let ty ← natural (← field normalized "type") "type_id"
+  let evaluated ← ctx.resolveSemantic .constant (← field normalized "constant")
+  let ty ← (← field normalized "type").getNat?
   let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue (← field evaluated "value"))
   pure (⟨site, ⟨fnInstance,source.value,normal.value,normal.span,value⟩, original, normalized⟩,
     interner)
@@ -122,7 +134,7 @@ private def prepareBody (ctx : LowerContext)
     let mut interner := interner
     let mut evidence := state.evidence
     let mut obligations := state.obligations
-    for (site,original) in ← sourceConstants bodyIndex body.input.payload do
+    for (site,original) in ← sourceConstants ctx bodyIndex body.input.payload do
       let result := do
         let normalized ← normalizedOperand normalizedBody site
         evidenceAt ctx interner fnInstance site original normalized

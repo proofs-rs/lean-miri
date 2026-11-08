@@ -1,5 +1,6 @@
 import Miri.Input.Decoder
 import Miri.Input.RuntimeMetadata
+import MiriTests.Input.NumericWireFixture
 
 open Lean Miri.ABI Miri.Input
 
@@ -33,7 +34,7 @@ private def target : RuntimeTargetDataLayout := Id.run do
   return ⟨⟨.little, .w64⟩, .ONE, .ONE, .ONE, .ONE, .ONE, .ONE,
     .ONE, .ONE, .ONE, .ONE, .ONE, #[], .ZERO, ptr, #[], .ZERO, .I32⟩
 
-private def typeNode (record : Json) : Except String TypeNode := do
+private def typeNode (catalog : SemanticTables.Catalog) (record : Json) : Except String TypeNode := do
   let shape ← field record "shape"
   let shapeKind ← match ← textField shape "kind" with
     | "str" => pure .str
@@ -45,7 +46,7 @@ private def typeNode (record : Json) : Except String TypeNode := do
     floatKind := none
     adtKind := none }
   let compilerFacts ← decodeTypeCompilerFacts (← field record "compiler_facts")
-  let layout ← decodeCompilerLayout (← field record "layout")
+  let layout ← decodeCompilerLayout (← field record "layout") catalog
   return {
     id := ← natField record "type_id"
     display := ← textField record "display"
@@ -56,7 +57,7 @@ private def typeNode (record : Json) : Except String TypeNode := do
     compilerFacts := some compilerFacts
     payload := Json.mkObj [("shape", shape)] }
 
-private def metadata (nodes : Array TypeNode) : Except String RuntimeMetadata := do
+private def metadata (catalog : SemanticTables.Catalog) (nodes : Array TypeNode) : Except String RuntimeMetadata := do
   let mut layouts := #[]
   for node in nodes do
     let layout ← (RuntimeMetadata.layout target node.layout).mapError toString
@@ -70,7 +71,8 @@ private def metadata (nodes : Array TypeNode) : Except String RuntimeMetadata :=
     functionAbis := #[]
     bodies := #[]
     typedTree := .scalar .null
-    raw := .null }
+    raw := .null
+    semanticTables := catalog }
   return {
     source := source
     target := target
@@ -86,7 +88,7 @@ private def projectionValue (strLayout u8Layout : Json) : Json :=
       ("layout", strLayout),
       ("fields", toJson #[Json.mkObj [
         ("index", toJson (0 : Nat)),
-        ("type", Json.mkObj [("type_id", toJson (1 : Nat))]),
+        ("type", toJson (1 : Nat)),
         ("layout", u8Layout)
       ]]),
       ("variant", Json.null)
@@ -119,27 +121,35 @@ def main (args : List String) : IO Unit := do
   let u8Record ← match u8Records[0]? with
     | some value => pure value
     | none => throw (IO.userError "retained u8 record is missing")
-  let strNode ← requireIO (typeNode strRecord)
-  let u8Node ← requireIO (typeNode u8Record)
-  let base ← requireIO (metadata #[strNode, u8Node])
+  -- Detached retained records are explicit test evidence, prepared as one
+  -- numeric catalog before exercising the current decoder APIs.
+  let numeric ← requireIO (MiriTests.NumericWireFixture.encode
+    (Json.mkObj [("types", Json.arr #[strRecord, u8Record])]))
+  let catalog ← requireIO (SemanticTables.parse numeric)
+  let records ← requireIO ((← requireIO (numeric.getObjVal? "types")).getArr?)
+  let strRecord := records[0]!
+  let u8Record := records[1]!
+  let strNode ← requireIO (typeNode catalog strRecord)
+  let u8Node ← requireIO (typeNode catalog u8Record)
+  let base ← requireIO (metadata catalog #[strNode, u8Node])
   let u8Layout ← requireIO ((base.lookup u8Node.id).mapError toString)
   for index in [0, 7] do
     let actual ← requireIO (fieldAt base strNode.id index)
     check (actual.ty == u8Node.id && actual.layout == u8Layout.layout)
       s!"legacy null-query str field {index} did not resolve to canonical u8"
 
-  let absent ← requireIO (metadata #[strNode])
+  let absent ← requireIO (metadata catalog #[strNode])
   for index in [0, 7] do
     check (!(fieldAt absent strNode.id index).isOk)
       s!"str field {index} succeeded without a canonical u8 node"
   let duplicateU8 := {u8Node with id := 2}
-  let ambiguous ← requireIO (metadata #[strNode, u8Node, duplicateU8])
+  let ambiguous ← requireIO (metadata catalog #[strNode, u8Node, duplicateU8])
   check (!(fieldAt ambiguous strNode.id 0).isOk)
     "str field succeeded with ambiguous supported canonical u8 nodes"
 
   let explicitRecord ← requireIO (explicitStrRowZero strRecord u8Record)
-  let explicitStr ← requireIO (typeNode explicitRecord)
-  let explicit ← requireIO (metadata #[explicitStr, u8Node])
+  let explicitStr ← requireIO (typeNode catalog explicitRecord)
+  let explicit ← requireIO (metadata catalog #[explicitStr, u8Node])
   for index in [0, 1, 7, 99] do
     let actual ← requireIO (fieldAt explicit explicitStr.id index)
     check (actual.ty == u8Node.id && actual.layout == u8Layout.layout)

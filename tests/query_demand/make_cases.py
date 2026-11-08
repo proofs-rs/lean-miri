@@ -8,7 +8,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
-from mir_json import load_mir_document
+from mir_json import load_mir_document, encode_mir_document
 
 p = argparse.ArgumentParser()
 p.add_argument('base', type=Path)
@@ -20,14 +20,11 @@ a.output.mkdir(parents=True, exist_ok=True)
 # independent inline JSON values, so expand to an ordinary mutable tree once
 # before copying and editing individual cases.
 base = json.loads(json.dumps(load_mir_document(a.base)))
-# Mutations below operate on the expanded business document. Give each derived
-# case a valid empty schema-3 catalog so the importer reaches the intended
-# query-demand checks instead of rejecting the test transport envelope.
-base["shared_payloads"] = {"schema_version": 2, "nodes": []}
+# Mutations edit the diagnostic view; save rebuilds numeric semantic tables.
 cases = []
 
 def save(name, value):
-    (a.output / name).write_text(json.dumps(value, indent=2) + '\n')
+    (a.output / name).write_text(json.dumps(encode_mir_document(value), indent=2) + '\n')
 
 save('plain.json', base)
 
@@ -80,7 +77,6 @@ for family, catalog, suffix, provider in [
 
 if a.tls_base:
     tls = json.loads(json.dumps(load_mir_document(a.tls_base)))
-    tls["shared_payloads"] = {"schema_version": 2, "nodes": []}
     save('tls-plain.json', tls)
     def collect(value):
         if isinstance(value, dict):

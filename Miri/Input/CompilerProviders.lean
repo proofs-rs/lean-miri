@@ -235,7 +235,7 @@ def resolveCurrent (p : Prepared) (definition : MIR.DefId) (args : Array MIR.Gen
     throw (.invalidProgram "callee resolution does not refer to a source terminator")
   lift do
     let resolution ← CallResolution.atSite p.lifecycle.calls.calls ⟨frame.bodyIdentity.index,location.block⟩
-    let ty ← (← (← resolution.source.getObjVal? "function_type").getObjVal? "type_id").getNat?
+    let ty ← (← resolution.source.getObjVal? "function_type").getNat?
     match ← CompilerFunctionFacts.kind p.functions ty with
     | .FnDef expected expectedArgs =>
       unless definition == expected && args == expectedArgs do throw "original compiler FnDef request differs from current source call"

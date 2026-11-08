@@ -19,7 +19,7 @@ structure Prepared where
   entries : Array Entry
   traceQueries : Bool := false
 private def ref (facts : CompilerFactAdapters.Prepared) (j : Json) (key : String) : Except String TypeId := do
-  let id ← (← (← j.getObjVal? key).getObjVal? "type_id").getNat?
+  let id ← (← j.getObjVal? key).getNat?
   let _ ← facts.context.runtime.node id |>.mapError toString
   pure id
 

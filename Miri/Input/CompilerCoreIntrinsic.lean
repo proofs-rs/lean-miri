@@ -17,7 +17,7 @@ def variantCount (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except StepE
   let source ← get ty
   let source ← if source.shapeKind == .patternType then do
       let id ← ((source.payload.getObjVal? "shape").bind (·.getObjVal? "base") >>= fun value =>
-        value.getObjValAs? Nat "type_id").mapError StepError.unsupported
+        value.getNat?).mapError StepError.unsupported
       get id
     else pure source
   match source.shapeKind with

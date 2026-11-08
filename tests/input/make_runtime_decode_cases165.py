@@ -6,7 +6,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "tools"))
-from mir_json import load_mir_document
+from mir_json import load_mir_document, encode_mir_document
 
 
 def replace_first_span(value):
@@ -15,7 +15,7 @@ def replace_first_span(value):
             if key == "span" and "scope" in value and isinstance(child, dict) and all(
                 item in child for item in ("lo", "hi", "start", "end", "ctxt", "file")
             ):
-                value[key] = {"$lean_miri_shared_ref": 0}
+                value[key] = {"$obsolete_span_reference": 0}
                 return True
             if replace_first_span(child):
                 return True
@@ -42,10 +42,8 @@ def replace_first_debug(value):
 
 
 def main(source: str, output: str) -> None:
-    # Derive semantic mutations from the validated expanded document. An empty
-    # valid catalog lets every case reach its intended semantic decoder check.
+    # Derive mutations from the validated diagnostic view, then rebuild tables.
     base = load_mir_document(source)
-    base["shared_payloads"] = {"schema_version": 2, "nodes": []}
     out = pathlib.Path(output)
     out.mkdir(parents=True, exist_ok=True)
     cases = {}
@@ -107,7 +105,7 @@ def main(source: str, output: str) -> None:
 
     for name, document in cases.items():
         path = out / f"{name}.json"
-        path.write_text(json.dumps(document, separators=(",", ":")), encoding="utf-8")
+        path.write_text(json.dumps(encode_mir_document(document), separators=(",", ":")), encoding="utf-8")
         print(f"{path} {path.stat().st_size}")
 
 

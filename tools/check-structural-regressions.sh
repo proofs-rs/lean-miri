@@ -11,14 +11,14 @@ for test in tests/regression/*.lean MiriTests/Regression/*.lean; do
   printf 'Checking %s\n' "$test"
   lake env lean "$test" || status=1
 done
-# Consume the pinned schema3 unit inputs prepared above. These are adapted unit
+# Consume the pinned schema4 unit inputs prepared above. These are adapted unit
 # fixtures, not fresh producer/Miri comparisons.
 lake env lean --run tests/regression/LowerContext.lean \
-  scratch/regression-inputs/u32.schema3.json || status=1
+  scratch/regression-inputs/u32.schema4.json || status=1
 for test in ProviderContext PrimitiveRebinding; do
   lake env lean --run "tests/regression/$test.lean" \
-    scratch/regression-inputs/u32.schema3.json \
-    scratch/regression-inputs/control-flow.schema3.json || status=1
+    scratch/regression-inputs/u32.schema4.json \
+    scratch/regression-inputs/control-flow.schema4.json || status=1
 done
 # These mains need no external input; their runtime assertions are part of the check.
 for test in DeadlineMachine MapValues ZeroWidth; do

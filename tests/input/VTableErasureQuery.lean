@@ -51,7 +51,7 @@ private def checkMemoryAlias (runtime : CompilerVTableRuntime.Prepared) (raw : J
   rejects (CompilerVTableRuntime.queryTargetPrincipal facts
     (replaceField raw "compiler_vtable_queries" (.arr wrongRows)) ty allocation) conflict
   let principal ← must (metadata.getObjVal? "principal_predicate")
-  let id ← must (principal.getObjValAs? Nat "predicate_id")
+  let id ← must principal.getNat?
   let program := facts.context.program
   let missing := { program with input := { program.input with
     compilerPredicates := program.input.compilerPredicates.filter (·.id != id) } }
@@ -85,18 +85,18 @@ def main (args : List String) : IO Unit := do
     let rows ← must ((program.input.raw.getObjVal? "compiler_vtable_queries").bind Lean.Json.getArr?)
     let mut found := false
     for row in rows do
-      let ty ← must ((row.getObjVal? "input_type").bind fun value => value.getObjValAs? Nat "type_id")
+      let ty ← must ((row.getObjVal? "input_type").bind fun value => value.getNat?)
       let principal ← must ((row.getObjVal? "vtable_metadata").bind fun value =>
         value.getObjVal? "principal_predicate")
       let principal ← if principal == .null then pure none else
-        some <$> must (principal.getObjValAs? Nat "predicate_id")
+        some <$> must principal.getNat?
       let entries ← must (CompilerVTableRuntime.entries prepared.compiler.vtables.calls.symbols principal ty)
       if entries.any (fun entry => match entry with | .traitVPtr _ => true | _ => false) then
         found := true
         let sourceEntries ← must ((row.getObjVal? "vtable_metadata").bind fun metadata =>
           (metadata.getObjVal? "entries").bind Json.getArr?)
         for value in sourceEntries do
-          let entry ← must (decodeVtableEntry value "$.vtable-erasure-control")
+          let entry ← must (decodeVtableEntry value "$.vtable-erasure-control" (DecoderValues.semanticDecodeMemo program.input.semanticTables))
           if entry.kind == .supertraitVtablePointer then
             let some allocation := entry.allocationId | throw (IO.userError "TraitVPtr allocation missing")
             checkMemoryAlias prepared.compiler.vtables.calls.symbols program.input.raw rows row ty allocation

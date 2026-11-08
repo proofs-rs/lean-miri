@@ -49,7 +49,7 @@ def normalizedLocalType (p : CompilerProviders.Prepared) (frame : ActualFrame)
   unless locals.size == body.input.locals.size do throw "body normalization changed local count"
   let some decl := locals[id]? | throw "normalized local is absent"
   unless (← decl.getObjValAs? Nat "local") == id do throw "normalized local index mismatch"
-  (← decl.getObjVal? "type").getObjValAs? Nat "type_id"
+  (← decl.getObjVal? "type").getNat?
 
 /-- Source step.rs Cast target normalization at the exact current statement.
 The requested original type must be the actual Cast target. No type-ID-only
@@ -78,7 +78,7 @@ def normalizeCastTarget (p : CompilerProviders.Prepared) (requested : MIR.TyId) 
     unless (← kind.getObjValAs? String "variant") == "Assign" do throw "normalization changed statement kind"
     let rvalue ← kind.getObjVal? "rvalue"
     unless (← rvalue.getObjValAs? String "kind") == "Cast" do throw "normalization changed Cast rvalue"
-    (← rvalue.getObjVal? "target_type").getObjValAs? Nat "type_id"
+    (← rvalue.getObjVal? "target_type").getNat?
 
 /-- The uncached compiler leaf used by the canonical local-layout cache. -/
 def computeLocalLayout (p : CompilerProviders.Prepared) (id : MIR.LocalId) :

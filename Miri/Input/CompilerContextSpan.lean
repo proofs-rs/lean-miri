@@ -7,9 +7,10 @@ namespace Miri.Input.CompilerContextSpan
 open Lean
 private def source (program : LoweredProgram) : Except String TypedValue := do
   let session ← program.input.raw.getObjVal? "compiler_session_queries"
-  let span ← session.getObjVal? "root_span"
+  let ctx := LowerContext.ofDocument program.input
+  let span ← ctx.resolveSemantic .span (← session.getObjVal? "root_span")
   unless (← (← span.getObjVal? "is_dummy").getBool?) do throw "compiler root_span is not DUMMY_SP"
-  decodeCompilerValueWithMemo span program.input.compilerValueMemo
+  ctx.decodeCompilerValue span
 
 def prepare (program : LoweredProgram) : Except String LoweredProgram := do
   let (_,tables) ← lowerCompilerSpan program.compilerTables (← source program)

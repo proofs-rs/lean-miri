@@ -110,7 +110,7 @@ private def shape (context : Context) (id : TypeId) : Result Json := do
   let source ← node context id
   field source.payload "shape"
 private def typeRef (context : Context) (j : Json) : Result TypeId := do
-  let id ← (← field j "type_id").getNat?
+  let id ← j.getNat?
   let _ ← node context id
   pure id
 

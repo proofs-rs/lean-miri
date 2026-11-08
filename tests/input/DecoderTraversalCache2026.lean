@@ -32,23 +32,21 @@ def main (args : List String) : IO Unit := do
   compare "early-vtable-error" (set (set document "a_first" bad) "z_later" bad).compress
   let malformedAbi := Json.mkObj [("fn_abi",Json.mkObj [])]
   compare "first-abi-error" (set (set document "a_first" malformedAbi) "z_later" malformedAbi).compress
-  -- Cached and uncached readers reject failed shared nodes with the same
-  -- physical transport-node diagnostic before any execution input exists.
-  let issue := Json.mkObj [("$lean_miri_shared_ref", toJson (999999999 : Nat))]
-  let .ok catalog := document.getObjVal? "shared_payloads" | throw (IO.userError "missing catalog")
-  let .ok nodes := (catalog.getObjVal? "nodes").bind Json.getArr? | throw (IO.userError "missing nodes")
-  let reference := Json.mkObj [("$lean_miri_shared_ref", toJson nodes.size)]
-  let withNode := set document "shared_payloads" (set catalog "nodes" (.arr (nodes.push issue)))
-  let contexts := Json.mkObj [("plain", reference), ("region", reference),
-    ("hir_id", reference), ("coverage", reference),
-    ("cast_kind", Json.mkObj [("coercion", reference)]),
-    ("operand", reference), ("rvalue", reference), ("projection", reference),
-    ("inline", issue), ("array", .arr #[reference, issue, reference])]
+  -- Cached and uncached readers reject malformed numeric edges in their
+  -- physical semantic node before any executable input exists.
+  let huge : Nat := 999999999
+  let issue := Json.arr #[Json.mkObj [("kind", .str "lifetime"), ("value", toJson huge)]]
+  let .ok catalog := document.getObjVal? "semantic_tables" | throw (IO.userError "missing catalog")
+  let .ok nodes := (catalog.getObjVal? "generic_args").bind Json.getArr? | throw (IO.userError "missing nodes")
+  let reference := Json.mkObj [("generic_args", toJson nodes.size)]
+  let withNode := set document "semantic_tables" (set catalog "generic_args" (.arr (nodes.push issue)))
+  let contexts := Json.mkObj [("plain", reference), ("nested", reference),
+    ("array", .arr #[reference, reference])]
   let repeated := set (set withNode "synthetic_a" contexts) "synthetic_z.%[" contexts
-  compare "shared-runtime-contexts-and-rebased-paths" repeated.compress
+  compare "semantic-runtime-contexts-and-rebased-paths" repeated.compress
   match decodeRuntimeJson repeated.compress with
   | .error message =>
-    unless message == s!"$.shared_payloads.nodes[{nodes.size}].$lean_miri_shared_ref: node reference 999999999 is out of range" do
-      throw (IO.userError s!"invalid shared reference diagnostic changed: {message}")
-  | .ok _ => throw (IO.userError "failed shared payload was accepted")
+    unless message.startsWith s!"$.semantic_tables.generic_args[{nodes.size}][0].value:" do
+      throw (IO.userError s!"invalid numeric reference diagnostic changed: {message}")
+  | .ok _ => throw (IO.userError "failed numeric payload was accepted")
   IO.println "cached/uncached decoder diagnostics and ordered ABI/body results: PASS"

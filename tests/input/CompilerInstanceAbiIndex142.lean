@@ -1,4 +1,5 @@
 import Miri.Input
+import MiriTests.Input.NumericWireFixture
 
 open Lean Miri.Input Miri.ABI Miri.Interpreter
 
@@ -43,8 +44,8 @@ private def replaceAbiRow (raw old replacement : Json) : Except String Json := d
   let some index := rows.findIdx? (· == old) | throw "ABI row to replace was absent"
   withAbiRows raw (rows.set! index replacement)
 
-private def rewriteGenericType (row : Json) (typeId : Nat) : Except String Json := do
-  let args ← (← field row "generic_args").getArr?
+private def rewriteGenericType (catalog : SemanticTables.Catalog) (row : Json) (typeId : Nat) : Except String Json := do
+  let args ← (← catalog.lookup .genericArgs (← field row "generic_args") "$test.generic_args").getArr?
   let mut rewritten := false
   let mut newArgs := #[]
   for arg in args do
@@ -52,26 +53,18 @@ private def rewriteGenericType (row : Json) (typeId : Nat) : Except String Json 
       newArgs := newArgs.push arg
     else
       rewritten := true
-      let value ← field arg "value"
-      let value ← setField value "type_id" (toJson typeId)
-      newArgs := newArgs.push (← setField arg "value" value)
+      newArgs := newArgs.push (← setField arg "value" (toJson typeId))
   unless rewritten do throw "fixture did not contain a type generic argument"
   setField row "generic_args" (.arr newArgs)
 
 private def withQuery (row query : Json) : Except String Json :=
   setField row "abi_query" query
 
-private def withQueryValue (row value : Json) : Except String Json := do
-  let query ← field row "abi_query"
-  withQuery row (← setField query "value" value)
-
-private def withQueryStatus (row : Json) (status reason : String) : Except String Json := do
-  let query ← field row "abi_query"
-  let query ← setField query "status" (.str status)
-  let query ← setField query "reason" (.str reason)
-  withQuery row query
+private def withQueryValue (row value : Json) : Except String Json :=
+  withQuery row value
 
 private def prepareRaw (raw : Json) : IO (Except String CompilerInstanceAbi.Prepared) := do
+  let raw ← must (MiriTests.NumericWireFixture.encode raw)
   let decoded ← match decodeJson raw.compress with
     | .ok decoded => pure decoded
     | .error error => throw (IO.userError error)
@@ -102,9 +95,7 @@ def main (args : List String) : IO Unit := do
   let raw ← match Json.parse text with
     | .ok raw => pure raw
     | .error error => throw (IO.userError error)
-  let raw ← must (SharedPayloads.resolveCatalog raw)
-  let raw ← must (setField raw "shared_payloads" (Json.mkObj [
-    ("schema_version", toJson (2 : Nat)), ("nodes", toJson (#[] : Array Json))]))
+  let catalog ← must (SemanticTables.parse raw)
   let decoded ← must (decodeJson text)
   let doc := decoded.document
   let runtime ← must ((RuntimeMetadata.ofDocument doc).mapError toString)
@@ -131,22 +122,22 @@ def main (args : List String) : IO Unit := do
   -- does not provide. The unmodified fixture above remains the provenance base.
   let rows ← must (abiRows raw)
   let some reify := rows.find? (fun row =>
-    ((field row "instance_kind").bind (field · "shim_kind")).toOption == some (.str "reify"))
+    (((field row "instance_kind").bind (fun value => catalog.lookup .instanceKind value "$test.instance_kind")).bind (field · "shim_kind")).toOption == some (.str "reify"))
     | throw (IO.userError "fixture lacks a genuine reify record")
   let some genericTypeRow := rows.find? (fun row =>
-    (((field row "generic_args").bind Json.getArr?).toOption.getD #[]).any fun arg =>
+    ((((field row "generic_args").bind (fun value => catalog.lookup .genericArgs value "$test.generic_args")).bind Json.getArr?).toOption.getD #[]).any fun arg =>
       ((arg.getObjValAs? String "kind").toOption == some "type"))
     | throw (IO.userError "fixture lacks a type generic argument")
   let some genericType := doc.types[0]? | throw (IO.userError "fixture has no compiler type")
-  let genericVariant ← must (rewriteGenericType genericTypeRow genericType.id)
-  let instanceKind ← must (field reify "instance_kind")
+  let genericVariant ← must (rewriteGenericType catalog genericTypeRow genericType.id)
+  let instanceKind ← must (catalog.lookup .instanceKind (← must (field reify "instance_kind")) "$test.instance_kind")
   let changedReason ← must (setField instanceKind "reason" (.str "function_pointer"))
   let reasonVariant ← must (setField reify "instance_kind" changedReason)
   let shimKind ← must (setField instanceKind "shim_kind" (.str "fn_pointer"))
-  let shimKind ← must (setField shimKind "function_type" (Json.mkObj [("type_id", toJson genericType.id)]))
+  let shimKind ← must (setField shimKind "function_type" (toJson genericType.id))
   let fnPointerVariant ← must (setField reify "instance_kind" shimKind)
   let extraVariant ← must (setField reify "extra_argument_types"
-    (.arr #[Json.mkObj [("type_id", toJson genericType.id)]]))
+    (.arr #[toJson genericType.id]))
   let extendedRaw ← must (appendAbiRows raw #[reasonVariant, fnPointerVariant, genericVariant, extraVariant])
   let extended ← match ← prepareRaw extendedRaw with
     | .ok value => pure value
@@ -164,23 +155,20 @@ def main (args : List String) : IO Unit := do
   comparePrepared duplicate
 
   let query ← must (field reify "abi_query")
-  let value ← must (field query "value")
+  let value ← must (catalog.lookup .functionAbi query "$test.abi_query")
   let canUnwind ← must (value.getObjValAs? Bool "can_unwind")
   let changedValue ← must (setField value "can_unwind" (.bool (!canUnwind)))
   let conflictingSuccess ← must (withQueryValue reify changedValue)
   let successConflictRaw ← must (appendAbiRows raw #[conflictingSuccess])
   expectPrepareError successConflictRaw "conflicting exact instance ABI evidence"
 
-  let failureOne ← must (withQueryStatus reify "unavailable" "synthetic failure one")
-  let failureTwo ← must (withQueryStatus reify "unavailable" "synthetic failure two")
-  let failureBase ← must (replaceAbiRow raw reify failureOne)
-  let sameFailureRaw ← must (appendAbiRows failureBase #[failureOne])
-  let failedPrepared ← match ← prepareRaw sameFailureRaw with
-    | .ok value => pure value
-    | .error error => throw (IO.userError s!"same failed duplicate did not coalesce: {error}")
-  comparePrepared failedPrepared
-  let failedConflictRaw ← must (appendAbiRows failureBase #[failureTwo])
-  expectPrepareError failedConflictRaw "conflicting failed instance ABI evidence"
-  let statusConflictRaw ← must (appendAbiRows raw #[failureOne])
-  expectPrepareError statusConflictRaw "conflicting instance ABI query status"
-  IO.println "synthetic duplicates/status: same evidence coalesces; conflicting success, conflicting failures, and mixed status retain exact prior errors"
+  -- Failed wire queries are rejected at the strict boundary, before indexing.
+  -- Keep the two distinct failures and mixed success/failure adversarial cases.
+  let failureOne := Json.mkObj [("status", .str "unavailable"), ("reason", .str "synthetic failure one")]
+  let failureTwo := Json.mkObj [("status", .str "unavailable"), ("reason", .str "synthetic failure two")]
+  for failures in [#[failureOne, failureOne], #[failureOne, failureTwo], #[query, failureOne]] do
+    let added ← failures.mapM (fun failure => must (withQuery reify failure))
+    let source ← must (appendAbiRows raw added)
+    check (!(decodeJson source.compress).isOk && !(decodeRuntimeJson source.compress).isOk)
+      "failed ABI wire evidence passed the strict decoder boundary"
+  IO.println "synthetic duplicates: exact success coalesces; conflicting success rejected; repeated, conflicting, and mixed failed wire evidence rejected"

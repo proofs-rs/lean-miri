@@ -48,10 +48,10 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
         | _ => throw "FnDef compiler type did not contain its exact Item definition"
       | _ => throw "unknown compiler function kind"
     let signature := do
-      let value ← record.getObjVal? "signature_query"
+      let value ← ctx.resolveSemantic .signature (← record.getObjVal? "signature_query")
       let inputs ← (← value.getObjVal? "inputs").getArr?
       for input in inputs do
-        let _ ← knownType ctx (← (← input.getObjVal? "type_id").getNat?)
+        let _ ← knownType ctx (← input.getNat?)
       pure (inputs.size,← value.getObjVal? "abi")
     functions := functions.push ⟨ty,kind,signature⟩
   let mut abis := #[]
@@ -63,7 +63,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
     | .FnPtr => pure ()
     | _ => throw "FnPtr ABI query references a non-pointer function type"
     let extra ← (← (← record.getObjVal? "extra_argument_types").getArr?).mapM fun input => do
-      knownType ctx (← (← input.getObjVal? "type_id").getNat?)
+      knownType ctx (← input.getNat?)
     if abis.any (fun entry => entry.ty == ty && entry.extra == extra) then throw "duplicate FnPtr ABI query key"
     let result := do
       let value ← record.getObjVal? "abi_query"

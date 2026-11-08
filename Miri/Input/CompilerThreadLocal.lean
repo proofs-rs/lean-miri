@@ -30,7 +30,7 @@ no TLS identity is obtained by interpreting diagnostic names. -/
 def ofProgram (program : LoweredProgram) : Except String (Array Entry) := do
   let mut entries := #[]
   for value in collect program.input.raw do
-    let defJson ← field value "def_id"
+    let defJson ← program.input.semanticTables.node .definition (← field value "def_id") "$.thread_local.def_id"
     let sourceId : DefinitionId := ⟨← natField defJson "crate", ← natField defJson "index"⟩
     let definition ← lookupDefinitionId program.bundle.definitions sourceId
     let info ← decodeStaticGlobalInfo (← field value "global_info")
@@ -38,7 +38,7 @@ def ofProgram (program : LoweredProgram) : Except String (Array Entry) := do
       throw "TLS declaration compiler query evidence is unresolved or inconsistent"
     let initializer ← field value "initializer"
     let memory ← if info.foreignItem then pure none else do
-      pure (some (← decodeAllocationMemoryEvidence (← field initializer "allocation")))
+      pure (some (← decodeAllocationMemoryEvidence (← field initializer "allocation_template")))
     if let some previous := entries.find? (fun entry => entry.definition == definition) then
       unless (previous.payload.getObjVal? "initializer").toOption == some initializer && previous.info.payload == info.payload do
         throw "conflicting compiler TLS query evidence"
@@ -58,7 +58,7 @@ def forDefinition (program : LoweredProgram) (definition : MIR.DefId) : Except S
     | throw "TLS definition absent from canonical compiler table"
   let rows := (collect program.input.raw).filter fun value =>
     let actual := do
-      let raw ← field value "def_id"
+      let raw ← program.input.semanticTables.node .definition (← field value "def_id") "$.thread_local.def_id"
       pure (⟨← natField raw "crate", ← natField raw "index"⟩ : DefinitionId)
     actual.toOption == some target
   unless !rows.isEmpty do throw "missing exact compiler TLS declaration/initializer evidence"

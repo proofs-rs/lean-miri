@@ -52,12 +52,9 @@ def functionAbi (runtime : RuntimeMetadata) (source : FunctionAbi) : Result (FnA
 /-- Decode and convert a raw compiler FnAbi through the runtime's shared
 preparation cache. Before cache preparation (and for manually constructed
 metadata), retain the direct decoder/converter path. -/
-private def decodeFunctionAbiJson (raw : Json) : Result FunctionAbi :=
-  decodeCompilerFunctionAbi raw
-
-private def decodeFunctionAbiJsonWithMemo (raw : Json)
-    (memo : CompilerFunctionAbiMemo) : Result FunctionAbi :=
-  decodeCompilerFunctionAbiWithMemo raw memo
+private def decodeFunctionAbiJson (runtime : RuntimeMetadata) (raw : Json) : Result FunctionAbi :=
+  DecoderValues.parseFunctionAbi raw "$.compiler_fn_abi"
+    (DecoderValues.semanticDecodeMemo runtime.source.semanticTables)
 
 private def isFunctionAbiCandidate (raw : Json) : Bool :=
   ["arguments", "return", "calling_convention", "can_unwind", "c_variadic", "fixed_count"]
@@ -75,11 +72,10 @@ private def buildFunctionAbiCache (runtime : RuntimeMetadata) :
       if !(entries.contains raw) then
         entries := entries.insert raw (decoded >>= functionAbi runtime)
   | none =>
-    let abiMemo := prepareCompilerFunctionAbiMemo runtime.source.sharedNodes
     for raw in runtime.source.sharedNodes do
       if isFunctionAbiCandidate raw && !(entries.contains raw) then
         let result := do
-          functionAbi runtime (← decodeFunctionAbiJsonWithMemo raw abiMemo)
+          functionAbi runtime (← decodeFunctionAbiJson runtime raw)
         entries := entries.insert raw result
   return entries
 
@@ -105,12 +101,13 @@ Without a cache, retain the direct decoder/converter path for manually
 constructed runtime contexts. -/
 def functionAbiJson (runtime : RuntimeMetadata) (raw : Json)
     (cache : Option (FunctionAbiCache runtime) := none) : Result (FnAbi TypeId) := do
+  let raw ← runtime.source.semanticTables.node .functionAbi raw "$.compiler_fn_abi"
   match cache with
   | some cache =>
     match cache.entries[raw]? with
     | some result => result
-    | none => functionAbi runtime (← decodeFunctionAbiJson raw)
-  | none => functionAbi runtime (← decodeFunctionAbiJson raw)
+    | none => functionAbi runtime (← decodeFunctionAbiJson runtime raw)
+  | none => functionAbi runtime (← decodeFunctionAbiJson runtime raw)
 
 structure Site where
   bodyIndex : Nat
@@ -182,6 +179,7 @@ private def decodeResolution (runtime : RuntimeMetadata) (ctx : LowerContext)
   | _ => unless !virtual do throw "virtual dispatch query did not return a Virtual instance"
   let sourceInstanceId ← natural source "instance_id"
   let sourceAbi ← field source "fn_abi"
+  let sourceAbi ← runtime.source.semanticTables.node .functionAbi sourceAbi "$.callee.fn_abi"
   let sourceAbi ← require (findTypedFunctionAbi runtime.source.functionAbis typedAbis sourceAbi) "missing typed compiler FnAbi record"
   return (⟨callee,sourceInstanceId,function,
     functionAbiJson runtime sourceAbi.payload (some abiCache),source⟩,tables)
@@ -218,7 +216,7 @@ private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgr
         if (text sourceResolution "kind").toOption == some "indirect_function_pointer" then
           let result := do
             let sourceType ← field sourceResolution "function_type"
-            let typeId ← natural sourceType "type_id"
+            let typeId ← sourceType.getNat?
             let sourceType ← require (program.input.types.find? (fun (node : TypeNode) => node.id == typeId)) "indirect function type is missing"
             unless sourceType.shapeKind == TypeShapeKind.functionPointer do throw "indirect dispatch metadata is not a function-pointer type"
             pure (typeId,← functionAbiJson runtime (← field sourceResolution "fn_abi")

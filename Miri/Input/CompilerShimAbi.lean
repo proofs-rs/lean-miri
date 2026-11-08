@@ -29,7 +29,7 @@ def prepare (runtime : RuntimeMetadata)
   for record in records do
     unless (← (← record.getObjVal? "typing_env").getStr?) == "fully_monomorphized" do
       throw "shim ABI query typing environment mismatch"
-    let signature ← record.getObjVal? "signature"
+    let signature ← runtime.source.semanticTables.lookup .signature (← record.getObjVal? "signature") "$.compiler_shim_abis.signature"
     let convention ← (← signature.getObjVal? "calling_convention").getStr?
     let convention : CanonAbi ← match convention with
       | "C" => pure .C | "Rust" => pure .Rust
@@ -46,9 +46,9 @@ def prepare (runtime : RuntimeMetadata)
       let inputs ← (← query.getObjVal? "input_types").getArr?
       unless inputs.size == args.size do throw "compiler shim type count mismatch"
       for input in inputs do
-        let id ← (← input.getObjVal? "type_id").getNat?
+        let id ← input.getNat?
         let _ ← runtime.node id |>.mapError toString
-      let outputId ← (← (← query.getObjVal? "output_type").getObjVal? "type_id").getNat?
+      let outputId ← (← query.getObjVal? "output_type").getNat?
       let _ ← runtime.node outputId |>.mapError toString
       let result ← query.getObjVal? "abi_query"
       CallResolution.functionAbiJson runtime result abiCache

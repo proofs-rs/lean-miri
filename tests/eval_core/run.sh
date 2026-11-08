@@ -38,34 +38,25 @@ restore_input() {
 }
 
 restore_input source133-root-u32-001 \
-  2d2c3a69db0c47a79e169fec0f3e95dcd21e507b90783d311a3b41f88b758c0f \
-  c3cb5698f70066a22579f1a15501450f27b4b0880a6870c6a5a23c1d5d7a1246
+  5f61062caea4949a1fddcd0e3db6eb398327a037e0f3eca938864547ca597fdd \
+  810f5be842d888bfe0e3366d1711612ec3f8672952d3f8111ac3f58248eaa668
 restore_input source133-root-control-flow-001 \
-  38ea4e16c71b7c78bf1d53b2d1f121d260a901439d575d89df8d0f4c2fc073ad \
-  f9cd1fd726d6aa8c071f3f36d4f05823be52cc1a6b8d19859b698b320de81ad2
+  3a5eb0fa1a2fe16cfb918dc62ed61dcff9e1ae0c4d76ace756f391429ebb445c \
+  e1ae0ff7bab92679fd212e47114a670e09ce29352ef01acf15095d806c12b5de
 restore_input source133-nostd-startup-001 \
-  d295c973eef4e9a42f7317369092db643c3c4db7825ee163c91f9b777c9f04c2 \
-  0e57792f48b0723c4bd09be9dc01d4c9d5cffd499d1fc0a4cb6f1ddf221ce4f6
+  d528d86bcbb4aa454f3979f2d555cac2ad7018e1b4701d50b5d5097271c11630 \
+  032886fc9cba69aebb1b0d82168f831852fcd7f6eff8d5fbfd763fa65b61cb49
 
-# Preserve the regenerated schema-3 compiler exports byte for byte after
-# verifying each archive and decompressed input hash above.
-prepare_schema3_input() {
-  local name="$1"
-  python3 tests/eval_core/prepare_schema3_fixture.py \
-    "$tmp_dir/$name.json" "$tmp_dir/$name.schema3.json"
-}
-
-prepare_schema3_input source133-root-u32-001
-prepare_schema3_input source133-root-control-flow-001
-prepare_schema3_input source133-nostd-startup-001
+# The hash-checked files above are genuine current schema-4 compiler exports.
+# Replay consumes their decompressed bytes directly, with no format adapter.
 
 run_fixture() {
   local name="$1" input="$2"
   printf 'eval_core %s\n' "$name"
   if [[ -n "${EVAL_CORE_LEAN_BIN:-}" ]]; then
-    "$EVAL_CORE_LEAN_BIN" --threads=1 --run "tests/eval_core/$name.lean" "$tmp_dir/$input.schema3.json"
+    "$EVAL_CORE_LEAN_BIN" --threads=1 --run "tests/eval_core/$name.lean" "$tmp_dir/$input.json"
   else
-    lake env lean --run "tests/eval_core/$name.lean" "$tmp_dir/$input.schema3.json"
+    lake env lean --run "tests/eval_core/$name.lean" "$tmp_dir/$input.json"
   fi
 }
 

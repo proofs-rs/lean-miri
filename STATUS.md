@@ -17,6 +17,9 @@ The exporter aborts when requested semantic compiler data is unavailable; the
 Lean input API no longer retains failed exporter payloads as execution inputs.
 Successful values are serialized without success-status wrappers or a
 completeness flag; consumers validate the semantic fields they use.
+The active format is schema 4, with separate numeric identity spaces for each
+semantic metadata kind. Retained older evidence needs an explicit test-only
+transport conversion; it is not accepted by the production importer.
 Cast-query consumers, including dynamic-upcast evidence validation, read direct
 result fields. Executables with custom `no_main` entry points retain startup
 preflight facts and the core C-ulong and mutable i32-pointer types required by
@@ -209,12 +212,12 @@ correctness. The large catch guest still needs a fresh same-prepared-TyCtxt
 reference comparison; native completion of a diagnostic trace does not prove UB
 freedom over every permitted choice.
 
-Import-time typing remains selective: query envelopes, layout extras and some
+Import-time typing remains selective: query records, layout extras and some
 specialized adapters still inspect source payloads. Any prepared-input reuse
 across seeds must bind input/version/configuration and create fresh guest state;
 it must not reuse guest pointers or allocation identities or replace first-run
 improvements. Preserve validation, context-sensitive memo keys, diagnostic
-rebasing and uncached compatibility paths when extending caching.
+rebasing and uncached checked paths when extending caching.
 
 ## Feature support outside the current acceptance scope
 

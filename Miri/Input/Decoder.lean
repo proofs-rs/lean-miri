@@ -3,51 +3,63 @@ import Miri.Input.Model
 namespace Miri.Input
 open Lean DecoderValues
 
+/-- Follow source-schema semantic edges without scanning the physical catalog.
+Deduplication uses resolved ABI payloads, never their kind-local numeric IDs. -/
 private partial def collectFunctionAbisAux (node : JsonTraversalCache.Node) (path : String) (memo : DecodeMemo)
-    (seen : Std.HashSet JsonTraversalCache.Key := {}) (visited : Std.HashSet JsonTraversalCache.IdentityKey := {})
-    : Except String (Array FunctionAbi × Std.HashSet JsonTraversalCache.Key × Std.HashSet JsonTraversalCache.IdentityKey) := do
+    (seen : Std.HashSet JsonTraversalCache.Key := {})
+    (visited : Std.HashSet (JsonTraversalCache.IdentityKey × Option SemanticTables.Kind) := {})
+    (query : Option SemanticTables.Kind := none)
+    : Except String (Array FunctionAbi × Std.HashSet JsonTraversalCache.Key ×
+        Std.HashSet (JsonTraversalCache.IdentityKey × Option SemanticTables.Kind)) := do
   let j := node.value
-  let key := node.identity
   if statusOf? j == some "debug_payload" then return (#[], seen, visited)
+  let key := (node.identity, query)
   let isContainer := match j with | .arr _ | .obj _ => true | _ => false
   if isContainer && node.shouldMemo && visited.contains key then return (#[], seen, visited)
-  let visited := if isContainer && node.shouldMemo then visited.insert key else visited
+  let mut visited := if isContainer && node.shouldMemo then visited.insert key else visited
+  let mut seen := seen
+  let mut all := #[]
+  let looksLikeFunctionAbi := hasField j "arguments" && hasField j "return" &&
+    hasField j "calling_convention" && hasField j "can_unwind" &&
+    hasField j "c_variadic" && hasField j "fixed_count"
+  if looksLikeFunctionAbi && !seen.contains node.key then
+    all := all.push (← parseFunctionAbi j path memo)
+    seen := seen.insert node.key
   match j with
   | .arr values =>
-    let mut all := #[]
-    let mut seen := seen
-    let mut visited := visited
-    let mut index := 0
-    for value in values do
-      let (found, nextSeen, nextVisited) ← collectFunctionAbisAux (node.child index value) s!"{path}[{index}]" memo seen visited
+    for (value, index) in values.toList.zipIdx do
+      let (found, nextSeen, nextVisited) ← collectFunctionAbisAux
+        (node.child index value) s!"{path}[{index}]" memo seen visited query
       all := all ++ found
       seen := nextSeen
       visited := nextVisited
-      index := index + 1
-    return (all, seen, visited)
   | .obj fields =>
-    let mut all := #[]
-    let mut seen := seen
-    let mut visited := visited
-    for ((fieldName, value), childIndex) in fields.toList.zipIdx do
-      let child := node.child childIndex value
-      if fieldName == "fn_abi" && value != .null then
-        if !seen.contains child.key then
-          all := all.push (← parseFunctionAbi value (joinPath path fieldName) memo)
-          seen := seen.insert child.key
-      let looksLikeFunctionAbi :=
-        hasField value "arguments" && hasField value "return" &&
-        hasField value "calling_convention" && hasField value "can_unwind" &&
-        hasField value "c_variadic" && hasField value "fixed_count"
-      if looksLikeFunctionAbi && !seen.contains child.key then
-        all := all.push (← parseFunctionAbi value (joinPath path fieldName) memo)
-        seen := seen.insert child.key
-      let (found, nextSeen, nextVisited) ← collectFunctionAbisAux child (joinPath path fieldName) memo seen visited
-      all := all ++ found
-      seen := nextSeen
-      visited := nextVisited
-    return (all, seen, visited)
-  | _ => return (#[], seen, visited)
+    for ((fieldName, raw), childIndex) in fields.toList.zipIdx do
+      if path == "$" && fieldName == "semantic_tables" then continue
+      let childPath := joinPath path fieldName
+      if let some kind := SemanticTables.arrayKind? fieldName j then
+        if raw == .null then continue
+        let values ← raw.getArr?
+        for (value, index) in values.toList.zipIdx do
+          let entryPath := s!"{childPath}[{index}]"
+          let source ← memo.semanticTables.lookup kind value entryPath
+          let (found, nextSeen, nextVisited) ← collectFunctionAbisAux
+            (.uncached source) entryPath memo seen visited
+          all := all ++ found
+          seen := nextSeen
+          visited := nextVisited
+      else
+        let value ← match SemanticTables.childKind? fieldName j query with
+          | some kind => if raw == .null then pure raw else memo.semanticTables.node kind raw childPath
+          | none => pure raw
+        let child := if value == raw then node.child childIndex raw else .uncached value
+        let childQuery := SemanticTables.queryKind? fieldName j raw
+        let (found, nextSeen, nextVisited) ← collectFunctionAbisAux child childPath memo seen visited childQuery
+        all := all ++ found
+        seen := nextSeen
+        visited := nextVisited
+  | _ => pure ()
+  return (all, seen, visited)
 
 private def collectFunctionAbis (node : JsonTraversalCache.Node) (path : String) (memo : DecodeMemo := emptyDecodeMemo) : Except String (Array FunctionAbi) := do
   return (← collectFunctionAbisAux node path memo).1
@@ -60,14 +72,18 @@ private def validateDense (ids : Array Nat) (what : String) : Except String Unit
   for id in ids do
     if id >= ids.size then throw s!"{what}: IDs must be dense from zero; found {id} with {ids.size} entries"
 
+private abbrev CoreReferenceContext := SemanticTables.CoreReferenceContext
+
 /-- The bounds encode ID membership only after all three source ID arrays pass
 `validateDense`; each dense array then denotes exactly the natural range below
 its size, independent of row order. -/
 private partial def validateReferencesAux (node : JsonTraversalCache.Node) (path : String)
-    (typeCount allocationCount instanceCount : Nat) (visited : Std.HashSet JsonTraversalCache.IdentityKey)
-    : Except String (Std.HashSet JsonTraversalCache.IdentityKey) := do
+    (typeCount allocationCount instanceCount : Nat)
+    (visited : Std.HashSet (JsonTraversalCache.IdentityKey × CoreReferenceContext))
+    (context : CoreReferenceContext := .ordinary)
+    : Except String (Std.HashSet (JsonTraversalCache.IdentityKey × CoreReferenceContext)) := do
   let j := node.value
-  let memoKey := node.identity
+  let memoKey := (node.identity, context)
   if statusOf? j == some "debug_payload" then return visited
   let isContainer := match j with | .arr _ | .obj _ => true | _ => false
   if isContainer && node.shouldMemo && visited.contains memoKey then return visited
@@ -76,27 +92,37 @@ private partial def validateReferencesAux (node : JsonTraversalCache.Node) (path
     let mut index := 0
     let mut visited := visited
     for value in values do
-      visited ← validateReferencesAux (node.child index value) s!"{path}[{index}]" typeCount allocationCount instanceCount visited
+      visited ← validateReferencesAux (node.child index value) s!"{path}[{index}]" typeCount allocationCount instanceCount visited context
       index := index + 1
     return if node.shouldMemo then visited.insert memoKey else visited
   | .obj fields =>
     let entries := fields.toList
-    match entries with
-    | [("type_id", idJson)] =>
-      let id ← idJson.getNat? |>.mapError fun e => s!"{path}.type_id: malformed type reference ({e})"
-      if id >= typeCount then throw s!"{path}: dangling type reference {id}"
-      return if node.shouldMemo then visited.insert memoKey else visited
-    | [("allocation_id", idJson)] =>
-      let id ← idJson.getNat? |>.mapError fun e => s!"{path}.allocation_id: malformed allocation reference ({e})"
-      if id >= allocationCount then throw s!"{path}: dangling allocation reference {id}"
-      return if node.shouldMemo then visited.insert memoKey else visited
-    | _ => pure ()
     let mut visited := visited
     for ((key, value), childIndex) in entries.zipIdx do
-      if key == "instance_id" then
+      if let some kind := SemanticTables.coreArrayKind? j key then
+        let values ← value.getArr?
+        let (name, count) := match kind with
+          | .typeId => ("type", typeCount)
+          | .allocationId => ("allocation", allocationCount)
+          | .instanceId => ("instance", instanceCount)
+        for (entry, index) in values.toList.zipIdx do
+          let id ← entry.getNat? |>.mapError fun error => s!"{joinPath path key}[{index}]: malformed numeric {name} reference ({error})"
+          if id >= count then throw s!"{joinPath path key}[{index}]: dangling {name} reference {id}"
+      let referenceKind := SemanticTables.coreFieldKind? j key value context
+      if referenceKind == some .typeId && value != .null ||
+          ["type_id", "input_type_id"].contains key ||
+          context == .runtimePrimitives && !["caller_location_type", "ordering_enum"].contains key then
+        let id ← value.getNat? |>.mapError fun e => s!"{joinPath path key}: malformed numeric type reference ({e})"
+        if id >= typeCount then throw s!"{joinPath path key}: dangling type reference {id}"
+      if (referenceKind == some .allocationId ||
+          ["allocation_id", "vtable_allocation_id", "key_allocation_id", "opaque_allocation_id"].contains key) && value != .null then
+        let id ← value.getNat? |>.mapError fun e => s!"{joinPath path key}: malformed numeric allocation reference ({e})"
+        if id >= allocationCount then throw s!"{joinPath path key}: dangling allocation reference {id}"
+      if (referenceKind == some .instanceId || key == "original_instance_id") && value != .null then
         let id ← value.getNat? |>.mapError fun e => s!"{joinPath path key}: malformed instance ID ({e})"
         if id >= instanceCount then throw s!"{joinPath path key}: dangling instance reference {id}"
       visited ← validateReferencesAux (node.child childIndex value) (joinPath path key) typeCount allocationCount instanceCount visited
+        (SemanticTables.coreChildContext j key context)
     return if node.shouldMemo then visited.insert memoKey else visited
   | _ => return visited
 
@@ -372,6 +398,7 @@ private def validatePromotedBody (promoted : Array PromotedBody) (path : String)
 
 private def validateVirtualIdentity (raw : Json) (types : Array TypeNode)
     (instances : Array InstanceNode) : Except String Unit := do
+  let catalog ← SemanticTables.parse raw
   for (node, index) in instances.toList.zipIdx do
     if node.kind != .virtualDispatchTarget then continue
     let base := s!"$.instances[{index}]"
@@ -380,7 +407,7 @@ private def validateVirtualIdentity (raw : Json) (types : Array TypeNode)
       throw (base ++ ".body_status" ++ ": " ++ "virtual dispatch identity must explicitly have no executable MIR body")
     if node.body.isSome then
       throw (base ++ ".body" ++ ": " ++ "virtual dispatch identity cannot carry a fabricated MIR body")
-    let kind := (payload.getObjVal? "instance_kind").toOption.getD .null
+    let kind := (catalog.field payload "instance_kind" "$").toOption.getD .null
     if (kind.getObjValAs? String "kind").toOption != some "virtual" then
       throw (base ++ ".instance_kind.kind" ++ ": " ++ "virtual dispatch target must retain rustc InstanceKind::Virtual")
     if (kind.getObjVal? "def_id").toOption != (payload.getObjVal? "def_id").toOption then
@@ -389,7 +416,7 @@ private def validateVirtualIdentity (raw : Json) (types : Array TypeNode)
       throw (base ++ ".instance_kind.dispatch_slot" ++ ": " ++ "virtual InstanceKind slot disagrees with catalog slot")
     let identity := (payload.getObjVal? "virtual_identity").toOption.getD .null
     let functionType := (identity.getObjVal? "function_type").toOption.getD .null
-    let typeId := (functionType.getObjValAs? Nat "type_id").toOption
+    let typeId := functionType.getNat?.toOption
     match typeId with
     | none => throw (base ++ ".virtual_identity.function_type" ++ ": " ++ "virtual method identity is missing its compiler function type")
     | some id =>
@@ -417,6 +444,7 @@ private def validateVirtualIdentity (raw : Json) (types : Array TypeNode)
 private def validateExtraSemantic (raw : Json) (types : Array TypeNode) (allocations : Array AllocationNode)
     (instances : Array InstanceNode) (functionAbis : Array FunctionAbi) (bodies : Array Body) : Except String Unit := do
   validateVirtualIdentity raw types instances
+  let catalog ← SemanticTables.parse raw
   for node in types do
     let shapePath := s!"types[{node.id}].shape"
     match node.shapeKind, node.shapeMetadata.signedKind, node.shapeMetadata.unsignedKind,
@@ -493,16 +521,14 @@ private def validateExtraSemantic (raw : Json) (types : Array TypeNode) (allocat
       let base := s!"instances[{node.id}]"
       if node.body.isSome then
         throw (joinPath base "body" ++ ": " ++ "intrinsic dispatch identity cannot carry fabricated MIR")
-      let instanceKind := (node.payload.getObjVal? "instance_kind").toOption.getD .null
+      let instanceKind := (catalog.field node.payload "instance_kind" "$").toOption.getD .null
       let tag := (instanceKind.getObjValAs? String "kind").toOption
       if tag != some "intrinsic" && tag != some "llvm_intrinsic" then
         throw (joinPath base "instance_kind.kind" ++ ": " ++ "intrinsic dispatch requires exact rustc Intrinsic or LlvmIntrinsic identity")
       let topDefId := node.definitionId
       let nestedDefIdJson := (instanceKind.getObjVal? "def_id").toOption
       let nestedDefId := nestedDefIdJson.bind fun value =>
-        match value.getObjValAs? Nat "crate", value.getObjValAs? Nat "index" with
-        | .ok crate, .ok index => some ⟨crate, index⟩
-        | _, _ => none
+        (parseDefinitionId value "$instance_kind.def_id" (semanticDecodeMemo catalog)).toOption
       if topDefId.isNone then
         throw (joinPath base "def_id" ++ ": " ++ "intrinsic dispatch requires an exact top-level rustc DefId")
       if nestedDefId.isNone then
@@ -518,15 +544,13 @@ private def validateExtraSemantic (raw : Json) (types : Array TypeNode) (allocat
       let symbol := (node.payload.getObjVal? "symbol_name").toOption.getD .null
       if (symbol.getStr?.toOption.getD "").isEmpty then
         throw (joinPath base "symbol_name" ++ ": " ++ "no-MIR foreign dispatch requires an exact nonempty rustc symbol name")
-      let instanceKind := (node.payload.getObjVal? "instance_kind").toOption.getD .null
+      let instanceKind := (catalog.field node.payload "instance_kind" "$").toOption.getD .null
       if (instanceKind.getObjValAs? String "kind").toOption != some "item" then
         throw (joinPath base "instance_kind.kind" ++ ": " ++ "foreign dispatch requires exact rustc Item identity")
       let topDefId := node.definitionId
       let nestedDefIdJson := (instanceKind.getObjVal? "def_id").toOption
       let nestedDefId := nestedDefIdJson.bind fun value =>
-        match value.getObjValAs? Nat "crate", value.getObjValAs? Nat "index" with
-        | .ok crate, .ok index => some ⟨crate, index⟩
-        | _, _ => none
+        (parseDefinitionId value "$instance_kind.def_id" (semanticDecodeMemo catalog)).toOption
       if topDefId.isNone then
         throw (joinPath base "def_id" ++ ": " ++ "foreign dispatch requires an exact top-level rustc DefId")
       if nestedDefId.isNone then
@@ -563,27 +587,51 @@ private def validateSelectedScope (scope : SelectedScope) (bodies : Array Body)
       throw (s!"$.selected_scope.roots[{index}]" ++ ": " ++ "selected DefId and path do not resolve to an emitted body or instance")
   return ()
 
-private partial def collectGraphReferencesInto (j : Json)
-    (result : Array (String × Nat)) : Array (String × Nat) := Id.run do
+private partial def collectGraphReferencesInto (catalog : SemanticTables.Catalog) (j : Json)
+    (result : Array (String × Nat))
+    (query : Option SemanticTables.Kind := none)
+    (context : SemanticTables.CoreReferenceContext := .ordinary) : Array (String × Nat) := Id.run do
   match j with
   | .obj fields =>
     if (j.getObjValAs? String "status").toOption == some "debug_payload" then return result
     let mut result := result
     for (key, value) in fields.toList do
-      if key == "normalization_template" || key == "compiler_facts" || key == "constructor_identity" then
+      if ["normalization_template", "compiler_facts", "constructor_identity", "semantic_tables"].contains key then
         continue
-      if key == "type_id" || key == "instance_id" || key == "allocation_id" then
-        if let .ok id := value.getNat? then result := result.push (key,id)
-      result := collectGraphReferencesInto value result
+      let referenceKind := SemanticTables.coreFieldKind? j key value context
+      let referenceKind := if ["type_id", "input_type_id"].contains key then some .typeId
+        else if ["allocation_id", "vtable_allocation_id", "key_allocation_id", "opaque_allocation_id"].contains key then some .allocationId
+        else if key == "original_instance_id" then some .instanceId else referenceKind
+      if let some kind := referenceKind then
+        if let .ok id := value.getNat? then
+          result := result.push ((match kind with
+            | .typeId => "type_id" | .instanceId => "instance_id" | .allocationId => "allocation_id"), id)
+      if let some kind := SemanticTables.coreArrayKind? j key then
+        if let .ok values := value.getArr? then
+          for entry in values do
+            if let .ok id := entry.getNat? then
+              result := result.push ((match kind with
+                | .typeId => "type_id" | .instanceId => "instance_id" | .allocationId => "allocation_id"), id)
+      if let some kind := SemanticTables.arrayKind? key j then
+        if let .ok values := value.getArr? then
+          for entry in values do
+            if let .ok source := catalog.lookup kind entry "$structural_dependency" then
+              result := collectGraphReferencesInto catalog source result
+      else
+        let child := match SemanticTables.childKind? key j query with
+          | some kind => (catalog.node kind value "$structural_dependency").toOption.getD value
+          | none => value
+        result := collectGraphReferencesInto catalog child result
+          (SemanticTables.queryKind? key j value) (SemanticTables.coreChildContext j key context)
     return result
   | .arr values =>
     let mut result := result
-    for value in values do result := collectGraphReferencesInto value result
+    for value in values do result := collectGraphReferencesInto catalog value result query context
     return result
   | _ => return result
 
-private def collectGraphReferences (j : Json) : Array (String × Nat) :=
-  collectGraphReferencesInto j #[]
+private def collectGraphReferences (catalog : SemanticTables.Catalog) (j : Json) : Array (String × Nat) :=
+  collectGraphReferencesInto catalog j #[]
 
 private def rawArray (j : Json) (key : String) : Array Json :=
   ((j.getObjVal? key).bind Json.getArr?).toOption.getD #[]
@@ -616,6 +664,7 @@ private structure RequiredStructuralDependencies where
   threadLocalRefs : Array (String × Json) := #[]
 
 private def requiredStructuralDependencies (j : Json) (includeAllBodies : Bool := false) : RequiredStructuralDependencies := Id.run do
+  let catalog := (SemanticTables.parse j).toOption.getD SemanticTables.empty
   let roots := match optionalField j "selected_scope" with
     | some scope => rawArray scope "roots"
     | none => #[]
@@ -678,7 +727,7 @@ private def requiredStructuralDependencies (j : Json) (includeAllBodies : Bool :
   for (body,bodyIndex) in selectedBodies do
       for reference in collectThreadLocalRefs body s!"$.bodies[{bodyIndex}]" do
         requiredTls := requiredTls.push reference
-      for (kind,id) in collectGraphReferences body do
+      for (kind,id) in collectGraphReferences catalog body do
         if kind == "type_id" then pendingTypes := pendingTypes.push id
         else if kind == "instance_id" then pendingInstances := pendingInstances.push id
         else if kind == "allocation_id" then pendingAllocations := pendingAllocations.push id
@@ -699,7 +748,7 @@ private def requiredStructuralDependencies (j : Json) (includeAllBodies : Bool :
         -- Only the compiler's source type shape participates here. Layout
         -- evidence itself is demanded separately; compiler_facts is a query catalog.
         if let .ok shape := row.getObjVal? "shape" then
-          for (kind, child) in collectGraphReferences shape do
+          for (kind, child) in collectGraphReferences catalog shape do
             if kind == "type_id" then pendingTypes := pendingTypes.push child
             else if kind == "instance_id" then pendingInstances := pendingInstances.push child
             else if kind == "allocation_id" then pendingAllocations := pendingAllocations.push child
@@ -712,7 +761,7 @@ private def requiredStructuralDependencies (j : Json) (includeAllBodies : Bool :
       if let some row := instancesById[id]? then
         for reference in collectThreadLocalRefs row s!"$.instances[{id}]" do
           requiredTls := requiredTls.push reference
-        for (key,child) in collectGraphReferences row do
+        for (key,child) in collectGraphReferences catalog row do
           if key == "type_id" then pendingTypes := pendingTypes.push child
           if key == "instance_id" then pendingInstances := pendingInstances.push child
           if key == "allocation_id" then pendingAllocations := pendingAllocations.push child
@@ -723,7 +772,7 @@ private def requiredStructuralDependencies (j : Json) (includeAllBodies : Bool :
       visitedAllocations := visitedAllocations.push id
       visitedAllocationIds := visitedAllocationIds.insert id ()
       if let some row := allocationsById[id]? then
-        for (key,child) in collectGraphReferences row do
+        for (key,child) in collectGraphReferences catalog row do
           if key == "type_id" then pendingTypes := pendingTypes.push child
           if key == "instance_id" then pendingInstances := pendingInstances.push child
           if key == "allocation_id" then pendingAllocations := pendingAllocations.push child
@@ -764,11 +813,11 @@ private def validateThreadLocalShape (references : Array (String × Json)) : Exc
     | none => throw (joinPath path "initializer" ++ ": " ++ "supported ThreadLocalRef is missing exact initializer query evidence")
     | some initializer =>
       let initializerPath := joinPath path "initializer"
-      let allocation := (initializer.getObjVal? "allocation").toOption
+      let allocation := (initializer.getObjVal? "allocation_template").toOption
       match allocation with
-      | none => throw (joinPath initializerPath "allocation" ++ ": " ++ "supported TLS initializer is missing its allocation image")
+      | none => throw (joinPath initializerPath "allocation_template" ++ ": " ++ "supported TLS initializer is missing its allocation image")
       | some allocation =>
-        let allocationPath := joinPath initializerPath "allocation"
+        let allocationPath := joinPath initializerPath "allocation_template"
         match parseAllocationMemory allocation allocationPath with
         | .error reason => throw (allocationPath ++ ": " ++ reason)
         | .ok memory =>
@@ -804,7 +853,7 @@ def jsonAtPath (j : Json) (path : String) : Option Json := Id.run do
   return current
 
 private def jsonTypeId? (j : Json) : Option Nat :=
-  (j.getObjVal? "type_id").toOption.bind (fun value => value.getNat?.toOption)
+  j.getNat?.toOption
 
 private def dynamicPredicateArray? (j : Json) (typeId : Nat) : Option (Array Json) := Id.run do
   let some types := (((j.getObjVal? "types").bind Json.getArr?).toOption) | return none
@@ -837,7 +886,7 @@ private def exactLockstepTails? (j : Json) (source target : Nat) : Option Json :
   unless matching.size == 1 do return none
   return matching[0]?
 
-private def castOperandTypeId? (node : Json) : Option Nat := Id.run do
+private def castOperandTypeId? (document node : Json) : Option Nat := Id.run do
   let some operand := (node.getObjVal? "operand").toOption | return none
   let some operandKind := ((operand.getObjVal? "kind").bind Json.getStr?).toOption | return none
   if operandKind == "Copy" || operandKind == "Move" then
@@ -845,7 +894,11 @@ private def castOperandTypeId? (node : Json) : Option Nat := Id.run do
     let some ty := (place.getObjVal? "type").toOption | return none
     return jsonTypeId? ty
   else if operandKind == "Constant" then
-    let some constant := (operand.getObjVal? "constant").toOption | return none
+    let some constantId := ((operand.getObjVal? "constant").bind Json.getNat?).toOption | return none
+    -- This exact evidence check reads the canonical constant row directly.
+    let some tables := (document.getObjVal? "semantic_tables").toOption | return none
+    let some constants := ((tables.getObjVal? "constants").bind Json.getArr?).toOption | return none
+    let some constant := constants[constantId]? | return none
     let some ty := (constant.getObjVal? "type").toOption | return none
     return jsonTypeId? ty
   else return none
@@ -878,7 +931,7 @@ private def exactDynamicVtableUpcast? (j node descriptor : Json) : Bool := Id.ru
   let some sourceTypeId := jsonTypeId? sourceType | return false
   let some targetType := (descriptor.getObjVal? "target_type").toOption | return false
   let some targetTypeId := jsonTypeId? targetType | return false
-  unless castOperandTypeId? node == some sourceTypeId do return false
+  unless castOperandTypeId? j node == some sourceTypeId do return false
   unless ((node.getObjVal? "target_type").toOption.bind jsonTypeId?) == some targetTypeId do return false
 
   let some sourcePointee := (descriptor.getObjVal? "source_pointee_type").toOption | return false
@@ -967,19 +1020,19 @@ private def parseTypeArray (values : Array Json) (memo : DecodeMemo) : Except St
     index := index + 1
   pure result
 
-private def parseAllocationArray (values : Array Json) : Except String (Array AllocationNode) := do
+private def parseAllocationArray (values : Array Json) (memo : DecodeMemo) : Except String (Array AllocationNode) := do
   let mut result := #[]
   let mut index := 0
   for value in values do
-    result := result.push (← parseAllocation value s!"$.allocations[{index}]")
+    result := result.push (← parseAllocation value s!"$.allocations[{index}]" memo)
     index := index + 1
   pure result
 
-private def parseInstanceArray (values : Array Json) : Except String (Array InstanceNode) := do
+private def parseInstanceArray (values : Array Json) (memo : DecodeMemo) : Except String (Array InstanceNode) := do
   let mut result := #[]
   let mut index := 0
   for value in values do
-    result := result.push (← parseInstance value s!"$.instances[{index}]")
+    result := result.push (← parseInstance value s!"$.instances[{index}]" memo)
     index := index + 1
   pure result
 
@@ -999,7 +1052,7 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
   let (resolved,traversal) ← profileit "decoder.shared_payload_resolution" profile fun _ =>
     JsonTraversalCache.resolve input cachedTraversal profile
   let j := resolved.root
-  let memo := profileit "decoder.shared_decode_memo" profile fun _ => sharedDecodeMemo resolved.nodes
+  let memo := profileit "decoder.shared_decode_memo" profile fun _ => (sharedDecodeMemo resolved.nodes).withSemanticTables resolved.semanticTables
   if (← fieldString j "schema" "$") != expectedSchema then
     throw s!"$.schema: expected `{expectedSchema}`"
   if (← fieldNat j "schema_version" "$") != expectedSchemaVersion then
@@ -1020,20 +1073,20 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
   if typesJson.isEmpty then throw "$.types: input has no type graph; refusing an empty import"
   let types ← profileit "decoder.types" profile fun _ => parseTypeArray typesJson memo
   let allocationsJson ← arrayField j "allocations" "$"
-  let allocations ← profileit "decoder.allocations" profile fun _ => parseAllocationArray allocationsJson
+  let allocations ← profileit "decoder.allocations" profile fun _ => parseAllocationArray allocationsJson memo
   let compilerAllocIdWorld ← profileit "decoder.compiler_alloc_id_world" profile fun _ => do
     match optionalJson j "compiler_alloc_id_world" with
     | none => pure none
     | some value => pure (some (← parseCompilerAllocIdWorld value allocations))
   let instancesJson ← arrayField j "instances" "$"
-  let instances ← profileit "decoder.instances" profile fun _ => parseInstanceArray instancesJson
+  let instances ← profileit "decoder.instances" profile fun _ => parseInstanceArray instancesJson memo
   let selectedScope ← match optionalJson j "selected_scope" with
     | none => pure none
     | some value =>
       for legacyField in ["unresolved_obligations", "retained_catalog_obligations"] do
         if hasField value legacyField then
           throw s!"$.selected_scope.{legacyField}: obsolete failed-input field"
-      pure (some (← parseSelectedScope value "$.selected_scope"))
+      pure (some (← parseSelectedScope value "$.selected_scope" memo))
   let compilerFunctionAbiTable := profileit "decoder.compiler_abi_queries" profile fun _ =>
     prepareCompilerFunctionAbiTableUsing resolved.nodes memo
   let memo := compilerFunctionAbiTable.extendDecodeMemo memo
@@ -1084,7 +1137,7 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
   let core : ImportDocumentCore := {
     compilerPredicates := ← match optionalField j "compiler_predicate_queries" with
       | none => pure #[]
-      | some value => (← value.getArr?).mapM decodeCompilerPredicateEvidence
+      | some value => (← value.getArr?).mapM (fun node => decodeCompilerPredicateEvidence node memo)
     compilerAbiLayoutSchema := compilerAbiLayoutSchema
     producer := producer
     runtimeTargetDataLayout := runtimeTargetDataLayout
@@ -1097,6 +1150,7 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     bodies := bodies
     raw := j
     sharedNodes := resolved.nodes
+    semanticTables := resolved.semanticTables
     compilerFunctionAbiTable := some compilerFunctionAbiTable
     compilerValueMemo := if runtimeOnly then some (profileit "decoder.compiler_values" profile fun _ =>
       prepareCompilerValueMemoUsing resolved.nodes memo) else none

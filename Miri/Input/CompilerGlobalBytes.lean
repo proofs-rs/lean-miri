@@ -101,14 +101,14 @@ def prepare (program : LoweredProgram) (runtime : RuntimeMetadata)
         unless (← result.getObjValAs? Nat "salt") == index do throw "global byte salt index mismatch"
         let allocation ← result.getObjVal? "existing_allocation"
         unless allocation == .null do
-          let id ← AllocationImage.runtimeId memory (← allocation.getObjValAs? Nat "allocation_id")
+          let id ← AllocationImage.runtimeId memory (← allocation.getNat?)
           unless candidates.any (fun entry => entry.1 == bytes && entry.2 == id) do
             throw "global byte salt query refers to incompatible global contents"
           if proof : index < 32 then keys := keys.push (bytes,⟨index,proof⟩,id)
           else throw "global byte salt exceeds support"
     unless candidates.all (fun entry => seen.contains entry.1) do
       throw "global byte query omits imported candidate content"
-  let strType ← (← source.getObjVal? "str_type").getObjValAs? Nat "type_id"
+  let strType ← (← source.getObjVal? "str_type").getNat?
   let node ← runtime.node strType |>.mapError toString
   unless node.shapeKind == .str do
     throw "global byte str type is not the compiler str primitive"

@@ -25,8 +25,9 @@ structure Prepared where
 
 private def field (j : Json) (key : String) : Except String Json := j.getObjVal? key
 
-private def definition (tables : CompilerTables) (raw : Json) :
+private def definition (ctx : LowerContext) (tables : CompilerTables) (raw : Json) :
     Except String (MIR.DefId × CompilerTables) := do
+  let raw ← ctx.resolveSemantic .definition raw
   let source : DefinitionId := ⟨← (← field raw "crate").getNat?, ← (← field raw "index").getNat?⟩
   match lookupDefinitionId tables.definitions source with
   | .ok id => pure (id, tables)
@@ -45,15 +46,15 @@ private def decodeValue (ctx : LowerContext) (tables : CompilerTables) (record :
     Except String (Value × CompilerTables) := do
   let query ← field record "query"
   let payload := query
-  let (defId, tables) ← definition tables (← field payload "definition")
+  let (defId, tables) ← definition ctx tables (← field payload "definition")
   let kind ← (← field payload "kind").getStr?
   let isStatic ← match kind with
     | "static" => pure true
     | "const_allocation" => pure false
     | _ => throw s!"named compiler global {name} has unknown allocation kind `{kind}`"
-  let ty ← (← (← field payload "type").getObjVal? "type_id").getNat?
+  let ty ← (← field payload "type").getNat?
   unless ctx.containsTypeId ty do throw "named compiler global references absent compiler type"
-  let allocation ← (← (← field payload "allocation").getObjVal? "allocation_id").getNat?
+  let allocation ← (← field payload "allocation").getNat?
   unless ctx.containsAllocationId allocation do throw "named compiler global references absent allocation image"
   pure (⟨defId, ty, allocation, isStatic⟩, tables)
 

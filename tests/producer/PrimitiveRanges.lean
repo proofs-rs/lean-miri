@@ -12,18 +12,21 @@ private def replace (j : Json) (key : String) (value : Json) : Except String Jso
   | _ => .error "expected object"
 private def changeEnd (root : Json) (id : Nat) (last : Json) : Except String Json := do
   let types ← (← field root "types").getArr?
-  let types ← types.mapM fun ty => do
-    if (← (← field ty "type_id").getNat?) != id then return ty
-    let layout ← field ty "layout"
-    let backend ← field layout "backend_repr"
-    let scalar ← field backend "scalar"
-    let range ← field scalar "valid_range"
-    let range ← replace range "end" last
-    let scalar ← replace scalar "valid_range" range
-    let backend ← replace backend "scalar" scalar
-    let layout ← replace layout "backend_repr" backend
-    replace ty "layout" layout
-  replace root "types" (.arr types)
+  let some ty := types.find? (fun ty => (ty.getObjValAs? Nat "type_id").toOption == some id)
+    | throw "source type absent"
+  let layoutId ← (← field ty "layout").getNat?
+  let catalog ← field root "semantic_tables"
+  let layouts ← (← field catalog "layouts").getArr?
+  let some layout := layouts[layoutId]? | throw "source layout absent"
+  let backend ← field layout "backend_repr"
+  let scalar ← field backend "scalar"
+  let range ← field scalar "valid_range"
+  let range ← replace range "end" last
+  let scalar ← replace scalar "valid_range" range
+  let backend ← replace backend "scalar" scalar
+  let layout ← replace layout "backend_repr" backend
+  let catalog ← replace catalog "layouts" (.arr (layouts.mapIdx fun index old => if index == layoutId then layout else old))
+  replace root "semantic_tables" catalog
 private def rangeOf (document : ImportDocument) (id : Nat) : Except String (Nat × Nat) := do
   let some ty := document.types.find? (·.id == id) | throw "source u128 type missing"
   let some backend := ty.layout.backendRepresentation | throw "scalar backend missing"
@@ -34,13 +37,10 @@ private def rangeOf (document : ImportDocument) (id : Nat) : Except String (Nat 
 def main (args : List String) : IO Unit := do
   let path::_ := args | throw (IO.userError "missing exported JSON")
   let source ← IO.FS.readFile path
-  -- Inspect and mutate semantic values after resolving shared transport. Keep
-  -- an empty catalog so edited documents reach the scalar/niche validators.
-  let original ← must (SharedPayloads.resolveCatalog (← must (Json.parse source)))
-  let original ← must (replace original "shared_payloads"
-    (Json.mkObj [("schema_version", toJson (2 : Nat)), ("nodes", toJson (#[] : Array Json))]))
+  let original ← must (Json.parse source)
+  let _ ← must (SemanticTables.parse original)
   let primitive ← must (field (← must (field original "compiler_runtime_primitives")) "u128")
-  let id ← must ((← must (field primitive "type_id")).getNat?)
+  let id ← must primitive.getNat?
   let decoded ← must (decodeJson source)
   let range ← must (rangeOf decoded.document id)
   check (range == (0,2^128-1)) "actual compiler u128 range was clipped"

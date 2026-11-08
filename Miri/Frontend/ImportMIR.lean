@@ -64,6 +64,12 @@ section
 -- Propagate the import-local JSON quotation table through all derived quoters.
 variable [ToExpr Json]
 
+instance : ToExpr Input.SemanticTables.Catalog where
+  toTypeExpr := mkConst ``Input.SemanticTables.Catalog
+  toExpr catalog := mkApp (mkConst ``Input.SemanticTables.ofNodes)
+    (toExpr (Input.SemanticTables.kinds.map catalog.nodes))
+
+
 deriving instance ToExpr for MIR.IntegerKind
 deriving instance ToExpr for MIR.BinOp
 deriving instance ToExpr for MIR.UnOp

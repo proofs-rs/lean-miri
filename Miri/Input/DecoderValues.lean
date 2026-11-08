@@ -9,7 +9,7 @@ open Lean
 def expectedMiriCommit : String := "7fa591d7d4dd9af8154becbc8332f8096f8323b1"
 def expectedRustcCommit : String := "8144389c895da997dbdecaa635e41d6a50be6ffd"
 def expectedSchema : String := "lean-miri-rustc-mir"
-def expectedSchemaVersion : Nat := 3
+def expectedSchemaVersion : Nat := 4
 def expectedCompilerAbiLayoutSchema : String := "physical_ty_and_layout_v1"
 
 def escapePathKey (key : String) : String :=
@@ -83,11 +83,56 @@ the canonical JSON encoding so inline copies and DAG references share entries;
 failed parses are never cached, preserving diagnostics at each occurrence. -/
 structure DecodeMemo where
   private mk ::
+  semanticTables : SemanticTables.Catalog := SemanticTables.empty
   private sourceSpans : Std.HashMap Json SourceSpanData := {}
   private layouts : Std.HashMap Json Layout := {}
   private functionAbis : Std.HashMap Json FunctionAbi := {}
 
 def emptyDecodeMemo : DecodeMemo := {}
+
+def DecodeMemo.withSemanticTables (memo : DecodeMemo) (catalog : SemanticTables.Catalog) : DecodeMemo :=
+  { memo with semanticTables := catalog }
+
+def semanticDecodeMemo (catalog : SemanticTables.Catalog) : DecodeMemo :=
+  emptyDecodeMemo.withSemanticTables catalog
+
+def DecodeMemo.field (memo : DecodeMemo) (source : Json) (key path : String) : Except String Json :=
+  memo.semanticTables.field source key path
+
+private def referenceValue? (parent : Json) (key : String) (value : Json)
+    (context : SemanticTables.CoreReferenceContext := .ordinary) : Option TypedValue := do
+  let id ← value.getNat?.toOption
+  match SemanticTables.coreFieldKind? parent key value context with
+  | some .typeId => return .typeRef id
+  | some .allocationId => return .allocationRef id
+  | some .instanceId => return .instanceRef id
+  | none => none
+
+private def referenceArray? (parent : Json) (key : String) (value : Json) : Option TypedValue := do
+  let kind ← SemanticTables.coreArrayKind? parent key
+  let values ← value.getArr?.toOption
+  return .array (← values.mapM fun value => do
+    let id ← value.getNat?.toOption
+    return match kind with
+      | .typeId => .typeRef id
+      | .allocationId => .allocationRef id
+      | .instanceId => .instanceRef id)
+
+private def semanticArrayElement (memo : DecodeMemo) (value : Json) (path : String)
+    (index : Nat) : Except String Json := do
+  let role := if path.endsWith ".required_consts" then some SemanticTables.Kind.constant
+    else if path.endsWith ".line_spans" then some .span else none
+  match role with
+  | some kind => memo.semanticTables.lookup kind value s!"{path}[{index}]"
+  | none => return value
+
+private def semanticChild (memo : DecodeMemo) (parent : Json) (key : String)
+    (value : Json) (path : String) (query : Option SemanticTables.Kind := none) : Except String Json := do
+  if value == .null then return value
+  match SemanticTables.childKind? key parent query with
+  | some kind => memo.semanticTables.node kind value path
+  | none => return value
+
 
 def parseSourcePosition (j : Json) (path : String) : Except String SourcePosition := do
   return {
@@ -97,7 +142,7 @@ def parseSourcePosition (j : Json) (path : String) : Except String SourcePositio
 
 def parseSourceSpanUncached (j : Json) (path : String) : Except String SourceSpanData := do
   if (j.getObjVal? "$lean_miri_shared_ref").isOk then
-    throw s!"{path}: shared span reference requires a shared_payloads catalog"
+    throw s!"{path}: obsolete generic span reference; expected numeric semantic reference"
   let start ← parseSourcePosition (← field j "start" path) (joinPath path "start")
   let endPos ← parseSourcePosition (← field j "end" path) (joinPath path "end")
   return {
@@ -110,7 +155,8 @@ def parseSourceSpanUncached (j : Json) (path : String) : Except String SourceSpa
     file := ← sourceDebugString j "file" path
   }
 
-def parseSourceSpan (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String SourceSpanData := do
+def parseSourceSpan (input : Json) (path : String) (memo : DecodeMemo := {}) : Except String SourceSpanData := do
+  let j ← memo.semanticTables.node .span input path
   match memo.sourceSpans[j]? with
   | some value => pure value
   | none => parseSourceSpanUncached j path
@@ -236,6 +282,8 @@ structure DecodeValueKey where
   json : Json
   domain : Domain
   tagCategory : Option TypedEnumTag
+  semanticQuery : Option SemanticTables.Kind
+  coreContext : SemanticTables.CoreReferenceContext
   isRegionPath : Bool
   isHirIdPath : Bool
   isCoveragePath : Bool
@@ -243,10 +291,13 @@ structure DecodeValueKey where
   deriving BEq, Hashable
 
 def decodeValueKey (j : Json) (path : String) (domain : Domain)
-    (tagCategory : Option TypedEnumTag) : DecodeValueKey := {
+    (tagCategory : Option TypedEnumTag) (query : Option SemanticTables.Kind := none)
+    (context : SemanticTables.CoreReferenceContext := .ordinary) : DecodeValueKey := {
   json := j
   domain := domain
   tagCategory := tagCategory
+  semanticQuery := query
+  coreContext := context
   isRegionPath := path.endsWith ".region"
   isHirIdPath := path.endsWith ".hir_id"
   isCoveragePath := path.endsWith ".coverage"
@@ -268,10 +319,10 @@ def singletonRef (j : Json) (key : String) : Option Nat :=
         match value.getNat? with | .ok id => some id | .error _ => none
     | _ => none
 
-def isTypeRef (j : Json) : Option Nat := singletonRef j "type_id"
+def isTypeRef (j : Json) : Option Nat := j.getNat?.toOption
 
 def isAllocationRef (j : Json) : Option Nat := do
-  singletonRef j "allocation_id"
+  j.getNat?.toOption
 
 def childDomain (parent : Domain) (key : String) : Domain :=
   match parent, key with
@@ -551,7 +602,12 @@ def validateValueLocal (value : TypedValue) (path : String) : Except String Unit
           match children.find? fun (key, _) => key == "hir_id" with
           | some (_, .object fields) =>
             let hasOwner := fields.any fun (key, value) =>
-              key == "owner_def_id" && match value with | .scalar (.str _) => true | _ => false
+              key == "owner_def_id" && match value with
+                | .object owner => owner.size == 2 && ["crate", "index"].all (fun name =>
+                    owner.any fun (key, value) => key == name && match value with
+                      | .scalar (.num number) => ((Json.num number).getNat?).isOk
+                      | _ => false)
+                | _ => false
             let hasLocalId := fields.any fun (key, value) =>
               key == "local_id" && match value with
                 | .scalar (.num number) => ((Json.num number).getNat?).isOk
@@ -611,25 +667,28 @@ abbrev DecodeValueM := StateT (Std.HashMap DecodeValueKey TypedValue) (Except St
 
 mutual
 partial def decodeValueM (j : Json) (path : String) (domain : Domain)
-    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : DecodeValueM TypedValue := do
-  let key := decodeValueKey j path domain tagCategory
+    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo)
+    (queryContext : Option SemanticTables.Kind := none)
+    (coreContext : SemanticTables.CoreReferenceContext := .ordinary) : DecodeValueM TypedValue := do
+  let key := decodeValueKey j path domain tagCategory queryContext coreContext
   if let some value := (← get).get? key then return value
-  let value ← decodeValueBody j path domain tagCategory memo
+  let value ← decodeValueBody j path domain tagCategory memo queryContext coreContext
   validateValueLocal value path
   modify fun cache => cache.insert key value
   return value
 
 partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
-    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : DecodeValueM TypedValue := do
-  if let some id := isTypeRef j then return .typeRef id
-  if let some id := isAllocationRef j then return .allocationRef id
+    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo)
+    (queryContext : Option SemanticTables.Kind := none)
+    (coreContext : SemanticTables.CoreReferenceContext := .ordinary) : DecodeValueM TypedValue := do
   if statusOf? j == some "debug_payload" then return .diagnostic j
   match j with
   | .arr values =>
     let mut decoded := #[]
     let mut index := 0
-    for value in values do
-      decoded := decoded.push (← decodeValueM value s!"{path}[{index}]" domain tagCategory memo)
+    for rawValue in values do
+      let value ← semanticArrayElement memo rawValue path index
+      decoded := decoded.push (← decodeValueM value s!"{path}[{index}]" domain tagCategory memo queryContext coreContext)
       index := index + 1
     return .array decoded
   | .obj _ =>
@@ -644,9 +703,21 @@ partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
     let parentTag := match effectiveDomain with
       | .rvalue | .operand | .statement | .terminator => domainTag j effectiveDomain
       | _ => asTag? j "kind"
-    for (key, value) in fields do
+    for (key, rawValue) in fields do
+      if path == "$" && key == "semantic_tables" then continue
+      let childPath := joinPath path key
+      let value ← semanticChild memo j key rawValue childPath queryContext
       let nextDomain := childDomain effectiveDomain key
-      let decoded ← if key == "user_type_projection" && parentTag == some "AscribeUserType" then
+      let decoded ← if let some references := referenceArray? j key rawValue then pure references
+        else if let some reference := referenceValue? j key rawValue coreContext then pure reference
+        else if let some arrayKind := (if value == .null then none else SemanticTables.arrayKind? key j) then do
+          let values ← value.getArr?
+          let mut decoded := #[]
+          for (entry, index) in values.toList.zipIdx do
+            let source ← memo.semanticTables.lookup arrayKind entry s!"{childPath}[{index}]"
+            decoded := decoded.push (← decodeValueM source s!"{childPath}[{index}]" .any none memo)
+          pure (.array decoded)
+        else if key == "user_type_projection" && parentTag == some "AscribeUserType" then
           .userTypeProjection <$> parseUserTypeProjection value (joinPath path key)
         else if key == "operator" && (parentTag == some "BinaryOp" || optionalField j "kind" == some (.str "Overflow")) then
           let tag ← parseOperatorTag value (joinPath path key)
@@ -658,11 +729,11 @@ partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
           match unOpFromExportTag tag with
           | some op => pure (.unOperator op)
           | none => throw s!"{joinPath path "operator"}: unrecognized unary operator `{tag}`"
-        else decodeValueM value (joinPath path key) nextDomain (typedEnumCategory? key path parentTag value) memo
+        else decodeValueM value (joinPath path key) nextDomain (typedEnumCategory? key path parentTag value) memo (SemanticTables.queryKind? key j rawValue) (SemanticTables.coreChildContext j key coreContext)
       let isTagField := match effectiveDomain with
         | .statement | .terminator | .rvalue | .operand | .projection => key == "status" || key == "variant" || key == "kind"
         | _ => false
-      let decoded := match key, value with
+      let decoded := if key == "target" && hasField j "storage_offset_bytes" then decoded else match key, value with
         | "instance_id", .num _ =>
           match value.getNat? with | .ok id => .instanceRef id | .error _ => decoded
         | "local", .num _ =>
@@ -715,6 +786,8 @@ structure RuntimeValueKey where
   json : JsonTraversalCache.IdentityKey
   domain : Domain
   tagCategory : Option TypedEnumTag
+  semanticQuery : Option SemanticTables.Kind
+  coreContext : SemanticTables.CoreReferenceContext
   isRegionPath : Bool
   isHirIdPath : Bool
   isCoveragePath : Bool
@@ -722,10 +795,13 @@ structure RuntimeValueKey where
   deriving BEq, Hashable
 
 def runtimeValueKey (node : JsonTraversalCache.Node) (path : String)
-    (domain : Domain) (tagCategory : Option TypedEnumTag) : RuntimeValueKey := {
+    (domain : Domain) (tagCategory : Option TypedEnumTag) (query : Option SemanticTables.Kind := none)
+    (context : SemanticTables.CoreReferenceContext := .ordinary) : RuntimeValueKey := {
   json := node.identity
   domain := domain
   tagCategory := tagCategory
+  semanticQuery := query
+  coreContext := context
   isRegionPath := path.endsWith ".region"
   isHirIdPath := path.endsWith ".hir_id"
   isCoveragePath := path.endsWith ".coverage"
@@ -750,12 +826,16 @@ abbrev RuntimeDecodeCache := Std.HashMap RuntimeValueKey TypedValue
 
 initialize runtimeSummaryKeys : Std.HashSet String ← pure (Std.HashSet.ofList [
   "status", "phase", "performs_retag", "enabled", "point_kind", "hir_id",
-  "id", "bcb", "index", "name", "index_kind", "variable_index",
+  "id", "bcb", "crate", "index", "name", "index_kind", "variable_index",
   "bound_kind", "scope_def_id", "scope_def_path", "parameter", "universe",
   "base_index", "projections", "user_type_projection", "variance", "coverage"])
 
 def runtimeSummaryChild (key : String) (value : TypedValue) : TypedValue :=
-  if key == "hir_id" then
+  if key == "owner_def_id" then
+    match value with
+    | .object fields => .object (fields.filter fun (field, _) => field == "crate" || field == "index")
+    | other => other
+  else if key == "hir_id" then
     match value with
     | .object fields => .object (fields.filter fun (field, _) => field == "owner_def_id" || field == "local_id")
     | other => other
@@ -775,30 +855,26 @@ abbrev RuntimeDecodeM := StateT RuntimeDecodeCache (Except String)
 
 mutual
 partial def decodeRuntimeValueM (node : JsonTraversalCache.Node) (path : String) (domain : Domain)
-    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : RuntimeDecodeM TypedValue := do
-  if !node.shouldMemo then return ← decodeRuntimeValueBody node path domain tagCategory memo
+    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo)
+    (queryContext : Option SemanticTables.Kind := none)
+    (coreContext : SemanticTables.CoreReferenceContext := .ordinary) : RuntimeDecodeM TypedValue := do
+  if !node.shouldMemo then return ← decodeRuntimeValueBody node path domain tagCategory memo queryContext coreContext
   -- Scalars are cheap and mostly inline. Giving every occurrence its own cache
   -- entry would retain millions of unique leaf IDs without sharing any work.
   match node.value with
   | .arr _ | .obj _ => pure ()
-  | _ => return ← decodeRuntimeValueBody node path domain tagCategory memo
-  let key := runtimeValueKey node path domain tagCategory
+  | _ => return ← decodeRuntimeValueBody node path domain tagCategory memo queryContext coreContext
+  let key := runtimeValueKey node path domain tagCategory queryContext coreContext
   if let some decoded := (← get).get? key then return decoded
-  let decoded ← decodeRuntimeValueBody node path domain tagCategory memo
+  let decoded ← decodeRuntimeValueBody node path domain tagCategory memo queryContext coreContext
   modify fun cache => cache.insert key decoded
   return decoded
 
 partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : String) (domain : Domain)
-    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : RuntimeDecodeM TypedValue := do
+    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo)
+    (queryContext : Option SemanticTables.Kind := none)
+    (coreContext : SemanticTables.CoreReferenceContext := .ordinary) : RuntimeDecodeM TypedValue := do
   let j := node.value
-  if let some id := isTypeRef j then
-    let value := TypedValue.typeRef id
-    validateValueLocal value path
-    return value
-  if let some id := isAllocationRef j then
-    let value := TypedValue.allocationRef id
-    validateValueLocal value path
-    return value
   if statusOf? j == some "debug_payload" then
     let value := TypedValue.diagnostic j
     validateValueLocal value path
@@ -806,8 +882,10 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
   match j with
   | .arr values =>
     let mut index := 0
-    for value in values do
-      let _ ← decodeRuntimeValueM (node.child index value) s!"{path}[{index}]" domain tagCategory memo
+    for rawValue in values do
+      let value ← semanticArrayElement memo rawValue path index
+      let childNode := if rawValue == value then node.child index value else .uncached value
+      let _ ← decodeRuntimeValueM childNode s!"{path}[{index}]" domain tagCategory memo queryContext coreContext
       index := index + 1
     let summary := TypedValue.array #[]
     validateValueLocal summary path
@@ -829,10 +907,24 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
       | .rvalue | .operand | .statement | .terminator => domainTag j effectiveDomain
       | _ => asTag? j "kind"
     let mut summaries := #[]
-    for ((key, value), index) in fields.toList.zipIdx do
+    for ((key, rawValue), index) in fields.toList.zipIdx do
+      if path == "$" && key == "semantic_tables" then continue
       let childPath := joinPath path key
+      let value ← semanticChild memo j key rawValue childPath queryContext
       let nextDomain := childDomain effectiveDomain key
-      let child ← if key == "user_type_projection" && parentTag == some "AscribeUserType" then do
+      let child ← if let some references := referenceArray? j key rawValue then
+          pure references
+        else if let some reference := referenceValue? j key rawValue coreContext then
+          pure reference
+        else if let some arrayKind := (if value == .null then none else SemanticTables.arrayKind? key j) then do
+          let values ← value.getArr?
+          for (entry, entryIndex) in values.toList.zipIdx do
+            let entryPath := s!"{childPath}[{entryIndex}]"
+            let source ← memo.semanticTables.lookup arrayKind entry entryPath
+            discard <| decodeRuntimeValueM (.uncached source) entryPath .any none memo
+          let summary := TypedValue.array #[]
+          pure summary
+        else if key == "user_type_projection" && parentTag == some "AscribeUserType" then do
           let projection ← parseUserTypeProjection value childPath
           let decoded := TypedValue.userTypeProjection projection
           validateValueLocal decoded childPath
@@ -851,13 +943,14 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
             | none => throw s!"{childPath}: unrecognized unary operator `{tag}`"
           validateValueLocal decoded childPath
           pure decoded
-        else decodeRuntimeValueM (node.child index value) childPath nextDomain (typedEnumCategory? key path parentTag value) memo
+        else decodeRuntimeValueM (if rawValue == value then node.child index value else .uncached value) childPath nextDomain (typedEnumCategory? key path parentTag value) memo (SemanticTables.queryKind? key j rawValue) (SemanticTables.coreChildContext j key coreContext)
       let isTagField := match effectiveDomain with
         | .statement | .terminator | .rvalue | .operand | .projection => key == "status" || key == "variant" || key == "kind"
         | _ => false
       if !isTagField && (runtimeSummaryKeys.contains key ||
           path.endsWith ".hir_id" && (key == "owner_def_id" || key == "local_id")) then
-        let childSummary := match key, value with
+        let childSummary := if key == "target" && hasField j "storage_offset_bytes" then
+          runtimeSummaryChild key child else match key, value with
           | "instance_id", .num _ => match value.getNat? with
             | .ok id => TypedValue.instanceRef id
             | .error _ => runtimeSummaryChild key child
@@ -1233,7 +1326,8 @@ def parseLayoutUncached (j : Json) (path : String) : Except String Layout := do
     payload := j
   }
 
-def parseLayout (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String Layout := do
+def parseLayout (input : Json) (path : String) (memo : DecodeMemo := {}) : Except String Layout := do
+  let j ← memo.semanticTables.node .layout input path
   match memo.layouts[j]? with
   | some value => pure value
   | none => parseLayoutUncached j path
@@ -1271,14 +1365,14 @@ def collectSharedDecodeMemo (j : Json) (path : String) (memo : DecodeMemo)
 def sharedDecodeMemo (nodes : Array Json) : DecodeMemo := Id.run do
   let mut memo : DecodeMemo := {}
   for (node, index) in nodes.toList.zipIdx do
-    memo := collectSharedDecodeMemo node s!"$.shared_payloads.nodes[{index}]" memo
+    memo := collectSharedDecodeMemo node s!"$semantic_metadata[{index}]" memo
   return memo
 
 def compilerFunctionAbiDecodeMemo (nodes : Array Json) : DecodeMemo := Id.run do
   let mut memo : DecodeMemo := {}
   for (node, index) in nodes.toList.zipIdx do
     if !isSourceSpanJson node && isLayoutPayload node && hasCanonicalJsonObjectKeys node then
-      if let .ok layout := parseLayoutUncached node s!"$.shared_payloads.nodes[{index}]" then
+      if let .ok layout := parseLayoutUncached node s!"$semantic_metadata[{index}]" then
         memo := { memo with layouts := memo.layouts.insert node layout }
   return memo
 
@@ -1291,10 +1385,11 @@ structure CompilerFunctionAbiMemo where
 
 /-- Prepare a reusable FnAbi decoder memo from a runtime's shared payloads.
 Malformed layouts are deliberately not cached, preserving occurrence paths. -/
-def prepareCompilerFunctionAbiMemo (nodes : Array Json) : CompilerFunctionAbiMemo :=
-  ⟨compilerFunctionAbiDecodeMemo nodes⟩
+def prepareCompilerFunctionAbiMemo (nodes : Array Json) (catalog : SemanticTables.Catalog) : CompilerFunctionAbiMemo :=
+  ⟨(compilerFunctionAbiDecodeMemo nodes).withSemanticTables catalog⟩
 
-def parseFunctionSignature (j : Json) (path : String) : Except String FunctionSignature := do
+def parseFunctionSignature (input : Json) (path : String) (memo : DecodeMemo := {}) : Except String FunctionSignature := do
+  let j ← memo.semanticTables.node .signature input path
   let inputsJson ← arrayField j "inputs" path
   let mut inputs := #[]
   let mut index := 0
@@ -1326,7 +1421,8 @@ def parseFunctionSignature (j : Json) (path : String) : Except String FunctionSi
     cVariadic := ← fieldBool j "c_variadic" path
   }
 
-def decodeCompilerPredicateEvidence (j : Json) : Except String CompilerPredicateEvidence := do
+def decodeCompilerPredicateEvidence (input : Json) (memo : DecodeMemo := {}) : Except String CompilerPredicateEvidence := do
+  let j ← memo.semanticTables.node .predicate input "$predicate"
   let normalization ← field j "normalization" "$predicate"
   let normalized ← match normalization with
     | .null => pure none
@@ -1341,10 +1437,11 @@ def decodeCompilerPredicateEvidence (j : Json) : Except String CompilerPredicate
     payload := j }
 
 /-- Decode all source PatternKind branches; unknown kinds fail explicitly. -/
-partial def decodeCompilerPattern (j : Json) : Except String CompilerPattern := do
+partial def decodeCompilerPattern (input : Json) (catalog : SemanticTables.Catalog) : Except String CompilerPattern := do
+  let j ← catalog.node .pattern input "$pattern"
   match ← fieldString j "kind" "$pattern" with
   | "range" => return .range (← field j "start" "$pattern") (← field j "end" "$pattern")
-  | "or" => return .or (← (← arrayField j "patterns" "$pattern").mapM decodeCompilerPattern)
+  | "or" => return .or (← (← arrayField j "patterns" "$pattern").mapM (fun child => decodeCompilerPattern child catalog))
   | "not_null" => pure .notNull
   | _ => throw "unknown compiler PatternKind"
 
@@ -1395,11 +1492,11 @@ def parseTypeNode (j : Json) (path : String) (memo : DecodeMemo := {}) : Except 
   }
   let signature ← match optionalJson shape "signature" with
     | none => pure none
-    | some signature => pure (some (← parseFunctionSignature signature (joinPath path "shape.signature")))
+    | some signature => pure (some (← parseFunctionSignature signature (joinPath path "shape.signature") memo))
   return {
     pattern := ← match optionalField shape "pattern" with
       | none => pure none
-      | some value => (decodeCompilerPattern value).map some
+      | some value => (decodeCompilerPattern value memo.semanticTables).map some
     compilerFacts := ← match optionalField j "compiler_facts" with
       | none => pure none
       | some value => (decodeTypeCompilerFacts value (joinPath path "compiler_facts")).map some
@@ -1432,7 +1529,7 @@ def parseRelocation (j : Json) (path : String) : Except String Relocation := do
   let targetRef ← field j "target" path
   let target ← match isAllocationRef targetRef with
     | some id => pure id
-    | none => throw s!"{joinPath path "target"}: expected allocation reference object"
+    | none => throw s!"{joinPath path "target"}: expected numeric allocation reference"
   -- Export IDs are zero-based and compilation-local.  The public CTFE
   -- provenance record requires a nonzero AllocId, so use the reversible +1
   -- embedding here and retain the original export ID separately in `target`.
@@ -1505,10 +1602,11 @@ def allocationKind (kind : String) : Except String AllocationKind :=
   | "" => throw "allocation kind is missing"
   | other => throw s!"unrecognized allocationKind tag `{other}`"
 
-def parseDefinitionId (j : Json) (path : String) : Except String DefinitionId := do
+def parseDefinitionId (input : Json) (path : String) (memo : DecodeMemo := {}) : Except String DefinitionId := do
+  let j ← memo.semanticTables.node .definition input path
   return ⟨← fieldNat j "crate" path, ← fieldNat j "index" path⟩
 
-def parseSelectedScope (j : Json) (path : String) : Except String SelectedScope := do
+def parseSelectedScope (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String SelectedScope := do
   let kind ← fieldString j "kind" path
   let rootsJson ← arrayField j "roots" path
   let mut roots := #[]
@@ -1516,7 +1614,7 @@ def parseSelectedScope (j : Json) (path : String) : Except String SelectedScope 
     let rootPath := s!"{joinPath path "roots"}[{index}]"
     let defPath ← fieldString root "def_path" rootPath
     if defPath.isEmpty then throw s!"{joinPath rootPath "def_path"}: selected root path cannot be empty"
-    roots := roots.push ⟨defPath, ← parseDefinitionId (← field root "def_id" rootPath) (joinPath rootPath "def_id")⟩
+    roots := roots.push ⟨defPath, ← parseDefinitionId (← field root "def_id" rootPath) (joinPath rootPath "def_id") memo⟩
   if roots.toList.eraseDups.length != roots.size then throw s!"{joinPath path "roots"}: duplicate selected roots"
   return {
     kind := kind
@@ -1532,15 +1630,16 @@ def vtablePredicateKind (tag : String) : Except String VtablePredicateKind :=
   | "projection" => pure (.projection)
   | other => throw s!"unrecognized vtablePredicateKind tag `{other}`"
 
-def parseVtablePredicate (j : Json) (path : String) : Except String VtablePredicate := do
+def parseVtablePredicate (input : Json) (path : String) (memo : DecodeMemo := {}) : Except String VtablePredicate := do
+  let j ← memo.semanticTables.node .predicate input path
   let tag ← fieldString j "kind" path
   let definitionId ← match optionalJson j "def_id" with
     | none => pure none
-    | some value => pure (some (← parseDefinitionId value (joinPath path "def_id")))
+    | some value => pure (some (← parseDefinitionId value (joinPath path "def_id") memo))
   let definitionPath ← optionalString j "def_path" path
   let genericArgs ← match optionalJson j "generic_args" with
     | none => pure none
-    | some value => pure (some (← decodeValue value (joinPath path "generic_args")))
+    | some value => pure (some (← decodeValue (← memo.semanticTables.lookup .genericArgs value (joinPath path "generic_args")) (joinPath path "generic_args") .any none memo))
   return {
     kind := ← vtablePredicateKind tag
     definitionId := definitionId
@@ -1560,14 +1659,14 @@ def vtableEntryKind (tag : String) : Except String VtableEntryKind :=
   | "supertrait_vtable_pointer" => pure (.supertraitVtablePointer)
   | other => throw s!"unrecognized vtableEntryKind tag `{other}`"
 
-def parseVtableEntry (j : Json) (path : String) : Except String VtableEntry := do
+def parseVtableEntry (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String VtableEntry := do
   let tag ← fieldString j "kind" path
   let definitionId ← match optionalJson j "def_id" with
     | none => pure none
-    | some value => pure (some (← parseDefinitionId value (joinPath path "def_id")))
+    | some value => pure (some (← parseDefinitionId value (joinPath path "def_id") memo))
   let traitDefinitionId ← match optionalJson j "trait_def_id" with
     | none => pure none
-    | some value => pure (some (← parseDefinitionId value (joinPath path "trait_def_id")))
+    | some value => pure (some (← parseDefinitionId value (joinPath path "trait_def_id") memo))
   let allocationId ← match optionalJson j "allocation" with
     | none => pure none
     | some value => match isAllocationRef value with
@@ -1575,7 +1674,7 @@ def parseVtableEntry (j : Json) (path : String) : Except String VtableEntry := d
       | none => throw s!"{joinPath path "allocation"}: expected allocation reference"
   let genericArgs ← match optionalJson j "generic_args" with
     | none => pure none
-    | some value => pure (some (← decodeValue value (joinPath path "generic_args")))
+    | some value => pure (some (← decodeValue (← memo.semanticTables.lookup .genericArgs value (joinPath path "generic_args")) (joinPath path "generic_args") .any none memo))
   return {
     kind := ← vtableEntryKind tag
     instanceId := ← optionalNat j "instance_id" path
@@ -1591,8 +1690,8 @@ def parseVtableEntry (j : Json) (path : String) : Except String VtableEntry := d
 /-- Decode a source `tcx.vtable_entries` row retained outside a GlobalAlloc
 image. Runtime-created vtables use this exact metadata without borrowing the
 CTFE probe's allocation identity. -/
-def decodeVtableEntry (j : Json) (path : String := "$compiler_vtable_entry") :
-    Except String VtableEntry := parseVtableEntry j path
+def decodeVtableEntry (j : Json) (path : String := "$compiler_vtable_entry") (memo : DecodeMemo := {}) :
+    Except String VtableEntry := parseVtableEntry j path memo
 
 /-- Decode compiler-query static metadata, retaining the original evidence. -/
 def decodeStaticGlobalInfo (j : Json) (path : String := "$static_global_info") : Except String StaticGlobalInfo := do
@@ -1609,7 +1708,7 @@ def decodeStaticGlobalInfo (j : Json) (path : String := "$static_global_info") :
     payload := j
   }
 
-def parseAllocation (j : Json) (path : String) : Except String AllocationNode := do
+def parseAllocation (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String AllocationNode := do
   let kindText ← fieldString j "kind" path
   let kind ← allocationKind kindText
   let mut memory := none
@@ -1620,8 +1719,8 @@ def parseAllocation (j : Json) (path : String) : Except String AllocationNode :=
     memory := some value
     data := some (.memory value)
   | .function =>
-    let defId ← parseDefinitionId (← field j "instance_def_id" path) (joinPath path "instance_def_id")
-    let args ← decodeValue (← field j "generic_args" path) (joinPath path "generic_args")
+    let defId ← parseDefinitionId (← field j "instance_def_id" path) (joinPath path "instance_def_id") memo
+    let args ← decodeValue (← memo.field j "generic_args" path) (joinPath path "generic_args") .any none memo
     data := some (.function {
       instanceId := ← fieldNat j "instance_id" path
       definitionId := defId
@@ -1639,7 +1738,7 @@ def parseAllocation (j : Json) (path : String) : Except String AllocationNode :=
       | none => if foreignItem then pure none else throw s!"{joinPath path "initializer"}: non-foreign static is missing its initializer image"
     data := some (.static {
       globalInfo := globalInfo
-      definitionId := ← parseDefinitionId (← field j "def_id" path) (joinPath path "def_id")
+      definitionId := ← parseDefinitionId (← field j "def_id" path) (joinPath path "def_id") memo
       definitionPath := ← fieldString j "def_path" path
       threadLocal := ← fieldBool j "thread_local" path
       initializer := initializer
@@ -1650,10 +1749,10 @@ def parseAllocation (j : Json) (path : String) : Except String AllocationNode :=
     let entriesJson ← arrayField j "entries" path
     let mut predicates := #[]
     for (predicate, index) in predicatesJson.toList.zipIdx do
-      predicates := predicates.push (← parseVtablePredicate predicate s!"{joinPath path "predicates"}[{index}]")
+      predicates := predicates.push (← parseVtablePredicate predicate s!"{joinPath path "predicates"}[{index}]" memo)
     let mut entries := #[]
     for (entry, index) in entriesJson.toList.zipIdx do
-      entries := entries.push (← parseVtableEntry entry s!"{joinPath path "entries"}[{index}]")
+      entries := entries.push (← parseVtableEntry entry s!"{joinPath path "entries"}[{index}]" memo)
     let typeRef ← field j "type" path
     let typeId ← match isTypeRef typeRef with
       | some id => pure id
@@ -2110,8 +2209,10 @@ def validateCompilerAllocIdWorldRaw (raw : Json) (nodes : Array AllocationNode)
     let allocationsJson ← arrayField raw "allocations" "$"
     unless allocationsJson.size == nodes.size do
       throw "source AllocId profile no longer matches the raw allocation table"
+    let catalog ← SemanticTables.parse raw
+    let memo : DecodeMemo := { semanticTables := catalog }
     for (value, index) in allocationsJson.toList.zipIdx do
-      let parsed ← parseAllocation value s!"$.allocations[{index}]"
+      let parsed ← parseAllocation value s!"$.allocations[{index}]" memo
       let some supplied := nodes[index]? | throw s!"$.allocations[{index}]: typed allocation row is absent"
       unless parsed.id == supplied.id && parsed.sourceAllocId == supplied.sourceAllocId &&
           parsed.kind == supplied.kind &&
@@ -2126,7 +2227,7 @@ def parseLocal (j : Json) (path : String) (memo : DecodeMemo := {}) : Except Str
   let type ← field j "type" path
   let typeId ← match isTypeRef type with
     | some id => pure id
-    | none => throw s!"{joinPath path "type"}: expected type reference object"
+    | none => throw s!"{joinPath path "type"}: expected numeric type reference"
   let sourceInfo ← parseSourceInfo (← field j "source_info" path) (joinPath path "source_info") memo
   return {
     id := ← fieldNat j "local" path
@@ -2175,8 +2276,8 @@ def parseBodyCore (j : Json) (path fallbackName : String) (memo : DecodeMemo := 
   let definitionId ← match optionalJson j "def_id" with
     | none => match optionalJson j "source_def_id" with
       | none => pure none
-      | some value => pure (some (← parseDefinitionId value (joinPath path "source_def_id")))
-    | some value => pure (some (← parseDefinitionId value (joinPath path "def_id")))
+      | some value => pure (some (← parseDefinitionId value (joinPath path "source_def_id") memo))
+    | some value => pure (some (← parseDefinitionId value (joinPath path "def_id") memo))
   let phase ← decodeValue (← field j "phase" path) (joinPath path "phase") .any (some .mirPhase) memo
   let injectionPhase ← match optionalJson j "injection_phase" with
     | none => pure none
@@ -2219,7 +2320,7 @@ def parseBody (j : Json) (path fallbackName : String) (memo : DecodeMemo := {}) 
   let promotedBodies ← parsePromotedBodies j path fallbackName memo
   return { core with promotedBodies := promotedBodies }
 
-def parseInstance (j : Json) (path : String) : Except String InstanceNode := do
+def parseInstance (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String InstanceNode := do
   let kindText ← fieldString j "kind" path
   let kind : InstanceKind ← match kindText with
     | "instance_mir" => pure .instanceMir
@@ -2232,7 +2333,7 @@ def parseInstance (j : Json) (path : String) : Except String InstanceNode := do
   let defPath ← optionalString j "def_path" path
   let definitionId ← match optionalJson j "def_id" with
     | none => pure none
-    | some value => pure (some (← parseDefinitionId value (joinPath path "def_id")))
+    | some value => pure (some (← parseDefinitionId value (joinPath path "def_id") memo))
   let fallback := match defPath with
     | some value => value
     | none => s!"instance[{id}]"
@@ -2247,8 +2348,8 @@ def parseInstance (j : Json) (path : String) : Except String InstanceNode := do
     | some value => (value.getBool?).map some |>.mapError fun e => s!"{joinPath path "instance_args_are_monomorphic"}: expected boolean ({e})"
   let body ← match optionalJson j "body" with
     | none => pure none
-    | some value => pure (some (← parseBody value (joinPath path "body") fallback))
-  let promotedBodies ← parsePromotedBodies j path fallback
+    | some value => pure (some (← parseBody value (joinPath path "body") fallback memo))
+  let promotedBodies ← parsePromotedBodies j path fallback memo
   return {
     id := id
     kind := kind
@@ -2272,7 +2373,8 @@ def passModeKind (tag : String) : Except String PassModeKind :=
   | "IndirectUnsized" => pure (.indirectUnsized)
   | other => throw s!"unrecognized passModeKind tag `{other}`"
 
-def parseAbiAttributes (j : Json) (path : String) : Except String AbiAttributes := do
+def parseAbiAttributes (input : Json) (path : String) (memo : DecodeMemo := {}) : Except String AbiAttributes := do
+  let j ← memo.semanticTables.node .abiAttributes input path
   return {
     noAlias := ← fieldBool j "no_alias" path
     noFree := ← fieldBool j "no_free" path
@@ -2348,7 +2450,8 @@ def parseCanonicalAbi (j : Json) (path : String) : Except String CanonicalAbi :=
     payload := j
   }
 
-def parseAbiRegister (j : Json) (path : String) : Except String AbiRegister := do
+def parseAbiRegister (input : Json) (path : String) (memo : DecodeMemo := {}) : Except String AbiRegister := do
+  let j ← memo.semanticTables.node .abiRegister input path
   let kindNode ← field j "kind" path
   let kindTag ← fieldString kindNode "kind" (joinPath path "kind")
   let hintElement ← match optionalJson kindNode "hint_element" with
@@ -2361,33 +2464,34 @@ def parseAbiRegister (j : Json) (path : String) : Except String AbiRegister := d
     payload := j
   }
 
-def parseAbiCastTarget (j : Json) (path : String) : Except String AbiCastTarget := do
+def parseAbiCastTarget (input : Json) (path : String) (memo : DecodeMemo := {}) : Except String AbiCastTarget := do
+  let j ← memo.semanticTables.node .castTarget input path
   let prefixJson ← arrayField j "prefix_registers" path
   let mut prefixRegisters := #[]
   for (register, index) in prefixJson.toList.zipIdx do
-    prefixRegisters := prefixRegisters.push (← parseAbiRegister register s!"{joinPath path "prefix_registers"}[{index}]")
+    prefixRegisters := prefixRegisters.push (← parseAbiRegister register s!"{joinPath path "prefix_registers"}[{index}]" memo)
   return {
     prefixRegisters := prefixRegisters
     restOffsetBytes := ← optionalNat j "rest_offset_bytes" path
-    restRegister := ← parseAbiRegister (← field j "rest_register" path) (joinPath path "rest_register")
+    restRegister := ← parseAbiRegister (← field j "rest_register" path) (joinPath path "rest_register") memo
     restTotalBytes := ← fieldNat j "rest_total_bytes" path
     restIsConsecutive := ← fieldBool j "rest_is_consecutive" path
-    attributes := ← parseAbiAttributes (← field j "attributes" path) (joinPath path "attributes")
+    attributes := ← parseAbiAttributes (← field j "attributes" path) (joinPath path "attributes") memo
     payload := j
   }
 
-def parseAbiPassMode (j : Json) (path : String) : Except String AbiPassMode := do
+def parseAbiPassMode (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String AbiPassMode := do
   let tag ← fieldString j "kind" path
   let mut attributes := #[]
   for key in ["attributes", "first", "second", "metadata_attributes"] do
     if let some attr := optionalJson j key then
       if key == "attributes" || key == "metadata_attributes" then
-        attributes := attributes.push (← parseAbiAttributes attr (joinPath path key))
+        attributes := attributes.push (← parseAbiAttributes attr (joinPath path key) memo)
       else if key == "first" || key == "second" then
-        attributes := attributes.push (← parseAbiAttributes attr (joinPath path key))
+        attributes := attributes.push (← parseAbiAttributes attr (joinPath path key) memo)
   let castTarget ← match optionalJson j "target" with
     | none => pure none
-    | some value => pure (some (← parseAbiCastTarget value (joinPath path "target")))
+    | some value => pure (some (← parseAbiCastTarget value (joinPath path "target") memo))
   let indirectMode ← match optionalJson j "mode" with
     | none => pure none
     | some value => pure (some (← parseAbiTag value (joinPath path "mode")))
@@ -2408,7 +2512,8 @@ def parseAbiPassMode (j : Json) (path : String) : Except String AbiPassMode := d
     payload := j
   }
 
-def parseAbiArgument (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String AbiArgument := do
+def parseAbiArgument (input : Json) (path : String) (memo : DecodeMemo := {}) : Except String AbiArgument := do
+  let j ← memo.semanticTables.node .argumentAbi input path
   let typeRef ← field j "type" path
   let typeId ← match isTypeRef typeRef with
     | some id => pure id
@@ -2419,7 +2524,7 @@ def parseAbiArgument (j : Json) (path : String) (memo : DecodeMemo := {}) : Exce
   return {
     typeId := typeId
     layout := layout
-    mode := ← parseAbiPassMode (← field j "mode" path) (joinPath path "mode")
+    mode := ← parseAbiPassMode (← field j "mode" path) (joinPath path "mode") memo
     payload := j
   }
 
@@ -2441,18 +2546,19 @@ private def parseFunctionAbiUncached (j : Json) (path : String) (memo : DecodeMe
     payload := j
   }
 
-def parseFunctionAbi (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String FunctionAbi :=
+def parseFunctionAbi (input : Json) (path : String) (memo : DecodeMemo := {}) : Except String FunctionAbi := do
+  let j ← memo.semanticTables.node .functionAbi input path
   match memo.functionAbis[j]? with
   | some abi => pure abi
   | none => parseFunctionAbiUncached j path memo
 
 /-- Decode an exact compiler projection layout using the canonical schema. -/
-def decodeCompilerLayout (j : Json) : Except String Layout :=
-  parseLayout j "$.compiler_projection_layout"
+def decodeCompilerLayout (j : Json) (catalog : SemanticTables.Catalog) : Except String Layout :=
+  parseLayout j "$.compiler_projection_layout" (semanticDecodeMemo catalog)
 
 /-- Decode an independently keyed compiler FnAbi query using the canonical schema. -/
-def decodeCompilerFunctionAbi (j : Json) : Except String FunctionAbi :=
-  parseFunctionAbi j "$.compiler_fn_abi"
+def decodeCompilerFunctionAbi (j : Json) (catalog : SemanticTables.Catalog) : Except String FunctionAbi :=
+  parseFunctionAbi j "$.compiler_fn_abi" (semanticDecodeMemo catalog)
 
 /-- Decode a compiler FnAbi using successful layouts collected from the same
 shared-payload table. Failures and diagnostics follow the uncached decoder. -/
@@ -2505,38 +2611,54 @@ summaries. These are complete typed values, including source coordinates. -/
 def decodeCompilerValue (j : Json) : Except String TypedValue :=
   decodeValue j "$compiler_value"
 
-private def buildCompilerValueEntries (nodes : Array Json) (memo : DecodeMemo) :
-    Std.HashMap Json TypedValue := Id.run do
+private def decodeSemanticCompilerValue (catalog : SemanticTables.Catalog)
+    (kind : SemanticTables.Kind) (reference : Json) : Except String TypedValue := do
+  let source ← catalog.lookup kind reference "$compiler_value"
+  decodeValue source "$compiler_value" .any none (semanticDecodeMemo catalog)
+
+private def buildCompilerValueEntries (catalog : SemanticTables.Catalog) :
+    Std.HashMap (SemanticTables.Kind × Nat) (Except String TypedValue) := Id.run do
   let mut entries := {}
-  for node in nodes do
-    let .obj fields := node | continue
-    for (key, raw) in fields.toList do
-      if ["generic_args", "rebased_args", "span", "preamble_def_span", "callsite_span"].contains key &&
-          hasCanonicalJsonObjectKeys raw && !entries.contains raw then
-        if let .ok value := decodeValue raw "$compiler_value" .any none memo then
-          entries := entries.insert raw value
+  -- These are the metadata families used by complete-value compiler adapters.
+  -- Other explicit kinds use the same checked decoder on demand.
+  for kind in #[SemanticTables.Kind.genericArgs, .span] do
+    for (_, index) in (catalog.nodes kind).toList.zipIdx do
+      entries := entries.insert (kind, index)
+        (decodeSemanticCompilerValue catalog kind (toJson index))
   return entries
 
-/-- Every entry is a successfully checked value for its JSON key. Unlike an
-instance/type lookup, this cache may safely survive a document record update:
-its immutable keys include the entire source value, never only a local ID. -/
+/-- Checked compiler values belong to one immutable semantic catalog. A bare
+ID is never a key without its kind, and the witness includes the complete
+owning catalog rather than a context-free numeric JSON leaf. -/
 structure CompilerValueMemo where
   private mk ::
-  private entries : Std.HashMap Json TypedValue
-  private exact : ∃ (nodes : Array Json) (memo : DecodeMemo),
-    entries = buildCompilerValueEntries nodes memo
+  private catalog : SemanticTables.Catalog
+  private entries : Std.HashMap (SemanticTables.Kind × Nat) (Except String TypedValue)
+  private exact : entries = buildCompilerValueEntries catalog
 
-def prepareCompilerValueMemoUsing (nodes : Array Json) (memo : DecodeMemo) : CompilerValueMemo :=
-  ⟨buildCompilerValueEntries nodes memo, ⟨nodes, memo, rfl⟩⟩
+/-- Preserve the importer's entry point, but use its explicit semantic catalog
+instead of attempting to recover reference roles from flattened JSON nodes. -/
+def prepareCompilerValueMemoUsing (_nodes : Array Json) (memo : DecodeMemo) : CompilerValueMemo :=
+  ⟨memo.semanticTables, buildCompilerValueEntries memo.semanticTables, rfl⟩
 
-def decodeCompilerValueWithMemo (raw : Json) (memo : Option CompilerValueMemo) : Except String TypedValue :=
-  match memo with
-  | some memo =>
-    if !hasCanonicalJsonObjectKeys raw then decodeCompilerValue raw else
-    match memo.entries[raw]? with
-    | some result => pure result
-    | none => decodeCompilerValue raw
-  | none => decodeCompilerValue raw
+private def sameCanonicalCatalog (left right : SemanticTables.Catalog) : Bool :=
+  SemanticTables.kinds.all fun kind =>
+    let a := left.nodes kind
+    let b := right.nodes kind
+    a.all hasCanonicalJsonObjectKeys && b.all hasCanonicalJsonObjectKeys && a == b
+
+/-- Resolve a numeric ID in the caller's explicit kind and catalog. A memo
+from a different or noncanonical catalog cannot supply a cached result; the
+uncached path still decodes in the requested owning catalog. -/
+def decodeCompilerValueWithMemo (catalog : SemanticTables.Catalog)
+    (kind : SemanticTables.Kind) (reference : Json) (memo : Option CompilerValueMemo) :
+    Except String TypedValue := do
+  let id ← reference.getNat? |>.mapError fun error =>
+    s!"$compiler_value: expected numeric {kind.table} reference ({error})"
+  if let some memo := memo then
+    if sameCanonicalCatalog memo.catalog catalog then
+      if let some result := memo.entries[(kind, id)]? then return ← result
+  decodeSemanticCompilerValue catalog kind reference
 
 end Miri.Input.DecoderValues
 

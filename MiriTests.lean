@@ -26,6 +26,7 @@ import MiriTests.Input.CompilerForeignSymbolTables
 import MiriTests.Input.DecoderProfile2026
 import MiriTests.Input.DefinitionLookup2026
 import MiriTests.Input.FinalizationProfileIdentity2026
+import MiriTests.Input.NumericWireFixture
 import MiriTests.Input.PreparationProfile2026
 import MiriTests.Input.RuntimeStartupProfileIdentity2026
 import MiriTests.Projection.Projection

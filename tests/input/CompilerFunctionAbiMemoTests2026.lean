@@ -75,15 +75,16 @@ private def sameAbiProjection (left right : FunctionAbi) : Bool :=
   left.canUnwind == right.canUnwind && left.cVariadic == right.cVariadic &&
   left.fixedCount == right.fixedCount
 
-private def replaceArgument (abi : Json) (index : Nat) (key : String) (value : Json) : Except String Json := do
+private def replaceArgument (catalog : SemanticTables.Catalog) (abi : Json) (index : Nat) (key : String) (value : Json) : Except String Json := do
   let args ← (← abi.getObjVal? "arguments").getArr?
   let some arg := args[index]? | throw "test ABI has no selected argument"
+  let arg ← catalog.node .argumentAbi arg "$test.argument"
   let arg ← set arg key value
   let args := args.set! index arg
   set abi "arguments" (.arr args)
 
-private def replaceReturn (abi : Json) (key : String) (value : Json) : Except String Json := do
-  let arg ← abi.getObjVal? "return"
+private def replaceReturn (catalog : SemanticTables.Catalog) (abi : Json) (key : String) (value : Json) : Except String Json := do
+  let arg ← catalog.node .argumentAbi (← abi.getObjVal? "return") "$test.return"
   set abi "return" (← set arg key value)
 
 -- The malformed tree repeats size_bytes. The ordinary partial key below
@@ -108,11 +109,12 @@ def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected exporter mir_features.json")
   let decoded ← must (decodeRuntimeJson (← IO.FS.readFile path))
   let nodes := decoded.document.sharedNodes
-  let memo := prepareCompilerFunctionAbiMemo nodes
+  let catalog := decoded.document.semanticTables
+  let memo := prepareCompilerFunctionAbiMemo nodes catalog
   let some importedAbis := decoded.document.compilerFunctionAbiTable |
     throw (IO.userError "import omitted typed compiler ABI queries")
   for (raw, result) in importedAbis.entries do
-    match result, decodeCompilerFunctionAbi raw with
+    match result, decodeCompilerFunctionAbi raw catalog with
     | .ok a, .ok b => check (sameAbiProjection a b) "import-time typed ABI differs"
     | .error a, .error b => check (a == b) "import-time deferred ABI error differs"
     | _, _ => throw (IO.userError "import-time ABI result class differs")
@@ -120,7 +122,7 @@ def main (args : List String) : IO Unit := do
   let mut sample? : Option Json := none
   for raw in nodes do
     if candidate raw then
-      let direct := decodeCompilerFunctionAbi raw
+      let direct := decodeCompilerFunctionAbi raw catalog
       let cached := decodeCompilerFunctionAbiWithMemo raw memo
       match direct, cached with
       | .ok left, .ok right =>
@@ -131,40 +133,49 @@ def main (args : List String) : IO Unit := do
       | _, _ => throw (IO.userError "cached and direct ABI decoders disagree on success")
       candidateCount := candidateCount + 1
   check (candidateCount > 0 && sample?.isSome) "fixture has no usable FnAbi candidate"
-  -- The import-time complete-value memo must agree with the independent
-  -- demand decoder, including failures and fallback on a changed source value.
+  -- Kind and owning catalog are part of every numeric compiler-value key.
   let some valueMemo := decoded.document.compilerValueMemo |
     throw (IO.userError "import omitted the compiler value memo")
   let mut valueCount := 0
-  for node in nodes do
-    if let .obj fields := node then
-      for (key, raw) in fields.toList do
-        if ["generic_args", "rebased_args", "span", "preamble_def_span", "callsite_span"].contains key then
-          let direct := decodeCompilerValue raw
-          let cached := decodeCompilerValueWithMemo raw (some valueMemo)
-          let agrees := match direct, cached with
-            | .ok a, .ok b => a == b
-            | .error a, .error b => a == b
-            | _, _ => false
-          check agrees s!"import-time compiler value differs at {key}"
-          valueCount := valueCount + 1
+  for kind in #[SemanticTables.Kind.genericArgs, .span] do
+    for (_, index) in (catalog.nodes kind).toList.zipIdx do
+      let reference := toJson index
+      let direct := decodeCompilerValueWithMemo catalog kind reference none
+      let cached := decodeCompilerValueWithMemo catalog kind reference (some valueMemo)
+      let agrees := match direct, cached with
+        | .ok a, .ok b => a == b
+        | .error a, .error b => a == b
+        | _, _ => false
+      check agrees s!"import-time compiler value differs at {kind.table}[{index}]"
+      valueCount := valueCount + 1
   check (valueCount > 0) "fixture has no compiler values"
-  let malformedSpan := Json.mkObj [("lo", .str "bad"), ("hi", toJson (0 : Nat)),
-    ("start", .null), ("end", .null), ("context", .str "x"), ("file", .str "x")]
-  let fallback := decodeCompilerValueWithMemo malformedSpan (some valueMemo)
-  let sameFallback := match fallback, decodeCompilerValue malformedSpan with
-    | .ok a, .ok b => a == b
+  let malformedReference := Json.str "not-an-id"
+  let fallback := decodeCompilerValueWithMemo catalog .span malformedReference (some valueMemo)
+  let sameFallback := match fallback, decodeCompilerValueWithMemo catalog .span malformedReference none with
     | .error a, .error b => a == b
     | _, _ => false
-  check sameFallback "compiler value fallback diagnostic changed"
+  check sameFallback "compiler value malformed-reference diagnostic changed"
+  let malformedSpan := Json.mkObj [("lo", .str "bad"), ("hi", toJson (0 : Nat)),
+    ("start", .null), ("end", .null), ("ctxt", .str "x"), ("file", .str "x")]
+  let originalSpans := catalog.nodes .span
+  check (!originalSpans.isEmpty) "fixture has no span for catalog-scope regression"
+  check ((decodeCompilerValueWithMemo catalog .span (toJson (0 : Nat)) (some valueMemo)).isOk)
+    "original span was not decodable before the catalog change"
+  let changedCatalog := SemanticTables.ofNodes (SemanticTables.kinds.map fun kind =>
+    if kind == .span then originalSpans.set! 0 malformedSpan else catalog.nodes kind)
+  let stale := decodeCompilerValueWithMemo changedCatalog .span (toJson (0 : Nat)) (some valueMemo)
+  let fresh := decodeCompilerValueWithMemo changedCatalog .span (toJson (0 : Nat)) none
+  check (!stale.isOk) "compiler value memo reused a result from another catalog"
+  check (match stale, fresh with | .error a, .error b => a == b | _, _ => false)
+    "changed-catalog compiler value diagnostic differs from direct decode"
   let sample := sample?.get!
 
   let malformedKey := duplicateSizeLayout
-  check (!(decodeCompilerLayout malformedKey).isOk)
+  check (!(decodeCompilerLayout malformedKey catalog).isOk)
     "duplicate malformed layout unexpectedly decoded"
-  let sampleReturn ← must (sample.getObjVal? "return")
-  let completeLayout ← must (sampleReturn.getObjVal? "layout")
-  let completeValue ← must (decodeCompilerLayout completeLayout)
+  let sampleReturn ← must (catalog.node .argumentAbi (← must (sample.getObjVal? "return")) "$test.return")
+  let completeLayout ← must (catalog.node .layout (← must (sampleReturn.getObjVal? "layout")) "$test.return.layout")
+  let completeValue ← must (decodeCompilerLayout completeLayout catalog)
   -- The poisoned value is deliberately assembled by this test. Successful
   -- schema decoding rejects the malformed key before it can populate a memo.
   let malformedValue := { completeValue with sizeBytes := none }
@@ -184,32 +195,32 @@ def main (args : List String) : IO Unit := do
     throw (IO.userError "could not find a HashMap collision with the ordinary partial key for the asymmetric malformed layout key")
   check (poisoned.sizeBytes.isNone) "malformed cache collision did not return the incomplete layout"
   let partialKey := incompleteLayout size
-  check (!(decodeCompilerLayout partialKey).isOk)
+  check (!(decodeCompilerLayout partialKey catalog).isOk)
     "partial collision key unexpectedly decoded as a successful layout"
-  let partialAbi ← must (replaceReturn sample "layout" partialKey)
-  let partialMemo := prepareCompilerFunctionAbiMemo #[malformedKey, partialKey]
-  match decodeCompilerFunctionAbi partialAbi,
+  let partialAbi ← must (replaceReturn catalog sample "layout" partialKey)
+  let partialMemo := prepareCompilerFunctionAbiMemo #[malformedKey, partialKey] catalog
+  match decodeCompilerFunctionAbi partialAbi catalog,
       decodeCompilerFunctionAbiWithMemo partialAbi partialMemo with
   | .error a, .error b => check (a == b) "collision-key rejection changed memo diagnostic"
   | _, _ => throw (IO.userError "partial collision layout unexpectedly decoded")
   let validKey ← must (set completeLayout "size_bytes" (toJson size))
-  let validValue ← must (decodeCompilerLayout validKey)
+  let validValue ← must (decodeCompilerLayout validKey catalog)
   check (validValue.sizeBytes == some size) "valid test layout did not retain its explicit size"
-  let abiWithValidLayout ← must (replaceReturn sample "layout" validKey)
-  let guardedMemo := prepareCompilerFunctionAbiMemo #[validKey]
-  let directValid ← must (decodeCompilerFunctionAbi abiWithValidLayout)
+  let abiWithValidLayout ← must (replaceReturn catalog sample "layout" validKey)
+  let guardedMemo := prepareCompilerFunctionAbiMemo #[validKey] catalog
+  let directValid ← must (decodeCompilerFunctionAbi abiWithValidLayout catalog)
   let cachedValid ← must (decodeCompilerFunctionAbiWithMemo abiWithValidLayout guardedMemo)
   check (sameAbiProjection directValid cachedValid &&
     cachedValid.returnValue.layout.map (·.sizeBytes) == some (some size))
     "guarded ABI memo returned an incomplete/colliding Layout instead of the exact valid value"
 
   let badLayout ← must (set completeLayout "field_offsets_bytes" (.str "not-an-array"))
-  let malformedArgument ← must (replaceArgument sample 0 "layout" badLayout)
-  let malformedReturn ← must (replaceReturn sample "layout" badLayout)
-  let malformedMemo := prepareCompilerFunctionAbiMemo #[badLayout]
-  let argumentDirect := decodeCompilerFunctionAbi malformedArgument
+  let malformedArgument ← must (replaceArgument catalog sample 0 "layout" badLayout)
+  let malformedReturn ← must (replaceReturn catalog sample "layout" badLayout)
+  let malformedMemo := prepareCompilerFunctionAbiMemo #[badLayout] catalog
+  let argumentDirect := decodeCompilerFunctionAbi malformedArgument catalog
   let argumentCached := decodeCompilerFunctionAbiWithMemo malformedArgument malformedMemo
-  let returnDirect := decodeCompilerFunctionAbi malformedReturn
+  let returnDirect := decodeCompilerFunctionAbi malformedReturn catalog
   let returnCached := decodeCompilerFunctionAbiWithMemo malformedReturn malformedMemo
   match argumentDirect, argumentCached, returnDirect, returnCached with
   | .error a, .error b, .error c, .error d =>
@@ -224,7 +235,7 @@ def main (args : List String) : IO Unit := do
   let mut decoy? : Option FunctionAbi := none
   for raw in nodes do
     if candidate raw && rawSample?.isNone then
-      match decodeCompilerFunctionAbi raw with
+      match decodeCompilerFunctionAbi raw catalog with
       | .ok value =>
         rawSample? := some raw
         decoy? := some { value with callingConvention :=
@@ -254,17 +265,17 @@ def main (args : List String) : IO Unit := do
     "memoized ABI path bypassed fixed-count arity validation"
 
   let arityTable := DecoderValues.prepareCompilerFunctionAbiTableUsing manualWithBadArity.source.sharedNodes
-    (DecoderValues.sharedDecodeMemo manualWithBadArity.source.sharedNodes)
+    ((DecoderValues.sharedDecodeMemo manualWithBadArity.source.sharedNodes).withSemanticTables catalog)
   let typedArity : RuntimeMetadata := { manualWithBadArity with source :=
     { manualWithBadArity.source with compilerFunctionAbiTable := some arityTable } }
   let typedArityCache := CallResolution.prepareFunctionAbiCache typedArity
   check (CallResolution.functionAbiJson typedArity malformedArity (some typedArityCache) == arityDirect)
     "import-time ABI projection bypassed runtime arity validation"
 
-  let returnJson ← must (sample.getObjVal? "return")
-  let returnLayout ← must (returnJson.getObjVal? "layout")
+  let returnJson ← must (catalog.node .argumentAbi (← must (sample.getObjVal? "return")) "$test.return")
+  let returnLayout ← must (catalog.node .layout (← must (returnJson.getObjVal? "layout")) "$test.return.layout")
   let oversizedLayout ← must (set returnLayout "size_bytes" (toJson (2^64 : Nat)))
-  let oversizedAbi ← must (replaceReturn sample "layout" oversizedLayout)
+  let oversizedAbi ← must (replaceReturn catalog sample "layout" oversizedLayout)
   let mut sizeNodes := manual.source.sharedNodes
   sizeNodes := sizeNodes.push oversizedLayout
   sizeNodes := sizeNodes.push oversizedAbi
@@ -279,7 +290,7 @@ def main (args : List String) : IO Unit := do
   check (sizeErrorMatches && sizeCached == sizeDirect)
     "memoized ABI path bypassed manual-runtime physical layout size validation"
   let sizeTable := DecoderValues.prepareCompilerFunctionAbiTableUsing sizeNodes
-    (DecoderValues.sharedDecodeMemo sizeNodes)
+    ((DecoderValues.sharedDecodeMemo sizeNodes).withSemanticTables catalog)
   let typedSize : RuntimeMetadata := { manualWithOversizedLayout with source :=
     { manualWithOversizedLayout.source with compilerFunctionAbiTable := some sizeTable } }
   let typedSizeCache := CallResolution.prepareFunctionAbiCache typedSize

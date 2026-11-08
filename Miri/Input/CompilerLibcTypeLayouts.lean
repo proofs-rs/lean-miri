@@ -8,7 +8,7 @@ open Lean Miri.ABI
 
 private def typeRef (entry : Json) : Except String TypeId := do
   let value := entry
-  (← value.getObjVal? "type_id").getNat?
+  value.getNat?
 
 /-- Resolve one exact source libc type and require its imported compiler
 layout. Missing or malformed metadata remains a demand-time error. -/

@@ -21,8 +21,8 @@ private partial def lowerPattern (ctx : LowerContext) (tables : CompilerTables)
     (nodes : Array PatternIdentity) (pattern : CompilerPattern) : Result (Nat × CompilerTables × Array PatternIdentity) := do
   let (value,tables,nodes) ← match pattern with
     | .range start finish => do
-      let (start,tables) ← lowerCompilerTypeConst ctx tables (← decodeCompilerValue start)
-      let (finish,tables) ← lowerCompilerTypeConst ctx tables (← decodeCompilerValue finish)
+      let (start,tables) ← lowerCompilerTypeConst ctx tables (← ctx.decodeSemanticValue .constant start)
+      let (finish,tables) ← lowerCompilerTypeConst ctx tables (← ctx.decodeSemanticValue .constant finish)
       pure (PatternIdentity.range start finish,tables,nodes)
     | .or children => do
       let mut tables := tables
@@ -52,12 +52,12 @@ private def source (context : CompilerFacts.Context) (id : TypeId) : Result Type
   (context.runtime.node id).mapError toString
 private def shape (context : CompilerFacts.Context) (id : TypeId) : Result Json := do field (← source context id).payload "shape"
 private def typeRef (context : CompilerFacts.Context) (j : Json) : Result TypeId := do
-  let id ← natural j "type_id"
+  let id ← j.getNat?
   let _ ← source context id
   pure id
-private def sourceDefinition (node : TypeNode) : Result DefinitionId := do
+private def sourceDefinition (context : CompilerFacts.Context) (node : TypeNode) : Result DefinitionId := do
   let some facts := node.compilerFacts | throw "type compiler definition evidence missing"
-  let value ← field facts.payload "definition"
+  let value ← context.loweringContext.resolveSemantic .definition (← field facts.payload "definition")
   pure ⟨← natural value "crate",← natural value "index"⟩
 private def ensureDefinition (tables : CompilerTables) (id : DefinitionId) : CompilerTables :=
   if tables.definitions.contains id then tables else { tables with definitions := tables.definitions.push id }
@@ -84,14 +84,14 @@ private def castType (context : CompilerFacts.Context) (tables : CompilerTables)
   | .reference => unchanged (.reference (← ty "pointee"))
   | .functionPointer => unchanged .fnPointer
   | .adt =>
-    let definition ← sourceDefinition node
+    let definition ← sourceDefinition context node
     let tables := ensureDefinition tables definition
     pure (.adt (← lookupDefinitionId tables.definitions definition),tables)
   | .functionDefinition | .closure =>
-    let definition ← sourceDefinition node
+    let definition ← sourceDefinition context node
     let tables := ensureDefinition tables definition
     let (args,tables) ← lowerCompilerGenericArgs context.loweringContext tables
-      (← context.loweringContext.decodeCompilerValue (← field value "generic_args"))
+      (← context.loweringContext.decodeSemanticValue .genericArgs (← field value "generic_args"))
     let definition ← lookupDefinitionId tables.definitions definition
     if node.shapeKind == .functionDefinition then pure (.fnDefinition definition args,tables)
     else pure (.closure definition args (← natural value "upvar_count"),tables)

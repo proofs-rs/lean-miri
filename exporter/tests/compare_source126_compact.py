@@ -8,7 +8,8 @@ from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-from mir_json import load_mir_document
+from mir_json import load_mir_document, decode_mir_document
+from mir_fixture import convert_evidence
 
 MIR_BODY_WRAPPER_FIELDS = {
     # export_body adds these after mir_body_with_constant_queries_json has
@@ -124,7 +125,7 @@ def main(old_path, new_path):
     # The legacy checkpoint is historical evidence and intentionally remains
     # readable as its original JSON. The newly generated active export uses
     # the shared-payload graph wire format.
-    old = load(old_path)
+    old = decode_mir_document(convert_evidence(load(old_path)))
     new = deepcopy(load_mir_document(new_path))
     # The wire schema version changed when the shared-payload graph was added;
     # compare semantic payloads rather than this transport metadata.

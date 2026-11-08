@@ -5,11 +5,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-from mir_json import load_mir_document
+from mir_json import load_mir_document, core_references
 
 doc = load_mir_document(sys.argv[1])
 assert doc["schema"] == "lean-miri-rustc-mir"
-assert doc["schema_version"] == 3
+assert doc["schema_version"] == 4
 assert doc["producer"]["rustc_commit"] == "8144389c895da997dbdecaa635e41d6a50be6ffd"
 assert doc["producer"]["miri_commit"] == "7fa591d7d4dd9af8154becbc8332f8096f8323b1"
 assert "completeness" not in doc
@@ -43,14 +43,9 @@ assert all(
 ), "niche tag payload must preserve exact range indices and u128 value"
 
 def check_type_refs(value):
-    if isinstance(value, dict):
-        if set(value) == {"type_id"}:
-            assert value["type_id"] in type_nodes, f"dangling type reference {value}"
-        for child in value.values():
-            check_type_refs(child)
-    elif isinstance(value, list):
-        for child in value:
-            check_type_refs(child)
+    for kind, identity in core_references(value):
+        if kind == "type_id":
+            assert identity in type_nodes, f"dangling type reference {identity}"
 
 check_type_refs([doc["bodies"], doc["instances"], doc["allocations"]])
 check_type_refs(doc["types"])
@@ -102,7 +97,7 @@ id_instance = next(
 assert id_instance["instance_args_are_monomorphic"]
 assert not id_instance["body"]["is_polymorphic"], "generic instance body was not actually substituted"
 assert id_instance["instance_kind"] == {"kind": "item", "def_id": id_instance["def_id"]}
-assert any(type_nodes[local["type"]["type_id"]]["display"] == "u32" for local in id_instance["body"]["locals"])
+assert any(type_nodes[local["type"]]["display"] == "u32" for local in id_instance["body"]["locals"])
 assert not any(
     node["shape"].get("length", {}).get("kind") == "parameter"
     for node in type_nodes.values()
@@ -182,14 +177,9 @@ assert "PointerExposeProvenance" in serialized, "pointer-to-integer cast kind mi
 assert "Copy" in serialized and "Move" in serialized
 
 def _walk_type_refs(value):
-    if isinstance(value, dict):
-        if set(value) == {"type_id"}:
-            yield value
-        for child in value.values():
-            yield from _walk_type_refs(child)
-    elif isinstance(value, list):
-        for child in value:
-            yield from _walk_type_refs(child)
+    for kind, identity in core_references(value):
+        if kind == "type_id":
+            yield identity
 
 def has_cycle(type_id, active, visited):
     if type_id in active:
@@ -198,7 +188,7 @@ def has_cycle(type_id, active, visited):
         return False
     active.add(type_id)
     for ref in _walk_type_refs(type_nodes[type_id]["shape"]):
-        if has_cycle(ref["type_id"], active, visited):
+        if has_cycle(ref, active, visited):
             return True
     active.remove(type_id)
     visited.add(type_id)
@@ -265,18 +255,13 @@ assert "status" not in tls
 assert tls["global_info"]["is_static"] is True
 assert tls["global_info"]["thread_local"] is True
 assert tls["def_id"]["crate"] >= 0 and tls["def_id"]["index"] >= 0
-assert tls["initializer"]["allocation"]["bytes_hex"] == "11000000"
+assert tls["initializer"]["allocation_template"]["bytes_hex"] == "11000000"
 assert "runtime_allocation" not in tls
 
 def check_allocation_refs(value):
-    if isinstance(value, dict):
-        if set(value) == {"allocation_id"}:
-            assert value["allocation_id"] in allocations, f"dangling allocation reference {value}"
-        for child in value.values():
-            check_allocation_refs(child)
-    elif isinstance(value, list):
-        for child in value:
-            check_allocation_refs(child)
+    for kind, identity in core_references(value):
+        if kind == "allocation_id":
+            assert identity in allocations, f"dangling allocation reference {identity}"
 
 check_allocation_refs([doc["bodies"], doc["instances"], doc["allocations"]])
 

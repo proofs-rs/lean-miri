@@ -91,7 +91,11 @@ class FailClosedExportTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         document = load_mir_document(self.output)
         self.assertEqual(set(document["compiler_named_types"]), {"c_ulong", "i32_pointer"})
-        self.assertIsInstance(document["compiler_named_types"]["c_ulong"]["type_id"], int)
+        self.assertIsInstance(document["compiler_named_types"]["c_ulong"], int)
+        self.assertIsInstance(document["compiler_named_types"]["i32_pointer"], int)
+        pointer = next(node for node in document["types"]
+                       if node["type_id"] == document["compiler_named_types"]["i32_pointer"])
+        self.assertEqual(pointer["shape"]["kind"], "raw_pointer")
         self.assertNotIn("compiler_named_constants", document)
         startup = document["compiler_runtime_queries"]["startup"]
         self.assertIs(startup["no_core"], False)
@@ -99,6 +103,7 @@ class FailClosedExportTests(unittest.TestCase):
         self.assertIs(sentinel["mir_available"], True)
         self.assertIsInstance(sentinel["definition"]["crate"], int)
         self.assertIsInstance(sentinel["definition"]["index"], int)
+
 
     def test_function_pointer_query_keeps_direct_instance_identity(self):
         document = self.accepted("function_pointer")

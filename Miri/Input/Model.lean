@@ -19,6 +19,7 @@ structure ImportDocumentCore where
   /-- Resolved source nodes from the mandatory shared-payload graph. Each node
   is retained once so downstream consumers can reuse the document's DAG. -/
   sharedNodes : Array Lean.Json := #[]
+  semanticTables : SemanticTables.Catalog := SemanticTables.empty
   /-- Checked import-time ABI projections indexed by their exact source JSON. -/
   compilerFunctionAbiTable : Option (CompilerFunctionAbiTable sharedNodes) := none
   compilerValueMemo : Option CompilerValueMemo := none
@@ -43,6 +44,7 @@ structure ImportDocument where
   raw : Lean.Json
   /-- Resolved source nodes from the mandatory shared-payload graph. -/
   sharedNodes : Array Lean.Json := #[]
+  semanticTables : SemanticTables.Catalog := SemanticTables.empty
 
 /-- Diagnostic/reflected imports contain schema data only. Their runtime view
 uses the uncached metadata path; the native runtime importer retains the
@@ -61,6 +63,7 @@ def ImportDocument.toCore (document : ImportDocument) : ImportDocumentCore := {
   bodies := document.bodies
   raw := document.raw
   sharedNodes := document.sharedNodes
+  semanticTables := document.semanticTables
 }
 
 /-- Diagnostic clients may pass their full document to core-only consumers
@@ -82,6 +85,7 @@ def ImportDocumentCore.withTypedTree (core : ImportDocumentCore) (typedTree : Ty
   typedTree := typedTree
   raw := core.raw
   sharedNodes := core.sharedNodes
+  semanticTables := core.semanticTables
 }
 
 /-- A structurally complete input accepted by the decoder.  This is still not

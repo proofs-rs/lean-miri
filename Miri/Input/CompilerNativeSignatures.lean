@@ -7,7 +7,7 @@ and bound-region erasure, with no normalization or FnAbi reconstruction. -/
 namespace Miri.Input.CompilerNativeSignatures
 open Lean Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
 private def typeRef (p : CompilerProviders.Prepared) (value : Json) : Except String TyId := do
-  let id ← value.getObjValAs? Nat "type_id"
+  let id ← value.getNat?
   let _ ← p.runtime.node id |>.mapError toString
   pure id
 
@@ -29,7 +29,7 @@ def query (p : CompilerProviders.Prepared) (callee : CallInstance) : Except Stri
           (← entry.getObjValAs? String "bound_regions") == "erased" do
         throw "native signature query operation/region-erasure evidence mismatch"
       let value ← entry.getObjVal? "signature_query"
-      let signature := value
+      let signature ← ctx.resolveSemantic .signature value
       let inputs ← (← (← signature.getObjVal? "inputs").getArr?).mapM (typeRef p)
       let output ← typeRef p (← signature.getObjVal? "output")
       let result := (inputs,output)

@@ -12,7 +12,7 @@ private def evidence (prepared : CompilerFactAdapters.Prepared) (id : Nat) : Res
   let some entry := entries[0]? | throw "compiler predicate query identity missing"
   unless entry.typingEnvironment == "fully_monomorphized" do throw "compiler predicate typing environment mismatch"
   unless entries.all (fun other => other.payload == entry.payload) do throw "conflicting compiler predicate evidence"
-  let actualId ← (← entry.original.getObjVal? "predicate_id").getNat?
+  let actualId ← entry.original.getNat?
   unless actualId == id do throw "compiler predicate original/query key mismatch"
   pure entry
 
@@ -20,7 +20,7 @@ def predicates (prepared : CompilerFactAdapters.Prepared) (token : Nat) : Result
   let some payload := prepared.dynamicPredicates[token]? | throw "shared dynamic predicate-array identity missing"
   let values ← payload.getArr?
   values.mapM fun value => do
-    let id ← (← value.getObjVal? "predicate_id").getNat?
+    let id ← value.getNat?
     let entry ← evidence prepared id
     pure ⟨id,entry.stableKey,entry.autoTrait⟩
 

@@ -26,13 +26,13 @@ private def trivial (runtime : RuntimeMetadata) : Nat → TyId → Except StepEr
       if elements.isEmpty then return true
       let some tail := elements[elements.size - 1]?
         | throw (.invalidProgram "nonempty compiler tuple has no tail")
-      let tail ← metadata (tail.getObjValAs? Nat "type_id")
+      let tail ← metadata (tail.getNat?)
       trivial runtime fuel tail
     | .patternType | .unsafeBinder =>
       let key := if node.shapeKind == .patternType then "base" else "inner"
       let inner ← metadata do
         let shape ← node.payload.getObjVal? "shape"
-        (← shape.getObjVal? key).getObjValAs? Nat "type_id"
+        (← shape.getObjVal? key).getNat?
       trivial runtime fuel inner
 
 /-- Every recursive step follows a canonical type edge. The type-table length

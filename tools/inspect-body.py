@@ -9,20 +9,12 @@ import argparse
 import json
 import pathlib
 
+from mir_json import load_mir_document
+
 
 def canonical_bodies(document):
-    nodes = document.get('shared_payloads', {}).get('nodes', [])
-
+    # Body records are inline; numeric IDs refer only to their semantic fields.
     def deref(value):
-        seen = set()
-        while isinstance(value, dict) and '$lean_miri_shared_ref' in value:
-            index = value['$lean_miri_shared_ref']
-            if index in seen:
-                raise ValueError('cyclic shared reference')
-            seen.add(index)
-            if not isinstance(index, int) or index < 0 or index >= len(nodes):
-                raise ValueError('shared reference outside catalog')
-            value = nodes[index]
         return value
 
     def field(value, name, default=None):
@@ -66,7 +58,7 @@ def main():
     parser.add_argument('--block', type=int, default=0)
     parser.add_argument('--statement', type=int, default=0)
     args = parser.parse_args()
-    bodies, deref = canonical_bodies(json.loads(args.input.read_text()))
+    bodies, deref = canonical_bodies(load_mir_document(args.input))
     if args.body < 0 or args.body >= len(bodies):
         parser.error('body index out of range')
     selected = bodies[args.body]

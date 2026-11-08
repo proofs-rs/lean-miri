@@ -8,7 +8,7 @@ namespace Miri.Input.CompilerPrimitiveFacts
 open Lean Miri.ABI
 private def referencedLayout (runtime : RuntimeMetadata) (j : Json) :
     Except String (TyAndLayout TypeId) := do
-  let id ← (← j.getObjVal? "type_id").getNat?
+  let id ← j.getNat?
   runtime.lookup id |>.mapError toString
 private def primitives (runtime : RuntimeMetadata) : Except String Json :=
   runtime.source.raw.getObjVal? "compiler_runtime_primitives"
@@ -34,7 +34,7 @@ private def buildCache (runtime : RuntimeMetadata) : Cache := Id.run do
   for node in runtime.source.types do
     if !nodes.contains node.id then nodes := nodes.insert node.id node
   let resolveLayout := fun (j : Json) => do
-    let id ← (← j.getObjVal? "type_id").getNat?
+    let id ← j.getNat?
     match layouts[id]? with
     | some result => result.mapError toString
     | none => runtime.lookup id |>.mapError toString
@@ -46,7 +46,7 @@ private def buildCache (runtime : RuntimeMetadata) : Cache := Id.run do
     resolveLayout (← (← primitives runtime).getObjVal? "ordering_enum")
   let callerLocation := do
     let value ← (← primitives runtime).getObjVal? "caller_location_type"
-    let id ← (← value.getObjVal? "type_id").getNat?
+    let id ← value.getNat?
     unless nodes.contains id do
       let _ ← runtime.node id |>.mapError toString
     pure id
@@ -106,7 +106,7 @@ def orderingLayout (runtime : RuntimeMetadata) : Except String (TyAndLayout Type
 both source reference/lifetime construction and canonical compiler identity. -/
 def callerLocationType (runtime : RuntimeMetadata) : Except String TypeId := do
   let value ← (← primitives runtime).getObjVal? "caller_location_type"
-  let id ← (← value.getObjVal? "type_id").getNat?
+  let id ← value.getNat?
   let _ ← runtime.node id |>.mapError toString
   pure id
 

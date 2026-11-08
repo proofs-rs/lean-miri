@@ -5,14 +5,19 @@ The synthetic unit fixture is a decoder-only input, not a Rust/Miri execution.
 """
 import json
 import pathlib
+import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 OUT = ROOT / "scratch/decoder-id-inputs"
 EXPORTS = ROOT / "tests/input/fixtures"
+sys.path.insert(0, str(ROOT / "tools"))
+from mir_json import decode_mir_document, encode_mir_document
+from mir_fixture import read_evidence, convert_evidence
 
 
 def write(name, value):
-    (OUT / f"{name}.json").write_text(json.dumps(value, separators=(",", ":")) + "\n")
+    encoded = encode_mir_document(value)
+    (OUT / f"{name}.json").write_text(json.dumps(encoded, separators=(",", ":")) + "\n")
 
 
 def resolved_table(doc, name):
@@ -20,7 +25,7 @@ def resolved_table(doc, name):
 
 
 def alter_type_ids(doc, edits):
-    """Mutate rows in the inlined schema-3 table."""
+    """Mutate identity rows while leaving semantic-ID tables independent."""
     table = resolved_table(doc, "types")
     for index, new_id in edits.items():
         table[index]["type_id"] = new_id
@@ -41,7 +46,7 @@ def set_table_empty(doc, key):
 
 
 def base():
-    return json.loads((EXPORTS / "strict-unit.json").read_text())
+    return decode_mir_document(convert_evidence(read_evidence(EXPORTS / "strict-unit.json")))
 
 
 def main():
@@ -80,7 +85,8 @@ def main():
         ("malformed-allocation-reference", "allocation_id", "bad"),
     ]:
         doc = base()
-        doc["synthetic_decoder_probe"] = {marker: value}
+        field = "type" if marker == "type_id" else "allocation"
+        doc["synthetic_decoder_probe"] = {field: value}
         write(name, doc)
 
     for name, value in [
@@ -88,7 +94,7 @@ def main():
         ("malformed-instance-reference", "bad"),
     ]:
         doc = base()
-        doc["synthetic_decoder_probe"] = {"instance_id": value}
+        doc["synthetic_decoder_probe"] = {"instance": value}
         write(name, doc)
 
     doc = base()
