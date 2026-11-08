@@ -48,7 +48,10 @@ def main (args : List String) : IO Unit := do
   let typeNameRow := set (set row "input_type" resultType) "typing_env" (.str "fully_monomorphized")
   let raw := set p.program.input.raw "compiler_type_name_constants" (.arr #[typeNameRow])
   let program := {p.program with input := {p.program.input with raw}}
-  let typeNameProvider := {p with program}
+  let typeNameProvider : CompilerProviders.Prepared :=
+    {p with program, lowering := none
+            covarianceIndex := CompilerQueryIndices.covariance raw
+            signatureAbiIndex := CompilerQueryIndices.signatureAbi p.runtime raw}
   let typeName ← must (CompilerValueConstants.typeName typeNameProvider resultTypeId)
   let caller ← must (CompilerValueConstants.callerLocationReference (withRows p (.arr #[row])) span)
   unless decide (typeName = caller) do
