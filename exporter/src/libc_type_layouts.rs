@@ -92,7 +92,7 @@ pub(super) fn export<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
 ) -> Result<Value, String> {
-    let mut entries = serde_json::Map::new();
+    let mut entries = crate::payload_value::Map::new();
     for name in LIBC_LAYOUT_PATHS.iter().filter(|name| {
         (shim_abi::is_unix_target(tcx)
             || (**name == "wchar_t" && tcx.sess.target.os != rustc_target::spec::Os::Windows))

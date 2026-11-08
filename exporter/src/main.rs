@@ -14,6 +14,8 @@ mod named_constants;
 mod named_statics;
 mod native_signature_queries;
 mod payload_sharing;
+mod payload_value;
+mod virtual_candidates;
 mod panic_queries;
 mod producer;
 mod projection_queries;
@@ -56,7 +58,7 @@ use rustc_interface::interface;
 use rustc_middle::mir::interpret::{AllocId, CTFE_ALLOC_SALT, GlobalAlloc};
 use rustc_middle::ty::{self, ExistentialPredicateStableCmpExt, TyCtxt, TypeVisitableExt};
 use rustc_span::Pos;
-use serde_json::{Value, json};
+use crate::payload_value::{Value, json};
 
 /// An unavailable semantic fact aborts the complete export, never a payload row.
 fn export_failure<T>(context: &str, details: impl std::fmt::Display) -> Result<T, String> {
@@ -78,6 +80,7 @@ struct ExportCallbacks {
     root_paths: Vec<String>,
     rustc_version: String,
     document: Option<Value>,
+    payload_pool: Option<payload_sharing::Pool>,
     invocation: Option<Value>,
     write_during_analysis: bool,
     continue_compilation: bool,
@@ -136,6 +139,7 @@ struct ExportContext<'tcx> {
     /// result once per source span so closure rounds do not invent identities.
     caller_location_constant_rows: HashMap<rustc_span::Span, Value>,
     cast_unsize_requests: HashSet<(ty::Ty<'tcx>, ty::Ty<'tcx>)>,
+    reserved_vtable_query_ids: HashMap<(u64, Vec<u64>), u64>,
     vtable_query_requests: HashSet<(
         ty::Ty<'tcx>,
         &'tcx ty::List<ty::PolyExistentialPredicate<'tcx>>,
@@ -205,6 +209,11 @@ enum IdentityMembershipSet {
 }
 
 impl<'tcx> ExportContext<'tcx> {
+    fn reserve_vtable_query_id(&mut self, input: u64, predicates: &[u64]) -> u64 {
+        let next = self.reserved_vtable_query_ids.len() as u64;
+        *self.reserved_vtable_query_ids.entry((input, predicates.to_vec())).or_insert(next)
+    }
+
     fn note_identity_membership_change(
         &mut self,
         set: IdentityMembershipSet,
@@ -941,7 +950,7 @@ fn runtime_target_data_layout_json(tcx: TyCtxt<'_>) -> Result<Value, String> {
 fn runtime_catalogs_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<serde_json::Map<String, Value>, String> {
+) -> Result<crate::payload_value::Map<String, Value>, String> {
     let named_shim_abis = shim_abi::named_signatures(tcx, context)?;
     let mut os_shims = named_shim_abis
             .as_array()
@@ -998,7 +1007,7 @@ fn runtime_catalogs_json<'tcx>(
             })
     });
     let portable = c_shim || miri_shim || no_alloc_shim || allocator;
-    let mut fields = serde_json::Map::new();
+    let mut fields = crate::payload_value::Map::new();
     if tcx.crate_types().contains(&rustc_structures::CrateType::Executable)
         && !rustc_attr_ir::find_attr!(tcx, crate, NoCore)
     {
@@ -1046,6 +1055,7 @@ fn runtime_catalogs_json<'tcx>(
 
 impl ExportCallbacks {
     fn export_document<'tcx>(&mut self, tcx: TyCtxt<'tcx>) -> Result<Compilation, String> {
+        payload_sharing::begin_export();
         #[cfg(feature = "miri-reference")]
         let reference_entry = if self.miri_reference {
             if !self.prepared_allocator_world {
@@ -1287,7 +1297,7 @@ impl ExportCallbacks {
                 &mut processed_runtime_type_queries,
             )?;
             let mut runtime_type_query_rows = match runtime_type_query_wave {
-                Value::Array(rows) => rows,
+                Value::Array(rows) => (*rows).clone(),
                 _ => panic!("runtime type queries are an array"),
             };
             runtime_type_queries.append(&mut runtime_type_query_rows);
@@ -1371,15 +1381,15 @@ impl ExportCallbacks {
         };
         instances.extend(symbol_identity_instances);
         let runtime_queries = {
-            let mut queries = serde_json::Map::new();
+            let mut queries = crate::payload_value::Map::new();
             if tcx.crate_types().contains(&rustc_structures::CrateType::Executable) {
                 queries.insert("startup".into(), startup_queries::export(tcx)?);
             }
-            queries.insert("types".into(), Value::Array(runtime_type_queries));
+            queries.insert("types".into(), Value::array(runtime_type_queries));
             queries.insert("virtual".into(), runtime_virtual_queries);
             queries.insert("instances".into(), runtime_caller_instances);
             queries.insert("foreign_symbols".into(), runtime_foreign_symbols);
-            Value::Object(queries)
+            Value::object(queries)
         };
         // Preserve the pinned query/evidence evaluation order from the former
         // root json! expression while keeping these outputs owned for moves.
@@ -1397,7 +1407,7 @@ impl ExportCallbacks {
         let target_data_layout = runtime_target_data_layout_json(tcx)?;
         let frame_metadata = compiler_frame_metadata_json(tcx);
         let panic_query_catalog = panic_queries::export(tcx);
-        let runtime_checks = Value::Array(vec![
+        let runtime_checks = Value::array(vec![
             runtime_check_json(tcx, rustc_middle::mir::RuntimeChecks::UbChecks),
             runtime_check_json(tcx, rustc_middle::mir::RuntimeChecks::ContractChecks),
             runtime_check_json(tcx, rustc_middle::mir::RuntimeChecks::OverflowChecks),
@@ -1440,7 +1450,7 @@ impl ExportCallbacks {
             fields.insert("producer".into(), producer);
             fields.insert("runtime_target_data_layout".into(), target_data_layout);
             fields.insert("compiler_session_queries".into(), session_queries);
-            fields.insert("instances".into(), Value::Array(instances));
+            fields.insert("instances".into(), Value::array(instances));
             fields.insert("compiler_runtime_queries".into(), runtime_queries);
             fields.insert("compiler_frame_metadata".into(), frame_metadata);
             fields.insert("compiler_instance_abis".into(), instance_abis);
@@ -1461,12 +1471,14 @@ impl ExportCallbacks {
             );
             fields.insert("compiler_main_queries".into(), main_queries);
             fields.insert("compiler_runtime_primitives".into(), runtime_primitives);
-            fields.insert("compiler_vtable_queries".into(), vtable_queries);
+            let mut indexed_vtable_queries = vtable_queries.as_array().expect("vtable query array").clone();
+            indexed_vtable_queries.sort_by_key(|row| row["query_id"].as_u64().expect("reserved query ID"));
+            fields.insert("compiler_vtable_queries".into(), Value::array(indexed_vtable_queries));
             fields.insert("compiler_predicate_queries".into(), predicate_queries);
             if let Some(catalogs) = runtime_catalogs {
                 fields.extend(catalogs);
             }
-            fields.insert("bodies".into(), Value::Array(bodies));
+            fields.insert("bodies".into(), Value::array(bodies));
         }
         let allocator_world = if self.prepared_allocator_world {
             Some(allocator_world::capture(
@@ -1483,6 +1495,11 @@ impl ExportCallbacks {
         if tcx.dcx().has_errors().is_some() {
             return Err("compiler reported errors while exporting semantic metadata".into());
         }
+        document["compiler_virtual_candidates"] = virtual_candidates::export(&export_context,
+            &document["compiler_runtime_queries"]["virtual"])?;
+        if vtable_query_ids != export_context.reserved_vtable_query_ids {
+            return Err("reserved vtable queries did not close in the compiler catalog".into());
+        }
         let (type_nodes, allocation_nodes) = {
             let context = export_context;
             (context.type_nodes, context.allocation_nodes)
@@ -1493,18 +1510,16 @@ impl ExportCallbacks {
                 .expect("root document is an object");
             fields.insert(
                 "types".into(),
-                Value::Array(type_nodes.into_values().collect()),
+                Value::array(type_nodes.into_values().collect()),
             );
             fields.insert(
                 "allocations".into(),
-                Value::Array(allocation_nodes.into_values().collect()),
+                Value::array(allocation_nodes.into_values().collect()),
             );
             if let Some(world) = allocator_world {
                 fields.insert("compiler_alloc_id_world".into(), world);
             }
         }
-        patch_vtable_query_ids(&mut document, &vtable_query_ids)?;
-        patch_virtual_resolution_candidates(&mut document);
         if is_scoped {
             let roots = selected_root_records.expect("scoped export has precomputed root records");
             document["selected_scope"] = json!({
@@ -1530,7 +1545,6 @@ impl ExportCallbacks {
         } else {
             None
         };
-        payload_sharing::share_payloads(&mut document)?;
         vtable_diagnostics::write_report(vtable_diagnostics, &document)?;
         if self.miri_reference {
             if !self.prepared_allocator_world {
@@ -1559,10 +1573,11 @@ impl ExportCallbacks {
                 });
                 let mut running = sidecar_base.clone();
                 running["status"] = json!("running");
-                write_document(&sidecar, &running)?;
+                write_plain_document(&sidecar, &running)?;
                 // Drop the large owned snapshot tree before Miri starts using
                 // the same TyCtxt, keeping the reference peak within budget.
                 drop(document);
+                payload_sharing::begin_export();
                 let result = match reference_entry {
                     Some((entry, entry_type)) => run_prepared_miri_reference_entry(
                         tcx,
@@ -1579,7 +1594,7 @@ impl ExportCallbacks {
                 let mut finished = sidecar_base;
                 finished["reference"] = result.clone();
                 finished["status"] = result["status"].clone();
-                write_document(&sidecar, &finished)?;
+                write_plain_document(&sidecar, &finished)?;
                 if result["status"] == "failed" {
                     return Err(
                         "same-TyCtxt Miri reference failed; see its reference sidecar".into(),
@@ -1595,10 +1610,13 @@ impl ExportCallbacks {
         if self.write_during_analysis {
             write_document(&self.output, &document)?;
             if self.continue_compilation {
+                drop(document);
+                payload_sharing::begin_export();
                 return Ok(Compilation::Continue);
             }
         }
         self.document = Some(document);
+        self.payload_pool = Some(payload_sharing::take_pool());
         Ok::<_, String>(if self.continue_compilation {
             Compilation::Continue
         } else {
@@ -1700,6 +1718,7 @@ fn run_direct(args: Vec<String>) -> Result<(), String> {
         root_paths: options.root_paths,
         rustc_version,
         document: None,
+        payload_pool: None,
         invocation: Some(invocation),
         write_during_analysis: false,
         continue_compilation: false,
@@ -1724,6 +1743,7 @@ fn run_direct(args: Vec<String>) -> Result<(), String> {
     let document = callbacks
         .document
         .ok_or("rustc completed without after_analysis output")?;
+    payload_sharing::install_pool(callbacks.payload_pool.take().ok_or("missing collection arena")?);
     write_document(&callbacks.output, &document)
 }
 
@@ -1832,6 +1852,7 @@ fn run_as_rustc_wrapper(args: Vec<String>) -> Result<(), String> {
         root_paths: Vec::new(),
         rustc_version,
         document: None,
+        payload_pool: None,
         invocation: Some(invocation),
         write_during_analysis: true,
         continue_compilation: true,
@@ -2003,6 +2024,14 @@ fn join_paths_prepend(prefix: &Path, rest: &std::ffi::OsStr) -> Result<std::ffi:
 }
 
 fn write_document(path: &Path, document: &Value) -> Result<(), String> {
+    write_serialized(path, &payload_sharing::Document::new(document)?)
+}
+
+fn write_plain_document(path: &Path, document: &Value) -> Result<(), String> {
+    write_serialized(path, &payload_value::Plain(document))
+}
+
+fn write_serialized(path: &Path, document: &impl serde::Serialize) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("output path {} has no parent", path.display()))?;
@@ -2611,7 +2640,7 @@ fn type_compiler_facts_json<'tcx>(
     let missing = || unavailable_compiler_fact("required compiler trait language item is missing");
     let input = query_input;
     let is_unsafe_cell = matches!(input.kind(),ty::Adt(def,_) if def.is_unsafe_cell());
-    let mut booleans = serde_json::Map::new();
+    let mut booleans: crate::payload_value::Map = crate::payload_value::Map::new();
     booleans.insert(
         "is_unsafe_cell".into(),
         compiler_fact(json!(is_unsafe_cell)),
@@ -2714,7 +2743,7 @@ fn type_compiler_facts_json<'tcx>(
             _ => missing()?,
         },
     );
-    let mut types = serde_json::Map::new();
+    let mut types: crate::payload_value::Map = crate::payload_value::Map::new();
     types.insert(
         "discriminant_type".into(),
         match normalized {
@@ -3105,7 +3134,7 @@ fn generic_args_json_inner<'tcx>(
     tcx: TyCtxt<'tcx>,
     args: ty::GenericArgsRef<'tcx>,
 ) -> Result<Value, String> {
-    Ok::<_, String>(Value::Array(
+    Ok::<_, String>(Value::array(
         args.iter()
             .map(|arg| {
                 Ok::<_, String>(match arg.kind() {
@@ -4045,7 +4074,7 @@ fn vtable_allocation_for_unsize<'tcx>(
                     "input_predicates":input_predicates,
                     "source_tail_type":type_json(context,tcx,source_tail)?,
                     "target_tail_type":type_json(context,tcx,target_tail)?,
-                    "_query_key":{"input_type_id":input_type_id,"input_predicate_ids":input_predicate_ids}},
+                    "query_id":context.reserve_vtable_query_id(input_type_id, &input_predicate_ids)},
             }))
         }
     })
@@ -5357,7 +5386,6 @@ fn resolve_callee_json<'tcx>(
                                     json!({"instance_id":instance_id,
                                     "method_definition":def_json(def),"dispatch_slot":slot,
                                     "generic_args":generic_args_json(context,tcx,instance.args)?,
-                                    "candidate_query_ids":[],
                                     "selection":"deferred to the runtime receiver vtable"})
                                 } else {
                                     Value::Null
@@ -6177,7 +6205,7 @@ fn compiler_runtime_type_queries_json<'tcx>(
         if let Some(drop) = drop { record["drop_glue"] = drop; }
         Ok::<_, String>(record)
     } }).collect::<Result<Vec<_>, String>>()?;
-    Ok::<_, String>(Value::Array(records))
+    Ok::<_, String>(Value::array(records))
 }
 
 fn compiler_runtime_virtual_queries_json<'tcx>(
@@ -6359,10 +6387,10 @@ fn compiler_runtime_virtual_queries_json<'tcx>(
                 "rebased_args":generic_args_json(context,tcx,rebound)?,"resolved":resolved,
                 "vtable_query":{"input_type":type_json(context,tcx,concrete)?,
                     "input_predicates":input_predicates,
-                    "_query_key":{"input_type_id":input_type_id,"input_predicate_ids":input_predicate_ids}}}));
+                    "query_id":context.reserve_vtable_query_id(input_type_id, &input_predicate_ids)}}));
         }
     }
-    Ok::<_, String>(Value::Array(virtual_queries))
+    Ok::<_, String>(Value::array(virtual_queries))
 }
 
 enum VtablePredicateMatch {
@@ -6470,7 +6498,7 @@ fn compiler_caller_location_queries_json<'tcx>(
         }
         records.push(row);
     }
-    Ok(Value::Array(records))
+    Ok(Value::array(records))
 }
 
 fn compiler_frame_metadata_json(tcx: TyCtxt<'_>) -> Value {
@@ -6566,7 +6594,7 @@ fn compiler_instance_abis_json<'tcx>(
         if let Some(id)=context.instance_ids.get(&instance){record["instance_id"]=json!(id);}
         Ok::<_, String>(record)
     } }).collect::<Result<Vec<_>, String>>()?;
-    Ok::<_, String>(Value::Array(records))
+    Ok::<_, String>(Value::array(records))
 }
 
 // backtrace.rs::handle_miri_get_backtrace and resolve_frame_pointer. The table
@@ -6598,7 +6626,7 @@ fn backtrace_spans_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tc
                 "filename":position.file.name.prefer_remapped_unconditionally().to_string()}})
         })
         .collect::<Vec<_>>();
-    Value::Array(records)
+    Value::array(records)
 }
 
 // stack.rs::push_stack_frame post-monomorphization required constant checks.
@@ -6918,7 +6946,8 @@ fn compiler_vtable_queries_json<'tcx>(
                 output_type_id,
                 output_predicate_ids,
             );
-            let row = json!({"input_type":input_json,
+            let query_id = context.reserve_vtable_query_id(input_type_id, &input_predicate_ids);
+            let row = json!({"query_id":query_id,"input_type":input_json,
             "input_predicates":input_predicates,
             "output_type":output_json,
             "output_predicates":output_predicates,
@@ -6932,121 +6961,11 @@ fn compiler_vtable_queries_json<'tcx>(
     }
     rows.sort_by(|left, right| left.0.cmp(&right.0));
     let mut query_ids = HashMap::new();
-    let records = rows
-        .into_iter()
-        .enumerate()
-        .map(|(query_id, (_, key, mut row))| {
-            query_ids.insert(key, query_id as u64);
-            row["query_id"] = json!(query_id);
-            row
-        })
-        .collect::<Vec<_>>();
-    Ok::<_, String>((Value::Array(records), query_ids))
-}
-
-fn patch_vtable_query_ids(
-    document: &mut Value,
-    query_ids: &HashMap<(u64, Vec<u64>), u64>,
-) -> Result<(), String> {
-    match document {
-        Value::Array(values) => {
-            for value in values {
-                patch_vtable_query_ids(value, query_ids)?;
-            }
-        }
-        Value::Object(fields) => {
-            if let Some(query) = fields
-                .get_mut("vtable_query")
-                .filter(|query| !query.is_null())
-            {
-                let key = query
-                    .get("_query_key")
-                    .and_then(|key| {
-                        let input = key.get("input_type_id")?.as_u64()?;
-                        let predicates = key
-                            .get("input_predicate_ids")?
-                            .as_array()?
-                            .iter()
-                            .map(Value::as_u64)
-                            .collect::<Option<Vec<_>>>()?;
-                        Some((input, predicates))
-                    })
-                    .ok_or("vtable query lacks its compiler query key")?;
-                let id = query_ids
-                    .get(&key)
-                    .ok_or("vtable query is absent from the finalized compiler catalog")?;
-                let object = query
-                    .as_object_mut()
-                    .ok_or("vtable query is not an object")?;
-                object.insert("query_id".into(), json!(id));
-                object.remove("_query_key");
-            }
-            for value in fields.values_mut() {
-                patch_vtable_query_ids(value, query_ids)?;
-            }
-        }
-        _ => (),
-    }
-    Ok(())
-}
-
-// Link each abstract virtual call identity only to exact compiler query rows
-// produced for that same virtual Instance. The catalog may contain many
-// unrelated concrete vtables; those rows are not dispatch evidence for this
-// call and must not be attached by type coincidence.
-fn patch_virtual_resolution_candidates(document: &mut Value) {
-    let mut candidates: HashMap<u64, Vec<u64>> = HashMap::new();
-    if let Some(rows) = document
-        .pointer("/compiler_runtime_queries/virtual")
-        .and_then(Value::as_array)
-    {
-        for row in rows {
-            let Some(instance_id) = row.get("original_instance_id").and_then(Value::as_u64) else {
-                continue;
-            };
-            let Some(query_id) = row
-                .pointer("/vtable_query/query_id")
-                .and_then(Value::as_u64)
-            else {
-                continue;
-            };
-            candidates.entry(instance_id).or_default().push(query_id);
-        }
-    }
-    for ids in candidates.values_mut() {
-        ids.sort_unstable();
-        ids.dedup();
-    }
-    fn patch(value: &mut Value, candidates: &HashMap<u64, Vec<u64>>) {
-        match value {
-            Value::Object(fields) => {
-                if let Some(resolution) = fields
-                    .get_mut("virtual_resolution")
-                    .filter(|value| !value.is_null())
-                {
-                    if let Some(instance_id) = resolution.get("instance_id").and_then(Value::as_u64)
-                    {
-                        if let Some(object) = resolution.as_object_mut() {
-                            object.insert(
-                                "candidate_query_ids".into(),
-                                json!(candidates.get(&instance_id).cloned().unwrap_or_default()),
-                            );
-                        }
-                    }
-                }
-                for child in fields.values_mut() {
-                    patch(child, candidates)
-                }
-            }
-            Value::Array(values) => {
-                for child in values {
-                    patch(child, candidates)
-                }
-            }
-            _ => (),
-        }
-    }
-    patch(document, &candidates);
+    let records = rows.into_iter().map(|(_, key, row)| {
+        query_ids.insert(key, row["query_id"].as_u64().expect("reserved vtable query ID"));
+        row
+    }).collect::<Vec<_>>();
+    Ok((Value::array(records), query_ids))
 }
 
 fn intrinsic_fallback_is_spec(tcx: TyCtxt<'_>, def: rustc_hir::def_id::DefId) -> bool {

@@ -43,6 +43,17 @@ at the user's request; regeneration and historical replay results do not
 validate those executions or establish compiler query closure, interpreter
 correspondence or whole-machine safety.
 
+## Export collection memory
+
+Exporter payloads are interned during collection, including MIR bodies and
+compiler catalogs. Virtual candidate IDs have a separate dense instance index
+with checked lookup at use. The general Lean shared-payload decoder still
+materializes its existing semantic view; eliminating that expansion is separate
+work. The collection arena retains canonical and intermediate snapshots until
+output, so memory is bounded by collected unique data, not a constant budget.
+Finite transport comparisons and source-run regressions do not establish
+compiler/exporter correctness or general Rust safety.
+
 ## Empty-function caller-domain transport
 
 The [empty-function proof](examples/empty_function/README.md) covers actual call

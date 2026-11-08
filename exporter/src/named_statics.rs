@@ -84,7 +84,7 @@ pub(super) fn export<'tcx>(
         "PTHREAD_RWLOCK_INITIALIZER",
         "PTHREAD_COND_INITIALIZER",
     ];
-    Ok::<_, String>(Value::Array(
+    Ok::<_, String>(Value::array(
         names
             .into_iter()
             .filter(|name| {

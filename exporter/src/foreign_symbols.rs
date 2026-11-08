@@ -172,7 +172,7 @@ fn selected_exports<'tcx>(
         }
     }
 
-    Ok::<_, String>(Value::Array(winners.into_iter().map(|(symbol, winner, ambiguous)| { {
+    Ok::<_, String>(Value::array(winners.into_iter().map(|(symbol, winner, ambiguous)| { {
         if ambiguous {
             return Ok(json!({"symbol":symbol,"resolution":"ambiguous",
                 "reason":"source lookup_exported_symbol found equal-strength duplicate definitions"}));
@@ -248,7 +248,7 @@ fn selected_foreign_fallbacks(candidates: &[Value], demanded_symbols: &[String])
             selected.push(row);
         }
     }
-    Value::Array(selected)
+    Value::array(selected)
 }
 
 fn demanded_extern_statics<'tcx>(
@@ -269,7 +269,7 @@ fn demanded_extern_statics<'tcx>(
         .collect::<Vec<_>>();
     definitions.sort_by_key(|def| (def.krate.as_u32(), def.index.as_u32()));
     definitions.dedup();
-    Ok::<_, String>(Value::Array(
+    Ok::<_, String>(Value::array(
         definitions
             .into_iter()
             .map(|def| extern_static_declaration(tcx, context, def))

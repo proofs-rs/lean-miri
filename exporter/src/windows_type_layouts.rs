@@ -44,7 +44,7 @@ pub(super) fn export<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
 ) -> Result<Value, String> {
-    let mut entries = serde_json::Map::new();
+    let mut entries = crate::payload_value::Map::new();
     // helpers.rs::windows_ty_layout is only a valid source query for Windows
     // targets. Keep the catalog's exact source identity everywhere, but do
     // not manufacture unsupported Windows-query rows while compiling another

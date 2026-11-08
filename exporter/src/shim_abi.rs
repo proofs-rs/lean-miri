@@ -267,7 +267,7 @@ pub(super) fn export<'tcx>(
             "unit",
         ),
     ];
-    Ok::<_, String>(Value::Array(
+    Ok::<_, String>(Value::array(
         recipes
             .iter()
             .filter(|(abi, args, _)| {
@@ -1014,11 +1014,11 @@ pub(super) fn named_signatures<'tcx>(
         "source_target_op_is_ulong":ulong}))
         };
     }
-    Ok::<_, String>(Value::Array(result))
+    Ok::<_, String>(Value::array(result))
 }
 
-/// Machine construction needs the exact core C-ulong layout even when no
-/// foreign operation requests an OS catalog. Do not demand unrelated libc types.
+/// Machine construction and source IO assembly need these exact compiler
+/// types even without an OS catalog. Do not demand unrelated libc types.
 pub(super) fn startup_named_types<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
@@ -1034,7 +1034,7 @@ pub(super) fn named_types<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
 ) -> Result<Value, String> {
-    let mut result = serde_json::Map::new();
+    let mut result = crate::payload_value::Map::new();
     for (name, path) in [
         ("c_ulong", &["core", "ffi", "c_ulong"][..]),
         ("pid_t", &["libc", "pid_t"][..]),
@@ -1104,7 +1104,7 @@ pub(super) fn named_types<'tcx>(
             ty::Ty::new_mut_ptr(tcx, tcx.types.i32),
         )?),
     );
-    Ok::<_, String>(Value::Object(result))
+    Ok::<_, String>(Value::object(result))
 }
 
 #[cfg(test)]

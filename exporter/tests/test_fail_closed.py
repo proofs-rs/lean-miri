@@ -92,6 +92,7 @@ class FailClosedExportTests(unittest.TestCase):
         document = load_mir_document(self.output)
         self.assertEqual(set(document["compiler_named_types"]), {"c_ulong", "i32_pointer"})
         self.assertIsInstance(document["compiler_named_types"]["c_ulong"]["type_id"], int)
+        self.assertIsInstance(document["compiler_named_types"]["i32_pointer"]["type_id"], int)
         self.assertNotIn("compiler_named_constants", document)
         startup = document["compiler_runtime_queries"]["startup"]
         self.assertIs(startup["no_core"], False)

@@ -1,4 +1,5 @@
 import Miri.Input.CompilerScopes
+import Miri.Input.CompilerVirtualCandidates
 
 /-! Compiler-owned call.rs constructors/drop queries. All keys use canonical
 shared type IDs and complete instances. Absent evidence remains an error. -/
@@ -16,6 +17,8 @@ structure VirtualEntry where
   concreteType : Nat
   rebasedArgs : Array MIR.GenericArg
   resolved : Except String CallInstance
+  sourceInstanceId : Nat
+  queryReference : Json
 structure Prepared where
   program : LoweredProgram
   types : Array TypeEntry
@@ -84,7 +87,11 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
       | .ok (callee,next) =>
         tables := next
         pure (.ok callee)
-    virtualQueries := virtualQueries.push ⟨original,method,parent,concrete,args,resolved⟩
+    virtualQueries := virtualQueries.push {
+      original := original, methodDefinition := method, parentTrait := parent
+      concreteType := concrete, rebasedArgs := args, resolved := resolved
+      sourceInstanceId := ← (← query.getObjVal? "original_instance_id").getNat?
+      queryReference := ← query.getObjVal? "vtable_query" }
   pure ⟨program.withCompilerTables tables,types,callers,virtualQueries⟩
 private def entry (prepared : Prepared) (id : Nat) : Except String TypeEntry := do
   let some entry := prepared.types.find? (·.typeId == id)
@@ -104,9 +111,22 @@ def requiresCallerLocation (prepared : Prepared) (callee : CallInstance) : Excep
   let some (_,track) := prepared.callerLocation.find? (·.1 == callee)
     | throw "missing exact full-instance caller-location query"
   pure track
+/-- Candidate metadata stays opaque during prepare. Only a runtime virtual
+query demands its instance's index row and finalized compiler-query evidence. -/
+private def checkVirtualEntry (prepared : Prepared) (entry : VirtualEntry) : Except String Unit := do
+  unless entry.sourceInstanceId < prepared.program.input.instances.size do
+    throw "virtual candidate index references an absent compiler instance"
+  let source ← prepared.program.input.raw.getObjVal? "compiler_virtual_candidates"
+  let queries ← (← prepared.program.input.raw.getObjVal? "compiler_vtable_queries").getArr?
+  let row ← (CompilerVirtualCandidates.ofJson source).query entry.sourceInstanceId prepared.program.input.instances.size queries entry.queryReference
+  let input ← (← row.getObjVal? "input_type").getObjVal? "type_id"
+  unless (← input.getNat?) == entry.concreteType do
+    throw "virtual candidate query concrete type differs from the demanded runtime row"
+
 def parentTrait (prepared : Prepared) (method : MIR.DefId) : Except String MIR.DefId := do
   let matching := prepared.virtualQueries.filter (·.methodDefinition == method)
   let some first := matching[0]? | throw "missing exact virtual parent-trait query"
+  for entry in matching do checkVirtualEntry prepared entry
   unless matching.all (·.parentTrait == first.parentTrait) do throw "conflicting parent-trait queries"
   pure first.parentTrait
 
@@ -115,6 +135,7 @@ def rebaseVirtualArgs (prepared : Prepared) (args : Array MIR.GenericArg)
   let matching := prepared.virtualQueries.filter fun entry =>
     entry.original.args == args && entry.parentTrait == parent && entry.concreteType == concrete
   let some first := matching[0]? | throw "missing complete-key virtual rebase query"
+  for entry in matching do checkVirtualEntry prepared entry
   unless matching.all (·.rebasedArgs == first.rebasedArgs) do throw "conflicting virtual rebase queries"
   pure first.rebasedArgs
 
@@ -123,6 +144,7 @@ def expectResolveForVTable (prepared : Prepared) (method : MIR.DefId)
   let matching := prepared.virtualQueries.filter fun entry =>
     entry.methodDefinition == method && entry.rebasedArgs == args
   let some first := matching[0]? | throw "missing complete-key virtual resolution query"
+  for entry in matching do checkVirtualEntry prepared entry
   let callee ← first.resolved
   for entry in matching do
     unless (← entry.resolved) == callee do throw "conflicting virtual resolutions"
