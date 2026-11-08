@@ -22,8 +22,10 @@ private def check (condition : Bool) (message : String) : IO Unit :=
   unless condition do throw (IO.userError message)
 
 def main (args : List String) : IO Unit := do
-  let [path] := args | throw (IO.userError "expected current exporter mir_features.json")
+  let [path] := args | throw (IO.userError "expected current exporter MIR JSON")
   let base ← must (Json.parse (← IO.FS.readFile path))
+  let _ ← must (decodeRuntimeJson base.compress)
+  IO.println "PASS direct-format input accepted before malformed-cast injection"
   let catalog ← must (base.getObjVal? "shared_payloads")
   let nodes ← must ((← must (catalog.getObjVal? "nodes")).getArr?)
   let malformedId := nodes.size

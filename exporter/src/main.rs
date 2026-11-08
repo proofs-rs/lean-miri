@@ -999,6 +999,11 @@ fn runtime_catalogs_json<'tcx>(
     });
     let portable = c_shim || miri_shim || no_alloc_shim || allocator;
     let mut fields = serde_json::Map::new();
+    if tcx.crate_types().contains(&rustc_structures::CrateType::Executable)
+        && !rustc_attr_ir::find_attr!(tcx, crate, NoCore)
+    {
+        fields.insert("compiler_named_types".into(), shim_abi::startup_named_types(tcx, context)?);
+    }
     if !os_shims && !portable {
         return Ok(fields);
     }
@@ -1367,7 +1372,7 @@ impl ExportCallbacks {
         instances.extend(symbol_identity_instances);
         let runtime_queries = {
             let mut queries = serde_json::Map::new();
-            if tcx.entry_fn(()).is_some() {
+            if tcx.crate_types().contains(&rustc_structures::CrateType::Executable) {
                 queries.insert("startup".into(), startup_queries::export(tcx)?);
             }
             queries.insert("types".into(), Value::Array(runtime_type_queries));

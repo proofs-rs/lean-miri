@@ -18,7 +18,7 @@ private def decode (p : CompilerProviders.Prepared) (record : Json) :
   let ty ← ref (← record.getObjVal? "result_type")
   let _ ← p.runtime.node ty |>.mapError toString
   let value ← lowerCompilerConstValue p.loweringContext ty
-    (← p.loweringContext.decodeCompilerValue (← record.getObjVal? "value"))
+    (← p.loweringContext.decodeCompilerValue record)
   pure (ty,value)
 
 def typeName (p : CompilerProviders.Prepared) (ty : MIR.TyId) :

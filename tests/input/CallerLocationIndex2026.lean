@@ -43,9 +43,22 @@ def main (args : List String) : IO Unit := do
   let span : Miri.MIR.SpanRef := ⟨0⟩
   unless (CompilerValueConstants.callerLocationReference (withRows p (.arr #[row])) span).isOk do
     throw (IO.userError "positive caller-location fixture did not decode")
+  let resultType ← must (row.getObjVal? "result_type")
+  let resultTypeId ← must (resultType.getObjValAs? Nat "type_id")
+  let typeNameRow := set (set row "input_type" resultType) "typing_env" (.str "fully_monomorphized")
+  let raw := set p.program.input.raw "compiler_type_name_constants" (.arr #[typeNameRow])
+  let program := {p.program with input := {p.program.input with raw}}
+  let typeNameProvider : CompilerProviders.Prepared :=
+    {p with program, lowering := none
+            covarianceIndex := CompilerQueryIndices.covariance raw
+            signatureAbiIndex := CompilerQueryIndices.signatureAbi p.runtime raw}
+  let typeName ← must (CompilerValueConstants.typeName typeNameProvider resultTypeId)
+  let caller ← must (CompilerValueConstants.callerLocationReference (withRows p (.arr #[row])) span)
+  unless decide (typeName = caller) do
+    throw (IO.userError "direct intrinsic constant payload differs between type-name and caller-location consumers")
   compare (withRows p (.arr #[row])) span
   compare (withRows p (.arr #[row,row])) span
-  compare (withRows p (.arr #[row,set row "value" (Json.mkObj [("kind", .str "unknown_caller_location_constant")])])) span
+  compare (withRows p (.arr #[row,set row "kind" (.str "unknown_caller_location_constant")])) span
   compare (withRows p (.arr #[row,Json.mkObj []])) span
   compare (withRows p (.arr #[Json.mkObj [],row])) span
   compare (withRows p (.arr #[])) span
