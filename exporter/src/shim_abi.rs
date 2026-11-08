@@ -1017,8 +1017,8 @@ pub(super) fn named_signatures<'tcx>(
     Ok::<_, String>(Value::array(result))
 }
 
-/// Machine construction needs the exact core C-ulong layout even when no
-/// foreign operation requests an OS catalog. Do not demand unrelated libc types.
+/// Machine construction and source IO assembly need these exact compiler
+/// types even without an OS catalog. Do not demand unrelated libc types.
 pub(super) fn startup_named_types<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
