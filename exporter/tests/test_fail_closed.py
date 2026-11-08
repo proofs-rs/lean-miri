@@ -81,6 +81,25 @@ class FailClosedExportTests(unittest.TestCase):
         self.assertEqual(facts["type_queries"]["boxed_type"],
                          None)
 
+    def test_no_main_binary_exports_startup_facts(self):
+        result = subprocess.run(
+            [str(self.exporter), "--output", str(self.output), "--",
+             str(ROOT / "tests/connected/fixtures/203-upcast-a-prefix.rs"),
+             "--crate-type=bin", "--crate-name=custom_entry_startup", "-Cpanic=abort"],
+            cwd=ROOT, env=self.environment, capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        document = load_mir_document(self.output)
+        self.assertEqual(set(document["compiler_named_types"]), {"c_ulong", "i32_pointer"})
+        self.assertIsInstance(document["compiler_named_types"]["c_ulong"]["type_id"], int)
+        self.assertNotIn("compiler_named_constants", document)
+        startup = document["compiler_runtime_queries"]["startup"]
+        self.assertIs(startup["no_core"], False)
+        sentinel = startup["core_escape_default"]
+        self.assertIs(sentinel["mir_available"], True)
+        self.assertIsInstance(sentinel["definition"]["crate"], int)
+        self.assertIsInstance(sentinel["definition"]["index"], int)
+
     def test_function_pointer_query_keeps_direct_instance_identity(self):
         document = self.accepted("function_pointer")
         resolutions = [record for record in document["compiler_cast_queries"]

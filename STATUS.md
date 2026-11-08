@@ -17,7 +17,11 @@ The exporter aborts when requested semantic compiler data is unavailable; the
 Lean input API no longer retains failed exporter payloads as execution inputs.
 Successful values are serialized without success-status wrappers or a
 completeness flag; consumers validate the semantic fields they use.
-Cast-query consumers read direct result fields. A genuine absent
+Cast-query consumers, including dynamic-upcast evidence validation, read direct
+result fields. Executables with custom `no_main` entry points retain startup
+preflight facts and the core C-ulong and mutable i32-pointer types required by
+machine construction without demanding an OS catalog. Intrinsic type-name and
+caller-location constants are lowered from their direct compiler payloads. A genuine absent
 function-pointer target has `resolution_kind: none` and no instance identity;
 `resolution_kind: instance` carries the direct instance fields. This preserves
 the optional answer when exact query-key fields are attached.

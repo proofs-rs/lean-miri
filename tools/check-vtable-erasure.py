@@ -203,6 +203,9 @@ def main():
         query_args.append('trait-vptr')
     if args.trace_queries:
         query_args.append('trace-map')
+    subprocess.run([str(elan / 'bin/lake'), 'env', 'lean', '--run',
+                    'tests/input/DecoderDirectLockstep2026.lean', str(output)],
+                   cwd=ROOT, env=env, check=True, timeout=args.timeout)
     logs = []
     for harness, extra in [('tests/input/VTableErasureQuery.lean', query_args),
                            ('tests/connected/203-upcast-a-prefix.lean', ['--trace-vtable-queries'] if args.trace_queries else [])]:

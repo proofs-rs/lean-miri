@@ -1017,6 +1017,19 @@ pub(super) fn named_signatures<'tcx>(
     Ok::<_, String>(Value::Array(result))
 }
 
+/// Machine construction needs the exact core C-ulong layout even when no
+/// foreign operation requests an OS catalog. Do not demand unrelated libc types.
+pub(super) fn startup_named_types<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    context: &mut ExportContext<'tcx>,
+) -> Result<Value, String> {
+    let ty = named_type(tcx, &["core", "ffi", "c_ulong"])?;
+    Ok(json!({
+        "c_ulong": type_json(context, tcx, ty)?,
+        "i32_pointer": type_json(context, tcx, ty::Ty::new_mut_ptr(tcx, tcx.types.i32))?,
+    }))
+}
+
 pub(super) fn named_types<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
