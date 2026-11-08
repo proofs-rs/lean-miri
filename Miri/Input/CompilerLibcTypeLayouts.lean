@@ -6,14 +6,12 @@ target-name fallback or layout-equality search. -/
 namespace Miri.Input.CompilerLibcTypeLayouts
 open Lean Miri.ABI
 
-private def supportedTypeRef (entry : Json) : Except String TypeId := do
-  unless (← (← entry.getObjVal? "status").getStr?) == "supported" do
-    throw s!"compiler libc type/layout query unavailable: {((entry.getObjVal? "reason").bind Json.getStr?).toOption}"
-  let value ← entry.getObjVal? "value"
+private def typeRef (entry : Json) : Except String TypeId := do
+  let value := entry
   (← value.getObjVal? "type_id").getNat?
 
 /-- Resolve one exact source libc type and require its imported compiler
-layout. Query errors stay demand-time errors with their producer reason. -/
+layout. Missing or malformed metadata remains a demand-time error. -/
 def layout (runtime : RuntimeMetadata) (name : String) : Except String (TyAndLayout TypeId) := do
   let catalog ← runtime.source.raw.getObjVal? "compiler_libc_type_layouts"
   unless (← (← catalog.getObjVal? "crate_path").getArr?) == #[toJson ("libc" : String)] do
@@ -24,6 +22,6 @@ def layout (runtime : RuntimeMetadata) (name : String) : Except String (TyAndLay
     throw "compiler libc type query has wrong typing environment"
   let entries ← catalog.getObjVal? "entries"
   let entry ← entries.getObjVal? name
-  let id ← supportedTypeRef entry
+  let id ← typeRef entry
   runtime.lookup id |>.mapError toString
 end Miri.Input.CompilerLibcTypeLayouts

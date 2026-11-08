@@ -80,9 +80,8 @@ def check_case(args, output, env, elan, sysroot, fixed):
         raise SystemExit('reference did not establish same-TyCtxt exit_zero for these exact bytes')
     snapshot = json.loads(raw)
     records = expand_shared(snapshot, snapshot['compiler_runtime_queries'])['instances']
-    names = {record.get('item_name', {}).get('value') for record in records
-             if record.get('intrinsic_metadata', {}).get('status') == 'supported'
-             and record['intrinsic_metadata'].get('value') is not None}
+    names = {record.get('item_name') for record in records
+             if record.get('intrinsic_metadata') is not None}
     expected_intrinsic = 'cos' if fixed else 'sin'
     if expected_intrinsic not in names:
         raise SystemExit(f'fresh MIR lost {expected_intrinsic} intrinsic: {names}')

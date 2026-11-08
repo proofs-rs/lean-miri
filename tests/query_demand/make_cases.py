@@ -37,18 +37,18 @@ def add(name, value, ready, provider='none', index=0, baseline='plain.json', **e
                       provider=provider, index=index, **extra))
 
 def diagnostic(doc, path):
-    doc['selected_scope'].setdefault('retained_catalog_obligations', []).append(
-        dict(path=path, status='unsupported', kind='query', reason='qa23 exact path sentinel'))
+    doc.setdefault('selected_scope', {}).setdefault('retained_catalog_obligations', []).append(
+        dict(path=path, type_id=10**30, reason='qa23 invalid retained compiler evidence'))
 
 def unsupported():
-    return dict(status='unsupported', reason='qa23 demanded missing compiler evidence')
+    return dict(type_id=10**30, reason='qa23 invalid compiler evidence')
 
 for family, catalog, suffix, provider in [
     ('native', 'compiler_native_signature_queries', '.signature_query', 'native'),
 ]:
     rows = base[catalog]
     index = next((i for i, row in enumerate(rows)
-                  if (row['signature_query'] if suffix else row)['status'] == 'supported'), None)
+                  if (row['signature_query'] if suffix else row).get('kind') != 'unsupported'), None)
     if index is None:
         raise ValueError(f'fresh compiler export has no supported {catalog} row')
     doc = copy.deepcopy(base)
@@ -59,7 +59,7 @@ for family, catalog, suffix, provider in [
     add(family + '-demand', doc, True, provider, index)
     retained = copy.deepcopy(doc)
     diagnostic(retained, f'{catalog}[{index}]{suffix}')
-    add(family + '-retained', retained, True, provider, index)
+    add(family + '-retained', retained, False, index=index)
     for label, path in [
         ('leading-zero', f'{catalog}[00]{suffix}'),
         ('leading-one', f'{catalog}[01]{suffix}'),
@@ -75,7 +75,7 @@ for family, catalog, suffix, provider in [
         add(f'{family}-{label}', negative, False)
     nested = copy.deepcopy(base)
     target = nested[catalog][index]['signature_query'] if suffix else nested[catalog][index]
-    target['qa23_unknown_descendant'] = unsupported()
+    target['qa23_unknown_descendant'] = dict(kind='Cast', vtable_allocation=dict(kind='dynamic_vtable_upcast'))
     add(family + '-actual-unknown-descendant', nested, False, index=index)
 
 if a.tls_base:
@@ -92,19 +92,20 @@ if a.tls_base:
             for child in value:
                 yield from collect(child)
     nodes = list(collect(tls['bodies']))
-    if not nodes or not any(n.get('initializer', {}).get('status') == 'supported' for n in nodes):
+    if not nodes or not any('initializer' in n for n in nodes):
         raise ValueError('TLS baseline lacks actual supported inline ThreadLocalRef initializer')
-    definition = next(n['def_id'] for n in nodes if n['initializer']['status'] == 'supported')
+    definition = next(n['def_id'] for n in nodes if 'initializer' in n)
     doc = copy.deepcopy(tls)
     for node in collect(doc['bodies']):
         if node['def_id'] == definition:
             node['initializer'] = unsupported()
-    add('tls-initializer-demand', doc, True, 'tls', baseline='tls-plain.json', definition=definition)
+    # Required inline TLS allocation images are validated by both decoders.
+    add('tls-initializer-demand', doc, False, baseline='tls-plain.json', definition=definition)
     nested = copy.deepcopy(tls)
-    next(n for n in collect(nested['bodies']) if n['def_id'] == definition)['initializer']['qa23_unknown_descendant'] = unsupported()
+    next(n for n in collect(nested['bodies']) if n['def_id'] == definition)['initializer']['qa23_unknown_descendant'] = dict(kind='Cast', vtable_allocation=dict(kind='dynamic_vtable_upcast'))
     add('tls-unknown-descendant', nested, False, baseline='tls-plain.json')
     lookalike = copy.deepcopy(tls)
-    lookalike['qa23_initializer_lookalike'] = dict(kind='ThreadLocalRef', initializer=unsupported())
+    lookalike['qa23_initializer_lookalike'] = dict(kind='ThreadLocalRef', def_id=dict(crate=0, index=0), initializer=dict(allocation=dict(allocation_id=10**30)))
     add('tls-outside-body-lookalike', lookalike, False, baseline='tls-plain.json')
 
 save('cases.json', dict(cases=cases, source_exports=dict(

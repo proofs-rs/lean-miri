@@ -64,7 +64,7 @@ private def seedImportedImpl (p : Prepared) (image : AllocationImage.Imported)
   if let some world := world? then
     unless memory.sourceAllocIdWorldActive do
       throw "prepared vtable catalog requires the active source AllocId world"
-    unless image.source == input.allocations.filter (·.status == .supported) do
+    unless image.source == input.allocations do
       throw "prepared vtable catalog allocation image differs from its owning program"
     Miri.Input.validateCompilerAllocIdWorldRaw input.raw input.allocations (some world)
       |>.mapError fun error => s!"prepared AllocId world: {error}"

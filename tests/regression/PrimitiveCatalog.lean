@@ -80,6 +80,4 @@ private def showNode (value : Except RuntimeMetadataError TypeNode) : String :=
     | _ => false
   assertTrue "duplicate type error remains before per-row layout conversion" duplicatePrecedence
   IO.println s!"typedTreeRoot={match document.typedTree with | .object fields => s!"object:{fields.size}" | .array values => s!"array:{values.size}" | .statement .. => "statement" | .terminator .. => "terminator" | .rvalue .. => "rvalue" | .operand .. => "operand" | .projection .. => "projection" | _ => "other"}"
-  IO.println s!"obligations={render decoded.blockingObligations}"
-  IO.println s!"readiness={decoded.executionInput.isSome}"
   IO.println s!"primitiveCache=PASS unitFirstMatch={render (sourceFirstUnit.map (fun (node : TypeNode) => node.id))} unit={showResult unitResult} strictTuple={showResult strictTuple} missing={showResult missingBase} duplicateError={duplicatePrecedence}"

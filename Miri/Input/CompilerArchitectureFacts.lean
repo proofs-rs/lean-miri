@@ -19,7 +19,6 @@ def integerLayoutContext (context : CompilerFacts.Context) (bits : Nat) (signed 
 
 def twiceWideLayout (runtime : RuntimeMetadata) (id : TyId) : Except String LocalLayout := do
   let node ← runtime.node id |>.mapError toString
-  unless node.shapeStatus == .supported do throw "missing integer type shape for twice-wide constructor"
   let shape ← node.payload.getObjVal? "shape"
   let (kind,signed) ← match node.shapeKind with
     | .int => pure (← (← shape.getObjVal? "signed_kind").getStr?,true)
@@ -34,7 +33,6 @@ def twiceWideLayout (runtime : RuntimeMetadata) (id : TyId) : Except String Loca
 def twiceWideLayoutContext (context : CompilerFacts.Context) (id : TyId) :
     Except String LocalLayout := do
   let node ← context.runtime.node id |>.mapError toString
-  unless node.shapeStatus == .supported do throw "missing integer type shape for twice-wide constructor"
   let shape ← node.payload.getObjVal? "shape"
   let (kind,signed) ← match node.shapeKind with
     | .int => pure (← (← shape.getObjVal? "signed_kind").getStr?,true)
@@ -56,8 +54,7 @@ def simdSizeAndType (context : CompilerFacts.Context) (id : TyId) : Except Strin
   let node ← context.runtime.node id |>.mapError toString
   let some facts := node.compilerFacts | throw "missing SIMD compiler facts"
   let query ← facts.payload.getObjVal? "simd_size_and_type"
-  unless (← (← query.getObjVal? "status").getStr?) == "supported" do throw "SIMD lane compiler query unavailable"
-  let value ← query.getObjVal? "value"
+  let value := query
   let count ← (← value.getObjVal? "count").getNat?
   unless count < 2^64 do throw "SIMD lane count exceeds source u64"
   let element ← (← (← value.getObjVal? "element").getObjVal? "type_id").getNat?

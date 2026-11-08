@@ -85,27 +85,27 @@ private def malformedResult (json : Json) : Bool :=
   | .ok _ => false
 
 private partial def containsBinary (wanted : Miri.MIR.BinOp) : TypedValue → Bool
-  | .binOperator actual _ => actual == wanted
+  | .binOperator actual => actual == wanted
   | .array values => values.any (containsBinary wanted)
   | .object fields => fields.any fun (_, value) => containsBinary wanted value
-  | .statement _ _ fields | .terminator _ _ fields | .rvalue _ _ fields
-  | .operand _ _ fields | .projection _ fields => fields.any fun (_, value) => containsBinary wanted value
+  | .statement _ fields | .terminator _ fields | .rvalue _ fields
+  | .operand _ fields | .projection _ fields => fields.any fun (_, value) => containsBinary wanted value
   | _ => false
 
 private partial def containsUnary (wanted : Miri.MIR.UnOp) : TypedValue → Bool
-  | .unOperator actual _ => actual == wanted
+  | .unOperator actual => actual == wanted
   | .array values => values.any (containsUnary wanted)
   | .object fields => fields.any fun (_, value) => containsUnary wanted value
-  | .statement _ _ fields | .terminator _ _ fields | .rvalue _ _ fields
-  | .operand _ _ fields | .projection _ fields => fields.any fun (_, value) => containsUnary wanted value
+  | .statement _ fields | .terminator _ fields | .rvalue _ fields
+  | .operand _ fields | .projection _ fields => fields.any fun (_, value) => containsUnary wanted value
   | _ => false
 
 private partial def containsEnumTag (wanted : TypedEnumTag) : TypedValue → Bool
   | .enumTag category _ fields => category == wanted || fields.any fun (_, value) => containsEnumTag wanted value
   | .array values => values.any (containsEnumTag wanted)
   | .object fields => fields.any fun (_, value) => containsEnumTag wanted value
-  | .statement _ _ fields | .terminator _ _ fields | .rvalue _ _ fields
-  | .operand _ _ fields | .projection _ fields => fields.any fun (_, value) => containsEnumTag wanted value
+  | .statement _ fields | .terminator _ fields | .rvalue _ fields
+  | .operand _ fields | .projection _ fields => fields.any fun (_, value) => containsEnumTag wanted value
   | _ => false
 
 private partial def containsUserTypeProjection : TypedValue → Bool
@@ -113,8 +113,8 @@ private partial def containsUserTypeProjection : TypedValue → Bool
   | .array values => values.any containsUserTypeProjection
   | .object fields => fields.any fun (_, value) => containsUserTypeProjection value
   | .enumTag _ _ fields => fields.any fun (_, value) => containsUserTypeProjection value
-  | .statement _ _ fields | .terminator _ _ fields | .rvalue _ _ fields
-  | .operand _ _ fields | .projection _ fields => fields.any fun (_, value) => containsUserTypeProjection value
+  | .statement _ fields | .terminator _ fields | .rvalue _ fields
+  | .operand _ fields | .projection _ fields => fields.any fun (_, value) => containsUserTypeProjection value
   | _ => false
 
 private partial def hasTypedUserTypeProjection : TypedValue → Bool
@@ -125,8 +125,8 @@ private partial def hasTypedUserTypeProjection : TypedValue → Bool
   | .array values => values.any hasTypedUserTypeProjection
   | .object fields => fields.any fun (_, value) => hasTypedUserTypeProjection value
   | .enumTag _ _ fields => fields.any fun (_, value) => hasTypedUserTypeProjection value
-  | .statement _ _ fields | .terminator _ _ fields | .rvalue _ _ fields
-  | .operand _ _ fields | .projection _ fields => fields.any fun (_, value) => hasTypedUserTypeProjection value
+  | .statement _ fields | .terminator _ fields | .rvalue _ fields
+  | .operand _ fields | .projection _ fields => fields.any fun (_, value) => hasTypedUserTypeProjection value
   | _ => false
 
 private def must (result : Except String α) : IO α :=
@@ -155,7 +155,6 @@ def main (args : List String) : IO UInt32 := do
   check (document.producer.miriCommit == expectedMiriCommit) "wrong Miri pin in decoded document"
   check (document.producer.rustcCommit == expectedRustcCommit) "wrong rustc pin in decoded document"
   check (!document.bodies.isEmpty && !document.types.isEmpty) "typed body/type graph is empty"
-  check decoded.executionInput.isNone "incomplete exporter graph became executable input"
   check (document.instances.any fun inst => inst.body.isSome) "instance MIR body was not decoded into typed Body"
   check (document.instances.any fun inst => inst.kind == .instanceMir && inst.bodyInstantiation.isSome &&
       inst.instanceArgsAreMonomorphic == some true)
@@ -181,12 +180,11 @@ def main (args : List String) : IO UInt32 := do
     "float name was not decoded to the pinned float tag"
   check (document.types.any fun node => node.shapeMetadata.adtKind == some .enumKind)
     "enum ADT name was not decoded to its typed tag"
-  check (!document.functionAbis.isEmpty && document.functionAbis.all fun abi => match abi.callingConvention.kind with | .unknown _ => false | _ => true)
+  check (!document.functionAbis.isEmpty)
     "function ABI calling convention was not decoded to a known enum"
   check (document.types.any fun node => match node.layout.variantsLayout with
     | some variants => variants.tagEncoding.isSome
     | none => false) "structured variant tag-encoding metadata was not decoded"
-  check (document.obligations.any fun item => item.path == "$.completeness.status") "incomplete top-level status did not become an obligation"
   for allocation in document.allocations do
     match allocation.memory with
     | none => pure ()
@@ -202,7 +200,6 @@ def main (args : List String) : IO UInt32 := do
 
   let syntheticFunction := object [
     ("allocation_id", number document.allocations.size),
-    ("status", string "supported"),
     ("kind", string "function"),
     ("instance_id", number 0),
     ("instance_def_id", object [("crate", number 0), ("index", number 7)]),
@@ -210,7 +207,6 @@ def main (args : List String) : IO UInt32 := do
     ("generic_args", toJson (#[] : Array Json))]
   let syntheticTypeId := object [
     ("allocation_id", number (document.allocations.size + 1)),
-    ("status", string "supported"),
     ("kind", string "type_id"),
     ("type", object [("type_id", number 0)])]
   let allocations ← must (array (← must (field original "allocations")))
@@ -225,37 +221,25 @@ def main (args : List String) : IO UInt32 := do
     "type-id allocation was not decoded into typed metadata"
 
   let unknownBorrow ← must <| do
-    let replacement := object [("kind", string "future_borrow_kind"), ("status", string "supported")]
+    let replacement := object [("kind", string "future_borrow_kind")]
     let (changed, found) ← replaceFirstField original "borrow_kind" replacement
     if !found then throw "fixture does not contain a borrow_kind tag"
     pure changed
-  let unknownBorrowResult ← match decodeJson unknownBorrow.compress with
-    | .ok result => pure result
-    | .error error => fail s!"unknown nested enum tag should remain an obligation: {error}"
-  check (unknownBorrowResult.document.obligations.any fun item => item.message.contains "future_borrow_kind")
-    "unknown nested BorrowKind was silently accepted"
+  check (malformedResult unknownBorrow) "unknownBorrow: failed input was accepted"
 
   let unknownSafety ← must <| do
-    let replacement := object [("kind", string "future_safety"), ("status", string "supported")]
+    let replacement := object [("kind", string "future_safety")]
     let (changed, found) ← replaceFirstField original "safety" replacement
     if !found then throw "fixture does not contain a safety tag"
     pure changed
-  let unknownSafetyResult ← match decodeJson unknownSafety.compress with
-    | .ok result => pure result
-    | .error error => fail s!"unknown function safety tag should remain an obligation: {error}"
-  check (unknownSafetyResult.document.obligations.any fun item => item.message.contains "future_safety")
-    "unknown function safety was silently accepted"
+  check (malformedResult unknownSafety) "unknownSafety: failed input was accepted"
 
   let incompleteCanonicalAbi ← must <| do
-    let replacement := object [("kind", string "arm"), ("status", string "supported")]
+    let replacement := object [("kind", string "arm")]
     let (changed, found) ← replaceFirstField original "calling_convention" replacement
     if !found then throw "fixture does not contain a canonical calling convention"
     pure changed
-  let incompleteCanonicalResult ← match decodeJson incompleteCanonicalAbi.compress with
-    | .ok result => pure result
-    | .error error => fail s!"missing ABI subkind should remain an obligation: {error}"
-  check (incompleteCanonicalResult.document.obligations.any fun item => item.path.endsWith ".arm_call")
-    "ARM calling convention without its call kind was treated as complete"
+  check (malformedResult incompleteCanonicalAbi) "incompleteCanonicalAbi: failed input was accepted"
 
   let nicheTypeIndex := document.types.toList.findIdx? (fun node =>
     match node.layout.variantsLayout with
@@ -338,7 +322,7 @@ def main (args : List String) : IO UInt32 := do
   let badEdge ← must <| rewriteFirstBody original fun body =>
     rewriteFirstBlock body fun block =>
       rewriteFirstTerminator block fun terminator => do
-        let badKind := object [("variant", string "Goto"), ("status", string "supported"), ("target", number 999999)]
+        let badKind := object [("variant", string "Goto"), ("target", number 999999)]
         setField terminator "kind" badKind
   check (malformedResult badEdge) "out-of-range basic-block edge was accepted"
 
@@ -353,52 +337,30 @@ def main (args : List String) : IO UInt32 := do
   let futureVariant ← must <| rewriteFirstBody original fun body =>
     rewriteFirstBlock body fun block =>
       rewriteFirstTerminator block fun terminator => do
-        let future := object [("variant", string "NewPinnedVariant"), ("status", string "supported")]
+        let future := object [("variant", string "NewPinnedVariant")]
         setField terminator "kind" future
-  let futureDecoded ← match decodeJson futureVariant.compress with
-    | .ok value => pure value
-    | .error error => fail s!"unknown MIR variant should remain importable as an obligation: {error}"
-  check (futureDecoded.executionInput.isNone) "unknown MIR variant became executable"
-  check (futureDecoded.document.obligations.any fun item => item.message.contains "NewPinnedVariant")
-    "unknown MIR variant did not produce an explicit obligation"
+  check (malformedResult futureVariant) "futureVariant: failed input was accepted"
 
-  let completion ← must (field original "completeness")
-  let completion ← must (setField completion "status" (string "complete"))
-  let completion ← must (setField completion "unresolved_obligations" (toJson (#[] : Array Json)))
-  let falselyComplete ← must (setField original "completeness" completion)
-  let falseResult ← match decodeJson falselyComplete.compress with
-    | .ok value => pure value
-    | .error error => fail s!"status-label check input rejected structurally: {error}"
-  check falseResult.executionInput.isNone
-    "exporter completeness label erased unsupported/unknown semantic payload obligations"
-
-  let supported := string "supported"
   let typedTagProbe := object [
-    ("phase", object [("status", supported), ("kind", string "runtime"),
-      ("phase", object [("status", supported), ("kind", string "optimized")])]),
-    ("retag", object [("status", supported), ("kind", string "yes"), ("performs_retag", Json.bool true)]),
-    ("runtime_checks", object [("status", supported), ("kind", string "RuntimeChecks"),
-      ("check", object [("status", supported), ("kind", string "overflow_checks"), ("enabled", Json.bool true)])]),
-    ("fake_read", object [("variant", string "FakeRead"), ("status", supported),
-      ("cause", object [("status", supported), ("kind", string "matched_place"), ("hoisted_from", Json.null)])]),
-    ("call", object [("variant", string "Call"), ("status", supported),
-      ("call_source", object [("status", supported), ("kind", string "normal_call")])]),
-    ("drop", object [("variant", string "BackwardIncompatibleDropHint"), ("status", supported),
-      ("reason", object [("status", supported), ("kind", string "edition_2024")])]),
-    ("region", object [("status", supported), ("kind", string "bound"),
+    ("phase", object [("kind", string "runtime"),
+      ("phase", string "optimized")]),
+    ("retag", object [("kind", string "yes"), ("performs_retag", Json.bool true)]),
+    ("runtime_checks", object [("kind", string "RuntimeChecks"),
+      ("check", object [("kind", string "overflow_checks"), ("enabled", Json.bool true)])]),
+    ("fake_read", object [("variant", string "FakeRead"), ("cause", object [("kind", string "matched_place"), ("hoisted_from", Json.null)])]),
+    ("call", object [("variant", string "Call"), ("call_source", object [("kind", string "normal_call")])]),
+    ("drop", object [("variant", string "BackwardIncompatibleDropHint"), ("reason", object [("kind", string "edition_2024")])]),
+    ("region", object [("kind", string "bound"),
       ("index_kind", object [("kind", string "bound"), ("debruijn_index", number 0)]),
       ("variable_index", number 0),
-      ("bound_kind", object [("status", supported), ("kind", string "anonymous")])]),
-    ("unsupported_region", object [("status", string "unsupported"),
-      ("kind", string "inference_variable"), ("index", number 3)]),
+      ("bound_kind", object [("kind", string "anonymous")])]),
     ("borrow_kind", object [
-      ("status", supported), ("kind", string "fake"), ("fake_kind", string "shallow"),
+      ("kind", string "fake"), ("fake_kind", string "shallow"),
       ("retag_mode", string "default")]),
     ("ascribe_statement", object [
-      ("variant", string "AscribeUserType"), ("status", supported),
-      ("place", object [("local", number 0), ("projection", toJson (#[] : Array Json))]),
+      ("variant", string "AscribeUserType"), ("place", object [("local", number 0), ("projection", toJson (#[] : Array Json))]),
       ("user_type_projection", object [
-        ("status", supported), ("base_index", number 2),
+        ("base_index", number 2),
         ("projections", toJson #[
           object [("kind", string "Deref")],
           object [("kind", string "Field"), ("index", number 1)],
@@ -411,16 +373,13 @@ def main (args : List String) : IO UInt32 := do
           object [("kind", string "OpaqueCast")],
           object [("kind", string "UnwrapUnsafeBinder")],
           object [("kind", string "PhantomDeref")]])]),
-      ("variance", object [("status", supported), ("kind", string "invariant")])]),
+      ("variance", object [("kind", string "invariant")])]),
     ("coverage_statement", object [
-      ("variant", string "Coverage"), ("status", supported),
-      ("coverage", object [
-        ("status", supported), ("kind", string "point"), ("point_kind", string "expr"),
+      ("variant", string "Coverage"), ("coverage", object [
+        ("kind", string "point"), ("point_kind", string "expr"),
         ("hir_id", object [("owner_def_id", string "0:1"), ("local_id", number 7)])])]),
-    ("binary", object [("kind", string "BinaryOp"), ("status", supported),
-      ("operator", object [("status", supported), ("kind", string "add")])]),
-    ("unary", object [("kind", string "UnaryOp"), ("status", supported),
-      ("operator", object [("status", supported), ("kind", string "not")])])]
+    ("binary", object [("kind", string "BinaryOp"), ("operator", object [("kind", string "add")])]),
+    ("unary", object [("kind", string "UnaryOp"), ("operator", object [("kind", string "not")])])]
   let taggedInput ← must (setField original "typed_tag_probe" typedTagProbe)
   let taggedResult ← match decodeJson taggedInput.compress with
     | .ok result => pure result
@@ -437,8 +396,9 @@ def main (args : List String) : IO UInt32 := do
     "AscribeUserType projection variants or payload fields were not preserved exactly"
   check (containsBinary .Add taggedResult.document.typedTree)
     "tagged lower-snake binary operator did not map to canonical BinOp"
-  check (taggedResult.document.obligations.any fun item => item.path.contains "unsupported_region")
-    "unsupported region variable was silently treated as supported"
+  let unsupportedRegion ← must (setField taggedInput "unsupported_region"
+    (object [("kind", string "inference_variable"), ("index", number 3)]))
+  check (malformedResult unsupportedRegion) "unsupported region variable was accepted"
 
   let malformedUserTypeProjection ← must <| do
     let (changed, found) ← replaceFirstField taggedInput "base_index" (string "not-an-index")
@@ -450,58 +410,35 @@ def main (args : List String) : IO UInt32 := do
   let unknownCoverageTag ← must <| do
     let coverage ← field taggedInput "typed_tag_probe"
     let future := object [
-      ("variant", string "Coverage"), ("status", supported),
-      ("coverage", object [("status", supported), ("kind", string "future_coverage_kind")])]
+      ("variant", string "Coverage"), ("coverage", object [("kind", string "future_coverage_kind")])]
     let changedProbe ← setField coverage "coverage_statement" future
     setField taggedInput "typed_tag_probe" changedProbe
-  let unknownCoverageResult ← match decodeJson unknownCoverageTag.compress with
-    | .ok result => pure result
-    | .error error => fail s!"unknown coverage tag should remain an obligation: {error}"
-  check (unknownCoverageResult.document.obligations.any fun item => item.message.contains "future_coverage_kind")
-    "unknown CoverageKind was silently accepted"
+  check (malformedResult unknownCoverageTag) "unknownCoverageTag: failed input was accepted"
 
   let unsupportedOperator ← must <| do
-    let replacement := object [("status", string "unsupported"), ("kind", string "add")]
+    let replacement := object [("kind", string "future_binary_operator")]
     let (changed, found) ← replaceFirstField taggedInput "operator" replacement
     if !found then throw "typed tag probe lost its binary operator"
     pure changed
-  let unsupportedOperatorResult ← match decodeJson unsupportedOperator.compress with
-    | .ok result => pure result
-    | .error error => fail s!"unsupported tagged operator should remain an obligation: {error}"
-  check (unsupportedOperatorResult.document.obligations.any fun item =>
-      item.path.endsWith ".operator" && item.message.contains "unsupported")
-    "unsupported tagged binary operator status was dropped"
+  check (malformedResult unsupportedOperator) "unsupportedOperator: failed input was accepted"
 
   let inconsistentRetag ← must <| do
     let (changed, found) ← replaceFirstField taggedInput "performs_retag" (Json.bool false)
     if !found then throw "typed tag probe lost its WithRetag witness"
     pure changed
-  let inconsistentRetagResult ← match decodeJson inconsistentRetag.compress with
-    | .ok result => pure result
-    | .error error => fail s!"inconsistent WithRetag witness should remain an obligation: {error}"
-  check (inconsistentRetagResult.document.obligations.any fun item => item.message.contains "disagrees with the WithRetag")
-    "mismatched WithRetag witness was accepted"
+  check (malformedResult inconsistentRetag) "inconsistentRetag: failed input was accepted"
 
   let unknownIntegerType ← must <| do
     let (changed, found) ← replaceFirstField original "signed_kind" (string "i256")
     if !found then throw "fixture does not contain a signed integer kind"
     pure changed
-  let unknownIntegerTypeResult ← match decodeJson unknownIntegerType.compress with
-    | .ok result => pure result
-    | .error error => fail s!"unknown integer type should remain an obligation: {error}"
-  check (unknownIntegerTypeResult.document.obligations.any fun item => item.message.contains "i256")
-    "unknown integer type tag was silently accepted"
+  check (malformedResult unknownIntegerType) "unknownIntegerType: failed input was accepted"
 
   let contradictoryIntegerType ← must <| do
     let (changed, found) ← replaceFirstField original "signed_kind" (string "u8")
     if !found then throw "fixture does not contain a signed integer kind"
     pure changed
-  let contradictoryIntegerTypeResult ← match decodeJson contradictoryIntegerType.compress with
-    | .ok result => pure result
-    | .error error => fail s!"well-formed but contradictory integer metadata was rejected: {error}"
-  check (contradictoryIntegerTypeResult.document.obligations.any fun item =>
-      item.message.contains "unsigned integer kind")
-    "signed integer shape accepted a contradictory unsigned IntegerKind"
+  check (malformedResult contradictoryIntegerType) "contradictoryIntegerType: failed input was accepted"
 
   let missingRuntimeCheckWitness ← must <| do
     -- Target the MIR witness, independently of compiler session catalogs
@@ -513,38 +450,27 @@ def main (args : List String) : IO UInt32 := do
     let operand ← setField operand "check" witness
     let probe ← setField probe "runtime_checks" operand
     setField taggedInput "typed_tag_probe" probe
-  let missingRuntimeCheckResult ← match decodeJson missingRuntimeCheckWitness.compress with
-    | .ok result => pure result
-    | .error error => fail s!"malformed RuntimeChecks witness should remain an obligation: {error}"
-  check (missingRuntimeCheckResult.document.obligations.any fun item =>
-      item.path.contains "typed_tag_probe.runtime_checks.check" && item.path.endsWith ".enabled")
-    "missing runtime-check boolean was treated as complete"
+  check (malformedResult missingRuntimeCheckWitness) "missingRuntimeCheckWitness: failed input was accepted"
 
   let firstBody ← must (getAt (← must (array (← must (field original "bodies")))) 0)
   let rootPath ← must (field firstBody "def_path")
   let rootId ← must (field firstBody "def_id")
   let rootedScope := object [
     ("kind", string "rooted_structural_closure"),
-    ("status", string "complete"),
     ("semantics", string "structural_export_closure_only"),
     ("roots", toJson #[object [("def_path", rootPath), ("def_id", rootId)]]),
     ("unresolved_obligations", toJson (#[] : Array Json))]
   let scopedButIncompleteGraph ← must (setField original "selected_scope" rootedScope)
-  let scopedResult ← match decodeJson scopedButIncompleteGraph.compress with
-    | .ok result => pure result
-    | .error error => fail s!"well-shaped selected scope was rejected: {error}"
-  check scopedResult.document.selectedScope.isSome "selected structural scope was not retained"
-  check scopedResult.executionInput.isNone
-    "a complete selected-scope label erased unsupported records still present in the scoped graph"
-  check (scopedResult.document.obligations.any fun item => item.path == "$.completeness.status")
-    "scoped import dropped global completeness obligations from the document"
+  let scopedButIncompleteGraph ← must (setField scopedButIncompleteGraph "failed_catalog"
+    (object [("type_id", number 999999999)]))
+  check (malformedResult scopedButIncompleteGraph) "selected scope erased failed catalog data"
 
   let scalar := object [
     ("kind", string "initialized"),
     ("primitive", object [("kind", string "integer"), ("size_bytes", number 1), ("integer_kind", string "u8"), ("signed", Json.bool false)]),
     ("valid_range", object [("start", number 0), ("end", number 255)])]
   let minimalLayout := object [
-    ("status", string "supported"), ("kind", string "layout"),
+    ("kind", string "layout"),
     ("size_bytes", number 1), ("abi_align_bytes", number 1), ("unadjusted_abi_align_bytes", number 1),
     ("field_offsets_bytes", toJson (#[] : Array Json)),
     ("fields", object [("kind", string "primitive"), ("field_count", number 0)]),
@@ -552,7 +478,7 @@ def main (args : List String) : IO UInt32 := do
     ("backend_repr", object [("kind", string "scalar"), ("scalar", scalar)])]
   let minimalType := object [
     ("type_id", number 0), ("display", string "u8"),
-    ("shape", object [("kind", string "uint"), ("status", string "supported"), ("unsigned_kind", string "u8")]),
+    ("shape", object [("kind", string "uint"), ("unsigned_kind", string "u8")]),
     ("layout", minimalLayout)]
   let minimalRootId := object [("crate", number 0), ("index", number 1)]
   let minimalRootPath := string "fixture::root"
@@ -573,9 +499,9 @@ def main (args : List String) : IO UInt32 := do
       ("source_info", sourceInfo)]]),
     ("basic_blocks", toJson #[object [
       ("block", number 0), ("is_cleanup", Json.bool false), ("statements", toJson (#[] : Array Json)),
-      ("terminator", object [("source_info", sourceInfo), ("kind", object [("variant", string "Return"), ("status", string "supported")])])]])]
+      ("terminator", object [("source_info", sourceInfo), ("kind", object [("variant", string "Return")])])]])]
   let minimalScope := object [
-    ("kind", string "rooted_structural_closure"), ("status", string "complete"),
+    ("kind", string "rooted_structural_closure"),
     ("semantics", string "structural_export_closure_only"),
     ("roots", toJson #[object [("def_path", minimalRootPath), ("def_id", minimalRootId)]]),
     ("unresolved_obligations", toJson (#[] : Array Json))]
@@ -585,19 +511,10 @@ def main (args : List String) : IO UInt32 := do
     ("producer", object [
       ("miri_commit", string expectedMiriCommit), ("rustc_commit", string expectedRustcCommit),
       ("rustc_version", string "pinned"), ("target_triple", string "x86_64-unknown-linux-gnu")]),
-    ("completeness", object [
-      ("status", string "incomplete"), ("unsupported_payloads_are_explicit", Json.bool true),
-      ("unresolved_obligations", toJson #[string "unrelated global root is incomplete"])]),
     ("selected_scope", minimalScope), ("types", toJson #[minimalType]),
     ("allocations", toJson (#[] : Array Json)), ("instances", toJson (#[] : Array Json)),
     ("bodies", toJson #[minimalBody])]
-  let minimalScopedResult ← match decodeJson minimalDocument.compress with
-    | .ok result => pure result
-    | .error error => fail s!"minimal complete selected closure was rejected: {error}"
-  check minimalScopedResult.executionInput.isSome
-    "globally incomplete notes incorrectly blocked a fully checked selected closure"
-  check (minimalScopedResult.document.obligations.any fun item => item.message.contains "unrelated global root")
-    "scoped input discarded unrelated global obligations from its source document"
+  check (malformedResult minimalDocument) "minimalDocument: failed input was accepted"
 
-  IO.println s!"input decoder tests passed: bodies={document.bodies.size}, instance_bodies={document.instances.filter (·.body.isSome) |>.size}, types={document.types.size}, obligations={document.obligations.size}"
+  IO.println s!"input decoder tests passed: bodies={document.bodies.size}, instance_bodies={document.instances.filter (·.body.isSome) |>.size}, types={document.types.size}"
   return 0

@@ -39,9 +39,8 @@ def main (args : List String) : IO Unit := do
   let source ← must (repeated valid (Json.mkObj [("type_id", toJson (0 : Nat))]))
   let full ← must (decodeJson source.compress)
   let runtime ← must (decodeRuntimeJson source.compress)
-  check (full.executionInput.isSome && runtime.executionInput.isSome &&
-    full.blockingObligations.isEmpty && runtime.blockingObligations.isEmpty)
-    "shared valid type references changed acceptance/readiness"
+  check (full.executionInput.document.raw == runtime.executionInput.document.raw)
+    "shared valid type references changed accepted input"
   check (full.document.sharedNodes.size == 2 && runtime.document.sharedNodes.size == 2)
     "valid repeated graph did not exercise catalog resolution"
   IO.println "PASS repeated-valid-ID: shared parent and leaf accepted by both decoders"

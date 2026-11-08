@@ -1,45 +1,18 @@
 #!/usr/bin/env python3
-"""Build the ID regressions from two retained, genuine schema-3 exports.
+"""Build strict decoder ID cases from a synthetic successful-schema input.
 
-Synthetic files are mutations of tiny-after.json.gz and are never presented as
-Rust/Miri executions. The two genuine cases are byte-for-byte decompressions of
-features-after.json.gz and main.json.gz.
+The synthetic unit fixture is a decoder-only input, not a Rust/Miri execution.
 """
-import copy
-import gzip
 import json
 import pathlib
-import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 OUT = ROOT / "scratch/decoder-id-inputs"
 EXPORTS = ROOT / "tests/input/fixtures"
-MARKER = "$lean_miri_shared_ref"
-
-
-def read_gzip(path):
-    with gzip.open(path, "rt", encoding="utf-8") as stream:
-        return json.load(stream)
 
 
 def write(name, value):
     (OUT / f"{name}.json").write_text(json.dumps(value, separators=(",", ":")) + "\n")
-
-
-def copy_export(name, source):
-    with gzip.open(source, "rb") as stream:
-        (OUT / f"{name}.json").write_bytes(stream.read())
-
-
-def expand_shared(doc, value):
-    nodes = doc["shared_payloads"]["nodes"]
-    if isinstance(value, dict) and set(value) == {MARKER}:
-        return expand_shared(doc, nodes[value[MARKER]])
-    if isinstance(value, list):
-        return [expand_shared(doc, item) for item in value]
-    if isinstance(value, dict):
-        return {key: expand_shared(doc, item) for key, item in value.items()}
-    return value
 
 
 def resolved_table(doc, name):
@@ -68,16 +41,17 @@ def set_table_empty(doc, key):
 
 
 def base():
-    graph = read_gzip(EXPORTS / "tiny-after.json.gz")
-    doc = expand_shared(graph, graph)
-    doc["shared_payloads"] = {"schema_version": 2, "nodes": []}
-    return doc
+    return json.loads((EXPORTS / "strict-unit.json").read_text())
 
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    copy_export("genuine-mir-features", EXPORTS / "features-after.json.gz")
-    copy_export("genuine-fresh", EXPORTS / "main.json.gz")
+    doc = base()
+    del doc["types"][0]["shape"]["kind"]
+    write("missing-type-shape-kind", doc)
+    doc = base()
+    del doc["types"][0]["layout"]["size_bytes"]
+    write("missing-type-layout-size", doc)
 
     doc = base()
     permute_type_rows(doc)

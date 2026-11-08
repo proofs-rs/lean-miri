@@ -16,9 +16,7 @@ def typeHash (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except String U1
   let source ← p.runtime.node ty |>.mapError toString
   let some facts := source.compilerFacts | throw "compiler TypeId hash evidence missing"
   let query ← facts.payload.getObjVal? "type_id_hash"
-  unless (← query.getObjValAs? String "status") == "supported" do
-    throw "compiler TypeId hash query unsupported"
-  let text ← (← query.getObjVal? "value").getStr?
+  let text ← query.getStr?
   unless !text.isEmpty && text.toList.all (fun c => c >= '0' && c <= '9') do
     throw "invalid compiler TypeId hash decimal encoding"
   let some value := text.toNat? | throw "invalid compiler TypeId hash value"
@@ -30,7 +28,6 @@ def importedTypeId (p : CompilerProviders.Prepared) (image : AllocationImage.Imp
   let some info := memory.findGlobal? id | return none
   if info.kind != .typeId then return none
   let node ← image.sourceNode memory id
-  unless node.status == .supported do throw "compiler TypeId allocation evidence unresolved"
   let some (.typeId ty) := node.data | throw "runtime TypeId allocation lacks typed compiler TypeId payload"
   let _ ← p.runtime.node ty |>.mapError toString
   pure (some ty)
@@ -54,7 +51,7 @@ def seedImported (p : CompilerProviders.Prepared) (image : AllocationImage.Impor
       throw "prepared TypeId catalog runtime metadata differs from its owning program"
     unless memory.sourceAllocIdWorldActive do
       throw "prepared TypeId catalog requires the active source AllocId world"
-    unless image.source == input.allocations.filter (·.status == .supported) do
+    unless image.source == input.allocations do
       throw "prepared TypeId catalog allocation image differs from its owning program"
     Miri.Input.validateCompilerAllocIdWorldRaw input.raw input.allocations (some world)
       |>.mapError fun error => s!"prepared AllocId world: {error}"

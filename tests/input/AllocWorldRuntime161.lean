@@ -93,7 +93,7 @@ private def legacySeedFunctions (prepared : CompilerFunctionPointers.Prepared)
   let input := prepared.calls.calls.program.input
   let some world := input.compilerAllocIdWorld | throw "fixture lacks prepared allocation world"
   unless memory.sourceAllocIdWorldActive do throw "prepared function catalog requires the active source AllocId world"
-  unless image.source == input.allocations.filter (·.status == .supported) do
+  unless image.source == input.allocations do
     throw "prepared function catalog allocation image differs from its owning program"
   validateCompilerAllocIdWorldRaw input.raw input.allocations (some world)
     |>.mapError fun error => s!"prepared AllocId world: {error}"
@@ -130,7 +130,7 @@ private def legacySeedVTables (prepared : CompilerVTableMachine.Prepared)
   let input := prepared.calls.calls.program.input
   let some world := input.compilerAllocIdWorld | throw "fixture lacks prepared allocation world"
   unless memory.sourceAllocIdWorldActive do throw "prepared vtable catalog requires the active source AllocId world"
-  unless image.source == input.allocations.filter (·.status == .supported) do
+  unless image.source == input.allocations do
     throw "prepared vtable catalog allocation image differs from its owning program"
   validateCompilerAllocIdWorldRaw input.raw input.allocations (some world)
     |>.mapError fun error => s!"prepared AllocId world: {error}"

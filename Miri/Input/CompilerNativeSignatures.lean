@@ -29,9 +29,7 @@ def query (p : CompilerProviders.Prepared) (callee : CallInstance) : Except Stri
           (← entry.getObjValAs? String "bound_regions") == "erased" do
         throw "native signature query operation/region-erasure evidence mismatch"
       let value ← entry.getObjVal? "signature_query"
-      unless (← value.getObjValAs? String "status") == "supported" do
-        throw "native signature compiler query unavailable for demanded full instance"
-      let signature ← value.getObjVal? "value"
+      let signature := value
       let inputs ← (← (← signature.getObjVal? "inputs").getArr?).mapM (typeRef p)
       let output ← typeRef p (← signature.getObjVal? "output")
       let result := (inputs,output)

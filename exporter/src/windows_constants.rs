@@ -2,35 +2,58 @@
 //! pinned std::sys::pal::windows ValueNS path and const-evaluation query.
 use super::*;
 
-fn query<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>, path: &[&str]) -> Value {
+fn query<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    context: &mut ExportContext<'tcx>,
+    path: &[&str],
+) -> Result<Value, String> {
     let instance = match shim_abi::named_instance(tcx, path, rustc_hir::def::Namespace::ValueNS) {
         Ok(instance) => instance,
-        Err(reason) => return json!({"status":"unsupported","reason":reason}),
+        Err(reason) => {
+            return Ok(export_failure(
+                "windows_constants::query",
+                format!("{}", reason),
+            )?);
+        }
     };
     if !matches!(
         tcx.def_kind(instance.def_id()),
         rustc_hir::def::DefKind::Const | rustc_hir::def::DefKind::AssocConst
     ) {
-        return unavailable_compiler_fact(
-            "Windows named scalar query did not resolve to a constant item",
+        return export_failure(
+            "windows_constants::query",
+            format!("{path:?} did not resolve to a constant item"),
         );
     }
     let environment = ty::TypingEnv::fully_monomorphized();
     let ty = instance.ty(tcx, environment);
     let evaluation = match tcx.const_eval_instance(environment, instance, rustc_span::DUMMY_SP) {
-        Ok(value) => compiler_fact(const_value_json(context, tcx, ty, value)),
-        Err(error) => {
-            json!({"status":"unsupported","reason":"compiler Windows constant evaluation failed","error_debug":format!("{error:?}")})
-        }
+        Ok(value) => compiler_fact(const_value_json(context, tcx, ty, value)?),
+        Err(error) => export_failure(
+            "windows_constants::query",
+            format!(
+                "{}; {}",
+                "compiler Windows constant evaluation failed",
+                format!("{error:?}")
+            ),
+        )?,
     };
-    json!({"status":"supported","instance_kind":instance_kind_json(context,tcx,instance.def),
-        "generic_args":generic_args_json(context,tcx,instance.args),"type":type_json(context,tcx,ty),
-        "evaluation":evaluation})
+    Ok::<_, String>(
+        json!({"instance_kind":instance_kind_json(context,tcx,instance.def)?,
+        "generic_args":generic_args_json(context,tcx,instance.args)?,"type":type_json(context,tcx,ty)?,
+        "evaluation":evaluation}),
+    )
 }
 
 /// Exact literal constants queried by pinned Miri Windows shims and its
-/// Windows I/O error table. Unsupported target items stay as explicit rows.
-pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>) -> Vec<Value> {
+/// Windows I/O error table. Query failures abort Windows exports.
+pub(super) fn export<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    context: &mut ExportContext<'tcx>,
+) -> Result<Vec<Value>, String> {
+    if tcx.sess.target.os != rustc_target::spec::Os::Windows {
+        return Ok(vec![]);
+    }
     let names = [
         "CREATE_ALWAYS",
         "CREATE_NEW",
@@ -137,9 +160,11 @@ pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>)
     names
         .iter()
         .map(|name| {
-            let path = ["std", "sys", "pal", "windows", "c", *name];
-            json!({"name":name,"path":path,"typing_env":"fully_monomorphized",
-            "query":query(tcx,context,&path)})
+            Ok::<_, String>({
+                let path = ["std", "sys", "pal", "windows", "c", *name];
+                json!({"name":name,"path":path,"typing_env":"fully_monomorphized",
+            "query":query(tcx,context,&path)?})
+            })
         })
-        .collect()
+        .collect::<Result<Vec<_>, String>>()
 }

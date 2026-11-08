@@ -17,7 +17,6 @@ private def liftResult (result : Result A) : RvalueM S A :=
   match result with | .ok value => pure value | .error error => throw error
 private def node (facts : CompilerFacts.Context) (ty : TyId) : Result TypeNode := do
   let value ← metadata (facts.runtime.node ty)
-  unless value.shapeStatus == .supported do throw (.callback "compiler scalar type shape unresolved")
   pure value
 
 def integerKind (facts : CompilerFacts.Context) (ty : TyId) : Result IntegerKind := do

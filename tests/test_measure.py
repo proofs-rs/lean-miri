@@ -41,7 +41,7 @@ class MeasureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
             runner = root / 'runner'
-            runner.write_text("#!/bin/sh\nprintf '%s\\n' 'decode: ready obligations=0' 'candidate=0: finalized_exit code=42' 'run: finalized_exit code=42'\n")
+            runner.write_text("#!/bin/sh\nprintf '%s\\n' 'decode: accepted' 'candidate=0: finalized_exit code=42' 'run: finalized_exit code=42'\n")
             runner.chmod(0o700)
             inp = root / 'input.json'
             inp.write_text('{}')

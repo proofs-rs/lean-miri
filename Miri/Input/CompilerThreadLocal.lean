@@ -34,11 +34,10 @@ def ofProgram (program : LoweredProgram) : Except String (Array Entry) := do
     let sourceId : DefinitionId := ⟨← natField defJson "crate", ← natField defJson "index"⟩
     let definition ← lookupDefinitionId program.bundle.definitions sourceId
     let info ← decodeStaticGlobalInfo (← field value "global_info")
-    unless info.status == .supported && info.isStatic && info.threadLocal do
+    unless info.isStatic && info.threadLocal do
       throw "TLS declaration compiler query evidence is unresolved or inconsistent"
     let initializer ← field value "initializer"
     let memory ← if info.foreignItem then pure none else do
-      unless (← stringField initializer "status") == "supported" do throw "TLS initializer query failed"
       pure (some (← decodeAllocationMemoryEvidence (← field initializer "allocation")))
     if let some previous := entries.find? (fun entry => entry.definition == definition) then
       unless (previous.payload.getObjVal? "initializer").toOption == some initializer && previous.info.payload == info.payload do

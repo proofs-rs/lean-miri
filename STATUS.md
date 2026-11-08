@@ -11,6 +11,34 @@ and exit, threads, synchronization, atomics, weak memory and data races. Finite
 QA and general whole-machine proofs are separate goals. Overall completion and
 the ability to verify arbitrary Rust are not claimed.
 
+## Exported input coverage
+
+The exporter aborts when requested semantic compiler data is unavailable; the
+Lean input API no longer retains failed exporter payloads as execution inputs.
+Successful values are serialized without success-status wrappers or a
+completeness flag; consumers validate the semantic fields they use.
+Cast-query consumers read direct result fields. A genuine absent
+function-pointer target has `resolution_kind: none` and no instance identity;
+`resolution_kind: instance` carries the direct instance fields. This preserves
+the optional answer when exact query-key fields are attached.
+Coroutine frame layout serialization and foreign TLS initializers remain
+unimplemented and now stop export. This boundary does not establish compiler
+query closure or interpreter correspondence.
+
+Fifteen fixed connected inputs and their same-TyCtxt reference observations,
+three eval-core inputs and two selected runtime inputs have been regenerated
+under the schema-3 successful-input contract. Performance checks now obtain
+fresh producer inputs. The DST and large Tree Borrows connected cases now
+generate inputs and same-TyCtxt references in CI from unchanged tracked sources,
+flags and reviewed guest configuration; fixed assertions and choice tapes are
+preserved. This adds pinned toolchain/sysroot build cost and replaces saved
+allocation-history replay for those two cases. Their historical archives are
+not CI inputs.
+The latest CI matrix and the 17-case Lean connected replay have not been run
+at the user's request; regeneration and historical replay results do not
+validate those executions or establish compiler query closure, interpreter
+correspondence or whole-machine safety.
+
 ## Empty-function caller-domain transport
 
 The [empty-function proof](examples/empty_function/README.md) covers actual call

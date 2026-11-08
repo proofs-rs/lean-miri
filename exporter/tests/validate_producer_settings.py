@@ -27,7 +27,7 @@ with tempfile.TemporaryDirectory() as tmp:
     env['MIRI_SYSROOT']=str(sysroot)
     subprocess.run(command,cwd=ROOT,env=env,check=True)
     doc=load_mir_document(output);settings=doc['producer']['input_settings']
-    assert settings['status']=='supported'
+    assert "status" not in settings
     assert settings['miri_default_args']==defaults
     assert all(arg in settings['rustc_args'] for arg in defaults)
     assert settings['requested_cfg_miri'] is True

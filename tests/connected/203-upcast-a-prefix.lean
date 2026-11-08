@@ -280,8 +280,6 @@ private def runTraitUpcastPure (contents : String) (pageSize : UInt64)
     (numCpus hostPid : UInt32) (mathHost expectUnaryUnsupported : Bool)
     (timezone : Bool := false) (hostPoll : Poll := {}) (monotonic : Nat := 0) (traceVtables : Bool := false) : Except String String := do
   let decoded ← Input.decodeRuntimeJson contents
-  unless decoded.executionInput.isSome && decoded.blockingObligations.isEmpty do
-    throw s!"strict readiness gate failed: obligations={decoded.blockingObligations.size}; sample={reprStr (decoded.blockingObligations.toList.take 30)}"
   let program ← Input.lowerCoreProgram decoded.document
   let attempt := Input.EvalPreparation.prepare program
   let prepared ← attempt.outcome

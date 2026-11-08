@@ -17,7 +17,7 @@ private def mustReject (name : String) (value : Except String α) : IO Unit :=
 private def body : Json := Json.mkObj [("basic_blocks", toJson (#[] : Array Json))]
 
 private def normalized (fields : List (String × Json)) : Json :=
-  Json.mkObj (("status", toJson "supported") :: fields)
+  Json.mkObj fields
 
 private def lowerSignature (program : LoweredProgram) :=
   (program.roots, program.instances, program.promoted,
@@ -36,7 +36,7 @@ def main (args : List String) : IO Unit := do
     throw (IO.userError "legacy embedded normalization body did not resolve")
   unless (NormalizationBody.resolve compact body).toOption == some body do
     throw (IO.userError "compact source_body reference did not resolve")
-  mustReject "unsupported status" (NormalizationBody.resolve (Json.mkObj [("status", toJson "unsupported"), ("body", body)]) body)
+  mustReject "missing successful body evidence" (NormalizationBody.resolve (Json.mkObj [("kind", toJson "normalization_error")]) body)
   mustReject "missing body and reference" (NormalizationBody.resolve (normalized []) body)
   mustReject "both body and reference" (NormalizationBody.resolve (normalized [("body", body), ("body_ref", toJson "source_body")]) body)
   mustReject "unknown reference" (NormalizationBody.resolve (normalized [("body_ref", toJson "other_body")]) body)
@@ -62,8 +62,6 @@ def main (args : List String) : IO Unit := do
   let inlineProgram ← must (lowerProgram inlineDecoded.document)
   unless lowerSignature graphProgram == lowerSignature inlineProgram do
     throw (IO.userError "graph and resolved inline MIR lowering differ")
-  unless graphProgram.input.obligations == inlineProgram.input.obligations do
-    throw (IO.userError "graph and resolved inline source obligations differ")
 
   let graphPrepared ← must (CompilerConstantQueries.prepare graphProgram)
   let inlinePrepared ← must (CompilerConstantQueries.prepare inlineProgram)
@@ -71,8 +69,6 @@ def main (args : List String) : IO Unit := do
     throw (IO.userError "graph and resolved inline prepared MIR programs differ")
   unless evidenceSignature graphPrepared == evidenceSignature inlinePrepared do
     throw (IO.userError "graph and resolved inline constant-query evidence differs")
-  unless graphPrepared.obligations == inlinePrepared.obligations do
-    throw (IO.userError "graph and resolved inline preparation obligations differ")
   unless !graphPrepared.evidence.isEmpty do
     throw (IO.userError "fixture did not exercise normalized constant-query evidence")
   IO.println s!"graph and resolved inline inputs decode, lower, and prepare equivalently ({graphProgram.bundle.bodies.size} bodies; {graphPrepared.evidence.size} constant-query results)"

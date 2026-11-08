@@ -3,8 +3,9 @@ import Miri.Interpreter.FunctionCalls
 
 /-! Demand-level compatibility regression for the prepared compiler query
 indices. The input is a retained producer export, supplied as the first CLI
-argument. Every case decodes, lowers, and prepares the mutated export through
-the public path; no Prepared provider or index is manually assembled. -/
+argument. Successful input cases use the public decode/lower/prepare path.
+Malformed ABI rows must fail import; a separate manually assembled raw index
+then exercises demand-level ordering against the source scan. -/
 open Lean Miri Miri.ABI Miri.Input Miri.Interpreter
 
 private def must (value : Except String α) : IO α :=
@@ -71,8 +72,6 @@ private def legacyCovariance (p : CompilerProviders.Prepared) (source target : M
       unless (← entry.getObjValAs? String "typing_env") == "fully_monomorphized" &&
           (← entry.getObjValAs? String "variance") == "covariant" do
         throw s!"compiler covariance query key/environment mismatch (source={source}, target={target})"
-      unless (← entry.getObjValAs? String "status") == "supported" do
-        throw s!"compiler covariance query unresolved (source={source}, target={target})"
       let value ← entry.getObjValAs? Bool "value"
       if let some old := found then
         unless old == value do
@@ -105,8 +104,9 @@ private def requestOf (p : CompilerProviders.Prepared) (record : Json) :
   pure ⟨inputs, output, abi, safety, cVariadic, splatted⟩
 
 private def legacySignatureAbi (p : CompilerProviders.Prepared)
-    (request : FunctionCalls.SignatureRequest ABI.ExternAbi) : Except String (FnAbi MIR.TyId) := do
-  let records ← (← (← p.program.input.raw.getObjVal? "compiler_function_facts").getObjVal? "helper_signatures").getArr?
+    (request : FunctionCalls.SignatureRequest ABI.ExternAbi) (raw? : Option Json := none) : Except String (FnAbi MIR.TyId) := do
+  let raw := raw?.getD p.program.input.raw
+  let records ← (← (← raw.getObjVal? "compiler_function_facts").getObjVal? "helper_signatures").getArr?
   let mut found : Option Json := none
   for record in records do
     unless (← record.getObjValAs? String "typing_env") == "fully_monomorphized" do
@@ -116,8 +116,6 @@ private def legacySignatureAbi (p : CompilerProviders.Prepared)
     let output ← typeRef p (← signature.getObjVal? "output")
     let abi ← CompilerExternAbi.decode (← signature.getObjVal? "abi")
     let safety ← signature.getObjVal? "safety"
-    unless (← safety.getObjValAs? String "status") == "supported" do
-      throw "helper safety metadata unsupported"
     let safety ← match ← safety.getObjValAs? String "kind" with
       | "safe" => pure MIR.Safety.Safe
       | "unsafe" => pure MIR.Safety.Unsafe
@@ -131,9 +129,7 @@ private def legacySignatureAbi (p : CompilerProviders.Prepared)
         unless value == previous do throw "conflicting exact helper signature ABI evidence"
       found := some value
   let some result := found | throw s!"missing exact compiler dummy-signature ABI query: inputs={reprStr request.inputs}, output={request.output}, abi={reprStr request.abi}, safety={reprStr request.safety}, c_variadic={request.cVariadic}, splatted={request.splatted}"
-  unless (← result.getObjValAs? String "status") == "supported" do
-    throw s!"compiler dummy-signature ABI query failed: {result.compress}"
-  CallResolution.functionAbi p.runtime (← decodeCompilerFunctionAbi (← result.getObjVal? "value"))
+  CallResolution.functionAbi p.runtime (← decodeCompilerFunctionAbi result)
 
 def main (args : List String) : IO Unit := do
   let some path := args.head? | throw (IO.userError "authentic producer export path required")
@@ -173,9 +169,9 @@ def main (args : List String) : IO Unit := do
   let conflictingCovarianceRow ← must (setField covarianceRow "value" (toJson (!expected)))
   let covarianceMutated ← must (replaceCovarianceAt raw covarianceIndex conflictingCovarianceRow)
   let covarianceMutated ← must (appendRootArray covarianceMutated "compiler_covariance_queries" covarianceRow)
-  let unsupportedCovarianceRow ← must (setField secondCovarianceRow "status" (toJson "unsupported"))
+  let unsupportedCovarianceRow ← must (setField secondCovarianceRow "value" Json.null)
   let covarianceMutated ← must (replaceCovarianceAt covarianceMutated 1 unsupportedCovarianceRow)
-  let malformedUnrelatedCovariance ← must (setField thirdCovarianceRow "status" (toJson "malformed-but-unrelated"))
+  let malformedUnrelatedCovariance ← must (setField thirdCovarianceRow "value" (toJson "malformed-but-unrelated"))
   let covarianceMutated ← must (replaceCovarianceAt covarianceMutated 2 malformedUnrelatedCovariance)
   let covarianceMutated ← must (appendRootArray covarianceMutated "compiler_covariance_queries" Json.null)
   let covariancePrepared ← prepared covarianceMutated
@@ -252,7 +248,7 @@ def main (args : List String) : IO Unit := do
   let currentSignatures ← must (field facts "helper_signatures")
   let currentRows ← must (array currentSignatures)
   let secondQuery ← must (field (currentRows[1]!) "abi_query")
-  let secondUnsupported ← must (setField secondQuery "status" (toJson "unsupported"))
+  let secondUnsupported ← must (setField secondQuery "return" Json.null)
   let secondRow ← must (setField (currentRows[1]!) "abi_query" secondUnsupported)
   let signatureMutated ← must (replaceSignatureAt signatureMutated 1 secondRow)
   let facts ← must (field signatureMutated "compiler_function_facts")
@@ -265,24 +261,30 @@ def main (args : List String) : IO Unit := do
   let currentRows ← must (array currentSignatures)
   let thirdBadQuery ← must (setField (currentRows[2]!) "abi_query" (toJson "malformed unrelated result"))
   let signatureMutated ← must (replaceSignatureAt signatureMutated 2 thirdBadQuery)
-  let conflictingSignatureRow ← must (setField signatureRow "abi_query" (Json.mkObj [("status", toJson "different")] ))
+  let conflictingSignatureRow ← must (setField signatureRow "abi_query" (Json.mkObj [("return", Json.null)] ))
   let signatureMutated ← must (appendSignature signatureMutated conflictingSignatureRow)
-  let signaturePrepared ← prepared signatureMutated
-  let currentFirst := CompilerSignatureAbi.queryWithIndex signaturePrepared.runtime signaturePrepared.signatureAbiIndex request
-  let legacyFirst := legacySignatureAbi signaturePrepared request
+  check (!(decodeJson signatureMutated.compress).isOk)
+    "malformed signature ABI unexpectedly passed full import"
+  check (!(decodeRuntimeJson signatureMutated.compress).isOk)
+    "malformed signature ABI unexpectedly passed runtime import"
+  -- An intentionally manual raw index isolates lookup/error ordering from
+  -- the successful-input decoder boundary checked above.
+  let signatureIndex := CompilerQueryIndices.signatureAbi baseline.runtime signatureMutated
+  let currentFirst := CompilerSignatureAbi.queryWithIndex baseline.runtime signatureIndex request
+  let legacyFirst := legacySignatureAbi baseline request (some signatureMutated)
   check (resultText currentFirst == resultText legacyFirst)
     s!"conflicting exact signature duplicate changed old scan result/error: current={resultText currentFirst}; legacy={resultText legacyFirst}"
-  let currentSecond := CompilerSignatureAbi.queryWithIndex signaturePrepared.runtime signaturePrepared.signatureAbiIndex secondRequest
-  let legacySecond := legacySignatureAbi signaturePrepared secondRequest
+  let currentSecond := CompilerSignatureAbi.queryWithIndex baseline.runtime signatureIndex secondRequest
+  let legacySecond := legacySignatureAbi baseline secondRequest (some signatureMutated)
   check (resultText currentSecond == resultText legacySecond)
     s!"unsupported exact signature row changed old scan result/error: current={resultText currentSecond}; legacy={resultText legacySecond}"
-  let currentThird := CompilerSignatureAbi.queryWithIndex signaturePrepared.runtime signaturePrepared.signatureAbiIndex thirdRequest
-  let legacyThird := legacySignatureAbi signaturePrepared thirdRequest
+  let currentThird := CompilerSignatureAbi.queryWithIndex baseline.runtime signatureIndex thirdRequest
+  let legacyThird := legacySignatureAbi baseline thirdRequest (some signatureMutated)
   check (resultText currentThird == resultText legacyThird)
     s!"malformed unrelated signature row changed old scan result/error: current={resultText currentThird}; legacy={resultText legacyThird}"
   let missingRequest := { request with output := 999999999 }
-  let currentMissing := CompilerSignatureAbi.queryWithIndex signaturePrepared.runtime signaturePrepared.signatureAbiIndex missingRequest
-  let legacyMissing := legacySignatureAbi signaturePrepared missingRequest
+  let currentMissing := CompilerSignatureAbi.queryWithIndex baseline.runtime signatureIndex missingRequest
+  let legacyMissing := legacySignatureAbi baseline missingRequest (some signatureMutated)
   check (resultText currentMissing == resultText legacyMissing)
     s!"missing exact signature row changed old scan result/error: current={resultText currentMissing}; legacy={resultText legacyMissing}"
   IO.println "prepared compiler query indices preserve source scan results and diagnostics on authentic export mutations"

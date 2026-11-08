@@ -16,10 +16,10 @@ private def trivial (runtime : RuntimeMetadata) : Nat → TyId → Except StepEr
     let node ← (runtime.node ty).mapError (fun e => StepError.unsupported (toString e))
     match node.shapeKind with
     | .int | .uint | .bool | .float | .functionDefinition | .functionPointer
-    | .rawPointer | .char | .reference | .coroutine | .coroutineWitness | .array
-    | .closure | .coroutineClosure | .never | .errorType => pure true
+    | .rawPointer | .char | .reference | .coroutine | .array
+    | .closure | .coroutineClosure | .never => pure true
     | .str | .slice | .dynamicTraitObject | .foreign | .adt | .alias
-    | .parameter | .placeholderType => pure false
+    => pure false
     | .tuple =>
       let elements ← metadata ((node.payload.getObjVal? "shape").bind fun shape =>
         (shape.getObjVal? "elements").bind Json.getArr?)
@@ -34,9 +34,6 @@ private def trivial (runtime : RuntimeMetadata) : Nat → TyId → Except StepEr
         let shape ← node.payload.getObjVal? "shape"
         (← shape.getObjVal? key).getObjValAs? Nat "type_id"
       trivial runtime fuel inner
-    | .boundType => throw (.invalidProgram "is_very_trivially_sized applied to bound type")
-    | .inferenceType => throw (.unsupported "storage sizedness requires exact compiler inference subtype")
-    | .unknown kind => throw (.unsupported s!"storage sizedness type kind {kind}")
 
 /-- Every recursive step follows a canonical type edge. The type-table length
 bounds an acyclic path; exhaustion diagnoses malformed cyclic input, rather

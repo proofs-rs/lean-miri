@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 lane="${1:?usage: setup.sh regression|extended|replay|fresh|upstream-ui}"
 case "$lane" in regression|extended|replay|fresh|upstream-ui) ;; *) exit 2 ;; esac
-if [[ "$lane" != replay ]] && ! command -v rg >/dev/null 2>&1; then
+if ! command -v rg >/dev/null 2>&1; then
   echo "Missing rg (ripgrep); install ripgrep before running $lane setup." >&2
   exit 1
 fi
@@ -16,7 +16,8 @@ mkdir -p scratch/ci
 source tools/ci/timing.sh
 ci_step 'setup:lean' bash tools/setup-lean.sh
 
-if [[ "$lane" != replay ]]; then
+# Every lane now needs pinned export/reference tooling for its live inputs.
+{
   # Existing scripts expect repository-local rustup, including its stable compiler.
   installer="$(mktemp)"
   trap 'rm -f "$installer"' EXIT
@@ -24,12 +25,14 @@ if [[ "$lane" != replay ]]; then
   ci_step 'setup:rustup' sh "$installer" -y --no-modify-path --profile minimal --default-toolchain stable
   ci_step 'setup:rustc-exporter' bash tools/setup-rustc-exporter.sh
   ci_step 'setup:fetch-source-analysis' cargo +stable fetch --locked --manifest-path tools/source-analysis/Cargo.toml
+  if [[ "$lane" != replay ]]; then
+    ci_step 'setup:fetch-float-oracle' cargo +stable fetch --locked --manifest-path tests/float_ops/source_oracle/Cargo.toml
+    ci_step 'setup:fetch-intrinsic-oracle' cargo +stable fetch --locked --manifest-path tests/intrinsic_float/source_oracle/Cargo.toml
+    ci_step 'setup:fetch-connected-libc' cargo +miri-exporter-8144389c895d fetch --locked --manifest-path tests/connected/libc/Cargo.toml
+  fi
   ci_step 'setup:fetch-exporter' cargo +miri-exporter-8144389c895d fetch --locked --manifest-path exporter/Cargo.toml
-  ci_step 'setup:fetch-float-oracle' cargo +stable fetch --locked --manifest-path tests/float_ops/source_oracle/Cargo.toml
-  ci_step 'setup:fetch-intrinsic-oracle' cargo +stable fetch --locked --manifest-path tests/intrinsic_float/source_oracle/Cargo.toml
-  ci_step 'setup:fetch-connected-libc' cargo +miri-exporter-8144389c895d fetch --locked --manifest-path tests/connected/libc/Cargo.toml
   ci_step 'setup:reference-miri-sysroot' bash tools/setup-miri-reference.sh
-fi
+}
 
 # GitHub starts each subsequent step with a fresh shell.
 if [[ -n "${GITHUB_ENV:-}" ]]; then
@@ -45,9 +48,9 @@ fi
   df -h .
   python3 --version
   lake --version
-  if [[ "$lane" != replay ]]; then
+  {
     cargo +stable --version
     rustc +stable -vV
     rustc +miri-exporter-8144389c895d -vV
-  fi
+  }
 } > scratch/ci/environment.txt

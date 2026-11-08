@@ -19,10 +19,11 @@ for path in glob.glob(str(root / "**/lean-miri-mir/*.json"), recursive=True):
 
 assert "exporter_helper" in documents, f"dependency crate MIR JSON absent: {list(documents)}"
 assert "exporter_cargo_app" in documents, f"application crate MIR JSON absent: {list(documents)}"
+assert "build_script_build" not in documents, "host build scripts are not guest input"
 app = documents["exporter_cargo_app"]
 instances = [
     item for item in app["instances"]
-    if item.get("kind") == "instance_mir" and item.get("status") == "supported"
+    if item.get("kind") == "instance_mir" and "status" not in item
 ]
 # A DefId/path can have several distinct generic instantiations. Discovery
 # retains symbolic instances too; choose the concrete full argument key.
@@ -33,8 +34,8 @@ def u32_argument(instance):
 wrap = next(item for item in instances if item["def_path"].endswith("::wrap") and u32_argument(item))
 identity = next(item for item in instances if item["def_path"].endswith("::identity") and item["generic_args"] == wrap["generic_args"])
 assert identity["instance_id"] != wrap["instance_id"]
-assert wrap["body_instantiation"] == {"kind": "substituted_and_normalized", "status": "supported"}
-assert identity["body_instantiation"]["status"] == "supported"
+assert wrap["body_instantiation"] == {"kind": "substituted_and_normalized"}
+assert "status" not in identity["body_instantiation"]
 
 types = {item["type_id"]: item for item in app["types"]}
 
@@ -55,6 +56,6 @@ if os.environ.get("MIRI_SYSROOT"):
         item for item in instances
         if "Vec" in item.get("def_path", "") and item.get("def_path", "").endswith("::len")
     )
-    assert vector_len["body_instantiation"]["status"] == "supported"
+    assert "status" not in vector_len["body_instantiation"]
     assert any("Vec<u32>" in ty for ty in local_displays(vector_len)), "Miri sysroot std MIR was not monomorphized"
 print(f"validated Cargo MIR for {len(documents)} crates and concrete external generic closure")

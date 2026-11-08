@@ -8,7 +8,6 @@ structure ImportDocumentCore where
   compilerAbiLayoutSchema : Option String := none
   producer : Producer
   runtimeTargetDataLayout : Option TargetDataLayoutEvidence := none
-  completenessStatus : PayloadStatus
   types : Array TypeNode
   allocations : Array AllocationNode
   compilerAllocIdWorld : Option CompilerAllocIdWorld := none
@@ -16,12 +15,11 @@ structure ImportDocumentCore where
   selectedScope : Option SelectedScope
   functionAbis : Array FunctionAbi
   bodies : Array Body
-  obligations : Array Obligation
   raw : Lean.Json
   /-- Resolved source nodes from the mandatory shared-payload graph. Each node
   is retained once so downstream consumers can reuse the document's DAG. -/
   sharedNodes : Array Lean.Json := #[]
-  /-- Checked import-time ABI queries; failures remain deferred until demand. -/
+  /-- Checked import-time ABI projections indexed by their exact source JSON. -/
   compilerFunctionAbiTable : Option (CompilerFunctionAbiTable sharedNodes) := none
   compilerValueMemo : Option CompilerValueMemo := none
 
@@ -34,7 +32,6 @@ structure ImportDocument where
   compilerAbiLayoutSchema : Option String := none
   producer : Producer
   runtimeTargetDataLayout : Option TargetDataLayoutEvidence := none
-  completenessStatus : PayloadStatus
   types : Array TypeNode
   allocations : Array AllocationNode
   compilerAllocIdWorld : Option CompilerAllocIdWorld := none
@@ -43,20 +40,18 @@ structure ImportDocument where
   functionAbis : Array FunctionAbi
   bodies : Array Body
   typedTree : TypedValue
-  obligations : Array Obligation
   raw : Lean.Json
   /-- Resolved source nodes from the mandatory shared-payload graph. -/
   sharedNodes : Array Lean.Json := #[]
 
 /-- Diagnostic/reflected imports contain schema data only. Their runtime view
-uses the uncached compatibility path; the native runtime importer retains the
+uses the uncached metadata path; the native runtime importer retains the
 checked compiler projections directly in ImportDocumentCore. -/
 def ImportDocument.toCore (document : ImportDocument) : ImportDocumentCore := {
   compilerPredicates := document.compilerPredicates
   compilerAbiLayoutSchema := document.compilerAbiLayoutSchema
   producer := document.producer
   runtimeTargetDataLayout := document.runtimeTargetDataLayout
-  completenessStatus := document.completenessStatus
   types := document.types
   allocations := document.allocations
   compilerAllocIdWorld := document.compilerAllocIdWorld
@@ -64,7 +59,6 @@ def ImportDocument.toCore (document : ImportDocument) : ImportDocumentCore := {
   selectedScope := document.selectedScope
   functionAbis := document.functionAbis
   bodies := document.bodies
-  obligations := document.obligations
   raw := document.raw
   sharedNodes := document.sharedNodes
 }
@@ -78,7 +72,6 @@ def ImportDocumentCore.withTypedTree (core : ImportDocumentCore) (typedTree : Ty
   compilerAbiLayoutSchema := core.compilerAbiLayoutSchema
   producer := core.producer
   runtimeTargetDataLayout := core.runtimeTargetDataLayout
-  completenessStatus := core.completenessStatus
   types := core.types
   allocations := core.allocations
   compilerAllocIdWorld := core.compilerAllocIdWorld
@@ -87,7 +80,6 @@ def ImportDocumentCore.withTypedTree (core : ImportDocumentCore) (typedTree : Ty
   functionAbis := core.functionAbis
   bodies := core.bodies
   typedTree := typedTree
-  obligations := core.obligations
   raw := core.raw
   sharedNodes := core.sharedNodes
 }
@@ -102,15 +94,10 @@ structure RuntimeExecutionInput where
 
 structure DecodeResult where
   document : ImportDocument
-  executionInput : Option ExecutionInput
-  /-- Exact obligations that make `executionInput` unavailable under the
-  decoder's existing readiness predicate. This is diagnostic evidence only;
-  it does not relax or otherwise define execution readiness. -/
-  blockingObligations : Array Obligation := #[]
+  executionInput : ExecutionInput
 
 structure RuntimeDecodeResult where
   document : ImportDocumentCore
-  executionInput : Option RuntimeExecutionInput
-  blockingObligations : Array Obligation := #[]
+  executionInput : RuntimeExecutionInput
 
 end Miri.Input

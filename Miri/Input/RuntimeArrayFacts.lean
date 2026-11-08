@@ -17,10 +17,9 @@ private def trivial (world : RuntimeArrayTypes.World) (ty : MIR.TyId) : Nat → 
         | .u8 => world.byteLayout.ty | .u16 => world.wideLayout.ty | .compiler id => id
       return ← trivial world child fuel
     let node ← world.metadata.node ty |>.mapError toString
-    unless node.shapeStatus == .supported do throw "structural trait query requires compiler type shape"
     match node.shapeKind with
     | .int | .uint | .float | .bool | .char | .str | .never | .reference | .rawPointer
-    | .functionDefinition | .functionPointer | .errorType => pure true
+    | .functionDefinition | .functionPointer => pure true
     | .tuple =>
       let shape ← node.payload.getObjVal? "shape"
       for child in ← (← shape.getObjVal? "elements").getArr? do

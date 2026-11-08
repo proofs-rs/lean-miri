@@ -27,10 +27,13 @@ fn extern_static_declaration<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
     def: rustc_hir::def_id::DefId,
-) -> Value {
+) -> Result<Value, String> {
     use rustc_hir::def::DefKind;
     let DefKind::Static { mutability, .. } = tcx.def_kind(def) else {
-        return json!({"status":"unsupported","reason":"extern-static declaration DefId is not a static"});
+        return Ok(export_failure(
+            "foreign_symbols::extern_static_declaration",
+            "extern-static declaration DefId is not a static",
+        )?);
     };
     let instance = ty::Instance::mono(tcx, def);
     let symbol = tcx.symbol_name(instance).name.to_string();
@@ -48,13 +51,12 @@ fn extern_static_declaration<'tcx>(
         rustc_ast::Mutability::Mut => "mutable",
         rustc_ast::Mutability::Not => "immutable",
     };
-    let type_ref = type_json(context, tcx, def_ty);
-    match tcx.layout_of(env.as_query_input(def_ty)) {
+    let type_ref = type_json(context, tcx, def_ty)?;
+    Ok::<_, String>(match tcx.layout_of(env.as_query_input(def_ty)) {
         Ok(layout) => {
             let ty_is_freeze = layout.ty.is_freeze(tcx, env);
             let declaration_mutable = !(mutability == rustc_ast::Mutability::Not && ty_is_freeze);
             json!({
-                "status":"supported",
                 "definition":def_json(def),
                 "symbol":symbol,
                 "typing_env":"fully_monomorphized",
@@ -66,18 +68,15 @@ fn extern_static_declaration<'tcx>(
                 "decl_is_mut":declaration_mutable,
             })
         }
-        Err(error) => json!({
-            "status":"unsupported",
-            "definition":def_json(def),
-            "symbol":symbol,
-            "typing_env":"fully_monomorphized",
-            "type":type_ref,
-            "import_linkage":import_linkage,
-            "definition_mutability":definition_mutability,
-            "reason":"extern-static declaration layout query failed",
-            "error_debug":format!("{error:?}"),
-        }),
-    }
+        Err(error) => export_failure(
+            "foreign_symbols::extern_static_declaration",
+            format!(
+                "{}; {}",
+                "extern-static declaration layout query failed",
+                format!("{error:?}")
+            ),
+        )?,
+    })
 }
 
 fn candidate<'tcx>(
@@ -87,7 +86,7 @@ fn candidate<'tcx>(
     def: rustc_hir::def_id::DefId,
     iteration_index: usize,
     used: bool,
-) -> Option<Value> {
+) -> Result<Option<Value>, String> {
     let attrs = tcx.codegen_fn_attrs(def);
     // foreign_items.rs::lookup_exported_symbol performs this exact gate
     // before Instance::mono and tcx.symbol_name. Do not query non-candidates:
@@ -96,7 +95,7 @@ fn candidate<'tcx>(
         || attrs.flags.contains(F::NO_MANGLE)
         || attrs.flags.contains(F::RUSTC_STD_INTERNAL_SYMBOL);
     if !explicit_symbol {
-        return None;
+        return Ok(None);
     }
     // This is deliberately the same `Instance::mono` + `tcx.symbol_name`
     // query used by Miri, including for exports that are not callable.
@@ -110,8 +109,8 @@ fn candidate<'tcx>(
     };
     let callable_identity = if instance_id.is_some() {
         Some(json!({
-            "instance_kind": instance_kind_json(context, tcx, instance.def),
-            "generic_args": generic_args_json(context, tcx, instance.args),
+            "instance_kind": instance_kind_json(context, tcx, instance.def)?,
+            "generic_args": generic_args_json(context, tcx, instance.args)?,
         }))
     } else {
         None
@@ -136,7 +135,7 @@ fn candidate<'tcx>(
     if let Some(identity) = callable_identity {
         record["callable_identity"] = identity;
     }
-    Some(record)
+    Ok::<_, String>(Some(record))
 }
 
 /// Export source lookup winners for every exact symbol identity. The winner
@@ -148,7 +147,7 @@ fn selected_exports<'tcx>(
     context: &mut ExportContext<'tcx>,
     candidates: &[Value],
     demanded_symbols: &[String],
-) -> Value {
+) -> Result<Value, String> {
     let mut winners: Vec<(String, Value, bool)> = Vec::new();
     for candidate in candidates {
         let symbol = candidate["symbol"].as_str().unwrap_or_default().to_owned();
@@ -156,7 +155,9 @@ fn selected_exports<'tcx>(
             continue;
         }
         let weak = candidate["weak"].as_bool().unwrap_or(false);
-        if let Some((_, current, ambiguous)) = winners.iter_mut().find(|(name, _, _)| *name == symbol) {
+        if let Some((_, current, ambiguous)) =
+            winners.iter_mut().find(|(name, _, _)| *name == symbol)
+        {
             if *ambiguous {
                 continue;
             }
@@ -171,22 +172,19 @@ fn selected_exports<'tcx>(
         }
     }
 
-    Value::Array(winners.into_iter().map(|(symbol, winner, ambiguous)| {
+    Ok::<_, String>(Value::Array(winners.into_iter().map(|(symbol, winner, ambiguous)| { {
         if ambiguous {
-            return json!({"symbol":symbol,"status":"ambiguous",
-                "reason":"source lookup_exported_symbol found equal-strength duplicate definitions"});
+            return Ok(json!({"symbol":symbol,"resolution":"ambiguous",
+                "reason":"source lookup_exported_symbol found equal-strength duplicate definitions"}));
         }
         let Some(definition) = winner.get("definition") else {
-            return json!({"symbol":symbol,"status":"unsupported",
-                "reason":"selected source symbol has no exact DefId"});
+            return Ok(export_failure("foreign_symbols::selected_exports", "selected source symbol has no exact DefId")?);
         };
         let Some(crate_index) = definition.get("crate").and_then(Value::as_u64) else {
-            return json!({"symbol":symbol,"status":"unsupported",
-                "reason":"selected source symbol has no crate index"});
+            return Ok(export_failure("foreign_symbols::selected_exports", "selected source symbol has no crate index")?);
         };
         let Some(def_index) = definition.get("index").and_then(Value::as_u64) else {
-            return json!({"symbol":symbol,"status":"unsupported",
-                "reason":"selected source symbol has no DefId index"});
+            return Ok(export_failure("foreign_symbols::selected_exports", "selected source symbol has no DefId index")?);
         };
         let def = rustc_hir::def_id::DefId {
             krate: rustc_hir::def_id::CrateNum::from_u32(crate_index as u32),
@@ -194,29 +192,23 @@ fn selected_exports<'tcx>(
         };
         let kind = definition_kind(tcx, def);
         if kind != "static" {
-            return json!({"symbol":symbol,"status":"supported","kind":kind,
+            return Ok(json!({"symbol":symbol,"kind":kind,
                 "definition":definition,
                 "instance_id":winner.get("instance_id").cloned().unwrap_or(Value::Null),
-                "callable_identity":winner.get("callable_identity").cloned().unwrap_or(Value::Null)});
+                "callable_identity":winner.get("callable_identity").cloned().unwrap_or(Value::Null)}));
         }
 
-        let declaration = extern_static_declaration(tcx, context, def);
+        let declaration = extern_static_declaration(tcx, context, def)?;
         let allocation = if matches!(tcx.def_kind(def), rustc_hir::def::DefKind::Static { .. }) {
             let alloc_id = tcx.reserve_and_set_static_alloc(def);
-            let reference = allocation_ref(context, tcx, alloc_id);
-            json!({"status":if allocation_status(context, &reference) == "supported" {
-                    "supported"
-                } else {
-                    "unsupported"
-                },"value":reference})
+            let reference = allocation_ref(context, tcx, alloc_id)?;
+            compiler_fact(reference)
         } else {
-            json!({"status":"unsupported","reason":"selected definition ceased to be a static"})
+            export_failure("foreign_symbols::selected_exports", "selected definition ceased to be a static")?
         };
-        json!({"symbol":symbol,"status":if declaration["status"] == "supported"
-                && allocation["status"] == "supported" {"supported"} else {"unsupported"},
-            "kind":"static","definition":definition,"declaration":declaration,
-            "allocation":allocation})
-    }).collect())
+        Ok::<_, String>(json!({"symbol":symbol,"kind":"static","definition":definition,"declaration":declaration,
+            "allocation":allocation}))
+    } }).collect::<Result<Vec<_>, String>>()?))
 }
 
 /// Record the exact `lookup_exported_symbol` winner for demanded foreign-call
@@ -230,7 +222,9 @@ fn selected_foreign_fallbacks(candidates: &[Value], demanded_symbols: &[String])
         let mut winner: Option<&Value> = None;
         let mut ambiguous = false;
         for candidate in candidates {
-            if candidate["symbol"].as_str() != Some(symbol.as_str()) { continue; }
+            if candidate["symbol"].as_str() != Some(symbol.as_str()) {
+                continue;
+            }
             let weak = candidate["weak"].as_bool().unwrap_or(false);
             if let Some(current) = winner {
                 let current_weak = current["weak"].as_bool().unwrap_or(false);
@@ -239,17 +233,18 @@ fn selected_foreign_fallbacks(candidates: &[Value], demanded_symbols: &[String])
                     (true, false) => (),
                     (true, true) | (false, false) => ambiguous = true,
                 }
-                if ambiguous { break; }
+                if ambiguous {
+                    break;
+                }
             } else {
                 winner = Some(candidate);
             }
         }
         if ambiguous {
-            selected.push(json!({"symbol":symbol,"status":"ambiguous",
+            selected.push(json!({"symbol":symbol,"resolution":"ambiguous",
                 "reason":"source lookup_exported_symbol found equal-strength duplicate definitions"}));
         } else if let Some(candidate) = winner {
-            let mut row = candidate.clone();
-            row["status"] = json!("supported");
+            let row = candidate.clone();
             selected.push(row);
         }
     }
@@ -259,19 +254,27 @@ fn selected_foreign_fallbacks(candidates: &[Value], demanded_symbols: &[String])
 fn demanded_extern_statics<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Value {
-    let mut definitions = context.allocation_ids.keys().filter_map(|alloc_id| {
-        match tcx.try_get_global_alloc(*alloc_id) {
+) -> Result<Value, String> {
+    let mut definitions = context
+        .allocation_ids
+        .keys()
+        .filter_map(|alloc_id| match tcx.try_get_global_alloc(*alloc_id) {
             Some(rustc_middle::mir::interpret::GlobalAlloc::Static(def))
-                if tcx.is_foreign_item(def) => Some(def),
+                if tcx.is_foreign_item(def) =>
+            {
+                Some(def)
+            }
             _ => None,
-        }
-    }).collect::<Vec<_>>();
+        })
+        .collect::<Vec<_>>();
     definitions.sort_by_key(|def| (def.krate.as_u32(), def.index.as_u32()));
     definitions.dedup();
-    Value::Array(definitions.into_iter().map(|def| {
-        extern_static_declaration(tcx, context, def)
-    }).collect())
+    Ok::<_, String>(Value::Array(
+        definitions
+            .into_iter()
+            .map(|def| extern_static_declaration(tcx, context, def))
+            .collect::<Result<Vec<_>, String>>()?,
+    ))
 }
 
 fn allocator_shims<'tcx>(tcx: TyCtxt<'tcx>) -> Value {
@@ -323,10 +326,26 @@ fn target_facts(tcx: TyCtxt<'_>) -> Value {
 }
 
 /// Reproduce `helpers::iter_exported_symbols` in its source order. For a
-/// non-executable compilation Miri's query is unavailable; retain local
-/// candidates for diagnosis, but mark the whole table unsupported so callers
-/// cannot treat an incomplete dependency walk as a successful lookup.
-pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>) -> Value {
+/// non-executable compilation does not demand executable-symbol lookup;
+/// its catalog omits those queries instead of claiming an empty symbol set.
+pub(super) fn export<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    context: &mut ExportContext<'tcx>,
+) -> Result<Value, String> {
+    if !tcx
+        .crate_types()
+        .contains(&rustc_structures::CrateType::Executable)
+    {
+        // Executable exported-symbol traversal is not a query in library scope.
+        let no_alloc = rustc_symbol_mangling::mangle_internal_symbol(
+            tcx,
+            allocator::NO_ALLOC_SHIM_IS_UNSTABLE,
+        );
+        return Ok(
+            json!({"target":target_facts(tcx),"no_alloc_shim_symbol":compiler_fact(json!(no_alloc)),
+            "allocator_shims":allocator_shims(tcx)}),
+        );
+    }
     let mut records = Vec::new();
     let mut iteration_index = 0usize;
     for def in tcx.hir_crate_items(()).definitions() {
@@ -336,7 +355,14 @@ pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>)
         let attrs = tcx.codegen_fn_attrs(def);
         let used = attrs.flags.contains(F::USED_COMPILER) || attrs.flags.contains(F::USED_LINKER);
         if used || attrs.contains_extern_indicator() {
-            if let Some(entry) = candidate(tcx, context, LOCAL_CRATE, def.to_def_id(), iteration_index, used) {
+            if let Some(entry) = candidate(
+                tcx,
+                context,
+                LOCAL_CRATE,
+                def.to_def_id(),
+                iteration_index,
+                used,
+            )? {
                 records.push(entry);
             }
             iteration_index += 1;
@@ -344,24 +370,11 @@ pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>)
     }
 
     let dependency_formats = tcx.dependency_formats(());
-    let Some(dependency_format) = dependency_formats.get(&rustc_structures::CrateType::Executable)
-    else {
-        let no_alloc = rustc_symbol_mangling::mangle_internal_symbol(
-            tcx,
-            allocator::NO_ALLOC_SHIM_IS_UNSTABLE,
-        );
-        return json!({
-            "target":target_facts(tcx),
-            "no_alloc_shim_symbol":compiler_fact(json!(no_alloc)),
-            "exported_candidates":{"status":"unsupported",
-                "reason":"source exported-symbol traversal requires executable dependency_formats",
-                "local_evidence":records},
-            "extern_statics":{"status":"unsupported",
-                "reason":"source extern-static lookup requires the executable exported-symbol traversal",
-                "declarations":[],"selected_exported":[]},
-            "allocator_shims":allocator_shims(tcx),
-        });
-    };
+    let dependency_format = dependency_formats
+        .get(&rustc_structures::CrateType::Executable)
+        .ok_or_else(|| {
+            "executable exported-symbol traversal lacks dependency_formats".to_owned()
+        })?;
 
     for (crate_num, linkage) in dependency_format.iter_enumerated() {
         if crate_num == LOCAL_CRATE || *linkage == DependencyLinkage::NotLinked {
@@ -372,7 +385,14 @@ pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>)
                 if !tcx.is_foreign_item(def) {
                     // The source helper passes `used`, but lookup ignores it.
                     // Preserve it for schema transparency and future consumers.
-                    if let Some(entry) = candidate(tcx, context, crate_num, def, iteration_index, export_info.used) {
+                    if let Some(entry) = candidate(
+                        tcx,
+                        context,
+                        crate_num,
+                        def,
+                        iteration_index,
+                        export_info.used,
+                    )? {
                         records.push(entry);
                     }
                     iteration_index += 1;
@@ -381,26 +401,38 @@ pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>)
         }
     }
 
-    let no_alloc = rustc_symbol_mangling::mangle_internal_symbol(
-        tcx,
-        allocator::NO_ALLOC_SHIM_IS_UNSTABLE,
-    );
-    let declarations = demanded_extern_statics(tcx, context);
-    let demanded_symbols = declarations.as_array().into_iter().flatten()
-        .filter_map(|record| record.get("symbol").and_then(Value::as_str).map(str::to_owned))
+    let no_alloc =
+        rustc_symbol_mangling::mangle_internal_symbol(tcx, allocator::NO_ALLOC_SHIM_IS_UNSTABLE);
+    let declarations = demanded_extern_statics(tcx, context)?;
+    let demanded_symbols = declarations
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|record| {
+            record
+                .get("symbol")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
         .collect::<Vec<_>>();
-    let selected = selected_exports(tcx, context, &records, &demanded_symbols);
+    let selected = selected_exports(tcx, context, &records, &demanded_symbols)?;
     // foreign_items.rs first runs its Miri shim and then resolves an exported
     // function by the exact foreign link name when that shim delegates. Keep
     // those source-demanded candidates under the same iterator order and
     // weak/duplicate policy as runtime lookup, and promote only the selected
     // candidate to MIR. A missing or ambiguous symbol remains a runtime source
     // error; it is never replaced by a guessed body.
-    let mut demanded_foreign_functions = context.instance_ids.keys()
-        .filter(|instance| matches!(instance.def, ty::InstanceKind::Item(_))
-            && matches!(tcx.def_kind(instance.def_id()),
-                rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn)
-            && tcx.is_foreign_item(instance.def_id()))
+    let mut demanded_foreign_functions = context
+        .instance_ids
+        .keys()
+        .filter(|instance| {
+            matches!(instance.def, ty::InstanceKind::Item(_))
+                && matches!(
+                    tcx.def_kind(instance.def_id()),
+                    rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn
+                )
+                && tcx.is_foreign_item(instance.def_id())
+        })
         .map(|instance| tcx.symbol_name(*instance).name.to_string())
         .collect::<Vec<_>>();
     demanded_foreign_functions.sort();
@@ -409,20 +441,37 @@ pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>)
     let mut promote = Vec::new();
     if let Some(rows) = selected_fallbacks.as_array() {
         for row in rows {
-            if row["status"] != "supported" { continue; }
-            if !matches!(row["definition_kind"].as_str(), Some("function" | "associated_function")) { continue; }
+            if !matches!(
+                row["definition_kind"].as_str(),
+                Some("function" | "associated_function")
+            ) {
+                continue;
+            }
             let symbol = row["symbol"].as_str().unwrap_or_default();
-            if !demanded_foreign_functions.iter().any(|demanded| demanded == symbol) { continue; }
-            let Some(id) = row["instance_id"].as_u64() else { continue; };
-            if let Some((instance, _)) = context.instance_ids.iter().find(|(_, candidate_id)| **candidate_id == id) {
+            if !demanded_foreign_functions
+                .iter()
+                .any(|demanded| demanded == symbol)
+            {
+                continue;
+            }
+            let Some(id) = row["instance_id"].as_u64() else {
+                continue;
+            };
+            if let Some((instance, _)) = context
+                .instance_ids
+                .iter()
+                .find(|(_, candidate_id)| **candidate_id == id)
+            {
                 promote.push(*instance);
             }
         }
     }
     promote.sort_by_key(|instance| context.instance_ids[instance]);
     promote.dedup();
-    for instance in promote { context.register_instance(instance); }
-    json!({
+    for instance in promote {
+        context.register_instance(instance);
+    }
+    Ok::<_, String>(json!({
         "target":target_facts(tcx),
         "no_alloc_shim_symbol":compiler_fact(json!(no_alloc)),
         "exported_candidates":compiler_fact(json!(records)),
@@ -433,5 +482,5 @@ pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>)
             "typing_env":"fully_monomorphized",
         })),
         "allocator_shims":allocator_shims(tcx),
-    })
+    }))
 }

@@ -9,26 +9,26 @@ private def must (value : Except String α) : IO α :=
 private partial def containsProbe : TypedValue → Bool
   | .array values => values.any containsProbe
   | .object fields => fields.any fun (key, value) =>
-      (key == "kind" && value == .scalar (.str "symbolic_vtable_allocation")) || containsProbe value
-  | .statement _ _ fields | .terminator _ _ fields | .rvalue _ _ fields
-  | .operand _ _ fields | .projection _ fields | .enumTag _ _ fields =>
+      (key == "kind" && value == .scalar (.str "same_dynamic_vtable_noop")) || containsProbe value
+  | .statement _ fields | .terminator _ fields | .rvalue _ fields
+  | .operand _ fields | .projection _ fields | .enumTag _ _ fields =>
       fields.any fun (_, value) => containsProbe value
   | _ => false
 
-private partial def mutateProbeStatus : TypedValue → TypedValue
-  | .array values => .array (values.map mutateProbeStatus)
+private partial def mutateProbeMetadata : TypedValue → TypedValue
+  | .array values => .array (values.map mutateProbeMetadata)
   | .object fields =>
       let isProbe := fields.any fun (key, value) =>
-        key == "kind" && value == .scalar (.str "symbolic_vtable_allocation")
-      .object (fields.map fun (key, value) =>
-        if isProbe && key == "status" then (key, .scalar (.str "unsupported"))
-        else (key, mutateProbeStatus value))
-  | .statement variant status fields => .statement variant status (fields.map fun (key, value) => (key, mutateProbeStatus value))
-  | .terminator variant status fields => .terminator variant status (fields.map fun (key, value) => (key, mutateProbeStatus value))
-  | .rvalue variant status fields => .rvalue variant status (fields.map fun (key, value) => (key, mutateProbeStatus value))
-  | .operand variant status fields => .operand variant status (fields.map fun (key, value) => (key, mutateProbeStatus value))
-  | .projection variant fields => .projection variant (fields.map fun (key, value) => (key, mutateProbeStatus value))
-  | .enumTag category tag fields => .enumTag category tag (fields.map fun (key, value) => (key, mutateProbeStatus value))
+        key == "kind" && value == .scalar (.str "same_dynamic_vtable_noop")
+      if isProbe then .diagnostic (Lean.Json.mkObj [("status", .str "debug_payload"),
+        ("rustc_debug", .str "missing exact dynamic vtable evidence")])
+      else .object (fields.map fun (key, value) => (key, mutateProbeMetadata value))
+  | .statement variant fields => .statement variant (fields.map fun (key, value) => (key, mutateProbeMetadata value))
+  | .terminator variant fields => .terminator variant (fields.map fun (key, value) => (key, mutateProbeMetadata value))
+  | .rvalue variant fields => .rvalue variant (fields.map fun (key, value) => (key, mutateProbeMetadata value))
+  | .operand variant fields => .operand variant (fields.map fun (key, value) => (key, mutateProbeMetadata value))
+  | .projection variant fields => .projection variant (fields.map fun (key, value) => (key, mutateProbeMetadata value))
+  | .enumTag category tag fields => .enumTag category tag (fields.map fun (key, value) => (key, mutateProbeMetadata value))
   | value => value
 
 private def obj (fs : List (String × TypedValue)) : TypedValue := .object fs.toArray
@@ -39,7 +39,7 @@ private def nil : TypedValue := .scalar .null
 private def arr (xs : List TypedValue) : TypedValue := .array xs.toArray
 private def tagged (kind : String) (fs : List (String × TypedValue) := []) : TypedValue := obj (("kind", s kind) :: fs)
 private def pl : TypedValue := obj [("local", .localRef 0), ("projection", arr [])]
-private def op : TypedValue := .operand .copy .supported #[("place", pl)]
+private def op : TypedValue := .operand .copy #[("place", pl)]
 private def defRef : TypedValue := obj [("crate", n 2), ("index", n 7)]
 private def unwind : TypedValue := tagged "Continue"
 private def tc (ty : Nat) : TypedValue := tagged "value" [("type", .typeRef ty), ("value", tagged "leaf" [("size_bytes", n 4), ("bits_unsigned", s "3")])]
@@ -55,8 +55,8 @@ private def rvalues (ty : Nat) : Array (RvalueVariant × Array (String × TypedV
   (.threadLocalRef, #[("def_id", defRef)]),
   (.rawPtr, #[("pointer_kind", tagged "metadata_only"), ("place", pl)]),
   (.cast, #[("cast_kind", tagged "PointerCoercion" [("coercion", tagged "ClosureFnPointer" [("safety", tagged "unsafe")]), ("source", tagged "as_cast")]), ("operand", op), ("target_type", .typeRef ty)]),
-  (.binaryOp, #[("operator", .binOperator .Add .supported), ("left", op), ("right", op)]),
-  (.unaryOp, #[("operator", .unOperator .Not .supported), ("operand", op)]),
+  (.binaryOp, #[("operator", .binOperator .Add), ("left", op), ("right", op)]),
+  (.unaryOp, #[("operator", .unOperator .Not), ("operand", op)]),
   (.discriminant, #[("place", pl)]),
   (.aggregate, #[("aggregate_kind", tagged "Adt" [("def_id", defRef), ("variant_index", n 2), ("generic_args", arr [tagged "const" [("value", tc ty)]]), ("user_type_annotation", tagged "annotation_ref" [("index", n 1)]), ("active_union_field", n 4)]), ("operands", arr [op])]),
   (.copyForDeref, #[("place", pl)]),
@@ -64,12 +64,12 @@ private def rvalues (ty : Nat) : Array (RvalueVariant × Array (String × TypedV
   (.reborrow, #[("type", .typeRef ty), ("mutability", tagged "mutable"), ("place", pl)])]
 
 private def statements (ty : Nat) : Array (StatementVariant × Array (String × TypedValue)) := #[
-  (.assign, #[("place", pl), ("rvalue", .rvalue .repeat .supported #[("operand", op), ("count", tc ty)])]),
+  (.assign, #[("place", pl), ("rvalue", .rvalue .repeat #[("operand", op), ("count", tc ty)])]),
   (.fakeRead, #[("cause", tagged "matched_place" [("hoisted_from", defRef)]), ("place", pl)]),
   (.setDiscriminant, #[("place", pl), ("variant_index", n 2)]),
   (.storageLive, #[("local", .localRef 0)]), (.storageDead, #[("local", .localRef 0)]),
   (.placeMention, #[("place", pl)]),
-  (.ascribeUserType, #[("place", pl), ("user_type_projection", .userTypeProjection ⟨.supported, some 2, some #[.deref, .field 1, .index, .constantIndex 1 3 false, .subslice 1 2 true, .downcast (some "V") 2, .opaqueCast, .unwrapUnsafeBinder, .phantomDeref], .null⟩), ("variance", tagged "contravariant")]),
+  (.ascribeUserType, #[("place", pl), ("user_type_projection", .userTypeProjection ⟨some 2, some #[.deref, .field 1, .index, .constantIndex 1 3 false, .subslice 1 2 true, .downcast (some "V") 2, .opaqueCast, .unwrapUnsafeBinder, .phantomDeref], .null⟩), ("variance", tagged "contravariant")]),
   (.coverage, #[("coverage", tagged "point" [("point_kind", s "function_end"), ("hir_id", obj [("owner_def_id", defRef), ("local_id", n 3)])])]),
   (.intrinsic, #[("intrinsic", s "CopyNonOverlapping"), ("src", op), ("dst", op), ("count", op)]),
   (.constEvalCounter, #[]), (.nop, #[]),
@@ -110,17 +110,19 @@ def main (args : List String) : IO Unit := do
   let input := { original.toBodyCore with argumentCount := 0, spreadArgument := none }
   let lower (ss : Array MirNode) (term : TypedValue) := lowerBody ctx { input with blocks := #[{ first with id := 0, statements := ss, terminator := ⟨term, info⟩ }] }
   for (kind, fs) in rvalues ty do
-    let _ ← must (lower #[⟨.statement .assign .supported #[("place", pl), ("rvalue", .rvalue kind .supported fs)], info⟩] (.terminator .return .supported #[]))
+    let _ ← must (lower #[⟨.statement .assign #[("place", pl), ("rvalue", .rvalue kind fs)], info⟩] (.terminator .return #[]))
   for (kind, fs) in statements ty do
-    let _ ← must (lower #[⟨.statement kind .supported fs, info⟩] (.terminator .return .supported #[]))
+    let _ ← must (lower #[⟨.statement kind fs, info⟩] (.terminator .return #[]))
   for (kind, fs) in terms ty info.span do
-    let _ ← must (lower #[] (.terminator kind .supported fs))
-  let pending ← must (lower #[⟨.statement .assign .supported #[("place", pl), ("rvalue", .rvalue .threadLocalRef .incomplete #[("def_id", defRef)])], info⟩] (.terminator .return .supported #[]))
-  unless !pending.obligations.isEmpty && pending.definitions.contains ⟨2, 7⟩ && pending.definitions[0]? == input.definitionId && pending.definitions.size == 2 do
-    throw (IO.userError "compiler obligations or crate-qualified definition identity were lost")
+    let _ ← must (lower #[] (.terminator kind fs))
+  let pending ← must (lower #[⟨.statement .assign #[("place", pl), ("rvalue", .rvalue .threadLocalRef #[("def_id", defRef)])], info⟩] (.terminator .return #[]))
+  unless pending.definitions.contains ⟨2, 7⟩ && pending.definitions[0]? == input.definitionId && pending.definitions.size == 2 do
+    throw (IO.userError "crate-qualified definition identity was lost")
+  unless !(DecoderValues.rvalueVariant "FutureRvalue").isOk do
+    throw (IO.userError "unknown rvalue selector accepted by decoder")
   let own ← must pending.ownDefinitionId
   unless own == 0 do throw (IO.userError "standalone body did not seed its own compiler identity")
-  let missing ← must (lowerBody ctx { input with definitionId := none, blocks := #[{ first with id := 0, statements := #[], terminator := ⟨.terminator .return .supported #[], info⟩ }] })
+  let missing ← must (lowerBody ctx { input with definitionId := none, blocks := #[{ first with id := 0, statements := #[], terminator := ⟨.terminator .return #[], info⟩ }] })
   unless !missing.obligations.isEmpty && !missing.ownDefinitionId.isOk do
     throw (IO.userError "missing source identity became an invented frame definition")
   let mkBody (self other : DefinitionId) (name : String) : BodyCore :=
@@ -129,9 +131,9 @@ def main (args : List String) : IO Unit := do
       defPath := name
       blocks := #[{ first with
         id := 0
-        statements := #[⟨.statement .assign .supported #[("place", pl), ("rvalue", .rvalue .aggregate .supported #[("aggregate_kind", tagged "Closure" [("def_id", obj [("crate", n other.crateIndex), ("index", n other.index)]), ("generic_args", arr [tagged "const" [("value", tc ty)]])]), ("operands", arr [])])], info⟩]
-        terminator := ⟨.terminator .call .supported #[
-          ("function", .operand .constant .supported #[("constant", obj [
+        statements := #[⟨.statement .assign #[("place", pl), ("rvalue", .rvalue .aggregate #[("aggregate_kind", tagged "Closure" [("def_id", obj [("crate", n other.crateIndex), ("index", n other.index)]), ("generic_args", arr [tagged "const" [("value", tc ty)]])]), ("operands", arr [])])], info⟩]
+        terminator := ⟨.terminator .call #[
+          ("function", .operand .constant #[("constant", obj [
             ("type", .typeRef ty), ("span", .sourceSpan info.span), ("user_type_annotation", nil),
             ("constant", obj [("source", tagged "unevaluated" [("def_id", obj [("crate", n other.crateIndex), ("index", n other.index)]), ("generic_args", arr [tagged "const" [("value", tc ty)]]), ("promoted", nil), ("type", .typeRef ty)])])])]),
           ("args", arr []), ("destination", pl), ("target", nil), ("unwind", unwind),
@@ -158,7 +160,7 @@ def main (args : List String) : IO Unit := do
   unless callee linkedA == some 1 && callee linkedB == some 0 do
     throw (IO.userError "mutually recursive Call references lost program-global identities")
   let standaloneCore := { mkBody ⟨3, 99⟩ ⟨1, 4⟩ "never_called" with
-    blocks := #[{ first with id := 0, statements := #[], terminator := ⟨.terminator .return .supported #[], info⟩ }] }
+    blocks := #[{ first with id := 0, statements := #[], terminator := ⟨.terminator .return #[], info⟩ }] }
   let syntheticDoc := { decoded.document with
     bodies := #[⟨mkBody ⟨1, 4⟩ ⟨1, 5⟩ "a", #[]⟩,
       ⟨mkBody ⟨1, 5⟩ ⟨1, 4⟩ "b", #[]⟩,
@@ -175,19 +177,18 @@ def main (args : List String) : IO Unit := do
   for lowered in program.bundle.bodies do
     unless lowered.definitions == program.bundle.definitions && lowered.typeConstants == program.bundle.typeConstants && lowered.spans == program.bundle.spans do
       throw (IO.userError "identity seeding rewrote shared constant/span tables inconsistently")
-  let probeInstance? := decoded.document.instances.find? fun instNode =>
-    match instNode.body with
-    | some body => body.blocks.any fun block =>
-        block.statements.any (fun node => containsProbe node.value) || containsProbe block.terminator.value
-    | none => false
-  let some probeInstance := probeInstance? | throw (IO.userError "fixture has no exact vtable probe to mutate")
-  let some probeBody := probeInstance.body | throw (IO.userError "probe instance body disappeared")
-  let mutatedCore := { probeBody.toBodyCore with blocks := probeBody.blocks.map fun block =>
+  let candidates := decoded.document.bodies.map (·.toBodyCore) ++
+    decoded.document.instances.filterMap (fun node => node.body.map (·.toBodyCore))
+  let probeBody? := candidates.find? fun body =>
+    body.blocks.any fun block =>
+      block.statements.any (fun node => containsProbe node.value) || containsProbe block.terminator.value
+  let some probeBody := probeBody? | throw (IO.userError "fixture has no exact dynamic vtable evidence to mutate")
+  let mutatedCore := { probeBody with blocks := probeBody.blocks.map fun block =>
     { block with
-      statements := block.statements.map fun node => { node with value := mutateProbeStatus node.value }
-      terminator := { block.terminator with value := mutateProbeStatus block.terminator.value } } }
+      statements := block.statements.map fun node => { node with value := mutateProbeMetadata node.value }
+      terminator := { block.terminator with value := mutateProbeMetadata block.terminator.value } } }
   let mutatedLowering ← must (lowerBody (LowerContext.ofDocument decoded.document) mutatedCore)
   unless mutatedLowering.obligations.any (fun obligation =>
-      obligation.message == "compiler metadata status remains unsupported") do
+      obligation.message == "diagnostic-only compiler metadata remains unresolved") do
     throw (IO.userError "mutated typed MIR inherited a raw-document vtable-probe exemption")
   IO.println "all 13 rvalue, 12 statement, 15 terminator source constructor branches lowered; typed metadata and execution obligations retained"

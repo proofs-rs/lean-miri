@@ -47,7 +47,11 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
         tcx: TyCtxt<'tcx>,
         context: &mut ExportContext<'tcx>,
     ) -> Result<(), String> {
-        let mut functions = context.fn_pointer_targets.iter().copied().collect::<Vec<_>>();
+        let mut functions = context
+            .fn_pointer_targets
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
         functions.sort_by_key(|instance| format!("{instance:?}"));
         for instance in functions {
             if self.functions.contains(&instance) {
@@ -60,7 +64,7 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                 let boundary = tcx.reserve_alloc_id();
                 let selected = tcx.reserve_and_set_fn_alloc(instance, salt);
                 let source_id = raw_id(selected);
-                let graph_ref = allocation_ref(context, tcx, selected);
+                let graph_ref = allocation_ref(context, tcx, selected)?;
                 let _ = allocation_graph_id(&graph_ref)?;
                 let graph_id = supported_global_graph_id(context, selected, "function")?;
                 if salt == 0 {
@@ -73,13 +77,13 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                     "probe_result":if source_id < raw_id(boundary) { "preexisting_hit" } else { "miss_reserved_by_probe" },
                 }));
             }
-            let key_allocation_id = key_graph_id
-                .ok_or_else(|| "function dedup probe omitted salt zero".to_owned())?;
+            let key_allocation_id =
+                key_graph_id.ok_or_else(|| "function dedup probe omitted salt zero".to_owned())?;
             self.rows.push(json!({
-                    "key_kind":"function",
-                    "key_allocation_id":key_allocation_id,
-                    "salts":salts,
-                }));
+                "key_kind":"function",
+                "key_allocation_id":key_allocation_id,
+                "salts":salts,
+            }));
             self.functions.insert(instance);
         }
 
@@ -93,26 +97,28 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                 vtables.insert(tcx.erase_and_anonymize_regions((ty, predicates)));
             }
         }
-        let mut vtables = vtables
-            .into_iter()
-            .filter(|(ty, predicates)| !ty.has_param() && !predicates.has_param())
-            .filter(|key| !self.vtables.contains(key))
-            .map(|(ty, predicates)| -> Result<_, String> {
-                let type_id = *context.type_ids.get(&ty).ok_or_else(|| {
-                    "selected vtable key lacks its closed-query type identity".to_owned()
-                })?;
-                let predicate_ids = predicates
-                    .iter()
-                    .map(|predicate| {
-                        context.predicate_ids.get(&predicate).copied().ok_or_else(|| {
+        let mut vtables =
+            vtables
+                .into_iter()
+                .filter(|(ty, predicates)| !ty.has_param() && !predicates.has_param())
+                .filter(|key| !self.vtables.contains(key))
+                .map(|(ty, predicates)| -> Result<_, String> {
+                    let type_id = *context.type_ids.get(&ty).ok_or_else(|| {
+                        "selected vtable key lacks its closed-query type identity".to_owned()
+                    })?;
+                    let predicate_ids =
+                        predicates
+                            .iter()
+                            .map(|predicate| {
+                                context.predicate_ids.get(&predicate).copied().ok_or_else(|| {
                             "selected vtable key lacks its closed-query predicate identity"
                                 .to_owned()
                         })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(((type_id, predicate_ids), (ty, predicates)))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                    Ok(((type_id, predicate_ids), (ty, predicates)))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
         vtables.sort_by(|left, right| left.0.cmp(&right.0));
         for ((_, _), (ty, predicates)) in vtables {
             let mut salts = Vec::with_capacity(32);
@@ -121,10 +127,13 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                 let boundary = tcx.reserve_alloc_id();
                 let selected = tcx.reserve_and_set_vtable_alloc(ty, predicates, salt);
                 if context.vtable_diagnostics.enabled() && raw_id(selected) >= raw_id(boundary) {
-                    context.vtable_diagnostics.probe_allocations.insert(selected);
+                    context
+                        .vtable_diagnostics
+                        .probe_allocations
+                        .insert(selected);
                 }
                 let source_id = raw_id(selected);
-                let graph_ref = allocation_ref(context, tcx, selected);
+                let graph_ref = allocation_ref(context, tcx, selected)?;
                 let _ = allocation_graph_id(&graph_ref)?;
                 let graph_id = supported_global_graph_id(context, selected, "vtable")?;
                 if salt == 0 {
@@ -137,13 +146,13 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                     "probe_result":if source_id < raw_id(boundary) { "preexisting_hit" } else { "miss_reserved_by_probe" },
                 }));
             }
-            let key_allocation_id = key_graph_id
-                .ok_or_else(|| "vtable dedup probe omitted salt zero".to_owned())?;
+            let key_allocation_id =
+                key_graph_id.ok_or_else(|| "vtable dedup probe omitted salt zero".to_owned())?;
             self.rows.push(json!({
-                    "key_kind":"vtable",
-                    "key_allocation_id":key_allocation_id,
-                    "salts":salts,
-                }));
+                "key_kind":"vtable",
+                "key_allocation_id":key_allocation_id,
+                "salts":salts,
+            }));
             self.vtables.insert((ty, predicates));
         }
 
@@ -165,11 +174,10 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                 continue;
             }
             let observed_graph_id = context.allocation_ids.get(&observed_id).copied();
-            let observed_node = observed_graph_id
-                .and_then(|graph_id| context.allocation_nodes.get(&graph_id));
+            let observed_node =
+                observed_graph_id.and_then(|graph_id| context.allocation_nodes.get(&graph_id));
             if observed_node.map_or(true, |node| {
-                node.get("status").and_then(Value::as_str) != Some("supported")
-                    || node.get("kind").and_then(Value::as_str) != Some("static")
+                node.get("kind").and_then(Value::as_str) != Some("static")
                     || node.get("source_alloc_id").and_then(Value::as_u64)
                         != Some(raw_id(observed_id))
             }) {
@@ -179,7 +187,7 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             let boundary = tcx.reserve_alloc_id();
             let selected = tcx.reserve_and_set_static_alloc(def);
             let source_id = raw_id(selected);
-            let graph_ref = allocation_ref(context, tcx, selected);
+            let graph_ref = allocation_ref(context, tcx, selected)?;
             let _ = allocation_graph_id(&graph_ref)?;
             let graph_id = supported_global_graph_id(context, selected, "static")?;
             let node = context
@@ -253,7 +261,7 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             let boundary = tcx.reserve_alloc_id();
             let selected = tcx.reserve_and_set_type_id_alloc(ty);
             let source_id = raw_id(selected);
-            let graph_ref = allocation_ref(context, tcx, selected);
+            let graph_ref = allocation_ref(context, tcx, selected)?;
             let _ = allocation_graph_id(&graph_ref)?;
             let graph_id = supported_global_graph_id(context, selected, "type_id")?;
             let node = context
@@ -391,8 +399,7 @@ fn supported_memory_graph_id<'tcx>(
         .allocation_nodes
         .get(&graph_id)
         .ok_or_else(|| format!("eligible byte allocation {} has no graph node", raw_id(id)))?;
-    if node.get("status").and_then(Value::as_str) != Some("supported")
-        || node.get("kind").and_then(Value::as_str) != Some("memory")
+    if node.get("kind").and_then(Value::as_str) != Some("memory")
         || node.get("source_alloc_id").and_then(Value::as_u64) != Some(raw_id(id))
     {
         return Err(format!(
@@ -423,8 +430,7 @@ fn supported_global_graph_id<'tcx>(
                 raw_id(id)
             )
         })?;
-    if node.get("status").and_then(Value::as_str) != Some("supported")
-        || node.get("kind").and_then(Value::as_str) != Some(expected_kind)
+    if node.get("kind").and_then(Value::as_str) != Some(expected_kind)
         || node.get("source_alloc_id").and_then(Value::as_u64) != Some(raw_id(id))
     {
         return Err(format!(
@@ -478,33 +484,23 @@ fn pool_row<'tcx>(
         .expect("checked present allocation remains present");
     let kind = kind_name(&global);
     let candidate_graph_id = context.allocation_ids.get(&id).copied();
-    let candidate_node = candidate_graph_id.and_then(|graph_id| {
-        context
-            .allocation_nodes
-            .get(&graph_id)
-            .map(|node| (graph_id, node))
-    });
-    let supported_graph_id = match candidate_node {
-        Some((graph_id, node))
-            if node.get("status").and_then(Value::as_str) == Some("supported") =>
+    let supported_graph_id = if let Some(graph_id) = candidate_graph_id {
+        let node = context.allocation_nodes.get(&graph_id).ok_or_else(|| {
+            format!("allocation node {graph_id} for source AllocId {raw} is absent")
+        })?;
+        if node.get("kind").and_then(Value::as_str) != Some(kind)
+            || node.get("source_alloc_id").and_then(Value::as_u64) != Some(raw)
         {
-            let node_kind = node.get("kind").and_then(Value::as_str).unwrap_or("");
-            let kind_matches =
-                node_kind == kind || (kind == "static" && node_kind == "static_initializer_error");
-            if !kind_matches || node.get("source_alloc_id").and_then(Value::as_u64) != Some(raw) {
-                return Err(format!(
-                    "supported allocation node {graph_id} disagrees with source AllocId {raw} ({kind})"
-                ));
-            }
-            Some(graph_id)
+            return Err(format!(
+                "allocation node {graph_id} disagrees with source AllocId {raw} ({kind})"
+            ));
         }
-        _ => None,
+        Some(graph_id)
+    } else {
+        // An unrequested compiler global still reserves its raw identity; it is
+        // not an imported semantic allocation or a failed serialization.
+        None
     };
-    let opaque_graph_id = candidate_node.and_then(|(graph_id, node)| {
-        (node.get("status").and_then(Value::as_str) != Some("supported")
-            && node.get("source_alloc_id").and_then(Value::as_u64) == Some(raw))
-        .then_some(graph_id)
-    });
     let status = if supported_graph_id.is_some() {
         "serialized"
     } else {
@@ -516,9 +512,6 @@ fn pool_row<'tcx>(
         "status":status,
         "allocation_id":supported_graph_id,
     });
-    if let Some(graph_id) = opaque_graph_id {
-        row["opaque_allocation_id"] = json!(graph_id);
-    }
     if let GlobalAlloc::Memory(memory) = global {
         let projection = byte_image(memory);
         // These are direct rustc allocation facts; the Lean decoder applies
@@ -551,7 +544,7 @@ pub(super) fn capture<'tcx>(
         let keys = scan_byte_keys(tcx, raw_id(snapshot))?;
         for key in keys.values() {
             for id in &key.allocations {
-                allocation_ref(context, tcx, *id);
+                allocation_ref(context, tcx, *id)?;
                 supported_memory_graph_id(context, *id)?;
             }
         }
@@ -560,7 +553,7 @@ pub(super) fn capture<'tcx>(
             .filter(|(hex, _)| !catalog.contains_key(hex))
             .collect::<Vec<_>>();
         for (hex, key) in unseen {
-            let representative_ref = allocation_ref(context, tcx, key.representative);
+            let representative_ref = allocation_ref(context, tcx, key.representative)?;
             let _ = allocation_graph_id(&representative_ref)?;
             let key_graph_id = supported_memory_graph_id(context, key.representative)?;
             let probe_boundary = tcx.reserve_alloc_id();
@@ -568,7 +561,7 @@ pub(super) fn capture<'tcx>(
             for salt in 0..32usize {
                 let selected = tcx.allocate_bytes_dedup(&key.bytes, salt);
                 let source_id = raw_id(selected);
-                let graph_ref = allocation_ref(context, tcx, selected);
+                let graph_ref = allocation_ref(context, tcx, selected)?;
                 let _ = allocation_graph_id(&graph_ref)?;
                 let allocation_id = supported_memory_graph_id(context, selected)?;
                 salts.push(json!({
@@ -643,7 +636,7 @@ pub(super) fn capture<'tcx>(
         "raw_pool":raw_pool,
         "dedup_catalog":catalog.into_values().chain(selected_keys.rows()).collect::<Vec<_>>(),
         "complete_key_families":["byte_memory"],
-        "unsupported_key_families":[
+        "non_exhaustive_key_families":[
             "function",
             "vtable",
             "static",

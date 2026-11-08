@@ -2,12 +2,14 @@
 
 Snapshot SHA-256 binds the prepared-TyCtxt reference to exact input bytes.
 Compiler placeholders are expanded by tools/export-connected.py.
+The two large historical archives are retained for provenance; CI generates
+their current inputs and binds fresh references to those exact bytes.
 """
 CASES = [('192-released-natural-exit',
   [],
   0,
   ['outcome=natural_exit_zero; leak_check=true; threads=1; choice_cursor=300; active_frame=none'],
-  'ed1c050edc1abd99a4d515f706f8503812e7ee6896151e4472ac4191da275478',
+  '76d8beb9b2eb1c9b500d23a6b0c5ba077326028a430e55bff418f0364ccef1c7',
   ['${SOURCE}',
    '--crate-type=bin',
    '--crate-name=tb_protector192_released',
@@ -31,7 +33,7 @@ CASES = [('192-released-natural-exit',
    'location=Miri.Interpreter.FrameLocation.mir { block := 0, statementIndex := 2 }',
    'threads=1',
    'stop-after-root-return=false'],
-  '6f84147cdaecffde8da609d42491030c7bf52f5484cc853aa79a128f0866a3ee',
+  '6d729fcd7682e4f3ba16eebb1f61588dd57166f054cecfd1650969acd77ab9e5',
   ['${SOURCE}',
    '--crate-type=bin',
    '--crate-name=tb_protector192_active',
@@ -52,7 +54,7 @@ CASES = [('192-released-natural-exit',
   ['expect-zero'],
   0,
   ['outcome=exit_zero; leak_check=true; threads=3; choice_cursor=502; active_frame=none'],
-  'e7865d83b4ff6aa4bd29b3da1ee7267f0ef1e683df598168e7698e5dde677d21',
+  '181684e5a7a769650467fa2eb7c6ff8e6e7cbd8260762919ff2b426b1f123127',
   ['${SOURCE}',
    '--crate-type=bin',
    '--crate-name=rmw_release193_positive',
@@ -78,7 +80,7 @@ CASES = [('192-released-natural-exit',
   0,
   ['outcome=typed_DataRace_before_any_join; error=Miri.Interpreter.StepError.undefinedBehavior '
    '"DataRace"; threads=3; choice_cursor=201'],
-  'c427804fc6013080a976800f6e44b0f1b33f1f074aea4361f34ac062c9f33310',
+  'daa8dbb108a8857e7094fbc5dd7fb462040a12cafef136f8aa9b1941961369ed',
   ['${SOURCE}',
    '--crate-type=bin',
    '--crate-name=rmw_release193_negative',
@@ -126,7 +128,7 @@ CASES = [('192-released-natural-exit',
   [],
   0,
   ['outcome=exit_zero; leak_check=true; threads=2; choice_cursor=465; active_frame=none'],
-  '001366591bdf208f50087fe9d22fbf852f99bf94fe8429140b2852e69b646009',
+  '2637a57f6f49ace9d72d79e6cc1a6e75afd3cb970efc06760f0ffc5ba87f67ad',
   ['${SOURCE}',
    '--crate-type=bin',
    '--crate-name=tls_drain197',
@@ -154,7 +156,7 @@ CASES = [('192-released-natural-exit',
    'error=DanglingIntPointer(address=0,size=4,context=memory_access); count=1; threads=2; '
    'active_function=destructor_a; source_line=41; callback_mir_location=11:0; '
    'active_thread=child-1; main=blocked_join_child-1; child=enabled; pending_key_b=true'],
-  'd0e197ebd9345bbbde9fb22b394793e243823bfc0f1a773c73a6e1642b75b0bb',
+  '4a07484f053f5e31bebae05b3957dad6dd961f06d43b3801513d8ed72c4da934',
   ['${SOURCE}',
    '--crate-type=bin',
    '--crate-name=tls_drain197_negative',
@@ -180,7 +182,7 @@ CASES = [('192-released-natural-exit',
   0,
   ['main_observed_trace=12\n'
    'outcome=exit_zero; leak_check=true; threads=1; choice_cursor=344; active_frame=none'],
-  '419170fa2fc613be438bd29e0175702eb014dbc9fa69d90ccd19838f0e390116',
+  'e16abc975c2fc824428a8236b268c763659dde9895b1c8a3a55cdd32fe0567ab',
   ['${SOURCE}',
    '--crate-type=bin',
    # Keep the compiler identity recorded in the retained export/reference.
@@ -203,7 +205,7 @@ CASES = [('192-released-natural-exit',
   0,
   ['trait_upcast_result=exit_zero; leak_check=true; threads=1; choice_cursor=48; '
    'active_frame=none'],
-  '954f426eec4783600a4eae7de15aeffc63344c034a0c43058fe0567b36b8eb11',
+  '14e255faab831660e8f4a7d1bc1faa1a68707a6fc8dce453cb73e24004a65603',
   ['${SOURCE}',
    '--crate-type=bin',
    '--crate-name=upcast_a',
@@ -225,7 +227,7 @@ CASES = [('192-released-natural-exit',
   0,
   ['trait_upcast_result=exit_zero; leak_check=true; threads=1; choice_cursor=48; '
    'active_frame=none'],
-  '1684f2ab0b831f0861c71099a6082f14186b5823de88eb6492e702a37ec8601f',
+  '9aada36c3cae16925a5f99bf6bb5cabde56e8a2e8c6a8030453bc03ac10073f7',
   ['${SOURCE}',
    '--crate-type=bin',
    '--crate-name=upcast_b',
@@ -247,7 +249,7 @@ CASES = [('192-released-natural-exit',
   0,
   ['choice_mode=bounded-seeded-diagnostic seed=0 algorithm=SplitMix64-v1; outcome=exit_zero; '
    'leak_check=true; threads=3; choice_cursor=528; active_frame=none'],
-  '4d706432e0423d3acf43e6f54b8b9cf1151c1a0e2ae9f203e88267fd6d94a8ec',
+  'ce6955bb5acb310e96722bfcc37f4a9583e93e02865746f71d98eb92d84ecd1a',
   ['${SOURCE}',
    '--crate-type=bin',
    '--crate-name=sc_litmus198_sc',
@@ -273,7 +275,7 @@ CASES = [('192-released-natural-exit',
   0,
   ['choice_mode=bounded-seeded-diagnostic seed=0 algorithm=SplitMix64-v1; outcome=exit_zero; '
    'leak_check=true; threads=3; choice_cursor=534; active_frame=none'],
-  '1abc2e81fc07a0b33fc0f0d9d70ed59b5441f143447d00391f611d70e320ca02',
+  '44d1d9a681de480e5bc62e97aae049f05a23ec2ab10c7e66fd403cad77012805',
   ['${SOURCE}',
    '--crate-type=bin',
    '--crate-name=sc_litmus198_relaxed_00',
@@ -300,7 +302,7 @@ MIRI_ERRORS = {'192-active-protector-typed-ub': ['protected tags must never be D
  '193-replace-store-datarace-negative': ['Data race detected between'],
  '197-tls-drain-negative-prefix': ['memory access failed: attempting to access 4 bytes, but got '
                                    'null pointer'],
- 'large-tb': ['state Frozen', 'forbids this child write access', 'source.rs:14:9']}
+ 'large-tb': ['state Frozen', 'forbids this child write access', 'large-tb.rs:14:9']}
 
 # Compiler options for the four finite ordering controls.
 ORDERING_EXPORTS = [('fence-acqrel',
@@ -387,3 +389,12 @@ ORDERING_EXPORTS = [('fence-acqrel',
    '-Zmir-enable-passes=-ReferencePropagation,-GVN',
    '-Zdeduplicate-diagnostics=no'],
   ['miri_start'])]
+
+# The accepted Frozen-write witness uses the same original compiler options.
+SPECIAL_EXPORTS = [('large-tb', [
+    '${SOURCE}', '--crate-type=bin', '--crate-name', 'source174_tree_borrows',
+    '--edition=2024', '-Cpanic=abort', '-Zmir-opt-level=0', '--sysroot', '${SYSROOT}',
+    '--cfg=miri', '-Zalways-encode-mir', '-Zextra-const-ub-checks', '-Zmir-preserve-ub',
+    '-Zmir-enable-passes=-CheckAlignment,-CheckNull,-CheckEnums',
+    '-Zmir-enable-passes=-ReferencePropagation,-GVN', '-Zdeduplicate-diagnostics=no',
+], ['miri_start'])]

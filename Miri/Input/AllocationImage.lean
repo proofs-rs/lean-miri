@@ -38,7 +38,6 @@ private def bytes (hex : String) : Result (Array UInt8) := do
 private def mutability : MemoryMutability → Result Memory.Mutability
   | .mutable => pure .Mut
   | .immutable => pure .Not
-  | .unknown tag => throw s!"unknown allocation mutability {tag}"
 
 /-- Resolve source graph identity; never use the decoder's reversible +1
 embedding of export IDs as runtime allocation identity. -/
@@ -171,7 +170,6 @@ structure ImportResult (P E K : Type) where
 
 private def metadata (target : RuntimeTargetDataLayout) (queries : Queries)
     (node : AllocationNode) : Result (GlobalAllocationKind × Size × Align × Memory.Mutability) := do
-  unless node.status == .supported do throw s!"compiler allocation {node.id} has unresolved status {repr node.status}"
   let consistent := match node.kind, node.data with
     | .memory, some (.memory _) | .function, some (.function _) | .static, some (.static _)
     | .vtable, some (.vtable _) | .typeId, some (.typeId _) => true

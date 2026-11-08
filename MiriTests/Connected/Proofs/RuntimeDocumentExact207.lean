@@ -30,8 +30,6 @@ deriving instance DecidableEq for Layout
 deriving instance DecidableEq for ExternAbi
 deriving instance DecidableEq for CanonicalAbi
 deriving instance DecidableEq for FunctionSignature
-deriving instance DecidableEq for CompilerBooleanEvidence
-deriving instance DecidableEq for CompilerTypeEvidence
 deriving instance DecidableEq for TypeCompilerFacts
 deriving instance DecidableEq for TypeNode
 

@@ -38,7 +38,6 @@ def fieldPath (context : CompilerFacts.Context) (layout : TyAndLayout TypeId)
   match source.shapeKind with
   | .closure | .coroutine | .coroutineClosure =>
     let some facts := source.compilerFacts | throw "capture-name compiler evidence missing"
-    unless facts.captureNamesStatus == some .supported do throw "capture-name compiler query unresolved"
     let some names := facts.captureNames | throw "capture-name compiler array evidence missing"
     let name := match names[index]? with
       | none | some none => toString index

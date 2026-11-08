@@ -10,11 +10,11 @@ fi
 EXPORTER="${EXPORTER_BIN:-$ROOT/exporter/target/debug/lean-miri-mir-exporter}"
 OUT="$(mktemp "${TMPDIR:-/tmp}/lean-miri-mir-XXXXXX.json")"
 SCOPE_OUT="$(mktemp "${TMPDIR:-/tmp}/lean-miri-mir-scope-XXXXXX.json")"
-SCOPE_UNRESOLVED_OUT="$(mktemp "${TMPDIR:-/tmp}/lean-miri-mir-scope-unresolved-XXXXXX.json")"
+VIRTUAL_SCOPE_OUT="$(mktemp "${TMPDIR:-/tmp}/lean-miri-mir-scope-virtual-XXXXXX.json")"
 SCOPE_ERR="$(mktemp "${TMPDIR:-/tmp}/lean-miri-mir-scope-XXXXXX.err")"
 NOOP_OUT="$(mktemp "${TMPDIR:-/tmp}/lean-miri-mir-noops-XXXXXX.json")"
 PROVENANCE_OUT="$(mktemp "${TMPDIR:-/tmp}/lean-miri-provenance-XXXXXX.json")"
-trap 'rm -f "$OUT" "$SCOPE_OUT" "$SCOPE_UNRESOLVED_OUT" "$SCOPE_ERR" "$NOOP_OUT" "$PROVENANCE_OUT"' EXIT
+trap 'rm -f "$OUT" "$SCOPE_OUT" "$VIRTUAL_SCOPE_OUT" "$SCOPE_ERR" "$NOOP_OUT" "$PROVENANCE_OUT"' EXIT
 "$EXPORTER" \
   --output "$OUT" "$ROOT/exporter/fixtures/mir_features.rs" \
   --crate-type=lib --crate-name=mir_features
@@ -39,17 +39,15 @@ python3 "$ROOT/tools/exporter_provenance.py" \
   --manifest "$PROVENANCE_OUT" --root "$ROOT"
 python3 "$ROOT/exporter/tests/validate_provenance_manifest.py" "$PROVENANCE_OUT"
 
-# A selected non-generic function is complete only when every node in its
-# emitted structural closure has supported status. The whole document keeps
-# its independent incomplete status.
+# A successful root has no failed semantic payload in any emitted catalog.
 "$EXPORTER" \
   --output "$SCOPE_OUT" --root add_one "$ROOT/exporter/fixtures/scope/simple.rs" \
   --crate-type=lib --crate-name=scoped_closure
 python3 "$ROOT/exporter/tests/validate_scope_fixture.py" "$SCOPE_OUT"
 "$EXPORTER" \
-  --output "$SCOPE_UNRESOLVED_OUT" --root call_trait_object \
+  --output "$VIRTUAL_SCOPE_OUT" --root call_trait_object \
   "$ROOT/exporter/fixtures/mir_features.rs" --crate-type=lib --crate-name=mir_features
-python3 "$ROOT/exporter/tests/validate_incomplete_scope.py" "$SCOPE_UNRESOLVED_OUT"
+python3 "$ROOT/exporter/tests/validate_virtual_scope.py" "$VIRTUAL_SCOPE_OUT"
 for ROOT_NAME in missing identity; do
   if "$EXPORTER" \
     --output "$SCOPE_OUT" --root "$ROOT_NAME" "$ROOT/exporter/fixtures/scope/simple.rs" \
@@ -68,7 +66,7 @@ echo "validated fail-closed rooted function selection"
 # The executable must fail closed when the selected `rustc` is not the pin.
 # Cargo tests inherit a pinned RUSTUP_TOOLCHAIN; keep it out of this negative case.
 ERR="$(mktemp "${TMPDIR:-/tmp}/lean-miri-rustc-pin-XXXXXX.err")"
-trap 'rm -f "$OUT" "$SCOPE_OUT" "$SCOPE_UNRESOLVED_OUT" "$SCOPE_ERR" "$ERR" "$NOOP_OUT" "$PROVENANCE_OUT"' EXIT
+trap 'rm -f "$OUT" "$SCOPE_OUT" "$VIRTUAL_SCOPE_OUT" "$SCOPE_ERR" "$ERR" "$NOOP_OUT" "$PROVENANCE_OUT"' EXIT
 if env -u RUSTUP_TOOLCHAIN PATH="$CARGO_HOME/bin:/usr/bin:/bin" RUSTUP_HOME="$RUSTUP_HOME" CARGO_HOME="$CARGO_HOME" \
   LD_LIBRARY_PATH="$SYSROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
   "$EXPORTER" --output "$OUT" \
@@ -83,7 +81,7 @@ echo "validated fail-closed compiler revision check"
 # Exercise rustc-wrapper mode with a path dependency. The application can only
 # export the helper's private MIR if the dependency was compiled with encoded MIR.
 CARGO_TARGET_BASE="$(mktemp -d "${TMPDIR:-/tmp}/lean-miri-cargo-target-XXXXXX")"
-trap 'rm -f "$OUT" "$SCOPE_OUT" "$SCOPE_UNRESOLVED_OUT" "$SCOPE_ERR" "$ERR" "$NOOP_OUT" "$PROVENANCE_OUT"; rm -rf "$CARGO_TARGET_BASE"' EXIT
+trap 'rm -f "$OUT" "$SCOPE_OUT" "$VIRTUAL_SCOPE_OUT" "$SCOPE_ERR" "$ERR" "$NOOP_OUT" "$PROVENANCE_OUT"; rm -rf "$CARGO_TARGET_BASE"' EXIT
 if [[ -n "${MIRI_SYSROOT:-}" ]]; then
   CARGO_TARGET_DIR="$CARGO_TARGET_BASE" "$EXPORTER" \
     --cargo build --offline \

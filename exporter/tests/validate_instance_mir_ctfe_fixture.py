@@ -39,9 +39,9 @@ def main(path):
                 f"{def_path} DefId changed: {row['def_id']}")
         require(row["instance_kind"] == {"def_id": {"crate": crate, "index": index}, "kind": "item"},
                 f"{def_path} is not an Item instance: {row['instance_kind']}")
-        require(row["kind"] == "instance_mir" and row["status"] == "supported",
-                f"{def_path} is not supported instance MIR: {row['kind']} / {row['status']}")
-        require(row["body_instantiation"] == {"kind": "substituted_and_normalized", "status": "supported"},
+        require(row["kind"] == "instance_mir" and "status" not in row,
+                f"{def_path} is not supported instance MIR: {row['kind']}")
+        require(row["body_instantiation"] == {"kind": "substituted_and_normalized"},
                 f"{def_path} body was not normalized: {row.get('body_instantiation')}")
         require(row["instance_args_are_monomorphic"] is True,
                 f"{def_path} arguments are not monomorphic")
@@ -87,7 +87,7 @@ def main(path):
         require(call.get("call_source", {}).get("kind") == "normal_call",
                 f"constructor call is not a normal call: {call.get('call_source')}")
         require(resolution.get("kind") == "indirect_function_pointer"
-                and resolution.get("status") == "supported",
+                and "status" not in resolution,
                 f"constructor call resolution changed: {resolution}")
     print("validated four supported normalized external instance_mir bodies and two indirect constructor call sites")
 

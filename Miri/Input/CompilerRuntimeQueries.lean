@@ -23,9 +23,7 @@ structure Prepared where
   virtualQueries : Array VirtualEntry
 private def value (j : Json) (key : String) : Except String Json := do
   let entry ← j.getObjVal? key
-  unless (← (← entry.getObjVal? "status").getStr?) == "supported" do
-    throw s!"unresolved compiler runtime query {key}"
-  entry.getObjVal? "value"
+  pure entry
 private def typeId (ctx : LowerContext) (j : Json) : Except String Nat := do
   let id ← (← j.getObjVal? "type_id").getNat?
   unless ctx.containsTypeId id do throw "runtime query references absent compiler type"

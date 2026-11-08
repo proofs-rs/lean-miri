@@ -18,14 +18,10 @@ def isClosureLike (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) 
 
 def symbolName (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) : Except String String := do
   let query ← (← entry p callee).getObjVal? "symbol_name"
-  unless (← (← query.getObjVal? "status").getStr?) == "supported" do
-    throw "compiler symbol name query requires a complete concrete callable instance"
-  (← query.getObjVal? "value").getStr?
+  query.getStr?
 /-- LLVM source dispatch reads codegen attributes, not mangled symbol_name. -/
 def codegenSymbolName (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) : Except String (Option String) := do
   let query ← (← entry p callee).getObjVal? "codegen_symbol_name"
-  unless (← (← query.getObjVal? "status").getStr?) == "supported" do
-    throw "definition does not support exact codegen symbol attributes"
-  let value ← query.getObjVal? "value"
+  let value := query
   if value == .null then pure none else return some (← value.getStr?)
 end Miri.Input.CompilerCallFacts

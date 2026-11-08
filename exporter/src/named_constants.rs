@@ -1,33 +1,103 @@
 //! helpers.rs::eval_path_scalar / eval_libc compiler evidence. No host libc,
 //! target-triple constants, or name-based integer guesses supply values.
 use super::*;
-fn query<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>, name: &str) -> Value {
+fn query<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    context: &mut ExportContext<'tcx>,
+    name: &str,
+) -> Result<Value, String> {
     let path = ["libc", name];
     let instance = match shim_abi::named_instance(tcx, &path, rustc_hir::def::Namespace::ValueNS) {
         Ok(instance) => instance,
-        Err(reason) => return json!({"status":"unsupported","reason":reason}),
+        Err(reason) => {
+            return Ok(export_failure(
+                "named_constants::query",
+                format!("{}", reason),
+            )?);
+        }
     };
     if !matches!(
         tcx.def_kind(instance.def_id()),
         rustc_hir::def::DefKind::Const | rustc_hir::def::DefKind::AssocConst
     ) {
-        return unavailable_compiler_fact(
-            "named libc scalar query did not resolve to a constant item",
+        return export_failure(
+            "named_constants::query",
+            format!("libc::{name} did not resolve to a constant item"),
         );
     }
     let environment = ty::TypingEnv::fully_monomorphized();
     let ty = instance.ty(tcx, environment);
     let value = match tcx.const_eval_instance(environment, instance, rustc_span::DUMMY_SP) {
-        Ok(value) => compiler_fact(const_value_json(context, tcx, ty, value)),
-        Err(error) => {
-            json!({"status":"unsupported","reason":"compiler named constant evaluation failed","error_debug":format!("{error:?}")})
-        }
+        Ok(value) => compiler_fact(const_value_json(context, tcx, ty, value)?),
+        Err(error) => export_failure(
+            "named_constants::query",
+            format!(
+                "{}; {}",
+                "compiler named constant evaluation failed",
+                format!("{error:?}")
+            ),
+        )?,
     };
-    json!({"status":"supported","instance_kind":instance_kind_json(context,tcx,instance.def),
-        "generic_args":generic_args_json(context,tcx,instance.args),"type":type_json(context,tcx,ty),
-        "evaluation":value})
+    Ok::<_, String>(
+        json!({"instance_kind":instance_kind_json(context,tcx,instance.def)?,
+        "generic_args":generic_args_json(context,tcx,instance.args)?,"type":type_json(context,tcx,ty)?,
+        "evaluation":value}),
+    )
 }
-pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>) -> Value {
+// Match the OS dispatch and guards in pinned shims/unix/{linux_like,
+// linux,macos,freebsd,solarish}, fd.rs, socket.rs, poll.rs and time.rs.
+fn required_on(os: &rustc_target::spec::Os, name: &str) -> bool {
+    use rustc_target::spec::Os;
+    let linux_like = matches!(os, Os::Linux | Os::Android);
+    if name.starts_with("SYS_")
+        || name.starts_with("FUTEX_")
+        || name.starts_with("EFD_")
+        || name.starts_with("EPOLL")
+    {
+        return linux_like;
+    }
+    if name.starts_with("MREMAP_")
+        || name.starts_with("STATX_")
+        || name.starts_with("SYNC_FILE_RANGE_")
+    {
+        return os == &Os::Linux;
+    }
+    if name.starts_with("CPU_") || name.starts_with("UMTX_") {
+        return os == &Os::FreeBsd;
+    }
+    if name.starts_with("OS_SYNC_") || name == "OS_CLOCK_MACH_ABSOLUTE_TIME" {
+        return os == &Os::MacOs;
+    }
+    match name {
+        "PR_SET_NAME" | "PR_GET_NAME" => linux_like,
+        "F_FULLFSYNC" | "F_GETPATH" | "MAXTHREADNAMESIZE" | "CLOCK_UPTIME_RAW"
+        | "SO_LINGER_SEC" | "kCCSuccess" => os == &Os::MacOs,
+        "SO_LINGER" => os != &Os::MacOs,
+        "F_KINFO" => os == &Os::FreeBsd,
+        "PS_MYID" => matches!(os, Os::Solaris | Os::Illumos),
+        "O_LARGEFILE" | "O_TMPFILE" | "AT_EMPTY_PATH" => os == &Os::Linux,
+        "CLOCK_MONOTONIC_COARSE" | "CLOCK_REALTIME_COARSE" => {
+            matches!(os, Os::Linux | Os::Android | Os::FreeBsd)
+        }
+        "TIMER_ABSTIME" | "SOCK_CLOEXEC" | "SOCK_NONBLOCK" => matches!(
+            os,
+            Os::Linux | Os::Android | Os::FreeBsd | Os::Solaris | Os::Illumos
+        ),
+        "MSG_CMSG_CLOEXEC" | "POLLRDHUP" => {
+            matches!(os, Os::Linux | Os::Android | Os::FreeBsd | Os::Illumos)
+        }
+        "SO_NOSIGPIPE" => matches!(os, Os::MacOs | Os::FreeBsd | Os::NetBsd),
+        _ => true,
+    }
+}
+
+pub(super) fn export<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    context: &mut ExportContext<'tcx>,
+) -> Result<Value, String> {
+    if !shim_abi::is_unix_target(tcx) {
+        return Ok(json!([]));
+    }
     // Currently ported unix/mem.rs and CPU affinity error branches.
     let mut names = vec![
         "EINVAL",
@@ -142,8 +212,8 @@ pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>)
     // Complete the path-keyed scalar names consumed throughout the pinned
     // Miri source. These include direct eval_libc calls, dynamically selected
     // entries from UNIX_ERRNO_TABLE/UNIX_IO_ERROR_TABLE, sysconf names, and
-    // file-type mode names. Querying all rows is safe: target-absent names keep
-    // their exact unsupported compiler status and are only rejected on demand.
+    // file-type mode names. OS guards below select required target queries;
+    // failure of any selected compiler query aborts the export.
     names.extend([
         "AF_INET",
         "AF_INET6",
@@ -316,13 +386,37 @@ pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>)
         "_SC_PAGE_SIZE",
         "kCCSuccess",
     ]);
-    Value::Array(
+    Ok::<_, String>(Value::Array(
         names
             .into_iter()
+            .filter(|name| required_on(&tcx.sess.target.os, name))
             .map(|name| {
-                json!({"name":name,"path":["libc",name],
-        "typing_env":"fully_monomorphized","query":query(tcx,context,name)})
+                Ok::<_, String>({
+                    json!({"name":name,"path":["libc",name],
+        "typing_env":"fully_monomorphized","query":query(tcx,context,name)?})
+                })
             })
-            .collect(),
-    )
+            .collect::<Result<Vec<_>, String>>()?,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustc_target::spec::Os;
+    #[test]
+    fn source_os_guards_select_constants_before_querying() {
+        assert!(required_on(&Os::Linux, "EINVAL"));
+        assert!(required_on(&Os::Linux, "SYS_futex"));
+        assert!(!required_on(&Os::MacOs, "SYS_futex"));
+        assert!(!required_on(&Os::Linux, "F_FULLFSYNC"));
+        assert!(required_on(&Os::MacOs, "F_FULLFSYNC"));
+        assert!(required_on(&Os::FreeBsd, "F_KINFO"));
+        assert!(!required_on(&Os::Linux, "CPU_WHICH_TID"));
+        assert!(required_on(&Os::Illumos, "MSG_CMSG_CLOEXEC"));
+        assert!(!required_on(&Os::Solaris, "MSG_CMSG_CLOEXEC"));
+        assert!(!required_on(&Os::Android, "O_TMPFILE"));
+        // An unknown required name is never classified away by lookup failure.
+        assert!(required_on(&Os::Linux, "MISSING_REQUIRED_CONSTANT"));
+    }
 }

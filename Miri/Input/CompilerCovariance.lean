@@ -16,8 +16,6 @@ def relationWithIndex {raw : Json} (index : CompilerQueryIndices.Covariance raw)
     unless (← entry.getObjValAs? String "typing_env") == "fully_monomorphized" &&
         (← entry.getObjValAs? String "variance") == "covariant" do
       throw s!"compiler covariance query key/environment mismatch (source={source}, target={target})"
-    unless (← entry.getObjValAs? String "status") == "supported" do
-      throw s!"compiler covariance query unresolved (source={source}, target={target})"
     let value ← entry.getObjValAs? Bool "value"
     if let some old := found then
       unless old == value do

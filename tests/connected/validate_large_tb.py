@@ -1,22 +1,17 @@
 #!/usr/bin/env python3
 """Preserve the exact accepted Frozen-write source/MIR/state assertions."""
-import hashlib
 import json
 from pathlib import Path
 import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools'))
 from mir_json import decode_mir_document
+from connected_large_inputs import validate_reference
 
 
 def validate(snapshot, log):
     raw = Path(snapshot).read_bytes()
-    assert hashlib.sha256(raw).hexdigest() == '32870449acfdc89f8ff86d1519fb562d8ad11b9fc3c92cfc012ea2cb1d39b8a7'
-    ref = json.loads((ROOT / 'tests/connected/fixtures/large-tb.reference.json').read_text())
-    assert ref['reference']['config']['same_tcx'] is True
-    assert ref['reference']['outcome']['kind'] == 'miri_evaluation_error'
-    assert ref['rustc_commit'] == (ROOT / 'upstream/.pins/rustc.commit').read_text().strip()
-    assert ref['miri_commit'] == (ROOT / 'upstream/.pins/miri.commit').read_text().strip()
+    validate_reference('large-tb', snapshot)
     doc = decode_mir_document(json.loads(raw))
     body = next(b for b in doc['bodies'] if b['def_path'] == 'miri_start')
     stmt = body['basic_blocks'][1]['statements'][8]

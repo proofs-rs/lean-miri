@@ -117,11 +117,17 @@ Scripts are the authority for individual cases and build behavior.
 | --- | --- | --- |
 | `bash tools/check-quick.sh` | Source pins/audits, Python tool tests, obligation inventory, saved-fixture hashes. No Lean or exporter build; audit generation needs the Rust analyzer. | Much of the audit/Python work overlaps, but this script and its two fixture hash-manifest checks are not called. |
 | `bash tools/check-build.sh` | Build library, self-contained tests, frontend and choice policy; run self-contained assertions and audit axioms. | Its build, runtime and axiom work overlaps; this script is not called. |
-| `bash tools/check-decoder.sh` | 16 saved-expectation decoder cases plus 4 shared-ID checks; generated mutations and retained genuine schema-3 exports. | No. Other decoder tests run, but these dedicated checks do not. |
+| `bash tools/check-decoder.sh` | Strict success/failure boundaries, 16 saved-expectation cases and 4 shared-ID checks; unit mutations with exact malformed-field and reference diagnostics. | No. Other decoder tests run, but these dedicated checks do not. |
 | `bash tools/check-structural-regressions.sh` | Context/provider/primitive rebinding, maps, zero width, thread-clock reuse and collection QA; proofs, `#eval` and runtime assertions. Uses adapted pinned unit inputs or no input. | Migrated self-contained cases are built/run through `MiriTests`; input-dependent cases are not included as a suite. |
 | `bash tools/check-performance-regressions.sh` | Finite equivalence/error-order/state-retention checks for indexes, ABI/backtrace caches, decoder caching, profiles and imported allocations. | Includes migrated self-contained cases and some input/memory overlap; dedicated input-driven parity cases still require this suite. |
 | `bash tools/check-connected-proofs.sh` | Build/audit `MiriTests` (including connected component proofs) and typecheck the retained SC projection and graph runner. | Component proofs are included; graph-runner typechecking is separate. |
 | `bash tools/check.sh` | Source audits, selected component tests, exporter contracts and fresh producer-to-consumer/execution checks. | This is the broad regression entry point, not an all-tests command. |
+
+The dedicated decoder mutations use `input/fixtures/strict-unit.json`, a
+synthetic document for schema and identity checks. It is not evidence
+of a Rust execution. Retained historical exporter files remain unchanged; their
+wire formats are not compatibility inputs for the current importer. Fresh
+exporter and frontend checks exercise current producer-to-consumer agreement.
 
 **“Performance regressions” here means preserving behavior through optimizations.**
 That script does not use speed thresholds to decide success.
@@ -162,8 +168,9 @@ The input check freshly exports Rust, exercises full/runtime decoding, lowering,
 preparation and selected allocator-world metadata. The frontend check imports
 fresh JSON into Lean constants. Runtime-metadata checks connect fresh compiler
 queries to Lean providers. Execution checks compare selected arithmetic, calls
-and globals with pinned Miri. Eval-core's six checks instead use hash-checked old
-exports converted into schema-3 **unit fixtures**; they are not fresh exports.
+and globals with pinned Miri. Eval-core's six checks use three hash-checked
+genuine schema-3 exports regenerated with the current producer. The preparation helper preserves their
+decompressed bytes exactly; it does not adapt an old wire format.
 
 The script uses `set -euo pipefail`: a failure stops it and later phases remain
 unexecuted. A timeout is not a pass. Python discovery does not recursively run
@@ -180,17 +187,23 @@ None of these top-level commands is called by `tools/check.sh`:
 
 | Command | Checks |
 | --- | --- |
-| `python3 tools/check-connected.py` | Replay canonical12 saved genuine exports: protectors, races, DST, TLS, ordinary main, upcasts, SC and Relaxed. Nine normal and three expected-UB cases. |
+| `python3 tools/check-connected.py` | Run canonical12 genuine exports (11 saved, DST fresh): protectors, races, DST, TLS, ordinary main, upcasts, SC and Relaxed. Nine normal and three expected-UB cases. |
 | `python3 tools/check-connected.py --case 198-sc-base` | Select one canonical case; `--case` can be repeated. |
 | `python3 tools/check-connected.py --ordering` | Four matched SC/weak controls, choice domains, typed prefixes and operation/scheduler order. |
 | `python3 tools/check-sc-schedules.py` | SC diagnostic seeds 0–11 and rejection of truncated/out-of-support/missing-post-step logs. |
-| `python3 tools/check-connected.py --large-tb` | Larger saved Rust export; assert the expected Frozen-tag write UB. |
+| `python3 tools/check-connected.py --large-tb` | Fresh larger Rust export; assert the expected Frozen-tag write UB. |
 | `python3 tests/connected/compare_selector.py` | Finite comparison of choice selection with extracted upstream code; does not execute the whole Miri interpreter. |
 
-Replay uses stored reference observations; it does not rerun rustc/exporter or
-reference Miri. The references specify the same prepared TyCtxt after snapshot
-capture, not vanilla Miri's allocation-ID history. Fresh generation is a separate
-operation via [tools/export-connected.py](../tools/export-connected.py).
+Fifteen cases use stored reference observations and genuine schema-3 bytes.
+The DST and large Tree Borrows cases generate fresh exports and same-TyCtxt
+Miri references in CI from tracked Rust sources, unchanged flags and exactly
+reviewed guest configuration/argv0. Their Lean assertions and choice tapes
+remain fixed. Replay therefore needs the pinned Rust/sysroot and reference
+exporter build; these two cases no longer compare immutable saved allocation
+histories. Their historical archives are not CI inputs. The latest CI matrix
+and 17-case Lean connected execution have not been run at the user's request.
+Fresh generation is a separate operation via
+[tools/export-connected.py](../tools/export-connected.py).
 Changing exporter/query collection requires fresh checks as well as replay:
 unchanged saved JSON cannot expose a new producer defect.
 

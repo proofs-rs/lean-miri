@@ -17,7 +17,6 @@ private def text (j : Json) (name : String) : Result String := do (← field j n
 private def natural (j : Json) (name : String) : Result Nat := do (← field j name).getNat?
 
 def convention (source : CanonicalAbi) : Result CanonAbi := do
-  if source.status != .supported then throw "calling-convention query is unsupported"
   match source.kind with
   | .c => pure .C | .rust => pure .Rust | .rustCold => pure .RustCold
   | .rustPreserveNone => pure .RustPreserveNone | .rustTail => pure .RustTail
@@ -26,21 +25,18 @@ def convention (source : CanonicalAbi) : Result CanonAbi := do
     let call ← require source.armCall "missing Arm calling convention"
     return .Arm (← match call with
       | .aapcs => pure ArmCall.Aapcs | .cmseNonSecureCall => pure .CCmseNonSecureCall
-      | .cmseNonSecureEntry => pure .CCmseNonSecureEntry | .unknown _ => throw "unknown Arm convention")
+      | .cmseNonSecureEntry => pure .CCmseNonSecureEntry)
   | .interrupt =>
     let kind ← require source.interruptKind "missing interrupt calling convention"
     return .Interrupt (← match kind with
       | .avr => pure InterruptKind.Avr | .avrNonBlocking => pure .AvrNonBlocking
       | .msp430 => pure .Msp430 | .riscvMachine => pure .RiscvMachine
-      | .riscvSupervisor => pure .RiscvSupervisor | .x86 => pure .X86
-      | .unknown _ => throw "unknown interrupt convention")
+      | .riscvSupervisor => pure .RiscvSupervisor | .x86 => pure .X86)
   | .x86 =>
     let call ← require source.x86Call "missing x86 calling convention"
     return .X86 (← match call with
       | .fastcall => pure X86Call.Fastcall | .stdcall => pure .Stdcall | .sysv64 => pure .SysV64
-      | .thiscall => pure .Thiscall | .vectorcall => pure .Vectorcall | .win64 => pure .Win64
-      | .unknown _ => throw "unknown x86 convention")
-  | .unknown _ => throw "unknown canonical ABI"
+      | .thiscall => pure .Thiscall | .vectorcall => pure .Vectorcall | .win64 => pure .Win64)
 
 def functionAbi (runtime : RuntimeMetadata) (source : FunctionAbi) : Result (FnAbi TypeId) := do
   let args ← source.arguments.mapM fun argument => (CallCompatibility.argument runtime argument).mapError toString
@@ -175,12 +171,9 @@ private def decodeResolution (runtime : RuntimeMetadata) (ctx : LowerContext)
     (tables : CompilerTables)
     (function : MIR.Operand) (source : Json) :
     Result (Resolution × CompilerTables) := do
-  let status ← text source "status"
   let kind ← text source "kind"
   let virtual := kind == "virtual_dispatch"
   unless kind == "resolved_instance" || virtual do throw "callee is not a compiler instance dispatch"
-  unless status == "supported" || (virtual && status == "unknown") do
-    throw "compiler callee resolution is unavailable"
   let (callee,tables) ← CompilerInstance.decode ctx tables source
   match callee.kind with
   | .Virtual _ slot =>
@@ -224,7 +217,6 @@ private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgr
         let sourceResolution ← field sourceBlock "terminator" >>= fun term => field term "kind" >>= fun kind => field kind "resolution"
         if (text sourceResolution "kind").toOption == some "indirect_function_pointer" then
           let result := do
-            unless (← text sourceResolution "status") == "supported" do throw "indirect compiler signature/ABI query is unavailable"
             let sourceType ← field sourceResolution "function_type"
             let typeId ← natural sourceType "type_id"
             let sourceType ← require (program.input.types.find? (fun (node : TypeNode) => node.id == typeId)) "indirect function type is missing"
@@ -327,7 +319,7 @@ def loadedBodyOfInstance (prepared : Prepared) (fnInstance : CallInstance) : Res
     "canonical source instance record is missing"
   unless source.kind == .instanceMir do throw "compiler body is not a substituted executable instance"
   let instantiated ← require source.bodyInstantiation "instance body lacks substitution evidence"
-  unless instantiated.status == .supported && instantiated.tag == "substituted_and_normalized" do
+  unless instantiated.tag == "substituted_and_normalized" do
     throw "instance body substitution/normalization is unresolved"
   unless source.instanceArgsAreMonomorphic == some true do throw "instance arguments are not known monomorphic"
   let body ← require prepared.program.bundle.bodies[candidate.bodyIndex]? "instance body index is absent"

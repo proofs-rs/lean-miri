@@ -49,7 +49,6 @@ private def digest (j : Json) (key : String) : Result String := do
     throw s!"invalid SHA256 evidence in {key}"
   pure value
 private def artifact (j : Json) : Result Artifact := do
-  unless (← string j "status") == "supported" do throw "consumed-artifact hash evidence is incomplete"
   pure {
     path := ← string j "path", crateName := ← string j "crate_name", kind := ← string j "kind"
     sha256 := ← digest j "sha256", sizeBytes := ← natural j "size_bytes"
@@ -58,7 +57,6 @@ private def artifact (j : Json) : Result Artifact := do
 
 def ofDocument (document : ImportDocumentCore) : Result Settings := do
   let value ← field (← field document.raw "producer") "input_settings"
-  unless (← string value "status") == "supported" do throw "producer settings/artifact identity evidence is incomplete"
   unless (← string value "hash_algorithm") == "sha256" do throw "unrecognized producer fingerprint algorithm"
   let level ← match ← field value "mir_opt_level" with
     | .null => pure none

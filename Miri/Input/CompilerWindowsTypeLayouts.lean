@@ -8,9 +8,7 @@ namespace Miri.Input.CompilerWindowsTypeLayouts
 open Lean Miri.ABI
 
 private def typeRef (entry : Json) : Except String TypeId := do
-  unless (← (← entry.getObjVal? "status").getStr?) == "supported" do
-    throw s!"compiler Windows type/layout query unavailable: {((entry.getObjVal? "reason").bind Json.getStr?).toOption}"
-  let value ← entry.getObjVal? "value"
+  let value := entry
   (← value.getObjVal? "type_id").getNat?
 
 /-- Resolve one exact source Windows C type and return its compiler-derived

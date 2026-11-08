@@ -121,14 +121,13 @@ def integer : MIR.IntegerKind → Result Integer
 def float : FloatTypeTag → Result ABI.Float
   | .f16 => pure .F16 | .f16b => pure .F16B | .f32 => pure .F32
   | .f64 => pure .F64 | .f128 => pure .F128 | .ppcf128 => pure .PpcF128
-  | .unknown _ => throw (.unsupported "float tag")
 
 def primitive (target : RuntimeTargetDataLayout) (source : PrimitiveLayout) : Result Primitive := do
   let expected ← size source.sizeBytes
   match source.kind with
   | .integer =>
     let kind ← require source.integerKind "primitive.integer_kind"
-    let .known kind := kind | throw (.unsupported "integer tag")
+    let .known kind := kind
     let integer ← integer kind
     if integer.size != expected then throw (.invalid "integer" "tag/size mismatch")
     return .Int integer (← require source.signed "primitive.signed")
@@ -141,7 +140,6 @@ def primitive (target : RuntimeTargetDataLayout) (source : PrimitiveLayout) : Re
     let pointerSize ← (target.pointerSizeIn space).mapError (fun e => .invalid "pointer" (toString e))
     if pointerSize != expected then throw (.invalid "pointer" "target/primitive size mismatch")
     return .Pointer space
-  | .unknown _ => throw (.unsupported "primitive kind")
 
 def scalar (target : RuntimeTargetDataLayout) (source : ScalarLayout) : Result ABI.Scalar := do
   let value ← primitive target source.primitive
@@ -153,7 +151,6 @@ def scalar (target : RuntimeTargetDataLayout) (source : ScalarLayout) : Result A
     let _ ← (range.isFullFor width).mapError (fun e => .invalid "scalar range" (reprStr e))
     return .Initialized (value := value) (validRange := range)
   | .union => return .Union (value := value)
-  | .unknown _ => throw (.unsupported "scalar kind")
 
 def backend (target : RuntimeTargetDataLayout) (source : Input.BackendRepr) : Result ABI.BackendRepr := do
   match source.kind with
@@ -172,7 +169,6 @@ def backend (target : RuntimeTargetDataLayout) (source : Input.BackendRepr) : Re
     if vectors == 0 || vectors > 8 then throw (.invalid "vector count" "outside 1..=8")
     return .SimdScalableVector (element := element) (count := count)
       (numberOfVectors := ⟨UInt8.ofNat vectors⟩)
-  | .unknown _ => throw (.unsupported "backend kind")
 
 def fields (source : FieldShape) : Result FieldsShape := do
   let result ← match source.kind with
@@ -188,7 +184,6 @@ def fields (source : FieldShape) : Result FieldsShape := do
     | .arbitrary =>
       if source.fieldCount != source.offsetsBytes.size then throw (.invalid "fields" "count mismatch")
       pure (.Arbitrary (← source.offsetsBytes.mapM size) source.memoryOrder)
-    | .unknown _ => throw (.unsupported "field shape")
   result.validate.mapError (fun e => .invalid "fields" (reprStr e))
   pure result
 
@@ -228,7 +223,6 @@ def niche (target : RuntimeTargetDataLayout) (j : Lean.Json) : Result (Option Ni
   return some ⟨← size (← number j "offset_bytes"), value, range⟩
 
 def encoding (source : Input.TagEncoding) : Result ABI.TagEncoding := do
-  if source.status != .supported then throw (.unsupported "tag encoding status")
   match source.kind with
   | .direct => pure .Direct
   | .niche =>
@@ -236,7 +230,6 @@ def encoding (source : Input.TagEncoding) : Result ABI.TagEncoding := do
     if first > last then throw (.invalid "niche variants" "reversed range")
     return .Niche (← require source.untaggedVariant "tag.untagged_variant") first last
       (← u128 (← require source.nicheStart "tag.niche_start") "niche start")
-  | .unknown _ => throw (.unsupported "tag encoding")
 
 private def variant (target : RuntimeTargetDataLayout) (source : Input.LayoutVariant) : Result ABI.VariantLayout := do
   let shape ← jsonField source.payload "fields"
@@ -264,10 +257,8 @@ def variants (target : RuntimeTargetDataLayout) (source : VariantsLayout) : Resu
     return .Multiple (← scalar target (← require source.tag "variants.tag"))
       (← encoding (← require source.tagEncoding "variants.tag_encoding"))
       (← require source.tagFieldIndex "variants.tag_field_index") values
-  | .unknown _ => throw (.unsupported "variants kind")
 
 def layout (target : RuntimeTargetDataLayout) (source : Input.Layout) : Result LayoutData := do
-  if source.status != .supported || source.kind != .layout then throw (.unsupported "layout query")
   let max ← jsonField source.payload "max_repr_align_bytes"
   let maxAlign ← if max == .null then pure none else do
     pure (some (← alignment (← convert "max_repr_align" max.getNat?)))
@@ -297,7 +288,6 @@ private def pointerSpec (j : Lean.Json) : Result PointerSpec := do
 /-- Every canonical target field is required. LLVM's original layout string
 and address-space bounds stay in the enclosing source document as evidence. -/
 def importTarget (j : Lean.Json) : Result RuntimeTargetDataLayout := do
-  if (← text j "status") != "supported" then throw (.unsupported "target layout")
   let endian ← match ← text j "endian" with
     | "little" => pure Endian.little | "big" => pure .big
     | _ => throw (.unsupported "target endian")
@@ -491,7 +481,7 @@ request to `tcx.types.u8`. Older exports may have no projection row for this
 special case, so recover it only from a unique, supported typed U8 node. -/
 private def stringElementLayout (metadata : RuntimeMetadata) : Result (TyAndLayout TypeId) := do
   let nodes := metadata.source.types.filter fun node =>
-    node.shapeKind == .uint && node.shapeStatus == .supported &&
+    node.shapeKind == .uint &&
       node.shapeMetadata.unsignedKind == some (.known .u8)
   unless nodes.size == 1 do throw (.unsupported "ambiguous or absent exact string element type")
   let value ← require nodes[0]? "string element type"
@@ -502,7 +492,7 @@ No size, display spelling, or first-match heuristic establishes a tuple type. -/
 def tupleLayout (metadata : RuntimeMetadata) (elements : Array TypeId) : Result (TyAndLayout TypeId) := do
   let mut candidates := #[]
   for node in metadata.source.types do
-    if node.shapeKind == .tuple && node.shapeStatus == .supported then
+    if node.shapeKind == .tuple then
       let shape ← jsonField node.payload "shape"
       let values ← array shape "elements"
       let ids ← values.mapM fun value => number value "type_id"
@@ -522,9 +512,7 @@ private def projectionParents (metadata : RuntimeMetadata) (id : TypeId) : Resul
   let query ← match facts.payload.getObjVal? "projection_queries" with
     | .error _ => return #[]
     | .ok value => pure value
-  unless (← convert "projection query status" ((← jsonField query "status").getStr?)) == "supported" do
-    throw (.unsupported "compiler projection queries")
-  let value ← jsonField query "value"
+  let value := query
   if value == .null then return #[]
   unless (← convert "projection typing environment" ((← jsonField value "typing_env").getStr?)) == "fully_monomorphized" do
     throw (.invalid "projection query" "typing environment mismatch")
@@ -551,7 +539,6 @@ def field (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index : Na
       let id ← typeRef (← jsonField source "type")
       let _ ← metadata.node id
       return ← projectionLayout metadata id source
-  if node.shapeStatus != .supported then throw (.unsupported "type shape")
   let shape ← jsonField node.payload "shape"
   let id ← match node.shapeKind with
     | .tuple => do
@@ -607,7 +594,6 @@ def forVariant (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index
 def pointee (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) :
     Result (TyAndLayout TypeId) := do
   let node ← metadata.node parent.ty
-  if node.shapeStatus != .supported then throw (.unsupported "pointee shape")
   match node.shapeKind with
   | .rawPointer | .reference =>
     let shape ← jsonField node.payload "shape"

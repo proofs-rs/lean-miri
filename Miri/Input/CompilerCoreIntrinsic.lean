@@ -13,8 +13,6 @@ private def lift (value : Except String A) : EStateM StepError S A :=
 def variantCount (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except StepError Nat := do
   let get := fun id => do
     let source ← (p.runtime.node id).mapError (fun e => StepError.unsupported (toString e))
-    unless source.shapeStatus == .supported do
-      throw (.unsupported "variant_count compiler shape unresolved")
     pure source
   let source ← get ty
   let source ← if source.shapeKind == .patternType then do
@@ -23,10 +21,9 @@ def variantCount (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except StepE
       get id
     else pure source
   match source.shapeKind with
-  | .alias | .parameter | .placeholderType | .inferenceType =>
+  | .alias =>
     throw (.invalidProgram "TooGeneric in variant_count")
-  | .patternType | .boundType => throw (.invalidProgram "source invariant: invalid nested pattern/bound type in variant_count")
-  | .unknown _ => throw (.unsupported "variant_count compiler shape unknown")
+  | .patternType => throw (.invalidProgram "source invariant: invalid nested pattern/bound type in variant_count")
   | .adt =>
     let variants ← ((source.payload.getObjVal? "shape").bind (·.getObjVal? "variants") >>= Json.getArr?).mapError StepError.unsupported
     pure variants.size

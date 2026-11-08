@@ -47,15 +47,6 @@ private def natural (j : Lean.Json) (name : String) : Except String Nat := do
   (← field j name).getNat?
 private def boolean (j : Lean.Json) (name : String) : Except String Bool := do
   (← field j name).getBool?
-private def compilerValue (j : Lean.Json) : Except String Lean.Json := do
-  let status ← text j "status"
-  unless status == "supported" do
-    let reason := match text j "reason" with
-      | .ok message => message
-      | .error _ => "compiler query did not provide a reason"
-    throw s!"compiler foreign-symbol query unresolved: {reason}"
-  field j "value"
-
 private def exportKind (value : String) : Except String ForeignItems.ExportKind :=
   match value with
   | "function" => pure .function
@@ -99,10 +90,8 @@ def prepare (instances : CompilerVTableRuntime.Prepared) : Except String Prepare
   let queries ← field program.input.raw "compiler_runtime_queries"
   let source ← field queries "foreign_symbols"
   let noAlloc ← field source "no_alloc_shim_symbol"
-  unless (← text noAlloc "status") == "supported" do
-    throw "compiler no-allocation shim symbol unresolved"
-  let noAllocName ← text noAlloc "value"
-  let candidateRecords ← (← compilerValue (← field source "exported_candidates")).getArr?
+  let noAllocName ← noAlloc.getStr?
+  let candidateRecords ← (← field source "exported_candidates").getArr?
   let mut lowering : Option LowerContext := none
   let mut candidates := #[]
   let mut previousIndex : Option Nat := none
@@ -138,7 +127,7 @@ def prepare (instances : CompilerVTableRuntime.Prepared) : Except String Prepare
       kind := kind
       compilerBuiltins := ← boolean record "compiler_builtins" }
     candidates := candidates.push candidate
-  let allocatorRecords ← (← compilerValue (← field source "allocator_shims")).getArr?
+  let allocatorRecords ← (← field source "allocator_shims").getArr?
   let mut allocatorEntries := #[]
   for record in allocatorRecords do
     let entry : AllocatorEntry := ⟨← text record "symbol",← allocatorTarget record⟩

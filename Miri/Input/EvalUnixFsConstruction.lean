@@ -537,8 +537,6 @@ def directoriesFromSource [DecidableEq MiriMemoryKind]
     let node ← match p.runtime.node parent.layout.ty with
       | .ok value => pure value
       | .error error => throw (.unsupported s!"compiler type shape for optional dirent field: {error}")
-    unless node.shapeStatus == .supported do
-      throw (.unsupported "compiler type shape for optional dirent field")
     let shape ← match node.payload.getObjVal? "shape" with
       | .ok value => pure value
       | .error error => throw (.invalidProgram s!"compiler dirent shape field: {error}")

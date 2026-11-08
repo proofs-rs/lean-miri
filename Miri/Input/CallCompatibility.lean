@@ -11,8 +11,6 @@ private def require (value : Option A) (path : String) : Result A := RuntimeMeta
 private def invalid (path message : String) : RuntimeMetadataError := .invalid path message
 
 def attributes (source : AbiAttributes) : Result ArgAttributes := do
-  if source.argExtension.status != .supported then
-    throw (.unsupported "argument attribute status")
   if source.regularBits >= 2^16 then throw (invalid "regular attributes" "u16 overflow")
   let regular := UInt16.ofNat source.regularBits
   if source.inRegister != (regular &&& 64 == 64) then throw (invalid "InReg" "redundant attribute mismatch")
@@ -46,7 +44,6 @@ def register (source : AbiRegister) : Result Reg := do
   let kind ← match source.kind with
     | .integer => pure RegKind.Integer | .float => pure .Float | .ppcF128 => pure .PpcF128
     | .vector => pure (RegKind.Vector (hintVectorElem := ← hintPrimitive (← require source.hintElement "register hint")))
-    | .unknown _ => throw (.unsupported "register kind")
   return ⟨kind,Size.fromBits (← RuntimeMetadata.u64 source.sizeBits "register bits")⟩
 
 def castTarget (source : AbiCastTarget) : Result CastTarget := do
@@ -62,7 +59,6 @@ def passMode (source : AbiPassMode) : Result PassMode := do
     | .ignore | .cast => pure 0
     | .direct | .indirect => pure 1
     | .pair | .indirectUnsized => pure 2
-    | .unknown _ => throw (.unsupported "pass mode")
   if source.attributes.size != expected then throw (invalid "pass attributes" "arity mismatch")
   let attrsAt (index : Nat) := do attributes (← require source.attributes[index]? s!"pass attributes {index}")
   match source.kind with
@@ -75,7 +71,6 @@ def passMode (source : AbiPassMode) : Result PassMode := do
     return .Cast (UInt8.ofNat pad) (← castTarget (← require source.castTarget "cast.target"))
   | .indirect =>
     let mode ← require source.indirectMode "indirect mode"
-    if mode.status != .supported then throw (.unsupported "indirect mode status")
     let mode ← match mode.tag with
       | "pointer" => pure IndirectMode.Pointer | "on_stack" => pure .OnStack
       | "amdgpu_kernel_argument" => pure .AmdgpuKernelArg
@@ -83,7 +78,6 @@ def passMode (source : AbiPassMode) : Result PassMode := do
     let space ← source.addressSpace.mapM (fun n => AddressSpace.mk <$> RuntimeMetadata.u32 n "indirect address space")
     return .Indirect (← attrsAt 0) space mode
   | .indirectUnsized => return .IndirectUnsized (← attrsAt 0) (← attrsAt 1)
-  | .unknown _ => throw (.unsupported "pass mode")
 
 def argument (runtime : RuntimeMetadata) (source : AbiArgument) : Result (ArgAbi TypeId) := do
   let _ ← runtime.node source.typeId
@@ -127,22 +121,19 @@ def kind (runtime : RuntimeMetadata) (id : TypeId) : Result (Miri.Interpreter.La
   | .functionPointer => pure .functionPointer
   | .int | .uint =>
     let tag ← require (if node.shapeKind == .int then node.shapeMetadata.signedKind else node.shapeMetadata.unsignedKind) "integer type tag"
-    let .known tag := tag | throw (.unsupported "unknown integer type tag")
+    let .known tag := tag
     return .integer tag
   | .char => pure .char
-  | .unknown _ => throw (.unsupported "unknown type kind")
   -- These are the known source `_ => false` cases, not a missing-data fallback.
-  | .bool | .float | .foreign | .str | .slice | .dynamicTraitObject | .coroutineWitness
-  | .parameter | .boundType | .placeholderType | .inferenceType | .errorType => pure .other
+  | .bool | .float | .foreign | .str | .slice | .dynamicTraitObject
+    => pure .other
 
 def adt (runtime : RuntimeMetadata) (id : TypeId) : Result (Miri.Interpreter.LayoutCompat.AdtInfo TypeId) := do
   let (node,source) ← shape runtime id
   if node.shapeKind != .adt then throw (.unsupported "non-ADT compiler query")
   let kind ← match ← require node.shapeMetadata.adtKind "ADT kind" with
     | .structKind => pure Miri.Interpreter.LayoutCompat.AdtKind.Struct | .unionKind => pure .Union | .enumKind => pure .Enum
-    | .unknown _ => throw (.unsupported "unknown ADT kind")
   let repr ← RuntimeMetadata.jsonField source "representation"
-  if (← RuntimeMetadata.text repr "status") != "supported" then throw (.unsupported "ADT repr")
   let sourceVariants ← RuntimeMetadata.array source "variants"
   let mut variants := #[]
   for sourceVariant in sourceVariants do

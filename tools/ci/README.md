@@ -15,7 +15,7 @@ with another runner.
 | `regression` | Two fixture hash manifests and `check.sh`: source/fixture integrity, Python tools, source-analyzer Rust tests, Lean proofs/assertions/axioms, source-extracted component comparisons, the exporter's current Cargo test entry point, fresh input/frontend/runtime-metadata and arithmetic/call/global execution comparisons. |
 | `extended` | Build prerequisites; decoder, structural, optimization and connected-proof scripts; intrinsic float/AES/random-memory comparisons; scheduler and SC prefixes; detached join ordering; source-extracted selector; fresh primitive-range producer/Lean decoder contract; native math ABI. Then a separate reference-feature release exporter for fresh powi-zero, math capability, timezone and three vtable identity controls. |
 | `fresh` | Independent fresh query-demand mutations, runtime-type closure, cross-crate vtable metadata, and six focused guests (acquire/relaxed handoff, positive/negative fence, pthread race, backtrace). |
-| `replay` | Build prerequisites, all canonical12 saved exports, four ordering controls, large Tree Borrows and SC diagnostic seeds 0–11 with negative-log checks. |
+| `replay` | Build prerequisites, canonical12 (11 fixed, one freshly exported), four ordering controls, freshly exported large Tree Borrows and SC diagnostic seeds 0–11 with negative-log checks. |
 
 `check.sh` owns the common `miri_tests` runtime registry and axiom audit. Other
 lanes build their own prerequisites without rerunning that registry. Their
@@ -33,8 +33,12 @@ their first failure internally, so a failed suite does not mean its later cases
 ran. No unavailable toolchain is silently skipped. Failed prerequisite suites
 can cause subsequent suites to fail as well; inspect the first setup/build error.
 
-Saved replay checks stored, hash-matched Miri observations; it does not freshly
-invoke reference Miri. Fresh checks build the pinned Miri reference and matching
+Replay checks 15 stored, hash-matched Miri observations. The DST and large
+Tree Borrows cases instead generate new exports and same-TyCtxt reference
+observations from their tracked source and unchanged flags/configuration,
+including argv0. Their Lean assertions and choice tapes remain fixed. This
+adds pinned Rust/sysroot and reference-exporter build costs to replay; these two
+cases no longer compare against immutable saved allocation histories. Fresh checks build the pinned Miri reference and matching
 MIR-enabled standard library, then compare new exports/guest outcomes. Vtable
 controls explicitly expect identity, not a nonidentity witness. Native math's
 capability check deliberately distinguishes expected Unsupported from success.
@@ -56,13 +60,12 @@ export PATH="$ELAN_HOME/bin:$CARGO_HOME/bin:$PATH"
 python3 tools/ci/run.py regression
 ```
 
-Replace the lane for the other commands. `replay` setup only installs Lean;
-the other lanes also install repository-local stable Rust, install and verify
+Replace the lane for the other commands. all lanes install Lean and repository-local stable Rust, install and verify
 the exact pinned rustc-dev compiler, prefetch locked Cargo dependencies, and run
 the existing reference Miri/sysroot setup. Setup needs network access. Fresh
 checks deliberately require new output paths: use a fresh checkout or move
 previous `scratch/ci-fresh` output before repeating the extended or fresh lane. Setup
-does not delete previous evidence. Non-replay setup checks for ripgrep before
+does not delete previous evidence. Setup checks for ripgrep before
 installing toolchains; the workflow installs Ubuntu's `ripgrep` package explicitly.
 Several source-comparison shell drivers invoke `rg`, so it is a test prerequisite,
 not an optional convenience.

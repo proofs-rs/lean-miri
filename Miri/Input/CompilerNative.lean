@@ -11,7 +11,6 @@ private def lift (value : Except String A) : EStateM StepError S A :=
 
 private def shape (p : CompilerProviders.Prepared) (layout : LocalLayout) : Except String Native.TypeShape := do
   let source ← p.runtime.node layout.ty |>.mapError toString
-  unless source.shapeStatus == .supported do throw "native type shape evidence unresolved"
   if source.shapeKind == .adt then
     let value ← source.payload.getObjVal? "shape"
     let repr ← value.getObjVal? "representation"
@@ -50,8 +49,6 @@ def abiQueries (p : CompilerProviders.Prepared)
     let world := arrays.get (← get)
     if world.entries.any (·.value.ty == ty) then
       return .ok (← lift ((RuntimeArrayTypes.lookup world ty).mapError reprStr))
-    let node ← lift (p.runtime.node ty |>.mapError toString)
-    if node.layout.kind == .layoutQueryError then return .error ()
     return .ok (← lift (p.runtime.lookup ty |>.mapError toString))
 /-- The same genuine compiler queries work on full-state native calls and
 machine-only closure construction, without introducing an artificial frame. -/

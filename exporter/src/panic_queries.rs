@@ -2,35 +2,67 @@
 use super::*;
 // machine.rs::unwind_terminate selects one of these independently of MIR
 // assert operands. Enqueue the actual mono helper before reachable traversal.
-pub(super) fn register_termination_helpers<'tcx>(tcx:TyCtxt<'tcx>,context:&mut ExportContext<'tcx>) {
-    for item in [
-        rustc_attr_ir::LangItem::Panic,
-        rustc_attr_ir::LangItem::PanicNounwind,
-        rustc_attr_ir::LangItem::PanicCannotUnwind,
-        rustc_attr_ir::LangItem::PanicInCleanup,
-    ] {
-        if let Some(def)=tcx.lang_items().get(item) {
-            if !ty::GenericArgs::identity_for_item(tcx,def).has_non_region_param() {
-                let instance = ty::Instance::mono(tcx,def);
-                context.register_instance(instance);
-                let args = if matches!(item,
-                    rustc_attr_ir::LangItem::Panic | rustc_attr_ir::LangItem::PanicNounwind) {
-                    vec![ty::Ty::new_mut_ptr(tcx, tcx.types.str_)]
-                } else {
-                    Vec::new()
-                };
-                super::generated_call_queries::register_target_call(
-                    context,
-                    tcx,
-                    instance,
-                    args,
-                    tcx.types.unit,
-                    rustc_abi::ExternAbi::Rust,
-                    ty::TypingEnv::fully_monomorphized(),
-                );
+pub(super) fn register_termination_helpers<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    context: &mut ExportContext<'tcx>,
+) -> Result<(), String> {
+    Ok::<_, String>(
+        for item in [
+            rustc_attr_ir::LangItem::Panic,
+            rustc_attr_ir::LangItem::PanicNounwind,
+            rustc_attr_ir::LangItem::PanicCannotUnwind,
+            rustc_attr_ir::LangItem::PanicInCleanup,
+        ] {
+            if let Some(def) = tcx.lang_items().get(item) {
+                if !ty::GenericArgs::identity_for_item(tcx, def).has_non_region_param() {
+                    let instance = ty::Instance::mono(tcx, def);
+                    context.register_instance(instance);
+                    let args = if matches!(
+                        item,
+                        rustc_attr_ir::LangItem::Panic | rustc_attr_ir::LangItem::PanicNounwind
+                    ) {
+                        vec![ty::Ty::new_mut_ptr(tcx, tcx.types.str_)]
+                    } else {
+                        Vec::new()
+                    };
+                    super::generated_call_queries::register_target_call(
+                        context,
+                        tcx,
+                        instance,
+                        args,
+                        tcx.types.unit,
+                        rustc_abi::ExternAbi::Rust,
+                        ty::TypingEnv::fully_monomorphized(),
+                    )?;
+                }
             }
-        }
+        },
+    )
+}
+/// machine.rs::unwind_terminate requests exactly reason.lang_item().
+pub(super) fn register_unwind_termination<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    context: &mut ExportContext<'tcx>,
+    reason: rustc_middle::mir::UnwindTerminateReason,
+) -> Result<(), String> {
+    let definition = tcx
+        .lang_items()
+        .get(reason.lang_item())
+        .ok_or("required unwind termination language item is missing")?;
+    if ty::GenericArgs::identity_for_item(tcx, definition).has_non_region_param() {
+        return Err("unwind termination helper has uninstantiated generic parameters".into());
     }
+    let instance = ty::Instance::mono(tcx, definition);
+    context.register_instance(instance);
+    generated_call_queries::register_target_call(
+        context,
+        tcx,
+        instance,
+        Vec::new(),
+        tcx.types.unit,
+        rustc_abi::ExternAbi::Rust,
+        ty::TypingEnv::fully_monomorphized(),
+    )
 }
 pub(super) fn export(tcx:TyCtxt<'_>)->Value {
     let items=[
@@ -71,25 +103,38 @@ pub(super) fn export(tcx:TyCtxt<'_>)->Value {
         let parameters=definition.map(|def|ty::GenericArgs::identity_for_item(tcx,def).iter().map(|arg|match arg.kind(){
             ty::GenericArgKind::Lifetime(_)=>"lifetime",ty::GenericArgKind::Type(_)=>"type_parameter",ty::GenericArgKind::Const(_)=>"const_parameter",
         }).collect::<Vec<_>>());
-        json!({"lang_item":name,"status":"supported","definition":definition.map(def_json),"generic_parameters":parameters})
+        json!({"lang_item":name,"definition":definition.map(def_json),"generic_parameters":parameters})
     }).collect())
 }
-pub(super) fn register_assert<'tcx>(tcx:TyCtxt<'tcx>,context:&mut ExportContext<'tcx>,body:&rustc_middle::mir::Body<'tcx>,message:&rustc_middle::mir::AssertMessage<'tcx>) {
+pub(super) fn register_assert<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    context: &mut ExportContext<'tcx>,
+    body: &rustc_middle::mir::Body<'tcx>,
+    message: &rustc_middle::mir::AssertMessage<'tcx>,
+) -> Result<(), String> {
     use rustc_middle::mir::AssertKind;
-    let definition=match message {
-        AssertKind::BoundsCheck{..}=>tcx.lang_items().panic_bounds_check_fn(),
-        AssertKind::MisalignedPointerDereference{..}=>tcx.lang_items().panic_misaligned_pointer_dereference_fn(),
-        _=>tcx.lang_items().get(message.panic_function()),
+    let definition = match message {
+        AssertKind::BoundsCheck { .. } => tcx.lang_items().panic_bounds_check_fn(),
+        AssertKind::MisalignedPointerDereference { .. } => {
+            tcx.lang_items().panic_misaligned_pointer_dereference_fn()
+        }
+        _ => tcx.lang_items().get(message.panic_function()),
     };
-    if let Some(def)=definition {
-        let args=ty::GenericArgs::identity_for_item(tcx,def);
-        if !args.has_non_region_param(){
-            let instance=ty::Instance::mono(tcx,def);
+    let def = definition.ok_or("MIR assertion requires a missing panic language item")?;
+    if ty::GenericArgs::identity_for_item(tcx, def).has_non_region_param() {
+        return Err("MIR assertion panic helper requires generic instantiation".into());
+    }
+    Ok::<_, String>({
+        {
+            let instance = ty::Instance::mono(tcx, def);
             context.register_instance(instance);
             let caller_args = match message {
-                AssertKind::BoundsCheck { index, len } => vec![index.ty(body,tcx),len.ty(body,tcx)],
-                AssertKind::MisalignedPointerDereference { required, found } =>
-                    vec![required.ty(body,tcx),found.ty(body,tcx)],
+                AssertKind::BoundsCheck { index, len } => {
+                    vec![index.ty(body, tcx), len.ty(body, tcx)]
+                }
+                AssertKind::MisalignedPointerDereference { required, found } => {
+                    vec![required.ty(body, tcx), found.ty(body, tcx)]
+                }
                 _ => Vec::new(),
             };
             super::generated_call_queries::register_target_call(
@@ -100,7 +145,7 @@ pub(super) fn register_assert<'tcx>(tcx:TyCtxt<'tcx>,context:&mut ExportContext<
                 tcx.types.unit,
                 rustc_abi::ExternAbi::Rust,
                 body.typing_env(tcx),
-            );
+            )?;
         }
-    }
+    })
 }

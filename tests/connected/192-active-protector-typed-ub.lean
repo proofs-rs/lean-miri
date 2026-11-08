@@ -246,8 +246,6 @@ def main (args : List String) : IO Unit := do
   let some path := args.head? | throw (IO.userError "untouched pinned-export JSON required")
   let some expectedReason := args[1]? | throw (IO.userError "expected UB category required")
   let decoded ← must (Input.decodeJson (← IO.FS.readFile path))
-  unless decoded.executionInput.isSome do
-    throw (IO.userError "export has unresolved source execution-input readiness")
   let program ← must (Input.lowerProgram decoded.document)
   let attempt := Input.EvalPreparation.prepare program
   let prepared ← must attempt.outcome

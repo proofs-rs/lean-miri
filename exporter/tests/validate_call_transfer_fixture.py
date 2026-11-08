@@ -113,7 +113,7 @@ call_body, call = indirect_call
 pointer_target_rows = [row for row in instance_rows if row.get("def_path", "").endswith("pointer_target")]
 require(pointer_target_rows, "pointer_target candidate instance/body is absent")
 pointer_target_body = next(
-    (row for row in pointer_target_rows if row.get("body_instantiation", {}).get("status") == "supported"),
+    (row for row in pointer_target_rows if row.get("body_instantiation", {}).get("kind") == "substituted_and_normalized"),
     None,
 )
 require(pointer_target_body, "pointer_target candidate has no substituted MIR body")
@@ -136,12 +136,12 @@ require_transfer(return_source, return_target, "indirect FnPtr return")
 resolved_virtual = [
     row
     for row in virtual_rows
-    if row.get("resolved", {}).get("status") == "supported"
+    if row.get("resolved", {}).get("instance_id") is not None
 ]
 require(resolved_virtual, "TransferObject::get has no validated virtual target row")
 instance_by_id = {item["instance_id"]: item for item in document["instances"]}
 fixture_virtual_targets = [
-    instance_by_id.get(row.get("resolved", {}).get("value", {}).get("instance_id"), {})
+    instance_by_id.get(row.get("resolved", {}).get("instance_id"), {})
     for row in resolved_virtual
 ]
 fixture_virtual_targets = [
@@ -169,7 +169,7 @@ virtual_target = fixture_virtual_targets[0]
 virtual_target_body = next(
     (row for row in instance_rows
      if row.get("instance_id") == virtual_target.get("instance_id")
-     and row.get("body_instantiation", {}).get("status") == "supported"),
+     and row.get("body_instantiation", {}).get("kind") == "substituted_and_normalized"),
     None,
 )
 require(virtual_target_body, "validated virtual target has no substituted MIR body")
@@ -218,7 +218,7 @@ callback_data_source = operand_type_ref(pthread_callsite["args"][3]["operand"])
 callback_operand_type = operand_type_ref(pthread_callsite["args"][2]["operand"])
 callback_rows = [row for row in instance_rows if row.get("def_path", "").endswith("thread_start")]
 callback_body = next(
-    (row for row in callback_rows if row.get("body_instantiation", {}).get("status") == "supported"),
+    (row for row in callback_rows if row.get("body_instantiation", {}).get("kind") == "substituted_and_normalized"),
     None,
 )
 require(callback_body and callback_data_source and callback_operand_type,
@@ -273,7 +273,7 @@ pthread_instances = [
     item
     for item in instances
     if item.get("def_path", "").endswith("pthread_create")
-    or item.get("symbol_name", {}).get("value") == "pthread_create"
+    or item.get("symbol_name") == "pthread_create"
 ]
 require(pthread_instances, "pthread_create foreign instance/candidate is absent")
 

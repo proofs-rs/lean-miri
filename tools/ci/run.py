@@ -41,9 +41,10 @@ def suites(lane):
                       'cd tests/input/fixtures && sha256sum --check SHA256SUMS')),
                 Suite('full', ('bash', 'tools/check.sh'), 14400)]
     if lane == 'replay':
-        # Freeze the full library closure before immutable-fixture replay.
+        # Freeze Lean prerequisites and build the pinned reference exporter for two live inputs.
         return [
             Suite('build', ('bash', 'tools/ci/build.sh'), 7200),
+            Suite('reference-profile', ('bash', 'tools/build-reference-profile.sh'), 7200),
             Suite('canonical12', ('python3', 'tools/check-connected.py'), 14400),
             Suite('ordering', ('python3', 'tools/check-connected.py', '--ordering'), 7200),
             Suite('large-tb', ('python3', 'tools/check-connected.py', '--large-tb', '--timeout', '1800')),

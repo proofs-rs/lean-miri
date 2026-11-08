@@ -21,9 +21,7 @@ def main (args : List String) : IO Unit := do
   boundary "decode: start"
   let text ← IO.FS.readFile path
   let decoded ← must (decodeRuntimeJsonProfiled text profile)
-  unless decoded.executionInput.isSome && decoded.blockingObligations.isEmpty do
-    throw (IO.userError s!"strict readiness gate failed: {decoded.blockingObligations.size} blocking obligations")
-  boundary "decode: ready obligations=0"
+  boundary "decode: accepted"
   boundary "lower: start"
   let program ← must (lowerCoreProgram decoded.document)
   boundary "lower: complete"

@@ -1,8 +1,8 @@
 import Miri.Input.CompilerConstantQueries
 import Miri.Interpreter.CallMachine
 
-/-! Exact body-keyed compiler results for the source stack preamble. Failed
-normalization/evaluation is retained until the corresponding runtime event. -/
+/-! Exact body-keyed compiler results for the source stack preamble.
+Malformed or missing metadata remains an error at the corresponding runtime event. -/
 namespace Miri.Input.CompilerLifecycle
 open Lean Miri.Interpreter
 structure Entry where
@@ -13,16 +13,11 @@ structure Prepared where
   program : LoweredProgram
   entries : Array Entry
 
-private def supported (j : Json) : Except String Unit := do
-  unless (← (← j.getObjVal? "status").getStr?) == "supported" do
-    throw s!"unresolved compiler lifecycle query: {j.compress}"
-
 private def decodeChecks (ctx : LowerContext) (interner : CompilerSpanInterner)
     (callee : CallInstance) (payload : Json) :
     Except String (Array (Except StepError CompilerConstantEvidence) × CompilerSpanInterner) := do
   let original ← (← payload.getObjVal? "required_consts").getArr?
   let query ← (← payload.getObjVal? "constant_query_context").getObjVal? "required_constant_checks"
-  supported query
   unless (← (← query.getObjVal? "typing_env").getStr?) == "body_typing_env" do
     throw "required-constant typing environment mismatch"
   let checks ← (← query.getObjVal? "checks").getArr?
@@ -36,23 +31,15 @@ private def decodeChecks (ctx : LowerContext) (interner : CompilerSpanInterner)
     unless (← check.getObjVal? "span") == (← source.getObjVal? "span") do
       throw "required-constant source span mismatch"
     let result ← check.getObjVal? "result"
-    if ((result.getObjVal? "status").bind Json.getStr?).toOption == some "supported" then
-      let normalized ← result.getObjVal? "normalized_operand"
-      unless (← normalized.getObjVal? "span") == (← source.getObjVal? "span") do
-        throw "required constant normalization changed source span"
-      let (source,nextInterner) ← lowerCompilerConstOperandWithInterner ctx interner (← ctx.decodeCompilerValue source)
-      let (normal,nextInterner) ← lowerCompilerConstOperandWithInterner ctx nextInterner (← ctx.decodeCompilerValue normalized)
-      let ty ← (← normalized.getObjVal? "type").getObjValAs? Nat "type_id"
-      let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue (← result.getObjVal? "value"))
-      interner := nextInterner
-      evidence := evidence.push (.ok ⟨callee,source.value,normal.value,normal.span,value⟩)
-    else
-      let kind := ((result.getObjVal? "kind").bind Json.getStr?).toOption
-      let error := if kind == some "required_const_normalization_error" ||
-          kind == some "required_const_evaluation_error" then
-        StepError.invalidProgram s!"required constant compiler failure: {result.compress}"
-        else StepError.unsupported s!"required constant unresolved: {result.compress}"
-      evidence := evidence.push (.error error)
+    let normalized ← result.getObjVal? "normalized_operand"
+    unless (← normalized.getObjVal? "span") == (← source.getObjVal? "span") do
+      throw "required constant normalization changed source span"
+    let (source,nextInterner) ← lowerCompilerConstOperandWithInterner ctx interner (← ctx.decodeCompilerValue source)
+    let (normal,nextInterner) ← lowerCompilerConstOperandWithInterner ctx nextInterner (← ctx.decodeCompilerValue normalized)
+    let ty ← (← normalized.getObjVal? "type").getObjValAs? Nat "type_id"
+    let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue (← result.getObjVal? "value"))
+    interner := nextInterner
+    evidence := evidence.push (.ok ⟨callee,source.value,normal.value,normal.span,value⟩)
   return (evidence,interner)
 
 def prepare (program : LoweredProgram) : Prepared := Id.run do

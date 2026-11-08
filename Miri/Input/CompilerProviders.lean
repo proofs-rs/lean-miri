@@ -271,7 +271,6 @@ def executionHooks (p : Prepared) (image : AllocationImage.Imported)
     rvalues := {base.rvalues with normalize := fun _ ty => lift (CompilerFacts.requiredType facts ty "normalized")}
     isRawPointer := fun _ ty => lift do
       let node ← p.runtime.node ty |>.mapError toString
-      unless node.shapeStatus == .supported do throw "missing normalized pointer type shape"
       pure (node.shapeKind == .rawPointer)
     usizeLayout := fun _ => lift (p.primitiveLayout "usize")
     pointeeLayout := fun _ ty => lift do

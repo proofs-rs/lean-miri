@@ -16,7 +16,5 @@ def main (args : List String) : IO Unit := do
   let decoded ← match decodeRuntimeJsonProfiled text options with
     | .ok value => pure value
     | .error reason => throw (IO.userError reason)
-  unless decoded.executionInput.isSome && decoded.blockingObligations.isEmpty do
-    throw (IO.userError s!"strict readiness gate failed: {decoded.blockingObligations.size} blocking obligations")
-  boundary "decode: ready obligations=0"
+  boundary "decode: accepted"
   boundary s!"decode_only: complete bodies={decoded.document.bodies.size}; guest_execution=not_run; safety=not_evaluated"

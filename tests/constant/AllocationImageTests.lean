@@ -21,7 +21,6 @@ private def queries : AllocationImage.Queries := {
     let mutability ← match initializer.mutability with
       | .immutable => pure Memory.Mutability.Not
       | .mutable => pure .Mut
-      | .unknown _ => throw "unknown static mutability"
     pure ⟨size, align, mutability, true, false⟩
 }
 

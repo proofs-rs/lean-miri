@@ -8,8 +8,8 @@ import Miri.Interpreter.Constant
 Sources: ty/instance.rs::try_instantiate_mir_and_normalize_erasing_regions;
 mir/consts.rs::Const::eval; Miri operand.rs::eval_const_to_op. A query key
 contains the complete instance, source body, MIR location and structural operand
-path. A source span alone is never an identity. Failed or absent compiler
-queries remain obligations and fail when requested. -/
+path. A source span alone is never an identity. Missing or malformed compiler
+metadata remains an error when requested. -/
 namespace Miri.Input.CompilerConstantQueries
 open Lean Miri.Interpreter
 
@@ -95,7 +95,6 @@ private def evidenceAt (ctx : LowerContext) (interner : CompilerSpanInterner) (f
   let (source,interner) ← lowerCompilerConstOperandWithInterner ctx interner (← ctx.decodeCompilerValue original)
   let (normal,interner) ← lowerCompilerConstOperandWithInterner ctx interner (← ctx.decodeCompilerValue normalized)
   let evaluated ← field normalized "constant"
-  unless (← evaluated.getObjValAs? String "status") == "supported" do throw "compiler Const::eval did not produce a value"
   let ty ← natural (← field normalized "type") "type_id"
   let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue (← field evaluated "value"))
   pure (⟨site, ⟨fnInstance,source.value,normal.value,normal.span,value⟩, original, normalized⟩,
@@ -119,27 +118,22 @@ private def prepareBody (ctx : LowerContext)
     let (fnInstance,nextTables) ← CompilerInstance.decode ctx state.interner.getTables queryContext
     let interner := state.interner.rebind nextTables
     let normalization ← field queryContext "normalization"
-    if (normalization.getObjValAs? String "status").toOption != some "supported" then
-      let obligation : Obligation := ⟨s!"bodies[{bodyIndex}].constant_query_context",
-        "compiler current-instance normalization query failed"⟩
-      pure { state with interner, obligations := state.obligations.push obligation }
-    else
-      let normalizedBody ← NormalizationBody.resolve normalization body.input.payload
-      let mut interner := interner
-      let mut evidence := state.evidence
-      let mut obligations := state.obligations
-      for (site,original) in ← sourceConstants bodyIndex body.input.payload do
-        let result := do
-          let normalized ← normalizedOperand normalizedBody site
-          evidenceAt ctx interner fnInstance site original normalized
-        match result with
-        | .ok (entry,nextInterner) =>
-          evidence := evidence.push entry
-          interner := nextInterner
-        | .error message =>
-          obligations := obligations.push
-            ⟨s!"bodies[{bodyIndex}].constant[{reprStr site.location},{reprStr site.path}]",message⟩
-      pure ⟨interner,evidence,obligations⟩
+    let normalizedBody ← NormalizationBody.resolve normalization body.input.payload
+    let mut interner := interner
+    let mut evidence := state.evidence
+    let mut obligations := state.obligations
+    for (site,original) in ← sourceConstants bodyIndex body.input.payload do
+      let result := do
+        let normalized ← normalizedOperand normalizedBody site
+        evidenceAt ctx interner fnInstance site original normalized
+      match result with
+      | .ok (entry,nextInterner) =>
+        evidence := evidence.push entry
+        interner := nextInterner
+      | .error message =>
+        obligations := obligations.push
+          ⟨s!"bodies[{bodyIndex}].constant[{reprStr site.location},{reprStr site.path}]",message⟩
+    pure ⟨interner,evidence,obligations⟩
 
 private def prepareBodies (ctx : LowerContext) (program : LoweredProgram)
     (initial : PrepareState) : Except String PrepareState := do

@@ -23,12 +23,9 @@ def unitPointerLayout (prepared : CompilerCallPipeline.Prepared) : Result LocalL
 returns None; unavailable type/repr metadata is an error, not a non-ADT default. -/
 def adtReprC (prepared : CompilerCallPipeline.Prepared) (ty : MIR.TyId) : Result (Option Bool) := do
   let node ← prepared.symbols.facts.context.runtime.node ty |>.mapError toString
-  unless node.shapeStatus == .supported do throw "return type compiler shape unresolved"
   if node.shapeKind == .adt then
     return some (← CompilerFacts.adtInfo prepared.symbols.facts.context ty).reprC
-  match node.shapeKind with
-  | .unknown tag => throw s!"unknown return type compiler shape {tag}"
-  | _ => return none
+  return none
 
 def hooks (prepared : CompilerCallPipeline.Prepared) (shim : CompilerShimAbi.Prepared)
     (image : AllocationImage.Imported) (memory : S → MemoryState P Extra K)

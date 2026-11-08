@@ -3,147 +3,57 @@
     "compiler_facts": {
       "adt": null,
       "boolean_queries": {
-        "has_erasable_regions": {
-          "status": "supported",
-          "value": false
-        },
-        "is_box": {
-          "status": "supported",
-          "value": false
-        },
-        "is_c_void": {
-          "status": "supported",
-          "value": false
-        },
-        "is_dynamic": {
-          "status": "supported",
-          "value": false
-        },
-        "is_freeze": {
-          "status": "supported",
-          "value": true
-        },
-        "is_global_box": {
-          "status": "supported",
-          "value": false
-        },
-        "is_like_maybe_dangling": {
-          "status": "supported",
-          "value": false
-        },
-        "is_monomorphic": {
-          "status": "supported",
-          "value": true
-        },
-        "is_monomorphic_enough": {
-          "status": "supported",
-          "value": true
-        },
-        "is_simd": {
-          "status": "supported",
-          "value": false
-        },
-        "is_sized": {
-          "status": "supported",
-          "value": false
-        },
-        "is_too_generic": {
-          "status": "supported",
-          "value": false
-        },
-        "is_unpin": {
-          "status": "supported",
-          "value": true
-        },
-        "is_unsafe_cell": {
-          "status": "supported",
-          "value": false
-        },
-        "is_unsafe_unpin": {
-          "status": "supported",
-          "value": true
-        },
-        "needs_drop": {
-          "status": "supported",
-          "value": false
-        },
-        "opsem_inhabited": {
-          "status": "supported",
-          "value": true
-        }
+        "has_erasable_regions": false,
+        "is_box": false,
+        "is_c_void": false,
+        "is_dynamic": false,
+        "is_freeze": true,
+        "is_global_box": false,
+        "is_like_maybe_dangling": false,
+        "is_monomorphic": true,
+        "is_monomorphic_enough": true,
+        "is_simd": false,
+        "is_sized": false,
+        "is_too_generic": false,
+        "is_unpin": true,
+        "is_unsafe_cell": false,
+        "is_unsafe_unpin": true,
+        "needs_drop": false,
+        "opsem_inhabited": true
       },
-      "capture_names": {
-        "status": "supported",
-        "value": null
-      },
+      "capture_names": null,
       "definition": null,
       "discriminants": {
-        "status": "supported",
-        "value": {
-          "adt_variant_count": null,
-          "has_discriminants": false,
-          "values": []
-        }
+        "adt_variant_count": null,
+        "has_discriminants": false,
+        "values": []
       },
       "input_type": {
         "type_id": 155
       },
-      "projection_queries": {
-        "status": "supported",
-        "value": null
-      },
+      "projection_queries": null,
       "query_input_type": {
         "type_id": 155
       },
-      "simd_size_and_type": {
-        "status": "supported",
-        "value": null
-      },
-      "type_id_hash": {
-        "status": "supported",
-        "value": "243540118543766788965880614474483045922"
-      },
+      "simd_size_and_type": null,
+      "type_id_hash": "243540118543766788965880614474483045922",
       "type_queries": {
-        "boxed_type": {
-          "status": "supported",
-          "value": null
-        },
-        "builtin_deref_explicit": {
-          "status": "supported",
-          "value": null
-        },
-        "builtin_deref_implicit": {
-          "status": "supported",
-          "value": null
-        },
+        "boxed_type": null,
+        "builtin_deref_explicit": null,
+        "builtin_deref_implicit": null,
         "discriminant_type": {
-          "status": "supported",
-          "value": {
-            "type_id": 1
-          }
+          "type_id": 1
         },
         "metadata_tail": {
-          "status": "supported",
-          "value": {
-            "type_id": 155
-          }
+          "type_id": 155
         },
         "normalized": {
-          "status": "supported",
-          "value": {
-            "type_id": 155
-          }
+          "type_id": 155
         },
         "pointer_metadata_type": {
-          "status": "supported",
-          "value": {
-            "type_id": 5
-          }
+          "type_id": 5
         },
-        "unsafe_binder_erased": {
-          "status": "supported",
-          "value": null
-        }
+        "unsafe_binder_erased": null
       },
       "typing_env": "fully_monomorphized"
     },
@@ -165,7 +75,6 @@
       "randomization_seed": 13921294091492507170,
       "repr_c": false,
       "size_bytes": 0,
-      "status": "supported",
       "unadjusted_abi_align_bytes": 1,
       "uninhabited": false,
       "variants": {
@@ -175,8 +84,7 @@
     },
     "layout_query_input_type": null,
     "shape": {
-      "kind": "str",
-      "status": "supported"
+      "kind": "str"
     },
     "type_id": 155
   },
@@ -184,123 +92,46 @@
     "compiler_facts": {
       "adt": null,
       "boolean_queries": {
-        "has_erasable_regions": {
-          "status": "supported",
-          "value": false
-        },
-        "is_box": {
-          "status": "supported",
-          "value": false
-        },
-        "is_c_void": {
-          "status": "supported",
-          "value": false
-        },
-        "is_dynamic": {
-          "status": "supported",
-          "value": false
-        },
-        "is_freeze": {
-          "status": "supported",
-          "value": true
-        },
-        "is_global_box": {
-          "status": "supported",
-          "value": false
-        },
-        "is_like_maybe_dangling": {
-          "status": "supported",
-          "value": false
-        },
-        "is_monomorphic": {
-          "status": "supported",
-          "value": true
-        },
-        "is_monomorphic_enough": {
-          "status": "supported",
-          "value": true
-        },
-        "is_simd": {
-          "status": "supported",
-          "value": false
-        },
-        "is_sized": {
-          "status": "supported",
-          "value": true
-        },
-        "is_too_generic": {
-          "status": "supported",
-          "value": false
-        },
-        "is_unpin": {
-          "status": "supported",
-          "value": true
-        },
-        "is_unsafe_cell": {
-          "status": "supported",
-          "value": false
-        },
-        "is_unsafe_unpin": {
-          "status": "supported",
-          "value": true
-        },
-        "needs_drop": {
-          "status": "supported",
-          "value": false
-        },
-        "opsem_inhabited": {
-          "status": "supported",
-          "value": true
-        }
+        "has_erasable_regions": false,
+        "is_box": false,
+        "is_c_void": false,
+        "is_dynamic": false,
+        "is_freeze": true,
+        "is_global_box": false,
+        "is_like_maybe_dangling": false,
+        "is_monomorphic": true,
+        "is_monomorphic_enough": true,
+        "is_simd": false,
+        "is_sized": true,
+        "is_too_generic": false,
+        "is_unpin": true,
+        "is_unsafe_cell": false,
+        "is_unsafe_unpin": true,
+        "needs_drop": false,
+        "opsem_inhabited": true
       },
-      "capture_names": {
-        "status": "supported",
-        "value": null
-      },
+      "capture_names": null,
       "definition": null,
       "discriminants": {
-        "status": "supported",
-        "value": {
-          "adt_variant_count": null,
-          "has_discriminants": false,
-          "values": []
-        }
+        "adt_variant_count": null,
+        "has_discriminants": false,
+        "values": []
       },
       "input_type": {
         "type_id": 159
       },
       "projection_queries": {
-        "status": "supported",
-        "value": {
-          "parents": [
-            {
-              "fields": [
-                {
-                  "index": 0,
-                  "layout": {
-                    "abi_align_bytes": 8,
-                    "backend_repr": {
-                      "kind": "scalar",
-                      "scalar": {
-                        "kind": "initialized",
-                        "primitive": {
-                          "address_space": 0,
-                          "kind": "pointer",
-                          "size_bytes": 8
-                        },
-                        "valid_range": {
-                          "end": "18446744073709551615",
-                          "start": "1"
-                        }
-                      }
-                    },
-                    "field_offsets_bytes": [],
-                    "fields": {
-                      "field_count": 0,
-                      "kind": "primitive"
-                    },
-                    "largest_niche": {
-                      "offset_bytes": 0,
+        "parents": [
+          {
+            "fields": [
+              {
+                "index": 0,
+                "layout": {
+                  "abi_align_bytes": 8,
+                  "backend_repr": {
+                    "kind": "scalar",
+                    "scalar": {
+                      "kind": "initialized",
                       "primitive": {
                         "address_space": 0,
                         "kind": "pointer",
@@ -310,71 +141,15 @@
                         "end": "18446744073709551615",
                         "start": "1"
                       }
-                    },
-                    "max_repr_align_bytes": null,
-                    "randomization_seed": 281492156579847,
-                    "repr_c": false,
-                    "size_bytes": 8,
-                    "status": "supported",
-                    "unadjusted_abi_align_bytes": 8,
-                    "uninhabited": false,
-                    "variants": {
-                      "kind": "single",
-                      "variant_index": 0
                     }
                   },
-                  "type": {
-                    "type_id": 159
-                  }
-                },
-                {
-                  "index": 1,
-                  "layout": {
-                    "abi_align_bytes": 8,
-                    "backend_repr": {
-                      "kind": "scalar",
-                      "scalar": {
-                        "kind": "initialized",
-                        "primitive": {
-                          "integer_kind": "i64",
-                          "kind": "integer",
-                          "signed": false,
-                          "size_bytes": 8
-                        },
-                        "valid_range": {
-                          "end": "18446744073709551615",
-                          "start": "0"
-                        }
-                      }
-                    },
-                    "field_offsets_bytes": [],
-                    "fields": {
-                      "field_count": 0,
-                      "kind": "primitive"
-                    },
-                    "largest_niche": null,
-                    "max_repr_align_bytes": null,
-                    "randomization_seed": 8589934599,
-                    "repr_c": false,
-                    "size_bytes": 8,
-                    "status": "supported",
-                    "unadjusted_abi_align_bytes": 8,
-                    "uninhabited": false,
-                    "variants": {
-                      "kind": "single",
-                      "variant_index": 0
-                    }
+                  "field_offsets_bytes": [],
+                  "fields": {
+                    "field_count": 0,
+                    "kind": "primitive"
                   },
-                  "type": {
-                    "type_id": 5
-                  }
-                }
-              ],
-              "layout": {
-                "abi_align_bytes": 8,
-                "backend_repr": {
-                  "first": {
-                    "kind": "initialized",
+                  "largest_niche": {
+                    "offset_bytes": 0,
                     "primitive": {
                       "address_space": 0,
                       "kind": "pointer",
@@ -385,40 +160,68 @@
                       "start": "1"
                     }
                   },
-                  "kind": "scalar_pair",
-                  "second": {
-                    "kind": "initialized",
-                    "primitive": {
-                      "integer_kind": "i64",
-                      "kind": "integer",
-                      "signed": false,
-                      "size_bytes": 8
-                    },
-                    "valid_range": {
-                      "end": "18446744073709551615",
-                      "start": "0"
+                  "max_repr_align_bytes": null,
+                  "randomization_seed": 281492156579847,
+                  "repr_c": false,
+                  "size_bytes": 8,
+                  "unadjusted_abi_align_bytes": 8,
+                  "uninhabited": false,
+                  "variants": {
+                    "kind": "single",
+                    "variant_index": 0
+                  }
+                },
+                "type": {
+                  "type_id": 159
+                }
+              },
+              {
+                "index": 1,
+                "layout": {
+                  "abi_align_bytes": 8,
+                  "backend_repr": {
+                    "kind": "scalar",
+                    "scalar": {
+                      "kind": "initialized",
+                      "primitive": {
+                        "integer_kind": "i64",
+                        "kind": "integer",
+                        "signed": false,
+                        "size_bytes": 8
+                      },
+                      "valid_range": {
+                        "end": "18446744073709551615",
+                        "start": "0"
+                      }
                     }
                   },
-                  "second_offset_bytes": 8
+                  "field_offsets_bytes": [],
+                  "fields": {
+                    "field_count": 0,
+                    "kind": "primitive"
+                  },
+                  "largest_niche": null,
+                  "max_repr_align_bytes": null,
+                  "randomization_seed": 8589934599,
+                  "repr_c": false,
+                  "size_bytes": 8,
+                  "unadjusted_abi_align_bytes": 8,
+                  "uninhabited": false,
+                  "variants": {
+                    "kind": "single",
+                    "variant_index": 0
+                  }
                 },
-                "field_offsets_bytes": [
-                  0,
-                  8
-                ],
-                "fields": {
-                  "field_count": 2,
-                  "kind": "arbitrary",
-                  "memory_order": [
-                    0,
-                    1
-                  ],
-                  "offsets_bytes": [
-                    0,
-                    8
-                  ]
-                },
-                "largest_niche": {
-                  "offset_bytes": 0,
+                "type": {
+                  "type_id": 5
+                }
+              }
+            ],
+            "layout": {
+              "abi_align_bytes": 8,
+              "backend_repr": {
+                "first": {
+                  "kind": "initialized",
                   "primitive": {
                     "address_space": 0,
                     "kind": "pointer",
@@ -429,80 +232,92 @@
                     "start": "1"
                   }
                 },
-                "max_repr_align_bytes": null,
-                "randomization_seed": 16,
-                "repr_c": false,
-                "size_bytes": 16,
-                "status": "supported",
-                "unadjusted_abi_align_bytes": 8,
-                "uninhabited": false,
-                "variants": {
-                  "kind": "single",
-                  "variant_index": 0
+                "kind": "scalar_pair",
+                "second": {
+                  "kind": "initialized",
+                  "primitive": {
+                    "integer_kind": "i64",
+                    "kind": "integer",
+                    "signed": false,
+                    "size_bytes": 8
+                  },
+                  "valid_range": {
+                    "end": "18446744073709551615",
+                    "start": "0"
+                  }
+                },
+                "second_offset_bytes": 8
+              },
+              "field_offsets_bytes": [
+                0,
+                8
+              ],
+              "fields": {
+                "field_count": 2,
+                "kind": "arbitrary",
+                "memory_order": [
+                  0,
+                  1
+                ],
+                "offsets_bytes": [
+                  0,
+                  8
+                ]
+              },
+              "largest_niche": {
+                "offset_bytes": 0,
+                "primitive": {
+                  "address_space": 0,
+                  "kind": "pointer",
+                  "size_bytes": 8
+                },
+                "valid_range": {
+                  "end": "18446744073709551615",
+                  "start": "1"
                 }
               },
-              "variant": null
-            }
-          ],
-          "typing_env": "fully_monomorphized"
-        }
+              "max_repr_align_bytes": null,
+              "randomization_seed": 16,
+              "repr_c": false,
+              "size_bytes": 16,
+              "unadjusted_abi_align_bytes": 8,
+              "uninhabited": false,
+              "variants": {
+                "kind": "single",
+                "variant_index": 0
+              }
+            },
+            "variant": null
+          }
+        ],
+        "typing_env": "fully_monomorphized"
       },
       "query_input_type": {
         "type_id": 159
       },
-      "simd_size_and_type": {
-        "status": "supported",
-        "value": null
-      },
-      "type_id_hash": {
-        "status": "supported",
-        "value": "48856307742461772449142782864826955356"
-      },
+      "simd_size_and_type": null,
+      "type_id_hash": "48856307742461772449142782864826955356",
       "type_queries": {
-        "boxed_type": {
-          "status": "supported",
-          "value": null
-        },
+        "boxed_type": null,
         "builtin_deref_explicit": {
-          "status": "supported",
-          "value": {
-            "type_id": 155
-          }
+          "type_id": 155
         },
         "builtin_deref_implicit": {
-          "status": "supported",
-          "value": {
-            "type_id": 155
-          }
+          "type_id": 155
         },
         "discriminant_type": {
-          "status": "supported",
-          "value": {
-            "type_id": 1
-          }
+          "type_id": 1
         },
         "metadata_tail": {
-          "status": "supported",
-          "value": {
-            "type_id": 159
-          }
+          "type_id": 159
         },
         "normalized": {
-          "status": "supported",
-          "value": {
-            "type_id": 159
-          }
+          "type_id": 159
         },
         "pointer_metadata_type": {
-          "status": "supported",
-          "value": {
-            "type_id": 0
-          }
+          "type_id": 0
         },
-        "unsafe_binder_erased": {
-          "status": "supported",
-          "value": null
-        }
+        "unsafe_binder_erased": null
       },
       "typing_env": "fully_monomorphized"
     },
@@ -570,7 +385,6 @@
       "randomization_seed": 16,
       "repr_c": false,
       "size_bytes": 16,
-      "status": "supported",
       "unadjusted_abi_align_bytes": 8,
       "uninhabited": false,
       "variants": {
@@ -582,17 +396,14 @@
     "shape": {
       "kind": "reference",
       "mutability": {
-        "kind": "immutable",
-        "status": "supported"
+        "kind": "immutable"
       },
       "pointee": {
         "type_id": 155
       },
       "region": {
-        "kind": "erased",
-        "status": "supported"
-      },
-      "status": "supported"
+        "kind": "erased"
+      }
     },
     "type_id": 159
   }

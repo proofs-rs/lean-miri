@@ -62,10 +62,9 @@ def main():
     # A source-level powi spelling alone is insufficient coverage evidence.
     snapshot = decode_mir_document(json.loads(raw))
     records = snapshot['compiler_runtime_queries']['instances']
-    intrinsics = {record['instance_id']: record.get('item_name', {}).get('value')
+    intrinsics = {record['instance_id']: record.get('item_name')
                   for record in records
-                  if record.get('intrinsic_metadata', {}).get('status') == 'supported'
-                  and record['intrinsic_metadata'].get('value') is not None}
+                  if record.get('intrinsic_metadata') is not None}
     retained = set()
     for body in snapshot['bodies']:
         if body.get('def_path') != 'miri_start':

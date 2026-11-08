@@ -169,7 +169,6 @@ private def allocationPrincipal (facts : CompilerFactAdapters.Prepared)
   let targets := facts.context.program.input.compilerPredicates.filter (·.id == normalized)
   let some target := targets[0]? | throw "normalized memory-backed vtable principal evidence missing"
   unless targets.all (·.payload == target.payload) &&
-      (target.original.getObjValAs? String "status").toOption == some "supported" &&
       (target.original.getObjValAs? String "kind").toOption == some "trait" do
     throw "normalized memory-backed vtable principal evidence conflicts"
   return (normalized, target.original)
@@ -193,10 +192,6 @@ def queryTargetPrincipal (facts : CompilerFactAdapters.Prepared)
       throw "memory-backed supertrait target compiler type mismatch"
     let some metadata := (row.getObjVal? "vtable_metadata").toOption
       | throw s!"compiler vtable target row {rowIndex} lacks metadata"
-    unless (row.getObjValAs? String "status").toOption == some "supported" &&
-        (metadata.getObjValAs? String "status").toOption == some "supported" &&
-        (metadata.getObjValAs? String "layout_status").toOption == some "supported" do
-      throw s!"compiler vtable target row {rowIndex} has unresolved metadata"
     let metadataType ← metadata.getObjVal? "type"
     unless ((metadataType.getObjValAs? Nat "type_id").toOption == some sourceType) do
       throw "memory-backed supertrait target metadata type mismatch"
@@ -206,7 +201,6 @@ def queryTargetPrincipal (facts : CompilerFactAdapters.Prepared)
       throw "memory-backed supertrait target predicates disagree with query key"
     let principalPredicate ← metadata.getObjVal? "principal_predicate"
     unless principalPredicate != Json.null &&
-        (principalPredicate.getObjValAs? String "status").toOption == some "supported" &&
         (principalPredicate.getObjValAs? String "kind").toOption == some "trait" do
       throw "memory-backed supertrait target has no supported principal trait"
     let (targetPrincipal, allocationPredicate) ← allocationPrincipal facts principalPredicate
@@ -217,8 +211,6 @@ def queryTargetPrincipal (facts : CompilerFactAdapters.Prepared)
     let evidence := Json.mkObj [
       ("type", metadataType),
       ("principal_predicate", allocationPredicate),
-      ("status", .str "supported"),
-      ("layout_status", .str "supported"),
       ("size_bytes", toJson size),
       ("align_bytes", toJson align),
       ("entries", entries)]
@@ -237,13 +229,12 @@ rustc may instead serialize the same global allocation as memory, in which
 case the query row's `vtable_allocation_id` is the required identity join. -/
 def supertraitPrincipal (prepared : Prepared) (sourceType : MIR.TyId)
     (entry : Input.VtableEntry) : Result Nat := do
-  unless entry.status == .supported && entry.kind == .supertraitVtablePointer do
+  unless entry.kind == .supertraitVtablePointer do
     throw "supertrait vtable entry is unresolved"
   let some sourceId := entry.allocationId | throw "supertrait vtable source allocation missing"
   let nodes := prepared.facts.context.program.input.allocations.filter (·.id == sourceId)
   unless nodes.size == 1 do throw "supertrait vtable allocation identity is missing or ambiguous"
   let some target := nodes[0]? | throw "supertrait vtable allocation evidence missing"
-  unless target.status == .supported do throw "supertrait vtable allocation is unresolved"
   match target.kind, target.data with
   | .vtable, some (.vtable vtable) =>
     unless vtable.typeId == sourceType do throw "supertrait vtable concrete type mismatch"
@@ -273,7 +264,6 @@ private def methodInstanceUsing (prepared : Prepared) (lookup : GlobalLookup pre
 private def entryValueUsing (prepared : Prepared) (lookup : GlobalLookup prepared)
     (sourceType : MIR.TyId)
     (entry : Input.VtableEntry) : Result (Interpreter.VTableEntry CallInstance) := do
-  unless entry.status == .supported do throw "compiler vtable entry unresolved"
   match entry.kind with
   | .dropInPlace | .dropInPlaceNull => return .dropInPlace
   | .sizeBytes => return .size
@@ -283,7 +273,6 @@ private def entryValueUsing (prepared : Prepared) (lookup : GlobalLookup prepare
   | .supertraitVtablePointer =>
     let token ← supertraitPrincipal prepared sourceType entry
     return .traitVPtr token
-  | .unknown tag => throw s!"unknown compiler vtable entry {tag}"
 
 /-- Actual compiler vtable_entries result keyed by its concrete type and exact
 compiler principal. Repeated symbolic allocations must provide identical query
@@ -310,10 +299,6 @@ def entriesUsing (prepared : Prepared) (lookup : GlobalLookup prepared)
     let rowPrincipal ← if predicate == .null then pure none else
       (predicate.getObjVal? "predicate_id").bind Json.getNat? |>.map some
     unless rowPrincipal == expectedPrincipal do continue
-    unless (row.getObjValAs? String "status").toOption == some "supported" &&
-        (metadata.getObjValAs? String "status").toOption == some "supported" &&
-        (metadata.getObjValAs? String "layout_status").toOption == some "supported" do
-      throw s!"compiler vtable query row {rowIndex} has unresolved runtime metadata"
     let metadataPredicates ← (metadata.getObjVal? "predicates").bind Json.getArr?
     let rowPredicates ← (row.getObjVal? "input_predicates").bind Json.getArr?
     unless metadataPredicates == rowPredicates do

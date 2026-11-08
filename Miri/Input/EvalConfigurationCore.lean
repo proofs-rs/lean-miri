@@ -482,9 +482,7 @@ def makeWithForeignContext {Assembly : Type}
       chooseNaN := fun _ => ExecutionChoiceBindings.nanChoice EvalCoreMachine.tape }
     let isRaw := fun (_ : C) ty => do
       let node ← query (p.runtime.node ty |>.mapError toString)
-      match node.shapeKind with
-      | .unknown _ => throw (.unsupported "raw pointer compiler type kind unavailable")
-      | kind => pure (kind == .rawPointer)
+      pure (node.shapeKind == .rawPointer)
     let usize := fun (_ : C) => query (p.primitiveLayout "usize")
     let pointeeLayout := fun (_ : C) ty => do
       let some pointee ← query (CompilerFacts.builtinDeref context ty true)
@@ -946,12 +944,6 @@ private def sourcePanicUnwinds (p : CompilerProviders.Prepared) : Except StepErr
     StepError.unsupported "source compiler panic strategy is missing"
   let settings ← (producer.getObjVal? "input_settings").mapError fun _ =>
     StepError.unsupported "source compiler panic strategy is missing"
-  let status ← (settings.getObjVal? "status").mapError fun _ =>
-    StepError.unsupported "source compiler settings status is missing"
-  let status ← status.getStr?.mapError fun _ =>
-    StepError.unsupported "source compiler settings status is malformed"
-  unless status == "supported" do
-    throw (.unsupported "source compiler settings are not supported")
   let strategy ← (settings.getObjVal? "effective_panic_strategy").mapError fun _ =>
     StepError.unsupported "source compiler panic strategy is missing"
   let strategy ← strategy.getStr?.mapError fun _ =>

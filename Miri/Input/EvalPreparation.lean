@@ -53,7 +53,7 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Attempt 
     | .error error => return ⟨empty,.error error⟩
   let importNodes := match compiler.program.input.compilerAllocIdWorld with
     | none => compiler.program.input.allocations
-    | some _ => compiler.program.input.allocations.filter (·.status == .supported)
+    | some _ => compiler.program.input.allocations
   let imported := profileit "preparation.eval.allocation_import_graph" profile fun _ =>
     AllocationImage.importGraph compiler.runtime.target
       compiler.program.compilerTables.definitions CompilerGlobals.queries importNodes empty

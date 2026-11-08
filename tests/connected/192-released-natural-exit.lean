@@ -270,8 +270,6 @@ private def raceStateInfo (state : OuterState) : String := Id.run do
 private def runProtectorNaturalExit (contents : String) (pageSize : UInt64)
     (numCpus hostPid : UInt32) : Except String String := do
   let decoded ← must (Input.decodeRuntimeJson contents)
-  unless decoded.executionInput.isSome && decoded.blockingObligations.isEmpty do
-    throw s!"strict readiness gate failed: obligations={decoded.blockingObligations.size}; sample={reprStr (decoded.blockingObligations.toList.take 30)}"
   let program ← must (Input.lowerCoreProgram decoded.document)
   let attempt := Input.EvalPreparation.prepare program
   let prepared ← must attempt.outcome

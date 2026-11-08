@@ -9,7 +9,6 @@ private def check (condition : Bool) (message : String) : IO Unit :=
 
 private def obj (fields : List (String × Json)) : Json := Json.mkObj fields
 
-private def statusJson (status : PayloadStatus) : Json := toJson (reprStr status)
 
 private partial def patternJson : CompilerPattern → Json
   | .range start finish => obj [("range", Json.arr #[start, finish])]
@@ -18,7 +17,7 @@ private partial def patternJson : CompilerPattern → Json
 
 private def typeJson (node : TypeNode) : Json := obj [
   ("id", toJson node.id), ("display", toJson node.display),
-  ("shape_status", statusJson node.shapeStatus), ("shape_kind", toJson (reprStr node.shapeKind)),
+  ("shape_kind", toJson (reprStr node.shapeKind)),
   ("shape_metadata", toJson (reprStr node.shapeMetadata)),
   ("pattern", node.pattern.map patternJson |>.getD Json.null),
   ("compiler_facts", node.compilerFacts.map (·.payload) |>.getD Json.null),
@@ -28,20 +27,20 @@ private def typeJson (node : TypeNode) : Json := obj [
       ("inputs", toJson signature.inputs), ("output", toJson signature.output),
       ("safety", toJson signature.safety.payload), ("abi", signature.abi.payload),
       ("c_variadic", toJson signature.cVariadic)]),
-  ("layout_status", statusJson node.layout.status), ("layout_kind", toJson (reprStr node.layout.kind)),
+  ("layout_kind", toJson (reprStr node.layout.kind)),
   ("layout", node.layout.payload), ("payload", node.payload)]
 
 private def predicateJson (row : CompilerPredicateEvidence) : Json := obj [
   ("id", toJson row.id), ("typing_environment", toJson row.typingEnvironment),
   ("stable_key", toJson row.stableKey), ("auto_trait", toJson row.autoTrait),
-  ("normalization_status", statusJson row.normalizationStatus),
+
   ("normalized_id", toJson row.normalizedId), ("original", row.original), ("payload", row.payload)]
 
 private def instanceJson (node : InstanceNode) : Json := obj [
-  ("id", toJson node.id), ("status", statusJson node.status), ("kind", toJson (reprStr node.kind)),
+  ("id", toJson node.id), ("kind", toJson (reprStr node.kind)),
   ("def_path", toJson node.defPath), ("definition_id", toJson (reprStr node.definitionId)),
   ("body_instantiation", node.bodyInstantiation.map (fun item => obj [
-    ("status", statusJson item.status), ("tag", toJson item.tag), ("payload", item.payload)]) |>.getD Json.null),
+    ("tag", toJson item.tag), ("payload", item.payload)]) |>.getD Json.null),
   ("body_template_is_polymorphic", toJson node.bodyTemplateIsPolymorphic),
   ("instance_args_are_monomorphic", toJson node.instanceArgsAreMonomorphic),
   ("body_payload", node.body.map (·.payload) |>.getD Json.null), ("payload", node.payload)]
@@ -71,12 +70,12 @@ private def coreJson (core : ImportDocumentCore) : Json := obj [
   ("producer", obj [("miri", toJson core.producer.miriCommit), ("rustc", toJson core.producer.rustcCommit),
     ("version", toJson core.producer.rustcVersion), ("target", toJson core.producer.targetTriple)]),
   ("runtime_target_data_layout", core.runtimeTargetDataLayout.map (fun layout =>
-    obj [("status", statusJson layout.status), ("payload", layout.payload)]) |>.getD Json.null),
-  ("completeness", statusJson core.completenessStatus),
+    obj [("payload", layout.payload)]) |>.getD Json.null),
+
   ("types", Json.arr (core.types.map typeJson)),
   ("allocations", Json.arr (core.allocations.map fun allocation => obj [
     ("id", toJson allocation.id), ("source_alloc_id", toJson allocation.sourceAllocId),
-    ("status", statusJson allocation.status), ("kind", toJson (reprStr allocation.kind)),
+    ("kind", toJson (reprStr allocation.kind)),
     ("memory", allocation.memory.map (·.bytesHex) |>.getD ""),
     ("payload", allocation.payload)])),
   ("compiler_alloc_id_world", toJson (reprStr core.compilerAllocIdWorld)),
@@ -84,7 +83,6 @@ private def coreJson (core : ImportDocumentCore) : Json := obj [
   ("selected_scope", core.selectedScope.map (·.payload) |>.getD Json.null),
   ("function_abis", Json.arr (core.functionAbis.map abiJson)),
   ("bodies", Json.arr (core.bodies.map bodyJson)),
-  ("obligations", toJson (core.obligations.map fun item => (item.path, item.message))),
   ("shared_nodes", Json.arr core.sharedNodes),
   ("raw", core.raw)]
 
@@ -96,33 +94,40 @@ private def sameBlock (left right : BasicBlock) : Bool := Id.run do
     if a.value != b.value || a.sourceInfo != b.sourceInfo then return false
   return true
 
-private def sameBody (left right : Body) : Bool := Id.run do
+private def sameBodyCore (left right : BodyCore) : Bool := Id.run do
   if left.sourcePath != right.sourcePath || left.defPath != right.defPath ||
       left.definitionId != right.definitionId || left.phase != right.phase ||
       left.injectionPhase != right.injectionPhase || left.argumentCount != right.argumentCount ||
       left.spreadArgument != right.spreadArgument || left.sourceScopes != right.sourceScopes ||
       left.payload != right.payload || left.locals.size != right.locals.size ||
-      left.blocks.size != right.blocks.size || left.promotedBodies.size != right.promotedBodies.size then
-    return false
+      left.blocks.size != right.blocks.size then return false
   for (a, b) in left.locals.zip right.locals do
     if a.id != b.id || a.typeId != b.typeId || a.sourceInfo != b.sourceInfo || a.payload != b.payload then return false
   for (a, b) in left.blocks.zip right.blocks do
     if !sameBlock a b then return false
-  for (a, b) in left.promotedBodies.zip right.promotedBodies do
-    if a.index != b.index || a.status != b.status || a.payload != b.payload then return false
   return true
+
+private def samePromotedBody (left right : PromotedBody) : Bool :=
+  left.index == right.index && left.payload == right.payload &&
+    match left.body, right.body with
+    | none, none => true
+    | some a, some b => sameBodyCore a b
+    | _, _ => false
+
+private def sameBody (left right : Body) : Bool :=
+  sameBodyCore left.toBodyCore right.toBodyCore &&
+    left.promotedBodies.size == right.promotedBodies.size &&
+    (left.promotedBodies.zip right.promotedBodies).all fun (a, b) => samePromotedBody a b
 
 private def sameSelectedScope : Option SelectedScope → Option SelectedScope → Bool
   | none, none => true
   | some left, some right =>
-    left.kind == right.kind && left.statusText == right.statusText &&
-    decide (left.status = right.status) && left.semantics == right.semantics &&
-    decide (left.roots = right.roots) && left.unresolvedObligations == right.unresolvedObligations &&
-    decide (left.unresolvedEvidence = right.unresolvedEvidence) && left.payload == right.payload
+    left.kind == right.kind && left.semantics == right.semantics &&
+    decide (left.roots = right.roots) && left.payload == right.payload
   | _, _ => false
 
 private def sameInstance (left right : InstanceNode) : Bool := Id.run do
-  if left.id != right.id || left.status != right.status || left.kind != right.kind ||
+  if left.id != right.id || left.kind != right.kind ||
       left.defPath != right.defPath || left.definitionId != right.definitionId ||
       left.bodyInstantiation != right.bodyInstantiation ||
       left.bodyTemplateIsPolymorphic != right.bodyTemplateIsPolymorphic ||
@@ -133,7 +138,7 @@ private def sameInstance (left right : InstanceNode) : Bool := Id.run do
   | some a, some b => if !sameBody a b then return false
   | _, _ => return false
   for (a, b) in left.promotedBodies.zip right.promotedBodies do
-    if a.index != b.index || a.status != b.status || a.payload != b.payload then return false
+    if !samePromotedBody a b then return false
   return true
 
 private def sameCore (left right : ImportDocumentCore) : Bool := Id.run do
@@ -156,17 +161,9 @@ private def checkOne (path : String) : IO Unit := do
   | .ok full, .ok runtime => do
     check (sameCore full.document.toCore runtime.document)
       s!"{path}: complete ImportDocument Core projection differs"
-    check (full.blockingObligations == runtime.blockingObligations)
-      s!"{path}: ordered blocking obligations differ"
-    check (full.executionInput.isSome == runtime.executionInput.isSome)
-      s!"{path}: execution readiness differs"
-    match full.executionInput, runtime.executionInput with
-    | none, none => pure ()
-    | some fullInput, some runtimeInput =>
-      check (sameCore fullInput.document.toCore runtimeInput.document)
-        s!"{path}: ready execution-input projection differs"
-    | _, _ => throw (IO.userError s!"{path}: execution readiness shape differs")
-    IO.println s!"PASS {path}: core projection, ordered obligations ({full.blockingObligations.size}), readiness={full.executionInput.isSome}"
+    check (sameCore full.executionInput.document.toCore runtime.executionInput.document)
+      s!"{path}: execution-input projection differs"
+    IO.println s!"PASS {path}: accepted core and execution-input projections agree"
   | .error fullError, .ok _ =>
     throw (IO.userError s!"{path}: full decoder rejected but runtime decoder accepted: {fullError}")
   | .ok _, .error runtimeError =>

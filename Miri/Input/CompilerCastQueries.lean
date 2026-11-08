@@ -1,6 +1,7 @@
 import Miri.Input.CompilerCastLeaves
 import Miri.Input.CompilerVTableFacts
 import Miri.Input.CompilerVTableRuntime
+import Miri.Input.CompilerCastQueryRecord
 
 /-! Exact compiler query closure for interpret/cast.rs. Query results are
 compiler evidence keyed by complete source types/arguments; this module is not
@@ -14,10 +15,7 @@ private def records (p : CompilerProviders.Prepared) : Result (Array Json) := do
 private def text (j : Json) (key : String) : Result String := do (← j.getObjVal? key).getStr?
 private def ref (j : Json) (key : String) : Result TyId := do
   (← (← j.getObjVal? key).getObjVal? "type_id").getNat?
-private def value (j : Json) : Result Json := do
-  unless (← text j "typing_env") == "fully_monomorphized" do throw "cast query typing environment mismatch"
-  unless (← text j "status") == "supported" do throw "cast compiler query unavailable"
-  j.getObjVal? "value"
+private def value (j : Json) : Result Json := CompilerCastQueryRecord.payload j
 private def unique (entries : Array Json) : Result Json := do
   let some first := entries[0]? | throw "missing exact cast compiler query"
   unless entries.all (· == first) do throw "conflicting exact cast compiler queries"
@@ -54,8 +52,9 @@ private def decodeInstance (p : CompilerProviders.Prepared) (j : Json) : Result 
 
 def resolveFunction (p : CompilerProviders.Prepared) (definition : DefId)
     (args : Array GenericArg) : Result (Option CallInstance) := do
-  let result ← value (← resolutionRecord p "resolve_fn_ptr" definition args)
-  if result == Json.null then pure none else pure (some (← decodeInstance p result))
+  let some result ← CompilerCastQueryRecord.functionResult
+    (← resolutionRecord p "resolve_fn_ptr" definition args) | return none
+  pure (some (← decodeInstance p result))
 
 def resolveClosureFnOnce (p : CompilerProviders.Prepared) (definition : DefId)
     (args : Array GenericArg) : Result CallInstance := do
@@ -88,7 +87,7 @@ def boxLayout (p : CompilerProviders.Prepared) (pointee : TyId) : Result LocalLa
   layout p id
 
 def supertraitSlot (p : CompilerProviders.Prepared) (source target : TyId) : Result (Option Nat) := do
-  let result ← value (← pairQuery p "supertrait_slot" source target)
+  let result ← (← value (← pairQuery p "supertrait_slot" source target)).getObjVal? "value"
   if result == Json.null then pure none else pure (some (← result.getNat?))
 
 private def principalValue (j : Json) : Result (Option Nat) := do
@@ -128,20 +127,19 @@ def eraseSelfTraitRef (p : CompilerProviders.Prepared) (token : Nat) : Result Na
   for allocation in p.program.input.allocations do
     if let some (.vtable source) := allocation.data then
       for entry in source.entries do
-        if entry.status == .supported && entry.kind == .supertraitVtablePointer then
+        if entry.kind == .supertraitVtablePointer then
           if (CompilerVTableRuntime.supertraitPrincipal runtime source.typeId entry).toOption == some token then
             return token
   let queryRows ← (← p.program.input.raw.getObjVal? "compiler_vtable_queries").getArr?
   for row in queryRows do
     let some metadata := (row.getObjVal? "vtable_metadata").toOption | continue
-    unless (metadata.getObjValAs? String "status").toOption == some "supported" do continue
     let some typeRef := (row.getObjVal? "input_type").toOption | continue
     let some sourceType := (typeRef.getObjValAs? Nat "type_id").toOption | continue
     let some entryValues := ((metadata.getObjVal? "entries").bind Json.getArr?).toOption | continue
     for (entryValue, index) in entryValues.toList.zipIdx do
       let some entry := (Input.decodeVtableEntry entryValue
         s!"$.compiler_vtable_queries.vtable_metadata.entries[{index}]").toOption | continue
-      if entry.status == .supported && entry.kind == .supertraitVtablePointer &&
+      if entry.kind == .supertraitVtablePointer &&
           (CompilerVTableRuntime.supertraitPrincipal runtime sourceType entry).toOption == some token then
         return token
   throw "missing exact exported TraitVPtr erase_self_ty relation"

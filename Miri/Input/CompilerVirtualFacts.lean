@@ -13,12 +13,10 @@ abbrev Result := Except String
 
 def receiverKind (context : CompilerFacts.Context) (id : TypeId) : Result VirtualCalls.ReceiverKind := do
   let node ← context.runtime.node id |>.mapError toString
-  unless node.shapeStatus == .supported do throw "virtual receiver compiler shape unresolved"
   match node.shapeKind with
   | .reference => pure .reference
   | .rawPointer => pure .rawPointer
   | .dynamicTraitObject => pure .dynamic
-  | .unknown _ => throw "virtual receiver compiler shape unknown"
   | _ => pure .other
 
 /-- The compiler exports predicates.principal() through the same bound
@@ -26,7 +24,6 @@ existential-predicate interner as trait checking. Missing legacy fields fail. -/
 def dynamicData (prepared : CompilerFactAdapters.Prepared) (id : TypeId) :
     Result (Option VirtualCalls.DynamicData) := do
   let node ← prepared.context.runtime.node id |>.mapError toString
-  unless node.shapeStatus == .supported do throw "dynamic type compiler shape unresolved"
   if node.shapeKind != .dynamicTraitObject then return none
   let token ← match ← CompilerFactAdapters.validityKind prepared id with
     | .dynamic token => pure token

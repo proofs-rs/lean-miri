@@ -11,7 +11,6 @@ def main (args : List String) : IO Unit := do
   let decoded ← must (decodeJson (← IO.FS.readFile path))
   let doc := decoded.document
   let some target := doc.runtimeTargetDataLayout | throw (IO.userError "compiler target data layout evidence was lost")
-  unless target.status == .supported do throw (IO.userError "target data layout query was incomplete")
   let program ← must (lowerProgram doc)
   unless program.roots.size == doc.bodies.size do throw (IO.userError "root body lost")
   for (sourceBody, rootIndex) in doc.bodies.toList.zipIdx do
@@ -30,7 +29,6 @@ def main (args : List String) : IO Unit := do
       count + (children.filter (·.body.isSome)).size) expectedPromoted
   unless program.promoted.size == expectedPromoted && program.bundle.bodies.size == program.roots.size + program.instances.size + expectedPromoted do
     throw (IO.userError "promoted bodies or exact graph body count lost")
-  unless program.input.obligations == doc.obligations do throw (IO.userError "document execution obligations disappeared")
   for body in program.bundle.bodies do
     if let some sourceId := body.input.definitionId then
       let dense ← must body.ownDefinitionId
@@ -40,7 +38,9 @@ def main (args : List String) : IO Unit := do
       throw (IO.userError "bundle body uses inconsistent compiler identity tables")
   let knownGeneric := program.bundle.bodies.find? (fun body => body.input.defPath.endsWith "array_len")
   if let some generic := knownGeneric then
-    unless !generic.obligations.isEmpty do throw (IO.userError "generic const parameter obligation disappeared")
+    unless (generic.input.payload.getObjValAs? Bool "is_polymorphic").toOption == some false &&
+        generic.obligations.isEmpty do
+      throw (IO.userError "concrete generic instantiation retained unresolved parameters")
   let knownTLS := program.bundle.bodies.find? (fun body => body.input.defPath.endsWith "read_tls")
   if let some tls := knownTLS then
     unless tls.body.basicBlocks.any (fun block => block.statements.any fun statement =>

@@ -38,9 +38,6 @@ private def intern (tables : CompilerTables) (value : Json) : Except String (MIR
   match lookupDefinitionId tables.definitions source with
   | .ok id => pure (id,tables)
   | .error _ => pure (tables.definitions.size,{tables with definitions := tables.definitions.push source})
-private def supported (query : Json) : Except String Json := do
-  unless (← (← query.getObjVal? "status").getStr?) == "supported" do throw "main compiler query is unresolved"
-  query.getObjVal? "value"
 private def typeId (context : LowerContext) (j : Json) : Except String MIR.TyId := do
   let id ← (← j.getObjVal? "type_id").getNat?
   unless context.containsTypeId id do throw "main compiler query references missing type"
@@ -70,7 +67,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
         if compilerEntry.isSome then throw "rustc selected main lacks exact EntryFnType query"
         else pure none
       | .ok query => do
-        let value ← supported query
+        let value := query
         if value == .null then
           if compilerEntry.isSome then throw "rustc selected main lacks exact EntryFnType"
           pure none
@@ -98,16 +95,16 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
       | "type_parameter" => pure .typeParameter | "const_parameter" => pure .constParameter
       | _ => throw "unknown main generic parameter kind"
     let signature := do
-      let value ← supported (← record.getObjVal? "signature_query")
+      let value ← record.getObjVal? "signature_query"
       pure (⟨← (← value.getObjVal? "has_bound_variables").getBool?,
         ← (← value.getObjVal? "output_has_bound_variables").getBool?,
         ← typeId ctx (← value.getObjVal? "return_type"),
         ← typeId ctx (← value.getObjVal? "function_pointer_type")⟩ : MainSignature)
     let resolution := do
-      let value ← supported (← record.getObjVal? "signature_query")
+      let value ← record.getObjVal? "signature_query"
       unless (← (← value.getObjVal? "compiler_selected_entry").getBool?) do
         throw "lang_start query not requested for a non-compiler-selected entry"
-      supported (← value.getObjVal? "start_resolution")
+      value.getObjVal? "start_resolution"
     let outcome : Except String (Option CallInstance) ← match resolution with
       | .error error => pure (.error error)
       | .ok value =>
@@ -116,7 +113,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
           | .error error => pure (.error error)
           | .ok (callee,next) => tables := next; pure (.ok (some callee))
     entries := entries.push ⟨definition,parameters,signature,outcome⟩
-  let sectionSources := do (← supported (← source.getObjVal? "link_sections")).getArr?
+  let sectionSources := do (← source.getObjVal? "link_sections").getArr?
   let mut sections : Array SectionQuery := #[]
   let sectionsResult : Except String (Array SectionQuery) ← match sectionSources with
     | .error error => pure (.error error)
@@ -126,7 +123,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
         let decoded := do
           let (definition,next) ← intern tables (← record.getObjVal? "definition")
           let (span,next) ← lowerCompilerSpan next (← ctx.decodeCompilerValue (← record.getObjVal? "span"))
-          let value ← supported (← record.getObjVal? "global_query")
+          let value ← record.getObjVal? "global_query"
           let ty ← typeId ctx (← value.getObjVal? "type")
           let allocation ← (← (← value.getObjVal? "allocation").getObjVal? "allocation_id").getNat?
           unless ctx.containsAllocationId allocation do throw "link-section static allocation missing from compiler graph"
