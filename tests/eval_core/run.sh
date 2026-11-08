@@ -38,17 +38,17 @@ restore_input() {
 }
 
 restore_input source133-root-u32-001 \
-  803a359498a246083617fc688acfc75061293a53096d882bae7d4206b9715080 \
-  d6d35a344b68ba036f1d3d0d090294b67b3fa54e211473b7c35a47dbb8857f84
+  2d2c3a69db0c47a79e169fec0f3e95dcd21e507b90783d311a3b41f88b758c0f \
+  c3cb5698f70066a22579f1a15501450f27b4b0880a6870c6a5a23c1d5d7a1246
 restore_input source133-root-control-flow-001 \
-  cec89f6d4502faf92b65b6c8fd32698011d36212381eb83f6acb5cbc8a2379db \
-  ebddbb887fd8f4256b16eab0921071433f0bd7e7d869fc94becdfd463a788660
+  38ea4e16c71b7c78bf1d53b2d1f121d260a901439d575d89df8d0f4c2fc073ad \
+  f9cd1fd726d6aa8c071f3f36d4f05823be52cc1a6b8d19859b698b320de81ad2
 restore_input source133-nostd-startup-001 \
-  d856cded59b712bc894cece6334807913bb143ba7167aa15b77d7e2818b5cb67 \
-  a47e516c9d6c1919104b01dd316ef114e1ef98c2b089bef2779f82aa59a71888
+  d295c973eef4e9a42f7317369092db643c3c4db7825ee163c91f9b777c9f04c2 \
+  0e57792f48b0723c4bd09be9dc01d4c9d5cffd499d1fc0a4cb6f1ddf221ce4f6
 
-# Keep the pinned schema-2 exports untouched; derive schema-3 unit inputs only
-# after each archive and decompressed source hash has been verified above.
+# Preserve the regenerated schema-3 compiler exports byte for byte after
+# verifying each archive and decompressed input hash above.
 prepare_schema3_input() {
   local name="$1"
   python3 tests/eval_core/prepare_schema3_fixture.py \

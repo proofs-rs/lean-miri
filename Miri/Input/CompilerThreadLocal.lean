@@ -38,7 +38,6 @@ def ofProgram (program : LoweredProgram) : Except String (Array Entry) := do
       throw "TLS declaration compiler query evidence is unresolved or inconsistent"
     let initializer ← field value "initializer"
     let memory ← if info.foreignItem then pure none else do
-      unless (← stringField initializer "status") == "supported" do throw "TLS initializer query failed"
       pure (some (← decodeAllocationMemoryEvidence (← field initializer "allocation")))
     if let some previous := entries.find? (fun entry => entry.definition == definition) then
       unless (previous.payload.getObjVal? "initializer").toOption == some initializer && previous.info.payload == info.payload do

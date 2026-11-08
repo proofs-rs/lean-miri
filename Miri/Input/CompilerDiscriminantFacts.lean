@@ -13,9 +13,7 @@ private def data (context : CompilerFacts.Context) (id : TypeId) : Except String
   unless facts.inputTypeId == id && facts.typingEnvironment == "fully_monomorphized" do
     throw "discriminant compiler environment/type key mismatch"
   let query ← facts.payload.getObjVal? "discriminants"
-  unless (← (← query.getObjVal? "status").getStr?) == "supported" do
-    throw "discriminant query is unresolved"
-  query.getObjVal? "value"
+  pure query
 
 def discriminantLayout (context : CompilerFacts.Context) (ty : TypeId) :
     Except String (TyAndLayout TypeId) := do

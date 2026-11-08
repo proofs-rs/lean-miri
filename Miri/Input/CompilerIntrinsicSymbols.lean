@@ -16,9 +16,7 @@ def typeHash (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except String U1
   let source ← p.runtime.node ty |>.mapError toString
   let some facts := source.compilerFacts | throw "compiler TypeId hash evidence missing"
   let query ← facts.payload.getObjVal? "type_id_hash"
-  unless (← query.getObjValAs? String "status") == "supported" do
-    throw "compiler TypeId hash query unsupported"
-  let text ← (← query.getObjVal? "value").getStr?
+  let text ← query.getStr?
   unless !text.isEmpty && text.toList.all (fun c => c >= '0' && c <= '9') do
     throw "invalid compiler TypeId hash decimal encoding"
   let some value := text.toNat? | throw "invalid compiler TypeId hash value"

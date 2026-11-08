@@ -4,7 +4,7 @@ import Miri.MIR.Operators
 
 /-!
 Typed data model for the pinned rustc MIR export.  These structures describe
-compiler input only; neither a `supported` tag nor successful decoding is a
+compiler input only; successful decoding is not a
 claim that Lean has implemented the corresponding Miri operation.
 -/
 
@@ -15,10 +15,6 @@ abbrev AllocationId := Nat
 abbrev InstanceId := Nat
 abbrev LocalId := Nat
 abbrev BlockId := Nat
-
-inductive PayloadStatus where
-  | supported
-  deriving Repr, DecidableEq
 
 inductive TypeShapeKind where
   | bool | char | int | uint | float | adt | foreign | str | array
@@ -150,10 +146,9 @@ structure Producer where
   deriving Repr, DecidableEq
 
 structure TaggedNode where
-  status : PayloadStatus
   tag : String
   -- Kept for round-tripping and diagnostics.  Semantic consumers must use the
-  -- typed tag/status and explicitly decoded children, never inspect debug text.
+  -- typed tags and explicitly decoded children, never inspect debug text.
   payload : Lean.Json
   deriving BEq
 
@@ -206,7 +201,6 @@ inductive TagEncodingKind where
   deriving Repr, DecidableEq
 
 structure TagEncoding where
-  status : PayloadStatus
   kind : TagEncodingKind
   untaggedVariant : Option Nat
   nicheVariants : Option (Nat × Nat)
@@ -223,7 +217,6 @@ structure VariantsLayout where
   payload : Lean.Json
 
 structure Layout where
-  status : PayloadStatus
   kind : LayoutKind
   sizeBytes : Option Nat
   abiAlignBytes : Option Nat
@@ -262,7 +255,6 @@ inductive CanonicalAbiKind where
   deriving Repr, DecidableEq
 
 structure CanonicalAbi where
-  status : PayloadStatus
   kind : CanonicalAbiKind
   armCall : Option ArmCallKind
   interruptKind : Option InterruptCallKind
@@ -292,7 +284,6 @@ inductive UserTypeProjectionKind where
   deriving Repr, DecidableEq
 
 structure UserTypeProjection where
-  status : PayloadStatus
   baseIndex : Option Nat
   projections : Option (Array UserTypeProjectionKind)
   payload : Lean.Json
@@ -312,26 +303,13 @@ inductive CompilerPattern where
   | or (patterns : Array CompilerPattern)
   | notNull
 
-/-- Exact successful rustc query evidence; negative answers remain ordinary values. -/
-structure CompilerBooleanEvidence where
-  status : PayloadStatus
-  value : Option Bool
-  reason : Option String
-  payload : Lean.Json
-structure CompilerTypeEvidence where
-  status : PayloadStatus
-  /-- Supported null is an actual None result (e.g. builtin_deref). -/
-  value : Option TypeId
-  reason : Option String
-  payload : Lean.Json
 structure TypeCompilerFacts where
   typingEnvironment : String
   inputTypeId : TypeId
-  booleanQueries : Array (String × CompilerBooleanEvidence)
-  typeQueries : Array (String × CompilerTypeEvidence)
+  booleanQueries : Array (String × Bool)
+  typeQueries : Array (String × Option TypeId)
   adtPayload : Option Lean.Json
   captureNames : Option (Array (Option String)) := none
-  captureNamesStatus : Option PayloadStatus := none
   payload : Lean.Json
 
 structure TypeNode where
@@ -339,7 +317,6 @@ structure TypeNode where
   compilerFacts : Option TypeCompilerFacts := none
   id : TypeId
   display : String
-  shapeStatus : PayloadStatus
   shapeKind : TypeShapeKind
   shapeMetadata : TypeShapeMetadata
   signature : Option FunctionSignature
@@ -447,18 +424,18 @@ inductive TypedValue where
   | blockRef (id : BlockId)
   | sourceSpan (value : SourceSpanData)
   | sourceInfo (value : SourceInfo)
-  | statement (variant : StatementVariant) (status : PayloadStatus)
+  | statement (variant : StatementVariant)
       (fields : Array (String × TypedValue))
-  | terminator (variant : TerminatorVariant) (status : PayloadStatus)
+  | terminator (variant : TerminatorVariant)
       (fields : Array (String × TypedValue))
-  | rvalue (variant : RvalueVariant) (status : PayloadStatus)
+  | rvalue (variant : RvalueVariant)
       (fields : Array (String × TypedValue))
-  | binOperator (operator : Miri.MIR.BinOp) (status : PayloadStatus)
-  | unOperator (operator : Miri.MIR.UnOp) (status : PayloadStatus)
+  | binOperator (operator : Miri.MIR.BinOp)
+  | unOperator (operator : Miri.MIR.UnOp)
   | enumTag (category : TypedEnumTag) (tag : TaggedNode)
       (children : Array (String × TypedValue))
   | userTypeProjection (value : UserTypeProjection)
-  | operand (variant : OperandVariant) (status : PayloadStatus)
+  | operand (variant : OperandVariant)
       (fields : Array (String × TypedValue))
   | projection (variant : ProjectionVariant)
       (fields : Array (String × TypedValue))
@@ -490,7 +467,6 @@ structure FunctionAllocation where
 /-- Exact compiler GlobalAlloc::Static metadata queries, independent of
 initializer evaluation and runtime allocation adjustment. -/
 structure StaticGlobalInfo where
-  status : PayloadStatus
   sizeBytes : Nat
   alignBytes : Nat
   mutability : MemoryMutability
@@ -511,7 +487,6 @@ structure StaticAllocation where
 
 structure VtablePredicate where
   kind : VtablePredicateKind
-  status : PayloadStatus
   definitionId : Option DefinitionId
   definitionPath : Option String
   genericArgs : Option TypedValue
@@ -520,7 +495,6 @@ structure VtablePredicate where
 
 structure VtableEntry where
   kind : VtableEntryKind
-  status : PayloadStatus
   instanceId : Option InstanceId
   definitionId : Option DefinitionId
   definitionPath : Option String
@@ -535,7 +509,6 @@ structure VtableAllocation where
   typeId : TypeId
   sizeBytes : Option Nat
   alignBytes : Option Nat
-  layoutStatus : PayloadStatus
   predicates : Array VtablePredicate
   entries : Array VtableEntry
   payload : Lean.Json
@@ -554,7 +527,6 @@ structure AllocationNode where
   /-- Exact rustc `AllocId.0.get()` witness supplied by the pinned exporter.
   This is absent in legacy exports and is never inferred from `id`. -/
   sourceAllocId : Option UInt64 := none
-  status : PayloadStatus
   kind : AllocationKind
   memory : Option AllocationMemory
   data : Option AllocationData
@@ -649,7 +621,6 @@ structure BodyCore where
 
 structure PromotedBody where
   index : Nat
-  status : PayloadStatus
   body : Option BodyCore
   payload : Lean.Json
 
@@ -658,7 +629,6 @@ structure Body extends BodyCore where
 
 structure InstanceNode where
   id : InstanceId
-  status : PayloadStatus
   kind : InstanceKind
   defPath : Option String
   definitionId : Option DefinitionId
@@ -676,8 +646,6 @@ structure ScopeRoot where
 
 structure SelectedScope where
   kind : String
-  statusText : String
-  status : PayloadStatus
   semantics : String
   roots : Array ScopeRoot
   payload : Lean.Json
@@ -685,7 +653,6 @@ structure SelectedScope where
 /-- Compiler-query target layout evidence, retained independently of a runtime
 layout validator. Missing evidence is not inferred from the target triple. -/
 structure TargetDataLayoutEvidence where
-  status : PayloadStatus
   payload : Lean.Json
 
 /-- Exact compiler existential-predicate identity, stable comparison rank and
@@ -695,7 +662,6 @@ structure CompilerPredicateEvidence where
   typingEnvironment : String
   stableKey : Nat
   autoTrait : Bool
-  normalizationStatus : PayloadStatus
   normalizedId : Option Nat
   original : Lean.Json
   payload : Lean.Json

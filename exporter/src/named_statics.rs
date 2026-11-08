@@ -61,12 +61,12 @@ fn query<'tcx>(
     };
     let allocation = allocation_ref(context, tcx, alloc_id)?;
     let type_ref = type_json(context, tcx, value_ty)?;
-    Ok::<_, String>(json!({"status":"supported","value":{
+    Ok::<_, String>(json!({
         "definition":def_json(def),
         "kind":allocation_kind,
         "type":type_ref,
         "allocation":allocation
-    }}))
+    }))
 }
 
 pub(super) fn export<'tcx>(

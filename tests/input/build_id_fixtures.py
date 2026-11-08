@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
-"""Build strict decoder ID cases from a synthetic, supported input document.
+"""Build strict decoder ID cases from a synthetic successful-schema input.
 
 The synthetic unit fixture is a decoder-only input, not a Rust/Miri execution.
-The two historical producer exports are retained byte-for-byte to verify
-rejection of their formerly tolerated failed payloads.
 """
-import gzip
 import json
 import pathlib
-import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 OUT = ROOT / "scratch/decoder-id-inputs"
@@ -17,11 +13,6 @@ EXPORTS = ROOT / "tests/input/fixtures"
 
 def write(name, value):
     (OUT / f"{name}.json").write_text(json.dumps(value, separators=(",", ":")) + "\n")
-
-
-def copy_export(name, source):
-    with gzip.open(source, "rb") as stream:
-        (OUT / f"{name}.json").write_bytes(stream.read())
 
 
 def resolved_table(doc, name):
@@ -55,8 +46,12 @@ def base():
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    copy_export("genuine-mir-features", EXPORTS / "features-after.json.gz")
-    copy_export("genuine-fresh", EXPORTS / "main.json.gz")
+    doc = base()
+    del doc["types"][0]["shape"]["kind"]
+    write("missing-type-shape-kind", doc)
+    doc = base()
+    del doc["types"][0]["layout"]["size_bytes"]
+    write("missing-type-layout-size", doc)
 
     doc = base()
     permute_type_rows(doc)

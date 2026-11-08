@@ -11,8 +11,7 @@ private def ref (id : Nat) : Json := Json.mkObj [("$lean_miri_shared_ref", toJso
 private def malformedCast : Json := Json.mkObj [
   ("kind", toJson ("Cast" : String)),
   ("vtable_allocation", Json.mkObj [
-    ("kind", toJson ("dynamic_vtable_upcast" : String)),
-    ("status", toJson ("supported" : String))])]
+    ("kind", toJson ("dynamic_vtable_upcast" : String))])]
 
 private def must {α : Type} (value : Except String α) : IO α :=
   match value with

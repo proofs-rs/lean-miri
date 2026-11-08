@@ -46,12 +46,9 @@ private def typeNode (record : Json) : Except String TypeNode := do
     adtKind := none }
   let compilerFacts ← decodeTypeCompilerFacts (← field record "compiler_facts")
   let layout ← decodeCompilerLayout (← field record "layout")
-  let status ← textField shape "status"
-  unless status == "supported" do throw "retained type shape is not supported"
   return {
     id := ← natField record "type_id"
     display := ← textField record "display"
-    shapeStatus := .supported
     shapeKind
     shapeMetadata
     signature := none
@@ -66,7 +63,6 @@ private def metadata (nodes : Array TypeNode) : Except String RuntimeMetadata :=
     layouts := layouts.push (node.id, .ok (⟨node.id, layout⟩ : TyAndLayout TypeId))
   let source : ImportDocument := {
     producer := ⟨"miri", "rustc", "version", "target"⟩
-    completenessStatus := .supported
     types := nodes
     allocations := #[]
     instances := #[]
@@ -74,7 +70,6 @@ private def metadata (nodes : Array TypeNode) : Except String RuntimeMetadata :=
     functionAbis := #[]
     bodies := #[]
     typedTree := .scalar .null
-    obligations := #[]
     raw := .null }
   return {
     source := source
@@ -100,10 +95,7 @@ private def projectionValue (strLayout u8Layout : Json) : Json :=
 
 private def explicitStrRowZero (strRecord u8Record : Json) : Except String Json := do
   let facts ← field strRecord "compiler_facts"
-  let projection := Json.mkObj [
-    ("status", toJson "supported"),
-    ("value", projectionValue (← field strRecord "layout") (← field u8Record "layout"))
-  ]
+  let projection := projectionValue (← field strRecord "layout") (← field u8Record "layout")
   let facts ← setField facts "projection_queries" projection
   setField strRecord "compiler_facts" facts
 

@@ -14,7 +14,7 @@ private def lift (query : Except String A) : MachineHooks.M K U A :=
 
 def tupleFields (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except String (Array MIR.TyId) := do
   let node ← p.runtime.node ty |>.mapError toString
-  unless node.shapeStatus == .supported && node.shapeKind == .tuple do
+  unless node.shapeKind == .tuple do
     throw "source RustCall spreading requires the exact tuple type"
   let elements ← (← (← node.payload.getObjVal? "shape").getObjVal? "elements").getArr?
   elements.mapM fun value => do
@@ -24,7 +24,6 @@ def tupleFields (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except String
 
 def closureUpvarCount (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except String (Option Nat) := do
   let node ← p.runtime.node ty |>.mapError toString
-  unless node.shapeStatus == .supported do throw "closure-kind compiler evidence is unavailable"
   if node.shapeKind != .closure then return none
   return some (← (← (← node.payload.getObjVal? "shape").getObjVal? "upvar_count").getNat?)
 

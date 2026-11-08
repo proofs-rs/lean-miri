@@ -9,7 +9,6 @@ pub(super) fn export(tcx: TyCtxt<'_>, context: &ExportContext<'_>) -> Value {
     definitions.dedup();
     Value::Array(definitions.into_iter().map(|definition| json!({
         "definition": def_json(definition),
-        "status": "supported",
         "rustc_no_writable": rustc_attr_ir::find_attr!(tcx, definition, RustcNoWritable),
     })).collect())
 }

@@ -20,10 +20,6 @@ structure Prepared where
   program : LoweredProgram
   runtime : RuntimeMetadata
   entries : Array Entry
-private def supported (j : Json) : Except String Unit := do
-  unless (← (← j.getObjVal? "status").getStr?) == "supported" do
-    throw s!"named compiler constant unavailable: {((j.getObjVal? "reason").bind Json.getStr?).toOption}"
-
 def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
     (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : Except String Prepared := do
   unless RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality program.input.raw do
@@ -40,14 +36,12 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
     unless (← (← record.getObjVal? "typing_env").getStr?) == "fully_monomorphized" do
       throw "named constant compiler environment mismatch"
     let query ← record.getObjVal? "query"
-    supported query
     let (sourceInstance, next) ← CompilerInstance.decode ctx tables query
     tables := next
     let ty ← (← (← query.getObjVal? "type").getObjVal? "type_id").getNat?
     unless ctx.containsTypeId ty do throw "named constant references missing compiler type"
     let evaluated ← query.getObjVal? "evaluation"
-    supported evaluated
-    let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue (← evaluated.getObjVal? "value"))
+    let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue evaluated)
     let result : Value := ⟨sourceInstance, ty, value⟩
     entries := entries.push ⟨name,result,record⟩
   pure ⟨program.withCompilerTables tables,runtime,entries⟩

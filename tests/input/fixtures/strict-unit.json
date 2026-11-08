@@ -7,20 +7,15 @@
     "rustc_version": "pinned",
     "target_triple": "x86_64-unknown-linux-gnu"
   },
-  "completeness": {
-    "status": "complete"
-  },
   "types": [
     {
       "type_id": 0,
       "display": "()",
       "shape": {
-        "status": "supported",
         "kind": "tuple",
         "elements": []
       },
       "layout": {
-        "status": "supported",
         "kind": "layout",
         "size_bytes": 0,
         "abi_align_bytes": 1,
@@ -44,12 +39,10 @@
       "type_id": 1,
       "display": "u8",
       "shape": {
-        "status": "supported",
         "kind": "uint",
         "unsigned_kind": "u8"
       },
       "layout": {
-        "status": "supported",
         "kind": "layout",
         "size_bytes": 1,
         "abi_align_bytes": 1,
@@ -85,12 +78,10 @@
       "type_id": 2,
       "display": "u16",
       "shape": {
-        "status": "supported",
         "kind": "uint",
         "unsigned_kind": "u16"
       },
       "layout": {
-        "status": "supported",
         "kind": "layout",
         "size_bytes": 2,
         "abi_align_bytes": 2,
@@ -126,7 +117,6 @@
   "allocations": [
     {
       "allocation_id": 0,
-      "status": "supported",
       "kind": "memory",
       "size_bytes": 0,
       "align_bytes": 1,
@@ -139,7 +129,6 @@
   "instances": [
     {
       "instance_id": 0,
-      "status": "supported",
       "kind": "intrinsic_dispatch",
       "def_id": {
         "crate": 1,
@@ -211,7 +200,6 @@
               "scope": 0
             },
             "kind": {
-              "status": "supported",
               "variant": "Return"
             }
           },

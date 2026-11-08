@@ -67,7 +67,7 @@ private def primitive (runtime : RuntimeMetadata) (refs : Json) (key : String)
     (kind : Miri.MIR.IntegerKind) : Except Error (TyAndLayout TypeId) := do
   let id ← convert ((refs.getObjVal? key).bind fun value => (value.getObjVal? "type_id").bind Json.getNat?)
   let source ← metadata (runtime.node id)
-  unless source.shapeStatus == .supported && source.shapeMetadata.unsignedKind == some (.known kind) do
+  unless source.shapeMetadata.unsignedKind == some (.known kind) do
     throw (.metadata s!"runtime primitive {key} is not the exact compiler unsigned type")
   metadata (runtime.lookup id)
 private def elementOfId (world : World) (id : TypeId) : Element :=
@@ -105,8 +105,6 @@ def create (runtime : RuntimeMetadata) : Except Error World := do
       let element ← convert ((shape.getObjVal? "element").bind fun value => (value.getObjVal? "type_id").bind Json.getNat?)
       let evidence := do
         let evidence ← shape.getObjVal? "constructor_identity"
-        unless (← (← evidence.getObjVal? "status").getStr?) == "supported" do
-          throw "unresolved compiler array constructor identity"
         unless (← (← evidence.getObjVal? "canonical_value_constructor").getBool?) do
           throw "source array is not the canonical value-length constructor"
         let count ← (← evidence.getObjVal? "count").getNat?

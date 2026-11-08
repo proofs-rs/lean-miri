@@ -1,12 +1,9 @@
-diff --git a/exporter/src/main.rs b/scratch/sc264-seeded-exporter/src/main.rs
-index 429dc7fe..c21f4e72 100644
 --- a/exporter/src/main.rs
-+++ b/scratch/sc264-seeded-exporter/src/main.rs
-@@ -488,6 +488,35 @@ fn prepared_miri_reference_arguments() -> Result<Vec<String>, String> {
-     }
++++ b/scratch/reference-profile-exporter/src/main.rs
+@@ -498,13 +498,64 @@
  }
  
-+#[cfg(feature = "miri-reference")]
+ #[cfg(feature = "miri-reference")]
 +fn prepared_miri_reference_seed() -> Result<Option<u64>, String> {
 +    match env::var("LEAN_MIRI_REFERENCE_SEED") {
 +        Ok(value) => value
@@ -35,10 +32,10 @@ index 429dc7fe..c21f4e72 100644
 +    }
 +}
 +
- #[cfg(feature = "miri-reference")]
++#[cfg(feature = "miri-reference")]
  fn run_prepared_miri_reference_entry(
      tcx: TyCtxt<'_>,
-@@ -495,7 +524,29 @@ fn run_prepared_miri_reference_entry(
+     entry: rustc_hir::def_id::DefId,
      entry_type: miri::MiriEntryFnType,
      extra_args: &[String],
  ) -> Value {
@@ -68,3 +65,20 @@ index 429dc7fe..c21f4e72 100644
      config.borrow_tracker = Some(miri::BorrowTrackerMethod::TreeBorrows(
          miri::TreeBorrowsParams {
              precise_interior_mut: true,
+@@ -513,7 +564,15 @@
+     ));
+     config.env = env::vars_os().collect();
+     let file_name = tcx.sess.io.input.file_name(tcx.sess);
+-    let mut args = vec![file_name.prefer_local_unconditionally().to_string()];
++    let argv0 = match env::var("LEAN_MIRI_REFERENCE_ARGV0") {
++        Ok(value) => value,
++        Err(env::VarError::NotPresent) => file_name.prefer_local_unconditionally().to_string(),
++        Err(error) => {
++            return json!({"status":"failed",
++                "outcome":{"kind":"invalid_configuration","error":format!("cannot read prepared Miri argv[0]: {error}")}});
++        }
++    };
++    let mut args = vec![argv0];
+     args.extend_from_slice(extra_args);
+     config.args = args.clone();
+     config.current_exe = file_name

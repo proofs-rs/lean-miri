@@ -46,12 +46,12 @@ def main : IO Unit := do
     throw (IO.userError "indexed payload update mutated the input state")
 
   let memoryNode : AllocationNode := {
-    id := 12, status := .supported, kind := .memory,
+    id := 12, kind := .memory,
     data := some (.memory ⟨2, 1, .immutable, "ff", #[], #[]⟩),
     memory := none, payload := Lean.Json.null
   }
   let functionNode : AllocationNode := {
-    id := 11, status := .supported, kind := .typeId,
+    id := 11, kind := .typeId,
     data := some (.typeId 0), memory := none, payload := Lean.Json.null
   }
   let result := AllocationImage.importGraph RuntimeTargetDataLayout.default #[]
@@ -71,7 +71,7 @@ def main : IO Unit := do
     throw (IO.userError "failed import unexpectedly populated malformed image")
 
   let sourceFirst : AllocationNode := {
-    id := 42, status := .supported, kind := .typeId,
+    id := 42, kind := .typeId,
     data := some (.typeId 1), memory := none, payload := .str "first"
   }
   let sourceDuplicate : AllocationNode := {

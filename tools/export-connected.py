@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fresh compiler export/reference for one canonical Rust fixture (not a replay)."""
 import argparse
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -8,15 +9,15 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tests/connected'))
-from cases import CASES, ORDERING_EXPORTS
+from cases import CASES, ORDERING_EXPORTS, SPECIAL_EXPORTS
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('case', choices=[c[0] for c in CASES] + [c[0] for c in ORDERING_EXPORTS])
+    parser.add_argument('case', choices=[c[0] for c in CASES] + [c[0] for c in ORDERING_EXPORTS] + [c[0] for c in SPECIAL_EXPORTS])
     parser.add_argument('output', type=Path, help='new JSON path under scratch/')
     parser.add_argument('--libc', type=Path, help='libc rlib built with the pinned Miri sysroot')
-    parser.add_argument('--exporter', type=Path, help='reference-only exporter copy; required for fence-acqrel profile')
+    parser.add_argument('--exporter', type=Path, help='reference-only profile copy for exact retained argv[0]; required for fence-acqrel')
     args = parser.parse_args()
     output = args.output.resolve()
     if not output.is_relative_to(ROOT / 'scratch') or output.exists():
@@ -30,8 +31,8 @@ def main():
     env['PATH'] = f"{toolchain / 'bin'}:{env.get('PATH', '')}"
     env['LD_LIBRARY_PATH'] = str(toolchain / 'lib') + ':' + env.get('LD_LIBRARY_PATH', '')
     env['MIRI_SYSROOT'] = str(sysroot)
-    if args.case in {c[0] for c in ORDERING_EXPORTS}:
-        _, source_args, source_roots = next(c for c in ORDERING_EXPORTS if c[0] == args.case)
+    if args.case in {c[0] for c in [*ORDERING_EXPORTS, *SPECIAL_EXPORTS]}:
+        _, source_args, source_roots = next(c for c in [*ORDERING_EXPORTS, *SPECIAL_EXPORTS] if c[0] == args.case)
     else:
         c = next(c for c in CASES if c[0] == args.case)
         source_args, source_roots = c[5], c[6]
@@ -53,7 +54,13 @@ def main():
             compiler_args.append(value)
     env['LEAN_MIRI_PREPARED_ALLOC_ID_WORLD'] = '1'
     env['LEAN_MIRI_RUN_PREPARED_MIRI'] = '1'
-    env.pop('LEAN_MIRI_REFERENCE_ARGS_JSON', None)
+    # The reference-only profile copy supports exact historical guest argv[0].
+    # Normal compiler input paths still identify the unchanged local Rust source.
+    reviewed = json.loads((ROOT / 'tests/connected/fixtures' / f'{args.case}.reference.json').read_text())['reference']['config']
+    env['LEAN_MIRI_REFERENCE_ARGS_JSON'] = json.dumps(reviewed['args'][1:])
+    env['LEAN_MIRI_REFERENCE_ARGV0'] = reviewed['args'][0]
+    env.pop('LEAN_MIRI_REFERENCE_SEED', None)
+    env.pop('LEAN_MIRI_REFERENCE_PREEMPTION_RATE', None)
     if args.case == 'fence-acqrel':
         if not args.exporter:
             parser.error('fence-acqrel requires --exporter from tools/build-reference-profile.sh')

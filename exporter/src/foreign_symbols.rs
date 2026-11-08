@@ -57,7 +57,6 @@ fn extern_static_declaration<'tcx>(
             let ty_is_freeze = layout.ty.is_freeze(tcx, env);
             let declaration_mutable = !(mutability == rustc_ast::Mutability::Not && ty_is_freeze);
             json!({
-                "status":"supported",
                 "definition":def_json(def),
                 "symbol":symbol,
                 "typing_env":"fully_monomorphized",
@@ -175,7 +174,7 @@ fn selected_exports<'tcx>(
 
     Ok::<_, String>(Value::Array(winners.into_iter().map(|(symbol, winner, ambiguous)| { {
         if ambiguous {
-            return Ok(json!({"symbol":symbol,"status":"supported","resolution":"ambiguous",
+            return Ok(json!({"symbol":symbol,"resolution":"ambiguous",
                 "reason":"source lookup_exported_symbol found equal-strength duplicate definitions"}));
         }
         let Some(definition) = winner.get("definition") else {
@@ -193,7 +192,7 @@ fn selected_exports<'tcx>(
         };
         let kind = definition_kind(tcx, def);
         if kind != "static" {
-            return Ok(json!({"symbol":symbol,"status":"supported","kind":kind,
+            return Ok(json!({"symbol":symbol,"kind":kind,
                 "definition":definition,
                 "instance_id":winner.get("instance_id").cloned().unwrap_or(Value::Null),
                 "callable_identity":winner.get("callable_identity").cloned().unwrap_or(Value::Null)}));
@@ -207,8 +206,7 @@ fn selected_exports<'tcx>(
         } else {
             export_failure("foreign_symbols::selected_exports", "selected definition ceased to be a static")?
         };
-        Ok::<_, String>(json!({"symbol":symbol,"status":"supported",
-            "kind":"static","definition":definition,"declaration":declaration,
+        Ok::<_, String>(json!({"symbol":symbol,"kind":"static","definition":definition,"declaration":declaration,
             "allocation":allocation}))
     } }).collect::<Result<Vec<_>, String>>()?))
 }
@@ -243,11 +241,10 @@ fn selected_foreign_fallbacks(candidates: &[Value], demanded_symbols: &[String])
             }
         }
         if ambiguous {
-            selected.push(json!({"symbol":symbol,"status":"supported","resolution":"ambiguous",
+            selected.push(json!({"symbol":symbol,"resolution":"ambiguous",
                 "reason":"source lookup_exported_symbol found equal-strength duplicate definitions"}));
         } else if let Some(candidate) = winner {
-            let mut row = candidate.clone();
-            row["status"] = json!("supported");
+            let row = candidate.clone();
             selected.push(row);
         }
     }
@@ -444,9 +441,6 @@ pub(super) fn export<'tcx>(
     let mut promote = Vec::new();
     if let Some(rows) = selected_fallbacks.as_array() {
         for row in rows {
-            if row["status"] != "supported" {
-                continue;
-            }
             if !matches!(
                 row["definition_kind"].as_str(),
                 Some("function" | "associated_function")

@@ -48,7 +48,7 @@ class FailClosedExportTests(unittest.TestCase):
         result = self.export(fixture, root)
         self.assertEqual(result.returncode, 0, result.stderr)
         document = load_mir_document(self.output)
-        self.assertEqual(document["completeness"], {"status": "complete"})
+        self.assertNotIn("completeness", document)
         seen = set()
 
         def check(value):
@@ -59,7 +59,7 @@ class FailClosedExportTests(unittest.TestCase):
                 if value.get("status") == "debug_payload":
                     return
                 if "status" in value:
-                    self.assertIn(value["status"], {"supported", "complete"})
+                    self.fail(f"semantic payload contains status: {value}")
                 for child in value.values():
                     check(child)
             else:
@@ -77,9 +77,9 @@ class FailClosedExportTests(unittest.TestCase):
                         if node["shape"].get("unsigned_kind") == "u32")
         facts = unsigned["compiler_facts"]
         self.assertEqual(facts["boolean_queries"]["is_dynamic"],
-                         {"status": "supported", "value": False})
+                         False)
         self.assertEqual(facts["type_queries"]["boxed_type"],
-                         {"status": "supported", "value": None})
+                         None)
 
     def test_dynamic_lookup_closes_over_source_allowed_targets(self):
         document = self.accepted("dynamic_symbols")

@@ -57,14 +57,13 @@ def lookup (p : CompilerMain.Prepared) (h : Memory K U Other) (includeName : Str
     let entryData ← lift entry.result
     let operand ← global p h entryData
     let node ← lift (p.runtime.node operand.layout.ty |>.mapError toString)
-    unless node.shapeStatus == .supported do throw (.unsupported "link-entryData value type shape missing")
     if node.shapeKind == .functionPointer then
       let value ← h.readImmediate operand
       values := values.push (⟨value.imm,value.layout⟩,entryData.span)
     else if node.shapeKind == .array then
       let element ← lift (p.runtime.field operand.layout 0 |>.mapError toString)
       let elementNode ← lift (p.runtime.node element.ty |>.mapError toString)
-      unless elementNode.shapeStatus == .supported && elementNode.shapeKind == .functionPointer do
+      unless elementNode.shapeKind == .functionPointer do
         throw (.unsupported "only FnPtr and arrays of FnPtr are supported in well-known linker sections")
       let cx ← h.projection
       let unit ← lift (CompilerPrimitiveFacts.unitLayout p.runtime)

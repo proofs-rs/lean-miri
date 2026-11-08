@@ -60,7 +60,7 @@ private def triviallyFreeze (world : RuntimeArrayTypes.World) (id : MIR.TyId) : 
       | .compiler element => triviallyFreeze world element fuel
     | none => match world.metadata.node id with
       | .error _ => false
-      | .ok source => source.shapeStatus == .supported && match source.shapeKind with
+      | .ok source => match source.shapeKind with
         | .int | .uint | .float | .bool | .char | .str | .never | .reference
         | .rawPointer | .functionDefinition | .functionPointer => true
         | _ => false

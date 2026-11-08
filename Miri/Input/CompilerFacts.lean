@@ -91,14 +91,13 @@ private def facts (context : Context) (id : TypeId) : Result TypeCompilerFacts :
 def boolean (context : Context) (id : TypeId) (query : String) : Result Bool := do
   let facts ← facts context id
   let some (_,entry) := facts.booleanQueries.find? (·.1 == query) | throw s!"missing compiler boolean query {query}"
-  let some value := entry.value | throw s!"compiler boolean query {query} has no value"
-  pure value
+  pure entry
 
 def optionalType (context : Context) (id : TypeId) (query : String) : Result (Option TypeId) := do
   let facts ← facts context id
   let some (_,entry) := facts.typeQueries.find? (·.1 == query) | throw s!"missing compiler type query {query}"
-  if let some ty := entry.value then let _ ← node context ty
-  pure entry.value
+  if let some ty := entry then let _ ← node context ty
+  pure entry
 
 def requiredType (context : Context) (id : TypeId) (query : String) : Result TypeId := do
   let some ty ← optionalType context id query | throw s!"compiler query {query} returned None"
@@ -109,7 +108,6 @@ private def bool (j : Json) (key : String) : Result Bool := do (← field j key)
 private def array (j : Json) (key : String) : Result (Array Json) := do (← field j key).getArr?
 private def shape (context : Context) (id : TypeId) : Result Json := do
   let source ← node context id
-  unless source.shapeStatus == .supported do throw "compiler type shape unresolved"
   field source.payload "shape"
 private def typeRef (context : Context) (j : Json) : Result TypeId := do
   let id ← (← field j "type_id").getNat?

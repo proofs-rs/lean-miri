@@ -288,7 +288,6 @@ private def pointerSpec (j : Lean.Json) : Result PointerSpec := do
 /-- Every canonical target field is required. LLVM's original layout string
 and address-space bounds stay in the enclosing source document as evidence. -/
 def importTarget (j : Lean.Json) : Result RuntimeTargetDataLayout := do
-  if (← text j "status") != "supported" then throw (.unsupported "target layout")
   let endian ← match ← text j "endian" with
     | "little" => pure Endian.little | "big" => pure .big
     | _ => throw (.unsupported "target endian")
@@ -482,7 +481,7 @@ request to `tcx.types.u8`. Older exports may have no projection row for this
 special case, so recover it only from a unique, supported typed U8 node. -/
 private def stringElementLayout (metadata : RuntimeMetadata) : Result (TyAndLayout TypeId) := do
   let nodes := metadata.source.types.filter fun node =>
-    node.shapeKind == .uint && node.shapeStatus == .supported &&
+    node.shapeKind == .uint &&
       node.shapeMetadata.unsignedKind == some (.known .u8)
   unless nodes.size == 1 do throw (.unsupported "ambiguous or absent exact string element type")
   let value ← require nodes[0]? "string element type"
@@ -493,7 +492,7 @@ No size, display spelling, or first-match heuristic establishes a tuple type. -/
 def tupleLayout (metadata : RuntimeMetadata) (elements : Array TypeId) : Result (TyAndLayout TypeId) := do
   let mut candidates := #[]
   for node in metadata.source.types do
-    if node.shapeKind == .tuple && node.shapeStatus == .supported then
+    if node.shapeKind == .tuple then
       let shape ← jsonField node.payload "shape"
       let values ← array shape "elements"
       let ids ← values.mapM fun value => number value "type_id"
@@ -513,9 +512,7 @@ private def projectionParents (metadata : RuntimeMetadata) (id : TypeId) : Resul
   let query ← match facts.payload.getObjVal? "projection_queries" with
     | .error _ => return #[]
     | .ok value => pure value
-  unless (← convert "projection query status" ((← jsonField query "status").getStr?)) == "supported" do
-    throw (.unsupported "compiler projection queries")
-  let value ← jsonField query "value"
+  let value := query
   if value == .null then return #[]
   unless (← convert "projection typing environment" ((← jsonField value "typing_env").getStr?)) == "fully_monomorphized" do
     throw (.invalid "projection query" "typing environment mismatch")
@@ -542,7 +539,6 @@ def field (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index : Na
       let id ← typeRef (← jsonField source "type")
       let _ ← metadata.node id
       return ← projectionLayout metadata id source
-  if node.shapeStatus != .supported then throw (.unsupported "type shape")
   let shape ← jsonField node.payload "shape"
   let id ← match node.shapeKind with
     | .tuple => do
@@ -598,7 +594,6 @@ def forVariant (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index
 def pointee (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) :
     Result (TyAndLayout TypeId) := do
   let node ← metadata.node parent.ty
-  if node.shapeStatus != .supported then throw (.unsupported "pointee shape")
   match node.shapeKind with
   | .rawPointer | .reference =>
     let shape ← jsonField node.payload "shape"

@@ -25,11 +25,6 @@ structure Prepared where
 
 private def field (j : Json) (key : String) : Except String Json := j.getObjVal? key
 
-private def supported (j : Json) : Except String Json := do
-  unless (← (← field j "status").getStr?) == "supported" do
-    throw s!"named compiler global unavailable: {((field j "reason").bind Json.getStr?).toOption}"
-  field j "value"
-
 private def definition (tables : CompilerTables) (raw : Json) :
     Except String (MIR.DefId × CompilerTables) := do
   let source : DefinitionId := ⟨← (← field raw "crate").getNat?, ← (← field raw "index").getNat?⟩
@@ -49,7 +44,7 @@ private def sourcePath (record : Json) (name : String) : Except String Unit := d
 private def decodeValue (ctx : LowerContext) (tables : CompilerTables) (record : Json) (name : String) :
     Except String (Value × CompilerTables) := do
   let query ← field record "query"
-  let payload ← supported query
+  let payload := query
   let (defId, tables) ← definition tables (← field payload "definition")
   let kind ← (← field payload "kind").getStr?
   let isStatic ← match kind with

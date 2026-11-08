@@ -12,11 +12,6 @@ private def referencedLayout (runtime : RuntimeMetadata) (j : Json) :
   runtime.lookup id |>.mapError toString
 private def primitives (runtime : RuntimeMetadata) : Except String Json :=
   runtime.source.raw.getObjVal? "compiler_runtime_primitives"
-private def supportedValue (j : Json) : Except String Json := do
-  unless (← (← j.getObjVal? "status").getStr?) == "supported" do
-    throw s!"compiler type query unavailable: {((j.getObjVal? "reason").bind Json.getStr?).toOption}"
-  j.getObjVal? "value"
-
 /-- Read one exact compiler primitive query key; no type-name search occurs. -/
 def primitiveLayout (runtime : RuntimeMetadata) (key : String) : Except String (TyAndLayout TypeId) := do
   referencedLayout runtime (← (← primitives runtime).getObjVal? key)
@@ -48,9 +43,9 @@ private def buildCache (runtime : RuntimeMetadata) : Cache := Id.run do
     for (key,value) in entries.toList do
       values := values.insert key (resolveLayout value)
   let ordering := do
-    resolveLayout (← supportedValue (← (← primitives runtime).getObjVal? "ordering_enum"))
+    resolveLayout (← (← primitives runtime).getObjVal? "ordering_enum")
   let callerLocation := do
-    let value ← supportedValue (← (← primitives runtime).getObjVal? "caller_location_type")
+    let value ← (← primitives runtime).getObjVal? "caller_location_type"
     let id ← (← value.getObjVal? "type_id").getNat?
     unless nodes.contains id do
       let _ ← runtime.node id |>.mapError toString
@@ -102,26 +97,26 @@ def unitPointerMutLayoutBound (runtime : RuntimeMetadata) (cache : Bound runtime
 /-- Read one exact source path/constructor query key from the named catalog. -/
 def namedLayout (runtime : RuntimeMetadata) (key : String) : Except String (TyAndLayout TypeId) := do
   let entries ← runtime.source.raw.getObjVal? "compiler_named_types"
-  referencedLayout runtime (← supportedValue (← entries.getObjVal? key))
+  referencedLayout runtime (← entries.getObjVal? key)
 
 def orderingLayout (runtime : RuntimeMetadata) : Except String (TyAndLayout TypeId) := do
-  referencedLayout runtime (← supportedValue (← (← primitives runtime).getObjVal? "ordering_enum"))
+  referencedLayout runtime (← (← primitives runtime).getObjVal? "ordering_enum")
 
 /-- Exact tcx.caller_location_ty(): &'static Location<'static>, preserving
 both source reference/lifetime construction and canonical compiler identity. -/
 def callerLocationType (runtime : RuntimeMetadata) : Except String TypeId := do
-  let value ← supportedValue (← (← primitives runtime).getObjVal? "caller_location_type")
+  let value ← (← primitives runtime).getObjVal? "caller_location_type"
   let id ← (← value.getObjVal? "type_id").getNat?
   let _ ← runtime.node id |>.mapError toString
   pure id
 
 def cULongLayout (runtime : RuntimeMetadata) : Except String (TyAndLayout TypeId) := do
   let entries ← runtime.source.raw.getObjVal? "compiler_named_types"
-  referencedLayout runtime (← supportedValue (← entries.getObjVal? "c_ulong"))
+  referencedLayout runtime (← entries.getObjVal? "c_ulong")
 
 def offTLayout (runtime : RuntimeMetadata) : Except String (TyAndLayout TypeId) := do
   let entries ← runtime.source.raw.getObjVal? "compiler_named_types"
-  referencedLayout runtime (← supportedValue (← entries.getObjVal? "off_t"))
+  referencedLayout runtime (← entries.getObjVal? "off_t")
 
 def u32Layout (runtime : RuntimeMetadata) : Except String (TyAndLayout TypeId) := do
   referencedLayout runtime (← (← primitives runtime).getObjVal? "u32")

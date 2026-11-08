@@ -83,7 +83,7 @@ fn query<'tcx>(
         }
     })();
     Ok::<_, String>(match result {
-        Ok(value) => json!({"status":"supported","value":value}),
+        Ok(value) => value,
         Err(reason) => export_failure("libc_type_layouts::query", format!("{}", reason))?,
     })
 }

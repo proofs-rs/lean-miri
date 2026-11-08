@@ -134,7 +134,6 @@ def adt (runtime : RuntimeMetadata) (id : TypeId) : Result (Miri.Interpreter.Lay
   let kind ← match ← require node.shapeMetadata.adtKind "ADT kind" with
     | .structKind => pure Miri.Interpreter.LayoutCompat.AdtKind.Struct | .unionKind => pure .Union | .enumKind => pure .Enum
   let repr ← RuntimeMetadata.jsonField source "representation"
-  if (← RuntimeMetadata.text repr "status") != "supported" then throw (.unsupported "ADT repr")
   let sourceVariants ← RuntimeMetadata.array source "variants"
   let mut variants := #[]
   for sourceVariant in sourceVariants do

@@ -19,11 +19,6 @@ structure Prepared where
   program : LoweredProgram
   entries : Array Entry
   checks : Array (MIR.RuntimeChecks × Bool)
-private def supportedValue (j : Json) : Except String Json := do
-  unless (← (← j.getObjVal? "status").getStr?) == "supported" do
-    throw s!"compiler intrinsic query unavailable: {((j.getObjVal? "reason").bind Json.getStr?).toOption}"
-  j.getObjVal? "value"
-
 def prepare (program : LoweredProgram) : Except String Prepared := do
   let query ← program.input.raw.getObjVal? "compiler_runtime_queries"
   let records ← (← query.getObjVal? "instances").getArr?
@@ -34,9 +29,9 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
     let (callee,next) ← CompilerInstance.decode ctx tables record
     tables := next
     unless !(entries.any (·.callee == callee)) do throw "duplicate full-instance intrinsic metadata key"
-    let name := do (← supportedValue (← record.getObjVal? "item_name")).getStr?
+    let name := do (← record.getObjVal? "item_name").getStr?
     let intrinsic := do
-      let value ← supportedValue (← record.getObjVal? "intrinsic_metadata")
+      let value ← record.getObjVal? "intrinsic_metadata"
       if value == Json.null then pure none else
         pure (some (⟨← (← value.getObjVal? "must_be_overridden").getBool?,
           ← (← value.getObjVal? "fallback_is_spec").getBool?⟩ : Metadata))
@@ -44,8 +39,6 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
   let session ← program.input.raw.getObjVal? "compiler_session_queries"
   let mut checks := #[]
   for check in (← (← session.getObjVal? "runtime_checks").getArr?) do
-    unless (← (← check.getObjVal? "status").getStr?) == "supported" do
-      throw "compiler session runtime-check query unavailable"
     let kind ← (← check.getObjVal? "kind").getStr?
     let kind : MIR.RuntimeChecks ← match kind with
       | "ub_checks" => pure .UbChecks | "contract_checks" => pure .ContractChecks

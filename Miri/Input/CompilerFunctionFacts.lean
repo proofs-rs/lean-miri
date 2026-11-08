@@ -24,11 +24,6 @@ private def text (j : Json) (key : String) : Except String String := do
 private def knownType (ctx : LowerContext) (id : Nat) : Except String Nat := do
   unless ctx.containsTypeId id do throw "function query references missing compiler type"
   pure id
-private def supported (j : Json) : Except String Json := do
-  unless (← text j "status") == "supported" do
-    throw s!"unresolved compiler function query: {((j.getObjVal? "reason").bind Json.getStr?).toOption}"
-  j.getObjVal? "value"
-
 def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
     (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none)
     (abiCache : Option (CallResolution.FunctionAbiCache runtime) := none) : Except String Prepared := do
@@ -53,7 +48,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
         | _ => throw "FnDef compiler type did not contain its exact Item definition"
       | _ => throw "unknown compiler function kind"
     let signature := do
-      let value ← supported (← record.getObjVal? "signature_query")
+      let value ← record.getObjVal? "signature_query"
       let inputs ← (← value.getObjVal? "inputs").getArr?
       for input in inputs do
         let _ ← knownType ctx (← (← input.getObjVal? "type_id").getNat?)
@@ -71,7 +66,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
       knownType ctx (← (← input.getObjVal? "type_id").getNat?)
     if abis.any (fun entry => entry.ty == ty && entry.extra == extra) then throw "duplicate FnPtr ABI query key"
     let result := do
-      let value ← supported (← record.getObjVal? "abi_query")
+      let value ← record.getObjVal? "abi_query"
       CallResolution.functionAbiJson runtime value abiCache
     abis := abis.push ⟨ty,extra,result⟩
   pure ⟨program.withCompilerTables tables,functions,abis⟩

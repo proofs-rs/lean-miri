@@ -58,7 +58,7 @@ pub(super) fn export<'tcx>(
     }).collect::<Vec<_>>();
     // No allocation_ref call here: the covered graph is unchanged by probing.
     Ok::<_, String>(
-        json!({"status":"supported","salt_count":32,"str_type":str_type,
+        json!({"salt_count":32,"str_type":str_type,
         "covered_allocation_ids":covered,"candidates":candidates}),
     )
 }

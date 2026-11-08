@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay finite connected fixtures against a freshly built local module closure."""
+"""Replay connected assertions, generating the two large compiler inputs at run time."""
 import argparse
 import gzip
 import hashlib
@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tests/connected'))
 from cases import CASES, MIRI_ERRORS
 from run_guarded import run as run_guarded, source_closure
+from connected_large_inputs import FRESH_CASES, generate as generate_large_input
 FIXTURES = ROOT / 'tests/connected/fixtures'
 
 
@@ -48,18 +49,31 @@ def main():
     if args.large_tb:
         jobs.append(('large-tb', 'LargeTreeBorrows.lean', ['Tree Borrows'], 0,
                      ['undefinedBehavior', 'ChildAccessForbidden', 'Frozen'],
-                     '32870449acfdc89f8ff86d1519fb562d8ad11b9fc3c92cfc012ea2cb1d39b8a7'))
+                     None))
     # Refuse silently changed retained inputs before invoking any interpreter.
     subprocess.run(['sha256sum', '--quiet', '--check', 'SHA256SUMS'], cwd=FIXTURES, check=True)
     closure_before = source_closure(ROOT)
     ordering_rows = []
     for ident, harness, extra, expected_exit, required, expected_sha in jobs:
-        raw = gzip.decompress((FIXTURES / f'{ident}.json.gz').read_bytes())
-        if expected_sha and hashlib.sha256(raw).hexdigest() != expected_sha:
-            raise SystemExit(f'{ident}: snapshot SHA-256 mismatch')
-        reference = json.loads((FIXTURES / f'{ident}.reference.json').read_text())
+        snapshot = run_dir / f'{ident}.json'
+        generation_inputs = []
+        if ident in FRESH_CASES:
+            print(f'{ident}: generating current snapshot and same-TyCtxt reference', flush=True)
+            reference_path, diagnostic_path, generation_log = generate_large_input(ident, snapshot, timeout=args.timeout)
+            raw = snapshot.read_bytes()
+            generation_inputs = [diagnostic_path, generation_log, FIXTURES / f'{ident}.reference.json',
+                                 ROOT / 'tools/connected_large_inputs.py', ROOT / 'tools/export-connected.py',
+                                 FIXTURES.parent / 'cases.py', FIXTURES.parent / 'reference/preemption-rate-zero.patch']
+        else:
+            raw = gzip.decompress((FIXTURES / f'{ident}.json.gz').read_bytes())
+            if expected_sha and hashlib.sha256(raw).hexdigest() != expected_sha:
+                raise SystemExit(f'{ident}: snapshot SHA-256 mismatch')
+            snapshot.write_bytes(raw)
+            reference_path = FIXTURES / f'{ident}.reference.json'
+            diagnostic_path = FIXTURES / f'{ident}.miri-error.txt'
+        reference = json.loads(reference_path.read_text())
         if ident in MIRI_ERRORS:
-            diagnostic = (FIXTURES / f'{ident}.miri-error.txt').read_text()
+            diagnostic = diagnostic_path.read_text()
             if reference['reference']['status'] != 'failed' or reference['reference']['outcome']['kind'] != 'miri_evaluation_error' or not all(t in diagnostic for t in MIRI_ERRORS[ident]):
                 raise SystemExit(f'{ident}: expected reference UB diagnostic is not established')
         elif reference['reference']['status'] != 'completed' or reference['reference']['outcome']['kind'] != 'exit_zero':
@@ -73,10 +87,8 @@ def main():
             raise SystemExit(f'{ident}: reference input identity mismatch')
         if reference['reference_contract'] != 'same_prepared_tcx_after_snapshot_capture;not_vanilla_miri_alloc_id_history':
             raise SystemExit(f'{ident}: reference contract changed')
-        snapshot = run_dir / f'{ident}.json'
-        snapshot.write_bytes(raw)
         cmd = [lake, 'env', 'lean', '--run', str(ROOT / 'tests/connected' / harness), str(snapshot), *extra]
-        tracked_inputs = [snapshot, FIXTURES / f'{ident}.reference.json', ROOT / 'tests/connected' / harness, FIXTURES / f'{ident}.rs']
+        tracked_inputs = [snapshot, reference_path, ROOT / 'tests/connected' / harness, FIXTURES / f'{ident}.rs', *generation_inputs]
         if args.ordering:
             tracked_inputs.append(FIXTURES / f'{ident}.tape.json')
         def fingerprint():
@@ -103,8 +115,8 @@ def main():
                 raise SystemExit(f'{ident}: input changed during run')
             print(f'{ident}: PASS (finite fixture assertion)', flush=True)
         finally:
-            # Raw MIR is reproducible from the retained archive; retain only the run log.
-            if not args.ordering:
+            # Keep generated large inputs together with their new reference evidence.
+            if not args.ordering and ident not in FRESH_CASES:
                 snapshot.unlink(missing_ok=True)
     if args.ordering:
         rows_path = run_dir / 'ordering-cases.json'

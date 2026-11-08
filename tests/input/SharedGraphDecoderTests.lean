@@ -22,7 +22,7 @@ def main (args : List String) : IO Unit := do
   let catalog ← must (original.getObjVal? "shared_payloads")
   let nodes ← must ((← must (catalog.getObjVal? "nodes")).getArr?)
   let id := nodes.size
-  let failure := Json.mkObj [("status", toJson "unsupported"), ("kind", toJson "shared_graph_regression")]
+  let failure := ref (id + 2)
   let parent := Json.mkObj [("child", ref id)]
   let nodes := (nodes.push failure).push parent
   let catalog ← must (set catalog "nodes" (.arr nodes))
@@ -32,7 +32,7 @@ def main (args : List String) : IO Unit := do
   let source ← must (set source "shared_c" (ref (id + 1)))
   match decodeJson source.compress, decodeRuntimeJson source.compress with
   | .error full, .error runtime =>
-    unless full == runtime && full.endsWith "exporter payload status `unsupported` is not a successful input" do
-      throw (IO.userError s!"shared failed payload diagnostic differs: {full} / {runtime}")
-  | _, _ => throw (IO.userError "shared failed payload must fail both importers")
-  IO.println "SharedGraphDecoderTests: shared failed payloads are rejected before executable input construction"
+    unless full == runtime do
+      throw (IO.userError s!"shared invalid reference diagnostic differs: {full} / {runtime}")
+  | _, _ => throw (IO.userError "shared invalid reference must fail both importers")
+  IO.println "SharedGraphDecoderTests: shared invalid references are rejected before executable input construction"

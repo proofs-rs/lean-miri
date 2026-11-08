@@ -11,7 +11,6 @@ def main (args : List String) : IO Unit := do
   let decoded ← must (decodeJson (← IO.FS.readFile path))
   let doc := decoded.document
   let some target := doc.runtimeTargetDataLayout | throw (IO.userError "compiler target data layout evidence was lost")
-  unless target.status == .supported do throw (IO.userError "target data layout query was incomplete")
   let program ← must (lowerProgram doc)
   unless program.roots.size == doc.bodies.size do throw (IO.userError "root body lost")
   for (sourceBody, rootIndex) in doc.bodies.toList.zipIdx do
@@ -39,7 +38,9 @@ def main (args : List String) : IO Unit := do
       throw (IO.userError "bundle body uses inconsistent compiler identity tables")
   let knownGeneric := program.bundle.bodies.find? (fun body => body.input.defPath.endsWith "array_len")
   if let some generic := knownGeneric then
-    unless !generic.obligations.isEmpty do throw (IO.userError "generic const parameter obligation disappeared")
+    unless (generic.input.payload.getObjValAs? Bool "is_polymorphic").toOption == some false &&
+        generic.obligations.isEmpty do
+      throw (IO.userError "concrete generic instantiation retained unresolved parameters")
   let knownTLS := program.bundle.bodies.find? (fun body => body.input.defPath.endsWith "read_tls")
   if let some tls := knownTLS then
     unless tls.body.basicBlocks.any (fun block => block.statements.any fun statement =>

@@ -19,7 +19,6 @@ def make (p : CompilerProviders.Prepared) (compatibilityBudget : Nat) :
   { layoutOf := fun _ ty => lift (CompilerFacts.layoutOf context ty)
     typeInfo := fun _ ty => do
       let source ← lift (context.runtime.node ty |>.mapError toString)
-      unless source.shapeStatus == .supported do throw (.unsupported "varargs compiler shape unavailable")
       match source.shapeKind with
       | .int => return .signedInteger (← checked (CompilerExecutionProviders.integerKind context ty))
       | .uint => return .unsignedInteger (← checked (CompilerExecutionProviders.integerKind context ty))
@@ -37,6 +36,5 @@ def make (p : CompilerProviders.Prepared) (compatibilityBudget : Nat) :
       pure (fields.map (·.ty))
     isRawPointer := fun _ ty => do
       let source ← lift (context.runtime.node ty |>.mapError toString)
-      unless source.shapeStatus == .supported do throw (.unsupported "VaList field compiler shape unavailable")
       pure (source.shapeKind == .rawPointer) }
 end Miri.Input.CompilerVarArgsLeaves

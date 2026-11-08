@@ -9,10 +9,10 @@ from mir_json import load_mir_document
 
 doc = load_mir_document(sys.argv[1])
 scope = doc["selected_scope"]
-assert doc["completeness"] == {"status": "complete"}
+assert "completeness" not in doc
 assert scope["kind"] == "rooted_structural_closure"
 assert scope["semantics"] == "structural_export_closure_only"
-assert scope["status"] == "complete"
+assert "status" not in scope
 assert "unresolved_obligations" not in scope
 assert "retained_catalog_obligations" not in scope
 assert scope["roots"] == [{"def_path": "add_one", "def_id": doc["bodies"][0]["def_id"]}]
@@ -35,7 +35,7 @@ def validate(document):
             if value.get("status") == "debug_payload":
                 return
             if "status" in value:
-                assert value["status"] in {"supported", "complete"}, value
+                raise AssertionError(f"semantic payload contains status: {value}")
             for key, child in value.items():
                 if key in catalogs and isinstance(child, int):
                     assert child in catalogs[key], f"missing {key} {child}"
@@ -49,7 +49,7 @@ def validate(document):
 
 validate(doc)
 # Unused failures are failures of the complete export contract too.
-for failure in ("unsupported", "unknown", "incomplete"):
+for failure in ("supported", "complete", "unsupported", "unknown", "incomplete"):
     invalid = deepcopy(doc)
     invalid["unused_catalog"] = {"status": failure}
     try:

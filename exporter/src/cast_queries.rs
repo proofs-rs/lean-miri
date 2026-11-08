@@ -103,7 +103,7 @@ pub(super) fn export<'tcx>(
         );
         if matches!(a.kind(), ty::Dynamic(..)) && matches!(b.kind(), ty::Dynamic(..)) {
             let slot = tcx.supertrait_vtable_slot((a, b));
-            records.push(json!({"query_kind":"supertrait_slot","typing_env":"fully_monomorphized","input_source":type_json(context,tcx,a)?,"input_target":type_json(context,tcx,b)?,"status":"supported","value":slot}));
+            records.push(json!({"query_kind":"supertrait_slot","typing_env":"fully_monomorphized","input_source":type_json(context,tcx,a)?,"input_target":type_json(context,tcx,b)?,"value":slot}));
         }
         result["query_kind"] = json!("lockstep_tails");
         result["typing_env"] = json!("fully_monomorphized");

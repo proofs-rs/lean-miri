@@ -85,27 +85,27 @@ private def malformedResult (json : Json) : Bool :=
   | .ok _ => false
 
 private partial def containsBinary (wanted : Miri.MIR.BinOp) : TypedValue → Bool
-  | .binOperator actual _ => actual == wanted
+  | .binOperator actual => actual == wanted
   | .array values => values.any (containsBinary wanted)
   | .object fields => fields.any fun (_, value) => containsBinary wanted value
-  | .statement _ _ fields | .terminator _ _ fields | .rvalue _ _ fields
-  | .operand _ _ fields | .projection _ fields => fields.any fun (_, value) => containsBinary wanted value
+  | .statement _ fields | .terminator _ fields | .rvalue _ fields
+  | .operand _ fields | .projection _ fields => fields.any fun (_, value) => containsBinary wanted value
   | _ => false
 
 private partial def containsUnary (wanted : Miri.MIR.UnOp) : TypedValue → Bool
-  | .unOperator actual _ => actual == wanted
+  | .unOperator actual => actual == wanted
   | .array values => values.any (containsUnary wanted)
   | .object fields => fields.any fun (_, value) => containsUnary wanted value
-  | .statement _ _ fields | .terminator _ _ fields | .rvalue _ _ fields
-  | .operand _ _ fields | .projection _ fields => fields.any fun (_, value) => containsUnary wanted value
+  | .statement _ fields | .terminator _ fields | .rvalue _ fields
+  | .operand _ fields | .projection _ fields => fields.any fun (_, value) => containsUnary wanted value
   | _ => false
 
 private partial def containsEnumTag (wanted : TypedEnumTag) : TypedValue → Bool
   | .enumTag category _ fields => category == wanted || fields.any fun (_, value) => containsEnumTag wanted value
   | .array values => values.any (containsEnumTag wanted)
   | .object fields => fields.any fun (_, value) => containsEnumTag wanted value
-  | .statement _ _ fields | .terminator _ _ fields | .rvalue _ _ fields
-  | .operand _ _ fields | .projection _ fields => fields.any fun (_, value) => containsEnumTag wanted value
+  | .statement _ fields | .terminator _ fields | .rvalue _ fields
+  | .operand _ fields | .projection _ fields => fields.any fun (_, value) => containsEnumTag wanted value
   | _ => false
 
 private partial def containsUserTypeProjection : TypedValue → Bool
@@ -113,8 +113,8 @@ private partial def containsUserTypeProjection : TypedValue → Bool
   | .array values => values.any containsUserTypeProjection
   | .object fields => fields.any fun (_, value) => containsUserTypeProjection value
   | .enumTag _ _ fields => fields.any fun (_, value) => containsUserTypeProjection value
-  | .statement _ _ fields | .terminator _ _ fields | .rvalue _ _ fields
-  | .operand _ _ fields | .projection _ fields => fields.any fun (_, value) => containsUserTypeProjection value
+  | .statement _ fields | .terminator _ fields | .rvalue _ fields
+  | .operand _ fields | .projection _ fields => fields.any fun (_, value) => containsUserTypeProjection value
   | _ => false
 
 private partial def hasTypedUserTypeProjection : TypedValue → Bool
@@ -125,8 +125,8 @@ private partial def hasTypedUserTypeProjection : TypedValue → Bool
   | .array values => values.any hasTypedUserTypeProjection
   | .object fields => fields.any fun (_, value) => hasTypedUserTypeProjection value
   | .enumTag _ _ fields => fields.any fun (_, value) => hasTypedUserTypeProjection value
-  | .statement _ _ fields | .terminator _ _ fields | .rvalue _ _ fields
-  | .operand _ _ fields | .projection _ fields => fields.any fun (_, value) => hasTypedUserTypeProjection value
+  | .statement _ fields | .terminator _ fields | .rvalue _ fields
+  | .operand _ fields | .projection _ fields => fields.any fun (_, value) => hasTypedUserTypeProjection value
   | _ => false
 
 private def must (result : Except String α) : IO α :=
@@ -200,7 +200,6 @@ def main (args : List String) : IO UInt32 := do
 
   let syntheticFunction := object [
     ("allocation_id", number document.allocations.size),
-    ("status", string "supported"),
     ("kind", string "function"),
     ("instance_id", number 0),
     ("instance_def_id", object [("crate", number 0), ("index", number 7)]),
@@ -208,7 +207,6 @@ def main (args : List String) : IO UInt32 := do
     ("generic_args", toJson (#[] : Array Json))]
   let syntheticTypeId := object [
     ("allocation_id", number (document.allocations.size + 1)),
-    ("status", string "supported"),
     ("kind", string "type_id"),
     ("type", object [("type_id", number 0)])]
   let allocations ← must (array (← must (field original "allocations")))
@@ -223,21 +221,21 @@ def main (args : List String) : IO UInt32 := do
     "type-id allocation was not decoded into typed metadata"
 
   let unknownBorrow ← must <| do
-    let replacement := object [("kind", string "future_borrow_kind"), ("status", string "supported")]
+    let replacement := object [("kind", string "future_borrow_kind")]
     let (changed, found) ← replaceFirstField original "borrow_kind" replacement
     if !found then throw "fixture does not contain a borrow_kind tag"
     pure changed
   check (malformedResult unknownBorrow) "unknownBorrow: failed input was accepted"
 
   let unknownSafety ← must <| do
-    let replacement := object [("kind", string "future_safety"), ("status", string "supported")]
+    let replacement := object [("kind", string "future_safety")]
     let (changed, found) ← replaceFirstField original "safety" replacement
     if !found then throw "fixture does not contain a safety tag"
     pure changed
   check (malformedResult unknownSafety) "unknownSafety: failed input was accepted"
 
   let incompleteCanonicalAbi ← must <| do
-    let replacement := object [("kind", string "arm"), ("status", string "supported")]
+    let replacement := object [("kind", string "arm")]
     let (changed, found) ← replaceFirstField original "calling_convention" replacement
     if !found then throw "fixture does not contain a canonical calling convention"
     pure changed
@@ -324,7 +322,7 @@ def main (args : List String) : IO UInt32 := do
   let badEdge ← must <| rewriteFirstBody original fun body =>
     rewriteFirstBlock body fun block =>
       rewriteFirstTerminator block fun terminator => do
-        let badKind := object [("variant", string "Goto"), ("status", string "supported"), ("target", number 999999)]
+        let badKind := object [("variant", string "Goto"), ("target", number 999999)]
         setField terminator "kind" badKind
   check (malformedResult badEdge) "out-of-range basic-block edge was accepted"
 
@@ -339,42 +337,30 @@ def main (args : List String) : IO UInt32 := do
   let futureVariant ← must <| rewriteFirstBody original fun body =>
     rewriteFirstBlock body fun block =>
       rewriteFirstTerminator block fun terminator => do
-        let future := object [("variant", string "NewPinnedVariant"), ("status", string "supported")]
+        let future := object [("variant", string "NewPinnedVariant")]
         setField terminator "kind" future
   check (malformedResult futureVariant) "futureVariant: failed input was accepted"
 
-  let completion ← must (field original "completeness")
-  let completion ← must (setField completion "status" (string "complete"))
-  let completion ← must (setField completion "unresolved_obligations" (toJson (#[] : Array Json)))
-  let falselyComplete ← must (setField original "completeness" completion)
-  let falselyComplete ← must (setField falselyComplete "typed_failure" (object [("status", string "unknown")]))
-  check (malformedResult falselyComplete) "complete label erased failed semantic payload"
-
-  let supported := string "supported"
   let typedTagProbe := object [
-    ("phase", object [("status", supported), ("kind", string "runtime"),
-      ("phase", object [("status", supported), ("kind", string "optimized")])]),
-    ("retag", object [("status", supported), ("kind", string "yes"), ("performs_retag", Json.bool true)]),
-    ("runtime_checks", object [("status", supported), ("kind", string "RuntimeChecks"),
-      ("check", object [("status", supported), ("kind", string "overflow_checks"), ("enabled", Json.bool true)])]),
-    ("fake_read", object [("variant", string "FakeRead"), ("status", supported),
-      ("cause", object [("status", supported), ("kind", string "matched_place"), ("hoisted_from", Json.null)])]),
-    ("call", object [("variant", string "Call"), ("status", supported),
-      ("call_source", object [("status", supported), ("kind", string "normal_call")])]),
-    ("drop", object [("variant", string "BackwardIncompatibleDropHint"), ("status", supported),
-      ("reason", object [("status", supported), ("kind", string "edition_2024")])]),
-    ("region", object [("status", supported), ("kind", string "bound"),
+    ("phase", object [("kind", string "runtime"),
+      ("phase", string "optimized")]),
+    ("retag", object [("kind", string "yes"), ("performs_retag", Json.bool true)]),
+    ("runtime_checks", object [("kind", string "RuntimeChecks"),
+      ("check", object [("kind", string "overflow_checks"), ("enabled", Json.bool true)])]),
+    ("fake_read", object [("variant", string "FakeRead"), ("cause", object [("kind", string "matched_place"), ("hoisted_from", Json.null)])]),
+    ("call", object [("variant", string "Call"), ("call_source", object [("kind", string "normal_call")])]),
+    ("drop", object [("variant", string "BackwardIncompatibleDropHint"), ("reason", object [("kind", string "edition_2024")])]),
+    ("region", object [("kind", string "bound"),
       ("index_kind", object [("kind", string "bound"), ("debruijn_index", number 0)]),
       ("variable_index", number 0),
-      ("bound_kind", object [("status", supported), ("kind", string "anonymous")])]),
+      ("bound_kind", object [("kind", string "anonymous")])]),
     ("borrow_kind", object [
-      ("status", supported), ("kind", string "fake"), ("fake_kind", string "shallow"),
+      ("kind", string "fake"), ("fake_kind", string "shallow"),
       ("retag_mode", string "default")]),
     ("ascribe_statement", object [
-      ("variant", string "AscribeUserType"), ("status", supported),
-      ("place", object [("local", number 0), ("projection", toJson (#[] : Array Json))]),
+      ("variant", string "AscribeUserType"), ("place", object [("local", number 0), ("projection", toJson (#[] : Array Json))]),
       ("user_type_projection", object [
-        ("status", supported), ("base_index", number 2),
+        ("base_index", number 2),
         ("projections", toJson #[
           object [("kind", string "Deref")],
           object [("kind", string "Field"), ("index", number 1)],
@@ -387,16 +373,13 @@ def main (args : List String) : IO UInt32 := do
           object [("kind", string "OpaqueCast")],
           object [("kind", string "UnwrapUnsafeBinder")],
           object [("kind", string "PhantomDeref")]])]),
-      ("variance", object [("status", supported), ("kind", string "invariant")])]),
+      ("variance", object [("kind", string "invariant")])]),
     ("coverage_statement", object [
-      ("variant", string "Coverage"), ("status", supported),
-      ("coverage", object [
-        ("status", supported), ("kind", string "point"), ("point_kind", string "expr"),
+      ("variant", string "Coverage"), ("coverage", object [
+        ("kind", string "point"), ("point_kind", string "expr"),
         ("hir_id", object [("owner_def_id", string "0:1"), ("local_id", number 7)])])]),
-    ("binary", object [("kind", string "BinaryOp"), ("status", supported),
-      ("operator", object [("status", supported), ("kind", string "add")])]),
-    ("unary", object [("kind", string "UnaryOp"), ("status", supported),
-      ("operator", object [("status", supported), ("kind", string "not")])])]
+    ("binary", object [("kind", string "BinaryOp"), ("operator", object [("kind", string "add")])]),
+    ("unary", object [("kind", string "UnaryOp"), ("operator", object [("kind", string "not")])])]
   let taggedInput ← must (setField original "typed_tag_probe" typedTagProbe)
   let taggedResult ← match decodeJson taggedInput.compress with
     | .ok result => pure result
@@ -414,7 +397,7 @@ def main (args : List String) : IO UInt32 := do
   check (containsBinary .Add taggedResult.document.typedTree)
     "tagged lower-snake binary operator did not map to canonical BinOp"
   let unsupportedRegion ← must (setField taggedInput "unsupported_region"
-    (object [("status", string "unsupported"), ("kind", string "inference_variable"), ("index", number 3)]))
+    (object [("kind", string "inference_variable"), ("index", number 3)]))
   check (malformedResult unsupportedRegion) "unsupported region variable was accepted"
 
   let malformedUserTypeProjection ← must <| do
@@ -427,14 +410,13 @@ def main (args : List String) : IO UInt32 := do
   let unknownCoverageTag ← must <| do
     let coverage ← field taggedInput "typed_tag_probe"
     let future := object [
-      ("variant", string "Coverage"), ("status", supported),
-      ("coverage", object [("status", supported), ("kind", string "future_coverage_kind")])]
+      ("variant", string "Coverage"), ("coverage", object [("kind", string "future_coverage_kind")])]
     let changedProbe ← setField coverage "coverage_statement" future
     setField taggedInput "typed_tag_probe" changedProbe
   check (malformedResult unknownCoverageTag) "unknownCoverageTag: failed input was accepted"
 
   let unsupportedOperator ← must <| do
-    let replacement := object [("status", string "unsupported"), ("kind", string "add")]
+    let replacement := object [("kind", string "future_binary_operator")]
     let (changed, found) ← replaceFirstField taggedInput "operator" replacement
     if !found then throw "typed tag probe lost its binary operator"
     pure changed
@@ -475,13 +457,12 @@ def main (args : List String) : IO UInt32 := do
   let rootId ← must (field firstBody "def_id")
   let rootedScope := object [
     ("kind", string "rooted_structural_closure"),
-    ("status", string "complete"),
     ("semantics", string "structural_export_closure_only"),
     ("roots", toJson #[object [("def_path", rootPath), ("def_id", rootId)]]),
     ("unresolved_obligations", toJson (#[] : Array Json))]
   let scopedButIncompleteGraph ← must (setField original "selected_scope" rootedScope)
   let scopedButIncompleteGraph ← must (setField scopedButIncompleteGraph "failed_catalog"
-    (object [("status", string "unsupported")]))
+    (object [("type_id", number 999999999)]))
   check (malformedResult scopedButIncompleteGraph) "selected scope erased failed catalog data"
 
   let scalar := object [
@@ -489,7 +470,7 @@ def main (args : List String) : IO UInt32 := do
     ("primitive", object [("kind", string "integer"), ("size_bytes", number 1), ("integer_kind", string "u8"), ("signed", Json.bool false)]),
     ("valid_range", object [("start", number 0), ("end", number 255)])]
   let minimalLayout := object [
-    ("status", string "supported"), ("kind", string "layout"),
+    ("kind", string "layout"),
     ("size_bytes", number 1), ("abi_align_bytes", number 1), ("unadjusted_abi_align_bytes", number 1),
     ("field_offsets_bytes", toJson (#[] : Array Json)),
     ("fields", object [("kind", string "primitive"), ("field_count", number 0)]),
@@ -497,7 +478,7 @@ def main (args : List String) : IO UInt32 := do
     ("backend_repr", object [("kind", string "scalar"), ("scalar", scalar)])]
   let minimalType := object [
     ("type_id", number 0), ("display", string "u8"),
-    ("shape", object [("kind", string "uint"), ("status", string "supported"), ("unsigned_kind", string "u8")]),
+    ("shape", object [("kind", string "uint"), ("unsigned_kind", string "u8")]),
     ("layout", minimalLayout)]
   let minimalRootId := object [("crate", number 0), ("index", number 1)]
   let minimalRootPath := string "fixture::root"
@@ -518,9 +499,9 @@ def main (args : List String) : IO UInt32 := do
       ("source_info", sourceInfo)]]),
     ("basic_blocks", toJson #[object [
       ("block", number 0), ("is_cleanup", Json.bool false), ("statements", toJson (#[] : Array Json)),
-      ("terminator", object [("source_info", sourceInfo), ("kind", object [("variant", string "Return"), ("status", string "supported")])])]])]
+      ("terminator", object [("source_info", sourceInfo), ("kind", object [("variant", string "Return")])])]])]
   let minimalScope := object [
-    ("kind", string "rooted_structural_closure"), ("status", string "complete"),
+    ("kind", string "rooted_structural_closure"),
     ("semantics", string "structural_export_closure_only"),
     ("roots", toJson #[object [("def_path", minimalRootPath), ("def_id", minimalRootId)]]),
     ("unresolved_obligations", toJson (#[] : Array Json))]
@@ -530,9 +511,6 @@ def main (args : List String) : IO UInt32 := do
     ("producer", object [
       ("miri_commit", string expectedMiriCommit), ("rustc_commit", string expectedRustcCommit),
       ("rustc_version", string "pinned"), ("target_triple", string "x86_64-unknown-linux-gnu")]),
-    ("completeness", object [
-      ("status", string "incomplete"), ("unsupported_payloads_are_explicit", Json.bool true),
-      ("unresolved_obligations", toJson #[string "unrelated global root is incomplete"])]),
     ("selected_scope", minimalScope), ("types", toJson #[minimalType]),
     ("allocations", toJson (#[] : Array Json)), ("instances", toJson (#[] : Array Json)),
     ("bodies", toJson #[minimalBody])]

@@ -29,7 +29,7 @@ private def sameAttributes (left right : AbiAttributes) : Bool :=
   left.captures.payload == right.captures.payload
 
 private def sameLayout (left right : Layout) : Bool :=
-  left.status == right.status && left.kind == right.kind &&
+  left.kind == right.kind &&
   left.sizeBytes == right.sizeBytes && left.abiAlignBytes == right.abiAlignBytes &&
   left.unadjustedAbiAlignBytes == right.unadjustedAbiAlignBytes &&
   left.fieldOffsetsBytes == right.fieldOffsetsBytes &&
@@ -67,7 +67,6 @@ private def sameAbiProjection (left right : FunctionAbi) : Bool :=
     | some l, some r => sameArgument l r
     | _, _ => false) &&
   sameArgument left.returnValue right.returnValue &&
-  left.callingConvention.status == right.callingConvention.status &&
   left.callingConvention.kind == right.callingConvention.kind &&
   left.callingConvention.armCall == right.callingConvention.armCall &&
   left.callingConvention.interruptKind == right.callingConvention.interruptKind &&
@@ -87,24 +86,23 @@ private def replaceReturn (abi : Json) (key : String) (value : Json) : Except St
   let arg ← abi.getObjVal? "return"
   set abi "return" (← set arg key value)
 
-private def badLayout : Json := Json.mkObj [
-  ("status", toJson ("supported" : String)),
-  ("field_offsets_bytes", toJson ("not-an-array" : String))]
-
-private def duplicateStatusLayout : Json := Id.run do
+-- The malformed tree repeats size_bytes. The ordinary partial key below
+-- replaces that duplicate with a nonce, so Json equality can be asymmetric
+-- while hashing the nonce lets the test locate a HashMap bucket collision.
+private def duplicateSizeLayout : Json := Id.run do
   let emptyNode : Std.DTreeMap.Internal.Impl String (fun _ : String => Json) := .leaf
-  let duplicateStatus : Std.DTreeMap.Internal.Impl String (fun _ : String => Json) :=
-    .inner 1 "status" (.str "incomplete") emptyNode emptyNode
-  let status : Std.DTreeMap.Internal.Impl String (fun _ : String => Json) :=
-    .inner 2 "status" (.str "incomplete") emptyNode duplicateStatus
+  let duplicateSize : Std.DTreeMap.Internal.Impl String (fun _ : String => Json) :=
+    .inner 1 "size_bytes" (toJson (7 : Nat)) emptyNode emptyNode
+  let sizes : Std.DTreeMap.Internal.Impl String (fun _ : String => Json) :=
+    .inner 2 "size_bytes" (toJson (7 : Nat)) emptyNode duplicateSize
   let root : Std.DTreeMap.Internal.Impl String (fun _ : String => Json) :=
-    .inner 3 "field_offsets_bytes" (.arr #[]) emptyNode status
+    .inner 3 "field_offsets_bytes" (.arr #[]) emptyNode sizes
   Json.obj ⟨⟨root⟩⟩
 
 private def incompleteLayout (size : Nat) : Json := Json.mkObj [
-  ("status", toJson ("incomplete" : String)),
   ("field_offsets_bytes", Json.arr #[]),
-  ("size_bytes", toJson size)]
+  ("size_bytes", toJson (7 : Nat)),
+  ("synthetic_collision_nonce", toJson size)]
 
 def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected exporter mir_features.json")
@@ -161,8 +159,15 @@ def main (args : List String) : IO Unit := do
   check sameFallback "compiler value fallback diagnostic changed"
   let sample := sample?.get!
 
-  let malformedKey := duplicateStatusLayout
-  let malformedValue ← must (decodeCompilerLayout malformedKey)
+  let malformedKey := duplicateSizeLayout
+  check (!(decodeCompilerLayout malformedKey).isOk)
+    "duplicate malformed layout unexpectedly decoded"
+  let sampleReturn ← must (sample.getObjVal? "return")
+  let completeLayout ← must (sampleReturn.getObjVal? "layout")
+  let completeValue ← must (decodeCompilerLayout completeLayout)
+  -- The poisoned value is deliberately assembled by this test. Successful
+  -- schema decoding rejects the malformed key before it can populate a memo.
+  let malformedValue := { completeValue with sizeBytes := none }
   let malformedFields ← must (malformedKey.getObj?)
   let mut collision? : Option (Nat × Layout) := none
   for size in [:10000] do
@@ -176,9 +181,18 @@ def main (args : List String) : IO Unit := do
         if let some found := bareCache[validKey]? then
           if found.sizeBytes != some size then collision? := some (size, found)
   let some (size, poisoned) := collision? |
-    throw (IO.userError "could not find a HashMap collision with a valid key for the asymmetric malformed layout key")
+    throw (IO.userError "could not find a HashMap collision with the ordinary partial key for the asymmetric malformed layout key")
   check (poisoned.sizeBytes.isNone) "malformed cache collision did not return the incomplete layout"
-  let validKey := incompleteLayout size
+  let partialKey := incompleteLayout size
+  check (!(decodeCompilerLayout partialKey).isOk)
+    "partial collision key unexpectedly decoded as a successful layout"
+  let partialAbi ← must (replaceReturn sample "layout" partialKey)
+  let partialMemo := prepareCompilerFunctionAbiMemo #[malformedKey, partialKey]
+  match decodeCompilerFunctionAbi partialAbi,
+      decodeCompilerFunctionAbiWithMemo partialAbi partialMemo with
+  | .error a, .error b => check (a == b) "collision-key rejection changed memo diagnostic"
+  | _, _ => throw (IO.userError "partial collision layout unexpectedly decoded")
+  let validKey ← must (set completeLayout "size_bytes" (toJson size))
   let validValue ← must (decodeCompilerLayout validKey)
   check (validValue.sizeBytes == some size) "valid test layout did not retain its explicit size"
   let abiWithValidLayout ← must (replaceReturn sample "layout" validKey)
@@ -189,6 +203,7 @@ def main (args : List String) : IO Unit := do
     cachedValid.returnValue.layout.map (·.sizeBytes) == some (some size))
     "guarded ABI memo returned an incomplete/colliding Layout instead of the exact valid value"
 
+  let badLayout ← must (set completeLayout "field_offsets_bytes" (.str "not-an-array"))
   let malformedArgument ← must (replaceArgument sample 0 "layout" badLayout)
   let malformedReturn ← must (replaceReturn sample "layout" badLayout)
   let malformedMemo := prepareCompilerFunctionAbiMemo #[badLayout]

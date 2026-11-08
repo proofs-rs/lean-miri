@@ -50,8 +50,8 @@ extra_rows = [
 require(extra_rows, "variadic FnPtr has no ABI query row with one i32 extra")
 require(
     any(
-        row.get("abi_query", {}).get("status") == "supported"
-        and row["abi_query"].get("value", {}).get("c_variadic") is True
+        row.get("abi_query", {}).get("c_variadic") is not None
+        and row["abi_query"].get("c_variadic") is True
         for row in extra_rows
     ),
     "variadic extra-i32 ABI query is not supported/c_variadic",
@@ -65,8 +65,8 @@ require(
 )
 require(
     any(
-        row.get("abi_query", {}).get("status") == "supported"
-        and row["abi_query"].get("value", {}).get("c_variadic") is False
+        row.get("abi_query", {}).get("c_variadic") is not None
+        and row["abi_query"].get("c_variadic") is False
         for row in nonvariadic_rows
     ),
     "nonvariadic candidate has no supported empty-extra nonvariadic ABI row",

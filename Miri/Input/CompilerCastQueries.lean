@@ -16,7 +16,6 @@ private def ref (j : Json) (key : String) : Result TyId := do
   (← (← j.getObjVal? key).getObjVal? "type_id").getNat?
 private def value (j : Json) : Result Json := do
   unless (← text j "typing_env") == "fully_monomorphized" do throw "cast query typing environment mismatch"
-  unless (← text j "status") == "supported" do throw "cast compiler query unavailable"
   j.getObjVal? "value"
 private def unique (entries : Array Json) : Result Json := do
   let some first := entries[0]? | throw "missing exact cast compiler query"
@@ -134,7 +133,6 @@ def eraseSelfTraitRef (p : CompilerProviders.Prepared) (token : Nat) : Result Na
   let queryRows ← (← p.program.input.raw.getObjVal? "compiler_vtable_queries").getArr?
   for row in queryRows do
     let some metadata := (row.getObjVal? "vtable_metadata").toOption | continue
-    unless (metadata.getObjValAs? String "status").toOption == some "supported" do continue
     let some typeRef := (row.getObjVal? "input_type").toOption | continue
     let some sourceType := (typeRef.getObjValAs? Nat "type_id").toOption | continue
     let some entryValues := ((metadata.getObjVal? "entries").bind Json.getArr?).toOption | continue

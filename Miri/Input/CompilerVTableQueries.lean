@@ -27,8 +27,6 @@ def prepare (facts : CompilerFactAdapters.Prepared) : Except String Prepared := 
   let records ← (← facts.context.program.input.raw.getObjVal? "compiler_vtable_queries").getArr?
   let mut entries := #[]
   for record in records do
-    unless (← (← record.getObjVal? "status").getStr?) == "supported" do
-      throw "vtable region-erasure query unavailable"
     let input ← ref facts record "input_type"
     let output ← ref facts record "output_type"
     let before ← CompilerVTableFacts.exportedArrayToken facts (← record.getObjVal? "input_predicates")

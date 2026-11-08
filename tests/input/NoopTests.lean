@@ -8,12 +8,11 @@ private def fail (message : String) : IO α := throw (IO.userError message)
 private partial def hasCoverage (value : TypedValue) : Bool :=
   match value with
   | .enumTag .coverageKind tag _ =>
-    tag.status == .supported &&
       (tag.tag == "point" || tag.tag == "block_marker" || tag.tag == "virtual_counter")
   | .array values => values.any hasCoverage
   | .object fields => fields.any fun (_, child) => hasCoverage child
-  | .statement _ _ fields | .terminator _ _ fields | .rvalue _ _ fields
-  | .operand _ _ fields | .projection _ fields | .enumTag _ _ fields =>
+  | .statement _ fields | .terminator _ fields | .rvalue _ fields
+  | .operand _ fields | .projection _ fields | .enumTag _ _ fields =>
     fields.any fun (_, child) => hasCoverage child
   | _ => false
 

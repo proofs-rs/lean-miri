@@ -12,7 +12,7 @@ assert doc["schema"] == "lean-miri-rustc-mir"
 assert doc["schema_version"] == 3
 assert doc["producer"]["rustc_commit"] == "8144389c895da997dbdecaa635e41d6a50be6ffd"
 assert doc["producer"]["miri_commit"] == "7fa591d7d4dd9af8154becbc8332f8096f8323b1"
-assert doc["completeness"] == {"status": "complete"}
+assert "completeness" not in doc
 type_nodes = {node["type_id"]: node for node in doc["types"]}
 assert type_nodes, "compilation-scoped type graph missing"
 assert sorted(type_nodes) == list(range(len(type_nodes))), "type IDs must be session-local monotonic IDs"
@@ -25,10 +25,10 @@ assert any(node["shape"].get("signed_kind") == "isize" for node in type_nodes.va
 tag_encodings = [
     node["layout"]["variants"]["tag_encoding"]
     for node in type_nodes.values()
-    if node["layout"].get("status") == "supported"
+    if "status" not in node["layout"]
     and node["layout"].get("variants", {}).get("kind") == "multiple"
 ]
-assert tag_encodings and all(tag["status"] == "supported" for tag in tag_encodings)
+assert tag_encodings and all("status" not in tag for tag in tag_encodings)
 assert any(tag["kind"] == "direct" for tag in tag_encodings), "direct enum tag encoding missing"
 niche_tags = [tag for tag in tag_encodings if tag["kind"] == "niche"]
 assert niche_tags, "niche enum tag encoding missing"
@@ -66,7 +66,7 @@ assert bodies["TLS_WORD"]["is_static"] and bodies["TLS_WORD"]["thread_local_stat
 
 exercise = bodies["exercise"]
 assert exercise["locals"] and all("type" in local and "layout" in local for local in exercise["locals"])
-assert exercise["phase"]["status"] == "supported"
+assert "status" not in exercise["phase"]
 assert exercise["phase"]["kind"] in ("built", "analysis", "runtime")
 terminators = [bb["terminator"]["kind"] for bb in exercise["basic_blocks"] if bb["terminator"]]
 assert any(term["variant"] == "SwitchInt" for term in terminators), "loop branch missing"
@@ -74,7 +74,7 @@ assert any(term["variant"] == "Goto" for term in terminators), "loop backedge mi
 calls = [term for term in terminators if term["variant"] == "Call"]
 assert calls
 assert all(
-    call["call_source"]["status"] == "supported"
+    "status" not in call["call_source"]
     and call["call_source"]["kind"] in (
         "overloaded_operator", "match_comparison", "miscellaneous_desugaring", "clone_or_use", "normal_call"
     )
@@ -84,11 +84,11 @@ resolutions = [term["resolution"] for term in calls]
 assert any(r.get("kind") == "resolved_instance" and r.get("instance_def_path") == "id" for r in resolutions), "generic id::<u32> instance missing"
 atomic = [r for r in resolutions if r.get("kind") == "resolved_instance" and "fetch_add" in r.get("instance_def_path", "")]
 assert atomic and atomic[0]["fn_abi"]["arguments"], "atomic call and FnAbi missing"
-assert atomic[0]["fn_abi"]["calling_convention"] == {"kind": "rust", "status": "supported"}
+assert atomic[0]["fn_abi"]["calling_convention"] == {"kind": "rust"}
 for argument in [atomic[0]["fn_abi"]["return"], *atomic[0]["fn_abi"]["arguments"]]:
     mode = argument["mode"]
     if mode["kind"] == "Direct":
-        assert mode["attributes"]["arg_extension"]["status"] == "supported"
+        assert "status" not in mode["attributes"]["arg_extension"]
 instances = {instance["instance_id"]: instance for instance in doc["instances"]}
 assert len(instances) == len(doc["instances"]), "instance IDs must be unique"
 assert all(r.get("instance_id") in instances for r in resolutions if r.get("kind") == "resolved_instance")
@@ -112,16 +112,16 @@ array_instance = next(
     for instance in instances.values()
     if instance.get("def_path") == "array_len"
     and instance.get("kind") == "instance_mir"
-    and instance.get("body_instantiation", {}).get("status") == "supported"
+    and instance.get("body_instantiation", {}).get("kind") == "substituted_and_normalized"
 )
 const_arg = next(arg["value"] for arg in array_instance["generic_args"] if arg["kind"] == "const")
 assert const_arg["kind"] == "value" and const_arg["value"] == {
-    "bits_unsigned": "3", "kind": "leaf", "size_bytes": 8, "status": "supported"
+    "bits_unsigned": "3", "kind": "leaf", "size_bytes": 8
 }, "monomorphized generic const argument must be structurally exported"
 assert array_instance["instance_args_are_monomorphic"]
 assert any(
     instance.get("kind") == "intrinsic_dispatch"
-    and instance.get("status") == "supported"
+    and "status" not in instance
     and instance.get("instance_kind", {}).get("kind") == "intrinsic"
     and instance.get("fallback_instance") is None
     and instance.get("reason") == "Miri executes intrinsic semantics outside a MIR body"
@@ -129,9 +129,9 @@ assert any(
 ), "intrinsic source identity and non-MIR dispatch boundary must be explicit"
 assert any(
     instance.get("kind") == "virtual_dispatch_target"
-    and instance.get("status") == "supported"
+    and "status" not in instance
     and instance.get("body_status") == "not_applicable"
-    and instance.get("virtual_identity", {}).get("fn_abi", {}).get("status") == "supported"
+    and "status" not in instance.get("virtual_identity", {}).get("fn_abi", {})
     for instance in instances.values()
 ), "virtual dispatch must retain exact non-body identity and ABI evidence"
 
@@ -143,7 +143,7 @@ binary_ops = [
     if statement["kind"].get("rvalue", {}).get("kind") == "BinaryOp"
 ]
 assert binary_ops and all(
-    item["operator"]["status"] == "supported" and isinstance(item["operator"]["kind"], str)
+    "status" not in item["operator"] and isinstance(item["operator"]["kind"], str)
     for item in binary_ops
 )
 unary_ops = [
@@ -152,7 +152,7 @@ unary_ops = [
     for statement in block["statements"]
     if statement["kind"].get("rvalue", {}).get("kind") == "UnaryOp"
 ]
-assert unary_ops and all(item["operator"]["status"] == "supported" for item in unary_ops)
+assert unary_ops and all("status" not in item["operator"] for item in unary_ops)
 retags = [
     statement["kind"]["rvalue"]["retag"]
     for block in exercise["basic_blocks"]
@@ -160,7 +160,7 @@ retags = [
     if statement["kind"].get("rvalue", {}).get("kind") == "Use"
 ]
 assert retags and all(
-    retag["status"] == "supported"
+    "status" not in retag
     and retag["kind"] in ("yes", "no")
     and retag["performs_retag"] == (retag["kind"] == "yes")
     for retag in retags
@@ -173,7 +173,7 @@ reference_regions = [
     if statement["kind"].get("rvalue", {}).get("kind") == "Ref"
 ]
 assert reference_regions and all(
-    region["status"] == "supported" and region["kind"] in ("erased", "static", "bound", "early_parameter", "late_parameter", "placeholder")
+    "status" not in region and region["kind"] in ("erased", "static", "bound", "early_parameter", "late_parameter", "placeholder")
     for region in reference_regions
 )
 assert '"kind": "Deref"' in serialized, "unsafe raw-pointer dereference projection missing"
@@ -215,13 +215,13 @@ assert fn_signatures and all(
     isinstance(signature["safety"], dict)
     and signature["safety"]["kind"] in ("safe", "unsafe")
     and isinstance(signature["abi"], dict)
-    and signature["abi"]["status"] == "supported"
+    and "status" not in signature["abi"]
     for signature in fn_signatures
 ), "function signatures must carry typed safety and ExternAbi tags"
 
 allocations = {allocation["allocation_id"]: allocation for allocation in doc["allocations"]}
 assert len(allocations) == len(doc["allocations"]), "allocation IDs must be unique"
-assert all(allocation.get("status") == "supported" for allocation in allocations.values()), "fixture allocation unexpectedly incomplete"
+assert all("status" not in allocation for allocation in allocations.values()), "fixture allocation unexpectedly incomplete"
 memory_allocations = [allocation for allocation in allocations.values() if allocation.get("kind") == "memory"]
 assert any(allocation["bytes_hex"] == "6c65616e2d6d697269" for allocation in memory_allocations), "byte-string allocation contents missing"
 assert any(
@@ -235,7 +235,7 @@ assert static["initializer"]["bytes_hex"] == "0b0000000d000000"
 vtable_queries = [
     query["vtable_metadata"]
     for query in doc["compiler_vtable_queries"]
-    if query.get("vtable_metadata", {}).get("status") == "supported"
+    if query.get("vtable_metadata", {}).get("entries") is not None
 ]
 assert any(
     entry.get("def_path") == "<ValueCell as ValueSource>::get"
@@ -249,7 +249,7 @@ drop_entry = next(
 drop_glue = instances[drop_entry["instance_id"]]
 assert drop_glue["instance_kind"]["kind"] == "shim"
 assert drop_glue["instance_kind"]["shim_kind"] == "drop_glue"
-assert drop_glue["status"] == "supported" and drop_glue["kind"] == "instance_mir"
+assert "status" not in drop_glue and drop_glue["kind"] == "instance_mir"
 
 # A TLS `ThreadLocalRef` contains exact compiler metadata. Runtime allocation
 # and destruction are interpreter semantics, not synthetic exporter payload.
@@ -261,7 +261,7 @@ for block in bodies["read_tls"]["basic_blocks"]:
             tls_refs.append(value)
 assert len(tls_refs) == 1
 tls = tls_refs[0]
-assert tls["status"] == "supported"
+assert "status" not in tls
 assert tls["global_info"]["is_static"] is True
 assert tls["global_info"]["thread_local"] is True
 assert tls["def_id"]["crate"] >= 0 and tls["def_id"]["index"] >= 0
@@ -284,8 +284,8 @@ check_allocation_refs([doc["bodies"], doc["instances"], doc["allocations"]])
 for body in bodies.values():
     for block in body["basic_blocks"]:
         for statement in block["statements"]:
-            assert statement["kind"].get("variant") and statement["kind"].get("status") == "supported"
+            assert statement["kind"].get("variant") and "status" not in statement["kind"]
         if block["terminator"]:
-            assert block["terminator"]["kind"].get("variant") and block["terminator"]["kind"].get("status") == "supported"
+            assert block["terminator"]["kind"].get("variant") and "status" not in block["terminator"]["kind"]
 
 print(f"validated {len(bodies)} local MIR bodies, {len(instances)} reachable instances, {len(allocations)} allocations, exact rustc pin")

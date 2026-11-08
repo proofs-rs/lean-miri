@@ -56,12 +56,13 @@ is version2. Reading old schema2 is not supported. IDs are document-local
 references, distinct from raw Miri AllocId values.
 [SharedPayloads](../Miri/Input/SharedPayloads.lean) and
 [Decoder](../Miri/Input/Decoder.lean) check catalog, reference and typed-query contracts.
-The completeness record is `{"status":"complete"}`. Lean rejects failed payload
-statuses and unrecognized semantic tags before constructing its execution input.
-Successful decoding returns an execution input directly. Historical documents
-containing unresolved exporter payloads must be regenerated.
+Successful query results are serialized directly: booleans remain booleans,
+optional results use JSON null, and structured results carry their semantic
+fields. There are no success-status wrappers or completeness flag. Lean validates
+required fields, semantic tags and references before returning an execution input.
+Historical exports must be regenerated for this wire format.
 
-Completeness describes the exported compiler data. Runtime values, including a
+A successful export describes the requested compiler data. Runtime values, including a
 virtual call's receiver and vtable, still determine execution. Export success is
 neither a proof of interpreter correspondence nor a proof of UB freedom.
 

@@ -39,7 +39,7 @@ fn query<'tcx>(
         )?,
     };
     Ok::<_, String>(
-        json!({"status":"supported","instance_kind":instance_kind_json(context,tcx,instance.def)?,
+        json!({"instance_kind":instance_kind_json(context,tcx,instance.def)?,
         "generic_args":generic_args_json(context,tcx,instance.args)?,"type":type_json(context,tcx,ty)?,
         "evaluation":value}),
     )

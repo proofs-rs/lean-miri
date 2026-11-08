@@ -65,16 +65,14 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
       pure id
     let result := do
       let query ← record.getObjVal? "abi_query"
-      unless (← (← query.getObjVal? "status").getStr?) == "supported" do
-        throw s!"unresolved exact instance ABI query: {((query.getObjVal? "reason").bind Json.getStr?).toOption}"
-      CallResolution.functionAbiJson runtime (← query.getObjVal? "value") abiCache
+      CallResolution.functionAbiJson runtime query abiCache
     let candidates := buckets.getD callee.defId #[]
     if let some previousIndex := matchingIndex entries candidates callee extra then
       let some previous := entries[previousIndex]? | throw "instance ABI bucket index invariant"
       match previous.result,result with
       | .ok old,.ok fresh => unless old == fresh do throw "conflicting exact instance ABI evidence"
       | .error old,.error fresh => unless old == fresh do throw "conflicting failed instance ABI evidence"
-      | _,_ => throw "conflicting instance ABI query status"
+      | _,_ => throw "conflicting instance ABI query outcomes"
     else
       let index := entries.size
       entries := entries.push ⟨callee,extra,result⟩

@@ -9,7 +9,6 @@ open Lean Miri.Input Miri.Interpreter
 
 private def document (raw : Json) : ImportDocument :=
   { producer := ⟨"miri", "rustc", "version", "target"⟩
-    completenessStatus := .supported
     types := #[]
     allocations := #[]
     instances := #[]
@@ -17,7 +16,6 @@ private def document (raw : Json) : ImportDocument :=
     functionAbis := #[]
     bodies := #[]
     typedTree := .scalar .null
-    obligations := #[]
     raw := raw }
 
 private def target : Miri.ABI.RuntimeTargetDataLayout := Id.run do
@@ -29,9 +27,9 @@ private def target : Miri.ABI.RuntimeTargetDataLayout := Id.run do
 private def rawSymbols (allocators : Json) (candidates : Array Json := #[]) : Json :=
   Json.mkObj [("compiler_runtime_queries", Json.mkObj [("foreign_symbols",
     Json.mkObj [
-      ("no_alloc_shim_symbol", Json.mkObj [("status", toJson "supported"), ("value", toJson "__no_alloc")]),
-      ("exported_candidates", Json.mkObj [("status", toJson "supported"), ("value", Json.arr candidates)]),
-      ("allocator_shims", Json.mkObj [("status", toJson "supported"), ("value", allocators)])
+      ("no_alloc_shim_symbol", toJson "__no_alloc"),
+      ("exported_candidates", Json.arr candidates),
+      ("allocator_shims", allocators)
     ])])]
 
 private def allocator (name : String) (target : Json) : Json :=

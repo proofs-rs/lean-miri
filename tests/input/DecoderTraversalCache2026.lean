@@ -28,14 +28,13 @@ def main (args : List String) : IO Unit := do
   let base ← IO.FS.readFile s!"{directory}/valid-permuted-dense.json"
   let .ok document := Json.parse base | throw (IO.userError "fixture parse")
   let bad := Json.mkObj [("kind",.str "Cast"), ("vtable_allocation", Json.mkObj [
-      ("kind",.str "dynamic_vtable_upcast"),("status",.str "supported")])]
+      ("kind",.str "dynamic_vtable_upcast")])]
   compare "early-vtable-error" (set (set document "a_first" bad) "z_later" bad).compress
-  let malformedAbi := Json.mkObj [("fn_abi",Json.mkObj [("status",.str "supported")])]
+  let malformedAbi := Json.mkObj [("fn_abi",Json.mkObj [])]
   compare "first-abi-error" (set (set document "a_first" malformedAbi) "z_later" malformedAbi).compress
   -- Cached and uncached readers reject failed shared nodes with the same
   -- physical transport-node diagnostic before any execution input exists.
-  let issue := Json.mkObj [("kind", .str "synthetic_unknown"),
-    ("status", .str "unsupported")]
+  let issue := Json.mkObj [("$lean_miri_shared_ref", toJson (999999999 : Nat))]
   let .ok catalog := document.getObjVal? "shared_payloads" | throw (IO.userError "missing catalog")
   let .ok nodes := (catalog.getObjVal? "nodes").bind Json.getArr? | throw (IO.userError "missing nodes")
   let reference := Json.mkObj [("$lean_miri_shared_ref", toJson nodes.size)]
@@ -49,7 +48,7 @@ def main (args : List String) : IO Unit := do
   compare "shared-runtime-contexts-and-rebased-paths" repeated.compress
   match decodeRuntimeJson repeated.compress with
   | .error message =>
-    unless message.endsWith "exporter payload status `unsupported` is not a successful input" do
-      throw (IO.userError s!"failed shared payload must be rejected: {message}")
+    unless message == s!"$.shared_payloads.nodes[{nodes.size}].$lean_miri_shared_ref: node reference 999999999 is out of range" do
+      throw (IO.userError s!"invalid shared reference diagnostic changed: {message}")
   | .ok _ => throw (IO.userError "failed shared payload was accepted")
   IO.println "cached/uncached decoder diagnostics and ordered ABI/body results: PASS"

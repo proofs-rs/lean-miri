@@ -29,15 +29,12 @@ def arrays : RuntimeArrayQueries.Access (State Os R P H D O Aff B Host) where
 
 private def shape (runtime : RuntimeMetadata) (ty : TyId) : Except ProjectionError TypeNode := do
   let node ← metadataResult (runtime.node ty)
-  unless node.shapeStatus == .supported do throw (.obligation "compiler type shape unavailable")
   pure node
 
 def packed (runtime : RuntimeMetadata) (ty : TyId) : Except ProjectionError (Option Align) := do
   let node ← shape runtime ty
   if node.shapeKind != .adt then return none
   let repr ← query ((node.payload.getObjVal? "shape").bind fun s => s.getObjVal? "representation")
-  let status ← query ((repr.getObjVal? "status").bind Json.getStr?)
-  unless status == "supported" do throw (.obligation "compiler repr packing unavailable")
   let pack ← query (repr.getObjVal? "pack_bytes")
   if pack == .null then return none
   let bytes ← query pack.getNat?

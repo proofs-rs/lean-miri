@@ -32,16 +32,9 @@ private partial def collectFunctionAbisAux (node : JsonTraversalCache.Node) (pat
     for ((fieldName, value), childIndex) in fields.toList.zipIdx do
       let child := node.child childIndex value
       if fieldName == "fn_abi" && value != .null then
-        let query? ← match statusOf? value with
-          | some "supported" => pure (some (← field value "value" (joinPath path fieldName)))
-          | some _ => pure none
-          | none => pure (some value)
-        if let some queryValue := query? then
-          let queryKey := (if statusOf? value == some "supported" then
-              child.field "value" queryValue else child).key
-          if !seen.contains queryKey then
-            all := all.push (← parseFunctionAbi queryValue (joinPath (joinPath path fieldName) "value") memo)
-            seen := seen.insert queryKey
+        if !seen.contains child.key then
+          all := all.push (← parseFunctionAbi value (joinPath path fieldName) memo)
+          seen := seen.insert child.key
       let looksLikeFunctionAbi :=
         hasField value "arguments" && hasField value "return" &&
         hasField value "calling_convention" && hasField value "can_unwind" &&
@@ -256,61 +249,57 @@ private def validateAllBodies (node : JsonTraversalCache.Node) (path : String) :
 
 private def jsonToNatArray (nodes : Array α) (getId : α → Nat) : Array Nat := nodes.map getId
 
-private def primitiveLayoutObligations (primitive : PrimitiveLayout) (path : String) : Array Obligation := Id.run do
-  let mut issues := #[]
+private def validatePrimitiveLayout (primitive : PrimitiveLayout) (path : String) : Except String Unit := do
   match primitive.kind with
   | .integer =>
     if primitive.integerKind.isNone || primitive.signed.isNone then
-      issues := issues.push ⟨path, "integer primitive layout is missing integer kind or signedness"⟩
+      throw (path ++ ": " ++ "integer primitive layout is missing integer kind or signedness")
   | .float =>
-    if primitive.floatKind.isNone then issues := issues.push ⟨path, "float primitive layout is missing float kind"⟩
+    if primitive.floatKind.isNone then throw (path ++ ": " ++ "float primitive layout is missing float kind")
   | .pointer =>
-    if primitive.addressSpace.isNone then issues := issues.push ⟨path, "pointer primitive layout is missing address space"⟩
-  return issues
+    if primitive.addressSpace.isNone then throw (path ++ ": " ++ "pointer primitive layout is missing address space")
+  return ()
 
-private def scalarLayoutObligations (scalar : ScalarLayout) (path : String) : Array Obligation := Id.run do
-  let mut issues := primitiveLayoutObligations scalar.primitive (joinPath path "primitive")
+private def validateScalarLayout (scalar : ScalarLayout) (path : String) : Except String Unit := do
+  validatePrimitiveLayout scalar.primitive (joinPath path "primitive")
   match scalar.kind with
   | .initialized =>
-    if scalar.validRange.isNone then issues := issues.push ⟨path, "initialized scalar layout is missing its valid range"⟩
+    if scalar.validRange.isNone then throw (path ++ ": " ++ "initialized scalar layout is missing its valid range")
   | .union => pure ()
-  return issues
+  return ()
 
-private def backendReprObligations (repr : BackendRepr) (path : String) : Array Obligation := Id.run do
-  let mut issues := #[]
+private def validateBackendRepr (repr : BackendRepr) (path : String) : Except String Unit := do
   for (key, scalar) in [("scalar", repr.scalar), ("first", repr.first), ("second", repr.second), ("element", repr.element)] do
     match scalar with
-    | some value => issues := issues ++ scalarLayoutObligations value (joinPath path key)
+    | some value => validateScalarLayout value (joinPath path key)
     | none => pure ()
-  return issues
+  return ()
 
-private def taggedNodeObligations (node : TaggedNode) (known : List String)
-    (path description : String) : Array Obligation := Id.run do
-  let mut issues : Array Obligation := #[]
+private def validateTaggedNode (node : TaggedNode) (known : List String)
+    (path description : String) : Except String Unit := do
   if !known.contains node.tag then
-    issues := issues.push ⟨joinPath path "kind", s!"unrecognized {description} tag `{node.tag}`"⟩
-  return issues
+    throw (joinPath path "kind" ++ ": " ++ s!"unrecognized {description} tag `{node.tag}`")
+  return ()
 
-private def canonicalAbiObligations (abi : CanonicalAbi) (path : String) : Array Obligation := Id.run do
-  let mut issues : Array Obligation := #[]
+private def validateCanonicalAbi (abi : CanonicalAbi) (path : String) : Except String Unit := do
   match abi.kind with
   | .arm =>
     match abi.armCall with
-    | none => issues := issues.push ⟨joinPath path "arm_call", "ARM calling convention is missing its call kind"⟩
+    | none => throw (joinPath path "arm_call" ++ ": " ++ "ARM calling convention is missing its call kind")
     | _ => pure ()
   | .interrupt =>
     match abi.interruptKind with
-    | none => issues := issues.push ⟨joinPath path "interrupt_kind", "interrupt calling convention is missing its interrupt kind"⟩
+    | none => throw (joinPath path "interrupt_kind" ++ ": " ++ "interrupt calling convention is missing its interrupt kind")
     | _ => pure ()
   | .x86 =>
     match abi.x86Call with
-    | none => issues := issues.push ⟨joinPath path "x86_call", "x86 calling convention is missing its call kind"⟩
+    | none => throw (joinPath path "x86_call" ++ ": " ++ "x86 calling convention is missing its call kind")
     | _ => pure ()
   | _ => pure ()
-  return issues
+  return ()
 
-private def externAbiObligations (abi : ExternAbi) (path : String) : Array Obligation := Id.run do
-  let mut issues := taggedNodeObligations abi.kind
+private def validateExternAbi (abi : ExternAbi) (path : String) : Except String Unit := do
+  validateTaggedNode abi.kind
     ["c", "system", "rust", "rust_call", "rust_cold", "rust_invalid", "rust_preserve_none",
       "rust_tail", "llvm_intrinsic", "custom", "efi_api", "swift", "aapcs",
       "cmse_nonsecure_call", "cmse_nonsecure_entry", "gpu_kernel", "ptx_kernel",
@@ -320,208 +309,194 @@ private def externAbiObligations (abi : ExternAbi) (path : String) : Array Oblig
     path "extern ABI"
   let hasUnwindTag := ["c", "system", "aapcs", "cdecl", "stdcall", "fastcall", "thiscall", "vectorcall", "sysv64", "win64"].contains abi.kind.tag
   if hasUnwindTag && abi.unwind.isNone then
-    issues := issues.push ⟨joinPath path "unwind", "this extern ABI requires an explicit unwind flag"⟩
+    throw (joinPath path "unwind" ++ ": " ++ "this extern ABI requires an explicit unwind flag")
   if !hasUnwindTag && abi.unwind.isSome then
-    issues := issues.push ⟨joinPath path "unwind", "extern ABI has an unexpected unwind flag"⟩
+    throw (joinPath path "unwind" ++ ": " ++ "extern ABI has an unexpected unwind flag")
   if abi.sourceSpelling.isNone then
-    issues := issues.push ⟨joinPath path "source_spelling", "extern ABI is missing its original spelling"⟩
-  return issues
+    throw (joinPath path "source_spelling" ++ ": " ++ "extern ABI is missing its original spelling")
+  return ()
 
-private def abiAttributesObligations (attrs : AbiAttributes) (path : String) : Array Obligation := Id.run do
-  let mut issues := taggedNodeObligations attrs.argExtension ["none", "zero_extend", "sign_extend"]
+private def validateAbiAttributes (attrs : AbiAttributes) (path : String) : Except String Unit := do
+  validateTaggedNode attrs.argExtension ["none", "zero_extend", "sign_extend"]
       (joinPath path "arg_extension") "argument extension"
-  issues := issues ++ taggedNodeObligations attrs.captures ["none", "address", "read_only", "unrestricted"]
+  validateTaggedNode attrs.captures ["none", "address", "read_only", "unrestricted"]
       (joinPath path "captures") "capture mode"
-  return issues
+  return ()
 
-private def abiRegisterObligations (reg : AbiRegister) (path : String) : Array Obligation := Id.run do
-  let mut issues := #[]
+private def validateAbiRegister (reg : AbiRegister) (path : String) : Except String Unit := do
   match reg.kind with
   | .vector =>
     match reg.hintElement with
-    | none => issues := issues.push ⟨joinPath path "kind.hint_element", "vector ABI register is missing its element hint"⟩
-    | some hint => issues := issues ++ taggedNodeObligations hint ["integer", "float", "pointer"] (joinPath path "kind.hint_element") "register element"
+    | none => throw (joinPath path "kind.hint_element" ++ ": " ++ "vector ABI register is missing its element hint")
+    | some hint => validateTaggedNode hint ["integer", "float", "pointer"] (joinPath path "kind.hint_element") "register element"
   | _ => pure ()
-  return issues
+  return ()
 
-private def abiPassModeObligations (mode : AbiPassMode) (path : String) : Array Obligation := Id.run do
-  let mut issues := #[]
+private def validateAbiPassMode (mode : AbiPassMode) (path : String) : Except String Unit := do
   for (attrs, index) in mode.attributes.toList.zipIdx do
-    issues := issues ++ abiAttributesObligations attrs s!"{path}.attributes[{index}]"
+    validateAbiAttributes attrs s!"{path}.attributes[{index}]"
   match mode.castTarget with
   | some target =>
     for (register, index) in target.prefixRegisters.toList.zipIdx do
-      issues := issues ++ abiRegisterObligations register s!"{path}.target.prefix_registers[{index}]"
-    issues := issues ++ abiRegisterObligations target.restRegister (joinPath path "target.rest_register")
-    issues := issues ++ abiAttributesObligations target.attributes (joinPath path "target.attributes")
+      validateAbiRegister register s!"{path}.target.prefix_registers[{index}]"
+    validateAbiRegister target.restRegister (joinPath path "target.rest_register")
+    validateAbiAttributes target.attributes (joinPath path "target.attributes")
   | none => pure ()
   match mode.indirectMode with
-  | some tag => issues := issues ++ taggedNodeObligations tag ["pointer", "on_stack", "amdgpu_kernel_argument"] (joinPath path "mode") "indirect mode"
+  | some tag => validateTaggedNode tag ["pointer", "on_stack", "amdgpu_kernel_argument"] (joinPath path "mode") "indirect mode"
   | none => pure ()
-  return issues
+  return ()
 
-private def allocationMemoryObligations (memory : AllocationMemory) (path : String) : Array Obligation := Id.run do
-  let mut issues := #[]
+private def validateAllocationMemory (memory : AllocationMemory) (path : String) : Except String Unit := do
   match memory.mutability with
   | .mutable | .immutable => pure ()
-  if memory.alignBytes == 0 then issues := issues.push ⟨joinPath path "align_bytes", "allocation alignment must be nonzero"⟩
-  return issues
+  if memory.alignBytes == 0 then throw (joinPath path "align_bytes" ++ ": " ++ "allocation alignment must be nonzero")
+  return ()
 
-private def tagEncodingObligations (encoding : TagEncoding) (path : String) : Array Obligation := Id.run do
-  let mut issues : Array Obligation := #[]
+private def validateTagEncoding (encoding : TagEncoding) (path : String) : Except String Unit := do
   match encoding.kind with
   | .direct => pure ()
   | .niche =>
     if encoding.untaggedVariant.isNone || encoding.nicheVariants.isNone || encoding.nicheStart.isNone then
-      issues := issues.push ⟨path, "niche tag encoding is missing its structured variant range or niche start"⟩
+      throw (path ++ ": " ++ "niche tag encoding is missing its structured variant range or niche start")
     match encoding.nicheVariants with
-    | some (first, last) => if last < first then issues := issues.push ⟨joinPath path "niche_variants", "inclusive niche range has its end before its start"⟩
+    | some (first, last) => if last < first then throw (joinPath path "niche_variants" ++ ": " ++ "inclusive niche range has its end before its start")
     | none => pure ()
-  return issues
+  return ()
 
-private def promotedBodyObligations (promoted : Array PromotedBody) (path : String) : Array Obligation := Id.run do
-  let mut issues := #[]
+private def validatePromotedBody (promoted : Array PromotedBody) (path : String) : Except String Unit := do
   for entry in promoted do
     if entry.body.isNone then
-      issues := issues.push ⟨s!"{path}[{entry.index}]", "promoted MIR body is absent; cannot import it as typed MIR"⟩
-  return issues
+      throw (s!"{path}[{entry.index}]" ++ ": " ++ "promoted MIR body is absent; cannot import it as typed MIR")
+  return ()
 
-private def virtualIdentityObligations (raw : Json) (types : Array TypeNode)
-    (instances : Array InstanceNode) : Array Obligation := Id.run do
-  let mut issues := #[]
+private def validateVirtualIdentity (raw : Json) (types : Array TypeNode)
+    (instances : Array InstanceNode) : Except String Unit := do
   for (node, index) in instances.toList.zipIdx do
     if node.kind != .virtualDispatchTarget then continue
     let base := s!"$.instances[{index}]"
     let payload := node.payload
     if (payload.getObjValAs? String "body_status").toOption != some "not_applicable" then
-      issues := issues.push ⟨base ++ ".body_status", "virtual dispatch identity must explicitly have no executable MIR body"⟩
+      throw (base ++ ".body_status" ++ ": " ++ "virtual dispatch identity must explicitly have no executable MIR body")
     if node.body.isSome then
-      issues := issues.push ⟨base ++ ".body", "virtual dispatch identity cannot carry a fabricated MIR body"⟩
+      throw (base ++ ".body" ++ ": " ++ "virtual dispatch identity cannot carry a fabricated MIR body")
     let kind := (payload.getObjVal? "instance_kind").toOption.getD .null
     if (kind.getObjValAs? String "kind").toOption != some "virtual" then
-      issues := issues.push ⟨base ++ ".instance_kind.kind", "virtual dispatch target must retain rustc InstanceKind::Virtual"⟩
+      throw (base ++ ".instance_kind.kind" ++ ": " ++ "virtual dispatch target must retain rustc InstanceKind::Virtual")
     if (kind.getObjVal? "def_id").toOption != (payload.getObjVal? "def_id").toOption then
-      issues := issues.push ⟨base ++ ".instance_kind.def_id", "virtual InstanceKind DefId disagrees with catalog DefId"⟩
+      throw (base ++ ".instance_kind.def_id" ++ ": " ++ "virtual InstanceKind DefId disagrees with catalog DefId")
     if (kind.getObjVal? "dispatch_slot").toOption != (payload.getObjVal? "dispatch_slot").toOption then
-      issues := issues.push ⟨base ++ ".instance_kind.dispatch_slot", "virtual InstanceKind slot disagrees with catalog slot"⟩
+      throw (base ++ ".instance_kind.dispatch_slot" ++ ": " ++ "virtual InstanceKind slot disagrees with catalog slot")
     let identity := (payload.getObjVal? "virtual_identity").toOption.getD .null
-    if (identity.getObjValAs? String "status").toOption != some "supported" then
-      issues := issues.push ⟨base ++ ".virtual_identity.status", "virtual method identity/signature query is unresolved"⟩
     let functionType := (identity.getObjVal? "function_type").toOption.getD .null
     let typeId := (functionType.getObjValAs? Nat "type_id").toOption
     match typeId with
-    | none => issues := issues.push ⟨base ++ ".virtual_identity.function_type", "virtual method identity is missing its compiler function type"⟩
+    | none => throw (base ++ ".virtual_identity.function_type" ++ ": " ++ "virtual method identity is missing its compiler function type")
     | some id =>
       let typeMatches := types.filter (·.id == id)
       if typeMatches.size != 1 then
-        issues := issues.push ⟨base ++ ".virtual_identity.function_type", "virtual method identity references a missing or ambiguous type"⟩
+        throw (base ++ ".virtual_identity.function_type" ++ ": " ++ "virtual method identity references a missing or ambiguous type")
       else if let some ty := typeMatches[0]? then
         if ty.shapeKind != .functionPointer && ty.shapeKind != .functionDefinition then
-          issues := issues.push ⟨base ++ ".virtual_identity.function_type", "virtual method identity type is not a compiler function value"⟩
+          throw (base ++ ".virtual_identity.function_type" ++ ": " ++ "virtual method identity type is not a compiler function value")
     let abi := (identity.getObjVal? "fn_abi").toOption.getD .null
-    if (abi.getObjValAs? String "status").toOption != some "supported" then
-      issues := issues.push ⟨base ++ ".virtual_identity.fn_abi.status", "virtual method FnAbi query is unresolved"⟩
-    let abiValue := (abi.getObjVal? "value").toOption
+    let abiValue := some abi
     let catalog := ((raw.getObjVal? "compiler_instance_abis").bind Json.getArr?).toOption.getD #[]
     let abiRows := catalog.filter fun row =>
       (row.getObjValAs? Nat "instance_id").toOption == some node.id &&
       (row.getObjVal? "instance_kind").toOption == (payload.getObjVal? "instance_kind").toOption &&
       (row.getObjVal? "generic_args").toOption == (payload.getObjVal? "generic_args").toOption
     if abiRows.size != 1 then
-      issues := issues.push ⟨base ++ ".virtual_identity.fn_abi", "virtual identity must match one exact full-instance FnAbi query"⟩
+      throw (base ++ ".virtual_identity.fn_abi" ++ ": " ++ "virtual identity must match one exact full-instance FnAbi query")
     else if let some row := abiRows[0]? then
       let query := (row.getObjVal? "abi_query").toOption.getD .null
-      if (query.getObjValAs? String "status").toOption != some "supported" then
-        issues := issues.push ⟨base ++ ".virtual_identity.fn_abi", "matching full-instance FnAbi query is unresolved"⟩
-      else if abiValue != (query.getObjVal? "value").toOption then
-        issues := issues.push ⟨base ++ ".virtual_identity.fn_abi", "virtual identity FnAbi disagrees with the exact full-instance FnAbi query"⟩
-  return issues
+      if abiValue != some query then
+        throw (base ++ ".virtual_identity.fn_abi" ++ ": " ++ "virtual identity FnAbi disagrees with the exact full-instance FnAbi query")
+  return ()
 
-private def extraSemanticObligations (raw : Json) (types : Array TypeNode) (allocations : Array AllocationNode)
-    (instances : Array InstanceNode) (functionAbis : Array FunctionAbi) (bodies : Array Body) : Array Obligation := Id.run do
-  let mut issues := #[]
-  issues := issues ++ virtualIdentityObligations raw types instances
+private def validateExtraSemantic (raw : Json) (types : Array TypeNode) (allocations : Array AllocationNode)
+    (instances : Array InstanceNode) (functionAbis : Array FunctionAbi) (bodies : Array Body) : Except String Unit := do
+  validateVirtualIdentity raw types instances
   for node in types do
     let shapePath := s!"types[{node.id}].shape"
-    if node.shapeStatus == .supported then
-      match node.shapeKind, node.shapeMetadata.signedKind, node.shapeMetadata.unsignedKind,
-          node.shapeMetadata.floatKind, node.shapeMetadata.adtKind with
-      | .int, none, _, _, _ => issues := issues.push ⟨joinPath shapePath "signed_kind", "signed integer type shape is missing its exact integer type"⟩
-      | .int, some (.known kind), _, _, _ =>
-        if !kind.signed then
-          issues := issues.push ⟨joinPath shapePath "signed_kind", "signed integer type shape carries an unsigned integer kind"⟩
-      | .uint, _, none, _, _ => issues := issues.push ⟨joinPath shapePath "unsigned_kind", "unsigned integer type shape is missing its exact integer type"⟩
-      | .uint, _, some (.known kind), _, _ =>
-        if kind.signed then
-          issues := issues.push ⟨joinPath shapePath "unsigned_kind", "unsigned integer type shape carries a signed integer kind"⟩
-      | .float, _, _, none, _ => issues := issues.push ⟨joinPath shapePath "float_kind", "float type shape is missing its exact float type"⟩
-      | .adt, _, _, _, none => issues := issues.push ⟨joinPath shapePath "adt_kind", "ADT type shape is missing its struct/union/enum kind"⟩
-      | _, _, _, _, _ => pure ()
+    match node.shapeKind, node.shapeMetadata.signedKind, node.shapeMetadata.unsignedKind,
+        node.shapeMetadata.floatKind, node.shapeMetadata.adtKind with
+    | .int, none, _, _, _ => throw (joinPath shapePath "signed_kind" ++ ": " ++ "signed integer type shape is missing its exact integer type")
+    | .int, some (.known kind), _, _, _ =>
+      if !kind.signed then
+        throw (joinPath shapePath "signed_kind" ++ ": " ++ "signed integer type shape carries an unsigned integer kind")
+    | .uint, _, none, _, _ => throw (joinPath shapePath "unsigned_kind" ++ ": " ++ "unsigned integer type shape is missing its exact integer type")
+    | .uint, _, some (.known kind), _, _ =>
+      if kind.signed then
+        throw (joinPath shapePath "unsigned_kind" ++ ": " ++ "unsigned integer type shape carries a signed integer kind")
+    | .float, _, _, none, _ => throw (joinPath shapePath "float_kind" ++ ": " ++ "float type shape is missing its exact float type")
+    | .adt, _, _, _, none => throw (joinPath shapePath "adt_kind" ++ ": " ++ "ADT type shape is missing its struct/union/enum kind")
+    | _, _, _, _, _ => pure ()
     match node.layout.kind with
     | .layout => pure ()
     match node.layout.backendRepresentation with
-    | some repr => issues := issues ++ backendReprObligations repr s!"types[{node.id}].layout.backend_repr"
+    | some repr => validateBackendRepr repr s!"types[{node.id}].layout.backend_repr"
     | none => pure ()
     match node.layout.variantsLayout with
     | some variants =>
       match variants.tagEncoding with
-      | some encoding => issues := issues ++ tagEncodingObligations encoding s!"types[{node.id}].layout.variants.tag_encoding"
-      | none => if variants.kind == .multiple then issues := issues.push ⟨s!"types[{node.id}].layout.variants.tag_encoding", "multi-variant layout is missing tag encoding"⟩
+      | some encoding => validateTagEncoding encoding s!"types[{node.id}].layout.variants.tag_encoding"
+      | none => if variants.kind == .multiple then throw (s!"types[{node.id}].layout.variants.tag_encoding" ++ ": " ++ "multi-variant layout is missing tag encoding")
       match variants.tag with
-      | some scalar => issues := issues ++ scalarLayoutObligations scalar s!"types[{node.id}].layout.variants.tag"
+      | some scalar => validateScalarLayout scalar s!"types[{node.id}].layout.variants.tag"
       | none => pure ()
       for variant in variants.variants do
-        issues := issues ++ backendReprObligations variant.backendRepr s!"types[{node.id}].layout.variants[{variant.variantIndex}].backend_repr"
+        validateBackendRepr variant.backendRepr s!"types[{node.id}].layout.variants[{variant.variantIndex}].backend_repr"
     | none => pure ()
     match node.signature with
     | some signature =>
-      issues := issues ++ taggedNodeObligations signature.safety ["safe", "unsafe"]
+      validateTaggedNode signature.safety ["safe", "unsafe"]
         s!"types[{node.id}].shape.signature.safety" "function safety"
-      issues := issues ++ externAbiObligations signature.abi s!"types[{node.id}].shape.signature.abi"
+      validateExternAbi signature.abi s!"types[{node.id}].shape.signature.abi"
     | none => pure ()
   for node in allocations do
     let allocPath := s!"allocations[{node.id}]"
     match node.kind, node.data with
     | .memory, some (.memory memory) =>
-      issues := issues ++ allocationMemoryObligations memory allocPath
+      validateAllocationMemory memory allocPath
     | .function, some (.function function) =>
-      if function.definitionPath.isEmpty then issues := issues.push ⟨s!"{allocPath}.instance_def_path", "function allocation is missing its definition path"⟩
+      if function.definitionPath.isEmpty then throw (s!"{allocPath}.instance_def_path" ++ ": " ++ "function allocation is missing its definition path")
     | .static, some (.static static) =>
-      if static.definitionPath.isEmpty then issues := issues.push ⟨s!"{allocPath}.def_path", "static allocation is missing its definition path"⟩
+      if static.definitionPath.isEmpty then throw (s!"{allocPath}.def_path" ++ ": " ++ "static allocation is missing its definition path")
       match static.initializer, static.globalInfo with
       | some initializer, _ =>
-        issues := issues ++ allocationMemoryObligations initializer (joinPath allocPath "initializer")
+        validateAllocationMemory initializer (joinPath allocPath "initializer")
       | none, some info =>
-        if !info.foreignItem then issues := issues.push ⟨joinPath allocPath "initializer", "non-foreign static is missing its initializer image"⟩
+        if !info.foreignItem then throw (joinPath allocPath "initializer" ++ ": " ++ "non-foreign static is missing its initializer image")
       | none, none =>
-        issues := issues.push ⟨joinPath allocPath "initializer", "static without an initializer lacks exact foreign-item compiler evidence"⟩
+        throw (joinPath allocPath "initializer" ++ ": " ++ "static without an initializer lacks exact foreign-item compiler evidence")
     | .vtable, some (.vtable _) => pure ()
     | .typeId, some (.typeId _) => pure ()
-    | _, none => issues := issues.push ⟨allocPath, "supported allocation is missing its typed payload"⟩
-    | _, some _ => issues := issues.push ⟨allocPath, "allocation kind and typed payload disagree"⟩
+    | _, none => throw (allocPath ++ ": " ++ "supported allocation is missing its typed payload")
+    | _, some _ => throw (allocPath ++ ": " ++ "allocation kind and typed payload disagree")
   for node in instances do
     match node.kind with
     | .instanceMir =>
       if node.body.isNone then
-        issues := issues.push ⟨s!"instances[{node.id}].body", "instance MIR is missing its decoded body"⟩
+        throw (s!"instances[{node.id}].body" ++ ": " ++ "instance MIR is missing its decoded body")
       match node.bodyInstantiation with
-      | none => issues := issues.push ⟨s!"instances[{node.id}].body_instantiation", "instance body is missing substitution/normalization evidence"⟩
+      | none => throw (s!"instances[{node.id}].body_instantiation" ++ ": " ++ "instance body is missing substitution/normalization evidence")
       | some detail =>
 
         if detail.tag != "substituted_and_normalized" then
-          issues := issues.push ⟨s!"instances[{node.id}].body_instantiation.kind", s!"unsupported instance body transformation `{detail.tag}`"⟩
+          throw (s!"instances[{node.id}].body_instantiation.kind" ++ ": " ++ s!"unsupported instance body transformation `{detail.tag}`")
       if node.bodyTemplateIsPolymorphic.isNone then
-        issues := issues.push ⟨s!"instances[{node.id}].body_template_is_polymorphic", "instance lacks polymorphism metadata for its body template"⟩
+        throw (s!"instances[{node.id}].body_template_is_polymorphic" ++ ": " ++ "instance lacks polymorphism metadata for its body template")
       if node.instanceArgsAreMonomorphic != some true then
-        issues := issues.push ⟨s!"instances[{node.id}].instance_args_are_monomorphic", "instance arguments are not known to be monomorphic"⟩
+        throw (s!"instances[{node.id}].instance_args_are_monomorphic" ++ ": " ++ "instance arguments are not known to be monomorphic")
     | .intrinsicDispatch =>
       let base := s!"instances[{node.id}]"
       if node.body.isSome then
-        issues := issues.push ⟨joinPath base "body", "intrinsic dispatch identity cannot carry fabricated MIR"⟩
+        throw (joinPath base "body" ++ ": " ++ "intrinsic dispatch identity cannot carry fabricated MIR")
       let instanceKind := (node.payload.getObjVal? "instance_kind").toOption.getD .null
       let tag := (instanceKind.getObjValAs? String "kind").toOption
       if tag != some "intrinsic" && tag != some "llvm_intrinsic" then
-        issues := issues.push ⟨joinPath base "instance_kind.kind", "intrinsic dispatch requires exact rustc Intrinsic or LlvmIntrinsic identity"⟩
+        throw (joinPath base "instance_kind.kind" ++ ": " ++ "intrinsic dispatch requires exact rustc Intrinsic or LlvmIntrinsic identity")
       let topDefId := node.definitionId
       let nestedDefIdJson := (instanceKind.getObjVal? "def_id").toOption
       let nestedDefId := nestedDefIdJson.bind fun value =>
@@ -529,24 +504,23 @@ private def extraSemanticObligations (raw : Json) (types : Array TypeNode) (allo
         | .ok crate, .ok index => some ⟨crate, index⟩
         | _, _ => none
       if topDefId.isNone then
-        issues := issues.push ⟨joinPath base "def_id", "intrinsic dispatch requires an exact top-level rustc DefId"⟩
+        throw (joinPath base "def_id" ++ ": " ++ "intrinsic dispatch requires an exact top-level rustc DefId")
       if nestedDefId.isNone then
-        issues := issues.push ⟨joinPath base "instance_kind.def_id", "intrinsic dispatch requires an exact nested rustc DefId"⟩
+        throw (joinPath base "instance_kind.def_id" ++ ": " ++ "intrinsic dispatch requires an exact nested rustc DefId")
       if topDefId.isSome && nestedDefId.isSome && topDefId != nestedDefId then
-        issues := issues.push ⟨joinPath base "instance_kind.def_id", "intrinsic identity DefId disagrees with its instance record"⟩
+        throw (joinPath base "instance_kind.def_id" ++ ": " ++ "intrinsic identity DefId disagrees with its instance record")
     | .foreignItemNoMir =>
       let base := s!"instances[{node.id}]"
       if node.body.isSome then
-        issues := issues.push ⟨joinPath base "body", "foreign declaration cannot carry fabricated MIR"⟩
+        throw (joinPath base "body" ++ ": " ++ "foreign declaration cannot carry fabricated MIR")
       if (node.payload.getObjValAs? Bool "foreign_item").toOption != some true then
-        issues := issues.push ⟨joinPath base "foreign_item", "no-MIR foreign dispatch requires exact rustc is_foreign_item=true evidence"⟩
+        throw (joinPath base "foreign_item" ++ ": " ++ "no-MIR foreign dispatch requires exact rustc is_foreign_item=true evidence")
       let symbol := (node.payload.getObjVal? "symbol_name").toOption.getD .null
-      if (symbol.getObjValAs? String "status").toOption != some "supported" ||
-          ((symbol.getObjValAs? String "value").toOption.getD "").isEmpty then
-        issues := issues.push ⟨joinPath base "symbol_name", "no-MIR foreign dispatch requires an exact nonempty rustc symbol name"⟩
+      if (symbol.getStr?.toOption.getD "").isEmpty then
+        throw (joinPath base "symbol_name" ++ ": " ++ "no-MIR foreign dispatch requires an exact nonempty rustc symbol name")
       let instanceKind := (node.payload.getObjVal? "instance_kind").toOption.getD .null
       if (instanceKind.getObjValAs? String "kind").toOption != some "item" then
-        issues := issues.push ⟨joinPath base "instance_kind.kind", "foreign dispatch requires exact rustc Item identity"⟩
+        throw (joinPath base "instance_kind.kind" ++ ": " ++ "foreign dispatch requires exact rustc Item identity")
       let topDefId := node.definitionId
       let nestedDefIdJson := (instanceKind.getObjVal? "def_id").toOption
       let nestedDefId := nestedDefIdJson.bind fun value =>
@@ -554,43 +528,40 @@ private def extraSemanticObligations (raw : Json) (types : Array TypeNode) (allo
         | .ok crate, .ok index => some ⟨crate, index⟩
         | _, _ => none
       if topDefId.isNone then
-        issues := issues.push ⟨joinPath base "def_id", "foreign dispatch requires an exact top-level rustc DefId"⟩
+        throw (joinPath base "def_id" ++ ": " ++ "foreign dispatch requires an exact top-level rustc DefId")
       if nestedDefId.isNone then
-        issues := issues.push ⟨joinPath base "instance_kind.def_id", "foreign dispatch requires an exact nested rustc DefId"⟩
+        throw (joinPath base "instance_kind.def_id" ++ ": " ++ "foreign dispatch requires an exact nested rustc DefId")
       if topDefId.isSome && nestedDefId.isSome && topDefId != nestedDefId then
-        issues := issues.push ⟨joinPath base "instance_kind.def_id", "foreign identity DefId disagrees with its instance record"⟩
+        throw (joinPath base "instance_kind.def_id" ++ ": " ++ "foreign identity DefId disagrees with its instance record")
     | .virtualDispatchTarget => pure ()
     | .symbolIdentityOnly =>
       if node.body.isSome then
-        issues := issues.push ⟨s!"instances[{node.id}].body", "symbol identity catalog row must not provide an executable MIR body"⟩
+        throw (s!"instances[{node.id}].body" ++ ": " ++ "symbol identity catalog row must not provide an executable MIR body")
   for (abi, abiIndex) in functionAbis.toList.zipIdx do
-    issues := issues ++ canonicalAbiObligations abi.callingConvention s!"function_abis[{abiIndex}].calling_convention"
+    validateCanonicalAbi abi.callingConvention s!"function_abis[{abiIndex}].calling_convention"
     for (arg, argIndex) in (abi.arguments.push abi.returnValue).toList.zipIdx do
-      issues := issues ++ abiPassModeObligations arg.mode s!"function_abis[{abiIndex}].arguments[{argIndex}].mode"
+      validateAbiPassMode arg.mode s!"function_abis[{abiIndex}].arguments[{argIndex}].mode"
   for (body, index) in bodies.toList.zipIdx do
-    issues := issues ++ promotedBodyObligations body.promotedBodies s!"bodies[{index}].promoted_bodies"
+    validatePromotedBody body.promotedBodies s!"bodies[{index}].promoted_bodies"
   for node in instances do
-    issues := issues ++ promotedBodyObligations node.promotedBodies s!"instances[{node.id}].promoted_bodies"
-  return issues
+    validatePromotedBody node.promotedBodies s!"instances[{node.id}].promoted_bodies"
+  return ()
 
-private def selectedScopeObligations (scope : SelectedScope) (bodies : Array Body)
-    (instances : Array InstanceNode) : Array Obligation := Id.run do
-  let mut issues := #[]
+private def validateSelectedScope (scope : SelectedScope) (bodies : Array Body)
+    (instances : Array InstanceNode) : Except String Unit := do
   if scope.kind != "rooted_structural_closure" then
-    issues := issues.push ⟨"$.selected_scope.kind", s!"unrecognized selected-scope kind `{scope.kind}`"⟩
-  if scope.statusText != "complete" then
-    issues := issues.push ⟨"$.selected_scope.status", s!"selected scope is not complete (`{scope.statusText}`)"⟩
+    throw ("$.selected_scope.kind" ++ ": " ++ s!"unrecognized selected-scope kind `{scope.kind}`")
   if scope.semantics != "structural_export_closure_only" then
-    issues := issues.push ⟨"$.selected_scope.semantics", s!"unrecognized scope guarantee `{scope.semantics}`"⟩
-  if scope.roots.isEmpty then issues := issues.push ⟨"$.selected_scope.roots", "selected structural closure has no root"⟩
+    throw ("$.selected_scope.semantics" ++ ": " ++ s!"unrecognized scope guarantee `{scope.semantics}`")
+  if scope.roots.isEmpty then throw ("$.selected_scope.roots" ++ ": " ++ "selected structural closure has no root")
   for (root, index) in scope.roots.toList.zipIdx do
     let resolvedBody := bodies.any fun body =>
       body.definitionId == some root.definitionId && body.defPath == root.defPath
     let resolvedInstance := instances.any fun inst =>
       inst.definitionId == some root.definitionId && inst.defPath == some root.defPath
     if !resolvedBody && !resolvedInstance then
-      issues := issues.push ⟨s!"$.selected_scope.roots[{index}]", "selected DefId and path do not resolve to an emitted body or instance"⟩
-  return issues
+      throw (s!"$.selected_scope.roots[{index}]" ++ ": " ++ "selected DefId and path do not resolve to an emitted body or instance")
+  return ()
 
 private partial def collectGraphReferencesInto (j : Json)
     (result : Array (String × Nat)) : Array (String × Nat) := Id.run do
@@ -762,62 +733,55 @@ private def requiredStructuralDependencies (j : Json) (includeAllBodies : Bool :
 Their absence of a body is harmless while they are unused catalog rows, but
 any row reached from a selected root or executable graph is an unresolved
 structural dependency. -/
-private def requiredIdentityOnlyInstanceObligations (instances : Array InstanceNode)
-    (requiredIds : Array Nat) : Array Obligation := Id.run do
-  let mut issues := #[]
+private def validateRequiredIdentityOnlyInstance (instances : Array InstanceNode)
+    (requiredIds : Array Nat) : Except String Unit := do
   for (node, index) in instances.toList.zipIdx do
     if requiredIds.contains node.id && node.kind == .symbolIdentityOnly then
-      issues := issues.push ⟨s!"$.instances[{index}].kind",
-        "selected execution depends on a symbol identity that has no imported MIR body"⟩
-  return issues
+      throw (s!"$.instances[{index}].kind" ++ ": " ++ "selected execution depends on a symbol identity that has no imported MIR body")
+  return ()
 
-private def threadLocalShapeObligations (references : Array (String × Json)) : Array Obligation := Id.run do
-  let mut issues := #[]
+private def validateThreadLocalShape (references : Array (String × Json)) : Except String Unit := do
   for (path, value) in references do
-    unless (value.getObjValAs? String "status").toOption == some "supported" do continue
     let definition := (value.getObjVal? "def_id").toOption
     match definition with
-    | none => issues := issues.push ⟨joinPath path "def_id", "supported ThreadLocalRef is missing its exact compiler DefId"⟩
+    | none => throw (joinPath path "def_id" ++ ": " ++ "supported ThreadLocalRef is missing its exact compiler DefId")
     | some defId =>
       for key in ["crate", "index"] do
         if ((defId.getObjVal? key).bind Json.getNat?).toOption.isNone then
-          issues := issues.push ⟨joinPath (joinPath path "def_id") key, "ThreadLocalRef DefId component must be an unsigned integer"⟩
+          throw (joinPath (joinPath path "def_id") key ++ ": " ++ "ThreadLocalRef DefId component must be an unsigned integer")
     let info := (value.getObjVal? "global_info").toOption
     match info with
-    | none => issues := issues.push ⟨joinPath path "global_info", "supported ThreadLocalRef is missing static compiler query evidence"⟩
+    | none => throw (joinPath path "global_info" ++ ": " ++ "supported ThreadLocalRef is missing static compiler query evidence")
     | some info =>
-      if (info.getObjValAs? String "status").toOption != some "supported" then
-        issues := issues.push ⟨joinPath (joinPath path "global_info") "status", "ThreadLocalRef static compiler query is unresolved"⟩
       if (info.getObjValAs? Bool "is_static").toOption != some true then
-        issues := issues.push ⟨joinPath (joinPath path "global_info") "is_static", "ThreadLocalRef DefId is not confirmed as a static"⟩
+        throw (joinPath (joinPath path "global_info") "is_static" ++ ": " ++ "ThreadLocalRef DefId is not confirmed as a static")
       if (info.getObjValAs? Bool "thread_local").toOption != some true then
-        issues := issues.push ⟨joinPath (joinPath path "global_info") "thread_local", "ThreadLocalRef DefId is not confirmed as thread-local"⟩
+        throw (joinPath (joinPath path "global_info") "thread_local" ++ ": " ++ "ThreadLocalRef DefId is not confirmed as thread-local")
       if (info.getObjValAs? Bool "is_foreign_item").toOption.isNone then
-        issues := issues.push ⟨joinPath (joinPath path "global_info") "is_foreign_item", "ThreadLocalRef static query lacks its foreign-item predicate"⟩
+        throw (joinPath (joinPath path "global_info") "is_foreign_item" ++ ": " ++ "ThreadLocalRef static query lacks its foreign-item predicate")
     let initializer := (value.getObjVal? "initializer").toOption
     match initializer with
-    | none => issues := issues.push ⟨joinPath path "initializer", "supported ThreadLocalRef is missing exact initializer query evidence"⟩
+    | none => throw (joinPath path "initializer" ++ ": " ++ "supported ThreadLocalRef is missing exact initializer query evidence")
     | some initializer =>
       let initializerPath := joinPath path "initializer"
-      if (initializer.getObjValAs? String "status").toOption == some "supported" then
-        let allocation := (initializer.getObjVal? "allocation").toOption
-        match allocation with
-        | none => issues := issues.push ⟨joinPath initializerPath "allocation", "supported TLS initializer is missing its allocation image"⟩
-        | some allocation =>
-          let allocationPath := joinPath initializerPath "allocation"
-          match parseAllocationMemory allocation allocationPath with
-          | .error reason => issues := issues.push ⟨allocationPath, reason⟩
-          | .ok memory =>
-            if let some info := info then
-              match (info.getObjVal? "size_bytes").bind Json.getNat? with
-              | .ok size => if size != memory.sizeBytes then
-                  issues := issues.push ⟨joinPath allocationPath "size_bytes", "TLS initializer size disagrees with static compiler query"⟩
-              | .error _ => issues := issues.push ⟨joinPath (joinPath path "global_info") "size_bytes", "TLS static query is missing its allocation size"⟩
-              match (info.getObjVal? "align_bytes").bind Json.getNat? with
-              | .ok align => if align != memory.alignBytes then
-                  issues := issues.push ⟨joinPath allocationPath "align_bytes", "TLS initializer alignment disagrees with static compiler query"⟩
-              | .error _ => issues := issues.push ⟨joinPath (joinPath path "global_info") "align_bytes", "TLS static query is missing its allocation alignment"⟩
-  return issues
+      let allocation := (initializer.getObjVal? "allocation").toOption
+      match allocation with
+      | none => throw (joinPath initializerPath "allocation" ++ ": " ++ "supported TLS initializer is missing its allocation image")
+      | some allocation =>
+        let allocationPath := joinPath initializerPath "allocation"
+        match parseAllocationMemory allocation allocationPath with
+        | .error reason => throw (allocationPath ++ ": " ++ reason)
+        | .ok memory =>
+          if let some info := info then
+            match (info.getObjVal? "size_bytes").bind Json.getNat? with
+            | .ok size => if size != memory.sizeBytes then
+                throw (joinPath allocationPath "size_bytes" ++ ": " ++ "TLS initializer size disagrees with static compiler query")
+            | .error _ => throw (joinPath (joinPath path "global_info") "size_bytes" ++ ": " ++ "TLS static query is missing its allocation size")
+            match (info.getObjVal? "align_bytes").bind Json.getNat? with
+            | .ok align => if align != memory.alignBytes then
+                throw (joinPath allocationPath "align_bytes" ++ ": " ++ "TLS initializer alignment disagrees with static compiler query")
+            | .error _ => throw (joinPath (joinPath path "global_info") "align_bytes" ++ ": " ++ "TLS static query is missing its allocation alignment")
+  return ()
 
 private def jsonAtPathSegment (j : Json) (segment : String) : Option Json := Id.run do
   match segment.splitOn "[" with
@@ -861,16 +825,13 @@ private def compilerBuiltinDerefType? (j : Json) (typeId : Nat) : Option Nat := 
   let some facts := (ty.getObjVal? "compiler_facts").toOption | return none
   let some queries := (facts.getObjVal? "type_queries").toOption | return none
   let some query := (queries.getObjVal? "builtin_deref_explicit").toOption | return none
-  unless ((query.getObjValAs? String "status").toOption == some "supported") do return none
-  let some value := (query.getObjVal? "value").toOption | return none
-  return jsonTypeId? value
+  return jsonTypeId? query
 
 private def exactLockstepTails? (j : Json) (source target : Nat) : Option Json := Id.run do
   let some rows := (((j.getObjVal? "compiler_cast_queries").bind Json.getArr?).toOption) | return none
   let matching := rows.filter fun row =>
     ((row.getObjValAs? String "query_kind").toOption == some "lockstep_tails") &&
     ((row.getObjValAs? String "typing_env").toOption == some "fully_monomorphized") &&
-    ((row.getObjValAs? String "status").toOption == some "supported") &&
     ((row.getObjVal? "input_source").toOption.bind jsonTypeId? == some source) &&
     ((row.getObjVal? "input_target").toOption.bind jsonTypeId? == some target)
   unless matching.size == 1 do return none
@@ -888,80 +849,6 @@ private def castOperandTypeId? (node : Json) : Option Nat := Id.run do
     let some ty := (constant.getObjVal? "type").toOption | return none
     return jsonTypeId? ty
   else return none
-
-/-- The exporter may retain its salt-zero CTFE vtable probe as diagnostic
-evidence, but it is not a runtime allocation identity. Only the exact probe
-leaf attached to a supported concrete Unsize Cast and backed by a supported
-exact-pair query is demand-local. The enclosing Cast must itself be supported;
-all other statuses and descendants remain structural blockers. -/
-def exactVtableProbeDiagnostic (j : Json) (path : String) : Bool := Id.run do
-  let suffix := ".vtable_probe.status"
-  unless path.endsWith suffix do return false
-  let castPath := (path.dropEnd suffix.length).toString
-  let some node := jsonAtPath j castPath | return false
-  unless ((node.getObjValAs? String "status").toOption == some "supported") do return false
-  unless ((node.getObjValAs? String "kind").toOption == some "Cast") do return false
-  let some castKind := (node.getObjVal? "cast_kind").toOption | return false
-  unless ((castKind.getObjValAs? String "status").toOption == some "supported") &&
-      ((castKind.getObjValAs? String "kind").toOption == some "PointerCoercion") do return false
-  let some coercion := (castKind.getObjVal? "coercion").toOption | return false
-  unless ((coercion.getObjValAs? String "kind").toOption == some "Unsize") do return false
-  let some sourceType := (node.getObjVal? "target_type").toOption | return false
-  let some sourceTypeId := jsonTypeId? sourceType | return false
-  unless castOperandTypeId? node |>.isSome do return false
-  let some operandTypeId := castOperandTypeId? node | return false
-  let some queryRef := (node.getObjVal? "vtable_query").toOption | return false
-  unless ((queryRef.getObjValAs? String "status").toOption == some "supported") do return false
-  let some queryId := ((queryRef.getObjVal? "query_id").bind Json.getNat?).toOption | return false
-  let some querySource := (queryRef.getObjVal? "source_type").toOption | return false
-  let some queryTarget := (queryRef.getObjVal? "target_type").toOption | return false
-  unless jsonTypeId? querySource == some operandTypeId && jsonTypeId? queryTarget == some sourceTypeId do return false
-  let some sourcePointee := (queryRef.getObjVal? "source_pointee_type").toOption | return false
-  let some targetPointee := (queryRef.getObjVal? "target_pointee_type").toOption | return false
-  let some sourcePointeeId := jsonTypeId? sourcePointee | return false
-  let some targetPointeeId := jsonTypeId? targetPointee | return false
-  unless compilerBuiltinDerefType? j operandTypeId == some sourcePointeeId &&
-      compilerBuiltinDerefType? j sourceTypeId == some targetPointeeId do return false
-  let some fullLockstep := exactLockstepTails? j operandTypeId sourceTypeId | return false
-  let some fullLockstepValue := (fullLockstep.getObjVal? "value").toOption | return false
-  unless ((fullLockstepValue.getObjVal? "source_tail").toOption.bind jsonTypeId? == some operandTypeId) &&
-      ((fullLockstepValue.getObjVal? "target_tail").toOption.bind jsonTypeId? == some sourceTypeId) do return false
-  let some sourceTail := (queryRef.getObjVal? "source_tail_type").toOption | return false
-  let some targetTail := (queryRef.getObjVal? "target_tail_type").toOption | return false
-  let some sourceTailId := jsonTypeId? sourceTail | return false
-  let some targetTailId := jsonTypeId? targetTail | return false
-  let some inputType := (queryRef.getObjVal? "input_type").toOption | return false
-  let some inputTypeId := jsonTypeId? inputType | return false
-  unless inputTypeId == sourceTailId do return false
-  let some queryPredicates := ((queryRef.getObjVal? "input_predicates").bind Json.getArr?).toOption | return false
-  let some targetPredicates := dynamicPredicateArray? j targetTailId | return false
-  unless targetPredicates == queryPredicates do return false
-  let some lockstep := exactLockstepTails? j sourcePointeeId targetPointeeId | return false
-  let some lockstepValue := (lockstep.getObjVal? "value").toOption | return false
-  unless ((lockstepValue.getObjVal? "source_tail").toOption.bind jsonTypeId? == some sourceTailId) &&
-      ((lockstepValue.getObjVal? "target_tail").toOption.bind jsonTypeId? == some targetTailId) do return false
-  let some rows := (((j.getObjVal? "compiler_vtable_queries").bind Json.getArr?).toOption) | return false
-  let matching := rows.filter fun row =>
-    ((row.getObjValAs? Nat "query_id").toOption == some queryId)
-  unless matching.size == 1 do return false
-  let some row := matching[0]? | return false
-  unless ((row.getObjValAs? String "status").toOption == some "supported") do return false
-  unless ((row.getObjVal? "input_type").toOption.bind jsonTypeId? == some inputTypeId) do return false
-  unless jsonTypeId? ((row.getObjVal? "output_type").toOption.getD .null) |>.isSome do return false
-  let some rowInputPredicates := ((row.getObjVal? "input_predicates").bind Json.getArr?).toOption | return false
-  unless rowInputPredicates == queryPredicates do return false
-  unless ((row.getObjVal? "output_predicates").bind Json.getArr?).isOk do return false
-  unless ((row.getObjValAs? Bool "output_type_monomorphic_enough").toOption == some true) &&
-      ((row.getObjValAs? Bool "output_predicates_monomorphic_enough").toOption == some true) do return false
-  let some probe := (node.getObjVal? "vtable_probe").toOption | return false
-  unless ((probe.getObjValAs? String "status").toOption == some "incomplete") &&
-      ((probe.getObjValAs? String "kind").toOption == some "symbolic_vtable_allocation") &&
-      (((probe.getObjValAs? String "salt_policy").toOption.getD "").startsWith
-        "exporter uses CTFE_ALLOC_SALT; Miri runtime allocation salts may be randomized") do return false
-  unless (node.getObjVal? "vtable_allocation").toOption == some .null do return false
-  unless (match probe.getObjVal? "allocation" with | .error _ => true | .ok _ => false) &&
-      (match probe.getObjVal? "allocation_id" with | .error _ => true | .ok _ => false) do return false
-  return true
 
 /-- A dynamic-to-dynamic Unsize is represented by the runtime source-vtable
 operation. Bind its descriptor to the Cast's complete types, both exact
@@ -981,15 +868,12 @@ private def castUnsizingPointeeType? (j : Json) (typeId : Nat) : Option Nat := I
     return some typeId
 
 private def exactDynamicVtableUpcast? (j node descriptor : Json) : Bool := Id.run do
-  unless ((node.getObjValAs? String "status").toOption == some "supported") &&
-      ((node.getObjValAs? String "kind").toOption == some "Cast") do return false
+  unless ((node.getObjValAs? String "kind").toOption == some "Cast") do return false
   let some castKind := (node.getObjVal? "cast_kind").toOption | return false
-  unless ((castKind.getObjValAs? String "status").toOption == some "supported") &&
-      ((castKind.getObjValAs? String "kind").toOption == some "PointerCoercion") do return false
+  unless ((castKind.getObjValAs? String "kind").toOption == some "PointerCoercion") do return false
   let some coercion := (castKind.getObjVal? "coercion").toOption | return false
   unless (coercion.getObjValAs? String "kind").toOption == some "Unsize" do return false
-  unless ((descriptor.getObjValAs? String "status").toOption == some "supported") &&
-      ((descriptor.getObjValAs? String "kind").toOption == some "dynamic_vtable_upcast") do return false
+  unless ((descriptor.getObjValAs? String "kind").toOption == some "dynamic_vtable_upcast") do return false
   let some sourceType := (descriptor.getObjVal? "source_type").toOption | return false
   let some sourceTypeId := jsonTypeId? sourceType | return false
   let some targetType := (descriptor.getObjVal? "target_type").toOption | return false
@@ -1024,8 +908,7 @@ private def exactDynamicVtableUpcast? (j node descriptor : Json) : Bool := Id.ru
   unless (descriptor.getObjValAs? String "runtime_vtable").toOption ==
       some "source_operand_metadata" do return false
   let some embeddedQuery := (descriptor.getObjVal? "supertrait_slot_query").toOption | return false
-  unless ((embeddedQuery.getObjValAs? String "status").toOption == some "supported") &&
-      ((embeddedQuery.getObjValAs? String "query_kind").toOption == some "supertrait_slot") &&
+  unless ((embeddedQuery.getObjValAs? String "query_kind").toOption == some "supertrait_slot") &&
       ((embeddedQuery.getObjValAs? String "typing_env").toOption == some "fully_monomorphized") &&
       ((embeddedQuery.getObjVal? "input_source").toOption.bind jsonTypeId? == some sourceTailId) &&
       ((embeddedQuery.getObjVal? "input_target").toOption.bind jsonTypeId? == some targetTailId) do return false
@@ -1033,7 +916,6 @@ private def exactDynamicVtableUpcast? (j node descriptor : Json) : Bool := Id.ru
   let matching := rows.filter fun row =>
     ((row.getObjValAs? String "query_kind").toOption == some "supertrait_slot") &&
     ((row.getObjValAs? String "typing_env").toOption == some "fully_monomorphized") &&
-    ((row.getObjValAs? String "status").toOption == some "supported") &&
     ((row.getObjVal? "input_source").toOption.bind jsonTypeId? == some sourceTailId) &&
     ((row.getObjVal? "input_target").toOption.bind jsonTypeId? == some targetTailId)
   unless matching.size == 1 do return false
@@ -1058,7 +940,6 @@ private partial def malformedDynamicVtableUpcastAux (root : Json) (node : JsonTr
     if (current.getObjValAs? String "kind").toOption == some "Cast" then
       if let some descriptor := (current.getObjVal? "vtable_allocation").toOption then
         if (descriptor.getObjValAs? String "kind").toOption == some "dynamic_vtable_upcast" &&
-            (descriptor.getObjValAs? String "status").toOption == some "supported" &&
             !exactDynamicVtableUpcast? root current descriptor then
           return (some (joinPath path "vtable_allocation"), visited)
     for ((key, value), childIndex) in fields.toList.zipIdx do
@@ -1119,7 +1000,6 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     (profile : Options := {}) (cachedTraversal : Bool := true) : Except String ParsedDocument := do
   let (resolved,traversal) ← profileit "decoder.shared_payload_resolution" profile fun _ =>
     JsonTraversalCache.resolve input cachedTraversal profile
-  validateWireStatuses input "$"
   let j := resolved.root
   let memo := profileit "decoder.shared_decode_memo" profile fun _ => sharedDecodeMemo resolved.nodes
   if (← fieldString j "schema" "$") != expectedSchema then
@@ -1138,13 +1018,6 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
   }
   if producer.miriCommit != expectedMiriCommit then throw "$.producer.miri_commit: input is from the wrong pinned Miri revision"
   if producer.rustcCommit != expectedRustcCommit then throw "$.producer.rustc_commit: input is from the wrong pinned rustc revision"
-  let completeness ← field j "completeness" "$"
-  for legacyField in ["unsupported_payloads_are_explicit", "unresolved_obligations"] do
-    if hasField completeness legacyField then
-      throw s!"$.completeness.{legacyField}: obsolete failed-input field"
-  let completeStatus ← fieldString completeness "status" "$.completeness"
-  if completeStatus != "complete" then
-    throw s!"$.completeness.status: expected complete, received `{completeStatus}`"
   let typesJson ← arrayField j "types" "$"
   if typesJson.isEmpty then throw "$.types: input has no type graph; refusing an empty import"
   let types ← profileit "decoder.types" profile fun _ => parseTypeArray typesJson memo
@@ -1187,30 +1060,27 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
   profileit "decoder.validate_all_bodies" profile fun _ => validateAllBodies traversal "$"
   profileit "decoder.validate_references" profile fun _ =>
     validateReferences traversal "$" types.size allocations.size instances.size
-  let (typedTree?, valueIssues) ← if runtimeOnly then
-      let decoded ← profileit "decoder.runtime_value" profile fun _ =>
+  let typedTree? ← if runtimeOnly then
+      let _ ← profileit "decoder.runtime_value" profile fun _ =>
         decodeRuntimeValue traversal "$" .any .none memo
-      pure (none, flattenRuntimeObligations decoded.obligations)
+      pure none
     else
-      let typedTree ← decodeValue j "$" .any .none memo
-      pure (some typedTree, valueObligations typedTree "$")
-  let mut obligations := valueIssues
-  obligations := obligations ++ profileit "decoder.extra_semantic_obligations" profile fun _ =>
-    extraSemanticObligations j types allocations instances functionAbis bodies
+      pure (some (← decodeValue j "$" .any .none memo))
+  profileit "decoder.extra_semantic_validation" profile fun _ =>
+    validateExtraSemantic j types allocations instances functionAbis bodies
   let requiredDependencies := profileit "decoder.required_dependencies" profile fun _ =>
     requiredStructuralDependencies j compilerAllocIdWorld.isSome
-  obligations := obligations ++ profileit "decoder.required_instance_obligations" profile fun _ =>
-    requiredIdentityOnlyInstanceObligations instances requiredDependencies.instanceIds
-  obligations := obligations ++ profileit "decoder.thread_local_obligations" profile fun _ =>
-    threadLocalShapeObligations requiredDependencies.threadLocalRefs
+  profileit "decoder.required_instance_validation" profile fun _ =>
+    validateRequiredIdentityOnlyInstance instances requiredDependencies.instanceIds
+  profileit "decoder.thread_local_validation" profile fun _ =>
+    validateThreadLocalShape requiredDependencies.threadLocalRefs
   match selectedScope with
-  | some scope => obligations := obligations ++ profileit "decoder.selected_scope_obligations" profile fun _ =>
-      selectedScopeObligations scope bodies instances
+  | some scope => profileit "decoder.selected_scope_validation" profile fun _ =>
+      validateSelectedScope scope bodies instances
   | none => pure ()
   let runtimeTargetDataLayout ← match optionalJson j "runtime_target_data_layout" with
     | none => pure none
     | some evidence => pure (some ({
-        status := ← parseStatus (← fieldString evidence "status" "$.runtime_target_data_layout")
         payload := evidence
       } : TargetDataLayoutEvidence))
   let core : ImportDocumentCore := {
@@ -1220,7 +1090,6 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     compilerAbiLayoutSchema := compilerAbiLayoutSchema
     producer := producer
     runtimeTargetDataLayout := runtimeTargetDataLayout
-    completenessStatus := ← parseStatus completeStatus
     types := types
     allocations := allocations
     compilerAllocIdWorld := compilerAllocIdWorld
@@ -1234,10 +1103,6 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     compilerValueMemo := if runtimeOnly then some (profileit "decoder.compiler_values" profile fun _ =>
       prepareCompilerValueMemoUsing resolved.nodes memo) else none
   }
-  -- Malformed or unresolved compiler input is an import error, even when a
-  -- selected root would not currently demand the offending catalog row.
-  if let some issue := obligations[0]? then
-    throw s!"{issue.path}: {issue.message}"
   match typedTree? with
   | some typedTree =>
     let doc := core.withTypedTree typedTree

@@ -15,14 +15,25 @@ the ability to verify arbitrary Rust are not claimed.
 
 The exporter aborts when requested semantic compiler data is unavailable; the
 Lean input API no longer retains failed exporter payloads as execution inputs.
+Successful values are serialized without success-status wrappers or a
+completeness flag; consumers validate the semantic fields they use.
 Coroutine frame layout serialization and foreign TLS initializers remain
 unimplemented and now stop export. This boundary does not establish compiler
 query closure or interpreter correspondence.
 
-Saved inputs containing old unresolved payloads are intentionally rejected.
-Maintained saved comparison and performance fixtures still need regeneration
-and fresh execution under the successful-input contract; historical replay
-results do not validate the changed boundary.
+Fifteen fixed connected inputs and their same-TyCtxt reference observations,
+three eval-core inputs and two selected runtime inputs have been regenerated
+under the schema-3 successful-input contract. Performance checks now obtain
+fresh producer inputs. The DST and large Tree Borrows connected cases now
+generate inputs and same-TyCtxt references in CI from unchanged tracked sources,
+flags and reviewed guest configuration; fixed assertions and choice tapes are
+preserved. This adds pinned toolchain/sysroot build cost and replaces saved
+allocation-history replay for those two cases. Their historical archives are
+not CI inputs.
+The latest CI matrix and the 17-case Lean connected replay have not been run
+at the user's request; regeneration and historical replay results do not
+validate those executions or establish compiler query closure, interpreter
+correspondence or whole-machine safety.
 
 ## Empty-function caller-domain transport
 

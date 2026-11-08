@@ -53,10 +53,10 @@ fn entry<'tcx>(
                         // unsupported even though rustc can answer it.
                         let function_type = instance.ty(tcx, ty::TypingEnv::fully_monomorphized());
                         let function_type = type_json(context, tcx, function_type)?;
-                        json!({"status":"supported","value":{"instance_id":id,
+                        json!({"instance_id":id,
                         "function_type":function_type,
                         "instance_kind":instance_kind_json(context,tcx,instance.def)?,
-                        "generic_args":generic_args_json(context,tcx,instance.args)?}})
+                        "generic_args":generic_args_json(context,tcx,instance.args)?})
                     }
                     Ok(None) => compiler_fact(Value::Null),
                     Err(error) => export_failure(

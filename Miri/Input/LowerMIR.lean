@@ -103,9 +103,7 @@ def LowerContext.ofTypes (types : Array TypeNode) : LowerContext := Id.run do
   let typeIds := types.map (·.id)
   let scalarSizes := types.filterMap fun ty =>
     ty.layout.sizeBytes.map (ty.id, ·)
-  let obligations : Array Obligation := types.filterMap fun ty =>
-      if ty.shapeStatus == .supported then none else
-        some ⟨s!"types[{ty.id}].shape", "type shape metadata remains unresolved; its compilation-local identity is preserved"⟩
+  let obligations : Array Obligation := #[]
   let mut ctx : LowerContext := {
     typeIds
     scalarSizes
@@ -424,7 +422,7 @@ private def place (ctx : LowerContext) (v : TypedValue) : LowerResult MIR.Place 
 
 private def binOp (v : TypedValue) : LowerResult MIR.BinOp := do
   match v with
-  | .binOperator op .supported => pure op
+  | .binOperator op => pure op
   | _ =>
     match ← tag v with
     | "add" => pure .Add
@@ -457,7 +455,7 @@ private def binOp (v : TypedValue) : LowerResult MIR.BinOp := do
 
 private def unOp (v : TypedValue) : LowerResult MIR.UnOp := do
   match v with
-  | .unOperator op .supported => pure op
+  | .unOperator op => pure op
   | _ =>
     match ← tag v with
     | "not" => pure .Not
@@ -586,7 +584,7 @@ private def constOperand (ctx : LowerContext) (v : TypedValue) : LowerM MIR.Cons
   pure ⟨span, userType, constant⟩
 
 private def operand (ctx : LowerContext) : TypedValue → LowerM MIR.Operand
-  | .operand k _ fs => do
+  | .operand k fs => do
     match k with
     | .copy => return .Copy (← place ctx (← get fs "place"))
     | .move => return .Move (← place ctx (← get fs "place"))
@@ -602,7 +600,7 @@ private def operand (ctx : LowerContext) : TypedValue → LowerM MIR.Operand
   | _ => throw "unsupported or malformed operand"
 
 private def rvalue (ctx : LowerContext) : TypedValue → LowerM MIR.Rvalue
-  | .rvalue k _ fs => do
+  | .rvalue k fs => do
     match k with
     | .use =>
       let retag ← tag (← get fs "retag")
@@ -613,12 +611,12 @@ private def rvalue (ctx : LowerContext) : TypedValue → LowerM MIR.Rvalue
       return .Use (← operand ctx (← get fs "operand")) retag
     | .binaryOp =>
       let op ← match ← get fs "operator" with
-        | .binOperator op .supported => pure op
+        | .binOperator op => pure op
         | _ => throw "unsupported binary operator"
       return .BinaryOp op (← operand ctx (← get fs "left")) (← operand ctx (← get fs "right"))
     | .unaryOp =>
       let op ← match ← get fs "operator" with
-        | .unOperator op .supported => pure op
+        | .unOperator op => pure op
         | _ => throw "unsupported unary operator"
       return .UnaryOp op (← operand ctx (← get fs "operand"))
     | .discriminant => return .Discriminant (← place ctx (← get fs "place"))
@@ -692,7 +690,7 @@ private def coverage (v : TypedValue) : LowerM MIR.CoverageKind := do
 
 private def statement (ctx : LowerContext) (node : MirNode) : LowerM MIR.Statement := do
   let kind ← (show LowerM MIR.StatementKind from match node.value with
-    | .statement k _ fs => do
+    | .statement k fs => do
       match k with
       | .assign => return MIR.StatementKind.Assign (← place ctx (← get fs "place")) (← rvalue ctx (← get fs "rvalue"))
       | .storageLive => return .StorageLive (← nat (← get fs "local"))
@@ -758,7 +756,7 @@ private def assertKind (ctx : LowerContext) (v : TypedValue) : LowerM MIR.Assert
   match ← tag v with
   | "Overflow" =>
     let op ← match ← get fs "operator" with
-      | .binOperator op .supported => pure op
+      | .binOperator op => pure op
       | _ => throw "unsupported assertion operator"
     return .Overflow op (← operand ctx (← get fs "left")) (← operand ctx (← get fs "right"))
   | "BoundsCheck" => return .BoundsCheck (← operand ctx (← get fs "length")) (← operand ctx (← get fs "index"))
@@ -887,7 +885,7 @@ private def inlineAsm (ctx : LowerContext) (fs : Fields) : LowerM MIR.InlineAsmT
 
 private def terminator (ctx : LowerContext) (node : MirNode) : LowerM MIR.Terminator := do
   let kind ← (show LowerM MIR.TerminatorKind from match node.value with
-    | .terminator k _ fs => do
+    | .terminator k fs => do
       match k with
       | .return => pure MIR.TerminatorKind.Return
       | .unreachable => pure .Unreachable
@@ -940,8 +938,8 @@ private partial def validateReferences (ctx : LowerContext) (locals blocks : Nat
   | .localRef id => unless id < locals do throw s!"out-of-range local {id}"
   | .blockRef id => unless id < blocks do throw s!"out-of-range block {id}"
   | .array vs => for child in vs do validateReferences ctx locals blocks child
-  | .object fs | .statement _ _ fs | .terminator _ _ fs | .rvalue _ _ fs
-  | .operand _ _ fs | .projection _ fs | .enumTag _ _ fs =>
+  | .object fs | .statement _ fs | .terminator _ fs | .rvalue _ fs
+  | .operand _ fs | .projection _ fs | .enumTag _ _ fs =>
     for (_, child) in fs do validateReferences ctx locals blocks child
   | .diagnostic _ => pure ()
   | _ => pure ()
@@ -953,18 +951,12 @@ private partial def payloadObligations (sourceDocument : Option Lean.Json)
   | .diagnostic _ => return #[⟨path, "diagnostic-only compiler metadata remains unresolved"⟩]
   | _ => pure ()
   let (own, children) : Array Obligation × Fields := match v with
-    | .statement _ _ fs | .terminator _ _ fs | .rvalue _ _ fs | .operand _ _ fs => (#[], fs)
+    | .statement _ fs | .terminator _ fs | .rvalue _ fs | .operand _ fs => (#[], fs)
     | .enumTag _ _ fs => (#[], fs)
     | .object fs | .projection _ fs => (#[], fs)
     | _ => (#[], #[])
   let mut out := own
   for (key, child) in children do
-    if key == "status" then
-      match child with
-      | .scalar (.str status) =>
-        unless status == "supported" || status == "complete" do
-          out := out.push ⟨path, s!"compiler metadata status remains {status}"⟩
-      | _ => pure ()
     out := out ++ payloadObligations sourceDocument child (path ++ "." ++ key)
   return out
 

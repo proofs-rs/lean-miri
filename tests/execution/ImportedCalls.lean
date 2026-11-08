@@ -287,7 +287,7 @@ private def prepare (document : Input.ImportDocument) : Except StepError Program
   let lowered := resolution.program
   let metadata := resolution.runtime
   let signature ← (document.types.findSome? (·.signature)).toExcept (.unsupported "Rust signature")
-  if signature.abi.kind.tag != "rust" || signature.abi.kind.status != .supported then
+  if signature.abi.kind.tag != "rust" then
     throw (.unsupported "non-Rust ABI fixture")
   let mut spans := lowered.bundle.spans
   let mut bodySpans := #[]
@@ -323,8 +323,7 @@ private def currentResolution (p : Program) : Exec Lean.Json := do
   let source ← lift (blocks[location.block]?.toExcept (.invalidProgram "source block index"))
   let kind ← lift (compiler (jfield source "terminator" >>= fun term => jfield term "kind"))
   let result ← lift (compiler (jfield kind "resolution"))
-  if (← lift (compiler (jtext result "status"))) != "supported" ||
-      (← lift (compiler (jtext result "kind"))) != "resolved_instance" then block "unresolved compiler callee"
+  if (← lift (compiler (jtext result "kind"))) != "resolved_instance" then block "unresolved compiler callee"
   return result
 private def instanceFromResolution (p : Program) (resolution : Lean.Json) : Except StepError (CallInstance × Input.InstanceId) := do
   let kind ← compiler (jfield resolution "instance_kind")
@@ -363,7 +362,7 @@ private def getAbi (p : Program) (fnInstance : CallInstance) : Exec FnABI := do
   let (resolution,_) ← lift (resolutionFor p fnInstance)
   let raw ← lift (compiler (jfield resolution "fn_abi"))
   let source ← lift ((p.lowered.input.functionAbis.find? (·.payload == raw)).toExcept (.unsupported "compiler FnABI"))
-  if source.callingConvention.status != .supported || source.callingConvention.kind != .rust || source.cVariadic then
+  if source.callingConvention.kind != .rust || source.cVariadic then
     block "unsupported calling convention or varargs"
   let arg (source : Input.AbiArgument) : Except StepError ArgABI := do
     if source.mode.kind != .direct then throw (.unsupported "non-Direct u32 argument ABI")
@@ -486,7 +485,7 @@ private def callHooks (p : Program) : CallHooks AllocId State Unit Nat Unit Inpu
   functionSignature := fun _ layout => do
     let node ← lift (node p.metadata layout.ty)
     let signature ← lift (node.signature.toExcept (.unsupported "function signature"))
-    if signature.cVariadic || signature.abi.kind.status != .supported || signature.abi.kind.tag != "rust" then
+    if signature.cVariadic || signature.abi.kind.tag != "rust" then
       block "non-Rust function signature"
     return (signature.inputs.size,signature.abi)
   functionKind := fun ty => do

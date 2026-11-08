@@ -171,12 +171,9 @@ private def decodeResolution (runtime : RuntimeMetadata) (ctx : LowerContext)
     (tables : CompilerTables)
     (function : MIR.Operand) (source : Json) :
     Result (Resolution × CompilerTables) := do
-  let status ← text source "status"
   let kind ← text source "kind"
   let virtual := kind == "virtual_dispatch"
   unless kind == "resolved_instance" || virtual do throw "callee is not a compiler instance dispatch"
-  unless status == "supported" || (virtual && status == "unknown") do
-    throw "compiler callee resolution is unavailable"
   let (callee,tables) ← CompilerInstance.decode ctx tables source
   match callee.kind with
   | .Virtual _ slot =>
@@ -220,7 +217,6 @@ private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgr
         let sourceResolution ← field sourceBlock "terminator" >>= fun term => field term "kind" >>= fun kind => field kind "resolution"
         if (text sourceResolution "kind").toOption == some "indirect_function_pointer" then
           let result := do
-            unless (← text sourceResolution "status") == "supported" do throw "indirect compiler signature/ABI query is unavailable"
             let sourceType ← field sourceResolution "function_type"
             let typeId ← natural sourceType "type_id"
             let sourceType ← require (program.input.types.find? (fun (node : TypeNode) => node.id == typeId)) "indirect function type is missing"

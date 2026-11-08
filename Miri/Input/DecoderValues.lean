@@ -67,42 +67,6 @@ def statusOf? (j : Json) : Option String :=
   | none => none
   | some value => match value.getStr? with | .ok text => some text | .error _ => none
 
-/-- A successful input carries no failed exporter state. Diagnostic payloads
-are decoded separately and never manufacture a semantic success status. -/
-def parseStatus (value : String) : Except String PayloadStatus :=
-  match value with
-  | "supported" | "complete" => pure .supported
-  | other => throw s!"exporter payload status `{other}` is not a successful input"
-
-/-- Allocator pool membership has its own status enum, independent of the
-semantic payload success contract. Its dedicated parser validates these rows. -/
-def validatePayloadStatus (j : Json) (path : String) : Except String Unit := do
-  if path.startsWith "$.compiler_alloc_id_world.raw_pool[" && path.endsWith "]" then return
-  match optionalField j "status" with
-  | none => pure ()
-  | some value =>
-    let text ← value.getStr? |>.mapError fun e => s!"{path}.status: expected string ({e})"
-    discard <| parseStatus text |>.mapError fun e => s!"{path}.status: {e}"
-
-/-- Inspect every physical transport node, including unreachable nodes. Status
-strings are fixed inline fields of the wire format, so this scan does not
-expand DAG references and its work is bounded by the serialized input size. -/
-partial def validateWireStatuses (j : Json) (path : String) : Except String Unit := do
-  if statusOf? j == some "debug_payload" then return
-  if let some value := optionalField j "status" then
-    let text ← value.getStr? |>.mapError fun e => s!"{path}.status: expected string ({e})"
-    let sourcePoolRow := (optionalField j "source_alloc_id").isSome &&
-      ["dangling", "serialized", "opaque"].contains text
-    unless sourcePoolRow do
-      discard <| parseStatus text |>.mapError fun e => s!"{path}.status: {e}"
-  match j with
-  | .arr values =>
-    for (child, index) in values.toList.zipIdx do
-      validateWireStatuses child s!"{path}[{index}]"
-  | .obj fields =>
-    for (key, child) in fields.toList do
-      validateWireStatuses child (joinPath path key)
-  | _ => pure ()
 
 def sourceDebugString (j : Json) (key path : String) : Except String String := do
   let value ← field j key path
@@ -332,7 +296,6 @@ def isKnownProjection (tag : String) : Bool :=
   (projectionVariant tag).isOk
 
 def recognizedAutoDomain (j : Json) : Option Domain :=
-  if (optionalField j "status").isSome then
   if let some v := asTag? j "variant" then
     if isKnownStatement v then some .statement
     else if isKnownTerminator v then some .terminator
@@ -345,7 +308,6 @@ def recognizedAutoDomain (j : Json) : Option Domain :=
       else if isKnownOperand tag then some .operand
       else if isKnownProjection tag then some .projection
       else none
-  else none
 
 def domainTag (j : Json) (domain : Domain) : Option String :=
   match domain with
@@ -401,35 +363,21 @@ def unOpFromExportTag (tag : String) : Option Miri.MIR.UnOp :=
   | "pointer_metadata" => some .PtrMetadata
   | _ => Miri.MIR.UnOp.ofString tag
 
-def statusField (j : Json) (path : String) (optional : Bool := false)
-    : Except String PayloadStatus := do
-  match optionalField j "status" with
-  | none =>
-    if optional then pure .supported
-    else throw s!"{joinPath path "status"}: missing required status tag"
-  | some value =>
-    let text ← value.getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})"
-    parseStatus text
-
-def parseOperatorTag (j : Json) (path : String) : Except String (String × PayloadStatus) := do
+def parseOperatorTag (j : Json) (path : String) : Except String String := do
   match j with
-  | .str tag => pure (tag, .supported)
-  | .obj _ =>
-    let tag ← fieldString j "kind" path
-    let status ← statusField j path
-    pure (tag, status)
+  | .str tag => pure tag
+  | .obj _ => fieldString j "kind" path
   | _ => throw s!"{path}: expected tagged operator object"
 
 def typedEnumCategory? (key path : String) (parentTag : Option String) (j : Json) : Option TypedEnumTag := Id.run do
   let hasKind := (optionalField j "kind").isSome
-  let hasStatus := (optionalField j "status").isSome
   match key with
-  | "value" => if parentTag == some "const" && hasKind && hasStatus then some .typeConstKind else none
-  | "const" => if parentTag == some "type_system_const" && hasKind && hasStatus then some .typeConstKind else none
+  | "value" => if parentTag == some "const" && hasKind then some .typeConstKind else none
+  | "const" => if parentTag == some "type_system_const" && hasKind then some .typeConstKind else none
   | "length" =>
-    if (parentTag == some "array" || parentTag == some "Repeat") && hasKind && hasStatus then some .typeConstKind else none
+    if (parentTag == some "array" || parentTag == some "Repeat") && hasKind then some .typeConstKind else none
   | "start" | "end" =>
-    if parentTag == some "range" && hasKind && hasStatus then some .typeConstKind else none
+    if parentTag == some "range" && hasKind then some .typeConstKind else none
   | "safety" => if hasKind || isStringJson j then some .safety else none
   | "borrow_kind" => if hasKind then some .borrowKind else none
   | "fake_kind" => if isStringJson j then some .fakeBorrowKind else none
@@ -442,40 +390,37 @@ def typedEnumCategory? (key path : String) (parentTag : Option String) (j : Json
   | "aggregate_kind" => if hasKind then some .aggregateKind else none
   | "unwind" => if hasKind then some .unwindAction else none
   | "phase" | "injection_phase" =>
-    if hasKind && hasStatus then some .mirPhase
+    if hasKind then some .mirPhase
     else if isStringJson j then some .mirPhaseStage
     else none
-  | "retag" => if hasKind && hasStatus then some .withRetag else none
-  | "check" => if parentTag == some "RuntimeChecks" && hasKind && hasStatus then some .runtimeCheck else none
-  | "cause" => if hasKind && hasStatus then some .fakeReadCause else none
-  | "call_source" => if hasKind && hasStatus then some .callSource else none
+  | "retag" => if hasKind then some .withRetag else none
+  | "check" => if parentTag == some "RuntimeChecks" && hasKind then some .runtimeCheck else none
+  | "cause" => if hasKind then some .fakeReadCause else none
+  | "call_source" => if hasKind then some .callSource else none
   | "reason" =>
-    if parentTag == some "BackwardIncompatibleDropHint" && hasKind && hasStatus then
+    if parentTag == some "BackwardIncompatibleDropHint" && hasKind then
       some .backwardDropReason
-    else if hasKind && hasStatus then some .unwindReason
+    else if hasKind then some .unwindReason
     else none
-  | "region" => if hasKind && hasStatus then some .regionKind else none
-  | "bound_kind" => if hasKind && hasStatus then some .boundRegionKind else none
+  | "region" => if hasKind then some .regionKind else none
+  | "bound_kind" => if hasKind then some .boundRegionKind else none
   | "index_kind" => if hasKind then some .boundVarIndexKind else none
   | "parameter" => if path.endsWith ".region" && hasKind then some .lateParamRegionKind else none
   | "signed_kind" | "unsigned_kind" | "integer_kind" => if isStringJson j then some .integerType else none
   | "float_kind" => if isStringJson j then some .floatType else none
   | "adt_kind" => if isStringJson j then some .adtKind else none
-  | "variance" => if hasKind && hasStatus then some .variance else none
-  | "coverage" => if parentTag == some "Coverage" && hasKind && hasStatus then some .coverageKind else none
+  | "variance" => if hasKind then some .variance else none
+  | "coverage" => if parentTag == some "Coverage" && hasKind then some .coverageKind else none
   | "point_kind" => if path.endsWith ".coverage" && isStringJson j then some .coveragePointKind else none
   | "retag_mode" => if isStringJson j then some .fakeBorrowRetagMode else none
   | _ => none
 
 def parseInlineTag (j : Json) (path : String) : Except String TaggedNode := do
   match j with
-  | .str tag => return ⟨.supported, tag, j⟩
+  | .str tag => return ⟨tag, j⟩
   | .obj _ =>
     let tag ← fieldString j "kind" path
-    let status ← match optionalField j "status" with
-      | none => pure .supported
-      | some value => (value.getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})") >>= parseStatus
-    return ⟨status, tag, j⟩
+    return ⟨tag, j⟩
   | _ => throw s!"{path}: expected enum tag object or string"
 
 def userTypeProjectionKind (j : Json) (path : String) : Except String UserTypeProjectionKind := do
@@ -502,7 +447,6 @@ def userTypeProjectionKind (j : Json) (path : String) : Except String UserTypePr
   | other => throw s!"{path}: unrecognized user type projection `{other}`"
 
 def parseUserTypeProjection (j : Json) (path : String) : Except String UserTypeProjection := do
-  let status ← statusField j path
   let baseIndex ← match optionalField j "base_index" with
     | none | some .null => pure none
     | some value => (value.getNat?).map some |>.mapError fun e => s!"{joinPath path "base_index"}: expected unsigned integer ({e})"
@@ -516,110 +460,7 @@ def parseUserTypeProjection (j : Json) (path : String) : Except String UserTypeP
       pure (some parsed)
   if (baseIndex.isNone || projections.isNone) then
     throw s!"{path}: supported user-type projection is missing base index or projection sequence"
-  return ⟨status, baseIndex, projections, j⟩
-
-abbrev DecodeValueM := StateT (Std.HashMap DecodeValueKey TypedValue) (Except String)
-
-mutual
-partial def decodeValueM (j : Json) (path : String) (domain : Domain)
-    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : DecodeValueM TypedValue := do
-  let key := decodeValueKey j path domain tagCategory
-  if let some value := (← get).get? key then return value
-  let value ← decodeValueBody j path domain tagCategory memo
-  modify fun cache => cache.insert key value
-  return value
-
-partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
-    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : DecodeValueM TypedValue := do
-  if let some id := isTypeRef j then return .typeRef id
-  if let some id := isAllocationRef j then return .allocationRef id
-  if statusOf? j == some "debug_payload" then return .diagnostic j
-  let _ ← validatePayloadStatus j path
-  match j with
-  | .arr values =>
-    let mut decoded := #[]
-    let mut index := 0
-    for value in values do
-      decoded := decoded.push (← decodeValueM value s!"{path}[{index}]" domain tagCategory memo)
-      index := index + 1
-    return .array decoded
-  | .obj _ =>
-    if isSourceSpanJson j then return .sourceSpan (← parseSourceSpan j path memo)
-    if hasField j "span" && hasField j "scope" then
-      return .sourceInfo (← parseSourceInfo j path memo)
-    let effectiveDomain := if domain == .any then
-      match recognizedAutoDomain j with | some detected => detected | none => .any
-      else domain
-    let fields ← objectFields j
-    let mut decodedFields := #[]
-    let parentTag := match effectiveDomain with
-      | .rvalue | .operand | .statement | .terminator => domainTag j effectiveDomain
-      | _ => asTag? j "kind"
-    for (key, value) in fields do
-      let nextDomain := childDomain effectiveDomain key
-      let decoded ← if key == "user_type_projection" && parentTag == some "AscribeUserType" then
-          .userTypeProjection <$> parseUserTypeProjection value (joinPath path key)
-        else if key == "operator" && (parentTag == some "BinaryOp" || optionalField j "kind" == some (.str "Overflow")) then
-          let (tag, status) ← parseOperatorTag value (joinPath path key)
-          match binOpFromExportTag tag with
-          | some op => pure (.binOperator op status)
-          | none => throw s!"{path}: unrecognized binary operator `{tag}`"
-        else if key == "operator" && parentTag == some "UnaryOp" then
-          let (tag, status) ← parseOperatorTag value (joinPath path key)
-          match unOpFromExportTag tag with
-          | some op => pure (.unOperator op status)
-          | none => throw s!"{path}: unrecognized unary operator `{tag}`"
-        else decodeValueM value (joinPath path key) nextDomain (typedEnumCategory? key path parentTag value) memo
-      let isTagField := match effectiveDomain with
-        | .statement | .terminator | .rvalue | .operand | .projection => key == "status" || key == "variant" || key == "kind"
-        | _ => false
-      let decoded := match key, value with
-        | "instance_id", .num _ =>
-          match value.getNat? with | .ok id => .instanceRef id | .error _ => decoded
-        | "local", .num _ =>
-          match value.getNat? with | .ok id => .localRef id | .error _ => decoded
-        | "block", .num _ | "target", .num _ | "otherwise", .num _
-        | "real_target", .num _ | "imaginary_target", .num _ | "resume", .num _ =>
-          match value.getNat? with | .ok id => .blockRef id | .error _ => decoded
-        | _, _ => decoded
-      if !isTagField then decodedFields := decodedFields.push (key, decoded)
-    match effectiveDomain with
-    | .statement =>
-      let tag ← fieldString j "variant" path
-      let status ← parseStatus (← fieldString j "status" path)
-      return .statement (← statementVariant tag) status decodedFields
-    | .terminator =>
-      let tag ← fieldString j "variant" path
-      let status ← parseStatus (← fieldString j "status" path)
-      return .terminator (← terminatorVariant tag) status decodedFields
-    | .rvalue =>
-      let tag ← fieldString j "kind" path
-      let status ← parseStatus (← fieldString j "status" path)
-      if tag == "BinaryOp" || tag == "UnaryOp" then
-        let operator ← field j "operator" path
-        let _ ← parseOperatorTag operator (joinPath path "operator")
-      return .rvalue (← rvalueVariant tag) status decodedFields
-    | .operand =>
-      let tag ← fieldString j "kind" path
-      let status ← parseStatus (← fieldString j "status" path)
-      return .operand (← operandVariant tag) status decodedFields
-    | .projection =>
-      let tag ← fieldString j "kind" path
-      return .projection (← projectionVariant tag) decodedFields
-    | .any | .statementWrapper | .terminatorWrapper =>
-      match tagCategory with
-      | some category => return .enumTag category (← parseInlineTag j path) decodedFields
-      | none => return .object decodedFields
-  | .str _ =>
-    match tagCategory with
-    | some category => return .enumTag category (← parseInlineTag j path) #[]
-    | none => return .scalar j
-  | _ => return .scalar j
-end
-
-
-def unknownTagObligation (tag : String) (path : String) : Obligation :=
-  ⟨path, s!"unrecognized pinned MIR enum tag `{tag}`; update decoder and review its semantics"⟩
+  return ⟨baseIndex, projections, j⟩
 
 def enumTagKnown (category : TypedEnumTag) (tag : String) : Bool :=
   match category with
@@ -664,42 +505,39 @@ def enumTagKnown (category : TypedEnumTag) (tag : String) : Bool :=
   | .fakeBorrowRetagMode => tag == "default"
   | .typeConstKind => tag == "value" || tag == "alias" || tag == "expression"
 
-def valueLocalObligationsInto (value : TypedValue) (path : String)
-    (initial : Array Obligation) : Array Obligation := Id.run do
+def validateValueLocal (value : TypedValue) (path : String) : Except String Unit := do
   match value with
   | .scalar _ | .diagnostic _ | .typeRef _ | .allocationRef _ | .instanceRef _
-  | .localRef _ | .blockRef _ | .sourceSpan _ | .sourceInfo _ => return initial
-  | .binOperator _ _ | .unOperator _ _ => return initial
+  | .localRef _ | .blockRef _ | .sourceSpan _ | .sourceInfo _ => return ()
+  | .binOperator _ | .unOperator _ => return ()
   | .enumTag category tag children => do
-      let mut out := initial
-
       if !enumTagKnown category tag.tag then
-        out := out.push (unknownTagObligation tag.tag (joinPath path "kind"))
+        throw s!"{joinPath path "kind"}: unrecognized pinned MIR enum tag `{tag.tag}`; update decoder and review its semantics"
       if category == .mirPhase then
         let phaseValue := children.find? fun (key, _) => key == "phase"
         match tag.tag with
         | "built" =>
-          if phaseValue.isSome then out := out.push ⟨path, "built MIR phase must not include a subphase"⟩
+          if phaseValue.isSome then throw s!"{path}: built MIR phase must not include a subphase"
         | "analysis" | "runtime" =>
           match phaseValue with
-          | none => out := out.push ⟨joinPath path "phase", "analysis/runtime MIR phase is missing its subphase"⟩
+          | none => throw s!"{joinPath path "phase"}: analysis/runtime MIR phase is missing its subphase"
           | some (_, .enumTag .mirPhaseStage phaseTag _) =>
             let valid := if tag.tag == "analysis" then
               phaseTag.tag == "initial" || phaseTag.tag == "post_cleanup"
               else phaseTag.tag == "initial" || phaseTag.tag == "post_cleanup" || phaseTag.tag == "optimized"
-            if !valid then out := out.push ⟨joinPath path "phase", s!"subphase `{phaseTag.tag}` does not belong to `{tag.tag}` MIR"⟩
-          | some (_, _) => out := out.push ⟨joinPath path "phase", "MIR subphase is not a typed tag"⟩
+            if !valid then throw s!"{joinPath path "phase"}: subphase `{phaseTag.tag}` does not belong to `{tag.tag}` MIR"
+          | some (_, _) => throw s!"{joinPath path "phase"}: MIR subphase is not a typed tag"
         | _ => pure ()
       if category == .withRetag then
         let performs := children.find? fun (key, _) => key == "performs_retag"
         match performs with
         | some (_, .scalar (.bool value)) =>
-          if value != (tag.tag == "yes") then out := out.push ⟨joinPath path "performs_retag", "boolean disagrees with the WithRetag tag"⟩
-        | _ => out := out.push ⟨joinPath path "performs_retag", "WithRetag tag is missing its boolean witness"⟩
+          if value != (tag.tag == "yes") then throw s!"{joinPath path "performs_retag"}: boolean disagrees with the WithRetag tag"
+        | _ => throw s!"{joinPath path "performs_retag"}: WithRetag tag is missing its boolean witness"
       if category == .runtimeCheck then
         match children.find? fun (key, _) => key == "enabled" with
         | some (_, .scalar (.bool _)) => pure ()
-        | _ => out := out.push ⟨joinPath path "enabled", "runtime-check tag is missing its configured boolean"⟩
+        | _ => throw s!"{joinPath path "enabled"}: runtime-check tag is missing its configured boolean"
       if category == .coverageKind then
         let hasNatField := fun key =>
           match children.find? fun (fieldKey, _) => fieldKey == key with
@@ -709,7 +547,7 @@ def valueLocalObligationsInto (value : TypedValue) (path : String)
         | "point" =>
           match children.find? fun (key, _) => key == "point_kind" with
           | some (_, .enumTag .coveragePointKind _ _) => pure ()
-          | _ => out := out.push ⟨joinPath path "point_kind", "coverage point is missing its typed point kind"⟩
+          | _ => throw s!"{joinPath path "point_kind"}: coverage point is missing its typed point kind"
           match children.find? fun (key, _) => key == "hir_id" with
           | some (_, .object fields) =>
             let hasOwner := fields.any fun (key, value) =>
@@ -719,135 +557,160 @@ def valueLocalObligationsInto (value : TypedValue) (path : String)
                 | .scalar (.num number) => ((Json.num number).getNat?).isOk
                 | _ => false
             if !hasOwner || !hasLocalId then
-              out := out.push ⟨joinPath path "hir_id", "coverage point has malformed owner DefId or local HIR index"⟩
-          | _ => out := out.push ⟨joinPath path "hir_id", "coverage point is missing its HIR identifier"⟩
+              throw s!"{joinPath path "hir_id"}: coverage point has malformed owner DefId or local HIR index"
+          | _ => throw s!"{joinPath path "hir_id"}: coverage point is missing its HIR identifier"
         | "block_marker" =>
-          if !hasNatField "id" then out := out.push ⟨joinPath path "id", "block-marker coverage is missing its identifier"⟩
+          if !hasNatField "id" then throw s!"{joinPath path "id"}: block-marker coverage is missing its identifier"
         | "virtual_counter" =>
-          if !hasNatField "bcb" then out := out.push ⟨joinPath path "bcb", "virtual-counter coverage is missing its basic-block counter"⟩
+          if !hasNatField "bcb" then throw s!"{joinPath path "bcb"}: virtual-counter coverage is missing its basic-block counter"
         | _ => pure ()
       if category == .regionKind then
         let hasField := fun key => (children.find? fun (fieldKey, _) => fieldKey == key).isSome
         match tag.tag with
         | "early_parameter" =>
           if !hasField "index" || !hasField "name" then
-            out := out.push ⟨path, "early region parameter is missing its index or name"⟩
+            throw s!"{path}: early region parameter is missing its index or name"
         | "bound" =>
           if !hasField "index_kind" || !hasField "variable_index" || !hasField "bound_kind" then
-            out := out.push ⟨path, "bound region is missing index, variable, or bound-kind metadata"⟩
+            throw s!"{path}: bound region is missing index, variable, or bound-kind metadata"
         | "late_parameter" =>
           if !hasField "scope_def_id" || !hasField "scope_def_path" || !hasField "parameter" then
-            out := out.push ⟨path, "late region parameter is missing its scope or parameter metadata"⟩
+            throw s!"{path}: late region parameter is missing its scope or parameter metadata"
         | "inference_variable" | "placeholder" =>
           if !hasField "index" && !hasField "universe" then
-            out := out.push ⟨path, "region variable is missing its identifying metadata"⟩
+            throw s!"{path}: region variable is missing its identifying metadata"
         | _ => pure ()
-      return out
+      return ()
   | .userTypeProjection projection => do
-      let mut out := initial
-
       if projection.baseIndex.isNone then
-        out := out.push ⟨joinPath path "base_index", "user-type projection is missing its base annotation index"⟩
+        throw s!"{joinPath path "base_index"}: user-type projection is missing its base annotation index"
       if projection.projections.isNone then
-        out := out.push ⟨joinPath path "projections", "user-type projection is missing its projection sequence"⟩
-      return out
-  | .array _ => return initial
-  | .object _ => return initial
-  | .statement variant status fields => do
-      let mut out := initial
-
+        throw s!"{joinPath path "projections"}: user-type projection is missing its projection sequence"
+      return ()
+  | .array _ => return ()
+  | .object _ => return ()
+  | .statement variant fields => do
       match variant with
       | .ascribeUserType =>
         if !(fields.any fun (key, value) => key == "user_type_projection" && match value with | .userTypeProjection _ => true | _ => false) then
-          out := out.push ⟨joinPath path "user_type_projection", "supported AscribeUserType is missing typed projection data"⟩
+          throw s!"{joinPath path "user_type_projection"}: supported AscribeUserType is missing typed projection data"
         if !(fields.any fun (key, value) => key == "variance" && match value with | .enumTag .variance _ _ => true | _ => false) then
-          out := out.push ⟨joinPath path "variance", "supported AscribeUserType is missing typed variance data"⟩
+          throw s!"{joinPath path "variance"}: supported AscribeUserType is missing typed variance data"
       | .coverage =>
         if !(fields.any fun (key, value) => key == "coverage" && match value with | .enumTag .coverageKind _ _ => true | _ => false) then
-          out := out.push ⟨joinPath path "coverage", "supported Coverage statement is missing its typed coverage kind"⟩
+          throw s!"{joinPath path "coverage"}: supported Coverage statement is missing its typed coverage kind"
       | _ => pure ()
-      return out
-  | .terminator _ _ _ => return initial
-  | .rvalue _ _ _ => return initial
-  | .operand _ _ _ => return initial
-  | .projection _ _ => return initial
+      return ()
+  | .terminator _ _ => return ()
+  | .rvalue _ _ => return ()
+  | .operand _ _ => return ()
+  | .projection _ _ => return ()
 
-partial def valueObligationsInto (value : TypedValue) (path : String)
-    (initial : Array Obligation) : Array Obligation := Id.run do
-  let mut out := valueLocalObligationsInto value path initial
-  match value with
-  | .array values =>
+
+abbrev DecodeValueM := StateT (Std.HashMap DecodeValueKey TypedValue) (Except String)
+
+mutual
+partial def decodeValueM (j : Json) (path : String) (domain : Domain)
+    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : DecodeValueM TypedValue := do
+  let key := decodeValueKey j path domain tagCategory
+  if let some value := (← get).get? key then return value
+  let value ← decodeValueBody j path domain tagCategory memo
+  validateValueLocal value path
+  modify fun cache => cache.insert key value
+  return value
+
+partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
+    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : DecodeValueM TypedValue := do
+  if let some id := isTypeRef j then return .typeRef id
+  if let some id := isAllocationRef j then return .allocationRef id
+  if statusOf? j == some "debug_payload" then return .diagnostic j
+  match j with
+  | .arr values =>
+    let mut decoded := #[]
     let mut index := 0
-    for child in values do
-      out := valueObligationsInto child s!"{path}[{index}]" out
+    for value in values do
+      decoded := decoded.push (← decodeValueM value s!"{path}[{index}]" domain tagCategory memo)
       index := index + 1
-  | .object fields | .enumTag _ _ fields | .statement _ _ fields | .terminator _ _ fields
-  | .rvalue _ _ fields | .operand _ _ fields | .projection _ fields =>
-    for (key, child) in fields do
-      out := valueObligationsInto child (joinPath path key) out
-  | _ => pure ()
-  return out
+    return .array decoded
+  | .obj _ =>
+    if isSourceSpanJson j then return .sourceSpan (← parseSourceSpan j path memo)
+    if hasField j "span" && hasField j "scope" then
+      return .sourceInfo (← parseSourceInfo j path memo)
+    let effectiveDomain := if domain == .any then
+      match recognizedAutoDomain j with | some detected => detected | none => .any
+      else domain
+    let fields ← objectFields j
+    let mut decodedFields := #[]
+    let parentTag := match effectiveDomain with
+      | .rvalue | .operand | .statement | .terminator => domainTag j effectiveDomain
+      | _ => asTag? j "kind"
+    for (key, value) in fields do
+      let nextDomain := childDomain effectiveDomain key
+      let decoded ← if key == "user_type_projection" && parentTag == some "AscribeUserType" then
+          .userTypeProjection <$> parseUserTypeProjection value (joinPath path key)
+        else if key == "operator" && (parentTag == some "BinaryOp" || optionalField j "kind" == some (.str "Overflow")) then
+          let tag ← parseOperatorTag value (joinPath path key)
+          match binOpFromExportTag tag with
+          | some op => pure (.binOperator op)
+          | none => throw s!"{joinPath path "operator"}: unrecognized binary operator `{tag}`"
+        else if key == "operator" && parentTag == some "UnaryOp" then
+          let tag ← parseOperatorTag value (joinPath path key)
+          match unOpFromExportTag tag with
+          | some op => pure (.unOperator op)
+          | none => throw s!"{joinPath path "operator"}: unrecognized unary operator `{tag}`"
+        else decodeValueM value (joinPath path key) nextDomain (typedEnumCategory? key path parentTag value) memo
+      let isTagField := match effectiveDomain with
+        | .statement | .terminator | .rvalue | .operand | .projection => key == "status" || key == "variant" || key == "kind"
+        | _ => false
+      let decoded := match key, value with
+        | "instance_id", .num _ =>
+          match value.getNat? with | .ok id => .instanceRef id | .error _ => decoded
+        | "local", .num _ =>
+          match value.getNat? with | .ok id => .localRef id | .error _ => decoded
+        | "block", .num _ | "target", .num _ | "otherwise", .num _
+        | "real_target", .num _ | "imaginary_target", .num _ | "resume", .num _ =>
+          match value.getNat? with | .ok id => .blockRef id | .error _ => decoded
+        | _, _ => decoded
+      if !isTagField then decodedFields := decodedFields.push (key, decoded)
+    match effectiveDomain with
+    | .statement =>
+      let tag ← fieldString j "variant" path
+      return .statement (← statementVariant tag) decodedFields
+    | .terminator =>
+      let tag ← fieldString j "variant" path
+      return .terminator (← terminatorVariant tag) decodedFields
+    | .rvalue =>
+      let tag ← fieldString j "kind" path
+      if tag == "BinaryOp" || tag == "UnaryOp" then
+        let operator ← field j "operator" path
+        let _ ← parseOperatorTag operator (joinPath path "operator")
+      return .rvalue (← rvalueVariant tag) decodedFields
+    | .operand =>
+      let tag ← fieldString j "kind" path
+      return .operand (← operandVariant tag) decodedFields
+    | .projection =>
+      let tag ← fieldString j "kind" path
+      return .projection (← projectionVariant tag) decodedFields
+    | .any | .statementWrapper | .terminatorWrapper =>
+      match tagCategory with
+      | some category => return .enumTag category (← parseInlineTag j path) decodedFields
+      | none => return .object decodedFields
+  | .str _ =>
+    match tagCategory with
+    | some category => return .enumTag category (← parseInlineTag j path) #[]
+    | none => return .scalar j
+  | _ => return .scalar j
+end
 
-def valueObligations (value : TypedValue) (path : String) : Array Obligation :=
-  valueObligationsInto value path #[]
 
 /-- Unknown semantic tags and missing required metadata fail at the decoding
 boundary, before a successful compiler value can be cached or imported. -/
 def decodeValue (j : Json) (path : String) (domain : Domain := .any)
     (tagCategory : Option TypedEnumTag := none) (memo : DecodeMemo := {}) : Except String TypedValue := do
-  let value ← (decodeValueM j path domain tagCategory memo).run' {}
-  if let some issue := (valueObligations value path)[0]? then
-    throw s!"{issue.path}: {issue.message}"
-  pure value
-
-
-inductive RuntimeObligationSequence where
-  | leaf (items : Array Obligation)
-  | append (left right : RuntimeObligationSequence)
-  | rebase (oldPath newPath : String) (inner : RuntimeObligationSequence)
-  deriving Inhabited
-
-def appendRuntimeObligations (left right : Option RuntimeObligationSequence) :
-    Option RuntimeObligationSequence :=
-  match left, right with
-  | none, right => right
-  | left, none => left
-  | some left, some right => some (.append left right)
-
-def rebaseRuntimeObligation (issue : Obligation) (oldPath newPath : String) : Obligation :=
-  let path := if issue.path == oldPath then newPath else
-    if issue.path.startsWith (oldPath ++ ".") || issue.path.startsWith (oldPath ++ "[") then
-      newPath ++ String.ofList (issue.path.toList.drop oldPath.toList.length)
-    else issue.path
-  { issue with path := path }
-
-def flattenRuntimeObligations (sequence : Option RuntimeObligationSequence) : Array Obligation := Id.run do
-  let mut pending : Array (RuntimeObligationSequence × Array (String × String)) := match sequence with
-    | some sequence => #[(sequence, #[])]
-    | none => #[]
-  let mut result := #[]
-  while h : pending.size > 0 do
-    let (sequence, rebases) := pending[pending.size - 1]'(by omega)
-    pending := pending.pop
-    match sequence with
-    | .leaf items =>
-      for item in items do
-        result := result.push (rebases.reverse.foldl (fun issue (oldPath, newPath) =>
-          rebaseRuntimeObligation issue oldPath newPath) item)
-    | .append left right =>
-      pending := pending.push (right, rebases)
-      pending := pending.push (left, rebases)
-    | .rebase oldPath newPath inner =>
-      pending := pending.push (inner, rebases.push (oldPath, newPath))
-  return result
-
-structure RuntimeValueDecode where
-  /-- Only the direct fields consumed by the parent's local invariants. -/
-  summary : TypedValue
-  obligations : Option RuntimeObligationSequence
+  (decodeValueM j path domain tagCategory memo).run' {}
 
 /-- Document-local node identity plus every decoding context flag. Only successful
-results are memoized; diagnostics are rebased separately for each occurrence. -/
+results are memoized; failed checks retain the current occurrence path. -/
 structure RuntimeValueKey where
   json : JsonTraversalCache.IdentityKey
   domain : Domain
@@ -883,13 +746,7 @@ theorem runtimeValueKey_uncached_hash_eq (value : Json) (path : String)
     hash (runtimeValueKey (.uncached value) path domain tag) =
       hash (decodeValueKey value path domain tag) := rfl
 
-abbrev RuntimeDecodeCache := Std.HashMap RuntimeValueKey (String × RuntimeValueDecode)
-
-def runtimeLocalObligations (value : TypedValue) (path : String)
-    (children : Option RuntimeObligationSequence := none) : Option RuntimeObligationSequence :=
-  let localIssues := valueLocalObligationsInto value path #[]
-  if localIssues.isEmpty then children
-  else appendRuntimeObligations (some (.leaf localIssues)) children
+abbrev RuntimeDecodeCache := Std.HashMap RuntimeValueKey TypedValue
 
 initialize runtimeSummaryKeys : Std.HashSet String ← pure (Std.HashSet.ofList [
   "status", "phase", "performs_retag", "enabled", "point_kind", "hir_id",
@@ -905,10 +762,10 @@ def runtimeSummaryChild (key : String) (value : TypedValue) : TypedValue :=
   else
     match value with
     | .enumTag category tag _ => .enumTag category tag #[]
-    | .statement variant status _ => .statement variant status #[]
-    | .terminator variant status _ => .terminator variant status #[]
-    | .rvalue variant status _ => .rvalue variant status #[]
-    | .operand variant status _ => .operand variant status #[]
+    | .statement variant _ => .statement variant #[]
+    | .terminator variant _ => .terminator variant #[]
+    | .rvalue variant _ => .rvalue variant #[]
+    | .operand variant _ => .operand variant #[]
     | .projection variant _ => .projection variant #[]
     | .object _ => .object #[]
     | .array _ => .array #[]
@@ -918,7 +775,7 @@ abbrev RuntimeDecodeM := StateT RuntimeDecodeCache (Except String)
 
 mutual
 partial def decodeRuntimeValueM (node : JsonTraversalCache.Node) (path : String) (domain : Domain)
-    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : RuntimeDecodeM RuntimeValueDecode := do
+    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : RuntimeDecodeM TypedValue := do
   if !node.shouldMemo then return ← decodeRuntimeValueBody node path domain tagCategory memo
   -- Scalars are cheap and mostly inline. Giving every occurrence its own cache
   -- entry would retain millions of unique leaf IDs without sharing any work.
@@ -926,43 +783,44 @@ partial def decodeRuntimeValueM (node : JsonTraversalCache.Node) (path : String)
   | .arr _ | .obj _ => pure ()
   | _ => return ← decodeRuntimeValueBody node path domain tagCategory memo
   let key := runtimeValueKey node path domain tagCategory
-  if let some (oldPath, decoded) := (← get).get? key then
-    if oldPath == path then return decoded
-    return { decoded with obligations := decoded.obligations.map fun issues => .rebase oldPath path issues }
+  if let some decoded := (← get).get? key then return decoded
   let decoded ← decodeRuntimeValueBody node path domain tagCategory memo
-  modify fun cache => cache.insert key (path, decoded)
+  modify fun cache => cache.insert key decoded
   return decoded
 
 partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : String) (domain : Domain)
-    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : RuntimeDecodeM RuntimeValueDecode := do
+    (tagCategory : Option TypedEnumTag) (memo : DecodeMemo) : RuntimeDecodeM TypedValue := do
   let j := node.value
   if let some id := isTypeRef j then
     let value := TypedValue.typeRef id
-    return ⟨value, runtimeLocalObligations value path⟩
+    validateValueLocal value path
+    return value
   if let some id := isAllocationRef j then
     let value := TypedValue.allocationRef id
-    return ⟨value, runtimeLocalObligations value path⟩
+    validateValueLocal value path
+    return value
   if statusOf? j == some "debug_payload" then
     let value := TypedValue.diagnostic j
-    return ⟨value, runtimeLocalObligations value path⟩
-  let _ ← validatePayloadStatus j path
+    validateValueLocal value path
+    return value
   match j with
   | .arr values =>
-    let mut obligations : Option RuntimeObligationSequence := none
     let mut index := 0
     for value in values do
-      let child ← decodeRuntimeValueM (node.child index value) s!"{path}[{index}]" domain tagCategory memo
-      obligations := appendRuntimeObligations obligations child.obligations
+      let _ ← decodeRuntimeValueM (node.child index value) s!"{path}[{index}]" domain tagCategory memo
       index := index + 1
     let summary := TypedValue.array #[]
-    return ⟨summary, runtimeLocalObligations summary path obligations⟩
+    validateValueLocal summary path
+    return summary
   | .obj _ =>
     if isSourceSpanJson j then
       let value := TypedValue.sourceSpan (← parseSourceSpan j path memo)
-      return ⟨value, runtimeLocalObligations value path⟩
+      validateValueLocal value path
+      return value
     if hasField j "span" && hasField j "scope" then
       let value := TypedValue.sourceInfo (← parseSourceInfo j path memo)
-      return ⟨value, runtimeLocalObligations value path⟩
+      validateValueLocal value path
+      return value
     let effectiveDomain := if domain == .any then
       match recognizedAutoDomain j with | some detected => detected | none => .any
       else domain
@@ -971,70 +829,64 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
       | .rvalue | .operand | .statement | .terminator => domainTag j effectiveDomain
       | _ => asTag? j "kind"
     let mut summaries := #[]
-    let mut obligations : Option RuntimeObligationSequence := none
     for ((key, value), index) in fields.toList.zipIdx do
       let childPath := joinPath path key
       let nextDomain := childDomain effectiveDomain key
       let child ← if key == "user_type_projection" && parentTag == some "AscribeUserType" then do
           let projection ← parseUserTypeProjection value childPath
-          pure ⟨.userTypeProjection projection,
-            runtimeLocalObligations (.userTypeProjection projection) childPath⟩
+          let decoded := TypedValue.userTypeProjection projection
+          validateValueLocal decoded childPath
+          pure decoded
         else if key == "operator" && (parentTag == some "BinaryOp" || optionalField j "kind" == some (.str "Overflow")) then do
-          let (tag, status) ← parseOperatorTag value childPath
+          let tag ← parseOperatorTag value childPath
           let decoded ← match binOpFromExportTag tag with
-            | some op => pure (TypedValue.binOperator op status)
+            | some op => pure (TypedValue.binOperator op)
             | none => throw s!"{childPath}: unrecognized binary operator `{tag}`"
-          pure ⟨decoded, runtimeLocalObligations decoded childPath⟩
+          validateValueLocal decoded childPath
+          pure decoded
         else if key == "operator" && parentTag == some "UnaryOp" then do
-          let (tag, status) ← parseOperatorTag value childPath
+          let tag ← parseOperatorTag value childPath
           let decoded ← match unOpFromExportTag tag with
-            | some op => pure (TypedValue.unOperator op status)
+            | some op => pure (TypedValue.unOperator op)
             | none => throw s!"{childPath}: unrecognized unary operator `{tag}`"
-          pure ⟨decoded, runtimeLocalObligations decoded childPath⟩
+          validateValueLocal decoded childPath
+          pure decoded
         else decodeRuntimeValueM (node.child index value) childPath nextDomain (typedEnumCategory? key path parentTag value) memo
       let isTagField := match effectiveDomain with
         | .statement | .terminator | .rvalue | .operand | .projection => key == "status" || key == "variant" || key == "kind"
         | _ => false
-      let statusIssues : List Obligation := []
-      let statusSequence := if statusIssues.isEmpty then none else some (.leaf statusIssues.toArray)
-      let childSequence := appendRuntimeObligations statusSequence child.obligations
-      if !isTagField then obligations := appendRuntimeObligations obligations childSequence
       if !isTagField && (runtimeSummaryKeys.contains key ||
           path.endsWith ".hir_id" && (key == "owner_def_id" || key == "local_id")) then
         let childSummary := match key, value with
           | "instance_id", .num _ => match value.getNat? with
             | .ok id => TypedValue.instanceRef id
-            | .error _ => runtimeSummaryChild key child.summary
+            | .error _ => runtimeSummaryChild key child
           | "local", .num _ => match value.getNat? with
             | .ok id => TypedValue.localRef id
-            | .error _ => runtimeSummaryChild key child.summary
+            | .error _ => runtimeSummaryChild key child
           | "block", .num _ | "target", .num _ | "otherwise", .num _
           | "real_target", .num _ | "imaginary_target", .num _ | "resume", .num _ =>
             match value.getNat? with
             | .ok id => TypedValue.blockRef id
-            | .error _ => runtimeSummaryChild key child.summary
-          | _, _ => runtimeSummaryChild key child.summary
+            | .error _ => runtimeSummaryChild key child
+          | _, _ => runtimeSummaryChild key child
         summaries := summaries.push (key, childSummary)
     let summary ← match effectiveDomain with
       | .statement => do
         let tag ← fieldString j "variant" path
-        let status ← parseStatus (← fieldString j "status" path)
-        pure (TypedValue.statement (← statementVariant tag) status summaries)
+        pure (TypedValue.statement (← statementVariant tag) summaries)
       | .terminator => do
         let tag ← fieldString j "variant" path
-        let status ← parseStatus (← fieldString j "status" path)
-        pure (TypedValue.terminator (← terminatorVariant tag) status summaries)
+        pure (TypedValue.terminator (← terminatorVariant tag) summaries)
       | .rvalue => do
         let tag ← fieldString j "kind" path
-        let status ← parseStatus (← fieldString j "status" path)
         if tag == "BinaryOp" || tag == "UnaryOp" then
           let operator ← field j "operator" path
           let _ ← parseOperatorTag operator (joinPath path "operator")
-        pure (TypedValue.rvalue (← rvalueVariant tag) status summaries)
+        pure (TypedValue.rvalue (← rvalueVariant tag) summaries)
       | .operand => do
         let tag ← fieldString j "kind" path
-        let status ← parseStatus (← fieldString j "status" path)
-        pure (TypedValue.operand (← operandVariant tag) status summaries)
+        pure (TypedValue.operand (← operandVariant tag) summaries)
       | .projection => do
         let tag ← fieldString j "kind" path
         pure (TypedValue.projection (← projectionVariant tag) summaries)
@@ -1042,22 +894,26 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
         match tagCategory with
         | some category => pure (TypedValue.enumTag category (← parseInlineTag j path) summaries)
         | none => pure (TypedValue.object summaries)
-    return ⟨summary, runtimeLocalObligations summary path obligations⟩
+    validateValueLocal summary path
+    return summary
   | .str _ =>
     match tagCategory with
     | some category =>
       let value := TypedValue.enumTag category (← parseInlineTag j path) #[]
-      return ⟨value, runtimeLocalObligations value path⟩
+      validateValueLocal value path
+      return value
     | none =>
       let value := TypedValue.scalar j
-      return ⟨value, runtimeLocalObligations value path⟩
+      validateValueLocal value path
+      return value
   | _ =>
     let value := TypedValue.scalar j
-    return ⟨value, runtimeLocalObligations value path⟩
+    validateValueLocal value path
+    return value
 end
 
 def decodeRuntimeValue (node : JsonTraversalCache.Node) (path : String) (domain : Domain := .any)
-    (tagCategory : Option TypedEnumTag := none) (memo : DecodeMemo := {}) : Except String RuntimeValueDecode := do
+    (tagCategory : Option TypedEnumTag := none) (memo : DecodeMemo := {}) : Except String TypedValue := do
   (decodeRuntimeValueM node path domain tagCategory memo).run' {}
 
 def jsonArray (j : Json) (path : String) : Except String (Array Json) :=
@@ -1082,24 +938,18 @@ def optionalJson (j : Json) (key : String) : Option Json :=
 
 def parseTagged (j : Json) (path : String) : Except String TaggedNode := do
   let tag ← fieldString j "kind" path
-  let status ← match optionalField j "status" with
-    | none => pure .supported
-    | some value => (value.getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})") >>= parseStatus
-  return ⟨status, tag, j⟩
+  return ⟨tag, j⟩
 
 def parseAbiTag (j : Json) (path : String) : Except String TaggedNode := do
   match j with
-  | .str tag => return ⟨.supported, tag, j⟩
+  | .str tag => return ⟨tag, j⟩
   | .obj _ =>
     let tag ← match optionalField j "kind" with
       | some value => value.getStr? |>.mapError fun e => s!"{joinPath path "kind"}: expected string enum tag ({e})"
       | none => match optionalField j "variant" with
         | some value => value.getStr? |>.mapError fun e => s!"{joinPath path "variant"}: expected string enum tag ({e})"
         | none => throw s!"{path}: enum object is missing its kind tag"
-    let status ← match optionalField j "status" with
-      | none => pure .supported
-      | some value => (value.getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})") >>= parseStatus
-    return ⟨status, tag, j⟩
+    return ⟨tag, j⟩
   | _ => throw s!"{path}: expected enum tag string or tagged object"
 
 def layoutVariantsKind (tag : String) : Except String LayoutVariantsKind :=
@@ -1277,7 +1127,6 @@ def parseTagEncoding (j : Json) (path : String) : Except String TagEncoding := d
     throw s!"{path}: tag encoding must be a typed object"
   | .obj _ =>
     let tag ← fieldString j "kind" path
-    let status ← parseStatus (← fieldString j "status" path)
     let kind : TagEncodingKind ← match tag with
       | "direct" => pure (TagEncodingKind.direct)
       | "niche" => pure (TagEncodingKind.niche)
@@ -1296,7 +1145,7 @@ def parseTagEncoding (j : Json) (path : String) : Except String TagEncoding := d
     | .niche =>
       if (untaggedVariant.isNone || nicheVariants.isNone || nicheStart.isNone) then
         throw s!"{path}: supported niche tag encoding is missing its range or start value"
-    return ⟨status, kind, untaggedVariant, nicheVariants, nicheStart, j⟩
+    return ⟨kind, untaggedVariant, nicheVariants, nicheStart, j⟩
   | _ => throw s!"{path}: expected structured tag encoding"
 
 def parseVariantsLayout (j : Json) (path : String) : Except String VariantsLayout := do
@@ -1335,8 +1184,6 @@ def parseVariantsLayout (j : Json) (path : String) : Except String VariantsLayou
 def parseLayoutUncached (j : Json) (path : String) : Except String Layout := do
   if (j.getObjVal? "$lean_miri_shared_ref").isOk then
     throw s!"{path}: shared layout reference requires a shared_payloads catalog"
-  let statusText ← fieldString j "status" path
-  let status ← parseStatus statusText
   let kind : LayoutKind ← match asTag? j "kind" with
     | some "layout" | none => pure (.layout)
     | some value => throw s!"{path}: unrecognized LayoutKind `{value}`"
@@ -1371,7 +1218,6 @@ def parseLayoutUncached (j : Json) (path : String) : Except String Layout := do
       throw s!"{path}: field shape count does not match field_offsets_bytes"
   | none => pure ()
   return {
-    status := status
     kind := kind
     sizeBytes := sizeBytes
     abiAlignBytes := abiAlignBytes
@@ -1393,7 +1239,7 @@ def parseLayout (j : Json) (path : String) (memo : DecodeMemo := {}) : Except St
   | none => parseLayoutUncached j path
 
 def isLayoutPayload (j : Json) : Bool :=
-  hasField j "status" && hasField j "field_offsets_bytes"
+  hasField j "field_offsets_bytes"
 
 /-- JSON equality and hashing are only used as memo keys for canonical object
 trees. In particular, never cache a Raw object whose inorder keys are not
@@ -1482,7 +1328,7 @@ def parseFunctionSignature (j : Json) (path : String) : Except String FunctionSi
 
 def decodeCompilerPredicateEvidence (j : Json) : Except String CompilerPredicateEvidence := do
   let normalization ← field j "normalization" "$predicate"
-  let normalized ← match ← field normalization "value" "$predicate.normalization" with
+  let normalized ← match normalization with
     | .null => pure none
     | value => value.getNat?.map some
   pure {
@@ -1490,14 +1336,12 @@ def decodeCompilerPredicateEvidence (j : Json) : Except String CompilerPredicate
     typingEnvironment := ← fieldString j "typing_env" "$predicate"
     stableKey := ← fieldNat j "stable_key" "$predicate"
     autoTrait := ← fieldBool j "auto_trait" "$predicate"
-    normalizationStatus := ← parseStatus (← fieldString normalization "status" "$predicate.normalization")
     normalizedId := normalized
     original := ← field j "original" "$predicate"
     payload := j }
 
 /-- Decode all source PatternKind branches; unknown kinds fail explicitly. -/
 partial def decodeCompilerPattern (j : Json) : Except String CompilerPattern := do
-  unless (← fieldString j "status" "$pattern") == "supported" do throw "unsupported compiler pattern"
   match ← fieldString j "kind" "$pattern" with
   | "range" => return .range (← field j "start" "$pattern") (← field j "end" "$pattern")
   | "or" => return .or (← (← arrayField j "patterns" "$pattern").mapM decodeCompilerPattern)
@@ -1509,35 +1353,28 @@ def decodeTypeCompilerFacts (j : Json) (path : String := "$compiler_facts") : Ex
   let some inputType := isTypeRef (← field j "input_type" path) | throw "compiler fact input_type is not a type reference"
   let mut booleans := #[]
   for (name,value) in ← objectFields (← field j "boolean_queries" path) do
-    let result ← match ← field value "value" path with
-      | .null => pure none
-      | value => value.getBool?.map some
-    booleans := booleans.push (name, {
-      status := ← parseStatus (← fieldString value "status" path), value := result,
-      reason := ← optionalString value "reason" path, payload := value })
+    let result ← value.getBool?
+    booleans := booleans.push (name, result)
   let mut types := #[]
   for (name,value) in ← objectFields (← field j "type_queries" path) do
-    let result ← match ← field value "value" path with
+    let result ← match value with
       | .null => pure none
       | value => match isTypeRef value with
         | some id => pure (some id)
         | none => throw "compiler type query value is not a type reference or null"
-    types := types.push (name, {
-      status := ← parseStatus (← fieldString value "status" path), value := result,
-      reason := ← optionalString value "reason" path, payload := value })
-  let (captureNames,captureStatus) ← match optionalField j "capture_names" with
-    | none => pure (none,none)
+    types := types.push (name, result)
+  let captureNames ← match optionalField j "capture_names" with
+    | none => pure none
     | some query => do
-      let status ← parseStatus (← fieldString query "status" path)
-      let names ← match ← field query "value" path with
+      let names ← match query with
         | .null => pure none
         | .arr names => (names.mapM fun (name : Json) => match name with
             | .null => pure none
             | name => name.getStr?.map some).map some
         | _ => throw "capture_names must be null or array"
-      pure (names,some status)
+      pure names
   pure {
-    captureNames := captureNames, captureNamesStatus := captureStatus,
+    captureNames := captureNames,
     typingEnvironment := ← fieldString j "typing_env" path, inputTypeId := inputType,
     booleanQueries := booleans, typeQueries := types,
     adtPayload := match ← field j "adt" path with | .null => none | value => some value,
@@ -1545,7 +1382,6 @@ def decodeTypeCompilerFacts (j : Json) (path : String := "$compiler_facts") : Ex
 
 def parseTypeNode (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String TypeNode := do
   let shape ← field j "shape" path
-  let shapeStatus ← parseStatus (← fieldString shape "status" (joinPath path "shape"))
   let shapeKindText ← fieldString shape "kind" (joinPath path "shape")
   let signedKindText ← optionalString shape "signed_kind" (joinPath path "shape")
   let unsignedKindText ← optionalString shape "unsigned_kind" (joinPath path "shape")
@@ -1569,7 +1405,6 @@ def parseTypeNode (j : Json) (path : String) (memo : DecodeMemo := {}) : Except 
       | some value => (decodeTypeCompilerFacts value (joinPath path "compiler_facts")).map some
     id := ← fieldNat j "type_id" path
     display := ← fieldString j "display" path
-    shapeStatus := shapeStatus
     shapeKind := ← typeShapeKind shapeKindText
     shapeMetadata := shapeMetadata
     signature := signature
@@ -1675,8 +1510,6 @@ def parseDefinitionId (j : Json) (path : String) : Except String DefinitionId :=
 
 def parseSelectedScope (j : Json) (path : String) : Except String SelectedScope := do
   let kind ← fieldString j "kind" path
-  let statusText ← fieldString j "status" path
-  if statusText != "complete" then throw s!"{path}.status: expected complete"
   let rootsJson ← arrayField j "roots" path
   let mut roots := #[]
   for (root, index) in rootsJson.toList.zipIdx do
@@ -1687,8 +1520,6 @@ def parseSelectedScope (j : Json) (path : String) : Except String SelectedScope 
   if roots.toList.eraseDups.length != roots.size then throw s!"{joinPath path "roots"}: duplicate selected roots"
   return {
     kind := kind
-    statusText := statusText
-    status := ← parseStatus statusText
     semantics := ← fieldString j "semantics" path
     roots := roots
     payload := j
@@ -1712,7 +1543,6 @@ def parseVtablePredicate (j : Json) (path : String) : Except String VtablePredic
     | some value => pure (some (← decodeValue value (joinPath path "generic_args")))
   return {
     kind := ← vtablePredicateKind tag
-    status := ← parseStatus (← fieldString j "status" path)
     definitionId := definitionId
     definitionPath := definitionPath
     genericArgs := genericArgs
@@ -1748,7 +1578,6 @@ def parseVtableEntry (j : Json) (path : String) : Except String VtableEntry := d
     | some value => pure (some (← decodeValue value (joinPath path "generic_args")))
   return {
     kind := ← vtableEntryKind tag
-    status := ← parseStatus (← fieldString j "status" path)
     instanceId := ← optionalNat j "instance_id" path
     definitionId := definitionId
     definitionPath := ← optionalString j "def_path" path
@@ -1768,7 +1597,6 @@ def decodeVtableEntry (j : Json) (path : String := "$compiler_vtable_entry") :
 /-- Decode compiler-query static metadata, retaining the original evidence. -/
 def decodeStaticGlobalInfo (j : Json) (path : String := "$static_global_info") : Except String StaticGlobalInfo := do
   return {
-    status := ← parseStatus (← fieldString j "status" path)
     sizeBytes := ← fieldNat j "size_bytes" path
     alignBytes := ← fieldNat j "align_bytes" path
     mutability := ← match ← fieldString j "mutability" path with
@@ -1784,7 +1612,6 @@ def decodeStaticGlobalInfo (j : Json) (path : String := "$static_global_info") :
 def parseAllocation (j : Json) (path : String) : Except String AllocationNode := do
   let kindText ← fieldString j "kind" path
   let kind ← allocationKind kindText
-  let status ← parseStatus (← fieldString j "status" path)
   let mut memory := none
   let mut data := none
   match kind with
@@ -1835,7 +1662,6 @@ def parseAllocation (j : Json) (path : String) : Except String AllocationNode :=
       typeId := typeId
       sizeBytes := ← optionalNat j "size_bytes" path
       alignBytes := ← optionalNat j "align_bytes" path
-      layoutStatus := ← parseStatus (← fieldString j "layout_status" path)
       predicates := predicates
       entries := entries
       payload := j
@@ -1855,7 +1681,6 @@ def parseAllocation (j : Json) (path : String) : Except String AllocationNode :=
         if value == 0 || value >= 2^64 then
           throw s!"{joinPath path "source_alloc_id"}: expected a nonzero u64 rustc allocation identity"
         else pure (some (UInt64.ofNat value))
-    status := status
     kind := kind
     memory := memory
     data := data
@@ -2289,7 +2114,7 @@ def validateCompilerAllocIdWorldRaw (raw : Json) (nodes : Array AllocationNode)
       let parsed ← parseAllocation value s!"$.allocations[{index}]"
       let some supplied := nodes[index]? | throw s!"$.allocations[{index}]: typed allocation row is absent"
       unless parsed.id == supplied.id && parsed.sourceAllocId == supplied.sourceAllocId &&
-          parsed.status == supplied.status && parsed.kind == supplied.kind &&
+          parsed.kind == supplied.kind &&
           parsed.memory == supplied.memory && parsed.data == supplied.data &&
           parsed.payload.compress == supplied.payload.compress do
         throw s!"$.allocations[{index}]: source AllocId profile does not match the exact raw allocation node"
@@ -2383,15 +2208,10 @@ def parsePromotedBodies (j : Json) (path fallbackName : String) (memo : DecodeMe
     let promotedIndex ← match optionalField entry "promoted_index" with
       | none => pure index
       | some value => value.getNat? |>.mapError fun e => s!"{joinPath promotedPath "promoted_index"}: expected unsigned integer ({e})"
-    let status ← match optionalField entry "status" with
-      | none =>
-        if (optionalField entry "body").isSome then pure .supported
-        else throw s!"{promotedPath}: promoted body is missing"
-      | some value => (value.getStr? |>.mapError fun e => s!"{joinPath promotedPath "status"}: expected string ({e})") >>= parseStatus
     let body ← match optionalJson entry "body" with
       | none => pure none
       | some value => pure (some (← parseBodyCore value (joinPath promotedPath "body") s!"{fallbackName}::promoted[{promotedIndex}]" memo))
-    promotedBodies := promotedBodies.push ⟨promotedIndex, status, body, entry⟩
+    promotedBodies := promotedBodies.push ⟨promotedIndex, body, entry⟩
   return promotedBodies
 
 def parseBody (j : Json) (path fallbackName : String) (memo : DecodeMemo := {}) : Except String Body := do
@@ -2431,7 +2251,6 @@ def parseInstance (j : Json) (path : String) : Except String InstanceNode := do
   let promotedBodies ← parsePromotedBodies j path fallback
   return {
     id := id
-    status := ← parseStatus (← fieldString j "status" path)
     kind := kind
     defPath := defPath
     definitionId := definitionId
@@ -2522,7 +2341,6 @@ def x86CallKind (tag : String) : Except String X86CallKind :=
 def parseCanonicalAbi (j : Json) (path : String) : Except String CanonicalAbi := do
   let kindNode ← parseAbiTag j path
   return {
-    status := kindNode.status
     kind := ← canonicalAbiKind kindNode.tag
     armCall := ← (← optionalString j "arm_call" path).mapM armCallKind
     interruptKind := ← (← optionalString j "interrupt_kind" path).mapM interruptCallKind
@@ -2688,22 +2506,23 @@ def decodeCompilerValue (j : Json) : Except String TypedValue :=
   decodeValue j "$compiler_value"
 
 private def buildCompilerValueEntries (nodes : Array Json) (memo : DecodeMemo) :
-    Std.HashMap Json (Except String TypedValue) := Id.run do
+    Std.HashMap Json TypedValue := Id.run do
   let mut entries := {}
   for node in nodes do
     let .obj fields := node | continue
     for (key, raw) in fields.toList do
       if ["generic_args", "rebased_args", "span", "preamble_def_span", "callsite_span"].contains key &&
           hasCanonicalJsonObjectKeys raw && !entries.contains raw then
-        entries := entries.insert raw (decodeValue raw "$compiler_value" .any none memo)
+        if let .ok value := decodeValue raw "$compiler_value" .any none memo then
+          entries := entries.insert raw value
   return entries
 
-/-- Every entry is a checked decoder outcome for its JSON key. Unlike an
+/-- Every entry is a successfully checked value for its JSON key. Unlike an
 instance/type lookup, this cache may safely survive a document record update:
 its immutable keys include the entire source value, never only a local ID. -/
 structure CompilerValueMemo where
   private mk ::
-  private entries : Std.HashMap Json (Except String TypedValue)
+  private entries : Std.HashMap Json TypedValue
   private exact : ∃ (nodes : Array Json) (memo : DecodeMemo),
     entries = buildCompilerValueEntries nodes memo
 
@@ -2715,7 +2534,7 @@ def decodeCompilerValueWithMemo (raw : Json) (memo : Option CompilerValueMemo) :
   | some memo =>
     if !hasCanonicalJsonObjectKeys raw then decodeCompilerValue raw else
     match memo.entries[raw]? with
-    | some result => result
+    | some result => pure result
     | none => decodeCompilerValue raw
   | none => decodeCompilerValue raw
 

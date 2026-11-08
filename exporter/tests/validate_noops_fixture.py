@@ -10,9 +10,9 @@ from mir_json import load_mir_document
 
 doc = load_mir_document(sys.argv[1])
 assert doc["producer"]["rustc_commit"] == "8144389c895da997dbdecaa635e41d6a50be6ffd"
-assert doc["completeness"] == {"status": "complete"}
+assert "completeness" not in doc
 assert doc["selected_scope"]["semantics"] == "structural_export_closure_only"
-assert doc["selected_scope"]["status"] == "complete"
+assert "status" not in doc["selected_scope"]
 assert doc["invocation"]["kind"] == "direct_rustc_driver"
 assert "-Cinstrument-coverage" in doc["invocation"]["rustc_args"]
 assert doc["invocation"]["rustc_args_fingerprint_fnv1a64"]
@@ -25,9 +25,9 @@ coverage = [
 ]
 assert coverage, "-Cinstrument-coverage did not produce a Coverage statement"
 assert all(
-    item["status"] == "supported"
+    "status" not in item
     and item["execution"] == "no_op"
-    and item["coverage"]["status"] == "supported"
+    and "status" not in item["coverage"]
     and item["coverage"]["kind"] in ("point", "block_marker", "virtual_counter")
     for item in coverage
 )

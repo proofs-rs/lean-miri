@@ -45,7 +45,7 @@ def main (args : List String) : IO Unit := do
     throw (IO.userError "positive caller-location fixture did not decode")
   compare (withRows p (.arr #[row])) span
   compare (withRows p (.arr #[row,row])) span
-  compare (withRows p (.arr #[row,set row "status" (.str "incomplete")])) span
+  compare (withRows p (.arr #[row,set row "value" (Json.mkObj [("kind", .str "unknown_caller_location_constant")])])) span
   compare (withRows p (.arr #[row,Json.mkObj []])) span
   compare (withRows p (.arr #[Json.mkObj [],row])) span
   compare (withRows p (.arr #[])) span

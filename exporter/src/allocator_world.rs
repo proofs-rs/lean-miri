@@ -177,8 +177,7 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             let observed_node =
                 observed_graph_id.and_then(|graph_id| context.allocation_nodes.get(&graph_id));
             if observed_node.map_or(true, |node| {
-                node.get("status").and_then(Value::as_str) != Some("supported")
-                    || node.get("kind").and_then(Value::as_str) != Some("static")
+                node.get("kind").and_then(Value::as_str) != Some("static")
                     || node.get("source_alloc_id").and_then(Value::as_u64)
                         != Some(raw_id(observed_id))
             }) {
@@ -400,8 +399,7 @@ fn supported_memory_graph_id<'tcx>(
         .allocation_nodes
         .get(&graph_id)
         .ok_or_else(|| format!("eligible byte allocation {} has no graph node", raw_id(id)))?;
-    if node.get("status").and_then(Value::as_str) != Some("supported")
-        || node.get("kind").and_then(Value::as_str) != Some("memory")
+    if node.get("kind").and_then(Value::as_str) != Some("memory")
         || node.get("source_alloc_id").and_then(Value::as_u64) != Some(raw_id(id))
     {
         return Err(format!(
@@ -432,8 +430,7 @@ fn supported_global_graph_id<'tcx>(
                 raw_id(id)
             )
         })?;
-    if node.get("status").and_then(Value::as_str) != Some("supported")
-        || node.get("kind").and_then(Value::as_str) != Some(expected_kind)
+    if node.get("kind").and_then(Value::as_str) != Some(expected_kind)
         || node.get("source_alloc_id").and_then(Value::as_u64) != Some(raw_id(id))
     {
         return Err(format!(
@@ -491,8 +488,7 @@ fn pool_row<'tcx>(
         let node = context.allocation_nodes.get(&graph_id).ok_or_else(|| {
             format!("allocation node {graph_id} for source AllocId {raw} is absent")
         })?;
-        if node.get("status").and_then(Value::as_str) != Some("supported")
-            || node.get("kind").and_then(Value::as_str) != Some(kind)
+        if node.get("kind").and_then(Value::as_str) != Some(kind)
             || node.get("source_alloc_id").and_then(Value::as_u64) != Some(raw)
         {
             return Err(format!(

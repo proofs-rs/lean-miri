@@ -103,7 +103,7 @@ pub(super) fn export(tcx:TyCtxt<'_>)->Value {
         let parameters=definition.map(|def|ty::GenericArgs::identity_for_item(tcx,def).iter().map(|arg|match arg.kind(){
             ty::GenericArgKind::Lifetime(_)=>"lifetime",ty::GenericArgKind::Type(_)=>"type_parameter",ty::GenericArgKind::Const(_)=>"const_parameter",
         }).collect::<Vec<_>>());
-        json!({"lang_item":name,"status":"supported","definition":definition.map(def_json),"generic_parameters":parameters})
+        json!({"lang_item":name,"definition":definition.map(def_json),"generic_parameters":parameters})
     }).collect())
 }
 pub(super) fn register_assert<'tcx>(

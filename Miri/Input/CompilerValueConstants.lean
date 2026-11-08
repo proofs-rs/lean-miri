@@ -15,8 +15,6 @@ private def unique (entries : Array Json) : Except String Json := do
   pure first
 private def decode (p : CompilerProviders.Prepared) (record : Json) :
     Except String (MIR.TyId × MIR.ConstValue) := do
-  unless (← record.getObjValAs? String "status") == "supported" do
-    throw s!"compiler intrinsic constant query failed: {record.compress}"
   let ty ← ref (← record.getObjVal? "result_type")
   let _ ← p.runtime.node ty |>.mapError toString
   let value ← lowerCompilerConstValue p.loweringContext ty

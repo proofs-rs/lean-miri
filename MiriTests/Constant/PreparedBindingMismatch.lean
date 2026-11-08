@@ -8,7 +8,6 @@ open Miri.Input Miri.Interpreter
 
 private def document (raw : Lean.Json) : ImportDocument :=
   { producer := ⟨"miri", "rustc", "version", "target"⟩
-    completenessStatus := .supported
     types := #[]
     allocations := #[]
     instances := #[]
@@ -16,7 +15,6 @@ private def document (raw : Lean.Json) : ImportDocument :=
     functionAbis := #[]
     bodies := #[]
     typedTree := .scalar .null
-    obligations := #[]
     raw := raw }
 
 private def target : Miri.ABI.RuntimeTargetDataLayout := Id.run do

@@ -42,7 +42,7 @@ fn artifact(path: &Path, crate_name: &str, kind: &str, sysroot: &Path) -> Result
     let (hash, size) =
         hash_file(&canonical).map_err(|error| format!("{}: {error}", path.display()))?;
     Ok(
-        json!({"status":"supported","path":text,"sha256":hash,"size_bytes":size,
+        json!({"path":text,"sha256":hash,"size_bytes":size,
         "crate_name":crate_name,"kind":kind,"within_sysroot":canonical.starts_with(sysroot),
         "sysroot_relative_path":canonical.strip_prefix(sysroot).ok().and_then(|path|path.to_str())}),
     )
@@ -99,8 +99,7 @@ pub fn evidence(tcx: TyCtxt<'_>, invocation: Option<&Value>) -> Result<Value, St
         rustc_target::spec::PanicStrategy::Abort => "abort",
         rustc_target::spec::PanicStrategy::ImmediateAbort => "immediate-abort",
     };
-    Ok::<_, String>(json!({"status":"supported",
-        "sysroot_path":root.to_string_lossy(),"hash_algorithm":"sha256",
+    Ok::<_, String>(json!({"sysroot_path":root.to_string_lossy(),"hash_algorithm":"sha256",
         "sysroot_manifest_sha256":manifest,"loaded_artifacts_manifest_sha256":loaded_manifest,
         "artifacts":artifacts,
         "requested_cfg_miri":cfg_miri,"miri_default_args":MIRI_DEFAULT_ARGS,"rustc_args":args,

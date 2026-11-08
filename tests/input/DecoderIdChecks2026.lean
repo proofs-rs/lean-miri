@@ -27,7 +27,7 @@ private def readCase (directory name : String) : IO String :=
   IO.FS.readFile s!"{directory}/{name}.json"
 
 private def caseNames : List String := [
-  "genuine-mir-features", "genuine-fresh", "valid-permuted-dense",
+  "missing-type-shape-kind", "missing-type-layout-size", "valid-permuted-dense",
   "duplicate-and-range-first", "out-of-range-type-id", "negative-type-id",
   "malformed-table-type-id", "dangling-type", "dangling-allocation", "dangling-instance",
   "malformed-type-reference", "malformed-allocation-reference", "malformed-instance-reference",

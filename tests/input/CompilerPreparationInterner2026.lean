@@ -71,8 +71,6 @@ private def legacyEvidenceAt (ctx : LowerContext) (tables : CompilerTables)
   let (source,tables) ← lowerCompilerConstOperand ctx tables (← decodeCompilerValue original)
   let (normal,tables) ← lowerCompilerConstOperand ctx tables (← decodeCompilerValue normalized)
   let evaluated ← field normalized "constant"
-  unless (← evaluated.getObjValAs? String "status") == "supported" do
-    throw "compiler Const::eval did not produce a value"
   let ty ← natural (← field normalized "type") "type_id"
   let value ← lowerCompilerConstValue ctx ty (← decodeCompilerValue (← field evaluated "value"))
   pure (⟨site, ⟨fnInstance,source.value,normal.value,normal.span,value⟩,original,normalized⟩,tables)
@@ -93,7 +91,7 @@ private def legacyConstantsPrepare (input : LoweredProgram) : Except String Comp
       let (fnInstance,nextTables) ← CompilerInstance.decode ctx tables queryContext
       tables := nextTables
       let normalization ← field queryContext "normalization"
-      if (normalization.getObjValAs? String "status").toOption != some "supported" then
+      if !(NormalizationBody.resolve normalization body.input.payload).isOk then
         obligations := obligations.push ⟨s!"bodies[{bodyIndex}].constant_query_context",
           "compiler current-instance normalization query failed"⟩
       else
@@ -117,8 +115,6 @@ private def legacyLifecycleChecks (ctx : LowerContext) (tables : CompilerTables)
     Except String (Array (Except StepError CompilerConstantEvidence) × CompilerTables) := do
   let original ← (← payload.getObjVal? "required_consts").getArr?
   let query ← (← payload.getObjVal? "constant_query_context").getObjVal? "required_constant_checks"
-  unless (← (← query.getObjVal? "status").getStr?) == "supported" do
-    throw s!"unresolved compiler lifecycle query: {query.compress}"
   unless (← (← query.getObjVal? "typing_env").getStr?) == "body_typing_env" do
     throw "required-constant typing environment mismatch"
   let checks ← (← query.getObjVal? "checks").getArr?
@@ -133,7 +129,7 @@ private def legacyLifecycleChecks (ctx : LowerContext) (tables : CompilerTables)
     unless (← check.getObjVal? "span") == (← source.getObjVal? "span") do
       throw "required-constant source span mismatch"
     let result ← check.getObjVal? "result"
-    if ((result.getObjVal? "status").bind Json.getStr?).toOption == some "supported" then
+    if (result.getObjVal? "normalized_operand").isOk then
       let normalized ← result.getObjVal? "normalized_operand"
       unless (← normalized.getObjVal? "span") == (← source.getObjVal? "span") do
         throw "required constant normalization changed source span"
@@ -263,7 +259,7 @@ private def spanAppendFailureProgram (program : LoweredProgram) :
       if let some body := program.bundle.bodies[bodyIndex]? then
         if let .ok context := field body.input.payload "constant_query_context" then
           if let .ok normalization := field context "normalization" then
-            if (normalization.getObjValAs? String "status").toOption == some "supported" then
+            if (NormalizationBody.resolve normalization body.input.payload).isOk then
               if let .ok _ := NormalizationBody.resolve normalization body.input.payload then
                 if let .ok values := sourceConstants bodyIndex body.input.payload then
                   if let some (site,value) := values[0]? then
@@ -292,7 +288,7 @@ private def spanAppendFailureProgram (program : LoweredProgram) :
     setField constant "span" uniqueSpan
   let changedNormalizedBody ← modifyAtSite changedNormalizedBody site fun constant =>
     let evaluated := (constant.getObjVal? "constant").toOption.getD Json.null
-    setField constant "constant" (setField evaluated "status" (toJson "unsupported"))
+    setField constant "constant" (setField evaluated "value" (Json.mkObj [("kind", toJson "missing_constant_value")]))
   let changedNormalization := setField (eraseField normalization "body_ref") "body" changedNormalizedBody
   let changedContext := setField context "normalization" changedNormalization
   let payload := setField changedOriginal "constant_query_context" changedContext
@@ -314,7 +310,7 @@ private def lifecycleBatchFailureProgram (program : LoweredProgram) :
             let some _source := originals[index]? | continue
             let some check := checks[index]? | continue
             let result := (check.getObjVal? "result").toOption.getD Json.null
-            if ((result.getObjVal? "status").bind Json.getStr?).toOption == some "supported" then
+            if (result.getObjVal? "normalized_operand").isOk then
               found := some (bodyIndex,index,original,context,check)
   let some (bodyIndex,index,originals,context,check) := found
     | throw "mir_features fixture contains no supported required-constant check"

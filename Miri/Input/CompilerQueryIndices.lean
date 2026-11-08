@@ -74,8 +74,6 @@ private def parseSignatureKey (runtime : RuntimeMetadata) (knownTypes : Std.Hash
   let output ← functionType runtime knownTypes (← signature.getObjVal? "output")
   let abi ← CompilerExternAbi.decode (← signature.getObjVal? "abi")
   let safety ← signature.getObjVal? "safety"
-  unless (← safety.getObjValAs? String "status") == "supported" do
-    throw "helper safety metadata unsupported"
   let safety ← match ← safety.getObjValAs? String "kind" with
     | "safe" => pure MIR.Safety.Safe
     | "unsafe" => pure MIR.Safety.Unsafe
@@ -101,9 +99,7 @@ structure SignatureAbiData where
 private def parseSignatureAbiResult (runtime : RuntimeMetadata)
     (abiCache : Option (CallResolution.FunctionAbiCache runtime)) (result : Json) :
     Except String (FnAbi MIR.TyId) := do
-  unless (← result.getObjValAs? String "status") == "supported" do
-    throw s!"compiler dummy-signature ABI query failed: {result.compress}"
-  CallResolution.functionAbiJson runtime (← result.getObjVal? "value") abiCache
+  CallResolution.functionAbiJson runtime result abiCache
 
 private def buildSignatureAbi (runtime : RuntimeMetadata)
     (abiCache : Option (CallResolution.FunctionAbiCache runtime)) (raw : Json) : SignatureAbiData := Id.run do

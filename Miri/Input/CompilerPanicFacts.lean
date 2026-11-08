@@ -58,11 +58,10 @@ def prepareProgram (program : LoweredProgram) : Except String LoweredProgram := 
     let tag ← row.getObjValAs? String "lang_item"
     if tags.contains tag then throw "duplicate panic language-item query"
     tags := tags.push tag
-    if (← row.getObjValAs? String "status") == "supported" then
-      let item ← row.getObjVal? "definition"
-      unless item == .null do
-        let source ← definition item
-        unless definitions.contains source do definitions := definitions.push source
+    let item ← row.getObjVal? "definition"
+    unless item == .null do
+      let source ← definition item
+      unless definitions.contains source do definitions := definitions.push source
   pure (program.withCompilerTables {program.compilerTables with definitions})
 
 def langItemByName (program : LoweredProgram) (tag : String) : Except String (Option MIR.DefId) := do
@@ -70,7 +69,6 @@ def langItemByName (program : LoweredProgram) (tag : String) : Except String (Op
     (row.getObjValAs? String "lang_item").toOption == some tag
   unless selected.size == 1 do throw "exact panic language-item query is missing or duplicated"
   let some row := selected[0]? | throw "panic language-item query absent"
-  unless (← row.getObjValAs? String "status") == "supported" do throw "panic language-item query unresolved"
   let value ← row.getObjVal? "definition"
   if value == .null then return none
   pure (some (← lookupDefinitionId program.compilerTables.definitions (← definition value)))
@@ -82,7 +80,6 @@ def genericParameters (program : LoweredProgram) (requested : MIR.DefId) :
     Except String (Array MainGenericParameter) := do
   let mut found : Option (Array MainGenericParameter) := none
   for row in ← rows program do
-    unless (← row.getObjValAs? String "status") == "supported" do continue
     let value ← row.getObjVal? "definition"
     if value == .null then continue
     let id ← lookupDefinitionId program.compilerTables.definitions (← definition value)

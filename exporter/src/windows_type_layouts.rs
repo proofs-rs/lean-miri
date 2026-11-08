@@ -35,7 +35,7 @@ fn query<'tcx>(
         Ok(type_json(context, tcx, ty)?)
     })();
     Ok::<_, String>(match result {
-        Ok(value) => json!({"status":"supported","value":value}),
+        Ok(value) => value,
         Err(reason) => export_failure("windows_type_layouts::query", reason)?,
     })
 }

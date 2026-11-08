@@ -169,7 +169,6 @@ private def allocationPrincipal (facts : CompilerFactAdapters.Prepared)
   let targets := facts.context.program.input.compilerPredicates.filter (·.id == normalized)
   let some target := targets[0]? | throw "normalized memory-backed vtable principal evidence missing"
   unless targets.all (·.payload == target.payload) &&
-      (target.original.getObjValAs? String "status").toOption == some "supported" &&
       (target.original.getObjValAs? String "kind").toOption == some "trait" do
     throw "normalized memory-backed vtable principal evidence conflicts"
   return (normalized, target.original)
@@ -193,10 +192,6 @@ def queryTargetPrincipal (facts : CompilerFactAdapters.Prepared)
       throw "memory-backed supertrait target compiler type mismatch"
     let some metadata := (row.getObjVal? "vtable_metadata").toOption
       | throw s!"compiler vtable target row {rowIndex} lacks metadata"
-    unless (row.getObjValAs? String "status").toOption == some "supported" &&
-        (metadata.getObjValAs? String "status").toOption == some "supported" &&
-        (metadata.getObjValAs? String "layout_status").toOption == some "supported" do
-      throw s!"compiler vtable target row {rowIndex} has unresolved metadata"
     let metadataType ← metadata.getObjVal? "type"
     unless ((metadataType.getObjValAs? Nat "type_id").toOption == some sourceType) do
       throw "memory-backed supertrait target metadata type mismatch"
@@ -206,7 +201,6 @@ def queryTargetPrincipal (facts : CompilerFactAdapters.Prepared)
       throw "memory-backed supertrait target predicates disagree with query key"
     let principalPredicate ← metadata.getObjVal? "principal_predicate"
     unless principalPredicate != Json.null &&
-        (principalPredicate.getObjValAs? String "status").toOption == some "supported" &&
         (principalPredicate.getObjValAs? String "kind").toOption == some "trait" do
       throw "memory-backed supertrait target has no supported principal trait"
     let (targetPrincipal, allocationPredicate) ← allocationPrincipal facts principalPredicate
@@ -217,8 +211,6 @@ def queryTargetPrincipal (facts : CompilerFactAdapters.Prepared)
     let evidence := Json.mkObj [
       ("type", metadataType),
       ("principal_predicate", allocationPredicate),
-      ("status", .str "supported"),
-      ("layout_status", .str "supported"),
       ("size_bytes", toJson size),
       ("align_bytes", toJson align),
       ("entries", entries)]
@@ -307,10 +299,6 @@ def entriesUsing (prepared : Prepared) (lookup : GlobalLookup prepared)
     let rowPrincipal ← if predicate == .null then pure none else
       (predicate.getObjVal? "predicate_id").bind Json.getNat? |>.map some
     unless rowPrincipal == expectedPrincipal do continue
-    unless (row.getObjValAs? String "status").toOption == some "supported" &&
-        (metadata.getObjValAs? String "status").toOption == some "supported" &&
-        (metadata.getObjValAs? String "layout_status").toOption == some "supported" do
-      throw s!"compiler vtable query row {rowIndex} has unresolved runtime metadata"
     let metadataPredicates ← (metadata.getObjVal? "predicates").bind Json.getArr?
     let rowPredicates ← (row.getObjVal? "input_predicates").bind Json.getArr?
     unless metadataPredicates == rowPredicates do

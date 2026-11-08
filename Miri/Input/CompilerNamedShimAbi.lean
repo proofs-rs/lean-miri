@@ -10,10 +10,6 @@ structure Entry where
   abi : FnAbi MIR.TyId
 structure Prepared where
   entries : Array Entry
-private def supported (j : Json) : Except String Unit := do
-  unless (← (← j.getObjVal? "status").getStr?) == "supported" do
-    throw s!"named shim ABI query unavailable: {((j.getObjVal? "reason").bind Json.getStr?).toOption}"
-
 def prepare (runtime : RuntimeMetadata)
     (abiCache : Option (CallResolution.FunctionAbiCache runtime) := none) : Except String Prepared := do
   let records ← match runtime.source.raw.getObjVal? "compiler_named_shim_abis" with
@@ -28,10 +24,8 @@ def prepare (runtime : RuntimeMetadata)
       throw "named shim typing environment mismatch"
     let abi ← do
       let query ← recipe.getObjVal? "query"
-      supported query
       let result ← query.getObjVal? "abi_query"
-      supported result
-      CallResolution.functionAbiJson runtime (← result.getObjVal? "value") abiCache
+      CallResolution.functionAbiJson runtime result abiCache
     entries := entries.push ⟨name,abi⟩
   pure ⟨entries⟩
 

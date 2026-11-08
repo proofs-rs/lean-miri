@@ -218,7 +218,7 @@ private def typedValueDecEq :
 
       isTrue (by cases h0; rfl)
 
-  | .binOperator av as_, .binOperator bv bs =>
+  | .binOperator av, .binOperator bv =>
 
     match (inferInstance : Decidable (av = bv)) with
 
@@ -226,15 +226,8 @@ private def typedValueDecEq :
 
     | isTrue h0 =>
 
-      match (inferInstance : Decidable (as_ = bs)) with
-
-      | isFalse h1 => isFalse (by intro hEq; cases hEq; exact h1 rfl)
-
-      | isTrue h1 =>
-
-        isTrue (by cases h0; cases h1; rfl)
-
-  | .unOperator av as_, .unOperator bv bs =>
+      isTrue (by cases h0; rfl)
+  | .unOperator av, .unOperator bv =>
 
     match (inferInstance : Decidable (av = bv)) with
 
@@ -242,14 +235,7 @@ private def typedValueDecEq :
 
     | isTrue h0 =>
 
-      match (inferInstance : Decidable (as_ = bs)) with
-
-      | isFalse h1 => isFalse (by intro hEq; cases hEq; exact h1 rfl)
-
-      | isTrue h1 =>
-
-        isTrue (by cases h0; cases h1; rfl)
-
+      isTrue (by cases h0; rfl)
   | .userTypeProjection a, .userTypeProjection b =>
 
     match (inferInstance : Decidable (a = b)) with
@@ -280,7 +266,7 @@ private def typedValueDecEq :
     | isTrue h => isTrue (by cases h; rfl)
     | isFalse h => isFalse (by intro hEq; cases hEq; exact h rfl)
 
-  | .statement av as_ af, .statement bv bs bf =>
+  | .statement av af, .statement bv bf =>
 
     match (inferInstance : Decidable (av = bv)) with
 
@@ -288,29 +274,22 @@ private def typedValueDecEq :
 
     | isTrue h0 =>
 
-      match (inferInstance : Decidable (as_ = bs)) with
+      match arrayDecEqWith af bf
+          (fun leftElem hLeft rightElem hRight =>
+            match leftElem, rightElem with
+            | (leftKey, leftValue), (rightKey, rightValue) =>
+              match (inferInstance : Decidable (leftKey = rightKey)) with
+              | isFalse hKey => isFalse (by intro hPair; cases hPair; exact hKey rfl)
+              | isTrue hKey =>
+                match typedValueDecEq leftValue rightValue with
+                | isTrue hValue => isTrue (by cases hKey; cases hValue; rfl)
+                | isFalse hValue => isFalse (by intro hPair; cases hPair; exact hValue rfl)
+          ) with
 
-      | isFalse h1 => isFalse (by intro hEq; cases hEq; exact h1 rfl)
+      | isFalse hFields => isFalse (by intro hEq; cases hEq; exact hFields rfl)
 
-      | isTrue h1 =>
-
-        match arrayDecEqWith af bf
-            (fun leftElem hLeft rightElem hRight =>
-              match leftElem, rightElem with
-              | (leftKey, leftValue), (rightKey, rightValue) =>
-                match (inferInstance : Decidable (leftKey = rightKey)) with
-                | isFalse hKey => isFalse (by intro hPair; cases hPair; exact hKey rfl)
-                | isTrue hKey =>
-                  match typedValueDecEq leftValue rightValue with
-                  | isTrue hValue => isTrue (by cases hKey; cases hValue; rfl)
-                  | isFalse hValue => isFalse (by intro hPair; cases hPair; exact hValue rfl)
-            ) with
-
-        | isFalse hFields => isFalse (by intro hEq; cases hEq; exact hFields rfl)
-
-        | isTrue hFields => isTrue (by cases h0; cases h1; cases hFields; rfl)
-
-  | .terminator av as_ af, .terminator bv bs bf =>
+      | isTrue hFields => isTrue (by cases h0; cases hFields; rfl)
+  | .terminator av af, .terminator bv bf =>
 
     match (inferInstance : Decidable (av = bv)) with
 
@@ -318,29 +297,22 @@ private def typedValueDecEq :
 
     | isTrue h0 =>
 
-      match (inferInstance : Decidable (as_ = bs)) with
+      match arrayDecEqWith af bf
+          (fun leftElem hLeft rightElem hRight =>
+            match leftElem, rightElem with
+            | (leftKey, leftValue), (rightKey, rightValue) =>
+              match (inferInstance : Decidable (leftKey = rightKey)) with
+              | isFalse hKey => isFalse (by intro hPair; cases hPair; exact hKey rfl)
+              | isTrue hKey =>
+                match typedValueDecEq leftValue rightValue with
+                | isTrue hValue => isTrue (by cases hKey; cases hValue; rfl)
+                | isFalse hValue => isFalse (by intro hPair; cases hPair; exact hValue rfl)
+          ) with
 
-      | isFalse h1 => isFalse (by intro hEq; cases hEq; exact h1 rfl)
+      | isFalse hFields => isFalse (by intro hEq; cases hEq; exact hFields rfl)
 
-      | isTrue h1 =>
-
-        match arrayDecEqWith af bf
-            (fun leftElem hLeft rightElem hRight =>
-              match leftElem, rightElem with
-              | (leftKey, leftValue), (rightKey, rightValue) =>
-                match (inferInstance : Decidable (leftKey = rightKey)) with
-                | isFalse hKey => isFalse (by intro hPair; cases hPair; exact hKey rfl)
-                | isTrue hKey =>
-                  match typedValueDecEq leftValue rightValue with
-                  | isTrue hValue => isTrue (by cases hKey; cases hValue; rfl)
-                  | isFalse hValue => isFalse (by intro hPair; cases hPair; exact hValue rfl)
-            ) with
-
-        | isFalse hFields => isFalse (by intro hEq; cases hEq; exact hFields rfl)
-
-        | isTrue hFields => isTrue (by cases h0; cases h1; cases hFields; rfl)
-
-  | .rvalue av as_ af, .rvalue bv bs bf =>
+      | isTrue hFields => isTrue (by cases h0; cases hFields; rfl)
+  | .rvalue av af, .rvalue bv bf =>
 
     match (inferInstance : Decidable (av = bv)) with
 
@@ -348,28 +320,21 @@ private def typedValueDecEq :
 
     | isTrue h0 =>
 
-      match (inferInstance : Decidable (as_ = bs)) with
+      match arrayDecEqWith af bf
+          (fun leftElem hLeft rightElem hRight =>
+            match leftElem, rightElem with
+            | (leftKey, leftValue), (rightKey, rightValue) =>
+              match (inferInstance : Decidable (leftKey = rightKey)) with
+              | isFalse hKey => isFalse (by intro hPair; cases hPair; exact hKey rfl)
+              | isTrue hKey =>
+                match typedValueDecEq leftValue rightValue with
+                | isTrue hValue => isTrue (by cases hKey; cases hValue; rfl)
+                | isFalse hValue => isFalse (by intro hPair; cases hPair; exact hValue rfl)
+          ) with
 
-      | isFalse h1 => isFalse (by intro hEq; cases hEq; exact h1 rfl)
+      | isFalse hFields => isFalse (by intro hEq; cases hEq; exact hFields rfl)
 
-      | isTrue h1 =>
-
-        match arrayDecEqWith af bf
-            (fun leftElem hLeft rightElem hRight =>
-              match leftElem, rightElem with
-              | (leftKey, leftValue), (rightKey, rightValue) =>
-                match (inferInstance : Decidable (leftKey = rightKey)) with
-                | isFalse hKey => isFalse (by intro hPair; cases hPair; exact hKey rfl)
-                | isTrue hKey =>
-                  match typedValueDecEq leftValue rightValue with
-                  | isTrue hValue => isTrue (by cases hKey; cases hValue; rfl)
-                  | isFalse hValue => isFalse (by intro hPair; cases hPair; exact hValue rfl)
-            ) with
-
-        | isFalse hFields => isFalse (by intro hEq; cases hEq; exact hFields rfl)
-
-        | isTrue hFields => isTrue (by cases h0; cases h1; cases hFields; rfl)
-
+      | isTrue hFields => isTrue (by cases h0; cases hFields; rfl)
   | .enumTag av atag ac, .enumTag bv btag bc =>
 
     match (inferInstance : Decidable (av = bv)) with
@@ -400,7 +365,7 @@ private def typedValueDecEq :
 
         | isTrue hFields => isTrue (by cases h0; cases h1; cases hFields; rfl)
 
-  | .operand av as_ af, .operand bv bs bf =>
+  | .operand av af, .operand bv bf =>
 
     match (inferInstance : Decidable (av = bv)) with
 
@@ -408,28 +373,21 @@ private def typedValueDecEq :
 
     | isTrue h0 =>
 
-      match (inferInstance : Decidable (as_ = bs)) with
+      match arrayDecEqWith af bf
+          (fun leftElem hLeft rightElem hRight =>
+            match leftElem, rightElem with
+            | (leftKey, leftValue), (rightKey, rightValue) =>
+              match (inferInstance : Decidable (leftKey = rightKey)) with
+              | isFalse hKey => isFalse (by intro hPair; cases hPair; exact hKey rfl)
+              | isTrue hKey =>
+                match typedValueDecEq leftValue rightValue with
+                | isTrue hValue => isTrue (by cases hKey; cases hValue; rfl)
+                | isFalse hValue => isFalse (by intro hPair; cases hPair; exact hValue rfl)
+          ) with
 
-      | isFalse h1 => isFalse (by intro hEq; cases hEq; exact h1 rfl)
+      | isFalse hFields => isFalse (by intro hEq; cases hEq; exact hFields rfl)
 
-      | isTrue h1 =>
-
-        match arrayDecEqWith af bf
-            (fun leftElem hLeft rightElem hRight =>
-              match leftElem, rightElem with
-              | (leftKey, leftValue), (rightKey, rightValue) =>
-                match (inferInstance : Decidable (leftKey = rightKey)) with
-                | isFalse hKey => isFalse (by intro hPair; cases hPair; exact hKey rfl)
-                | isTrue hKey =>
-                  match typedValueDecEq leftValue rightValue with
-                  | isTrue hValue => isTrue (by cases hKey; cases hValue; rfl)
-                  | isFalse hValue => isFalse (by intro hPair; cases hPair; exact hValue rfl)
-            ) with
-
-        | isFalse hFields => isFalse (by intro hEq; cases hEq; exact hFields rfl)
-
-        | isTrue hFields => isTrue (by cases h0; cases h1; cases hFields; rfl)
-
+      | isTrue hFields => isTrue (by cases h0; cases hFields; rfl)
   | .projection av af, .projection bv bf =>
 
     match (inferInstance : Decidable (av = bv)) with
@@ -474,21 +432,21 @@ private def typedValueDecEq :
 
   | .scalar _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .scalar _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .scalar _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .scalar _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .scalar _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .scalar _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .scalar _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .scalar _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .scalar _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .scalar _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .scalar _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
   | .scalar _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
   | .scalar _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .scalar _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .scalar _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
   | .scalar _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
@@ -512,21 +470,21 @@ private def typedValueDecEq :
 
   | .diagnostic _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .diagnostic _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .diagnostic _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .diagnostic _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .diagnostic _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .diagnostic _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .diagnostic _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .diagnostic _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .diagnostic _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .diagnostic _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .diagnostic _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
   | .diagnostic _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
   | .diagnostic _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .diagnostic _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .diagnostic _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
   | .diagnostic _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
@@ -550,21 +508,21 @@ private def typedValueDecEq :
 
   | .array _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .array _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .array _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .array _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .array _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .array _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .array _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .array _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .array _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .array _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .array _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
   | .array _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
   | .array _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .array _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .array _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
   | .array _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
@@ -588,21 +546,21 @@ private def typedValueDecEq :
 
   | .object _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .object _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .object _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .object _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .object _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .object _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .object _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .object _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .object _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .object _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .object _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
   | .object _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
   | .object _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .object _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .object _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
   | .object _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
@@ -626,21 +584,21 @@ private def typedValueDecEq :
 
   | .typeRef _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .typeRef _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .typeRef _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .typeRef _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .typeRef _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .typeRef _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .typeRef _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .typeRef _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .typeRef _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .typeRef _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .typeRef _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
   | .typeRef _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
   | .typeRef _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .typeRef _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .typeRef _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
   | .typeRef _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
@@ -664,21 +622,21 @@ private def typedValueDecEq :
 
   | .allocationRef _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .allocationRef _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .allocationRef _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .allocationRef _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .allocationRef _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .allocationRef _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .allocationRef _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .allocationRef _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .allocationRef _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .allocationRef _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .allocationRef _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
   | .allocationRef _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
   | .allocationRef _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .allocationRef _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .allocationRef _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
   | .allocationRef _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
@@ -702,21 +660,21 @@ private def typedValueDecEq :
 
   | .instanceRef _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .instanceRef _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .instanceRef _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .instanceRef _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .instanceRef _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .instanceRef _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .instanceRef _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .instanceRef _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .instanceRef _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .instanceRef _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .instanceRef _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
   | .instanceRef _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
   | .instanceRef _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .instanceRef _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .instanceRef _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
   | .instanceRef _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
@@ -740,21 +698,21 @@ private def typedValueDecEq :
 
   | .localRef _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .localRef _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .localRef _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .localRef _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .localRef _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .localRef _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .localRef _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .localRef _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .localRef _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .localRef _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .localRef _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
   | .localRef _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
   | .localRef _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .localRef _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .localRef _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
   | .localRef _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
@@ -778,21 +736,21 @@ private def typedValueDecEq :
 
   | .blockRef _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .blockRef _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .blockRef _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .blockRef _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .blockRef _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .blockRef _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .blockRef _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .blockRef _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .blockRef _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .blockRef _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .blockRef _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
   | .blockRef _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
   | .blockRef _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .blockRef _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .blockRef _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
   | .blockRef _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
@@ -816,21 +774,21 @@ private def typedValueDecEq :
 
   | .sourceSpan _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .sourceSpan _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .sourceSpan _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .sourceSpan _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .sourceSpan _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .sourceSpan _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .sourceSpan _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .sourceSpan _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .sourceSpan _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .sourceSpan _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .sourceSpan _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
   | .sourceSpan _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
   | .sourceSpan _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .sourceSpan _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .sourceSpan _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
   | .sourceSpan _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
@@ -854,213 +812,213 @@ private def typedValueDecEq :
 
   | .sourceInfo _, .sourceSpan _ => isFalse (by intro hEq; cases hEq)
 
-  | .sourceInfo _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .sourceInfo _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .sourceInfo _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .sourceInfo _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .sourceInfo _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .sourceInfo _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .sourceInfo _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .sourceInfo _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .sourceInfo _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .sourceInfo _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
   | .sourceInfo _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
   | .sourceInfo _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .sourceInfo _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .sourceInfo _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
   | .sourceInfo _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .scalar _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .scalar _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .diagnostic _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .diagnostic _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .array _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .array _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .object _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .object _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .typeRef _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .typeRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .allocationRef _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .allocationRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .instanceRef _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .instanceRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .localRef _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .localRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .blockRef _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .blockRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .sourceSpan _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .sourceSpan _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .statement _ _ _, .projection _ _ => isFalse (by intro hEq; cases hEq)
+  | .statement _ _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .scalar _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .scalar _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .diagnostic _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .diagnostic _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .array _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .array _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .object _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .object _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .typeRef _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .typeRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .allocationRef _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .allocationRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .instanceRef _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .instanceRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .localRef _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .localRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .blockRef _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .blockRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .sourceSpan _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .sourceSpan _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .terminator _ _ _, .projection _ _ => isFalse (by intro hEq; cases hEq)
+  | .terminator _ _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .scalar _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .scalar _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .diagnostic _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .diagnostic _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .array _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .array _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .object _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .object _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .typeRef _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .typeRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .allocationRef _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .allocationRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .instanceRef _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .instanceRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .localRef _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .localRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .blockRef _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .blockRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .sourceSpan _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .sourceSpan _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .rvalue _ _ _, .projection _ _ => isFalse (by intro hEq; cases hEq)
+  | .rvalue _ _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .scalar _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .scalar _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .diagnostic _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .diagnostic _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .array _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .array _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .object _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .object _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .typeRef _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .typeRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .allocationRef _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .allocationRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .instanceRef _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .instanceRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .localRef _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .localRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .blockRef _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .blockRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .sourceSpan _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .sourceSpan _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .binOperator _ _, .projection _ _ => isFalse (by intro hEq; cases hEq)
+  | .binOperator _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .scalar _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .scalar _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .diagnostic _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .diagnostic _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .array _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .array _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .object _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .object _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .typeRef _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .typeRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .allocationRef _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .allocationRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .instanceRef _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .instanceRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .localRef _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .localRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .blockRef _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .blockRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .sourceSpan _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .sourceSpan _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .unOperator _ _, .projection _ _ => isFalse (by intro hEq; cases hEq)
+  | .unOperator _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
   | .enumTag _ _ _, .scalar _ => isFalse (by intro hEq; cases hEq)
 
@@ -1084,19 +1042,19 @@ private def typedValueDecEq :
 
   | .enumTag _ _ _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .enumTag _ _ _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .enumTag _ _ _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .enumTag _ _ _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .enumTag _ _ _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .enumTag _ _ _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .enumTag _ _ _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .enumTag _ _ _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .enumTag _ _ _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .enumTag _ _ _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .enumTag _ _ _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
   | .enumTag _ _ _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .enumTag _ _ _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .enumTag _ _ _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
   | .enumTag _ _ _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
@@ -1122,59 +1080,59 @@ private def typedValueDecEq :
 
   | .userTypeProjection _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .userTypeProjection _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .userTypeProjection _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .userTypeProjection _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .userTypeProjection _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .userTypeProjection _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .userTypeProjection _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .userTypeProjection _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .userTypeProjection _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .userTypeProjection _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .userTypeProjection _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
   | .userTypeProjection _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .userTypeProjection _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .userTypeProjection _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
   | .userTypeProjection _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .scalar _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .scalar _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .diagnostic _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .diagnostic _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .array _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .array _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .object _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .object _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .typeRef _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .typeRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .allocationRef _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .allocationRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .instanceRef _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .instanceRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .localRef _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .localRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .blockRef _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .blockRef _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .sourceSpan _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .sourceSpan _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .operand _ _ _, .projection _ _ => isFalse (by intro hEq; cases hEq)
+  | .operand _ _, .projection _ _ => isFalse (by intro hEq; cases hEq)
 
   | .projection _ _, .scalar _ => isFalse (by intro hEq; cases hEq)
 
@@ -1198,21 +1156,21 @@ private def typedValueDecEq :
 
   | .projection _ _, .sourceInfo _ => isFalse (by intro hEq; cases hEq)
 
-  | .projection _ _, .statement _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .projection _ _, .statement _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .projection _ _, .terminator _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .projection _ _, .terminator _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .projection _ _, .rvalue _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .projection _ _, .rvalue _ _ => isFalse (by intro hEq; cases hEq)
 
-  | .projection _ _, .binOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .projection _ _, .binOperator _ => isFalse (by intro hEq; cases hEq)
 
-  | .projection _ _, .unOperator _ _ => isFalse (by intro hEq; cases hEq)
+  | .projection _ _, .unOperator _ => isFalse (by intro hEq; cases hEq)
 
   | .projection _ _, .enumTag _ _ _ => isFalse (by intro hEq; cases hEq)
 
   | .projection _ _, .userTypeProjection _ => isFalse (by intro hEq; cases hEq)
 
-  | .projection _ _, .operand _ _ _ => isFalse (by intro hEq; cases hEq)
+  | .projection _ _, .operand _ _ => isFalse (by intro hEq; cases hEq)
 
 termination_by left right => sizeOf left + sizeOf right
 

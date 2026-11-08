@@ -67,7 +67,6 @@ variable [ToExpr Json]
 deriving instance ToExpr for MIR.IntegerKind
 deriving instance ToExpr for MIR.BinOp
 deriving instance ToExpr for MIR.UnOp
-deriving instance ToExpr for Input.PayloadStatus
 deriving instance ToExpr for Input.TypeShapeKind
 deriving instance ToExpr for Input.StatementVariant
 deriving instance ToExpr for Input.TerminatorVariant
@@ -113,8 +112,6 @@ deriving instance ToExpr for Input.UserTypeProjectionKind
 deriving instance ToExpr for Input.UserTypeProjection
 deriving instance ToExpr for Input.FunctionSignature
 deriving instance ToExpr for Input.CompilerPattern
-deriving instance ToExpr for Input.CompilerBooleanEvidence
-deriving instance ToExpr for Input.CompilerTypeEvidence
 deriving instance ToExpr for Input.TypeCompilerFacts
 deriving instance ToExpr for Input.TypeNode
 deriving instance ToExpr for Input.InitRange
@@ -257,28 +254,28 @@ private partial def typedValueExpr [ToExpr Json] (value : Input.TypedValue) : Qu
       pure <| mkApp (mkConst ``Input.TypedValue.sourceSpan) (toExpr value)
     | .sourceInfo value => do
       pure <| mkApp (mkConst ``Input.TypedValue.sourceInfo) (toExpr value)
-    | .statement variant status fields => do
+    | .statement variant fields => do
       let children ← fields.mapM fun (key, child) => do
         let child ← typedValueExpr child
         pure <| mkApp4 (mkConst ``Prod.mk [0, 0]) (mkConst ``String)
           (mkConst ``Input.TypedValue) (toExpr key) child
-      pure <| mkApp3 (mkConst ``Input.TypedValue.statement) (toExpr variant) (toExpr status) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Input.TypedValue)) children)
-    | .terminator variant status fields => do
+      pure <| mkApp2 (mkConst ``Input.TypedValue.statement) (toExpr variant) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Input.TypedValue)) children)
+    | .terminator variant fields => do
       let children ← fields.mapM fun (key, child) => do
         let child ← typedValueExpr child
         pure <| mkApp4 (mkConst ``Prod.mk [0, 0]) (mkConst ``String)
           (mkConst ``Input.TypedValue) (toExpr key) child
-      pure <| mkApp3 (mkConst ``Input.TypedValue.terminator) (toExpr variant) (toExpr status) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Input.TypedValue)) children)
-    | .rvalue variant status fields => do
+      pure <| mkApp2 (mkConst ``Input.TypedValue.terminator) (toExpr variant) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Input.TypedValue)) children)
+    | .rvalue variant fields => do
       let children ← fields.mapM fun (key, child) => do
         let child ← typedValueExpr child
         pure <| mkApp4 (mkConst ``Prod.mk [0, 0]) (mkConst ``String)
           (mkConst ``Input.TypedValue) (toExpr key) child
-      pure <| mkApp3 (mkConst ``Input.TypedValue.rvalue) (toExpr variant) (toExpr status) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Input.TypedValue)) children)
-    | .binOperator operator status => do
-      pure <| mkApp2 (mkConst ``Input.TypedValue.binOperator) (toExpr operator) (toExpr status)
-    | .unOperator operator status => do
-      pure <| mkApp2 (mkConst ``Input.TypedValue.unOperator) (toExpr operator) (toExpr status)
+      pure <| mkApp2 (mkConst ``Input.TypedValue.rvalue) (toExpr variant) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Input.TypedValue)) children)
+    | .binOperator operator => do
+      pure <| mkApp (mkConst ``Input.TypedValue.binOperator) (toExpr operator)
+    | .unOperator operator => do
+      pure <| mkApp (mkConst ``Input.TypedValue.unOperator) (toExpr operator)
     | .enumTag category tag fields => do
       let children ← fields.mapM fun (key, child) => do
         let child ← typedValueExpr child
@@ -287,12 +284,12 @@ private partial def typedValueExpr [ToExpr Json] (value : Input.TypedValue) : Qu
       pure <| mkApp3 (mkConst ``Input.TypedValue.enumTag) (toExpr category) (toExpr tag) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Input.TypedValue)) children)
     | .userTypeProjection value => do
       pure <| mkApp (mkConst ``Input.TypedValue.userTypeProjection) (toExpr value)
-    | .operand variant status fields => do
+    | .operand variant fields => do
       let children ← fields.mapM fun (key, child) => do
         let child ← typedValueExpr child
         pure <| mkApp4 (mkConst ``Prod.mk [0, 0]) (mkConst ``String)
           (mkConst ``Input.TypedValue) (toExpr key) child
-      pure <| mkApp3 (mkConst ``Input.TypedValue.operand) (toExpr variant) (toExpr status) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Input.TypedValue)) children)
+      pure <| mkApp2 (mkConst ``Input.TypedValue.operand) (toExpr variant) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Input.TypedValue)) children)
     | .projection variant fields => do
       let children ← fields.mapM fun (key, child) => do
         let child ← typedValueExpr child

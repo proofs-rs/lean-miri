@@ -27,7 +27,6 @@ def predicates (prepared : CompilerFactAdapters.Prepared) (token : Nat) : Result
 def normalizePredicate (prepared : CompilerFactAdapters.Prepared) (predicate : VTablePredicate) : Result Nat := do
   let entry ← evidence prepared predicate.id
   unless entry.stableKey == predicate.stableKey && entry.autoTrait == predicate.autoTrait do throw "predicate compiler comparison evidence mismatch"
-  unless entry.normalizationStatus == .supported do throw "compiler predicate normalization is unresolved"
   let some id := entry.normalizedId | throw "compiler predicate normalization has no result identity"
   let _ ← evidence prepared id
   pure id

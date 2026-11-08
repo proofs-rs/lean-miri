@@ -8,7 +8,6 @@ structure ImportDocumentCore where
   compilerAbiLayoutSchema : Option String := none
   producer : Producer
   runtimeTargetDataLayout : Option TargetDataLayoutEvidence := none
-  completenessStatus : PayloadStatus
   types : Array TypeNode
   allocations : Array AllocationNode
   compilerAllocIdWorld : Option CompilerAllocIdWorld := none
@@ -33,7 +32,6 @@ structure ImportDocument where
   compilerAbiLayoutSchema : Option String := none
   producer : Producer
   runtimeTargetDataLayout : Option TargetDataLayoutEvidence := none
-  completenessStatus : PayloadStatus
   types : Array TypeNode
   allocations : Array AllocationNode
   compilerAllocIdWorld : Option CompilerAllocIdWorld := none
@@ -54,7 +52,6 @@ def ImportDocument.toCore (document : ImportDocument) : ImportDocumentCore := {
   compilerAbiLayoutSchema := document.compilerAbiLayoutSchema
   producer := document.producer
   runtimeTargetDataLayout := document.runtimeTargetDataLayout
-  completenessStatus := document.completenessStatus
   types := document.types
   allocations := document.allocations
   compilerAllocIdWorld := document.compilerAllocIdWorld
@@ -75,7 +72,6 @@ def ImportDocumentCore.withTypedTree (core : ImportDocumentCore) (typedTree : Ty
   compilerAbiLayoutSchema := core.compilerAbiLayoutSchema
   producer := core.producer
   runtimeTargetDataLayout := core.runtimeTargetDataLayout
-  completenessStatus := core.completenessStatus
   types := core.types
   allocations := core.allocations
   compilerAllocIdWorld := core.compilerAllocIdWorld

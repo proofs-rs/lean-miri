@@ -9,8 +9,6 @@ namespace Miri.Input.NormalizationBody
 open Lean
 
 def resolve (normalization sourceBody : Json) : Except String Json := do
-  unless (← (← normalization.getObjVal? "status").getStr?) == "supported" do
-    throw "compiler body normalization is unresolved"
   match normalization.getObjVal? "body", normalization.getObjVal? "body_ref" with
   | .ok body, .error _ =>
     let _ ← body.getObj?

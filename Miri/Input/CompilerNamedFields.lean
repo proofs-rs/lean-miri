@@ -10,8 +10,6 @@ open Lean Miri.ABI Miri.Interpreter
 def fieldIndex (runtime : RuntimeMetadata) (parent : LocalLayout) (name : String) :
     Except StepError Nat := do
   let node ← runtime.node parent.ty |>.mapError (fun e => StepError.unsupported (toString e))
-  unless node.shapeStatus == .supported do
-    throw (.unsupported "named field requires compiler type shape")
   let parse : Except String Nat := do
     unless node.shapeKind == .adt do throw "named field source requires ADT"
     let shape ← node.payload.getObjVal? "shape"

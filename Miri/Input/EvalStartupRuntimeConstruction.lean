@@ -19,28 +19,16 @@ private def fieldString (value : Json) (name : String) : Except String String :=
 private def fieldNat (value : Json) (name : String) : Except String Nat := do
   (← field value name).getNat?
 
-private def queryValue (query : Json) : Except String Json := do
-  let status ← fieldString query "status"
-  if status == "supported" then field query "value"
-  else if status == "unsupported" then do
-    let reason := match (field query "reason").bind Json.getStr? with
-      | .ok message => message
-      | .error _ => "exact compiler startup query is unavailable"
-    throw reason
-  else throw s!"unknown compiler startup query status `{status}`"
-
-/-- Prepare source facts from the pinned exporter query table. Failed queries
-remain stored and are raised only if the corresponding source startup path
-asks for them. The escape-default identity must already be in the canonical
+/-- Prepare source facts from the pinned exporter query table. The escape-default identity must already be in the canonical
 definition table; no path or display-name identity is synthesized here. -/
 def prepare (compiler : CompilerProviders.Prepared) : Except String StartupFacts := do
   let queries ← field compiler.program.input.raw "compiler_runtime_queries"
   let startup ← field queries "startup"
   let noCore := do
-    let value ← queryValue (← field startup "no_core")
+    let value ← field startup "no_core"
     value.getBool?
   let coreEscapeDefault := do
-    let value ← queryValue (← field startup "core_escape_default")
+    let value ← field startup "core_escape_default"
     let rawDefinition ← field value "definition"
     let source : DefinitionId := ⟨← fieldNat rawDefinition "crate", ← fieldNat rawDefinition "index"⟩
     let available ← (← field value "mir_available").getBool?

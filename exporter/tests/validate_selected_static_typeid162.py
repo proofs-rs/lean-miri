@@ -49,7 +49,7 @@ def main(path: str) -> None:
         outcomes[result["probe_result"]] += 1
         graph_id = result["allocation_id"]
         key_node = nodes[graph_id]
-        require(key_node["kind"] == kind and key_node["status"] == "supported",
+        require(key_node["kind"] == kind and "status" not in key_node,
                 f"{kind} key node kind/status mismatch")
         require(key_node["source_alloc_id"] == result["source_alloc_id"],
                 f"{kind} key node source witness mismatch")
@@ -58,7 +58,7 @@ def main(path: str) -> None:
                 f"{kind} key source ID does not join its serialized graph node")
         if kind == "static":
             global_info = key_node["global_info"]
-            require(global_info["status"] == "supported" and global_info["is_static"],
+            require("status" not in global_info and global_info["is_static"],
                     "selected static lacks supported compiler static metadata")
             require(key_node["def_path"] == "SELECTED_STATIC",
                     "selected static witness is not the fixture's exact static definition")

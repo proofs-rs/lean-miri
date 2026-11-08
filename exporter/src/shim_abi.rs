@@ -201,7 +201,7 @@ fn variadic_query<'tcx>(
             )?,
         };
         Ok(
-            json!({"status":"supported","input_types":input_types,"output_type":output_type,"abi_query":value}),
+            json!({"input_types":input_types,"output_type":output_type,"abi_query":value}),
         )
     })();
     Ok::<_, String>(
@@ -377,8 +377,7 @@ pub(super) fn named_signatures<'tcx>(
         .collect::<HashSet<_>>();
     let dynamic_lookup = names.contains("dlsym") || names.contains("GetProcAddress");
     let required = |name: &str| {
-        tcx.entry_fn(()).is_some()
-            || names.contains(name)
+        names.contains(name)
             || (dynamic_lookup && is_dynamic_symbol(&tcx.sess.target, name))
     };
     let recipes: &[(&str, &[&str], &str)] = &[

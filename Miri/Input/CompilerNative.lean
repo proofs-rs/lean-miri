@@ -11,7 +11,6 @@ private def lift (value : Except String A) : EStateM StepError S A :=
 
 private def shape (p : CompilerProviders.Prepared) (layout : LocalLayout) : Except String Native.TypeShape := do
   let source ← p.runtime.node layout.ty |>.mapError toString
-  unless source.shapeStatus == .supported do throw "native type shape evidence unresolved"
   if source.shapeKind == .adt then
     let value ← source.payload.getObjVal? "shape"
     let repr ← value.getObjVal? "representation"

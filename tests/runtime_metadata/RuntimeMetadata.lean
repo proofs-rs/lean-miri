@@ -47,9 +47,9 @@ def main (args : List String) : IO Unit := do
   check (!(RuntimeMetadata.importTarget .null).isOk) "missing target accepted"
   let first ← must ((RuntimeMetadata.require decoded.document.types[0]? "first type").mapError toString)
   check (!(RuntimeMetadata.layout metadata.target { first.layout with fields := none }).isOk) "missing fields accepted"
-  let unknownLayout := decodeCompilerLayout (Lean.Json.mkObj [("status", .str "unknown"), ("kind", .str "layout")])
-  check (match unknownLayout with | .error reason => reason.contains "unknown" | .ok _ => false)
-    "unknown layout status was not rejected at the input boundary"
+  let missingSize := decodeCompilerLayout (Lean.Json.mkObj [("kind", .str "layout"), ("field_offsets_bytes", .arr #[])])
+  check (match missingSize with | .error reason => reason.contains "size/alignment" | .ok _ => false)
+    "missing layout size was not rejected at the input boundary"
   let duplicate := { decoded.document with types := decoded.document.types.push first }
   check (!(RuntimeMetadata.ofDocument duplicate).isOk) "duplicate IDs accepted"
   let incomplete := { decoded.document with types := decoded.document.types.map fun node =>

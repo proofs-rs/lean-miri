@@ -113,6 +113,6 @@ pub(super) fn export<'tcx>(
         // query_generated_type_json still exports the complete type node.
         "source_type":query_generated_type_json(context,tcx,source)?,
         "target_type":query_generated_type_json(context,tcx,target)?,
-        "status":"supported","value":rustc_const_eval::util::relate_types(tcx,env,ty::Variance::Covariant,source,target),
+        "value":rustc_const_eval::util::relate_types(tcx,env,ty::Variance::Covariant,source,target),
     })) }).collect::<Result<Vec<_>, String>>()?))
 }

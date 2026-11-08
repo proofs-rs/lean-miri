@@ -48,7 +48,6 @@ def prepare (program : LoweredProgram) (runtime : RuntimeMetadata)
   if memory.byteGlobalKeysReady || !memory.byteGlobalKeys.isEmpty then
     throw "global byte keys already initialized"
   let source ← program.input.raw.getObjVal? "compiler_global_byte_queries"
-  unless (← source.getObjValAs? String "status") == "supported" do throw "global byte compiler queries unavailable"
   unless (← source.getObjValAs? Nat "salt_count") == 32 do throw "global byte salt support differs from pinned source"
   let mut keys := #[]
   if let some world := program.input.compilerAllocIdWorld then
@@ -111,7 +110,7 @@ def prepare (program : LoweredProgram) (runtime : RuntimeMetadata)
       throw "global byte query omits imported candidate content"
   let strType ← (← source.getObjVal? "str_type").getObjValAs? Nat "type_id"
   let node ← runtime.node strType |>.mapError toString
-  unless node.shapeStatus == .supported && node.shapeKind == .str do
+  unless node.shapeKind == .str do
     throw "global byte str type is not the compiler str primitive"
   pure ⟨strType,keys⟩
 

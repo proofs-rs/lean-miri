@@ -944,12 +944,6 @@ private def sourcePanicUnwinds (p : CompilerProviders.Prepared) : Except StepErr
     StepError.unsupported "source compiler panic strategy is missing"
   let settings ← (producer.getObjVal? "input_settings").mapError fun _ =>
     StepError.unsupported "source compiler panic strategy is missing"
-  let status ← (settings.getObjVal? "status").mapError fun _ =>
-    StepError.unsupported "source compiler settings status is missing"
-  let status ← status.getStr?.mapError fun _ =>
-    StepError.unsupported "source compiler settings status is malformed"
-  unless status == "supported" do
-    throw (.unsupported "source compiler settings are not supported")
   let strategy ← (settings.getObjVal? "effective_panic_strategy").mapError fun _ =>
     StepError.unsupported "source compiler panic strategy is missing"
   let strategy ← strategy.getStr?.mapError fun _ =>

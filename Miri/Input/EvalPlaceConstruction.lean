@@ -100,7 +100,6 @@ def projection
   isSliceOrStr := fun _ ty => do
     let node ← match p.runtime.node ty with
       | .ok value => pure value | .error error => throw (.unsupported (toString error))
-    unless node.shapeStatus == .supported do throw (.unsupported "compiler type shape unavailable")
     pure (node.shapeKind == .slice || node.shapeKind == .str)
   field := fun _ layout index => do lift (EvalProjectionMachine.field (EvalProjectionMachine.arrays.get (← get)) layout index)
   variant := fun _ layout index => match p.runtime.forVariant layout index with

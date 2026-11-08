@@ -20,11 +20,6 @@ private def descriptor (key : String) : Except String ForeignItems.SignatureType
   | "u64" => pure .u64 | "u8" => pure .u8 | "bool" => pure .bool
   | "byteSlice" => pure .byteSlice | "functionPointer" => pure .functionPointer
   | _ => throw "unknown compiler shim type descriptor"
-private def supported (j : Json) : Except String Unit := do
-  unless (← (← j.getObjVal? "status").getStr?) == "supported" do
-    let reason := ((j.getObjVal? "reason").bind Json.getStr?).toOption
-    throw s!"unsupported compiler shim ABI query: {reason}"
-
 def prepare (runtime : RuntimeMetadata)
     (abiCache : Option (CallResolution.FunctionAbiCache runtime) := none) : Except String Prepared := do
   let records ← match runtime.source.raw.getObjVal? "compiler_shim_abis" with
@@ -48,7 +43,6 @@ def prepare (runtime : RuntimeMetadata)
     unless !(entries.any (·.signature == signature)) do throw "duplicate compiler shim signature key"
     let abi ← do
       let query ← record.getObjVal? "query"
-      supported query
       let inputs ← (← query.getObjVal? "input_types").getArr?
       unless inputs.size == args.size do throw "compiler shim type count mismatch"
       for input in inputs do
@@ -57,8 +51,7 @@ def prepare (runtime : RuntimeMetadata)
       let outputId ← (← (← query.getObjVal? "output_type").getObjVal? "type_id").getNat?
       let _ ← runtime.node outputId |>.mapError toString
       let result ← query.getObjVal? "abi_query"
-      supported result
-      CallResolution.functionAbiJson runtime (← result.getObjVal? "value") abiCache
+      CallResolution.functionAbiJson runtime result abiCache
     entries := entries.push ⟨signature,abi⟩
   pure ⟨entries⟩
 

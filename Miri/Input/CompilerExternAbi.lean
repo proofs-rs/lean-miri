@@ -7,8 +7,6 @@ namespace Miri.Input.CompilerExternAbi
 open Lean
 
 def decode (source : Json) : Except String ABI.ExternAbi := do
-  unless (← (← source.getObjVal? "status").getStr?) == "supported" do
-    throw "compiler ExternAbi is unsupported"
   let unwind ← source.getObjVal? "unwind"
   let kind ← (← source.getObjVal? "kind").getStr?
   match kind with

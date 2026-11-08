@@ -13,8 +13,6 @@ private def lift (value : Except String A) : EStateM StepError S A :=
 def variantCount (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except StepError Nat := do
   let get := fun id => do
     let source ← (p.runtime.node id).mapError (fun e => StepError.unsupported (toString e))
-    unless source.shapeStatus == .supported do
-      throw (.unsupported "variant_count compiler shape unresolved")
     pure source
   let source ← get ty
   let source ← if source.shapeKind == .patternType then do

@@ -26,8 +26,6 @@ def rustcNoWritable (p : CompilerProviders.Prepared) (id : DefId) : Except Strin
     if seen.contains key then throw "duplicate compiler retag definition query"
     seen := seen.push key
     if key == definition then
-      unless (← row.getObjValAs? String "status") == "supported" do
-        throw "compiler rustc_no_writable attribute query unavailable"
       selected := some (← row.getObjValAs? Bool "rustc_no_writable")
   let some value := selected | throw "exact compiler retag frame attribute query absent"
   pure value

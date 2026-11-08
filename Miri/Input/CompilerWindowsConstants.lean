@@ -25,7 +25,7 @@ private def exactPath (record : Json) (module name : String) : Except String Uni
     throw "Windows compiler constant row name does not match its path"
 
 /-- Resolve the exact source path and retain the named constant decoder's
-compiler status, target layout, width, and scalar validation. -/
+compiler target layout, width, and scalar validation. -/
 def scalar (prepared : CompilerNamedConstants.Prepared) (module name : String) :
     Except String (Scalar Provenance) := do
   let records ← (← prepared.program.input.raw.getObjVal? "compiler_named_constants").getArr?
