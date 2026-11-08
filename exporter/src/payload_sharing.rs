@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 const REF: &str = "$lean_miri_shared_ref";
 const CATALOG: &str = "shared_payloads";
+pub(crate) const HANDLE: &str = "\0lean_miri_collection_handle";
 
 #[derive(Default)]
 pub(crate) struct Pool {
@@ -100,8 +101,32 @@ fn collect_refs(value: &Raw, result: &mut Vec<usize>) {
     }
 }
 
+fn reject_reserved(value: &Value) -> bool {
+    let reserved = value.as_object().is_some_and(|fields| {
+        [REF, CATALOG, HANDLE]
+            .iter()
+            .any(|key| fields.contains_key(*key))
+    });
+    if reserved {
+        POOL.with(|pool| {
+            pool.borrow_mut().invalid =
+                Some("export payload contains reserved shared-graph fields".into())
+        });
+    }
+    reserved
+}
+pub(crate) fn has_invalid() -> bool {
+    POOL.with(|pool| pool.borrow().invalid.is_some())
+}
+fn invalid() -> Option<String> {
+    POOL.with(|pool| pool.borrow().invalid.clone())
+}
+
 // No RefCell borrow is held while constructing a node's child references.
 fn payload(value: &Value) -> Raw {
+    if reject_reserved(value) {
+        return Raw::Null;
+    }
     match value {
         Value::Null => Raw::Null,
         Value::Bool(value) => Raw::Bool(*value),
@@ -152,14 +177,8 @@ fn wire(value: &Value, field: Option<&str>) -> Raw {
 }
 
 pub(crate) fn canonicalize(value: Value) -> Value {
-    if let Some(fields) = value.as_object() {
-        if fields.contains_key(REF) || fields.contains_key(CATALOG) {
-            POOL.with(|pool| {
-                pool.borrow_mut().invalid =
-                    Some("export payload contains reserved shared-graph fields".into())
-            });
-            return value;
-        }
+    if reject_reserved(&value) || has_invalid() {
+        return value;
     }
     if eligible(&value, None) {
         return lookup_node(intern(&value)).expect("newly interned node exists");
@@ -179,7 +198,14 @@ pub(crate) fn serialize_value<S: Serializer>(
     value: &Value,
     serializer: S,
 ) -> Result<S::Ok, S::Error> {
-    wire(value, None).serialize(serializer)
+    if has_invalid() {
+        return Plain(value).serialize(serializer);
+    }
+    if eligible(value, None) {
+        raw_json!({HANDLE: intern(value)}).serialize(serializer)
+    } else {
+        payload(value).serialize(serializer)
+    }
 }
 
 /// A frozen wire snapshot. Reachability works on the already-interned ID
@@ -190,7 +216,8 @@ pub(crate) struct Document {
 }
 impl Document {
     pub(crate) fn new(value: &Value) -> Result<Self, String> {
-        if let Some(error) = POOL.with(|pool| pool.borrow().invalid.clone()) {
+        reject_reserved(value);
+        if let Some(error) = invalid() {
             return Err(error);
         }
         let fields = value
@@ -209,6 +236,9 @@ impl Document {
                 wire(value, Some(key))
             };
             root.insert(key.clone(), value);
+        }
+        if let Some(error) = invalid() {
+            return Err(error);
         }
         let (nodes, edges) = POOL.with(|pool| {
             let pool = pool.borrow();
@@ -237,6 +267,9 @@ impl Document {
                 }
             })
             .collect::<Vec<_>>();
+        if let Some(error) = invalid() {
+            return Err(error);
+        }
         root.insert(
             CATALOG.into(),
             raw_json!({"schema_version":2,"nodes":encoded}),
@@ -359,8 +392,43 @@ mod tests {
     }
 
     #[test]
+    fn macro_literals_cannot_alias_existing_public_wire_references() {
+        for bad in [
+            raw_json!({REF:0}),
+            raw_json!({REF:999999}),
+            raw_json!({REF:0,"extra":true}),
+            raw_json!({CATALOG:{"nodes":[]}}),
+        ] {
+            begin_export();
+            let _seed = json!({"payload":[1]});
+            let source = Value::from_wire(raw_json!({"payload":[bad]}));
+            assert!(Document::new(&source).is_err());
+        }
+        begin_export();
+        let _seed = json!({"payload":[1]});
+        let source = json!({"payload":{"$lean_miri_shared_ref":0}});
+        assert!(Document::new(&source).is_err());
+    }
+
+    #[test]
+    fn copy_on_write_reserved_fields_are_rejected_at_freeze() {
+        for key in [REF, CATALOG, HANDLE] {
+            begin_export();
+            let mut child = json!({"payload":[1]});
+            child[key] = json!(999999);
+            let mut source = json!({"ok":true});
+            source["child"] = child;
+            assert!(Document::new(&source).is_err());
+            begin_export();
+            let mut source = json!({"ok":true});
+            source[key] = json!(0);
+            assert!(Document::new(&source).is_err());
+        }
+    }
+
+    #[test]
     fn reserved_payload_fields_cannot_become_a_successful_export() {
-        for key in [REF, CATALOG] {
+        for key in [REF, CATALOG, HANDLE] {
             begin_export();
             let malformed = Value::from_raw(raw_json!({key: 7}));
             let error = match Document::new(&malformed) {
@@ -368,6 +436,8 @@ mod tests {
                 Err(error) => error,
             };
             assert!(error.contains("reserved"));
+            let wrapped = json!({"nested":malformed});
+            assert!(Document::new(&wrapped).is_err());
         }
     }
 }

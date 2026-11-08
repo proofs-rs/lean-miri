@@ -141,11 +141,14 @@ impl Value {
         }
     }
     /// Convert macro serialization back into semantic values. References here
-    /// were emitted by this compilation's registry, not read from an export.
+    /// use the private collection handle, never the public wire-reference key.
     pub fn from_wire(value: RawValue) -> Self {
         if let RawValue::Object(object) = &value {
             if object.len() == 1 {
-                if let Some(id) = object.get("$lean_miri_shared_ref") {
+                if let Some(id) = object.get(crate::payload_sharing::HANDLE) {
+                    if crate::payload_sharing::has_invalid() {
+                        return Self::from_raw(value);
+                    }
                     let id = id
                         .as_u64()
                         .and_then(|id| usize::try_from(id).ok())
