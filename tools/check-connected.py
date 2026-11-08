@@ -15,6 +15,8 @@ sys.path.insert(0, str(ROOT / 'tests/connected'))
 from cases import CASES, MIRI_ERRORS
 from run_guarded import run as run_guarded, source_closure
 from connected_large_inputs import FRESH_CASES, generate as generate_large_input
+from mir_fixture import prepare_schema3_replay
+from mir_json import decode_mir_document
 FIXTURES = ROOT / 'tests/connected/fixtures'
 
 
@@ -87,8 +89,23 @@ def main():
             raise SystemExit(f'{ident}: reference input identity mismatch')
         if reference['reference_contract'] != 'same_prepared_tcx_after_snapshot_capture;not_vanilla_miri_alloc_id_history':
             raise SystemExit(f'{ident}: reference contract changed')
-        cmd = [lake, 'env', 'lean', '--run', str(ROOT / 'tests/connected' / harness), str(snapshot), *extra]
+        # The reference above remains bound to original bytes. Saved successful
+        # schema-3 exports need an explicit test transport conversion; fresh
+        # schema-4 exports are decoded directly and retain their byte identity.
+        execution_snapshot = snapshot
+        conversion_path = None
+        if ident not in FRESH_CASES:
+            execution_snapshot = run_dir / f'{ident}.schema4.json'
+            conversion = prepare_schema3_replay(snapshot, execution_snapshot)
+            conversion_path = run_dir / f'{ident}.conversion.json'
+            conversion_path.write_text(json.dumps(conversion, indent=2) + '\n')
+            print(f'{ident}: test-only schema3 -> schema4 transport; reference binds {snapshot.name}; execution={execution_snapshot.name}', flush=True)
+        else:
+            decode_mir_document(json.loads(raw))
+        cmd = [lake, 'env', 'lean', '--run', str(ROOT / 'tests/connected' / harness), str(execution_snapshot), *extra]
         tracked_inputs = [snapshot, reference_path, ROOT / 'tests/connected' / harness, FIXTURES / f'{ident}.rs', *generation_inputs]
+        if conversion_path is not None:
+            tracked_inputs += [execution_snapshot, conversion_path, ROOT / 'tools/mir_fixture.py', ROOT / 'tools/mir_json.py']
         if args.ordering:
             tracked_inputs.append(FIXTURES / f'{ident}.tape.json')
         def fingerprint():
@@ -105,7 +122,7 @@ def main():
                 result_path = run_dir / f'{ident}.result.json'
                 result_path.write_text(json.dumps({'exit_code': result.returncode, 'guard': None, 'inputs_before': inputs_before, 'inputs_after': fingerprint(), 'log_sha256': hashlib.sha256((run_dir / f'{ident}.log').read_bytes()).hexdigest()}))
                 Path(str(snapshot) + '.miri-reference.json').write_bytes((FIXTURES / f'{ident}.reference.json').read_bytes())
-                ordering_rows.append({'case': ident, 'snapshot': str(snapshot), 'log': str(run_dir / f'{ident}.log'), 'prefix': str(FIXTURES / f'{ident}.tape.json'), 'result': str(result_path)})
+                ordering_rows.append({'case': ident, 'snapshot': str(snapshot), 'execution_snapshot': str(execution_snapshot), 'conversion': str(conversion_path), 'log': str(run_dir / f'{ident}.log'), 'prefix': str(FIXTURES / f'{ident}.tape.json'), 'result': str(result_path)})
                 subprocess.run([sys.executable, str(ROOT / 'tests/connected/validate_guided_choice_replay.py'),
                                 str(FIXTURES / f'{ident}.tape.json'), str(run_dir / f'{ident}.log'),
                                 str(run_dir / f'{ident}.validation.json')], check=True)
@@ -118,6 +135,7 @@ def main():
             # Keep generated large inputs together with their new reference evidence.
             if not args.ordering and ident not in FRESH_CASES:
                 snapshot.unlink(missing_ok=True)
+                execution_snapshot.unlink(missing_ok=True)
     if args.ordering:
         rows_path = run_dir / 'ordering-cases.json'
         rows_path.write_text(json.dumps(ordering_rows))
@@ -126,6 +144,7 @@ def main():
         finally:
             for row in ordering_rows:
                 Path(row['snapshot']).unlink(missing_ok=True)
+                Path(row['execution_snapshot']).unlink(missing_ok=True)
                 Path(row['snapshot'] + '.miri-reference.json').unlink(missing_ok=True)
     if source_closure(ROOT) != closure_before:
         raise SystemExit('project source or compiled module closure changed during replay')

@@ -1,6 +1,8 @@
 """Finite canonical tests; expected output and return codes preserved from accepted harnesses.
 
 Snapshot SHA-256 binds the prepared-TyCtxt reference to exact input bytes.
+Saved schema-3 bytes remain immutable reference evidence. Replay prepares a
+separate schema-4 test transport, retaining both identities in its manifest.
 Compiler placeholders are expanded by tools/export-connected.py.
 The two large historical archives are retained for provenance; CI generates
 their current inputs and binds fresh references to those exact bytes.

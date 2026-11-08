@@ -29,8 +29,8 @@ private def buildCovariance (raw : Json) : CovarianceData := Id.run do
   while index < entries.size && firstRowError.isNone do
     let some entry := entries[index]? | return { headerError := some "covariance row index invariant" }
     let key ← match do
-        let source ← (← entry.getObjVal? "source_type").getObjValAs? Nat "type_id"
-        let target ← (← entry.getObjVal? "target_type").getObjValAs? Nat "type_id"
+        let source ← (← entry.getObjVal? "source_type").getNat?
+        let target ← (← entry.getObjVal? "target_type").getNat?
         pure (covarianceKey source target) with
       | .ok key => pure key
       | .error error =>
@@ -50,7 +50,7 @@ def covariance (raw : Json) : Covariance raw := ⟨buildCovariance raw, rfl⟩
 
 private def functionType (runtime : RuntimeMetadata) (knownTypes : Std.HashSet Nat)
     (source : Json) : Except String Nat := do
-  let id ← source.getObjValAs? Nat "type_id"
+  let id ← source.getNat?
   unless knownTypes.contains id do
     let _ ← runtime.node id |>.mapError toString
   pure id
@@ -69,7 +69,7 @@ private def parseSignatureKey (runtime : RuntimeMetadata) (knownTypes : Std.Hash
   let typingEnv ← record.getObjValAs? String "typing_env"
   unless typingEnv == "fully_monomorphized" do
     throw "helper signature compiler typing environment mismatch"
-  let signature ← record.getObjVal? "signature"
+  let signature ← runtime.source.semanticTables.node .signature (← record.getObjVal? "signature") "$.compiler_function_facts.signature"
   let inputs ← (← (← signature.getObjVal? "inputs").getArr?).mapM (functionType runtime knownTypes)
   let output ← functionType runtime knownTypes (← signature.getObjVal? "output")
   let abi ← CompilerExternAbi.decode (← signature.getObjVal? "abi")

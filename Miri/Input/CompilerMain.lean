@@ -33,13 +33,14 @@ structure Prepared where
   compilerEntryType : Except String (Option (MIR.DefId × MainEntryType))
   entries : Array Entry
   sections : Except String (Array SectionQuery)
-private def intern (tables : CompilerTables) (value : Json) : Except String (MIR.DefId × CompilerTables) := do
+private def intern (ctx : LowerContext) (tables : CompilerTables) (value : Json) : Except String (MIR.DefId × CompilerTables) := do
+  let value ← ctx.resolveSemantic .definition value
   let source : DefinitionId := ⟨← (← value.getObjVal? "crate").getNat?,← (← value.getObjVal? "index").getNat?⟩
   match lookupDefinitionId tables.definitions source with
   | .ok id => pure (id,tables)
   | .error _ => pure (tables.definitions.size,{tables with definitions := tables.definitions.push source})
 private def typeId (context : LowerContext) (j : Json) : Except String MIR.TyId := do
-  let id ← (← j.getObjVal? "type_id").getNat?
+  let id ← j.getNat?
   unless context.containsTypeId id do throw "main compiler query references missing type"
   pure id
 
@@ -53,12 +54,12 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
   let mut tables := program.compilerTables
   let startSource ← source.getObjVal? "start_lang_item"
   let start ← if startSource == .null then pure none else do
-    let (id,next) ← intern tables startSource
+    let (id,next) ← intern ctx tables startSource
     tables := next
     pure (some id)
   let entrySource ← source.getObjVal? "compiler_entry"
   let compilerEntry ← if entrySource == .null then pure none else do
-    let (id,next) ← intern tables entrySource
+    let (id,next) ← intern ctx tables entrySource
     tables := next
     pure (some id)
   let compilerEntryType : Except String (Option (MIR.DefId × MainEntryType)) := do
@@ -72,7 +73,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
           if compilerEntry.isSome then throw "rustc selected main lacks exact EntryFnType"
           pure none
         else do
-          let definitionJson ← value.getObjVal? "definition"
+          let definitionJson ← ctx.resolveSemantic .definition (← value.getObjVal? "definition")
           let sourceDefinition : DefinitionId := ⟨
             ← (← definitionJson.getObjVal? "crate").getNat?,
             ← (← definitionJson.getObjVal? "index").getNat?⟩
@@ -86,7 +87,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
           pure (some (definition,.rustcMain (UInt8.ofNat sigpipe)))
   let mut entries : Array Entry := #[]
   for record in ← (← source.getObjVal? "entries").getArr? do
-    let (definition,next) ← intern tables (← record.getObjVal? "definition")
+    let (definition,next) ← intern ctx tables (← record.getObjVal? "definition")
     tables := next
     if entries.any (·.definition == definition) then throw "duplicate source main definition key"
     let parameters ← (← (← record.getObjVal? "generic_parameters").getArr?).mapM fun value => do
@@ -121,11 +122,11 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
       for record in records do
         let name ← (← record.getObjVal? "section").getStr?
         let decoded := do
-          let (definition,next) ← intern tables (← record.getObjVal? "definition")
-          let (span,next) ← lowerCompilerSpan next (← ctx.decodeCompilerValue (← record.getObjVal? "span"))
+          let (definition,next) ← intern ctx tables (← record.getObjVal? "definition")
+          let (span,next) ← lowerCompilerSpan next (← ctx.decodeSemanticValue .span (← record.getObjVal? "span"))
           let value ← record.getObjVal? "global_query"
           let ty ← typeId ctx (← value.getObjVal? "type")
-          let allocation ← (← (← value.getObjVal? "allocation").getObjVal? "allocation_id").getNat?
+          let allocation ← (← value.getObjVal? "allocation").getNat?
           unless ctx.containsAllocationId allocation do throw "link-section static allocation missing from compiler graph"
           pure ((⟨definition,span,ty,allocation⟩ : Section),next)
         let result ← match decoded with

@@ -8,7 +8,7 @@ runtime arrays still require genuine compiler trait resolution evidence. -/
 namespace Miri.Input.RuntimeArrayFacts
 open Lean Miri.ABI Miri.Interpreter
 private def ref (j : Json) : Except String MIR.TyId := do
-  (← j.getObjVal? "type_id").getNat?
+  j.getNat?
 private def trivial (world : RuntimeArrayTypes.World) (ty : MIR.TyId) : Nat → Except String Bool
   | 0 => throw "structural trivial-trait query budget exhausted"
   | fuel+1 => do

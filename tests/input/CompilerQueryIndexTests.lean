@@ -66,8 +66,8 @@ private def legacyCovariance (p : CompilerProviders.Prepared) (source target : M
   let entries ← (← p.program.input.raw.getObjVal? "compiler_covariance_queries").getArr?
   let mut found := none
   for entry in entries do
-    let a ← (← entry.getObjVal? "source_type").getObjValAs? Nat "type_id"
-    let b ← (← entry.getObjVal? "target_type").getObjValAs? Nat "type_id"
+    let a ← (← entry.getObjVal? "source_type").getNat?
+    let b ← (← entry.getObjVal? "target_type").getNat?
     if a == source && b == target then
       unless (← entry.getObjValAs? String "typing_env") == "fully_monomorphized" &&
           (← entry.getObjValAs? String "variance") == "covariant" do
@@ -82,7 +82,7 @@ private def legacyCovariance (p : CompilerProviders.Prepared) (source target : M
   pure value
 
 private def typeRef (p : CompilerProviders.Prepared) (source : Json) : Except String MIR.TyId := do
-  let id ← source.getObjValAs? Nat "type_id"
+  let id ← source.getNat?
   let _ ← p.runtime.node id |>.mapError toString
   pure id
 
@@ -90,7 +90,7 @@ private def requestOf (p : CompilerProviders.Prepared) (record : Json) :
     Except String (FunctionCalls.SignatureRequest ABI.ExternAbi) := do
   unless (← record.getObjValAs? String "typing_env") == "fully_monomorphized" do
     throw "authentic helper signature had an unexpected typing environment"
-  let signature ← record.getObjVal? "signature"
+  let signature ← p.loweringContext.resolveSemantic .signature (← record.getObjVal? "signature")
   let inputs ← (← (← signature.getObjVal? "inputs").getArr?).mapM (typeRef p)
   let output ← typeRef p (← signature.getObjVal? "output")
   let abi ← CompilerExternAbi.decode (← signature.getObjVal? "abi")
@@ -111,7 +111,7 @@ private def legacySignatureAbi (p : CompilerProviders.Prepared)
   for record in records do
     unless (← record.getObjValAs? String "typing_env") == "fully_monomorphized" do
       throw "helper signature compiler typing environment mismatch"
-    let signature ← record.getObjVal? "signature"
+    let signature ← p.loweringContext.resolveSemantic .signature (← record.getObjVal? "signature")
     let inputs ← (← (← signature.getObjVal? "inputs").getArr?).mapM (typeRef p)
     let output ← typeRef p (← signature.getObjVal? "output")
     let abi ← CompilerExternAbi.decode (← signature.getObjVal? "abi")
@@ -129,14 +129,13 @@ private def legacySignatureAbi (p : CompilerProviders.Prepared)
         unless value == previous do throw "conflicting exact helper signature ABI evidence"
       found := some value
   let some result := found | throw s!"missing exact compiler dummy-signature ABI query: inputs={reprStr request.inputs}, output={request.output}, abi={reprStr request.abi}, safety={reprStr request.safety}, c_variadic={request.cVariadic}, splatted={request.splatted}"
-  CallResolution.functionAbi p.runtime (← decodeCompilerFunctionAbi result)
+  CallResolution.functionAbi p.runtime (← DecoderValues.parseFunctionAbi result "$.compiler_fn_abi"
+    (DecoderValues.semanticDecodeMemo p.loweringContext.semanticTables))
 
 def main (args : List String) : IO Unit := do
   let some path := args.head? | throw (IO.userError "authentic producer export path required")
   let raw ← must (Json.parse (← IO.FS.readFile path))
   let raw ← must (SharedPayloads.resolveCatalog raw)
-  let raw ← must (setField raw "shared_payloads" (Json.mkObj [
-    ("schema_version", toJson (2 : Nat)), ("nodes", toJson (#[] : Array Json))]))
   let baseline ← prepared raw
 
   let covarianceTable ← must (field raw "compiler_covariance_queries")
@@ -148,8 +147,8 @@ def main (args : List String) : IO Unit := do
     | none => throw (IO.userError "authentic producer export has no covariance query")
   let sourceRow ← must (field covarianceRow "source_type")
   let targetRow ← must (field covarianceRow "target_type")
-  let source ← must (sourceRow.getObjValAs? Nat "type_id")
-  let target ← must (targetRow.getObjValAs? Nat "type_id")
+  let source ← must sourceRow.getNat?
+  let target ← must targetRow.getNat?
   let expected ← must (covarianceRow.getObjValAs? Bool "value")
   let actual ← must (CompilerCovariance.relationWithIndex baseline.covarianceIndex source target)
   check (actual == expected) "exact producer covariance answer changed"
@@ -183,8 +182,8 @@ def main (args : List String) : IO Unit := do
     "conflicting exact covariance duplicate changed old scan result/error"
   let secondSourceRow ← must (field secondCovarianceRow "source_type")
   let secondTargetRow ← must (field secondCovarianceRow "target_type")
-  let secondSource ← must (secondSourceRow.getObjValAs? Nat "type_id")
-  let secondTarget ← must (secondTargetRow.getObjValAs? Nat "type_id")
+  let secondSource ← must secondSourceRow.getNat?
+  let secondTarget ← must secondTargetRow.getNat?
   let unsupportedResult := CompilerCovariance.relationWithIndex covariancePrepared.covarianceIndex secondSource secondTarget
   check (resultText unsupportedResult == resultText (legacyCovariance covariancePrepared secondSource secondTarget))
     "unsupported exact covariance row changed old scan result/error"
@@ -248,6 +247,7 @@ def main (args : List String) : IO Unit := do
   let currentSignatures ← must (field facts "helper_signatures")
   let currentRows ← must (array currentSignatures)
   let secondQuery ← must (field (currentRows[1]!) "abi_query")
+  let secondQuery ← must (baseline.runtime.source.semanticTables.node .functionAbi secondQuery "$test.abi_query")
   let secondUnsupported ← must (setField secondQuery "return" Json.null)
   let secondRow ← must (setField (currentRows[1]!) "abi_query" secondUnsupported)
   let signatureMutated ← must (replaceSignatureAt signatureMutated 1 secondRow)

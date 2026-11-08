@@ -117,7 +117,7 @@ Scripts are the authority for individual cases and build behavior.
 | --- | --- | --- |
 | `bash tools/check-quick.sh` | Source pins/audits, Python tool tests, obligation inventory, saved-fixture hashes. No Lean or exporter build; audit generation needs the Rust analyzer. | Much of the audit/Python work overlaps, but this script and its two fixture hash-manifest checks are not called. |
 | `bash tools/check-build.sh` | Build library, self-contained tests, frontend and choice policy; run self-contained assertions and audit axioms. | Its build, runtime and axiom work overlaps; this script is not called. |
-| `bash tools/check-decoder.sh` | Strict success/failure boundaries, 16 saved-expectation cases and 4 shared-ID checks; unit mutations with exact malformed-field and reference diagnostics. | No. Other decoder tests run, but these dedicated checks do not. |
+| `bash tools/check-decoder.sh` | Strict success/failure boundaries, 16 saved-expectation cases and 4 shared-ID checks; successful synthetic unit inputs converted to schema 4 and mutated for exact malformed-field and numeric-reference diagnostics. | No. Other decoder tests run, but these dedicated checks do not. |
 | `bash tools/check-structural-regressions.sh` | Context/provider/primitive rebinding, maps, zero width, thread-clock reuse and collection QA; proofs, `#eval` and runtime assertions. Uses adapted pinned unit inputs or no input. | Migrated self-contained cases are built/run through `MiriTests`; input-dependent cases are not included as a suite. |
 | `bash tools/check-performance-regressions.sh` | Finite equivalence/error-order/state-retention checks for indexes, ABI/backtrace caches, decoder caching, profiles and imported allocations. | Includes migrated self-contained cases and some input/memory overlap; dedicated input-driven parity cases still require this suite. |
 | `bash tools/check-connected-proofs.sh` | Build/audit `MiriTests` (including connected component proofs) and typecheck the retained SC projection and graph runner. | Component proofs are included; graph-runner typechecking is separate. |
@@ -169,8 +169,10 @@ preparation and selected allocator-world metadata. The frontend check imports
 fresh JSON into Lean constants. Runtime-metadata checks connect fresh compiler
 queries to Lean providers. Execution checks compare selected arithmetic, calls
 and globals with pinned Miri. Eval-core's six checks use three hash-checked
-genuine schema-3 exports regenerated with the current producer. The preparation helper preserves their
-decompressed bytes exactly; it does not adapt an old wire format.
+genuine schema-4 exports regenerated from the unchanged Rust sources, roots,
+compiler flags and allocation-world profile. Replay verifies archive and
+decompressed hashes, then consumes the compiler bytes directly without a
+format adapter. Regeneration did not execute a Miri reference.
 
 The script uses `set -euo pipefail`: a failure stops it and later phases remain
 unexecuted. A timeout is not a pass. Python discovery does not recursively run
@@ -195,6 +197,10 @@ None of these top-level commands is called by `tools/check.sh`:
 | `python3 tests/connected/compare_selector.py` | Finite comparison of choice selection with extracted upstream code; does not execute the whole Miri interpreter. |
 
 Fifteen cases use stored reference observations and genuine schema-3 bytes.
+Replay verifies those original bytes against the unchanged references before
+explicitly preparing separate schema-4 test inputs. Conversion manifests and
+run fingerprints distinguish source evidence from executed transport; this
+does not create a fresh producer comparison or rebind the Miri references.
 The DST and large Tree Borrows cases generate fresh exports and same-TyCtxt
 Miri references in CI from tracked Rust sources, unchanged flags and exactly
 reviewed guest configuration/argv0. Their Lean assertions and choice tapes
@@ -282,6 +288,12 @@ checks and obtains its input from the exporter-owned primitive-range check.
 `tests/input/run.sh` uses the shared allocator-world fixtures in `tests/fixtures/`
 and the exporter validators before testing their Lean consumers. These consumer
 checks remain separate from Cargo's exporter suite.
+
+`bash tests/input/check-numeric-references.sh` exports fresh selected roots from
+`exporter/fixtures/numeric_references.rs` and checks both Lean decoder modes. It
+requires every semantic table kind to be exercised, including ABI registers and
+cast targets, and checks matching identity tables and execution readiness. Build
+the pinned exporter and Lean decoder dependencies first.
 
 ## Standalone checks that need explicit selection
 

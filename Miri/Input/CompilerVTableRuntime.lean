@@ -152,7 +152,7 @@ def globalVTableUsing (prepared : Prepared) (_lookup : GlobalLookup prepared)
 private def principal (source : VtableAllocation) : Result (Option Nat) := do
   let value ← source.payload.getObjVal? "principal_predicate"
   if value == Json.null then return none
-  return some (← (← value.getObjVal? "predicate_id").getNat?)
+  return some (← value.getNat?)
 
 /-- vtable_allocation is queried with an instantiated principal, unlike a
 symbolic vtable's full higher-ranked predicate list. Use the compiler's exact
@@ -160,7 +160,7 @@ late-bound-erasure/normalization evidence; never compare names or discard the
 predicate identity on the original symbolic query. -/
 private def allocationPrincipal (facts : CompilerFactAdapters.Prepared)
     (value : Json) : Result (Nat × Json) := do
-  let id ← value.getObjValAs? Nat "predicate_id"
+  let id ← value.getNat?
   let sources := facts.context.program.input.compilerPredicates.filter (·.id == id)
   let some source := sources[0]? | throw "memory-backed vtable principal normalization evidence missing"
   unless sources.all (·.payload == source.payload) && source.original == value do
@@ -168,8 +168,9 @@ private def allocationPrincipal (facts : CompilerFactAdapters.Prepared)
   let normalized ← CompilerVTableFacts.normalizePredicate facts ⟨id,source.stableKey,source.autoTrait⟩
   let targets := facts.context.program.input.compilerPredicates.filter (·.id == normalized)
   let some target := targets[0]? | throw "normalized memory-backed vtable principal evidence missing"
+  let targetPayload ← facts.context.loweringContext.resolveSemantic .predicate target.original
   unless targets.all (·.payload == target.payload) &&
-      (target.original.getObjValAs? String "kind").toOption == some "trait" do
+      (targetPayload.getObjValAs? String "kind").toOption == some "trait" do
     throw "normalized memory-backed vtable principal evidence conflicts"
   return (normalized, target.original)
 
@@ -187,21 +188,22 @@ def queryTargetPrincipal (facts : CompilerFactAdapters.Prepared)
   for (row, rowIndex) in queryRows.toList.zipIdx do
     unless (row.getObjValAs? Nat "vtable_allocation_id").toOption == some allocationId do
       continue
-    let rowType ← (← (← row.getObjVal? "input_type").getObjVal? "type_id").getNat?
+    let rowType ← (← row.getObjVal? "input_type").getNat?
     unless rowType == sourceType do
       throw "memory-backed supertrait target compiler type mismatch"
     let some metadata := (row.getObjVal? "vtable_metadata").toOption
       | throw s!"compiler vtable target row {rowIndex} lacks metadata"
     let metadataType ← metadata.getObjVal? "type"
-    unless ((metadataType.getObjValAs? Nat "type_id").toOption == some sourceType) do
+    unless ((metadataType.getNat?).toOption == some sourceType) do
       throw "memory-backed supertrait target metadata type mismatch"
     let metadataPredicates ← (metadata.getObjVal? "predicates").bind Json.getArr?
     let rowPredicates ← (row.getObjVal? "input_predicates").bind Json.getArr?
     unless metadataPredicates == rowPredicates do
       throw "memory-backed supertrait target predicates disagree with query key"
     let principalPredicate ← metadata.getObjVal? "principal_predicate"
+    let principalPayload ← facts.context.loweringContext.resolveSemantic .predicate principalPredicate
     unless principalPredicate != Json.null &&
-        (principalPredicate.getObjValAs? String "kind").toOption == some "trait" do
+        (principalPayload.getObjValAs? String "kind").toOption == some "trait" do
       throw "memory-backed supertrait target has no supported principal trait"
     let (targetPrincipal, allocationPredicate) ← allocationPrincipal facts principalPredicate
     let entries ← metadata.getObjVal? "entries"
@@ -293,24 +295,25 @@ def entriesUsing (prepared : Prepared) (lookup : GlobalLookup prepared)
   let queryRows ← (← raw.getObjVal? "compiler_vtable_queries").getArr?
   for (row, rowIndex) in queryRows.toList.zipIdx do
     let some rowType := (row.getObjVal? "input_type").toOption | continue
-    unless ((rowType.getObjValAs? Nat "type_id").toOption == some ty) do continue
+    unless ((rowType.getNat?).toOption == some ty) do continue
     let some metadata := (row.getObjVal? "vtable_metadata").toOption | continue
     let predicate := (metadata.getObjVal? "principal_predicate").toOption.getD .null
     let rowPrincipal ← if predicate == .null then pure none else
-      (predicate.getObjVal? "predicate_id").bind Json.getNat? |>.map some
+      predicate.getNat? |>.map some
     unless rowPrincipal == expectedPrincipal do continue
     let metadataPredicates ← (metadata.getObjVal? "predicates").bind Json.getArr?
     let rowPredicates ← (row.getObjVal? "input_predicates").bind Json.getArr?
     unless metadataPredicates == rowPredicates do
       throw "compiler vtable metadata predicate identity disagrees with its query key"
     let metadataType ← metadata.getObjVal? "type"
-    unless ((metadataType.getObjValAs? Nat "type_id").toOption == some ty) do
+    unless ((metadataType.getNat?).toOption == some ty) do
       throw "compiler vtable metadata type disagrees with its query key"
     let entryJson ← (metadata.getObjVal? "entries").bind Json.getArr?
     let mut sourceEntries := #[]
     for (entry, index) in entryJson.toList.zipIdx do
       sourceEntries := sourceEntries.push (← Input.decodeVtableEntry entry
-        s!"$.compiler_vtable_queries[{rowIndex}].vtable_metadata.entries[{index}]")
+        s!"$.compiler_vtable_queries[{rowIndex}].vtable_metadata.entries[{index}]"
+        (DecoderValues.semanticDecodeMemo prepared.facts.context.program.input.semanticTables))
     if let some previous := found then
       unless previous.map (·.payload) == sourceEntries.map (·.payload) do
         throw "conflicting source compiler vtable_entries query metadata"

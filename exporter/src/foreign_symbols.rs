@@ -207,7 +207,7 @@ fn selected_exports<'tcx>(
             export_failure("foreign_symbols::selected_exports", "selected definition ceased to be a static")?
         };
         Ok::<_, String>(json!({"symbol":symbol,"kind":"static","definition":definition,"declaration":declaration,
-            "allocation":allocation}))
+            "allocation_query":allocation}))
     } }).collect::<Result<Vec<_>, String>>()?))
 }
 

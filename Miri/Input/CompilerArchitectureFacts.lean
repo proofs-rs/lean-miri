@@ -57,7 +57,7 @@ def simdSizeAndType (context : CompilerFacts.Context) (id : TyId) : Except Strin
   let value := query
   let count ← (← value.getObjVal? "count").getNat?
   unless count < 2^64 do throw "SIMD lane count exceeds source u64"
-  let element ← (← (← value.getObjVal? "element").getObjVal? "type_id").getNat?
+  let element ← (← value.getObjVal? "element").getNat?
   let _ ← context.runtime.lookup element |>.mapError toString
   pure (UInt64.ofNat count,element)
 

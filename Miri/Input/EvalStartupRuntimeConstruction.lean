@@ -29,7 +29,7 @@ def prepare (compiler : CompilerProviders.Prepared) : Except String StartupFacts
     value.getBool?
   let coreEscapeDefault := do
     let value ← field startup "core_escape_default"
-    let rawDefinition ← field value "definition"
+    let rawDefinition ← compiler.loweringContext.resolveSemantic .definition (← field value "definition")
     let source : DefinitionId := ⟨← fieldNat rawDefinition "crate", ← fieldNat rawDefinition "index"⟩
     let available ← (← field value "mir_available").getBool?
     pure (source,available)

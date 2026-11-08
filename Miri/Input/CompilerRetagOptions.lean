@@ -21,7 +21,7 @@ def rustcNoWritable (p : CompilerProviders.Prepared) (id : DefId) : Except Strin
   let mut selected : Option Bool := none
   let mut seen : Array DefinitionId := #[]
   for row in rows do
-    let value ← row.getObjVal? "definition"
+    let value ← p.loweringContext.resolveSemantic .definition (← row.getObjVal? "definition")
     let key : DefinitionId := ⟨← value.getObjValAs? Nat "crate", ← value.getObjValAs? Nat "index"⟩
     if seen.contains key then throw "duplicate compiler retag definition query"
     seen := seen.push key

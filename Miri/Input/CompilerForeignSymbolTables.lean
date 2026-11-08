@@ -114,7 +114,7 @@ def prepare (instances : CompilerVTableRuntime.Prepared) : Except String Prepare
         -- uses only this minimal mono identity, not eager instance metadata.
         pure (some decoded)
       else pure none
-    let span ← field record "span"
+    let span ← program.input.semanticTables.node .span (← field record "span") "$.compiler_foreign_symbols.span"
     let candidate : Candidate := {
       symbol := ← text record "symbol"
       explicitSymbol := ← boolean record "explicit_symbol"

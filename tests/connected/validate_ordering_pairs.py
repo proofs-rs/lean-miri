@@ -9,7 +9,8 @@ import hashlib,json,re,sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'tools'))
-from mir_json import load_mir_document
+from mir_json import load_mir_document, decode_mir_document
+from mir_fixture import convert_evidence, read_evidence
 ORIGINAL_SOURCES={'fence-acqrel': ['/workspace/lean-miri/docs/verification/sc-ordering-controls264/inputs/259-fence-acqrel-yield-control.rs'], 'fence-sc': ['/workspace/lean-miri/docs/verification/sc-ordering-controls264/inputs/259-fence-sc-yield.rs'], 'rmw-relaxed': ['/workspace/lean-miri/docs/verification/sc-ordering-controls264/inputs/259-rmw-relaxed-yield-control.rs'], 'rmw-sc': ['/workspace/lean-miri/docs/verification/sc-ordering-controls264/inputs/259-rmw-sc-yield.rs']}
 SOURCE_HASHES={'fence-acqrel': '2c6645e8da4e849ea7e13e3a1bcc5c1293a8965e7ab53605997a18d412048c26', 'fence-sc': 'e55a059e733243d97e9a4ef5aa7e3ff9a264dcfbdcd07b74c04fc79fffc76905', 'rmw-relaxed': '31042ff16963a0730d1d5d6f511bf240bc293d3a3e46880b8ab8ba7cea90975e', 'rmw-sc': '059cb871809b85b579e70e0ae372203681be184c82df093d2032dccd38a00be0'}
 def need(ok,msg):
@@ -93,7 +94,16 @@ def check(row):
     need(len(inputs)==target_indices[-1]+1,'prefix does not end immediately after second target')
     need(set(modifications)<=set(target_indices),'non-target supplied choice changed')
     need([e['request'] for e in ev[:len(inputs)]]==[e['request'] for e in original[:len(inputs)]],'actual prefix request sequence changed')
-    sites,workers=source_map(load_mir_document(raw))
+    execution=path(row.get('execution_snapshot',row['snapshot']))
+    execution_document=load_mir_document(execution)
+    if execution != raw:
+        conversion=json.loads(path(row['conversion']).read_text())
+        need(conversion['source_sha256']==sha(raw) and conversion['execution_sha256']==sha(execution),'fixture transport identity mismatch')
+        need(conversion['reference_identity']=='original_source_bytes_only' and conversion['compiler_reexecuted'] is False,'fixture conversion confused with fresh reference evidence')
+        need(decode_mir_document(convert_evidence(read_evidence(raw)))==execution_document,'fixture conversion changed source semantic data')
+        for input_path in (raw,execution,path(row['conversion'])):
+            need(run['inputs_before'].get(str(input_path.relative_to(ROOT)))==sha(input_path),'fixture source/execution/manifest not bound to the observed run')
+    sites,workers=source_map(execution_document)
     steps=[{'thread':int(m[1]),'cursor':int(m[2]),'pc':tuple(map(int,m.group(3,4,5))),'offset':m.start()} for m in STEP.finditer(txt)]
     need(steps,'missing cursor-indexed scheduled trace')
     projected=[];active={};target_context=[]
@@ -124,7 +134,7 @@ def check(row):
     need(len(target_context)==2,'target event/step correlation missing or duplicated')
     need({x['worker'] for x in target_context}=={'child_a','child_b'},'targets do not cover both workers')
     scheduling=[e for e in ev[:len(inputs)] if e['request']['site'] in ('scheduler','preemption')]
-    return {'case':row['case'],'log':str(log.relative_to(ROOT)),'log_sha256':sha(log),'prefix_sha256':sha(prefix),'snapshot_sha256':sha(raw),'miri_sidecar_sha256':sha(sidecar),'miri_seed':side['reference']['config']['rng_seed'],'miri_preemption_rate':side['reference']['config']['preemption_rate'],'original_rust_source_sha256':sha(source),'preserved_actual_prefix':True,'modified_input_indices':modifications,'dense_worker_definitions':workers,'worker_operation_projection':projected,'scheduling_projection_through_targets':scheduling,'targets':target_context}
+    return {'case':row['case'],'log':str(log.relative_to(ROOT)),'log_sha256':sha(log),'prefix_sha256':sha(prefix),'snapshot_sha256':sha(raw),'execution_snapshot_sha256':sha(execution),'test_transport_conversion':execution!=raw,'miri_sidecar_sha256':sha(sidecar),'miri_seed':side['reference']['config']['rng_seed'],'miri_preemption_rate':side['reference']['config']['preemption_rate'],'original_rust_source_sha256':sha(source),'preserved_actual_prefix':True,'modified_input_indices':modifications,'dense_worker_definitions':workers,'worker_operation_projection':projected,'scheduling_projection_through_targets':scheduling,'targets':target_context}
 def main():
     rows=json.loads(path(sys.argv[1]).read_text());checked=[check(r) for r in rows]
     by={r['case']:r for r in checked};pairs=[]

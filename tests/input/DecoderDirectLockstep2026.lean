@@ -8,21 +8,17 @@ private def check (condition : Bool) (message : String) : IO Unit :=
 -- Reintroduce the removed success envelope only for lockstep query answers.
 -- Keep the exact query keys and all referenced type identities unchanged.
 private def oldLockstep (input : Json) : Except String Json := do
-  let graph ← SharedPayloads.resolveGraph input
-  let catalog ← input.getObjVal? "shared_payloads"
-  let nodes ← (← catalog.getObjVal? "nodes").getArr?
-  let nodes ← nodes.mapIdxM fun index raw => do
-    let resolved := graph.nodes[index]!
-    if (resolved.getObjValAs? String "query_kind").toOption != some "lockstep_tails" then
+  let nodes ← (← input.getObjVal? "compiler_cast_queries").getArr?
+  let nodes ← nodes.mapM fun raw => do
+    if (raw.getObjValAs? String "query_kind").toOption != some "lockstep_tails" then
       return raw
     let fields := (← raw.getObj?).toList
     let tails := fields.filter fun (key, _) => key == "source_tail" || key == "target_tail"
     return Json.mkObj (("value", Json.mkObj tails) :: fields.filter (fun (key, _) =>
       key != "source_tail" && key != "target_tail"))
   let fields := (← input.getObj?).toList
-  let catalogFields := (← catalog.getObj?).toList
-  let catalog := Json.mkObj (("nodes", .arr nodes) :: catalogFields.filter (fun (key, _) => key != "nodes"))
-  return Json.mkObj (("shared_payloads", catalog) :: fields.filter (fun (key, _) => key != "shared_payloads"))
+  return Json.mkObj (("compiler_cast_queries", .arr nodes) ::
+    fields.filter (fun (key, _) => key != "compiler_cast_queries"))
 
 def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected fresh dynamic-vtable-upcast exporter input")

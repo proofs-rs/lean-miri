@@ -6,7 +6,7 @@ allocation identities are materialized by the actual constant root-pointer
 pipeline, with supplied destination layout checked at the original event. -/
 namespace Miri.Input.CompilerValueConstants
 open Lean Miri.ABI Miri.Interpreter Miri.Memory
-private def ref (j : Json) : Except String MIR.TyId := j.getObjValAs? Nat "type_id"
+private def ref (j : Json) : Except String MIR.TyId := j.getNat?
 private def records (p : CompilerProviders.Prepared) (key : String) : Except String (Array Json) := do
   (← p.program.input.raw.getObjVal? key).getArr?
 private def unique (entries : Array Json) : Except String Json := do
@@ -36,7 +36,7 @@ def callerLocationReference (p : CompilerProviders.Prepared) (span : MIR.SpanRef
   let mut matching := #[]
   for record in ← records p "compiler_caller_location_constants" do
     let (actual,tables) ← lowerCompilerSpan p.program.compilerTables
-      (← p.loweringContext.decodeCompilerValue (← record.getObjVal? "span"))
+      (← p.loweringContext.decodeSemanticValue .span (← record.getObjVal? "span"))
     if tables.spans == p.program.compilerTables.spans && actual == span then
       matching := matching.push record
   decode p (← unique matching)
@@ -53,7 +53,7 @@ def callerLocation (p : CompilerProviders.Prepared) (span : MIR.SpanRef) :
   let mut matching := #[]
   for record in entries do
     let (actual,next) ← lowerCompilerSpanWithInterner base
-      (← p.loweringContext.decodeCompilerValue (← record.getObjVal? "span"))
+      (← p.loweringContext.decodeSemanticValue .span (← record.getObjVal? "span"))
     if next.sameSpansAs base && actual == span then
       matching := matching.push record
   decode p (← unique matching)

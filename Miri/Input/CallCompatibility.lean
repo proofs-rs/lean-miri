@@ -104,7 +104,8 @@ private def lift (value : Result A) : Miri.Interpreter.LayoutCompat.M S A :=
 private def shape (runtime : RuntimeMetadata) (id : TypeId) : Result (TypeNode × Lean.Json) := do
   let node ← runtime.node id
   return (node,← RuntimeMetadata.jsonField node.payload "shape")
-private def typeRef (j : Lean.Json) : Result TypeId := RuntimeMetadata.number j "type_id"
+private def typeRef (j : Lean.Json) : Result TypeId :=
+  j.getNat?.mapError (.invalid "numeric type reference")
 
 def kind (runtime : RuntimeMetadata) (id : TypeId) : Result (Miri.Interpreter.LayoutCompat.TypeKind TypeId) := do
   let (node,source) ← shape runtime id

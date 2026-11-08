@@ -14,7 +14,7 @@ private def scan (ctx : LowerContext) (requested : MIR.Place) :
     if (source.getObjVal? "local").isOk && (source.getObjVal? "projection").isOk then
       let key ← lowerCompilerPlace ctx (← ctx.decodeCompilerValue source)
       if key == requested then
-        found := found.push (← (← normalized.getObjVal? "type").getObjValAs? Nat "type_id")
+        found := found.push (← (← normalized.getObjVal? "type").getNat?)
     match source with
     | .arr values =>
       let counterparts ← normalized.getArr?

@@ -65,7 +65,7 @@ def calculate (target : RuntimeTargetDataLayout) (element : LayoutData)
     randomizationSeed := element.randomizationSeed + count }
 private def primitive (runtime : RuntimeMetadata) (refs : Json) (key : String)
     (kind : Miri.MIR.IntegerKind) : Except Error (TyAndLayout TypeId) := do
-  let id ← convert ((refs.getObjVal? key).bind fun value => (value.getObjVal? "type_id").bind Json.getNat?)
+  let id ← convert ((refs.getObjVal? key).bind fun value => value.getNat?)
   let source ← metadata (runtime.node id)
   unless source.shapeMetadata.unsignedKind == some (.known kind) do
     throw (.metadata s!"runtime primitive {key} is not the exact compiler unsigned type")
@@ -102,7 +102,7 @@ def create (runtime : RuntimeMetadata) : Except Error World := do
   for node in runtime.source.types do
     if node.shapeKind == .array then
       let shape ← convert (node.payload.getObjVal? "shape")
-      let element ← convert ((shape.getObjVal? "element").bind fun value => (value.getObjVal? "type_id").bind Json.getNat?)
+      let element ← convert ((shape.getObjVal? "element").bind fun value => value.getNat?)
       let evidence := do
         let evidence ← shape.getObjVal? "constructor_identity"
         unless (← (← evidence.getObjVal? "canonical_value_constructor").getBool?) do

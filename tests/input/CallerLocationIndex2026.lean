@@ -44,7 +44,7 @@ def main (args : List String) : IO Unit := do
   unless (CompilerValueConstants.callerLocationReference (withRows p (.arr #[row])) span).isOk do
     throw (IO.userError "positive caller-location fixture did not decode")
   let resultType ← must (row.getObjVal? "result_type")
-  let resultTypeId ← must (resultType.getObjValAs? Nat "type_id")
+  let resultTypeId ← must resultType.getNat?
   let typeNameRow := set (set row "input_type" resultType) "typing_env" (.str "fully_monomorphized")
   let raw := set p.program.input.raw "compiler_type_name_constants" (.arr #[typeNameRow])
   let program := {p.program with input := {p.program.input with raw}}

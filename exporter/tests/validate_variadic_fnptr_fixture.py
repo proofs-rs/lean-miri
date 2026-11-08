@@ -45,7 +45,7 @@ i32_id = i32_types[0]["type_id"]
 variadic_rows = [row for row in pointer_abis if row.get("type_id") == variadic_id]
 extra_rows = [
     row for row in variadic_rows
-    if row.get("extra_argument_types") == [{"type_id": i32_id}]
+    if row.get("extra_argument_types") == [i32_id]
 ]
 require(extra_rows, "variadic FnPtr has no ABI query row with one i32 extra")
 require(

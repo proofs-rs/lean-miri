@@ -1,4 +1,5 @@
 import Miri.Input
+import MiriTests.Input.NumericWireFixture
 
 open Lean
 open Miri.Input
@@ -79,8 +80,11 @@ private def rewriteFirstTerminator (block : Json) (rewrite : Json → Except Str
   let term ← field block "terminator"
   setField block "terminator" (← rewrite term)
 
+private def decodeWire (json : Json) : Except String DecodeResult := do
+  decodeJson (← MiriTests.NumericWireFixture.encode json).compress
+
 private def malformedResult (json : Json) : Bool :=
-  match decodeJson json.compress with
+  match decodeWire json with
   | .error _ => true
   | .ok _ => false
 
@@ -137,16 +141,13 @@ private def must (result : Except String α) : IO α :=
 def main (args : List String) : IO UInt32 := do
   let path ← match args with
     | value :: _ => pure value
-    | [] => fail "usage: DecoderTests <schema-v3-export.json>"
+    | [] => fail "usage: DecoderTests <schema-v4-export.json>"
   let source ← IO.FS.readFile path
   let original ← match Json.parse source with
     | .ok value => pure value
     | .error error => fail s!"invalid fixture JSON: {error}"
-  -- Mutate semantic payloads, after validating and resolving the transport.
-  -- Keep a valid empty catalog so malformed cases reach their intended check.
-  let original ← must (SharedPayloads.resolveCatalog original)
-  let original ← must (setField original "shared_payloads"
-    (object [("schema_version", number 2), ("nodes", toJson (#[] : Array Json))]))
+  -- Keep source numeric tables intact; mutations edit nodes in their own kind.
+  let _ ← must (SemanticTables.parse original)
 
   let decoded ← match decodeJson source with
     | .ok value => pure value
@@ -212,7 +213,7 @@ def main (args : List String) : IO UInt32 := do
   let allocations ← must (array (← must (field original "allocations")))
   let expandedAllocations := allocations.push syntheticFunction |>.push syntheticTypeId
   let withSyntheticAllocations ← must (setField original "allocations" (toJson expandedAllocations))
-  let allocationDataTest ← match decodeJson withSyntheticAllocations.compress with
+  let allocationDataTest ← match decodeWire withSyntheticAllocations with
     | .ok result => pure result
     | .error error => fail s!"typed function/type-id allocation payloads were rejected: {error}"
   check (allocationDataTest.document.allocations.any fun node => match node.data with | some (.function _) => true | _ => false)
@@ -250,14 +251,17 @@ def main (args : List String) : IO UInt32 := do
     let badTagEncoding ← must <| do
       let types ← array (← field original "types")
       let typeNode ← getAt types index
-      let layout ← field typeNode "layout"
+      let layoutId ← (← field typeNode "layout").getNat?
+      let catalog ← field original "semantic_tables"
+      let layouts ← array (← field catalog "layouts")
+      let layout ← getAt layouts layoutId
       let variants ← field layout "variants"
       let encoding ← field variants "tag_encoding"
       let corrupt ← setField encoding "niche_start" (string "not-a-number")
       let variants ← setField variants "tag_encoding" corrupt
       let layout ← setField layout "variants" variants
-      let typeNode ← setField typeNode "layout" layout
-      setField original "types" (toJson (← updateAt types index typeNode))
+      let catalog ← setField catalog "layouts" (toJson (← updateAt layouts layoutId layout))
+      setField original "semantic_tables" catalog
     check (malformedResult badTagEncoding) "malformed u128 niche encoding was accepted"
   | none => fail "fixture did not exercise a structured tag encoding"
 
@@ -272,9 +276,9 @@ def main (args : List String) : IO UInt32 := do
   let badPin ← must (setField original "producer" badProducer)
   check (malformedResult badPin) "wrong rustc pin was accepted"
 
-  let danglingType ← must (setField original "synthetic_type_ref" (object [("type_id", number 999999)]))
+  let danglingType ← must (setField original "input_type" (number 999999))
   check (malformedResult danglingType) "dangling type reference was accepted"
-  let danglingAlloc ← must (setField original "synthetic_allocation_ref" (object [("allocation_id", number 999999)]))
+  let danglingAlloc ← must (setField original "allocation" (number 999999))
   check (malformedResult danglingAlloc) "dangling allocation reference was accepted"
 
   let typesJson ← must (field original "types")
@@ -301,7 +305,7 @@ def main (args : List String) : IO UInt32 := do
   let duplicateInstanceId ← must (setField original "instances" (toJson duplicateInstances))
   check (malformedResult duplicateInstanceId) "duplicate instance ID was accepted"
 
-  let danglingInstance ← must (setField original "synthetic_instance_ref" (object [("instance_id", number 999999)]))
+  let danglingInstance ← must (setField original "instance_id" (number 999999))
   check (malformedResult danglingInstance) "dangling instance reference was accepted"
 
   let badLocal ← must <| rewriteFirstBody original fun body => do
@@ -381,7 +385,7 @@ def main (args : List String) : IO UInt32 := do
     ("binary", object [("kind", string "BinaryOp"), ("operator", object [("kind", string "add")])]),
     ("unary", object [("kind", string "UnaryOp"), ("operator", object [("kind", string "not")])])]
   let taggedInput ← must (setField original "typed_tag_probe" typedTagProbe)
-  let taggedResult ← match decodeJson taggedInput.compress with
+  let taggedResult ← match decodeWire taggedInput with
     | .ok result => pure result
     | .error error => fail s!"known pinned MIR tags were rejected: {error}"
   for category in [.mirPhase, .mirPhaseStage, .withRetag, .runtimeCheck,
@@ -488,9 +492,14 @@ def main (args : List String) : IO UInt32 := do
   let sourceBody ← must (getAt originalBodies 0)
   let sourceLocals ← must (array (← must (field sourceBody "locals")))
   let sourceLocal ← must (getAt sourceLocals 0)
-  let sourceInfo ← must (field sourceLocal "source_info")
+  let originalSourceInfo ← must (field sourceLocal "source_info")
+  let sourceCatalog ← must (SemanticTables.parse original)
+  let sourceSpan ← must (sourceCatalog.lookup .span (← must (field originalSourceInfo "span")) "$minimal.span")
+  let sourceInfo := object [("span", sourceSpan), ("scope", number 0)]
   let bodyPhase ← must (field sourceBody "phase")
-  let sourceScopes ← must (field sourceBody "source_scopes")
+  let sourceScopes := toJson #[object [
+    ("scope", number 0), ("parent", Json.null), ("span", sourceSpan),
+    ("inlined", Json.null), ("inlined_parent_scope", Json.null), ("local_data", Json.null)]]
   let minimalBody := object [
     ("def_id", minimalRootId), ("def_path", minimalRootPath), ("arg_count", number 0),
     ("phase", bodyPhase), ("spread_arg", Json.null), ("injection_phase", Json.null),
@@ -507,7 +516,6 @@ def main (args : List String) : IO UInt32 := do
     ("unresolved_obligations", toJson (#[] : Array Json))]
   let minimalDocument := object [
     ("schema", string expectedSchema), ("schema_version", number expectedSchemaVersion),
-    ("shared_payloads", object [("schema_version", number 2), ("nodes", toJson (#[] : Array Json))]),
     ("producer", object [
       ("miri_commit", string expectedMiriCommit), ("rustc_commit", string expectedRustcCommit),
       ("rustc_version", string "pinned"), ("target_triple", string "x86_64-unknown-linux-gnu")]),

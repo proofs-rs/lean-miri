@@ -95,3 +95,7 @@ LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1 "$ROOT/exporter/target/debug/lean-miri-mir-e
   -Zmir-opt-level=0 --sysroot "$MIRI_SYSROOT" --cfg=miri -Zalways-encode-mir
 python3 "$ROOT/exporter/tests/validate_selected_static_typeid162.py" "$ALLOC_WORLD_OUT"
 lake env lean --run "$ROOT/tests/input/SelectedStaticTypeIdRuntime162.lean" "$ALLOC_WORLD_OUT"
+
+# Exercise every numeric semantic table, including C ABI cast/register nodes.
+LEAN_MIRI_NUMERIC_EXPORTER="$ROOT/exporter/target/debug/lean-miri-mir-exporter" \
+  LEAN_MIRI_NUMERIC_FIXTURE="$OUT" bash "$ROOT/tests/input/check-numeric-references.sh"

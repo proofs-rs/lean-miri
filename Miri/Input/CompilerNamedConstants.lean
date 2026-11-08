@@ -38,7 +38,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
     let query ← record.getObjVal? "query"
     let (sourceInstance, next) ← CompilerInstance.decode ctx tables query
     tables := next
-    let ty ← (← (← query.getObjVal? "type").getObjVal? "type_id").getNat?
+    let ty ← (← query.getObjVal? "type").getNat?
     unless ctx.containsTypeId ty do throw "named constant references missing compiler type"
     let evaluated ← query.getObjVal? "evaluation"
     let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue evaluated)

@@ -41,7 +41,8 @@ def name : Panic.LangItem → String
 private def parameterTag : MainGenericParameter → Nat
   | .lifetime => 0 | .typeParameter => 1 | .constParameter => 2
 
-private def definition (source : Json) : Except String DefinitionId := do
+private def definition (program : LoweredProgram) (source : Json) : Except String DefinitionId := do
+  let source ← program.input.semanticTables.node .definition source "$.compiler_panic_queries.definition"
   pure ⟨← source.getObjValAs? Nat "crate",← source.getObjValAs? Nat "index"⟩
 private def rows (p : LoweredProgram) : Except String (Array Json) := do
   (← p.input.raw.getObjVal? "compiler_panic_queries").getArr?
@@ -60,7 +61,7 @@ def prepareProgram (program : LoweredProgram) : Except String LoweredProgram := 
     tags := tags.push tag
     let item ← row.getObjVal? "definition"
     unless item == .null do
-      let source ← definition item
+      let source ← definition program item
       unless definitions.contains source do definitions := definitions.push source
   pure (program.withCompilerTables {program.compilerTables with definitions})
 
@@ -71,7 +72,7 @@ def langItemByName (program : LoweredProgram) (tag : String) : Except String (Op
   let some row := selected[0]? | throw "panic language-item query absent"
   let value ← row.getObjVal? "definition"
   if value == .null then return none
-  pure (some (← lookupDefinitionId program.compilerTables.definitions (← definition value)))
+  pure (some (← lookupDefinitionId program.compilerTables.definitions (← definition program value)))
 
 def langItem (program : LoweredProgram) (item : Panic.LangItem) : Except String (Option MIR.DefId) :=
   langItemByName program (name item)
@@ -82,7 +83,7 @@ def genericParameters (program : LoweredProgram) (requested : MIR.DefId) :
   for row in ← rows program do
     let value ← row.getObjVal? "definition"
     if value == .null then continue
-    let id ← lookupDefinitionId program.compilerTables.definitions (← definition value)
+    let id ← lookupDefinitionId program.compilerTables.definitions (← definition program value)
     unless id == requested do continue
     let params ← (← (← row.getObjVal? "generic_parameters").getArr?).mapM fun value => do
       match ← value.getStr? with

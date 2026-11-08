@@ -65,7 +65,7 @@ fn export_failure<T>(context: &str, details: impl std::fmt::Display) -> Result<T
 
 const EXPECTED_RUSTC_COMMIT: &str = "8144389c895da997dbdecaa635e41d6a50be6ffd";
 const MIRI_COMMIT: &str = "7fa591d7d4dd9af8154becbc8332f8096f8323b1";
-const ROOT_SCHEMA_VERSION: u64 = 3;
+const ROOT_SCHEMA_VERSION: u64 = 4;
 
 struct Options {
     output: PathBuf,
@@ -1519,7 +1519,7 @@ impl ExportCallbacks {
             document["invocation"] = invocation;
         }
         // The reference sidecar records allocator-world metadata from the raw
-        // document. Once graph-encoded, this path may be a shared reference.
+        // document before numeric semantic references are encoded.
         #[cfg(feature = "miri-reference")]
         let miri_reference_frontier = if self.miri_reference {
             document
@@ -1530,7 +1530,7 @@ impl ExportCallbacks {
         } else {
             None
         };
-        payload_sharing::share_payloads(&mut document)?;
+        payload_sharing::encode_numeric_references(&mut document)?;
         vtable_diagnostics::write_report(vtable_diagnostics, &document)?;
         if self.miri_reference {
             if !self.prepared_allocator_world {
@@ -4077,7 +4077,7 @@ fn rvalue_json<'tcx>(
             } else {
                 match tcx.eval_static_initializer(*def) {
                     Ok(value) => json!({
-                        "allocation":allocation_memory_payload(context,tcx,value.inner())?,
+                        "allocation_template":allocation_memory_payload(context,tcx,value.inner())?,
                     }),
                     Err(error) => {
                         export_failure("main::rvalue_json", format!("{}", format!("{error:?}")))?

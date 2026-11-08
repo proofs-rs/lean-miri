@@ -49,11 +49,39 @@ is unchanged by this example. The fixed Rust/MIR hashes are recorded in
 a Lean native-code-generation boxing panic; no native executable validation
 of that block is claimed.
 
+`input.json` is a fresh root-schema-4 export from the pinned rustc/Miri
+exporter, using the same root and compiler flags as the preceding input.
+Types, definitions, spans, constants and ABI metadata use the current numeric
+identity tables. The production importer resolves those references before the
+example reflects its ordinary Lean constants; no historical JSON conversion or
+compatibility reader participates in this proof. This transport migration does
+not change the Rust function, caller/profile premises, or final UB-freedom claim.
+
+To regenerate it after building the pinned exporter and MIR sysroot, run from
+the repository root with `EXPORTER_BIN` and `MIRI_SYSROOT` pointing to those
+artifacts:
+
+```sh
+LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=0 LEAN_MIRI_RUN_PREPARED_MIRI=0 \
+  "$EXPORTER_BIN" --output scratch/empty-function-schema4.json \
+  --root empty_function -- examples/empty_function/empty_function.rs \
+  --crate-type=lib --crate-name=empty_function --edition=2024 \
+  -Zmir-opt-level=0 --cfg=miri -Zalways-encode-mir \
+  -Zextra-const-ub-checks -Zmir-preserve-ub \
+  -Zmir-enable-passes=-CheckAlignment,-CheckNull,-CheckEnums \
+  -Zmir-enable-passes=-ReferencePropagation,-GVN \
+  -Zdeduplicate-diagnostics=no --sysroot "$MIRI_SYSROOT"
+```
+
+Review the generated input, replace the committed snapshot, update its
+`SHA256SUMS` entry, and rerun the proof checks below. The Rust source hash must
+remain unchanged for this example.
+
 Run `bash tools/check-empty-function.sh` to compile the committed root and its source
 closure, check the final target type, and audit imported EmptyFunction/Miri declarations
 (including private/generated declarations) for transitive axioms. Only
 `propext`, `Quot.sound`, and `Classical.choice` are permitted.
-See [STATUS.md](../../STATUS.md#empty-function-call-safety).
+See [STATUS.md](../../STATUS.md#empty-function-caller-domain-transport).
 
 ## Continuous integration
 

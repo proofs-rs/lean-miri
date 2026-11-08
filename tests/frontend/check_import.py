@@ -44,6 +44,10 @@ def main : IO Unit := do
       throw (IO.userError "raw JSON changed during reflection")
     unless Client.imported.document.sharedNodes == expected.document.sharedNodes do
       throw (IO.userError "shared JSON catalog changed during reflection")
+    unless Miri.Input.SemanticTables.kinds.all (fun kind =>
+      Client.imported.document.semanticTables.nodes kind ==
+        expected.document.semanticTables.nodes kind) do
+      throw (IO.userError "semantic reference catalog changed during reflection")
     unless Client.imported.document.typedTree == expected.document.typedTree do
       throw (IO.userError "typed diagnostic tree changed during reflection")
     unless Client.imported.document.allocations.size == expected.document.allocations.size do
@@ -83,11 +87,16 @@ run_cmd do
 -- Runtime-only representation diagnostic; the imported declarations and their
 -- kernel/axiom checks above remain safe. Pointer inspection is not a proof.
 unsafe def main : IO Unit := do
-  let value ← match Client.selected.document.raw.getObjVal? "types" with
+  let tables ← match Client.selected.document.raw.getObjVal? "semantic_tables" with
     | .ok value => pure value
     | .error message => throw (IO.userError message)
+  let spans ← match tables.getObjValAs? (Array Lean.Json) "spans" with
+    | .ok value => pure value
+    | .error message => throw (IO.userError message)
+  let some value := spans[0]?
+    | throw (IO.userError "sharing fixture has no span row")
   let some node := Client.selected.document.sharedNodes.find? (· == value)
-    | throw (IO.userError "sharing fixture has no catalog entry for types")
+    | throw (IO.userError "sharing fixture has no catalog entry for span")
   unless ptrEq value node do
     throw (IO.userError "reflected raw JSON and catalog lost runtime sharing")
 ''')

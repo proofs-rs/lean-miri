@@ -84,6 +84,7 @@ private def coreJson (core : ImportDocumentCore) : Json := obj [
   ("function_abis", Json.arr (core.functionAbis.map abiJson)),
   ("bodies", Json.arr (core.bodies.map bodyJson)),
   ("shared_nodes", Json.arr core.sharedNodes),
+  ("semantic_tables", Json.arr (SemanticTables.kinds.map fun kind => Json.arr (core.semanticTables.nodes kind))),
   ("raw", core.raw)]
 
 private def sameBlock (left right : BasicBlock) : Bool := Id.run do

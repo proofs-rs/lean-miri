@@ -30,7 +30,7 @@ instances = [
 types = {item["type_id"]: item for item in app["types"]}
 def u32_argument(instance):
     args = instance.get("generic_args", [])
-    return len(args) == 1 and args[0].get("kind") == "type" and types[args[0]["value"]["type_id"]]["display"] == "u32"
+    return len(args) == 1 and args[0].get("kind") == "type" and types[args[0]["value"]]["display"] == "u32"
 wrap = next(item for item in instances if item["def_path"].endswith("::wrap") and u32_argument(item))
 identity = next(item for item in instances if item["def_path"].endswith("::identity") and item["generic_args"] == wrap["generic_args"])
 assert identity["instance_id"] != wrap["instance_id"]
@@ -41,7 +41,7 @@ types = {item["type_id"]: item for item in app["types"]}
 
 def local_displays(instance):
     return {
-        types[local["type"]["type_id"]]["display"]
+        types[local["type"]]["display"]
         for local in instance["body"]["locals"]
     }
 

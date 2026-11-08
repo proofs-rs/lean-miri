@@ -31,7 +31,7 @@ def dynamicData (prepared : CompilerFactAdapters.Prepared) (id : TypeId) :
   let shape ← node.payload.getObjVal? "shape"
   let principal ← shape.getObjVal? "principal_predicate"
   let principal : Option Nat ← if principal == Lean.Json.null then pure none else do
-    pure (some (← (← principal.getObjVal? "predicate_id").getNat?))
+    pure (some (← principal.getNat?))
   return some ⟨token,principal⟩
 
 private def lift (value : Result A) : EStateM StepError S A :=

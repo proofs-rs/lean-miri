@@ -21,6 +21,7 @@ def runtimeChecks : Array (String × Bool) := #[
   ("MiriTests/Input/JsonReflexivityCache.lean", true),
   ("MiriTests/Input/JsonTraversalCache2026.lean", true),
   ("MiriTests/Input/MiriWriteAllHost.lean", true),
+  ("MiriTests/Input/SemanticTables.lean", false),
   ("MiriTests/Input/SharedPayloadArrayRegression.lean", true),
   ("MiriTests/Input/WindowsHostIoDemand.lean", true),
   ("MiriTests/LocalAccess/Basic.lean", true),

@@ -51,10 +51,13 @@ exact arguments cannot be fingerprinted.
 
 ## Input contract
 
-The root schema is `lean-miri-rustc-mir` version3 and the `shared_payloads` catalog
-is version2. Reading old schema2 is not supported. IDs are document-local
-references, distinct from raw Miri AllocId values.
-[SharedPayloads](../Miri/Input/SharedPayloads.lean) and
+The root schema is `lean-miri-rustc-mir` version4 and the `semantic_tables`
+catalog is version1. References are bare numeric IDs in separate document-local
+spaces for each semantic kind, distinct from raw Miri AllocId values. The Lean
+decoder consumes this format directly. Historical fixtures are converted during
+test preparation. See the [numeric format](../docs/mir-numeric-format.md) for
+table roles and identity rules.
+[SemanticTables](../Miri/Input/SemanticTables.lean) and
 [Decoder](../Miri/Input/Decoder.lean) check catalog, reference and typed-query contracts.
 Successful query results are serialized directly: booleans remain booleans,
 optional results use JSON null, and structured results carry their semantic

@@ -8,7 +8,7 @@ private def fail (message : String) : IO α := throw (IO.userError message)
 def main (args : List String) : IO UInt32 := do
   let path ← match args with
     | value :: _ => pure value
-    | [] => fail "usage: SelectedScopeTests <rooted-schema-v3-export.json>"
+    | [] => fail "usage: SelectedScopeTests <rooted-schema-v4-export.json>"
   let source ← IO.FS.readFile path
   let result ← match decodeJson source with
     | .ok value => pure value

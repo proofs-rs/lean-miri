@@ -60,7 +60,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
     let (callee,next) ← CompilerInstance.decode ctx tables record
     tables := next
     let extra ← (← (← record.getObjVal? "extra_argument_types").getArr?).mapM fun ty => do
-      let id ← (← ty.getObjVal? "type_id").getNat?
+      let id ← ty.getNat?
       unless ctx.containsTypeId id do throw "extra ABI argument references missing compiler type"
       pure id
     let result := do

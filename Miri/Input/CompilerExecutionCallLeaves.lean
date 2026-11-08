@@ -18,7 +18,7 @@ def tupleFields (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except String
     throw "source RustCall spreading requires the exact tuple type"
   let elements ← (← (← node.payload.getObjVal? "shape").getObjVal? "elements").getArr?
   elements.mapM fun value => do
-    let id ← (← value.getObjVal? "type_id").getNat?
+    let id ← value.getNat?
     let _ ← p.runtime.node id |>.mapError toString
     pure id
 

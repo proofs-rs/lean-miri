@@ -14,7 +14,7 @@ private def records (p : CompilerProviders.Prepared) : Result (Array Json) := do
   (← p.program.input.raw.getObjVal? "compiler_cast_queries").getArr?
 private def text (j : Json) (key : String) : Result String := do (← j.getObjVal? key).getStr?
 private def ref (j : Json) (key : String) : Result TyId := do
-  (← (← j.getObjVal? key).getObjVal? "type_id").getNat?
+  (← j.getObjVal? key).getNat?
 private def value (j : Json) : Result Json := CompilerCastQueryRecord.payload j
 private def unique (entries : Array Json) : Result Json := do
   let some first := entries[0]? | throw "missing exact cast compiler query"
@@ -83,7 +83,7 @@ def lockstepTails (p : CompilerProviders.Prepared) (source target : TyId) : Resu
 
 def boxLayout (p : CompilerProviders.Prepared) (pointee : TyId) : Result LocalLayout := do
   let result ← value (← query p "box_type" pointee)
-  let id ← (← result.getObjVal? "type_id").getNat?
+  let id ← result.getObjValAs? Nat "type_id"
   layout p id
 
 def supertraitSlot (p : CompilerProviders.Prepared) (source target : TyId) : Result (Option Nat) := do
@@ -92,7 +92,7 @@ def supertraitSlot (p : CompilerProviders.Prepared) (source target : TyId) : Res
 
 private def principalValue (j : Json) : Result (Option Nat) := do
   let result ← j.getObjVal? "principal_predicate"
-  if result == Json.null then pure none else pure (some (← (← result.getObjVal? "predicate_id").getNat?))
+  if result == Json.null then pure none else pure (some (← result.getNat?))
 
 /-- Full predicate-list identity is the key. The principal is exported by the
 compiler, not reconstructed by picking the first non-auto predicate. -/
@@ -134,11 +134,12 @@ def eraseSelfTraitRef (p : CompilerProviders.Prepared) (token : Nat) : Result Na
   for row in queryRows do
     let some metadata := (row.getObjVal? "vtable_metadata").toOption | continue
     let some typeRef := (row.getObjVal? "input_type").toOption | continue
-    let some sourceType := (typeRef.getObjValAs? Nat "type_id").toOption | continue
+    let some sourceType := (typeRef.getNat?).toOption | continue
     let some entryValues := ((metadata.getObjVal? "entries").bind Json.getArr?).toOption | continue
     for (entryValue, index) in entryValues.toList.zipIdx do
       let some entry := (Input.decodeVtableEntry entryValue
-        s!"$.compiler_vtable_queries.vtable_metadata.entries[{index}]").toOption | continue
+        s!"$.compiler_vtable_queries.vtable_metadata.entries[{index}]"
+        (DecoderValues.semanticDecodeMemo p.program.input.semanticTables)).toOption | continue
       if entry.kind == .supertraitVtablePointer &&
           (CompilerVTableRuntime.supertraitPrincipal runtime sourceType entry).toOption == some token then
         return token

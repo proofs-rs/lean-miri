@@ -26,14 +26,14 @@ covariance = document["compiler_covariance_queries"]
 
 
 def display(type_ref):
-    if not isinstance(type_ref, dict):
+    if type(type_ref) is not int:
         return ""
-    node = types.get(type_ref.get("type_id"), {})
+    node = types.get(type_ref, {})
     return node.get("display", "")
 
 
 def type_id(type_ref):
-    return type_ref.get("type_id") if isinstance(type_ref, dict) else None
+    return type_ref if type(type_ref) is int else None
 
 
 def relation_ids(source_ref, target_ref):
@@ -121,7 +121,7 @@ argument_source = operand_type_ref(call.get("args", [{}])[0].get("operand"))
 argument_target = local_type_ref(pointer_target_body, 1)
 return_source = local_type_ref(pointer_target_body, 0)
 return_target = call.get("destination", {}).get("type")
-require(argument_source and argument_target and return_source and return_target,
+require(all(item is not None for item in (argument_source, argument_target, return_source, return_target)),
         "indirect pointer call/candidate transfer types could not be recovered")
 require(type_id(argument_source) != type_id(argument_target),
         "indirect FnPtr argument fixture did not preserve its distinct MIR types")
@@ -175,18 +175,18 @@ virtual_target_body = next(
 require(virtual_target_body, "validated virtual target has no substituted MIR body")
 receiver_source = next(
     (
-        {"type_id": item["type_id"]}
+        item["type_id"]
         for item in types.values()
         if item.get("shape", {}).get("kind") == "raw_pointer"
         and item.get("shape", {}).get("mutability", {}).get("kind") == "mutable"
         and "ConcreteObject"
-        in types.get(item.get("shape", {}).get("pointee", {}).get("type_id"), {})
+        in types.get(item.get("shape", {}).get("pointee"), {})
         .get("shape", {}).get("def_path", "")
     ),
     None,
 )
 receiver_target = local_type_ref(virtual_target_body, 1)
-require(receiver_source and receiver_target and relation_ids(receiver_source, receiver_target),
+require(receiver_source is not None and receiver_target is not None and relation_ids(receiver_source, receiver_target),
         "exact virtual receiver transfer from *mut ConcreteObject to callee local is absent")
 virtual_argument_source = operand_type_ref(virtual_callsite.get("args", [{}, {}])[1].get("operand"))
 virtual_argument_target = local_type_ref(virtual_target_body, 2)
@@ -221,20 +221,20 @@ callback_body = next(
     (row for row in callback_rows if row.get("body_instantiation", {}).get("kind") == "substituted_and_normalized"),
     None,
 )
-require(callback_body and callback_data_source and callback_operand_type,
+require(callback_body is not None and callback_data_source is not None and callback_operand_type is not None,
         "pthread callback target or registration data operand is absent")
 callback_signature = display(callback_operand_type)
 require("c_void" in callback_signature and "*mut" in callback_signature,
         "pthread callback operand is not the fixture's mutable c_void callback")
 callback_argument_target = local_type_ref(callback_body, 1)
 require(
-    callback_argument_target
+    callback_argument_target is not None
     and type_id(callback_data_source) == type_id(callback_argument_target),
     "pthread registration data operand does not match the callback MIR argument local",
 )
 callback_return_source = local_type_ref(callback_body, 0)
 require(
-    callback_return_source
+    callback_return_source is not None
     and type_id(callback_return_source) == type_id(callback_argument_target),
     "thread_start return local does not preserve its callback argument type",
 )
@@ -246,7 +246,7 @@ def is_mutable_unit_pointer(node):
         return False
     if shape.get("mutability", {}).get("kind") != "mutable":
         return False
-    pointee = types.get(shape.get("pointee", {}).get("type_id"), {})
+    pointee = types.get(shape.get("pointee"), {})
     return (
         pointee.get("shape", {}).get("kind") == "tuple"
         and pointee.get("shape", {}).get("elements", []) == []
@@ -255,7 +255,7 @@ def is_mutable_unit_pointer(node):
 
 unit_pointer_destination = next(
     (
-        {"type_id": item["type_id"]}
+        item["type_id"]
         for item in types.values()
         if is_mutable_unit_pointer(item)
     ),

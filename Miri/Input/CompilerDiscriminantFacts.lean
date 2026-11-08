@@ -29,13 +29,13 @@ source nondefault-address-space limitation), never a guessed usize/layout. -/
 def tagLayout (context : CompilerFacts.Context) (tag : Scalar) : Except String (TyAndLayout TypeId) := do
   let key ← primitiveKey tag.primitive
   let refs ← context.runtime.source.raw.getObjVal? "compiler_runtime_primitives"
-  let id ← (← (← refs.getObjVal? key).getObjVal? "type_id").getNat?
+  let id ← (← refs.getObjVal? key).getNat?
   CompilerFacts.layoutOf context id
 private def decodeValue (context : CompilerFacts.Context) (j : Json) :
     Except String (Nat × TypeId × U128) := do
   let variant ← (← j.getObjVal? "variant").getNat?
   unless variant < 2^32 do throw "compiler variant index exceeds u32"
-  let ty ← (← (← j.getObjVal? "type").getObjVal? "type_id").getNat?
+  let ty ← (← j.getObjVal? "type").getNat?
   let _ ← context.runtime.node ty |>.mapError toString
   let text ← (← j.getObjVal? "bits").getStr?
   let some bits := text.toNat? | throw "invalid compiler discriminant u128 bits"

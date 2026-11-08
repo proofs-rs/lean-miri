@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from mir_json import decode_mir_document
+from mir_fixture import convert_evidence
 
 
 def main():
@@ -26,7 +27,7 @@ def main():
     args = parser.parse_args()
     before_bytes = args.before.read_bytes()
     after_bytes = args.after.read_bytes()
-    before = json.loads(before_bytes)
+    before = decode_mir_document(convert_evidence(json.loads(before_bytes)))
     wire = json.loads(after_bytes)
     after = decode_mir_document(wire)
     before.pop("schema_version")
@@ -51,7 +52,7 @@ def main():
                    "sha256": hashlib.sha256(before_bytes).hexdigest()},
         "after": {"bytes": len(after_bytes), "gzip_bytes": len(gzip.compress(after_bytes, mtime=0)),
                   "sha256": hashlib.sha256(after_bytes).hexdigest()},
-        "shared_nodes": len(wire["shared_payloads"]["nodes"]),
+        "semantic_nodes": {kind: len(nodes) for kind, nodes in wire["semantic_tables"].items() if kind != "schema_version"},
         "byte_reduction_percent": 100 * (1 - len(after_bytes) / len(before_bytes)),
     }
     args.report.write_text(json.dumps(report, indent=2) + "\n")

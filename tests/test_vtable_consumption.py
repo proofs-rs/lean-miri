@@ -4,6 +4,9 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+from mir_json import encode_mir_document
 
 SPEC = importlib.util.spec_from_file_location('vtable_erasure',
     Path(__file__).resolve().parents[1] / 'tools/check-vtable-erasure.py')
@@ -14,9 +17,9 @@ SPEC.loader.exec_module(MODULE)
 class ConsumptionTests(unittest.TestCase):
     def setUp(self):
         # Synthetic parser data only; never a producer/nonidentity witness.
-        self.document = {'producer': {'rustc_commit': 'unit-test'}, 'compiler_vtable_queries': [{
-            'query_id': 0, 'input_type': {'type_id': 10}, 'output_type': {'type_id': 10},
-            'input_predicates': [{'predicate_id': 1}], 'output_predicates': [{'predicate_id': 2}]}]}
+        self.document = encode_mir_document({'schema': 'lean-miri-rustc-mir', 'schema_version': 4, 'producer': {'rustc_commit': 'unit-test'}, 'compiler_vtable_queries': [{
+            'query_id': 0, 'input_type': 10, 'output_type': 10,
+            'input_predicates': [{'predicate_id': 1, 'kind': 'trait'}], 'output_predicates': [{'predicate_id': 2, 'kind': 'trait'}]}]})
         self.provenance = {'schema': 'lean-miri-vtable-origins-v1', 'queries': [{
             'query_id': 0, 'input_type_id': 10, 'input_predicate_ids': [1],
             'origins': [{'route': 'unsize_cast', 'body': {'role': 'root_template'}}]}]}

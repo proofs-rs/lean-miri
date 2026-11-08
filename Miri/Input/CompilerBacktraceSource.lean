@@ -35,7 +35,7 @@ private def spans (ctx : LowerContext) (interner : CompilerSpanInterner) (payloa
   let mut entries := #[]
   for record in records do
     let (span,next) ← lowerCompilerSpanWithInterner interner
-      (← ctx.decodeCompilerValue (← record.getObjVal? "span"))
+      (← ctx.decodeSemanticValue .span (← record.getObjVal? "span"))
     interner := next
     let location ← position (← record.getObjVal? "source_position")
     unless (← natural record "collapsed_lo") == location.bytePosition.toNat do

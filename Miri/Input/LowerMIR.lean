@@ -61,6 +61,7 @@ structure LowerContext where
   /-- Paired source for query metadata addressed by paths in decoded MIR. -/
   sourceDocument : Option Lean.Json := none
   compilerValueMemo : Option CompilerValueMemo := none
+  semanticTables : SemanticTables.Catalog := SemanticTables.empty
   /-- Optional exact-array certificates; hand-built contexts default to the
   original linear lookup behavior. -/
   typeIndex : Option (LowerContextTypeIndex typeIds) := none
@@ -69,7 +70,18 @@ structure LowerContext where
 
 /-- Consume complete import-time compiler values; manual contexts decode directly. -/
 def LowerContext.decodeCompilerValue (ctx : LowerContext) (raw : Lean.Json) : Except String TypedValue :=
-  decodeCompilerValueWithMemo raw ctx.compilerValueMemo
+  DecoderValues.decodeValue raw "$compiler_value" .any none (DecoderValues.semanticDecodeMemo ctx.semanticTables)
+
+/-- Resolve one schema-provided kind in this compilation's numeric tables. -/
+def LowerContext.resolveSemantic (ctx : LowerContext) (kind : SemanticTables.Kind)
+    (raw : Lean.Json) (path : String := "$compiler_value") : Except String Lean.Json :=
+  ctx.semanticTables.node kind raw path
+
+/-- Decode the demanded semantic node directly, without reconstructing a JSON
+transport tree or conflating equal numbers from different reference kinds. -/
+def LowerContext.decodeSemanticValue (ctx : LowerContext) (kind : SemanticTables.Kind)
+    (raw : Lean.Json) (path : String := "$compiler_value") : Except String TypedValue := do
+  ctx.decodeCompilerValue (← ctx.resolveSemantic kind raw path)
 
 def LowerContext.containsTypeId (ctx : LowerContext) (id : TypeId) : Bool :=
   match ctx.typeIndex with
@@ -120,7 +132,10 @@ def LowerContext.ofTypes (types : Array TypeNode) : LowerContext := Id.run do
 semantics remain independent from syntax lowering and its obligations. -/
 def LowerContext.ofDocument (document : ImportDocumentCore) : LowerContext :=
   let ctx := (ofTypes document.types).withAllocationIds (document.allocations.map (·.id))
-  { ctx with sourceDocument := some document.raw, compilerValueMemo := document.compilerValueMemo }
+  { ctx with
+    sourceDocument := some document.raw
+    compilerValueMemo := document.compilerValueMemo
+    semanticTables := document.semanticTables }
 
 set_option autoImplicit false in
 /-- A prepared lowering context tied to one exact decoded source document.

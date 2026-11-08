@@ -2,6 +2,9 @@
 import importlib.util
 import pathlib
 import unittest
+import sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "tools"))
+from mir_json import decode_mir_document, encode_mir_document
 
 SCRIPT = pathlib.Path(__file__).resolve().parents[1] / 'tools/inspect-body.py'
 SPEC = importlib.util.spec_from_file_location('body', SCRIPT)
@@ -25,14 +28,15 @@ class BodyTests(unittest.TestCase):
                          ['root', 'root-promoted', 'instance', 'instance-promoted', 'owned'])
         self.assertEqual(bodies[3]['source_path'], 'instances[1].promoted_bodies[0].body')
 
-    def test_shared_references_do_not_add_body_indices(self):
-        document = {'shared_payloads': {'nodes': [{'def_path': 'body'}]},
-                    'bodies': [{'$lean_miri_shared_ref': 0}], 'instances': []}
-        bodies, deref = MODULE.canonical_bodies(document)
+    def test_semantic_references_do_not_add_body_indices(self):
+        source = {"schema": "lean-miri-rustc-mir", "schema_version": 4,
+                  "bodies": [{"def_path": "body", "span": {"lo": 0, "hi": 1}}],
+                  "instances": []}
+        document = decode_mir_document(encode_mir_document(source))
+        bodies, _ = MODULE.canonical_bodies(document)
         self.assertEqual(len(bodies), 1)
         self.assertEqual(bodies[0]['definition_path'], 'body')
-        with self.assertRaisesRegex(ValueError, 'outside catalog'):
-            deref({'$lean_miri_shared_ref': -1})
+        self.assertEqual(bodies[0]['body']['span'], {"lo": 0, "hi": 1})
 
 
 if __name__ == '__main__':
