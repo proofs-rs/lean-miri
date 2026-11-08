@@ -24,8 +24,8 @@ ci_step 'setup:lean' bash tools/setup-lean.sh
   ci_step 'setup:rustup-download' curl --fail --location --silent --show-error https://sh.rustup.rs --output "$installer"
   ci_step 'setup:rustup' sh "$installer" -y --no-modify-path --profile minimal --default-toolchain stable
   ci_step 'setup:rustc-exporter' bash tools/setup-rustc-exporter.sh
+  ci_step 'setup:fetch-source-analysis' cargo +stable fetch --locked --manifest-path tools/source-analysis/Cargo.toml
   if [[ "$lane" != replay ]]; then
-    ci_step 'setup:fetch-source-analysis' cargo +stable fetch --locked --manifest-path tools/source-analysis/Cargo.toml
     ci_step 'setup:fetch-float-oracle' cargo +stable fetch --locked --manifest-path tests/float_ops/source_oracle/Cargo.toml
     ci_step 'setup:fetch-intrinsic-oracle' cargo +stable fetch --locked --manifest-path tests/intrinsic_float/source_oracle/Cargo.toml
     ci_step 'setup:fetch-connected-libc' cargo +miri-exporter-8144389c895d fetch --locked --manifest-path tests/connected/libc/Cargo.toml
