@@ -482,9 +482,7 @@ def makeWithForeignContext {Assembly : Type}
       chooseNaN := fun _ => ExecutionChoiceBindings.nanChoice EvalCoreMachine.tape }
     let isRaw := fun (_ : C) ty => do
       let node ← query (p.runtime.node ty |>.mapError toString)
-      match node.shapeKind with
-      | .unknown _ => throw (.unsupported "raw pointer compiler type kind unavailable")
-      | kind => pure (kind == .rawPointer)
+      pure (node.shapeKind == .rawPointer)
     let usize := fun (_ : C) => query (p.primitiveLayout "usize")
     let pointeeLayout := fun (_ : C) ty => do
       let some pointee ← query (CompilerFacts.builtinDeref context ty true)

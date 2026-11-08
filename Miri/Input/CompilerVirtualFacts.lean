@@ -18,7 +18,6 @@ def receiverKind (context : CompilerFacts.Context) (id : TypeId) : Result Virtua
   | .reference => pure .reference
   | .rawPointer => pure .rawPointer
   | .dynamicTraitObject => pure .dynamic
-  | .unknown _ => throw "virtual receiver compiler shape unknown"
   | _ => pure .other
 
 /-- The compiler exports predicates.principal() through the same bound

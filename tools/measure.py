@@ -15,7 +15,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 OUT = ROOT / 'scratch/performance'
 TICKS = os.sysconf('SC_CLK_TCK')
 MARKERS = {
- 'decode: start':'decode_start', 'decode: ready obligations=0':'decode_end',
+ 'decode: start':'decode_start', 'decode: accepted':'decode_end',
  'lower: start':'lower_start', 'lower: complete':'lower_end',
  'prepare: start':'prepare_start', 'prepare: complete':'prepare_end',
  'run: start':'setup_start',
@@ -145,7 +145,7 @@ def main():
        run['events']['guest_end']=now; run['snapshots']['guest_end']=counters(pgid,a.cpu); run['candidate0']=s
       if s.startswith('run: finalized_exit') or s.startswith('run: undefined_behavior ') or s.startswith('run: unsupported ') or s.startswith('run: failed ') or s.startswith('run: pending '):
        run['events']['output_end']=now; run['snapshots']['output_end']=counters(pgid,a.cpu); run['terminal_line']=s
-      if s.startswith('decode: ready obligations='):
+      if s == 'decode: accepted':
        run['readiness_line']=s
       if s.startswith('preparation_only: complete '):
        run['preparation_only_line']=s
@@ -178,9 +178,9 @@ def main():
    run['initial_start_to_decode_wall_seconds']=(run['events']['decode_start']-run['start_counters']['wall_monotonic_ns'])/1e9
   if 'guest_end' in run['events'] and 'output_end' in run['events']:
    run['candidate0_to_terminal_output_wall_seconds']=(run['events']['output_end']-run['events']['guest_end'])/1e9
-  run['terminal_observed']=bool(run.get('candidate0') and run.get('terminal_line') and run.get('readiness_line')=='decode: ready obligations=0' and run['returncode']==0 and re.search(r'run: (finalized_exit code=|undefined_behavior |unsupported |failed |pending )',run['terminal_line']))
+  run['terminal_observed']=bool(run.get('candidate0') and run.get('terminal_line') and run.get('readiness_line')=='decode: accepted' and run['returncode']==0 and re.search(r'run: (finalized_exit code=|undefined_behavior |unsupported |failed |pending )',run['terminal_line']))
   run['finalized_exit_observed'] = bool(run.get('terminal_line', '').startswith('run: finalized_exit code=') and run['returncode'] == 0)
-  run['preparation_only_observed'] = bool(run.get('preparation_only_line') and 'prepare_end' in run['events'] and run.get('readiness_line') == 'decode: ready obligations=0' and run['returncode'] == 0)
+  run['preparation_only_observed'] = bool(run.get('preparation_only_line') and 'prepare_end' in run['events'] and run.get('readiness_line') == 'decode: accepted' and run['returncode'] == 0)
   result['runs'].append(run); (OUT/f'{a.name}-{i:02d}.json').write_text(json.dumps(run,indent=2)+'\n'); print(json.dumps({'run':i,'wall_seconds':run['wall_seconds'],'process_cpu_seconds':run['process_cpu_seconds'],'steal_seconds_delta':run['steal_seconds_delta'],'terminal_observed':run['terminal_observed'],'returncode':run['returncode']}),flush=True)
  (OUT/f'{a.name}-summary.json').write_text(json.dumps(result,indent=2)+'\n')
 if __name__=='__main__': main()

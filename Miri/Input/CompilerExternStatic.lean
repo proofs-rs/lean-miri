@@ -115,10 +115,10 @@ private def selectedWinner (ctx : LowerContext) (tables : CompilerTables)
     (raw : Json) :
     Except String (Winner × CompilerTables) := do
   let status ← str raw "status"
-  if status == "ambiguous" then
-    return (⟨none,"ambiguous",none,status,((field raw "reason").bind Json.getStr?).toOption.getD "ambiguous exported symbol"⟩,tables)
-  if status != "supported" then
-    return (⟨none,"unknown",none,status,((field raw "reason").bind Json.getStr?).toOption.getD "exported symbol query unavailable"⟩,tables)
+  unless status == "supported" do
+    throw "selected exported symbol query did not succeed"
+  if ((field raw "resolution").bind Json.getStr?).toOption == some "ambiguous" then
+    return (⟨none,"ambiguous",none,"ambiguous",((field raw "reason").bind Json.getStr?).toOption.getD "ambiguous exported symbol"⟩,tables)
   let (definitionId,tables) ← definition tables (← field raw "definition")
   let kind ← str raw "kind"
   if kind != "static" then

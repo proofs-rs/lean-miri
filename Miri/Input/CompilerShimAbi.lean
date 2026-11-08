@@ -8,7 +8,7 @@ namespace Miri.Input.CompilerShimAbi
 open Lean Miri.ABI Miri.Interpreter
 structure Entry where
   signature : ForeignItems.Signature
-  abi : Except String (FnAbi MIR.TyId)
+  abi : FnAbi MIR.TyId
 structure Prepared where
   entries : Array Entry
 private def descriptor (key : String) : Except String ForeignItems.SignatureType :=
@@ -27,7 +27,9 @@ private def supported (j : Json) : Except String Unit := do
 
 def prepare (runtime : RuntimeMetadata)
     (abiCache : Option (CallResolution.FunctionAbiCache runtime) := none) : Except String Prepared := do
-  let records ← (← runtime.source.raw.getObjVal? "compiler_shim_abis").getArr?
+  let records ← match runtime.source.raw.getObjVal? "compiler_shim_abis" with
+    | .error _ => pure #[]
+    | .ok value => value.getArr?
   let mut entries := #[]
   for record in records do
     unless (← (← record.getObjVal? "typing_env").getStr?) == "fully_monomorphized" do
@@ -44,7 +46,7 @@ def prepare (runtime : RuntimeMetadata)
     let ret ← descriptor (← (← signature.getObjVal? "return").getStr?)
     let signature : ForeignItems.Signature := ⟨convention,args,ret⟩
     unless !(entries.any (·.signature == signature)) do throw "duplicate compiler shim signature key"
-    let abi := do
+    let abi ← do
       let query ← record.getObjVal? "query"
       supported query
       let inputs ← (← query.getObjVal? "input_types").getArr?
@@ -64,7 +66,7 @@ def expectedAbi (prepared : Prepared) (signature : ForeignItems.Signature) :
     Except String (FnAbi MIR.TyId) := do
   let some entry := prepared.entries.find? (·.signature == signature)
     | throw "missing exact compiler shim signature query"
-  entry.abi
+  pure entry.abi
 /-- Bind the compiler query provider to the shared source shim dispatcher. -/
 def hooks {P S D MD Ptr B I : Type} (prepared : Prepared) (base : ForeignItems.Hooks P S D MD Ptr B I) :
     ForeignItems.Hooks P S D MD Ptr B I :=

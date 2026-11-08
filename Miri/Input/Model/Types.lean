@@ -18,80 +18,69 @@ abbrev BlockId := Nat
 
 inductive PayloadStatus where
   | supported
-  | unsupported
-  | unknown
-  | incomplete
-  | debugPayload
-  | unrecognized (value : String)
   deriving Repr, DecidableEq
 
 inductive TypeShapeKind where
   | bool | char | int | uint | float | adt | foreign | str | array
   | patternType | slice | rawPointer | reference | functionDefinition
   | functionPointer | unsafeBinder | dynamicTraitObject | closure
-  | coroutineClosure | coroutine | coroutineWitness | never | tuple
-  | alias | parameter | boundType | placeholderType | inferenceType
-  | errorType | unknown (value : String)
+  | coroutineClosure | coroutine | never | tuple
+  | alias
   deriving Repr, DecidableEq
 
 inductive StatementVariant where
   | assign | fakeRead | setDiscriminant | storageLive | storageDead
   | placeMention | ascribeUserType | coverage | intrinsic
   | constEvalCounter | nop | backwardIncompatibleDropHint
-  | unknown (value : String)
   deriving Repr, DecidableEq
 
 inductive TerminatorVariant where
   | goto | switchInt | unwindResume | unwindTerminate | return
   | unreachable | drop | call | tailCall | assert | yield
   | coroutineDrop | falseEdge | falseUnwind | inlineAsm
-  | unknown (value : String)
   deriving Repr, DecidableEq
 
 inductive RvalueVariant where
   | use | repeat | ref | threadLocalRef | rawPtr | cast | binaryOp
   | unaryOp | discriminant | aggregate | copyForDeref
-  | wrapUnsafeBinder | reborrow | unknown (value : String)
+  | wrapUnsafeBinder | reborrow
   deriving Repr, DecidableEq
 
 inductive OperandVariant where
-  | copy | move | constant | runtimeChecks | unknown (value : String)
+  | copy | move | constant | runtimeChecks
   deriving Repr, DecidableEq
 
 inductive ProjectionVariant where
   | deref | field | index | constantIndex | subslice | downcast
   | opaqueCast | unwrapUnsafeBinder | phantomDeref
-  | unknown (value : String)
   deriving Repr, DecidableEq
 
 inductive LayoutKind where
-  | layout | layoutQueryError | unknown (value : String)
+  | layout
   deriving Repr, DecidableEq
 
 inductive LayoutVariantsKind where
-  | single | multiple | empty | unknown (value : String)
+  | single | multiple | empty
   deriving Repr, DecidableEq
 
 inductive BackendReprKind where
   | scalar | scalarPair | memory | simdVector | scalableSimdVector
-  | unknown (value : String)
   deriving Repr, DecidableEq
 
 inductive FieldShapeKind where
-  | primitive | union | array | arbitrary | unknown (value : String)
+  | primitive | union | array | arbitrary
   deriving Repr, DecidableEq
 
 inductive IntegerTypeTag where
   | known (kind : Miri.MIR.IntegerKind)
-  | unknown (value : String)
   deriving Repr, DecidableEq
 
 inductive FloatTypeTag where
-  | f16 | f16b | f32 | f64 | f128 | ppcf128 | unknown (value : String)
+  | f16 | f16b | f32 | f64 | f128 | ppcf128
   deriving Repr, DecidableEq
 
 inductive AdtKind where
-  | structKind | unionKind | enumKind | unknown (value : String)
+  | structKind | unionKind | enumKind
   deriving Repr, DecidableEq
 
 structure TypeShapeMetadata where
@@ -102,29 +91,27 @@ structure TypeShapeMetadata where
   deriving Repr, DecidableEq
 
 inductive PrimitiveKind where
-  | integer | float | pointer | unknown (value : String)
+  | integer | float | pointer
   deriving Repr, DecidableEq
 
 inductive ScalarShapeKind where
-  | initialized | union | unknown (value : String)
+  | initialized | union
   deriving Repr, DecidableEq
 
 
 inductive PassModeKind where
-  | ignore | direct | pair | cast | indirect | indirectUnsized | unknown (value : String)
+  | ignore | direct | pair | cast | indirect | indirectUnsized
   deriving Repr, DecidableEq
 
 inductive AllocationKind where
   | memory | function | static | vtable | typeId
-  | other (value : String) | unknown
   deriving Repr, DecidableEq
 
 inductive InstanceKind where
-  | instanceMir | instanceMirTemplate | intrinsicWithoutMir | intrinsicDispatch
+  | instanceMir | intrinsicDispatch
   | foreignItemNoMir
-  | virtualDispatch | virtualDispatchTarget | instanceMirUnavailable
+  | virtualDispatchTarget
   | symbolIdentityOnly
-  | other (value : String)
   deriving Repr, DecidableEq
 
 structure Obligation where
@@ -215,7 +202,7 @@ structure LayoutVariant where
   payload : Lean.Json
 
 inductive TagEncodingKind where
-  | direct | niche | unknown (value : String)
+  | direct | niche
   deriving Repr, DecidableEq
 
 structure TagEncoding where
@@ -258,22 +245,20 @@ structure ExternAbi where
   payload : Lean.Json
 
 inductive ArmCallKind where
-  | aapcs | cmseNonSecureCall | cmseNonSecureEntry | unknown (value : String)
+  | aapcs | cmseNonSecureCall | cmseNonSecureEntry
   deriving Repr, DecidableEq
 
 inductive InterruptCallKind where
   | avr | avrNonBlocking | msp430 | riscvMachine | riscvSupervisor | x86
-  | unknown (value : String)
   deriving Repr, DecidableEq
 
 inductive X86CallKind where
   | fastcall | stdcall | sysv64 | thiscall | vectorcall | win64
-  | unknown (value : String)
   deriving Repr, DecidableEq
 
 inductive CanonicalAbiKind where
   | c | rust | rustCold | rustPreserveNone | rustTail | custom | swift
-  | arm | gpuKernel | interrupt | x86 | unknown (value : String)
+  | arm | gpuKernel | interrupt | x86
   deriving Repr, DecidableEq
 
 structure CanonicalAbi where
@@ -291,8 +276,7 @@ inductive TypedEnumTag where
   | mirPhase | mirPhaseStage | withRetag | runtimeCheck | fakeReadCause
   | callSource | backwardDropReason | regionKind | boundRegionKind
   | boundVarIndexKind | lateParamRegionKind | integerType | floatType | adtKind
-  | variance | coverageKind | coveragePointKind | fakeBorrowRetagMode
-  | other (value : String)
+  | variance | coverageKind | coveragePointKind | fakeBorrowRetagMode | typeConstKind
   deriving Repr, DecidableEq, Hashable
 
 inductive UserTypeProjectionKind where
@@ -305,7 +289,6 @@ inductive UserTypeProjectionKind where
   | opaqueCast
   | unwrapUnsafeBinder
   | phantomDeref
-  | unknown (tag : String)
   deriving Repr, DecidableEq
 
 structure UserTypeProjection where
@@ -329,7 +312,7 @@ inductive CompilerPattern where
   | or (patterns : Array CompilerPattern)
   | notNull
 
-/-- Exact rustc query evidence; unsupported is never interpreted as false. -/
+/-- Exact successful rustc query evidence; negative answers remain ordinary values. -/
 structure CompilerBooleanEvidence where
   status : PayloadStatus
   value : Option Bool
@@ -380,7 +363,7 @@ structure Relocation where
 
 
 inductive MemoryMutability where
-  | mutable | immutable | unknown (value : String)
+  | mutable | immutable
   deriving Repr, DecidableEq
 
 structure AllocationMemory where
@@ -407,7 +390,7 @@ structure AbiAttributes where
   captures : TaggedNode
 
 inductive AbiRegisterKind where
-  | integer | float | ppcF128 | vector | unknown (value : String)
+  | integer | float | ppcF128 | vector
   deriving Repr, DecidableEq
 
 structure AbiRegister where
@@ -438,7 +421,7 @@ structure AbiArgument where
   typeId : TypeId
   /-- Physical compiler TyAndLayout for this FnAbi argument. The logical type
   remains `typeId`; Rust can adjust the ABI layout independently (notably the
-  forced-thin virtual-call receiver). Legacy exports leave this unavailable. -/
+  forced-thin virtual-call receiver). The input schema validates its presence. -/
   layout : Option Layout := none
   mode : AbiPassMode
   payload : Lean.Json
@@ -471,9 +454,7 @@ inductive TypedValue where
   | rvalue (variant : RvalueVariant) (status : PayloadStatus)
       (fields : Array (String × TypedValue))
   | binOperator (operator : Miri.MIR.BinOp) (status : PayloadStatus)
-  | unknownBinOperator (tag : String) (status : PayloadStatus)
   | unOperator (operator : Miri.MIR.UnOp) (status : PayloadStatus)
-  | unknownUnOperator (tag : String) (status : PayloadStatus)
   | enumTag (category : TypedEnumTag) (tag : TaggedNode)
       (children : Array (String × TypedValue))
   | userTypeProjection (value : UserTypeProjection)
@@ -491,11 +472,11 @@ structure DefinitionId where
 
 inductive VtableEntryKind where
   | dropInPlaceNull | dropInPlace | sizeBytes | alignBytes | vacant
-  | method | supertraitVtablePointer | unknown (value : String)
+  | method | supertraitVtablePointer
   deriving Repr, DecidableEq
 
 inductive VtablePredicateKind where
-  | trait | autoTrait | projection | unknown (value : String)
+  | trait | autoTrait | projection
   deriving Repr, DecidableEq
 
 structure FunctionAllocation where
@@ -595,7 +576,6 @@ structure SourceAllocIdPoolRow where
   kind : SourceAllocIdKind
   status : SourceAllocIdStatus
   allocationId : Option AllocationId
-  opaqueAllocationId : Option AllocationId := none
   memoryMutability : Option MemoryMutability := none
   memoryAlignBytes : Option Nat := none
   memoryAllBytesInitialized : Option Bool := none
@@ -632,7 +612,8 @@ structure CompilerAllocIdWorld where
   rawPool : Array SourceAllocIdPoolRow
   dedupCatalog : Array SourceAllocIdDedupRow
   completeKeyFamilies : Array SourceAllocIdDedupKind := #[]
-  unsupportedKeyFamilies : Array SourceAllocIdDedupKind := #[]
+  /-- Families carry exact selected-key outcomes, without claiming every possible key. -/
+  nonExhaustiveKeyFamilies : Array SourceAllocIdDedupKind := #[]
   deriving Repr, DecidableEq
 
 structure MirNode where
@@ -699,8 +680,6 @@ structure SelectedScope where
   status : PayloadStatus
   semantics : String
   roots : Array ScopeRoot
-  unresolvedObligations : Array String
-  unresolvedEvidence : Array Obligation := #[]
   payload : Lean.Json
 
 /-- Compiler-query target layout evidence, retained independently of a runtime

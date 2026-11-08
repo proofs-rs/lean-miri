@@ -12,7 +12,7 @@ assert doc["schema"] == "lean-miri-rustc-mir"
 assert doc["schema_version"] == 3
 assert doc["producer"]["rustc_commit"] == "8144389c895da997dbdecaa635e41d6a50be6ffd"
 assert doc["producer"]["miri_commit"] == "7fa591d7d4dd9af8154becbc8332f8096f8323b1"
-assert doc["completeness"]["status"] == "incomplete"
+assert doc["completeness"] == {"status": "complete"}
 type_nodes = {node["type_id"]: node for node in doc["types"]}
 assert type_nodes, "compilation-scoped type graph missing"
 assert sorted(type_nodes) == list(range(len(type_nodes))), "type IDs must be session-local monotonic IDs"
@@ -56,8 +56,8 @@ check_type_refs([doc["bodies"], doc["instances"], doc["allocations"]])
 check_type_refs(doc["types"])
 bodies = {body["def_path"]: body for body in doc["bodies"]}
 assert {
-    "id", "exercise", "make_link", "direct_tag_value", "promoted_ref", "byte_string", "pointer_slice",
-    "array_len", "as_trait_object", "as_drop_trait_object", "call_trait_object",
+    "exercise", "make_link", "direct_tag_value", "promoted_ref", "byte_string", "pointer_slice",
+    "as_trait_object", "as_drop_trait_object", "call_trait_object",
     "STATIC_DATA", "TLS_WORD", "read_tls",
 }.issubset(bodies)
 assert bodies["promoted_ref"]["promoted_bodies"], "promoted MIR body missing"
@@ -103,11 +103,10 @@ assert id_instance["instance_args_are_monomorphic"]
 assert not id_instance["body"]["is_polymorphic"], "generic instance body was not actually substituted"
 assert id_instance["instance_kind"] == {"kind": "item", "def_id": id_instance["def_id"]}
 assert any(type_nodes[local["type"]["type_id"]]["display"] == "u32" for local in id_instance["body"]["locals"])
-assert any(
+assert not any(
     node["shape"].get("length", {}).get("kind") == "parameter"
-    and node["shape"]["length"]["status"] == "incomplete"
     for node in type_nodes.values()
-), "unresolved generic const parameter must remain an explicit incomplete payload"
+), "uninstantiated generic constants must not enter a successful export"
 array_instance = next(
     instance
     for instance in instances.values()
@@ -281,13 +280,12 @@ def check_allocation_refs(value):
 
 check_allocation_refs([doc["bodies"], doc["instances"], doc["allocations"]])
 
-# The serializer must never omit encountered nodes. Unsupported payloads are
-# allowed, but must be explicitly marked in the typed envelope.
+# Every encountered operation in a successful document has typed semantics.
 for body in bodies.values():
     for block in body["basic_blocks"]:
         for statement in block["statements"]:
-            assert statement["kind"].get("variant") and statement["kind"].get("status")
+            assert statement["kind"].get("variant") and statement["kind"].get("status") == "supported"
         if block["terminator"]:
-            assert block["terminator"]["kind"].get("variant") and block["terminator"]["kind"].get("status")
+            assert block["terminator"]["kind"].get("variant") and block["terminator"]["kind"].get("status") == "supported"
 
 print(f"validated {len(bodies)} local MIR bodies, {len(instances)} reachable instances, {len(allocations)} allocations, exact rustc pin")

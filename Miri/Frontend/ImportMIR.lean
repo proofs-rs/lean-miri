@@ -277,12 +277,8 @@ private partial def typedValueExpr [ToExpr Json] (value : Input.TypedValue) : Qu
       pure <| mkApp3 (mkConst ``Input.TypedValue.rvalue) (toExpr variant) (toExpr status) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Input.TypedValue)) children)
     | .binOperator operator status => do
       pure <| mkApp2 (mkConst ``Input.TypedValue.binOperator) (toExpr operator) (toExpr status)
-    | .unknownBinOperator tag status => do
-      pure <| mkApp2 (mkConst ``Input.TypedValue.unknownBinOperator) (toExpr tag) (toExpr status)
     | .unOperator operator status => do
       pure <| mkApp2 (mkConst ``Input.TypedValue.unOperator) (toExpr operator) (toExpr status)
-    | .unknownUnOperator tag status => do
-      pure <| mkApp2 (mkConst ``Input.TypedValue.unknownUnOperator) (toExpr tag) (toExpr status)
     | .enumTag category tag fields => do
       let children ← fields.mapM fun (key, child) => do
         let child ← typedValueExpr child
@@ -325,9 +321,9 @@ private def quoteSharedJson (base : Name) (nodes : Array Json) :
     shared := shared.insert node (mkConst name)
   return shared
 
-/-- Import a decoded document as a closed, kernel-checked Lean value.
-`executionInput` records structural readiness only. Unsupported semantics stay
-in the document's obligations; this command never produces a safety theorem. -/
+/-- Import an accepted document as a closed, kernel-checked Lean value.
+Malformed or failed compiler input is rejected before declarations are created.
+This command never produces a safety theorem. -/
 syntax (name := importMir) "import_mir " str " as " ident : command
 
 open Elab Command in

@@ -7,15 +7,15 @@ def main (args : List String) : IO Unit := do
   let some path := args.tail?.bind List.head? | throw (IO.userError "usage: RuntimeDecodeTiming165 <full|runtime> <input.json>")
   let text ← IO.FS.readFile path
   let start ← IO.monoNanosNow
-  let (obligationCount, ready) ← match mode with
+  let typeCount ← match mode with
     | "full" =>
       match decodeJson text with
       | .error error => throw (IO.userError s!"full decoder error: {error}")
-      | .ok result => pure (result.blockingObligations.size, result.executionInput.isSome)
+      | .ok result => pure result.document.types.size
     | "runtime" =>
       match decodeRuntimeJson text with
       | .error error => throw (IO.userError s!"runtime decoder error: {error}")
-      | .ok result => pure (result.blockingObligations.size, result.executionInput.isSome)
+      | .ok result => pure result.document.types.size
     | _ => throw (IO.userError s!"unknown decoder mode `{mode}`")
   let stop ← IO.monoNanosNow
-  IO.println s!"mode={mode} elapsed_ns={stop - start} obligations={obligationCount} ready={ready}"
+  IO.println s!"mode={mode} elapsed_ns={stop - start} types={typeCount}"

@@ -27,19 +27,26 @@ in `Miri.Frontend.ImportMIR`. A minimal executable client-generation example
 is in [check_import.py](../tests/frontend/check_import.py); canonical configuration
 and terminal-check examples are in [connected tests](../tests/connected/README.md).
 
-`--root` specifies an exact nongeneric local def-path. A complete rooted
-structural closure describes the output graph's structural state; it does not
-guarantee coverage of unknown dynamic callees or semantic completeness. Without
-`--root`, local bodies are roots from which dependency instances are traversed.
-Unsupported or unknown queries remain explicit obligations and are not replaced
-with opaque debug payloads.
+`--root` specifies an exact nongeneric local def-path. Without it, closed local
+bodies are roots. Generic definitions enter the graph through their actual
+monomorphic instances; unsubstituted templates are not exported as executable
+bodies. Selecting a generic definition directly is an error.
+
+Every requested semantic query must succeed. Missing MIR, failed normalization,
+layout or ABI queries, unavailable initializers and incomplete producer evidence
+abort the export with a nonzero exit status. No failed query is serialized as a
+payload that a consumer might later accept. Target and execution demand determine
+which queries apply; pure `no_std` and `no_core` roots do not request OS startup
+or foreign-shim catalogs. Successful `false`, `None` and empty query results
+retain their meaning. Diagnostic debug payloads remain separate.
 
 For Cargo projects, use `exporter/target/debug/lean-miri-mir-exporter --cargo check
 --manifest-path /path/to/Cargo.toml`. The wrapper uses pinned Cargo/rustc,
-rebuilds dependency crates with MIR, writes per-crate JSON under `lean-miri-mir/`
+rebuilds dependency crates with MIR, writes target-crate JSON under `lean-miri-mir/`
 in the target directory, and continues ordinary metadata/codegen. It uses
 `MIRI_SYSROOT` for the target and optional `MIRI_HOST_SYSROOT` for host
-build tools/proc macros. Response-file invocations fail closed because their
+build tools/proc macros. Host tools use the pinned compiler and are not exported.
+Response-file invocations fail closed because their
 exact arguments cannot be fingerprinted.
 
 ## Input contract
@@ -49,6 +56,14 @@ is version2. Reading old schema2 is not supported. IDs are document-local
 references, distinct from raw Miri AllocId values.
 [SharedPayloads](../Miri/Input/SharedPayloads.lean) and
 [Decoder](../Miri/Input/Decoder.lean) check catalog, reference and typed-query contracts.
+The completeness record is `{"status":"complete"}`. Lean rejects failed payload
+statuses and unrecognized semantic tags before constructing its execution input.
+Successful decoding returns an execution input directly. Historical documents
+containing unresolved exporter payloads must be regenerated.
+
+Completeness describes the exported compiler data. Runtime values, including a
+virtual call's receiver and vtable, still determine execution. Export success is
+neither a proof of interpreter correspondence nor a proof of UB freedom.
 
 Specify `LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1` for prepared execution such as
 main. Building with `--features miri-reference` and adding
@@ -101,3 +116,25 @@ primitive-range driver uses this to consume the same checked export.
 
 Lean decoder, frontend and execution comparisons under root `tests/` remain
 separate integration checks; this command does not run the entire repository suite.
+
+Prepared allocator snapshots distinguish complete byte-memory keys from
+`non_exhaustive_key_families`: function, vtable, static, TypeId, and general
+constant-memory keys. This is coverage metadata, not a failed query result.
+Every imported function/vtable/static/TypeId global must have its exact selected
+key outcome; functions and vtables require all 32 salts. The decoder rejects
+missing keys or truncated salts, and runtime lookup rejects keys outside the
+validated selected domain. Unrequested compiler globals may reserve opaque raw
+IDs, but cannot point to an imported or failed semantic allocation. General
+constant-memory keys have no selected-key support; requests remain explicit
+runtime errors. This snapshot contract does not assert completeness of arbitrary
+runtime key discovery.
+
+After building the pinned exporter and Lean decoder, this boundary check uses a
+fresh prepared snapshot (not a saved historical input):
+
+```sh
+EXPORTER_BIN=exporter/target/release/lean-miri-mir-exporter \
+  bash exporter/tests/run-producer.sh selected_alloc_world scratch/selected-keys.json
+lake env lean --run tests/input/SelectedKeyCoverageStrict.lean scratch/selected-keys.json
+lake env lean --run tests/input/AllocWorldRuntime161.lean scratch/selected-keys.json
+```

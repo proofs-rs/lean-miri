@@ -1,7 +1,7 @@
 //! Exact helpers.rs::windows_ty_layout TypeNS path queries.
 //! Windows types are resolved only under std::sys::pal::windows::c and laid
-//! out by the selected rustc target; non-Windows targets retain unsupported
-//! rows rather than receiving host or handwritten layouts.
+//! out by the selected rustc target. Non-Windows targets do not request these
+//! Windows-only shim layouts.
 use super::*;
 
 const WINDOWS_TYPE_LAYOUTS: &[&str] = &[
@@ -14,7 +14,11 @@ const WINDOWS_TYPE_LAYOUTS: &[&str] = &[
     "FILETIME",
 ];
 
-fn query<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>, name: &str) -> Value {
+fn query<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    context: &mut ExportContext<'tcx>,
+    name: &str,
+) -> Result<Value, String> {
     let result = (|| -> Result<Value, String> {
         let path = ["std", "sys", "pal", "windows", "c", name];
         let instance = shim_abi::named_instance(tcx, &path, rustc_hir::def::Namespace::TypeNS)?;
@@ -28,15 +32,18 @@ fn query<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>, name: &str)
         }
         tcx.layout_of(ty::TypingEnv::fully_monomorphized().as_query_input(ty))
             .map_err(|error| format!("rustc layout_of failed for windows::{name}: {error:?}"))?;
-        Ok(type_json(context, tcx, ty))
+        Ok(type_json(context, tcx, ty)?)
     })();
-    match result {
+    Ok::<_, String>(match result {
         Ok(value) => json!({"status":"supported","value":value}),
-        Err(reason) => json!({"status":"unsupported","value":null,"reason":reason}),
-    }
+        Err(reason) => export_failure("windows_type_layouts::query", reason)?,
+    })
 }
 
-pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>) -> Value {
+pub(super) fn export<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    context: &mut ExportContext<'tcx>,
+) -> Result<Value, String> {
     let mut entries = serde_json::Map::new();
     // helpers.rs::windows_ty_layout is only a valid source query for Windows
     // targets. Keep the catalog's exact source identity everywhere, but do
@@ -48,12 +55,12 @@ pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>)
         &[]
     };
     for name in names {
-        entries.insert((*name).to_owned(), query(tcx, context, name));
+        entries.insert((*name).to_owned(), query(tcx, context, name)?);
     }
-    json!({
+    Ok::<_, String>(json!({
         "crate_path": ["std", "sys", "pal", "windows", "c"],
         "namespace": "TypeNS",
         "typing_env": "fully_monomorphized",
         "entries": entries,
-    })
+    }))
 }

@@ -9,7 +9,6 @@ open Miri.ABI Miri.Memory
 
 def staticInfo (source : StaticAllocation) : Except String AllocationImage.StaticInfo := do
   let some info := source.globalInfo | throw "static global_info compiler queries are missing"
-  unless info.status == .supported do throw "static global_info compiler query is unresolved"
   unless info.threadLocal == source.threadLocal do throw "static TLS predicates disagree"
   unless info.isStatic do throw "GlobalAlloc::Static lacks compiler is_static evidence"
   let size ← (RuntimeMetadata.size info.sizeBytes).mapError toString
@@ -17,7 +16,6 @@ def staticInfo (source : StaticAllocation) : Except String AllocationImage.Stati
   let mutable ← match info.mutability with
     | .mutable => pure Mutability.Mut
     | .immutable => pure Mutability.Not
-    | .unknown tag => throw s!"unknown compiler static mutability {tag}"
   pure ⟨size, align, mutable, info.isStatic, info.foreignItem⟩
 
 def queries : AllocationImage.Queries := ⟨staticInfo⟩

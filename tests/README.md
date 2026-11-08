@@ -117,11 +117,17 @@ Scripts are the authority for individual cases and build behavior.
 | --- | --- | --- |
 | `bash tools/check-quick.sh` | Source pins/audits, Python tool tests, obligation inventory, saved-fixture hashes. No Lean or exporter build; audit generation needs the Rust analyzer. | Much of the audit/Python work overlaps, but this script and its two fixture hash-manifest checks are not called. |
 | `bash tools/check-build.sh` | Build library, self-contained tests, frontend and choice policy; run self-contained assertions and audit axioms. | Its build, runtime and axiom work overlaps; this script is not called. |
-| `bash tools/check-decoder.sh` | 16 saved-expectation decoder cases plus 4 shared-ID checks; generated mutations and retained genuine schema-3 exports. | No. Other decoder tests run, but these dedicated checks do not. |
+| `bash tools/check-decoder.sh` | Strict success/failure boundaries, 16 saved-expectation cases and 4 shared-ID checks; supported unit mutations and rejection of historical failed exports. | No. Other decoder tests run, but these dedicated checks do not. |
 | `bash tools/check-structural-regressions.sh` | Context/provider/primitive rebinding, maps, zero width, thread-clock reuse and collection QA; proofs, `#eval` and runtime assertions. Uses adapted pinned unit inputs or no input. | Migrated self-contained cases are built/run through `MiriTests`; input-dependent cases are not included as a suite. |
 | `bash tools/check-performance-regressions.sh` | Finite equivalence/error-order/state-retention checks for indexes, ABI/backtrace caches, decoder caching, profiles and imported allocations. | Includes migrated self-contained cases and some input/memory overlap; dedicated input-driven parity cases still require this suite. |
 | `bash tools/check-connected-proofs.sh` | Build/audit `MiriTests` (including connected component proofs) and typecheck the retained SC projection and graph runner. | Component proofs are included; graph-runner typechecking is separate. |
 | `bash tools/check.sh` | Source audits, selected component tests, exporter contracts and fresh producer-to-consumer/execution checks. | This is the broad regression entry point, not an all-tests command. |
+
+The dedicated decoder mutations use `input/fixtures/strict-unit.json`, a
+synthetic supported document for schema and identity checks. It is not evidence
+of a Rust execution. Retained historical exporter files remain unchanged; their
+failed payloads must be rejected by the strict importer. Fresh exporter and
+frontend checks exercise current producer-to-consumer agreement.
 
 **“Performance regressions” here means preserving behavior through optimizations.**
 That script does not use speed thresholds to decide success.

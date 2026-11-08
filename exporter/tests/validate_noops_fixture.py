@@ -10,7 +10,7 @@ from mir_json import load_mir_document
 
 doc = load_mir_document(sys.argv[1])
 assert doc["producer"]["rustc_commit"] == "8144389c895da997dbdecaa635e41d6a50be6ffd"
-assert doc["completeness"]["status"] == "incomplete"
+assert doc["completeness"] == {"status": "complete"}
 assert doc["selected_scope"]["semantics"] == "structural_export_closure_only"
 assert doc["selected_scope"]["status"] == "complete"
 assert doc["invocation"]["kind"] == "direct_rustc_driver"

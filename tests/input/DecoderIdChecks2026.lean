@@ -16,25 +16,12 @@ private def textField (value : Json) (key : String) : IO String := do
   | .ok text => pure text
   | .error error => throw (IO.userError s!"`{key}` must be a string: {error}")
 
-private def boolField (value : Json) (key : String) : IO Bool := do
-  let result ← field value key
-  match result.getBool? with
-  | .ok flag => pure flag
-  | .error error => throw (IO.userError s!"`{key}` must be Boolean: {error}")
-
-private def obligationsJson (obligations : Array Obligation) : Json :=
-  Json.arr (obligations.map fun item => Json.mkObj [
-    ("path", toJson item.path), ("message", toJson item.message)])
-
-private def acceptedSummary (ready : Bool) (obligations : Array Obligation) : Json :=
-  Json.mkObj [
-    ("kind", toJson ("ok" : String)),
-    ("readiness", Json.bool ready),
-    ("obligations", obligationsJson obligations)]
+private def acceptedSummary : Json :=
+  Json.mkObj [("kind", toJson ("ok" : String))]
 
 private def decodeSummary (text : String) : Except String Json := do
-  let decoded ← decodeJson text
-  pure (acceptedSummary decoded.executionInput.isSome decoded.blockingObligations)
+  discard <| decodeJson text
+  pure acceptedSummary
 
 private def readCase (directory name : String) : IO String :=
   IO.FS.readFile s!"{directory}/{name}.json"
@@ -71,21 +58,10 @@ private def checkCase (directory : String) (expected : Json) (name : String) : I
       s!"{name}: decodeRuntimeJson differs from baseline error; expected={expectedError}; actual={runtimeError}"
     IO.println s!"PASS {name}: exact error {fullError}"
   | .ok full, .ok runtime, "ok" => do
-    let expectedReady ← boolField wanted "readiness"
-    let expectedObligations ← field wanted "obligations"
-    let fullSummary := acceptedSummary full.executionInput.isSome full.blockingObligations
-    let runtimeSummary := acceptedSummary runtime.executionInput.isSome runtime.blockingObligations
-    check (fullSummary == wanted)
-      s!"{name}: decodeJson readiness/ordered obligations changed from baseline"
-    check (runtimeSummary == wanted)
-      s!"{name}: decodeRuntimeJson readiness/ordered obligations changed from baseline"
-    check (full.blockingObligations == runtime.blockingObligations)
-      s!"{name}: ordered blocking obligations differ between decoders"
-    check (full.executionInput.isSome == runtime.executionInput.isSome)
-      s!"{name}: execution readiness differs between decoders"
-    check (full.executionInput.isSome == expectedReady && obligationsJson full.blockingObligations == expectedObligations)
-      s!"{name}: readiness or obligations differ from stored baseline"
-    IO.println s!"PASS {name}: accepted; obligations={full.blockingObligations.size}; readiness={full.executionInput.isSome}"
+    check (acceptedSummary == wanted) s!"{name}: success result changed"
+    check (full.executionInput.document.raw == runtime.executionInput.document.raw)
+      s!"{name}: accepted full/runtime inputs differ"
+    IO.println s!"PASS {name}: accepted input"
   | .error error, .ok _, _ => throw (IO.userError s!"{name}: full decoder rejected but runtime decoder accepted: {error}")
   | .ok _, .error error, _ => throw (IO.userError s!"{name}: runtime decoder rejected but full decoder accepted: {error}")
   | _, _, "error" => throw (IO.userError s!"{name}: expected a hard error")

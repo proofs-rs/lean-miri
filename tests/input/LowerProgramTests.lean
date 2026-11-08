@@ -30,7 +30,6 @@ def main (args : List String) : IO Unit := do
       count + (children.filter (·.body.isSome)).size) expectedPromoted
   unless program.promoted.size == expectedPromoted && program.bundle.bodies.size == program.roots.size + program.instances.size + expectedPromoted do
     throw (IO.userError "promoted bodies or exact graph body count lost")
-  unless program.input.obligations == doc.obligations do throw (IO.userError "document execution obligations disappeared")
   for body in program.bundle.bodies do
     if let some sourceId := body.input.definitionId then
       let dense ← must body.ownDefinitionId

@@ -237,13 +237,12 @@ rustc may instead serialize the same global allocation as memory, in which
 case the query row's `vtable_allocation_id` is the required identity join. -/
 def supertraitPrincipal (prepared : Prepared) (sourceType : MIR.TyId)
     (entry : Input.VtableEntry) : Result Nat := do
-  unless entry.status == .supported && entry.kind == .supertraitVtablePointer do
+  unless entry.kind == .supertraitVtablePointer do
     throw "supertrait vtable entry is unresolved"
   let some sourceId := entry.allocationId | throw "supertrait vtable source allocation missing"
   let nodes := prepared.facts.context.program.input.allocations.filter (·.id == sourceId)
   unless nodes.size == 1 do throw "supertrait vtable allocation identity is missing or ambiguous"
   let some target := nodes[0]? | throw "supertrait vtable allocation evidence missing"
-  unless target.status == .supported do throw "supertrait vtable allocation is unresolved"
   match target.kind, target.data with
   | .vtable, some (.vtable vtable) =>
     unless vtable.typeId == sourceType do throw "supertrait vtable concrete type mismatch"
@@ -273,7 +272,6 @@ private def methodInstanceUsing (prepared : Prepared) (lookup : GlobalLookup pre
 private def entryValueUsing (prepared : Prepared) (lookup : GlobalLookup prepared)
     (sourceType : MIR.TyId)
     (entry : Input.VtableEntry) : Result (Interpreter.VTableEntry CallInstance) := do
-  unless entry.status == .supported do throw "compiler vtable entry unresolved"
   match entry.kind with
   | .dropInPlace | .dropInPlaceNull => return .dropInPlace
   | .sizeBytes => return .size
@@ -283,7 +281,6 @@ private def entryValueUsing (prepared : Prepared) (lookup : GlobalLookup prepare
   | .supertraitVtablePointer =>
     let token ← supertraitPrincipal prepared sourceType entry
     return .traitVPtr token
-  | .unknown tag => throw s!"unknown compiler vtable entry {tag}"
 
 /-- Actual compiler vtable_entries result keyed by its concrete type and exact
 compiler principal. Repeated symbolic allocations must provide identical query

@@ -14,7 +14,7 @@ structure Value where
   value : MIR.ConstValue
 structure Entry where
   name : String
-  result : Except String Value
+  result : Value
   payload : Json
 structure Prepared where
   program : LoweredProgram
@@ -28,7 +28,9 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
     (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : Except String Prepared := do
   unless RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality program.input.raw do
     throw "named constant metadata document mismatch"
-  let records ← (← program.input.raw.getObjVal? "compiler_named_constants").getArr?
+  let records ← match program.input.raw.getObjVal? "compiler_named_constants" with
+    | .error _ => pure #[]
+    | .ok value => value.getArr?
   let ctx := LowerContext.ofDocument program.input
   let mut tables := program.compilerTables
   let mut entries := #[]
@@ -38,27 +40,22 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
     unless (← (← record.getObjVal? "typing_env").getStr?) == "fully_monomorphized" do
       throw "named constant compiler environment mismatch"
     let query ← record.getObjVal? "query"
-    let origin := do
-      supported query
-      CompilerInstance.decode ctx tables query
-    let result ← match origin with
-      | .error reason => pure (.error reason)
-      | .ok (sourceInstance,next) =>
-        tables := next
-        pure (do
-          let ty ← (← (← query.getObjVal? "type").getObjVal? "type_id").getNat?
-          unless ctx.containsTypeId ty do throw "named constant references missing compiler type"
-          let evaluated ← query.getObjVal? "evaluation"
-          supported evaluated
-          let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue (← evaluated.getObjVal? "value"))
-          pure (⟨sourceInstance,ty,value⟩ : Value))
+    supported query
+    let (sourceInstance, next) ← CompilerInstance.decode ctx tables query
+    tables := next
+    let ty ← (← (← query.getObjVal? "type").getObjVal? "type_id").getNat?
+    unless ctx.containsTypeId ty do throw "named constant references missing compiler type"
+    let evaluated ← query.getObjVal? "evaluation"
+    supported evaluated
+    let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue (← evaluated.getObjVal? "value"))
+    let result : Value := ⟨sourceInstance, ty, value⟩
     entries := entries.push ⟨name,result,record⟩
   pure ⟨program.withCompilerTables tables,runtime,entries⟩
 
 def value (prepared : Prepared) (name : String) : Except String Value := do
   let some entry := prepared.entries.find? (·.name == name)
     | throw s!"missing compiler named constant query {name}"
-  entry.result
+  pure entry.result
 
 /-- Scalar-only fast path preserves the actual bits and byte width. Allocation
 pointers/slices/indirect values require toOp and actual global memory hooks. -/

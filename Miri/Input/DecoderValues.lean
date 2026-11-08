@@ -67,14 +67,42 @@ def statusOf? (j : Json) : Option String :=
   | none => none
   | some value => match value.getStr? with | .ok text => some text | .error _ => none
 
-def parseStatus (value : String) : PayloadStatus :=
+/-- A successful input carries no failed exporter state. Diagnostic payloads
+are decoded separately and never manufacture a semantic success status. -/
+def parseStatus (value : String) : Except String PayloadStatus :=
   match value with
-  | "supported" | "complete" => .supported
-  | "unsupported" => .unsupported
-  | "unknown" => .unknown
-  | "incomplete" => .incomplete
-  | "debug_payload" => .debugPayload
-  | other => .unrecognized other
+  | "supported" | "complete" => pure .supported
+  | other => throw s!"exporter payload status `{other}` is not a successful input"
+
+/-- Allocator pool membership has its own status enum, independent of the
+semantic payload success contract. Its dedicated parser validates these rows. -/
+def validatePayloadStatus (j : Json) (path : String) : Except String Unit := do
+  if path.startsWith "$.compiler_alloc_id_world.raw_pool[" && path.endsWith "]" then return
+  match optionalField j "status" with
+  | none => pure ()
+  | some value =>
+    let text ← value.getStr? |>.mapError fun e => s!"{path}.status: expected string ({e})"
+    discard <| parseStatus text |>.mapError fun e => s!"{path}.status: {e}"
+
+/-- Inspect every physical transport node, including unreachable nodes. Status
+strings are fixed inline fields of the wire format, so this scan does not
+expand DAG references and its work is bounded by the serialized input size. -/
+partial def validateWireStatuses (j : Json) (path : String) : Except String Unit := do
+  if statusOf? j == some "debug_payload" then return
+  if let some value := optionalField j "status" then
+    let text ← value.getStr? |>.mapError fun e => s!"{path}.status: expected string ({e})"
+    let sourcePoolRow := (optionalField j "source_alloc_id").isSome &&
+      ["dangling", "serialized", "opaque"].contains text
+    unless sourcePoolRow do
+      discard <| parseStatus text |>.mapError fun e => s!"{path}.status: {e}"
+  match j with
+  | .arr values =>
+    for (child, index) in values.toList.zipIdx do
+      validateWireStatuses child s!"{path}[{index}]"
+  | .obj fields =>
+    for (key, child) in fields.toList do
+      validateWireStatuses child (joinPath path key)
+  | _ => pure ()
 
 def sourceDebugString (j : Json) (key path : String) : Except String String := do
   let value ← field j key path
@@ -135,111 +163,105 @@ def isSourceSpanJson (j : Json) : Bool :=
   hasField j "lo" && hasField j "hi" && hasField j "start" && hasField j "end" &&
     hasField j "ctxt" && hasField j "file"
 
-def statementVariant (tag : String) : StatementVariant :=
+def statementVariant (tag : String) : Except String StatementVariant :=
   match tag with
-  | "Assign" => .assign
-  | "FakeRead" => .fakeRead
-  | "SetDiscriminant" => .setDiscriminant
-  | "StorageLive" => .storageLive
-  | "StorageDead" => .storageDead
-  | "PlaceMention" => .placeMention
-  | "AscribeUserType" => .ascribeUserType
-  | "Coverage" => .coverage
-  | "Intrinsic" => .intrinsic
-  | "ConstEvalCounter" => .constEvalCounter
-  | "Nop" => .nop
-  | "BackwardIncompatibleDropHint" => .backwardIncompatibleDropHint
-  | other => .unknown other
+  | "Assign" => pure (.assign)
+  | "FakeRead" => pure (.fakeRead)
+  | "SetDiscriminant" => pure (.setDiscriminant)
+  | "StorageLive" => pure (.storageLive)
+  | "StorageDead" => pure (.storageDead)
+  | "PlaceMention" => pure (.placeMention)
+  | "AscribeUserType" => pure (.ascribeUserType)
+  | "Coverage" => pure (.coverage)
+  | "Intrinsic" => pure (.intrinsic)
+  | "ConstEvalCounter" => pure (.constEvalCounter)
+  | "Nop" => pure (.nop)
+  | "BackwardIncompatibleDropHint" => pure (.backwardIncompatibleDropHint)
+  | other => throw s!"unrecognized statementVariant tag `{other}`"
 
-def terminatorVariant (tag : String) : TerminatorVariant :=
+def terminatorVariant (tag : String) : Except String TerminatorVariant :=
   match tag with
-  | "Goto" => .goto
-  | "SwitchInt" => .switchInt
-  | "UnwindResume" => .unwindResume
-  | "UnwindTerminate" => .unwindTerminate
-  | "Return" => .return
-  | "Unreachable" => .unreachable
-  | "Drop" => .drop
-  | "Call" => .call
-  | "TailCall" => .tailCall
-  | "Assert" => .assert
-  | "Yield" => .yield
-  | "CoroutineDrop" => .coroutineDrop
-  | "FalseEdge" => .falseEdge
-  | "FalseUnwind" => .falseUnwind
-  | "InlineAsm" => .inlineAsm
-  | other => .unknown other
+  | "Goto" => pure (.goto)
+  | "SwitchInt" => pure (.switchInt)
+  | "UnwindResume" => pure (.unwindResume)
+  | "UnwindTerminate" => pure (.unwindTerminate)
+  | "Return" => pure (.return)
+  | "Unreachable" => pure (.unreachable)
+  | "Drop" => pure (.drop)
+  | "Call" => pure (.call)
+  | "TailCall" => pure (.tailCall)
+  | "Assert" => pure (.assert)
+  | "Yield" => pure (.yield)
+  | "CoroutineDrop" => pure (.coroutineDrop)
+  | "FalseEdge" => pure (.falseEdge)
+  | "FalseUnwind" => pure (.falseUnwind)
+  | "InlineAsm" => pure (.inlineAsm)
+  | other => throw s!"unrecognized terminatorVariant tag `{other}`"
 
-def rvalueVariant (tag : String) : RvalueVariant :=
+def rvalueVariant (tag : String) : Except String RvalueVariant :=
   match tag with
-  | "Use" => .use
-  | "Repeat" => .repeat
-  | "Ref" => .ref
-  | "ThreadLocalRef" => .threadLocalRef
-  | "RawPtr" => .rawPtr
-  | "Cast" => .cast
-  | "BinaryOp" => .binaryOp
-  | "UnaryOp" => .unaryOp
-  | "Discriminant" => .discriminant
-  | "Aggregate" => .aggregate
-  | "CopyForDeref" => .copyForDeref
-  | "WrapUnsafeBinder" => .wrapUnsafeBinder
-  | "Reborrow" => .reborrow
-  | other => .unknown other
+  | "Use" => pure (.use)
+  | "Repeat" => pure (.repeat)
+  | "Ref" => pure (.ref)
+  | "ThreadLocalRef" => pure (.threadLocalRef)
+  | "RawPtr" => pure (.rawPtr)
+  | "Cast" => pure (.cast)
+  | "BinaryOp" => pure (.binaryOp)
+  | "UnaryOp" => pure (.unaryOp)
+  | "Discriminant" => pure (.discriminant)
+  | "Aggregate" => pure (.aggregate)
+  | "CopyForDeref" => pure (.copyForDeref)
+  | "WrapUnsafeBinder" => pure (.wrapUnsafeBinder)
+  | "Reborrow" => pure (.reborrow)
+  | other => throw s!"unrecognized rvalueVariant tag `{other}`"
 
-def operandVariant (tag : String) : OperandVariant :=
+def operandVariant (tag : String) : Except String OperandVariant :=
   match tag with
-  | "Copy" => .copy
-  | "Move" => .move
-  | "Constant" => .constant
-  | "RuntimeChecks" => .runtimeChecks
-  | other => .unknown other
+  | "Copy" => pure (.copy)
+  | "Move" => pure (.move)
+  | "Constant" => pure (.constant)
+  | "RuntimeChecks" => pure (.runtimeChecks)
+  | other => throw s!"unrecognized operandVariant tag `{other}`"
 
-def projectionVariant (tag : String) : ProjectionVariant :=
+def projectionVariant (tag : String) : Except String ProjectionVariant :=
   match tag with
-  | "Deref" => .deref
-  | "Field" => .field
-  | "Index" => .index
-  | "ConstantIndex" => .constantIndex
-  | "Subslice" => .subslice
-  | "Downcast" => .downcast
-  | "OpaqueCast" => .opaqueCast
-  | "UnwrapUnsafeBinder" => .unwrapUnsafeBinder
-  | "PhantomDeref" => .phantomDeref
-  | other => .unknown other
+  | "Deref" => pure (.deref)
+  | "Field" => pure (.field)
+  | "Index" => pure (.index)
+  | "ConstantIndex" => pure (.constantIndex)
+  | "Subslice" => pure (.subslice)
+  | "Downcast" => pure (.downcast)
+  | "OpaqueCast" => pure (.opaqueCast)
+  | "UnwrapUnsafeBinder" => pure (.unwrapUnsafeBinder)
+  | "PhantomDeref" => pure (.phantomDeref)
+  | other => throw s!"unrecognized projectionVariant tag `{other}`"
 
-def typeShapeKind (tag : String) : TypeShapeKind :=
+def typeShapeKind (tag : String) : Except String TypeShapeKind :=
   match tag with
-  | "bool" => .bool
-  | "char" => .char
-  | "int" => .int
-  | "uint" => .uint
-  | "float" => .float
-  | "adt" => .adt
-  | "foreign" => .foreign
-  | "str" => .str
-  | "array" => .array
-  | "pattern_type" => .patternType
-  | "slice" => .slice
-  | "raw_pointer" => .rawPointer
-  | "reference" => .reference
-  | "function_definition" => .functionDefinition
-  | "function_pointer" => .functionPointer
-  | "unsafe_binder" => .unsafeBinder
-  | "dynamic_trait_object" => .dynamicTraitObject
-  | "closure" => .closure
-  | "coroutine_closure" => .coroutineClosure
-  | "coroutine" => .coroutine
-  | "coroutine_witness" => .coroutineWitness
-  | "never" => .never
-  | "tuple" => .tuple
-  | "alias" => .alias
-  | "parameter" => .parameter
-  | "bound_type" => .boundType
-  | "placeholder_type" => .placeholderType
-  | "inference_type" => .inferenceType
-  | "error_type" => .errorType
-  | other => .unknown other
+  | "bool" => pure (.bool)
+  | "char" => pure (.char)
+  | "int" => pure (.int)
+  | "uint" => pure (.uint)
+  | "float" => pure (.float)
+  | "adt" => pure (.adt)
+  | "foreign" => pure (.foreign)
+  | "str" => pure (.str)
+  | "array" => pure (.array)
+  | "pattern_type" => pure (.patternType)
+  | "slice" => pure (.slice)
+  | "raw_pointer" => pure (.rawPointer)
+  | "reference" => pure (.reference)
+  | "function_definition" => pure (.functionDefinition)
+  | "function_pointer" => pure (.functionPointer)
+  | "unsafe_binder" => pure (.unsafeBinder)
+  | "dynamic_trait_object" => pure (.dynamicTraitObject)
+  | "closure" => pure (.closure)
+  | "coroutine_closure" => pure (.coroutineClosure)
+  | "coroutine" => pure (.coroutine)
+  | "never" => pure (.never)
+  | "tuple" => pure (.tuple)
+  | "alias" => pure (.alias)
+  | other => throw s!"unrecognized typeShapeKind tag `{other}`"
 
 inductive Domain where
   | any | statement | terminator | rvalue | operand | projection
@@ -299,15 +321,15 @@ def childDomain (parent : Domain) (key : String) : Domain :=
   | _, _ => .any
 
 def isKnownStatement (tag : String) : Bool :=
-  match statementVariant tag with | .unknown _ => false | _ => true
+  (statementVariant tag).isOk
 def isKnownTerminator (tag : String) : Bool :=
-  match terminatorVariant tag with | .unknown _ => false | _ => true
+  (terminatorVariant tag).isOk
 def isKnownRvalue (tag : String) : Bool :=
-  match rvalueVariant tag with | .unknown _ => false | _ => true
+  (rvalueVariant tag).isOk
 def isKnownOperand (tag : String) : Bool :=
-  match operandVariant tag with | .unknown _ => false | _ => true
+  (operandVariant tag).isOk
 def isKnownProjection (tag : String) : Bool :=
-  match projectionVariant tag with | .unknown _ => false | _ => true
+  (projectionVariant tag).isOk
 
 def recognizedAutoDomain (j : Json) : Option Domain :=
   if (optionalField j "status").isSome then
@@ -334,26 +356,26 @@ def domainTag (j : Json) (domain : Domain) : Option String :=
 def isStringJson (j : Json) : Bool :=
   match j with | .str _ => true | _ => false
 
-def integerTypeTag (text : String) : IntegerTypeTag :=
+def integerTypeTag (text : String) : Except String IntegerTypeTag :=
   match text with
-  | "i8" => .known .i8 | "i16" => .known .i16 | "i32" => .known .i32
-  | "i64" => .known .i64 | "i128" => .known .i128 | "isize" => .known .isize
-  | "u8" => .known .u8 | "u16" => .known .u16 | "u32" => .known .u32
-  | "u64" => .known .u64 | "u128" => .known .u128 | "usize" => .known .usize
-  | other => .unknown other
+  | "i8" => pure (.known .i8) | "i16" => pure (.known .i16) | "i32" => pure (.known .i32)
+  | "i64" => pure (.known .i64) | "i128" => pure (.known .i128) | "isize" => pure (.known .isize)
+  | "u8" => pure (.known .u8) | "u16" => pure (.known .u16) | "u32" => pure (.known .u32)
+  | "u64" => pure (.known .u64) | "u128" => pure (.known .u128) | "usize" => pure (.known .usize)
+  | other => throw s!"unrecognized integerTypeTag tag `{other}`"
 
-def floatTypeTag (text : String) : FloatTypeTag :=
+def floatTypeTag (text : String) : Except String FloatTypeTag :=
   match text with
-  | "f16" => .f16 | "f16b" => .f16b | "f32" => .f32 | "f64" => .f64
-  | "f128" => .f128 | "ppcf128" => .ppcf128
-  | other => .unknown other
+  | "f16" => pure (.f16) | "f16b" => pure (.f16b) | "f32" => pure (.f32) | "f64" => pure (.f64)
+  | "f128" => pure (.f128) | "ppcf128" => pure (.ppcf128)
+  | other => throw s!"unrecognized floatTypeTag tag `{other}`"
 
-def adtKindTag (text : String) : AdtKind :=
+def adtKindTag (text : String) : Except String AdtKind :=
   match text with
-  | "struct" => .structKind
-  | "union" => .unionKind
-  | "enum" => .enumKind
-  | other => .unknown other
+  | "struct" => pure (.structKind)
+  | "union" => pure (.unionKind)
+  | "enum" => pure (.enumKind)
+  | other => throw s!"unrecognized adtKindTag tag `{other}`"
 
 def binOpFromExportTag (tag : String) : Option Miri.MIR.BinOp :=
   match tag with
@@ -387,7 +409,7 @@ def statusField (j : Json) (path : String) (optional : Bool := false)
     else throw s!"{joinPath path "status"}: missing required status tag"
   | some value =>
     let text ← value.getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})"
-    pure (parseStatus text)
+    parseStatus text
 
 def parseOperatorTag (j : Json) (path : String) : Except String (String × PayloadStatus) := do
   match j with
@@ -402,6 +424,12 @@ def typedEnumCategory? (key path : String) (parentTag : Option String) (j : Json
   let hasKind := (optionalField j "kind").isSome
   let hasStatus := (optionalField j "status").isSome
   match key with
+  | "value" => if parentTag == some "const" && hasKind && hasStatus then some .typeConstKind else none
+  | "const" => if parentTag == some "type_system_const" && hasKind && hasStatus then some .typeConstKind else none
+  | "length" =>
+    if (parentTag == some "array" || parentTag == some "Repeat") && hasKind && hasStatus then some .typeConstKind else none
+  | "start" | "end" =>
+    if parentTag == some "range" && hasKind && hasStatus then some .typeConstKind else none
   | "safety" => if hasKind || isStringJson j then some .safety else none
   | "borrow_kind" => if hasKind then some .borrowKind else none
   | "fake_kind" => if isStringJson j then some .fakeBorrowKind else none
@@ -446,7 +474,7 @@ def parseInlineTag (j : Json) (path : String) : Except String TaggedNode := do
     let tag ← fieldString j "kind" path
     let status ← match optionalField j "status" with
       | none => pure .supported
-      | some value => parseStatus <$> (value.getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})")
+      | some value => (value.getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})") >>= parseStatus
     return ⟨status, tag, j⟩
   | _ => throw s!"{path}: expected enum tag object or string"
 
@@ -471,7 +499,7 @@ def userTypeProjectionKind (j : Json) (path : String) : Except String UserTypePr
   | "OpaqueCast" => pure .opaqueCast
   | "UnwrapUnsafeBinder" => pure .unwrapUnsafeBinder
   | "PhantomDeref" => pure .phantomDeref
-  | other => pure (.unknown other)
+  | other => throw s!"{path}: unrecognized user type projection `{other}`"
 
 def parseUserTypeProjection (j : Json) (path : String) : Except String UserTypeProjection := do
   let status ← statusField j path
@@ -486,7 +514,7 @@ def parseUserTypeProjection (j : Json) (path : String) : Except String UserTypeP
       for (item, index) in json.toList.zipIdx do
         parsed := parsed.push (← userTypeProjectionKind item s!"{joinPath path "projections"}[{index}]")
       pure (some parsed)
-  if status == .supported && (baseIndex.isNone || projections.isNone) then
+  if (baseIndex.isNone || projections.isNone) then
     throw s!"{path}: supported user-type projection is missing base index or projection sequence"
   return ⟨status, baseIndex, projections, j⟩
 
@@ -506,6 +534,7 @@ partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
   if let some id := isTypeRef j then return .typeRef id
   if let some id := isAllocationRef j then return .allocationRef id
   if statusOf? j == some "debug_payload" then return .diagnostic j
+  let _ ← validatePayloadStatus j path
   match j with
   | .arr values =>
     let mut decoded := #[]
@@ -525,7 +554,7 @@ partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
     let mut decodedFields := #[]
     let parentTag := match effectiveDomain with
       | .rvalue | .operand | .statement | .terminator => domainTag j effectiveDomain
-      | _ => none
+      | _ => asTag? j "kind"
     for (key, value) in fields do
       let nextDomain := childDomain effectiveDomain key
       let decoded ← if key == "user_type_projection" && parentTag == some "AscribeUserType" then
@@ -534,12 +563,12 @@ partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
           let (tag, status) ← parseOperatorTag value (joinPath path key)
           match binOpFromExportTag tag with
           | some op => pure (.binOperator op status)
-          | none => pure (.unknownBinOperator tag status)
+          | none => throw s!"{path}: unrecognized binary operator `{tag}`"
         else if key == "operator" && parentTag == some "UnaryOp" then
           let (tag, status) ← parseOperatorTag value (joinPath path key)
           match unOpFromExportTag tag with
           | some op => pure (.unOperator op status)
-          | none => pure (.unknownUnOperator tag status)
+          | none => throw s!"{path}: unrecognized unary operator `{tag}`"
         else decodeValueM value (joinPath path key) nextDomain (typedEnumCategory? key path parentTag value) memo
       let isTagField := match effectiveDomain with
         | .statement | .terminator | .rvalue | .operand | .projection => key == "status" || key == "variant" || key == "kind"
@@ -557,26 +586,26 @@ partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
     match effectiveDomain with
     | .statement =>
       let tag ← fieldString j "variant" path
-      let status := parseStatus (← fieldString j "status" path)
-      return .statement (statementVariant tag) status decodedFields
+      let status ← parseStatus (← fieldString j "status" path)
+      return .statement (← statementVariant tag) status decodedFields
     | .terminator =>
       let tag ← fieldString j "variant" path
-      let status := parseStatus (← fieldString j "status" path)
-      return .terminator (terminatorVariant tag) status decodedFields
+      let status ← parseStatus (← fieldString j "status" path)
+      return .terminator (← terminatorVariant tag) status decodedFields
     | .rvalue =>
       let tag ← fieldString j "kind" path
-      let status := parseStatus (← fieldString j "status" path)
+      let status ← parseStatus (← fieldString j "status" path)
       if tag == "BinaryOp" || tag == "UnaryOp" then
         let operator ← field j "operator" path
         let _ ← parseOperatorTag operator (joinPath path "operator")
-      return .rvalue (rvalueVariant tag) status decodedFields
+      return .rvalue (← rvalueVariant tag) status decodedFields
     | .operand =>
       let tag ← fieldString j "kind" path
-      let status := parseStatus (← fieldString j "status" path)
-      return .operand (operandVariant tag) status decodedFields
+      let status ← parseStatus (← fieldString j "status" path)
+      return .operand (← operandVariant tag) status decodedFields
     | .projection =>
       let tag ← fieldString j "kind" path
-      return .projection (projectionVariant tag) decodedFields
+      return .projection (← projectionVariant tag) decodedFields
     | .any | .statementWrapper | .terminatorWrapper =>
       match tagCategory with
       | some category => return .enumTag category (← parseInlineTag j path) decodedFields
@@ -588,17 +617,6 @@ partial def decodeValueBody (j : Json) (path : String) (domain : Domain)
   | _ => return .scalar j
 end
 
-def decodeValue (j : Json) (path : String) (domain : Domain := .any)
-    (tagCategory : Option TypedEnumTag := none) (memo : DecodeMemo := {}) : Except String TypedValue := do
-  (decodeValueM j path domain tagCategory memo).run' {}
-
-def statusObligation? (status : PayloadStatus) (path : String) : Option Obligation :=
-  match status with
-  | .supported | .debugPayload => none
-  | .unsupported => some ⟨path, "exporter marked this payload unsupported; it is an unresolved semantic obligation"⟩
-  | .unknown => some ⟨path, "exporter could not resolve this payload; it is an unresolved obligation"⟩
-  | .incomplete => some ⟨path, "exporter marked this payload incomplete; it is an unresolved obligation"⟩
-  | .unrecognized value => some ⟨path, s!"unrecognized status `{value}`"⟩
 
 def unknownTagObligation (tag : String) (path : String) : Obligation :=
   ⟨path, s!"unrecognized pinned MIR enum tag `{tag}`; update decoder and review its semantics"⟩
@@ -631,8 +649,7 @@ def enumTagKnown (category : TypedEnumTag) (tag : String) : Bool :=
       tag == "miscellaneous_desugaring" || tag == "clone_or_use" || tag == "normal_call"
   | .backwardDropReason => tag == "edition_2024"
   | .regionKind => tag == "early_parameter" || tag == "bound" || tag == "late_parameter" ||
-      tag == "static" || tag == "inference_variable" || tag == "placeholder" ||
-      tag == "erased" || tag == "error"
+      tag == "static" || tag == "placeholder" || tag == "erased"
   | .boundRegionKind => tag == "anonymous" || tag == "named_for_printing" ||
       tag == "named" || tag == "closure_environment"
   | .boundVarIndexKind => tag == "bound" || tag == "canonical"
@@ -645,25 +662,17 @@ def enumTagKnown (category : TypedEnumTag) (tag : String) : Bool :=
   | .coverageKind => tag == "point" || tag == "block_marker" || tag == "virtual_counter"
   | .coveragePointKind => tag == "expr" || tag == "implicit_else" || tag == "function_end"
   | .fakeBorrowRetagMode => tag == "default"
-  | .other _ => false
+  | .typeConstKind => tag == "value" || tag == "alias" || tag == "expression"
 
 def valueLocalObligationsInto (value : TypedValue) (path : String)
     (initial : Array Obligation) : Array Obligation := Id.run do
   match value with
   | .scalar _ | .diagnostic _ | .typeRef _ | .allocationRef _ | .instanceRef _
   | .localRef _ | .blockRef _ | .sourceSpan _ | .sourceInfo _ => return initial
-  | .binOperator _ status | .unOperator _ status =>
-      return match statusObligation? status path with
-        | some issue => initial.push issue
-        | none => initial
-  | .unknownBinOperator tag status | .unknownUnOperator tag status =>
-      let withTag := initial.push (unknownTagObligation tag path)
-      return match statusObligation? status path with
-        | some issue => withTag.push issue
-        | none => withTag
+  | .binOperator _ _ | .unOperator _ _ => return initial
   | .enumTag category tag children => do
       let mut out := initial
-      if let some issue := statusObligation? tag.status path then out := out.push issue
+
       if !enumTagKnown category tag.tag then
         out := out.push (unknownTagObligation tag.tag (joinPath path "kind"))
       if category == .mirPhase then
@@ -736,67 +745,32 @@ def valueLocalObligationsInto (value : TypedValue) (path : String)
       return out
   | .userTypeProjection projection => do
       let mut out := initial
-      if let some issue := statusObligation? projection.status path then out := out.push issue
-      if projection.status == .supported then
-        if projection.baseIndex.isNone then
-          out := out.push ⟨joinPath path "base_index", "supported user-type projection is missing its base annotation index"⟩
-        if projection.projections.isNone then
-          out := out.push ⟨joinPath path "projections", "supported user-type projection is missing its projection sequence"⟩
-      match projection.projections with
-      | some entries =>
-        for (entry, index) in entries.toList.zipIdx do
-          match entry with
-          | .unknown tag => out := out.push (unknownTagObligation tag s!"{joinPath path "projections"}[{index}].kind")
-          | _ => pure ()
-      | none => pure ()
+
+      if projection.baseIndex.isNone then
+        out := out.push ⟨joinPath path "base_index", "user-type projection is missing its base annotation index"⟩
+      if projection.projections.isNone then
+        out := out.push ⟨joinPath path "projections", "user-type projection is missing its projection sequence"⟩
       return out
   | .array _ => return initial
-  | .object fields => do
-      let mut out := initial
-      return out
+  | .object _ => return initial
   | .statement variant status fields => do
       let mut out := initial
-      if let some issue := statusObligation? status path then out := out.push issue
+
       match variant with
-      | .unknown tag => out := out.push (unknownTagObligation tag (joinPath path "variant"))
       | .ascribeUserType =>
-        if status == .supported then
-          if !(fields.any fun (key, value) => key == "user_type_projection" && match value with | .userTypeProjection _ => true | _ => false) then
-            out := out.push ⟨joinPath path "user_type_projection", "supported AscribeUserType is missing typed projection data"⟩
-          if !(fields.any fun (key, value) => key == "variance" && match value with | .enumTag .variance _ _ => true | _ => false) then
-            out := out.push ⟨joinPath path "variance", "supported AscribeUserType is missing typed variance data"⟩
+        if !(fields.any fun (key, value) => key == "user_type_projection" && match value with | .userTypeProjection _ => true | _ => false) then
+          out := out.push ⟨joinPath path "user_type_projection", "supported AscribeUserType is missing typed projection data"⟩
+        if !(fields.any fun (key, value) => key == "variance" && match value with | .enumTag .variance _ _ => true | _ => false) then
+          out := out.push ⟨joinPath path "variance", "supported AscribeUserType is missing typed variance data"⟩
       | .coverage =>
-        if status == .supported && !(fields.any fun (key, value) => key == "coverage" && match value with | .enumTag .coverageKind _ _ => true | _ => false) then
+        if !(fields.any fun (key, value) => key == "coverage" && match value with | .enumTag .coverageKind _ _ => true | _ => false) then
           out := out.push ⟨joinPath path "coverage", "supported Coverage statement is missing its typed coverage kind"⟩
       | _ => pure ()
       return out
-  | .terminator variant status fields => do
-      let mut out := initial
-      if let some issue := statusObligation? status path then out := out.push issue
-      match variant with
-      | .unknown tag => out := out.push (unknownTagObligation tag (joinPath path "variant"))
-      | _ => pure ()
-      return out
-  | .rvalue variant status fields => do
-      let mut out := initial
-      if let some issue := statusObligation? status path then out := out.push issue
-      match variant with
-      | .unknown tag => out := out.push (unknownTagObligation tag (joinPath path "kind"))
-      | _ => pure ()
-      return out
-  | .operand variant status fields => do
-      let mut out := initial
-      if let some issue := statusObligation? status path then out := out.push issue
-      match variant with
-      | .unknown tag => out := out.push (unknownTagObligation tag (joinPath path "kind"))
-      | _ => pure ()
-      return out
-  | .projection variant fields => do
-      let mut out := initial
-      match variant with
-      | .unknown tag => out := out.push (unknownTagObligation tag (joinPath path "kind"))
-      | _ => pure ()
-      return out
+  | .terminator _ _ _ => return initial
+  | .rvalue _ _ _ => return initial
+  | .operand _ _ _ => return initial
+  | .projection _ _ => return initial
 
 partial def valueObligationsInto (value : TypedValue) (path : String)
     (initial : Array Obligation) : Array Obligation := Id.run do
@@ -810,20 +784,22 @@ partial def valueObligationsInto (value : TypedValue) (path : String)
   | .object fields | .enumTag _ _ fields | .statement _ _ fields | .terminator _ _ fields
   | .rvalue _ _ fields | .operand _ _ fields | .projection _ fields =>
     for (key, child) in fields do
-      match value, key, child with
-      | .enumTag _ _ _, "status", .scalar (.str text) =>
-        if let some issue := statusObligation? (parseStatus text) (joinPath path key) then out := out.push issue
-      | .enumTag _ _ _, "status", _ => out := out.push ⟨joinPath path key, "enum status must be a string"⟩
-      | .object _, "status", .scalar (.str text) =>
-        if let some issue := statusObligation? (parseStatus text) (joinPath path key) then out := out.push issue
-      | .object _, "status", _ => out := out.push ⟨joinPath path key, "status field must be a string"⟩
-      | _, _, _ => pure ()
       out := valueObligationsInto child (joinPath path key) out
   | _ => pure ()
   return out
 
 def valueObligations (value : TypedValue) (path : String) : Array Obligation :=
   valueObligationsInto value path #[]
+
+/-- Unknown semantic tags and missing required metadata fail at the decoding
+boundary, before a successful compiler value can be cached or imported. -/
+def decodeValue (j : Json) (path : String) (domain : Domain := .any)
+    (tagCategory : Option TypedEnumTag := none) (memo : DecodeMemo := {}) : Except String TypedValue := do
+  let value ← (decodeValueM j path domain tagCategory memo).run' {}
+  if let some issue := (valueObligations value path)[0]? then
+    throw s!"{issue.path}: {issue.message}"
+  pure value
+
 
 inductive RuntimeObligationSequence where
   | leaf (items : Array Obligation)
@@ -969,6 +945,7 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
   if statusOf? j == some "debug_payload" then
     let value := TypedValue.diagnostic j
     return ⟨value, runtimeLocalObligations value path⟩
+  let _ ← validatePayloadStatus j path
   match j with
   | .arr values =>
     let mut obligations : Option RuntimeObligationSequence := none
@@ -992,7 +969,7 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
     let fields ← objectFields j
     let parentTag := match effectiveDomain with
       | .rvalue | .operand | .statement | .terminator => domainTag j effectiveDomain
-      | _ => none
+      | _ => asTag? j "kind"
     let mut summaries := #[]
     let mut obligations : Option RuntimeObligationSequence := none
     for ((key, value), index) in fields.toList.zipIdx do
@@ -1004,31 +981,21 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
             runtimeLocalObligations (.userTypeProjection projection) childPath⟩
         else if key == "operator" && (parentTag == some "BinaryOp" || optionalField j "kind" == some (.str "Overflow")) then do
           let (tag, status) ← parseOperatorTag value childPath
-          let decoded := match binOpFromExportTag tag with
-            | some op => TypedValue.binOperator op status
-            | none => TypedValue.unknownBinOperator tag status
+          let decoded ← match binOpFromExportTag tag with
+            | some op => pure (TypedValue.binOperator op status)
+            | none => throw s!"{childPath}: unrecognized binary operator `{tag}`"
           pure ⟨decoded, runtimeLocalObligations decoded childPath⟩
         else if key == "operator" && parentTag == some "UnaryOp" then do
           let (tag, status) ← parseOperatorTag value childPath
-          let decoded := match unOpFromExportTag tag with
-            | some op => TypedValue.unOperator op status
-            | none => TypedValue.unknownUnOperator tag status
+          let decoded ← match unOpFromExportTag tag with
+            | some op => pure (TypedValue.unOperator op status)
+            | none => throw s!"{childPath}: unrecognized unary operator `{tag}`"
           pure ⟨decoded, runtimeLocalObligations decoded childPath⟩
         else decodeRuntimeValueM (node.child index value) childPath nextDomain (typedEnumCategory? key path parentTag value) memo
       let isTagField := match effectiveDomain with
         | .statement | .terminator | .rvalue | .operand | .projection => key == "status" || key == "variant" || key == "kind"
         | _ => false
-      let parentIsTagged := match effectiveDomain with
-        | .any | .statementWrapper | .terminatorWrapper => tagCategory.isSome
-        | _ => false
-      let parentIsObject := match effectiveDomain with
-        | .any | .statementWrapper | .terminatorWrapper => !tagCategory.isSome
-        | _ => false
-      let statusIssues := if key == "status" && (parentIsTagged || parentIsObject) then
-        match child.summary with
-        | .scalar (.str text) => (statusObligation? (parseStatus text) childPath).toList
-        | _ => [⟨childPath, if parentIsTagged then "enum status must be a string" else "status field must be a string"⟩]
-        else []
+      let statusIssues : List Obligation := []
       let statusSequence := if statusIssues.isEmpty then none else some (.leaf statusIssues.toArray)
       let childSequence := appendRuntimeObligations statusSequence child.obligations
       if !isTagField then obligations := appendRuntimeObligations obligations childSequence
@@ -1051,26 +1018,26 @@ partial def decodeRuntimeValueBody (node : JsonTraversalCache.Node) (path : Stri
     let summary ← match effectiveDomain with
       | .statement => do
         let tag ← fieldString j "variant" path
-        let status := parseStatus (← fieldString j "status" path)
-        pure (TypedValue.statement (statementVariant tag) status summaries)
+        let status ← parseStatus (← fieldString j "status" path)
+        pure (TypedValue.statement (← statementVariant tag) status summaries)
       | .terminator => do
         let tag ← fieldString j "variant" path
-        let status := parseStatus (← fieldString j "status" path)
-        pure (TypedValue.terminator (terminatorVariant tag) status summaries)
+        let status ← parseStatus (← fieldString j "status" path)
+        pure (TypedValue.terminator (← terminatorVariant tag) status summaries)
       | .rvalue => do
         let tag ← fieldString j "kind" path
-        let status := parseStatus (← fieldString j "status" path)
+        let status ← parseStatus (← fieldString j "status" path)
         if tag == "BinaryOp" || tag == "UnaryOp" then
           let operator ← field j "operator" path
           let _ ← parseOperatorTag operator (joinPath path "operator")
-        pure (TypedValue.rvalue (rvalueVariant tag) status summaries)
+        pure (TypedValue.rvalue (← rvalueVariant tag) status summaries)
       | .operand => do
         let tag ← fieldString j "kind" path
-        let status := parseStatus (← fieldString j "status" path)
-        pure (TypedValue.operand (operandVariant tag) status summaries)
+        let status ← parseStatus (← fieldString j "status" path)
+        pure (TypedValue.operand (← operandVariant tag) status summaries)
       | .projection => do
         let tag ← fieldString j "kind" path
-        pure (TypedValue.projection (projectionVariant tag) summaries)
+        pure (TypedValue.projection (← projectionVariant tag) summaries)
       | .any | .statementWrapper | .terminatorWrapper => do
         match tagCategory with
         | some category => pure (TypedValue.enumTag category (← parseInlineTag j path) summaries)
@@ -1117,7 +1084,7 @@ def parseTagged (j : Json) (path : String) : Except String TaggedNode := do
   let tag ← fieldString j "kind" path
   let status ← match optionalField j "status" with
     | none => pure .supported
-    | some value => parseStatus <$> (value.getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})")
+    | some value => (value.getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})") >>= parseStatus
   return ⟨status, tag, j⟩
 
 def parseAbiTag (j : Json) (path : String) : Except String TaggedNode := do
@@ -1131,25 +1098,25 @@ def parseAbiTag (j : Json) (path : String) : Except String TaggedNode := do
         | none => throw s!"{path}: enum object is missing its kind tag"
     let status ← match optionalField j "status" with
       | none => pure .supported
-      | some value => parseStatus <$> (value.getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})")
+      | some value => (value.getStr? |>.mapError fun e => s!"{joinPath path "status"}: expected string ({e})") >>= parseStatus
     return ⟨status, tag, j⟩
   | _ => throw s!"{path}: expected enum tag string or tagged object"
 
-def layoutVariantsKind (tag : String) : LayoutVariantsKind :=
+def layoutVariantsKind (tag : String) : Except String LayoutVariantsKind :=
   match tag with
-  | "single" => .single
-  | "multiple" => .multiple
-  | "empty" => .empty
-  | other => .unknown other
+  | "single" => pure (.single)
+  | "multiple" => pure (.multiple)
+  | "empty" => pure (.empty)
+  | other => throw s!"unrecognized layoutVariantsKind tag `{other}`"
 
-def backendReprKind (tag : String) : BackendReprKind :=
+def backendReprKind (tag : String) : Except String BackendReprKind :=
   match tag with
-  | "scalar" => .scalar
-  | "scalar_pair" => .scalarPair
-  | "memory" => .memory
-  | "simd_vector" => .simdVector
-  | "scalable_simd_vector" => .scalableSimdVector
-  | other => .unknown other
+  | "scalar" => pure (.scalar)
+  | "scalar_pair" => pure (.scalarPair)
+  | "memory" => pure (.memory)
+  | "simd_vector" => pure (.simdVector)
+  | "scalable_simd_vector" => pure (.scalableSimdVector)
+  | other => throw s!"unrecognized backendReprKind tag `{other}`"
 
 def optionalNatBefore (j : Json) (key path : String) : Except String (Option Nat) := do
   match optionalField j key with
@@ -1158,18 +1125,18 @@ def optionalNatBefore (j : Json) (key path : String) : Except String (Option Nat
 
 def parsePrimitiveLayout (j : Json) (path : String) : Except String PrimitiveLayout := do
   let tag ← fieldString j "kind" path
-  let kind := match tag with
-    | "integer" => .integer
-    | "float" => .float
-    | "pointer" => .pointer
-    | other => .unknown other
+  let kind : PrimitiveKind ← match tag with
+    | "integer" => pure (.integer)
+    | "float" => pure (.float)
+    | "pointer" => pure (.pointer)
+    | other => throw s!"{path}: unrecognized PrimitiveKind `{other}`"
   let integerKindText ← optionalString j "integer_kind" path
-  let integerKind := integerKindText.map integerTypeTag
+  let integerKind ← integerKindText.mapM integerTypeTag
   let signed ← match optionalField j "signed" with
     | none | some .null => pure none
     | some value => (value.getBool?).map some |>.mapError fun e => s!"{joinPath path "signed"}: expected boolean ({e})"
   let floatKindText ← optionalString j "float_kind" path
-  let floatKind := floatKindText.map floatTypeTag
+  let floatKind ← floatKindText.mapM floatTypeTag
   let addressSpace ← optionalNatBefore j "address_space" path
   return {
     kind := kind
@@ -1195,10 +1162,10 @@ def parseU128Natural (j : Json) (path : String) : Except String Nat := do
 
 def parseScalarLayout (j : Json) (path : String) : Except String ScalarLayout := do
   let tag ← fieldString j "kind" path
-  let kind := match tag with
-    | "initialized" => .initialized
-    | "union" => .union
-    | other => .unknown other
+  let kind : ScalarShapeKind ← match tag with
+    | "initialized" => pure (.initialized)
+    | "union" => pure (.union)
+    | other => throw s!"{path}: unrecognized ScalarShapeKind `{other}`"
   let range ← match optionalJson j "valid_range" with
     | none => pure none
     | some value => pure (some (← parseU128Natural (← field value "start" (joinPath path "valid_range")) (joinPath path "valid_range.start"), ← parseU128Natural (← field value "end" (joinPath path "valid_range")) (joinPath path "valid_range.end")))
@@ -1211,7 +1178,7 @@ def parseScalarLayout (j : Json) (path : String) : Except String ScalarLayout :=
 
 def parseBackendRepr (j : Json) (path : String) : Except String BackendRepr := do
   let tag ← fieldString j "kind" path
-  let kind := backendReprKind tag
+  let kind ← backendReprKind tag
   let scalar ← match optionalJson j "scalar" with
     | none => pure none
     | some value => pure (some (← parseScalarLayout value (joinPath path "scalar")))
@@ -1238,7 +1205,6 @@ def parseBackendRepr (j : Json) (path : String) : Except String BackendRepr := d
   | .memory => if sized.isNone then throw s!"{path}: memory backend representation is missing `sized`"
   | .simdVector | .scalableSimdVector =>
     if element.isNone || laneCount.isNone then throw s!"{path}: SIMD backend representation is incomplete"
-  | .unknown _ => pure ()
   return {
     kind := kind
     sized := sized
@@ -1254,12 +1220,12 @@ def parseBackendRepr (j : Json) (path : String) : Except String BackendRepr := d
 
 def parseFieldShape (j : Json) (path : String) : Except String FieldShape := do
   let tag ← fieldString j "kind" path
-  let kind := match tag with
-    | "primitive" => .primitive
-    | "union" => .union
-    | "array" => .array
-    | "arbitrary" => .arbitrary
-    | other => .unknown other
+  let kind : FieldShapeKind ← match tag with
+    | "primitive" => pure (.primitive)
+    | "union" => pure (.union)
+    | "array" => pure (.array)
+    | "arbitrary" => pure (.arbitrary)
+    | other => throw s!"{path}: unrecognized FieldShapeKind `{other}`"
   let fieldCount ← optionalNatBefore j "field_count" path
   let offsetBytes ← optionalNatBefore j "offset_bytes" path
   let strideBytes ← optionalNatBefore j "stride_bytes" path
@@ -1277,7 +1243,6 @@ def parseFieldShape (j : Json) (path : String) : Except String FieldShape := do
   | .arbitrary =>
     if fieldCount.isNone || offsetsBytes.size != fieldCountValue || memoryOrder.size != fieldCountValue then
       throw s!"{path}: arbitrary field shape count/offset/order mismatch"
-  | .unknown _ => pure ()
   return {
     kind := kind
     fieldCount := fieldCountValue
@@ -1308,15 +1273,15 @@ def decimalNat (text path : String) : Except String Nat := do
 
 def parseTagEncoding (j : Json) (path : String) : Except String TagEncoding := do
   match j with
-  | .str legacy =>
-    return ⟨.incomplete, .unknown s!"legacy_debug:{legacy}", none, none, none, j⟩
+  | .str _ =>
+    throw s!"{path}: tag encoding must be a typed object"
   | .obj _ =>
     let tag ← fieldString j "kind" path
-    let status := parseStatus (← fieldString j "status" path)
-    let kind := match tag with
-      | "direct" => TagEncodingKind.direct
-      | "niche" => TagEncodingKind.niche
-      | other => TagEncodingKind.unknown other
+    let status ← parseStatus (← fieldString j "status" path)
+    let kind : TagEncodingKind ← match tag with
+      | "direct" => pure (TagEncodingKind.direct)
+      | "niche" => pure (TagEncodingKind.niche)
+      | other => throw s!"{path}: unrecognized TagEncodingKind `{other}`"
     let untaggedVariant ← optionalNat j "untagged_variant" path
     let nicheVariants ← match optionalJson j "niche_variants" with
       | none => pure none
@@ -1329,15 +1294,14 @@ def parseTagEncoding (j : Json) (path : String) : Except String TagEncoding := d
     match kind with
     | .direct => pure ()
     | .niche =>
-      if status == .supported && (untaggedVariant.isNone || nicheVariants.isNone || nicheStart.isNone) then
+      if (untaggedVariant.isNone || nicheVariants.isNone || nicheStart.isNone) then
         throw s!"{path}: supported niche tag encoding is missing its range or start value"
-    | .unknown _ => pure ()
     return ⟨status, kind, untaggedVariant, nicheVariants, nicheStart, j⟩
   | _ => throw s!"{path}: expected structured tag encoding"
 
 def parseVariantsLayout (j : Json) (path : String) : Except String VariantsLayout := do
   let tag ← fieldString j "kind" path
-  let kind := layoutVariantsKind tag
+  let kind ← layoutVariantsKind tag
   let variantIndex ← optionalNatBefore j "variant_index" path
   let scalarTag ← match optionalJson j "tag" with
     | none => pure none
@@ -1358,7 +1322,6 @@ def parseVariantsLayout (j : Json) (path : String) : Except String VariantsLayou
     if scalarTag.isNone || tagEncoding.isNone || tagFieldIndex.isNone || variants.isEmpty then
       throw s!"{path}: multi-variant layout is missing tag or variant data"
   | .empty => pure ()
-  | .unknown _ => pure ()
   return {
     kind := kind
     variantIndex := variantIndex
@@ -1373,16 +1336,11 @@ def parseLayoutUncached (j : Json) (path : String) : Except String Layout := do
   if (j.getObjVal? "$lean_miri_shared_ref").isOk then
     throw s!"{path}: shared layout reference requires a shared_payloads catalog"
   let statusText ← fieldString j "status" path
-  let status := parseStatus statusText
-  let kind := match asTag? j "kind" with
-    | some "layout_query_error" => .layoutQueryError
-    | some "layout" | none => .layout
-    | some value => .unknown value
-  let offsets ← if status == .supported then
-    natArray (← field j "field_offsets_bytes" path) (joinPath path "field_offsets_bytes")
-    else match optionalJson j "field_offsets_bytes" with
-      | none => pure #[]
-      | some value => natArray value (joinPath path "field_offsets_bytes")
+  let status ← parseStatus statusText
+  let kind : LayoutKind ← match asTag? j "kind" with
+    | some "layout" | none => pure (.layout)
+    | some value => throw s!"{path}: unrecognized LayoutKind `{value}`"
+  let offsets ← natArray (← field j "field_offsets_bytes" path) (joinPath path "field_offsets_bytes")
   let variants ← match optionalJson j "variants" with
     | none => pure none
     | some value => pure (some (← parseTagged value (joinPath path "variants")))
@@ -1401,11 +1359,11 @@ def parseLayoutUncached (j : Json) (path : String) : Except String Layout := do
   let sizeBytes ← optionalNat j "size_bytes" path
   let abiAlignBytes ← optionalNat j "abi_align_bytes" path
   let unadjustedAbiAlignBytes ← optionalNat j "unadjusted_abi_align_bytes" path
-  let variantsKind := variants.map fun value => layoutVariantsKind value.tag
-  let backendReprKind := backend.map fun value => backendReprKind value.tag
-  if status == .supported && (sizeBytes.isNone || abiAlignBytes.isNone || unadjustedAbiAlignBytes.isNone) then
+  let variantsKind ← variants.mapM fun value => layoutVariantsKind value.tag
+  let backendReprKind ← backend.mapM fun value => backendReprKind value.tag
+  if (sizeBytes.isNone || abiAlignBytes.isNone || unadjustedAbiAlignBytes.isNone) then
     throw s!"{path}: supported layout is missing size/alignment fields"
-  if status == .supported && (fields.isNone || variantsLayout.isNone || backendRepresentation.isNone) then
+  if (fields.isNone || variantsLayout.isNone || backendRepresentation.isNone) then
     throw s!"{path}: supported layout is missing field/variant/backend representation data"
   match fields with
   | some fieldShape =>
@@ -1532,7 +1490,7 @@ def decodeCompilerPredicateEvidence (j : Json) : Except String CompilerPredicate
     typingEnvironment := ← fieldString j "typing_env" "$predicate"
     stableKey := ← fieldNat j "stable_key" "$predicate"
     autoTrait := ← fieldBool j "auto_trait" "$predicate"
-    normalizationStatus := parseStatus (← fieldString normalization "status" "$predicate.normalization")
+    normalizationStatus := ← parseStatus (← fieldString normalization "status" "$predicate.normalization")
     normalizedId := normalized
     original := ← field j "original" "$predicate"
     payload := j }
@@ -1555,7 +1513,7 @@ def decodeTypeCompilerFacts (j : Json) (path : String := "$compiler_facts") : Ex
       | .null => pure none
       | value => value.getBool?.map some
     booleans := booleans.push (name, {
-      status := parseStatus (← fieldString value "status" path), value := result,
+      status := ← parseStatus (← fieldString value "status" path), value := result,
       reason := ← optionalString value "reason" path, payload := value })
   let mut types := #[]
   for (name,value) in ← objectFields (← field j "type_queries" path) do
@@ -1565,12 +1523,12 @@ def decodeTypeCompilerFacts (j : Json) (path : String := "$compiler_facts") : Ex
         | some id => pure (some id)
         | none => throw "compiler type query value is not a type reference or null"
     types := types.push (name, {
-      status := parseStatus (← fieldString value "status" path), value := result,
+      status := ← parseStatus (← fieldString value "status" path), value := result,
       reason := ← optionalString value "reason" path, payload := value })
   let (captureNames,captureStatus) ← match optionalField j "capture_names" with
     | none => pure (none,none)
     | some query => do
-      let status := parseStatus (← fieldString query "status" path)
+      let status ← parseStatus (← fieldString query "status" path)
       let names ← match ← field query "value" path with
         | .null => pure none
         | .arr names => (names.mapM fun (name : Json) => match name with
@@ -1587,17 +1545,17 @@ def decodeTypeCompilerFacts (j : Json) (path : String := "$compiler_facts") : Ex
 
 def parseTypeNode (j : Json) (path : String) (memo : DecodeMemo := {}) : Except String TypeNode := do
   let shape ← field j "shape" path
-  let shapeStatus := parseStatus (← fieldString shape "status" (joinPath path "shape"))
+  let shapeStatus ← parseStatus (← fieldString shape "status" (joinPath path "shape"))
   let shapeKindText ← fieldString shape "kind" (joinPath path "shape")
   let signedKindText ← optionalString shape "signed_kind" (joinPath path "shape")
   let unsignedKindText ← optionalString shape "unsigned_kind" (joinPath path "shape")
   let floatKindText ← optionalString shape "float_kind" (joinPath path "shape")
   let adtKindText ← optionalString shape "adt_kind" (joinPath path "shape")
   let shapeMetadata : TypeShapeMetadata := {
-    signedKind := signedKindText.map integerTypeTag
-    unsignedKind := unsignedKindText.map integerTypeTag
-    floatKind := floatKindText.map floatTypeTag
-    adtKind := adtKindText.map adtKindTag
+    signedKind := ← signedKindText.mapM integerTypeTag
+    unsignedKind := ← unsignedKindText.mapM integerTypeTag
+    floatKind := ← floatKindText.mapM floatTypeTag
+    adtKind := ← adtKindText.mapM adtKindTag
   }
   let signature ← match optionalJson shape "signature" with
     | none => pure none
@@ -1612,7 +1570,7 @@ def parseTypeNode (j : Json) (path : String) (memo : DecodeMemo := {}) : Except 
     id := ← fieldNat j "type_id" path
     display := ← fieldString j "display" path
     shapeStatus := shapeStatus
-    shapeKind := typeShapeKind shapeKindText
+    shapeKind := ← typeShapeKind shapeKindText
     shapeMetadata := shapeMetadata
     signature := signature
     layout := ← parseLayout (← field j "layout" path) (joinPath path "layout") memo
@@ -1693,24 +1651,24 @@ def parseAllocationMemory (j : Json) (path : String) : Except String AllocationM
   return {
     sizeBytes := size
     alignBytes := alignBytes
-    mutability := match ← fieldString j "mutability" path with
-      | "mutable" => .mutable
-      | "immutable" => .immutable
-      | other => .unknown other
+    mutability := ← match ← fieldString j "mutability" path with
+      | "mutable" => pure .mutable
+      | "immutable" => pure .immutable
+      | other => throw s!"{path}.mutability: unrecognized memory mutability `{other}`"
     bytesHex := bytes
     initializationRanges := ranges
     relocations := relocations
   }
 
-def allocationKind (kind : String) : AllocationKind :=
+def allocationKind (kind : String) : Except String AllocationKind :=
   match kind with
-  | "memory" => .memory
-  | "function" => .function
-  | "static" => .static
-  | "vtable" => .vtable
-  | "type_id" => .typeId
-  | "" => .unknown
-  | other => .other other
+  | "memory" => pure (.memory)
+  | "function" => pure (.function)
+  | "static" => pure (.static)
+  | "vtable" => pure (.vtable)
+  | "type_id" => pure (.typeId)
+  | "" => throw "allocation kind is missing"
+  | other => throw s!"unrecognized allocationKind tag `{other}`"
 
 def parseDefinitionId (j : Json) (path : String) : Except String DefinitionId := do
   return ⟨← fieldNat j "crate" path, ← fieldNat j "index" path⟩
@@ -1718,6 +1676,7 @@ def parseDefinitionId (j : Json) (path : String) : Except String DefinitionId :=
 def parseSelectedScope (j : Json) (path : String) : Except String SelectedScope := do
   let kind ← fieldString j "kind" path
   let statusText ← fieldString j "status" path
+  if statusText != "complete" then throw s!"{path}.status: expected complete"
   let rootsJson ← arrayField j "roots" path
   let mut roots := #[]
   for (root, index) in rootsJson.toList.zipIdx do
@@ -1726,41 +1685,21 @@ def parseSelectedScope (j : Json) (path : String) : Except String SelectedScope 
     if defPath.isEmpty then throw s!"{joinPath rootPath "def_path"}: selected root path cannot be empty"
     roots := roots.push ⟨defPath, ← parseDefinitionId (← field root "def_id" rootPath) (joinPath rootPath "def_id")⟩
   if roots.toList.eraseDups.length != roots.size then throw s!"{joinPath path "roots"}: duplicate selected roots"
-  let unresolvedJson ← arrayField j "unresolved_obligations" path
-  let mut unresolved := #[]
-  let mut evidence := #[]
-  for (entry, index) in unresolvedJson.toList.zipIdx do
-    let entryPath := s!"{joinPath path "unresolved_obligations"}[{index}]"
-    match entry with
-    | .str message =>
-      unresolved := unresolved.push message
-      evidence := evidence.push ⟨entryPath,message⟩
-    | .obj _ =>
-      let sourcePath ← fieldString entry "path" entryPath
-      let status ← fieldString entry "status" entryPath
-      let kind ← fieldString entry "kind" entryPath
-      let reason ← fieldString entry "reason" entryPath
-      let message := s!"{status} {kind}: {reason}"
-      unresolved := unresolved.push message
-      evidence := evidence.push ⟨sourcePath,message⟩
-    | _ => throw s!"{entryPath}: expected string or structured source obligation"
   return {
     kind := kind
     statusText := statusText
-    status := parseStatus statusText
+    status := ← parseStatus statusText
     semantics := ← fieldString j "semantics" path
     roots := roots
-    unresolvedObligations := unresolved
-    unresolvedEvidence := evidence
     payload := j
   }
 
-def vtablePredicateKind (tag : String) : VtablePredicateKind :=
+def vtablePredicateKind (tag : String) : Except String VtablePredicateKind :=
   match tag with
-  | "trait" => .trait
-  | "auto_trait" => .autoTrait
-  | "projection" => .projection
-  | other => .unknown other
+  | "trait" => pure (.trait)
+  | "auto_trait" => pure (.autoTrait)
+  | "projection" => pure (.projection)
+  | other => throw s!"unrecognized vtablePredicateKind tag `{other}`"
 
 def parseVtablePredicate (j : Json) (path : String) : Except String VtablePredicate := do
   let tag ← fieldString j "kind" path
@@ -1772,24 +1711,24 @@ def parseVtablePredicate (j : Json) (path : String) : Except String VtablePredic
     | none => pure none
     | some value => pure (some (← decodeValue value (joinPath path "generic_args")))
   return {
-    kind := vtablePredicateKind tag
-    status := parseStatus (← fieldString j "status" path)
+    kind := ← vtablePredicateKind tag
+    status := ← parseStatus (← fieldString j "status" path)
     definitionId := definitionId
     definitionPath := definitionPath
     genericArgs := genericArgs
     payload := j
   }
 
-def vtableEntryKind (tag : String) : VtableEntryKind :=
+def vtableEntryKind (tag : String) : Except String VtableEntryKind :=
   match tag with
-  | "drop_in_place_null" => .dropInPlaceNull
-  | "drop_in_place" => .dropInPlace
-  | "size_bytes" => .sizeBytes
-  | "align_bytes" => .alignBytes
-  | "vacant" => .vacant
-  | "method" => .method
-  | "supertrait_vtable_pointer" => .supertraitVtablePointer
-  | other => .unknown other
+  | "drop_in_place_null" => pure (.dropInPlaceNull)
+  | "drop_in_place" => pure (.dropInPlace)
+  | "size_bytes" => pure (.sizeBytes)
+  | "align_bytes" => pure (.alignBytes)
+  | "vacant" => pure (.vacant)
+  | "method" => pure (.method)
+  | "supertrait_vtable_pointer" => pure (.supertraitVtablePointer)
+  | other => throw s!"unrecognized vtableEntryKind tag `{other}`"
 
 def parseVtableEntry (j : Json) (path : String) : Except String VtableEntry := do
   let tag ← fieldString j "kind" path
@@ -1808,8 +1747,8 @@ def parseVtableEntry (j : Json) (path : String) : Except String VtableEntry := d
     | none => pure none
     | some value => pure (some (← decodeValue value (joinPath path "generic_args")))
   return {
-    kind := vtableEntryKind tag
-    status := parseStatus (← fieldString j "status" path)
+    kind := ← vtableEntryKind tag
+    status := ← parseStatus (← fieldString j "status" path)
     instanceId := ← optionalNat j "instance_id" path
     definitionId := definitionId
     definitionPath := ← optionalString j "def_path" path
@@ -1829,13 +1768,13 @@ def decodeVtableEntry (j : Json) (path : String := "$compiler_vtable_entry") :
 /-- Decode compiler-query static metadata, retaining the original evidence. -/
 def decodeStaticGlobalInfo (j : Json) (path : String := "$static_global_info") : Except String StaticGlobalInfo := do
   return {
-    status := parseStatus (← fieldString j "status" path)
+    status := ← parseStatus (← fieldString j "status" path)
     sizeBytes := ← fieldNat j "size_bytes" path
     alignBytes := ← fieldNat j "align_bytes" path
-    mutability := match ← fieldString j "mutability" path with
-      | "mutable" => .mutable
-      | "immutable" => .immutable
-      | tag => .unknown tag
+    mutability := ← match ← fieldString j "mutability" path with
+      | "mutable" => pure .mutable
+      | "immutable" => pure .immutable
+      | tag => throw s!"{path}.mutability: unrecognized memory mutability `{tag}`"
     isStatic := ← fieldBool j "is_static" path
     foreignItem := ← fieldBool j "is_foreign_item" path
     threadLocal := ← fieldBool j "thread_local" path
@@ -1844,71 +1783,69 @@ def decodeStaticGlobalInfo (j : Json) (path : String := "$static_global_info") :
 
 def parseAllocation (j : Json) (path : String) : Except String AllocationNode := do
   let kindText ← fieldString j "kind" path
-  let kind := allocationKind kindText
-  let status := parseStatus (← fieldString j "status" path)
+  let kind ← allocationKind kindText
+  let status ← parseStatus (← fieldString j "status" path)
   let mut memory := none
   let mut data := none
-  if status == .supported then
-    match kind with
-    | .memory =>
-      let value ← parseAllocationMemory j path
-      memory := some value
-      data := some (.memory value)
-    | .function =>
-      let defId ← parseDefinitionId (← field j "instance_def_id" path) (joinPath path "instance_def_id")
-      let args ← decodeValue (← field j "generic_args" path) (joinPath path "generic_args")
-      data := some (.function {
-        instanceId := ← fieldNat j "instance_id" path
-        definitionId := defId
-        definitionPath := ← fieldString j "instance_def_path" path
-        genericArgs := args
-        payload := j
-      })
-    | .static =>
-      let globalInfo ← match optionalField j "global_info" with
-        | none => pure none
-        | some info => (decodeStaticGlobalInfo info (joinPath path "global_info")).map some
-      let foreignItem := globalInfo.map (·.foreignItem) |>.getD false
-      let initializer ← match optionalField j "initializer" with
-        | some value => (parseAllocationMemory value (joinPath path "initializer")).map some
-        | none => if foreignItem then pure none else throw s!"{joinPath path "initializer"}: non-foreign static is missing its initializer image"
-      data := some (.static {
-        globalInfo := globalInfo
-        definitionId := ← parseDefinitionId (← field j "def_id" path) (joinPath path "def_id")
-        definitionPath := ← fieldString j "def_path" path
-        threadLocal := ← fieldBool j "thread_local" path
-        initializer := initializer
-        payload := j
-      })
-    | .vtable =>
-      let predicatesJson ← arrayField j "predicates" path
-      let entriesJson ← arrayField j "entries" path
-      let mut predicates := #[]
-      for (predicate, index) in predicatesJson.toList.zipIdx do
-        predicates := predicates.push (← parseVtablePredicate predicate s!"{joinPath path "predicates"}[{index}]")
-      let mut entries := #[]
-      for (entry, index) in entriesJson.toList.zipIdx do
-        entries := entries.push (← parseVtableEntry entry s!"{joinPath path "entries"}[{index}]")
-      let typeRef ← field j "type" path
-      let typeId ← match isTypeRef typeRef with
-        | some id => pure id
-        | none => throw s!"{joinPath path "type"}: expected type reference"
-      data := some (.vtable {
-        typeId := typeId
-        sizeBytes := ← optionalNat j "size_bytes" path
-        alignBytes := ← optionalNat j "align_bytes" path
-        layoutStatus := parseStatus (← fieldString j "layout_status" path)
-        predicates := predicates
-        entries := entries
-        payload := j
-      })
-    | .typeId =>
-      let typeRef ← field j "type" path
-      let typeId ← match isTypeRef typeRef with
-        | some id => pure id
-        | none => throw s!"{joinPath path "type"}: expected type reference"
-      data := some (.typeId typeId)
-    | .unknown | .other _ => pure ()
+  match kind with
+  | .memory =>
+    let value ← parseAllocationMemory j path
+    memory := some value
+    data := some (.memory value)
+  | .function =>
+    let defId ← parseDefinitionId (← field j "instance_def_id" path) (joinPath path "instance_def_id")
+    let args ← decodeValue (← field j "generic_args" path) (joinPath path "generic_args")
+    data := some (.function {
+      instanceId := ← fieldNat j "instance_id" path
+      definitionId := defId
+      definitionPath := ← fieldString j "instance_def_path" path
+      genericArgs := args
+      payload := j
+    })
+  | .static =>
+    let globalInfo ← match optionalField j "global_info" with
+      | none => pure none
+      | some info => (decodeStaticGlobalInfo info (joinPath path "global_info")).map some
+    let foreignItem := globalInfo.map (·.foreignItem) |>.getD false
+    let initializer ← match optionalField j "initializer" with
+      | some value => (parseAllocationMemory value (joinPath path "initializer")).map some
+      | none => if foreignItem then pure none else throw s!"{joinPath path "initializer"}: non-foreign static is missing its initializer image"
+    data := some (.static {
+      globalInfo := globalInfo
+      definitionId := ← parseDefinitionId (← field j "def_id" path) (joinPath path "def_id")
+      definitionPath := ← fieldString j "def_path" path
+      threadLocal := ← fieldBool j "thread_local" path
+      initializer := initializer
+      payload := j
+    })
+  | .vtable =>
+    let predicatesJson ← arrayField j "predicates" path
+    let entriesJson ← arrayField j "entries" path
+    let mut predicates := #[]
+    for (predicate, index) in predicatesJson.toList.zipIdx do
+      predicates := predicates.push (← parseVtablePredicate predicate s!"{joinPath path "predicates"}[{index}]")
+    let mut entries := #[]
+    for (entry, index) in entriesJson.toList.zipIdx do
+      entries := entries.push (← parseVtableEntry entry s!"{joinPath path "entries"}[{index}]")
+    let typeRef ← field j "type" path
+    let typeId ← match isTypeRef typeRef with
+      | some id => pure id
+      | none => throw s!"{joinPath path "type"}: expected type reference"
+    data := some (.vtable {
+      typeId := typeId
+      sizeBytes := ← optionalNat j "size_bytes" path
+      alignBytes := ← optionalNat j "align_bytes" path
+      layoutStatus := ← parseStatus (← fieldString j "layout_status" path)
+      predicates := predicates
+      entries := entries
+      payload := j
+    })
+  | .typeId =>
+    let typeRef ← field j "type" path
+    let typeId ← match isTypeRef typeRef with
+      | some id => pure id
+      | none => throw s!"{joinPath path "type"}: expected type reference"
+    data := some (.typeId typeId)
   return {
     id := ← fieldNat j "allocation_id" path
     sourceAllocId := ← do
@@ -1944,7 +1881,6 @@ def allocationNodeMatchesSourceKind (sourceKind : SourceAllocIdKind)
   match sourceKind, nodeKind with
   | .memory, .memory | .function, .function | .vtable, .vtable
   | .static, .static | .typeId, .typeId => true
-  | .static, .other "static_initializer_error" => true
   | _, _ => false
 
 def parseSourceAllocIdDedupKind (value path : String) : Except String SourceAllocIdDedupKind := do
@@ -1967,7 +1903,8 @@ def parseSourceAllocIdPoolRow (j : Json) (path : String) : Except String SourceA
     | "opaque" => pure .opaque
     | value => throw s!"{joinPath path "status"}: unknown source AllocId pool status `{value}`"
   let allocationId ← optionalNatField j "allocation_id" path
-  let opaqueAllocationId ← optionalNat j "opaque_allocation_id" path
+  if (optionalField j "opaque_allocation_id").isSome then
+    throw s!"{path}: opaque_allocation_id is not a semantic allocation witness"
   let (memoryMutability, memoryAlignBytes, memoryAllBytesInitialized, memoryHasProvenance) ←
     match kind with
     | .memory => do
@@ -1984,12 +1921,12 @@ def parseSourceAllocIdPoolRow (j : Json) (path : String) : Except String SourceA
   if let some image := byteImageHex then
     unless canonicalLowerHex image do throw s!"{joinPath path "byte_image_hex"}: expected canonical lowercase hexadecimal"
   let shapeIsValid := match kind, status, allocationId with
-    | .dangling, .dangling, none => opaqueAllocationId.isNone
-    | .memory, .serialized, some _ => opaqueAllocationId.isNone
-    | .function, .serialized, some _ => opaqueAllocationId.isNone
-    | .vtable, .serialized, some _ => opaqueAllocationId.isNone
-    | .static, .serialized, some _ => opaqueAllocationId.isNone
-    | .typeId, .serialized, some _ => opaqueAllocationId.isNone
+    | .dangling, .dangling, none => true
+    | .memory, .serialized, some _ => true
+    | .function, .serialized, some _ => true
+    | .vtable, .serialized, some _ => true
+    | .static, .serialized, some _ => true
+    | .typeId, .serialized, some _ => true
     | .memory, .opaque, none => true
     | .function, .opaque, none => true
     | .vtable, .opaque, none => true
@@ -2007,7 +1944,7 @@ def parseSourceAllocIdPoolRow (j : Json) (path : String) : Except String SourceA
   | .memory, _, _ => throw s!"{path}: inconsistent byte-memory eligibility and image"
   | _, _, none => pure ()
   | _, _, some _ => throw s!"{path}: byte-memory image is only valid for memory globals"
-  pure ⟨UInt64.ofNat raw, kind, status, allocationId, opaqueAllocationId, memoryMutability, memoryAlignBytes,
+  pure ⟨UInt64.ofNat raw, kind, status, allocationId, memoryMutability, memoryAlignBytes,
     memoryAllBytesInitialized, memoryHasProvenance, byteImageHex⟩
 
 def parseSourceAllocIdSaltResult (j : Json) (path : String) : Except String SourceAllocIdSaltResult := do
@@ -2083,14 +2020,13 @@ def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except
       let some nodeIndex := nodeIndexByGraphId[graphId]? | throw s!"{rowPath}.allocation_id: allocation node is absent"
       let some node := nodes[nodeIndex]? | throw s!"{rowPath}.allocation_id: allocation node index is absent"
       unless node.sourceAllocId == some row.sourceAllocId do throw s!"{rowPath}: source AllocId disagrees with allocation node witness"
-      unless node.status == .supported do throw s!"{rowPath}: serialized source global lacks supported allocation status"
-      let expectedKind := match row.kind with
-        | .memory => AllocationKind.memory
-        | .function => .function
-        | .vtable => .vtable
-        | .static => .static
-        | .typeId => .typeId
-        | .dangling => .unknown
+      let expectedKind ← match row.kind with
+        | .memory => pure AllocationKind.memory
+        | .function => pure AllocationKind.function
+        | .vtable => pure AllocationKind.vtable
+        | .static => pure AllocationKind.static
+        | .typeId => pure AllocationKind.typeId
+        | .dangling => throw s!"{rowPath}: dangling source global cannot be serialized"
       unless node.kind == expectedKind do throw s!"{rowPath}: source global kind disagrees with allocation node"
       let expectedData : Bool := match row.kind, node.data with
         | .memory, some (.memory _) => true
@@ -2119,13 +2055,6 @@ def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except
             throw s!"{rowPath}: eligible byte-memory projection differs from serialized bytes"
         else unless row.byteImageHex.isNone do
           throw s!"{rowPath}: ineligible memory image must not publish a byte key"
-    else if let some graphId := row.opaqueAllocationId then
-      unless row.status == .opaque do throw s!"{rowPath}.opaque_allocation_id: only valid for opaque rows"
-      let some nodeIndex := nodeIndexByGraphId[graphId]? | throw s!"{rowPath}.opaque_allocation_id: allocation node is absent"
-      let some node := nodes[nodeIndex]? | throw s!"{rowPath}.opaque_allocation_id: allocation node index is absent"
-      unless node.sourceAllocId == some row.sourceAllocId && node.status != .supported &&
-          allocationNodeMatchesSourceKind row.kind node.kind do
-        throw s!"{rowPath}.opaque_allocation_id: source witness does not identify an unsupported allocation of the same source kind"
     else if nodeIndexBySourceId.contains row.sourceAllocId.toNat then
       throw s!"{rowPath}: non-serialized source ID is attached to an allocation node"
     pool := pool.push row
@@ -2135,11 +2064,8 @@ def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except
   for node in nodes do
     let some sourceId := node.sourceAllocId | throw "$.compiler_alloc_id_world: every imported allocation must carry an exact source_alloc_id witness"
     let some row := pool[sourceId.toNat - 1]? | throw "$.compiler_alloc_id_world: allocation witness lies outside captured raw prefix"
-    if node.status == .supported then
-      unless row.status == .serialized && row.allocationId == some node.id do
-        throw "$.compiler_alloc_id_world: supported allocation node is not covered by exactly one serialized pool row"
-    else unless row.status == .opaque && row.opaqueAllocationId == some node.id do
-      throw "$.compiler_alloc_id_world: unsupported allocation node is not covered by its opaque pool row"
+    unless row.status == .serialized && row.allocationId == some node.id do
+      throw "$.compiler_alloc_id_world: allocation node is not covered by exactly one serialized pool row"
   let dedupJson ← arrayField j "dedup_catalog" path
   let mut dedup := #[]
   let mut byteRowByImage : Std.HashMap String Nat := {}
@@ -2154,14 +2080,14 @@ def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except
       throw s!"{rowPath}.key_kind: dedup key family is not available in this prepared profile"
     let some keyIndex := nodeIndexByGraphId[row.keyAllocationId]? | throw s!"{rowPath}.key_allocation_id: selected key node is not serialized"
     let some keyNode := nodes[keyIndex]? | throw s!"{rowPath}.key_allocation_id: selected key index is absent"
-    let expectedKeyKind := match row.keyKind with
-      | .bytes => AllocationKind.memory
-      | .function => .function
-      | .vtable => .vtable
-      | .static => .static
-      | .typeId => .typeId
-      | _ => .unknown
-    unless keyNode.kind == expectedKeyKind && keyNode.status == .supported do
+    let expectedKeyKind ← match row.keyKind with
+      | .bytes => pure AllocationKind.memory
+      | .function => pure AllocationKind.function
+      | .vtable => pure AllocationKind.vtable
+      | .static => pure AllocationKind.static
+      | .typeId => pure AllocationKind.typeId
+      | _ => throw s!"{rowPath}: unavailable dedup key family"
+    unless keyNode.kind == expectedKeyKind do
       throw s!"{rowPath}: selected key node has incompatible kind/status"
     let expectedSaltCount := if row.keyKind == .static || row.keyKind == .typeId then 1 else 32
     unless row.salts.size == expectedSaltCount do
@@ -2181,7 +2107,7 @@ def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except
         | throw s!"{rowPath}.salts[{saltIndex}]: result allocation node is absent"
       let some resultNode := nodes[resultIndex]?
         | throw s!"{rowPath}.salts[{saltIndex}]: result node index is absent"
-      unless resultNode.kind == expectedKeyKind && resultNode.status == .supported do
+      unless resultNode.kind == expectedKeyKind do
         throw s!"{rowPath}.salts[{saltIndex}]: result allocation has incompatible kind/status"
       if row.keyKind == .function then
         let some (.function keyFunction) := keyNode.data
@@ -2281,13 +2207,18 @@ def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except
       typeIdRowByType := typeIdRowByType.insert keyType dedup.size
     dedup := dedup.push row
   for node in nodes do
-    if node.status == .supported then
-      if let some (.static static) := node.data then
-        unless staticDefinitionsSeen.contains (static.definitionId.crateIndex, static.definitionId.index) do
-          throw "$.compiler_alloc_id_world.dedup_catalog: selected source static node lacks its exact salt-zero key outcome"
-      if let some (.typeId ty) := node.data then
-        unless typeIdRowByType.contains ty do
-          throw "$.compiler_alloc_id_world.dedup_catalog: selected TypeId node lacks its exact salt-zero key outcome"
+    if let some (.function fn) := node.data then
+      unless functionRowByInstance.contains fn.instanceId do
+        throw "$.compiler_alloc_id_world.dedup_catalog: selected function node lacks its exact full-salt key outcomes"
+    if let some (.vtable vtable) := node.data then
+      unless (vtableRowsByType[vtable.typeId]?.getD #[]).contains vtable.predicates do
+        throw "$.compiler_alloc_id_world.dedup_catalog: selected vtable node lacks its exact full-salt key outcomes"
+    if let some (.static static) := node.data then
+      unless staticDefinitionsSeen.contains (static.definitionId.crateIndex, static.definitionId.index) do
+        throw "$.compiler_alloc_id_world.dedup_catalog: selected source static node lacks its exact salt-zero key outcome"
+    if let some (.typeId ty) := node.data then
+      unless typeIdRowByType.contains ty do
+        throw "$.compiler_alloc_id_world.dedup_catalog: selected TypeId node lacks its exact salt-zero key outcome"
   let mut completeFamilies := #[]
   let families ← arrayField j "complete_key_families" path
   for (family, index) in families.toList.zipIdx do
@@ -2299,19 +2230,19 @@ def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except
     completeFamilies := completeFamilies.push kind
   unless completeFamilies.size == 1 && completeFamilies[0]? == some .bytes do
     throw "$.compiler_alloc_id_world.complete_key_families: prepared profile requires exactly byte_memory completeness"
-  let unsupportedJson ← arrayField j "unsupported_key_families" path
-  let mut unsupportedFamilies := #[]
-  for (family, index) in unsupportedJson.toList.zipIdx do
-    let name ← family.getStr? |>.mapError fun _ => s!"$.compiler_alloc_id_world.unsupported_key_families[{index}]: expected string"
-    let kind ← parseSourceAllocIdDedupKind name s!"$.compiler_alloc_id_world.unsupported_key_families[{index}]"
+  let nonExhaustiveJson ← arrayField j "non_exhaustive_key_families" path
+  let mut nonExhaustiveFamilies := #[]
+  for (family, index) in nonExhaustiveJson.toList.zipIdx do
+    let name ← family.getStr? |>.mapError fun _ => s!"$.compiler_alloc_id_world.non_exhaustive_key_families[{index}]: expected string"
+    let kind ← parseSourceAllocIdDedupKind name s!"$.compiler_alloc_id_world.non_exhaustive_key_families[{index}]"
     unless #[.function, .vtable, .static, .typeId, .memory].contains kind do
-      throw s!"$.compiler_alloc_id_world.unsupported_key_families[{index}]: unknown or inapplicable unsupported family"
-    if unsupportedFamilies.contains kind then throw "$.compiler_alloc_id_world.unsupported_key_families: duplicate family"
-    if completeFamilies.contains kind then throw "$.compiler_alloc_id_world: key family is both complete and unsupported"
-    unsupportedFamilies := unsupportedFamilies.push kind
+      throw s!"$.compiler_alloc_id_world.non_exhaustive_key_families[{index}]: unknown or inapplicable non-exhaustive family"
+    if nonExhaustiveFamilies.contains kind then throw "$.compiler_alloc_id_world.non_exhaustive_key_families: duplicate family"
+    if completeFamilies.contains kind then throw "$.compiler_alloc_id_world: key family is both complete and non-exhaustive"
+    nonExhaustiveFamilies := nonExhaustiveFamilies.push kind
   for required in #[SourceAllocIdDedupKind.function, .vtable, .static, .typeId, .memory] do
-    unless unsupportedFamilies.contains required do
-      throw "$.compiler_alloc_id_world.unsupported_key_families: function/vtable/static/type_id/memory_const_allocation must remain explicitly unsupported"
+    unless nonExhaustiveFamilies.contains required do
+      throw "$.compiler_alloc_id_world.non_exhaustive_key_families: function/vtable/static/type_id/memory_const_allocation must remain explicitly non-exhaustive"
   for row in dedup do
     unless #[.bytes, .function, .vtable, .static, .typeId].contains row.keyKind do
       throw "$.compiler_alloc_id_world.dedup_catalog: unsupported selected key outcome family"
@@ -2338,7 +2269,7 @@ def parseCompilerAllocIdWorld (j : Json) (nodes : Array AllocationNode) : Except
     rawPool := pool
     dedupCatalog := dedup
     completeKeyFamilies := completeFamilies
-    unsupportedKeyFamilies := unsupportedFamilies
+    nonExhaustiveKeyFamilies := nonExhaustiveFamilies
   }
 
 /-- Revalidate allocation identity metadata against the exact retained raw
@@ -2453,8 +2384,10 @@ def parsePromotedBodies (j : Json) (path fallbackName : String) (memo : DecodeMe
       | none => pure index
       | some value => value.getNat? |>.mapError fun e => s!"{joinPath promotedPath "promoted_index"}: expected unsigned integer ({e})"
     let status ← match optionalField entry "status" with
-      | none => pure (if (optionalField entry "body").isSome then .supported else .incomplete)
-      | some value => parseStatus <$> (value.getStr? |>.mapError fun e => s!"{joinPath promotedPath "status"}: expected string ({e})")
+      | none =>
+        if (optionalField entry "body").isSome then pure .supported
+        else throw s!"{promotedPath}: promoted body is missing"
+      | some value => (value.getStr? |>.mapError fun e => s!"{joinPath promotedPath "status"}: expected string ({e})") >>= parseStatus
     let body ← match optionalJson entry "body" with
       | none => pure none
       | some value => pure (some (← parseBodyCore value (joinPath promotedPath "body") s!"{fallbackName}::promoted[{promotedIndex}]" memo))
@@ -2468,17 +2401,13 @@ def parseBody (j : Json) (path fallbackName : String) (memo : DecodeMemo := {}) 
 
 def parseInstance (j : Json) (path : String) : Except String InstanceNode := do
   let kindText ← fieldString j "kind" path
-  let kind := match kindText with
-    | "instance_mir" => .instanceMir
-    | "instance_mir_template" => .instanceMirTemplate
-    | "intrinsic_without_mir" => .intrinsicWithoutMir
-    | "intrinsic_dispatch" => .intrinsicDispatch
-    | "foreign_item_no_mir" => .foreignItemNoMir
-    | "virtual_dispatch" => .virtualDispatch
-    | "virtual_dispatch_target" => .virtualDispatchTarget
-    | "instance_mir_unavailable" => .instanceMirUnavailable
-    | "symbol_identity_only" => .symbolIdentityOnly
-    | other => .other other
+  let kind : InstanceKind ← match kindText with
+    | "instance_mir" => pure .instanceMir
+    | "intrinsic_dispatch" => pure .intrinsicDispatch
+    | "foreign_item_no_mir" => pure .foreignItemNoMir
+    | "virtual_dispatch_target" => pure .virtualDispatchTarget
+    | "symbol_identity_only" => pure .symbolIdentityOnly
+    | other => throw s!"{path}.kind: unrecognized instance kind `{other}`"
   let id ← fieldNat j "instance_id" path
   let defPath ← optionalString j "def_path" path
   let definitionId ← match optionalJson j "def_id" with
@@ -2502,7 +2431,7 @@ def parseInstance (j : Json) (path : String) : Except String InstanceNode := do
   let promotedBodies ← parsePromotedBodies j path fallback
   return {
     id := id
-    status := parseStatus (← fieldString j "status" path)
+    status := ← parseStatus (← fieldString j "status" path)
     kind := kind
     defPath := defPath
     definitionId := definitionId
@@ -2514,15 +2443,15 @@ def parseInstance (j : Json) (path : String) : Except String InstanceNode := do
     payload := j
   }
 
-def passModeKind (tag : String) : PassModeKind :=
+def passModeKind (tag : String) : Except String PassModeKind :=
   match tag with
-  | "Ignore" => .ignore
-  | "Direct" => .direct
-  | "Pair" => .pair
-  | "Cast" => .cast
-  | "Indirect" => .indirect
-  | "IndirectUnsized" => .indirectUnsized
-  | other => .unknown other
+  | "Ignore" => pure (.ignore)
+  | "Direct" => pure (.direct)
+  | "Pair" => pure (.pair)
+  | "Cast" => pure (.cast)
+  | "Indirect" => pure (.indirect)
+  | "IndirectUnsized" => pure (.indirectUnsized)
+  | other => throw s!"unrecognized passModeKind tag `{other}`"
 
 def parseAbiAttributes (j : Json) (path : String) : Except String AbiAttributes := do
   return {
@@ -2540,64 +2469,64 @@ def parseAbiAttributes (j : Json) (path : String) : Except String AbiAttributes 
     captures := ← parseAbiTag (← field j "captures" path) (joinPath path "captures")
   }
 
-def abiRegisterKind (tag : String) : AbiRegisterKind :=
+def abiRegisterKind (tag : String) : Except String AbiRegisterKind :=
   match tag with
-  | "integer" => .integer
-  | "float" => .float
-  | "ppc_f128" => .ppcF128
-  | "vector" => .vector
-  | other => .unknown other
+  | "integer" => pure (.integer)
+  | "float" => pure (.float)
+  | "ppc_f128" => pure (.ppcF128)
+  | "vector" => pure (.vector)
+  | other => throw s!"unrecognized abiRegisterKind tag `{other}`"
 
-def canonicalAbiKind (tag : String) : CanonicalAbiKind :=
+def canonicalAbiKind (tag : String) : Except String CanonicalAbiKind :=
   match tag with
-  | "c" => .c
-  | "rust" => .rust
-  | "rust_cold" => .rustCold
-  | "rust_preserve_none" => .rustPreserveNone
-  | "rust_tail" => .rustTail
-  | "custom" => .custom
-  | "swift" => .swift
-  | "arm" => .arm
-  | "gpu_kernel" => .gpuKernel
-  | "interrupt" => .interrupt
-  | "x86" => .x86
-  | other => .unknown other
+  | "c" => pure (.c)
+  | "rust" => pure (.rust)
+  | "rust_cold" => pure (.rustCold)
+  | "rust_preserve_none" => pure (.rustPreserveNone)
+  | "rust_tail" => pure (.rustTail)
+  | "custom" => pure (.custom)
+  | "swift" => pure (.swift)
+  | "arm" => pure (.arm)
+  | "gpu_kernel" => pure (.gpuKernel)
+  | "interrupt" => pure (.interrupt)
+  | "x86" => pure (.x86)
+  | other => throw s!"unrecognized canonicalAbiKind tag `{other}`"
 
-def armCallKind (tag : String) : ArmCallKind :=
+def armCallKind (tag : String) : Except String ArmCallKind :=
   match tag with
-  | "aapcs" => .aapcs
-  | "cmse_nonsecure_call" => .cmseNonSecureCall
-  | "cmse_nonsecure_entry" => .cmseNonSecureEntry
-  | other => .unknown other
+  | "aapcs" => pure (.aapcs)
+  | "cmse_nonsecure_call" => pure (.cmseNonSecureCall)
+  | "cmse_nonsecure_entry" => pure (.cmseNonSecureEntry)
+  | other => throw s!"unrecognized armCallKind tag `{other}`"
 
-def interruptCallKind (tag : String) : InterruptCallKind :=
+def interruptCallKind (tag : String) : Except String InterruptCallKind :=
   match tag with
-  | "avr" => .avr
-  | "avr_non_blocking" => .avrNonBlocking
-  | "msp430" => .msp430
-  | "riscv_machine" => .riscvMachine
-  | "riscv_supervisor" => .riscvSupervisor
-  | "x86" => .x86
-  | other => .unknown other
+  | "avr" => pure (.avr)
+  | "avr_non_blocking" => pure (.avrNonBlocking)
+  | "msp430" => pure (.msp430)
+  | "riscv_machine" => pure (.riscvMachine)
+  | "riscv_supervisor" => pure (.riscvSupervisor)
+  | "x86" => pure (.x86)
+  | other => throw s!"unrecognized interruptCallKind tag `{other}`"
 
-def x86CallKind (tag : String) : X86CallKind :=
+def x86CallKind (tag : String) : Except String X86CallKind :=
   match tag with
-  | "fastcall" => .fastcall
-  | "stdcall" => .stdcall
-  | "sysv64" => .sysv64
-  | "thiscall" => .thiscall
-  | "vectorcall" => .vectorcall
-  | "win64" => .win64
-  | other => .unknown other
+  | "fastcall" => pure (.fastcall)
+  | "stdcall" => pure (.stdcall)
+  | "sysv64" => pure (.sysv64)
+  | "thiscall" => pure (.thiscall)
+  | "vectorcall" => pure (.vectorcall)
+  | "win64" => pure (.win64)
+  | other => throw s!"unrecognized x86CallKind tag `{other}`"
 
 def parseCanonicalAbi (j : Json) (path : String) : Except String CanonicalAbi := do
   let kindNode ← parseAbiTag j path
   return {
     status := kindNode.status
-    kind := canonicalAbiKind kindNode.tag
-    armCall := (← optionalString j "arm_call" path).map armCallKind
-    interruptKind := (← optionalString j "interrupt_kind" path).map interruptCallKind
-    x86Call := (← optionalString j "x86_call" path).map x86CallKind
+    kind := ← canonicalAbiKind kindNode.tag
+    armCall := ← (← optionalString j "arm_call" path).mapM armCallKind
+    interruptKind := ← (← optionalString j "interrupt_kind" path).mapM interruptCallKind
+    x86Call := ← (← optionalString j "x86_call" path).mapM x86CallKind
     payload := j
   }
 
@@ -2608,7 +2537,7 @@ def parseAbiRegister (j : Json) (path : String) : Except String AbiRegister := d
     | none => pure none
     | some value => pure (some (← parseAbiTag value (joinPath path "kind.hint_element")))
   return {
-    kind := abiRegisterKind kindTag
+    kind := ← abiRegisterKind kindTag
     sizeBits := ← fieldNat j "size_bits" path
     hintElement := hintElement
     payload := j
@@ -2646,11 +2575,11 @@ def parseAbiPassMode (j : Json) (path : String) : Except String AbiPassMode := d
     | some value => pure (some (← parseAbiTag value (joinPath path "mode")))
   let padI32Count ← optionalNat j "pad_i32_count" path
   let addressSpace ← optionalNat j "address_space" path
-  let kind := passModeKind tag
+  let kind ← passModeKind tag
   match kind with
   | .cast => if castTarget.isNone || padI32Count.isNone then throw s!"{path}: Cast pass mode is missing target/padding data"
   | .indirect => if indirectMode.isNone then throw s!"{path}: Indirect pass mode is missing its mode tag"
-  | .direct | .pair | .indirectUnsized | .ignore | .unknown _ => pure ()
+  | .direct | .pair | .indirectUnsized | .ignore => pure ()
   return {
     kind := kind
     attributes := attributes

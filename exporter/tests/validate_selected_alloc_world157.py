@@ -82,8 +82,8 @@ def main(path: str) -> None:
     require(probe_counts == {"preexisting_hit": 0, "miss_reserved_by_probe": 64}, "selected salt probes differ from the captured fixture expectations")
     require(world["complete_key_families"] == ["byte_memory"],
             "selected functions/vtables were incorrectly marked exhaustive")
-    require({"function", "vtable"}.issubset(set(world["unsupported_key_families"])),
-            "nonexhaustive function/vtable families are not marked unsupported")
+    require({"function", "vtable"}.issubset(set(world["non_exhaustive_key_families"])),
+            "nonexhaustive function/vtable families are not marked non-exhaustive")
     print(
         "producer crosswalk PASS: "
         f"prefix={through}, function_keys={selected_counts['function']}, "

@@ -20,7 +20,8 @@ set_option maxHeartbeats 4000000
 open Miri.Frontend
 namespace Client
 import_mir {json.dumps(full)} as imported
-example : imported.executionInput.isSome = false := by rfl
+example : imported.executionInput.document.producer.rustcCommit =
+    "8144389c895da997dbdecaa635e41d6a50be6ffd" := by rfl
 example : imported.document.producer.rustcCommit =
     "8144389c895da997dbdecaa635e41d6a50be6ffd" := by rfl
 end Client
@@ -67,9 +68,9 @@ import_mir {json.dumps(scoped)} as selected
 import_mir {json.dumps(scoped)} as selectedAgain
 example : selected.document.bodies.size = 1 := by rfl
 example : selected.document.types.size = {scoped_type_count} := by rfl
-example : selected.executionInput.isSome = true := by rfl
+example : selected.executionInput.document.bodies.size = 1 := by rfl
 example : selectedAgain.document.bodies.size = 1 := by rfl
-example : selectedAgain.executionInput.isSome = true := by rfl
+example : selectedAgain.executionInput.document.bodies.size = 1 := by rfl
 end Client
 open Lean Elab Command in
 run_cmd do
@@ -91,7 +92,7 @@ unsafe def main : IO Unit := do
     throw (IO.userError "reflected raw JSON and catalog lost runtime sharing")
 ''')
     subprocess.run(["lake", "env", "lean", "--run", str(source)], cwd=root, check=True)
-    print("MIR values reflected and kernel-checked; scoped readiness is not a safety theorem")
+    print("MIR values reflected and kernel-checked; accepted input is not a safety theorem")
     invalid = directory / "invalid.json"
     invalid.write_text('{"schema_version":999}')
     source.write_text(f'''import Miri.Frontend.ImportMIR

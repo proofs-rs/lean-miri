@@ -213,7 +213,7 @@ def main (args : List String) : IO Unit := do
       | .ok value =>
         rawSample? := some raw
         decoy? := some { value with callingConvention :=
-          { value.callingConvention with kind := .unknown "deliberate-decoy" } }
+          { value.callingConvention with kind := .arm, armCall := none } }
       | .error _ => pure ()
   let some raw := rawSample? | throw (IO.userError "fixture has no decoy ABI candidate")
   let some decoy := decoy? | throw (IO.userError "fixture ABI could not form a decoy projection")

@@ -156,8 +156,6 @@ private def runPrepared (prepared : Input.CompilerProviders.Prepared) : Except S
 def main (args : List String) : IO Unit := do
   let some path := args.head? | throw (IO.userError "actual pinned-export JSON required")
   let decoded ← must (Input.decodeJson (← IO.FS.readFile path))
-  unless decoded.executionInput.isSome do
-    throw (IO.userError "pinned export has unresolved source execution-input readiness")
   let program ← must (Input.lowerProgram decoded.document)
   let prepared ← must (Input.CompilerProviders.prepare program)
   IO.println (← must (runPrepared prepared))

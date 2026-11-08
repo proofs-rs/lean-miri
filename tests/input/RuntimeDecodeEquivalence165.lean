@@ -84,7 +84,6 @@ private def coreJson (core : ImportDocumentCore) : Json := obj [
   ("selected_scope", core.selectedScope.map (·.payload) |>.getD Json.null),
   ("function_abis", Json.arr (core.functionAbis.map abiJson)),
   ("bodies", Json.arr (core.bodies.map bodyJson)),
-  ("obligations", toJson (core.obligations.map fun item => (item.path, item.message))),
   ("shared_nodes", Json.arr core.sharedNodes),
   ("raw", core.raw)]
 
@@ -117,8 +116,7 @@ private def sameSelectedScope : Option SelectedScope → Option SelectedScope �
   | some left, some right =>
     left.kind == right.kind && left.statusText == right.statusText &&
     decide (left.status = right.status) && left.semantics == right.semantics &&
-    decide (left.roots = right.roots) && left.unresolvedObligations == right.unresolvedObligations &&
-    decide (left.unresolvedEvidence = right.unresolvedEvidence) && left.payload == right.payload
+    decide (left.roots = right.roots) && left.payload == right.payload
   | _, _ => false
 
 private def sameInstance (left right : InstanceNode) : Bool := Id.run do
@@ -156,17 +154,9 @@ private def checkOne (path : String) : IO Unit := do
   | .ok full, .ok runtime => do
     check (sameCore full.document.toCore runtime.document)
       s!"{path}: complete ImportDocument Core projection differs"
-    check (full.blockingObligations == runtime.blockingObligations)
-      s!"{path}: ordered blocking obligations differ"
-    check (full.executionInput.isSome == runtime.executionInput.isSome)
-      s!"{path}: execution readiness differs"
-    match full.executionInput, runtime.executionInput with
-    | none, none => pure ()
-    | some fullInput, some runtimeInput =>
-      check (sameCore fullInput.document.toCore runtimeInput.document)
-        s!"{path}: ready execution-input projection differs"
-    | _, _ => throw (IO.userError s!"{path}: execution readiness shape differs")
-    IO.println s!"PASS {path}: core projection, ordered obligations ({full.blockingObligations.size}), readiness={full.executionInput.isSome}"
+    check (sameCore full.executionInput.document.toCore runtime.executionInput.document)
+      s!"{path}: execution-input projection differs"
+    IO.println s!"PASS {path}: accepted core and execution-input projections agree"
   | .error fullError, .ok _ =>
     throw (IO.userError s!"{path}: full decoder rejected but runtime decoder accepted: {fullError}")
   | .ok _, .error runtimeError =>

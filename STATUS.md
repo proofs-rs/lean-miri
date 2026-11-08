@@ -11,6 +11,19 @@ and exit, threads, synchronization, atomics, weak memory and data races. Finite
 QA and general whole-machine proofs are separate goals. Overall completion and
 the ability to verify arbitrary Rust are not claimed.
 
+## Exported input coverage
+
+The exporter aborts when requested semantic compiler data is unavailable; the
+Lean input API no longer retains failed exporter payloads as execution inputs.
+Coroutine frame layout serialization and foreign TLS initializers remain
+unimplemented and now stop export. This boundary does not establish compiler
+query closure or interpreter correspondence.
+
+Saved inputs containing old unresolved payloads are intentionally rejected.
+Maintained saved comparison and performance fixtures still need regeneration
+and fresh execution under the successful-input contract; historical replay
+results do not validate the changed boundary.
+
 ## Empty-function caller-domain transport
 
 The [empty-function proof](examples/empty_function/README.md) covers actual call

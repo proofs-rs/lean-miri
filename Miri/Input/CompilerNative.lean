@@ -50,8 +50,6 @@ def abiQueries (p : CompilerProviders.Prepared)
     let world := arrays.get (← get)
     if world.entries.any (·.value.ty == ty) then
       return .ok (← lift ((RuntimeArrayTypes.lookup world ty).mapError reprStr))
-    let node ← lift (p.runtime.node ty |>.mapError toString)
-    if node.layout.kind == .layoutQueryError then return .error ()
     return .ok (← lift (p.runtime.lookup ty |>.mapError toString))
 /-- The same genuine compiler queries work on full-state native calls and
 machine-only closure construction, without introducing an artificial frame. -/

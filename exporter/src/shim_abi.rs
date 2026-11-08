@@ -1,6 +1,14 @@
 //! Exact shims/sig.rs ShimSig::as_abi and shim_sig_arg constructors.
 //! Recipes mirror currently ported alloc/foreign_items/mem/miri source arms.
 use super::*;
+pub(super) fn is_unix_target(tcx: TyCtxt<'_>) -> bool {
+    tcx.sess
+        .target
+        .families
+        .iter()
+        .any(|family| family == "unix")
+}
+
 // helpers.rs::try_resolve_did TypeNS path lookup. Try matching crates in the
 // compiler's own order and select only module/type namespaces as the source.
 pub(super) fn named_instance<'tcx>(
@@ -142,7 +150,7 @@ fn query<'tcx>(
     abi: &str,
     args: &[&str],
     ret: &str,
-) -> Value {
+) -> Result<Value, String> {
     variadic_query(tcx, context, abi, args, ret, false)
 }
 fn variadic_query<'tcx>(
@@ -152,7 +160,7 @@ fn variadic_query<'tcx>(
     args: &[&str],
     ret: &str,
     variadic: bool,
-) -> Value {
+) -> Result<Value, String> {
     let result = (|| -> Result<Value, String> {
         let inputs = args
             .iter()
@@ -177,24 +185,36 @@ fn variadic_query<'tcx>(
         let input_types = inputs
             .iter()
             .map(|ty| type_json(context, tcx, *ty))
-            .collect::<Vec<_>>();
-        let output_type = type_json(context, tcx, output);
+            .collect::<Result<Vec<_>, String>>()?;
+        let output_type = type_json(context, tcx, output)?;
         let value = match tcx.fn_abi_of_fn_ptr(
             ty::TypingEnv::fully_monomorphized().as_query_input((signature, ty::List::empty())),
         ) {
-            Ok(abi) => compiler_fact(fn_abi_json(context, tcx, abi)),
-            Err(error) => {
-                json!({"status":"unsupported","reason":"rustc fn_abi_of_fn_ptr failed","error_debug":format!("{error:?}")})
-            }
+            Ok(abi) => compiler_fact(fn_abi_json(context, tcx, abi)?),
+            Err(error) => export_failure(
+                "shim_abi::variadic_query",
+                format!(
+                    "{}; {}",
+                    "rustc fn_abi_of_fn_ptr failed",
+                    format!("{error:?}")
+                ),
+            )?,
         };
         Ok(
             json!({"status":"supported","input_types":input_types,"output_type":output_type,"abi_query":value}),
         )
     })();
-    json!({"typing_env":"fully_monomorphized","signature":{"calling_convention":abi,"arguments":args,"return":ret,"c_variadic":variadic},
-        "query":match result{Ok(value)=>value,Err(reason)=>json!({"status":"unsupported","reason":reason})}})
+    Ok::<_, String>(
+        json!({"typing_env":"fully_monomorphized","signature":{"calling_convention":abi,"arguments":args,"return":ret,"c_variadic":variadic},
+        "query":result.map_err(|reason| format!("shim ABI {abi}({args:?}) -> {ret}: {reason}"))?}),
+    )
 }
-pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>) -> Value {
+pub(super) fn export<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    context: &mut ExportContext<'tcx>,
+    portable_only: bool,
+    allocator_required: bool,
+) -> Result<Value, String> {
     let recipes: &[(&str, &[&str], &str)] = &[
         ("Rust", &[], "unit"),
         ("Rust", &["usize", "alignment"], "unitPointer"),
@@ -247,19 +267,120 @@ pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>)
             "unit",
         ),
     ];
-    Value::Array(
+    Ok::<_, String>(Value::Array(
         recipes
             .iter()
+            .filter(|(abi, args, _)| {
+                (!portable_only || *abi == "C")
+                    && (allocator_required || !args.contains(&"alignment"))
+            })
             .map(|(abi, args, ret)| query(tcx, context, abi, args, ret))
-            .collect(),
-    )
+            .collect::<Result<Vec<_>, String>>()?,
+    ))
+}
+
+fn unix_signature_required(os: &rustc_target::spec::Os, name: &str) -> bool {
+    use rustc_target::spec::Os;
+    if name.starts_with("__xnet") {
+        return matches!(os, Os::Solaris | Os::Illumos);
+    }
+    if name.starts_with("dispatch_") || name.contains("$INODE64") {
+        return os == &Os::MacOs;
+    }
+    match name {
+        "__xuname" => os == &Os::FreeBsd,
+        "sched_getaffinity" | "sched_setaffinity" => {
+            matches!(os, Os::Linux | Os::Android | Os::FreeBsd)
+        }
+        "pread64" | "pwrite64" | "lseek64" | "ftruncate64" | "fallocate64"
+        | "posix_fallocate64" | "fstat64" | "fallocate" => matches!(os, Os::Linux | Os::Android),
+        "reallocarray" => matches!(os, Os::Linux | Os::Android | Os::FreeBsd),
+        "clock_nanosleep" | "pipe2" | "posix_fallocate" => matches!(
+            os,
+            Os::Linux | Os::Android | Os::FreeBsd | Os::Solaris | Os::Illumos
+        ),
+        "uname" => matches!(
+            os,
+            Os::Linux | Os::Android | Os::MacOs | Os::Solaris | Os::Illumos
+        ),
+        "getentropy" | "_Unwind_RaiseException" => matches!(
+            os,
+            Os::Linux | Os::Android | Os::FreeBsd | Os::MacOs | Os::Illumos | Os::Solaris
+        ),
+        "getrandom" => matches!(
+            os,
+            Os::Linux | Os::Android | Os::FreeBsd | Os::Illumos | Os::Solaris
+        ),
+        "arc4random_buf" => matches!(os, Os::FreeBsd | Os::Illumos | Os::Solaris),
+        "flock" => matches!(
+            os,
+            Os::Linux | Os::Android | Os::FreeBsd | Os::MacOs | Os::Illumos
+        ),
+        _ => true,
+    }
 }
 
 // Source unix/foreign_items.rs sched_{get,set}affinity exact declarations.
+// Source shims/{unix,windows}/foreign_items.rs::is_dyn_sym and the Unix
+// per-target extensions. A loader request can reach these without a foreign
+// declaration, so declaration discovery alone is not a closed query domain.
+fn is_dynamic_symbol(target: &rustc_target::spec::Target, name: &str) -> bool {
+    use rustc_target::spec::{Env, Os};
+    if target.families.iter().any(|family| family == "unix") {
+        if matches!(
+            name,
+            "strlen" | "signal" | "getentropy" | "getrandom" | "futimens"
+        ) {
+            return true;
+        }
+        if matches!(name, "preadv" | "pwritev") && target.os != Os::Solaris {
+            return true;
+        }
+        match target.os {
+            Os::Android => name == "gettid",
+            Os::Linux => {
+                matches!(name, "gettid" | "statx")
+                    || (target.env == Env::Gnu && name == "__cxa_thread_atexit_impl")
+            }
+            Os::MacOs => matches!(
+                name,
+                "os_sync_wait_on_address"
+                    | "os_sync_wait_on_address_with_deadline"
+                    | "os_sync_wait_on_address_with_timeout"
+                    | "os_sync_wake_by_address_any"
+                    | "os_sync_wake_by_address_all"
+            ),
+            Os::Solaris | Os::Illumos => name == "pthread_setname_np",
+            _ => false,
+        }
+    } else {
+        target.os == Os::Windows
+            && matches!(
+                name,
+                "SetThreadDescription"
+                    | "GetThreadDescription"
+                    | "WaitOnAddress"
+                    | "WakeByAddressSingle"
+            )
+    }
+}
+
 pub(super) fn named_signatures<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Value {
+) -> Result<Value, String> {
+    let names = context
+        .pending_instances
+        .iter()
+        .filter(|instance| tcx.is_foreign_item(instance.def_id()))
+        .map(|instance| tcx.symbol_name(*instance).name.to_owned())
+        .collect::<HashSet<_>>();
+    let dynamic_lookup = names.contains("dlsym") || names.contains("GetProcAddress");
+    let required = |name: &str| {
+        tcx.entry_fn(()).is_some()
+            || names.contains(name)
+            || (dynamic_lookup && is_dynamic_symbol(&tcx.sess.target, name))
+    };
     let recipes: &[(&str, &[&str], &str)] = &[
         // Unix environment/system-information checks from
         // shims/unix/foreign_items.rs. The libc aliases stay type queries: we
@@ -363,7 +484,11 @@ pub(super) fn named_signatures<'tcx>(
         // pointers stay exact TypeNS compiler queries.
         ("unlink", &["pointer"], "i32"),
         ("symlink", &["pointer", "pointer"], "i32"),
-        ("linkat", &["i32", "pointer", "i32", "pointer", "i32"], "i32"),
+        (
+            "linkat",
+            &["i32", "pointer", "i32", "pointer", "i32"],
+            "i32",
+        ),
         ("stat", &["pointer", "libc::stat_pointer"], "i32"),
         ("lstat", &["pointer", "libc::stat_pointer"], "i32"),
         ("fstat", &["i32", "libc::stat_pointer"], "i32"),
@@ -381,11 +506,7 @@ pub(super) fn named_signatures<'tcx>(
         ("readdir", &["pointer"], "pointer"),
         ("dirfd", &["pointer"], "i32"),
         ("closedir", &["pointer"], "i32"),
-        (
-            "lseek",
-            &["i32", "libc::off_t", "i32"],
-            "libc::off_t",
-        ),
+        ("lseek", &["i32", "libc::off_t", "i32"], "libc::off_t"),
         ("ftruncate", &["i32", "libc::off_t"], "i32"),
         ("fsync", &["i32"], "i32"),
         ("fdatasync", &["i32"], "i32"),
@@ -408,11 +529,7 @@ pub(super) fn named_signatures<'tcx>(
         ("isatty", &["i32"], "i32"),
         // Linux/Android exact strict large-file declarations in
         // shims/unix/{linux,android}/foreign_items.rs.
-        (
-            "lseek64",
-            &["i32", "libc::off64_t", "i32"],
-            "libc::off64_t",
-        ),
+        ("lseek64", &["i32", "libc::off64_t", "i32"], "libc::off64_t"),
         ("ftruncate64", &["i32", "libc::off64_t"], "i32"),
         (
             "fallocate",
@@ -432,11 +549,7 @@ pub(super) fn named_signatures<'tcx>(
         ("fstat64", &["i32", "libc::stat64_pointer"], "i32"),
         // macOS strict ABI aliases; stat/lstat aliases in the same source
         // intentionally use the deprecated checker and are not listed.
-        (
-            "fstat$INODE64",
-            &["i32", "libc::stat_pointer"],
-            "i32",
-        ),
+        ("fstat$INODE64", &["i32", "libc::stat_pointer"], "i32"),
         (
             "fstatat$INODE64",
             &["i32", "pointer", "libc::stat_pointer", "i32"],
@@ -487,18 +600,18 @@ pub(super) fn named_signatures<'tcx>(
         ("getsockname", &["i32", "pointer", "pointer"], "i32"),
         ("getpeername", &["i32", "pointer", "pointer"], "i32"),
         ("shutdown", &["i32", "i32"], "i32"),
-        ("getaddrinfo", &["pointer", "pointer", "pointer", "pointer"], "i32"),
+        (
+            "getaddrinfo",
+            &["pointer", "pointer", "pointer", "pointer"],
+            "i32",
+        ),
         ("freeaddrinfo", &["pointer"], "unit"),
         // Solaris/illumos strict socket aliases in
         // shims/unix/solarish/foreign_items.rs. __xnet_socketpair is omitted
         // because the pinned source uses the deprecated ABI checker there.
         ("__xnet_socket", &["i32", "i32", "i32"], "i32"),
         ("__xnet7_socket", &["i32", "i32", "i32"], "i32"),
-        (
-            "__xnet_bind",
-            &["i32", "pointer", "libc::socklen_t"],
-            "i32",
-        ),
+        ("__xnet_bind", &["i32", "pointer", "libc::socklen_t"], "i32"),
         (
             "__xnet_connect",
             &["i32", "pointer", "libc::socklen_t"],
@@ -544,27 +657,40 @@ pub(super) fn named_signatures<'tcx>(
     ];
     let mut result = recipes
         .iter()
-        .map(|(name, args, ret)| json!({"name":name,"recipe":query(tcx,context,"C",args,ret)}))
-        .collect::<Vec<_>>();
+        .filter(|(name, _, _)| {
+            is_unix_target(tcx)
+                && unix_signature_required(&tcx.sess.target.os, name)
+                && required(name)
+        })
+        .map(|(name, args, ret)| {
+            Ok::<_, String>(json!({"name":name,"recipe":query(tcx,context,"C",args,ret)?}))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     // Linux GNU TLS destructor registration is strict in
     // shims/unix/linux/foreign_items.rs. Preserve the source's three wildcard
     // pointer arguments and int result, and emit the record only for the GNU
     // environment where Miri accepts this symbol.
-    if tcx.sess.target.env == rustc_target::spec::Env::Gnu {
-        result.push(json!({
-            "name":"__cxa_thread_atexit_impl",
-            "recipe":query(tcx,context,"C",&["pointer","pointer","pointer"],"i32")
-        }));
+    if tcx.sess.target.os == rustc_target::spec::Os::Linux
+        && tcx.sess.target.env == rustc_target::spec::Env::Gnu
+    {
+        if required("__cxa_thread_atexit_impl") {
+            result.push(json!({
+                "name":"__cxa_thread_atexit_impl",
+                "recipe":query(tcx,context,"C",&["pointer","pointer","pointer"],"i32")?
+            }))
+        };
     }
     // The pinned Linux foreign-item arm checks this exact variadic C
     // declaration. Keep it Linux-targeted because the connected Miri/Lean
     // dispatch is selected only for Linux, and preserve the wildcard pointer
     // return and four fixed arguments from shim_sig!.
     if tcx.sess.target.os == rustc_target::spec::Os::Linux {
-        result.push(json!({
+        if required("mremap") {
+            result.push(json!({
             "name":"mremap",
-            "recipe":variadic_query(tcx,context,"C",&["pointer","usize","usize","i32"],"pointer",true)
-        }));
+            "recipe":variadic_query(tcx,context,"C",&["pointer","usize","usize","i32"],"pointer",true)?
+        }))
+        };
     }
     // `open` and `openat` have source-checked C varargs, so retain variadic
     // FnAbi and the exact fixed argument prefix in the named compiler query.
@@ -574,11 +700,23 @@ pub(super) fn named_signatures<'tcx>(
         ("open64", &["pointer", "i32"][..]),
         ("openat64", &["i32", "pointer", "i32"][..]),
     ] {
-        result.push(json!({"name":name,"recipe":variadic_query(tcx,context,"C",args,"i32",true)}));
+        if is_unix_target(tcx)
+            && (!name.ends_with("64")
+                || matches!(
+                    tcx.sess.target.os,
+                    rustc_target::spec::Os::Linux | rustc_target::spec::Os::Android
+                ))
+        {
+            if required(name) {
+                result.push(
+                    json!({"name":name,"recipe":variadic_query(tcx,context,"C",args,"i32",true)?}),
+                )
+            };
+        }
     }
     // Windows foreign_items.rs strict check_shim_sig! declarations. The
     // Windows aliases are resolved from std's exact target module through
-    // descriptor(); this makes non-Windows target absence explicit and keeps
+    // descriptor(); only Windows dispatch requests these paths, keeping
     // pointer-width-dependent aliases under rustc's target ABI query.
     let windows: &[(&str, &[&str], &str)] = &[
         (
@@ -811,45 +949,79 @@ pub(super) fn named_signatures<'tcx>(
             "u32",
         ),
     ];
-    for (name, args, ret) in windows {
-        result.push(json!({"name":name,"recipe":query(tcx,context,"System",args,ret)}));
+    for (name, args, ret) in windows
+        .iter()
+        .filter(|_| tcx.sess.target.os == rustc_target::spec::Os::Windows)
+    {
+        if required(name) {
+            result.push(json!({"name":name,"recipe":query(tcx,context,"System",args,ret)?}))
+        };
     }
-    // windows/foreign_items.rs random shims, preserving source System ABI.
-    for (name, args, ret) in [
-        ("SystemFunction036", &["pointer", "u32"][..], "u8"),
-        ("ProcessPrng", &["pointer", "usize"][..], "winapi::BOOL"),
-        (
-            "BCryptGenRandom",
-            &["pointer", "pointer", "u32", "u32"][..],
-            "i32",
-        ),
-    ] {
-        result.push(json!({"name":name,"recipe":query(tcx,context,"System",args,ret)}));
-    }
-    result.push(
-        json!({"name":"syscall","recipe":variadic_query(tcx,context,"C",&["isize"],"isize",true)}),
-    );
-    result
-        .push(json!({"name":"prctl","recipe":variadic_query(tcx,context,"C",&["i32"],"i32",true)}));
-    result.push(
-        json!({"name":"fcntl","recipe":variadic_query(tcx,context,"C",&["i32","i32"],"i32",true)}),
-    );
-    // unix/foreign_items.rs:328 target-spec query, not host/triple inference.
-    let ulong = match tcx.sess.target.os {
-        rustc_target::spec::Os::FreeBsd
-        | rustc_target::spec::Os::NetBsd
-        | rustc_target::spec::Os::MacOs => true,
-        rustc_target::spec::Os::Linux if tcx.sess.target.env == rustc_target::spec::Env::Gnu => {
-            true
+    if tcx.sess.target.os == rustc_target::spec::Os::Windows {
+        if tcx.sess.target.env == rustc_target::spec::Env::Gnu {
+            if required("_Unwind_RaiseException") {
+                result.push(json!({"name":"_Unwind_RaiseException",
+            "recipe":query(tcx,context,"C",&["pointer"],"unwind_reason_code")?}))
+            };
         }
-        _ => false,
-    };
-    result.push(json!({"name":"ioctl","recipe":variadic_query(tcx,context,"C",&["i32",if ulong{"usize"}else{"i32"}],"i32",true),
-        "source_target_op_is_ulong":ulong}));
-    Value::Array(result)
+        // windows/foreign_items.rs random shims, preserving source System ABI.
+        for (name, args, ret) in [
+            ("SystemFunction036", &["pointer", "u32"][..], "u8"),
+            ("ProcessPrng", &["pointer", "usize"][..], "winapi::BOOL"),
+            (
+                "BCryptGenRandom",
+                &["pointer", "pointer", "u32", "u32"][..],
+                "i32",
+            ),
+        ] {
+            if required(name) {
+                result.push(json!({"name":name,"recipe":query(tcx,context,"System",args,ret)?}))
+            };
+        }
+    }
+    if matches!(
+        tcx.sess.target.os,
+        rustc_target::spec::Os::Linux | rustc_target::spec::Os::Android
+    ) {
+        if required("syscall") {
+            result.push(
+        json!({"name":"syscall","recipe":variadic_query(tcx,context,"C",&["isize"],"isize",true)?}),
+    )
+        };
+        if required("prctl") {
+            result.push(json!({"name":"prctl","recipe":variadic_query(tcx,context,"C",&["i32"],"i32",true)?}));
+        }
+    }
+    if is_unix_target(tcx) {
+        if required("fcntl") {
+            result.push(
+        json!({"name":"fcntl","recipe":variadic_query(tcx,context,"C",&["i32","i32"],"i32",true)?}),
+    )
+        };
+        // unix/foreign_items.rs:328 target-spec query, not host/triple inference.
+        let ulong = match tcx.sess.target.os {
+            rustc_target::spec::Os::FreeBsd
+            | rustc_target::spec::Os::NetBsd
+            | rustc_target::spec::Os::MacOs => true,
+            rustc_target::spec::Os::Linux
+                if tcx.sess.target.env == rustc_target::spec::Env::Gnu =>
+            {
+                true
+            }
+            _ => false,
+        };
+        if required("ioctl") {
+            result.push(json!({"name":"ioctl","recipe":variadic_query(tcx,context,"C",&["i32",if ulong{"usize"}else{"i32"}],"i32",true)?,
+        "source_target_op_is_ulong":ulong}))
+        };
+    }
+    Ok::<_, String>(Value::Array(result))
 }
 
-pub(super) fn named_types<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>) -> Value {
+pub(super) fn named_types<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    context: &mut ExportContext<'tcx>,
+) -> Result<Value, String> {
     let mut result = serde_json::Map::new();
     for (name, path) in [
         ("c_ulong", &["core", "ffi", "c_ulong"][..]),
@@ -862,9 +1034,20 @@ pub(super) fn named_types<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'
         ("pthread_t", &["libc", "pthread_t"][..]),
         ("pthread_key_t", &["libc", "pthread_key_t"][..]),
     ] {
+        if path[0] == "libc"
+            && ((!is_unix_target(tcx)
+                && !(name == "wchar_t" && tcx.sess.target.os != rustc_target::spec::Os::Windows))
+                || (name == "off64_t"
+                    && !matches!(
+                        tcx.sess.target.os,
+                        rustc_target::spec::Os::Linux | rustc_target::spec::Os::Android
+                    )))
+        {
+            continue;
+        }
         let value = match named_type(tcx, path) {
-            Ok(ty) => compiler_fact(type_json(context, tcx, ty)),
-            Err(reason) => json!({"status":"unsupported","reason":reason}),
+            Ok(ty) => compiler_fact(type_json(context, tcx, ty)?),
+            Err(reason) => export_failure("shim_abi::named_types", format!("{}", reason))?,
         };
         result.insert(name.into(), value);
     }
@@ -876,15 +1059,18 @@ pub(super) fn named_types<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'
         ("libc_socklen_t", &["libc", "socklen_t"][..]),
         ("libc_iovec", &["libc", "iovec"][..]),
     ] {
+        if !is_unix_target(tcx) {
+            continue;
+        }
         let ty = named_type(tcx, path);
         let value = match &ty {
-            Ok(ty) => compiler_fact(type_json(context, tcx, *ty)),
-            Err(reason) => json!({"status":"unsupported","reason":reason}),
+            Ok(ty) => compiler_fact(type_json(context, tcx, *ty)?),
+            Err(reason) => export_failure("shim_abi::named_types", format!("{}", reason))?,
         };
         result.insert(name.into(), value);
         let value = match ty {
-            Ok(ty) => compiler_fact(type_json(context, tcx, ty::Ty::new_mut_ptr(tcx, ty))),
-            Err(reason) => json!({"status":"unsupported","reason":reason}),
+            Ok(ty) => compiler_fact(type_json(context, tcx, ty::Ty::new_mut_ptr(tcx, ty))?),
+            Err(reason) => export_failure("shim_abi::named_types", format!("{}", reason))?,
         };
         result.insert(format!("{name}_pointer"), value);
     }
@@ -896,7 +1082,7 @@ pub(super) fn named_types<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'
             context,
             tcx,
             ty::Ty::new_mut_ptr(tcx, tcx.types.u32),
-        )),
+        )?),
     );
     result.insert(
         "i32_pointer".into(),
@@ -904,7 +1090,29 @@ pub(super) fn named_types<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'
             context,
             tcx,
             ty::Ty::new_mut_ptr(tcx, tcx.types.i32),
-        )),
+        )?),
     );
-    Value::Object(result)
+    Ok::<_, String>(Value::Object(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustc_target::spec::Os;
+    #[test]
+    fn source_os_guards_select_foreign_signatures() {
+        assert!(unix_signature_required(&Os::Linux, "pread64"));
+        assert!(!unix_signature_required(&Os::MacOs, "pread64"));
+        assert!(unix_signature_required(&Os::MacOs, "dispatch_time"));
+        assert!(!unix_signature_required(&Os::Linux, "dispatch_time"));
+        assert!(unix_signature_required(&Os::Solaris, "__xnet_socket"));
+        assert!(!unix_signature_required(&Os::Linux, "__xnet_socket"));
+        assert!(!unix_signature_required(&Os::MacOs, "reallocarray"));
+        assert!(!unix_signature_required(&Os::Linux, "arc4random_buf"));
+        assert!(unix_signature_required(&Os::FreeBsd, "sched_getaffinity"));
+        assert!(unix_signature_required(&Os::Solaris, "clock_nanosleep"));
+        assert!(unix_signature_required(&Os::Illumos, "pipe2"));
+        assert!(unix_signature_required(&Os::MacOs, "accept4"));
+        assert!(unix_signature_required(&Os::Linux, "missing_required_shim"));
+    }
 }

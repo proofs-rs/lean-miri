@@ -23,10 +23,9 @@ def variantCount (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except StepE
       get id
     else pure source
   match source.shapeKind with
-  | .alias | .parameter | .placeholderType | .inferenceType =>
+  | .alias =>
     throw (.invalidProgram "TooGeneric in variant_count")
-  | .patternType | .boundType => throw (.invalidProgram "source invariant: invalid nested pattern/bound type in variant_count")
-  | .unknown _ => throw (.unsupported "variant_count compiler shape unknown")
+  | .patternType => throw (.invalidProgram "source invariant: invalid nested pattern/bound type in variant_count")
   | .adt =>
     let variants ← ((source.payload.getObjVal? "shape").bind (·.getObjVal? "variants") >>= Json.getArr?).mapError StepError.unsupported
     pure variants.size

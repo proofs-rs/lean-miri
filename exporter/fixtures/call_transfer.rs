@@ -1,6 +1,10 @@
 #![no_std]
 #![no_main]
 #![allow(dead_code)]
+#![feature(rustc_private)]
+
+// Pinned Miri's pthread_create queries the target libc::pthread_t layout.
+extern crate libc;
 
 use core::ffi::{c_int, c_void};
 

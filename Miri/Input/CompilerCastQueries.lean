@@ -128,7 +128,7 @@ def eraseSelfTraitRef (p : CompilerProviders.Prepared) (token : Nat) : Result Na
   for allocation in p.program.input.allocations do
     if let some (.vtable source) := allocation.data then
       for entry in source.entries do
-        if entry.status == .supported && entry.kind == .supertraitVtablePointer then
+        if entry.kind == .supertraitVtablePointer then
           if (CompilerVTableRuntime.supertraitPrincipal runtime source.typeId entry).toOption == some token then
             return token
   let queryRows ← (← p.program.input.raw.getObjVal? "compiler_vtable_queries").getArr?
@@ -141,7 +141,7 @@ def eraseSelfTraitRef (p : CompilerProviders.Prepared) (token : Nat) : Result Na
     for (entryValue, index) in entryValues.toList.zipIdx do
       let some entry := (Input.decodeVtableEntry entryValue
         s!"$.compiler_vtable_queries.vtable_metadata.entries[{index}]").toOption | continue
-      if entry.status == .supported && entry.kind == .supertraitVtablePointer &&
+      if entry.kind == .supertraitVtablePointer &&
           (CompilerVTableRuntime.supertraitPrincipal runtime sourceType entry).toOption == some token then
         return token
   throw "missing exact exported TraitVPtr erase_self_ty relation"

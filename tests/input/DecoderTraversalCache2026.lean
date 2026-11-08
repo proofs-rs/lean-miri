@@ -7,12 +7,9 @@ private def compare (name text : String) : IO Unit := do
   | .error a, .error b =>
     unless a == b do throw (IO.userError s!"{name}: first diagnostic changed: {a} / {b}")
   | .ok a, .ok b =>
-    unless a.executionInput.isSome == b.executionInput.isSome &&
-      a.blockingObligations == b.blockingObligations &&
-      a.document.obligations == b.document.obligations &&
-      a.document.functionAbis.map (·.payload) == b.document.functionAbis.map (·.payload) &&
+    unless a.document.functionAbis.map (·.payload) == b.document.functionAbis.map (·.payload) &&
       a.document.bodies.map (·.payload) == b.document.bodies.map (·.payload) do
-        throw (IO.userError s!"{name}: readiness, ordered obligations, ABI or body sequence changed")
+        throw (IO.userError s!"{name}: accepted ABI or body sequence changed")
   | _, _ => throw (IO.userError s!"{name}: decoder result class changed")
 
 private def set (j : Json) (key : String) (value : Json) : Json :=
@@ -28,15 +25,15 @@ def main (args : List String) : IO Unit := do
     "malformed-type-reference", "malformed-allocation-reference", "malformed-instance-reference",
     "nested-debug-payload-skips-references", "empty-allocations", "empty-instances"] do
     compare name (← IO.FS.readFile s!"{directory}/{name}.json")
-  let base ← IO.FS.readFile s!"{directory}/genuine-fresh.json"
+  let base ← IO.FS.readFile s!"{directory}/valid-permuted-dense.json"
   let .ok document := Json.parse base | throw (IO.userError "fixture parse")
   let bad := Json.mkObj [("kind",.str "Cast"), ("vtable_allocation", Json.mkObj [
       ("kind",.str "dynamic_vtable_upcast"),("status",.str "supported")])]
   compare "early-vtable-error" (set (set document "a_first" bad) "z_later" bad).compress
   let malformedAbi := Json.mkObj [("fn_abi",Json.mkObj [("status",.str "supported")])]
   compare "first-abi-error" (set (set document "a_first" malformedAbi) "z_later" malformedAbi).compress
-  -- Equal inline and shared nodes must retain path/context-sensitive decoding
-  -- and rebase every diagnostic to the occurrence that produced it.
+  -- Cached and uncached readers reject failed shared nodes with the same
+  -- physical transport-node diagnostic before any execution input exists.
   let issue := Json.mkObj [("kind", .str "synthetic_unknown"),
     ("status", .str "unsupported")]
   let .ok catalog := document.getObjVal? "shared_payloads" | throw (IO.userError "missing catalog")
@@ -50,9 +47,9 @@ def main (args : List String) : IO Unit := do
     ("inline", issue), ("array", .arr #[reference, issue, reference])]
   let repeated := set (set withNode "synthetic_a" contexts) "synthetic_z.%[" contexts
   compare "shared-runtime-contexts-and-rebased-paths" repeated.compress
-  let .ok result := decodeRuntimeJson repeated.compress | throw (IO.userError "runtime context fixture failed")
-  for pathPrefix in ["synthetic_a", "synthetic_z%2E%25%5B"] do
-    unless result.document.obligations.any (fun issue => issue.path.startsWith pathPrefix ||
-        issue.path.startsWith ("$." ++ pathPrefix)) do
-      throw (IO.userError s!"missing rebased diagnostics for {pathPrefix}")
+  match decodeRuntimeJson repeated.compress with
+  | .error message =>
+    unless message.endsWith "exporter payload status `unsupported` is not a successful input" do
+      throw (IO.userError s!"failed shared payload must be rejected: {message}")
+  | .ok _ => throw (IO.userError "failed shared payload was accepted")
   IO.println "cached/uncached decoder diagnostics and ordered ABI/body results: PASS"

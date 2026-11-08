@@ -1,0 +1,235 @@
+{
+  "schema": "lean-miri-rustc-mir",
+  "schema_version": 3,
+  "producer": {
+    "miri_commit": "7fa591d7d4dd9af8154becbc8332f8096f8323b1",
+    "rustc_commit": "8144389c895da997dbdecaa635e41d6a50be6ffd",
+    "rustc_version": "pinned",
+    "target_triple": "x86_64-unknown-linux-gnu"
+  },
+  "completeness": {
+    "status": "complete"
+  },
+  "types": [
+    {
+      "type_id": 0,
+      "display": "()",
+      "shape": {
+        "status": "supported",
+        "kind": "tuple",
+        "elements": []
+      },
+      "layout": {
+        "status": "supported",
+        "kind": "layout",
+        "size_bytes": 0,
+        "abi_align_bytes": 1,
+        "unadjusted_abi_align_bytes": 1,
+        "field_offsets_bytes": [],
+        "fields": {
+          "kind": "primitive",
+          "field_count": 0
+        },
+        "variants": {
+          "kind": "single",
+          "variant_index": 0
+        },
+        "backend_repr": {
+          "kind": "memory",
+          "sized": true
+        }
+      }
+    },
+    {
+      "type_id": 1,
+      "display": "u8",
+      "shape": {
+        "status": "supported",
+        "kind": "uint",
+        "unsigned_kind": "u8"
+      },
+      "layout": {
+        "status": "supported",
+        "kind": "layout",
+        "size_bytes": 1,
+        "abi_align_bytes": 1,
+        "unadjusted_abi_align_bytes": 1,
+        "field_offsets_bytes": [],
+        "fields": {
+          "kind": "primitive",
+          "field_count": 0
+        },
+        "variants": {
+          "kind": "single",
+          "variant_index": 0
+        },
+        "backend_repr": {
+          "kind": "scalar",
+          "scalar": {
+            "kind": "initialized",
+            "primitive": {
+              "kind": "integer",
+              "size_bytes": 1,
+              "integer_kind": "u8",
+              "signed": false
+            },
+            "valid_range": {
+              "start": "0",
+              "end": "255"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type_id": 2,
+      "display": "u16",
+      "shape": {
+        "status": "supported",
+        "kind": "uint",
+        "unsigned_kind": "u16"
+      },
+      "layout": {
+        "status": "supported",
+        "kind": "layout",
+        "size_bytes": 2,
+        "abi_align_bytes": 2,
+        "unadjusted_abi_align_bytes": 2,
+        "field_offsets_bytes": [],
+        "fields": {
+          "kind": "primitive",
+          "field_count": 0
+        },
+        "variants": {
+          "kind": "single",
+          "variant_index": 0
+        },
+        "backend_repr": {
+          "kind": "scalar",
+          "scalar": {
+            "kind": "initialized",
+            "primitive": {
+              "kind": "integer",
+              "size_bytes": 2,
+              "integer_kind": "u16",
+              "signed": false
+            },
+            "valid_range": {
+              "start": "0",
+              "end": "65535"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "allocations": [
+    {
+      "allocation_id": 0,
+      "status": "supported",
+      "kind": "memory",
+      "size_bytes": 0,
+      "align_bytes": 1,
+      "mutability": "immutable",
+      "bytes_hex": "",
+      "initialization_ranges": [],
+      "relocations": []
+    }
+  ],
+  "instances": [
+    {
+      "instance_id": 0,
+      "status": "supported",
+      "kind": "intrinsic_dispatch",
+      "def_id": {
+        "crate": 1,
+        "index": 1
+      },
+      "instance_kind": {
+        "kind": "intrinsic",
+        "def_id": {
+          "crate": 1,
+          "index": 1
+        }
+      },
+      "generic_args": []
+    }
+  ],
+  "bodies": [
+    {
+      "def_path": "strict::empty",
+      "phase": {
+        "kind": "runtime",
+        "phase": "optimized"
+      },
+      "arg_count": 0,
+      "locals": [
+        {
+          "local": 0,
+          "type": {
+            "type_id": 0
+          },
+          "source_info": {
+            "span": {
+              "lo": 0,
+              "hi": 0,
+              "start": {
+                "line": 1,
+                "column": 0
+              },
+              "end": {
+                "line": 1,
+                "column": 0
+              },
+              "ctxt": "root",
+              "file": "strict.rs"
+            },
+            "scope": 0
+          }
+        }
+      ],
+      "basic_blocks": [
+        {
+          "block": 0,
+          "statements": [],
+          "terminator": {
+            "source_info": {
+              "span": {
+                "lo": 0,
+                "hi": 0,
+                "start": {
+                  "line": 1,
+                  "column": 0
+                },
+                "end": {
+                  "line": 1,
+                  "column": 0
+                },
+                "ctxt": "root",
+                "file": "strict.rs"
+              },
+              "scope": 0
+            },
+            "kind": {
+              "status": "supported",
+              "variant": "Return"
+            }
+          },
+          "is_cleanup": false
+        }
+      ]
+    }
+  ],
+  "shared_payloads": {
+    "schema_version": 2,
+    "nodes": []
+  },
+  "synthetic_reference_probe": {
+    "allocation": {
+      "allocation_id": 0
+    },
+    "instance": {
+      "instance_id": 0
+    }
+  }
+}

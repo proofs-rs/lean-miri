@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Build the ID regressions from two retained, genuine schema-3 exports.
+"""Build strict decoder ID cases from a synthetic, supported input document.
 
-Synthetic files are mutations of tiny-after.json.gz and are never presented as
-Rust/Miri executions. The two genuine cases are byte-for-byte decompressions of
-features-after.json.gz and main.json.gz.
+The synthetic unit fixture is a decoder-only input, not a Rust/Miri execution.
+The two historical producer exports are retained byte-for-byte to verify
+rejection of their formerly tolerated failed payloads.
 """
-import copy
 import gzip
 import json
 import pathlib
@@ -14,12 +13,6 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 OUT = ROOT / "scratch/decoder-id-inputs"
 EXPORTS = ROOT / "tests/input/fixtures"
-MARKER = "$lean_miri_shared_ref"
-
-
-def read_gzip(path):
-    with gzip.open(path, "rt", encoding="utf-8") as stream:
-        return json.load(stream)
 
 
 def write(name, value):
@@ -29,17 +22,6 @@ def write(name, value):
 def copy_export(name, source):
     with gzip.open(source, "rb") as stream:
         (OUT / f"{name}.json").write_bytes(stream.read())
-
-
-def expand_shared(doc, value):
-    nodes = doc["shared_payloads"]["nodes"]
-    if isinstance(value, dict) and set(value) == {MARKER}:
-        return expand_shared(doc, nodes[value[MARKER]])
-    if isinstance(value, list):
-        return [expand_shared(doc, item) for item in value]
-    if isinstance(value, dict):
-        return {key: expand_shared(doc, item) for key, item in value.items()}
-    return value
 
 
 def resolved_table(doc, name):
@@ -68,10 +50,7 @@ def set_table_empty(doc, key):
 
 
 def base():
-    graph = read_gzip(EXPORTS / "tiny-after.json.gz")
-    doc = expand_shared(graph, graph)
-    doc["shared_payloads"] = {"schema_version": 2, "nodes": []}
-    return doc
+    return json.loads((EXPORTS / "strict-unit.json").read_text())
 
 
 def main():

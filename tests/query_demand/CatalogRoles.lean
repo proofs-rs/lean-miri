@@ -23,27 +23,13 @@ def main (args : List String) : IO Unit := do
   let mut count := 0
   for row in ← must (arr manifest "cases") do
     let name ← must (row.getObjValAs? String "file")
-    let baseline ← read dir (← must (row.getObjValAs? String "baseline"))
-    let decoded ← read dir name
-    let expected ← must (row.getObjValAs? Bool "ready")
-    check (baseline.executionInput.isSome) s!"fresh compiler baseline not structurally ready: {name}"
-    check (decoded.executionInput.isSome == expected) s!"query role readiness mismatch: {name}"
-    for issue in baseline.document.obligations do
-      check (decoded.document.obligations.any fun actual => actual.path == issue.path && actual.message == issue.message)
-        s!"baseline obligation erased in {name}: {issue.path}"
-    check (decoded.document.obligations.size > baseline.document.obligations.size)
-      s!"mutated unsupported evidence disappeared: {name}"
-    let provider ← must (row.getObjValAs? String "provider")
-    if provider != "none" then
-      let program ← must (lowerProgram decoded.document)
-      let p ← must (CompilerProviders.prepare program)
-      let index ← must (row.getObjValAs? Nat "index")
-      let unavailable ← match provider with
-        | "native" => do
-          let entry ← must (getAt (← must (arr program.input.raw "compiler_native_signature_queries")) index)
-          let (callee,_) ← must (CompilerInstance.decode (LowerContext.ofDocument program.input) program.compilerTables entry)
-          pure (!(CompilerNativeSignatures.query p callee).isOk)
-        | _ => throw (IO.userError s!"unknown provider case: {provider}")
-      check unavailable s!"demanded missing provider silently succeeded: {name}"
+    -- Producer/query failure is rejected before any execution input exists,
+    -- independently of whether an unrelated root would demand the query.
+    discard <| read dir (← must (row.getObjValAs? String "baseline"))
+    let source ← IO.FS.readFile (dir ++ "/" ++ name)
+    match decodeJson source, decodeRuntimeJson source with
+    | .error full, .error runtime =>
+      check (full == runtime) s!"query failure diagnostics differ: {name}"
+    | _, _ => throw (IO.userError s!"failed catalog input was accepted: {name}")
     count := count + 1
-  IO.println s!"catalog demand roles: {count} finite readiness/obligation/provider cases passed; no MIR equivalence claim"
+  IO.println s!"catalog failures: {count} rejected at both decoder boundaries; no MIR equivalence claim"

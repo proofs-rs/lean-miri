@@ -19,6 +19,7 @@ for path in glob.glob(str(root / "**/lean-miri-mir/*.json"), recursive=True):
 
 assert "exporter_helper" in documents, f"dependency crate MIR JSON absent: {list(documents)}"
 assert "exporter_cargo_app" in documents, f"application crate MIR JSON absent: {list(documents)}"
+assert "build_script_build" not in documents, "host build scripts are not guest input"
 app = documents["exporter_cargo_app"]
 instances = [
     item for item in app["instances"]

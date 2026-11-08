@@ -248,8 +248,6 @@ def main (args : List String) : IO Unit := do
   IO.println "phase=decode-start"
   let decoded ← must (Input.decodeJson (← IO.FS.readFile path))
   IO.println "phase=decode-complete"
-  unless decoded.executionInput.isSome do
-    throw (IO.userError "export has unresolved source execution-input readiness")
   let program ← must (Input.lowerProgram decoded.document)
   IO.println "phase=lower-complete"
   let attempt := Input.EvalPreparation.prepare program

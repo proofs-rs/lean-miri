@@ -62,7 +62,7 @@ private def triviallyFreeze (world : RuntimeArrayTypes.World) (id : MIR.TyId) : 
       | .error _ => false
       | .ok source => source.shapeStatus == .supported && match source.shapeKind with
         | .int | .uint | .float | .bool | .char | .str | .never | .reference
-        | .rawPointer | .functionDefinition | .functionPointer | .errorType => true
+        | .rawPointer | .functionDefinition | .functionPointer => true
         | _ => false
 
 /-- Bind classification for interned arrays; all other compiler leaves remain

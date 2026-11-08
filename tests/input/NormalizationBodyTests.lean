@@ -62,8 +62,6 @@ def main (args : List String) : IO Unit := do
   let inlineProgram ← must (lowerProgram inlineDecoded.document)
   unless lowerSignature graphProgram == lowerSignature inlineProgram do
     throw (IO.userError "graph and resolved inline MIR lowering differ")
-  unless graphProgram.input.obligations == inlineProgram.input.obligations do
-    throw (IO.userError "graph and resolved inline source obligations differ")
 
   let graphPrepared ← must (CompilerConstantQueries.prepare graphProgram)
   let inlinePrepared ← must (CompilerConstantQueries.prepare inlineProgram)
@@ -71,8 +69,6 @@ def main (args : List String) : IO Unit := do
     throw (IO.userError "graph and resolved inline prepared MIR programs differ")
   unless evidenceSignature graphPrepared == evidenceSignature inlinePrepared do
     throw (IO.userError "graph and resolved inline constant-query evidence differs")
-  unless graphPrepared.obligations == inlinePrepared.obligations do
-    throw (IO.userError "graph and resolved inline preparation obligations differ")
   unless !graphPrepared.evidence.isEmpty do
     throw (IO.userError "fixture did not exercise normalized constant-query evidence")
   IO.println s!"graph and resolved inline inputs decode, lower, and prepare equivalently ({graphProgram.bundle.bodies.size} bodies; {graphPrepared.evidence.size} constant-query results)"

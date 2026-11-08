@@ -39,9 +39,12 @@ fn resolve_path<'tcx>(tcx: TyCtxt<'tcx>, path: &[&str], namespace: Namespace)
     None
 }
 
-pub(super) fn export(tcx: TyCtxt<'_>) -> Value {
+pub(super) fn export(tcx: TyCtxt<'_>) -> Result<Value, String> {
     // Exact helpers::is_no_core: rustc_attr_ir::find_attr!(tcx, crate, NoCore).
     let no_core = rustc_attr_ir::find_attr!(tcx, crate, NoCore);
+    if no_core {
+        return Ok(json!({"no_core":compiler_fact(json!(true))}));
+    }
     let core_escape_default = match resolve_path(
         tcx,
         &["core", "ascii", "escape_default"],
@@ -51,13 +54,13 @@ pub(super) fn export(tcx: TyCtxt<'_>) -> Value {
             "definition": def_json(definition),
             "mir_available": tcx.is_mir_available(definition),
         })),
-        None => json!({
-            "status":"unsupported",
-            "reason":"source try_resolve_path did not find core::ascii::escape_default in the value namespace",
-        }),
+        None => export_failure(
+            "startup_queries::export",
+            "source try_resolve_path did not find core::ascii::escape_default in the value namespace",
+        )?,
     };
-    json!({
+    Ok::<_, String>(json!({
         "no_core":compiler_fact(json!(no_core)),
         "core_escape_default":core_escape_default,
-    })
+    }))
 }

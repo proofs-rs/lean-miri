@@ -38,6 +38,8 @@ def main (args : List String) : IO Unit := do
   let appended := {first with display := "LATER_DUPLICATE"}
   let manual : RuntimeMetadata := {metadata with
     source := {metadata.source with types := metadata.source.types.push appended}
+    nodeCache := none
+    layoutCache := none
     layouts := metadata.layouts.push (first.id, .error (.invalid "later" "duplicate"))}
   let manualIndexed := RuntimeMetadata.Indexed.ofMetadata manual
   check ((manual.node first.id).toOption.map (·.display) ==

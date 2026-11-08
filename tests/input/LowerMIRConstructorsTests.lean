@@ -115,9 +115,11 @@ def main (args : List String) : IO Unit := do
     let _ ← must (lower #[⟨.statement kind .supported fs, info⟩] (.terminator .return .supported #[]))
   for (kind, fs) in terms ty info.span do
     let _ ← must (lower #[] (.terminator kind .supported fs))
-  let pending ← must (lower #[⟨.statement .assign .supported #[("place", pl), ("rvalue", .rvalue .threadLocalRef .incomplete #[("def_id", defRef)])], info⟩] (.terminator .return .supported #[]))
-  unless !pending.obligations.isEmpty && pending.definitions.contains ⟨2, 7⟩ && pending.definitions[0]? == input.definitionId && pending.definitions.size == 2 do
-    throw (IO.userError "compiler obligations or crate-qualified definition identity were lost")
+  let pending ← must (lower #[⟨.statement .assign .supported #[("place", pl), ("rvalue", .rvalue .threadLocalRef .supported #[("def_id", defRef)])], info⟩] (.terminator .return .supported #[]))
+  unless pending.definitions.contains ⟨2, 7⟩ && pending.definitions[0]? == input.definitionId && pending.definitions.size == 2 do
+    throw (IO.userError "crate-qualified definition identity was lost")
+  unless !(DecoderValues.parseStatus "incomplete").isOk do
+    throw (IO.userError "incomplete payload status accepted by decoder")
   let own ← must pending.ownDefinitionId
   unless own == 0 do throw (IO.userError "standalone body did not seed its own compiler identity")
   let missing ← must (lowerBody ctx { input with definitionId := none, blocks := #[{ first with id := 0, statements := #[], terminator := ⟨.terminator .return .supported #[], info⟩ }] })

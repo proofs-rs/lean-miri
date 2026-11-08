@@ -91,14 +91,12 @@ private def facts (context : Context) (id : TypeId) : Result TypeCompilerFacts :
 def boolean (context : Context) (id : TypeId) (query : String) : Result Bool := do
   let facts ← facts context id
   let some (_,entry) := facts.booleanQueries.find? (·.1 == query) | throw s!"missing compiler boolean query {query}"
-  unless entry.status == .supported do throw s!"unresolved compiler query {query}: {entry.reason}"
   let some value := entry.value | throw s!"compiler boolean query {query} has no value"
   pure value
 
 def optionalType (context : Context) (id : TypeId) (query : String) : Result (Option TypeId) := do
   let facts ← facts context id
   let some (_,entry) := facts.typeQueries.find? (·.1 == query) | throw s!"missing compiler type query {query}"
-  unless entry.status == .supported do throw s!"unresolved compiler type query {query}: {entry.reason}"
   if let some ty := entry.value then let _ ← node context ty
   pure entry.value
 
@@ -201,7 +199,6 @@ def compatibilityKind (context : Context) (id : TypeId) : Result (LayoutCompat.T
     | _ => throw "compiler integer kind missing"
   | .char => pure .char
   | .bool | .float | .foreign | .str | .slice | .dynamicTraitObject => pure .other
-  | _ => throw "non-normalized compiler type in ABI compatibility query"
 
 private def lift (value : Result A) : EStateM StepError S A :=
   match value with | .ok value => pure value | .error error => throw (.invalidProgram error)

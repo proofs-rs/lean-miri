@@ -1,19 +1,39 @@
 //! Exact native callback FnSig query, alloc_addresses/mod.rs:167–174.
 //! No normalization or ABI lowering is substituted for the pinned query.
 use super::*;
-pub(super) fn export<'tcx>(tcx:TyCtxt<'tcx>,context:&mut ExportContext<'tcx>)->Value {
-    let mut requests=context.instance_ids.iter()
-        .filter(|(instance,_)| !context.runtime_query_only_empty_drops.contains(instance))
-        .map(|(instance,id)|(*id,*instance)).collect::<Vec<_>>();
-    requests.sort_by_key(|(id,_)|*id);
-    Value::Array(requests.into_iter().map(|(id,instance)| {
+pub(super) fn export<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    context: &mut ExportContext<'tcx>,
+) -> Result<Value, String> {
+    let mut requests = context
+        .instance_ids
+        .iter()
+        .filter(|(instance, _)| {
+            !context.runtime_query_only_empty_drops.contains(instance)
+                && !context.symbol_only_instances.contains(instance)
+                && !matches!(instance.def, ty::InstanceKind::Virtual(..))
+        })
+        // alloc_addresses requests FnSig only for native function callbacks;
+        // static roots are valid MIR instances but never callable values.
+        .filter(|(instance, _)| {
+            let kind = tcx.def_kind(instance.def_id());
+            kind.is_fn_like()
+                || matches!(
+                    kind,
+                    rustc_hir::def::DefKind::Ctor(_, rustc_hir::def::CtorKind::Fn)
+                )
+        })
+        .map(|(instance, id)| (*id, *instance))
+        .collect::<Vec<_>>();
+    requests.sort_by_key(|(id, _)| *id);
+    Ok::<_, String>(Value::Array(requests.into_iter().map(|(id,instance)| { {
         let closed=!instance.args.has_non_region_param() && !instance.args.has_escaping_bound_vars()
             && !instance.args.has_infer() && !instance.args.has_placeholders() && !instance.args.references_error();
         let def_kind=tcx.def_kind(instance.def_id());
         let callable=def_kind.is_fn_like()
             || matches!(def_kind,rustc_hir::def::DefKind::Ctor(_,rustc_hir::def::CtorKind::Fn));
         let (signature,query)=if !closed || !callable {
-            (unavailable_compiler_fact("native FnSig requires a complete compiler function instance"),
+            (export_failure("native FnSig", format!("requires closed callable instance: {instance:?} (closed={closed}, callable={callable})"))?,
                 "instantiate_bound_regions_with_erased(fn_sig(instance.def_id()).instantiate(instance.args))")
         } else if def_kind==rustc_hir::def::DefKind::Closure {
             // Closure DefIds do not have a standalone `fn_sig` metadata entry.
@@ -22,23 +42,23 @@ pub(super) fn export<'tcx>(tcx:TyCtxt<'tcx>,context:&mut ExportContext<'tcx>)->V
             match closure_ty.kind() {
                 ty::Closure(_,args)=>{
                     let sig=tcx.instantiate_bound_regions_with_erased(args.as_closure().sig());
-                    (compiler_fact(fn_sig_json_inner(context,tcx,sig)),
+                    (compiler_fact(fn_sig_json_inner(context,tcx,sig)?),
                         "instantiate_bound_regions_with_erased(closure_args.sig())")
                 }
-                _=>(unavailable_compiler_fact("closure instance type does not carry a normal closure FnSig"),
+                _=>(unavailable_compiler_fact("closure instance type does not carry a normal closure FnSig")?,
                     "closure_args.sig() unavailable for non-closure instance type")
             }
         } else {
             let sig=tcx.instantiate_bound_regions_with_erased(
                 tcx.fn_sig(instance.def_id()).instantiate(tcx,instance.args).skip_norm_wip());
-            (compiler_fact(fn_sig_json_inner(context,tcx,sig)),
+            (compiler_fact(fn_sig_json_inner(context,tcx,sig)?),
                 "instantiate_bound_regions_with_erased(fn_sig(instance.def_id()).instantiate(instance.args))")
         };
-        json!({"instance_id":id,
-            "instance_kind":instance_kind_json(context,tcx,instance.def),
-            "generic_args":generic_args_json(context,tcx,instance.args),
+        Ok::<_, String>(json!({"instance_id":id,
+            "instance_kind":instance_kind_json(context,tcx,instance.def)?,
+            "generic_args":generic_args_json(context,tcx,instance.args)?,
             "query":query,
             "normalization":"none","bound_regions":"erased",
-            "signature_query":signature})
-    }).collect())
+            "signature_query":signature}))
+    } }).collect::<Result<Vec<_>, String>>()?))
 }

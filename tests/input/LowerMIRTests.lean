@@ -49,8 +49,7 @@ def main (args : List String) : IO Unit := do
   let first ← match input.blocks[0]? with
     | some b => pure b
     | none => throw (IO.userError "empty fixture")
-  let bad := { first with terminator := { first.terminator with value := .terminator (.unknown "future") .supported #[] } }
-  check ((lowerBody ctx { input with blocks := input.blocks.set! 0 bad }).isOk == false) "unknown terminator accepted"
+  check (!(DecoderValues.terminatorVariant "future").isOk) "unknown terminator accepted by decoder"
   let outOfRange := { first with terminator := { first.terminator with
     value := .terminator .falseEdge .supported #[("real_target", .blockRef input.blocks.size), ("imaginary_target", .blockRef 0)] } }
   check ((lowerBody ctx { input with blocks := input.blocks.set! 0 outOfRange }).isOk == false) "out-of-range CFG edge accepted"

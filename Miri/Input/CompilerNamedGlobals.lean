@@ -15,7 +15,7 @@ structure Value where
 
 structure Entry where
   name : String
-  result : Except String Value
+  result : Value
   payload : Json
 
 structure Prepared where
@@ -68,7 +68,9 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
     (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : Except String Prepared := do
   unless RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality program.input.raw do
     throw "named global metadata document mismatch"
-  let records ← (← program.input.raw.getObjVal? "compiler_named_statics").getArr?
+  let records ← match program.input.raw.getObjVal? "compiler_named_statics" with
+    | .error _ => pure #[]
+    | .ok value => value.getArr?
   let ctx := LowerContext.ofDocument program.input
   let mut tables := program.compilerTables
   let mut entries := #[]
@@ -78,17 +80,15 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
     unless (← (← field record "typing_env").getStr?) == "fully_monomorphized" do
       throw "named global compiler environment mismatch"
     unless !(entries.any (·.name == name)) do throw "duplicate compiler named global query"
-    let result := (decodeValue ctx tables record name).map fun (value, next) => (value, next)
-    let result ← match result with
-      | .error reason => pure (.error reason)
-      | .ok (value, next) => tables := next; pure (.ok value)
+    let (result, next) ← decodeValue ctx tables record name
+    tables := next
     entries := entries.push ⟨name, result, record⟩
   pure ⟨program.withCompilerTables tables, runtime, entries⟩
 
 private def value (prepared : Prepared) (name : String) : Except String Value := do
   let some entry := prepared.entries.find? (·.name == name)
     | throw s!"missing exact compiler named global query libc::{name}"
-  entry.result
+  pure entry.result
 
 private def lift (query : Except String A) : MachineHooks.M K U A :=
   match query with

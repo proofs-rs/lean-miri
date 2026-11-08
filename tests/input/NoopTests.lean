@@ -25,8 +25,6 @@ def main (args : List String) : IO UInt32 := do
   let result ← match decodeJson source with
     | .ok value => pure value
     | .error error => fail s!"valid rooted coverage export rejected: {error}"
-  if result.executionInput.isNone then
-    fail "complete rooted no-op statements did not produce structural input"
   if !hasCoverage result.document.typedTree then
     fail "Coverage payload was not decoded to a typed coverage tag"
   IO.println "typed rooted Coverage payload accepted as structural input"
