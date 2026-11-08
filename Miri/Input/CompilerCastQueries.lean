@@ -1,6 +1,7 @@
 import Miri.Input.CompilerCastLeaves
 import Miri.Input.CompilerVTableFacts
 import Miri.Input.CompilerVTableRuntime
+import Miri.Input.CompilerCastQueryRecord
 
 /-! Exact compiler query closure for interpret/cast.rs. Query results are
 compiler evidence keyed by complete source types/arguments; this module is not
@@ -14,9 +15,7 @@ private def records (p : CompilerProviders.Prepared) : Result (Array Json) := do
 private def text (j : Json) (key : String) : Result String := do (← j.getObjVal? key).getStr?
 private def ref (j : Json) (key : String) : Result TyId := do
   (← (← j.getObjVal? key).getObjVal? "type_id").getNat?
-private def value (j : Json) : Result Json := do
-  unless (← text j "typing_env") == "fully_monomorphized" do throw "cast query typing environment mismatch"
-  j.getObjVal? "value"
+private def value (j : Json) : Result Json := CompilerCastQueryRecord.payload j
 private def unique (entries : Array Json) : Result Json := do
   let some first := entries[0]? | throw "missing exact cast compiler query"
   unless entries.all (· == first) do throw "conflicting exact cast compiler queries"
@@ -53,8 +52,9 @@ private def decodeInstance (p : CompilerProviders.Prepared) (j : Json) : Result 
 
 def resolveFunction (p : CompilerProviders.Prepared) (definition : DefId)
     (args : Array GenericArg) : Result (Option CallInstance) := do
-  let result ← value (← resolutionRecord p "resolve_fn_ptr" definition args)
-  if result == Json.null then pure none else pure (some (← decodeInstance p result))
+  let some result ← CompilerCastQueryRecord.functionResult
+    (← resolutionRecord p "resolve_fn_ptr" definition args) | return none
+  pure (some (← decodeInstance p result))
 
 def resolveClosureFnOnce (p : CompilerProviders.Prepared) (definition : DefId)
     (args : Array GenericArg) : Result CallInstance := do
@@ -87,7 +87,7 @@ def boxLayout (p : CompilerProviders.Prepared) (pointee : TyId) : Result LocalLa
   layout p id
 
 def supertraitSlot (p : CompilerProviders.Prepared) (source target : TyId) : Result (Option Nat) := do
-  let result ← value (← pairQuery p "supertrait_slot" source target)
+  let result ← (← value (← pairQuery p "supertrait_slot" source target)).getObjVal? "value"
   if result == Json.null then pure none else pure (some (← result.getNat?))
 
 private def principalValue (j : Json) : Result (Option Nat) := do

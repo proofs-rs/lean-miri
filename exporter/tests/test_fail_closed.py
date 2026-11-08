@@ -81,6 +81,18 @@ class FailClosedExportTests(unittest.TestCase):
         self.assertEqual(facts["type_queries"]["boxed_type"],
                          None)
 
+    def test_function_pointer_query_keeps_direct_instance_identity(self):
+        document = self.accepted("function_pointer")
+        resolutions = [record for record in document["compiler_cast_queries"]
+                       if record["query_kind"] == "resolve_fn_ptr"]
+        self.assertTrue(resolutions)
+        for record in resolutions:
+            self.assertNotIn("value", record)
+            self.assertEqual(record["resolution_kind"], "instance")
+            self.assertIsInstance(record["instance_id"], int)
+            self.assertIn("instance_kind", record)
+            self.assertIn("generic_args", record)
+
     def test_dynamic_lookup_closes_over_source_allowed_targets(self):
         document = self.accepted("dynamic_symbols")
         names = {row["name"] for row in document["compiler_named_shim_abis"]}

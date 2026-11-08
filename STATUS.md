@@ -17,6 +17,10 @@ The exporter aborts when requested semantic compiler data is unavailable; the
 Lean input API no longer retains failed exporter payloads as execution inputs.
 Successful values are serialized without success-status wrappers or a
 completeness flag; consumers validate the semantic fields they use.
+Cast-query consumers read direct result fields. A genuine absent
+function-pointer target has `resolution_kind: none` and no instance identity;
+`resolution_kind: instance` carries the direct instance fields. This preserves
+the optional answer when exact query-key fields are attached.
 Coroutine frame layout serialization and foreign TLS initializers remain
 unimplemented and now stop export. This boundary does not establish compiler
 query closure or interpreter correspondence.

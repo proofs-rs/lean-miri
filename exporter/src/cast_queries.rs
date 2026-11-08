@@ -1,6 +1,17 @@
 //! Exact interpret/cast.rs compiler queries. Constructor requests are collected
 //! from actual MIR casts; resolved instances enter the ordinary shared graph.
 use super::*;
+fn optional_instance(value: Option<Value>) -> Value {
+    // This tag preserves the genuine optional answer when query keys are
+    // attached. Instance identities, when present, remain ordinary Nat refs.
+    match value {
+        Some(mut instance) => {
+            instance["resolution_kind"] = json!("instance");
+            instance
+        }
+        None => json!({"resolution_kind": "none"}),
+    }
+}
 fn instance<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
@@ -55,7 +66,7 @@ pub(super) fn export<'tcx>(
                     let _ = ty::Instance::try_resolve(tcx, env, def, args).map_err(|error| {
                         format!("function-pointer resolution failed: {error:?}")
                     })?;
-                    compiler_fact(
+                    compiler_fact(optional_instance(
                         ty::Instance::resolve_for_fn_ptr(tcx, env, def, args)
                             .map(|resolved| {
                                 instance(
@@ -65,9 +76,8 @@ pub(super) fn export<'tcx>(
                                     context.fn_pointer_cast_inputs.contains(&input),
                                 )
                             })
-                            .transpose()?
-                            .unwrap_or(Value::Null),
-                    )
+                            .transpose()?,
+                    ))
                 }
                 None => {
                     unavailable_compiler_fact("source FnDef args.no_bound_vars assertion failed")?
@@ -129,4 +139,29 @@ pub(super) fn export<'tcx>(
         records.push(result);
     }
     Ok::<_, String>(Value::Array(records))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn optional_instance_survives_query_key_fields() {
+        for input in [None, Some(json!({"instance_id": 7, "instance_kind": {"kind":"item"}, "generic_args": []}))] {
+            let mut record = optional_instance(input.clone());
+            record["query_kind"] = json!("resolve_fn_ptr");
+            record["typing_env"] = json!("fully_monomorphized");
+            record["input_type"] = json!({"type_id": 3});
+            assert!(record.get("value").is_none());
+            if let Some(instance) = input {
+                assert_eq!(record["resolution_kind"], "instance");
+                assert_eq!(record["instance_id"], instance["instance_id"]);
+                assert_eq!(record["instance_kind"], instance["instance_kind"]);
+                assert_eq!(record["generic_args"], instance["generic_args"]);
+            } else {
+                assert_eq!(record["resolution_kind"], "none");
+                assert!(record.get("instance_id").is_none());
+            }
+        }
+    }
 }
