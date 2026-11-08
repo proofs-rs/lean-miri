@@ -28,8 +28,8 @@ private def source : Json := Json.mkObj [
 #guard !((ofJson .null).lookup 0 13 3).isOk
 
 
-private def query (id input : Nat) (predicates : Array Nat) (status := "supported") : Json :=
-  Json.mkObj [("status", toJson status), ("query_id", toJson id),
+private def query (id input : Nat) (predicates : Array Nat) : Json :=
+  Json.mkObj [("query_id", toJson id),
     ("input_type", Json.mkObj [("type_id", toJson input)]),
     ("input_predicates", .arr (predicates.map fun id => Json.mkObj [("predicate_id", toJson id)]))]
 
@@ -39,25 +39,24 @@ private def queries : Array Json := #[query 0 7 #[2], .str "unused malformed que
 #guard ((ofJson source).query 0 13 queries (query 2 9 #[])).isOk
 #guard !((ofJson source).query 0 13 queries (query 0 7 #[3])).isOk
 #guard !((ofJson source).query 0 13 queries (query 0 8 #[2])).isOk
-#guard !((ofJson source).query 0 13 queries (query 0 7 #[2] "unsupported")).isOk
+#guard !((ofJson source).query 0 13 queries (Json.mkObj [("query_id", toJson (0 : Nat))])).isOk
 #guard !((ofJson source).query 0 13 queries (query 1 7 #[2])).isOk
 #guard !((ofJson source).query 0 13 (queries.set! 0 (query 1 7 #[2])) (query 0 7 #[2])).isOk
-#guard !((ofJson source).query 0 13 (queries.set! 0 (query 0 7 #[2] "unsupported")) (query 0 7 #[2])).isOk
+#guard !((ofJson source).query 0 13 (queries.set! 0 (Json.mkObj [("query_id", toJson (0 : Nat))])) (query 0 7 #[2])).isOk
 
 
 open Miri.Input Miri.Interpreter
 
 private def document (raw : Json) : ImportDocumentCore := {
   producer := ⟨"miri", "rustc", "version", "target"⟩
-  completenessStatus := .supported
   types := #[], allocations := #[]
   instances := (Array.range 13).map fun id => {
-    id := id, status := .supported, kind := .virtualDispatch
+    id := id, kind := .virtualDispatchTarget
     defPath := none, definitionId := none, bodyInstantiation := none
     bodyTemplateIsPolymorphic := none, instanceArgsAreMonomorphic := none
     body := none, promotedBodies := #[], payload := .null }
   selectedScope := none, functionAbis := #[], bodies := #[]
-  obligations := #[], raw := raw }
+  raw := raw }
 
 private def callee : CallInstance := ⟨.Item 99, #[]⟩
 private def virtualEntry : CompilerRuntimeQueries.VirtualEntry := {

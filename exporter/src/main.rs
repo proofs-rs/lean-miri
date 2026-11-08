@@ -2640,7 +2640,7 @@ fn type_compiler_facts_json<'tcx>(
     let missing = || unavailable_compiler_fact("required compiler trait language item is missing");
     let input = query_input;
     let is_unsafe_cell = matches!(input.kind(),ty::Adt(def,_) if def.is_unsafe_cell());
-    let mut booleans = crate::payload_value::Map::new();
+    let mut booleans: crate::payload_value::Map = crate::payload_value::Map::new();
     booleans.insert(
         "is_unsafe_cell".into(),
         compiler_fact(json!(is_unsafe_cell)),
@@ -2743,7 +2743,7 @@ fn type_compiler_facts_json<'tcx>(
             _ => missing()?,
         },
     );
-    let mut types = crate::payload_value::Map::new();
+    let mut types: crate::payload_value::Map = crate::payload_value::Map::new();
     types.insert(
         "discriminant_type".into(),
         match normalized {
