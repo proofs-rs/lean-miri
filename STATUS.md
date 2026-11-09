@@ -34,13 +34,13 @@ caller-location constants are lowered from their direct compiler payloads. A gen
 function-pointer target has `resolution_kind: none` and no instance identity;
 `resolution_kind: instance` carries a canonical instance ID. This preserves
 the optional answer when exact query-key fields are attached.
-The full vtable-erasure wrapper checks remain blocked by existing harness
-expectations: the TraitVPtr check reads numeric references as wrapped objects,
-and the cross-crate metadata fixture is required to contain lockstep cast rows
-that it does not produce. The HRTB upcast fixture currently has only identity
-query answers, so its nonidentity expectation also fails. Baseline and current
-exports agree on these inputs; direct catalog joins and canonical source-run
-checks pass separately. These harness repairs remain with input/lowering work.
+The vtable-erasure reader now uses typed predicate/type references, including
+TraitVPtr child joins. Remaining wrapper coverage expectations still need
+reconciliation: the cross-crate metadata fixture does not produce the required
+lockstep cast rows, and the HRTB fixture has only identity query answers despite
+its nonidentity expectation. Baseline and current exports agree on these inputs;
+direct catalog joins and canonical source-run checks pass separately. A successful
+full wrapper run remains unverified.
 Coroutine frame layout serialization and foreign TLS initializers remain
 unimplemented and now stop export. This boundary does not establish compiler
 query closure or interpreter correspondence.
