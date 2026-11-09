@@ -23,40 +23,35 @@ def main (args : List String) : IO Unit := do
   let mut count := 0
   for row in ← must (arr manifest "cases") do
     let name ← must (row.getObjValAs? String "file")
-    let baseline ← read dir (← must (row.getObjValAs? String "baseline"))
     let source ← IO.FS.readFile (dir ++ "/" ++ name)
     let ready ← must (row.getObjValAs? Bool "ready")
     let full := decodeJson source
-    let runtime := decodeJson source
-    check (full.isOk == ready && runtime.isOk == ready) s!"decoder readiness differs: {name}"
+    check (full.isOk == ready) s!"decoder readiness differs: {name}"
     if ready then
-      let decoded ← must full
-      let program ← must (lowerProgram baseline.document)
-      let prepared ← must (CompilerProviders.prepare program)
-      let mutated ← must (CompilerProviders.prepare (← must (lowerProgram decoded.document)))
-      match ← must (row.getObjValAs? String "provider") with
-      | "native" =>
-        let entry ← must (getAt baseline.document.queries.nativeSignatures (← must (row.getObjValAs? Nat "index")))
-        let callee := entry.instanceId
-        discard <| must (CompilerNativeSignatures.query prepared callee)
-        let invalidId := prepared.program.input.instances.size
-        let queries := prepared.program.input.queries
-        let invalidQueries := {queries with nativeSignatures := #[{entry with instanceId := invalidId}]}
-        let invalidProgram := {prepared.program with input := {prepared.program.input with queries := invalidQueries}}
-        let invalid := {prepared with program := invalidProgram}
-        check (!(CompilerNativeSignatures.query invalid invalidId).isOk)
-          "native query accepted out-of-bounds full-instance identity"
-        discard <| must (CompilerNativeSignatures.query mutated callee)
-      | "tls" =>
-        let definition ← must (row.getObjValAs? Nat "definition")
-        discard <| must (CompilerThreadLocal.forDefinition prepared.program definition)
-        discard <| must (CompilerThreadLocal.forDefinition mutated.program definition)
-      | "none" => pure ()
-      | provider => throw (IO.userError s!"unknown demand provider: {provider}")
-    else
-      match full, runtime with
-      | .error full, .error runtime =>
-        check (full == runtime) s!"query failure diagnostics differ: {name}"
-      | _, _ => throw (IO.userError s!"malformed catalog input accepted: {name}")
+      let provider ← must (row.getObjValAs? String "provider")
+      unless provider == "none" do
+        let baseline ← read dir (← must (row.getObjValAs? String "baseline"))
+        let decoded ← must full
+        let program ← must (lowerProgram baseline.document)
+        let prepared ← must (CompilerProviders.prepare program)
+        let mutated ← must (CompilerProviders.prepare (← must (lowerProgram decoded.document)))
+        match provider with
+        | "native" =>
+          let entry ← must (getAt baseline.document.queries.nativeSignatures (← must (row.getObjValAs? Nat "index")))
+          let callee := entry.instanceId
+          discard <| must (CompilerNativeSignatures.query prepared callee)
+          let invalidId := prepared.program.input.instances.size
+          let queries := prepared.program.input.queries
+          let invalidQueries := {queries with nativeSignatures := #[{entry with instanceId := invalidId}]}
+          let invalidProgram := {prepared.program with input := {prepared.program.input with queries := invalidQueries}}
+          let invalid := {prepared with program := invalidProgram}
+          check (!(CompilerNativeSignatures.query invalid invalidId).isOk)
+            "native query accepted out-of-bounds full-instance identity"
+          discard <| must (CompilerNativeSignatures.query mutated callee)
+        | "tls" =>
+          let definition ← must (row.getObjValAs? Nat "definition")
+          discard <| must (CompilerThreadLocal.forDefinition prepared.program definition)
+          discard <| must (CompilerThreadLocal.forDefinition mutated.program definition)
+        | provider => throw (IO.userError s!"unknown demand provider: {provider}")
     count := count + 1
   IO.println s!"catalog cases: {count} checked at decoder and demanded-provider boundaries; no MIR equivalence claim"

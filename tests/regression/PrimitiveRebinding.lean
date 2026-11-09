@@ -43,8 +43,12 @@ def main (args : List String) : IO Unit := do
   -- Give the provider a nested facts context from another source whose runtime
   -- has missing query evidence. The provider's own primitive source remains
   -- source2, and its query must preserve that result/error boundary.
+  let missingCallerPrimitives := { firstProvider.runtime.source.queries.primitives with
+    callerLocationType := none }
+  let missingCallerQueries := { firstProvider.runtime.source.queries with
+    primitives := missingCallerPrimitives }
   let malformedNestedRuntime : RuntimeMetadata := { firstProvider.runtime with
-    source := { firstProvider.runtime.source with raw := .null } }
+    source := { firstProvider.runtime.source with queries := missingCallerQueries } }
   let originalNested := secondProvider.lifecycle.calls.symbols.facts.context
   let malformedNested : CompilerFacts.Context := { originalNested with
     runtime := malformedNestedRuntime

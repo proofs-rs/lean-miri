@@ -150,9 +150,10 @@ The fresh CI lane now schedules the six supplemental focused guests, native/TLS
 query-demand mutations, runtime-type closure and the cross-crate vtable control;
 a successful hosted run remains required. Fresh regeneration/comparison of every
 canonical guest and standalone unregistered harnesses remain outside workflow
-coverage. The existing CatalogRoles consumer
-lacks the TLS-provider branch required by its optional generator mode.
-Saved replay cannot validate changed producers.
+coverage. Catalog-role checks now distinguish malformed typed fields from ignored
+extension fields and include the optional TLS-provider branch; hosted validation
+of these updated checks remains required. Saved replay cannot validate changed
+producers.
 
 The upstream UI workflow ports PR #9’s test harness without its compiler/runtime
 fixes. Main’s reference environment and Lean choice/argv/CPU/float/CAS/I/O profile
@@ -161,12 +162,10 @@ with attempted Lean outcomes retained. Full hosted sweep and aggregate coverage
 remain unvalidated.
 Selected finite checks do not close general proof or source-correspondence gaps.
 
-The typed-pool input revision still needs full `tools/check.sh` and hosted CI.
-`tools/check-structural-regressions.sh` currently fails to elaborate
-`tests/regression/PrimitiveCatalog.lean:19`: the `.ok` constructor in its
-`runtime.lookup` equality has no inferred expected type. The provider
-pool-preservation and context/runtime assertions pass separately; this test API
-elaboration failure remains unresolved.
+The typed input revision still needs full `tools/check.sh` and hosted CI.
+The structural regression suite passes with typed provider-context and
+primitive-catalog checks; these finite checks do not replace the complete
+comparison lanes.
 The full regression result for an earlier revision does not validate later
 changes. Separate canonical12, ordering,
 large-TB, SC-schedule, connected-proof and structural-regression entry points
@@ -175,11 +174,11 @@ and MIR-enabled std sysroot remains a validation gap; reusing retained artifacts
 does not establish that setup path.
 
 The ordinary standard-library startup closure from
-`tests/repro/startup/empty-main.rs` still stops during lowering with
-`expected typed object`, before guest execution. Both the main baseline
-`a0967d39` and the typed-pool input exhibit this failure; their same-TyCtxt Miri
-references complete normally. Successful rooted functions and the constructor
-startup witness do not establish support for this larger closure.
+`tests/repro/startup/empty-main.rs` now decodes directly into MIR, including a
+fresh 7,254-body export. This removes the earlier `expected typed object`
+lowering failure. Complete guest execution of this larger closure still needs
+validation; successful rooted functions and the no_std startup witness do not
+establish support for it.
 
 ### Compiler query closure and prepared allocation identity
 
