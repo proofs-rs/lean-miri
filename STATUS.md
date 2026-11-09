@@ -162,22 +162,20 @@ with attempted Lean outcomes retained. Full hosted sweep and aggregate coverage
 remain unvalidated.
 Selected finite checks do not close general proof or source-correspondence gaps.
 
-The typed input revision still needs full `tools/check.sh` and hosted CI.
-The structural regression suite passes with typed provider-context and
-primitive-catalog checks; these finite checks do not replace the complete
-comparison lanes.
+The two-pass typed input revision passes the local library/frontend/native
+build, runtime registry, decoder, fresh input, structural, optimization and
+connected-proof checks. Full `tools/check.sh` and hosted CI remain unvalidated;
+these finite checks do not replace the complete comparison lanes.
 The full regression result for an earlier revision does not validate later
 changes. Separate canonical12, ordering,
-large-TB, SC-schedule, connected-proof and structural-regression entry points
-also need current-revision execution. Fresh construction of the reference Miri
+large-TB and SC-schedule entry points also need current-revision execution. Fresh construction of the reference Miri
 and MIR-enabled std sysroot remains a validation gap; reusing retained artifacts
 does not establish that setup path.
 
 The ordinary standard-library startup closure from
 `tests/repro/startup/empty-main.rs` now decodes directly into MIR. A fresh
-7,254-body export completed native execution with `finalized_exit code=0` under
-the bounded-diagnostic-zero choice profile, removing the earlier
-`expected typed object` lowering failure. This finite witness does not establish
+7,322-body export completed native execution with `finalized_exit code=0` under
+the bounded-diagnostic-zero choice profile. This finite witness does not establish
 behavior for other standard-library closures or all permitted choices.
 
 ### Compiler query closure and prepared allocation identity
