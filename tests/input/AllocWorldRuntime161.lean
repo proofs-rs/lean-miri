@@ -312,7 +312,9 @@ private def runSelected (path : String) : IO Unit := do
     "function hit consumed a fresh source AllocId"
   check (afterFnHit.machine.user.functions.functions.size == functionRegistry.functions.size)
     "function hit changed the seeded registry size"
-  let missingFn : CallInstance := 18446744073709551615
+  let some missingFn := (Array.range prepared.compiler.program.input.instances.size).find? (fun id =>
+      !(functionRegistry.functions.any (fun entry => entry.callee == id)))
+    | throw (IO.userError "fixture has no valid uncaptured function key")
   let (afterFnMiss, fnMiss) := MachineHooks.run
     (FunctionPointers.functionPointer fHooks (.Instance missingFn)) initial
   match fnMiss with
@@ -324,6 +326,18 @@ private def runSelected (path : String) : IO Unit := do
     "function miss consumed a fresh source AllocId"
   check (afterFnMiss.machine.user.functions.functions.size == functionRegistry.functions.size)
     "function miss mutated the function registry size"
+
+  let invalidFn := prepared.compiler.program.input.instances.size
+  let (afterInvalidFn, invalidFnResult) := MachineHooks.run
+    (FunctionPointers.functionPointer fHooks (.Instance invalidFn)) initial
+  match invalidFnResult with
+  | .error (.unsupported message) =>
+    check (message == s!"compiler instance ID {invalidFn} out of bounds")
+      "out-of-bounds function ID returned an unrelated error"
+  | _ => throw (IO.userError "out-of-bounds function ID was not rejected")
+  check (afterInvalidFn.machine.memory.sourceAllocIdNext == memory.sourceAllocIdNext &&
+      afterInvalidFn.machine.user.functions.functions.size == functionRegistry.functions.size)
+    "out-of-bounds function ID changed allocator state"
 
   let some vtableEntry := vtableRegistry.entries[0]? |
     throw (IO.userError "seeded vtable registry is empty")

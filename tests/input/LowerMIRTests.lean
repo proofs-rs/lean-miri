@@ -19,9 +19,11 @@ def main (args : List String) : IO Unit := do
     | [] => throw (IO.userError "usage: LowerMIRTests <selected add_one export>")
   let source ← IO.FS.readFile path
   let decoded ← must (decodeJson source)
-  let input ← match decoded.document.bodies.find? (fun b => b.defPath.endsWith "add_one") with
-    | some b => pure b.toBodyCore
-    | none => throw (IO.userError "missing add_one fixture")
+  let some selected := decoded.document.bodyRoots.find? (fun root => root.defPath.endsWith "add_one")
+    | throw (IO.userError "missing add_one root")
+  let some body := decoded.document.bodies[selected.bodyId]?
+    | throw (IO.userError "missing add_one body")
+  let input := body.toBodyCore
   let lowered ← must (lowerBody (LowerContext.ofDocument decoded.document) input)
   check (lowered.body == input.mir) "prepared body differs from directly decoded MIR"
   check (!lowered.spans.isEmpty) "actual source spans were not retained"
@@ -33,7 +35,7 @@ def main (args : List String) : IO Unit := do
     "add_one arithmetic did not decode"
   let root ← must (JsonFixtures.parse source)
   let bodies ← must ((← must (root.field "bodies")).array)
-  let some raw := bodies.find? (fun body => ((body.field "def_path").bind (·.string)).toOption == some input.defPath)
+  let some raw := bodies[selected.bodyId]?
     | throw (IO.userError "missing body source")
   let document := decoded.document
   let ctx : DecodeMIR.Context := {
