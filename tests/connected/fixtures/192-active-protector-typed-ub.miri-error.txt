@@ -1,5 +1,5 @@
 error: Undefined Behavior: write access through <23> (root of the allocation) at alloc123[0x0] is forbidden
-  --> /workspace/lean-miri-fail-closed/tests/connected/fixtures/192-active-protector-typed-ub.rs:15:14
+  --> /workspace/lean-miri-typed-pools-fresh/tests/connected/fixtures/192-active-protector-typed-ub.rs:15:14
    |
 15 |     unsafe { *parent = 2 };
    |              ^^^^^^^^^^^ Undefined Behavior occurred here
@@ -10,26 +10,26 @@ error: Undefined Behavior: write access through <23> (root of the allocation) at
    = help: this foreign write access would cause the protected tag <26> (currently Unique) to become Disabled
    = help: protected tags must never be Disabled
 help: the accessed tag <23> was created here
-  --> /workspace/lean-miri-fail-closed/tests/connected/fixtures/192-active-protector-typed-ub.rs:7:18
+  --> /workspace/lean-miri-typed-pools-fresh/tests/connected/fixtures/192-active-protector-typed-ub.rs:7:18
    |
  7 |     let parent = core::ptr::addr_of_mut!(value);
    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 help: the protected tag <26> was created here, in the initial state Reserved
-  --> /workspace/lean-miri-fail-closed/tests/connected/fixtures/192-active-protector-typed-ub.rs:13:20
+  --> /workspace/lean-miri-typed-pools-fresh/tests/connected/fixtures/192-active-protector-typed-ub.rs:13:20
    |
 13 | fn protected_write(argument: &mut u8, parent: *mut u8) {
    |                    ^^^^^^^^
 help: the protected tag <26> later transitioned to Unique due to a child write access at offsets [0x0..0x1]
-  --> /workspace/lean-miri-fail-closed/tests/connected/fixtures/192-active-protector-typed-ub.rs:14:5
+  --> /workspace/lean-miri-typed-pools-fresh/tests/connected/fixtures/192-active-protector-typed-ub.rs:14:5
    |
 14 |     *argument = 1;
    |     ^^^^^^^^^^^^^
    = help: this transition corresponds to the first write to a 2-phase borrowed mutable reference
    = note: stack backtrace:
            0: protected_write
-               at /workspace/lean-miri-fail-closed/tests/connected/fixtures/192-active-protector-typed-ub.rs:15:14: 15:25
+               at /workspace/lean-miri-typed-pools-fresh/tests/connected/fixtures/192-active-protector-typed-ub.rs:15:14: 15:25
            1: miri_start
-               at /workspace/lean-miri-fail-closed/tests/connected/fixtures/192-active-protector-typed-ub.rs:8:14: 8:51
+               at /workspace/lean-miri-typed-pools-fresh/tests/connected/fixtures/192-active-protector-typed-ub.rs:8:14: 8:51
    = note: this error originates in the macro `core::ptr::addr_of_mut` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error: aborting due to 1 previous error

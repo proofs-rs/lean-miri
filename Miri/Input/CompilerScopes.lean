@@ -12,25 +12,24 @@ structure Entry where
 structure Prepared where
   program : LoweredProgram
   scopes : Array (Array (Except String Entry))
-private def decodeEntry (ctx : LowerContext) (tables : CompilerTables) (j : Json) :
+private def decodeEntry (ctx : LowerContext) (tables : CompilerTables) (scope : SourceScope) :
     Except String (Entry × CompilerTables) := do
-  let inlined ← j.getObjVal? "inlined"
-  let parent ← j.getObjVal? "inlined_parent_scope"
-  let parent ← if parent == Json.null then pure none else parent.getNat? |>.map some
-  if inlined == Json.null then
-    pure (⟨⟨none,parent⟩,none⟩,tables)
-  else
-    let (fnInstance,tables) ← CompilerInstance.decode ctx tables inlined
-    let span ← ctx.decodeCompilerValue (← inlined.getObjVal? "callsite_span")
-    let (span,tables) ← lowerCompilerSpan tables span
-    let track ← (← inlined.getObjVal? "requires_caller_location").getBool?
-    pure (⟨⟨some (fnInstance,span),parent⟩,some track⟩,tables)
+  match scope.inlined with
+  | none => pure (⟨⟨none,scope.inlinedParent⟩,none⟩,tables)
+  | some inlined =>
+    let _ ← CompilerInstance.source ctx inlined.instanceId
+    let (span,tables) ← lowerCompilerSpan tables (.sourceSpan inlined.callsiteSpanId)
+    pure (⟨⟨some (inlined.instanceId,span),scope.inlinedParent⟩,some inlined.requiresCallerLocation⟩,tables)
 
 def prepare (program : LoweredProgram) : Prepared := Id.run do
   let ctx := LowerContext.ofDocument program.input
   let mut tables := program.compilerTables
   let mut all := #[]
-  for body in program.bundle.bodies do
+  let executable := program.executableBodyIds
+  for (body, bodyId) in program.bundle.bodies.toList.zipIdx do
+    if !executable.contains bodyId then
+      all := all.push #[]
+      continue
     let mut entries := #[]
     match body.input.sourceScopes with
     | none => entries := #[.error "missing source_scopes compiler metadata"]
@@ -38,7 +37,7 @@ def prepare (program : LoweredProgram) : Prepared := Id.run do
       for index in [:scopes.size] do
         let result := do
           let some scope := scopes[index]? | throw "source scope canonical index missing"
-          unless (← (← scope.getObjVal? "scope").getNat?) == index do
+          unless scope.id == index do
             throw "source scope index does not match canonical position"
           decodeEntry ctx tables scope
         match result with

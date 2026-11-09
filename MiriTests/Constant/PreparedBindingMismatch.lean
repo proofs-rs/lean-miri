@@ -14,7 +14,6 @@ private def document (raw : Lean.Json) : ImportDocument :=
     selectedScope := none
     functionAbis := #[]
     bodies := #[]
-    typedTree := .scalar .null
     raw := raw }
 
 private def target : Miri.ABI.RuntimeTargetDataLayout := Id.run do
@@ -24,7 +23,7 @@ private def target : Miri.ABI.RuntimeTargetDataLayout := Id.run do
     .ONE, .ONE, .ONE, .ONE, .ONE, #[], .ZERO, ptr, #[], .ZERO, .I32⟩
 
 private def runtime : RuntimeMetadata :=
-  { source := document (.str "runtime"), target, layouts := #[] }
+  { source := document (.str "runtime"), target }
 
 private def prepared : CompilerConstantQueries.Prepared :=
   ⟨⟨⟨#[],#[],#[],#[]⟩, #[], #[], #[], document (.str "compiler")⟩, #[], #[]⟩
@@ -37,6 +36,7 @@ private def functions : FunctionPointers.Hooks Unit Unit Unit :=
   { registry := fun _ => .empty
     putRegistry := fun _ _ => ()
     crossCrateInlineAlways := false
+    instanceArgs := fun _ => pure #[]
     inlineNever := fun _ => pure false
     chooseSalt := pure ⟨0, by decide⟩
     ptrGetAlloc := fun _ => pure none

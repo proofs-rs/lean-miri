@@ -8,13 +8,13 @@ open Lean Miri.ABI Miri.Interpreter
 structure Entry where
   callee : CallInstance
   extra : Array MIR.TyId
-  result : Except String (FnAbi MIR.TyId)
+  result : Except String Nat
 
 private def buildBuckets (entries : Array Entry) : Std.HashMap Nat (Array Nat) := Id.run do
   let mut buckets : Std.HashMap Nat (Array Nat) := {}
   for index in [:entries.size] do
     if let some entry := entries[index]? then
-      let key := entry.callee.defId
+      let key := entry.callee
       buckets := buckets.insert key ((buckets.getD key #[]).push index)
   return buckets
 
@@ -28,6 +28,7 @@ private def instanceBuckets (entries : Array Entry) : InstanceBuckets entries :=
   ⟨buildBuckets entries, rfl⟩
 
 structure Prepared where
+  runtime : RuntimeMetadata
   program : LoweredProgram
   entries : Array Entry
   /-- A private checked index tied to this exact immutable entries array. A
@@ -45,8 +46,7 @@ private def matchingIndex (entries : Array Entry) (indices : Array Nat)
   indices.find? fun index => keyMatches entries index callee extra
 
 def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none)
-    (abiCache : Option (CallResolution.FunctionAbiCache runtime) := none) : Except String Prepared := do
+    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : Except String Prepared := do
   unless RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality program.input.raw do
     throw "instance ABI metadata document mismatch"
   let records ← (← program.input.raw.getObjVal? "compiler_instance_abis").getArr?
@@ -60,13 +60,13 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
     let (callee,next) ← CompilerInstance.decode ctx tables record
     tables := next
     let extra ← (← (← record.getObjVal? "extra_argument_types").getArr?).mapM fun ty => do
-      let id ← (← ty.getObjVal? "type_id").getNat?
+      let id ← ty.getNat?
       unless ctx.containsTypeId id do throw "extra ABI argument references missing compiler type"
       pure id
     let result := do
       let query ← record.getObjVal? "abi_query"
-      CallResolution.functionAbiJson runtime query abiCache
-    let candidates := buckets.getD callee.defId #[]
+      query.getNat?
+    let candidates := buckets.getD callee #[]
     if let some previousIndex := matchingIndex entries candidates callee extra then
       let some previous := entries[previousIndex]? | throw "instance ABI bucket index invariant"
       match previous.result,result with
@@ -76,21 +76,21 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
     else
       let index := entries.size
       entries := entries.push ⟨callee,extra,result⟩
-      buckets := buckets.insert callee.defId ((buckets.getD callee.defId #[]).push index)
-  pure ⟨program.withCompilerTables tables,entries,some (instanceBuckets entries)⟩
+      buckets := buckets.insert callee ((buckets.getD callee #[]).push index)
+  pure ⟨runtime,program.withCompilerTables tables,entries,some (instanceBuckets entries)⟩
 
 def abiOfInstance (prepared : Prepared) (callee : CallInstance) (extra : Array MIR.TyId) :
     Except String (FnAbi MIR.TyId) := do
   let found := match prepared.index with
     | some index => matchingIndex prepared.entries
-        (index.buckets.getD callee.defId #[]) callee extra
+        (index.buckets.getD callee #[]) callee extra
     | none => Array.findIdx? (fun (entry : Entry) =>
         entry.callee == callee && entry.extra == extra) prepared.entries
   let some entryIndex := found
     | throw "missing exact full-instance/extra-argument FnAbi query"
   let some entry := prepared.entries[entryIndex]?
     | throw "instance ABI bucket index invariant"
-  entry.result
+  CallResolution.functionAbiId prepared.runtime (← entry.result)
 
 def hooks (prepared : Prepared)
     (base : CallHooks P S C E Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId)) :

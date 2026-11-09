@@ -1,4 +1,4 @@
-import Miri.Input
+import Miri.Input.Decoder
 
 open Lean
 open Miri.Input
@@ -24,7 +24,8 @@ def main (args : List String) : IO UInt32 := do
   let result ← match decodeJson source with
     | .ok value => pure value
     | .error error => fail s!"valid rooted coverage export rejected: {error}"
-  if !hasCoverage result.document.typedTree then
+  if !(result.document.bodies.any fun body => body.blocks.any fun block =>
+      block.statements.any (fun statement => hasCoverage statement.value) || hasCoverage block.terminator.value) then
     fail "Coverage payload was not decoded to a typed coverage tag"
   IO.println "typed rooted Coverage payload accepted as structural input"
   return 0

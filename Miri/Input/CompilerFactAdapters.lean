@@ -21,8 +21,8 @@ private partial def lowerPattern (ctx : LowerContext) (tables : CompilerTables)
     (nodes : Array PatternIdentity) (pattern : CompilerPattern) : Result (Nat × CompilerTables × Array PatternIdentity) := do
   let (value,tables,nodes) ← match pattern with
     | .range start finish => do
-      let (start,tables) ← lowerCompilerTypeConst ctx tables (← decodeCompilerValue start)
-      let (finish,tables) ← lowerCompilerTypeConst ctx tables (← decodeCompilerValue finish)
+      unless start < tables.typeConstants.size && finish < tables.typeConstants.size do
+        throw "compiler pattern constant ID out of bounds"
       pure (PatternIdentity.range start finish,tables,nodes)
     | .or children => do
       let mut tables := tables
@@ -39,7 +39,6 @@ private partial def lowerPattern (ctx : LowerContext) (tables : CompilerTables)
 
 structure Prepared where
   context : CompilerFacts.Context
-  dynamicPredicates : Array Json
   patterns : Array PatternIdentity
   castTypes : Array (TypeId × Result CastTypeInfo)
   obligations : Array Obligation
@@ -50,84 +49,39 @@ private def string (j : Json) (key : String) : Result String := do (← field j 
 private def array (j : Json) (key : String) : Result (Array Json) := do (← field j key).getArr?
 private def source (context : CompilerFacts.Context) (id : TypeId) : Result TypeNode :=
   (context.runtime.node id).mapError toString
-private def shape (context : CompilerFacts.Context) (id : TypeId) : Result Json := do field (← source context id).payload "shape"
-private def typeRef (context : CompilerFacts.Context) (j : Json) : Result TypeId := do
-  let id ← natural j "type_id"
-  let _ ← source context id
-  pure id
-private def sourceDefinition (node : TypeNode) : Result DefinitionId := do
-  let some facts := node.compilerFacts | throw "type compiler definition evidence missing"
-  let value ← field facts.payload "definition"
-  pure ⟨← natural value "crate",← natural value "index"⟩
-private def ensureDefinition (tables : CompilerTables) (id : DefinitionId) : CompilerTables :=
-  if tables.definitions.contains id then tables else { tables with definitions := tables.definitions.push id }
-
-private def castType (context : CompilerFacts.Context) (tables : CompilerTables) (predicates : Array Json)
+private def castType (context : CompilerFacts.Context) (tables : CompilerTables)
     (patternIds : Array (TypeId × Nat)) (id : TypeId) : Result (CastTypeInfo × CompilerTables) := do
   let node ← source context id
-  let value ← shape context id
-  let ty key := do typeRef context (← field value key)
   let unchanged value := pure (value,tables)
-  match node.shapeKind with
-  | .int | .uint =>
-    match node.shapeMetadata.signedKind <|> node.shapeMetadata.unsignedKind with
-    | some (.known kind) => unchanged (.integer kind)
-    | _ => throw "integer kind evidence unavailable"
-  | .float =>
-    let format ← match node.shapeMetadata.floatKind with
-      | some .f16 => pure FloatFormat.binary16 | some .f32 => pure .binary32
-      | some .f64 => pure .binary64 | some .f128 => pure .binary128
+  match node.shape with
+  | .int (.known kind) | .uint (.known kind) => unchanged (.integer kind)
+  | .float kind =>
+    let format ← match kind with
+      | .f16 => pure FloatFormat.binary16 | .f32 => pure .binary32
+      | .f64 => pure .binary64 | .f128 => pure .binary128
       | _ => throw "unsupported compiler float format"
     unchanged (.floating format)
   | .bool => unchanged .boolean | .char => unchanged .character
-  | .rawPointer => unchanged (.rawPointer (← ty "pointee"))
-  | .reference => unchanged (.reference (← ty "pointee"))
-  | .functionPointer => unchanged .fnPointer
-  | .adt =>
-    let definition ← sourceDefinition node
-    let tables := ensureDefinition tables definition
-    pure (.adt (← lookupDefinitionId tables.definitions definition),tables)
-  | .functionDefinition | .closure =>
-    let definition ← sourceDefinition node
-    let tables := ensureDefinition tables definition
-    let (args,tables) ← lowerCompilerGenericArgs context.loweringContext tables
-      (← context.loweringContext.decodeCompilerValue (← field value "generic_args"))
-    let definition ← lookupDefinitionId tables.definitions definition
-    if node.shapeKind == .functionDefinition then pure (.fnDefinition definition args,tables)
-    else pure (.closure definition args (← natural value "upvar_count"),tables)
-  | .array =>
+  | .rawPointer pointee _ => unchanged (.rawPointer pointee)
+  | .reference pointee .. => unchanged (.reference pointee)
+  | .functionPointer .. => unchanged .fnPointer
+  | .adt data => unchanged (.adt data.definition)
+  | .functionDefinition definition args .. => unchanged (.fnDefinition definition args)
+  | .closure definition args count => unchanged (.closure definition args count)
+  | .array element .. =>
     let layout ← CompilerFacts.layoutOf context id
     let .Array _ count := layout.layout.fields | throw "array compiler layout lacks source array count"
-    unchanged (.array (← ty "element") count)
-  | .slice => unchanged (.slice (← ty "element"))
-  | .dynamicTraitObject =>
-    let value ← field value "predicates"
-    let some token := predicates.toList.idxOf? value | throw "dynamic predicate table identity missing"
-    unchanged (.dynamic token)
-  | .patternType =>
-    let some (_,id) := patternIds.find? (·.1 == id) | throw "canonical compiler pattern identity missing"
-    unchanged (.pattern (← ty "base") id)
+    unchanged (.array element count)
+  | .slice element => unchanged (.slice element)
+  | .dynamicTraitObject ids .. =>
+    unchanged (.dynamic ids)
+  | .patternType base _ =>
+    let some (_,patternId) := patternIds.find? (·.1 == id) | throw "canonical compiler pattern identity missing"
+    unchanged (.pattern base patternId)
   | _ => throw "type kind is outside the cast operand domain"
 
 def prepare (context : CompilerFacts.Context) : Result Prepared := do
   let loweringContext := context.loweringContext
-  let mut predicates := #[]
-  for node in context.runtime.source.types do
-    if node.shapeKind == .dynamicTraitObject then
-      let value ← field (← field node.payload "shape") "predicates"
-      unless predicates.contains value do predicates := predicates.push value
-  for allocation in context.program.input.allocations do
-    if let some (.vtable source) := allocation.data then
-      let value ← field source.payload "predicates"
-      unless predicates.contains value do predicates := predicates.push value
-  -- Region-erased/anonymized outputs share this same predicate-array table.
-  -- Existing source tokens keep their indices; newly exported outputs append.
-  if let .ok queries := context.program.input.raw.getObjVal? "compiler_vtable_queries" then
-    for query in (← queries.getArr?) do
-      for key in #["input_predicates","output_predicates"] do
-        let value ← field query key
-        let _ ← value.getArr?
-        unless predicates.contains value do predicates := predicates.push value
   let mut tables := context.program.compilerTables
   let mut casts := #[]
   let mut obligations := #[]
@@ -140,40 +94,35 @@ def prepare (context : CompilerFacts.Context) : Result Prepared := do
         tables := nextTables; patterns := nextPatterns; patternIds := patternIds.push (node.id,id)
       | .error error => obligations := obligations.push ⟨s!"types[{node.id}].pattern",error⟩
   for node in context.runtime.source.types do
-    match castType context tables predicates patternIds node.id with
+    match castType context tables patternIds node.id with
     | .ok (kind,next) => casts := casts.push (node.id,.ok kind); tables := next
     | .error error =>
       casts := casts.push (node.id,.error error)
       obligations := obligations.push ⟨s!"types[{node.id}].cast",error⟩
-  pure ⟨context.withProgram (context.program.withCompilerTables tables),predicates,patterns,casts,obligations⟩
+  pure ⟨context.withProgram (context.program.withCompilerTables tables),patterns,casts,obligations⟩
 
 def castTypeInfo (prepared : Prepared) (id : TypeId) : Result CastTypeInfo := do
   let some (_,result) := prepared.castTypes.find? (·.1 == id) | throw "compiler cast type identity missing"
   result
-private def dynamicToken (prepared : Prepared) (id : TypeId) : Result Nat := do
-  let value ← field (← shape prepared.context id) "predicates"
-  let some token := prepared.dynamicPredicates.toList.idxOf? value | throw "dynamic predicate identity missing"
-  pure token
+private def dynamicPredicates (prepared : Prepared) (id : TypeId) : Result PredicateList := do
+  let .dynamicTraitObject ids .. := (← source prepared.context id).shape | throw "dynamic predicate query on non-dynamic type"
+  pure ids
 
 def validityKind (prepared : Prepared) (id : TypeId) : Result ValidityVisitor.TypeKind := do
   let context := prepared.context
   let node ← source context id
-  let value ← shape context id
-  let ty key := do typeRef context (← field value key)
-  match node.shapeKind with
-  | .bool => pure .boolean | .char => pure .character | .int | .uint => pure .integer
-  | .float => pure .float | .functionPointer => pure .functionPointer | .never => pure .never
-  | .foreign => pure .foreign | .functionDefinition => pure .functionDefinition
-  | .rawPointer =>
-    let pointee ← ty "pointee"
-    return .rawPointer pointee (← CompilerFacts.boolean context pointee "is_sized")
-  | .reference => return .reference ((← CompilerFacts.referencePointee context id).2 == .Mut)
+  match node.shape with
+  | .bool => pure .boolean | .char => pure .character | .int _ | .uint _ => pure .integer
+  | .float _ => pure .float | .functionPointer .. => pure .functionPointer | .never => pure .never
+  | .foreign _ => pure .foreign | .functionDefinition .. => pure .functionDefinition
+  | .rawPointer pointee _ => return .rawPointer pointee (← CompilerFacts.boolean context pointee "is_sized")
+  | .reference _ mutable _ => pure (.reference (mutable == .Mut))
   | .str => pure .string
-  | .array | .slice => return .sequence (← ty "element")
-  | .dynamicTraitObject => return .dynamic (← dynamicToken prepared id)
-  | .patternType => return .pattern (← ty "base")
-  | .unsafeBinder => pure .unsafeBinder
-  | .adt | .tuple | .closure | .coroutine | .coroutineClosure =>
+  | .array element .. | .slice element => pure (.sequence element)
+  | .dynamicTraitObject .. => return .dynamic (← dynamicPredicates prepared id)
+  | .patternType base _ => pure (.pattern base)
+  | .unsafeBinder .. => pure .unsafeBinder
+  | .adt _ | .tuple _ | .closure .. | .coroutine .. | .coroutineClosure .. =>
     if ← CompilerFacts.boolean context id "is_box" then pure .box else
       return .aggregate (← CompilerFacts.boolean context id "is_like_maybe_dangling")
         (← CompilerFacts.boolean context id "is_unsafe_cell") (node.shapeMetadata.adtKind == some .enumKind)
@@ -183,7 +132,7 @@ def metadataTail (prepared : Prepared) (id : TypeId) : Result ValidityVisitor.Me
   let tail ← CompilerFacts.requiredType prepared.context id "metadata_tail"
   let node ← source prepared.context tail
   match node.shapeKind with
-  | .dynamicTraitObject => return .dynamic (← dynamicToken prepared tail)
+  | .dynamicTraitObject => return .dynamic (← dynamicPredicates prepared tail)
   | .slice | .str => pure .sliceOrStr
   | .foreign => pure .foreign
   | _ => throw "metadata validation requested for a sized or unsupported tail"

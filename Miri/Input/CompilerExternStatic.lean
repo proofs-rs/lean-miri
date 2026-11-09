@@ -54,10 +54,9 @@ private def nat (j : Json) (key : String) : Except String Nat := do
 
 private def definition (tables : CompilerTables) (raw : Json) :
     Except String (MIR.DefId × CompilerTables) := do
-  let source : DefinitionId := ⟨← nat raw "crate", ← nat raw "index"⟩
-  match lookupDefinitionId tables.definitions source with
-  | .ok id => pure (id,tables)
-  | .error _ => pure (tables.definitions.size,{tables with definitions := tables.definitions.push source})
+  let id ← raw.getNat?
+  unless id < tables.definitions.size do throw "compiler definition ID out of bounds"
+  pure (id,tables)
 
 private def linkage (raw : Json) : Except String ExternStatic.ImportLinkage := do
   let kind ← str raw "kind"
@@ -73,11 +72,14 @@ private def decodeDeclaration (ctx : LowerContext) (tables : CompilerTables) (ra
   let result := do
     unless (← str raw "typing_env") == "fully_monomorphized" do
       throw "extern-static declaration has a non-canonical typing environment"
-    let ty ← nat (← field raw "type") "type_id"
+    let ty ← (← field raw "type").getNat?
     unless ctx.containsTypeId ty do throw "extern-static declaration references absent compiler type"
-    let layout ← field raw "layout"
-    let size ← RuntimeMetadata.size (← nat layout "size_bytes") |>.mapError toString
-    let align ← RuntimeMetadata.alignment (← nat layout "abi_align_bytes") |>.mapError toString
+    let layoutId ← (← field raw "layout").getNat?
+    let some layout := ctx.layouts[layoutId]? | throw "extern-static layout ID out of bounds"
+    let some bytes := layout.sizeBytes | throw "extern-static layout size missing"
+    let some alignment := layout.abiAlignBytes | throw "extern-static layout alignment missing"
+    let size ← RuntimeMetadata.size bytes |>.mapError toString
+    let align ← RuntimeMetadata.alignment alignment |>.mapError toString
     let mutable ← (← field raw "decl_is_mut").getBool?
     let definitionMutability ← str raw "definition_mutability"
     let typeIsFreeze ← (← field raw "type_is_freeze").getBool?
@@ -118,7 +120,7 @@ private def selectedWinner (ctx : LowerContext) (tables : CompilerTables)
     return (⟨some definitionId,kind,none,.error (.unsupported s!"compiler extern-static query: {reason}")⟩,tables)
   let allocationResult := do
     let allocation ← field raw "allocation"
-    let id ← nat allocation "allocation_id"
+    let id ← allocation.getNat?
     unless ctx.containsAllocationId id do throw "selected exported static allocation is absent from compiler graph"
     pure id
   let allocation ← match allocationResult with

@@ -1,6 +1,6 @@
 # Constant and compiler-image checks
 
-Run from the repository root after the [README setup](../../README.md#prerequisites-and-setup):
+Run from the repository root after the [toolchain setup](../../docs/development.md#rust-toolchain-and-reference-setup):
 
 ```bash
 bash tests/constant/run.sh
@@ -8,14 +8,17 @@ bash tests/constant/run.sh
 
 The script builds the pinned exporter and exports `exporter/fixtures/mir_features.rs`.
 The Lean tests use that compiler graph and target metadata to check allocation
-images, relocations, constant operands, lazy static initialization and query-cache
-behavior. Negative cases cover malformed images, missing metadata, unknown
+images, relocations, constant operands, lazy static initialization and supplied compiler query
+results. Negative cases cover malformed images, missing metadata, unknown
 evaluation queries, TLS/extern routing and failed-hook state retention.
+`TypedTableReferences.lean` also mutates decoded typed fields while retaining the
+original JSON, checking bounds for shapes, generic arguments, binders, regions,
+predicates and constant children.
 
 Runtime allocation IDs are deliberately different from exporter graph IDs.
 Image checks preserve bytes, initialization masks and provenance independently;
 uninitialized pointer bytes must not become initialized during import.
-Compiler evaluation evidence is an exact-key cache of supplied query results,
+Compiler evaluation evidence consists of exact-key supplied query results,
 not a compiler or a proof that those results are correct. Machine callbacks are
 observable stubs, not implementations of address allocation, Tree Borrows or
 foreign-static semantics.

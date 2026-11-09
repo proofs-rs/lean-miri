@@ -57,7 +57,7 @@ fn extern_static_declaration<'tcx>(
             let ty_is_freeze = layout.ty.is_freeze(tcx, env);
             let declaration_mutable = !(mutability == rustc_ast::Mutability::Not && ty_is_freeze);
             json!({
-                "definition":def_json(def),
+                "definition":def_json(context, def),
                 "symbol":symbol,
                 "typing_env":"fully_monomorphized",
                 "type":type_ref,
@@ -107,33 +107,22 @@ fn candidate<'tcx>(
     } else {
         None
     };
-    let callable_identity = if instance_id.is_some() {
-        Some(json!({
-            "instance_kind": instance_kind_json(context, tcx, instance.def)?,
-            "generic_args": generic_args_json(context, tcx, instance.args)?,
-        }))
-    } else {
-        None
-    };
     let span = tcx.def_span(def);
     let mut record = json!({
         "iteration_index": iteration_index,
         "used": used,
         "symbol": symbol,
-        "definition": def_json(def),
+        "definition": def_json(context, def),
         "explicit_symbol": explicit_symbol,
         "crate_index": crate_num.as_u32(),
         "crate_name": tcx.crate_name(crate_num).as_str(),
         "weak": attrs.linkage == Some(SymbolLinkage::WeakAny),
-        "span": {"lo": span.lo().0, "hi": span.hi().0},
+        "span": span_json(context, tcx, span),
         "definition_kind": kind,
         "compiler_builtins": tcx.is_compiler_builtins(crate_num),
     });
     if let Some(instance_id) = instance_id {
         record["instance_id"] = json!(instance_id);
-    }
-    if let Some(identity) = callable_identity {
-        record["callable_identity"] = identity;
     }
     Ok::<_, String>(Some(record))
 }
@@ -180,22 +169,15 @@ fn selected_exports<'tcx>(
         let Some(definition) = winner.get("definition") else {
             return Ok(export_failure("foreign_symbols::selected_exports", "selected source symbol has no exact DefId")?);
         };
-        let Some(crate_index) = definition.get("crate").and_then(Value::as_u64) else {
-            return Ok(export_failure("foreign_symbols::selected_exports", "selected source symbol has no crate index")?);
-        };
-        let Some(def_index) = definition.get("index").and_then(Value::as_u64) else {
-            return Ok(export_failure("foreign_symbols::selected_exports", "selected source symbol has no DefId index")?);
-        };
-        let def = rustc_hir::def_id::DefId {
-            krate: rustc_hir::def_id::CrateNum::from_u32(crate_index as u32),
-            index: rustc_hir::def_id::DefIndex::from_u32(def_index as u32),
-        };
+        let definition_id = definition.as_u64().ok_or("selected definition is not an ID")?;
+        let def = context.definitions.key(usize::try_from(definition_id)
+            .map_err(|_| "selected definition ID exceeds host bounds")?).copied()
+            .ok_or("selected definition ID is outside the definition pool")?;
         let kind = definition_kind(tcx, def);
         if kind != "static" {
             return Ok(json!({"symbol":symbol,"kind":kind,
                 "definition":definition,
-                "instance_id":winner.get("instance_id").cloned().unwrap_or(Value::Null),
-                "callable_identity":winner.get("callable_identity").cloned().unwrap_or(Value::Null)}));
+                "instance_id":winner.get("instance_id").cloned().unwrap_or(Value::Null)}));
         }
 
         let declaration = extern_static_declaration(tcx, context, def)?;

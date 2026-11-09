@@ -37,10 +37,9 @@ private def legacySourceNode (image : AllocationImage.Imported)
 
 private def legacyFunctionInstance (prepared : CompilerVTableRuntime.Prepared)
     (id : InstanceId) : Except String CallInstance := do
-  let candidates := prepared.instances.filter (·.id == id)
-  unless candidates.size == 1 do throw "missing or ambiguous complete compiler function instance"
-  let some value := candidates[0]? | throw "compiler function instance missing"
-  value.outcome
+  let ctx := prepared.facts.context.loweringContext
+  let tables := prepared.facts.context.program.compilerTables
+  pure (← CompilerInstance.decode ctx tables (toJson id)).1
 
 private def legacyGlobalFunction (prepared : CompilerVTableRuntime.Prepared)
     (image : AllocationImage.Imported)
@@ -56,20 +55,12 @@ private def legacyGlobalFunction (prepared : CompilerVTableRuntime.Prepared)
     | return none
   let some (.function source) := node.data | return none
   let fnInstance ← legacyFunctionInstance prepared source.instanceId
-  let tables := prepared.facts.context.program.compilerTables
-  let definition ← lookupDefinitionId tables.definitions source.definitionId
-  unless fnInstance.defId == definition do throw "global function/full-instance definition mismatch"
-  let (args,next) ← lowerCompilerGenericArgs prepared.facts.context.loweringContext
-    tables source.genericArgs
-  unless next.definitions == tables.definitions && next.typeConstants == tables.typeConstants do
-    throw "global function arguments require unprepared compiler identities"
-  unless args == fnInstance.args do throw "global function/full-instance generic arguments mismatch"
   pure (some fnInstance)
 
 private def legacyGlobalVTable (prepared : CompilerVTableRuntime.Prepared)
     (image : AllocationImage.Imported)
     (memory : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind)
-    (id : AllocId) : Except String (Option (Nat × Nat)) := do
+    (id : AllocId) : Except String (Option (Nat × PredicateList)) := do
   let some node ← if memory.hasImportedRuntimeId id then
       some <$> legacySourceNode image memory id
     else
@@ -80,9 +71,7 @@ private def legacyGlobalVTable (prepared : CompilerVTableRuntime.Prepared)
     | return none
   let some (.vtable source) := node.data | return none
   let _ ← prepared.facts.context.runtime.node source.typeId |>.mapError toString
-  let predicates ← source.payload.getObjVal? "predicates"
-  let token ← CompilerVTableFacts.exportedArrayToken prepared.facts predicates
-  pure (some (source.typeId, token))
+  pure (some (source.typeId, source.predicates))
 
 private def legacySeedFunctions (prepared : CompilerFunctionPointers.Prepared)
     (image : AllocationImage.Imported)
@@ -166,11 +155,16 @@ private def stateWith (memory : MemoryState Provenance Miri.TreeBorrows.BorrowTr
     raceAllocations := #[], allocationSpans := #[], user
   }⟩
 
-private def functionHooks (salt : Fin 32) :
+private def functionHooks (prepared : EvalPreparation.Prepared) (salt : Fin 32) :
     FunctionPointers.Hooks MiriMemoryKind RuntimeUser Unit := {
   registry := RuntimeUser.functions
   putRegistry := fun user registry => {user with functions := registry}
   crossCrateInlineAlways := true
+  instanceArgs := fun id =>
+    match CompilerInstance.argsOf (LowerContext.ofDocument prepared.compiler.program.input)
+        prepared.compiler.program.compilerTables id with
+    | .ok args => pure args
+    | .error message => throw (.unsupported message)
   inlineNever := fun _ => pure false
   chooseSalt := pure salt
   ptrGetAlloc := fun _ => pure none
@@ -307,7 +301,7 @@ private def runSelected (path : String) : IO Unit := do
   let initial := stateWith memory user
   let some functionEntry := functionRegistry.functions[0]? |
     throw (IO.userError "seeded function registry is empty")
-  let fHooks := functionHooks functionEntry.salt
+  let fHooks := functionHooks prepared functionEntry.salt
   let (afterFnHit, fnHit) := MachineHooks.run
     (FunctionPointers.functionPointer fHooks (.Instance functionEntry.callee)) initial
   match fnHit with
@@ -317,7 +311,7 @@ private def runSelected (path : String) : IO Unit := do
     "function hit consumed a fresh source AllocId"
   check (afterFnHit.machine.user.functions.functions.size == functionRegistry.functions.size)
     "function hit changed the seeded registry size"
-  let missingFn : CallInstance := ⟨.Item 18446744073709551615, #[]⟩
+  let missingFn : CallInstance := 18446744073709551615
   let (afterFnMiss, fnMiss) := MachineHooks.run
     (FunctionPointers.functionPointer fHooks (.Instance missingFn)) initial
   match fnMiss with

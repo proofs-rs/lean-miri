@@ -59,7 +59,7 @@ structure IntrinsicHooks (P S C V : Type) where
   validatePlace : C → V → Bool → Bool → RvalueM S Unit
   tryAllocId : C → Pointer (Option P) → RvalueM S (Except UInt64 (AllocId × Size))
   checkSignedAccess : C → Pointer (Option P) → Int64 → RvalueM S (Except StepError Unit)
-  vtableSizeAlign : C → Pointer (Option P) → Option Nat → RvalueM S (Size × Align)
+  vtableSizeAlign : C → Pointer (Option P) → Option PredicateList → RvalueM S (Size × Align)
   readDiscriminant : C → OpTy P → RvalueM S VariantIndex
   discriminantForVariant : C → TyId → VariantIndex → RvalueM S (RvalueImmTy P)
   variantLayout : C → TyAndLayout TyId → Nat → RvalueM S (TyAndLayout TyId)

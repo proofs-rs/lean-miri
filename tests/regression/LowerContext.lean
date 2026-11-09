@@ -43,25 +43,18 @@ def main (args : List String) : IO Unit := do
       | throw (IO.userError "genuine input has no root body")
     let core := body.toBodyCore
     let indexedCtx := LowerContext.ofDocument decoded.document
-    let manualCtx : LowerContext := { indexedCtx with
-      typeIndex := none, allocationIndex := none, scalarIndex := none }
+    let manualCtx := indexedCtx
     check ((lowerBody indexedCtx core).isOk && (lowerBody manualCtx core).isOk)
       "genuine baseline body did not lower under both paths"
     let noTypesIndexed := indexedCtx.withTypeIds #[]
-    let noTypesManual : LowerContext := {
-      typeIds := #[], scalarSizes := manualCtx.scalarSizes
-      allocationIds := manualCtx.allocationIds, obligations := manualCtx.obligations
-      sourceDocument := manualCtx.sourceDocument }
+    let noTypesManual := { manualCtx with typeIds := #[] }
     let .error indexedError := lowerBody noTypesIndexed core
       | throw (IO.userError "indexed missing-type case unexpectedly lowered")
     let .error manualError := lowerBody noTypesManual core
       | throw (IO.userError "manual missing-type case unexpectedly lowered")
     check (indexedError == manualError) "missing-type error order changed"
     let noSizesIndexed := indexedCtx.withScalarSizes #[]
-    let noSizesManual : LowerContext := {
-      typeIds := manualCtx.typeIds, scalarSizes := #[]
-      allocationIds := manualCtx.allocationIds, obligations := manualCtx.obligations
-      sourceDocument := manualCtx.sourceDocument }
+    let noSizesManual := { manualCtx with scalarSizes := #[] }
     match lowerBody noSizesIndexed core, lowerBody noSizesManual core with
     | .error indexedError, .error manualError =>
       check (indexedError == manualError) "missing-scalar error order changed"

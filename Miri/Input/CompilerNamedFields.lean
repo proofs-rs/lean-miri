@@ -11,20 +11,15 @@ def fieldIndex (runtime : RuntimeMetadata) (parent : LocalLayout) (name : String
     Except StepError Nat := do
   let node ← runtime.node parent.ty |>.mapError (fun e => StepError.unsupported (toString e))
   let parse : Except String Nat := do
-    unless node.shapeKind == .adt do throw "named field source requires ADT"
-    let shape ← node.payload.getObjVal? "shape"
-    let kind ← (← shape.getObjVal? "adt_kind").getStr?
-    unless kind == "struct" || kind == "union" do
+    let .adt data := node.shape | throw "named field source requires ADT"
+    unless data.kind == .structKind || data.kind == .unionKind do
       throw "named field source requires non-enum ADT"
-    let variants ← (← shape.getObjVal? "variants").getArr?
-    unless variants.size == 1 do throw "non-enum ADT has invalid variant declarations"
-    let some variant := variants[0]? | throw "missing non-enum variant"
-    let fields ← (← variant.getObjVal? "fields").getArr?
-    let matching := fields.filter fun field =>
-      ((field.getObjVal? "name").bind Json.getStr?).toOption == some name
+    unless data.variants.size == 1 do throw "non-enum ADT has invalid variant declarations"
+    let some variant := data.variants[0]? | throw "missing non-enum variant"
+    let matching := variant.fields.filter (·.name == name)
     unless matching.size == 1 do throw s!"missing or ambiguous compiler field {name}"
     let some field := matching[0]? | throw "missing named field"
-    (← field.getObjVal? "index").getNat?
+    pure field.index
   let index ← parse.mapError StepError.invalidProgram
   -- Require the exact source field projection to be available as well.
   let _ ← runtime.field parent index |>.mapError (fun e => StepError.unsupported (toString e))

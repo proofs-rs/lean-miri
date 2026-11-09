@@ -1,6 +1,6 @@
 --- a/exporter/src/main.rs
 +++ b/scratch/reference-profile-exporter/src/main.rs
-@@ -498,13 +498,64 @@
+@@ -544,13 +544,64 @@
  }
  
  #[cfg(feature = "miri-reference")]
@@ -65,7 +65,7 @@
      config.borrow_tracker = Some(miri::BorrowTrackerMethod::TreeBorrows(
          miri::TreeBorrowsParams {
              precise_interior_mut: true,
-@@ -513,7 +564,15 @@
+@@ -559,7 +610,15 @@
      ));
      config.env = env::vars_os().collect();
      let file_name = tcx.sess.io.input.file_name(tcx.sess);

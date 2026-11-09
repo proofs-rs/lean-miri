@@ -9,12 +9,12 @@ open ExactStateCodec207
 local instance jsonDecEq : DecidableEq Json := ExactJson213.jsonDecidableEq
 local instance patternDecEq : DecidableEq Input.CompilerPattern := ExactStateCodec207.compilerPatternDecidableEq
 
-def importDocumentCorePointerDecEq : DecidableEq Input.ImportDocumentCore :=
+def importDocumentCorePointerDecEq : DecidableEq Input.ImportDocument :=
   fun left right => withPtrEqDecEq left right (fun _ =>
-    Miri.Verification.RuntimeDocumentExact207.instDecidableEqImportDocumentCore_miriTests left right)
+    Miri.Verification.RuntimeDocumentExact207.instDecidableEqImportDocument_miriTests left right)
 
 attribute [-instance] Miri.Verification.RuntimeDocumentExact207.instDecidableEqRuntimeMetadata_miriTests
-local instance importDocumentCoreFast : DecidableEq Input.ImportDocumentCore := importDocumentCorePointerDecEq
+local instance importDocumentCoreFast : DecidableEq Input.ImportDocument := importDocumentCorePointerDecEq
 deriving instance DecidableEq for Input.RuntimeMetadata
 private def runtimeMetadataStructuralDecEq : DecidableEq Input.RuntimeMetadata := inferInstance
 def runtimeMetadataPointerDecEq : DecidableEq Input.RuntimeMetadata :=

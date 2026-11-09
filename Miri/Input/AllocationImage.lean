@@ -214,7 +214,8 @@ def importGraph [DecidableEq K] (target : RuntimeTargetDataLayout)
         | some (.memory source) => return (GlobalAllocationPayload.memory (← decode target memory source), none)
         | some (.static source) =>
           let info ← queries.staticInfo source
-          let definition ← lookupDefinitionId definitions source.definitionId
+          let definition := source.definitionId
+          unless definition < definitions.size do throw "static compiler definition ID out of bounds"
           if source.globalInfo.map (·.foreignItem) |>.getD false then
             -- rustc represents an extern static as GlobalAlloc::Static, but
             -- Miri resolves its pointer through extern_static_pointer rather

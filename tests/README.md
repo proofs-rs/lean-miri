@@ -164,12 +164,12 @@ The ordered list is maintained in [the script](../tools/check.sh). Its phases ar
    `runtime_metadata/run.py` and `execution/run{,_calls,_globals}.py`.
 6. Compare the extracted obligation inventory with the checked-in fixture.
 
-The input check freshly exports Rust, exercises full/runtime decoding, lowering,
+The input check freshly exports Rust, exercises typed-table decoding, lowering,
 preparation and selected allocator-world metadata. The frontend check imports
 fresh JSON into Lean constants. Runtime-metadata checks connect fresh compiler
 queries to Lean providers. Execution checks compare selected arithmetic, calls
 and globals with pinned Miri. Eval-core's six checks use three hash-checked
-genuine schema-3 exports regenerated with the current producer. The preparation helper preserves their
+genuine schema-4 exports regenerated with the current producer. The preparation helper preserves their
 decompressed bytes exactly; it does not adapt an old wire format.
 
 The script uses `set -euo pipefail`: a failure stops it and later phases remain
@@ -194,7 +194,7 @@ None of these top-level commands is called by `tools/check.sh`:
 | `python3 tools/check-connected.py --large-tb` | Fresh larger Rust export; assert the expected Frozen-tag write UB. |
 | `python3 tests/connected/compare_selector.py` | Finite comparison of choice selection with extracted upstream code; does not execute the whole Miri interpreter. |
 
-Fifteen cases use stored reference observations and genuine schema-3 bytes.
+Fifteen cases use stored same-TyCtxt reference observations and genuine schema-4 bytes.
 The DST and large Tree Borrows cases generate fresh exports and same-TyCtxt
 Miri references in CI from tracked Rust sources, unchanged flags and exactly
 reviewed guest configuration/argv0. Their Lean assertions and choice tapes
@@ -297,17 +297,15 @@ when changing it.
 | `python3 tests/random_memory/source_compare.py` | Extracted gen_random outer-body ordering and failure propagation; RNG/host/write leaves are fixtures. |
 | `python3 tests/producer/primitive_ranges.py` | Genuine u128/niche metadata and Lean decoder boundaries; requires built debug exporter and MIR sysroot. |
 | `cargo +miri-exporter-8144389c895d test --manifest-path exporter/Cargo.toml --locked --offline` | Rust/Python exporter tests, four fixture scripts and four producer checks; included in `check.sh`. Requires pinned toolchain, MIR sysroot and offline dependencies. |
-| `python3 -m unittest discover -s exporter/tests -p 'test_*.py' -v` | Python shared-transport loader unit tests, outside the main discovery root. |
+| `python3 -m unittest discover -s exporter/tests -p 'test_*.py' -v` | Python typed-table schema loader tests, outside the main discovery root. |
 | `lake env lean MiriTests/Cast/Typed.lean` | Cast dispatcher, check order and size-mismatch cases; now included in `lake build MiriTests`. |
 | `lake env lean --run MiriTests/Native/BytesOwnership.lean` | Included in `lake exe miri_tests`: host-byte ownership, release and copy-failure cleanup using fixture hosts. “Native” here names the boundary, not an execution mode. |
 | `python3 tests/scheduling/test_source_prefix.py` | Extracted scheduler service prefix with fixture leaves, and `Stateful.lean` proof examples. |
 | `MiriTests/FunctionPointers/*.lean` | Self-contained persistent reservation assertions are included in the runtime registry. |
 | `tests/query_demand/make_cases.py` + `CatalogRoles.lean` | Generate mutations from fresh compiler evidence, then run readiness/obligation/provider assertions. Native-signature and TLS cases run in the fresh CI lane; the existing missing TLS consumer provider branch remains a visible failure. |
 
-`exporter/tests/compare_shared_graph.py`, `compare_source126_compact.py` and
-`check_runtime_type_closure.py` are argument-driven helpers. The fresh CI lane
-exports the runtime-type closure fixture and runs its helper; shared-graph and
-source126 comparison helpers still need explicit matching inputs. See
+`exporter/tests/check_runtime_type_closure.py` checks a supplied compiler export.
+The fresh CI lane exports its fixture and runs the helper. See
 [CI coverage](../tools/ci/README.md) and the
 [upstream UI contract](upstream_ui/README.md) for scheduled entry points.
 
@@ -321,7 +319,7 @@ affect several rows below.
 | Change | Checks to select in addition to broad regression coverage |
 | --- | --- |
 | Export schema, rustc query collection, roots or allocation identities | Exporter fixtures and transport tests; producer tests; input/frontend/runtime-metadata checks; fresh execution or fresh connected cases. Saved replay alone cannot test a changed exporter. |
-| Decoder IDs, shared payloads or validation | Dedicated decoder suite, relevant input checks, transport tests, optimization parity if caches are involved; query-demand rejection cases where applicable. |
+| Typed pool IDs or validation | Dedicated decoder suite, relevant input checks, pool-reference tests and query-demand rejection cases. |
 | Lowering, compiler providers, primitive binding or preparation | Structural suite, relevant input/runtime-metadata cases, optimization suite for indexes/caches, and an assembled execution exercising the changed path. |
 | Indexes, memoization, profiles, rollback or retained state | Optimization suite plus the relevant feature tests and end-to-end control; use the profiling protocol separately for speed claims. |
 | Arithmetic, casts, intrinsics or AES | Relevant component runner/Lean assertions; standalone cast/APFloat/AES checks as applicable; fresh guest comparison when dispatch/input integration changes. |
@@ -373,6 +371,6 @@ UB freedom requires excluding UB on every reachable permitted finite prefix;
 local proofs, open graph exploration and source inventories do not establish that
 whole-machine claim.
 
-`bash tools/check-lowering-reader.sh [INPUT.json ...]` checks full/runtime
-lowering agreement and source paths for root, instance and promoted bodies.
+`bash tools/check-lowering-reader.sh [INPUT.json ...]` checks source paths and
+compiler pool IDs across lowering for root, instance and promoted bodies.
 The default input is the fixed empty-function fixture.

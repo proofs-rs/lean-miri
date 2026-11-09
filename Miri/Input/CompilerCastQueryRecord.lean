@@ -21,8 +21,8 @@ def functionResult (record : Json) : Except String (Option Json) := do
       return none
     | "instance" => pure ()
     | _ => throw "unrecognized cast resolution kind"
-  -- A direct instance identity already identifies a positive answer. Existing
-  -- successful snapshots need no redundant option tag to retain that meaning.
+  -- An instance ID determines a positive answer; the tag distinguishes an
+  -- absent result that has no instance identity.
   let _ ← (← record.getObjVal? "instance_id").getNat?
   return some record
 

@@ -20,39 +20,39 @@ theorem nestedReordered_ne : nestedA ≠ nestedReordered := by
       | _ => CompilerPattern.notNull) h
   simp [nestedA, nestedReordered] at hFirst
 
-example [DecidableEq Lean.Json] : DecidableEq CompilerPattern :=
+example : DecidableEq CompilerPattern :=
   compilerPatternDecEqInstance
 
-example [DecidableEq Lean.Json] :
+example :
     (compilerPatternDecEqInstance nestedA nestedB).decide = true := by
   exact (compilerPatternDecEq_reflect nestedA nestedB).2 rfl
 
-example [DecidableEq Lean.Json] :
+example :
     (compilerPatternDecEq nestedA nestedB).decide = true := by
   exact (compilerPatternDecEq_reflect nestedA nestedB).2 rfl
 
-example [DecidableEq Lean.Json] :
+example :
     (compilerPatternDecEq nestedA nestedReordered).decide = false := by
   cases h : compilerPatternDecEq nestedA nestedReordered with
   | isTrue hEq => exact False.elim (nestedReordered_ne hEq)
   | isFalse _ => rfl
 
-example [DecidableEq Lean.Json] (payload : Lean.Json) :
-    (compilerPatternDecEq (.range payload .null) (.range payload .null)).decide = true := by
+example (payload : Nat) :
+    (compilerPatternDecEq (.range payload 0) (.range payload 0)).decide = true := by
   exact (compilerPatternDecEq_reflect _ _).2 rfl
 
-theorem ranges_differ (leftPayload rightPayload : Lean.Json)
+theorem ranges_differ (leftPayload rightPayload : Nat)
     (h : leftPayload ≠ rightPayload) :
-    CompilerPattern.range leftPayload .null ≠ CompilerPattern.range rightPayload .null := by
+    CompilerPattern.range leftPayload 0 ≠ CompilerPattern.range rightPayload 0 := by
   intro hEq
   injection hEq with hFields
   exact h hFields
 
-example [DecidableEq Lean.Json] (leftPayload rightPayload : Lean.Json)
+example (leftPayload rightPayload : Nat)
     (h : leftPayload ≠ rightPayload) :
-    (compilerPatternDecEq (.range leftPayload .null) (.range rightPayload .null)).decide = false := by
-  cases hDecision : compilerPatternDecEq (.range leftPayload .null)
-      (.range rightPayload .null) with
+    (compilerPatternDecEq (.range leftPayload 0) (.range rightPayload 0)).decide = false := by
+  cases hDecision : compilerPatternDecEq (.range leftPayload 0)
+      (.range rightPayload 0) with
   | isTrue hEq => exact False.elim (ranges_differ leftPayload rightPayload h hEq)
   | isFalse _ => rfl
 

@@ -22,13 +22,14 @@ private def staticKind (p : CompilerProviders.Prepared) (image : AllocationImage
   unless isStatic && !tls do throw "CTFE static is not a non-thread-local static"
   let source ← image.sourceNode memory id
   let some (.static source) := source.data | throw "CTFE static lacks actual compiler image identity"
-  let actual ← lookupDefinitionId p.program.compilerTables.definitions source.definitionId
+  let actual := source.definitionId
+  unless actual < p.program.compilerTables.definitions.size do throw "static compiler definition ID out of bounds"
   unless actual == definition do throw "CTFE static compiler definition identity mismatch"
   let info ← CompilerGlobals.staticInfo source
   unless info.size == global.size && info.align == global.align && info.mutability == global.mutability &&
       info.foreignItem == foreignItem do throw "CTFE static compiler metadata disagrees with canonical global"
   let some evidence := source.globalInfo | throw "CTFE nested-static compiler evidence missing"
-  let nested ← evidence.payload.getObjValAs? Bool "nested"
+  let nested := evidence.nested
   pure (.static nested foreignItem)
 
 /-- Source ptr_try_get_alloc_id errors mean there is no allocation identity;

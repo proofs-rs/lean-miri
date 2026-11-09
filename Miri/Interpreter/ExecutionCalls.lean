@@ -82,6 +82,9 @@ def make [DecidableEq K] (leaves : ExecutionCallLeaves.Hooks (State K U) C Other
       lift (scalar.toPointer access.runtime.base |>.mapError ScalarOps.scalarError)
    getPtrFn := fun _ pointer => FunctionPointers.getPtrFn functions pointer
    resolve := leaves.compiler.resolve
+   instanceKind := leaves.compiler.instanceKind
+   instanceArgs := leaves.compiler.instanceArgs
+   itemInstance := leaves.compiler.itemInstance
    fnAbiOfFnPtr := leaves.compiler.fnAbiOfFnPtr
    fnAbiOfInstance := leaves.compiler.fnAbiOfInstance
    requiresCallerLocation := virtual.compiler.requiresCallerLocation

@@ -5,8 +5,8 @@ open Miri.Interpreter.FunctionPointers
 
 private def id1 : AllocId := ⟨1, by decide⟩
 private def id2 : AllocId := ⟨2, by decide⟩
-private def instance1 : CallInstance := ⟨.Item 10, #[]⟩
-private def instance2 : CallInstance := ⟨.Item 11, #[]⟩
+private def instance1 : CallInstance := 10
+private def instance2 : CallInstance := 11
 private def entry (callee : CallInstance) (id : AllocId) : FunctionEntry :=
   ⟨callee, ⟨0, by decide⟩, id⟩
 

@@ -35,7 +35,9 @@ structure Metadata (s : Static) where
   unitBackend : s.abi.ret.layout.layout.backendRepr = .Memory (sized := true)
   target : s.prepared.compiler.runtime.target.base.pointerWidth = .w64
   /-- The selected callable is the ordinary item represented by the exported body. -/
-  itemKind : s.functionInstance.kind = .Item s.functionInstance.defId
+  itemDefinition : DefId
+  itemKind : CompilerInstance.kindOf s.prepared.compiler.loweringContext
+    s.prepared.compiler.program.compilerTables s.functionInstance = .ok (.Item itemDefinition)
   inlineAttribute : CompilerVirtualFacts.inlineAttribute
     s.prepared.compiler.lifecycle.calls.scopes s.functionInstance = .ok none ∨
     CompilerVirtualFacts.inlineAttribute
@@ -66,8 +68,11 @@ structure Metadata (s : Static) where
       s.prepared.compiler.lifecycle.frames.calls.scopes s.functionInstance = .ok (some false)
   frameTrackCaller : CompilerRuntimeQueries.requiresCallerLocation
     s.prepared.compiler.lifecycle.frames.calls.runtime s.functionInstance = .ok false
-  frameDefinition : ∃ definition,
-    s.prepared.compiler.lifecycle.frames.calls.calls.program.compilerTables.definitions[s.functionInstance.defId]? = some definition
+  frameDefinition : ∃ definitionIndex definition,
+    CompilerInstance.definitionOf
+      (LowerContext.ofDocument s.prepared.compiler.lifecycle.frames.calls.calls.program.input)
+      s.prepared.compiler.lifecycle.frames.calls.calls.program.compilerTables s.functionInstance = .ok definitionIndex ∧
+    s.prepared.compiler.lifecycle.frames.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition
   /-- Normalization depends on the current frame's static body/instance key,
   while locals, memory, thread state and caches are unconstrained by this fact. -/
   normalizedLocal : ∀ frame : CompilerFrameContext.ActualFrame,
@@ -84,7 +89,7 @@ structure Metadata (s : Static) where
     some ⟨.ok preamble, .ok s.functionInstance, .ok #[]⟩
   localSpan : SpanRef
   localSourceSpan : ∃ decl, loweredBody.input.locals[0]? = some decl ∧
-    s.prepared.compiler.program.bundle.spans.toList.idxOf? decl.sourceInfo.span = some localSpan.id
+    decl.sourceInfo.spanId = localSpan.id
   /-- The literal is tied to the fixed instruction, not chosen to supply an
   operational result. Its exact structural site selects compiler evidence. -/
   literal : ConstOperand
@@ -111,8 +116,8 @@ structure Metadata (s : Static) where
   /-- Canonical compiler span collection covers declarations in every imported
   body, including arbitrary callers whose locals are later materialized. -/
   compilerLocalSourceSpans : ∀ body ∈ s.prepared.compiler.program.bundle.bodies,
-    ∀ decl ∈ body.input.locals, ∃ index,
-      s.prepared.compiler.program.bundle.spans.toList.idxOf? decl.sourceInfo.span = some index
+    ∀ decl ∈ body.input.locals,
+      decl.sourceInfo.spanId < s.prepared.compiler.program.bundle.spans.size
 
 structure Profile (s : Static) : Prop where
   debug : s.options.place.debugAssertions = false

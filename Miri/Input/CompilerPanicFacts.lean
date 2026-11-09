@@ -1,4 +1,4 @@
-import Miri.Input.LowerMIR
+import Miri.Input.CompilerInstance
 import Miri.Interpreter.Panic
 
 /-! Exact language-item definitions and Instance::mono generic parameters.
@@ -41,18 +41,19 @@ def name : Panic.LangItem → String
 private def parameterTag : MainGenericParameter → Nat
   | .lifetime => 0 | .typeParameter => 1 | .constParameter => 2
 
-private def definition (source : Json) : Except String DefinitionId := do
-  pure ⟨← source.getObjValAs? Nat "crate",← source.getObjValAs? Nat "index"⟩
+private def definition (program : LoweredProgram) (source : Json) : Except String MIR.DefId := do
+  let id ← source.getNat?
+  unless id < program.compilerTables.definitions.size do throw "panic compiler definition ID out of bounds"
+  pure id
 private def rows (p : LoweredProgram) : Except String (Array Json) := do
   (← p.input.raw.getObjVal? "compiler_panic_queries").getArr?
 
 /-- An absent catalog is not demanded by preparing an unrelated function.
-Actual panic queries still fail. Present definitions join the final shared
-append-only table; no returned compiler DefId is invented at the call event. -/
+Actual panic queries still fail. Present references must address the immutable
+exporter definition table; no compiler DefId is invented at the call event. -/
 def prepareProgram (program : LoweredProgram) : Except String LoweredProgram := do
   let source ← match program.input.raw.getObjVal? "compiler_panic_queries" with
     | .error _ => return program | .ok value => pure value
-  let mut definitions := program.compilerTables.definitions
   let mut tags : Array String := #[]
   for row in ← source.getArr? do
     let tag ← row.getObjValAs? String "lang_item"
@@ -60,9 +61,9 @@ def prepareProgram (program : LoweredProgram) : Except String LoweredProgram := 
     tags := tags.push tag
     let item ← row.getObjVal? "definition"
     unless item == .null do
-      let source ← definition item
-      unless definitions.contains source do definitions := definitions.push source
-  pure (program.withCompilerTables {program.compilerTables with definitions})
+      let _ ← definition program item
+      pure ()
+  pure program
 
 def langItemByName (program : LoweredProgram) (tag : String) : Except String (Option MIR.DefId) := do
   let selected := (← rows program).filter fun row =>
@@ -71,7 +72,7 @@ def langItemByName (program : LoweredProgram) (tag : String) : Except String (Op
   let some row := selected[0]? | throw "panic language-item query absent"
   let value ← row.getObjVal? "definition"
   if value == .null then return none
-  pure (some (← lookupDefinitionId program.compilerTables.definitions (← definition value)))
+  pure (some (← definition program value))
 
 def langItem (program : LoweredProgram) (item : Panic.LangItem) : Except String (Option MIR.DefId) :=
   langItemByName program (name item)
@@ -82,7 +83,7 @@ def genericParameters (program : LoweredProgram) (requested : MIR.DefId) :
   for row in ← rows program do
     let value ← row.getObjVal? "definition"
     if value == .null then continue
-    let id ← lookupDefinitionId program.compilerTables.definitions (← definition value)
+    let id ← definition program value
     unless id == requested do continue
     let params ← (← (← row.getObjVal? "generic_parameters").getArr?).mapM fun value => do
       match ← value.getStr? with
@@ -111,5 +112,6 @@ def unwindTerminate (program : LoweredProgram) (reason : MIR.UnwindTerminateReas
     | .lifetime => args := args.push (.Lifetime .Erased)
     | .typeParameter | .constParameter =>
       throw (.invalidProgram "Instance::mono called on type/const generic unwind termination item")
-  pure ⟨.Item definition,args⟩
+  CompilerInstance.item (LowerContext.ofDocument program.input) program.compilerTables definition args
+    |>.mapError StepError.unsupported
 end Miri.Input.CompilerPanicFacts

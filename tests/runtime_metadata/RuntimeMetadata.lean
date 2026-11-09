@@ -12,7 +12,7 @@ def main (args : List String) : IO Unit := do
   check metadata.obligations.isEmpty s!"metadata obligations: {reprStr metadata.obligations}"
   check (metadata.source.raw == decoded.document.raw) "original source evidence lost"
   check ((metadata.target.validate).isOk) "invalid canonical target"
-  let values := metadata.layouts.filterMap fun (_,value) => value.toOption
+  let values := metadata.source.types.filterMap fun node => (metadata.lookup node.id).toOption
   check (values.any fun x => match x.layout.fields with | .Union _ => true | _ => false) "union missing"
   check (values.any fun x => match x.layout.fields with | .Array .. => true | _ => false) "array missing"
   check (values.any fun x => match x.layout.backendRepr with | .SimdVector => true | _ => false) "SIMD missing"
@@ -46,14 +46,15 @@ def main (args : List String) : IO Unit := do
   check (!(metadata.lookup 999999).isOk) "unknown type accepted"
   check (!(RuntimeMetadata.importTarget .null).isOk) "missing target accepted"
   let first ← must ((RuntimeMetadata.require decoded.document.types[0]? "first type").mapError toString)
-  check (!(RuntimeMetadata.layout metadata.target { first.layout with fields := none }).isOk) "missing fields accepted"
+  let physical ← must ((RuntimeMetadata.require decoded.document.layouts[first.layoutId]? "first physical layout").mapError toString)
+  check (!(RuntimeMetadata.layout metadata.target { physical with fields := none }).isOk) "missing fields accepted"
   let missingSize := decodeCompilerLayout (Lean.Json.mkObj [("kind", .str "layout"), ("field_offsets_bytes", .arr #[])])
   check (match missingSize with | .error reason => reason.contains "size/alignment" | .ok _ => false)
     "missing layout size was not rejected at the input boundary"
   let duplicate := { decoded.document with types := decoded.document.types.push first }
   check (!(RuntimeMetadata.ofDocument duplicate).isOk) "duplicate IDs accepted"
-  let incomplete := { decoded.document with types := decoded.document.types.map fun node =>
-      if node.id == first.id then { node with layout := { node.layout with fields := none } } else node }
+  let incompleteLayouts := decoded.document.layouts.set! first.layoutId { physical with fields := none }
+  let incomplete := { decoded.document with layouts := incompleteLayouts }
   let kept ← must ((RuntimeMetadata.ofDocument incomplete).mapError toString)
   check (!kept.obligations.isEmpty && !(kept.lookup first.id).isOk) "layout failure was hidden"
   check (kept.source.raw == incomplete.raw) "failed-query source lost"

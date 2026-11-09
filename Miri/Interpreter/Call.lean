@@ -78,6 +78,9 @@ structure CallHooks (P S C E Other Extern FnABI ArgABI : Type) where
   resolve : C → DefId → Array GenericArg → CallM S CallInstance
   fnAbiOfFnPtr : C → LocalLayout → Array TyId → CallM S FnABI
   fnAbiOfInstance : C → CallInstance → Array TyId → CallM S FnABI
+  instanceKind : CallInstance → CallM S CallInstanceKind
+  instanceArgs : CallInstance → CallM S (Array GenericArg)
+  itemInstance : DefId → Array GenericArg → CallM S CallInstance
   requiresCallerLocation : CallInstance → CallM S Bool
   callerLocation : CallM S SpanRef
   abiCanUnwind : FnABI → Bool
@@ -197,10 +200,10 @@ def evalCalleeAndArgs (h : Hooks) (choice : C) (func : MIR.Operand)
     return ⟨fnVal, evaluated, externAbi, some abi, false⟩
   | .FnDef definition args =>
     let fnInstance ← h.resolve choice definition args
-    let abi ← match fnInstance.kind with
+    let abi ← match ← h.instanceKind fnInstance with
       | .LlvmIntrinsic _ => pure none
       | .Intrinsic definition =>
-        pure (some (← h.fnAbiOfInstance choice ⟨.Item definition, fnInstance.args⟩ extra))
+        pure (some (← h.fnAbiOfInstance choice (← h.itemInstance definition (← h.instanceArgs fnInstance)) extra))
       | _ => pure (some (← h.fnAbiOfInstance choice fnInstance extra))
     return ⟨.Instance fnInstance, evaluated, externAbi, abi, ← h.requiresCallerLocation fnInstance⟩
   | .invalid => throw (.invalidProgram "invalid callee type")
@@ -370,7 +373,7 @@ def initFnCallStep (h : Hooks) (choice : C) (request : CallRequest P Other Exter
     h.callExtra choice extra (← needAbi) request.args request.destination request.target request.unwind
     pure none
   | .Instance fnInstance =>
-    match fnInstance.kind with
+    match ← h.instanceKind fnInstance with
     | .Intrinsic _ =>
       require (!request.withCallerLocation) "intrinsic received caller location"
       let fallback ← h.callIntrinsic choice fnInstance (request.args.map FnArg.copyFnArg)
@@ -378,7 +381,7 @@ def initFnCallStep (h : Hooks) (choice : C) (request : CallRequest P Other Exter
       match fallback with
       | none => pure none
       | some fallback =>
-        match fallback.kind with
+        match ← h.instanceKind fallback with
         | .Item _ => pure ()
         | _ => throw (.invalidProgram "intrinsic fallback must be Item")
         return some { request with

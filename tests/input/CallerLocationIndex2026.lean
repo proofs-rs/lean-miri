@@ -3,16 +3,6 @@ import Miri.Input.CompilerValueConstants
 
 open Lean Miri.Input Miri.Interpreter
 
-#print axioms CompilerSpanInterner.sameSpansAs_eq
-
-theorem callerLocationSpanComparison_eq (result base : CompilerSpanInterner) :
-    result.sameSpansAs base = (result.getTables.spans == base.getTables.spans) := by
-  rw [CompilerSpanInterner.sameSpansAs_eq]
-  exact Bool.beq_comm
-
-#print axioms callerLocationSpanComparison_eq
-
-
 private def must (value : Except String α) : IO α :=
   match value with | .ok x => pure x | .error e => throw (IO.userError e)
 private def set (j : Json) (key : String) (value : Json) : Json :=
@@ -32,8 +22,8 @@ private def compare (p : CompilerProviders.Prepared) (span : Miri.MIR.SpanRef) :
 
 def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected ordinary export fixture")
-  let decoded ← must (decodeRuntimeJson (← IO.FS.readFile path))
-  let program ← must (lowerCoreProgram decoded.document)
+  let decoded ← must (decodeJson (← IO.FS.readFile path))
+  let program ← must (lowerProgram decoded.document)
   let p := (← must (EvalPreparation.prepare program).outcome).compiler
   let records ← must ((← must (p.program.input.raw.getObjVal? "compiler_caller_location_constants")).getArr?)
   let some row := records[0]? | throw (IO.userError "fixture has no caller-location rows")

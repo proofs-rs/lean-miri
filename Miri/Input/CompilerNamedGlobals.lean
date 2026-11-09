@@ -27,10 +27,9 @@ private def field (j : Json) (key : String) : Except String Json := j.getObjVal?
 
 private def definition (tables : CompilerTables) (raw : Json) :
     Except String (MIR.DefId × CompilerTables) := do
-  let source : DefinitionId := ⟨← (← field raw "crate").getNat?, ← (← field raw "index").getNat?⟩
-  match lookupDefinitionId tables.definitions source with
-  | .ok id => pure (id, tables)
-  | .error _ => pure (tables.definitions.size, {tables with definitions := tables.definitions.push source})
+  let id ← raw.getNat?
+  unless id < tables.definitions.size do throw "compiler definition ID out of bounds"
+  pure (id,tables)
 
 private def sourcePath (record : Json) (name : String) : Except String Unit := do
   let parts ← (← field record "path").getArr?
@@ -51,9 +50,9 @@ private def decodeValue (ctx : LowerContext) (tables : CompilerTables) (record :
     | "static" => pure true
     | "const_allocation" => pure false
     | _ => throw s!"named compiler global {name} has unknown allocation kind `{kind}`"
-  let ty ← (← (← field payload "type").getObjVal? "type_id").getNat?
+  let ty ← (← field payload "type").getNat?
   unless ctx.containsTypeId ty do throw "named compiler global references absent compiler type"
-  let allocation ← (← (← field payload "allocation").getObjVal? "allocation_id").getNat?
+  let allocation ← (← field payload "allocation").getNat?
   unless ctx.containsAllocationId allocation do throw "named compiler global references absent allocation image"
   pure (⟨defId, ty, allocation, isStatic⟩, tables)
 

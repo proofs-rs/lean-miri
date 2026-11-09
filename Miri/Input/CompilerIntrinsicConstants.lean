@@ -35,7 +35,9 @@ private def argument (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstanc
     (index : Nat) : Except StepError ValTree := do
   unless p.entries.any (·.callee == callee) do
     throw (.unsupported "full intrinsic instance missing from compiler metadata")
-  let some (.Const id) := callee.args[index]?
+  let args ← CompilerInstance.argsOf (LowerContext.ofDocument p.program.input) p.program.compilerTables callee
+    |>.mapError StepError.unsupported
+  let some (.Const id) := args[index]?
     | throw (invalid "const_at/expect_const requires a constant argument")
   value p id
 private def firstLeaf (p : CompilerIntrinsicFacts.Prepared) (tree : ValTree) :

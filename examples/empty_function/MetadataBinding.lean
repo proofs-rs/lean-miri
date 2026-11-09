@@ -32,12 +32,8 @@ theorem target_features (s : Static) (metadata : Metadata s) (capacity : 0 < s.c
 
 theorem not_closure (s : Static) (metadata : Metadata s) (capacity : 0 < s.capacity) :
     (ExecutionMachine.callHooks s.cfg s.limits).nonCapturingClosure () s.functionInstance s.abi = pure false := by
-  have equality : s.functionInstance = ⟨.Item s.functionInstance.defId,s.functionInstance.args⟩ := by
-    exact congrArg (fun kind => (⟨kind,s.functionInstance.args⟩ : CallInstance)) metadata.itemKind
-  have query := metadata.notClosure
-  rw [equality] at query ⊢
   exact MetadataQueries.not_closure (fields s metadata capacity) s.limits
-    s.functionInstance.defId s.functionInstance.args s.abi query
+    s.functionInstance metadata.itemDefinition s.abi metadata.itemKind metadata.notClosure
 
 end EmptyFunction.MetadataBinding
 

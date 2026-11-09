@@ -269,8 +269,8 @@ private def raceStateInfo (state : OuterState) : String := Id.run do
 
 private def runRmwReleasePure (contents : String) (expectRace : Bool) (pageSize : UInt64)
     (numCpus hostPid : UInt32) : Except String String := do
-  let decoded ← must (Input.decodeRuntimeJson contents)
-  let program ← must (Input.lowerCoreProgram decoded.document)
+  let decoded ← must (Input.decodeJson contents)
+  let program ← must (Input.lowerProgram decoded.document)
   let attempt := Input.EvalPreparation.prepare program
   let prepared ← must attempt.outcome
   let compiler := prepared.compiler

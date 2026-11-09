@@ -365,7 +365,7 @@ structure UnevaluatedConst where
   deriving Repr, DecidableEq
 
 inductive MirConst where
-  | Ty (ty : TyId) (value : TypeConst)
+  | Ty (ty : TyId) (value : TypeConstId)
   | Unevaluated (constant : UnevaluatedConst) (ty : TyId)
   | Val (value : ConstValue) (ty : TyId)
   deriving Repr, DecidableEq
@@ -424,7 +424,7 @@ inductive AggregateKind where
 
 inductive Rvalue where
   | Use (operand : Operand) (retag : WithRetag)
-  | Repeat (operand : Operand) (count : TypeConst)
+  | Repeat (operand : Operand) (count : TypeConstId)
   | Ref (region : Region) (borrow : BorrowKind) (place : Place)
   | ThreadLocalRef (definition : DefId)
   | RawPtr (kind : RawPtrKind) (place : Place)

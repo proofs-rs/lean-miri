@@ -28,16 +28,16 @@ structure VTableHooks (P S C F ABI : Type) where
   isDynamic : C → MIR.TyId → RvalueM S Bool
   memoryOffset : C → MemPlace P → Size → OffsetMode → MemPlaceMeta P → RvalueM S (MemPlace P)
   resolvePointer : C → Pointer (Option P) → RvalueM S (Except VTablePointerError (AllocId × Size))
-  globalVTable : C → AllocId → RvalueM S (Option (MIR.TyId × Nat))
+  globalVTable : C → AllocId → RvalueM S (Option (MIR.TyId × PredicateList))
   globalFunction : C → AllocId → RvalueM S (Option F)
-  predicates : C → Nat → RvalueM S (Array VTablePredicate)
+  predicates : C → PredicateList → RvalueM S (Array VTablePredicate)
   normalizePredicate : C → VTablePredicate → RvalueM S Nat
   layoutOf : C → MIR.TyId → RvalueM S (TyAndLayout MIR.TyId)
-  eraseAndAnonymize : C → MIR.TyId → Nat → RvalueM S (MIR.TyId × Nat)
+  eraseAndAnonymize : C → MIR.TyId → PredicateList → RvalueM S (MIR.TyId × PredicateList)
   ensureMonomorphicType : C → MIR.TyId → RvalueM S Unit
-  ensureMonomorphicDyn : C → Nat → RvalueM S Unit
+  ensureMonomorphicDyn : C → PredicateList → RvalueM S Unit
   globalSalt : C → RvalueM S Nat
-  reserveVTable : C → MIR.TyId → Nat → Nat → RvalueM S AllocId
+  reserveVTable : C → MIR.TyId → PredicateList → Nat → RvalueM S AllocId
   globalRootPointer : C → AllocId → RvalueM S (Pointer (Option P))
   entries : C → Option Nat → MIR.TyId → RvalueM S (Array (VTableEntry F))
   assertVirtualInstanceMatches : C → MIR.TyId → MIR.DefId → F → F → RvalueM S Unit
@@ -46,8 +46,8 @@ structure VTableHooks (P S C F ABI : Type) where
 machine-level dynamic layout needs no placeholder operational dictionary. -/
 structure VTableReadHooks (P S C : Type) where
   resolvePointer : C → Pointer (Option P) → RvalueM S (Except VTablePointerError (AllocId × Size))
-  globalVTable : C → AllocId → RvalueM S (Option (MIR.TyId × Nat))
-  predicates : C → Nat → RvalueM S (Array VTablePredicate)
+  globalVTable : C → AllocId → RvalueM S (Option (MIR.TyId × PredicateList))
+  predicates : C → PredicateList → RvalueM S (Array VTablePredicate)
   normalizePredicate : C → VTablePredicate → RvalueM S Nat
   layoutOf : C → MIR.TyId → RvalueM S (TyAndLayout MIR.TyId)
 
@@ -69,7 +69,7 @@ private def sortedPredicates (predicates : Array VTablePredicate) : List VTableP
 
 /-- Source ignores auto traits, sorts by compiler stable comparison, removes
 identical predicates, then normalizes each paired predicate before equality. -/
-def checkForTypeRead (h : VTableReadHooks P S C) (choice : C) (actual expected : Nat) : RvalueM S Unit := do
+def checkForTypeRead (h : VTableReadHooks P S C) (choice : C) (actual expected : PredicateList) : RvalueM S Unit := do
   let actual ← h.predicates choice actual
   let expected ← h.predicates choice expected
   let actual := sortedPredicates actual
@@ -81,7 +81,7 @@ def checkForTypeRead (h : VTableReadHooks P S C) (choice : C) (actual expected :
     if a != b then ub "InvalidVTableTrait"
 
 def getPtrVTableTypeRead (h : VTableReadHooks P S C) (choice : C)
-    (ptr : Pointer (Option P)) (expectedTrait : Option Nat) : RvalueM S MIR.TyId := do
+    (ptr : Pointer (Option P)) (expectedTrait : Option PredicateList) : RvalueM S MIR.TyId := do
   let resolution ← h.resolvePointer choice ptr
   let (id, offset) ← match resolution with
     | .ok result => pure result
@@ -95,25 +95,25 @@ def getPtrVTableTypeRead (h : VTableReadHooks P S C) (choice : C)
 /-- The interpreter consults the symbolic VTable allocation's type and layout;
 it does not trust or load the raw size/alignment words of arbitrary memory. -/
 def getSizeAndAlignRead (h : VTableReadHooks P S C) (choice : C)
-    (ptr : Pointer (Option P)) (expectedTrait : Option Nat) : RvalueM S (Size × Align) := do
+    (ptr : Pointer (Option P)) (expectedTrait : Option PredicateList) : RvalueM S (Size × Align) := do
   let ty ← getPtrVTableTypeRead h choice ptr expectedTrait
   let layout ← h.layoutOf choice ty
   if !layout.layout.isSized then invalid "there are no vtables for unsized types"
   pure (layout.layout.size, layout.layout.align.abi)
 
-def checkForType (h : VTableHooks P S C F A) (choice : C) (actual expected : Nat) : RvalueM S Unit :=
+def checkForType (h : VTableHooks P S C F A) (choice : C) (actual expected : PredicateList) : RvalueM S Unit :=
   checkForTypeRead h.readHooks choice actual expected
 
 def getPtrVTableType (h : VTableHooks P S C F A) (choice : C)
-    (ptr : Pointer (Option P)) (expectedTrait : Option Nat) : RvalueM S MIR.TyId :=
+    (ptr : Pointer (Option P)) (expectedTrait : Option PredicateList) : RvalueM S MIR.TyId :=
   getPtrVTableTypeRead h.readHooks choice ptr expectedTrait
 
 def getSizeAndAlign (h : VTableHooks P S C F A) (choice : C)
-    (ptr : Pointer (Option P)) (expectedTrait : Option Nat) : RvalueM S (Size × Align) :=
+    (ptr : Pointer (Option P)) (expectedTrait : Option PredicateList) : RvalueM S (Size × Align) :=
   getSizeAndAlignRead h.readHooks choice ptr expectedTrait
 
 def getPointer (h : VTableHooks P S C F A) (choice : C) (ty : MIR.TyId)
-    (dynType : Nat) : RvalueM S (Pointer (Option P)) := do
+    (dynType : PredicateList) : RvalueM S (Pointer (Option P)) := do
   let (ty, dynType) ← h.eraseAndAnonymize choice ty dynType
   h.ensureMonomorphicType choice ty
   h.ensureMonomorphicDyn choice dynType
@@ -146,7 +146,7 @@ validation is caller-selected; production call.rs validates at frame initializat
 Wrong/vacant/header/supertrait entries are UB, never callable functions. -/
 def getMethod (h : VTableHooks P S C F A)
     (validateABI : C → F → A → RvalueM S Unit) (choice : C)
-    (ptr : Pointer (Option P)) (expectedTrait : Nat) (principal : Option Nat)
+    (ptr : Pointer (Option P)) (expectedTrait : PredicateList) (principal : Option Nat)
     (index : Nat) (definition : MIR.DefId) (virtualInstance : F) (expectedABI : A) : RvalueM S F := do
   let ty ← getPtrVTableType h choice ptr (some expectedTrait)
   let entries ← h.entries choice principal ty
@@ -158,7 +158,7 @@ def getMethod (h : VTableHooks P S C F A)
 /-- Source unpack_dyn_trait operates only on an indirect dynamic place, then
 changes its layout at zero wrapping offset while clearing the metadata. -/
 def unpackDynTrait [PointerProvenance P] (h : VTableHooks P S C F A) (choice : C)
-    (op : OpTy P) (expectedTrait : Nat) : RvalueM S (OpTy P) := do
+    (op : OpTy P) (expectedTrait : PredicateList) : RvalueM S (OpTy P) := do
   if !(← h.isDynamic choice op.layout.ty) then invalid "unpack_dyn_trait requires dynamic type"
   let .indirect place := op.op | invalid "dynamic place must be indirect"
   let scalar ← match place.metadata.unwrapMeta with

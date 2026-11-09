@@ -27,9 +27,9 @@ with tempfile.TemporaryDirectory(prefix='lean-miri-constant-source-') as tmp:
     rust = Path(tmp) / 'probe.rs'
     exe = Path(tmp) / 'probe'
     rust.write_text(probe)
-    subprocess.run([str(root / '.cargo/bin/rustup'), 'run', 'miri-exporter-8144389c895d', 'rustc', '--edition=2024', '-Awarnings', str(rust), '-o', str(exe)], check=True, env=env)
+    subprocess.run([str(Path(env.get('CARGO_HOME', root / '.cargo')) / 'bin/rustup'), 'run', 'miri-exporter-8144389c895d', 'rustc', '--edition=2024', '-Awarnings', str(rust), '-o', str(exe)], check=True, env=env)
     expected = subprocess.check_output([str(exe)], text=True, env=env)
-    actual = subprocess.check_output([str(root / '.elan/bin/lake'), 'env', 'lean', '--run', 'tests/constant/SourceObservations.lean', sys.argv[1]], text=True, cwd=root, env=env)
+    actual = subprocess.check_output([str(Path(env['ELAN_HOME']) / 'bin/lake'), 'env', 'lean', '--run', 'tests/constant/SourceObservations.lean', sys.argv[1]], text=True, cwd=root, env=env)
     if actual != expected:
         raise SystemExit(f'source observations differ\nRust:\n{expected}\nLean:\n{actual}')
 print('matched all five const_val_to_op conversion branches and root-pointer effects against extracted pinned source')

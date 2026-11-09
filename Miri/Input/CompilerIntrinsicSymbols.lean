@@ -15,11 +15,7 @@ private def lift (value : Except String A) : MachineHooks.M K U A :=
 def typeHash (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except String U128 := do
   let source ← p.runtime.node ty |>.mapError toString
   let some facts := source.compilerFacts | throw "compiler TypeId hash evidence missing"
-  let query ← facts.payload.getObjVal? "type_id_hash"
-  let text ← query.getStr?
-  unless !text.isEmpty && text.toList.all (fun c => c >= '0' && c <= '9') do
-    throw "invalid compiler TypeId hash decimal encoding"
-  let some value := text.toNat? | throw "invalid compiler TypeId hash value"
+  let some value := facts.typeIdHash | throw "compiler TypeId hash evidence missing"
   unless value < 2^128 do throw "compiler TypeId hash exceeds u128"
   pure (BitVec.ofNat 128 value)
 

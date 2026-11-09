@@ -23,7 +23,7 @@ inductive CastTypeInfo where
   | adt (definition : DefId)
   | array (element : TyId) (length : UInt64)
   | slice (element : TyId)
-  | dynamic (predicates : Nat)
+  | dynamic (predicates : PredicateList)
   deriving DecidableEq, Repr
 
 structure CastHooks (P S C V : Type) where
@@ -57,13 +57,13 @@ structure CastHooks (P S C V : Type) where
   projectWrite : C → V → Nat → RvalueM S V
   fieldLayout : C → TyAndLayout TyId → Nat → RvalueM S (TyAndLayout TyId)
   lockstepTails : C → TyId → TyId → RvalueM S (TyId × TyId)
-  vtableType : C → Pointer (Option P) → Option Nat → RvalueM S TyId
-  vtablePointer : C → TyId → Nat → RvalueM S (Pointer (Option P))
-  principal : C → Nat → RvalueM S (Option Nat)
+  vtableType : C → Pointer (Option P) → Option PredicateList → RvalueM S TyId
+  vtablePointer : C → TyId → PredicateList → RvalueM S (Pointer (Option P))
+  principal : C → PredicateList → RvalueM S (Option Nat)
   vtableEntries : C → Option Nat → TyId → RvalueM S (Array (VTableEntry CallInstance))
   supertraitSlot : C → TyId → TyId → RvalueM S (Option Nat)
   eraseSelfTraitRef : C → Nat → RvalueM S Nat
-  normalizePrincipal : C → Nat → RvalueM S (Option Nat)
+  normalizePrincipal : C → PredicateList → RvalueM S (Option Nat)
 
 namespace Cast
 private def invalid (message : String) : RvalueM S A := throw (.invalidProgram message)

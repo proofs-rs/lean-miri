@@ -114,8 +114,8 @@ private def hasBacktraceRows (body : LoweredBody) : Bool :=
 
 def main (args : List String) : IO Unit := do
   let some path := args.head? | throw (IO.userError "retained producer export path required")
-  let decoded ← must (decodeRuntimeJson (← IO.FS.readFile path))
-  let program ← must (lowerCoreProgram decoded.document)
+  let decoded ← must (decodeJson (← IO.FS.readFile path))
+  let program ← must (lowerProgram decoded.document)
   check (signature (CompilerBacktraceSource.prepare program) == signature (legacyPrepare program))
     "ordinary preparation differs from ordered scan reference"
 

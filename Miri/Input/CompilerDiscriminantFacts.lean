@@ -7,12 +7,12 @@ compiler u128 bits; declaration indices, encoded tags and signed discriminants
 are not conflated. -/
 namespace Miri.Input.CompilerDiscriminantFacts
 open Lean Miri.ABI Miri.Interpreter
-private def data (context : CompilerFacts.Context) (id : TypeId) : Except String Json := do
+private def data (context : CompilerFacts.Context) (id : TypeId) : Except String DiscriminantInfo := do
   let source ← context.runtime.node id |>.mapError toString
   let some facts := source.compilerFacts | throw "missing discriminant compiler facts"
   unless facts.inputTypeId == id && facts.typingEnvironment == "fully_monomorphized" do
     throw "discriminant compiler environment/type key mismatch"
-  let query ← facts.payload.getObjVal? "discriminants"
+  let some query := facts.discriminants | throw "missing discriminant compiler query"
   pure query
 
 def discriminantLayout (context : CompilerFacts.Context) (ty : TypeId) :
@@ -29,26 +29,20 @@ source nondefault-address-space limitation), never a guessed usize/layout. -/
 def tagLayout (context : CompilerFacts.Context) (tag : Scalar) : Except String (TyAndLayout TypeId) := do
   let key ← primitiveKey tag.primitive
   let refs ← context.runtime.source.raw.getObjVal? "compiler_runtime_primitives"
-  let id ← (← (← refs.getObjVal? key).getObjVal? "type_id").getNat?
+  let id ← (← refs.getObjVal? key).getNat?
   CompilerFacts.layoutOf context id
-private def decodeValue (context : CompilerFacts.Context) (j : Json) :
-    Except String (Nat × TypeId × U128) := do
-  let variant ← (← j.getObjVal? "variant").getNat?
-  unless variant < 2^32 do throw "compiler variant index exceeds u32"
-  let ty ← (← (← j.getObjVal? "type").getObjVal? "type_id").getNat?
-  let _ ← context.runtime.node ty |>.mapError toString
-  let text ← (← j.getObjVal? "bits").getStr?
-  let some bits := text.toNat? | throw "invalid compiler discriminant u128 bits"
-  unless bits < 2^128 do throw "compiler discriminant exceeds u128"
-  pure (variant,ty,BitVec.ofNat 128 bits)
-private def values (context : CompilerFacts.Context) (j : Json) :
-    Except String (Array (Nat × TypeId × U128)) := do
-  (← (← j.getObjVal? "values").getArr?).mapM (decodeValue context)
+private def values (context : CompilerFacts.Context) (info : DiscriminantInfo) :
+    Except String (Array (Nat × TypeId × U128)) :=
+  info.values.mapM fun value => do
+    unless value.variant < 2^32 do throw "compiler variant index exceeds u32"
+    let _ ← context.runtime.node value.typeId |>.mapError toString
+    unless value.bits < 2^128 do throw "compiler discriminant exceeds u128"
+    pure (value.variant,value.typeId,BitVec.ofNat 128 value.bits)
 
 def discriminantValue (context : CompilerFacts.Context) (ty variant : Nat) :
     Except String (Option (TypeId × U128)) := do
   let info ← data context ty
-  let has ← (← info.getObjVal? "has_discriminants").getBool?
+  let has := info.hasDiscriminants
   let entries ← values context info
   if !has then
     unless entries.isEmpty do throw "non-discriminant type has discriminant values"
@@ -62,7 +56,7 @@ def discriminantValue (context : CompilerFacts.Context) (ty variant : Nat) :
 def variantForDiscriminant (context : CompilerFacts.Context) (ty : TypeId) (bits : U128) :
     Except String (Option Nat) := do
   let info ← data context ty
-  unless (← (← info.getObjVal? "has_discriminants").getBool?) do
+  unless info.hasDiscriminants do
     throw "source invariant: tagged layout has no ADT/coroutine discriminants"
   let entries ← values context info
   let matching := entries.filter (·.2.2 == bits)
@@ -71,9 +65,8 @@ def variantForDiscriminant (context : CompilerFacts.Context) (ty : TypeId) (bits
 
 def adtVariantCount (context : CompilerFacts.Context) (ty : TypeId) : Except String Nat := do
   let info ← data context ty
-  let count ← info.getObjVal? "adt_variant_count"
-  unless count != Json.null do throw "source invariant: ADT variant count requested for non-ADT"
-  count.getNat?
+  let some count := info.adtVariantCount | throw "source invariant: ADT variant count requested for non-ADT"
+  pure count
 private def lift (value : Except String A) : EStateM StepError S A :=
   match value with
   | .ok value => pure value

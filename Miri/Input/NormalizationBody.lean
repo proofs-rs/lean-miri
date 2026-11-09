@@ -1,24 +1,9 @@
-import Lean
+import Miri.Input.Model.Types
 
-/-! Resolve the body carried by compiler normalization evidence.
-
-Legacy exports embed the normalized body. Compact exports may instead point
-at the source body's top-level JSON when the two complete serialized bodies
-are equal. Unknown references and malformed encodings fail closed. -/
+/-! Normalization evidence refers directly to the immutable body pool. -/
 namespace Miri.Input.NormalizationBody
-open Lean
-
-def resolve (normalization sourceBody : Json) : Except String Json := do
-  match normalization.getObjVal? "body", normalization.getObjVal? "body_ref" with
-  | .ok body, .error _ =>
-    let _ ← body.getObj?
-    pure body
-  | .error _, .ok reference => do
-    unless (← reference.getStr?) == "source_body" do
-      throw "unknown compiler normalization body reference"
-    let _ ← sourceBody.getObj?
-    pure sourceBody
-  | .ok _, .ok _ => throw "normalization evidence has both body and body_ref"
-  | .error _, .error _ => throw "normalization evidence has neither body nor body_ref"
+def resolve (id : BodyId) (bodies : Array Body) : Except String Body := do
+  let some body := bodies[id]? | throw s!"normalized compiler body ID {id} out of bounds"
+  pure body
 
 end Miri.Input.NormalizationBody

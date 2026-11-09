@@ -15,7 +15,7 @@ inductive ReceiverKind where
   deriving DecidableEq, Repr
 
 structure DynamicData where
-  predicates : Nat
+  predicates : PredicateList
   principal : Option Nat
 
 /-- SourceScopeData fields consumed by Body::caller_location_span. -/
@@ -38,6 +38,7 @@ structure CompilerHooks (S C : Type) where
   rebaseVirtualArgs : Array GenericArg → DefId → TyId → CallM S (Array GenericArg)
   expectResolveForVTable : C → DefId → Array GenericArg → CallM S CallInstance
   resolveDropGlue : TyId → CallM S CallInstance
+  instanceArgs : CallInstance → CallM S (Array GenericArg)
   requiresCallerLocation : CallInstance → CallM S Bool
   sourceScope : BodyIdentity → CallInstance → Body → Nat → CallM S CallerScope
   unitLayout : CallM S LocalLayout
@@ -124,7 +125,7 @@ Compiler rebasing preserves all method-level generic arguments and shim kind. -/
 def assertConcrete (compiler : CompilerHooks S C) (choice : C) (dynTy : TyId)
     (definition : DefId) (virtualInstance concreteInstance : CallInstance) : CallM S Unit := do
   let traitDef ← compiler.parentTrait definition
-  let args ← compiler.rebaseVirtualArgs virtualInstance.args traitDef dynTy
+  let args ← compiler.rebaseVirtualArgs (← compiler.instanceArgs virtualInstance) traitDef dynTy
   let expected ← compiler.expectResolveForVTable choice definition args
   if concreteInstance != expected then invalid "virtual/concrete compiler instance mismatch"
 
@@ -228,6 +229,7 @@ def bind [PointerProvenance P] (h : Hooks P S C E) (budget : Nat)
     resolveVirtual := fun c virtualInstance definition index abi args =>
       resolveVirtual h c budget virtualInstance definition index abi args
     callerLocation := callerLocation h budget
+    instanceArgs := h.compiler.instanceArgs
     requiresCallerLocation := h.compiler.requiresCallerLocation
     isDynamic := fun ty => return (← h.compiler.classifyReceiver ty) == .dynamic
     unpackDynForDrop := unpackDynForDrop h

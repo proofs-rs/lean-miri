@@ -41,6 +41,9 @@ structure Compiler (S C Extern : Type) where
   functionSignature : C → LocalLayout → M S (Nat × Extern)
   functionKind : TyId → M S CallFunctionKind
   resolve : C → DefId → Array GenericArg → M S CallInstance
+  instanceKind : CallInstance → M S CallInstanceKind
+  instanceArgs : CallInstance → M S (Array GenericArg)
+  itemInstance : DefId → Array GenericArg → M S CallInstance
   fnAbiOfFnPtr : C → LocalLayout → Array TyId → M S (FnAbi TyId)
   fnAbiOfInstance : C → CallInstance → Array TyId → M S (FnAbi TyId)
   isRustCall : Extern → Bool
@@ -60,7 +63,7 @@ structure Hooks (S C Other Extern : Type) where
 ClosureOnce avoids the def-kind query; the first ABI argument is touched only
 for closure-like instances, and upvars only for a Closure type. -/
 def nonCapturingClosure (h : Compiler S C X) (callee : CallInstance) (abi : FnAbi TyId) : M S Bool := do
-  let closureLike ← match callee.kind with
+  let closureLike ← match ← h.instanceKind callee with
     | .Shim (.ClosureOnce ..) => pure true
     | _ => h.isClosureLike callee
   unless closureLike do return false

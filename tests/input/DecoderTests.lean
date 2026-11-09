@@ -1,14 +1,15 @@
-import Miri.Input
+import Miri.Input.Decoder
 
 open Lean
 open Miri.Input
+open Miri.Input.DecoderValues
 
 private def fail (message : String) : IO α := throw (IO.userError message)
 
 private def check (condition : Bool) (message : String) : IO Unit :=
   if condition then pure () else fail message
 
-private def field (j : Json) (key : String) : Except String Json :=
+private def getField (j : Json) (key : String) : Except String Json :=
   j.getObjVal? key |>.mapError fun error => s!"missing field `{key}`: {error}"
 
 private def array (j : Json) : Except String (Array Json) :=
@@ -66,17 +67,17 @@ private def number (value : Nat) : Json := toJson value
 private def string (value : String) : Json := toJson value
 
 private def rewriteFirstBody (doc : Json) (rewrite : Json → Except String Json) : Except String Json := do
-  let bodies ← array (← field doc "bodies")
+  let bodies ← array (← getField doc "bodies")
   let first ← getAt bodies 0
   setField doc "bodies" (toJson (← updateAt bodies 0 (← rewrite first)))
 
 private def rewriteFirstBlock (body : Json) (rewrite : Json → Except String Json) : Except String Json := do
-  let blocks ← array (← field body "basic_blocks")
+  let blocks ← array (← getField body "basic_blocks")
   let first ← getAt blocks 0
   setField body "basic_blocks" (toJson (← updateAt blocks 0 (← rewrite first)))
 
 private def rewriteFirstTerminator (block : Json) (rewrite : Json → Except String Json) : Except String Json := do
-  let term ← field block "terminator"
+  let term ← getField block "terminator"
   setField block "terminator" (← rewrite term)
 
 private def malformedResult (json : Json) : Bool :=
@@ -134,19 +135,23 @@ private def must (result : Except String α) : IO α :=
   | .ok value => pure value
   | .error message => fail message
 
+private def mirValues (document : ImportDocument) : Array TypedValue :=
+  document.bodies.flatMap fun body => body.blocks.flatMap fun block =>
+    block.statements.map (·.value) |>.push block.terminator.value
+
+private def malformedProbe (input : Json) : Bool :=
+  match input.getObjVal? "typed_tag_probe" with
+  | .error _ => true
+  | .ok value => !(DecoderValues.decodeValue value "$probe").isOk
+
 def main (args : List String) : IO UInt32 := do
   let path ← match args with
     | value :: _ => pure value
-    | [] => fail "usage: DecoderTests <schema-v3-export.json>"
+    | [] => fail "usage: DecoderTests <schema-v4-export.json>"
   let source ← IO.FS.readFile path
   let original ← match Json.parse source with
     | .ok value => pure value
     | .error error => fail s!"invalid fixture JSON: {error}"
-  -- Mutate semantic payloads, after validating and resolving the transport.
-  -- Keep a valid empty catalog so malformed cases reach their intended check.
-  let original ← must (SharedPayloads.resolveCatalog original)
-  let original ← must (setField original "shared_payloads"
-    (object [("schema_version", number 2), ("nodes", toJson (#[] : Array Json))]))
 
   let decoded ← match decodeJson source with
     | .ok value => pure value
@@ -155,17 +160,18 @@ def main (args : List String) : IO UInt32 := do
   check (document.producer.miriCommit == expectedMiriCommit) "wrong Miri pin in decoded document"
   check (document.producer.rustcCommit == expectedRustcCommit) "wrong rustc pin in decoded document"
   check (!document.bodies.isEmpty && !document.types.isEmpty) "typed body/type graph is empty"
-  check (document.instances.any fun inst => inst.body.isSome) "instance MIR body was not decoded into typed Body"
+  check (document.instances.any fun inst => inst.bodyId.isSome) "instance MIR body was not decoded into typed Body"
   check (document.instances.any fun inst => inst.kind == .instanceMir && inst.bodyInstantiation.isSome &&
       inst.instanceArgsAreMonomorphic == some true)
     "substituted instance body metadata was not decoded"
-  check (document.bodies.any fun body => body.promotedBodies.any fun promoted => promoted.body.isSome)
+  check (document.bodyRoots.any fun body => body.promotedBodies.any fun promoted => promoted.bodyId.isSome)
     "promoted MIR bodies were not decoded into typed body cores"
-  check (containsBinary .Lt document.typedTree) "binary operator did not use the canonical BinOp type"
-  check (containsBinary .AddWithOverflow document.typedTree) "overflowing binary operator was not typed"
-  check (containsUnary .Not document.typedTree) "unary operator did not use the canonical UnOp type"
-  check (containsEnumTag .borrowKind document.typedTree) "borrow kinds were not decoded as typed enum tags"
-  check (containsEnumTag .safety document.typedTree) "function safety tags were not retained as typed values"
+  check ((mirValues document).any (containsBinary .Lt)) "binary operator did not use the canonical BinOp type"
+  check ((mirValues document).any (containsBinary .AddWithOverflow)) "overflowing binary operator was not typed"
+  check ((mirValues document).any (containsUnary .Not)) "unary operator did not use the canonical UnOp type"
+  check ((mirValues document).any (containsEnumTag .borrowKind)) "borrow kinds were not decoded as typed enum tags"
+  check (document.types.any fun node => node.signature.any fun signature =>
+    signature.safety.tag == "safe" || signature.safety.tag == "unsafe") "function safety tags were not retained as typed values"
   check (document.allocations.any fun node => node.memory.isSome) "structured allocation memory was not decoded"
   check (document.allocations.any fun node => match node.data with | some (.static _) => true | _ => false)
     "static initializer allocation metadata was not decoded"
@@ -182,7 +188,7 @@ def main (args : List String) : IO UInt32 := do
     "enum ADT name was not decoded to its typed tag"
   check (!document.functionAbis.isEmpty)
     "function ABI calling convention was not decoded to a known enum"
-  check (document.types.any fun node => match node.layout.variantsLayout with
+  check (document.layouts.any fun node => match node.variantsLayout with
     | some variants => variants.tagEncoding.isSome
     | none => false) "structured variant tag-encoding metadata was not decoded"
   for allocation in document.allocations do
@@ -201,15 +207,12 @@ def main (args : List String) : IO UInt32 := do
   let syntheticFunction := object [
     ("allocation_id", number document.allocations.size),
     ("kind", string "function"),
-    ("instance_id", number 0),
-    ("instance_def_id", object [("crate", number 0), ("index", number 7)]),
-    ("instance_def_path", string "fixture::root"),
-    ("generic_args", toJson (#[] : Array Json))]
+    ("instance_id", number 0)]
   let syntheticTypeId := object [
     ("allocation_id", number (document.allocations.size + 1)),
     ("kind", string "type_id"),
-    ("type", object [("type_id", number 0)])]
-  let allocations ← must (array (← must (field original "allocations")))
+    ("type", number 0)]
+  let allocations ← must (array (← must (getField original "allocations")))
   let expandedAllocations := allocations.push syntheticFunction |>.push syntheticTypeId
   let withSyntheticAllocations ← must (setField original "allocations" (toJson expandedAllocations))
   let allocationDataTest ← match decodeJson withSyntheticAllocations.compress with
@@ -228,11 +231,17 @@ def main (args : List String) : IO UInt32 := do
   check (malformedResult unknownBorrow) "unknownBorrow: failed input was accepted"
 
   let unknownSafety ← must <| do
-    let replacement := object [("kind", string "future_safety")]
-    let (changed, found) ← replaceFirstField original "safety" replacement
-    if !found then throw "fixture does not contain a safety tag"
-    pure changed
-  check (malformedResult unknownSafety) "unknownSafety: failed input was accepted"
+    let some index := document.types.toList.findIdx? (·.signature.isSome)
+      | throw "fixture does not contain a typed function signature"
+    let types ← array (← getField original "types")
+    let node ← getAt types index
+    let shape ← getField node "shape"
+    let signature ← getField shape "signature"
+    let signature ← setField signature "safety" (object [("kind", string "future_safety")])
+    let shape ← setField shape "signature" signature
+    let node ← setField node "shape" shape
+    setField original "types" (toJson (← updateAt types index node))
+  check (malformedResult unknownSafety) "unknown function safety was accepted"
 
   let incompleteCanonicalAbi ← must <| do
     let replacement := object [("kind", string "arm")]
@@ -241,23 +250,21 @@ def main (args : List String) : IO UInt32 := do
     pure changed
   check (malformedResult incompleteCanonicalAbi) "incompleteCanonicalAbi: failed input was accepted"
 
-  let nicheTypeIndex := document.types.toList.findIdx? (fun node =>
-    match node.layout.variantsLayout with
+  let nicheTypeIndex := document.layouts.toList.findIdx? (fun node =>
+    match node.variantsLayout with
     | some variants => variants.tagEncoding.isSome
     | none => false)
   match nicheTypeIndex with
   | some index =>
     let badTagEncoding ← must <| do
-      let types ← array (← field original "types")
-      let typeNode ← getAt types index
-      let layout ← field typeNode "layout"
-      let variants ← field layout "variants"
-      let encoding ← field variants "tag_encoding"
+      let layouts ← array (← getField original "layouts")
+      let layout ← getAt layouts index
+      let variants ← getField layout "variants"
+      let encoding ← getField variants "tag_encoding"
       let corrupt ← setField encoding "niche_start" (string "not-a-number")
       let variants ← setField variants "tag_encoding" corrupt
       let layout ← setField layout "variants" variants
-      let typeNode ← setField typeNode "layout" layout
-      setField original "types" (toJson (← updateAt types index typeNode))
+      setField original "layouts" (toJson (← updateAt layouts index layout))
     check (malformedResult badTagEncoding) "malformed u128 niche encoding was accepted"
   | none => fail "fixture did not exercise a structured tag encoding"
 
@@ -267,17 +274,31 @@ def main (args : List String) : IO UInt32 := do
     pure changed
   check (malformedResult badRelocation) "relocation bytes outside the allocation were accepted"
 
-  let producer ← must (field original "producer")
+  let producer ← must (getField original "producer")
   let badProducer ← must (setField producer "rustc_commit" (string "not-the-pinned-rustc"))
   let badPin ← must (setField original "producer" badProducer)
   check (malformedResult badPin) "wrong rustc pin was accepted"
 
-  let danglingType ← must (setField original "synthetic_type_ref" (object [("type_id", number 999999)]))
+  let danglingType ← must <| rewriteFirstBody original fun body => do
+    let locals ← array (← getField body "locals")
+    let first ← getAt locals 0
+    let first ← setField first "type" (number 999999)
+    setField body "locals" (toJson (← updateAt locals 0 first))
   check (malformedResult danglingType) "dangling type reference was accepted"
-  let danglingAlloc ← must (setField original "synthetic_allocation_ref" (object [("allocation_id", number 999999)]))
+  let danglingAlloc ← must <| do
+    let allocations ← array (← getField original "allocations")
+    let some index := document.allocations.toList.findIdx? (fun node =>
+      node.memory.any fun memory => !memory.relocations.isEmpty)
+      | throw "fixture contains no relocation target"
+    let allocation ← getAt allocations index
+    let relocations ← array (← getField allocation "relocations")
+    let first ← getAt relocations 0
+    let first ← setField first "target" (number 999999)
+    let allocation ← setField allocation "relocations" (toJson (← updateAt relocations 0 first))
+    setField original "allocations" (toJson (← updateAt allocations index allocation))
   check (malformedResult danglingAlloc) "dangling allocation reference was accepted"
 
-  let typesJson ← must (field original "types")
+  let typesJson ← must (getField original "types")
   let types ← must (array typesJson)
   let secondType ← must (getAt types 1)
   let duplicateType ← must (setField secondType "type_id" (number 0))
@@ -285,7 +306,7 @@ def main (args : List String) : IO UInt32 := do
   let duplicateId ← must (setField original "types" (toJson duplicateTypes))
   check (malformedResult duplicateId) "duplicate graph-node ID was accepted"
 
-  let allocationsJson ← must (field original "allocations")
+  let allocationsJson ← must (getField original "allocations")
   let allocations ← must (array allocationsJson)
   let firstAllocation ← must (getAt allocations 0)
   let duplicateAllocation ← must (setField firstAllocation "allocation_id" (number 1))
@@ -293,7 +314,7 @@ def main (args : List String) : IO UInt32 := do
   let duplicateAllocationId ← must (setField original "allocations" (toJson duplicateAllocations))
   check (malformedResult duplicateAllocationId) "duplicate allocation ID was accepted"
 
-  let instancesJson ← must (field original "instances")
+  let instancesJson ← must (getField original "instances")
   let instances ← must (array instancesJson)
   let secondInstance ← must (getAt instances 1)
   let duplicateInstance ← must (setField secondInstance "instance_id" (number 0))
@@ -301,11 +322,15 @@ def main (args : List String) : IO UInt32 := do
   let duplicateInstanceId ← must (setField original "instances" (toJson duplicateInstances))
   check (malformedResult duplicateInstanceId) "duplicate instance ID was accepted"
 
-  let danglingInstance ← must (setField original "synthetic_instance_ref" (object [("instance_id", number 999999)]))
+  let danglingInstance ← must <| do
+    let roots ← array (← getField original "body_roots")
+    let root ← getAt roots 0
+    let root ← setField root "entry_instance" (number 999999)
+    setField original "body_roots" (toJson (← updateAt roots 0 root))
   check (malformedResult danglingInstance) "dangling instance reference was accepted"
 
   let badLocal ← must <| rewriteFirstBody original fun body => do
-    let locals ← array (← field body "locals")
+    let locals ← array (← getField body "locals")
     let firstLocal ← getAt locals 0
     let changed ← setField firstLocal "local" (number 999999)
     setField body "locals" (toJson (← updateAt locals 0 changed))
@@ -314,7 +339,7 @@ def main (args : List String) : IO UInt32 := do
   let badLocalReference ← must <| rewriteFirstBody original fun body =>
     rewriteFirstBlock body fun block =>
       rewriteFirstTerminator block fun terminator => do
-        let kind ← field terminator "kind"
+        let kind ← getField terminator "kind"
         let changed ← setField kind "local" (number 999999)
         setField terminator "kind" changed
   check (malformedResult badLocalReference) "out-of-range local reference was accepted"
@@ -329,7 +354,7 @@ def main (args : List String) : IO UInt32 := do
   let badProjection ← must <| rewriteFirstBody original fun body =>
     rewriteFirstBlock body fun block =>
       rewriteFirstTerminator block fun terminator => do
-        let kind ← field terminator "kind"
+        let kind ← getField terminator "kind"
         let withProjection ← setField kind "synthetic_place" (object [("projection", toJson #[object [("kind", string "Field"), ("index", number 0)]])])
         setField terminator "kind" withProjection
   check (malformedResult badProjection) "incomplete projection payload was accepted"
@@ -377,56 +402,55 @@ def main (args : List String) : IO UInt32 := do
     ("coverage_statement", object [
       ("variant", string "Coverage"), ("coverage", object [
         ("kind", string "point"), ("point_kind", string "expr"),
-        ("hir_id", object [("owner_def_id", string "0:1"), ("local_id", number 7)])])]),
+        ("hir_id", object [("owner_def_id", number 0), ("local_id", number 7)])])]),
     ("binary", object [("kind", string "BinaryOp"), ("operator", object [("kind", string "add")])]),
     ("unary", object [("kind", string "UnaryOp"), ("operator", object [("kind", string "not")])])]
   let taggedInput ← must (setField original "typed_tag_probe" typedTagProbe)
-  let taggedResult ← match decodeJson taggedInput.compress with
+  let taggedResult ← match DecoderValues.decodeValue typedTagProbe "$probe" with
     | .ok result => pure result
     | .error error => fail s!"known pinned MIR tags were rejected: {error}"
   for category in [.mirPhase, .mirPhaseStage, .withRetag, .runtimeCheck,
       .fakeReadCause, .callSource, .backwardDropReason, .regionKind,
       .boundRegionKind, .boundVarIndexKind, .variance, .coverageKind,
       .coveragePointKind, .fakeBorrowRetagMode] do
-    check (containsEnumTag category taggedResult.document.typedTree)
+    check (containsEnumTag category taggedResult)
       "MIR tag family was not preserved as a typed value"
-  check (containsUserTypeProjection taggedResult.document.typedTree)
+  check (containsUserTypeProjection taggedResult)
     "AscribeUserType projection wrapper was not decoded to its dedicated typed record"
-  check (hasTypedUserTypeProjection taggedResult.document.typedTree)
+  check (hasTypedUserTypeProjection taggedResult)
     "AscribeUserType projection variants or payload fields were not preserved exactly"
-  check (containsBinary .Add taggedResult.document.typedTree)
+  check (containsBinary .Add taggedResult)
     "tagged lower-snake binary operator did not map to canonical BinOp"
-  let unsupportedRegion ← must (setField taggedInput "unsupported_region"
-    (object [("kind", string "inference_variable"), ("index", number 3)]))
-  check (malformedResult unsupportedRegion) "unsupported region variable was accepted"
+  let unsupportedRegion := object [("kind", string "inference_variable"), ("index", number 3)]
+  check (!(DecoderValues.decodeValue unsupportedRegion "$region" .any (some .regionKind)).isOk) "unsupported region variable was accepted"
 
   let malformedUserTypeProjection ← must <| do
     let (changed, found) ← replaceFirstField taggedInput "base_index" (string "not-an-index")
     if !found then throw "typed tag probe lost its user-type projection base index"
     pure changed
-  check (malformedResult malformedUserTypeProjection)
+  check (malformedProbe malformedUserTypeProjection)
     "malformed user-type projection annotation index was accepted"
 
   let unknownCoverageTag ← must <| do
-    let coverage ← field taggedInput "typed_tag_probe"
+    let coverage ← getField taggedInput "typed_tag_probe"
     let future := object [
       ("variant", string "Coverage"), ("coverage", object [("kind", string "future_coverage_kind")])]
     let changedProbe ← setField coverage "coverage_statement" future
     setField taggedInput "typed_tag_probe" changedProbe
-  check (malformedResult unknownCoverageTag) "unknownCoverageTag: failed input was accepted"
+  check (malformedProbe unknownCoverageTag) "unknownCoverageTag: failed input was accepted"
 
   let unsupportedOperator ← must <| do
     let replacement := object [("kind", string "future_binary_operator")]
-    let (changed, found) ← replaceFirstField taggedInput "operator" replacement
+    let (changed, found) ← replaceFirstField typedTagProbe "operator" replacement
     if !found then throw "typed tag probe lost its binary operator"
-    pure changed
-  check (malformedResult unsupportedOperator) "unsupportedOperator: failed input was accepted"
+    setField taggedInput "typed_tag_probe" changed
+  check (malformedProbe unsupportedOperator) "unsupportedOperator: failed input was accepted"
 
   let inconsistentRetag ← must <| do
-    let (changed, found) ← replaceFirstField taggedInput "performs_retag" (Json.bool false)
+    let (changed, found) ← replaceFirstField typedTagProbe "performs_retag" (Json.bool false)
     if !found then throw "typed tag probe lost its WithRetag witness"
-    pure changed
-  check (malformedResult inconsistentRetag) "inconsistentRetag: failed input was accepted"
+    setField taggedInput "typed_tag_probe" changed
+  check (malformedProbe inconsistentRetag) "inconsistentRetag: failed input was accepted"
 
   let unknownIntegerType ← must <| do
     let (changed, found) ← replaceFirstField original "signed_kind" (string "i256")
@@ -443,26 +467,28 @@ def main (args : List String) : IO UInt32 := do
   let missingRuntimeCheckWitness ← must <| do
     -- Target the MIR witness, independently of compiler session catalogs
     -- which also contain source `enabled` booleans.
-    let probe ← field taggedInput "typed_tag_probe"
-    let operand ← field probe "runtime_checks"
-    let witness ← field operand "check"
+    let probe ← getField taggedInput "typed_tag_probe"
+    let operand ← getField probe "runtime_checks"
+    let witness ← getField operand "check"
     let witness ← setField witness "enabled" Json.null
     let operand ← setField operand "check" witness
     let probe ← setField probe "runtime_checks" operand
     setField taggedInput "typed_tag_probe" probe
-  check (malformedResult missingRuntimeCheckWitness) "missingRuntimeCheckWitness: failed input was accepted"
+  check (malformedProbe missingRuntimeCheckWitness) "missingRuntimeCheckWitness: failed input was accepted"
 
-  let firstBody ← must (getAt (← must (array (← must (field original "bodies")))) 0)
-  let rootPath ← must (field firstBody "def_path")
-  let rootId ← must (field firstBody "def_id")
+  let firstRoot ← must (getAt (← must (array (← must (getField original "body_roots")))) 0)
+  let rootPath ← must (getField firstRoot "def_path")
+  let rootId ← must (getField firstRoot "def_id")
   let rootedScope := object [
     ("kind", string "rooted_structural_closure"),
     ("semantics", string "structural_export_closure_only"),
-    ("roots", toJson #[object [("def_path", rootPath), ("def_id", rootId)]]),
-    ("unresolved_obligations", toJson (#[] : Array Json))]
+    ("roots", toJson #[object [("def_path", rootPath), ("def_id", rootId)]])]
   let scopedButIncompleteGraph ← must (setField original "selected_scope" rootedScope)
-  let scopedButIncompleteGraph ← must (setField scopedButIncompleteGraph "failed_catalog"
-    (object [("type_id", number 999999999)]))
+  let scopedButIncompleteGraph ← must <| do
+    let types ← array (← getField scopedButIncompleteGraph "types")
+    let first ← getAt types 0
+    let first ← setField first "layout" (number 999999999)
+    setField scopedButIncompleteGraph "types" (toJson (← updateAt types 0 first))
   check (malformedResult scopedButIncompleteGraph) "selected scope erased failed catalog data"
 
   let scalar := object [
@@ -479,23 +505,23 @@ def main (args : List String) : IO UInt32 := do
   let minimalType := object [
     ("type_id", number 0), ("display", string "u8"),
     ("shape", object [("kind", string "uint"), ("unsigned_kind", string "u8")]),
-    ("layout", minimalLayout)]
-  let minimalRootId := object [("crate", number 0), ("index", number 1)]
+    ("layout", number 0)]
+  let minimalRootId := number 0
   let minimalRootPath := string "fixture::root"
   -- Reuse real compiler source envelopes. The synthetic graph must obey the
   -- same required metadata schema as compiler-produced bodies.
-  let originalBodies ← must (array (← must (field original "bodies")))
+  let originalBodies ← must (array (← must (getField original "bodies")))
   let sourceBody ← must (getAt originalBodies 0)
-  let sourceLocals ← must (array (← must (field sourceBody "locals")))
+  let sourceLocals ← must (array (← must (getField sourceBody "locals")))
   let sourceLocal ← must (getAt sourceLocals 0)
-  let sourceInfo ← must (field sourceLocal "source_info")
-  let bodyPhase ← must (field sourceBody "phase")
-  let sourceScopes ← must (field sourceBody "source_scopes")
+  let sourceInfo ← must (getField sourceLocal "source_info")
+  let bodyPhase ← must (getField sourceBody "phase")
+  let sourceScopes ← must (getField sourceBody "source_scopes")
   let minimalBody := object [
     ("def_id", minimalRootId), ("def_path", minimalRootPath), ("arg_count", number 0),
     ("phase", bodyPhase), ("spread_arg", Json.null), ("injection_phase", Json.null),
     ("source_scopes", sourceScopes),
-    ("locals", toJson #[object [("local", number 0), ("type", object [("type_id", number 0)]),
+    ("locals", toJson #[object [("local", number 0), ("type", number 0),
       ("source_info", sourceInfo)]]),
     ("basic_blocks", toJson #[object [
       ("block", number 0), ("is_cleanup", Json.bool false), ("statements", toJson (#[] : Array Json)),
@@ -507,14 +533,21 @@ def main (args : List String) : IO UInt32 := do
     ("unresolved_obligations", toJson (#[] : Array Json))]
   let minimalDocument := object [
     ("schema", string expectedSchema), ("schema_version", number expectedSchemaVersion),
-    ("shared_payloads", object [("schema_version", number 2), ("nodes", toJson (#[] : Array Json))]),
+    ("definitions", toJson #[object [("crate", number 0), ("index", number 1)]]),
+    ("type_constants", toJson (#[] : Array Json)),
+    ("layouts", toJson #[minimalLayout]),
+    ("spans", getField original "spans" |>.toOption.getD (.arr #[])),
+    ("fn_abis", toJson (#[] : Array Json)),
     ("producer", object [
       ("miri_commit", string expectedMiriCommit), ("rustc_commit", string expectedRustcCommit),
       ("rustc_version", string "pinned"), ("target_triple", string "x86_64-unknown-linux-gnu")]),
     ("selected_scope", minimalScope), ("types", toJson #[minimalType]),
     ("allocations", toJson (#[] : Array Json)), ("instances", toJson (#[] : Array Json)),
+    ("body_roots", toJson #[object [("body", number 0), ("entry_instance", number 0),
+      ("def_id", minimalRootId), ("def_path", minimalRootPath),
+      ("is_static", Json.bool false), ("thread_local_static", Json.bool false)]]),
     ("bodies", toJson #[minimalBody])]
   check (malformedResult minimalDocument) "minimalDocument: failed input was accepted"
 
-  IO.println s!"input decoder tests passed: bodies={document.bodies.size}, instance_bodies={document.instances.filter (·.body.isSome) |>.size}, types={document.types.size}"
+  IO.println s!"input decoder tests passed: bodies={document.bodies.size}, instance_bodies={document.instances.filter (·.bodyId.isSome) |>.size}, types={document.types.size}"
   return 0

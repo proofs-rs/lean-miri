@@ -65,7 +65,7 @@ def main(path: str) -> None:
             identity = json.dumps(key_node["def_id"], sort_keys=True)
             identities[kind].add(identity)
         else:
-            typed_key = key_node["type"]["type_id"]
+            typed_key = key_node["type"]
             require(document["types"][typed_key]["display"] == "u32",
                     "selected TypeId witness is not the fixture's exact u32 type")
             identities[kind].add(typed_key)

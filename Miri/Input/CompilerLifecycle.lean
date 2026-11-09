@@ -13,62 +13,68 @@ structure Prepared where
   program : LoweredProgram
   entries : Array Entry
 
-private def decodeChecks (ctx : LowerContext) (interner : CompilerSpanInterner)
-    (callee : CallInstance) (payload : Json) :
-    Except String (Array (Except StepError CompilerConstantEvidence) × CompilerSpanInterner) := do
-  let original ← (← payload.getObjVal? "required_consts").getArr?
-  let query ← (← payload.getObjVal? "constant_query_context").getObjVal? "required_constant_checks"
-  unless (← (← query.getObjVal? "typing_env").getStr?) == "body_typing_env" do
+private def decodeChecks (ctx : LowerContext) (tables : CompilerTables)
+    (callee : CallInstance) (body : BodyCore) :
+    Except String (Array (Except StepError CompilerConstantEvidence) × CompilerTables) := do
+  let some original := body.requiredConsts | throw "required source constants are absent"
+  let some query := body.constantQueryContext | throw "constant query context is absent"
+  unless query.requiredTypingEnvironment == "body_typing_env" do
     throw "required-constant typing environment mismatch"
-  let checks ← (← query.getObjVal? "checks").getArr?
+  let checks := query.requiredChecks
   unless checks.size == original.size do throw "required-constant query count mismatch"
-  let mut interner := interner
+  let mut tables := tables
   let mut evidence := #[]
   for index in [:checks.size] do
     let some check := checks[index]? | throw "required check absent"
     let some source := original[index]? | throw "required source operand absent"
-    unless (← (← check.getObjVal? "index").getNat?) == index do throw "required-constant source order mismatch"
-    unless (← check.getObjVal? "span") == (← source.getObjVal? "span") do
-      throw "required-constant source span mismatch"
-    let result ← check.getObjVal? "result"
-    let normalized ← result.getObjVal? "normalized_operand"
-    unless (← normalized.getObjVal? "span") == (← source.getObjVal? "span") do
+    unless check.index == index do throw "required-constant source order mismatch"
+    let sourceSpan ← (← source.field "span").natural
+    unless check.spanId == sourceSpan do throw "required-constant source span mismatch"
+    let normalized := check.normalizedOperand
+    unless (← (← normalized.field "span").natural) == sourceSpan do
       throw "required constant normalization changed source span"
-    let (source,nextInterner) ← lowerCompilerConstOperandWithInterner ctx interner (← ctx.decodeCompilerValue source)
-    let (normal,nextInterner) ← lowerCompilerConstOperandWithInterner ctx nextInterner (← ctx.decodeCompilerValue normalized)
-    let ty ← (← normalized.getObjVal? "type").getObjValAs? Nat "type_id"
-    let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue (← result.getObjVal? "value"))
-    interner := nextInterner
+    let (source,nextTables) ← lowerCompilerConstOperand ctx tables source
+    let (normal,nextTables) ← lowerCompilerConstOperand ctx nextTables normalized
+    let ty ← (← normalized.field "type").natural
+    let value ← lowerCompilerConstValue ctx ty check.value
+    tables := nextTables
     evidence := evidence.push (.ok ⟨callee,source.value,normal.value,normal.span,value⟩)
-  return (evidence,interner)
+  return (evidence,tables)
 
 def prepare (program : LoweredProgram) : Prepared := Id.run do
   let ctx := LowerContext.ofDocument program.input
-  let mut interner := CompilerSpanInterner.ofTables program.compilerTables
+  let mut tables := program.compilerTables
   let mut entries := #[]
-  for body in program.bundle.bodies do
+  let executable := program.executableBodyIds
+  for (body, bodyIndex) in program.bundle.bodies.toList.zipIdx do
+    unless executable.contains bodyIndex do
+      let unavailable := "body is compiler-query metadata, not an executable body"
+      entries := entries.push ⟨.error unavailable, .error unavailable, .error unavailable⟩
+      continue
     let preamble := do
-      lowerCompilerSpanWithInterner interner (← ctx.decodeCompilerValue (← body.input.payload.getObjVal? "preamble_def_span"))
+      lowerCompilerSpan tables (.sourceSpan body.input.preambleDefSpanId)
     let preamble ← match preamble with
       | .error error => pure (.error error)
       | .ok (span,next) =>
-        interner := next
+        tables := next
         pure (.ok span)
-    let decoded := do
-      CompilerInstance.decode ctx interner.getTables (← body.input.payload.getObjVal? "constant_query_context")
+    let decoded : Except String (CallInstance × CompilerTables) := do
+      let some query := body.input.constantQueryContext | throw "constant query context is absent"
+      unless query.instanceId < ctx.instances.size do throw "constant query instance ID out of bounds"
+      pure (query.instanceId,tables)
     let callee ← match decoded with
       | .error error => pure (.error error)
       | .ok (callee,next) =>
-        interner := interner.rebind next
+        tables := next
         pure (.ok callee)
-    let checks := do decodeChecks ctx interner (← callee) body.input.payload
+    let checks := do decodeChecks ctx tables (← callee) body.input
     let checks ← match checks with
       | .error error => pure (.error error)
       | .ok (checks,next) =>
-        interner := next
+        tables := next
         pure (.ok checks)
     entries := entries.push ⟨preamble,callee,checks⟩
-  return ⟨program.withCompilerTables interner.getTables,entries⟩
+  return ⟨program.withCompilerTables tables,entries⟩
 
 private def lift (query : Except String A) : MachineHooks.M K User A :=
   match query with

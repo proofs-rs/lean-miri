@@ -1,6 +1,7 @@
 import Lean
 import Miri.Memory.CtfeProvenance
 import Miri.MIR.Operators
+import Miri.Interpreter.Instance
 
 /-!
 Typed data model for the pinned rustc MIR export.  These structures describe
@@ -13,6 +14,13 @@ namespace Miri.Input
 abbrev TypeId := Nat
 abbrev AllocationId := Nat
 abbrev InstanceId := Nat
+abbrev LayoutId := Nat
+abbrev FunctionAbiId := Nat
+abbrev SpanId := Nat
+abbrev DefinitionRef := Nat
+abbrev TypeConstantId := Nat
+abbrev BodyId := Nat
+abbrev PredicateId := Nat
 abbrev LocalId := Nat
 abbrev BlockId := Nat
 
@@ -107,7 +115,7 @@ inductive InstanceKind where
   | instanceMir | intrinsicDispatch
   | foreignItemNoMir
   | virtualDispatchTarget
-  | symbolIdentityOnly
+  | identityOnly
   deriving Repr, DecidableEq
 
 structure Obligation where
@@ -124,6 +132,7 @@ structure SourcePosition where
   deriving Repr, DecidableEq
 
 structure SourceSpanData where
+  isDummy : Bool := false
   originalPayload : String
   lo : Nat
   hi : Nat
@@ -134,7 +143,7 @@ structure SourceSpanData where
   deriving Repr, DecidableEq
 
 structure SourceInfo where
-  span : SourceSpanData
+  spanId : SpanId
   scope : Nat
   deriving Repr, DecidableEq
 
@@ -176,6 +185,11 @@ structure ScalarLayout where
   validRange : Option (Nat × Nat)
   payload : Lean.Json
 
+structure NicheLayout where
+  offsetBytes : Nat
+  primitive : PrimitiveLayout
+  validRange : Nat × Nat
+
 structure BackendRepr where
   kind : BackendReprKind
   sized : Option Bool
@@ -189,6 +203,8 @@ structure BackendRepr where
   payload : Lean.Json
 
 structure LayoutVariant where
+  fields : FieldShape
+  largestNiche : Option NicheLayout
   variantIndex : Nat
   sizeBytes : Nat
   backendRepr : BackendRepr
@@ -217,6 +233,11 @@ structure VariantsLayout where
   payload : Lean.Json
 
 structure Layout where
+  maxReprAlignBytes : Option Nat
+  reprC : Bool
+  uninhabited : Bool
+  largestNiche : Option NicheLayout
+  randomizationSeed : Nat
   kind : LayoutKind
   sizeBytes : Option Nat
   abiAlignBytes : Option Nat
@@ -296,32 +317,186 @@ structure FunctionSignature where
   abi : ExternAbi
   cVariadic : Bool
 
-/-- Source compiler pattern AST; range endpoints retain original const payloads
-until lowered through the shared TypeConst interner. -/
+
 inductive CompilerPattern where
-  | range (start finish : Lean.Json)
+  | range (start finish : TypeConstantId)
   | or (patterns : Array CompilerPattern)
   | notNull
+
+inductive ReprInteger where
+  | pointerSized (signed : Bool)
+  | fixed (kind : IntegerTypeTag) (sizeBits : Nat) (signed : Bool)
+  deriving Repr, DecidableEq
+
+inductive ScalableElement where
+  | elementCount (count : Nat)
+  | container
+  deriving Repr, DecidableEq
+
+structure ReprOptions where
+  integer : Option ReprInteger
+  alignBytes : Option Nat
+  packBytes : Option Nat
+  simd : Bool
+  c : Bool
+  rust : Bool
+  packed : Bool
+  transparent : Bool
+  linear : Bool
+  scalable : Bool
+  flagsBits : Nat
+  scalableElement : Option ScalableElement
+  canRandomizeTypeLayout : Bool
+  inhibitEnumLayoutOptimization : Bool
+  inhibitStructFieldReordering : Bool
+  inhibitNewtypeAbiOptimization : Bool
+  fieldShuffleSeed : Nat
+  deriving Repr, DecidableEq
+
+structure AdtField where
+  index : Nat
+  name : String
+  typeId : TypeId
+  deriving Repr, DecidableEq
+
+structure AdtVariant where
+  index : Nat
+  name : String
+  fields : Array AdtField
+  deriving Repr, DecidableEq
+
+structure AdtShape where
+  definition : DefinitionRef
+  kind : AdtKind
+  representation : ReprOptions
+  args : Array Miri.MIR.GenericArg
+  variants : Array AdtVariant
+  deriving Repr, DecidableEq
+
+structure ArrayConstructor where
+  count : Nat
+  canonicalValueConstructor : Bool
+  deriving Repr, DecidableEq
+
+inductive AliasTypeKind where
+  | projection | inherent | opaque | free
+  deriving Repr, DecidableEq
+
+inductive TypeShape where
+  | bool | char
+  | int (kind : IntegerTypeTag)
+  | uint (kind : IntegerTypeTag)
+  | float (kind : FloatTypeTag)
+  | adt (data : AdtShape)
+  | foreign (definition : DefinitionRef)
+  | str
+  | array (element : TypeId) (length : TypeConstantId) (constructor : ArrayConstructor)
+  | patternType (base : TypeId) (pattern : CompilerPattern)
+  | slice (element : TypeId)
+  | rawPointer (pointee : TypeId) (mutability : Miri.MIR.Mutability)
+  | reference (pointee : TypeId) (mutability : Miri.MIR.Mutability) (region : Miri.MIR.Region)
+  | functionDefinition (definition : DefinitionRef) (args : Array Miri.MIR.GenericArg)
+      (signature : FunctionSignature) (boundVariables : Array Miri.MIR.BoundVariableKind)
+  | functionPointer (signature : FunctionSignature) (boundVariables : Array Miri.MIR.BoundVariableKind)
+  | unsafeBinder (inner : TypeId) (boundVariables : Array Miri.MIR.BoundVariableKind)
+  | dynamicTraitObject (predicates : Array PredicateId) (principal : Option PredicateId) (region : Miri.MIR.Region)
+  | closure (definition : DefinitionRef) (args : Array Miri.MIR.GenericArg) (upvarCount : Nat)
+  | coroutineClosure (definition : DefinitionRef) (args : Array Miri.MIR.GenericArg)
+  | coroutine (definition : DefinitionRef) (args : Array Miri.MIR.GenericArg)
+  | never
+  | tuple (elements : Array TypeId)
+  | alias (kind : AliasTypeKind) (definition : DefinitionRef) (args : Array Miri.MIR.GenericArg)
+
+namespace TypeShape
+
+def kind : TypeShape → TypeShapeKind
+  | .bool => .bool | .char => .char | .int _ => .int | .uint _ => .uint
+  | .float _ => .float | .adt _ => .adt | .foreign _ => .foreign | .str => .str
+  | .array .. => .array | .patternType .. => .patternType | .slice _ => .slice
+  | .rawPointer .. => .rawPointer | .reference .. => .reference
+  | .functionDefinition .. => .functionDefinition | .functionPointer .. => .functionPointer
+  | .unsafeBinder .. => .unsafeBinder | .dynamicTraitObject .. => .dynamicTraitObject
+  | .closure .. => .closure | .coroutineClosure .. => .coroutineClosure | .coroutine .. => .coroutine
+  | .never => .never | .tuple _ => .tuple | .alias .. => .alias
+
+def metadata (shape : TypeShape) : TypeShapeMetadata := {
+  signedKind := match shape with | .int k => some k | _ => none
+  unsignedKind := match shape with | .uint k => some k | _ => none
+  floatKind := match shape with | .float k => some k | _ => none
+  adtKind := match shape with | .adt data => some data.kind | _ => none }
+
+def signature : TypeShape → Option FunctionSignature
+  | .functionDefinition _ _ signature _ | .functionPointer signature _ => some signature
+  | _ => none
+
+def pattern : TypeShape → Option CompilerPattern
+  | .patternType _ pattern => some pattern
+  | _ => none
+
+end TypeShape
+
+structure AdtCompilerFacts where
+  definitionId : DefinitionRef
+  itemName : String
+  nonnullOptimizationGuaranteed : Bool
+
+structure ProjectionField where
+  index : Nat
+  typeId : TypeId
+  layoutId : LayoutId
+
+structure ProjectionParent where
+  variant : Option Nat
+  layoutId : LayoutId
+  fields : Array ProjectionField
+
+structure ProjectionQueries where
+  typingEnvironment : String
+  parents : Array ProjectionParent
+
+structure DiscriminantValue where
+  variant : Nat
+  typeId : TypeId
+  bits : Nat
+
+structure DiscriminantInfo where
+  hasDiscriminants : Bool
+  adtVariantCount : Option Nat
+  values : Array DiscriminantValue
 
 structure TypeCompilerFacts where
   typingEnvironment : String
   inputTypeId : TypeId
+  queryInputTypeId : TypeId := 0
   booleanQueries : Array (String × Bool)
   typeQueries : Array (String × Option TypeId)
-  adtPayload : Option Lean.Json
+  adt : Option AdtCompilerFacts := none
+  definitionId : Option DefinitionRef := none
+  projectionQueries : Option ProjectionQueries := none
+  simdSizeAndType : Option (Nat × TypeId) := none
+  discriminants : Option DiscriminantInfo := none
+  typeIdHash : Option Nat := none
   captureNames : Option (Array (Option String)) := none
-  payload : Lean.Json
 
 structure TypeNode where
-  pattern : Option CompilerPattern := none
+  layoutQueryInputTypeId : Option TypeId := none
   compilerFacts : Option TypeCompilerFacts := none
   id : TypeId
   display : String
-  shapeKind : TypeShapeKind
-  shapeMetadata : TypeShapeMetadata
-  signature : Option FunctionSignature
-  layout : Layout
-  payload : Lean.Json
+  shape : TypeShape
+  layoutId : LayoutId
+
+namespace TypeNode
+
+def shapeKind (node : TypeNode) : TypeShapeKind := node.shape.kind
+
+def shapeMetadata (node : TypeNode) : TypeShapeMetadata := node.shape.metadata
+
+def signature (node : TypeNode) : Option FunctionSignature := node.shape.signature
+
+def pattern (node : TypeNode) : Option CompilerPattern := node.shape.pattern
+
+end TypeNode
 
 structure InitRange where
   initialized : Bool
@@ -352,6 +527,18 @@ structure AllocationMemory where
   relocations : Array Relocation
   deriving Repr, DecidableEq
 
+inductive ArgumentExtensionKind where
+  | none | zeroExtend | signExtend
+  deriving Repr, DecidableEq
+
+inductive ArgumentCaptureKind where
+  | none | address | readOnly | unrestricted
+  deriving Repr, DecidableEq
+
+inductive IndirectModeKind where
+  | pointer | onStack | amdgpuKernelArgument
+  deriving Repr, DecidableEq
+
 structure AbiAttributes where
   noAlias : Bool
   noFree : Bool
@@ -363,17 +550,23 @@ structure AbiAttributes where
   regularBits : Nat
   pointeeSizeBytes : Nat
   pointeeAlignBytes : Option Nat
-  argExtension : TaggedNode
-  captures : TaggedNode
+  argExtension : ArgumentExtensionKind
+  captures : ArgumentCaptureKind
 
 inductive AbiRegisterKind where
   | integer | float | ppcF128 | vector
   deriving Repr, DecidableEq
 
+inductive AbiRegisterHint where
+  | integer (kind : IntegerTypeTag) (signed : Bool)
+  | float (kind : FloatTypeTag)
+  | pointer (addressSpace : Nat)
+  deriving Repr, DecidableEq
+
 structure AbiRegister where
   kind : AbiRegisterKind
   sizeBits : Nat
-  hintElement : Option TaggedNode
+  hintElement : Option AbiRegisterHint
   payload : Lean.Json
 
 structure AbiCastTarget where
@@ -391,7 +584,7 @@ structure AbiPassMode where
   castTarget : Option AbiCastTarget
   padI32Count : Option Nat
   addressSpace : Option Nat
-  indirectMode : Option TaggedNode
+  indirectMode : Option IndirectModeKind
   payload : Lean.Json
 
 structure AbiArgument where
@@ -399,7 +592,7 @@ structure AbiArgument where
   /-- Physical compiler TyAndLayout for this FnAbi argument. The logical type
   remains `typeId`; Rust can adjust the ABI layout independently (notably the
   forced-thin virtual-call receiver). The input schema validates its presence. -/
-  layout : Option Layout := none
+  layoutId : LayoutId
   mode : AbiPassMode
   payload : Lean.Json
 
@@ -422,7 +615,7 @@ inductive TypedValue where
   | instanceRef (id : InstanceId)
   | localRef (id : LocalId)
   | blockRef (id : BlockId)
-  | sourceSpan (value : SourceSpanData)
+  | sourceSpan (id : SpanId)
   | sourceInfo (value : SourceInfo)
   | statement (variant : StatementVariant)
       (fields : Array (String × TypedValue))
@@ -458,15 +651,13 @@ inductive VtablePredicateKind where
 
 structure FunctionAllocation where
   instanceId : InstanceId
-  definitionId : DefinitionId
-  definitionPath : String
-  genericArgs : TypedValue
   payload : Lean.Json
   deriving BEq
 
 /-- Exact compiler GlobalAlloc::Static metadata queries, independent of
 initializer evaluation and runtime allocation adjustment. -/
 structure StaticGlobalInfo where
+  nested : Bool
   sizeBytes : Nat
   alignBytes : Nat
   mutability : MemoryMutability
@@ -478,7 +669,7 @@ structure StaticGlobalInfo where
 
 structure StaticAllocation where
   globalInfo : Option StaticGlobalInfo := none
-  definitionId : DefinitionId
+  definitionId : DefinitionRef
   definitionPath : String
   threadLocal : Bool
   initializer : Option AllocationMemory
@@ -487,29 +678,29 @@ structure StaticAllocation where
 
 structure VtablePredicate where
   kind : VtablePredicateKind
-  definitionId : Option DefinitionId
+  definitionId : DefinitionRef
   definitionPath : Option String
-  genericArgs : Option TypedValue
+  genericArgs : Array Miri.MIR.GenericArg
+  boundVariables : Array Miri.MIR.BoundVariableKind
+  projectionTerm : Option TypeId
   payload : Lean.Json
   deriving BEq
 
 structure VtableEntry where
   kind : VtableEntryKind
   instanceId : Option InstanceId
-  definitionId : Option DefinitionId
-  definitionPath : Option String
   allocationId : Option AllocationId
-  traitDefinitionId : Option DefinitionId
+  traitDefinitionId : Option DefinitionRef
   traitDefinitionPath : Option String
-  genericArgs : Option TypedValue
   payload : Lean.Json
   deriving BEq
 
 structure VtableAllocation where
+  principalPredicate : Option PredicateId
   typeId : TypeId
   sizeBytes : Option Nat
   alignBytes : Option Nat
-  predicates : Array VtablePredicate
+  predicates : Array PredicateId
   entries : Array VtableEntry
   payload : Lean.Json
   deriving BEq
@@ -592,7 +783,47 @@ structure MirNode where
   value : TypedValue
   sourceInfo : SourceInfo
 
+inductive CallResolutionKind where
+  | direct | virtualDispatch | indirect
+  deriving Repr, DecidableEq
+
+structure CallResolutionEvidence where
+  kind : CallResolutionKind
+  instanceId : Option InstanceId
+  functionType : Option TypeId
+  dispatchSlot : Option Nat
+  fnAbiId : FunctionAbiId
+  payload : Lean.Json
+
+structure InlinedScope where
+  instanceId : InstanceId
+  callsiteSpanId : SpanId
+  requiresCallerLocation : Bool
+  deriving Repr, DecidableEq
+
+structure SourceScope where
+  id : Nat
+  parent : Option Nat
+  spanId : SpanId
+  inlined : Option InlinedScope
+  inlinedParent : Option Nat
+  deriving Repr, DecidableEq
+
+structure CompilerSourcePosition where
+  bytePosition : Nat
+  line : Nat
+  column : Nat
+  filename : String
+  deriving Repr, DecidableEq
+
+structure BacktraceSpan where
+  spanId : SpanId
+  collapsedLo : Nat
+  position : CompilerSourcePosition
+  deriving Repr, DecidableEq
+
 structure BasicBlock where
+  callResolution : Option CallResolutionEvidence
   id : BlockId
   statements : Array MirNode
   terminator : MirNode
@@ -605,43 +836,77 @@ structure LocalDecl where
   sourceInfo : SourceInfo
   payload : Lean.Json
 
+inductive BodyInputPhase where
+  | template | alreadyInstantiated
+  deriving Repr, DecidableEq
+
+structure RequiredConstantCheck where
+  index : Nat
+  spanId : SpanId
+  normalizedOperand : TypedValue
+  value : TypedValue
+
+structure ConstantQueryContext where
+  instanceId : InstanceId
+  inputPhase : BodyInputPhase
+  normalizationBodyId : BodyId
+  requiredTypingEnvironment : String
+  requiredChecks : Array RequiredConstantCheck
+
 structure BodyCore where
+  constantQueryContext : Option ConstantQueryContext := none
+  requiredConsts : Option (Array TypedValue) := none
+  spanId : SpanId
+  preambleDefSpanId : SpanId
+  backtraceSpans : Array BacktraceSpan
   /-- Source location for body-scoped compiler queries. -/
   sourcePath : String := ""
   defPath : String
-  definitionId : Option DefinitionId
+  definitionId : Option DefinitionRef
   phase : TypedValue
   injectionPhase : Option TypedValue
   argumentCount : Nat
   spreadArgument : Option LocalId
   locals : Array LocalDecl
   blocks : Array BasicBlock
-  sourceScopes : Option (Array Lean.Json)
+  sourceScopes : Option (Array SourceScope)
   payload : Lean.Json
 
 structure PromotedBody where
   index : Nat
-  body : Option BodyCore
+  bodyId : Option BodyId
   payload : Lean.Json
 
 structure Body extends BodyCore where
   promotedBodies : Array PromotedBody
 
+structure BodyRoot where
+  bodyId : BodyId
+  entryInstance : InstanceId
+  definitionId : DefinitionRef
+  defPath : String
+  isStatic : Bool
+  threadLocalStatic : Bool
+  promotedBodies : Array PromotedBody
+  payload : Lean.Json
+
 structure InstanceNode where
+  instanceKind : Miri.Interpreter.CallInstanceKind
+  genericArgs : Array Miri.MIR.GenericArg
   id : InstanceId
   kind : InstanceKind
   defPath : Option String
-  definitionId : Option DefinitionId
+  definitionId : Option DefinitionRef
   bodyInstantiation : Option TaggedNode
   bodyTemplateIsPolymorphic : Option Bool
   instanceArgsAreMonomorphic : Option Bool
-  body : Option Body
+  bodyId : Option BodyId
   promotedBodies : Array PromotedBody
   payload : Lean.Json
 
 structure ScopeRoot where
   defPath : String
-  definitionId : DefinitionId
+  definitionId : DefinitionRef
   deriving Repr, DecidableEq
 
 structure SelectedScope where
@@ -663,7 +928,7 @@ structure CompilerPredicateEvidence where
   stableKey : Nat
   autoTrait : Bool
   normalizedId : Option Nat
-  original : Lean.Json
+  original : PredicateId
   payload : Lean.Json
 
 

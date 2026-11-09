@@ -103,7 +103,7 @@ def fixtureIdentity : LocalsIdentity := (LocalsIdentitySupply.allocate ⟨0⟩).
 def fixture : Frame Unit Unit Unit where
   body := fixtureLoaded.body
   bodyIdentity := fixtureLoaded.identity
-  functionInstance := ⟨.Item 0, #[]⟩
+  functionInstance := 0
   extra := ()
   returnContinuation := .stop true
   returnPlace := .frameLocal 0 0 none returnLayout fixtureIdentity

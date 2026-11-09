@@ -16,16 +16,16 @@ def tupleFields (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except String
   let node ← p.runtime.node ty |>.mapError toString
   unless node.shapeKind == .tuple do
     throw "source RustCall spreading requires the exact tuple type"
-  let elements ← (← (← node.payload.getObjVal? "shape").getObjVal? "elements").getArr?
-  elements.mapM fun value => do
-    let id ← (← value.getObjVal? "type_id").getNat?
+  let .tuple elements := node.shape | throw "tuple field query on non-tuple"
+  for id in elements do
     let _ ← p.runtime.node id |>.mapError toString
-    pure id
+  pure elements
 
 def closureUpvarCount (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except String (Option Nat) := do
   let node ← p.runtime.node ty |>.mapError toString
-  if node.shapeKind != .closure then return none
-  return some (← (← (← node.payload.getObjVal? "shape").getObjVal? "upvar_count").getNat?)
+  match node.shape with
+  | .closure _ _ count => pure (some count)
+  | _ => pure none
 
 /-- Exact source ExternAbi identity, canonical FnAbi records, shared DefIds/
 TypeConstIds and actual current BodyIdentity all belong to this same program. -/
@@ -34,6 +34,9 @@ def make (p : CompilerProviders.Prepared) (compatibilityBudget : Nat) :
   functionSignature := fun _ layout => lift do
     let (count,sourceAbi) ← CompilerFunctionFacts.signature p.functions layout.ty
     pure (count,← CompilerExternAbi.decode sourceAbi)
+  instanceKind := fun inst => lift (CompilerInstance.kindOf p.loweringContext p.program.compilerTables inst)
+  instanceArgs := fun inst => lift (CompilerInstance.argsOf p.loweringContext p.program.compilerTables inst)
+  itemInstance := fun definition args => lift (CompilerInstance.item p.loweringContext p.program.compilerTables definition args)
   functionKind := fun ty => lift (CompilerFunctionFacts.kind p.functions ty)
   resolve := fun _ definition args => CompilerProviders.resolveCurrent p definition args
   fnAbiOfFnPtr := fun _ layout extra => lift (CompilerFunctionFacts.pointerAbi p.functions layout.ty extra)

@@ -1,6 +1,7 @@
 import Lean.Util.Profile
 import Miri.Input.CompilerInstance
 import Miri.Input.NormalizationBody
+import Miri.Input.TypedValueAccess
 import Miri.Input.RuntimeMetadata
 import Miri.Interpreter.Constant
 
@@ -25,8 +26,8 @@ structure Site where
 structure Evidence where
   site : Site
   query : CompilerConstantEvidence
-  sourcePayload : Json
-  normalizedPayload : Json
+  sourceOperand : TypedValue
+  normalizedOperand : TypedValue
 structure Prepared where
   program : LoweredProgram
   evidence : Array Evidence
@@ -46,62 +47,56 @@ def bind (prepared : Prepared) (runtime : RuntimeMetadata)
   let compatible := RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality prepared.program.input.raw
   ⟨compatible, RuntimeMetadata.JsonReflexivity.matchesRightOr_eq sourceEquality prepared.program.input.raw⟩
 
-private def field (j : Json) (key : String) : Except String Json := j.getObjVal? key
-private def natural (j : Json) (key : String) : Except String Nat := do (← field j key).getNat?
-private def array (j : Json) (key : String) : Except String (Array Json) := do (← field j key).getArr?
-private partial def constants (j : Json) (path : Array PathElement := #[]) : Array (Array PathElement × Json) :=
-  if ((j.getObjVal? "constant").bind (fun c => c.getObjValAs? String "kind")).toOption == some "evaluated_const" then #[(path,j)]
-  else match j with
-  | .arr values => (values.mapIdx fun i value => constants value (path.push (.index i))).flatten
-  | .obj fields => (fields.toList.toArray.map fun (name,value) => constants value (path.push (.field name))).flatten
-  | _ => #[]
+private partial def constants (value : TypedValue) (path : Array PathElement := #[]) :
+    Array (Array PathElement × TypedValue) :=
+  if ((value.field "constant").bind TypedValue.tag).toOption == some "evaluated_const" then #[(path,value)]
+  else match value with
+  | .array values => (values.mapIdx fun index child => constants child (path.push (.index index))).flatten
+  | value => match value.fields with
+    | .ok fields => (fields.map fun (name,child) => constants child (path.push (.field name))).flatten
+    | .error _ => #[]
 
-private def lookupPath (j : Json) (path : Array PathElement) : Except String Json :=
+private def lookupPath (value : TypedValue) (path : Array PathElement) : Except String TypedValue :=
   path.foldlM (fun value key => match key with
-    | .field name => field value name
-    | .index i => do
-      let values ← value.getArr?
-      match values[i]? with
-      | some value => pure value
-      | none => throw "normalized query changed operand structural path") j
+    | .field name => value.field name
+    | .index index => do
+      let values ← value.elements
+      match values[index]? with
+      | some child => pure child
+      | none => throw "normalized query changed operand structural path") value
 
-private def sourceConstants (bodyIndex : Nat) (body : Json) : Except String (Array (Site × Json)) := do
+private def sourceConstants (bodyIndex : Nat) (body : BodyCore) : Array (Site × TypedValue) := Id.run do
   let mut found := #[]
-  for block in ← array body "basic_blocks" do
-    let blockId ← natural block "block"
-    let statements ← array block "statements"
-    for i in [:statements.size] do
-      let some statement := statements[i]? | throw "statement array changed"
-      for (path, value) in constants statement do
-        found := found.push (⟨bodyIndex, ⟨blockId,i⟩, path⟩,value)
-    for (path,value) in constants (← field block "terminator") do
-      found := found.push (⟨bodyIndex, ⟨blockId,statements.size⟩,path⟩,value)
+  for block in body.blocks do
+    for (statement, index) in block.statements.toList.zipIdx do
+      for (path, value) in constants statement.envelope do
+        found := found.push (⟨bodyIndex, ⟨block.id,index⟩, path⟩,value)
+    for (path,value) in constants block.terminator.envelope do
+      found := found.push (⟨bodyIndex, ⟨block.id,block.statements.size⟩,path⟩,value)
   pure found
 
-private def normalizedOperand (body : Json) (site : Site) : Except String Json := do
-  let blocks ← array body "basic_blocks"
-  let some block := blocks.find? (fun b => (natural b "block").toOption == some site.location.block)
+private def normalizedOperand (body : BodyCore) (site : Site) : Except String TypedValue := do
+  let some block := body.blocks.find? (·.id == site.location.block)
     | throw "normalized body is missing source basic block"
-  let statements ← array block "statements"
-  let envelope ← if site.location.statementIndex == statements.size then field block "terminator"
-    else match statements[site.location.statementIndex]? with
+  let node ← if site.location.statementIndex == block.statements.size then pure block.terminator
+    else match block.statements[site.location.statementIndex]? with
       | some statement => pure statement
       | none => throw "normalized body is missing source statement"
-  lookupPath envelope site.path
+  lookupPath node.envelope site.path
 
-private def evidenceAt (ctx : LowerContext) (interner : CompilerSpanInterner) (fnInstance : CallInstance)
-    (site : Site) (original normalized : Json) : Except String (Evidence × CompilerSpanInterner) := do
-  unless (← field original "span") == (← field normalized "span") do throw "normalization changed constant source span"
-  let (source,interner) ← lowerCompilerConstOperandWithInterner ctx interner (← ctx.decodeCompilerValue original)
-  let (normal,interner) ← lowerCompilerConstOperandWithInterner ctx interner (← ctx.decodeCompilerValue normalized)
-  let evaluated ← field normalized "constant"
-  let ty ← natural (← field normalized "type") "type_id"
-  let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue (← field evaluated "value"))
+private def evidenceAt (ctx : LowerContext) (tables : CompilerTables) (fnInstance : CallInstance)
+    (site : Site) (original normalized : TypedValue) : Except String (Evidence × CompilerTables) := do
+  unless (← (← original.field "span").natural) == (← (← normalized.field "span").natural) do throw "normalization changed constant source span"
+  let (source,tables) ← lowerCompilerConstOperand ctx tables original
+  let (normal,tables) ← lowerCompilerConstOperand ctx tables normalized
+  let evaluated ← normalized.field "constant"
+  let ty ← (← normalized.field "type").natural
+  let value ← lowerCompilerConstValue ctx ty (← evaluated.field "value")
   pure (⟨site, ⟨fnInstance,source.value,normal.value,normal.span,value⟩, original, normalized⟩,
-    interner)
+    tables)
 
 private structure PrepareState where
-  interner : CompilerSpanInterner
+  tables : CompilerTables
   evidence : Array Evidence
   obligations : Array Obligation
 
@@ -109,36 +104,36 @@ private def prepareBody (ctx : LowerContext)
     (program : LoweredProgram) (bodyIndex : Nat) (state : PrepareState) :
     Except String PrepareState := do
   let some body := program.bundle.bodies[bodyIndex]? | throw "body index missing"
-  match field body.input.payload "constant_query_context" with
-  | .error _ =>
+  match body.input.constantQueryContext with
+  | none =>
     let obligation : Obligation := ⟨s!"bodies[{bodyIndex}].constant_query_context",
       "compiler current-instance normalization query is missing"⟩
     pure { state with obligations := state.obligations.push obligation }
-  | .ok queryContext => do
-    let (fnInstance,nextTables) ← CompilerInstance.decode ctx state.interner.getTables queryContext
-    let interner := state.interner.rebind nextTables
-    let normalization ← field queryContext "normalization"
-    let normalizedBody ← NormalizationBody.resolve normalization body.input.payload
-    let mut interner := interner
+  | some queryContext => do
+    let fnInstance := queryContext.instanceId
+    unless fnInstance < ctx.instances.size do throw "constant query instance ID out of bounds"
+    let tables := state.tables
+    let normalizedBody ← NormalizationBody.resolve queryContext.normalizationBodyId program.input.bodies
+    let mut tables := tables
     let mut evidence := state.evidence
     let mut obligations := state.obligations
-    for (site,original) in ← sourceConstants bodyIndex body.input.payload do
+    for (site,original) in sourceConstants bodyIndex body.input do
       let result := do
-        let normalized ← normalizedOperand normalizedBody site
-        evidenceAt ctx interner fnInstance site original normalized
+        let normalized ← normalizedOperand normalizedBody.toBodyCore site
+        evidenceAt ctx tables fnInstance site original normalized
       match result with
       | .ok (entry,nextInterner) =>
         evidence := evidence.push entry
-        interner := nextInterner
+        tables := nextInterner
       | .error message =>
         obligations := obligations.push
           ⟨s!"bodies[{bodyIndex}].constant[{reprStr site.location},{reprStr site.path}]",message⟩
-    pure ⟨interner,evidence,obligations⟩
+    pure ⟨tables,evidence,obligations⟩
 
 private def prepareBodies (ctx : LowerContext) (program : LoweredProgram)
     (initial : PrepareState) : Except String PrepareState := do
   let mut state := initial
-  for bodyIndex in [:program.bundle.bodies.size] do
+  for bodyIndex in program.executableBodyIds do
     state ← prepareBody ctx program bodyIndex state
   pure state
 
@@ -149,10 +144,10 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
     CompilerGlobals.prepareProgram input
   let ctx := profileit "preparation.constants.context" profile fun _ =>
     LowerContext.ofDocument program.input
-  let initial : PrepareState := ⟨CompilerSpanInterner.ofTables program.compilerTables, #[], #[]⟩
+  let initial : PrepareState := ⟨program.compilerTables, #[], #[]⟩
   let state ← profileit "preparation.constants.bodies" profile fun _ =>
     prepareBodies ctx program initial
-  let program := program.withCompilerTables state.interner.getTables
+  let program := program.withCompilerTables state.tables
   pure ⟨program,state.evidence,state.obligations⟩
 
 def prepare (input : LoweredProgram) : Except String Prepared := prepareProfiled {} input

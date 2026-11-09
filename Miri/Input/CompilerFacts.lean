@@ -16,33 +16,14 @@ abbrev Result := Except String
 private def computeUnitLayout (runtime : RuntimeMetadata.Indexed) :
     Result (TyAndLayout TypeId) := do
   let some source := runtime.source.types.find? (fun ty =>
-    ty.shapeKind == .tuple &&
-      ((ty.payload.getObjVal? "shape").bind fun shape =>
-        (shape.getObjVal? "elements").bind Json.getArr?).toOption == some #[])
+    match ty.shape with | .tuple elements => elements.isEmpty | _ => false)
     | throw "compiler unit type identity missing"
   runtime.lookup source.id |>.mapError toString
 
-set_option autoImplicit false in
-structure UnitLayoutCache (runtime : RuntimeMetadata.Indexed) where
-  private mk ::
-  value : Result (TyAndLayout TypeId)
-  exact : value = computeUnitLayout runtime
-
-def bindUnitLayout (runtime : RuntimeMetadata.Indexed) : UnitLayoutCache runtime :=
-  let value := computeUnitLayout runtime
-  ⟨value, rfl⟩
-
 structure Context where
   runtime : RuntimeMetadata.Indexed
-  /-- Exact direct primitive query results for the metadata owned by this
-  context. Manual contexts may omit the cache. -/
-  primitiveQueries : Option (CompilerPrimitiveFacts.Bound runtime.toRuntimeMetadata) := none
-  /-- The first-match unit query result is stored as data, including failure,
-  and bound to this exact indexed metadata value. -/
-  unitLayoutCache : Option (UnitLayoutCache runtime) := none
   program : LoweredProgram
-  /-- Context caches are certified for this exact source document. Manual
-  contexts may omit it and retain the uncached accessor fallback. -/
+  /-- Lowering evidence is bound to the exact owned source document. -/
   lowering : Option (LowerContext.Bound program.input) := none
 
 def Context.loweringContext (context : Context) : LowerContext :=
@@ -52,16 +33,12 @@ def Context.loweringContext (context : Context) : LowerContext :=
 
 def Context.primitiveLayout (context : Context) (key : String) :
     Except String (TyAndLayout TypeId) :=
-  match context.primitiveQueries with
-  | some cache => CompilerPrimitiveFacts.primitiveLayoutBound context.runtime.toRuntimeMetadata cache key
-  | none => CompilerPrimitiveFacts.primitiveLayout context.runtime.toRuntimeMetadata key
+  CompilerPrimitiveFacts.primitiveLayout context.runtime.toRuntimeMetadata key
 
 def Context.orderingLayout (context : Context) : Except String (TyAndLayout TypeId) :=
-  match context.primitiveQueries with
-  | some cache => CompilerPrimitiveFacts.orderingLayoutBound context.runtime.toRuntimeMetadata cache
-  | none => CompilerPrimitiveFacts.orderingLayout context.runtime.toRuntimeMetadata
+  CompilerPrimitiveFacts.orderingLayout context.runtime.toRuntimeMetadata
 
-/-- Rebind every document-dependent cache when the owning lowered program changes. -/
+/-- Bind lowering evidence when the owning lowered program changes. -/
 def Context.withProgram (context : Context) (program : LoweredProgram) : Context :=
   { context with program, lowering := some (LowerContext.bindDocument program.input) }
 
@@ -71,11 +48,8 @@ def ofProgram (runtime : RuntimeMetadata) (program : LoweredProgram)
     throw "compiler facts/runtime metadata are from different documents"
   let program := CompilerGlobals.prepareProgram program
   let indexed := RuntimeMetadata.Indexed.ofMetadata runtime sourceEquality
-  let baseRuntime := indexed.toRuntimeMetadata
   return {
     runtime := indexed
-    primitiveQueries := some (CompilerPrimitiveFacts.bind baseRuntime)
-    unitLayoutCache := some (bindUnitLayout indexed)
     program
     lowering := some (LowerContext.bindDocument program.input)
   }
@@ -106,97 +80,70 @@ private def field (j : Json) (key : String) : Result Json := j.getObjVal? key
 private def string (j : Json) (key : String) : Result String := do (← field j key).getStr?
 private def bool (j : Json) (key : String) : Result Bool := do (← field j key).getBool?
 private def array (j : Json) (key : String) : Result (Array Json) := do (← field j key).getArr?
-private def shape (context : Context) (id : TypeId) : Result Json := do
-  let source ← node context id
-  field source.payload "shape"
-private def typeRef (context : Context) (j : Json) : Result TypeId := do
-  let id ← (← field j "type_id").getNat?
-  let _ ← node context id
-  pure id
 
 def layoutOf (context : Context) (id : TypeId) : Result (TyAndLayout TypeId) :=
   (context.runtime.lookup id).mapError toString
 
-def unitLayout (context : Context) : Result (TyAndLayout TypeId) := do
-  match context.unitLayoutCache with
-  | some cached => cached.value
-  | none => computeUnitLayout context.runtime
+def unitLayout (context : Context) : Result (TyAndLayout TypeId) :=
+  computeUnitLayout context.runtime
 
 def builtinDeref (context : Context) (id : TypeId) (explicit : Bool) : Result (Option TypeId) :=
   optionalType context id (if explicit then "builtin_deref_explicit" else "builtin_deref_implicit")
 
 def referencePointee (context : Context) (id : TypeId) : Result (TypeId × MIR.Mutability) := do
   let source ← node context id
-  unless source.shapeKind == .reference do throw "reference_pointee requested for a non-reference"
-  let value ← shape context id
-  let pointee ← typeRef context (← field value "pointee")
-  let mutable ← string (← field value "mutability") "kind"
-  let mutable ← match mutable with
-    | "mutable" => pure MIR.Mutability.Mut
-    | "immutable" => pure .Not
-    | _ => throw "unknown reference mutability"
-  pure (pointee,mutable)
+  let .reference pointee mutability _ := source.shape
+    | throw "reference_pointee requested for a non-reference"
+  let _ ← node context pointee
+  pure (pointee,mutability)
 
 def retagTypeShape (context : Context) (id : TypeId) : Result Miri.TreeBorrows.RetagPipeline.RetagTypeShape := do
   let source ← node context id
   pure ⟨← boolean context id "is_global_box",source.shapeKind == .reference,
     source.shapeKind == .rawPointer,← boolean context id "is_box"⟩
 
-private def adtPayload (context : Context) (id : TypeId) : Result Json := do
-  let some payload := (← facts context id).adtPayload | throw "ADT query requested for a non-ADT"
-  pure payload
+private def adtFacts (context : Context) (id : TypeId) : Result AdtCompilerFacts := do
+  let some value := (← facts context id).adt | throw "ADT query requested for a non-ADT"
+  pure value
 
-def itemName (context : Context) (id : TypeId) : Result String := do string (← adtPayload context id) "item_name"
-def nonnullOptimizationGuaranteed (context : Context) (id : TypeId) : Result Bool := do
-  bool (← adtPayload context id) "nonnull_optimization_guaranteed"
+private def adtShape (context : Context) (id : TypeId) : Result AdtShape := do
+  let .adt value := (← node context id).shape | throw "ADT layout query on non-ADT"
+  pure value
+
+def itemName (context : Context) (id : TypeId) : Result String :=
+  return (← adtFacts context id).itemName
+
+def nonnullOptimizationGuaranteed (context : Context) (id : TypeId) : Result Bool :=
+  return (← adtFacts context id).nonnullOptimizationGuaranteed
+
 def reprEqualUpToSeed (context : Context) (left right : TypeId) : Result Bool := do
-  let a ← field (← shape context left) "representation"
-  let b ← field (← shape context right) "representation"
-  let mut same := true
-  -- Exactly ReprOptions::equal_up_to_seed: no field is dropped except seed.
-  for key in #["integer","align_bytes","pack_bytes","flags_bits","scalable_element"] do
-    let av ← field a key
-    let bv ← field b key
-    same := same && av == bv
-  pure same
+  let a := (← adtShape context left).representation
+  let b := (← adtShape context right).representation
+  pure (a.integer == b.integer && a.alignBytes == b.alignBytes &&
+    a.packBytes == b.packBytes && a.flagsBits == b.flagsBits && a.scalableElement == b.scalableElement)
 
 def adtInfo (context : Context) (id : TypeId) : Result (LayoutCompat.AdtInfo TypeId) := do
-  let source ← node context id
-  unless source.shapeKind == .adt do throw "ADT layout query on non-ADT"
-  let value ← shape context id
-  let repr ← field value "representation"
-  let kind ← match source.shapeMetadata.adtKind with
-    | some .structKind => pure LayoutCompat.AdtKind.Struct
-    | some .unionKind => pure .Union
-    | some .enumKind => pure .Enum
-    | _ => throw "unknown ADT kind"
-  let mut variants := #[]
-  for variant in ← array value "variants" do
-    let mut fields := #[]
-    for item in ← array variant "fields" do
-      fields := fields.push (⟨← string item "name", ← typeRef context (← field item "type")⟩ : LayoutCompat.Field TypeId)
-    variants := variants.push fields
-  pure ⟨kind,← bool repr "transparent",← bool repr "c",← bool repr "rust",variants⟩
+  let data ← adtShape context id
+  let kind := match data.kind with
+    | .structKind => LayoutCompat.AdtKind.Struct | .unionKind => .Union | .enumKind => .Enum
+  let variants := data.variants.map fun variant => variant.fields.map fun field =>
+    ({ name := field.name, ty := field.typeId } : LayoutCompat.Field TypeId)
+  pure ⟨kind,data.representation.transparent,data.representation.c,data.representation.rust,variants⟩
 
 def compatibilityKind (context : Context) (id : TypeId) : Result (LayoutCompat.TypeKind TypeId) := do
-  let source ← node context id
-  let value ← shape context id
-  match source.shapeKind with
-  | .tuple => pure .tuple | .never => pure .never | .functionDefinition => pure .functionDefinition
-  | .closure => pure .closure | .coroutine => pure .coroutine | .coroutineClosure => pure .coroutineClosure
-  | .array => return .array (← typeRef context (← field value "element"))
-  | .adt => pure .adt
-  | .patternType => return .pattern (← typeRef context (← field value "base"))
-  | .unsafeBinder => pure .unsafeBinder | .alias => pure .alias
-  | .reference => return .reference (← typeRef context (← field value "pointee"))
-  | .rawPointer => return .rawPointer (← typeRef context (← field value "pointee"))
-  | .functionPointer => pure .functionPointer
-  | .int | .uint =>
-    match source.shapeMetadata.signedKind <|> source.shapeMetadata.unsignedKind with
-    | some (.known kind) => pure (.integer kind)
-    | _ => throw "compiler integer kind missing"
+  match (← node context id).shape with
+  | .tuple _ => pure .tuple | .never => pure .never | .functionDefinition .. => pure .functionDefinition
+  | .closure .. => pure .closure | .coroutine .. => pure .coroutine | .coroutineClosure .. => pure .coroutineClosure
+  | .array element .. => pure (.array element)
+  | .adt _ => pure .adt
+  | .patternType base _ => pure (.pattern base)
+  | .unsafeBinder .. => pure .unsafeBinder | .alias .. => pure .alias
+  | .reference pointee .. => pure (.reference pointee)
+  | .rawPointer pointee _ => pure (.rawPointer pointee)
+  | .functionPointer .. => pure .functionPointer
+  | .int (.known kind) | .uint (.known kind) => pure (.integer kind)
   | .char => pure .char
-  | .bool | .float | .foreign | .str | .slice | .dynamicTraitObject => pure .other
+  | .bool | .float _ | .foreign _ | .str | .slice _ | .dynamicTraitObject .. => pure .other
 
 private def lift (value : Result A) : EStateM StepError S A :=
   match value with | .ok value => pure value | .error error => throw (.invalidProgram error)

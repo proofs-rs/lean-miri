@@ -13,7 +13,7 @@ open Miri.ABI Miri.Memory
 open MachineHooks (M State)
 structure Entry where
   typeId : MIR.TyId
-  dynamicType : Nat
+  dynamicType : PredicateList
   salt : Fin 32
   allocation : AllocId
 structure Registry where
@@ -91,11 +91,11 @@ structure Hooks (K User Other : Type) where
   registry : User → Registry
   putRegistry : User → Registry → User
   target : RuntimeTargetDataLayout
-  importedVTable : AllocId → M K User (Option (MIR.TyId × Nat))
+  importedVTable : AllocId → M K User (Option (MIR.TyId × PredicateList))
 
 /-- Source reserve_and_set_vtable_alloc key includes salt and both erased
 compiler identities. Metadata uses source pointer alignment and size zero. -/
-def reserve (h : Hooks K User Other) (ty : MIR.TyId) (dynType : Nat) (salt : Fin 32) : M K User AllocId := do
+def reserve (h : Hooks K User Other) (ty : MIR.TyId) (dynType : PredicateList) (salt : Fin 32) : M K User AllocId := do
   let state ← get
   let registry := h.registry state.machine.user
   if let some entry := registry.entries.find? (fun e => e.typeId == ty && e.dynamicType == dynType && e.salt == salt) then
@@ -113,7 +113,7 @@ def reserve (h : Hooks K User Other) (ty : MIR.TyId) (dynType : Nat) (salt : Fin
     user := h.putRegistry state.machine.user {registry with entries := registry.entries.push ⟨ty,dynType,salt,id⟩}}}
   return id
 
-def globalVTable (h : Hooks K User Other) (id : AllocId) : M K User (Option (MIR.TyId × Nat)) := do
+def globalVTable (h : Hooks K User Other) (id : AllocId) : M K User (Option (MIR.TyId × PredicateList)) := do
   if let some entry := (h.registry (← get).machine.user).entries.find? (·.allocation == id) then
     return some (entry.typeId,entry.dynamicType)
   if let .ok info := (← get).machine.memory.getAllocInfo id then

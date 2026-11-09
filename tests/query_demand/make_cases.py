@@ -16,14 +16,7 @@ p.add_argument('output', type=Path)
 p.add_argument('--tls-base', type=Path)
 a = p.parse_args()
 a.output.mkdir(parents=True, exist_ok=True)
-# The loader intentionally preserves graph aliases. Query mutations model
-# independent inline JSON values, so expand to an ordinary mutable tree once
-# before copying and editing individual cases.
-base = json.loads(json.dumps(load_mir_document(a.base)))
-# Mutations below operate on the expanded business document. Give each derived
-# case a valid empty schema-3 catalog so the importer reaches the intended
-# query-demand checks instead of rejecting the test transport envelope.
-base["shared_payloads"] = {"schema_version": 2, "nodes": []}
+base = load_mir_document(a.base)
 cases = []
 
 def save(name, value):
@@ -79,8 +72,7 @@ for family, catalog, suffix, provider in [
     add(family + '-actual-unknown-descendant', nested, False, index=index)
 
 if a.tls_base:
-    tls = json.loads(json.dumps(load_mir_document(a.tls_base)))
-    tls["shared_payloads"] = {"schema_version": 2, "nodes": []}
+    tls = load_mir_document(a.tls_base)
     save('tls-plain.json', tls)
     def collect(value):
         if isinstance(value, dict):
@@ -105,7 +97,7 @@ if a.tls_base:
     next(n for n in collect(nested['bodies']) if n['def_id'] == definition)['initializer']['qa23_unknown_descendant'] = dict(kind='Cast', vtable_allocation=dict(kind='dynamic_vtable_upcast'))
     add('tls-unknown-descendant', nested, False, baseline='tls-plain.json')
     lookalike = copy.deepcopy(tls)
-    lookalike['qa23_initializer_lookalike'] = dict(kind='ThreadLocalRef', def_id=dict(crate=0, index=0), initializer=dict(allocation=dict(allocation_id=10**30)))
+    lookalike['qa23_initializer_lookalike'] = dict(kind='ThreadLocalRef', def_id=10**30, initializer=dict(allocation=10**30))
     add('tls-outside-body-lookalike', lookalike, False, baseline='tls-plain.json')
 
 save('cases.json', dict(cases=cases, source_exports=dict(

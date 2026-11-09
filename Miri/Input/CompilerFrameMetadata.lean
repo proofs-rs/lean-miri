@@ -28,7 +28,9 @@ private def lift (result : Except String A) : MachineHooks.M K User A :=
   | .error error => throw (.unsupported s!"compiler frame metadata: {error}")
 
 private def definitionCrate (p : Prepared) (callee : CallInstance) : Except String Nat := do
-  let some definition := p.calls.calls.program.compilerTables.definitions[callee.defId]?
+  let id ← CompilerInstance.definitionOf (LowerContext.ofDocument p.calls.calls.program.input)
+    p.calls.calls.program.compilerTables callee
+  let some definition := p.calls.calls.program.compilerTables.definitions[id]?
     | throw "frame full-instance definition absent from shared compiler table"
   return definition.crateIndex
 
@@ -60,25 +62,29 @@ variable {K U P : Type}
 def resolvedRank (localCrate definitionCrate : Nat) (relevant : Array Nat) : UInt8 :=
   if definitionCrate == localCrate || relevant.contains definitionCrate then 255 else 1
  theorem userRelevance_resolved (p : Prepared) (relevant : Array Nat)
-    (frame : Frame P LocalLayout Unit) (definition : DefinitionId)
+    (frame : Frame P LocalLayout Unit) (definition : DefinitionId) (definitionIndex : Nat)
     (inline : CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = .ok none ∨
       CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = .ok (some false))
     (track : CompilerRuntimeQueries.requiresCallerLocation p.calls.runtime frame.functionInstance = .ok false)
-    (found : p.calls.calls.program.compilerTables.definitions[frame.functionInstance.defId]? = some definition) :
+    (resolved : CompilerInstance.definitionOf (LowerContext.ofDocument p.calls.calls.program.input)
+      p.calls.calls.program.compilerTables frame.functionInstance = .ok definitionIndex)
+    (found : p.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition) :
     (FrameMetadata.userRelevance (hooks p relevant) frame : MachineHooks.M K U UInt8) =
       pure (resolvedRank p.localCrate definition.crateIndex relevant) := by
   rcases inline with inline | inline <;> funext state
-  all_goals simp [FrameMetadata.userRelevance, hooks, lift, definitionCrate, inline, track, found,
+  all_goals simp [FrameMetadata.userRelevance, hooks, lift, definitionCrate, inline, track, resolved, found,
     resolvedRank, bind, EStateM.bind, pure, EStateM.pure, Except.pure, Except.bind]
   all_goals split <;> simp_all [bind, EStateM.bind, EStateM.pure]
   all_goals split <;> rfl
 
  theorem initFrame_resolved (p : Prepared) (relevant : Array Nat)
-    (frame : Frame Provenance LocalLayout Unit) (definition : DefinitionId)
+    (frame : Frame Provenance LocalLayout Unit) (definition : DefinitionId) (definitionIndex : Nat)
     (inline : CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = .ok none ∨
       CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = .ok (some false))
     (track : CompilerRuntimeQueries.requiresCallerLocation p.calls.runtime frame.functionInstance = .ok false)
-    (found : p.calls.calls.program.compilerTables.definitions[frame.functionInstance.defId]? = some definition)
+    (resolved : CompilerInstance.definitionOf (LowerContext.ofDocument p.calls.calls.program.input)
+      p.calls.calls.program.compilerTables frame.functionInstance = .ok definitionIndex)
+    (found : p.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition)
     (state : MachineHooks.State K U) :
     ∃ fresh,
       MachineHooks.initFrame (FrameMetadata.userRelevance (hooks p relevant)) frame state = .ok fresh state ∧
@@ -86,7 +92,7 @@ def resolvedRank (localCrate definitionCrate : Nat) (relevant : Array Nat) : UIn
       fresh.extra.dataRace = state.machine.dataRace.map (fun _ => {}) ∧
       fresh.extra.userRelevance = resolvedRank p.localCrate definition.crateIndex relevant ∧
       fresh.returnContinuation = frame.returnContinuation ∧ fresh.returnPlace = frame.returnPlace := by
-  have exactQuery := userRelevance_resolved (K := K) (U := U) p relevant frame definition inline track found
+  have exactQuery := userRelevance_resolved (K := K) (U := U) p relevant frame definition definitionIndex inline track resolved found
   unfold MachineHooks.initFrame
   simp only [get, getThe, MonadStateOf.get, EStateM.get, bind, EStateM.bind, pure, EStateM.pure]
   rw [exactQuery]
@@ -110,15 +116,17 @@ def resolvedRank (localCrate definitionCrate : Nat) (relevant : Array Nat) : UIn
   trackCallerArg := frame.trackCallerArg
   location := frame.location }
  theorem initFrame_explicit (p : Prepared) (relevant : Array Nat)
-    (frame : Frame Provenance LocalLayout Unit) (definition : DefinitionId)
+    (frame : Frame Provenance LocalLayout Unit) (definition : DefinitionId) (definitionIndex : Nat)
     (inline : CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = .ok none ∨
       CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = .ok (some false))
     (track : CompilerRuntimeQueries.requiresCallerLocation p.calls.runtime frame.functionInstance = .ok false)
-    (found : p.calls.calls.program.compilerTables.definitions[frame.functionInstance.defId]? = some definition)
+    (resolved : CompilerInstance.definitionOf (LowerContext.ofDocument p.calls.calls.program.input)
+      p.calls.calls.program.compilerTables frame.functionInstance = .ok definitionIndex)
+    (found : p.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition)
     (state : MachineHooks.State K U) :
     MachineHooks.initFrame (FrameMetadata.userRelevance (hooks p relevant)) frame state =
       .ok (resolvedFrame frame state.machine (resolvedRank p.localCrate definition.crateIndex relevant)) state := by
-  have exactQuery := userRelevance_resolved (K := K) (U := U) p relevant frame definition inline track found
+  have exactQuery := userRelevance_resolved (K := K) (U := U) p relevant frame definition definitionIndex inline track resolved found
   unfold MachineHooks.initFrame
   simp only [get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure]
   rw [exactQuery]

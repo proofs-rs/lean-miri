@@ -1,5 +1,6 @@
 import Miri.Input.CompilerProviders
 import Miri.Input.NormalizationBody
+import Miri.Input.TypedValueAccess
 import Miri.Interpreter.AllocationDriver
 
 /-! Canonical stack.rs frame/local/instruction queries. The body index is the
@@ -28,15 +29,14 @@ def currentBody (p : CompilerProviders.Prepared) : MachineHooks.M K User Lowered
   lift (bodyOfFrame p (← MachineHooks.currentFrame))
 
 def normalizedBody (p : CompilerProviders.Prepared) (frame : ActualFrame) :
-    Except String Json := do
+    Except String BodyCore := do
   let body ← bodyOfFrame p frame
   let some lifecycle := p.lifecycle.lifecycle.entries[frame.bodyIdentity.index]?
     | throw "canonical body compiler context is absent"
   unless (← lifecycle.callee) == frame.functionInstance do
     throw "body normalization belongs to another full instance"
-  let context ← body.input.payload.getObjVal? "constant_query_context"
-  let normalized ← context.getObjVal? "normalization"
-  NormalizationBody.resolve normalized body.input.payload
+  let some context := body.input.constantQueryContext | throw "body normalization compiler context is absent"
+  pure (← NormalizationBody.resolve context.normalizationBodyId p.program.input.bodies).toBodyCore
 
 /-- The recorded normalization ran rustc's instantiate-MIR-and-normalize query
 with this exact full instance and body's typing environment. -/
@@ -45,11 +45,11 @@ def normalizedLocalType (p : CompilerProviders.Prepared) (frame : ActualFrame)
   let body ← bodyOfFrame p frame
   let some source := body.input.locals[id]? | throw "source local is absent"
   unless source.id == id do throw "source local index mismatch"
-  let locals ← (← (← normalizedBody p frame).getObjVal? "locals").getArr?
+  let locals := (← normalizedBody p frame).locals
   unless locals.size == body.input.locals.size do throw "body normalization changed local count"
   let some decl := locals[id]? | throw "normalized local is absent"
-  unless (← decl.getObjValAs? Nat "local") == id do throw "normalized local index mismatch"
-  (← decl.getObjVal? "type").getObjValAs? Nat "type_id"
+  unless decl.id == id do throw "normalized local index mismatch"
+  pure decl.typeId
 
 /-- Source step.rs Cast target normalization at the exact current statement.
 The requested original type must be the actual Cast target. No type-ID-only
@@ -68,17 +68,17 @@ def normalizeCastTarget (p : CompilerProviders.Prepared) (requested : MIR.TyId) 
   unless requested == original do throw (.invalidProgram "cast normalization requested another source type")
   lift do
     let normalized ← normalizedBody p frame
-    let blocks ← (← normalized.getObjVal? "basic_blocks").getArr?
-    let some normalizedBlock := blocks[location.block]? | throw "normalized source block absent"
-    unless (← normalizedBlock.getObjValAs? Nat "block") == location.block do
-      throw "normalized source block index mismatch"
-    let statements ← (← normalizedBlock.getObjVal? "statements").getArr?
-    let some statement := statements[location.statementIndex]? | throw "normalized source statement absent"
-    let kind ← statement.getObjVal? "kind"
-    unless (← kind.getObjValAs? String "variant") == "Assign" do throw "normalization changed statement kind"
-    let rvalue ← kind.getObjVal? "rvalue"
-    unless (← rvalue.getObjValAs? String "kind") == "Cast" do throw "normalization changed Cast rvalue"
-    (← rvalue.getObjVal? "target_type").getObjValAs? Nat "type_id"
+    let some normalizedBlock := normalized.blocks[location.block]? | throw "normalized source block absent"
+    unless normalizedBlock.id == location.block do throw "normalized source block index mismatch"
+    let some statement := normalizedBlock.statements[location.statementIndex]? | throw "normalized source statement absent"
+    match statement.value with
+    | .statement .assign _ => pure ()
+    | _ => throw "normalization changed statement kind"
+    let rvalue ← statement.value.field "rvalue"
+    match rvalue with
+    | .rvalue .cast _ => pure ()
+    | _ => throw "normalization changed Cast rvalue"
+    (← rvalue.field "target_type").natural
 
 /-- The uncached compiler leaf used by the canonical local-layout cache. -/
 def computeLocalLayout (p : CompilerProviders.Prepared) (id : MIR.LocalId) :
@@ -121,9 +121,9 @@ def localSpan (p : CompilerProviders.Prepared) (supplied : MIR.Body) (id : MIR.L
   unless supplied == frame.body do throw (.invalidProgram "local span body differs from active frame")
   let body ← lift (bodyOfFrame p frame)
   let some decl := body.input.locals[id]? | throw (.invalidProgram "local source span index is absent")
-  match p.program.bundle.spans.toList.idxOf? decl.sourceInfo.span with
-  | some index => pure ⟨index⟩
-  | none => throw (.unsupported "exact local source span is absent from canonical span table")
+  if decl.sourceInfo.spanId < p.program.bundle.spans.size then
+    pure ⟨decl.sourceInfo.spanId⟩
+  else throw (.unsupported "exact local source span is absent from canonical span table")
 
 /-- Return the actual existing MIR node; no second executable instruction IR. -/
 def instruction (p : CompilerProviders.Prepared) :
@@ -218,13 +218,14 @@ variable {K U : Type}
     (contents : actual.body = body.body)
     (loader : CallResolution.loadedBodyOfInstance p.lifecycle.calls.calls fnInstance = .ok body)
     (declaration : actual.input.locals[0]? = some decl)
-    (indexed : p.program.bundle.spans.toList.idxOf? decl.sourceInfo.span = some span.id)
+    (indexed : decl.sourceInfo.spanId = span.id)
+    (bounded : span.id < p.program.bundle.spans.size)
     (frames : Array ActualFrame) (frame : ActualFrame) (machine : MachineHooks.MachineState K U)
     (identity : frame.bodyIdentity = body.identity) (function : frame.functionInstance = fnInstance)
     (frameBody : frame.body = body.body) :
     localSpan p body.body 0 (⟨⟨frames.push frame⟩,machine⟩ : MachineHooks.State K U) =
       .ok span ⟨⟨frames.push frame⟩,machine⟩ := by
   simp [localSpan,MachineHooks.currentFrame,Stack.currentFrame?,bodyOfFrame,lift,
-    row,contents,loader,declaration,indexed,identity,function,frameBody,
+    row,contents,loader,declaration,indexed,bounded,identity,function,frameBody,
     get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,Except.bind,Except.pure]
 end Miri.Input.CompilerFrameContext

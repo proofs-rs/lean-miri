@@ -1,108 +1,75 @@
 import Miri.Input.Model
+import Miri.Input.ValidateTables
+import Miri.Input.TypeConstCodec
 
 namespace Miri.Input
 open Lean DecoderValues
 
-private partial def collectFunctionAbisAux (node : JsonTraversalCache.Node) (path : String) (memo : DecodeMemo)
-    (seen : Std.HashSet JsonTraversalCache.Key := {}) (visited : Std.HashSet JsonTraversalCache.IdentityKey := {})
-    : Except String (Array FunctionAbi × Std.HashSet JsonTraversalCache.Key × Std.HashSet JsonTraversalCache.IdentityKey) := do
-  let j := node.value
-  let key := node.identity
-  if statusOf? j == some "debug_payload" then return (#[], seen, visited)
-  let isContainer := match j with | .arr _ | .obj _ => true | _ => false
-  if isContainer && node.shouldMemo && visited.contains key then return (#[], seen, visited)
-  let visited := if isContainer && node.shouldMemo then visited.insert key else visited
-  match j with
-  | .arr values =>
-    let mut all := #[]
-    let mut seen := seen
-    let mut visited := visited
-    let mut index := 0
-    for value in values do
-      let (found, nextSeen, nextVisited) ← collectFunctionAbisAux (node.child index value) s!"{path}[{index}]" memo seen visited
-      all := all ++ found
-      seen := nextSeen
-      visited := nextVisited
-      index := index + 1
-    return (all, seen, visited)
-  | .obj fields =>
-    let mut all := #[]
-    let mut seen := seen
-    let mut visited := visited
-    for ((fieldName, value), childIndex) in fields.toList.zipIdx do
-      let child := node.child childIndex value
-      if fieldName == "fn_abi" && value != .null then
-        if !seen.contains child.key then
-          all := all.push (← parseFunctionAbi value (joinPath path fieldName) memo)
-          seen := seen.insert child.key
-      let looksLikeFunctionAbi :=
-        hasField value "arguments" && hasField value "return" &&
-        hasField value "calling_convention" && hasField value "can_unwind" &&
-        hasField value "c_variadic" && hasField value "fixed_count"
-      if looksLikeFunctionAbi && !seen.contains child.key then
-        all := all.push (← parseFunctionAbi value (joinPath path fieldName) memo)
-        seen := seen.insert child.key
-      let (found, nextSeen, nextVisited) ← collectFunctionAbisAux child (joinPath path fieldName) memo seen visited
-      all := all ++ found
-      seen := nextSeen
-      visited := nextVisited
-    return (all, seen, visited)
-  | _ => return (#[], seen, visited)
-
-private def collectFunctionAbis (node : JsonTraversalCache.Node) (path : String) (memo : DecodeMemo := emptyDecodeMemo) : Except String (Array FunctionAbi) := do
-  return (← collectFunctionAbisAux node path memo).1
-
 private def validateDense (ids : Array Nat) (what : String) : Except String Unit := do
-  let mut seen : Std.HashSet Nat := {}
-  for id in ids do
-    if seen.contains id then throw s!"{what}: duplicate IDs"
-    seen := seen.insert id
-  for id in ids do
-    if id >= ids.size then throw s!"{what}: IDs must be dense from zero; found {id} with {ids.size} entries"
+  for (id, index) in ids.toList.zipIdx do
+    unless id == index do throw s!"{what}: expected ID {index} at table position {index}, got {id}"
 
-/-- The bounds encode ID membership only after all three source ID arrays pass
-`validateDense`; each dense array then denotes exactly the natural range below
-its size, independent of row order. -/
-private partial def validateReferencesAux (node : JsonTraversalCache.Node) (path : String)
-    (typeCount allocationCount instanceCount : Nat) (visited : Std.HashSet JsonTraversalCache.IdentityKey)
-    : Except String (Std.HashSet JsonTraversalCache.IdentityKey) := do
-  let j := node.value
-  let memoKey := node.identity
-  if statusOf? j == some "debug_payload" then return visited
-  let isContainer := match j with | .arr _ | .obj _ => true | _ => false
-  if isContainer && node.shouldMemo && visited.contains memoKey then return visited
+private partial def validateReferences (j : Json) (path : String)
+    (typeCount allocationCount instanceCount layoutCount abiCount spanCount definitionCount constantCount bodyCount predicateCount : Nat) : Except String Unit := do
+  if statusOf? j == some "debug_payload" then return
   match j with
   | .arr values =>
-    let mut index := 0
-    let mut visited := visited
-    for value in values do
-      visited ← validateReferencesAux (node.child index value) s!"{path}[{index}]" typeCount allocationCount instanceCount visited
-      index := index + 1
-    return if node.shouldMemo then visited.insert memoKey else visited
+    for (value, index) in values.toList.zipIdx do
+      validateReferences value s!"{path}[{index}]" typeCount allocationCount instanceCount layoutCount abiCount spanCount definitionCount constantCount bodyCount predicateCount
   | .obj fields =>
-    let entries := fields.toList
-    match entries with
-    | [("type_id", idJson)] =>
-      let id ← idJson.getNat? |>.mapError fun e => s!"{path}.type_id: malformed type reference ({e})"
-      if id >= typeCount then throw s!"{path}: dangling type reference {id}"
-      return if node.shouldMemo then visited.insert memoKey else visited
-    | [("allocation_id", idJson)] =>
-      let id ← idJson.getNat? |>.mapError fun e => s!"{path}.allocation_id: malformed allocation reference ({e})"
-      if id >= allocationCount then throw s!"{path}: dangling allocation reference {id}"
-      return if node.shouldMemo then visited.insert memoKey else visited
-    | _ => pure ()
-    let mut visited := visited
-    for ((key, value), childIndex) in entries.zipIdx do
-      if key == "instance_id" then
-        let id ← value.getNat? |>.mapError fun e => s!"{joinPath path key}: malformed instance ID ({e})"
-        if id >= instanceCount then throw s!"{joinPath path key}: dangling instance reference {id}"
-      visited ← validateReferencesAux (node.child childIndex value) (joinPath path key) typeCount allocationCount instanceCount visited
-    return if node.shouldMemo then visited.insert memoKey else visited
-  | _ => return visited
-
-private def validateReferences (node : JsonTraversalCache.Node) (path : String)
-    (typeCount allocationCount instanceCount : Nat) : Except String Unit := do
-  let _ ← validateReferencesAux node path typeCount allocationCount instanceCount {}
+    if hasField j "$lean_miri_shared_ref" then throw s!"{path}: generic shared references are not part of this schema"
+    for (key, value) in fields.toList do
+      let childPath := joinPath path key
+      if let some reference := referenceField j key value then
+        let (id, count, kind) := match reference with
+          | .typeRef id => (id, typeCount, "type")
+          | .allocationRef id => (id, allocationCount, "allocation")
+          | .instanceRef id => (id, instanceCount, "instance")
+          | .sourceSpan id => (id, spanCount, "span")
+          | _ => (0, 1, "value")
+        unless id < count do throw s!"{childPath}: dangling {kind} reference {id}"
+      let extraPool :=
+        if key.endsWith "def_id" || ["definition", "hoisted_from"].contains key then some (definitionCount, "definition")
+        else if key == "body" then some (bodyCount, "body")
+        else if ["entry_instance", "original_instance_id"].contains key then some (instanceCount, "instance")
+        else if key == "value" && (j.getObjValAs? String "kind").toOption == some "const" then some (constantCount, "type constant")
+        else if key == "length" && (j.getObjValAs? String "kind").toOption == some "array" then some (constantCount, "type constant")
+        else if key == "count" && (j.getObjValAs? String "kind").toOption == some "Repeat" then some (constantCount, "type constant")
+        else if key == "const" || ["start", "end"].contains key && (j.getObjValAs? String "kind").toOption == some "range" then some (constantCount, "type constant")
+        else none
+      if let some (count, kind) := extraPool then
+        unless value == .null do
+          let id ← value.getNat? |>.mapError fun error => s!"{childPath}: expected {kind} ID ({error})"
+          unless id < count do throw s!"{childPath}: dangling {kind} reference {id}"
+      if key == "elements" && (j.getObjValAs? String "kind").toOption == some "branch" then
+        for element in (← value.getArr?) do
+          let id ← element.getNat?
+          unless id < constantCount do throw s!"{childPath}: dangling type constant reference {id}"
+      if key == "line_spans" then
+        for span in (← value.getArr?) do
+          let id ← span.getNat?
+          unless id < spanCount do throw s!"{childPath}: dangling span reference {id}"
+      if key == "type_queries" then
+        for (_, result) in (← objectFields value) do
+          unless result == .null do
+            let id ← result.getNat?
+            unless id < typeCount do throw s!"{childPath}: dangling type reference {id}"
+      if ["predicates", "input_predicates"].contains key && path != "$" then
+        for element in (← value.getArr?) do
+          let id ← element.getNat?
+          unless id < predicateCount do throw s!"{childPath}: dangling predicate reference {id}"
+      if ["inputs", "extra_argument_types", "extra_arguments"].contains key ||
+          key == "elements" && (j.getObjValAs? String "kind").toOption == some "tuple" then
+        for element in (← value.getArr?) do
+          let id ← element.getNat?
+          unless id < typeCount do throw s!"{childPath}: dangling type reference {id}"
+      if key == "layout" || key == "fn_abi" || key == "abi_query" then
+        unless value == .null do
+          let id ← value.getNat? |>.mapError fun error => s!"{childPath}: expected pool ID ({error})"
+          let count := if key == "layout" then layoutCount else abiCount
+          unless id < count do throw s!"{childPath}: dangling pool reference {id}"
+      validateReferences value childPath typeCount allocationCount instanceCount layoutCount abiCount spanCount definitionCount constantCount bodyCount predicateCount
+  | _ => pure ()
 
 private partial def validateMirIndices (j : Json) (path : String)
     (localCount : Nat) : Except String Unit := do
@@ -218,34 +185,20 @@ private def validateBody (j : Json) (path : String) : Except String Unit := do
     validateTerminatorEdges term s!"{blockPath}.terminator.kind" blocks.size
     index := index + 1
 
-private partial def validateAllBodiesAux (node : JsonTraversalCache.Node) (path : String) (visited : Std.HashSet JsonTraversalCache.IdentityKey)
-    : Except String (Std.HashSet JsonTraversalCache.IdentityKey) := do
-  let j := node.value
-  let memoKey := node.identity
-  if statusOf? j == some "debug_payload" then return visited
-  let isContainer := match j with | .arr _ | .obj _ => true | _ => false
-  if isContainer && node.shouldMemo && visited.contains memoKey then return visited
+private partial def validateAllBodies (j : Json) (path : String) : Except String Unit := do
+  if statusOf? j == some "debug_payload" then return
   match j with
   | .arr values =>
-    let mut index := 0
-    let mut visited := visited
-    for value in values do
-      visited ← validateAllBodiesAux (node.child index value) s!"{path}[{index}]" visited
-      index := index + 1
-    return if node.shouldMemo then visited.insert memoKey else visited
+    for (value, index) in values.toList.zipIdx do
+      validateAllBodies value s!"{path}[{index}]"
   | .obj fields =>
     let hasLocals := (j.getObjVal? "locals").isOk
     let hasBlocks := (j.getObjVal? "basic_blocks").isOk
     if hasLocals != hasBlocks then throw s!"{path}: body requires both locals and basic_blocks"
     if hasLocals && hasBlocks then validateBody j path
-    let mut visited := visited
-    for ((key, value), childIndex) in fields.toList.zipIdx do
-      visited ← validateAllBodiesAux (node.child childIndex value) (joinPath path key) visited
-    return if node.shouldMemo then visited.insert memoKey else visited
-  | _ => return visited
-
-private def validateAllBodies (node : JsonTraversalCache.Node) (path : String) : Except String Unit := do
-  let _ ← validateAllBodiesAux node path {}
+    for (key, value) in fields.toList do
+      validateAllBodies value (joinPath path key)
+  | _ => pure ()
 
 private def jsonToNatArray (nodes : Array α) (getId : α → Nat) : Array Nat := nodes.map getId
 
@@ -316,34 +269,21 @@ private def validateExternAbi (abi : ExternAbi) (path : String) : Except String 
     throw (joinPath path "source_spelling" ++ ": " ++ "extern ABI is missing its original spelling")
   return ()
 
-private def validateAbiAttributes (attrs : AbiAttributes) (path : String) : Except String Unit := do
-  validateTaggedNode attrs.argExtension ["none", "zero_extend", "sign_extend"]
-      (joinPath path "arg_extension") "argument extension"
-  validateTaggedNode attrs.captures ["none", "address", "read_only", "unrestricted"]
-      (joinPath path "captures") "capture mode"
-  return ()
-
 private def validateAbiRegister (reg : AbiRegister) (path : String) : Except String Unit := do
   match reg.kind with
   | .vector =>
     match reg.hintElement with
     | none => throw (joinPath path "kind.hint_element" ++ ": " ++ "vector ABI register is missing its element hint")
-    | some hint => validateTaggedNode hint ["integer", "float", "pointer"] (joinPath path "kind.hint_element") "register element"
+    | some _ => pure ()
   | _ => pure ()
   return ()
 
 private def validateAbiPassMode (mode : AbiPassMode) (path : String) : Except String Unit := do
-  for (attrs, index) in mode.attributes.toList.zipIdx do
-    validateAbiAttributes attrs s!"{path}.attributes[{index}]"
   match mode.castTarget with
   | some target =>
     for (register, index) in target.prefixRegisters.toList.zipIdx do
       validateAbiRegister register s!"{path}.target.prefix_registers[{index}]"
     validateAbiRegister target.restRegister (joinPath path "target.rest_register")
-    validateAbiAttributes target.attributes (joinPath path "target.attributes")
-  | none => pure ()
-  match mode.indirectMode with
-  | some tag => validateTaggedNode tag ["pointer", "on_stack", "amdgpu_kernel_argument"] (joinPath path "mode") "indirect mode"
   | none => pure ()
   return ()
 
@@ -366,7 +306,7 @@ private def validateTagEncoding (encoding : TagEncoding) (path : String) : Excep
 
 private def validatePromotedBody (promoted : Array PromotedBody) (path : String) : Except String Unit := do
   for entry in promoted do
-    if entry.body.isNone then
+    if entry.bodyId.isNone then
       throw (s!"{path}[{entry.index}]" ++ ": " ++ "promoted MIR body is absent; cannot import it as typed MIR")
   return ()
 
@@ -378,7 +318,7 @@ private def validateVirtualIdentity (raw : Json) (types : Array TypeNode)
     let payload := node.payload
     if (payload.getObjValAs? String "body_status").toOption != some "not_applicable" then
       throw (base ++ ".body_status" ++ ": " ++ "virtual dispatch identity must explicitly have no executable MIR body")
-    if node.body.isSome then
+    if node.bodyId.isSome then
       throw (base ++ ".body" ++ ": " ++ "virtual dispatch identity cannot carry a fabricated MIR body")
     let kind := (payload.getObjVal? "instance_kind").toOption.getD .null
     if (kind.getObjValAs? String "kind").toOption != some "virtual" then
@@ -389,7 +329,7 @@ private def validateVirtualIdentity (raw : Json) (types : Array TypeNode)
       throw (base ++ ".instance_kind.dispatch_slot" ++ ": " ++ "virtual InstanceKind slot disagrees with catalog slot")
     let identity := (payload.getObjVal? "virtual_identity").toOption.getD .null
     let functionType := (identity.getObjVal? "function_type").toOption.getD .null
-    let typeId := (functionType.getObjValAs? Nat "type_id").toOption
+    let typeId := functionType.getNat?.toOption
     match typeId with
     | none => throw (base ++ ".virtual_identity.function_type" ++ ": " ++ "virtual method identity is missing its compiler function type")
     | some id =>
@@ -403,9 +343,7 @@ private def validateVirtualIdentity (raw : Json) (types : Array TypeNode)
     let abiValue := some abi
     let catalog := ((raw.getObjVal? "compiler_instance_abis").bind Json.getArr?).toOption.getD #[]
     let abiRows := catalog.filter fun row =>
-      (row.getObjValAs? Nat "instance_id").toOption == some node.id &&
-      (row.getObjVal? "instance_kind").toOption == (payload.getObjVal? "instance_kind").toOption &&
-      (row.getObjVal? "generic_args").toOption == (payload.getObjVal? "generic_args").toOption
+      (row.getObjValAs? Nat "instance_id").toOption == some node.id
     if abiRows.size != 1 then
       throw (base ++ ".virtual_identity.fn_abi" ++ ": " ++ "virtual identity must match one exact full-instance FnAbi query")
     else if let some row := abiRows[0]? then
@@ -415,7 +353,8 @@ private def validateVirtualIdentity (raw : Json) (types : Array TypeNode)
   return ()
 
 private def validateExtraSemantic (raw : Json) (types : Array TypeNode) (allocations : Array AllocationNode)
-    (instances : Array InstanceNode) (functionAbis : Array FunctionAbi) (bodies : Array Body) : Except String Unit := do
+    (instances : Array InstanceNode) (functionAbis : Array FunctionAbi) (bodies : Array Body)
+    (layouts : Array Layout) : Except String Unit := do
   validateVirtualIdentity raw types instances
   for node in types do
     let shapePath := s!"types[{node.id}].shape"
@@ -432,12 +371,13 @@ private def validateExtraSemantic (raw : Json) (types : Array TypeNode) (allocat
     | .float, _, _, none, _ => throw (joinPath shapePath "float_kind" ++ ": " ++ "float type shape is missing its exact float type")
     | .adt, _, _, _, none => throw (joinPath shapePath "adt_kind" ++ ": " ++ "ADT type shape is missing its struct/union/enum kind")
     | _, _, _, _, _ => pure ()
-    match node.layout.kind with
+    let some layout := layouts[node.layoutId]? | throw s!"types[{node.id}].layout: missing layout {node.layoutId}"
+    match layout.kind with
     | .layout => pure ()
-    match node.layout.backendRepresentation with
+    match layout.backendRepresentation with
     | some repr => validateBackendRepr repr s!"types[{node.id}].layout.backend_repr"
     | none => pure ()
-    match node.layout.variantsLayout with
+    match layout.variantsLayout with
     | some variants =>
       match variants.tagEncoding with
       | some encoding => validateTagEncoding encoding s!"types[{node.id}].layout.variants.tag_encoding"
@@ -460,7 +400,8 @@ private def validateExtraSemantic (raw : Json) (types : Array TypeNode) (allocat
     | .memory, some (.memory memory) =>
       validateAllocationMemory memory allocPath
     | .function, some (.function function) =>
-      if function.definitionPath.isEmpty then throw (s!"{allocPath}.instance_def_path" ++ ": " ++ "function allocation is missing its definition path")
+      let canonical := instances.filter (·.id == function.instanceId)
+      unless canonical.size == 1 do throw s!"{allocPath}: missing canonical function instance"
     | .static, some (.static static) =>
       if static.definitionPath.isEmpty then throw (s!"{allocPath}.def_path" ++ ": " ++ "static allocation is missing its definition path")
       match static.initializer, static.globalInfo with
@@ -475,9 +416,12 @@ private def validateExtraSemantic (raw : Json) (types : Array TypeNode) (allocat
     | _, none => throw (allocPath ++ ": " ++ "supported allocation is missing its typed payload")
     | _, some _ => throw (allocPath ++ ": " ++ "allocation kind and typed payload disagree")
   for node in instances do
+    if let some definition := node.definitionId then
+      unless definition == node.instanceKind.defId do
+        throw s!"instances[{node.id}]: canonical instance kind and definition disagree"
     match node.kind with
     | .instanceMir =>
-      if node.body.isNone then
+      if node.bodyId.isNone then
         throw (s!"instances[{node.id}].body" ++ ": " ++ "instance MIR is missing its decoded body")
       match node.bodyInstantiation with
       | none => throw (s!"instances[{node.id}].body_instantiation" ++ ": " ++ "instance body is missing substitution/normalization evidence")
@@ -491,7 +435,7 @@ private def validateExtraSemantic (raw : Json) (types : Array TypeNode) (allocat
         throw (s!"instances[{node.id}].instance_args_are_monomorphic" ++ ": " ++ "instance arguments are not known to be monomorphic")
     | .intrinsicDispatch =>
       let base := s!"instances[{node.id}]"
-      if node.body.isSome then
+      if node.bodyId.isSome then
         throw (joinPath base "body" ++ ": " ++ "intrinsic dispatch identity cannot carry fabricated MIR")
       let instanceKind := (node.payload.getObjVal? "instance_kind").toOption.getD .null
       let tag := (instanceKind.getObjValAs? String "kind").toOption
@@ -499,10 +443,7 @@ private def validateExtraSemantic (raw : Json) (types : Array TypeNode) (allocat
         throw (joinPath base "instance_kind.kind" ++ ": " ++ "intrinsic dispatch requires exact rustc Intrinsic or LlvmIntrinsic identity")
       let topDefId := node.definitionId
       let nestedDefIdJson := (instanceKind.getObjVal? "def_id").toOption
-      let nestedDefId := nestedDefIdJson.bind fun value =>
-        match value.getObjValAs? Nat "crate", value.getObjValAs? Nat "index" with
-        | .ok crate, .ok index => some ⟨crate, index⟩
-        | _, _ => none
+      let nestedDefId := nestedDefIdJson.bind (·.getNat?.toOption)
       if topDefId.isNone then
         throw (joinPath base "def_id" ++ ": " ++ "intrinsic dispatch requires an exact top-level rustc DefId")
       if nestedDefId.isNone then
@@ -511,7 +452,7 @@ private def validateExtraSemantic (raw : Json) (types : Array TypeNode) (allocat
         throw (joinPath base "instance_kind.def_id" ++ ": " ++ "intrinsic identity DefId disagrees with its instance record")
     | .foreignItemNoMir =>
       let base := s!"instances[{node.id}]"
-      if node.body.isSome then
+      if node.bodyId.isSome then
         throw (joinPath base "body" ++ ": " ++ "foreign declaration cannot carry fabricated MIR")
       if (node.payload.getObjValAs? Bool "foreign_item").toOption != some true then
         throw (joinPath base "foreign_item" ++ ": " ++ "no-MIR foreign dispatch requires exact rustc is_foreign_item=true evidence")
@@ -523,10 +464,7 @@ private def validateExtraSemantic (raw : Json) (types : Array TypeNode) (allocat
         throw (joinPath base "instance_kind.kind" ++ ": " ++ "foreign dispatch requires exact rustc Item identity")
       let topDefId := node.definitionId
       let nestedDefIdJson := (instanceKind.getObjVal? "def_id").toOption
-      let nestedDefId := nestedDefIdJson.bind fun value =>
-        match value.getObjValAs? Nat "crate", value.getObjValAs? Nat "index" with
-        | .ok crate, .ok index => some ⟨crate, index⟩
-        | _, _ => none
+      let nestedDefId := nestedDefIdJson.bind (·.getNat?.toOption)
       if topDefId.isNone then
         throw (joinPath base "def_id" ++ ": " ++ "foreign dispatch requires an exact top-level rustc DefId")
       if nestedDefId.isNone then
@@ -534,8 +472,8 @@ private def validateExtraSemantic (raw : Json) (types : Array TypeNode) (allocat
       if topDefId.isSome && nestedDefId.isSome && topDefId != nestedDefId then
         throw (joinPath base "instance_kind.def_id" ++ ": " ++ "foreign identity DefId disagrees with its instance record")
     | .virtualDispatchTarget => pure ()
-    | .symbolIdentityOnly =>
-      if node.body.isSome then
+    | .identityOnly =>
+      if node.bodyId.isSome then
         throw (s!"instances[{node.id}].body" ++ ": " ++ "symbol identity catalog row must not provide an executable MIR body")
   for (abi, abiIndex) in functionAbis.toList.zipIdx do
     validateCanonicalAbi abi.callingConvention s!"function_abis[{abiIndex}].calling_convention"
@@ -547,15 +485,15 @@ private def validateExtraSemantic (raw : Json) (types : Array TypeNode) (allocat
     validatePromotedBody node.promotedBodies s!"instances[{node.id}].promoted_bodies"
   return ()
 
-private def validateSelectedScope (scope : SelectedScope) (bodies : Array Body)
-    (instances : Array InstanceNode) : Except String Unit := do
+private def validateSelectedScope (scope : SelectedScope) (_bodies : Array Body)
+    (instances : Array InstanceNode) (bodyRoots : Array BodyRoot) : Except String Unit := do
   if scope.kind != "rooted_structural_closure" then
     throw ("$.selected_scope.kind" ++ ": " ++ s!"unrecognized selected-scope kind `{scope.kind}`")
   if scope.semantics != "structural_export_closure_only" then
     throw ("$.selected_scope.semantics" ++ ": " ++ s!"unrecognized scope guarantee `{scope.semantics}`")
   if scope.roots.isEmpty then throw ("$.selected_scope.roots" ++ ": " ++ "selected structural closure has no root")
   for (root, index) in scope.roots.toList.zipIdx do
-    let resolvedBody := bodies.any fun body =>
+    let resolvedBody := bodyRoots.any fun body =>
       body.definitionId == some root.definitionId && body.defPath == root.defPath
     let resolvedInstance := instances.any fun inst =>
       inst.definitionId == some root.definitionId && inst.defPath == some root.defPath
@@ -564,26 +502,39 @@ private def validateSelectedScope (scope : SelectedScope) (bodies : Array Body)
   return ()
 
 private partial def collectGraphReferencesInto (j : Json)
-    (result : Array (String × Nat)) : Array (String × Nat) := Id.run do
+    (result : Array (String × Nat)) (metadata : Bool := false) : Array (String × Nat) := Id.run do
   match j with
   | .obj fields =>
-    if (j.getObjValAs? String "status").toOption == some "debug_payload" then return result
+    if statusOf? j == some "debug_payload" then return result
     let mut result := result
+    let metadata := metadata || (j.getObjValAs? String "kind").toOption == some "function_definition"
     for (key, value) in fields.toList do
-      if key == "normalization_template" || key == "compiler_facts" || key == "constructor_identity" then
-        continue
-      if key == "type_id" || key == "instance_id" || key == "allocation_id" then
-        if let .ok id := value.getNat? then result := result.push (key,id)
-      result := collectGraphReferencesInto value result
+      if ["normalization_template", "compiler_facts", "constructor_identity"].contains key then continue
+      let childMetadata := metadata || ["constant_query_context", "inlined"].contains key
+      if let some reference := referenceField j key value then
+        match reference with
+        | .typeRef id => result := result.push ("type_id", id)
+        | .allocationRef id => result := result.push ("allocation_id", id)
+        | .instanceRef id => result := result.push (if childMetadata then "metadata_instance_id" else "instance_id", id)
+        | _ => pure ()
+      if key == "entry_instance" then
+        if let .ok id := value.getNat? then result := result.push ("instance_id", id)
+      if key == "body" then
+        if let .ok id := value.getNat? then
+          result := result.push (if childMetadata then "metadata_body_id" else "body_id", id)
+      if key == "elements" && (j.getObjValAs? String "kind").toOption == some "tuple" then
+        for child in value.getArr?.toOption.getD #[] do
+          if let .ok id := child.getNat? then result := result.push ("type_id", id)
+      result := collectGraphReferencesInto value result childMetadata
     return result
   | .arr values =>
     let mut result := result
-    for value in values do result := collectGraphReferencesInto value result
+    for value in values do result := collectGraphReferencesInto value result metadata
     return result
   | _ => return result
 
-private def collectGraphReferences (j : Json) : Array (String × Nat) :=
-  collectGraphReferencesInto j #[]
+private def collectGraphReferences (j : Json) (metadata : Bool := false) : Array (String × Nat) :=
+  collectGraphReferencesInto j #[] metadata
 
 private def rawArray (j : Json) (key : String) : Array Json :=
   ((j.getObjVal? key).bind Json.getArr?).toOption.getD #[]
@@ -624,110 +575,45 @@ private def requiredStructuralDependencies (j : Json) (includeAllBodies : Bool :
   let instanceRows := rawArray j "instances"
   let allocationRows := rawArray j "allocations"
   let typeRows := rawArray j "types"
-  -- Hash only the exact source definition path string. Candidate rows are
-  -- checked with Json equality below, so arbitrary malformed Json values do
-  -- not rely on a Json hash/equality law.
-  let mut bodiesByDefinitionPath : Std.HashMap (Option String) (Array (Json × Nat)) := {}
-  let mut indexedBodyPosition := 0
-  for body in bodyRows do
-    let key := ((body.getObjVal? "def_path").toOption.bind fun value => (value.getStr?).toOption)
-    bodiesByDefinitionPath := bodiesByDefinitionPath.insert key
-      ((bodiesByDefinitionPath[key]?.getD #[]).push (body, indexedBodyPosition))
-    indexedBodyPosition := indexedBodyPosition + 1
-  let mut instancesByDefinitionPath : Std.HashMap (Option String) (Array (Json × Nat)) := {}
-  let mut instancesById : Std.HashMap Nat Json := {}
-  for inst in instanceRows do
-    let key := ((inst.getObjVal? "def_path").toOption.bind fun value => (value.getStr?).toOption)
-    if let .ok id := (inst.getObjVal? "instance_id").bind Json.getNat? then
-      instancesByDefinitionPath := instancesByDefinitionPath.insert key
-        ((instancesByDefinitionPath[key]?.getD #[]).push (inst, id))
-      if !(instancesById[id]?.isSome) then instancesById := instancesById.insert id inst
-  let mut typesById : Std.HashMap Nat Json := {}
-  for row in typeRows do
-    if let .ok id := (row.getObjVal? "type_id").bind Json.getNat? then
-      if !(typesById[id]?.isSome) then typesById := typesById.insert id row
-  let mut allocationsById : Std.HashMap Nat Json := {}
-  for row in allocationRows do
-    if let .ok id := (row.getObjVal? "allocation_id").bind Json.getNat? then
-      if !(allocationsById[id]?.isSome) then allocationsById := allocationsById.insert id row
+  let rootRows := rawArray j "body_roots"
+  let selected := if roots.isEmpty then rootRows else rootRows.filter fun body =>
+    roots.any fun root =>
+      optionalField root "def_id" == optionalField body "def_id" &&
+      optionalField root "def_path" == optionalField body "def_path"
+  let mut pending : Array (String × Nat) := #[]
+  for root in selected do pending := pending ++ collectGraphReferences root
+  let mut requiredTypes := #[]
+  let mut requiredInstances := #[]
+  let mut requiredAllocations := #[]
   let mut requiredTls := #[]
-  let mut pendingInstances := #[]
-  let mut pendingAllocations := #[]
-  let mut pendingTypes := #[]
-  let (selectedBodies, selectedInstances) := if includeAllBodies && (optionalField j "selected_scope").isNone then
-      (bodyRows.toList.zipIdx.toArray, #[])
-    else Id.run do
-      let mut selected := #[]
-      let mut rootInstances := #[]
-      for root in roots do
-        let rootPath := (root.getObjVal? "def_path").toOption
-        let rootDef := (root.getObjVal? "def_id").toOption
-        let rootPathText := rootPath.bind fun value => (value.getStr?).toOption
-        let rootBodyRows := (bodiesByDefinitionPath[rootPathText]?.getD #[]).filter fun (body, _) =>
-          (body.getObjVal? "def_path").toOption == rootPath &&
-            (body.getObjVal? "def_id").toOption == rootDef
-        -- The canonical root instance is an independent structural dependency,
-        -- even when its MIR body is emitted and does not refer to itself.
-        for (inst, id) in instancesByDefinitionPath[rootPathText]?.getD #[] do
-          if (inst.getObjVal? "def_path").toOption == rootPath &&
-              (inst.getObjVal? "def_id").toOption == rootDef then
-            rootInstances := rootInstances.push id
-        selected := selected ++ rootBodyRows
-      (selected, rootInstances)
-  pendingInstances := pendingInstances ++ selectedInstances
-  for (body,bodyIndex) in selectedBodies do
-      for reference in collectThreadLocalRefs body s!"$.bodies[{bodyIndex}]" do
-        requiredTls := requiredTls.push reference
-      for (kind,id) in collectGraphReferences body do
-        if kind == "type_id" then pendingTypes := pendingTypes.push id
-        else if kind == "instance_id" then pendingInstances := pendingInstances.push id
-        else if kind == "allocation_id" then pendingAllocations := pendingAllocations.push id
-  let mut visitedTypes := #[]
-  let mut visitedTypeIds : Std.HashMap Nat Unit := {}
-  let mut visitedInstances := #[]
-  let mut visitedInstanceIds : Std.HashMap Nat Unit := {}
-  let mut visitedAllocations := #[]
-  let mut visitedAllocationIds : Std.HashMap Nat Unit := {}
-  while !pendingTypes.isEmpty || !pendingInstances.isEmpty || !pendingAllocations.isEmpty do
-    let typeRefs := pendingTypes
-    pendingTypes := #[]
-    for id in typeRefs do
-      if visitedTypeIds[id]?.isSome then continue
-      visitedTypes := visitedTypes.push id
-      visitedTypeIds := visitedTypeIds.insert id ()
-      if let some row := typesById[id]? then
-        -- Only the compiler's source type shape participates here. Layout
-        -- evidence itself is demanded separately; compiler_facts is a query catalog.
-        if let .ok shape := row.getObjVal? "shape" then
-          for (kind, child) in collectGraphReferences shape do
-            if kind == "type_id" then pendingTypes := pendingTypes.push child
-            else if kind == "instance_id" then pendingInstances := pendingInstances.push child
-            else if kind == "allocation_id" then pendingAllocations := pendingAllocations.push child
-    let instanceRefs := pendingInstances
-    pendingInstances := #[]
-    for id in instanceRefs do
-      if visitedInstanceIds[id]?.isSome then continue
-      visitedInstances := visitedInstances.push id
-      visitedInstanceIds := visitedInstanceIds.insert id ()
-      if let some row := instancesById[id]? then
-        for reference in collectThreadLocalRefs row s!"$.instances[{id}]" do
-          requiredTls := requiredTls.push reference
-        for (key,child) in collectGraphReferences row do
-          if key == "type_id" then pendingTypes := pendingTypes.push child
-          if key == "instance_id" then pendingInstances := pendingInstances.push child
-          if key == "allocation_id" then pendingAllocations := pendingAllocations.push child
-    let allocationRefs := pendingAllocations
-    pendingAllocations := #[]
-    for id in allocationRefs do
-      if visitedAllocationIds[id]?.isSome then continue
-      visitedAllocations := visitedAllocations.push id
-      visitedAllocationIds := visitedAllocationIds.insert id ()
-      if let some row := allocationsById[id]? then
-        for (key,child) in collectGraphReferences row do
-          if key == "type_id" then pendingTypes := pendingTypes.push child
-          if key == "instance_id" then pendingInstances := pendingInstances.push child
-          if key == "allocation_id" then pendingAllocations := pendingAllocations.push child
-  return ⟨visitedTypes, visitedInstances, visitedAllocations, requiredTls⟩
+  let mut visited : Std.HashSet (String × Nat) := {}
+  while !pending.isEmpty do
+    let current := pending
+    pending := #[]
+    for (kind, id) in current do
+      if visited.contains (kind, id) then continue
+      visited := visited.insert (kind, id)
+      if kind == "type_id" then
+        requiredTypes := requiredTypes.push id
+        if let some row := typeRows[id]? then
+          if let some shape := optionalField row "shape" then
+            pending := pending ++ collectGraphReferences shape true
+      else if kind == "allocation_id" then
+        requiredAllocations := requiredAllocations.push id
+        if let some row := allocationRows[id]? then
+          pending := pending ++ collectGraphReferences row
+      else if kind == "instance_id" || kind == "metadata_instance_id" then
+        let metadata := kind == "metadata_instance_id"
+        if !metadata then requiredInstances := requiredInstances.push id
+        if let some row := instanceRows[id]? then
+          pending := pending ++ collectGraphReferences row metadata
+      else if kind == "body_id" || kind == "metadata_body_id" then
+        let metadata := kind == "metadata_body_id"
+        if let some row := bodyRows[id]? then
+          if !metadata then
+            requiredTls := requiredTls ++ collectThreadLocalRefs row s!"$.bodies[{id}]"
+          pending := pending ++ collectGraphReferences row metadata
+  return ⟨requiredTypes, requiredInstances, requiredAllocations, requiredTls⟩
 
 /-- Symbol-only entries close compiler identity references but carry no MIR.
 Their absence of a body is harmless while they are unused catalog rows, but
@@ -736,7 +622,7 @@ structural dependency. -/
 private def validateRequiredIdentityOnlyInstance (instances : Array InstanceNode)
     (requiredIds : Array Nat) : Except String Unit := do
   for (node, index) in instances.toList.zipIdx do
-    if requiredIds.contains node.id && node.kind == .symbolIdentityOnly then
+    if requiredIds.contains node.id && node.kind == .identityOnly then
       throw (s!"$.instances[{index}].kind" ++ ": " ++ "selected execution depends on a symbol identity that has no imported MIR body")
   return ()
 
@@ -804,7 +690,7 @@ def jsonAtPath (j : Json) (path : String) : Option Json := Id.run do
   return current
 
 private def jsonTypeId? (j : Json) : Option Nat :=
-  (j.getObjVal? "type_id").toOption.bind (fun value => value.getNat?.toOption)
+  j.getNat?.toOption
 
 private def dynamicPredicateArray? (j : Json) (typeId : Nat) : Option (Array Json) := Id.run do
   let some types := (((j.getObjVal? "types").bind Json.getArr?).toOption) | return none
@@ -924,46 +810,31 @@ private def exactDynamicVtableUpcast? (j node descriptor : Json) : Bool := Id.ru
     | .error _ => false) do return false
   return true
 
-private partial def malformedDynamicVtableUpcastAux (root : Json) (node : JsonTraversalCache.Node) (path : String)
-    (visited : Std.HashSet JsonTraversalCache.IdentityKey) : Option String × Std.HashSet JsonTraversalCache.IdentityKey := Id.run do
-  let current := node.value
-  let memoKey := node.identity
-  match current with
-  | .obj _ | .arr _ => pure ()
-  | _ => return (none, visited)
-  if node.shouldMemo && visited.contains memoKey then return (none, visited)
-  let mut visited := if node.shouldMemo then visited.insert memoKey else visited
+private partial def malformedDynamicVtableUpcastAux (root current : Json) (path : String) : Option String := do
   match current with
   | .obj fields =>
     if (current.getObjValAs? String "kind").toOption == some "Cast" then
       if let some descriptor := (current.getObjVal? "vtable_allocation").toOption then
         if (descriptor.getObjValAs? String "kind").toOption == some "dynamic_vtable_upcast" &&
             !exactDynamicVtableUpcast? root current descriptor then
-          return (some (joinPath path "vtable_allocation"), visited)
-    for ((key, value), childIndex) in fields.toList.zipIdx do
-      let (badPath?, nextVisited) := malformedDynamicVtableUpcastAux root (node.child childIndex value) (joinPath path key) visited
-      visited := nextVisited
-      if let some badPath := badPath? then return (some badPath, visited)
+          return joinPath path "vtable_allocation"
+    for (key, value) in fields.toList do
+      if let some bad := malformedDynamicVtableUpcastAux root value (joinPath path key) then return bad
+    none
   | .arr values =>
-    for (value, childIndex) in values.toList.zipIdx do
-      let (badPath?, nextVisited) := malformedDynamicVtableUpcastAux root (node.child childIndex value) s!"{path}[{childIndex}]" visited
-      visited := nextVisited
-      if let some badPath := badPath? then return (some badPath, visited)
-  | _ => pure ()
-  return (none, visited)
+    for (value, index) in values.toList.zipIdx do
+      if let some bad := malformedDynamicVtableUpcastAux root value s!"{path}[{index}]" then return bad
+    none
+  | _ => none
 
-private def malformedDynamicVtableUpcast? (node : JsonTraversalCache.Node) : Option String :=
-  (malformedDynamicVtableUpcastAux node.value node "$" {}).1
+private def malformedDynamicVtableUpcast? (j : Json) : Option String :=
+  malformedDynamicVtableUpcastAux j j "$"
 
-private inductive ParsedDocument where
-  | full (result : DecodeResult)
-  | runtime (result : RuntimeDecodeResult)
-
-private def parseTypeArray (values : Array Json) (memo : DecodeMemo) : Except String (Array TypeNode) := do
+private def parseTypeArray (values : Array Json) : Except String (Array TypeNode) := do
   let mut result := #[]
   let mut index := 0
   for value in values do
-    result := result.push (← parseTypeNode value s!"$.types[{index}]" memo)
+    result := result.push (← parseTypeNode value s!"$.types[{index}]")
     index := index + 1
   pure result
 
@@ -983,27 +854,25 @@ private def parseInstanceArray (values : Array Json) : Except String (Array Inst
     index := index + 1
   pure result
 
-private def parseBodyArray (values : Array Json) (memo : DecodeMemo) : Except String (Array Body) := do
+private def parseBodyArray (values : Array Json) : Except String (Array Body) := do
   let mut result := #[]
   let mut index := 0
   for value in values do
     let fallback := match optionalField value "def_path" with
       | some (.str name) => name
       | _ => s!"body[{index}]"
-    result := result.push (← parseBody value s!"$.bodies[{index}]" fallback memo)
+    result := result.push (← parseBody value s!"$.bodies[{index}]" fallback)
     index := index + 1
   pure result
 
-private def parseDocument (input : Json) (runtimeOnly : Bool := false)
-    (profile : Options := {}) (cachedTraversal : Bool := true) : Except String ParsedDocument := do
-  let (resolved,traversal) ← profileit "decoder.shared_payload_resolution" profile fun _ =>
-    JsonTraversalCache.resolve input cachedTraversal profile
-  let j := resolved.root
-  let memo := profileit "decoder.shared_decode_memo" profile fun _ => sharedDecodeMemo resolved.nodes
+private def parseDocument (input : Json) (profile : Options := {}) : Except String ExecutionInput := do
+  let j := input
+  let traversal := input
   if (← fieldString j "schema" "$") != expectedSchema then
     throw s!"$.schema: expected `{expectedSchema}`"
   if (← fieldNat j "schema_version" "$") != expectedSchemaVersion then
     throw s!"$.schema_version: unsupported schema version"
+  if hasField j "shared_payloads" then throw "$.shared_payloads: generic payload graphs are not part of this schema"
   if let some path := profileit "decoder.dynamic_vtable_scan" profile fun _ =>
       malformedDynamicVtableUpcast? traversal then
     throw s!"{path}: supported dynamic vtable upcast lacks matching compiler cast evidence"
@@ -1016,9 +885,50 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
   }
   if producer.miriCommit != expectedMiriCommit then throw "$.producer.miri_commit: input is from the wrong pinned Miri revision"
   if producer.rustcCommit != expectedRustcCommit then throw "$.producer.rustc_commit: input is from the wrong pinned rustc revision"
+  let predicates ← ((← arrayField j "predicates" "$").toList.zipIdx.mapM fun ((value, index) : Json × Nat) =>
+    parseVtablePredicate value s!"$.predicates[{index}]").map List.toArray
+  let mut predicateIdentities : Std.HashMap Nat (Array VtablePredicate) := {}
+  for (predicate, index) in predicates.toList.zipIdx do
+    let previous := predicateIdentities.getD predicate.definitionId #[]
+    if previous.any (fun other => decide (other.kind = predicate.kind ∧ other.genericArgs = predicate.genericArgs ∧
+        other.boundVariables = predicate.boundVariables ∧ other.projectionTerm = predicate.projectionTerm)) then
+      throw s!"$.predicates[{index}]: duplicate compiler predicate identity"
+    predicateIdentities := predicateIdentities.insert predicate.definitionId (previous.push predicate)
+  let compilerPredicates ← (← arrayField j "compiler_predicate_queries" "$").mapM decodeCompilerPredicateEvidence
+  unless compilerPredicates.size == predicates.size do
+    throw "$.compiler_predicate_queries: predicate query and definition tables differ in size"
+  for (query, index) in compilerPredicates.toList.zipIdx do
+    unless query.id == index && query.original == index do
+      throw s!"$.compiler_predicate_queries[{index}]: predicate query identity mismatch"
+    let some definition := predicates[index]? | throw "compiler predicate table index invariant"
+    unless query.autoTrait == (definition.kind == .autoTrait) do
+      throw s!"$.compiler_predicate_queries[{index}]: auto-trait query disagrees with predicate definition"
+    if let some normalized := query.normalizedId then
+      unless normalized < predicates.size do
+        throw s!"$.compiler_predicate_queries[{index}]: dangling normalized predicate reference {normalized}"
+  let definitions ← ((← arrayField j "definitions" "$").toList.zipIdx.mapM fun ((value, index) : Json × Nat) =>
+    parseDefinitionId value s!"$.definitions[{index}]").map List.toArray
+  let mut definitionKeys : Std.HashSet (Nat × Nat) := {}
+  for (definition, index) in definitions.toList.zipIdx do
+    let key := (definition.crateIndex, definition.index)
+    if definitionKeys.contains key then throw s!"$.definitions[{index}]: duplicate compiler definition identity"
+    definitionKeys := definitionKeys.insert key
+  let typeConstants ← ((← arrayField j "type_constants" "$").toList.zipIdx.mapM fun ((value, index) : Json × Nat) =>
+    TypeConstCodec.decode value s!"$.type_constants[{index}]").map List.toArray
+  let mut constantValues : Array MIR.TypeConst := #[]
+  for (constant, index) in typeConstants.toList.zipIdx do
+    if constantValues.contains constant then
+      throw s!"$.type_constants[{index}]: duplicate compiler type-constant identity"
+    constantValues := constantValues.push constant
+  let spans ← ((← arrayField j "spans" "$").toList.zipIdx.mapM fun ((value, index) : Json × Nat) =>
+    parseSourceSpan value s!"$.spans[{index}]").map List.toArray
+  let layouts ← ((← arrayField j "layouts" "$").toList.zipIdx.mapM fun ((value, index) : Json × Nat) =>
+    parseLayout value s!"$.layouts[{index}]").map List.toArray
+  let functionAbis ← ((← arrayField j "fn_abis" "$").toList.zipIdx.mapM fun ((value, index) : Json × Nat) =>
+    parseFunctionAbi value s!"$.fn_abis[{index}]").map List.toArray
   let typesJson ← arrayField j "types" "$"
   if typesJson.isEmpty then throw "$.types: input has no type graph; refusing an empty import"
-  let types ← profileit "decoder.types" profile fun _ => parseTypeArray typesJson memo
+  let types ← profileit "decoder.types" profile fun _ => parseTypeArray typesJson
   let allocationsJson ← arrayField j "allocations" "$"
   let allocations ← profileit "decoder.allocations" profile fun _ => parseAllocationArray allocationsJson
   let compilerAllocIdWorld ← profileit "decoder.compiler_alloc_id_world" profile fun _ => do
@@ -1027,6 +937,13 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     | some value => pure (some (← parseCompilerAllocIdWorld value allocations))
   let instancesJson ← arrayField j "instances" "$"
   let instances ← profileit "decoder.instances" profile fun _ => parseInstanceArray instancesJson
+  let mut instanceIdentities : Std.HashMap Nat (Array InstanceNode) := {}
+  for (node, index) in instances.toList.zipIdx do
+    let definition := node.instanceKind.defId
+    let previous := instanceIdentities.getD definition #[]
+    if previous.any (fun other => decide (other.instanceKind = node.instanceKind ∧ other.genericArgs = node.genericArgs)) then
+      throw s!"$.instances[{index}]: duplicate compiler instance identity"
+    instanceIdentities := instanceIdentities.insert definition (previous.push node)
   let selectedScope ← match optionalJson j "selected_scope" with
     | none => pure none
     | some value =>
@@ -1034,21 +951,14 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
         if hasField value legacyField then
           throw s!"$.selected_scope.{legacyField}: obsolete failed-input field"
       pure (some (← parseSelectedScope value "$.selected_scope"))
-  let compilerFunctionAbiTable := profileit "decoder.compiler_abi_queries" profile fun _ =>
-    prepareCompilerFunctionAbiTableUsing resolved.nodes memo
-  let memo := compilerFunctionAbiTable.extendDecodeMemo memo
-  let functionAbis ← profileit "decoder.function_abis" profile fun _ => collectFunctionAbis traversal "$" memo
-  let compilerAbiLayoutSchema ← optionalString j "compiler_abi_layout_schema" "$"
-  if let some schema := compilerAbiLayoutSchema then
-    if schema != expectedCompilerAbiLayoutSchema then
-      throw s!"$.compiler_abi_layout_schema: unsupported schema `{schema}`"
-    for (abi, abiIndex) in functionAbis.toList.zipIdx do
-      for (argument, abiArgumentIndex) in (abi.arguments.push abi.returnValue).toList.zipIdx do
-        if argument.layout.isNone then
-          throw s!"$.compiler_abi_layout_schema: ABI record {abiIndex} argument {abiArgumentIndex} lacks its physical layout"
+  let compilerAbiLayoutSchema ← fieldString j "compiler_abi_layout_schema" "$"
+  unless compilerAbiLayoutSchema == expectedCompilerAbiLayoutSchema do
+    throw s!"$.compiler_abi_layout_schema: unsupported schema `{compilerAbiLayoutSchema}`"
   let bodiesJson ← arrayField j "bodies" "$"
   if bodiesJson.isEmpty then throw "$.bodies: input has no MIR bodies; refusing an empty import"
-  let bodies ← profileit "decoder.bodies" profile fun _ => parseBodyArray bodiesJson memo
+  let bodies ← profileit "decoder.bodies" profile fun _ => parseBodyArray bodiesJson
+  let bodyRoots ← ((← arrayField j "body_roots" "$").toList.zipIdx.mapM fun ((value, index) : Json × Nat) =>
+    parseBodyRoot value s!"$.body_roots[{index}]").map List.toArray
   let typeIds := jsonToNatArray types (·.id)
   let allocationIds := jsonToNatArray allocations (·.id)
   let instanceIds := jsonToNatArray instances (·.id)
@@ -1057,15 +967,9 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
   profileit "decoder.validate_dense_instance_ids" profile fun _ => validateDense instanceIds "instance IDs"
   profileit "decoder.validate_all_bodies" profile fun _ => validateAllBodies traversal "$"
   profileit "decoder.validate_references" profile fun _ =>
-    validateReferences traversal "$" types.size allocations.size instances.size
-  let typedTree? ← if runtimeOnly then
-      let _ ← profileit "decoder.runtime_value" profile fun _ =>
-        decodeRuntimeValue traversal "$" .any .none memo
-      pure none
-    else
-      pure (some (← decodeValue j "$" .any .none memo))
+    validateReferences traversal "$" types.size allocations.size instances.size layouts.size functionAbis.size spans.size definitions.size typeConstants.size bodies.size predicates.size
   profileit "decoder.extra_semantic_validation" profile fun _ =>
-    validateExtraSemantic j types allocations instances functionAbis bodies
+    validateExtraSemantic j types allocations instances functionAbis bodies layouts
   let requiredDependencies := profileit "decoder.required_dependencies" profile fun _ =>
     requiredStructuralDependencies j compilerAllocIdWorld.isSome
   profileit "decoder.required_instance_validation" profile fun _ =>
@@ -1074,84 +978,47 @@ private def parseDocument (input : Json) (runtimeOnly : Bool := false)
     validateThreadLocalShape requiredDependencies.threadLocalRefs
   match selectedScope with
   | some scope => profileit "decoder.selected_scope_validation" profile fun _ =>
-      validateSelectedScope scope bodies instances
+      validateSelectedScope scope bodies instances bodyRoots
   | none => pure ()
   let runtimeTargetDataLayout ← match optionalJson j "runtime_target_data_layout" with
     | none => pure none
     | some evidence => pure (some ({
         payload := evidence
       } : TargetDataLayoutEvidence))
-  let core : ImportDocumentCore := {
-    compilerPredicates := ← match optionalField j "compiler_predicate_queries" with
-      | none => pure #[]
-      | some value => (← value.getArr?).mapM decodeCompilerPredicateEvidence
-    compilerAbiLayoutSchema := compilerAbiLayoutSchema
+  let core : ImportDocument := {
+    compilerPredicates := compilerPredicates
+    compilerAbiLayoutSchema := some compilerAbiLayoutSchema
     producer := producer
     runtimeTargetDataLayout := runtimeTargetDataLayout
+    predicates := predicates
+    definitions := definitions
+    typeConstants := typeConstants
+    layouts := layouts
+    spans := spans
     types := types
     allocations := allocations
     compilerAllocIdWorld := compilerAllocIdWorld
     instances := instances
     selectedScope := selectedScope
     functionAbis := functionAbis
+    bodyRoots := bodyRoots
     bodies := bodies
     raw := j
-    sharedNodes := resolved.nodes
-    compilerFunctionAbiTable := some compilerFunctionAbiTable
-    compilerValueMemo := if runtimeOnly then some (profileit "decoder.compiler_values" profile fun _ =>
-      prepareCompilerValueMemoUsing resolved.nodes memo) else none
   }
-  match typedTree? with
-  | some typedTree =>
-    let doc := core.withTypedTree typedTree
-    return .full ⟨doc, ⟨doc⟩⟩
-  | none =>
-    return .runtime ⟨core, ⟨core⟩⟩
+  validatePrimaryTables core
+  pure ⟨core⟩
 
-def decodeJson (text : String) : Except String DecodeResult := do
-  let json ← Json.parse text
-  match ← parseDocument json with
-  | .full result => pure result
-  | .runtime _ => throw "internal decoder mode mismatch"
+def decodeJsonProfiled (text : String) (profile : Options) : Except String ExecutionInput := do
+  let json ← profileit "decoder.json_parse" profile fun _ => Json.parse text
+  profileit "decoder.document" profile fun _ => parseDocument json profile
 
-def decodeFile (path : System.FilePath) : IO (Except String DecodeResult) := do
+def decodeJson (text : String) : Except String ExecutionInput :=
+  decodeJsonProfiled text {}
+
+def decodeFile (path : System.FilePath) : IO (Except String ExecutionInput) := do
   try
     let text ← IO.FS.readFile path
     pure (decodeJson text)
-  catch error => pure (.error s!"could not read {path}: {error}")
-
-/-- Runtime decoder with optional Lean profiler options. Profiling wrappers are
-kernel identity functions; with profiling disabled this preserves the ordinary
-decoder result and diagnostic order. -/
-def decodeRuntimeJsonProfiled (text : String) (profile : Options) : Except String RuntimeDecodeResult := do
-  let json ← profileit "decoder.json_parse" profile fun _ => Json.parse text
-  match ← profileit "decoder.document" profile fun _ => parseDocument json true profile with
-  | .runtime result => pure result
-  | .full _ => throw "internal decoder mode mismatch"
-
-/-- Regression oracle: identical validation with the structural-hash memo off.
-This is not a relaxed decoder and retains the full original error ordering. -/
-def decodeRuntimeJsonReference (text : String) : Except String RuntimeDecodeResult := do
-  let json ← Json.parse text
-  match ← parseDocument json true {} false with
-  | .runtime result => pure result
-  | .full _ => throw "internal decoder mode mismatch"
-
-def decodeJsonReference (text : String) : Except String DecodeResult := do
-  let json ← Json.parse text
-  match ← parseDocument json false {} false with
-  | .full result => pure result
-  | .runtime _ => throw "internal decoder mode mismatch"
-
-/-- Runtime-only entry point, preserving validation and diagnostic precedence
-without retaining the full typed projection. -/
-def decodeRuntimeJson (text : String) : Except String RuntimeDecodeResult :=
-  decodeRuntimeJsonProfiled text {}
-
-def decodeRuntimeFile (path : System.FilePath) : IO (Except String RuntimeDecodeResult) := do
-  try
-    let text ← IO.FS.readFile path
-    pure (decodeRuntimeJson text)
   catch error => pure (.error s!"could not read {path}: {error}")
 
 /-- Typed metadata entrypoints for compiler-query adapters. -/

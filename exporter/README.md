@@ -51,16 +51,41 @@ exact arguments cannot be fingerprinted.
 
 ## Input contract
 
-The root schema is `lean-miri-rustc-mir` version3 and the `shared_payloads` catalog
-is version2. Reading old schema2 is not supported. IDs are document-local
-references, distinct from raw Miri AllocId values.
-[SharedPayloads](../Miri/Input/SharedPayloads.lean) and
-[Decoder](../Miri/Input/Decoder.lean) check catalog, reference and typed-query contracts.
+The root schema is `lean-miri-rustc-mir` version 4. Compiler values have separate
+tables with document-local, dense, zero-based IDs:
+
+| Table | Interning key |
+| --- | --- |
+| `types` | Exact rustc `Ty`, retaining binders and regions |
+| `layouts` | Complete `TyAndLayout`, including field and variant layouts |
+| `fn_abis` | Complete `FnAbi`, including argument layouts and passing modes |
+| `instances` | Exact rustc `InstanceKind` and its local generic arguments |
+| `allocations` | Compiler `AllocId`, independently of memory contents |
+| `spans` | Compiler `Span`, including its hygiene context |
+| `definitions` | Compiler `DefId` (crate and definition index) |
+| `type_constants` | Compiler `Const`, including its type and constructor |
+| `predicates` | Full bound existential predicate; comparison rank is separate |
+| `bodies` | Instance, promoted index and source/query mode |
+
+References are numeric indices interpreted by the field's schema. Layouts retain
+exact compiler `TyAndLayout` keys, including field and variant layouts. Allocation
+IDs retain compiler allocation identity even when bytes are equal. IDs are local
+to the document; exported `source_alloc_id` records the separate raw Miri AllocId.
+Generic arguments remain in their owning records, with type and type-constant
+references into the corresponding tables. `body_roots` records root metadata and
+body IDs; instance bodies, promoted bodies and normalization results also retain
+body IDs. Body keys distinguish templates, instantiated MIR and normalization
+query results, even when their serialized instructions coincide.
+[Decoder](../Miri/Input/Decoder.lean) validates typed-table and query contracts.
 Successful query results are serialized directly: booleans remain booleans,
 optional results use JSON null, and structured results carry their semantic
 fields. There are no success-status wrappers or completeness flag. Lean validates
 required fields, semantic tags and references before returning an execution input.
-Historical exports must be regenerated for this wire format.
+An ID is reserved before its definition is traversed, so mutually recursive
+references do not require a table ordering. Export fails if a reserved definition
+is unfinished. Lean reads each table directly, checks reference bounds and keeps
+IDs through lowering and execution. Runtime lookups return checked errors.
+Malformed table definitions are reported before downstream scope validation.
 
 A successful export describes the requested compiler data. Runtime values, including a
 virtual call's receiver and vtable, still determine execution. Export success is

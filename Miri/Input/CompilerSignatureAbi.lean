@@ -25,7 +25,7 @@ def queryWithIndex {raw : Json} (runtime : RuntimeMetadata)
     found := some (value,row)
   if let some (_,error) := index.data.firstRowError then throw error
   let some (_,row) := found | throw s!"missing exact compiler dummy-signature ABI query: inputs={reprStr request.inputs}, output={request.output}, abi={reprStr request.abi}, safety={reprStr request.safety}, c_variadic={request.cVariadic}, splatted={request.splatted}"
-  row.parsedAbi
+  CallResolution.functionAbiId runtime (← row.abiId)
 
 def query (p : CompilerProviders.Prepared) (request : FunctionCalls.SignatureRequest ABI.ExternAbi) :
     Except String (FnAbi MIR.TyId) :=

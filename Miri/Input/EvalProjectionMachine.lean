@@ -33,11 +33,8 @@ private def shape (runtime : RuntimeMetadata) (ty : TyId) : Except ProjectionErr
 
 def packed (runtime : RuntimeMetadata) (ty : TyId) : Except ProjectionError (Option Align) := do
   let node ← shape runtime ty
-  if node.shapeKind != .adt then return none
-  let repr ← query ((node.payload.getObjVal? "shape").bind fun s => s.getObjVal? "representation")
-  let pack ← query (repr.getObjVal? "pack_bytes")
-  if pack == .null then return none
-  let bytes ← query pack.getNat?
+  let .adt data := node.shape | return none
+  let some bytes := data.representation.packBytes | return none
   if bytes >= 2^64 then throw (.invariant "compiler packing exceeds u64")
   let align ← Align.fromBytes (UInt64.ofNat bytes) |>.mapError ProjectionError.align
   pure (some align)
@@ -137,17 +134,14 @@ def context (prepared : CompilerFactAdapters.Prepared) (maxSizeOfVal : Size) (de
 
 def dynamicKind (prepared : CompilerFactAdapters.Prepared) (ty : TyId) : Except ProjectionError DynamicTypeKind := do
   let node ← shape prepared.context.runtime ty
-  match node.shapeKind with
-  | .adt =>
-    let simd ← query (((node.payload.getObjVal? "shape").bind fun s => s.getObjVal? "representation").bind
-      fun r => (r.getObjVal? "simd").bind Json.getBool?)
-    pure (.adt simd)
-  | .tuple => pure (.tuple false)
-  | .dynamicTraitObject =>
+  match node.shape with
+  | .adt data => pure (.adt data.representation.simd)
+  | .tuple _ => pure (.tuple false)
+  | .dynamicTraitObject .. =>
     let .dynamic expected ← query (CompilerFactAdapters.validityKind prepared ty)
       | throw (.invariant "dynamic type missing compiler predicates")
     pure (.dynamic expected)
-  | .slice => pure .slice | .str => pure .str | .foreign => pure .foreign
+  | .slice _ => pure .slice | .str => pure .str | .foreign _ => pure .foreign
   | _ => throw (.invariant "invalid unsized dynamic layout kind")
 
 def dynamic (prepared : CompilerFactAdapters.Prepared)

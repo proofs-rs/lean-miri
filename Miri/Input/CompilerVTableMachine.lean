@@ -23,14 +23,13 @@ private def lift (result : Except String A) : MachineHooks.M K User A :=
 
 def hooks (p : Prepared) (image : AllocationImage.Imported)
     (base : VTableMachine.Hooks K User Other) : VTableMachine.Hooks K User Other :=
-  let lookup := CompilerVTableRuntime.GlobalLookup.prepare p.calls.symbols
   {base with importedVTable := fun id => do
-    lift (CompilerVTableRuntime.globalVTableUsing p.calls.symbols lookup image (← get).machine.memory id)}
+    lift (CompilerVTableRuntime.globalVTable p.calls.symbols image (← get).machine.memory id)}
 
-private abbrev VTableKeyIndex := Std.HashMap (Nat × Nat × Nat) (Array Nat)
+private abbrev VTableKeyIndex := Std.HashMap (Nat × PredicateList × Nat) (Array Nat)
 private abbrev AllocIdIndex := Std.HashMap UInt64 Bool
 
-private def addVTableKey (index : VTableKeyIndex) (ty dynamicType salt position : Nat) : VTableKeyIndex :=
+private def addVTableKey (index : VTableKeyIndex) (ty : Nat) (dynamicType : PredicateList) (salt position : Nat) : VTableKeyIndex :=
   let key := (ty,dynamicType,salt)
   index.insert key ((index[key]?).getD #[] |>.push position)
 
@@ -46,7 +45,7 @@ private def vtableAllocIndex (entries : Array VTableMachine.Entry) : AllocIdInde
   return index
 
 private def findVTableKey (entries : Array VTableMachine.Entry) (index : VTableKeyIndex)
-    (ty dynamicType salt : Nat) : Option VTableMachine.Entry := Id.run do
+    (ty : Nat) (dynamicType : PredicateList) (salt : Nat) : Option VTableMachine.Entry := Id.run do
   for position in (index[(ty,dynamicType,salt)]?).getD #[] do
     if let some entry := entries[position]? then
       if entry.typeId == ty && entry.dynamicType == dynamicType && entry.salt.val == salt then
@@ -58,7 +57,6 @@ private def seedImportedImpl (p : Prepared) (image : AllocationImage.Imported)
   let mut registry := initial
   let mut keys := vtableKeyIndex registry.entries
   let mut allocated := vtableAllocIndex registry.entries
-  let lookup := CompilerVTableRuntime.GlobalLookup.prepare p.calls.symbols
   let input := p.calls.calls.program.input
   let world? := input.compilerAllocIdWorld
   if let some world := world? then
@@ -70,7 +68,7 @@ private def seedImportedImpl (p : Prepared) (image : AllocationImage.Imported)
       |>.mapError fun error => s!"prepared AllocId world: {error}"
   else
     for (_,id) in memory.importedGlobalIds do
-      if let some (ty,dynType) ← CompilerVTableRuntime.globalVTableUsing p.calls.symbols lookup image memory id then
+      if let some (ty,dynType) ← CompilerVTableRuntime.globalVTable p.calls.symbols image memory id then
         if let some old := findVTableKey registry.entries keys ty dynType 0 then
           unless old.allocation == id do throw "conflicting imported CTFE salt-zero vtable identities"
         else
@@ -82,14 +80,14 @@ private def seedImportedImpl (p : Prepared) (image : AllocationImage.Imported)
     for row in world.dedupCatalog do
       if row.keyKind == .vtable then
         let keyRuntime ← AllocationImage.runtimeId memory row.keyAllocationId
-        let some key ← CompilerVTableRuntime.globalVTableUsing p.calls.symbols lookup image memory keyRuntime
+        let some key ← CompilerVTableRuntime.globalVTable p.calls.symbols image memory keyRuntime
           | throw "prepared vtable key witness is not a symbolic vtable"
         for result in row.salts do
           if saltBound : result.salt < 32 then
             let resultRuntime ← AllocationImage.runtimeId memory result.allocationId
             unless memory.sourceAllocIdForRuntime? resultRuntime == some result.sourceAllocId do
               throw "prepared vtable result raw AllocId does not match the active memory world"
-            let some resultKey ← CompilerVTableRuntime.globalVTableUsing p.calls.symbols lookup image memory resultRuntime
+            let some resultKey ← CompilerVTableRuntime.globalVTable p.calls.symbols image memory resultRuntime
               | throw "prepared vtable salt result is not a symbolic vtable"
             unless resultKey == key do
               throw "prepared vtable salt result does not match its exact type/predicate key"

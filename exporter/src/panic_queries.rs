@@ -64,7 +64,7 @@ pub(super) fn register_unwind_termination<'tcx>(
         ty::TypingEnv::fully_monomorphized(),
     )
 }
-pub(super) fn export(tcx:TyCtxt<'_>)->Value {
+pub(super) fn export<'tcx>(tcx:TyCtxt<'tcx>, context: &mut ExportContext<'tcx>)->Value {
     let items=[
         ("Panic",rustc_attr_ir::LangItem::Panic),
         ("PanicNounwind",rustc_attr_ir::LangItem::PanicNounwind),
@@ -100,10 +100,15 @@ pub(super) fn export(tcx:TyCtxt<'_>)->Value {
 ];
     Value::Array(items.into_iter().map(|(name,item)|{
         let definition=tcx.lang_items().get(item);
+        if let Some(def) = definition {
+            if !ty::GenericArgs::identity_for_item(tcx, def).has_non_region_param() {
+                context.register_metadata_instance(ty::Instance::mono(tcx, def));
+            }
+        }
         let parameters=definition.map(|def|ty::GenericArgs::identity_for_item(tcx,def).iter().map(|arg|match arg.kind(){
             ty::GenericArgKind::Lifetime(_)=>"lifetime",ty::GenericArgKind::Type(_)=>"type_parameter",ty::GenericArgKind::Const(_)=>"const_parameter",
         }).collect::<Vec<_>>());
-        json!({"lang_item":name,"definition":definition.map(def_json),"generic_parameters":parameters})
+        json!({"lang_item":name,"definition":definition.map(|def| def_json(context, def)),"generic_parameters":parameters})
     }).collect())
 }
 pub(super) fn register_assert<'tcx>(

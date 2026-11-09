@@ -14,18 +14,6 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def expand_shared(document, value):
-    # Schema3 may share complete tables and nested instance metadata. This is
-    # only a coverage assertion; the Lean consumer decodes the original bytes.
-    if isinstance(value, dict) and set(value) == {'$lean_miri_shared_ref'}:
-        return expand_shared(document, document['shared_payloads']['nodes'][value['$lean_miri_shared_ref']])
-    if isinstance(value, list):
-        return [expand_shared(document, item) for item in value]
-    if isinstance(value, dict):
-        return {key: expand_shared(document, item) for key, item in value.items()}
-    return value
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output', type=Path, help='new output directory under scratch/')
@@ -79,7 +67,7 @@ def check_case(args, output, env, elan, sysroot, fixed):
             reference.get('snapshot_fnv1a64') != f'{digest:016x}'):
         raise SystemExit('reference did not establish same-TyCtxt exit_zero for these exact bytes')
     snapshot = json.loads(raw)
-    records = expand_shared(snapshot, snapshot['compiler_runtime_queries'])['instances']
+    records = snapshot['compiler_runtime_queries']['instances']
     names = {record.get('item_name') for record in records
              if record.get('intrinsic_metadata') is not None}
     expected_intrinsic = 'cos' if fixed else 'sin'

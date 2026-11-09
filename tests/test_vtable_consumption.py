@@ -15,8 +15,8 @@ class ConsumptionTests(unittest.TestCase):
     def setUp(self):
         # Synthetic parser data only; never a producer/nonidentity witness.
         self.document = {'producer': {'rustc_commit': 'unit-test'}, 'compiler_vtable_queries': [{
-            'query_id': 0, 'input_type': {'type_id': 10}, 'output_type': {'type_id': 10},
-            'input_predicates': [{'predicate_id': 1}], 'output_predicates': [{'predicate_id': 2}]}]}
+            'query_id': 0, 'input_type': 10, 'output_type': 10,
+            'input_predicates': [1], 'output_predicates': [2]}]}
         self.provenance = {'schema': 'lean-miri-vtable-origins-v1', 'queries': [{
             'query_id': 0, 'input_type_id': 10, 'input_predicate_ids': [1],
             'origins': [{'route': 'unsize_cast', 'body': {'role': 'root_template'}}]}]}

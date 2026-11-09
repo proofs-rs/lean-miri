@@ -26,14 +26,9 @@ namespace Miri.Input.CompilerProviders
 open Lean Miri.ABI Miri.Memory Miri.Interpreter
 structure Prepared where
   program : LoweredProgram
-  /-- Prepared lowering indices certified for this provider's exact input.
-  Publicly assembled providers may omit the cache; their accessor preserves
-  the historical behavior by deriving from `program.input`. -/
+  /-- Lowering evidence bound to this provider's exact input. -/
   lowering : Option (LowerContext.Bound program.input) := none
   runtime : RuntimeMetadata
-  /-- Direct source primitive references prepared for this exact runtime.
-  Publicly assembled providers may omit it and retain the linear query path. -/
-  primitiveQueries : Option (CompilerPrimitiveFacts.Bound runtime) := none
   /-- Reflexive-comparison certificate created once by the shared call pipeline
   and retained for every provider check against this source document. -/
   sourceEquality : RuntimeMetadata.JsonReflexivity runtime.source.raw
@@ -72,23 +67,16 @@ def Prepared.loweringContext (p : Prepared) : LowerContext :=
   | some prepared => prepared.value
   | none => LowerContext.ofDocument p.program.input
 
-/-- Demand one exact compiler primitive using the provider-owned cache when
-available; manual providers retain the original query path. -/
+/-- Resolve the exact primitive reference at its operation. -/
 def Prepared.primitiveLayout (p : Prepared) (key : String) :
     Except String (TyAndLayout TypeId) :=
-  match p.primitiveQueries with
-  | some cache => CompilerPrimitiveFacts.primitiveLayoutBound p.runtime cache key
-  | none => CompilerPrimitiveFacts.primitiveLayout p.runtime key
+  CompilerPrimitiveFacts.primitiveLayout p.runtime key
 
 def Prepared.orderingLayout (p : Prepared) : Except String (TyAndLayout TypeId) :=
-  match p.primitiveQueries with
-  | some cache => CompilerPrimitiveFacts.orderingLayoutBound p.runtime cache
-  | none => CompilerPrimitiveFacts.orderingLayout p.runtime
+  CompilerPrimitiveFacts.orderingLayout p.runtime
 
 def Prepared.callerLocationType (p : Prepared) : Except String TypeId :=
-  match p.primitiveQueries with
-  | some cache => CompilerPrimitiveFacts.callerLocationTypeBound p.runtime cache
-  | none => CompilerPrimitiveFacts.callerLocationType p.runtime
+  CompilerPrimitiveFacts.callerLocationType p.runtime
 
 /-- Check index preservation at each append stage, including exact source spans.
 No table contents may be normalized, reordered or silently replaced. -/
@@ -136,10 +124,9 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
   profileit "preparation.providers.extension_after_lifecycle" profile fun _ =>
     extension calls.calls.program.compilerTables program.compilerTables
   let runtime := lifecycle.calls.calls.runtime
-  let abiCache := some lifecycle.calls.calls.functionAbiCache
   let sourceEquality := lifecycle.calls.sourceEquality
   let functions ← profileit "preparation.providers.function_facts" profile fun _ =>
-    CompilerFunctionFacts.prepare runtime program (some sourceEquality) abiCache
+    CompilerFunctionFacts.prepare runtime program (some sourceEquality)
   profileit "preparation.providers.extension_after_functions" profile fun _ =>
     extension program.compilerTables functions.program.compilerTables
   let main ← profileit "preparation.providers.main" profile fun _ =>
@@ -169,13 +156,13 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
   let lifecycle := profileit "preparation.providers.rebind_lifecycle" profile fun _ => rebindLifecycle lifecycle program
   let pointers ← profileit "preparation.providers.function_pointers" profile fun _ => CompilerFunctionPointers.prepare lifecycle.calls
   let vtables ← profileit "preparation.providers.vtable_machine" profile fun _ => CompilerVTableMachine.prepare lifecycle.calls
-  let namedAbi ← profileit "preparation.providers.named_shim_abi" profile fun _ => CompilerNamedShimAbi.prepare runtime abiCache
+  let namedAbi ← profileit "preparation.providers.named_shim_abi" profile fun _ => CompilerNamedShimAbi.prepare runtime
   let foreignSymbols := profileit "preparation.providers.foreign_symbols" profile fun _ =>
     CompilerForeignSymbolTables.prepare lifecycle.calls.symbols
   let covarianceIndex := profileit "preparation.providers.covariance_index" profile fun _ =>
     CompilerQueryIndices.covariance program.input.raw
   let signatureAbiIndex := profileit "preparation.providers.signature_abi_index" profile fun _ =>
-    CompilerQueryIndices.signatureAbi runtime program.input.raw abiCache
+    CompilerQueryIndices.signatureAbi runtime program.input.raw
   let arrays := profileit "preparation.providers.runtime_arrays" profile fun _ =>
     RuntimeArrayTypes.create runtime |>.mapError reprStr
   let tls := profileit "preparation.providers.thread_local" profile fun _ => CompilerThreadLocal.ofProgram program
@@ -186,7 +173,6 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
     program
     lowering := some (LowerContext.bindDocument program.input)
     runtime
-    primitiveQueries := some (CompilerPrimitiveFacts.bind runtime)
     sourceEquality
     lifecycle
     functions := {functions with program}
@@ -210,7 +196,6 @@ def prepare (input : LoweredProgram) : Except String Prepared :=
   prepareProfiled {} input
 
 /-- The canonical predicate table belonging to all prepared vtable/cast facts. -/
-def predicates (p : Prepared) : Array Json := p.lifecycle.calls.symbols.facts.dynamicPredicates
 
 private def lift (query : Except String A) : MachineHooks.M K User A :=
   match query with
@@ -235,7 +220,7 @@ def resolveCurrent (p : Prepared) (definition : MIR.DefId) (args : Array MIR.Gen
     throw (.invalidProgram "callee resolution does not refer to a source terminator")
   lift do
     let resolution ← CallResolution.atSite p.lifecycle.calls.calls ⟨frame.bodyIdentity.index,location.block⟩
-    let ty ← (← (← resolution.source.getObjVal? "function_type").getObjVal? "type_id").getNat?
+    let some ty := resolution.source.functionType | throw "original call function type is absent"
     match ← CompilerFunctionFacts.kind p.functions ty with
     | .FnDef expected expectedArgs =>
       unless definition == expected && args == expectedArgs do throw "original compiler FnDef request differs from current source call"

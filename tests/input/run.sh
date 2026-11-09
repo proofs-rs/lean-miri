@@ -20,7 +20,7 @@ lake env lean "$ROOT/MiriTests/Input/DefinitionLookup2026.lean"
 lake env lean "$ROOT/MiriTests/Input/DecoderProfile2026.lean"
 lake env lean "$ROOT/MiriTests/Input/PreparationProfile2026.lean"
 lake env lean "$ROOT/MiriTests/Input/RuntimeStartupProfileIdentity2026.lean"
-lake env lean --run "$ROOT/MiriTests/Input/CompilerSpanInterner2026.lean"
+lake env lean --run "$ROOT/MiriTests/Input/SpanPool.lean"
 lake env lean --run "$ROOT/MiriTests/Input/AllocationImageIndexed2026.lean"
 
 OUT="$(mktemp "${TMPDIR:-/tmp}/lean-miri-input-XXXXXX.json")"

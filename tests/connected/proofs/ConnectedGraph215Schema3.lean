@@ -482,8 +482,8 @@ private def renderGraphReport (report : GraphReport) : String := Id.run do
 
 private def runScLitmusPure [DecidableEq OuterState] (contents : String) (nodeBudget : Nat) (pageSize : UInt64)
     (numCpus hostPid : UInt32) : Except String String := do
-  let decoded ← must (Input.decodeRuntimeJson contents)
-  let program ← must (Input.lowerCoreProgram decoded.document)
+  let decoded ← must (Input.decodeJson contents)
+  let program ← must (Input.lowerProgram decoded.document)
   let attempt := Input.EvalPreparation.prepare program
   let prepared ← must attempt.outcome
   let compiler := prepared.compiler
@@ -639,7 +639,7 @@ private def runScLitmusPure [DecidableEq OuterState] (contents : String) (nodeBu
         let changedLedgerEq := decide (afterCallbacks = changedLedgerState)
         let world := afterCallbacks.machine.user.user.payload.payload
         let source := world.types.metadata.source
-        let withSource := fun (changedSource : Input.ImportDocumentCore)
+        let withSource := fun (changedSource : Input.ImportDocument)
             (nodeCache : Option (Input.RuntimeNodeLookupCache changedSource.types)) =>
           let changedMetadata := {world.types.metadata with source := changedSource, nodeCache}
           let changedTypes := {world.types with metadata := changedMetadata}

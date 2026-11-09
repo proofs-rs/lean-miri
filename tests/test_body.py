@@ -1,4 +1,4 @@
-"""Check diagnostic canonical-index reconstruction against lowering's ordering."""
+"""Check body pool IDs remain stable across root and instance owners."""
 import importlib.util
 import pathlib
 import unittest
@@ -10,29 +10,27 @@ SPEC.loader.exec_module(MODULE)
 
 
 class BodyTests(unittest.TestCase):
-    def test_root_instance_and_promoted_order_with_missing_children(self):
-        document = {'bodies': [{'def_path': 'root', 'promoted_bodies': [
-            {'body': None}, {'body': {'def_path': 'root-promoted'}}]}],
-            'instances': [
-                {'def_path': 'no-body', 'body': None},
-                {'def_path': 'instance', 'body': {'promoted_bodies': []},
-                 'promoted_bodies': [{'body': {'def_path': 'instance-promoted'}}]},
-                {'def_path': 'owned', 'body': {'promoted_bodies': [{'body': None}]},
-                 'promoted_bodies': [{'body': {'def_path': 'must-not-fallback'}}]},
-            ]}
-        bodies, _ = MODULE.canonical_bodies(document)
+    def test_pool_order_is_the_body_id_order(self):
+        document = {'bodies': [{}, {}, {}, {}],
+                    'body_roots': [{'body': 2, 'def_path': 'root',
+                                    'promoted_bodies': [{'promoted_index': 1, 'body': 0}]}],
+                    'instances': [{'def_path': 'instance', 'body': 1,
+                                   'promoted_bodies': [{'promoted_index': 0, 'body': 3}]}]}
+        bodies = MODULE.canonical_bodies(document)
         self.assertEqual([b['definition_path'] for b in bodies],
-                         ['root', 'root-promoted', 'instance', 'instance-promoted', 'owned'])
-        self.assertEqual(bodies[3]['source_path'], 'instances[1].promoted_bodies[0].body')
+                         ['root::promoted[1]', 'instance', 'root', 'instance::promoted[0]'])
+        self.assertEqual(bodies[3]['source_path'], 'bodies[3]')
 
-    def test_shared_references_do_not_add_body_indices(self):
-        document = {'shared_payloads': {'nodes': [{'def_path': 'body'}]},
-                    'bodies': [{'$lean_miri_shared_ref': 0}], 'instances': []}
-        bodies, deref = MODULE.canonical_bodies(document)
+    def test_reused_body_id_keeps_one_definition(self):
+        document = {'bodies': [{}],
+                    'body_roots': [{'body': 0, 'def_path': 'root'}],
+                    'instances': [{'body': 0, 'def_path': 'instance'}]}
+        bodies = MODULE.canonical_bodies(document)
         self.assertEqual(len(bodies), 1)
-        self.assertEqual(bodies[0]['definition_path'], 'body')
-        with self.assertRaisesRegex(ValueError, 'outside catalog'):
-            deref({'$lean_miri_shared_ref': -1})
+        self.assertEqual(bodies[0]['definition_path'], 'root')
+        document['body_roots'][0]['body'] = -1
+        with self.assertRaisesRegex(ValueError, 'out of range'):
+            MODULE.canonical_bodies(document)
 
 
 if __name__ == '__main__':

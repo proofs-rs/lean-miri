@@ -28,7 +28,7 @@ def main (args : List String) : IO Unit := do
   let input ← match decoded.document.bodies.find? (fun b => b.defPath.endsWith "add_one") with
     | some b => pure b.toBodyCore
     | none => throw (IO.userError "missing add_one fixture")
-  let ctx := LowerContext.ofTypes decoded.document.types
+  let ctx := LowerContext.ofDocument decoded.document
   let lowered ← must (lowerBody ctx input)
   check (lowered.body.argumentCount == input.argumentCount) "argument count lost"
   check (lowered.body.spreadArgument == input.spreadArgument) "spread argument lost"

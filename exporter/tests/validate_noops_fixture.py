@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-from mir_json import load_mir_document
+from mir_json import load_mir_document, pool_entry
 
 doc = load_mir_document(sys.argv[1])
 assert doc["producer"]["rustc_commit"] == "8144389c895da997dbdecaa635e41d6a50be6ffd"
@@ -16,7 +16,8 @@ assert "status" not in doc["selected_scope"]
 assert doc["invocation"]["kind"] == "direct_rustc_driver"
 assert "-Cinstrument-coverage" in doc["invocation"]["rustc_args"]
 assert doc["invocation"]["rustc_args_fingerprint_fnv1a64"]
-body = next(body for body in doc["bodies"] if body["def_path"] == "covered")
+root = next(root for root in doc["body_roots"] if root["def_path"] == "covered")
+body = pool_entry(doc, "bodies", root["body"])
 coverage = [
     statement["kind"]
     for block in body["basic_blocks"]

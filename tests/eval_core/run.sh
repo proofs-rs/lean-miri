@@ -38,34 +38,34 @@ restore_input() {
 }
 
 restore_input source133-root-u32-001 \
-  2d2c3a69db0c47a79e169fec0f3e95dcd21e507b90783d311a3b41f88b758c0f \
-  c3cb5698f70066a22579f1a15501450f27b4b0880a6870c6a5a23c1d5d7a1246
+  e19a835b54f699aec7bcfa406fdf811f4701e776542cafeb0eee0f0e53cd3912 \
+  e4f779e0ef19599603882cf158759b48254201a2a13f9fd991e7fccc51898508
 restore_input source133-root-control-flow-001 \
-  38ea4e16c71b7c78bf1d53b2d1f121d260a901439d575d89df8d0f4c2fc073ad \
-  f9cd1fd726d6aa8c071f3f36d4f05823be52cc1a6b8d19859b698b320de81ad2
+  675c1d678fb39ecceea77d91ae84cf1915cb8432cbcf2f6a8c80c4c606b9b72a \
+  9a8f719d8cb9539319584bf4baab9c7e931bd2784b38a224a23b69a709a678ff
 restore_input source133-nostd-startup-001 \
-  d295c973eef4e9a42f7317369092db643c3c4db7825ee163c91f9b777c9f04c2 \
-  0e57792f48b0723c4bd09be9dc01d4c9d5cffd499d1fc0a4cb6f1ddf221ce4f6
+  6f65c056bcd7828fbabce5b438d084bbb91460aff9194a164a325591cbd1d150 \
+  b9d876261cb5a7dcf8f17820af5754fde375ba01d6b7b74c79eaf8af1aabac94
 
-# Preserve the regenerated schema-3 compiler exports byte for byte after
+# Preserve the fresh schema-4 compiler exports byte for byte after
 # verifying each archive and decompressed input hash above.
-prepare_schema3_input() {
+copy_checked_input() {
   local name="$1"
-  python3 tests/eval_core/prepare_schema3_fixture.py \
-    "$tmp_dir/$name.json" "$tmp_dir/$name.schema3.json"
+  python3 tests/eval_core/copy_fixture.py \
+    "$tmp_dir/$name.json" "$tmp_dir/$name.checked.json"
 }
 
-prepare_schema3_input source133-root-u32-001
-prepare_schema3_input source133-root-control-flow-001
-prepare_schema3_input source133-nostd-startup-001
+copy_checked_input source133-root-u32-001
+copy_checked_input source133-root-control-flow-001
+copy_checked_input source133-nostd-startup-001
 
 run_fixture() {
   local name="$1" input="$2"
   printf 'eval_core %s\n' "$name"
   if [[ -n "${EVAL_CORE_LEAN_BIN:-}" ]]; then
-    "$EVAL_CORE_LEAN_BIN" --threads=1 --run "tests/eval_core/$name.lean" "$tmp_dir/$input.schema3.json"
+    "$EVAL_CORE_LEAN_BIN" --threads=1 --run "tests/eval_core/$name.lean" "$tmp_dir/$input.checked.json"
   else
-    lake env lean --run "tests/eval_core/$name.lean" "$tmp_dir/$input.schema3.json"
+    lake env lean --run "tests/eval_core/$name.lean" "$tmp_dir/$input.checked.json"
   fi
 }
 

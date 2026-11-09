@@ -134,6 +134,7 @@ def main (p : CompilerProviders.Prepared) (physical : Physical Os R P H D O Aff 
     format
     cNoUnwind := .C false
     lookupLinkSection := CompilerLinkSections.lookup p.main memory
+    itemInstance := fun definition args => lift (CompilerInstance.item p.loweringContext p.program.compilerTables definition args)
     genericParameters := fun id => lift do return (← exactEntry p.main id).parameters
     entrySignature := fun id => lift do (← exactEntry p.main id).signature
     startLangItem := pure p.main.start

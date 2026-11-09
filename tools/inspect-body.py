@@ -1,62 +1,33 @@
 #!/usr/bin/env python3
-"""Inspect an exported body's canonical index using lowerCoreProgram's order.
+"""Inspect a MIR body's exported pool ID and a selected statement or terminator.
 
-This is a source-derived diagnostic adapter, not a decoder or safety check.
-Use the same bytes that passed strict readiness. Root/promoted bodies precede
-instance/promoted bodies; missing promoted bodies do not consume an index.
+This is a diagnostic adapter, not a decoder or safety check. References in the
+printed MIR remain typed IDs.
 """
 import argparse
 import json
 import pathlib
+import sys
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from mir_json import load_mir_document, pool_entry
 
 
 def canonical_bodies(document):
-    nodes = document.get('shared_payloads', {}).get('nodes', [])
-
-    def deref(value):
-        seen = set()
-        while isinstance(value, dict) and '$lean_miri_shared_ref' in value:
-            index = value['$lean_miri_shared_ref']
-            if index in seen:
-                raise ValueError('cyclic shared reference')
-            seen.add(index)
-            if not isinstance(index, int) or index < 0 or index >= len(nodes):
-                raise ValueError('shared reference outside catalog')
-            value = nodes[index]
-        return value
-
-    def field(value, name, default=None):
-        return deref(deref(value).get(name, default))
-
-    result = []
-
-    def append(body, path, name):
-        result.append({'source_path': path, 'definition_path': field(body, 'def_path', name),
-                       'body': deref(body)})
-
-    def promoted(owner, path, name):
-        for i, child in enumerate(field(owner, 'promoted_bodies', [])):
-            body = field(child, 'body')
-            if body is not None:
-                append(body, f'{path}.promoted_bodies[{i}].body', f'{name}::promoted[{i}]')
-
-    for i, body in enumerate(deref(document['bodies'])):
-        path = f'bodies[{i}]'
-        name = field(body, 'def_path', path)
-        append(body, path, name)
-        promoted(body, path, name)
-    for i, instance in enumerate(deref(document['instances'])):
-        body = field(instance, 'body')
-        if body is None:
-            continue
-        path = f'instances[{i}]'
-        name = field(instance, 'def_path', path)
-        append(body, path + '.body', name)
-        if field(body, 'promoted_bodies', []):
-            promoted(body, path + '.body', name)
-        else:
-            promoted(instance, path, name)
-    return result, deref
+    names = {}
+    for root in document['body_roots']:
+        names.setdefault(root['body'], root['def_path'])
+        for child in root.get('promoted_bodies', []):
+            names.setdefault(child['body'], f"{root['def_path']}::promoted[{child['promoted_index']}]")
+    for instance in document['instances']:
+        if instance.get('body') is not None:
+            names.setdefault(instance['body'], instance['def_path'])
+        for child in instance.get('promoted_bodies', []):
+            names.setdefault(child['body'], f"{instance['def_path']}::promoted[{child['promoted_index']}]")
+    for body_id in names:
+        pool_entry(document, 'bodies', body_id)
+    return [{'source_path': f'bodies[{index}]',
+             'definition_path': names.get(index), 'body': body}
+            for index, body in enumerate(document['bodies'])]
 
 
 def main():
@@ -66,25 +37,17 @@ def main():
     parser.add_argument('--block', type=int, default=0)
     parser.add_argument('--statement', type=int, default=0)
     args = parser.parse_args()
-    bodies, deref = canonical_bodies(json.loads(args.input.read_text()))
+    bodies = canonical_bodies(load_mir_document(args.input))
     if args.body < 0 or args.body >= len(bodies):
         parser.error('body index out of range')
     selected = bodies[args.body]
 
-    def expand(value):
-        value = deref(value)
-        if isinstance(value, dict):
-            return {k: expand(v) for k, v in value.items()}
-        if isinstance(value, list):
-            return [expand(v) for v in value]
-        return value
-
     body = selected['body']
-    blocks = deref(body['basic_blocks'])
+    blocks = body['basic_blocks']
     if args.block < 0 or args.block >= len(blocks):
         parser.error('block index out of range')
-    block = deref(blocks[args.block])
-    statements = deref(block['statements'])
+    block = blocks[args.block]
+    statements = block['statements']
     if args.statement < 0 or args.statement > len(statements):
         parser.error('statement index out of range')
     at_terminator = args.statement == len(statements)
@@ -92,7 +55,7 @@ def main():
     print(json.dumps({'body_index': args.body, 'source_path': selected['source_path'],
         'definition_path': selected['definition_path'], 'block': args.block,
         'statement_index': args.statement, 'at_terminator': at_terminator,
-        'node': expand(node)}, indent=2))
+        'node': node}, indent=2))
 
 
 if __name__ == '__main__':

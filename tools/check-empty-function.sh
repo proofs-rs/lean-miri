@@ -7,7 +7,7 @@ export PATH="$ELAN_HOME/bin:$PATH"
 export LEAN_NUM_THREADS=1
 sha256sum --check examples/empty_function/SHA256SUMS
 mkdir -p scratch
-out="$(mktemp -d "$PWD/scratch/empty_function-check.XXXXXXXX")"
+out="$(mktemp -d "${TMPDIR:-$PWD/scratch}/empty_function-check.XXXXXXXX")"
 mkdir -p "$out/source/empty_function" "$out/empty_function"
 # Freeze the dependency closure before building. Optional arguments select roots.
 python3 - "$out" "${@:-Check}" <<'PYTHON'

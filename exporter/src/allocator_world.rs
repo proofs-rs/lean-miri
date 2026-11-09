@@ -226,6 +226,9 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             })
             .collect::<Vec<_>>();
         for instance in context.instance_ids.keys().copied() {
+            if context.metadata_only_instances.contains(&instance) {
+                continue;
+            }
             let ty::InstanceKind::Intrinsic(def) = instance.def else {
                 continue;
             };
@@ -380,8 +383,7 @@ fn scan_byte_keys<'tcx>(
 
 fn allocation_graph_id(reference: &Value) -> Result<u64, String> {
     reference
-        .get("allocation_id")
-        .and_then(Value::as_u64)
+        .as_u64()
         .ok_or_else(|| "serialized allocator-world allocation has no graph ID".to_owned())
 }
 

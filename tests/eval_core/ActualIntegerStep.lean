@@ -79,7 +79,8 @@ private def rootCall (p : Input.CompilerProviders.Prepared) (body : LoadedBody)
 private def runPrepared (prepared : Input.CompilerProviders.Prepared) : Except String String := do
   let dummy ← Input.CompilerContextSpan.rootSpan prepared.program
   let definition ← prepared.program.rootDefinitionId 0
-  let rootInstance : CallInstance := ⟨.Item definition, #[]⟩
+  let rootInstance ← Input.CompilerInstance.item prepared.loweringContext
+    prepared.program.compilerTables definition #[]
   let body ← Input.CallResolution.loadedBodyOfInstance prepared.lifecycle.calls.calls rootInstance
   let some returnTy := body.body.locals[0]? | throw "root has no return local"
   let imported := Input.CompilerGlobals.importGraph prepared.runtime.target prepared.program

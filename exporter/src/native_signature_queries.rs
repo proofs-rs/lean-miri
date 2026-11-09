@@ -55,8 +55,6 @@ pub(super) fn export<'tcx>(
                 "instantiate_bound_regions_with_erased(fn_sig(instance.def_id()).instantiate(instance.args))")
         };
         Ok::<_, String>(json!({"instance_id":id,
-            "instance_kind":instance_kind_json(context,tcx,instance.def)?,
-            "generic_args":generic_args_json(context,tcx,instance.args)?,
             "query":query,
             "normalization":"none","bound_regions":"erased",
             "signature_query":signature}))

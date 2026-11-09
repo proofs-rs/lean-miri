@@ -12,18 +12,14 @@ private def set (value : Json) (key : String) (child : Json) : Except String Jso
   pure (Json.mkObj ((key, child) :: fields.toList.filter (·.1 != key)))
 
 private def reject (input : Json) (label : String) : IO Unit := do
-  for outcome in #[decodeJson input.compress |>.map (fun _ => ()),
-      decodeRuntimeJson input.compress |>.map (fun _ => ()),
-      decodeJsonReference input.compress |>.map (fun _ => ()),
-      decodeRuntimeJsonReference input.compress |>.map (fun _ => ())] do
+  for outcome in #[decodeJson input.compress |>.map (fun _ => ())] do
     if outcome.isOk then throw (IO.userError s!"{label}: incomplete selected key evidence accepted")
 
 def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected prepared selected-keys JSON")
   let input ← must (Json.parse (← IO.FS.readFile path))
   discard <| must (decodeJson input.compress)
-  discard <| must (decodeRuntimeJson input.compress)
-  let input ← must (SharedPayloads.resolveCatalog input)
+  discard <| must (decodeJson input.compress)
   let world ← must (input.getObjVal? "compiler_alloc_id_world")
   let rows ← must ((← must (world.getObjVal? "dedup_catalog")).getArr?)
   for family in #["function", "vtable"] do

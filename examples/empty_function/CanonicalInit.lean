@@ -29,7 +29,7 @@ theorem push_actual (s : Static) (metadata : Metadata s) (profile : Profile s)
       frame.trackCallerArg = none ∧
       machine.borrowTracker = p.before.machine.borrowTracker ∧ machine.dataRace = none := by
   have fields := MetadataBinding.fields s metadata capacity
-  obtain ⟨definition, definitionAt⟩ := metadata.frameDefinition
+  obtain ⟨definitionIndex, definition, definitionResolved, definitionAt⟩ := metadata.frameDefinition
   let frame := EmptyFunction.Init.created s.cfg.lifecycle p.before s.loaded s.functionInstance p.destination
     continuation metadata.preamble s.prepared.compiler.lifecycle.frames s.options.userRelevantCrates definition
   let machine := (s.cfg.lifecycle.freshLocalsIdentity p.before.machine).1
@@ -53,9 +53,9 @@ theorem push_actual (s : Static) (metadata : Metadata s) (profile : Profile s)
       · rw [Array.getElem?_push, if_neg (Nat.ne_of_lt bounded), Array.getElem?_eq_getElem bounded]
   obtain ⟨index,old,cached,selected⟩ := select
   have pushed := EmptyFunction.Init.push_raw s.cfg.lifecycle p.before s.loaded s.functionInstance p.destination
-    continuation metadata.preamble s.prepared.compiler.lifecycle.frames s.options.userRelevantCrates definition
+    continuation metadata.preamble s.prepared.compiler.lifecycle.frames s.options.userRelevantCrates definition definitionIndex
     s.prepared.compiler.lifecycle.lifecycle metadata.loweredBody fields.frameCompiler fields.preambleSpan
-    fields.requiredConstants metadata.frameInlineAttribute metadata.frameTrackCaller definitionAt
+    fields.requiredConstants metadata.frameInlineAttribute metadata.frameTrackCaller definitionResolved definitionAt
     metadata.lifecycleBody metadata.bodyContents metadata.lifecycleRow input.thread index active old cached selected
   refine ⟨frame,FrameRelevance.pushedMachine p.before.stack.frames frame old machine,?_,⟨old,rfl⟩,?_,?_,?_⟩
   · change CallMachine.pushRaw s.cfg.lifecycle s.cfg.compiler.debugAssertions s.functionInstance s.loaded
@@ -141,11 +141,14 @@ theorem push_actual (s : Static) (metadata : Metadata s) (profile : Profile s)
     (Configuration.leaves s.prepared s.options.place.debugAssertions) remaining metadata.construction s.cfg
     (by simpa only [Configuration.rootConfig,eq] using s.built)
   obtain ⟨decl,declaration,indexed⟩ := metadata.localSourceSpan
+  have bounded := metadata.compilerLocalSourceSpans metadata.loweredBody
+    (Array.mem_of_getElem? metadata.bodyRow) decl (Array.mem_of_getElem? declaration)
+  rw [indexed] at bounded
   change s.cfg.compiler.localSpan s.loaded.body 0 _ = _
   rw [fields.localSpan]
   exact CompilerFrameContext.localSpan_known s.prepared.compiler s.loaded metadata.loweredBody
     s.functionInstance decl metadata.localSpan metadata.bodyRow metadata.bodyContents metadata.loader
-    declaration indexed frames frame machine identity function body
+    declaration indexed bounded frames frame machine identity function body
 
  theorem push_done (s : Static) (metadata : Metadata s) (capacity : 0 < s.capacity)
     (frames : Array LocalUnit.F) (frame : LocalUnit.F)

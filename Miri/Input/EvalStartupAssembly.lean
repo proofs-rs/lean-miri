@@ -172,6 +172,7 @@ private def outerFunctions
   registry := fun user => hooks.registry (ExecutionStateTransport.toInner user)
   putRegistry := fun user value => ExecutionStateTransport.toOuter
     (hooks.putRegistry (ExecutionStateTransport.toInner user) value)
+  instanceArgs := fun inst => ExecutionStateTransport.action (hooks.instanceArgs inst)
   crossCrateInlineAlways := hooks.crossCrateInlineAlways
   inlineNever := fun callee => ExecutionStateTransport.action (hooks.inlineNever callee)
   chooseSalt := ExecutionStateTransport.action hooks.chooseSalt

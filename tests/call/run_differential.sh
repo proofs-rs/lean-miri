@@ -12,7 +12,7 @@ work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT
 python3 tests/call/extract_reference.py "$work_dir/reference.rs"
 rustc --edition=2024 -Awarnings "$work_dir/reference.rs" -o "$work_dir/reference"
-lake build Miri.Interpreter.Call
+flock /tmp/lean-miri-lake-build.lock lake build Miri.Interpreter.Call
 "$work_dir/reference" > "$work_dir/rust.out"
 if ! lake env lean --run tests/call/Pipeline.lean > "$work_dir/lean.out"; then
   cat "$work_dir/lean.out"

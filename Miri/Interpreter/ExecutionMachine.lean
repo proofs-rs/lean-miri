@@ -286,12 +286,14 @@ def callHooks [DecidableEq K] (h : Config K U C O X Host) (limits : Limits) : Ca
   let intrinsic : C → CallInstance → Array (OpTy Provenance) → RuntimeStackPlace Provenance →
       Option BasicBlockId → UnwindAction → M K U (Option CallInstance) := fun c callee args dest ret _ => do
     let name ← h.intrinsicName callee
-    let types := callee.args.filterMap fun arg => match arg with | .Type ty => some ty | _ => none
+    let genericArgs ← h.calls.compiler.instanceArgs callee
+    let types := genericArgs.filterMap fun arg => match arg with | .Type ty => some ty | _ => none
     let context := h.intrinsics callee
     if ← IntrinsicBackend.eval h.backend (intrinsicHooks h limits context) c name types args dest.toRuntimePlace ret then return none
     if ← h.intrinsicMustOverride callee then throw (.unsupported s!"unimplemented intrinsic: {name}")
     unless ← h.intrinsicFallbackIsSpec callee do throw (.unsupported s!"intrinsic fallback is not a specification: {name}")
-    return some ⟨.Item callee.defId,callee.args⟩
+    let kind ← h.calls.compiler.instanceKind callee
+    return some (← h.calls.compiler.itemInstance kind.defId genericArgs)
   let virtual := ExecutionCalls.virtualHooks h.virtual h.access operands h.compiler.debugAssertions
   ExecutionCalls.make h.calls h.lifecycle h.access h.allocation h.compiler h.copy h.retag
     limits.retag limits.callDispatch operands (projectionHooks h) h.functions virtual
@@ -327,7 +329,7 @@ def stepHooks [DecidableEq K] (h : Config K U C O X Host) (limits : Limits) :
     drop := fun c mirPlace target unwind => MachineHooks.run do
       let dest ← PlaceDynamic.evalPlace (projectionHooks h) c mirPlace false
       let callee ← calls.resolveDropGlue c dest.layout.ty
-      match callee.kind with
+      match ← calls.instanceKind callee with
       | .Shim (.DropGlue _ none) =>
         let state ← get
         let (state,outcome) := ControlFlow.goToBlock target state

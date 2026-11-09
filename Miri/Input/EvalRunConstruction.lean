@@ -362,7 +362,7 @@ private def progressLabel
       | .threadAtexit => "threadAtexit" | .windows .. => "windows" | .done => "done"
   let frame := match state.stack.frames.back? with
     | none => "empty"
-    | some frame => s!"def_{frame.functionInstance.kind.defId}.body_{frame.bodyIdentity.index}.loc_{repr frame.location}"
+    | some frame => s!"instance_{frame.functionInstance}.body_{frame.bodyIdentity.index}.loc_{repr frame.location}"
   return s!"thread_{state.machine.user.registry.activeThread.value.val}.depth_{state.stack.frames.size}.main_{main}.tls_{tls}.{frame}"
 
 /-- Profiling is an identity on the state, including failed prefixes. Log the

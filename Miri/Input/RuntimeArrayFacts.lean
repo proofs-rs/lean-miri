@@ -8,7 +8,7 @@ runtime arrays still require genuine compiler trait resolution evidence. -/
 namespace Miri.Input.RuntimeArrayFacts
 open Lean Miri.ABI Miri.Interpreter
 private def ref (j : Json) : Except String MIR.TyId := do
-  (← j.getObjVal? "type_id").getNat?
+  j.getNat?
 private def trivial (world : RuntimeArrayTypes.World) (ty : MIR.TyId) : Nat → Except String Bool
   | 0 => throw "structural trivial-trait query budget exhausted"
   | fuel+1 => do
@@ -17,18 +17,14 @@ private def trivial (world : RuntimeArrayTypes.World) (ty : MIR.TyId) : Nat → 
         | .u8 => world.byteLayout.ty | .u16 => world.wideLayout.ty | .compiler id => id
       return ← trivial world child fuel
     let node ← world.metadata.node ty |>.mapError toString
-    match node.shapeKind with
-    | .int | .uint | .float | .bool | .char | .str | .never | .reference | .rawPointer
-    | .functionDefinition | .functionPointer => pure true
-    | .tuple =>
-      let shape ← node.payload.getObjVal? "shape"
-      for child in ← (← shape.getObjVal? "elements").getArr? do
-        unless ← trivial world (← ref child) fuel do return false
+    match node.shape with
+    | .int _ | .uint _ | .float _ | .bool | .char | .str | .never | .reference .. | .rawPointer ..
+    | .functionDefinition .. | .functionPointer .. => pure true
+    | .tuple elements =>
+      for child in elements do
+        unless ← trivial world child fuel do return false
       pure true
-    | .array | .slice | .patternType =>
-      let shape ← node.payload.getObjVal? "shape"
-      let key := if node.shapeKind == .patternType then "base" else "element"
-      trivial world (← ref (← shape.getObjVal? key)) fuel
+    | .array element .. | .slice element | .patternType element _ => trivial world element fuel
     | _ => pure false
 
 def boolean (context : CompilerFacts.Context) (world : RuntimeArrayTypes.World)

@@ -16,7 +16,7 @@ abbrev InlineIndex := Std.HashMap Nat (Array (CallInstance × Bool))
 
 private def addFunctionKey (index : FunctionKeyIndex) (callee : CallInstance)
     (salt : Nat) (position : Nat) : FunctionKeyIndex :=
-  let key := (callee.defId, salt)
+  let key := (callee, salt)
   index.insert key ((index[key]?).getD #[] |>.push position)
 
 private def functionKeyIndex (functions : Array FunctionPointers.FunctionEntry) : FunctionKeyIndex := Id.run do
@@ -33,7 +33,7 @@ private def functionAllocIndex (registry : FunctionPointers.Registry Other) : Al
 
 private def findFunctionKey (functions : Array FunctionPointers.FunctionEntry) (index : FunctionKeyIndex)
     (callee : CallInstance) (salt : Nat) : Option FunctionPointers.FunctionEntry := Id.run do
-  let key := (callee.defId, salt)
+  let key := (callee, salt)
   for position in (index[key]?).getD #[] do
     if let some entry := functions[position]? then
       if entry.callee == callee && entry.salt.val == salt then return some entry
@@ -49,13 +49,13 @@ def InlineLookup.prepare (prepared : Prepared) : InlineLookup prepared := Id.run
   let rows := prepared.inlineAttributes
   let mut index : InlineIndex := {}
   for entry in rows do
-    let key := entry.1.defId
+    let key := entry.1
     index := index.insert key ((index[key]?).getD #[] |>.push entry)
   return ⟨rows,index,rfl⟩
 
 def inlineNeverUsing (lookup : InlineLookup prepared) (callee : CallInstance) :
     Option Bool := Id.run do
-  for (candidate, value) in (lookup.index[callee.defId]?).getD #[] do
+  for (candidate, value) in (lookup.index[callee]?).getD #[] do
     if candidate == callee then return some value
   return none
 
@@ -70,7 +70,7 @@ def prepare (calls : CompilerCallPipeline.Prepared) : Except String Prepared := 
     unless next.definitions == tables.definitions && next.typeConstants == tables.typeConstants do
       throw "function inline query requires unprepared shared compiler identities"
     let never ← (← record.getObjVal? "inline_never").getBool?
-    let key := callee.defId
+    let key := callee
     let bucket := (indexed[key]?).getD #[]
     if let some (_,old) := bucket.find? (fun e : CallInstance × Bool => e.1 == callee) then
       unless old == never do throw "conflicting exact full-instance inline attribute"
@@ -86,15 +86,16 @@ private def lift (result : Except String A) : MachineHooks.M K User A :=
 
 def hooks (p : Prepared) (image : AllocationImage.Imported)
     (base : FunctionPointers.Hooks K User Other) : FunctionPointers.Hooks K User Other :=
-  let lookup := CompilerVTableRuntime.GlobalLookup.prepare p.calls.symbols
   let inlineLookup := InlineLookup.prepare p
   {base with
+    instanceArgs := fun inst => lift (CompilerInstance.argsOf
+      (LowerContext.ofDocument p.calls.calls.program.input) p.calls.calls.program.compilerTables inst)
     inlineNever := fun callee => lift do
       let some never := inlineNeverUsing inlineLookup callee
         | throw "exact full-instance inline attribute absent"
       pure never
     importedFunction := fun id => do
-      lift (CompilerVTableRuntime.globalFunctionUsing p.calls.symbols lookup image (← get).machine.memory id)}
+      lift (CompilerVTableRuntime.globalFunction p.calls.symbols image (← get).machine.memory id)}
 
 /-- Seed actual compiler-image function reservations before execution. Reject
 conflicting salt-zero identities rather than pick an arbitrary matching body. -/
@@ -104,7 +105,6 @@ private def seedImportedImpl (p : Prepared) (image : AllocationImage.Imported)
   let mut registry := initial
   let mut keys := functionKeyIndex registry.functions
   let mut allocated := functionAllocIndex registry
-  let lookup := CompilerVTableRuntime.GlobalLookup.prepare p.calls.symbols
   let input := p.calls.calls.program.input
   let world? := input.compilerAllocIdWorld
   if let some world := world? then
@@ -116,7 +116,7 @@ private def seedImportedImpl (p : Prepared) (image : AllocationImage.Imported)
       |>.mapError fun error => s!"prepared AllocId world: {error}"
   else
     for (_,id) in memory.importedGlobalIds do
-      if let some callee ← CompilerVTableRuntime.globalFunctionUsing p.calls.symbols lookup image memory id then
+      if let some callee ← CompilerVTableRuntime.globalFunction p.calls.symbols image memory id then
         if let some old := findFunctionKey registry.functions keys callee 0 then
           unless old.allocation == id do throw "conflicting imported salt-zero function allocations"
         else
@@ -129,14 +129,14 @@ private def seedImportedImpl (p : Prepared) (image : AllocationImage.Imported)
     for row in world.dedupCatalog do
       if row.keyKind == .function then
         let keyRuntime ← AllocationImage.runtimeId memory row.keyAllocationId
-        let some keyCallee ← CompilerVTableRuntime.globalFunctionUsing p.calls.symbols lookup image memory keyRuntime
+        let some keyCallee ← CompilerVTableRuntime.globalFunction p.calls.symbols image memory keyRuntime
           | throw "prepared function key witness is not a symbolic function"
         for result in row.salts do
           if saltBound : result.salt < 32 then
             let resultRuntime ← AllocationImage.runtimeId memory result.allocationId
             unless memory.sourceAllocIdForRuntime? resultRuntime == some result.sourceAllocId do
               throw "prepared function result raw AllocId does not match the active memory world"
-            let some resultCallee ← CompilerVTableRuntime.globalFunctionUsing p.calls.symbols lookup image memory resultRuntime
+            let some resultCallee ← CompilerVTableRuntime.globalFunction p.calls.symbols image memory resultRuntime
               | throw "prepared function salt result is not a symbolic function"
             unless resultCallee == keyCallee do
               throw "prepared function salt result does not match its exact compiler Instance key"

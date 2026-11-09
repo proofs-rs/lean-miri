@@ -16,7 +16,6 @@ def make (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
       MachineHooks.M K U (MemPlace Provenance)) :
     VTableHooks Provenance (MachineHooks.State K U) C CallInstance (FnAbi MIR.TyId) :=
   let facts := p.lifecycle.calls.symbols.facts
-  let lookup := CompilerVTableRuntime.GlobalLookup.prepare p.lifecycle.calls.symbols
   let engine := CompilerVTableMachine.hooks p.vtables image engine
   { target := p.runtime.target.base
     isDynamic := fun _ ty => lift (CompilerFacts.boolean facts.context ty "is_dynamic")
@@ -46,6 +45,6 @@ def make (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
       else throw (.invalidProgram "vtable source salt outside 0..32")
     globalRootPointer := fun _ id => return (← FunctionPointers.rootPointer engine.functions id).withOptionalProvenance
     entries := fun _ principal ty => lift
-      (CompilerVTableRuntime.entriesUsing p.lifecycle.calls.symbols lookup principal ty)
+      (CompilerVTableRuntime.entries p.lifecycle.calls.symbols principal ty)
     assertVirtualInstanceMatches := VirtualCalls.assertConcrete (CompilerVirtualLeaves.make p.lifecycle.calls) }
 end Miri.Input.CompilerVTableLeaves

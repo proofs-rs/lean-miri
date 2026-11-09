@@ -23,23 +23,24 @@ preflight facts and the core C-ulong and mutable i32-pointer types required by
 machine construction without demanding an OS catalog. Intrinsic type-name and
 caller-location constants are lowered from their direct compiler payloads. A genuine absent
 function-pointer target has `resolution_kind: none` and no instance identity;
-`resolution_kind: instance` carries the direct instance fields. This preserves
+`resolution_kind: instance` carries a canonical instance ID. This preserves
 the optional answer when exact query-key fields are attached.
 Coroutine frame layout serialization and foreign TLS initializers remain
 unimplemented and now stop export. This boundary does not establish compiler
 query closure or interpreter correspondence.
 
-Fifteen fixed connected inputs and their same-TyCtxt reference observations,
-three eval-core inputs and two selected runtime inputs have been regenerated
-under the schema-3 successful-input contract. Performance checks now obtain
+Fifteen fixed connected inputs with their same-TyCtxt reference observations
+and three eval-core inputs have been regenerated
+under the schema-4 typed-pool contract. Runtime-metadata checks export their
+Rust inputs afresh. Performance checks now obtain
 fresh producer inputs. The DST and large Tree Borrows connected cases now
 generate inputs and same-TyCtxt references in CI from unchanged tracked sources,
 flags and reviewed guest configuration; fixed assertions and choice tapes are
 preserved. This adds pinned toolchain/sysroot build cost and replaces saved
 allocation-history replay for those two cases. Their historical archives are
 not CI inputs.
-The latest CI matrix and the 17-case Lean connected replay have not been run
-at the user's request; regeneration and historical replay results do not
+The full CI matrix and the 17-case Lean connected replay remain unexecuted;
+regeneration and focused replay results do not
 validate those executions or establish compiler query closure, interpreter
 correspondence or whole-machine safety.
 
@@ -144,14 +145,20 @@ with attempted Lean outcomes retained. Full hosted sweep and aggregate coverage
 remain unvalidated.
 Selected finite checks do not close general proof or source-correspondence gaps.
 
-The latest shared-node/typed-metadata optimization revision still needs full
-`tools/check.sh`, the full `miri_tests` runtime registry and a fresh
-same-prepared-TyCtxt reference-Miri comparison. The full regression result for an
-earlier revision does not validate later changes. Separate canonical12, ordering,
+The typed-pool input revision still needs full `tools/check.sh` and hosted CI.
+The full regression result for an earlier revision does not validate later
+changes. Separate canonical12, ordering,
 large-TB, SC-schedule, connected-proof and structural-regression entry points
 also need current-revision execution. Fresh construction of the reference Miri
 and MIR-enabled std sysroot remains a validation gap; reusing retained artifacts
 does not establish that setup path.
+
+The ordinary standard-library startup closure from
+`tests/repro/startup/empty-main.rs` still stops during lowering with
+`expected typed object`, before guest execution. Both the main baseline
+`a0967d39` and the typed-pool input exhibit this failure; their same-TyCtxt Miri
+references complete normally. Successful rooted functions and the constructor
+startup witness do not establish support for this larger closure.
 
 ### Compiler query closure and prepared allocation identity
 
@@ -199,22 +206,19 @@ source-order diagnostics, malformed-row handling and fresh Location allocations.
 Measure current immutable artifacts with the protocol in [AGENTS](AGENTS.md);
 old timings and shared-host samples do not establish a general speedup.
 
-No full generic indexed-query/decoder equivalence proof exists. Component
-identities, cached/reference parity and finite guest comparisons do not imply
-whole-decoder equivalence or all-choice safety. The shared-ID cache partition
-supersedes the earlier structural-key comparison identity; local Raw-fallback
-identities do not prove the new whole-decoder implementation equivalent.
+No full compiler-query/decoder equivalence proof exists. Component identities
+and finite guest comparisons do not imply whole-decoder equivalence or
+all-choice safety. Typed pool validation establishes bounds and selected
+structural invariants; it does not prove exporter/interpreter correspondence.
 Native profiling identities preserve Lean states/outcomes, not native C compiler
 correctness. The large catch guest still needs a fresh same-prepared-TyCtxt
 reference comparison; native completion of a diagnostic trace does not prove UB
 freedom over every permitted choice.
 
 Import-time typing remains selective: query envelopes, layout extras and some
-specialized adapters still inspect source payloads. Any prepared-input reuse
-across seeds must bind input/version/configuration and create fresh guest state;
-it must not reuse guest pointers or allocation identities or replace first-run
-improvements. Preserve validation, context-sensitive memo keys, diagnostic
-rebasing and uncached compatibility paths when extending caching.
+specialized adapters still inspect source payloads. Compiler table identities
+remain local to one input. Reusing guest pointers or allocation identities
+between executions would invalidate the execution model.
 
 ## Feature support outside the current acceptance scope
 

@@ -33,7 +33,7 @@ theorem push_cached (s : Static) (metadata : Metadata s) (profile : Profile s)
       frame.trackCallerArg = none ∧
       machine.borrowTracker = (cachedState s p input.tracker destination older bound).machine.borrowTracker ∧ machine.dataRace = none := by
   have fields := MetadataBinding.fields s metadata capacity
-  obtain ⟨definition, definitionAt⟩ := metadata.frameDefinition
+  obtain ⟨definitionIndex, definition, definitionResolved, definitionAt⟩ := metadata.frameDefinition
   let frame := EmptyFunction.Init.created s.cfg.lifecycle (cachedState s p input.tracker destination older bound) s.loaded s.functionInstance p.destination
     continuation metadata.preamble s.prepared.compiler.lifecycle.frames s.options.userRelevantCrates definition
   let machine := (s.cfg.lifecycle.freshLocalsIdentity (cachedState s p input.tracker destination older bound).machine).1
@@ -59,9 +59,9 @@ theorem push_cached (s : Static) (metadata : Metadata s) (profile : Profile s)
       · rw [Array.getElem?_push, if_neg (Nat.ne_of_lt bounded), Array.getElem?_eq_getElem bounded]
   obtain ⟨index,old,cached,selected⟩ := select
   have pushed := EmptyFunction.Init.push_raw s.cfg.lifecycle (cachedState s p input.tracker destination older bound) s.loaded s.functionInstance p.destination
-    continuation metadata.preamble s.prepared.compiler.lifecycle.frames s.options.userRelevantCrates definition
+    continuation metadata.preamble s.prepared.compiler.lifecycle.frames s.options.userRelevantCrates definition definitionIndex
     s.prepared.compiler.lifecycle.lifecycle metadata.loweredBody fields.frameCompiler fields.preambleSpan
-    fields.requiredConstants metadata.frameInlineAttribute metadata.frameTrackCaller definitionAt
+    fields.requiredConstants metadata.frameInlineAttribute metadata.frameTrackCaller definitionResolved definitionAt
     metadata.lifecycleBody metadata.bodyContents metadata.lifecycleRow input.thread index active old cached selected
   refine ⟨frame,FrameRelevance.pushedMachine (cachedState s p input.tracker destination older bound).stack.frames frame old machine,?_,⟨old,rfl⟩,?_,?_,?_⟩
   · change CallMachine.pushRaw s.cfg.lifecycle s.cfg.compiler.debugAssertions s.functionInstance s.loaded

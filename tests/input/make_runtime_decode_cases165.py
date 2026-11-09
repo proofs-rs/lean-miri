@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Derive focused decoder edge inputs from an archived genuine export."""
+"""Derive focused decoder edge inputs from a fresh export."""
 import copy
 import json
 import pathlib
@@ -12,10 +12,8 @@ from mir_json import load_mir_document
 def replace_first_span(value):
     if isinstance(value, dict):
         for key, child in value.items():
-            if key == "span" and "scope" in value and isinstance(child, dict) and all(
-                item in child for item in ("lo", "hi", "start", "end", "ctxt", "file")
-            ):
-                value[key] = {"$lean_miri_shared_ref": 0}
+            if key == "span" and "scope" in value and type(child) is int:
+                value[key] = 999999999
                 return True
             if replace_first_span(child):
                 return True
@@ -42,10 +40,7 @@ def replace_first_debug(value):
 
 
 def main(source: str, output: str) -> None:
-    # Derive semantic mutations from the validated expanded document. An empty
-    # valid catalog lets every case reach its intended semantic decoder check.
     base = load_mir_document(source)
-    base["shared_payloads"] = {"schema_version": 2, "nodes": []}
     out = pathlib.Path(output)
     out.mkdir(parents=True, exist_ok=True)
     cases = {}

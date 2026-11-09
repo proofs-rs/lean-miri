@@ -51,6 +51,7 @@ structure MainThreadQueries (P E H Error : Type) where
   startLangItem : MainThreadM P E H Error (Option MIR.DefId)
   /-- Instance::try_resolve in the actual interpreter typing environment. -/
   resolveInstance : MIR.DefId → Array MIR.GenericArg → MainThreadM P E H Error (Option CallInstance)
+  itemInstance : MIR.DefId → Array MIR.GenericArg → MainThreadM P E H Error CallInstance
   fnPointer : CallInstance → MainThreadM P E H Error (Pointer P)
   layoutOf : MIR.TyId → MainThreadM P E H Error (TyAndLayout MIR.TyId)
   /-- Actual call_function with Rust ABI and Stop{cleanup:true}. -/
@@ -67,13 +68,13 @@ private def scalarArgument (value : Scalar P) (layout : TyAndLayout MIR.TyId) : 
 are invariant errors, not empty generic argument lists. -/
 private def monoMainInstance (queries : MainThreadQueries P E H Error) (entry : MIR.DefId) :
     MainThreadM P E H Error CallInstance := do
-  let mut args := #[]
+  let mut args : Array MIR.GenericArg := #[]
   for parameter in ← queries.genericParameters entry do
     match parameter with
     | .lifetime => args := args.push (.Lifetime .Erased)
     | .typeParameter => throw (.sourceInvariant "Instance::mono: entry has type parameters")
     | .constParameter => throw (.sourceInvariant "Instance::mono: entry has const parameters")
-  pure ⟨.Item entry,args⟩
+  queries.itemInstance entry args
 
 def callMain (target : RuntimeTargetDataLayout) (queries : MainThreadQueries P E H Error)
     (entry : MIR.DefId) (entryType : MainEntryType) (argc argv : TlsImmediate P) : MainThreadM P E H Error Unit := do

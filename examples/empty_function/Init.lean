@@ -25,6 +25,7 @@ theorem push_raw (h : CallMachine.Lifecycle K U C) (before : MachineHooks.State 
     (body : LoadedBody) (fnInstance : CallInstance) (destination : RuntimeStackPlace Provenance)
     (continuation : ReturnContinuation) (span : SpanRef)
     (metadata : CompilerFrameMetadata.Prepared) (relevant : Array Nat) (definition : DefinitionId)
+    (definitionIndex : Nat)
     (lifecycle : CompilerLifecycle.Prepared) (actual : LoweredBody)
     (compiler : h.compiler = CompilerFrameMetadata.hooks metadata relevant)
     (preamble : h.preambleSpan = CompilerLifecycle.preambleSpan lifecycle)
@@ -32,7 +33,9 @@ theorem push_raw (h : CallMachine.Lifecycle K U C) (before : MachineHooks.State 
     (inline : CompilerVirtualFacts.inlineAttribute metadata.calls.scopes fnInstance = .ok none ∨
       CompilerVirtualFacts.inlineAttribute metadata.calls.scopes fnInstance = .ok (some false))
     (track : CompilerRuntimeQueries.requiresCallerLocation metadata.calls.runtime fnInstance = .ok false)
-    (definitionAt : metadata.calls.calls.program.compilerTables.definitions[fnInstance.defId]? = some definition)
+    (definitionResolved : CompilerInstance.definitionOf (LowerContext.ofDocument metadata.calls.calls.program.input)
+      metadata.calls.calls.program.compilerTables fnInstance = .ok definitionIndex)
+    (definitionAt : metadata.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition)
     (row : lifecycle.program.bundle.bodies[body.identity.index]? = some actual)
     (contents : actual.body = body.body)
     (evidence : lifecycle.entries[body.identity.index]? = some ⟨.ok span,.ok fnInstance,.ok #[]⟩)
@@ -53,7 +56,7 @@ theorem push_raw (h : CallMachine.Lifecycle K U C) (before : MachineHooks.State 
   have spanQuery := CompilerLifecycle.preamble_known (K := K) (U := U)
     lifecycle body actual span fnInstance row contents evidence
   have initialized := CompilerFrameMetadata.initFrame_explicit metadata relevant
-    (raw h before body fnInstance destination continuation span) definition inline track definitionAt
+    (raw h before body fnInstance destination continuation span) definition definitionIndex inline track definitionResolved definitionAt
     ({before with machine := (h.freshLocalsIdentity before.machine).1})
   have constants := CompilerLifecycle.required_empty lifecycle body actual span fnInstance row contents evidence
     before.stack.frames (created h before body fnInstance destination continuation span metadata relevant definition)

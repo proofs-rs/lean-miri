@@ -11,7 +11,7 @@ inductive Kind where
   | reference | box | raw | other
   deriving DecidableEq, Repr
 inductive UnsizedTail where
-  | dynamic (expectedTrait : Nat)
+  | dynamic (expectedTrait : PredicateList)
   | slice | str | foreign | other
   deriving Repr
 structure Compiler (K U C : Type) where

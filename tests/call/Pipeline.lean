@@ -15,7 +15,7 @@ def body : MIR.Body := ⟨.Built, 1, none, #[0, 0], #[]⟩
 def fixtureBodies : Array MIR.Body := #[body, { body with spreadArgument := some 1 }]
 def loaded (key : Fin fixtureBodies.size) : LoadedBody :=
   ⟨BodyIdentity.ofCanonicalIndex key.val, fixtureBodies[key]⟩
-def frame : Frame Unit LocalLayout Unit := Frame.create (loaded ⟨0, by decide⟩) ⟨.Item 0, #[]⟩ () (.stop true) runtimePlace ⟨0⟩ fixtureIdentity
+def frame : Frame Unit LocalLayout Unit := Frame.create (loaded ⟨0, by decide⟩) 0 () (.stop true) runtimePlace ⟨0⟩ fixtureIdentity
 structure TestAbi where
   args : Array LocalLayout
   ret : LocalLayout
@@ -49,9 +49,22 @@ def hooks : Hooks := {
   functionKind := fun _ => log "functionKind" (.FnDef 0 #[])
   readPointer := fun _ _ => blocked "readPointer"
   getPtrFn := fun _ _ => blocked "getPtrFn"
-  resolve := fun _ _ _ => log "resolve" ⟨.Item 0, #[]⟩
+  resolve := fun _ _ _ => log "resolve" 0
   fnAbiOfFnPtr := fun _ _ _ => blocked "fnAbiOfFnPtr"
   fnAbiOfInstance := fun _ _ _ => log "fnAbi" ⟨#[layout], layout, true, false, 1⟩
+  instanceKind := fun id =>
+    match id with
+    | 0 => pure (.Item 0)
+    | 2 => pure (.Intrinsic 0)
+    | 3 => pure (.LlvmIntrinsic 0)
+    | 4 => pure (.Virtual 0 3)
+    | 5 => pure (.Shim (.DropGlue 0 (some 0)))
+    | 6 => pure (.Virtual 0 0)
+    | _ => throw (.invalidProgram "fixture instance ID missing")
+  instanceArgs := fun _ => pure #[]
+  itemInstance := fun definition args => do
+    unless definition == 0 && args.isEmpty do throw (.invalidProgram "fixture Item identity missing")
+    pure 0
   requiresCallerLocation := fun _ => log "requiresLocation" false
   callerLocation := blocked "callerLocation"
   abiCanUnwind := (·.canUnwind)
@@ -151,7 +164,7 @@ def main : IO Unit := do
   let failCompat := { hooks with checkArgumentCompat := fun _ _ _ => log "compat" false }
   let (state, result) := Call.run (Call.passArgument failCompat () (.InPlace mplace) layout layout 0 ⟨1, #[]⟩ 0 false) {}
   check (!result.isOk && state.trace == ["compat"]) "ABI mismatch before live"
-  let request : CallRequest Unit Unit Bool TestAbi := ⟨.Instance ⟨.Item 0, #[]⟩, false,
+  let request : CallRequest Unit Unit Bool TestAbi := ⟨.Instance 0, false,
     some ⟨#[layout], layout, true, false, 1⟩, #[.InPlace mplace], false, runtimePlace, some 1, .Continue⟩
   let (state, result) := Call.run (Call.initFnCall hooks () 4 request) {}
   check result.isOk "init call"
@@ -175,24 +188,25 @@ def main : IO Unit := do
     .FutureDropPoll 0 0 0, .DropGlue 0 none, .Clone 0 0, .FnPtrAsPtr 0 0,
     .FnPtrFromPtr 0 0, .AsyncDropGlueCtor 0 0, .AsyncDropGlue 0 0]
   for shim in shims do
-    let (state, result) := Call.run (Call.initFnCall hooks () 4
-      { request with callee := .Instance ⟨.Shim shim, #[]⟩ }) {}
+    let shimHooks := { hooks with instanceKind := fun id => if id == 1 then pure (.Shim shim) else hooks.instanceKind id }
+    let (state, result) := Call.run (Call.initFnCall shimHooks () 4
+      { request with callee := .Instance 1 }) {}
     check (result.isOk && state.trace.head? == some "findMir" &&
-      state.frame.functionInstance == ⟨.Shim shim, #[]⟩) "shim dispatch retains canonical identity"
-  let fallback := { hooks with callIntrinsic := fun _ _ _ _ _ _ => log "intrinsic" (some ⟨.Item 0, #[]⟩) }
+      state.frame.functionInstance == 1) "shim dispatch retains canonical identity"
+  let fallback := { hooks with callIntrinsic := fun _ _ _ _ _ _ => log "intrinsic" (some 0) }
   let (state, result) := Call.run (Call.initFnCall fallback () 4
-    { request with callee := .Instance ⟨.Intrinsic 0, #[]⟩ }) {}
+    { request with callee := .Instance 2 }) {}
   check (result.isOk && state.trace.take 3 == ["intrinsic", "requiresLocation", "findMir"]) "intrinsic fallback"
   let llvm := { hooks with callLlvmIntrinsic := fun _ _ _ _ _ => log "llvm" () }
   let (state, result) := Call.run (Call.initFnCall llvm () 1
-    { request with callee := .Instance ⟨.LlvmIntrinsic 0, #[]⟩, callerFnAbi := none }) {}
+    { request with callee := .Instance 3, callerFnAbi := none }) {}
   check (result.isOk && state.trace == ["llvm"]) "LLVM without ABI"
   let foreign := { hooks with callExtra := fun _ _ _ _ _ _ _ => log "foreign" () }
   let (state, result) := Call.run (Call.initFnCall foreign () 1 { request with callee := .Other () }) {}
   check (result.isOk && state.trace == ["foreign"]) "foreign function pointer"
-  let virtual := { hooks with resolveVirtual := fun _ _ _ _ abi args => log "virtual" (⟨.Item 0, #[]⟩, abi, args) }
+  let virtual := { hooks with resolveVirtual := fun _ _ _ _ abi args => log "virtual" (0, abi, args) }
   let (state, result) := Call.run (Call.initFnCall virtual () 4
-    { request with callee := .Instance ⟨.Virtual 0 3, #[]⟩ }) {}
+    { request with callee := .Instance 4 }) {}
   check (result.isOk && state.trace.take 2 == ["virtual", "findMir"]) "virtual dispatch"
   let spread := { hooks with
     findMirOrEvalFn := fun _ inst _ _ _ _ _ => log "findMir" (some (loaded ⟨1, by decide⟩, inst)) }
@@ -222,10 +236,10 @@ def main : IO Unit := do
   let dropped := { hooks with
     isDynamic := fun _ => log "isDynamic" true
     unpackDynForDrop := fun _ p => log "unpackDyn" p
-    resolveDropGlue := fun _ _ => log "resolveDrop" ⟨.Shim (.DropGlue 0 (some 0)), #[]⟩
+    resolveDropGlue := fun _ _ => log "resolveDrop" 5
     mplaceToMutRef := fun _ _ => log "mutRef" op
     fakeUnitReturn := fun _ => log "fakeUnit" runtimePlace }
-  let (state, result) := Call.run (Call.initDropInPlaceCall dropped () 4 runtimePlace ⟨.Virtual 0 0, #[]⟩ 1 .Continue) {}
+  let (state, result) := Call.run (Call.initDropInPlaceCall dropped () 4 runtimePlace 6 1 .Continue) {}
   check (result.isOk && state.trace.take 7 == ["forceAllocation", "isDynamic", "unpackDyn", "resolveDrop", "fnAbi", "mutRef", "fakeUnit"]) "dynamic drop resolution"
   let trackMismatch := { hooks with requiresCallerLocation := fun _ => log "requiresLocation" true }
   let (state, result) := Call.run (Call.initFnCall trackMismatch () 4 request) {}
