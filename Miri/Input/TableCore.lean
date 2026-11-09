@@ -215,6 +215,7 @@ private def abiObjectTag  : Parser (TaggedNode) := do
     | "kind" => return { s with «kind» := some (← string) }
     | "variant" => return { s with «variant» := some (← string) }
     | _ => skipValue; pure s
+  if s.kind.isSome && s.variant.isSome then fail "ambiguous ABI tag: both kind and variant are present"
   match s.kind.or s.variant with
   | some tag => pure ⟨tag⟩
   | none => fail "enum object is missing its kind tag"

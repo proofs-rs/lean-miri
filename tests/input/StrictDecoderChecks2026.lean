@@ -85,6 +85,7 @@ def main : IO Unit := do
   rejects (layoutVariantsKind "future_layout") "layout variant"
   rejects (backendReprKind "future_backend") "backend representation"
   rejects (canonicalAbiKind "future_abi") "ABI"
+  rejects (JsonReader.run (parseAbiTag "$abi") "{\"kind\":\"Rust\",\"variant\":\"C\"}") "ambiguous ABI tag"
   rejects (allocationKind "future_allocation") "allocation"
   rejects (JsonReader.run (parseTagEncoding "$tag") (string "legacy debug")) "legacy tag encoding"
   IO.println "StrictDecoderChecks2026: typed references, unknown MIR constructors and unresolved compiler values rejected"
