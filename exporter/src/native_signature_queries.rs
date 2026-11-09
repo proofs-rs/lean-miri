@@ -1,10 +1,18 @@
 //! Exact native callback FnSig query, alloc_addresses/mod.rs:167–174.
 //! No normalization or ABI lowering is substituted for the pinned query.
 use super::*;
+#[derive(serde::Serialize)]
+pub(super) struct Query {
+    instance_id: u64,
+    query: &'static str,
+    normalization: &'static str,
+    bound_regions: &'static str,
+    signature_query: pool_type::FunctionSignature,
+}
 pub(super) fn export<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<Vec<Query>, String> {
     let mut requests = context
         .instance_ids
         .iter()
@@ -26,7 +34,7 @@ pub(super) fn export<'tcx>(
         .map(|(instance, id)| (*id, *instance))
         .collect::<Vec<_>>();
     requests.sort_by_key(|(id, _)| *id);
-    Ok::<_, String>(Value::Array(requests.into_iter().map(|(id,instance)| { {
+    Ok::<_, String>(requests.into_iter().map(|(id,instance)| { {
         let closed=!instance.args.has_non_region_param() && !instance.args.has_escaping_bound_vars()
             && !instance.args.has_infer() && !instance.args.has_placeholders() && !instance.args.references_error();
         let def_kind=tcx.def_kind(instance.def_id());
@@ -54,9 +62,7 @@ pub(super) fn export<'tcx>(
             (compiler_fact(fn_sig_json_inner(context,tcx,sig)?),
                 "instantiate_bound_regions_with_erased(fn_sig(instance.def_id()).instantiate(instance.args))")
         };
-        Ok::<_, String>(json!({"instance_id":id,
-            "query":query,
-            "normalization":"none","bound_regions":"erased",
-            "signature_query":signature}))
-    } }).collect::<Result<Vec<_>, String>>()?))
+        Ok::<_, String>(Query { instance_id: id, query,
+            normalization: "none", bound_regions: "erased", signature_query: signature })
+    } }).collect::<Result<Vec<_>, String>>()?)
 }

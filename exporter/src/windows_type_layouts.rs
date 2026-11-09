@@ -3,6 +3,13 @@
 //! out by the selected rustc target. Non-Windows targets do not request these
 //! Windows-only shim layouts.
 use super::*;
+#[derive(serde::Serialize)]
+pub(super) struct Catalog {
+    crate_path: [&'static str; 5],
+    namespace: &'static str,
+    typing_env: &'static str,
+    entries: BTreeMap<String, u64>,
+}
 
 const WINDOWS_TYPE_LAYOUTS: &[&str] = &[
     "INIT_ONCE",
@@ -18,7 +25,7 @@ fn query<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
     name: &str,
-) -> Result<Value, String> {
+) -> Result<u64, String> {
     let result = (|| -> Result<u64, String> {
         let path = ["std", "sys", "pal", "windows", "c", name];
         let instance = shim_abi::named_instance(tcx, &path, rustc_hir::def::Namespace::TypeNS)?;
@@ -35,7 +42,7 @@ fn query<'tcx>(
         Ok(type_json(context, tcx, ty)?)
     })();
     Ok::<_, String>(match result {
-        Ok(value) => json!(value),
+        Ok(value) => value,
         Err(reason) => export_failure("windows_type_layouts::query", reason)?,
     })
 }
@@ -43,8 +50,8 @@ fn query<'tcx>(
 pub(super) fn export<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
-    let mut entries = serde_json::Map::new();
+) -> Result<Catalog, String> {
+    let mut entries = BTreeMap::new();
     // helpers.rs::windows_ty_layout is only a valid source query for Windows
     // targets. Keep the catalog's exact source identity everywhere, but do
     // not manufacture unsupported Windows-query rows while compiling another
@@ -57,10 +64,10 @@ pub(super) fn export<'tcx>(
     for name in names {
         entries.insert((*name).to_owned(), query(tcx, context, name)?);
     }
-    Ok::<_, String>(json!({
-        "crate_path": ["std", "sys", "pal", "windows", "c"],
-        "namespace": "TypeNS",
-        "typing_env": "fully_monomorphized",
-        "entries": entries,
-    }))
+    Ok::<_, String>(Catalog {
+        crate_path: ["std", "sys", "pal", "windows", "c"],
+        namespace: "TypeNS",
+        typing_env: "fully_monomorphized",
+        entries,
+    })
 }

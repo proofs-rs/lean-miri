@@ -2,11 +2,25 @@
 //! pinned std::sys::pal::windows ValueNS path and const-evaluation query.
 use super::*;
 
+#[derive(serde::Serialize)]
+pub(super) struct Record {
+    name: &'static str,
+    path: Vec<&'static str>,
+    typing_env: &'static str,
+    query: Query,
+}
+#[derive(serde::Serialize)]
+struct Query {
+    instance_id: u64,
+    #[serde(rename = "type")]
+    ty: u64,
+    evaluation: pool_constant::Value,
+}
 fn query<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
     path: &[&str],
-) -> Result<Value, String> {
+) -> Result<Query, String> {
     let instance = match shim_abi::named_instance(tcx, path, rustc_hir::def::Namespace::ValueNS) {
         Ok(instance) => instance,
         Err(reason) => {
@@ -38,10 +52,11 @@ fn query<'tcx>(
             ),
         )?,
     };
-    Ok::<_, String>(
-        json!({"instance_id":context.register_metadata_instance(instance),"type":type_json(context,tcx,ty)?,
-        "evaluation":evaluation}),
-    )
+    Ok(Query {
+        instance_id: context.register_metadata_instance(instance),
+        ty: type_json(context, tcx, ty)?,
+        evaluation: evaluation,
+    })
 }
 
 /// Exact literal constants queried by pinned Miri Windows shims and its
@@ -49,7 +64,7 @@ fn query<'tcx>(
 pub(super) fn export<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Vec<Value>, String> {
+) -> Result<Vec<Record>, String> {
     if tcx.sess.target.os != rustc_target::spec::Os::Windows {
         return Ok(vec![]);
     }
@@ -161,8 +176,12 @@ pub(super) fn export<'tcx>(
         .map(|name| {
             Ok::<_, String>({
                 let path = ["std", "sys", "pal", "windows", "c", *name];
-                json!({"name":name,"path":path,"typing_env":"fully_monomorphized",
-            "query":query(tcx,context,&path)?})
+                Record {
+                    name,
+                    path: path.to_vec(),
+                    typing_env: "fully_monomorphized",
+                    query: query(tcx, context, &path)?,
+                }
             })
         })
         .collect::<Result<Vec<_>, String>>()

@@ -1,9 +1,24 @@
 //! Source intrinsics.rs alloc_type_name and span_as_caller_location queries.
 use super::*;
+#[derive(serde::Serialize)]
+pub(super) struct TypeName {
+    #[serde(flatten)]
+    value: pool_constant::Value,
+    input_type: u64,
+    result_type: u64,
+    typing_env: &'static str,
+}
+#[derive(Clone, serde::Serialize)]
+pub(super) struct CallerLocation {
+    #[serde(flatten)]
+    value: pool_constant::Value,
+    span: u64,
+    result_type: Option<u64>,
+}
 pub(super) fn type_names<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<Vec<TypeName>, String> {
     let mut requested = context
         .instance_ids
         .keys()
@@ -16,11 +31,11 @@ pub(super) fn type_names<'tcx>(
     requested.sort_by_key(|ty| context.type_id(*ty));
     requested.dedup();
     let result_type = ty::Ty::new_imm_ref(tcx, tcx.lifetimes.re_erased, tcx.types.str_);
-    Ok::<_, String>(Value::Array(
+    Ok::<_, String>(
         requested
             .into_iter()
             .map(|input| {
-                let mut result = if input.has_non_region_param()
+                let value = if input.has_non_region_param()
                     || input.has_escaping_bound_vars()
                     || input.has_infer()
                     || input.has_placeholders()
@@ -39,33 +54,56 @@ pub(super) fn type_names<'tcx>(
                         rustc_middle::mir::ConstValue::Slice { alloc_id, meta },
                     )?)
                 };
-                result["input_type"] = json!(type_json(context, tcx, input)?);
-                result["result_type"] = json!(type_json(context, tcx, result_type)?);
-                result["typing_env"] = json!("fully_monomorphized");
-                Ok::<_, String>(result)
+                Ok::<_, String>(TypeName {
+                    value,
+                    input_type: type_json(context, tcx, input)?,
+                    result_type: type_json(context, tcx, result_type)?,
+                    typing_env: "fully_monomorphized",
+                })
             })
             .collect::<Result<Vec<_>, String>>()?,
-    ))
+    )
 }
-pub(super) fn collect_spans<'tcx>(tcx:TyCtxt<'tcx>,context:&mut ExportContext<'tcx>,body:&rustc_middle::mir::Body<'tcx>) {
-    let mut spans=vec![body.span,tcx.def_span(body.source.def_id())];
-    for local in &body.local_decls{spans.push(local.source_info.span);}
-    for scope in &body.source_scopes{
-        spans.push(scope.span);if let Some((_,span))=scope.inlined{spans.push(span);}
+pub(super) fn collect_spans<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    context: &mut ExportContext<'tcx>,
+    body: &rustc_middle::mir::Body<'tcx>,
+) {
+    let mut spans = vec![body.span, tcx.def_span(body.source.def_id())];
+    for local in &body.local_decls {
+        spans.push(local.source_info.span);
     }
-    for block in body.basic_blocks.iter(){
-        for statement in &block.statements{spans.push(statement.source_info.span);}
-        if let Some(term)=&block.terminator{
-            spans.push(term.source_info.span);
-            match &term.kind{rustc_middle::mir::TerminatorKind::Call{fn_span,..}|rustc_middle::mir::TerminatorKind::TailCall{fn_span,..}=>spans.push(*fn_span),_=>{}}
+    for scope in &body.source_scopes {
+        spans.push(scope.span);
+        if let Some((_, span)) = scope.inlined {
+            spans.push(span);
         }
     }
-    for span in spans {if context.caller_location_span_set.insert(span){context.caller_location_spans.push(span);}}
+    for block in body.basic_blocks.iter() {
+        for statement in &block.statements {
+            spans.push(statement.source_info.span);
+        }
+        if let Some(term) = &block.terminator {
+            spans.push(term.source_info.span);
+            match &term.kind {
+                rustc_middle::mir::TerminatorKind::Call { fn_span, .. }
+                | rustc_middle::mir::TerminatorKind::TailCall { fn_span, .. } => {
+                    spans.push(*fn_span)
+                }
+                _ => {}
+            }
+        }
+    }
+    for span in spans {
+        if context.caller_location_span_set.insert(span) {
+            context.caller_location_spans.push(span);
+        }
+    }
 }
 pub(super) fn caller_locations<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<Vec<CallerLocation>, String> {
     // `span_as_caller_location` invokes a rustc hook rather than a memoized
     // query. Its provider allocates fresh CallerLocation memory on every
     // invocation, so revisiting already-seen spans in a closure round would
@@ -83,14 +121,14 @@ pub(super) fn caller_locations<'tcx>(
         {
             return unavailable_compiler_fact("track_caller requires PanicLocation language item");
         }
-        return Ok(Value::Array(Vec::new()));
+        return Ok(Vec::new());
     }
     let spans = context.caller_location_spans.clone();
     for span in spans.iter().copied() {
         if context.caller_location_constant_rows.contains_key(&span) {
             continue;
         }
-        let mut result = if tcx
+        let value = if tcx
             .lang_items()
             .get(rustc_attr_ir::LangItem::PanicLocation)
             .is_some()
@@ -104,23 +142,30 @@ pub(super) fn caller_locations<'tcx>(
         } else {
             unavailable_compiler_fact("caller location constant requires PanicLocation lang item")?
         };
-        result["span"] = json!(span_json(context, tcx, span));
-        result["result_type"] = if tcx
+        let span_id = span_json(context, tcx, span);
+        let result_type = if tcx
             .lang_items()
             .get(rustc_attr_ir::LangItem::PanicLocation)
             .is_some()
         {
-            json!(type_json(context, tcx, tcx.caller_location_ty())?)
+            Some(type_json(context, tcx, tcx.caller_location_ty())?)
         } else {
-            Value::Null
+            None
         };
-        context.caller_location_constant_rows.insert(span, result);
+        context.caller_location_constant_rows.insert(
+            span,
+            CallerLocation {
+                value,
+                span: span_id,
+                result_type,
+            },
+        );
     }
     // Preserve source span discovery order on every returned catalog snapshot.
-    Ok::<_, String>(Value::Array(
+    Ok::<_, String>(
         spans
             .iter()
             .map(|span| context.caller_location_constant_rows[span].clone())
             .collect(),
-    ))
+    )
 }

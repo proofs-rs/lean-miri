@@ -5,14 +5,25 @@
 //! answer comes from the actual rustc relation query; no layout-based answer
 //! is fabricated.
 use super::*;
-fn closed(input:ty::Ty<'_>)->bool {
-    !input.has_non_region_param() && !input.has_escaping_bound_vars() &&
-        !input.has_infer() && !input.has_placeholders() && !input.references_error()
+#[derive(serde::Serialize)]
+pub(super) struct Query {
+    typing_env: &'static str,
+    variance: &'static str,
+    source_type: u64,
+    target_type: u64,
+    value: bool,
+}
+fn closed(input: ty::Ty<'_>) -> bool {
+    !input.has_non_region_param()
+        && !input.has_escaping_bound_vars()
+        && !input.has_infer()
+        && !input.has_placeholders()
+        && !input.references_error()
 }
 pub(super) fn export<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<Vec<Query>, String> {
     let env = ty::TypingEnv::fully_monomorphized();
     let mut inputs = context
         .type_ids
@@ -104,15 +115,29 @@ pub(super) fn export<'tcx>(
     pairs.sort_by_key(|(source, target)| (format!("{source:?}"), format!("{target:?}")));
     pairs.dedup();
     pairs.sort_by_key(|(a, b)| (context.type_id(*a), context.type_id(*b)));
-    Ok::<_, String>(Value::Array(pairs.into_iter().map(|(source,target)|{ Ok::<_, String>(json!({
-        "typing_env":"fully_monomorphized","variance":"covariant",
-        // These are inputs to a projected relation query. Their genuine
-        // runtime type-query demand is registered by source MIR/cast/vtable
-        // discovery; a normalized-equivalence pair must not promote a
-        // query-generated pointer/reference node back into the demand set.
-        // query_generated_type_json still exports the complete type node.
-        "source_type":query_generated_type_json(context,tcx,source)?,
-        "target_type":query_generated_type_json(context,tcx,target)?,
-        "value":rustc_const_eval::util::relate_types(tcx,env,ty::Variance::Covariant,source,target),
-    })) }).collect::<Result<Vec<_>, String>>()?))
+    Ok::<_, String>(
+        pairs
+            .into_iter()
+            .map(|(source, target)| {
+                Ok::<_, String>(Query {
+                    typing_env: "fully_monomorphized",
+                    variance: "covariant",
+                    // These are inputs to a projected relation query. Their genuine
+                    // runtime type-query demand is registered by source MIR/cast/vtable
+                    // discovery; a normalized-equivalence pair must not promote a
+                    // query-generated pointer/reference node back into the demand set.
+                    // query_generated_type_json still exports the complete type node.
+                    source_type: query_generated_type_json(context, tcx, source)?,
+                    target_type: query_generated_type_json(context, tcx, target)?,
+                    value: rustc_const_eval::util::relate_types(
+                        tcx,
+                        env,
+                        ty::Variance::Covariant,
+                        source,
+                        target,
+                    ),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+    )
 }

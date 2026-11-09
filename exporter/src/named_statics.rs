@@ -2,11 +2,26 @@
 //! These are path queries, not guessed from host bytes or runtime lifecycle.
 use super::*;
 
+#[derive(serde::Serialize)]
+pub(super) struct Record {
+    name: &'static str,
+    path: Vec<&'static str>,
+    typing_env: &'static str,
+    query: Query,
+}
+#[derive(serde::Serialize)]
+struct Query {
+    definition: u64,
+    kind: &'static str,
+    #[serde(rename = "type")]
+    ty: u64,
+    allocation: u64,
+}
 fn query<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
     name: &str,
-) -> Result<Value, String> {
+) -> Result<Query, String> {
     let path = ["libc", name];
     let instance = match shim_abi::named_instance(tcx, &path, rustc_hir::def::Namespace::ValueNS) {
         Ok(instance) => instance,
@@ -61,20 +76,20 @@ fn query<'tcx>(
     };
     let allocation = allocation_ref(context, tcx, alloc_id)?;
     let type_ref = type_json(context, tcx, value_ty)?;
-    Ok::<_, String>(json!({
-        "definition":def_json(context, def),
-        "kind":allocation_kind,
-        "type":type_ref,
-        "allocation":allocation
-    }))
+    Ok(Query {
+        definition: def_json(context, def),
+        kind: allocation_kind,
+        ty: type_ref,
+        allocation,
+    })
 }
 
 pub(super) fn export<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<Vec<Record>, String> {
     if !shim_abi::is_unix_target(tcx) {
-        return Ok(json!([]));
+        return Ok(vec![]);
     }
     let names = [
         "PTHREAD_MUTEX_INITIALIZER",
@@ -84,21 +99,18 @@ pub(super) fn export<'tcx>(
         "PTHREAD_RWLOCK_INITIALIZER",
         "PTHREAD_COND_INITIALIZER",
     ];
-    Ok::<_, String>(Value::Array(
-        names
-            .into_iter()
-            .filter(|name| {
-                // unix/sync.rs::mutex_init_offset only checks the NP forms on Linux.
-                !name.ends_with("_NP") || tcx.sess.target.os == rustc_target::spec::Os::Linux
+    names
+        .into_iter()
+        .filter(|name| {
+            !name.ends_with("_NP") || tcx.sess.target.os == rustc_target::spec::Os::Linux
+        })
+        .map(|name| {
+            Ok(Record {
+                name,
+                path: vec!["libc", name],
+                typing_env: "fully_monomorphized",
+                query: query(tcx, context, name)?,
             })
-            .map(|name| {
-                Ok::<_, String>(json!({
-                    "name":name,
-                    "path":["libc",name],
-                    "typing_env":"fully_monomorphized",
-                    "query":query(tcx,context,name)?
-                }))
-            })
-            .collect::<Result<Vec<_>, String>>()?,
-    ))
+        })
+        .collect()
 }

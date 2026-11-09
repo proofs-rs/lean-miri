@@ -8,6 +8,76 @@ use super::*;
 use rustc_middle::mir::interpret::{AllocId, AllocRange, GlobalAlloc};
 use std::num::NonZeroU64;
 
+#[derive(Clone, serde::Serialize)]
+pub(super) struct Salt {
+    salt: usize,
+    allocation_id: u64,
+    source_alloc_id: u64,
+    probe_result: &'static str,
+}
+#[derive(Clone, serde::Serialize)]
+pub(super) struct DedupKey {
+    key_kind: &'static str,
+    key_allocation_id: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bytes_hex: Option<String>,
+    salts: Vec<Salt>,
+}
+#[derive(serde::Serialize)]
+pub(super) struct Frontier {
+    pub last_reserved_source_alloc_id: u64,
+    final_sentinel_source_alloc_id: u64,
+    next_source_alloc_id: u64,
+}
+#[derive(serde::Serialize)]
+pub(super) struct World {
+    schema: &'static str,
+    profile: &'static str,
+    pub frontier: Frontier,
+    global_pool_complete_through: u64,
+    raw_pool: Vec<PoolRow>,
+    dedup_catalog: Vec<DedupKey>,
+    complete_key_families: [&'static str; 1],
+    non_exhaustive_key_families: [&'static str; 5],
+}
+#[derive(serde::Serialize)]
+struct PoolRow {
+    source_alloc_id: u64,
+    kind: &'static str,
+    status: &'static str,
+    allocation_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    memory_mutability: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    memory_align_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    memory_all_bytes_initialized: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    memory_has_provenance: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    byte_image_hex: Option<String>,
+}
+impl PoolRow {
+    fn new(
+        source_alloc_id: u64,
+        kind: &'static str,
+        status: &'static str,
+        allocation_id: Option<u64>,
+    ) -> Self {
+        Self {
+            source_alloc_id,
+            kind,
+            status,
+            allocation_id,
+            memory_mutability: None,
+            memory_align_bytes: None,
+            memory_all_bytes_initialized: None,
+            memory_has_provenance: None,
+            byte_image_hex: None,
+        }
+    }
+}
+
 struct ByteKey {
     representative: AllocId,
     bytes: Vec<u8>,
@@ -25,7 +95,7 @@ pub(super) struct SelectedKeyProbes<'tcx> {
     )>,
     statics: HashSet<rustc_hir::def_id::DefId>,
     type_ids: HashSet<ty::Ty<'tcx>>,
-    rows: Vec<Value>,
+    rows: Vec<DedupKey>,
 }
 
 impl<'tcx> SelectedKeyProbes<'tcx> {
@@ -69,20 +139,25 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                 if salt == 0 {
                     key_graph_id = Some(graph_id);
                 }
-                salts.push(json!({
-                    "salt":salt,
-                    "allocation_id":graph_id,
-                    "source_alloc_id":source_id,
-                    "probe_result":if source_id < raw_id(boundary) { "preexisting_hit" } else { "miss_reserved_by_probe" },
-                }));
+                salts.push(Salt {
+                    salt,
+                    allocation_id: graph_id,
+                    source_alloc_id: source_id,
+                    probe_result: if source_id < raw_id(boundary) {
+                        "preexisting_hit"
+                    } else {
+                        "miss_reserved_by_probe"
+                    },
+                });
             }
             let key_allocation_id =
                 key_graph_id.ok_or_else(|| "function dedup probe omitted salt zero".to_owned())?;
-            self.rows.push(json!({
-                "key_kind":"function",
-                "key_allocation_id":key_allocation_id,
-                "salts":salts,
-            }));
+            self.rows.push(DedupKey {
+                key_kind: "function",
+                key_allocation_id,
+                bytes_hex: None,
+                salts,
+            });
             self.functions.insert(instance);
         }
 
@@ -137,20 +212,25 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                 if salt == 0 {
                     key_graph_id = Some(graph_id);
                 }
-                salts.push(json!({
-                    "salt":salt,
-                    "allocation_id":graph_id,
-                    "source_alloc_id":source_id,
-                    "probe_result":if source_id < raw_id(boundary) { "preexisting_hit" } else { "miss_reserved_by_probe" },
-                }));
+                salts.push(Salt {
+                    salt,
+                    allocation_id: graph_id,
+                    source_alloc_id: source_id,
+                    probe_result: if source_id < raw_id(boundary) {
+                        "preexisting_hit"
+                    } else {
+                        "miss_reserved_by_probe"
+                    },
+                });
             }
             let key_allocation_id =
                 key_graph_id.ok_or_else(|| "vtable dedup probe omitted salt zero".to_owned())?;
-            self.rows.push(json!({
-                "key_kind":"vtable",
-                "key_allocation_id":key_allocation_id,
-                "salts":salts,
-            }));
+            self.rows.push(DedupKey {
+                key_kind: "vtable",
+                key_allocation_id,
+                bytes_hex: None,
+                salts,
+            });
             self.vtables.insert((ty, predicates));
         }
 
@@ -195,16 +275,21 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             {
                 return Err("selected static key does not match its exact DefId allocation".into());
             }
-            self.rows.push(json!({
-                "key_kind":"static",
-                "key_allocation_id":graph_id,
-                "salts":[{
-                    "salt":0,
-                    "allocation_id":graph_id,
-                    "source_alloc_id":source_id,
-                    "probe_result":if source_id < raw_id(boundary) { "preexisting_hit" } else { "miss_reserved_by_probe" },
+            self.rows.push(DedupKey {
+                key_kind: "static",
+                key_allocation_id: graph_id,
+                bytes_hex: None,
+                salts: vec![Salt {
+                    salt: 0,
+                    allocation_id: graph_id,
+                    source_alloc_id: source_id,
+                    probe_result: if source_id < raw_id(boundary) {
+                        "preexisting_hit"
+                    } else {
+                        "miss_reserved_by_probe"
+                    },
                 }],
-            }));
+            });
             self.statics.insert(def);
         }
 
@@ -271,22 +356,27 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             {
                 return Err("selected TypeId key does not match its exact Ty allocation".into());
             }
-            self.rows.push(json!({
-                "key_kind":"type_id",
-                "key_allocation_id":graph_id,
-                "salts":[{
-                    "salt":0,
-                    "allocation_id":graph_id,
-                    "source_alloc_id":source_id,
-                    "probe_result":if source_id < raw_id(boundary) { "preexisting_hit" } else { "miss_reserved_by_probe" },
+            self.rows.push(DedupKey {
+                key_kind: "type_id",
+                key_allocation_id: graph_id,
+                bytes_hex: None,
+                salts: vec![Salt {
+                    salt: 0,
+                    allocation_id: graph_id,
+                    source_alloc_id: source_id,
+                    probe_result: if source_id < raw_id(boundary) {
+                        "preexisting_hit"
+                    } else {
+                        "miss_reserved_by_probe"
+                    },
                 }],
-            }));
+            });
             self.type_ids.insert(ty);
         }
         Ok(())
     }
 
-    fn rows(&self) -> impl Iterator<Item = Value> + '_ {
+    fn rows(&self) -> impl Iterator<Item = DedupKey> + '_ {
         self.rows.iter().cloned()
     }
 }
@@ -439,7 +529,7 @@ fn pool_row<'tcx>(
     context: &ExportContext<'tcx>,
     id: AllocId,
     sentinel: bool,
-) -> Result<Value, String> {
+) -> Result<PoolRow, String> {
     let raw = raw_id(id);
     if sentinel || tcx.try_get_global_alloc(id).is_none() {
         if !sentinel
@@ -453,12 +543,7 @@ fn pool_row<'tcx>(
                 "source AllocId {raw} is dangling but has a linked allocation node"
             ));
         }
-        return Ok(json!({
-            "source_alloc_id":raw,
-            "kind":"dangling",
-            "status":"dangling",
-            "allocation_id":null,
-        }));
+        return Ok(PoolRow::new(raw, "dangling", "dangling", None));
     }
     let global = tcx
         .try_get_global_alloc(id)
@@ -485,23 +570,18 @@ fn pool_row<'tcx>(
     } else {
         "opaque"
     };
-    let mut row = json!({
-        "source_alloc_id":raw,
-        "kind":kind,
-        "status":status,
-        "allocation_id":supported_graph_id,
-    });
+    let mut row = PoolRow::new(raw, kind, status, supported_graph_id);
     if let GlobalAlloc::Memory(memory) = global {
         let projection = byte_image(memory);
         // These are direct rustc allocation facts; the Lean decoder applies
         // the closed eligibility predicate rather than trusting a producer
         // supplied eligibility bit.
-        row["memory_mutability"] = json!(projection.mutability);
-        row["memory_align_bytes"] = json!(projection.align_bytes);
-        row["memory_all_bytes_initialized"] = json!(projection.all_bytes_initialized);
-        row["memory_has_provenance"] = json!(projection.has_provenance);
+        row.memory_mutability = Some(projection.mutability);
+        row.memory_align_bytes = Some(projection.align_bytes);
+        row.memory_all_bytes_initialized = Some(projection.all_bytes_initialized);
+        row.memory_has_provenance = Some(projection.has_provenance);
         if let Some(bytes) = projection.bytes {
-            row["byte_image_hex"] = json!(bytes_hex(&bytes));
+            row.byte_image_hex = Some(bytes_hex(&bytes));
         }
     }
     Ok(row)
@@ -514,8 +594,8 @@ pub(super) fn capture<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
     selected_keys: &SelectedKeyProbes<'tcx>,
-) -> Result<Value, String> {
-    let mut catalog = BTreeMap::<String, Value>::new();
+) -> Result<World, String> {
+    let mut catalog = BTreeMap::<String, DedupKey>::new();
     loop {
         // A temporary reserved ID bounds a read-only enumeration of the
         // current pool. AllocMap IDs are monotone and never reused.
@@ -541,21 +621,25 @@ pub(super) fn capture<'tcx>(
                 let source_id = raw_id(selected);
                 allocation_ref(context, tcx, selected)?;
                 let allocation_id = supported_memory_graph_id(context, selected)?;
-                salts.push(json!({
-                    "salt":salt,
-                    "allocation_id":allocation_id,
-                    "source_alloc_id":source_id,
-                    "probe_result":if source_id < raw_id(probe_boundary) { "preexisting_hit" } else { "miss_reserved_by_probe" },
-                }));
+                salts.push(Salt {
+                    salt,
+                    allocation_id: allocation_id,
+                    source_alloc_id: source_id,
+                    probe_result: if source_id < raw_id(probe_boundary) {
+                        "preexisting_hit"
+                    } else {
+                        "miss_reserved_by_probe"
+                    },
+                });
             }
             catalog.insert(
                 hex.clone(),
-                json!({
-                    "key_kind":"byte_memory",
-                    "key_allocation_id":key_graph_id,
-                    "bytes_hex":hex,
-                    "salts":salts,
-                }),
+                DedupKey {
+                    key_kind: "byte_memory",
+                    key_allocation_id: key_graph_id,
+                    bytes_hex: Some(hex),
+                    salts,
+                },
             );
         }
         // Serialization may itself expose compiler globals. Re-scan after
@@ -601,24 +685,24 @@ pub(super) fn capture<'tcx>(
         let id = alloc_id(raw)?;
         raw_pool.push(pool_row(tcx, context, id, raw == frontier)?);
     }
-    Ok(json!({
-        "schema":"rustc_alloc_id_world_v1",
-        "profile":"prepared_post_export",
-        "frontier":{
-            "last_reserved_source_alloc_id":frontier,
-            "final_sentinel_source_alloc_id":frontier,
-            "next_source_alloc_id":next,
+    Ok(World {
+        schema: "rustc_alloc_id_world_v1",
+        profile: "prepared_post_export",
+        frontier: Frontier {
+            last_reserved_source_alloc_id: frontier,
+            final_sentinel_source_alloc_id: frontier,
+            next_source_alloc_id: next,
         },
-        "global_pool_complete_through":frontier,
-        "raw_pool":raw_pool,
-        "dedup_catalog":catalog.into_values().chain(selected_keys.rows()).collect::<Vec<_>>(),
-        "complete_key_families":["byte_memory"],
-        "non_exhaustive_key_families":[
+        global_pool_complete_through: frontier,
+        raw_pool,
+        dedup_catalog: catalog.into_values().chain(selected_keys.rows()).collect(),
+        complete_key_families: ["byte_memory"],
+        non_exhaustive_key_families: [
             "function",
             "vtable",
             "static",
             "type_id",
             "memory_const_allocation",
         ],
-    }))
+    })
 }

@@ -24,11 +24,14 @@ mod allocation_values;
 mod resolution_values;
 mod panic_queries;
 mod producer;
+#[cfg(feature = "miri-reference")]
+mod reference_values;
 mod projection_queries;
 mod retag_queries;
 mod shim_abi;
 mod startup_queries;
 mod vtable_diagnostics;
+mod query_values;
 mod windows_constants;
 mod windows_type_layouts;
 
@@ -65,7 +68,6 @@ use rustc_interface::interface;
 use rustc_middle::mir::interpret::{AllocId, CTFE_ALLOC_SALT, GlobalAlloc};
 use rustc_middle::ty::{self, ExistentialPredicateStableCmpExt, TyCtxt, TypeVisitableExt};
 use rustc_span::Pos;
-use serde_json::{Value, json};
 
 /// An unavailable semantic fact aborts the complete export, never a payload row.
 fn export_failure<T>(context: &str, details: impl std::fmt::Display) -> Result<T, String> {
@@ -82,12 +84,145 @@ struct Options {
     root_paths: Vec<String>,
 }
 
+#[derive(serde::Serialize)]
+struct Producer {
+    miri_commit: &'static str,
+    rustc_commit: &'static str,
+    rustc_version: String,
+    target_triple: String,
+    input_settings: producer::Evidence,
+}
+#[derive(serde::Serialize)]
+struct SessionQueries {
+    internal_target_features: Vec<String>,
+    is_like_wasm: bool,
+    target_arch: String,
+    root_span: u64,
+    runtime_checks: [pool_body::RuntimeCheck; 3],
+}
+#[derive(serde::Serialize)]
+struct RuntimeQueries {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    startup: Option<startup_queries::Catalog>,
+    types: Vec<query_values::RuntimeTypeQuery>,
+    #[serde(rename = "virtual")]
+    virtual_queries: Vec<query_values::RuntimeVirtualQuery<query_values::VtableRef>>,
+    instances: Vec<CallerInstance>,
+    foreign_symbols: foreign_symbols::Catalog,
+}
+#[derive(serde::Serialize)]
+struct SelectedRoot {
+    def_path: String,
+    def_id: u64,
+}
+#[derive(serde::Serialize)]
+struct SelectedScope {
+    kind: &'static str,
+    semantics: &'static str,
+    roots: Vec<SelectedRoot>,
+    dependency_policy: &'static str,
+}
+#[derive(serde::Serialize)]
+struct PromotedRoot {
+    promoted_index: u32,
+    body: u64,
+}
+#[derive(serde::Serialize)]
+struct BodyRoot {
+    body: u64,
+    entry_instance: u64,
+    def_path: String,
+    def_id: u64,
+    is_static: bool,
+    thread_local_static: bool,
+    promoted_bodies: Vec<PromotedRoot>,
+}
+/// Owned, closed export graph. Pending reference types cannot inhabit this snapshot.
+#[derive(serde::Serialize)]
+struct ExportDocument {
+    schema: &'static str,
+    schema_version: u64,
+    mir_query: &'static str,
+    compiler_abi_layout_schema: &'static str,
+    producer: Producer,
+    runtime_target_data_layout: producer::TargetDataLayout,
+    compiler_session_queries: SessionQueries,
+    compiler_runtime_queries: RuntimeQueries,
+    compiler_frame_metadata: FrameMetadata,
+    compiler_instance_abis: Vec<InstanceAbi>,
+    compiler_function_facts: FunctionFacts,
+    compiler_cast_queries: Vec<cast_queries::Query>,
+    compiler_type_name_constants: Vec<intrinsic_value_queries::TypeName>,
+    compiler_panic_queries: Vec<panic_queries::Query>,
+    compiler_native_signature_queries: Vec<native_signature_queries::Query>,
+    compiler_retag_queries: Vec<retag_queries::Query>,
+    compiler_covariance_queries: Vec<covariance_queries::Query>,
+    compiler_global_byte_queries: global_byte_queries::Queries,
+    compiler_caller_location_constants: Vec<intrinsic_value_queries::CallerLocation>,
+    compiler_main_queries: main_queries::Catalog,
+    compiler_runtime_primitives: RuntimePrimitives,
+    compiler_vtable_queries: Vec<query_values::VtableQuery>,
+    compiler_predicate_queries: Vec<query_values::PredicateQuery>,
+    #[serde(flatten)]
+    runtime_catalogs: RuntimeCatalogs,
+    body_roots: Vec<BodyRoot>,
+    bodies: Vec<pool_body::Body<u64, Vec<u64>>>,
+    definitions: Vec<pool_values::Definition>,
+    type_constants: Vec<pool_values::TypeConstant>,
+    spans: Vec<pool_values::Span>,
+    layouts: Vec<pool_layout::Layout>,
+    fn_abis: Vec<pool_layout::FnAbi>,
+    instances: Vec<pool_instance::Instance>,
+    types: Vec<pool_type::Type>,
+    allocations: Vec<allocation_values::Allocation>,
+    predicates: Vec<allocation_values::Predicate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compiler_alloc_id_world: Option<allocator_world::World>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selected_scope: Option<SelectedScope>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invocation: Option<Invocation>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(tag = "kind")]
+enum Invocation {
+    #[serde(rename = "direct_rustc_driver")]
+    Direct {
+        rustc_commit: &'static str,
+        rustc_executable: Option<String>,
+        working_directory: Option<String>,
+        rustc_args: Vec<String>,
+        rustc_args_fingerprint_fnv1a64: String,
+        root_paths: Vec<String>,
+    },
+    #[serde(rename = "cargo_rustc_wrapper")]
+    Cargo {
+        rustc_commit: &'static str,
+        rustc_executable: String,
+        working_directory: Option<String>,
+        crate_name: String,
+        source_path: Option<String>,
+        target_crate: bool,
+        rustc_args: Vec<String>,
+        rustc_args_fingerprint_fnv1a64: String,
+    },
+}
+impl Invocation {
+    fn rustc_args(&self) -> &[String] {
+        match self {
+            Self::Direct { rustc_args, .. } | Self::Cargo { rustc_args, .. } => rustc_args,
+        }
+    }
+}
+
 struct ExportCallbacks {
     output: PathBuf,
     root_paths: Vec<String>,
     rustc_version: String,
-    document: Option<Value>,
-    invocation: Option<Value>,
+    document: Option<ExportDocument>,
+    diagnostics: Option<(PathBuf, vtable_diagnostics::Report)>,
+    invocation: Option<Invocation>,
     write_during_analysis: bool,
     continue_compilation: bool,
     prepared_allocator_world: bool,
@@ -143,7 +278,7 @@ struct ExportContext<'tcx> {
     /// Caller-location construction is a rustc hook, not a memoized query;
     /// each invocation allocates a fresh global. Cache the exact serialized
     /// result once per source span so closure rounds do not invent identities.
-    caller_location_constant_rows: HashMap<rustc_span::Span, Value>,
+    caller_location_constant_rows: HashMap<rustc_span::Span, intrinsic_value_queries::CallerLocation>,
     cast_unsize_requests: HashSet<(ty::Ty<'tcx>, ty::Ty<'tcx>)>,
     vtable_query_requests: HashSet<(
         ty::Ty<'tcx>,
@@ -530,7 +665,8 @@ fn run_prepared_miri_reference_entry(
     entry: rustc_hir::def_id::DefId,
     entry_type: miri::MiriEntryFnType,
     extra_args: &[String],
-) -> Value {
+) -> reference_values::Result {
+    use reference_values::{Config, TreeBorrows, Result as R, Status as S, Outcome as O};
     let mut config = miri::MiriConfig::default();
     config.borrow_tracker = Some(miri::BorrowTrackerMethod::TreeBorrows(
         miri::TreeBorrowsParams {
@@ -547,60 +683,47 @@ fn run_prepared_miri_reference_entry(
         .into_local_path()
         .and_then(|path| path.canonicalize().ok());
 
-    let config_description = json!({
-        "same_tcx":true,
-        "borrow_tracker":"tree_borrows",
-        "tree_borrows":{"precise_interior_mut":true,"implicit_writes":false},
-        "validation":format!("{:?}",config.validation),
-        "alignment_check":format!("{:?}",config.check_alignment),
-        "isolated_op":format!("{:?}",config.isolated_op),
-        "ignore_leaks":config.ignore_leaks,
-        "provenance_mode":format!("{:?}",config.provenance_mode),
-        "rng_seed":config.seed,
-        "data_race_detector":config.data_race_detector,
-        "weak_memory_emulation":config.weak_memory_emulation,
-        "track_outdated_loads":config.track_outdated_loads,
-        "genmc":config.genmc_config.is_some(),
-        "native_libraries":config.native_lib.len(),
-        "cmpxchg_weak_failure_rate":config.cmpxchg_weak_failure_rate,
-        "preemption_rate":config.preemption_rate,
-        "backtrace_style":format!("{:?}",config.backtrace_style),
-        "mute_stdout_stderr":config.mute_stdout_stderr,
-        "num_cpus":config.num_cpus,
-        "address_reuse_rate":config.address_reuse_rate,
-        "address_reuse_cross_thread_rate":config.address_reuse_cross_thread_rate,
-        "fixed_scheduling":config.fixed_scheduling,
-        "float_nondeterminism":config.float_nondet,
-        "float_rounding_error_mode":format!("{:?}",config.float_rounding_error),
-        "short_fd_operations":config.short_fd_operations,
-        "collect_leak_backtraces":config.collect_leak_backtraces,
-        "environment_policy":"host snapshot used; variable names and values are not serialized",
-        "args":args,
-    });
+    let config_description = Config {
+        same_tcx: true,
+        borrow_tracker: "tree_borrows",
+        tree_borrows: TreeBorrows { precise_interior_mut: true, implicit_writes: false },
+        validation: format!("{:?}",config.validation),
+        alignment_check: format!("{:?}",config.check_alignment),
+        isolated_op: format!("{:?}",config.isolated_op),
+        ignore_leaks: config.ignore_leaks,
+        provenance_mode: format!("{:?}",config.provenance_mode),
+        rng_seed: config.seed,
+        data_race_detector: config.data_race_detector,
+        weak_memory_emulation: config.weak_memory_emulation,
+        track_outdated_loads: config.track_outdated_loads,
+        genmc: config.genmc_config.is_some(),
+        native_libraries: config.native_lib.len(),
+        cmpxchg_weak_failure_rate: config.cmpxchg_weak_failure_rate,
+        preemption_rate: config.preemption_rate,
+        backtrace_style: format!("{:?}",config.backtrace_style),
+        mute_stdout_stderr: config.mute_stdout_stderr,
+        num_cpus: config.num_cpus,
+        address_reuse_rate: config.address_reuse_rate,
+        address_reuse_cross_thread_rate: config.address_reuse_cross_thread_rate,
+        fixed_scheduling: config.fixed_scheduling,
+        float_nondeterminism: config.float_nondet,
+        float_rounding_error_mode: format!("{:?}",config.float_rounding_error),
+        short_fd_operations: config.short_fd_operations,
+        collect_leak_backtraces: config.collect_leak_backtraces,
+        environment_policy: "host snapshot used; variable names and values are not serialized",
+        args: args,
+    };
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         miri::eval_entry(tcx, entry, entry_type, &config, None)
     }));
     match outcome {
-        Ok(Ok(())) => json!({
-            "status":"completed",
-            "config":config_description,
-            "outcome":{"kind":"exit_zero"},
-        }),
-        Ok(Err(code)) if tcx.dcx().has_errors().is_some() => json!({
-            "status":"failed",
-            "config":config_description,
-            "outcome":{"kind":"miri_evaluation_error","exit_code":code.get()},
-        }),
-        Ok(Err(code)) => json!({
-            "status":"completed",
-            "config":config_description,
-            "outcome":{"kind":"guest_nonzero_exit","exit_code":code.get()},
-        }),
-        Err(_) => json!({
-            "status":"failed",
-            "config":config_description,
-            "outcome":{"kind":"miri_panicked"},
-        }),
+        Ok(Ok(())) => R::Executed { status: S::Completed, config: config_description, outcome: O::ExitZero },
+        Ok(Err(code)) if tcx.dcx().has_errors().is_some() => R::Executed {
+            status: S::Failed, config: config_description, outcome: O::MiriEvaluationError { exit_code: code.get() },
+        },
+        Ok(Err(code)) => R::Executed { status: S::Completed, config: config_description,
+            outcome: O::GuestNonzeroExit { exit_code: code.get() } },
+        Err(_) => R::Executed { status: S::Failed, config: config_description, outcome: O::MiriPanicked },
     }
 }
 
@@ -815,7 +938,7 @@ fn region_json(context: &mut ExportContext<'_>, tcx: TyCtxt<'_>, region: ty::Reg
 // address-space inventory and _is_fat bit have no public accessors. Enumerate
 // those only from the official LLVM data-layout input, following the pinned
 // rustc_abi parser's p/pf directive and instruction-space inheritance rules.
-fn runtime_target_data_layout_json(tcx: TyCtxt<'_>) -> Result<Value, String> {
+fn runtime_target_data_layout_json(tcx: TyCtxt<'_>) -> Result<producer::TargetDataLayout, String> {
     use rustc_abi::{AddressSpace, Endian};
     let dl = &tcx.data_layout;
     let llvm = tcx.sess.target.data_layout.to_string();
@@ -856,12 +979,11 @@ fn runtime_target_data_layout_json(tcx: TyCtxt<'_>) -> Result<Value, String> {
         spaces.push((dl.instruction_address_space, default_fat));
     }
     let spec = |space: AddressSpace, fat: bool| {
-        json!({
-            "pointer_size_bytes":dl.pointer_size_in(space).bytes(),
-            "pointer_align_bytes":dl.pointer_align_in(space).bytes(),
-            "pointer_offset_bytes":dl.pointer_offset_in(space).bytes(),
-            "is_fat":fat,
-        })
+        producer::PointerSpec {
+            pointer_size_bytes: dl.pointer_size_in(space).bytes(),
+            pointer_align_bytes: dl.pointer_align_in(space).bytes(),
+            pointer_offset_bytes: dl.pointer_offset_in(space).bytes(), is_fat: fat,
+        }
     };
     let bound = |space: AddressSpace| match dl.pointer_size_in(space).bits() {
         16 | 32 | 64 => Some(dl.obj_size_bound_in(space)),
@@ -878,50 +1000,75 @@ fn runtime_target_data_layout_json(tcx: TyCtxt<'_>) -> Result<Value, String> {
     let address_space_info = spaces
         .iter()
         .map(|(space, fat)| {
-            json!({
-                "address_space":space.0,"spec":spec(*space,*fat),
-                "object_size_bound_bytes":bound(*space),
-            })
+            producer::AddressSpaceInfo { address_space: space.0, spec: spec(*space, *fat),
+                object_size_bound_bytes: bound(*space) }
         })
         .collect::<Vec<_>>();
-    Ok::<_, String>(json!({
-        "evidence_path":"rustc_abi/src/lib.rs::TargetDataLayout; TyCtxt::data_layout",
-        "llvm_data_layout":llvm,
-        "private_inventory_evidence":"p/pf directives and instruction-space inheritance from pinned TargetDataLayout::parse_from_llvm_datalayout_string",
-        "alignment_evidence":"pinned TargetDataLayout stores ABI Align only; preferred LLVM alignment entries remain in llvm_data_layout",
-        "endian":match dl.endian { Endian::Little => "little", Endian::Big => "big" },
-        "pointer_width_bits":dl.pointer_size().bits(),
-        "object_size_bound_bytes":bound(dl.default_address_space),
-        "i1_align_bytes":dl.i1_align.bytes(),"i8_align_bytes":dl.i8_align.bytes(),
-        "i16_align_bytes":dl.i16_align.bytes(),"i32_align_bytes":dl.i32_align.bytes(),
-        "i64_align_bytes":dl.i64_align.bytes(),"i128_align_bytes":dl.i128_align.bytes(),
-        "f16_align_bytes":dl.f16_align.bytes(),"f32_align_bytes":dl.f32_align.bytes(),
-        "f64_align_bytes":dl.f64_align.bytes(),"f128_align_bytes":dl.f128_align.bytes(),
-        "aggregate_align_bytes":dl.aggregate_align.bytes(),
-        "vector_align":dl.vector_align.iter().map(|(size,align)|json!({"size_bytes":size.bytes(),"align_bytes":align.bytes()})).collect::<Vec<_>>(),
-        "default_address_space":dl.default_address_space.0,
-        "default_address_space_pointer_spec":spec(dl.default_address_space,default_fat),
-        "address_space_info":address_space_info,
-        "instruction_address_space":dl.instruction_address_space.0,
-        "c_enum_min_size":match dl.c_enum_min_size {
+    Ok(producer::TargetDataLayout {
+        evidence_path: "rustc_abi/src/lib.rs::TargetDataLayout; TyCtxt::data_layout",
+        llvm_data_layout: llvm,
+        private_inventory_evidence: "p/pf directives and instruction-space inheritance from pinned TargetDataLayout::parse_from_llvm_datalayout_string",
+        alignment_evidence: "pinned TargetDataLayout stores ABI Align only; preferred LLVM alignment entries remain in llvm_data_layout",
+        endian: match dl.endian { Endian::Little => "little", Endian::Big => "big" },
+        pointer_width_bits: dl.pointer_size().bits(),
+        object_size_bound_bytes: bound(dl.default_address_space),
+        i1_align_bytes: dl.i1_align.bytes(),i8_align_bytes: dl.i8_align.bytes(),
+        i16_align_bytes: dl.i16_align.bytes(),i32_align_bytes: dl.i32_align.bytes(),
+        i64_align_bytes: dl.i64_align.bytes(),i128_align_bytes: dl.i128_align.bytes(),
+        f16_align_bytes: dl.f16_align.bytes(),f32_align_bytes: dl.f32_align.bytes(),
+        f64_align_bytes: dl.f64_align.bytes(),f128_align_bytes: dl.f128_align.bytes(),
+        aggregate_align_bytes: dl.aggregate_align.bytes(),
+        vector_align: dl.vector_align.iter().map(|(size,align)|producer::VectorAlign {size_bytes: size.bytes(),align_bytes: align.bytes()}).collect::<Vec<_>>(),
+        default_address_space: dl.default_address_space.0,
+        default_address_space_pointer_spec: spec(dl.default_address_space,default_fat),
+        address_space_info: address_space_info,
+        instruction_address_space: dl.instruction_address_space.0,
+        c_enum_min_size: match dl.c_enum_min_size {
             rustc_abi::Integer::I8 => "I8", rustc_abi::Integer::I16 => "I16",
             rustc_abi::Integer::I32 => "I32", rustc_abi::Integer::I64 => "I64",
             rustc_abi::Integer::I128 => "I128",
         },
-    }))
+    })
 }
 
 /// Shim signatures are queried by reached foreign dispatch, not by the mere
 /// existence of a Rust main. Startup queries are exported by their own producers.
 /// Generated MIR can introduce another foreign demand in a later round.
+#[derive(Default, serde::Serialize)]
+struct RuntimeCatalogs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compiler_named_types: Option<NamedTypes>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compiler_shim_abis: Option<Vec<shim_abi::Recipe>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compiler_named_shim_abis: Option<Vec<shim_abi::NamedSignature>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compiler_libc_type_layouts: Option<libc_type_layouts::Catalog>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compiler_windows_type_layouts: Option<windows_type_layouts::Catalog>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compiler_named_constants: Option<Vec<NamedConstant>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compiler_named_statics: Option<Vec<named_statics::Record>>,
+}
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum NamedTypes {
+    Startup(shim_abi::StartupNamedTypes),
+    All(BTreeMap<String, u64>),
+}
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum NamedConstant {
+    Libc(named_constants::Record),
+    Windows(windows_constants::Record),
+}
 fn runtime_catalogs_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<serde_json::Map<String, Value>, String> {
+) -> Result<RuntimeCatalogs, String> {
     let named_shim_abis = shim_abi::named_signatures(tcx, context)?;
-    let mut os_shims = named_shim_abis
-            .as_array()
-            .is_some_and(|rows| !rows.is_empty());
+    let mut os_shims = !named_shim_abis.is_empty();
     let names = context
         .pending_instances
         .iter()
@@ -974,50 +1121,71 @@ fn runtime_catalogs_json<'tcx>(
             })
     });
     let portable = c_shim || miri_shim || no_alloc_shim || allocator;
-    let mut fields = serde_json::Map::new();
-    if tcx.crate_types().contains(&rustc_structures::CrateType::Executable)
+    let mut fields = RuntimeCatalogs::default();
+    if tcx
+        .crate_types()
+        .contains(&rustc_structures::CrateType::Executable)
         && !rustc_attr_ir::find_attr!(tcx, crate, NoCore)
     {
-        fields.insert("compiler_named_types".into(), shim_abi::startup_named_types(tcx, context)?);
+        fields.compiler_named_types = Some(NamedTypes::Startup(shim_abi::startup_named_types(
+            tcx, context,
+        )?));
     }
     if !os_shims && !portable {
         return Ok(fields);
     }
-    fields.insert(
-        "compiler_shim_abis".into(),
-        shim_abi::export(
-            tcx,
-            context,
-            !os_shims && !miri_shim && !no_alloc_shim && !allocator,
-            tcx.entry_fn(()).is_some() || allocator,
-        )?,
-    );
+    fields.compiler_shim_abis = Some(shim_abi::export(
+        tcx,
+        context,
+        !os_shims && !miri_shim && !no_alloc_shim && !allocator,
+        tcx.entry_fn(()).is_some() || allocator,
+    )?);
     if os_shims {
-        fields.insert("compiler_named_shim_abis".into(), named_shim_abis);
-        fields.insert(
-            "compiler_named_types".into(),
-            shim_abi::named_types(tcx, context)?,
+        fields.compiler_named_shim_abis = Some(named_shim_abis);
+        fields.compiler_named_types = Some(NamedTypes::All(shim_abi::named_types(tcx, context)?));
+        fields.compiler_libc_type_layouts = Some(libc_type_layouts::export(tcx, context)?);
+        fields.compiler_windows_type_layouts = Some(windows_type_layouts::export(tcx, context)?);
+        let mut constants = named_constants::export(tcx, context)?
+            .into_iter()
+            .map(NamedConstant::Libc)
+            .collect::<Vec<_>>();
+        constants.extend(
+            windows_constants::export(tcx, context)?
+                .into_iter()
+                .map(NamedConstant::Windows),
         );
-        fields.insert(
-            "compiler_libc_type_layouts".into(),
-            libc_type_layouts::export(tcx, context)?,
-        );
-        fields.insert(
-            "compiler_windows_type_layouts".into(),
-            windows_type_layouts::export(tcx, context)?,
-        );
-        let mut constants = named_constants::export(tcx, context)?;
-        constants
-            .as_array_mut()
-            .ok_or("named constant catalog is not an array")?
-            .extend(windows_constants::export(tcx, context)?);
-        fields.insert("compiler_named_constants".into(), constants);
-        fields.insert(
-            "compiler_named_statics".into(),
-            named_statics::export(tcx, context)?,
-        );
+        fields.compiler_named_constants = Some(constants);
+        fields.compiler_named_statics = Some(named_statics::export(tcx, context)?);
     }
     Ok(fields)
+}
+
+#[derive(serde::Serialize)]
+struct RuntimePrimitives {
+    u8: u64,
+    u16: u64,
+    u32: u64,
+    u64: u64,
+    u128: u64,
+    i8: u64,
+    i16: u64,
+    i32: u64,
+    i64: u64,
+    i128: u64,
+    bool: u64,
+    pointer_tag_integer: u64,
+    usize: u64,
+    isize: u64,
+    unit: u64,
+    unit_pointer_const: u64,
+    unit_pointer_mut: u64,
+    imm_u8_pointer: u64,
+    imm_u8_pointer_pointer: u64,
+    type_name_result_type: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caller_location_type: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ordering_enum: Option<u64>,
 }
 
 impl ExportCallbacks {
@@ -1092,40 +1260,62 @@ impl ExportCallbacks {
         // before the shared reachable-instance traversal.
         let main_queries = main_queries::export(tcx, &mut export_context, &main_query_roots)?;
         // Canonical primitive identities for runtime array constructors.
-        let mut runtime_primitives = json!({"u8":type_json(&mut export_context,tcx,tcx.types.u8)?,
-            "u16":type_json(&mut export_context,tcx,tcx.types.u16)?,
-            "u32":type_json(&mut export_context,tcx,tcx.types.u32)?,
-            "u64":type_json(&mut export_context,tcx,tcx.types.u64)?,
-            "u128":type_json(&mut export_context,tcx,tcx.types.u128)?,
-            "i8":type_json(&mut export_context,tcx,tcx.types.i8)?,
-            "i16":type_json(&mut export_context,tcx,tcx.types.i16)?,
-            "i32":type_json(&mut export_context,tcx,tcx.types.i32)?,
-            "i64":type_json(&mut export_context,tcx,tcx.types.i64)?,
-            "i128":type_json(&mut export_context,tcx,tcx.types.i128)?,
-            "bool":type_json(&mut export_context,tcx,tcx.types.bool)?,
-            "pointer_tag_integer":type_json(&mut export_context,tcx,{
+        let mut runtime_primitives = RuntimePrimitives {
+            u8: type_json(&mut export_context, tcx, tcx.types.u8)?,
+            u16: type_json(&mut export_context, tcx, tcx.types.u16)?,
+            u32: type_json(&mut export_context, tcx, tcx.types.u32)?,
+            u64: type_json(&mut export_context, tcx, tcx.types.u64)?,
+            u128: type_json(&mut export_context, tcx, tcx.types.u128)?,
+            i8: type_json(&mut export_context, tcx, tcx.types.i8)?,
+            i16: type_json(&mut export_context, tcx, tcx.types.i16)?,
+            i32: type_json(&mut export_context, tcx, tcx.types.i32)?,
+            i64: type_json(&mut export_context, tcx, tcx.types.i64)?,
+            i128: type_json(&mut export_context, tcx, tcx.types.i128)?,
+            bool: type_json(&mut export_context, tcx, tcx.types.bool)?,
+            pointer_tag_integer: type_json(&mut export_context, tcx, {
                 use rustc_middle::ty::layout::IntegerExt;
-                tcx.data_layout.ptr_sized_integer().to_ty(tcx,false)
+                tcx.data_layout.ptr_sized_integer().to_ty(tcx, false)
             })?,
-            "usize":type_json(&mut export_context,tcx,tcx.types.usize)?,
-            "isize":type_json(&mut export_context,tcx,tcx.types.isize)?,
-            "unit":type_json(&mut export_context,tcx,tcx.types.unit)?,
-            "unit_pointer_const":type_json(&mut export_context,tcx,ty::Ty::new_imm_ptr(tcx,tcx.types.unit))?,
-            "unit_pointer_mut":type_json(&mut export_context,tcx,ty::Ty::new_mut_ptr(tcx,tcx.types.unit))?,
-            "imm_u8_pointer":type_json(&mut export_context,tcx,ty::Ty::new_imm_ptr(tcx,tcx.types.u8))?,
-            "imm_u8_pointer_pointer":type_json(&mut export_context,tcx,ty::Ty::new_imm_ptr(tcx,ty::Ty::new_imm_ptr(tcx,tcx.types.u8)))?,
+            usize: type_json(&mut export_context, tcx, tcx.types.usize)?,
+            isize: type_json(&mut export_context, tcx, tcx.types.isize)?,
+            unit: type_json(&mut export_context, tcx, tcx.types.unit)?,
+            unit_pointer_const: type_json(
+                &mut export_context,
+                tcx,
+                ty::Ty::new_imm_ptr(tcx, tcx.types.unit),
+            )?,
+            unit_pointer_mut: type_json(
+                &mut export_context,
+                tcx,
+                ty::Ty::new_mut_ptr(tcx, tcx.types.unit),
+            )?,
+            imm_u8_pointer: type_json(
+                &mut export_context,
+                tcx,
+                ty::Ty::new_imm_ptr(tcx, tcx.types.u8),
+            )?,
+            imm_u8_pointer_pointer: type_json(
+                &mut export_context,
+                tcx,
+                ty::Ty::new_imm_ptr(tcx, ty::Ty::new_imm_ptr(tcx, tcx.types.u8)),
+            )?,
             // Seed the intrinsic's actual result before the finite runtime
             // query domain is captured; late ConstValue export must not leave
             // its &str layout without the corresponding compiler leaves.
-            "type_name_result_type":type_json(&mut export_context,tcx,
-                ty::Ty::new_imm_ref(tcx,tcx.lifetimes.re_erased,tcx.types.str_))?,
-        });
+            type_name_result_type: type_json(
+                &mut export_context,
+                tcx,
+                ty::Ty::new_imm_ref(tcx, tcx.lifetimes.re_erased, tcx.types.str_),
+            )?,
+            caller_location_type: None,
+            ordering_enum: None,
+        };
         if tcx
             .lang_items()
             .get(rustc_attr_ir::LangItem::PanicLocation)
             .is_some()
         {
-            runtime_primitives["caller_location_type"] = compiler_fact(type_json(
+            runtime_primitives.caller_location_type = Some(type_json(
                 &mut export_context,
                 tcx,
                 tcx.caller_location_ty(),
@@ -1136,7 +1326,7 @@ impl ExportCallbacks {
             .get(rustc_attr_ir::LangItem::OrderingEnum)
             .is_some()
         {
-            runtime_primitives["ordering_enum"] = compiler_fact(type_json(
+            runtime_primitives.ordering_enum = Some(type_json(
                 &mut export_context,
                 tcx,
                 tcx.ty_ordering_enum(rustc_span::DUMMY_SP),
@@ -1244,8 +1434,7 @@ impl ExportCallbacks {
                 .filter(|instance| tcx.is_foreign_item(instance.def_id()))
                 .map(|instance| tcx.symbol_name(*instance).name.to_owned())
                 .collect::<HashSet<_>>();
-            if runtime_catalogs.is_none() || foreign_symbols != catalog_foreign_symbols
-            {
+            if runtime_catalogs.is_none() || foreign_symbols != catalog_foreign_symbols {
                 runtime_catalogs = Some(runtime_catalogs_json(tcx, &mut export_context)?);
                 catalog_foreign_symbols = foreign_symbols;
             }
@@ -1262,16 +1451,11 @@ impl ExportCallbacks {
                 &mut export_context,
                 &mut processed_runtime_type_queries,
             )?;
-            let mut runtime_type_query_rows = match runtime_type_query_wave {
-                Value::Array(rows) => rows,
-                _ => panic!("runtime type queries are an array"),
-            };
-            runtime_type_queries.append(&mut runtime_type_query_rows);
+            runtime_type_queries.extend(runtime_type_query_wave);
             let runtime_caller_instances =
                 compiler_caller_location_queries_json(tcx, &mut export_context)?;
             let global_byte_queries = global_byte_queries::export(tcx, &mut export_context)?;
-            let identity_only_instances =
-                identity_only_instances_json(tcx, &mut export_context)?;
+            let identity_only_instances = identity_only_instances_json(tcx, &mut export_context)?;
             let instance_abis = compiler_instance_abis_json(tcx, &mut export_context)?;
             let covariance_queries = covariance_queries::export(tcx, &mut export_context)?;
             let function_facts = compiler_function_facts_json(tcx, &mut export_context)?;
@@ -1348,110 +1532,79 @@ impl ExportCallbacks {
         instances.extend(identity_only_instances);
         instances.sort_by_key(|row| row.instance_id);
         if instances.len() != export_context.instance_ids.len()
-            || instances.iter().enumerate().any(|(id, row)| row.instance_id != id as u64)
+            || instances
+                .iter()
+                .enumerate()
+                .any(|(id, row)| row.instance_id != id as u64)
         {
             return Err("instance table has missing or duplicate definitions".into());
         }
-        let runtime_queries = {
-            let mut queries = serde_json::Map::new();
-            if tcx.crate_types().contains(&rustc_structures::CrateType::Executable) {
-                queries.insert("startup".into(), startup_queries::export(tcx, &mut export_context)?);
-            }
-            queries.insert("types".into(), Value::Array(runtime_type_queries));
-            queries.insert("virtual".into(), runtime_virtual_queries);
-            queries.insert("instances".into(), runtime_caller_instances);
-            queries.insert("foreign_symbols".into(), runtime_foreign_symbols);
-            Value::Object(queries)
+        let runtime_queries = RuntimeQueries {
+            startup: if tcx
+                .crate_types()
+                .contains(&rustc_structures::CrateType::Executable)
+            {
+                Some(startup_queries::export(tcx, &mut export_context)?)
+            } else {
+                None
+            },
+            types: runtime_type_queries,
+            virtual_queries: runtime_virtual_queries
+                .into_iter()
+                .map(|row| row.finish(&vtable_query_ids))
+                .collect::<Result<Vec<_>, _>>()?,
+            instances: runtime_caller_instances,
+            foreign_symbols: runtime_foreign_symbols,
         };
-        // Preserve the pinned query/evidence evaluation order from the former
-        // root json! expression while keeping these outputs owned for moves.
-        let mut producer = json!({
-            "miri_commit": MIRI_COMMIT,
-            "rustc_commit": EXPECTED_RUSTC_COMMIT,
-            "rustc_version": self.rustc_version,
-            "target_triple": tcx.sess.opts.target_triple.to_string(),
-        });
-        let input_settings = producer::evidence(tcx, self.invocation.as_ref())?;
-        producer
-            .as_object_mut()
-            .expect("producer metadata is an object")
-            .insert("input_settings".into(), input_settings);
+        // Preserve compiler query evaluation order before capturing allocator state.
+        let producer = Producer {
+            miri_commit: MIRI_COMMIT,
+            rustc_commit: EXPECTED_RUSTC_COMMIT,
+            rustc_version: self.rustc_version.clone(),
+            target_triple: tcx.sess.opts.target_triple.to_string(),
+            input_settings: producer::evidence(
+                tcx,
+                self.invocation
+                    .as_ref()
+                    .ok_or("missing invocation evidence")?
+                    .rustc_args(),
+            )?,
+        };
         let target_data_layout = runtime_target_data_layout_json(tcx)?;
         let frame_metadata = compiler_frame_metadata_json(tcx);
         let panic_query_catalog = panic_queries::export(tcx, &mut export_context);
-        let runtime_checks = json!([
+        let runtime_checks = [
             runtime_check_json(tcx, rustc_middle::mir::RuntimeChecks::UbChecks),
             runtime_check_json(tcx, rustc_middle::mir::RuntimeChecks::ContractChecks),
             runtime_check_json(tcx, rustc_middle::mir::RuntimeChecks::OverflowChecks),
-        ]);
-        let mut session_queries = json!({
-            "internal_target_features":internal_target_features,
-            "is_like_wasm":tcx.sess.target.is_like_wasm,
-            "target_arch":tcx.sess.target.arch.to_string(),
-            "root_span":root_span,
-        });
-        session_queries
-            .as_object_mut()
-            .expect("session queries are an object")
-            .insert("runtime_checks".into(), runtime_checks);
-        let selected_root_records = is_scoped.then(|| {
-            selected_roots
-                .iter()
-                .map(|def_id| {
-                    json!({
-                        "def_path":tcx.def_path_str(def_id.to_def_id()),
-                        "def_id":def_json(&mut export_context, def_id.to_def_id()),
+        ];
+        let session_queries = SessionQueries {
+            internal_target_features,
+            is_like_wasm: tcx.sess.target.is_like_wasm,
+            target_arch: tcx.sess.target.arch.to_string(),
+            root_span,
+            runtime_checks,
+        };
+        let selected_scope = if is_scoped {
+            Some(SelectedScope {
+                kind: "rooted_structural_closure",
+                semantics: "structural_export_closure_only",
+                roots: selected_roots
+                    .iter()
+                    .map(|def_id| SelectedRoot {
+                        def_path: tcx.def_path_str(def_id.to_def_id()),
+                        def_id: def_json(&mut export_context, def_id.to_def_id()),
                     })
-                })
-                .collect::<Vec<_>>()
-        });
-        let mut document = json!({
-            "schema": "lean-miri-rustc-mir",
-            "schema_version": ROOT_SCHEMA_VERSION,
-            "mir_query": "TyCtxt::instance_mir(InstanceKind::Item(def_id)); ordinary runtime function bodies use optimized_mir",
-            "compiler_abi_layout_schema":"physical_ty_and_layout_v1",
-        });
-        // serde_json::json! serializes expression fields by borrowing them via
-        // to_value, which clones owned Values and vectors of Values. Insert the
-        // completed catalogs directly so their rows and nested trees move into
-        // the root object without a second full in-memory copy.
-        {
-            let fields = document
-                .as_object_mut()
-                .expect("root document is an object");
-            fields.insert("producer".into(), producer);
-            fields.insert("runtime_target_data_layout".into(), target_data_layout);
-            fields.insert("compiler_session_queries".into(), session_queries);
-            for (id, instance) in instances.into_iter().enumerate() {
-                export_context.instance_ids.define(id, instance);
-            }
-            fields.insert("compiler_runtime_queries".into(), runtime_queries);
-            fields.insert("compiler_frame_metadata".into(), frame_metadata);
-            fields.insert("compiler_instance_abis".into(), instance_abis);
-            fields.insert("compiler_function_facts".into(), function_facts);
-            fields.insert("compiler_cast_queries".into(), cast_queries);
-            fields.insert("compiler_type_name_constants".into(), intrinsic_type_names);
-            fields.insert("compiler_panic_queries".into(), panic_query_catalog);
-            fields.insert(
-                "compiler_native_signature_queries".into(),
-                native_signature_queries,
-            );
-            fields.insert("compiler_retag_queries".into(), retag_queries);
-            fields.insert("compiler_covariance_queries".into(), covariance_queries);
-            fields.insert("compiler_global_byte_queries".into(), global_byte_queries);
-            fields.insert(
-                "compiler_caller_location_constants".into(),
-                caller_location_constants,
-            );
-            fields.insert("compiler_main_queries".into(), main_queries);
-            fields.insert("compiler_runtime_primitives".into(), runtime_primitives);
-            fields.insert("compiler_vtable_queries".into(), vtable_queries);
-            fields.insert("compiler_predicate_queries".into(), predicate_queries);
-            if let Some(catalogs) = runtime_catalogs {
-                fields.extend(catalogs);
-            }
-            fields.insert("body_roots".into(), serde_json::to_value(bodies).map_err(|e| e.to_string())?);
+                    .collect(),
+                dependency_policy: "canonical entry instances and transitive MIR/type-shape/layout/allocation references",
+            })
+        } else {
+            None
+        };
+        for (id, instance) in instances.into_iter().enumerate() {
+            export_context.instance_ids.define(id, instance);
         }
+        let body_roots = bodies;
         let allocator_world = if self.prepared_allocator_world {
             Some(allocator_world::capture(
                 tcx,
@@ -1476,68 +1629,59 @@ impl ExportCallbacks {
         {
             return Err("type or allocation table has unfinished definitions".into());
         }
-        let bodies = export_context.bodies.finish("body")?;
-        let definitions = export_context.definitions.finish("definition")?;
-        let type_constants = export_context.type_constants.finish("type_constant")?;
-        let spans = export_context.spans.finish("span_id")?;
-        let layouts = export_context.layouts.finish("layout_id")?;
-        let fn_abis = export_context.fn_abis.finish("fn_abi_id")?;
-        let instances = export_context.instance_ids.finish("instance_id")?;
-        let type_nodes = export_context.type_ids.finish("type_id")?;
-        let allocation_nodes = export_context.allocation_ids.finish("allocation_id")?;
-        let predicate_nodes = export_context.predicate_ids.finish("predicate_id")?;
-        {
-            let fields = document
-                .as_object_mut()
-                .expect("root document is an object");
-            fields.insert("instances".into(), serde_json::to_value(instances).map_err(|e| e.to_string())?);
-            fields.insert("predicates".into(), json!(predicate_nodes));
-            fields.insert("bodies".into(), serde_json::to_value(bodies).map_err(|e| e.to_string())?);
-            fields.insert("definitions".into(), serde_json::to_value(definitions).map_err(|e| e.to_string())?);
-            fields.insert("type_constants".into(), serde_json::to_value(type_constants).map_err(|e| e.to_string())?);
-            fields.insert("spans".into(), serde_json::to_value(spans).map_err(|e| e.to_string())?);
-            fields.insert("layouts".into(), serde_json::to_value(layouts).map_err(|e| e.to_string())?);
-            fields.insert("fn_abis".into(), serde_json::to_value(fn_abis).map_err(|e| e.to_string())?);
-            fields.insert(
-                "types".into(),
-                serde_json::to_value(type_nodes).map_err(|e| e.to_string())?,
-            );
-            fields.insert(
-                "allocations".into(),
-                json!(allocation_nodes),
-            );
-            if let Some(world) = allocator_world {
-                fields.insert("compiler_alloc_id_world".into(), world);
-            }
-        }
-        patch_vtable_query_ids(&mut document, &vtable_query_ids)?;
-        patch_virtual_resolution_candidates(&mut document);
-        if is_scoped {
-            let roots = selected_root_records.expect("scoped export has precomputed root records");
-            document["selected_scope"] = json!({
-                "kind":"rooted_structural_closure",
-                "semantics":"structural_export_closure_only",
-                "roots":roots,
-                "dependency_policy":"canonical entry instances and transitive MIR/type-shape/layout/allocation references",
-            });
-        }
-
-        if let Some(invocation) = self.invocation.take() {
-            document["invocation"] = invocation;
-        }
-        // The reference sidecar records allocator-world metadata from the raw
-        // document before the same-TyCtxt reference execution.
-        #[cfg(feature = "miri-reference")]
-        let miri_reference_frontier = if self.miri_reference {
-            document
-                .get("compiler_alloc_id_world")
-                .and_then(|world| world.get("frontier"))
-                .and_then(|frontier| frontier.get("last_reserved_source_alloc_id"))
-                .cloned()
-        } else {
-            None
+        let candidates = query_values::virtual_candidates(&runtime_queries.virtual_queries);
+        let bodies = export_context
+            .bodies
+            .finish("body")?
+            .into_iter()
+            .map(|body| body.finish(&vtable_query_ids, &candidates))
+            .collect::<Result<Vec<_>, _>>()?;
+        let document = ExportDocument {
+            schema: "lean-miri-rustc-mir",
+            schema_version: ROOT_SCHEMA_VERSION,
+            mir_query: "TyCtxt::instance_mir(InstanceKind::Item(def_id)); ordinary runtime function bodies use optimized_mir",
+            compiler_abi_layout_schema: "physical_ty_and_layout_v1",
+            producer,
+            runtime_target_data_layout: target_data_layout,
+            compiler_session_queries: session_queries,
+            compiler_runtime_queries: runtime_queries,
+            compiler_frame_metadata: frame_metadata,
+            compiler_instance_abis: instance_abis,
+            compiler_function_facts: function_facts,
+            compiler_cast_queries: cast_queries,
+            compiler_type_name_constants: intrinsic_type_names,
+            compiler_panic_queries: panic_query_catalog,
+            compiler_native_signature_queries: native_signature_queries,
+            compiler_retag_queries: retag_queries,
+            compiler_covariance_queries: covariance_queries,
+            compiler_global_byte_queries: global_byte_queries,
+            compiler_caller_location_constants: caller_location_constants,
+            compiler_main_queries: main_queries,
+            compiler_runtime_primitives: runtime_primitives,
+            compiler_vtable_queries: vtable_queries,
+            compiler_predicate_queries: predicate_queries,
+            runtime_catalogs: runtime_catalogs.unwrap_or_default(),
+            body_roots,
+            bodies,
+            definitions: export_context.definitions.finish("definition")?,
+            type_constants: export_context.type_constants.finish("type_constant")?,
+            spans: export_context.spans.finish("span_id")?,
+            layouts: export_context.layouts.finish("layout_id")?,
+            fn_abis: export_context.fn_abis.finish("fn_abi_id")?,
+            instances: export_context.instance_ids.finish("instance_id")?,
+            types: export_context.type_ids.finish("type_id")?,
+            allocations: export_context.allocation_ids.finish("allocation_id")?,
+            predicates: export_context.predicate_ids.finish("predicate_id")?,
+            compiler_alloc_id_world: allocator_world,
+            selected_scope,
+            invocation: self.invocation.take(),
         };
-        vtable_diagnostics::write_report(vtable_diagnostics, &document)?;
+        #[cfg(feature = "miri-reference")]
+        let miri_reference_frontier = document
+            .compiler_alloc_id_world
+            .as_ref()
+            .map(|world| world.frontier.last_reserved_source_alloc_id);
+        self.diagnostics = vtable_diagnostics;
         if self.miri_reference {
             if !self.prepared_allocator_world {
                 return Err(
@@ -1546,6 +1690,7 @@ impl ExportCallbacks {
                 );
             }
             write_document(&self.output, &document)?;
+            vtable_diagnostics::write_report(self.diagnostics.take(), &self.output)?;
             #[cfg(feature = "miri-reference")]
             {
                 let (fingerprint, byte_length) = snapshot_fingerprint(&self.output)?;
@@ -1554,18 +1699,18 @@ impl ExportCallbacks {
                             .into());
                 };
                 let sidecar = reference_sidecar_path(&self.output);
-                let sidecar_base = json!({
-                    "snapshot_fnv1a64":fingerprint,
-                    "snapshot_byte_length":byte_length,
-                    "snapshot_path":self.output.to_string_lossy(),
-                    "last_reserved_source_alloc_id":frontier,
-                    "rustc_commit":EXPECTED_RUSTC_COMMIT,
-                    "miri_commit":MIRI_COMMIT,
-                    "reference_contract":"same_prepared_tcx_after_snapshot_capture;not_vanilla_miri_alloc_id_history",
-                });
-                let mut running = sidecar_base.clone();
-                running["status"] = json!("running");
-                write_document(&sidecar, &running)?;
+                let mut sidecar_record = reference_values::Sidecar {
+                    snapshot_fnv1a64: fingerprint,
+                    snapshot_byte_length: byte_length,
+                    snapshot_path: self.output.to_string_lossy().into_owned(),
+                    last_reserved_source_alloc_id: frontier,
+                    rustc_commit: EXPECTED_RUSTC_COMMIT,
+                    miri_commit: MIRI_COMMIT,
+                    reference_contract: "same_prepared_tcx_after_snapshot_capture;not_vanilla_miri_alloc_id_history",
+                    status: reference_values::Status::Running,
+                    reference: None,
+                };
+                write_document(&sidecar, &sidecar_record)?;
                 // Drop the large owned snapshot tree before Miri starts using
                 // the same TyCtxt, keeping the reference peak within budget.
                 drop(document);
@@ -1576,17 +1721,13 @@ impl ExportCallbacks {
                         entry_type,
                         &self.miri_reference_args,
                     ),
-                    None => json!({
-                        "status":"skipped",
-                        "reason":"crate_is_not_executable",
-                        "same_tcx":true,
-                    }),
+                    None => reference_values::Result::skipped(),
                 };
-                let mut finished = sidecar_base;
-                finished["reference"] = result.clone();
-                finished["status"] = result["status"].clone();
-                write_document(&sidecar, &finished)?;
-                if result["status"] == "failed" {
+                sidecar_record.status = result.status();
+                let failed = sidecar_record.status == reference_values::Status::Failed;
+                sidecar_record.reference = Some(result);
+                write_document(&sidecar, &sidecar_record)?;
+                if failed {
                     return Err(
                         "same-TyCtxt Miri reference failed; see its reference sidecar".into(),
                     );
@@ -1600,6 +1741,7 @@ impl ExportCallbacks {
         }
         if self.write_during_analysis {
             write_document(&self.output, &document)?;
+            vtable_diagnostics::write_report(self.diagnostics.take(), &self.output)?;
             if self.continue_compilation {
                 return Ok(Compilation::Continue);
             }
@@ -1679,15 +1821,12 @@ fn run_direct(args: Vec<String>) -> Result<(), String> {
     let mut rustc_args = Vec::with_capacity(options.rustc_args.len() + 1);
     rustc_args.push("rustc".to_owned());
     rustc_args.extend(options.rustc_args);
-    let invocation = json!({
-        "kind":"direct_rustc_driver",
-        "rustc_commit":EXPECTED_RUSTC_COMMIT,
-        "rustc_executable":resolve_executable(selected_rustc),
-        "working_directory":env::current_dir().ok().map(|path|path.to_string_lossy().into_owned()),
-        "rustc_args":&rustc_args[1..],
-        "rustc_args_fingerprint_fnv1a64":args_fingerprint(&rustc_args[1..]),
-        "root_paths":&options.root_paths,
-    });
+    let invocation = Invocation::Direct {
+        rustc_commit:EXPECTED_RUSTC_COMMIT, rustc_executable:resolve_executable(selected_rustc),
+        working_directory:env::current_dir().ok().map(|path|path.to_string_lossy().into_owned()),
+        rustc_args:rustc_args[1..].to_vec(), rustc_args_fingerprint_fnv1a64:args_fingerprint(&rustc_args[1..]),
+        root_paths:options.root_paths.clone(),
+    };
     let miri_reference = prepared_miri_reference_enabled()?;
     let prepared_allocator_world = prepared_allocator_world_enabled()?;
     if miri_reference && !prepared_allocator_world {
@@ -1706,6 +1845,7 @@ fn run_direct(args: Vec<String>) -> Result<(), String> {
         root_paths: options.root_paths,
         rustc_version,
         document: None,
+        diagnostics: None,
         invocation: Some(invocation),
         write_during_analysis: false,
         continue_compilation: false,
@@ -1730,7 +1870,8 @@ fn run_direct(args: Vec<String>) -> Result<(), String> {
     let document = callbacks
         .document
         .ok_or("rustc completed without after_analysis output")?;
-    write_document(&callbacks.output, &document)
+    write_document(&callbacks.output, &document)?;
+    vtable_diagnostics::write_report(callbacks.diagnostics.take(), &callbacks.output)
 }
 
 fn run_as_rustc_wrapper(args: Vec<String>) -> Result<(), String> {
@@ -1806,17 +1947,13 @@ fn run_as_rustc_wrapper(args: Vec<String>) -> Result<(), String> {
         }
     }
     let output = cargo_export_path(&out_dir, &crate_name, &rustc_args)?;
-    let invocation = json!({
-        "kind":"cargo_rustc_wrapper",
-        "rustc_commit":EXPECTED_RUSTC_COMMIT,
-        "rustc_executable":rustc_path.canonicalize().ok().map(|path|path.to_string_lossy().into_owned()).unwrap_or_else(||rustc_path.to_string_lossy().into_owned()),
-        "working_directory":env::current_dir().ok().map(|path|path.to_string_lossy().into_owned()),
-        "crate_name":crate_name,
-        "source_path":rustc_args.iter().find(|arg|arg.ends_with(".rs")),
-        "target_crate":target_crate,
-        "rustc_args":&rustc_args,
-        "rustc_args_fingerprint_fnv1a64":args_fingerprint(&rustc_args),
-    });
+    let invocation = Invocation::Cargo {
+        rustc_commit:EXPECTED_RUSTC_COMMIT,
+        rustc_executable:rustc_path.canonicalize().ok().map(|path|path.to_string_lossy().into_owned()).unwrap_or_else(||rustc_path.to_string_lossy().into_owned()),
+        working_directory:env::current_dir().ok().map(|path|path.to_string_lossy().into_owned()),
+        crate_name:crate_name.clone(), source_path:rustc_args.iter().find(|arg|arg.ends_with(".rs")).cloned(),
+        target_crate, rustc_args:rustc_args.clone(), rustc_args_fingerprint_fnv1a64:args_fingerprint(&rustc_args),
+    };
     let mut driver_args = Vec::with_capacity(rustc_args.len() + 1);
     driver_args.push(rustc_path.to_string_lossy().into_owned());
     driver_args.extend(rustc_args);
@@ -1838,6 +1975,7 @@ fn run_as_rustc_wrapper(args: Vec<String>) -> Result<(), String> {
         root_paths: Vec::new(),
         rustc_version,
         document: None,
+        diagnostics: None,
         invocation: Some(invocation),
         write_during_analysis: true,
         continue_compilation: true,
@@ -2008,7 +2146,7 @@ fn join_paths_prepend(prefix: &Path, rest: &std::ffi::OsStr) -> Result<std::ffi:
         .map_err(|error| format!("cannot construct toolchain search path: {error}"))
 }
 
-fn write_document(path: &Path, document: &Value) -> Result<(), String> {
+fn write_document(path: &Path, document: &impl serde::Serialize) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("output path {} has no parent", path.display()))?;
@@ -2267,7 +2405,7 @@ fn export_body<'tcx>(
     tcx: TyCtxt<'tcx>,
     local_def_id: LocalDefId,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<BodyRoot, String> {
     let def_id = local_def_id.to_def_id();
     let body = tcx.instance_mir(ty::InstanceKind::Item(def_id));
     let instance = ty::Instance {
@@ -2284,31 +2422,14 @@ fn export_body<'tcx>(
         None
     };
     let body_id = mir_body_with_constant_queries_json(tcx, body, instance, false, context)?;
-    let mut result = json!({"body":body_id});
-    let object = result.as_object_mut().expect("body root is an object");
-    object.insert("entry_instance".into(), match entry {
-        Some((id,_))=>json!(id),
-        None=>unavailable_compiler_fact("root requires explicit type/const instantiation; Instance::mono cannot invent arguments")?,
-    });
-    object.insert("def_path".into(), json!(tcx.def_path_str(def_id)));
-    object.insert("def_id".into(), json!(def_json(context, def_id)));
-    object.insert("is_static".into(), json!(tcx.is_static(def_id)));
-    object.insert(
-        "thread_local_static".into(),
-        json!(tcx.is_thread_local_static(def_id)),
-    );
-    object.insert(
-        "promoted_bodies".into(),
-        json!(
-            tcx.promoted_mir(def_id)
-                .iter_enumerated()
-                .map(|(index, promoted)| Ok::<_, String>({ json!({
-                    "promoted_index":index.as_u32(), "body":mir_body_with_constant_queries_json(tcx,promoted,instance,false,context)?
-                }) }))
-                .collect::<Result<Vec<_>, String>>()?
-        ),
-    );
-    Ok::<_, String>(result)
+    Ok(BodyRoot { body:body_id,
+        entry_instance:match entry { Some((id,_))=>id, None=>unavailable_compiler_fact("root requires explicit type/const instantiation; Instance::mono cannot invent arguments")? },
+        def_path:tcx.def_path_str(def_id), def_id:def_json(context,def_id), is_static:tcx.is_static(def_id),
+        thread_local_static:tcx.is_thread_local_static(def_id),
+        promoted_bodies:tcx.promoted_mir(def_id).iter_enumerated().map(|(index,promoted)|Ok(PromotedRoot {
+            promoted_index:index.as_u32(), body:mir_body_with_constant_queries_json(tcx,promoted,instance,false,context)?,
+        })).collect::<Result<Vec<_>,String>>()?,
+    })
 }
 
 fn mir_body_json<'tcx>(
@@ -2405,9 +2526,7 @@ fn span_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, span: r
     id as u64
 }
 
-fn debug_value<T: std::fmt::Debug>(value: &T) -> Value {
-    json!({ "status": "debug_payload", "rustc_debug": format!("{value:?}") })
-}
+
 
 fn type_json<'tcx>(
     context: &mut ExportContext<'tcx>,
@@ -2470,10 +2589,8 @@ fn query_generated_type_json<'tcx>(
     Ok::<_, String>(result)
 }
 
-fn compiler_fact(value: impl serde::Serialize) -> Value {
-    serde_json::to_value(value).expect("semantic compiler fact serialization")
-}
-fn unavailable_compiler_fact(reason: &str) -> Result<Value, String> {
+fn compiler_fact<T: serde::Serialize>(value: T) -> T { value }
+fn unavailable_compiler_fact<T>(reason: &str) -> Result<T, String> {
     export_failure("main::unavailable_compiler_fact", reason)
 }
 
@@ -3689,7 +3806,7 @@ fn vtable_allocation_for_unsize<'tcx>(
                 source_pointee_type:type_json(context,tcx,source_pointee)?, target_pointee_type:type_json(context,tcx,target_pointee)?,
                 input_type:type_json(context,tcx,source_tail)?, input_predicates,
                 source_tail_type:type_json(context,tcx,source_tail)?, target_tail_type:type_json(context,tcx,target_tail)?,
-                _query_key:VtableQueryKey { input_type_id, input_predicate_ids },
+                query_id:VtableQueryKey { input_type_id, input_predicate_ids },
             }))
         }
     })
@@ -4873,7 +4990,7 @@ fn resolve_callee_json<'tcx>(
                             )?;
                             let virtual_resolution = if let ty::InstanceKind::Virtual(def, slot) = instance.def {
                                 Some(VirtualResolution { instance_id, method_definition:def_json(context,def), dispatch_slot:slot,
-                                    candidate_query_ids:Vec::new(), selection:"deferred to the runtime receiver vtable" })
+                                    candidate_query_ids:resolution_values::PendingCandidates, selection:"deferred to the runtime receiver vtable" })
                             } else { None };
                             let dispatch_slot = virtual_resolution.as_ref().map(|resolution| resolution.dispatch_slot);
                             let function_type = type_json(context,tcx,func_ty)?;
@@ -5219,7 +5336,7 @@ fn existential_predicate_json<'tcx>(
 fn compiler_predicate_queries_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<Vec<query_values::PredicateQuery>, String> {
     let env = ty::TypingEnv::fully_monomorphized();
     let mut records = Vec::new();
     let mut cursor = 0;
@@ -5238,7 +5355,7 @@ fn compiler_predicate_queries_json<'tcx>(
             )?
         } else {
             match tcx.try_normalize_erasing_regions(env, ty::Unnormalized::new_wip(erased)) {
-                Ok(value) => compiler_fact(json!(context.predicate_id(ty::Binder::dummy(value)))),
+                Ok(value) => context.predicate_id(ty::Binder::dummy(value)),
                 Err(error) => export_failure(
                     "main::compiler_predicate_queries_json",
                     format!(
@@ -5249,11 +5366,9 @@ fn compiler_predicate_queries_json<'tcx>(
                 )?,
             }
         };
-        records.push(
-            json!({"predicate_id":cursor,"typing_env":"fully_monomorphized",
-            "auto_trait":matches!(predicate.skip_binder(),ty::ExistentialPredicate::AutoTrait(_)),
-            "original":original,"normalization":normalization}),
-        );
+        records.push(query_values::PredicateQuery { predicate_id: cursor, typing_env: "fully_monomorphized",
+            auto_trait: matches!(predicate.skip_binder(),ty::ExistentialPredicate::AutoTrait(_)),
+            original, normalization, stable_key: 0 });
         cursor += 1;
     }
     let mut ordered = context.pending_predicates.clone();
@@ -5267,10 +5382,10 @@ fn compiler_predicate_queries_json<'tcx>(
             }
         }
         let id = context.predicate_ids[&predicate] as usize;
-        records[id]["stable_key"] = json!(rank);
+        records[id].stable_key = rank;
         previous = Some(predicate.skip_binder());
     }
-    Ok::<_, String>(json!(records))
+    Ok(records)
 }
 
 fn existential_predicate_payload_json<'tcx>(
@@ -5358,7 +5473,7 @@ fn compiler_runtime_type_queries_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
     processed: &mut HashSet<ty::Ty<'tcx>>,
-) -> Result<Value, String> {
+) -> Result<Vec<query_values::RuntimeTypeQuery>, String> {
     let mut types = context
         .runtime_type_query_demands
         .iter()
@@ -5397,24 +5512,22 @@ fn compiler_runtime_type_queries_json<'tcx>(
                 } else {
                     context.register_instance(instance)
                 };
-                compiler_fact(json!(instance_id))
+                instance_id
             }
             _=>unavailable_compiler_fact("drop glue requires normalized monomorphic type and drop_in_place lang item")?,
         }) };
-        let mut record = json!({"input_type_id":id,"typing_env":"fully_monomorphized",
-            "mut_pointer_type":compiler_fact(query_generated_type_json(context,tcx,ty::Ty::new_mut_ptr(tcx,input))?),
-            "mut_reference_type":compiler_fact(query_generated_type_json(context,tcx,ty::Ty::new_mut_ref(tcx,tcx.lifetimes.re_erased,input))?),
-        });
-        if let Some(drop) = drop { record["drop_glue"] = drop; }
-        Ok::<_, String>(record)
+        Ok::<_, String>(query_values::RuntimeTypeQuery { input_type_id:id, typing_env:"fully_monomorphized",
+            mut_pointer_type:query_generated_type_json(context,tcx,ty::Ty::new_mut_ptr(tcx,input))?,
+            mut_reference_type:query_generated_type_json(context,tcx,ty::Ty::new_mut_ref(tcx,tcx.lifetimes.re_erased,input))?,
+            drop_glue: drop })
     } }).collect::<Result<Vec<_>, String>>()?;
-    Ok::<_, String>(Value::Array(records))
+    Ok(records)
 }
 
 fn compiler_runtime_virtual_queries_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<Vec<query_values::RuntimeVirtualQuery<query_values::PendingVtableRef>>, String> {
     // call.rs::assert_virtual_instance_matches_concrete: preserve original
     // complete virtual args and use rustc from_assoc/erase_self_ty/rebase_onto.
     let mut virtuals = context
@@ -5560,7 +5673,7 @@ fn compiler_runtime_virtual_queries_json<'tcx>(
                             register_virtual_call_transfers(
                                 context, tcx, original, concrete, instance,
                             )?;
-                            compiler_fact(json!(id))
+                            id
                         }
                     }
                     Ok(None) => unavailable_compiler_fact(
@@ -5580,17 +5693,14 @@ fn compiler_runtime_virtual_queries_json<'tcx>(
                     "virtual target query requires complete monomorphic arguments",
                 )?
             };
-            virtual_queries.push(json!({"typing_env":"fully_monomorphized",
-                "original_instance_id":original_instance_id,
-                "method_definition":def_json(context, def),"parent_trait":def_json(context, parent),
-                "concrete_type":input_type,
-                "rebased_args":generic_args_json(context,tcx,rebound)?,"resolved":resolved,
-                "vtable_query":{"input_type":type_json(context,tcx,concrete)?,
-                    "input_predicates":input_predicates,
-                    "_query_key":{"input_type_id":input_type_id,"input_predicate_ids":input_predicate_ids}}}));
+            virtual_queries.push(query_values::RuntimeVirtualQuery { typing_env:"fully_monomorphized",
+                original_instance_id, method_definition:def_json(context,def), parent_trait:def_json(context,parent),
+                concrete_type:input_type, rebased_args:generic_args_json(context,tcx,rebound)?, resolved,
+                vtable_query:query_values::PendingVtableRef { input_type:type_json(context,tcx,concrete)?,
+                    input_predicates, key:(input_type_id,input_predicate_ids) } });
         }
     }
-    Ok::<_, String>(Value::Array(virtual_queries))
+    Ok(virtual_queries)
 }
 
 enum VtablePredicateMatch {
@@ -5637,10 +5747,44 @@ fn vtable_predicates_match<'tcx>(
     Ok(VtablePredicateMatch::Match)
 }
 
+#[derive(serde::Serialize)]
+struct CallerInstance {
+    instance_id: u64,
+    requires_caller_location: bool,
+    display: String,
+    inline_never: bool,
+    target_features: Vec<TargetFeature>,
+    is_foreign_item: bool,
+    is_closure_like: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    intrinsic_metadata: Option<Option<IntrinsicMetadata>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    item_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    codegen_symbol_name: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    symbol_name: Option<String>,
+}
+#[derive(serde::Serialize)]
+struct TargetFeature {
+    name: String,
+    kind: &'static str,
+}
+#[derive(serde::Serialize)]
+struct FrameMetadata {
+    local_crate: u32,
+    crates: Vec<CrateMetadata>,
+}
+#[derive(serde::Serialize)]
+struct CrateMetadata {
+    #[serde(rename = "crate")]
+    krate: u32,
+    name: String,
+}
 fn compiler_caller_location_queries_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<Vec<CallerInstance>, String> {
     let mut instances = context
         .instance_ids
         .iter()
@@ -5650,20 +5794,40 @@ fn compiler_caller_location_queries_json<'tcx>(
     instances.sort_by_key(|(id, _)| *id);
     let mut records = Vec::new();
     for (id, instance) in instances {
-        let mut row = json!({
-            "instance_id":id,
-            "requires_caller_location":instance.def.requires_caller_location(tcx),
-            "display":instance.to_string(),
-            "inline_never":matches!(tcx.codegen_instance_attrs(instance.def).inline,rustc_attr_ir::InlineAttr::Never),
-            "target_features":tcx.codegen_instance_attrs(instance.def).target_features.iter().map(|feature|json!({
-                "name":feature.name.as_str(),"kind":match feature.kind {
-                    rustc_middle::middle::codegen_fn_attrs::TargetFeatureKind::Implied=>"implied",
-                    rustc_middle::middle::codegen_fn_attrs::TargetFeatureKind::Enabled=>"enabled",
-                    rustc_middle::middle::codegen_fn_attrs::TargetFeatureKind::Forced=>"forced",
-                }})).collect::<Vec<_>>(),
-            "is_foreign_item":tcx.is_foreign_item(instance.def_id()),
-            "is_closure_like":tcx.is_closure_like(instance.def_id()),
-        });
+        let mut row = CallerInstance {
+            instance_id: id,
+            requires_caller_location: instance.def.requires_caller_location(tcx),
+            display: instance.to_string(),
+            inline_never: matches!(
+                tcx.codegen_instance_attrs(instance.def).inline,
+                rustc_attr_ir::InlineAttr::Never
+            ),
+            target_features: tcx
+                .codegen_instance_attrs(instance.def)
+                .target_features
+                .iter()
+                .map(|feature| TargetFeature {
+                    name: feature.name.as_str().to_owned(),
+                    kind: match feature.kind {
+                        rustc_middle::middle::codegen_fn_attrs::TargetFeatureKind::Implied => {
+                            "implied"
+                        }
+                        rustc_middle::middle::codegen_fn_attrs::TargetFeatureKind::Enabled => {
+                            "enabled"
+                        }
+                        rustc_middle::middle::codegen_fn_attrs::TargetFeatureKind::Forced => {
+                            "forced"
+                        }
+                    },
+                })
+                .collect(),
+            is_foreign_item: tcx.is_foreign_item(instance.def_id()),
+            is_closure_like: tcx.is_closure_like(instance.def_id()),
+            intrinsic_metadata: None,
+            item_name: None,
+            codegen_symbol_name: None,
+            symbol_name: None,
+        };
         // These compiler APIs have narrower domains than Instance itself.
         // Virtual dispatch has no standalone codegen symbol; the runtime
         // resolves its actual vtable target before requesting a symbol.
@@ -5671,17 +5835,17 @@ fn compiler_caller_location_queries_json<'tcx>(
             tcx.def_kind(instance.def_id()),
             rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn
         ) {
-            row["intrinsic_metadata"] = intrinsic_metadata_json(tcx, instance.def_id())?;
+            row.intrinsic_metadata = Some(intrinsic_metadata_json(tcx, instance.def_id())?);
         }
         if let Some(name) = tcx.opt_item_name(instance.def_id()) {
-            row["item_name"] = compiler_fact(json!(name.as_str()));
+            row.item_name = Some(name.as_str().to_owned());
         }
         if tcx.def_kind(instance.def_id()).has_codegen_attrs() {
-            row["codegen_symbol_name"] = compiler_fact(json!(
+            row.codegen_symbol_name = Some(
                 tcx.codegen_fn_attrs(instance.def_id())
                     .symbol_name
-                    .map(|symbol| symbol.as_str().to_owned())
-            ));
+                    .map(|symbol| symbol.as_str().to_owned()),
+            );
         }
         if !matches!(instance.def, ty::InstanceKind::Virtual(..)) {
             if instance.args.has_non_region_param()
@@ -5693,29 +5857,39 @@ fn compiler_caller_location_queries_json<'tcx>(
                     "symbol query requires closed instance: {instance:?}"
                 ));
             }
-            row["symbol_name"] = compiler_fact(json!(tcx.symbol_name(instance).name));
+            row.symbol_name = Some(tcx.symbol_name(instance).name.to_owned());
         }
         records.push(row);
     }
-    Ok(Value::Array(records))
+    Ok(records)
 }
 
-fn compiler_frame_metadata_json(tcx: TyCtxt<'_>) -> Value {
+fn compiler_frame_metadata_json(tcx: TyCtxt<'_>) -> FrameMetadata {
     let local = rustc_hir::def_id::LOCAL_CRATE;
     let mut crates = tcx.crates(()).iter().copied().collect::<Vec<_>>();
     crates.push(local);
     crates.sort_by_key(|krate| krate.as_u32());
     crates.dedup();
-    json!({"local_crate":local.as_u32(),"crates":crates.into_iter().map(|krate|
-        json!({"crate":krate.as_u32(),"name":tcx.crate_name(krate).as_str()})).collect::<Vec<_>>()})
+    FrameMetadata {
+        local_crate: local.as_u32(),
+        crates: crates
+            .into_iter()
+            .map(|krate| CrateMetadata {
+                krate: krate.as_u32(),
+                name: tcx.crate_name(krate).as_str().to_owned(),
+            })
+            .collect(),
+    }
 }
 
 // FnAbiOf::fn_abi_of_instance. Complete instance+extra-argument vector+env is
 // the query key; empty arguments are also recorded for runtime drop/vtable calls.
+#[derive(serde::Serialize)]
+struct InstanceAbi { typing_env:&'static str, instance_id:u64, extra_argument_types:Vec<u64>, abi_query:u64 }
 fn compiler_instance_abis_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<Vec<InstanceAbi>, String> {
     let mut requests = context.instance_abi_requests.clone();
     for instance in context.instance_ids.keys() {
         if context.runtime_query_only_empty_drops.contains(instance)
@@ -5784,13 +5958,10 @@ fn compiler_instance_abis_json<'tcx>(
                 Ok(abi)=>compiler_fact(fn_abi_json(context,tcx,abi)?),
             Err(error)=>export_failure("main::compiler_instance_abis_json", format!("{}; {}", "rustc fn_abi_of_instance failed", format!("{error:?}")))?,
         }};
-        let record=json!({"typing_env":"fully_monomorphized",
-            "instance_id":context.register_metadata_instance(instance),
-            "extra_argument_types":extra.iter().map(|ty|Ok::<_, String>({ type_json(context,tcx,ty)? })).collect::<Result<Vec<_>, String>>()?,
-            "abi_query":abi});
+        let record=InstanceAbi { typing_env:"fully_monomorphized", instance_id:context.register_metadata_instance(instance), extra_argument_types:extra.iter().map(|ty| type_json(context,tcx,ty)).collect::<Result<Vec<_>, String>>()?, abi_query:abi };
         Ok::<_, String>(record)
     } }).collect::<Result<Vec<_>, String>>()?;
-    Ok::<_, String>(Value::Array(records))
+    Ok::<_, String>(records)
 }
 
 // backtrace.rs::handle_miri_get_backtrace and resolve_frame_pointer. The table
@@ -5933,7 +6104,7 @@ fn compiler_vtable_metadata_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     input: ty::Ty<'tcx>,
     predicates: &'tcx ty::List<ty::PolyExistentialPredicate<'tcx>>,
-) -> Result<Value, String> {
+) -> Result<query_values::VtableMetadata, String> {
     let predicate_json = predicates
         .iter()
         .map(|predicate| existential_predicate_json(context, tcx, predicate))
@@ -5950,21 +6121,21 @@ fn compiler_vtable_metadata_json<'tcx>(
         ty::VtblEntry::MetadataDropInPlace=>if input.needs_drop(tcx,ty::TypingEnv::fully_monomorphized()) {
             let instance=ty::Instance::resolve_drop_glue(tcx,input);
             let instance_id=context.register_instance(instance);
-            json!({"kind":"drop_in_place","instance_id":instance_id})
+            allocation_values::VtableEntry::DropInPlace { instance_id }
         }else{
             let instance=ty::Instance::resolve_drop_glue(tcx,input);
             // Dynamic drop performs the same concrete call sequence as the
             // ordinary vtable serializer above, even when the vtable's drop
             // slot is null for `needs_drop == false`.
             context.register_vtable_target(instance);
-            json!({"kind":"drop_in_place_null"})
+            allocation_values::VtableEntry::DropInPlaceNull
         },
-        ty::VtblEntry::MetadataSize=>json!({"kind":"size_bytes"}),
-        ty::VtblEntry::MetadataAlign=>json!({"kind":"align_bytes"}),
-        ty::VtblEntry::Vacant=>json!({"kind":"vacant"}),
+        ty::VtblEntry::MetadataSize=>allocation_values::VtableEntry::SizeBytes,
+        ty::VtblEntry::MetadataAlign=>allocation_values::VtableEntry::AlignBytes,
+        ty::VtblEntry::Vacant=>allocation_values::VtableEntry::Vacant,
         ty::VtblEntry::Method(instance)=>{
             let instance_id=context.register_vtable_target(instance);
-            json!({"kind":"method","instance_id":instance_id})
+            allocation_values::VtableEntry::Method { instance_id }
         },
         ty::VtblEntry::TraitVPtr(trait_ref)=>{
             let existential=ty::ExistentialTraitRef::erase_self_ty(tcx,trait_ref);
@@ -5982,10 +6153,7 @@ fn compiler_vtable_metadata_json<'tcx>(
                 .insert((input, child_predicates));
             context.vtable_diagnostics.record((input, child_predicates), "trait_vptr",
                 Some((input, predicates)), None);
-            json!({"kind":"supertrait_vtable_pointer",
-                "trait_def_id":def_json(context, trait_ref.def_id),"trait_def_path":tcx.def_path_str(trait_ref.def_id),
-                "generic_args":generic_args_json(context,tcx,trait_ref.args)?,
-                "allocation":allocation_ref(context,tcx,allocation)?})
+            allocation_values::VtableEntry::SupertraitVtablePointer { trait_def_id:def_json(context,trait_ref.def_id), trait_def_path:tcx.def_path_str(trait_ref.def_id), generic_args:generic_args_json(context,tcx,trait_ref.args)?, allocation:allocation_ref(context,tcx,allocation)? }
         },
     }) }).collect::<Result<Vec<_>, String>>()?;
     let (size_bytes, align_bytes) =
@@ -5996,18 +6164,16 @@ fn compiler_vtable_metadata_json<'tcx>(
             ),
             Err(error) => export_failure("vtable layout", format!("{error:?}"))?,
         };
-    Ok::<_, String>(
-        json!({"type":type_json(context,tcx,input)?,"size_bytes":size_bytes,"align_bytes":align_bytes,
-        "predicates":predicate_json,
-        "principal_predicate":predicates.principal().map(|p|Ok::<_, String>({ existential_predicate_json(context,tcx,p.map_bound(ty::ExistentialPredicate::Trait))? })).transpose()?,
-        "entries":entry_json}),
-    )
+    Ok(query_values::VtableMetadata { r#type:type_json(context,tcx,input)?, size_bytes, align_bytes,
+        predicates:predicate_json,
+        principal_predicate:predicates.principal().map(|p| existential_predicate_json(context,tcx,p.map_bound(ty::ExistentialPredicate::Trait))).transpose()?,
+        entries:entry_json })
 }
 
 fn compiler_vtable_queries_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<(Value, HashMap<(u64, Vec<u64>), u64>), String> {
+) -> Result<(Vec<query_values::VtableQuery>, HashMap<(u64, Vec<u64>), u64>), String> {
     let mut allocations = context
         .allocation_ids
         .iter()
@@ -6136,14 +6302,10 @@ fn compiler_vtable_queries_json<'tcx>(
                 output_type_id,
                 output_predicate_ids,
             );
-            let row = json!({"input_type":input_json,
-            "input_predicates":input_predicates,
-            "output_type":output_json,
-            "output_predicates":output_predicates,
-            "output_type_monomorphic_enough":!output.has_param(),
-            "output_predicates_monomorphic_enough":!erased.has_param(),
-            "vtable_allocation_id":vtable_allocation_id,
-            "vtable_metadata":vtable_metadata});
+            let row = query_values::VtableQuery { query_id:0, input_type:input_json,
+                input_predicates, output_type:output_json, output_predicates,
+                output_type_monomorphic_enough:!output.has_param(), output_predicates_monomorphic_enough:!erased.has_param(),
+                vtable_allocation_id, vtable_metadata };
             rows.push((ordering, (input_type_id, input_predicate_ids), row));
             pairs.extend(context.vtable_query_requests.iter().copied());
         }
@@ -6155,116 +6317,11 @@ fn compiler_vtable_queries_json<'tcx>(
         .enumerate()
         .map(|(query_id, (_, key, mut row))| {
             query_ids.insert(key, query_id as u64);
-            row["query_id"] = json!(query_id);
+            row.query_id = query_id as u64;
             row
         })
         .collect::<Vec<_>>();
-    Ok::<_, String>((Value::Array(records), query_ids))
-}
-
-fn patch_vtable_query_ids(
-    document: &mut Value,
-    query_ids: &HashMap<(u64, Vec<u64>), u64>,
-) -> Result<(), String> {
-    match document {
-        Value::Array(values) => {
-            for value in values {
-                patch_vtable_query_ids(value, query_ids)?;
-            }
-        }
-        Value::Object(fields) => {
-            if let Some(query) = fields
-                .get_mut("vtable_query")
-                .filter(|query| !query.is_null())
-            {
-                let key = query
-                    .get("_query_key")
-                    .and_then(|key| {
-                        let input = key.get("input_type_id")?.as_u64()?;
-                        let predicates = key
-                            .get("input_predicate_ids")?
-                            .as_array()?
-                            .iter()
-                            .map(Value::as_u64)
-                            .collect::<Option<Vec<_>>>()?;
-                        Some((input, predicates))
-                    })
-                    .ok_or("vtable query lacks its compiler query key")?;
-                let id = query_ids
-                    .get(&key)
-                    .ok_or("vtable query is absent from the finalized compiler catalog")?;
-                let object = query
-                    .as_object_mut()
-                    .ok_or("vtable query is not an object")?;
-                object.insert("query_id".into(), json!(id));
-                object.remove("_query_key");
-            }
-            for value in fields.values_mut() {
-                patch_vtable_query_ids(value, query_ids)?;
-            }
-        }
-        _ => (),
-    }
-    Ok(())
-}
-
-// Link each abstract virtual call identity only to exact compiler query rows
-// produced for that same virtual Instance. The catalog may contain many
-// unrelated concrete vtables; those rows are not dispatch evidence for this
-// call and must not be attached by type coincidence.
-fn patch_virtual_resolution_candidates(document: &mut Value) {
-    let mut candidates: HashMap<u64, Vec<u64>> = HashMap::new();
-    if let Some(rows) = document
-        .pointer("/compiler_runtime_queries/virtual")
-        .and_then(Value::as_array)
-    {
-        for row in rows {
-            let Some(instance_id) = row.get("original_instance_id").and_then(Value::as_u64) else {
-                continue;
-            };
-            let Some(query_id) = row
-                .pointer("/vtable_query/query_id")
-                .and_then(Value::as_u64)
-            else {
-                continue;
-            };
-            candidates.entry(instance_id).or_default().push(query_id);
-        }
-    }
-    for ids in candidates.values_mut() {
-        ids.sort_unstable();
-        ids.dedup();
-    }
-    fn patch(value: &mut Value, candidates: &HashMap<u64, Vec<u64>>) {
-        match value {
-            Value::Object(fields) => {
-                if let Some(resolution) = fields
-                    .get_mut("virtual_resolution")
-                    .filter(|value| !value.is_null())
-                {
-                    if let Some(instance_id) = resolution.get("instance_id").and_then(Value::as_u64)
-                    {
-                        if let Some(object) = resolution.as_object_mut() {
-                            object.insert(
-                                "candidate_query_ids".into(),
-                                json!(candidates.get(&instance_id).cloned().unwrap_or_default()),
-                            );
-                        }
-                    }
-                }
-                for child in fields.values_mut() {
-                    patch(child, candidates)
-                }
-            }
-            Value::Array(values) => {
-                for child in values {
-                    patch(child, candidates)
-                }
-            }
-            _ => (),
-        }
-    }
-    patch(document, &candidates);
+    Ok((records, query_ids))
 }
 
 fn intrinsic_fallback_is_spec(tcx: TyCtxt<'_>, def: rustc_hir::def_id::DefId) -> bool {
@@ -6278,29 +6335,54 @@ fn intrinsic_fallback_is_spec(tcx: TyCtxt<'_>, def: rustc_hir::def_id::DefId) ->
     .next()
     .is_some()
 }
-fn intrinsic_metadata_json(
-    tcx: TyCtxt<'_>,
-    def: rustc_hir::def_id::DefId,
-) -> Result<Value, String> {
-    if !matches!(
-        tcx.def_kind(def),
-        rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn
-    ) {
+#[derive(serde::Serialize)]
+struct IntrinsicMetadata { must_be_overridden: bool, fallback_is_spec: bool }
+fn intrinsic_metadata_json(tcx: TyCtxt<'_>, def: rustc_hir::def_id::DefId) -> Result<Option<IntrinsicMetadata>, String> {
+    if !matches!(tcx.def_kind(def), rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn) {
         return unavailable_compiler_fact("intrinsic query requires a function definition");
     }
-    Ok::<_, String>(compiler_fact(match tcx.intrinsic(def) {
-        Some(info) => json!({"must_be_overridden":info.must_be_overridden,
-            "fallback_is_spec":intrinsic_fallback_is_spec(tcx,def)}),
-        None => Value::Null,
-    }))
+    Ok(tcx.intrinsic(def).map(|info| IntrinsicMetadata { must_be_overridden: info.must_be_overridden, fallback_is_spec: intrinsic_fallback_is_spec(tcx,def) }))
 }
 
 // step.rs::eval_fn_call: normalized original signature for arity/ExternAbi,
 // original FnPtr binder plus exact ordered extra argument types for FnAbi.
+#[derive(serde::Serialize)]
+struct FunctionFacts {
+    types: Vec<FunctionTypeFact>,
+    pointer_abis: Vec<PointerAbi>,
+    helper_signatures: Vec<HelperSignature>,
+}
+#[derive(serde::Serialize)]
+struct FunctionTypeFact {
+    type_id: u64,
+    typing_env: &'static str,
+    function_kind: FunctionKind,
+    signature_query: pool_type::FunctionSignature,
+}
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum FunctionKind {
+    FunctionPointer,
+    FunctionDefinition { instance_id: u64 },
+}
+#[derive(serde::Serialize)]
+struct PointerAbi {
+    type_id: u64,
+    typing_env: &'static str,
+    extra_argument_types: Vec<u64>,
+    abi_query: u64,
+}
+#[derive(serde::Serialize)]
+struct HelperSignature {
+    typing_env: &'static str,
+    signature: pool_type::FunctionSignature,
+    splatted: bool,
+    abi_query: u64,
+}
 fn compiler_function_facts_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<FunctionFacts, String> {
     // Serializing a function signature recursively serializes its input and
     // output types. Those can themselves contain function items/pointers, so
     // walk the interned type set to a fixed point instead of snapshotting one
@@ -6312,7 +6394,7 @@ fn compiler_function_facts_json<'tcx>(
         }
     }
     let mut types = BTreeMap::<u64, ty::Ty<'tcx>>::new();
-    let mut records = BTreeMap::<u64, Value>::new();
+    let mut records = BTreeMap::<u64, FunctionTypeFact>::new();
     loop {
         let mut pending = context
             .type_ids
@@ -6357,13 +6439,24 @@ fn compiler_function_facts_json<'tcx>(
                 }
             };
             let kind = match *input.kind() {
-                ty::FnPtr(..) => json!({"kind":"function_pointer"}),
-                ty::FnDef(def, args) => {
-                    json!({"kind":"function_definition","instance_id":context.register_metadata_instance(ty::Instance {def:ty::InstanceKind::Item(def),args:args.skip_binder()})})
-                }
+                ty::FnPtr(..) => FunctionKind::FunctionPointer,
+                ty::FnDef(def, args) => FunctionKind::FunctionDefinition {
+                    instance_id: context.register_metadata_instance(ty::Instance {
+                        def: ty::InstanceKind::Item(def),
+                        args: args.skip_binder(),
+                    }),
+                },
                 _ => unreachable!(),
             };
-            records.insert(id, json!({"type_id":id,"typing_env":"fully_monomorphized","function_kind":kind,"signature_query":signature}));
+            records.insert(
+                id,
+                FunctionTypeFact {
+                    type_id: id,
+                    typing_env: "fully_monomorphized",
+                    function_kind: kind,
+                    signature_query: signature,
+                },
+            );
         }
     }
     let helper_inputs = types
@@ -6396,8 +6489,7 @@ fn compiler_function_facts_json<'tcx>(
             Ok(abi)=>compiler_fact(fn_abi_json(context,tcx,abi)?),
             Err(error)=>export_failure("main::compiler_function_facts_json", format!("{}; {}", "rustc fn_abi_of_fn_ptr failed", format!("{error:?}")))?,
         }};
-        Ok::<_, String>(json!({"type_id":context.type_id(input),"typing_env":"fully_monomorphized",
-            "extra_argument_types":extra.iter().map(|ty|Ok::<_, String>({ type_json(context,tcx,ty)? })).collect::<Result<Vec<_>, String>>()?,"abi_query":abi}))
+        Ok::<_, String>(PointerAbi { type_id:context.type_id(input), typing_env:"fully_monomorphized", extra_argument_types:extra.iter().map(|ty| type_json(context,tcx,ty)).collect::<Result<Vec<_>, String>>()?, abi_query:abi })
     } }).collect::<Result<Vec<_>, String>>()?;
     // helpers.rs::call_function constructs a Safe, nonvariadic, unsplatted
     // dummy-binder signature from actual argument/output types. Query exact
@@ -6465,7 +6557,12 @@ fn compiler_function_facts_json<'tcx>(
                             ),
                         )?,
                     };
-                    helper_signatures.push(json!({"typing_env":"fully_monomorphized","signature":fn_sig_json_inner(context,tcx,signature)?,"splatted":false,"abi_query":result}));
+                    helper_signatures.push(HelperSignature {
+                        typing_env: "fully_monomorphized",
+                        signature: fn_sig_json_inner(context, tcx, signature)?,
+                        splatted: false,
+                        abi_query: result,
+                    });
                 }
             }
         }
@@ -6480,9 +6577,11 @@ fn compiler_function_facts_json<'tcx>(
     }) {
         return compiler_function_facts_json(tcx, context);
     }
-    Ok::<_, String>(
-        json!({"types":records,"pointer_abis":abis,"helper_signatures":helper_signatures}),
-    )
+    Ok::<_, String>(FunctionFacts {
+        types: records,
+        pointer_abis: abis,
+        helper_signatures,
+    })
 }
 
 #[cfg(test)]
@@ -6550,5 +6649,36 @@ mod instance_demand_tests {
         assert_eq!(direct.register_instance(instance), id);
         assert!(direct.identity_membership_delta.contains(&(IdentityMembershipSet::MetadataOnly, instance)));
         assert!(direct.identity_membership_delta.contains(&(IdentityMembershipSet::SymbolOnly, instance)));
+    }
+}
+
+#[cfg(test)]
+mod snapshot_writer_tests {
+    use super::*;
+    struct Refuse;
+    impl serde::Serialize for Refuse {
+        fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("injected serialization failure"))
+        }
+    }
+    #[test]
+    fn failed_serialization_keeps_the_previous_snapshot() {
+        let directory = env::temp_dir().join(format!("lean-miri-writer-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("snapshot.json");
+        fs::write(&path, b"previous snapshot").unwrap();
+        assert!(
+            write_document(&path, &Refuse)
+                .unwrap_err()
+                .contains("injected serialization failure")
+        );
+        assert_eq!(fs::read(&path).unwrap(), b"previous snapshot");
+        #[derive(serde::Serialize)]
+        struct Finished {
+            query_id: u64,
+        }
+        write_document(&path, &Finished { query_id: 7 }).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"query_id\":7}");
+        fs::remove_dir_all(directory).unwrap();
     }
 }

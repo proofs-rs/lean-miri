@@ -64,52 +64,147 @@ pub(super) fn register_unwind_termination<'tcx>(
         ty::TypingEnv::fully_monomorphized(),
     )
 }
-pub(super) fn export<'tcx>(tcx:TyCtxt<'tcx>, context: &mut ExportContext<'tcx>)->Value {
-    let items=[
-        ("Panic",rustc_attr_ir::LangItem::Panic),
-        ("PanicNounwind",rustc_attr_ir::LangItem::PanicNounwind),
-        ("PanicCannotUnwind",rustc_attr_ir::LangItem::PanicCannotUnwind),
-        ("PanicInCleanup",rustc_attr_ir::LangItem::PanicInCleanup),
-        ("PanicBoundsCheck",rustc_attr_ir::LangItem::PanicBoundsCheck),
-        ("PanicMisalignedPointerDereference",rustc_attr_ir::LangItem::PanicMisalignedPointerDereference),
-        ("PanicAddOverflow",rustc_attr_ir::LangItem::PanicAddOverflow),
-        ("PanicSubOverflow",rustc_attr_ir::LangItem::PanicSubOverflow),
-        ("PanicMulOverflow",rustc_attr_ir::LangItem::PanicMulOverflow),
-        ("PanicDivOverflow",rustc_attr_ir::LangItem::PanicDivOverflow),
-        ("PanicRemOverflow",rustc_attr_ir::LangItem::PanicRemOverflow),
-        ("PanicNegOverflow",rustc_attr_ir::LangItem::PanicNegOverflow),
-        ("PanicShrOverflow",rustc_attr_ir::LangItem::PanicShrOverflow),
-        ("PanicShlOverflow",rustc_attr_ir::LangItem::PanicShlOverflow),
-        ("PanicDivZero",rustc_attr_ir::LangItem::PanicDivZero),
-        ("PanicRemZero",rustc_attr_ir::LangItem::PanicRemZero),
-        ("PanicNullPointerDereference",rustc_attr_ir::LangItem::PanicNullPointerDereference),
-        ("PanicNullReferenceConstructed",rustc_attr_ir::LangItem::PanicNullReferenceConstructed),
-        ("PanicInvalidEnumConstruction",rustc_attr_ir::LangItem::PanicInvalidEnumConstruction),
-        ("PanicCoroutineResumed",rustc_attr_ir::LangItem::PanicCoroutineResumed),
-        ("PanicAsyncFnResumed",rustc_attr_ir::LangItem::PanicAsyncFnResumed),
-        ("PanicAsyncGenFnResumed",rustc_attr_ir::LangItem::PanicAsyncGenFnResumed),
-        ("PanicGenFnNone",rustc_attr_ir::LangItem::PanicGenFnNone),
-        ("PanicCoroutineResumedPanic",rustc_attr_ir::LangItem::PanicCoroutineResumedPanic),
-        ("PanicAsyncFnResumedPanic",rustc_attr_ir::LangItem::PanicAsyncFnResumedPanic),
-        ("PanicAsyncGenFnResumedPanic",rustc_attr_ir::LangItem::PanicAsyncGenFnResumedPanic),
-        ("PanicGenFnNonePanic",rustc_attr_ir::LangItem::PanicGenFnNonePanic),
-        ("PanicCoroutineResumedDrop",rustc_attr_ir::LangItem::PanicCoroutineResumedDrop),
-        ("PanicAsyncFnResumedDrop",rustc_attr_ir::LangItem::PanicAsyncFnResumedDrop),
-        ("PanicAsyncGenFnResumedDrop",rustc_attr_ir::LangItem::PanicAsyncGenFnResumedDrop),
-        ("PanicGenFnNoneDrop",rustc_attr_ir::LangItem::PanicGenFnNoneDrop),
-];
-    Value::Array(items.into_iter().map(|(name,item)|{
-        let definition=tcx.lang_items().get(item);
-        if let Some(def) = definition {
-            if !ty::GenericArgs::identity_for_item(tcx, def).has_non_region_param() {
-                context.register_metadata_instance(ty::Instance::mono(tcx, def));
+#[derive(serde::Serialize)]
+pub(super) struct Query {
+    lang_item: &'static str,
+    definition: Option<u64>,
+    generic_parameters: Option<Vec<&'static str>>,
+}
+pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>) -> Vec<Query> {
+    let items = [
+        ("Panic", rustc_attr_ir::LangItem::Panic),
+        ("PanicNounwind", rustc_attr_ir::LangItem::PanicNounwind),
+        (
+            "PanicCannotUnwind",
+            rustc_attr_ir::LangItem::PanicCannotUnwind,
+        ),
+        ("PanicInCleanup", rustc_attr_ir::LangItem::PanicInCleanup),
+        (
+            "PanicBoundsCheck",
+            rustc_attr_ir::LangItem::PanicBoundsCheck,
+        ),
+        (
+            "PanicMisalignedPointerDereference",
+            rustc_attr_ir::LangItem::PanicMisalignedPointerDereference,
+        ),
+        (
+            "PanicAddOverflow",
+            rustc_attr_ir::LangItem::PanicAddOverflow,
+        ),
+        (
+            "PanicSubOverflow",
+            rustc_attr_ir::LangItem::PanicSubOverflow,
+        ),
+        (
+            "PanicMulOverflow",
+            rustc_attr_ir::LangItem::PanicMulOverflow,
+        ),
+        (
+            "PanicDivOverflow",
+            rustc_attr_ir::LangItem::PanicDivOverflow,
+        ),
+        (
+            "PanicRemOverflow",
+            rustc_attr_ir::LangItem::PanicRemOverflow,
+        ),
+        (
+            "PanicNegOverflow",
+            rustc_attr_ir::LangItem::PanicNegOverflow,
+        ),
+        (
+            "PanicShrOverflow",
+            rustc_attr_ir::LangItem::PanicShrOverflow,
+        ),
+        (
+            "PanicShlOverflow",
+            rustc_attr_ir::LangItem::PanicShlOverflow,
+        ),
+        ("PanicDivZero", rustc_attr_ir::LangItem::PanicDivZero),
+        ("PanicRemZero", rustc_attr_ir::LangItem::PanicRemZero),
+        (
+            "PanicNullPointerDereference",
+            rustc_attr_ir::LangItem::PanicNullPointerDereference,
+        ),
+        (
+            "PanicNullReferenceConstructed",
+            rustc_attr_ir::LangItem::PanicNullReferenceConstructed,
+        ),
+        (
+            "PanicInvalidEnumConstruction",
+            rustc_attr_ir::LangItem::PanicInvalidEnumConstruction,
+        ),
+        (
+            "PanicCoroutineResumed",
+            rustc_attr_ir::LangItem::PanicCoroutineResumed,
+        ),
+        (
+            "PanicAsyncFnResumed",
+            rustc_attr_ir::LangItem::PanicAsyncFnResumed,
+        ),
+        (
+            "PanicAsyncGenFnResumed",
+            rustc_attr_ir::LangItem::PanicAsyncGenFnResumed,
+        ),
+        ("PanicGenFnNone", rustc_attr_ir::LangItem::PanicGenFnNone),
+        (
+            "PanicCoroutineResumedPanic",
+            rustc_attr_ir::LangItem::PanicCoroutineResumedPanic,
+        ),
+        (
+            "PanicAsyncFnResumedPanic",
+            rustc_attr_ir::LangItem::PanicAsyncFnResumedPanic,
+        ),
+        (
+            "PanicAsyncGenFnResumedPanic",
+            rustc_attr_ir::LangItem::PanicAsyncGenFnResumedPanic,
+        ),
+        (
+            "PanicGenFnNonePanic",
+            rustc_attr_ir::LangItem::PanicGenFnNonePanic,
+        ),
+        (
+            "PanicCoroutineResumedDrop",
+            rustc_attr_ir::LangItem::PanicCoroutineResumedDrop,
+        ),
+        (
+            "PanicAsyncFnResumedDrop",
+            rustc_attr_ir::LangItem::PanicAsyncFnResumedDrop,
+        ),
+        (
+            "PanicAsyncGenFnResumedDrop",
+            rustc_attr_ir::LangItem::PanicAsyncGenFnResumedDrop,
+        ),
+        (
+            "PanicGenFnNoneDrop",
+            rustc_attr_ir::LangItem::PanicGenFnNoneDrop,
+        ),
+    ];
+    items
+        .into_iter()
+        .map(|(name, item)| {
+            let definition = tcx.lang_items().get(item);
+            if let Some(def) = definition {
+                if !ty::GenericArgs::identity_for_item(tcx, def).has_non_region_param() {
+                    context.register_metadata_instance(ty::Instance::mono(tcx, def));
+                }
             }
-        }
-        let parameters=definition.map(|def|ty::GenericArgs::identity_for_item(tcx,def).iter().map(|arg|match arg.kind(){
-            ty::GenericArgKind::Lifetime(_)=>"lifetime",ty::GenericArgKind::Type(_)=>"type_parameter",ty::GenericArgKind::Const(_)=>"const_parameter",
-        }).collect::<Vec<_>>());
-        json!({"lang_item":name,"definition":definition.map(|def| def_json(context, def)),"generic_parameters":parameters})
-    }).collect())
+            let parameters = definition.map(|def| {
+                ty::GenericArgs::identity_for_item(tcx, def)
+                    .iter()
+                    .map(|arg| match arg.kind() {
+                        ty::GenericArgKind::Lifetime(_) => "lifetime",
+                        ty::GenericArgKind::Type(_) => "type_parameter",
+                        ty::GenericArgKind::Const(_) => "const_parameter",
+                    })
+                    .collect::<Vec<_>>()
+            });
+            Query {
+                lang_item: name,
+                definition: definition.map(|def| def_json(context, def)),
+                generic_parameters: parameters,
+            }
+        })
+        .collect()
 }
 pub(super) fn register_assert<'tcx>(
     tcx: TyCtxt<'tcx>,
