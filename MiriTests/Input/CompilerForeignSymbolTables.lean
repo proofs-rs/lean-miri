@@ -66,7 +66,7 @@ private def prepare (raw : Json) (definitions : Array DefinitionId := #[]) :
     target := target
   }
   let context : CompilerFacts.Context := {
-    runtime := RuntimeMetadata.Indexed.ofMetadata runtime
+    runtime := runtime
     program := program
   }
   let facts : CompilerFactAdapters.Prepared := { context := context, patterns := #[], castTypes := #[], obligations := #[] }

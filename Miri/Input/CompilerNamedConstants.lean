@@ -20,10 +20,7 @@ structure Prepared where
   program : LoweredProgram
   runtime : RuntimeMetadata
   entries : Array Entry
-def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : Except String Prepared := do
-  unless RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality program.input.raw do
-    throw "named constant metadata document mismatch"
+def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except String Prepared := do
   let records ← match program.input.raw.getObjVal? "compiler_named_constants" with
     | .error _ => pure #[]
     | .ok value => value.getArr?

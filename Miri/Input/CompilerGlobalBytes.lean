@@ -41,10 +41,7 @@ private def candidate (global : GlobalAllocation) : Except String (Option (Array
 The exported graph must be the same complete identity universe that was probed.
 Compiler pool identity/serialization remains an explicit exporter trust boundary. -/
 def prepare (program : LoweredProgram) (runtime : RuntimeMetadata)
-    (memory : MemoryState P E K)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : Except String Prepared := do
-  unless RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality program.input.raw do
-    throw "global byte query metadata document mismatch"
+    (memory : MemoryState P E K) : Except String Prepared := do
   if memory.byteGlobalKeysReady || !memory.byteGlobalKeys.isEmpty then
     throw "global byte keys already initialized"
   let source ← program.input.raw.getObjVal? "compiler_global_byte_queries"
@@ -114,25 +111,22 @@ def prepare (program : LoweredProgram) (runtime : RuntimeMetadata)
     throw "global byte str type is not the compiler str primitive"
   pure ⟨strType,keys⟩
 
-def attachProfiled (profile : Lean.Options) (program : LoweredProgram) (runtime : RuntimeMetadata)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : MachineHooks.M K U Prepared := do
+def attachProfiled (profile : Lean.Options) (program : LoweredProgram) (runtime : RuntimeMetadata) : MachineHooks.M K U Prepared := do
   let state ← get
   let prepared ← match profileit "startup.alloc_bytes" profile fun _ =>
-      prepare program runtime state.machine.memory sourceEquality with
+      prepare program runtime state.machine.memory with
     | .ok value => pure value | .error error => throw (.unsupported error)
   modify fun state => {state with machine := {state.machine with memory :=
     {state.machine.memory with byteGlobalKeys := prepared.keys, byteGlobalKeysReady := true}}}
   pure prepared
 
-def attach (program : LoweredProgram) (runtime : RuntimeMetadata)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) :
+def attach (program : LoweredProgram) (runtime : RuntimeMetadata) :
     MachineHooks.M K U Prepared :=
-  attachProfiled {} program runtime sourceEquality
+  attachProfiled {} program runtime
 
-theorem attach_profile_identity {K U : Type} (program : LoweredProgram) (runtime : RuntimeMetadata)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw)) :
-    attach (K := K) (U := U) program runtime sourceEquality =
-      attachProfiled (K := K) (U := U) {} program runtime sourceEquality := rfl
+theorem attach_profile_identity {K U : Type} (program : LoweredProgram) (runtime : RuntimeMetadata) :
+    attach (K := K) (U := U) program runtime =
+      attachProfiled (K := K) (U := U) {} program runtime := rfl
 
 def strLayout (runtime : RuntimeMetadata) (prepared : Prepared) : MachineHooks.M K U LocalLayout :=
   match runtime.lookup prepared.strType with

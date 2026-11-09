@@ -4,8 +4,9 @@ import Miri.ABI.Layout
 
 /-! Internal compiler-metadata bridge, not the public import API. Successful
 conversion supplies records and queries; it does not establish execution
-readiness, machine-hook adequacy, or Rust UB freedom. Original source nodes
-remain available beside every canonical layout result. -/
+readiness, machine-hook adequacy, or Rust UB freedom. Compiler adapters and
+runtime metadata must come from the same export: pool IDs are compilation-local.
+Original source nodes remain available beside every canonical layout result. -/
 namespace Miri.Input
 open Miri.ABI
 
@@ -21,57 +22,6 @@ instance : ToString RuntimeMetadataError where
 
 namespace RuntimeMetadata
 
-/-- A private, checked certificate that one immutable JSON tree compares equal
-to itself. JSON's `BEq` is not assumed lawful: a malformed tree may fail this
-test, in which case comparisons must retain their ordinary recursive path. -/
-structure JsonReflexivity (left : Lean.Json) where
-  private mk ::
-  reflexive : Option (PLift ((left == left) = true))
-
-namespace JsonReflexivity
-
-def prepare {left : Lean.Json} : JsonReflexivity left :=
-  ⟨if h : left == left then some ⟨h⟩ else none⟩
-
-/-- Compare in the source-left orientation, preserving `left == candidate`. -/
-def matchesRight {left : Lean.Json} (certificate : JsonReflexivity left) (candidate : Lean.Json) : Bool :=
-  match certificate.reflexive with
-  | none => left == candidate
-  | some ⟨reflexive⟩ =>
-      withPtrEq left candidate (fun _ => left == candidate)
-        (by intro equal; cases equal; exact reflexive)
-
-/-- Compare in the candidate-left orientation, preserving `candidate == left`. -/
-def matchesLeft {left : Lean.Json} (certificate : JsonReflexivity left) (candidate : Lean.Json) : Bool :=
-  match certificate.reflexive with
-  | none => candidate == left
-  | some ⟨reflexive⟩ =>
-      withPtrEq candidate left (fun _ => candidate == left)
-        (by intro equal; cases equal; exact reflexive)
-
-/-- Reuse a supplied source-equality proof; otherwise compare the source value. -/
-def matchesRightOr {left : Lean.Json} (certificate : Option (JsonReflexivity left)) (candidate : Lean.Json) : Bool :=
-  match certificate with
-  | none => left == candidate
-  | some certificate => certificate.matchesRight candidate
-
-theorem matchesRight_eq {left : Lean.Json} (certificate : JsonReflexivity left) (candidate : Lean.Json) :
-    certificate.matchesRight candidate = (left == candidate) := by
-  cases h : certificate.reflexive <;>
-    simp [matchesRight, h, withPtrEq]
-
-theorem matchesLeft_eq {left : Lean.Json} (certificate : JsonReflexivity left) (candidate : Lean.Json) :
-    certificate.matchesLeft candidate = (candidate == left) := by
-  cases h : certificate.reflexive <;>
-    simp [matchesLeft, h, withPtrEq]
-
-theorem matchesRightOr_eq {left : Lean.Json} (certificate : Option (JsonReflexivity left)) (candidate : Lean.Json) :
-    matchesRightOr certificate candidate = (left == candidate) := by
-  cases certificate with
-  | none => rfl
-  | some certificate => exact certificate.matchesRight_eq candidate
-
-end JsonReflexivity
 abbrev Result := Except RuntimeMetadataError
 
 def require (value : Option A) (path : String) : Result A :=
@@ -299,28 +249,6 @@ structure RuntimeMetadata where
 
 namespace RuntimeMetadata
 
-/-- Source binding is a proof about the owned input, not an ID lookup cache. -/
-structure Indexed extends RuntimeMetadata where
-  rawReflexivity : JsonReflexivity source.raw
-
-def Indexed.ofMetadata (metadata : RuntimeMetadata)
-    (sourceEquality : Option (JsonReflexivity metadata.source.raw) := none) : Indexed :=
-  { toRuntimeMetadata := metadata
-    rawReflexivity := sourceEquality.getD (JsonReflexivity.prepare (left := metadata.source.raw)) }
-
-/-- Compare a candidate document using the exact original JSON equality. The
-checked self-equality certificate permits Lean's safe `withPtrEq` fast path
-when the indexed metadata object is reused by the source world. -/
-def Indexed.matchesSourceLeft (metadata : Indexed) (left : Lean.Json) : Bool :=
-  metadata.rawReflexivity.matchesLeft left
-
-theorem Indexed.matchesSourceLeft_eq (metadata : Indexed) (left : Lean.Json) :
-    metadata.matchesSourceLeft left = (left == metadata.source.raw) := by
-  simpa [Indexed.matchesSourceLeft] using metadata.rawReflexivity.matchesLeft_eq left
-
-instance : Coe Indexed RuntimeMetadata where
-  coe := Indexed.toRuntimeMetadata
-
 def ofDocument (document : ImportDocument) : Result RuntimeMetadata := do
   let target ← importTarget (← jsonField document.raw "runtime_target_data_layout")
   let mut seen : Std.HashSet TypeId := {}
@@ -342,12 +270,6 @@ def lookup (metadata : RuntimeMetadata) (id : TypeId) : Result (TyAndLayout Type
   let sourceLayout ← require metadata.source.layouts[sourceNode.layoutId]?
     s!"compiler layout ID {sourceNode.layoutId} out of bounds"
   return ⟨id,← layout metadata.target sourceLayout⟩
-
-def Indexed.node (metadata : Indexed) (id : TypeId) : Result TypeNode :=
-  metadata.toRuntimeMetadata.node id
-
-def Indexed.lookup (metadata : Indexed) (id : TypeId) : Result (TyAndLayout TypeId) :=
-  metadata.toRuntimeMetadata.lookup id
 
 /-- This is an explicit diagnostic inventory, not an execution-readiness test. -/
 def obligations (metadata : RuntimeMetadata) : Array (TypeId × RuntimeMetadataError) :=

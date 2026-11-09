@@ -335,8 +335,7 @@ private def runScLitmusPure (contents : String) (seed : Option UInt64)
   let compiler := prepared.compiler
   let image := prepared.image
   let memory := attempt.memory
-  let bytes ← must (Input.CompilerGlobalBytes.prepare compiler.program compiler.runtime memory
-    (some compiler.sourceEquality))
+  let bytes ← must (Input.CompilerGlobalBytes.prepare compiler.program compiler.runtime memory)
   let targetBits := compiler.runtime.target.base.pointerWidth.bits.toNat
   let arch ← must (Input.EvalArchitectureMachine.targetArch compiler.intrinsics)
   unless compiler.program.input.producer.targetTriple == "x86_64-unknown-linux-gnu" &&

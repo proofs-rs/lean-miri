@@ -13,7 +13,7 @@ namespace Miri.Input.CompilerFacts
 open Lean Miri.ABI Miri.Memory Miri.Interpreter
 abbrev Result := Except String
 
-private def computeUnitLayout (runtime : RuntimeMetadata.Indexed) :
+private def computeUnitLayout (runtime : RuntimeMetadata) :
     Result (TyAndLayout TypeId) := do
   let some source := runtime.source.types.find? (fun ty =>
     match ty.shape with | .tuple elements => elements.isEmpty | _ => false)
@@ -21,7 +21,7 @@ private def computeUnitLayout (runtime : RuntimeMetadata.Indexed) :
   runtime.lookup source.id |>.mapError toString
 
 structure Context where
-  runtime : RuntimeMetadata.Indexed
+  runtime : RuntimeMetadata
   program : LoweredProgram
   /-- Lowering evidence is bound to the exact owned source document. -/
   lowering : Option (LowerContext.Bound program.input) := none
@@ -33,23 +33,19 @@ def Context.loweringContext (context : Context) : LowerContext :=
 
 def Context.primitiveLayout (context : Context) (key : String) :
     Except String (TyAndLayout TypeId) :=
-  CompilerPrimitiveFacts.primitiveLayout context.runtime.toRuntimeMetadata key
+  CompilerPrimitiveFacts.primitiveLayout context.runtime key
 
 def Context.orderingLayout (context : Context) : Except String (TyAndLayout TypeId) :=
-  CompilerPrimitiveFacts.orderingLayout context.runtime.toRuntimeMetadata
+  CompilerPrimitiveFacts.orderingLayout context.runtime
 
 /-- Bind lowering evidence when the owning lowered program changes. -/
 def Context.withProgram (context : Context) (program : LoweredProgram) : Context :=
   { context with program, lowering := some (LowerContext.bindDocument program.input) }
 
-def ofProgram (runtime : RuntimeMetadata) (program : LoweredProgram)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : Result Context := do
-  unless RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality program.input.raw do
-    throw "compiler facts/runtime metadata are from different documents"
+def ofProgram (runtime : RuntimeMetadata) (program : LoweredProgram) : Result Context := do
   let program := CompilerGlobals.prepareProgram program
-  let indexed := RuntimeMetadata.Indexed.ofMetadata runtime sourceEquality
   return {
-    runtime := indexed
+    runtime
     program
     lowering := some (LowerContext.bindDocument program.input)
   }

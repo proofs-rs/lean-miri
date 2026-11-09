@@ -716,7 +716,7 @@ inductive AllocationData where
 structure AllocationNode where
   id : AllocationId
   /-- Exact rustc `AllocId.0.get()` witness supplied by the pinned exporter.
-  This is absent in legacy exports and is never inferred from `id`. -/
+  Optional without a captured allocator world; never inferred from `id`. -/
   sourceAllocId : Option UInt64 := none
   kind : AllocationKind
   memory : Option AllocationMemory

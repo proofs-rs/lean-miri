@@ -25,10 +25,7 @@ private def text (j : Json) (key : String) : Except String String := do
 private def knownType (ctx : LowerContext) (id : Nat) : Except String Nat := do
   unless ctx.containsTypeId id do throw "function query references missing compiler type"
   pure id
-def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : Except String Prepared := do
-  unless RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality program.input.raw do
-    throw "function query metadata document mismatch"
+def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except String Prepared := do
   let source ← program.input.raw.getObjVal? "compiler_function_facts"
   let ctx := LowerContext.ofDocument program.input
   let mut tables := program.compilerTables

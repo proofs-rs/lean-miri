@@ -42,10 +42,9 @@ theorem vtableAttachProfileIdentity (profile : Lean.Options)
   rfl
 
 theorem globalBytesAttachProfileIdentity (K U : Type) (profile : Lean.Options)
-    (program : LoweredProgram) (runtime : RuntimeMetadata)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw)) :
-    CompilerGlobalBytes.attachProfiled (K := K) (U := U) profile program runtime sourceEquality =
-      CompilerGlobalBytes.attach (K := K) (U := U) program runtime sourceEquality := by
+    (program : LoweredProgram) (runtime : RuntimeMetadata) :
+    CompilerGlobalBytes.attachProfiled (K := K) (U := U) profile program runtime =
+      CompilerGlobalBytes.attach (K := K) (U := U) program runtime := by
   rfl
 
 theorem typeIdAttachProfileIdentity (K : Type) (profile : Lean.Options)

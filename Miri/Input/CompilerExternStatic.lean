@@ -129,10 +129,7 @@ private def selectedWinner (ctx : LowerContext) (tables : CompilerTables)
       return (⟨some definitionId,kind,none,.error (.unsupported s!"compiler extern-static query: {reason}")⟩,tables)
   return (⟨some definitionId,kind,allocation,.ok ()⟩,tables)
 
-def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : Except String Prepared := do
-  unless RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality program.input.raw do
-    throw "extern-static metadata document mismatch"
+def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except String Prepared := do
   let ctx := LowerContext.ofDocument program.input
   let sourceResult := do
     let queries ← field program.input.raw "compiler_runtime_queries"

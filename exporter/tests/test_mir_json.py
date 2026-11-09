@@ -43,13 +43,9 @@ class MirJSONTests(unittest.TestCase):
                 with self.subTest(name=name, value=value), self.assertRaises(MirJSONError):
                     decode_mir_document(document(**{name: value}))
 
-    def test_rejects_legacy_transport(self):
+    def test_requires_current_schema_version(self):
         with self.assertRaisesRegex(MirJSONError, "schema_version must be 4"):
             decode_mir_document(document(schema_version=3))
-        with self.assertRaisesRegex(MirJSONError, "shared_payloads"):
-            decode_mir_document(document(shared_payloads={"nodes": []}))
-        with self.assertRaisesRegex(MirJSONError, "generic shared reference"):
-            decode_mir_document(document(types=[{"unused": {"$lean_miri_shared_ref": 0}}]))
 
     def test_loads_gzip_archives(self):
         encoded = document(payload={"type": 0}, types=[{}])

@@ -43,8 +43,6 @@ def seedImported (p : CompilerProviders.Prepared) (image : AllocationImage.Impor
     Except String IntrinsicSymbolsMachine.Registry := do
   let input := p.program.input
   if let some world := input.compilerAllocIdWorld then
-    unless RuntimeMetadata.JsonReflexivity.matchesRightOr (some p.sourceEquality) input.raw do
-      throw "prepared TypeId catalog runtime metadata differs from its owning program"
     unless memory.sourceAllocIdWorldActive do
       throw "prepared TypeId catalog requires the active source AllocId world"
     unless image.source == input.allocations do

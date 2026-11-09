@@ -23,22 +23,11 @@ def decode_mir_document(document: Any) -> dict[str, Any]:
         raise MirJSONError("document is not a lean-miri-rustc-mir export")
     if type(document.get("schema_version")) is not int or document["schema_version"] != 4:
         raise MirJSONError("MIR root schema_version must be 4")
-    if "shared_payloads" in document:
-        raise MirJSONError("shared_payloads is not part of the MIR schema")
     for name in sorted(POOL_NAMES):
         if not isinstance(document.get(name), list):
             raise MirJSONError(f"{name} must be a pool array")
         if any(not isinstance(row, dict) for row in document[name]):
             raise MirJSONError(f"{name} definitions must be objects")
-    pending = [document]
-    while pending:
-        value = pending.pop()
-        if isinstance(value, dict):
-            if "$lean_miri_shared_ref" in value:
-                raise MirJSONError("generic shared reference is not part of the MIR schema")
-            pending.extend(value.values())
-        elif isinstance(value, list):
-            pending.extend(value)
     return document
 
 

@@ -87,8 +87,6 @@ def compilerDispatcher
     (simdBase : IntrinsicSimdHooks Provenance (EvalCoreMachine.State Os R P H D O Aff B Host) C (RuntimePlace Provenance))
     (unsupportedForeignItem : String → String → StepError) :
     Except String (IntrinsicArchitecture.DispatchHooks Provenance (EvalCoreMachine.State Os R P H D O Aff B Host) C (RuntimePlace Provenance)) := do
-  unless context.runtime.source.raw == prepared.program.input.raw do
-    throw "architecture runtime/compiler facts are from different documents"
   let boolLayout ← context.primitiveLayout "bool"
   let u8Layout ← context.primitiveLayout "u8"
   match context.primitiveLayout "u128", targetArch prepared,

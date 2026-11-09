@@ -62,6 +62,5 @@ def main : IO Unit := do
     reject (← must (set source "types" (.arr (types.set! 0 bad)))) "invalid layout reference"
   reject (← must (set source "fn_abis" (.arr #[Json.mkObj []]))) "unused malformed ABI definition"
   reject (← must (set source "spans" (.arr #[Json.mkObj []]))) "unused malformed span definition"
-  reject (← must (set source "shared_payloads" (Json.mkObj []))) "obsolete generic graph"
   reject (← must (set source "schema_version" (toJson (3 : Nat)))) "obsolete root schema"
   IO.println "typed pools preserve ID spaces and allocation identity; all definitions and references are checked"

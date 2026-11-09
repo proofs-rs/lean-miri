@@ -23,7 +23,6 @@ def main : IO Unit := do
   let full ← must (decodeJson fixture.compress)
   unless full.document.types.size == 3 && full.document.layouts.size == 3 do
     throw (IO.userError "typed table definitions were discarded")
-  reject (← must (set fixture "shared_payloads" (Json.mkObj []))) "obsolete generic graph transport"
   let types ← must ((fixture.getObjVal? "types").bind Json.getArr?)
   let badType ← must (set types[0]! "layout" (toJson (99999 : Nat)))
   reject (← must (set fixture "types" (.arr (types.set! 0 badType)))) "out of bounds layout"

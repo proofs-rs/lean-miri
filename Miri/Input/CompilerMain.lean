@@ -43,10 +43,7 @@ private def typeId (context : LowerContext) (j : Json) : Except String MIR.TyId 
   unless context.containsTypeId id do throw "main compiler query references missing type"
   pure id
 
-def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : Except String Prepared := do
-  unless RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality program.input.raw do
-    throw "main query metadata document mismatch"
+def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except String Prepared := do
   let source ← program.input.raw.getObjVal? "compiler_main_queries"
   unless (← (← source.getObjVal? "typing_env").getStr?) == "fully_monomorphized" do throw "main query environment mismatch"
   let ctx := LowerContext.ofDocument program.input

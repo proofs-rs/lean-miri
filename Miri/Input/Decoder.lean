@@ -17,7 +17,6 @@ private partial def validateReferences (j : Json) (path : String)
     for (value, index) in values.toList.zipIdx do
       validateReferences value s!"{path}[{index}]" typeCount allocationCount instanceCount layoutCount abiCount spanCount definitionCount constantCount bodyCount predicateCount
   | .obj fields =>
-    if hasField j "$lean_miri_shared_ref" then throw s!"{path}: generic shared references are not part of this schema"
     for (key, value) in fields.toList do
       let childPath := joinPath path key
       if let some reference := referenceField j key value then
@@ -872,7 +871,6 @@ private def parseDocument (input : Json) (profile : Options := {}) : Except Stri
     throw s!"$.schema: expected `{expectedSchema}`"
   if (← fieldNat j "schema_version" "$") != expectedSchemaVersion then
     throw s!"$.schema_version: unsupported schema version"
-  if hasField j "shared_payloads" then throw "$.shared_payloads: generic payload graphs are not part of this schema"
   if let some path := profileit "decoder.dynamic_vtable_scan" profile fun _ =>
       malformedDynamicVtableUpcast? traversal then
     throw s!"{path}: supported dynamic vtable upcast lacks matching compiler cast evidence"
@@ -947,9 +945,6 @@ private def parseDocument (input : Json) (profile : Options := {}) : Except Stri
   let selectedScope ← match optionalJson j "selected_scope" with
     | none => pure none
     | some value =>
-      for legacyField in ["unresolved_obligations", "retained_catalog_obligations"] do
-        if hasField value legacyField then
-          throw s!"$.selected_scope.{legacyField}: obsolete failed-input field"
       pure (some (← parseSelectedScope value "$.selected_scope"))
   let compilerAbiLayoutSchema ← fieldString j "compiler_abi_layout_schema" "$"
   unless compilerAbiLayoutSchema == expectedCompilerAbiLayoutSchema do

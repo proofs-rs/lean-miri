@@ -30,7 +30,6 @@ def prepareProfiled (profile : Lean.Options) (calls : CompilerCallPipeline.Prepa
   let runtime := calls.calls.runtime
   let instances ← profileit "preparation.lifecycle.instance_abi" profile fun _ =>
     CompilerInstanceAbi.prepare runtime calls.calls.program
-      (some calls.sourceEquality)
   let lifecycle := profileit "preparation.lifecycle.compiler_lifecycle" profile fun _ =>
     CompilerLifecycle.prepare instances.program
   let backtrace ← profileit "preparation.lifecycle.backtrace_source" profile fun _ =>

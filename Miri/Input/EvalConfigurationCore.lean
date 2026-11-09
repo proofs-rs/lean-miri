@@ -464,7 +464,7 @@ def makeWithForeignContext {Assembly : Type}
       constant := fun _ _ _ => throw (.unsupported "constant operand requires an exact structural source site")
       constantAt := fun _ path constant known => do
         let site ← CompilerOperandSites.current path
-        CompilerConstantMachine.evalAtBound p.constantBinding site functions pointers.arithmetic
+        CompilerConstantMachine.evalAt p.constants p.runtime site functions pointers.arithmetic
           externStatic MemoryErrors.constant constant known
           (if options.place.debugAssertions then some (fun computed expected => physical (compatibility computed expected)) else none) }
     let callBackend : CallDispatchMachine.Backend (State Os R P H D O Aff B Host) := {

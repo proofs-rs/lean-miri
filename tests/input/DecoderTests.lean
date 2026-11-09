@@ -529,8 +529,7 @@ def main (args : List String) : IO UInt32 := do
   let minimalScope := object [
     ("kind", string "rooted_structural_closure"),
     ("semantics", string "structural_export_closure_only"),
-    ("roots", toJson #[object [("def_path", minimalRootPath), ("def_id", minimalRootId)]]),
-    ("unresolved_obligations", toJson (#[] : Array Json))]
+    ("roots", toJson #[object [("def_path", minimalRootPath), ("def_id", minimalRootId)]])]
   let minimalDocument := object [
     ("schema", string expectedSchema), ("schema_version", number expectedSchemaVersion),
     ("definitions", toJson #[object [("crate", number 0), ("index", number 1)]]),

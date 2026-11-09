@@ -45,15 +45,14 @@ def main (args : List String) : IO Unit := do
   -- source2, and its query must preserve that result/error boundary.
   let malformedNestedRuntime : RuntimeMetadata := { firstProvider.runtime with
     source := { firstProvider.runtime.source with raw := .null } }
-  let malformedNestedIndexed := RuntimeMetadata.Indexed.ofMetadata malformedNestedRuntime
   let originalNested := secondProvider.lifecycle.calls.symbols.facts.context
   let malformedNested : CompilerFacts.Context := { originalNested with
-    runtime := malformedNestedIndexed
+    runtime := malformedNestedRuntime
     program := firstProgram
     lowering := none
   }
   let nestedCallerError :=
-    CompilerPrimitiveFacts.callerLocationType malformedNested.runtime.toRuntimeMetadata
+    CompilerPrimitiveFacts.callerLocationType malformedNested.runtime
   match nestedCallerError with
   | .error _ => pure ()
   | .ok _ => throw (IO.userError "malformed wrong-source nested context unexpectedly resolved")

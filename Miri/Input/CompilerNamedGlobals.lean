@@ -58,10 +58,7 @@ private def decodeValue (ctx : LowerContext) (tables : CompilerTables) (record :
 
 /-- Retain every exact path query, including unavailable rows. Failed queries
 are raised only when the corresponding source path is demanded. -/
-def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : Except String Prepared := do
-  unless RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality program.input.raw do
-    throw "named global metadata document mismatch"
+def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except String Prepared := do
   let records ← match program.input.raw.getObjVal? "compiler_named_statics" with
     | .error _ => pure #[]
     | .ok value => value.getArr?

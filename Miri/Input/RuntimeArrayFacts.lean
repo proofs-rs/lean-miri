@@ -31,7 +31,6 @@ def boolean (context : CompilerFacts.Context) (world : RuntimeArrayTypes.World)
     (ty : MIR.TyId) (key : String) : Except String Bool := do
   unless key == "is_freeze" || key == "is_unpin" || key == "is_unsafe_unpin" do
     throw "unsupported structural array trait query"
-  unless context.runtime.matchesSourceLeft world.metadata.source.raw do throw "array/compiler trait document mismatch"
   if !world.entries.any (·.value.ty == ty) then return ← CompilerFacts.boolean context ty key
   if ← trivial world ty (world.entries.size + world.metadata.source.types.size + 1) then return true
   -- Compiler aliases retain actual queried traits. A newly constructed array
@@ -48,8 +47,6 @@ def opsemInhabited (context : CompilerFacts.Context) (world : RuntimeArrayTypes.
     (ty : MIR.TyId) : Nat → Except String Bool
   | 0 => throw "runtime array inhabitedness query budget exhausted"
   | fuel+1 => do
-    unless context.runtime.matchesSourceLeft world.metadata.source.raw do
-      throw "array/compiler inhabitedness document mismatch"
     if let some entry := world.entries.find? (·.value.ty == ty) then
       if entry.key.count == 0 then return true
       let child := match entry.key.element with

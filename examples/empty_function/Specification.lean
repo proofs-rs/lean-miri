@@ -57,7 +57,6 @@ structure Metadata (s : Static) where
     s.abi.ret.layout.ty "opsem_inhabited" = .ok true
   unitNode : ∃ node, s.prepared.compiler.lifecycle.calls.symbols.facts.context.runtime.node
     s.abi.ret.layout.ty = .ok node
-  sourceReflexive : (s.prepared.compiler.runtime.source.raw == s.prepared.compiler.runtime.source.raw) = true
   unitFreeze : CompilerFacts.boolean s.prepared.compiler.lifecycle.calls.symbols.facts.context
     s.abi.ret.layout.ty "is_freeze" = .ok true
   unitStorageSized : CompilerStorage.veryTriviallySized
@@ -96,7 +95,6 @@ structure Metadata (s : Static) where
   literalShape : literal.value = .Val .ZeroSized s.abi.ret.layout.ty
   literalStatement : ((s.loaded.body.basicBlocks[0]?).bind (fun block => block.statements[0]?)).map
     (fun statement => statement.kind) = some (.Assign ⟨0,#[]⟩ (.Use (.Constant literal) .Yes))
-  constantBinding : s.prepared.compiler.constantBinding.compatible = true
   literalNormalization : normalizationFromEvidence
     ((s.prepared.compiler.constants.evidence.filter (fun entry => entry.site ==
       (⟨s.loaded.identity.index,⟨0,0⟩,#[.field "kind",.field "rvalue",.field "operand",.field "constant"]⟩ :

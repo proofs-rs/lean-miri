@@ -45,10 +45,7 @@ private def matchingIndex (entries : Array Entry) (indices : Array Nat)
     (callee : CallInstance) (extra : Array MIR.TyId) : Option Nat :=
   indices.find? fun index => keyMatches entries index callee extra
 
-def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : Except String Prepared := do
-  unless RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality program.input.raw do
-    throw "instance ABI metadata document mismatch"
+def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except String Prepared := do
   let records ← (← program.input.raw.getObjVal? "compiler_instance_abis").getArr?
   let ctx := LowerContext.ofDocument program.input
   let mut tables := program.compilerTables

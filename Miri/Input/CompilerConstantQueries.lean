@@ -33,20 +33,6 @@ structure Prepared where
   evidence : Array Evidence
   obligations : Array Obligation
 
-/-! A source compatibility check is deep over JSON. Production preparation
-does it once, then carries this binding with the exact values it checked.
-The private constructor and dependent indices prevent a caller from supplying
-an arbitrary cached Boolean or reusing it for different metadata. -/
-structure Binding (prepared : Prepared) (runtime : RuntimeMetadata) where
-  private mk ::
-  compatible : Bool
-  correct : compatible = (runtime.source.raw == prepared.program.input.raw)
-
-def bind (prepared : Prepared) (runtime : RuntimeMetadata)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : Binding prepared runtime :=
-  let compatible := RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality prepared.program.input.raw
-  ⟨compatible, RuntimeMetadata.JsonReflexivity.matchesRightOr_eq sourceEquality prepared.program.input.raw⟩
-
 private partial def constants (value : TypedValue) (path : Array PathElement := #[]) :
     Array (Array PathElement × TypedValue) :=
   if ((value.field "constant").bind TypedValue.tag).toOption == some "evaluated_const" then #[(path,value)]

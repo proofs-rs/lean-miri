@@ -20,7 +20,6 @@ def runtimeChecks : Array (String × Bool) := #[
   ("MiriTests/Input/TypeConstantPool.lean", true),
   ("MiriTests/Input/GenericArgumentIds.lean", true),
   ("MiriTests/Input/JsonNumberRepresentation.lean", true),
-  ("MiriTests/Input/JsonReflexivityCache.lean", true),
   ("MiriTests/Input/MiriWriteAllHost.lean", true),
   ("MiriTests/Input/WindowsHostIoDemand.lean", true),
   ("MiriTests/LocalAccess/Basic.lean", true),

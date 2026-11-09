@@ -29,17 +29,11 @@ structure Prepared where
   /-- Lowering evidence bound to this provider's exact input. -/
   lowering : Option (LowerContext.Bound program.input) := none
   runtime : RuntimeMetadata
-  /-- Reflexive-comparison certificate created once by the shared call pipeline
-  and retained for every provider check against this source document. -/
-  sourceEquality : RuntimeMetadata.JsonReflexivity runtime.source.raw
   lifecycle : CompilerLifecyclePipeline.Prepared
   functions : CompilerFunctionFacts.Prepared
   main : CompilerMain.Prepared
   intrinsics : CompilerIntrinsicFacts.Prepared
   constants : CompilerConstantQueries.Prepared
-  /-- Exact compatibility computed once from the values above. Keeping the
-  indices dependent makes later record updates unable to reuse a stale result. -/
-  constantBinding : CompilerConstantQueries.Binding constants runtime
   namedConstants : CompilerNamedConstants.Prepared
   namedGlobals : CompilerNamedGlobals.Prepared
   externStatics : CompilerExternStatic.Prepared
@@ -108,12 +102,8 @@ FactAdapters preparation, then consumed by vtable adapters without re-interning.
 -/
 def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except String Prepared := do
   let input ← profileit "preparation.providers.panic_facts" profile fun _ => CompilerPanicFacts.prepareProgram input
-  -- Legacy documents retain explicit missing root-span evidence at the query
-  -- accessor; a present compiler span is always interned before all providers.
-  let seeded ← profileit "preparation.providers.context_span" profile fun _ => do
-    if ((input.input.raw.getObjVal? "compiler_session_queries").bind (·.getObjVal? "root_span")).isOk then
-      CompilerContextSpan.prepare input
-    else pure input
+  let seeded ← profileit "preparation.providers.context_span" profile fun _ =>
+    CompilerContextSpan.prepare input
   let calls ← profileit "preparation.providers.call_pipeline" profile fun _ =>
     CompilerCallPipeline.prepareProfiled profile seeded
   profileit "preparation.providers.extension_after_calls" profile fun _ =>
@@ -124,13 +114,12 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
   profileit "preparation.providers.extension_after_lifecycle" profile fun _ =>
     extension calls.calls.program.compilerTables program.compilerTables
   let runtime := lifecycle.calls.calls.runtime
-  let sourceEquality := lifecycle.calls.sourceEquality
   let functions ← profileit "preparation.providers.function_facts" profile fun _ =>
-    CompilerFunctionFacts.prepare runtime program (some sourceEquality)
+    CompilerFunctionFacts.prepare runtime program
   profileit "preparation.providers.extension_after_functions" profile fun _ =>
     extension program.compilerTables functions.program.compilerTables
   let main ← profileit "preparation.providers.main" profile fun _ =>
-    CompilerMain.prepare runtime functions.program (some sourceEquality)
+    CompilerMain.prepare runtime functions.program
   profileit "preparation.providers.extension_after_main" profile fun _ =>
     extension functions.program.compilerTables main.program.compilerTables
   let intrinsics ← profileit "preparation.providers.intrinsics" profile fun _ => CompilerIntrinsicFacts.prepare main.program
@@ -141,15 +130,15 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
   profileit "preparation.providers.extension_after_constants" profile fun _ =>
     extension intrinsics.program.compilerTables constants.program.compilerTables
   let namedConstants ← profileit "preparation.providers.named_constants" profile fun _ =>
-    CompilerNamedConstants.prepare runtime constants.program (some sourceEquality)
+    CompilerNamedConstants.prepare runtime constants.program
   profileit "preparation.providers.extension_after_named_constants" profile fun _ =>
     extension constants.program.compilerTables namedConstants.program.compilerTables
   let namedGlobals ← profileit "preparation.providers.named_globals" profile fun _ =>
-    CompilerNamedGlobals.prepare runtime namedConstants.program (some sourceEquality)
+    CompilerNamedGlobals.prepare runtime namedConstants.program
   profileit "preparation.providers.extension_after_named_globals" profile fun _ =>
     extension namedConstants.program.compilerTables namedGlobals.program.compilerTables
   let externStatics ← profileit "preparation.providers.extern_statics" profile fun _ =>
-    CompilerExternStatic.prepare runtime namedGlobals.program (some sourceEquality)
+    CompilerExternStatic.prepare runtime namedGlobals.program
   profileit "preparation.providers.extension_after_extern_statics" profile fun _ =>
     extension namedGlobals.program.compilerTables externStatics.program.compilerTables
   let program := externStatics.program
@@ -167,19 +156,15 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
     RuntimeArrayTypes.create runtime |>.mapError reprStr
   let tls := profileit "preparation.providers.thread_local" profile fun _ => CompilerThreadLocal.ofProgram program
   let constants := profileit "preparation.providers.rebind_constants" profile fun _ => {constants with program}
-  let constantBinding := profileit "preparation.providers.constant_binding" profile fun _ =>
-    CompilerConstantQueries.bind constants runtime (some sourceEquality)
   return {
     program
     lowering := some (LowerContext.bindDocument program.input)
     runtime
-    sourceEquality
     lifecycle
     functions := {functions with program}
     main := {main with program}
     intrinsics := {intrinsics with program}
     constants
-    constantBinding
     namedConstants
     namedGlobals
     externStatics

@@ -82,7 +82,6 @@ structure Indirect where
 structure Prepared where
   program : LoweredProgram
   runtime : RuntimeMetadata
-  sourceEquality : RuntimeMetadata.JsonReflexivity runtime.source.raw
   entries : Array Entry
   bodies : Array InstanceBody
   obligations : Array Obligation
@@ -102,8 +101,7 @@ private def decodeResolution (ctx : LowerContext) (tables : CompilerTables)
 
 /-- Appended identities are rebound through all bodies; existing IDs never move.
 Query failures are retained per call site, without deleting the imported MIR. -/
-private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgram) (runtime : RuntimeMetadata)
-    (sourceEquality : RuntimeMetadata.JsonReflexivity runtime.source.raw) :
+private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgram) (runtime : RuntimeMetadata) :
     Result Prepared := do
   let ctx := LowerContext.ofDocument program.input
   let tables := program.compilerTables
@@ -144,7 +142,6 @@ private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgr
   return {
     program := program.withCompilerTables tables
     runtime
-    sourceEquality
     entries
     bodies
     obligations
@@ -154,27 +151,19 @@ private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgr
 runtime metadata for this program's unchanged ImportDocument. Compiler tables
 may grow during preparation, but `CompilerGlobals.prepareProgram` changes only
 the lowered bundle and leaves that document untouched. -/
-def prepareWithRuntimeProfiled (profile : Lean.Options) (runtime : RuntimeMetadata) (program : LoweredProgram)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : Result Prepared := do
+def prepareWithRuntimeProfiled (profile : Lean.Options) (runtime : RuntimeMetadata) (program : LoweredProgram) : Result Prepared := do
   let program := profileit "prepare.compiler_globals" profile fun _ => CompilerGlobals.prepareProgram program
-  let sourceEquality := match sourceEquality with
-    | some certificate => certificate
-    | none => RuntimeMetadata.JsonReflexivity.prepare (left := runtime.source.raw)
-  unless sourceEquality.matchesRight program.input.raw do
-    throw "compiler call pipeline/runtime metadata are from different documents"
-  prepareUsingRuntime profile program runtime sourceEquality
+  prepareUsingRuntime profile program runtime
 
 /-- Prepare call-resolution tables using validated runtime metadata. -/
-def prepareWithRuntime (runtime : RuntimeMetadata) (program : LoweredProgram)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : Result Prepared :=
-  prepareWithRuntimeProfiled {} runtime program sourceEquality
+def prepareWithRuntime (runtime : RuntimeMetadata) (program : LoweredProgram) : Result Prepared :=
+  prepareWithRuntimeProfiled {} runtime program
 
 /-- Validate target metadata before preparing canonical call-site queries. -/
 def prepare (program : LoweredProgram) : Result Prepared := do
   let program := CompilerGlobals.prepareProgram program
   let runtime ← (RuntimeMetadata.ofDocument program.input).mapError toString
-  let sourceEquality := RuntimeMetadata.JsonReflexivity.prepare (left := runtime.source.raw)
-  prepareUsingRuntime {} program runtime sourceEquality
+  prepareUsingRuntime {} program runtime
 
 def atSite (prepared : Prepared) (site : Site) : Result Resolution := do
   let matching := prepared.entries.filter (·.site == site)
