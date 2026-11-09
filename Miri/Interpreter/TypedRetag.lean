@@ -17,6 +17,7 @@ structure Hooks (K User : Type) where
   isUnsafeUnpin : TyId → M K User Bool
   typeIsFreeze : TyId → M K User Bool
   implicitWrites : M K User Bool
+  instanceDefinition : CallInstance → M K User DefId
   rustcNoWritable : DefId → M K User Bool
   preciseInteriorMut : M K User Bool
   immPtrToMPlace : RvalueImmTy Provenance → M K User (MPlaceTy Provenance)
@@ -49,7 +50,7 @@ def newPermission (h : Hooks K User) (pointee : TyId) (kind : ReferenceKind)
   let mut noWritable := false
   if mode == .FnEntry then
     implicitWrites ← h.implicitWrites
-    let defId := (← currentFrame).functionInstance.defId
+    let defId ← h.instanceDefinition (← currentFrame).functionInstance
     if implicitWrites then noWritable ← h.rustcNoWritable defId
   return create ⟨unpin, unsafeUnpin, freeze⟩ kind mode ⟨implicitWrites, noWritable⟩
 

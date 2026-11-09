@@ -65,7 +65,7 @@ def calculate (target : RuntimeTargetDataLayout) (element : LayoutData)
     randomizationSeed := element.randomizationSeed + count }
 private def primitive (runtime : RuntimeMetadata) (refs : Json) (key : String)
     (kind : Miri.MIR.IntegerKind) : Except Error (TyAndLayout TypeId) := do
-  let id ← convert ((refs.getObjVal? key).bind fun value => (value.getObjVal? "type_id").bind Json.getNat?)
+  let id ← convert ((refs.getObjVal? key).bind fun value => value.getNat?)
   let source ← metadata (runtime.node id)
   unless source.shapeMetadata.unsignedKind == some (.known kind) do
     throw (.metadata s!"runtime primitive {key} is not the exact compiler unsigned type")
@@ -100,16 +100,12 @@ def create (runtime : RuntimeMetadata) : Except Error World := do
     nextId := next
     obligations := #[] }
   for node in runtime.source.types do
-    if node.shapeKind == .array then
-      let shape ← convert (node.payload.getObjVal? "shape")
-      let element ← convert ((shape.getObjVal? "element").bind fun value => (value.getObjVal? "type_id").bind Json.getNat?)
-      let evidence := do
-        let evidence ← shape.getObjVal? "constructor_identity"
-        unless (← (← evidence.getObjVal? "canonical_value_constructor").getBool?) do
+    if let .array element _ constructor := node.shape then
+      let evidence : Except String UInt64 := do
+        unless constructor.canonicalValueConstructor do
           throw "source array is not the canonical value-length constructor"
-        let count ← (← evidence.getObjVal? "count").getNat?
-        unless count < 2^64 do throw "compiler array count exceeds u64"
-        pure (UInt64.ofNat count)
+        unless constructor.count < 2^64 do throw "compiler array count exceeds u64"
+        pure (UInt64.ofNat constructor.count)
       match evidence with
       | .error reason => world := {world with obligations := world.obligations.push s!"type {node.id}: {reason}"}
       | .ok count =>

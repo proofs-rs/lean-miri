@@ -144,7 +144,7 @@ impl<'tcx> Trace<'tcx> {
                     .transpose()?;
                 records.push(json!({"route":origin.route,
                     "body":origin.body.as_ref().map(|body| json!({"role":body.role,
-                        "def_id":def_json(body.def_id),"promoted":body.promoted,"phase":body.phase})),
+                        "def_id":{"crate":body.def_id.krate.as_u32(),"index":body.def_id.index.as_u32()},"promoted":body.promoted,"phase":body.phase})),
                     "parent_query_id":parent_id,"source_alloc_id":origin.source_alloc_id}));
             }
             records.sort_by_key(Value::to_string);

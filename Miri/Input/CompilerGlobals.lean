@@ -20,19 +20,9 @@ def staticInfo (source : StaticAllocation) : Except String AllocationImage.Stati
 
 def queries : AllocationImage.Queries := ⟨staticInfo⟩
 
-/-- Append graph identities without changing any existing dense ID. Every body
-uses the final shared table, including statics with no selected MIR root. -/
-def prepareProgram (program : LoweredProgram) : LoweredProgram := Id.run do
-  let mut definitions := program.bundle.definitions
-  for node in program.input.allocations do
-    let id := match node.data with
-      | some (.static source) => some source.definitionId
-      | some (.function source) => some source.definitionId
-      | _ => none
-    if let some id := id then
-      unless definitions.contains id do definitions := definitions.push id
-  let bodies := program.bundle.bodies.map fun body => { body with definitions := definitions }
-  return { program with bundle := { program.bundle with bodies := bodies, definitions := definitions } }
+/-- Exporter definition IDs already address the complete immutable table seeded
+by lowering, including statics with no selected MIR root. -/
+def prepareProgram (program : LoweredProgram) : LoweredProgram := program
 
 def importGraph [DecidableEq K] (target : RuntimeTargetDataLayout)
     (program : LoweredProgram) (initial : MemoryState P E K) : AllocationImage.ImportResult P E K :=

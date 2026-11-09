@@ -7,5 +7,5 @@ lake env lean --run tests/input/StrictDecoderChecks2026.lean
 lake env lean --run tests/input/ValueFailFastChecks2026.lean
 lake env lean --run tests/input/CastQueryRecordChecks2026.lean
 python3 tests/input/build_id_fixtures.py
-lake env lean --run tests/input/DecoderIdChecks2026.lean scratch/decoder-id-inputs tests/input/fixtures/decoder-id-expected.json
-lake env lean --run tests/input/DecoderSharedIdChecks2026.lean scratch/decoder-id-inputs
+lake env lean --run tests/input/DecoderIdChecks2026.lean scratch/decoder-id-inputs
+lake env lean --run tests/input/TypedFunctionAbiTests.lean "${1:-examples/empty_function/input.json}"

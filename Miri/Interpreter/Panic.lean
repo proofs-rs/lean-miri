@@ -65,6 +65,7 @@ structure Hooks (K User C Other : Type) where
   toImmediatePointer : C → MPlaceTy Provenance → M K User (RvalueImmTy Provenance)
   langItem : C → LangItem → M K User (Option DefId)
   genericParameters : C → DefId → M K User (Array MainGenericParameter)
+  itemInstance : C → DefId → Array GenericArg → M K User CallInstance
   evalOperand : C → MIR.Operand → M K User (OpTy Provenance)
   evalOperandAt : C → OperandPath → MIR.Operand → M K User (OpTy Provenance) := fun c _ => evalOperand c
 
@@ -77,7 +78,7 @@ private def mono (h : Hooks K User C Other) (choice : C) (item : LangItem) : M K
     | .lifetime => args := args.push (.Lifetime .Erased)
     | .typeParameter | .constParameter =>
       throw (.invalidProgram "Instance::mono called on type/const generic panic item")
-  return ⟨.Item definition, args⟩
+  h.itemInstance choice definition args
 
 private def call (h : Hooks K User C Other) (choice : C) (item : LangItem)
     (args : Array (RvalueImmTy Provenance)) (unwind : UnwindAction) : M K User Unit := do

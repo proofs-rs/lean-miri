@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-from mir_json import load_mir_document
+from mir_json import load_mir_document, pool_entry
 
 
 def require(condition, message):
@@ -45,13 +45,13 @@ i32_id = i32_types[0]["type_id"]
 variadic_rows = [row for row in pointer_abis if row.get("type_id") == variadic_id]
 extra_rows = [
     row for row in variadic_rows
-    if row.get("extra_argument_types") == [{"type_id": i32_id}]
+    if row.get("extra_argument_types") == [i32_id]
 ]
 require(extra_rows, "variadic FnPtr has no ABI query row with one i32 extra")
 require(
     any(
-        row.get("abi_query", {}).get("c_variadic") is not None
-        and row["abi_query"].get("c_variadic") is True
+        pool_entry(document, "fn_abis", row["abi_query"]).get("c_variadic") is not None
+        and pool_entry(document, "fn_abis", row["abi_query"]).get("c_variadic") is True
         for row in extra_rows
     ),
     "variadic extra-i32 ABI query is not supported/c_variadic",
@@ -65,8 +65,8 @@ require(
 )
 require(
     any(
-        row.get("abi_query", {}).get("c_variadic") is not None
-        and row["abi_query"].get("c_variadic") is False
+        pool_entry(document, "fn_abis", row["abi_query"]).get("c_variadic") is not None
+        and pool_entry(document, "fn_abis", row["abi_query"]).get("c_variadic") is False
         for row in nonvariadic_rows
     ),
     "nonvariadic candidate has no supported empty-extra nonvariadic ABI row",

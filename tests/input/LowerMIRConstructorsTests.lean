@@ -40,11 +40,12 @@ private def arr (xs : List TypedValue) : TypedValue := .array xs.toArray
 private def tagged (kind : String) (fs : List (String × TypedValue) := []) : TypedValue := obj (("kind", s kind) :: fs)
 private def pl : TypedValue := obj [("local", .localRef 0), ("projection", arr [])]
 private def op : TypedValue := .operand .copy #[("place", pl)]
-private def defRef : TypedValue := obj [("crate", n 2), ("index", n 7)]
+private def defRef : TypedValue := n 0
 private def unwind : TypedValue := tagged "Continue"
-private def tc (ty : Nat) : TypedValue := tagged "value" [("type", .typeRef ty), ("value", tagged "leaf" [("size_bytes", n 4), ("bits_unsigned", s "3")])]
 
-private def constant (ty : Nat) (span : SourceSpanData) : TypedValue := obj [
+private def tc (_ : Nat) : TypedValue := n 0
+
+private def constant (ty : Nat) (span : Nat) : TypedValue := obj [
   ("type", .typeRef ty), ("user_type_annotation", nil), ("span", .sourceSpan span),
   ("constant", obj [("source", tagged "already_evaluated"), ("value", tagged "scalar" [("bits_unsigned", s "1")])])]
 
@@ -75,7 +76,7 @@ private def statements (ty : Nat) : Array (StatementVariant × Array (String × 
   (.constEvalCounter, #[]), (.nop, #[]),
   (.backwardIncompatibleDropHint, #[("place", pl), ("reason", tagged "edition_2024")])]
 
-private def asm (ty : Nat) (span : SourceSpanData) : Array (String × TypedValue) := #[
+private def asm (ty : Nat) (span : Nat) : Array (String × TypedValue) := #[
   ("asm_macro", s "asm"), ("template", arr [tagged "string" [("text", s "x")], tagged "placeholder" [("operand_index", n 0), ("modifier", s "e"), ("span", .sourceSpan span)]]),
   ("operands", arr [
     tagged "in" [("register", tagged "register_class" [("arch", s "X86_64"), ("name", s "reg")]), ("value", op)],
@@ -86,7 +87,7 @@ private def asm (ty : Nat) (span : SourceSpanData) : Array (String × TypedValue
   ("options", obj ((["pure", "nomem", "readonly", "preserves_flags", "noreturn", "nostack", "att_syntax", "raw", "may_unwind"]).map (fun key => (key, b false)))),
   ("line_spans", arr [.sourceSpan span]), ("targets", arr [.blockRef 0]), ("unwind", unwind)]
 
-private def terms (ty : Nat) (span : SourceSpanData) : Array (TerminatorVariant × Array (String × TypedValue)) := #[
+private def terms (ty : Nat) (span : Nat) : Array (TerminatorVariant × Array (String × TypedValue)) := #[
   (.goto, #[("target", .blockRef 0), ("loop_hints", arr [tagged "Hint", tagged "Full", tagged "Never", tagged "Count" [("count", n 7)]])]),
   (.switchInt, #[("discriminant", op), ("targets", arr [obj [("value", s "18446744073709551615"), ("target", .blockRef 0)]]), ("otherwise", .blockRef 0)]),
   (.unwindResume, #[]), (.unwindTerminate, #[("reason", tagged "in_cleanup")]), (.return, #[]), (.unreachable, #[]),
@@ -106,17 +107,19 @@ def main (args : List String) : IO Unit := do
   let info := first.terminator.sourceInfo
   let some decl := original.locals[0]? | throw (IO.userError "empty locals")
   let ty := decl.typeId
-  let ctx := LowerContext.ofTypes decoded.document.types
-  let input := { original.toBodyCore with argumentCount := 0, spreadArgument := none }
+  let definitions : Array DefinitionId := #[⟨2, 7⟩, ⟨1, 4⟩, ⟨1, 5⟩, ⟨3, 99⟩]
+  let ctx := { LowerContext.ofDocument decoded.document with
+    definitions := definitions, typeConstants := #[.Value ty ⟨#[.Leaf 3 4],0⟩] }
+  let input := { original.toBodyCore with argumentCount := 0, spreadArgument := none, definitionId := some 0 }
   let lower (ss : Array MirNode) (term : TypedValue) := lowerBody ctx { input with blocks := #[{ first with id := 0, statements := ss, terminator := ⟨term, info⟩ }] }
   for (kind, fs) in rvalues ty do
     let _ ← must (lower #[⟨.statement .assign #[("place", pl), ("rvalue", .rvalue kind fs)], info⟩] (.terminator .return #[]))
   for (kind, fs) in statements ty do
     let _ ← must (lower #[⟨.statement kind fs, info⟩] (.terminator .return #[]))
-  for (kind, fs) in terms ty info.span do
+  for (kind, fs) in terms ty info.spanId do
     let _ ← must (lower #[] (.terminator kind fs))
   let pending ← must (lower #[⟨.statement .assign #[("place", pl), ("rvalue", .rvalue .threadLocalRef #[("def_id", defRef)])], info⟩] (.terminator .return #[]))
-  unless pending.definitions.contains ⟨2, 7⟩ && pending.definitions[0]? == input.definitionId && pending.definitions.size == 2 do
+  unless pending.definitions == definitions && pending.definitions[0]? == some ⟨2, 7⟩ do
     throw (IO.userError "crate-qualified definition identity was lost")
   unless !(DecoderValues.rvalueVariant "FutureRvalue").isOk do
     throw (IO.userError "unknown rvalue selector accepted by decoder")
@@ -125,21 +128,21 @@ def main (args : List String) : IO Unit := do
   let missing ← must (lowerBody ctx { input with definitionId := none, blocks := #[{ first with id := 0, statements := #[], terminator := ⟨.terminator .return #[], info⟩ }] })
   unless !missing.obligations.isEmpty && !missing.ownDefinitionId.isOk do
     throw (IO.userError "missing source identity became an invented frame definition")
-  let mkBody (self other : DefinitionId) (name : String) : BodyCore :=
+  let mkBody (self other : Nat) (name : String) : BodyCore :=
     { input with
       definitionId := some self
       defPath := name
       blocks := #[{ first with
         id := 0
-        statements := #[⟨.statement .assign #[("place", pl), ("rvalue", .rvalue .aggregate #[("aggregate_kind", tagged "Closure" [("def_id", obj [("crate", n other.crateIndex), ("index", n other.index)]), ("generic_args", arr [tagged "const" [("value", tc ty)]])]), ("operands", arr [])])], info⟩]
+        statements := #[⟨.statement .assign #[("place", pl), ("rvalue", .rvalue .aggregate #[("aggregate_kind", tagged "Closure" [("def_id", n other), ("generic_args", arr [tagged "const" [("value", tc ty)]])]), ("operands", arr [])])], info⟩]
         terminator := ⟨.terminator .call #[
           ("function", .operand .constant #[("constant", obj [
-            ("type", .typeRef ty), ("span", .sourceSpan info.span), ("user_type_annotation", nil),
-            ("constant", obj [("source", tagged "unevaluated" [("def_id", obj [("crate", n other.crateIndex), ("index", n other.index)]), ("generic_args", arr [tagged "const" [("value", tc ty)]]), ("promoted", nil), ("type", .typeRef ty)])])])]),
+            ("type", .typeRef ty), ("span", .sourceSpan info.spanId), ("user_type_annotation", nil),
+            ("constant", obj [("source", tagged "unevaluated" [("def_id", n other), ("generic_args", arr [tagged "const" [("value", tc ty)]]), ("promoted", nil), ("type", .typeRef ty)])])])]),
           ("args", arr []), ("destination", pl), ("target", nil), ("unwind", unwind),
-          ("call_source", tagged "normal_call"), ("function_span", .sourceSpan info.span)], info⟩ }] }
-  let linked ← must (lowerBodies ctx #[mkBody ⟨1, 4⟩ ⟨1, 5⟩ "a", mkBody ⟨1, 5⟩ ⟨1, 4⟩ "b"])
-  unless linked.definitions == #[⟨1, 4⟩, ⟨1, 5⟩] && linked.typeConstants.size == 1 do
+          ("call_source", tagged "normal_call"), ("function_span", .sourceSpan info.spanId)], info⟩ }] }
+  let linked ← must (lowerBodies ctx #[mkBody 1 2 "a", mkBody 2 1 "b"])
+  unless linked.definitions == definitions && linked.typeConstants.size == 1 do
     throw (IO.userError "cross-body definition or generic-constant interning lost identity")
   let linkedA ← match linked.bodies[0]? with | some b => pure b | none => throw (IO.userError "missing a")
   let linkedB ← match linked.bodies[1]? with | some b => pure b | none => throw (IO.userError "missing b")
@@ -149,7 +152,7 @@ def main (args : List String) : IO Unit := do
     match statement.kind with
     | .Assign _ (.Aggregate (.Closure defId #[.Const constId]) _) => some (defId, constId)
     | _ => none
-  unless closureRef linkedA == some (1, 0) && closureRef linkedB == some (0, 0) do
+  unless closureRef linkedA == some (2, 0) && closureRef linkedB == some (1, 0) do
     throw (IO.userError "mutually recursive references use inconsistent compiler IDs")
   let callee (body : LoweredBody) : Option Nat := do
     let block ← body.body.basicBlocks[0]?
@@ -157,16 +160,21 @@ def main (args : List String) : IO Unit := do
     | .Call (.Constant c) _ _ _ _ _ _ =>
       match c.value with | .Unevaluated u _ => some u.definition | _ => none
     | _ => none
-  unless callee linkedA == some 1 && callee linkedB == some 0 do
+  unless callee linkedA == some 2 && callee linkedB == some 1 do
     throw (IO.userError "mutually recursive Call references lost program-global identities")
-  let standaloneCore := { mkBody ⟨3, 99⟩ ⟨1, 4⟩ "never_called" with
+  let standaloneCore := { mkBody 3 1 "never_called" with
     blocks := #[{ first with id := 0, statements := #[], terminator := ⟨.terminator .return #[], info⟩ }] }
+  let some root := decoded.document.bodyRoots[0]? | throw (IO.userError "fixture has no body root")
   let syntheticDoc := { decoded.document with
-    bodies := #[⟨mkBody ⟨1, 4⟩ ⟨1, 5⟩ "a", #[]⟩,
-      ⟨mkBody ⟨1, 5⟩ ⟨1, 4⟩ "b", #[]⟩,
-      ⟨mkBody ⟨1, 4⟩ ⟨1, 5⟩ "a_same_source", #[]⟩,
+    bodyRoots := #[{ root with bodyId := 0, definitionId := 1, promotedBodies := #[] },
+      { root with bodyId := 1, definitionId := 2, promotedBodies := #[] },
+      { root with bodyId := 2, definitionId := 1, promotedBodies := #[] },
+      { root with bodyId := 3, definitionId := 3, promotedBodies := #[] }]
+    bodies := #[⟨mkBody 1 2 "a", #[]⟩,
+      ⟨mkBody 2 1 "b", #[]⟩,
+      ⟨mkBody 1 2 "a_same_source", #[]⟩,
       ⟨standaloneCore, #[]⟩]
-    instances := #[] }
+    instances := #[], definitions := definitions, typeConstants := #[.Value ty ⟨#[.Leaf 3 4],0⟩] }
   let program ← must (lowerProgram syntheticDoc)
   let rootA ← must (program.rootDefinitionId 0)
   let rootB ← must (program.rootDefinitionId 1)
@@ -177,8 +185,7 @@ def main (args : List String) : IO Unit := do
   for lowered in program.bundle.bodies do
     unless lowered.definitions == program.bundle.definitions && lowered.typeConstants == program.bundle.typeConstants && lowered.spans == program.bundle.spans do
       throw (IO.userError "identity seeding rewrote shared constant/span tables inconsistently")
-  let candidates := decoded.document.bodies.map (·.toBodyCore) ++
-    decoded.document.instances.filterMap (fun node => node.body.map (·.toBodyCore))
+  let candidates := decoded.document.bodies.map (·.toBodyCore)
   let probeBody? := candidates.find? fun body =>
     body.blocks.any fun block =>
       block.statements.any (fun node => containsProbe node.value) || containsProbe block.terminator.value

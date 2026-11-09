@@ -4,7 +4,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "tools"))
-from mir_json import load_mir_document
+from mir_json import load_mir_document, pool_entry
 
 
 def require(condition: bool, message: str) -> None:
@@ -12,13 +12,9 @@ def require(condition: bool, message: str) -> None:
         raise SystemExit(message)
 
 
-def function_key(node: dict) -> tuple:
-    return (
-        node["instance_id"],
-        node["instance_def_id"],
-        node["instance_def_path"],
-        node["generic_args"],
-    )
+def function_key(document: dict, node: dict) -> tuple:
+    instance = pool_entry(document, "instances", node["instance_id"])
+    return (node["instance_id"], instance["def_id"], instance["def_path"], instance["generic_args"])
 
 
 def vtable_key(node: dict) -> tuple:
@@ -57,7 +53,7 @@ def main(path: str) -> None:
         key_node = nodes[catalog["key_allocation_id"]]
         require(key_node["kind"] == kind and "status" not in key_node,
                 f"catalog row {row_index} key node has wrong kind/status")
-        typed_key = function_key(key_node) if kind == "function" else vtable_key(key_node)
+        typed_key = function_key(document, key_node) if kind == "function" else vtable_key(key_node)
         require(salts[0]["allocation_id"] == catalog["key_allocation_id"],
                 f"catalog row {row_index} salt zero is not the selected key node")
         for salt, result in enumerate(salts):
@@ -74,7 +70,7 @@ def main(path: str) -> None:
                     f"catalog row {row_index} salt {salt} node/source witness differs")
             require(result_node["kind"] == kind and "status" not in result_node,
                     f"catalog row {row_index} salt {salt} node kind/status differs")
-            result_key = function_key(result_node) if kind == "function" else vtable_key(result_node)
+            result_key = function_key(document, result_node) if kind == "function" else vtable_key(result_node)
             require(result_key == typed_key,
                     f"catalog row {row_index} salt {salt} changes its exact typed key")
 

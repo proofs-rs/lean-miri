@@ -9,7 +9,7 @@ open Lean Miri.ABI
 
 private def typeRef (entry : Json) : Except String TypeId := do
   let value := entry
-  (← value.getObjVal? "type_id").getNat?
+  value.getNat?
 
 /-- Resolve one exact source Windows C type and return its compiler-derived
 layout. This intentionally stays demand-local so unused Windows structures do

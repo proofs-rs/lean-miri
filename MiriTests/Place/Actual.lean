@@ -126,7 +126,7 @@ private def initial : Except StepError S := do
   let a ← scalar 10
   let b ← scalar 20
   let frame : Frame AllocId LocalLayout Nat := {
-    body := (fixtureLoaded ⟨0, by decide⟩).body, bodyIdentity := (fixtureLoaded ⟨0, by decide⟩).identity, localsIdentity := fixtureIdentity, functionInstance := ⟨.Item 0, #[]⟩, extra := 0
+    body := (fixtureLoaded ⟨0, by decide⟩).body, bodyIdentity := (fixtureLoaded ⟨0, by decide⟩).identity, localsIdentity := fixtureIdentity, functionInstance := 0, extra := 0
     returnContinuation := .stop true, returnPlace := .frameLocal 0 0 none pairLayout fixtureIdentity
     locals := #[⟨.live (.immediate (.scalarPair a b)), some pairLayout⟩,
       ⟨.live (.immediate .uninit), some pairLayout⟩]

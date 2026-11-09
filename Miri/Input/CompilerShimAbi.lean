@@ -8,8 +8,9 @@ namespace Miri.Input.CompilerShimAbi
 open Lean Miri.ABI Miri.Interpreter
 structure Entry where
   signature : ForeignItems.Signature
-  abi : FnAbi MIR.TyId
+  abi : Nat
 structure Prepared where
+  runtime : RuntimeMetadata
   entries : Array Entry
 private def descriptor (key : String) : Except String ForeignItems.SignatureType :=
   match key with
@@ -20,8 +21,7 @@ private def descriptor (key : String) : Except String ForeignItems.SignatureType
   | "u64" => pure .u64 | "u8" => pure .u8 | "bool" => pure .bool
   | "byteSlice" => pure .byteSlice | "functionPointer" => pure .functionPointer
   | _ => throw "unknown compiler shim type descriptor"
-def prepare (runtime : RuntimeMetadata)
-    (abiCache : Option (CallResolution.FunctionAbiCache runtime) := none) : Except String Prepared := do
+def prepare (runtime : RuntimeMetadata) : Except String Prepared := do
   let records ← match runtime.source.raw.getObjVal? "compiler_shim_abis" with
     | .error _ => pure #[]
     | .ok value => value.getArr?
@@ -46,20 +46,20 @@ def prepare (runtime : RuntimeMetadata)
       let inputs ← (← query.getObjVal? "input_types").getArr?
       unless inputs.size == args.size do throw "compiler shim type count mismatch"
       for input in inputs do
-        let id ← (← input.getObjVal? "type_id").getNat?
+        let id ← input.getNat?
         let _ ← runtime.node id |>.mapError toString
-      let outputId ← (← (← query.getObjVal? "output_type").getObjVal? "type_id").getNat?
+      let outputId ← (← query.getObjVal? "output_type").getNat?
       let _ ← runtime.node outputId |>.mapError toString
       let result ← query.getObjVal? "abi_query"
-      CallResolution.functionAbiJson runtime result abiCache
+      result.getNat?
     entries := entries.push ⟨signature,abi⟩
-  pure ⟨entries⟩
+  pure ⟨runtime,entries⟩
 
 def expectedAbi (prepared : Prepared) (signature : ForeignItems.Signature) :
     Except String (FnAbi MIR.TyId) := do
   let some entry := prepared.entries.find? (·.signature == signature)
     | throw "missing exact compiler shim signature query"
-  pure entry.abi
+  CallResolution.functionAbiId prepared.runtime entry.abi
 /-- Bind the compiler query provider to the shared source shim dispatcher. -/
 def hooks {P S D MD Ptr B I : Type} (prepared : Prepared) (base : ForeignItems.Hooks P S D MD Ptr B I) :
     ForeignItems.Hooks P S D MD Ptr B I :=

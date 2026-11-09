@@ -29,13 +29,12 @@ def adtReprC (prepared : CompilerCallPipeline.Prepared) (ty : MIR.TyId) : Result
 
 def hooks (prepared : CompilerCallPipeline.Prepared) (shim : CompilerShimAbi.Prepared)
     (image : AllocationImage.Imported) (memory : S → MemoryState P Extra K)
-    (base : Backtrace.Hooks P S D MD B I E Loc) : Backtrace.Hooks P S D MD B I E Loc := Id.run do
-  let lookup := CompilerVTableRuntime.GlobalLookup.prepare prepared.symbols
+    (base : Backtrace.Hooks P S D MD B I E Loc) : Backtrace.Hooks P S D MD B I E Loc :=
   { base with
     foreign := CompilerShimAbi.hooks shim base.foreign
     unitPointerLayout := lift (unitPointerLayout prepared)
     globalFunction := fun id => do
-      lift (CompilerVTableRuntime.globalFunctionUsing prepared.symbols lookup image (memory (← get)) id) }
+      lift (CompilerVTableRuntime.globalFunction prepared.symbols image (memory (← get)) id) }
 
 def reprCHook (prepared : CompilerCallPipeline.Prepared) (ty : MIR.TyId) : EStateM StepError S (Option Bool) :=
   lift (adtReprC prepared ty)

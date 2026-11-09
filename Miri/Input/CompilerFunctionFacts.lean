@@ -9,13 +9,14 @@ namespace Miri.Input.CompilerFunctionFacts
 open Lean Miri.ABI Miri.Interpreter
 structure Function where
   ty : MIR.TyId
-  kind : CallFunctionKind
+  instanceId : Option CallInstance
   signature : Except String (Nat × Json)
 structure PointerAbi where
   ty : MIR.TyId
   extra : Array MIR.TyId
-  result : Except String (FnAbi MIR.TyId)
+  result : Except String Nat
 structure Prepared where
+  runtime : RuntimeMetadata
   program : LoweredProgram
   functions : Array Function
   pointerAbis : Array PointerAbi
@@ -24,11 +25,7 @@ private def text (j : Json) (key : String) : Except String String := do
 private def knownType (ctx : LowerContext) (id : Nat) : Except String Nat := do
   unless ctx.containsTypeId id do throw "function query references missing compiler type"
   pure id
-def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none)
-    (abiCache : Option (CallResolution.FunctionAbiCache runtime) := none) : Except String Prepared := do
-  unless RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality program.input.raw do
-    throw "function query metadata document mismatch"
+def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except String Prepared := do
   let source ← program.input.raw.getObjVal? "compiler_function_facts"
   let ctx := LowerContext.ofDocument program.input
   let mut tables := program.compilerTables
@@ -38,38 +35,34 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
     let ty ← knownType ctx (← (← record.getObjVal? "type_id").getNat?)
     if functions.any (fun f => f.ty == ty) then throw "duplicate compiler function type query"
     let sourceKind ← record.getObjVal? "function_kind"
-    let kind ← match ← text sourceKind "kind" with
-      | "function_pointer" => pure CallFunctionKind.FnPtr
+    let inst ← match ← text sourceKind "kind" with
+      | "function_pointer" => pure none
       | "function_definition" => do
         let (callee,next) ← CompilerInstance.decode ctx tables sourceKind
         tables := next
-        match callee.kind with
-        | .Item defId => pure (.FnDef defId callee.args)
-        | _ => throw "FnDef compiler type did not contain its exact Item definition"
+        pure (some callee)
       | _ => throw "unknown compiler function kind"
     let signature := do
       let value ← record.getObjVal? "signature_query"
       let inputs ← (← value.getObjVal? "inputs").getArr?
       for input in inputs do
-        let _ ← knownType ctx (← (← input.getObjVal? "type_id").getNat?)
+        let _ ← knownType ctx (← input.getNat?)
       pure (inputs.size,← value.getObjVal? "abi")
-    functions := functions.push ⟨ty,kind,signature⟩
+    functions := functions.push ⟨ty,inst,signature⟩
   let mut abis := #[]
   for record in ← (← source.getObjVal? "pointer_abis").getArr? do
     unless (← text record "typing_env") == "fully_monomorphized" do throw "FnPtr ABI environment mismatch"
     let ty ← knownType ctx (← (← record.getObjVal? "type_id").getNat?)
     let some function := functions.find? (fun f => f.ty == ty) | throw "FnPtr ABI has no function-kind evidence"
-    match function.kind with
-    | .FnPtr => pure ()
-    | _ => throw "FnPtr ABI query references a non-pointer function type"
+    unless function.instanceId.isNone do throw "FnPtr ABI query references a non-pointer function type"
     let extra ← (← (← record.getObjVal? "extra_argument_types").getArr?).mapM fun input => do
-      knownType ctx (← (← input.getObjVal? "type_id").getNat?)
+      knownType ctx (← input.getNat?)
     if abis.any (fun entry => entry.ty == ty && entry.extra == extra) then throw "duplicate FnPtr ABI query key"
     let result := do
       let value ← record.getObjVal? "abi_query"
-      CallResolution.functionAbiJson runtime value abiCache
+      value.getNat?
     abis := abis.push ⟨ty,extra,result⟩
-  pure ⟨program.withCompilerTables tables,functions,abis⟩
+  pure ⟨runtime,program.withCompilerTables tables,functions,abis⟩
 
 def signature (prepared : Prepared) (ty : MIR.TyId) : Except String (Nat × Json) := do
   let some entry := prepared.functions.find? (fun f => f.ty == ty) | throw "missing normalized original function signature"
@@ -77,12 +70,20 @@ def signature (prepared : Prepared) (ty : MIR.TyId) : Except String (Nat × Json
 
 def kind (prepared : Prepared) (ty : MIR.TyId) : Except String CallFunctionKind := do
   let some entry := prepared.functions.find? (fun f => f.ty == ty) | throw "missing exact compiler function-kind query"
-  pure entry.kind
+  match entry.instanceId with
+  | none => pure .FnPtr
+  | some inst =>
+    let ctx := LowerContext.ofDocument prepared.program.input
+    let tables := prepared.program.compilerTables
+    let kind ← CompilerInstance.kindOf ctx tables inst
+    match kind with
+    | .Item definition => return .FnDef definition (← CompilerInstance.argsOf ctx tables inst)
+    | _ => throw "FnDef compiler type did not contain its exact Item definition"
 
 def pointerAbi (prepared : Prepared) (ty : MIR.TyId) (extra : Array MIR.TyId) : Except String (FnAbi MIR.TyId) := do
   let some entry := prepared.pointerAbis.find? (fun e => e.ty == ty && e.extra == extra)
     | throw "missing exact function-pointer/extra-argument FnAbi query"
-  entry.result
+  CallResolution.functionAbiId prepared.runtime (← entry.result)
 
 def hooks (prepared : Prepared) (extern : Json → Except String Extern)
     (base : CallHooks P S C E Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId)) :

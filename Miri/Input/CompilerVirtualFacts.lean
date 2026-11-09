@@ -19,20 +19,14 @@ def receiverKind (context : CompilerFacts.Context) (id : TypeId) : Result Virtua
   | .dynamicTraitObject => pure .dynamic
   | _ => pure .other
 
-/-- The compiler exports predicates.principal() through the same bound
-existential-predicate interner as trait checking. Missing legacy fields fail. -/
+/-- Dynamic metadata owns its predicate sequence; each element names the
+canonical predicate pool and the principal retains its exact compiler ID. -/
 def dynamicData (prepared : CompilerFactAdapters.Prepared) (id : TypeId) :
     Result (Option VirtualCalls.DynamicData) := do
   let node ← prepared.context.runtime.node id |>.mapError toString
-  if node.shapeKind != .dynamicTraitObject then return none
-  let token ← match ← CompilerFactAdapters.validityKind prepared id with
-    | .dynamic token => pure token
-    | _ => throw "dynamic predicate-array identity mismatch"
-  let shape ← node.payload.getObjVal? "shape"
-  let principal ← shape.getObjVal? "principal_predicate"
-  let principal : Option Nat ← if principal == Lean.Json.null then pure none else do
-    pure (some (← (← principal.getObjVal? "predicate_id").getNat?))
-  return some ⟨token,principal⟩
+  match node.shape with
+  | .dynamicTraitObject predicates principal _ => pure (some ⟨predicates,principal⟩)
+  | _ => pure none
 
 private def lift (value : Result A) : EStateM StepError S A :=
   match value with

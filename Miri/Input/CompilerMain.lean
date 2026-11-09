@@ -34,19 +34,16 @@ structure Prepared where
   entries : Array Entry
   sections : Except String (Array SectionQuery)
 private def intern (tables : CompilerTables) (value : Json) : Except String (MIR.DefId × CompilerTables) := do
-  let source : DefinitionId := ⟨← (← value.getObjVal? "crate").getNat?,← (← value.getObjVal? "index").getNat?⟩
-  match lookupDefinitionId tables.definitions source with
-  | .ok id => pure (id,tables)
-  | .error _ => pure (tables.definitions.size,{tables with definitions := tables.definitions.push source})
+  let id ← value.getNat?
+  unless id < tables.definitions.size do throw "compiler definition ID out of bounds"
+  pure (id,tables)
+
 private def typeId (context : LowerContext) (j : Json) : Except String MIR.TyId := do
-  let id ← (← j.getObjVal? "type_id").getNat?
+  let id ← j.getNat?
   unless context.containsTypeId id do throw "main compiler query references missing type"
   pure id
 
-def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
-    (sourceEquality : Option (RuntimeMetadata.JsonReflexivity runtime.source.raw) := none) : Except String Prepared := do
-  unless RuntimeMetadata.JsonReflexivity.matchesRightOr sourceEquality program.input.raw do
-    throw "main query metadata document mismatch"
+def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except String Prepared := do
   let source ← program.input.raw.getObjVal? "compiler_main_queries"
   unless (← (← source.getObjVal? "typing_env").getStr?) == "fully_monomorphized" do throw "main query environment mismatch"
   let ctx := LowerContext.ofDocument program.input
@@ -73,10 +70,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
           pure none
         else do
           let definitionJson ← value.getObjVal? "definition"
-          let sourceDefinition : DefinitionId := ⟨
-            ← (← definitionJson.getObjVal? "crate").getNat?,
-            ← (← definitionJson.getObjVal? "index").getNat?⟩
-          let definition ← lookupDefinitionId tables.definitions sourceDefinition
+          let (definition,_) ← intern tables definitionJson
           unless compilerEntry == some definition do
             throw "rustc EntryFnType definition differs from compiler-selected entry"
           let kind ← (← value.getObjVal? "kind").getStr?
@@ -122,10 +116,10 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram)
         let name ← (← record.getObjVal? "section").getStr?
         let decoded := do
           let (definition,next) ← intern tables (← record.getObjVal? "definition")
-          let (span,next) ← lowerCompilerSpan next (← ctx.decodeCompilerValue (← record.getObjVal? "span"))
+          let (span,next) ← lowerCompilerSpan next (← ctx.decodeCompilerSpan (← record.getObjVal? "span"))
           let value ← record.getObjVal? "global_query"
           let ty ← typeId ctx (← value.getObjVal? "type")
-          let allocation ← (← (← value.getObjVal? "allocation").getObjVal? "allocation_id").getNat?
+          let allocation ← (← value.getObjVal? "allocation").getNat?
           unless ctx.containsAllocationId allocation do throw "link-section static allocation missing from compiler graph"
           pure ((⟨definition,span,ty,allocation⟩ : Section),next)
         let result ← match decoded with
@@ -157,6 +151,7 @@ private def lift (value : Except String A) : MainMachine.M U A :=
 def hooks (p : Prepared) (base : MainMachine.Hooks U C O ABI.ExternAbi F A Aff P) :
     MainMachine.Hooks U C O ABI.ExternAbi F A Aff P :=
   {base with
+    itemInstance := fun definition args => lift (CompilerInstance.item (LowerContext.ofDocument p.program.input) p.program.compilerTables definition args)
     cNoUnwind := .C false
     genericParameters := fun id => lift do return (← entry p id).parameters
     entrySignature := fun id => lift do (← entry p id).signature

@@ -279,8 +279,8 @@ its ordered, actual monotonic/poll observations externally. -/
 private def runTraitUpcastPure (contents : String) (pageSize : UInt64)
     (numCpus hostPid : UInt32) (mathHost expectUnaryUnsupported : Bool)
     (timezone : Bool := false) (hostPoll : Poll := {}) (monotonic : Nat := 0) (traceVtables : Bool := false) : Except String String := do
-  let decoded ← Input.decodeRuntimeJson contents
-  let program ← Input.lowerCoreProgram decoded.document
+  let decoded ← Input.decodeJson contents
+  let program ← Input.lowerProgram decoded.document
   let attempt := Input.EvalPreparation.prepare program
   let prepared ← attempt.outcome
   let compiler := {prepared.compiler with vtables := {prepared.compiler.vtables with
@@ -288,7 +288,6 @@ private def runTraitUpcastPure (contents : String) (pageSize : UInt64)
   let image := prepared.image
   let memory := attempt.memory
   let bytes ← Input.CompilerGlobalBytes.prepare compiler.program compiler.runtime memory
-    (some compiler.sourceEquality)
   let targetBits := compiler.runtime.target.base.pointerWidth.bits.toNat
   let arch ← (Input.EvalArchitectureMachine.targetArch compiler.intrinsics).mapError toString
   unless compiler.program.input.producer.targetTriple == "x86_64-unknown-linux-gnu" &&

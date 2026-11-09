@@ -12,10 +12,10 @@ structure Required (S C : Type) where
   resolveClosureFnOnce : C → DefId → Array GenericArg → RvalueM S CallInstance
   lockstepTails : C → TyId → TyId → RvalueM S (TyId × TyId)
   boxLayout : C → TyId → RvalueM S (TyAndLayout TyId)
-  principal : C → Nat → RvalueM S (Option Nat)
+  principal : C → PredicateList → RvalueM S (Option Nat)
   supertraitSlot : C → TyId → TyId → RvalueM S (Option Nat)
   eraseSelfTraitRef : C → Nat → RvalueM S Nat
-  normalizePrincipal : C → Nat → RvalueM S (Option Nat)
+  normalizePrincipal : C → PredicateList → RvalueM S (Option Nat)
 
 private def lift (value : Except String A) : EStateM StepError S A :=
   match value with

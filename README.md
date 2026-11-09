@@ -83,7 +83,7 @@ open Miri.Frontend
 import_mir "scratch/add-one.json" as program
 
 #check program.document
-#check program.executionInput
+#check program
 ```
 
 Check it with `lake build Miri.Frontend.ImportMIR`, then

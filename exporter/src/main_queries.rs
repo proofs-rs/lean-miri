@@ -54,9 +54,7 @@ fn entry<'tcx>(
                         let function_type = instance.ty(tcx, ty::TypingEnv::fully_monomorphized());
                         let function_type = type_json(context, tcx, function_type)?;
                         json!({"instance_id":id,
-                        "function_type":function_type,
-                        "instance_kind":instance_kind_json(context,tcx,instance.def)?,
-                        "generic_args":generic_args_json(context,tcx,instance.args)?})
+                        "function_type":function_type})
                     }
                     Ok(None) => compiler_fact(Value::Null),
                     Err(error) => export_failure(
@@ -80,7 +78,7 @@ fn entry<'tcx>(
         )
     };
     Ok::<_, String>(
-        json!({"definition":def_json(def),"generic_parameters":parameters,"signature_query":signature}),
+        json!({"definition":def_json(context, def),"generic_parameters":parameters,"signature_query":signature}),
     )
 }
 pub(super) fn export<'tcx>(
@@ -114,11 +112,11 @@ pub(super) fn export<'tcx>(
         .entry_fn(())
         .map(|(definition, entry_type)| match entry_type {
             EntryFnType::Main { sigpipe } => {
-                json!({"definition":def_json(definition),"kind":"rustc_main","sigpipe":sigpipe})
+                json!({"definition":def_json(context, definition),"kind":"rustc_main","sigpipe":sigpipe})
             }
         });
-    let mut result = json!({"typing_env":"fully_monomorphized","start_lang_item":tcx.lang_items().start_fn().map(def_json),
-    "compiler_entry":tcx.entry_fn(()).map(|(entry,_)|def_json(entry)),
+    let mut result = json!({"typing_env":"fully_monomorphized","start_lang_item":tcx.lang_items().start_fn().map(|def| def_json(context, def)),
+    "compiler_entry":tcx.entry_fn(()).map(|(entry,_)|def_json(context, entry)),
     "compiler_entry_type":compiler_fact(compiler_entry_type.unwrap_or(Value::Null)),"entries":entries,
     });
     if tcx
@@ -188,7 +186,7 @@ fn link_sections<'tcx>(
                 "source link-section eval_global requires a function-pointer or function-pointer-array static",
             )?
         };
-        entries.push(json!({"section":section.as_str(),"definition":def_json(def),"span":span_json(context,tcx,tcx.def_span(def)),"global_query":query}));
+        entries.push(json!({"section":section.as_str(),"definition":def_json(context, def),"span":span_json(context,tcx,tcx.def_span(def)),"global_query":query}));
     }
     Ok::<_, String>(if complete {
         compiler_fact(json!(entries))

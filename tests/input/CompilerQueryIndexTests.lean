@@ -134,9 +134,6 @@ private def legacySignatureAbi (p : CompilerProviders.Prepared)
 def main (args : List String) : IO Unit := do
   let some path := args.head? | throw (IO.userError "authentic producer export path required")
   let raw ← must (Json.parse (← IO.FS.readFile path))
-  let raw ← must (SharedPayloads.resolveCatalog raw)
-  let raw ← must (setField raw "shared_payloads" (Json.mkObj [
-    ("schema_version", toJson (2 : Nat)), ("nodes", toJson (#[] : Array Json))]))
   let baseline ← prepared raw
 
   let covarianceTable ← must (field raw "compiler_covariance_queries")
@@ -265,7 +262,7 @@ def main (args : List String) : IO Unit := do
   let signatureMutated ← must (appendSignature signatureMutated conflictingSignatureRow)
   check (!(decodeJson signatureMutated.compress).isOk)
     "malformed signature ABI unexpectedly passed full import"
-  check (!(decodeRuntimeJson signatureMutated.compress).isOk)
+  check (!(decodeJson signatureMutated.compress).isOk)
     "malformed signature ABI unexpectedly passed runtime import"
   -- An intentionally manual raw index isolates lookup/error ordering from
   -- the successful-input decoder boundary checked above.

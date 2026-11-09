@@ -109,7 +109,7 @@ private def freshRaw : RvalueHooks Unit Trace Unit Unit := {
   unless (trace (.Cast .IntToInt operand 0) =
     ["place:true", "operand:false", "normalize", "cast"]) do throw (IO.userError "runtime assertion failed")
 #eval show IO Unit from do
-  unless (trace (.Repeat operand .Error) == ["place:true", "repeat"]) do throw (IO.userError "runtime assertion failed")
+  unless (trace (.Repeat operand 0) == ["place:true", "repeat"]) do throw (IO.userError "runtime assertion failed")
 #eval show IO Unit from do
   unless (trace (.BinaryOp .Eq operand operand) =
     ["place:true", "operand:false", "readImmediate", "operand:true", "readImmediate", "binary", "writeImmediate"]) do throw (IO.userError "runtime assertion failed")

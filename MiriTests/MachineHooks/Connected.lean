@@ -20,7 +20,7 @@ def frame : Frame Provenance LocalLayout MachineHooks.FrameExtra :=
   { body := fixtureLoaded.body
     bodyIdentity := fixtureLoaded.identity
     localsIdentity := fixtureIdentity
-    functionInstance := ⟨.Item 0, #[]⟩
+    functionInstance := 0
     extra := { borrowTracker := some {}, catchUnwind := none, userRelevance := 0, dataRace := some {} }
     returnContinuation := .stop true
     returnPlace := .memory ⟨place.mplace, layout⟩

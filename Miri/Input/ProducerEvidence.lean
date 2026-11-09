@@ -55,7 +55,7 @@ private def artifact (j : Json) : Result Artifact := do
     withinSysroot := ← boolean j "within_sysroot"
     sysrootRelativePath := ← optionalString j "sysroot_relative_path" }
 
-def ofDocument (document : ImportDocumentCore) : Result Settings := do
+def ofDocument (document : ImportDocument) : Result Settings := do
   let value ← field (← field document.raw "producer") "input_settings"
   unless (← string value "hash_algorithm") == "sha256" do throw "unrecognized producer fingerprint algorithm"
   let level ← match ← field value "mir_opt_level" with

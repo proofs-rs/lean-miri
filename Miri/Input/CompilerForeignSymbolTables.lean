@@ -104,7 +104,7 @@ def prepare (instances : CompilerVTableRuntime.Prepared) : Except String Prepare
     previousIndex := some index
     let kind ← exportKind (← text record "definition_kind")
     let callee ← if kind == .function || kind == .associatedFunction then do
-        let identity ← field record "callable_identity"
+        let identity ← field record "instance_id"
         let ctx := match lowering with
           | some ctx => ctx
           | none => LowerContext.ofDocument program.input
@@ -114,7 +114,8 @@ def prepare (instances : CompilerVTableRuntime.Prepared) : Except String Prepare
         -- uses only this minimal mono identity, not eager instance metadata.
         pure (some decoded)
       else pure none
-    let span ← field record "span"
+    let spanId ← (← field record "span").getNat?
+    let some span := program.input.spans[spanId]? | throw "exported symbol span ID out of bounds"
     let candidate : Candidate := {
       symbol := ← text record "symbol"
       explicitSymbol := ← boolean record "explicit_symbol"
@@ -122,8 +123,8 @@ def prepare (instances : CompilerVTableRuntime.Prepared) : Except String Prepare
       crateIndex := ← natural record "crate_index"
       crateName := ← text record "crate_name"
       weak := ← boolean record "weak"
-      spanLo := ← natural span "lo"
-      spanHi := ← natural span "hi"
+      spanLo := span.lo
+      spanHi := span.hi
       kind := kind
       compilerBuiltins := ← boolean record "compiler_builtins" }
     candidates := candidates.push candidate

@@ -52,7 +52,7 @@ pub(super) fn export<'tcx>(
             // The rustc API accepts `Into<Cow<[u8]>>`; borrowing avoids a
             // full byte-vector clone for every salt without changing probes.
             let selected=tcx.allocate_bytes_dedup(bytes,salt);
-            json!({"salt":salt,"existing_allocation":original.get(&selected).map(|id|json!({"allocation_id":id}))})
+            json!({"salt":salt,"existing_allocation":original.get(&selected).map(|id|json!(id))})
         }).collect::<Vec<_>>();
         json!({"bytes_hex":hex,"salts":salts})
     }).collect::<Vec<_>>();

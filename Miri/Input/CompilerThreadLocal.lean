@@ -31,8 +31,8 @@ def ofProgram (program : LoweredProgram) : Except String (Array Entry) := do
   let mut entries := #[]
   for value in collect program.input.raw do
     let defJson ← field value "def_id"
-    let sourceId : DefinitionId := ⟨← natField defJson "crate", ← natField defJson "index"⟩
-    let definition ← lookupDefinitionId program.bundle.definitions sourceId
+    let definition ← defJson.getNat?
+    unless definition < program.bundle.definitions.size do throw "TLS compiler definition ID out of bounds"
     let info ← decodeStaticGlobalInfo (← field value "global_info")
     unless info.isStatic && info.threadLocal do
       throw "TLS declaration compiler query evidence is unresolved or inconsistent"
@@ -54,13 +54,13 @@ private def find (entries : Array Entry) (definition : MIR.DefId) : Except Strin
 Other TLS declarations, including unsupported initializers, are not demanded
 by this source lookup. The canonical definition table is unchanged. -/
 def forDefinition (program : LoweredProgram) (definition : MIR.DefId) : Except String Entry := do
-  let some target := program.bundle.definitions[definition]?
+  let some _ := program.bundle.definitions[definition]?
     | throw "TLS definition absent from canonical compiler table"
   let rows := (collect program.input.raw).filter fun value =>
     let actual := do
       let raw ← field value "def_id"
-      pure (⟨← natField raw "crate", ← natField raw "index"⟩ : DefinitionId)
-    actual.toOption == some target
+      raw.getNat?
+    actual.toOption == some definition
   unless !rows.isEmpty do throw "missing exact compiler TLS declaration/initializer evidence"
   -- Reuse the existing strict decoder on the selected records with the same
   -- source tables; this is a query view, never a second program representation.

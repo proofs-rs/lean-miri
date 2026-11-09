@@ -13,7 +13,7 @@ def main (args : List String) : IO Unit := do
   let options := (({} : Options).setBool `profiler true).set `profiler.threshold (1 : Nat)
   boundary "decode: start"
   let text ← IO.FS.readFile path
-  let decoded ← match decodeRuntimeJsonProfiled text options with
+  let decoded ← match decodeJsonProfiled text options with
     | .ok value => pure value
     | .error reason => throw (IO.userError reason)
   boundary "decode: accepted"

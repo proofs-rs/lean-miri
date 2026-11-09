@@ -18,7 +18,7 @@ structure Fields (p : CompilerProviders.Prepared) (options : EvalConfigurationCo
       (external : DefId → MachineHooks.M MiriMemoryKind RootUser (Pointer Provenance)),
     options.place.debugAssertions = false → config.operands.constantAt = fun _ path constant known => do
       let site ← CompilerOperandSites.current path
-      CompilerConstantMachine.evalAtBound p.constantBinding site functions arithmetic external
+      CompilerConstantMachine.evalAt p.constants p.runtime site functions arithmetic external
         MemoryErrors.constant constant known none
 def pointers (p : CompilerProviders.Prepared) (image : AllocationImage.Imported) (leaves : RootLeaves) :=
   (EvalPointerSource.make p image
@@ -46,7 +46,7 @@ def constantAt (p : CompilerProviders.Prepared) (image : AllocationImage.Importe
     Unit → OperandPath → ConstOperand → Option LocalLayout → MachineHooks.M MiriMemoryKind RootUser (OpTy Provenance) :=
   fun _ path constant known => do
     let site ← CompilerOperandSites.current path
-    CompilerConstantMachine.evalAtBound p.constantBinding site (functions p image options leaves)
+    CompilerConstantMachine.evalAt p.constants p.runtime site (functions p image options leaves)
       (pointers p image leaves).arithmetic (external p image options leaves)
       MemoryErrors.constant constant known
       (if options.place.debugAssertions then some (fun left right =>

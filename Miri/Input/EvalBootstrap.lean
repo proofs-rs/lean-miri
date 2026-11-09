@@ -40,7 +40,6 @@ def createContextWithBytesProfiled [DecidableEq Os] (profile : Lean.Options)
     (h : Hooks U C O X F A Aff P AP Os)
     (config : Configuration Os) (choice : C) : MainMachine.M U CompilerGlobalBytes.Prepared := do
   let bytes ← CompilerGlobalBytes.attachProfiled profile h.compiler.program h.compiler.runtime
-    (some h.compiler.sourceEquality)
   CompilerFunctionPointers.attachProfiled profile h.compiler.pointers h.image h.main.functions
   CompilerVTableMachine.attachProfiled profile h.compiler.vtables h.image h.vtableRuntime
   CompilerIntrinsicSymbols.attachProfiled profile h.compiler h.image h.symbols

@@ -10,7 +10,7 @@ private def must (value : Except String A) : IO A :=
   match value with | .ok value => pure value | .error error => throw (IO.userError error)
 private def check (condition : Bool) (message : String) : IO Unit :=
   unless condition do throw (IO.userError message)
-private def read (dir file : String) : IO DecodeResult := do
+private def read (dir file : String) : IO ExecutionInput := do
   must (decodeJson (← IO.FS.readFile (dir ++ "/" ++ file)))
 private def arr (value : Json) (key : String) : Except String (Array Json) :=
   (value.getObjVal? key).bind Json.getArr?
@@ -27,7 +27,7 @@ def main (args : List String) : IO Unit := do
     let source ← IO.FS.readFile (dir ++ "/" ++ name)
     let ready ← must (row.getObjValAs? Bool "ready")
     let full := decodeJson source
-    let runtime := decodeRuntimeJson source
+    let runtime := decodeJson source
     check (full.isOk == ready && runtime.isOk == ready) s!"decoder readiness differs: {name}"
     if ready then
       let decoded ← must full

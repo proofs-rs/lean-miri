@@ -13,7 +13,7 @@ fn optional_instance(value: Option<Value>) -> Value {
     }
 }
 fn instance<'tcx>(
-    tcx: TyCtxt<'tcx>,
+    _tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
     value: ty::Instance<'tcx>,
     source_cast: bool,
@@ -23,7 +23,7 @@ fn instance<'tcx>(
     }
     let id = context.register_instance(value);
     Ok::<_, String>(
-        json!({"instance_id":id,"instance_kind":instance_kind_json(context,tcx,value.def)?,"generic_args":generic_args_json(context,tcx,value.args)?}),
+        json!({"instance_id":id}),
     )
 }
 fn closed(input:ty::Ty<'_>)->bool {
@@ -93,7 +93,7 @@ pub(super) fn export<'tcx>(
         };
         result["query_kind"] = json!(kind);
         result["typing_env"] = json!("fully_monomorphized");
-        result["input_type"] = type_json(context, tcx, input)?;
+        result["input_type"] = json!(type_json(context, tcx, input)?);
         result["args_no_bound_vars"] = json!(no_bound);
         records.push(result);
     }
@@ -117,8 +117,8 @@ pub(super) fn export<'tcx>(
         }
         result["query_kind"] = json!("lockstep_tails");
         result["typing_env"] = json!("fully_monomorphized");
-        result["input_source"] = type_json(context, tcx, source)?;
-        result["input_target"] = type_json(context, tcx, target)?;
+        result["input_source"] = json!(type_json(context, tcx, source)?);
+        result["input_target"] = json!(type_json(context, tcx, target)?);
         records.push(result);
     }
     let mut boxes = context
@@ -129,13 +129,13 @@ pub(super) fn export<'tcx>(
     boxes.sort_by_key(|input| context.type_id(*input));
     for input in boxes {
         let mut result = if tcx.lang_items().owned_box().is_some() {
-            compiler_fact(type_json(context, tcx, ty::Ty::new_box(tcx, input))?)
+            json!({"type": type_json(context, tcx, ty::Ty::new_box(tcx, input))?})
         } else {
             unavailable_compiler_fact("Box constructor requires owned_box lang item")?
         };
         result["query_kind"] = json!("box_type");
         result["typing_env"] = json!("fully_monomorphized");
-        result["input_type"] = type_json(context, tcx, input)?;
+        result["input_type"] = json!(type_json(context, tcx, input)?);
         records.push(result);
     }
     Ok::<_, String>(Value::Array(records))
@@ -147,17 +147,15 @@ mod tests {
 
     #[test]
     fn optional_instance_survives_query_key_fields() {
-        for input in [None, Some(json!({"instance_id": 7, "instance_kind": {"kind":"item"}, "generic_args": []}))] {
+        for input in [None, Some(json!({"instance_id": 7}))] {
             let mut record = optional_instance(input.clone());
             record["query_kind"] = json!("resolve_fn_ptr");
             record["typing_env"] = json!("fully_monomorphized");
-            record["input_type"] = json!({"type_id": 3});
+            record["input_type"] = json!(3);
             assert!(record.get("value").is_none());
             if let Some(instance) = input {
                 assert_eq!(record["resolution_kind"], "instance");
                 assert_eq!(record["instance_id"], instance["instance_id"]);
-                assert_eq!(record["instance_kind"], instance["instance_kind"]);
-                assert_eq!(record["generic_args"], instance["generic_args"]);
             } else {
                 assert_eq!(record["resolution_kind"], "none");
                 assert!(record.get("instance_id").is_none());

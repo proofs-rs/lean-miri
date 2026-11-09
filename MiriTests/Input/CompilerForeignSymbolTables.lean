@@ -15,7 +15,6 @@ private def document (raw : Json) : ImportDocument :=
     selectedScope := none
     functionAbis := #[]
     bodies := #[]
-    typedTree := .scalar .null
     raw := raw }
 
 private def target : Miri.ABI.RuntimeTargetDataLayout := Id.run do
@@ -25,7 +24,10 @@ private def target : Miri.ABI.RuntimeTargetDataLayout := Id.run do
     .ONE, .ONE, .ONE, .ONE, .ONE, #[], .ZERO, ptr, #[], .ZERO, .I32⟩
 
 private def rawSymbols (allocators : Json) (candidates : Array Json := #[]) : Json :=
-  Json.mkObj [("compiler_runtime_queries", Json.mkObj [("foreign_symbols",
+  Json.mkObj [("instances", .arr (#[0,1].map fun id => Json.mkObj [
+    ("instance_id", toJson id), ("kind", .str "identity_only"), ("def_id", toJson id), ("instance_kind", Json.mkObj [
+      ("kind", .str "item"), ("def_id", toJson id)]), ("generic_args", .arr #[])])),
+    ("compiler_runtime_queries", Json.mkObj [("foreign_symbols",
     Json.mkObj [
       ("no_alloc_shim_symbol", toJson "__no_alloc"),
       ("exported_candidates", Json.arr candidates),
@@ -42,21 +44,34 @@ private def redirect (symbol : String) : Json :=
   Json.mkObj [("kind", toJson "redirect"), ("symbol", toJson symbol)]
 
 private def prepare (raw : Json) (definitions : Array DefinitionId := #[]) :
-    Except String CompilerForeignSymbolTables.Prepared := Id.run do
-  let source := document raw
+    Except String CompilerForeignSymbolTables.Prepared := do
+  let instanceRows ← ((raw.getObjVal? "instances").bind Json.getArr?)
+  let instanceNodes ← instanceRows.mapIdxM fun index row => DecoderValues.parseInstance row s!"instances[{index}]"
+  let base := document raw
+  let source : ImportDocument := {
+    base with
+    definitions := definitions
+    instances := instanceNodes
+    spans := #[{
+      originalPayload := "symbol"
+      lo := 0
+      hi := 1
+      start := ⟨1,0⟩
+      «end» := ⟨1,1⟩
+      context := "root"
+      file := "test.rs" }] }
   let program : LoweredProgram := ⟨⟨#[], #[], definitions, #[]⟩, #[], #[], #[], source⟩
   let runtime : RuntimeMetadata := {
-    source := source.toCore
+    source := source
     target := target
-    layouts := #[]
   }
   let context : CompilerFacts.Context := {
-    runtime := RuntimeMetadata.Indexed.ofMetadata runtime
+    runtime := runtime
     program := program
   }
-  let facts : CompilerFactAdapters.Prepared := ⟨context, #[], #[], #[], #[]⟩
-  let instances : CompilerVTableRuntime.Prepared := ⟨facts, #[], #[]⟩
-  return CompilerForeignSymbolTables.prepare instances
+  let facts : CompilerFactAdapters.Prepared := { context := context, patterns := #[], castTypes := #[], obligations := #[] }
+  let instances : CompilerVTableRuntime.Prepared := ⟨facts, #[]⟩
+  CompilerForeignSymbolTables.prepare instances
 
 private def allocatorRows : Array Json := #[
   allocator "_RNvCsaeuD6Zm55dc_7___rustc12___rust_alloc" (special "alloc"),
@@ -93,11 +108,8 @@ private def allocatorIs (prepared : CompilerForeignSymbolTables.Prepared)
 private def callableCandidate (iteration definition : Nat) : Json := Json.mkObj [
   ("iteration_index", toJson iteration),
   ("definition_kind", toJson "function"),
-  ("callable_identity", Json.mkObj [
-    ("instance_kind", Json.mkObj [("kind", toJson "item"),
-      ("def_id", Json.mkObj [("crate", toJson (1 : Nat)), ("index", toJson definition)])]),
-    ("generic_args", Json.arr #[])]),
-  ("span", Json.mkObj [("lo", toJson iteration), ("hi", toJson (iteration + 1))]),
+  ("instance_id", toJson definition),
+  ("span", toJson (0 : Nat)),
   ("symbol", toJson s!"callable{iteration}"), ("explicit_symbol", toJson true),
   ("crate_index", toJson (1 : Nat)), ("crate_name", toJson "test"),
   ("weak", toJson false), ("compiler_builtins", toJson false)]
@@ -106,15 +118,15 @@ private def callableDefinitions : Array DefinitionId := #[⟨1,7⟩, ⟨1,8⟩]
 
 -- Two callable identities share the lowering context while retaining distinct
 -- dense definitions and the original finalized-table validation.
-#guard match prepare (rawSymbols (.arr #[]) #[callableCandidate 0 7, callableCandidate 1 8])
+#guard match prepare (rawSymbols (.arr #[]) #[callableCandidate 0 0, callableCandidate 1 1])
     callableDefinitions with
   | .error _ => false
   | .ok prepared =>
       prepared.candidates.size == 2 &&
-      ((prepared.candidates[0]?.bind (·.fnInstance)).map (·.defId)) == some 0 &&
-      ((prepared.candidates[1]?.bind (·.fnInstance)).map (·.defId)) == some 1
+      (prepared.candidates[0]?.bind (·.fnInstance)) == some 0 &&
+      (prepared.candidates[1]?.bind (·.fnInstance)) == some 1
 
-#guard match prepare (rawSymbols (.arr #[]) #[callableCandidate 0 7, callableCandidate 1 999])
+#guard match prepare (rawSymbols (.arr #[]) #[callableCandidate 0 0, callableCandidate 1 999])
     callableDefinitions with
-  | .error message => message == "exported callable identity is absent from finalized compiler tables"
+  | .error message => message == "compiler instance ID 999 out of bounds"
   | .ok _ => false

@@ -25,6 +25,9 @@ def calls (h : CallHooks P (MachineHooks.State K (Inner U)) C E O X F A) :
   resolve := fun a0 a1 a2 => action (h.resolve a0 a1 a2)
   fnAbiOfFnPtr := fun a0 a1 a2 => action (h.fnAbiOfFnPtr a0 a1 a2)
   fnAbiOfInstance := fun a0 a1 a2 => action (h.fnAbiOfInstance a0 a1 a2)
+  instanceKind := fun a0 => action (h.instanceKind a0)
+  instanceArgs := fun a0 => action (h.instanceArgs a0)
+  itemInstance := fun a0 a1 => action (h.itemInstance a0 a1)
   requiresCallerLocation := fun a0 => action (h.requiresCallerLocation a0)
   callerLocation := action (h.callerLocation)
   abiCanUnwind := h.abiCanUnwind
@@ -86,6 +89,7 @@ def pointers (h : FunctionPointers.Hooks K (Inner U) O) : FunctionPointers.Hooks
   registry := fun u => h.registry (toInner u)
   putRegistry := fun u r => toOuter (h.putRegistry (toInner u) r)
   crossCrateInlineAlways := h.crossCrateInlineAlways
+  instanceArgs := fun callee => action (h.instanceArgs callee)
   inlineNever := fun callee => action (h.inlineNever callee)
   chooseSalt := action h.chooseSalt
   ptrGetAlloc := fun pointer => action (h.ptrGetAlloc pointer)

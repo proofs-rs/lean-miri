@@ -14,26 +14,17 @@ private def trivial (runtime : RuntimeMetadata) : Nat → TyId → Except StepEr
   | 0, _ => .error (.invalidProgram "cyclic compiler type in storage sizedness traversal")
   | fuel + 1, ty => do
     let node ← (runtime.node ty).mapError (fun e => StepError.unsupported (toString e))
-    match node.shapeKind with
-    | .int | .uint | .bool | .float | .functionDefinition | .functionPointer
-    | .rawPointer | .char | .reference | .coroutine | .array
-    | .closure | .coroutineClosure | .never => pure true
-    | .str | .slice | .dynamicTraitObject | .foreign | .adt | .alias
-    => pure false
-    | .tuple =>
-      let elements ← metadata ((node.payload.getObjVal? "shape").bind fun shape =>
-        (shape.getObjVal? "elements").bind Json.getArr?)
+    match node.shape with
+    | .int _ | .uint _ | .bool | .float _ | .functionDefinition .. | .functionPointer ..
+    | .rawPointer .. | .char | .reference .. | .coroutine .. | .array ..
+    | .closure .. | .coroutineClosure .. | .never => pure true
+    | .str | .slice _ | .dynamicTraitObject .. | .foreign _ | .adt _ | .alias .. => pure false
+    | .tuple elements =>
       if elements.isEmpty then return true
       let some tail := elements[elements.size - 1]?
         | throw (.invalidProgram "nonempty compiler tuple has no tail")
-      let tail ← metadata (tail.getObjValAs? Nat "type_id")
       trivial runtime fuel tail
-    | .patternType | .unsafeBinder =>
-      let key := if node.shapeKind == .patternType then "base" else "inner"
-      let inner ← metadata do
-        let shape ← node.payload.getObjVal? "shape"
-        (← shape.getObjVal? key).getObjValAs? Nat "type_id"
-      trivial runtime fuel inner
+    | .patternType inner _ | .unsafeBinder inner _ => trivial runtime fuel inner
 
 /-- Every recursive step follows a canonical type edge. The type-table length
 bounds an acyclic path; exhaustion diagnoses malformed cyclic input, rather

@@ -62,7 +62,7 @@ fn query<'tcx>(
     context: &mut ExportContext<'tcx>,
     name: &str,
 ) -> Result<Value, String> {
-    let result = (|| -> Result<Value, String> {
+    let result = (|| -> Result<u64, String> {
         // This is the same exact crate/type namespace query as Miri's
         // resolve_path(tcx, &["libc", name], TypeNS), followed by layout_of.
         let instance =
@@ -83,7 +83,7 @@ fn query<'tcx>(
         }
     })();
     Ok::<_, String>(match result {
-        Ok(value) => value,
+        Ok(value) => json!(value),
         Err(reason) => export_failure("libc_type_layouts::query", format!("{}", reason))?,
     })
 }

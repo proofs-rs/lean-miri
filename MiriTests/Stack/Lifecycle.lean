@@ -30,7 +30,7 @@ def lifecycle : StackLifecycleHooks Unit Bool Unit Nat :=
 def check (ok : Bool) (message : String) : IO Unit :=
   unless ok do throw (IO.userError message)
 def main : IO Unit := do
-  let pushed := Stack.empty.pushStackFrameRaw 0 lifecycle fixtureLoaded ⟨.Item 0, #[]⟩ (.stop true) place ⟨0⟩
+  let pushed := Stack.empty.pushStackFrameRaw 0 lifecycle fixtureLoaded 0 (.stop true) place ⟨0⟩
   check (pushed.outcome.isOk && pushed.state == 111 && pushed.stack.frames.size == 1) "push order"
   let done_ := pushed.stack.pushStackFrameDone pushed.state lifecycle
   check (done_.outcome.isOk && done_.state == 113) "storage initialization"
@@ -46,7 +46,7 @@ def main : IO Unit := do
   check (skipped.outcome == .ok .noCleanup && skipped.state == 0) "skip cleanup"
   let failedHooks := { lifecycle with requiredConstants := fun st s =>
     ⟨st, s + 10, .error (.machineHookFailure "test")⟩ }
-  let failed := Stack.empty.pushStackFrameRaw 0 failedHooks fixtureLoaded ⟨.Item 0, #[]⟩ (.stop true) place ⟨0⟩
+  let failed := Stack.empty.pushStackFrameRaw 0 failedHooks fixtureLoaded 0 (.stop true) place ⟨0⟩
   check (!failed.outcome.isOk && failed.stack.frames.size == 1 && failed.state == 11) "failed push retains frame"
   let unsizedHooks := { storage with
     veryTriviallySized := fun _ => .ok false

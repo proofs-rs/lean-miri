@@ -3,145 +3,53 @@ import Miri.Input.RuntimeMetadata
 
 open Lean Miri.ABI Miri.Input
 
-private def requireIO (value : Except String α) : IO α :=
-  match value with
-  | .ok value => pure value
-  | .error error => throw (IO.userError error)
+private def must (value : Except String α) : IO α :=
+  match value with | .ok value => pure value | .error error => throw (IO.userError error)
 
 private def check (condition : Bool) (message : String) : IO Unit :=
   unless condition do throw (IO.userError message)
-
-private def field (json : Json) (key : String) : Except String Json :=
-  json.getObjVal? key
-
-private def textField (json : Json) (key : String) : Except String String := do
-  (← field json key).getStr?
-
-private def natField (json : Json) (key : String) : Except String Nat := do
-  (← field json key).getNat?
-
-private def setField (json : Json) (key : String) (value : Json) : Except String Json := do
-  match json with
-  | .obj entries =>
-    let retained := entries.toList.filter fun entry => entry.1 != key
-    pure (Json.mkObj ((key, value) :: retained))
-  | _ => throw "expected JSON object"
-
-private def target : RuntimeTargetDataLayout := Id.run do
-  let size : Size := ⟨8⟩
-  let ptr : PointerSpec := ⟨size, .ONE, size, false⟩
-  return ⟨⟨.little, .w64⟩, .ONE, .ONE, .ONE, .ONE, .ONE, .ONE,
-    .ONE, .ONE, .ONE, .ONE, .ONE, #[], .ZERO, ptr, #[], .ZERO, .I32⟩
-
-private def typeNode (record : Json) : Except String TypeNode := do
-  let shape ← field record "shape"
-  let shapeKind ← match ← textField shape "kind" with
-    | "str" => pure .str
-    | "uint" => pure .uint
-    | kind => throw s!"unexpected retained type shape {kind}"
-  let shapeMetadata : TypeShapeMetadata := {
-    signedKind := none
-    unsignedKind := if shapeKind == .uint then some (.known .u8) else none
-    floatKind := none
-    adtKind := none }
-  let compilerFacts ← decodeTypeCompilerFacts (← field record "compiler_facts")
-  let layout ← decodeCompilerLayout (← field record "layout")
-  return {
-    id := ← natField record "type_id"
-    display := ← textField record "display"
-    shapeKind
-    shapeMetadata
-    signature := none
-    layout
-    compilerFacts := some compilerFacts
-    payload := Json.mkObj [("shape", shape)] }
-
-private def metadata (nodes : Array TypeNode) : Except String RuntimeMetadata := do
-  let mut layouts := #[]
-  for node in nodes do
-    let layout ← (RuntimeMetadata.layout target node.layout).mapError toString
-    layouts := layouts.push (node.id, .ok (⟨node.id, layout⟩ : TyAndLayout TypeId))
-  let source : ImportDocument := {
-    producer := ⟨"miri", "rustc", "version", "target"⟩
-    types := nodes
-    allocations := #[]
-    instances := #[]
-    selectedScope := none
-    functionAbis := #[]
-    bodies := #[]
-    typedTree := .scalar .null
-    raw := .null }
-  return {
-    source := source
-    target := target
-    layouts := layouts
-    nodeCache := some (RuntimeNodeLookupCache.build nodes)
-    layoutCache := some (RuntimeLayoutLookupCache.build layouts)
-  }
-
-private def projectionValue (strLayout u8Layout : Json) : Json :=
-  Json.mkObj [
-    ("typing_env", toJson "fully_monomorphized"),
-    ("parents", toJson #[Json.mkObj [
-      ("layout", strLayout),
-      ("fields", toJson #[Json.mkObj [
-        ("index", toJson (0 : Nat)),
-        ("type", Json.mkObj [("type_id", toJson (1 : Nat))]),
-        ("layout", u8Layout)
-      ]]),
-      ("variant", Json.null)
-    ]])
-  ]
-
-private def explicitStrRowZero (strRecord u8Record : Json) : Except String Json := do
-  let facts ← field strRecord "compiler_facts"
-  let projection := projectionValue (← field strRecord "layout") (← field u8Record "layout")
-  let facts ← setField facts "projection_queries" projection
-  setField strRecord "compiler_facts" facts
 
 private def fieldAt (runtime : RuntimeMetadata) (strId index : Nat) : Except String (TyAndLayout TypeId) := do
   let parent ← (runtime.lookup strId).mapError toString
   (runtime.field parent index).mapError toString
 
+private def withNodes (runtime : RuntimeMetadata) (nodes : Array TypeNode) : RuntimeMetadata :=
+  { runtime with source := { runtime.source with types := nodes } }
+
 def main (args : List String) : IO Unit := do
-  let strPath := args[0]?.getD "tests/runtime_metadata/fixtures/type155-159-raw-selected.json"
-  let u8Path := args[1]?.getD "tests/runtime_metadata/fixtures/u8-raw-selected.json"
-  let strText ← IO.FS.readFile strPath
-  let u8Text ← IO.FS.readFile u8Path
-  let strDocument ← requireIO (Json.parse strText)
-  let u8Document ← requireIO (Json.parse u8Text)
-  let strRecord ← match strDocument.getObjVal? "155" with
-    | .ok value => pure value
-    | .error error => throw (IO.userError s!"missing retained Type155: {error}")
-  let u8Records ← match u8Document.getArr? with
-    | .ok records => pure records
-    | .error error => throw (IO.userError s!"expected retained u8 record array: {error}")
-  let u8Record ← match u8Records[0]? with
-    | some value => pure value
-    | none => throw (IO.userError "retained u8 record is missing")
-  let strNode ← requireIO (typeNode strRecord)
-  let u8Node ← requireIO (typeNode u8Record)
-  let base ← requireIO (metadata #[strNode, u8Node])
-  let u8Layout ← requireIO ((base.lookup u8Node.id).mapError toString)
-  for index in [0, 7] do
-    let actual ← requireIO (fieldAt base strNode.id index)
+  let [path] := args | throw (IO.userError "expected fresh str_field exporter input")
+  let decoded ← must (decodeJson (← IO.FS.readFile path))
+  let runtime ← must ((RuntimeMetadata.ofDocument decoded.document).mapError toString)
+  let some strNode := runtime.source.types.find? (·.shapeKind == .str)
+    | throw (IO.userError "input contains no str type")
+  let some u8Node := runtime.source.types.find? (fun node => node.shapeKind == .uint &&
+    node.shapeMetadata.unsignedKind == some (.known .u8))
+    | throw (IO.userError "input contains no canonical u8 type")
+  let u8Layout ← must ((runtime.lookup u8Node.id).mapError toString)
+  for index in #[0, 1, 7, 99] do
+    let actual ← must (fieldAt runtime strNode.id index)
     check (actual.ty == u8Node.id && actual.layout == u8Layout.layout)
-      s!"legacy null-query str field {index} did not resolve to canonical u8"
-
-  let absent ← requireIO (metadata #[strNode])
-  for index in [0, 7] do
-    check (!(fieldAt absent strNode.id index).isOk)
-      s!"str field {index} succeeded without a canonical u8 node"
-  let duplicateU8 := {u8Node with id := 2}
-  let ambiguous ← requireIO (metadata #[strNode, u8Node, duplicateU8])
-  check (!(fieldAt ambiguous strNode.id 0).isOk)
-    "str field succeeded with ambiguous supported canonical u8 nodes"
-
-  let explicitRecord ← requireIO (explicitStrRowZero strRecord u8Record)
-  let explicitStr ← requireIO (typeNode explicitRecord)
-  let explicit ← requireIO (metadata #[explicitStr, u8Node])
-  for index in [0, 1, 7, 99] do
-    let actual ← requireIO (fieldAt explicit explicitStr.id index)
+      s!"compiler str query {index} lost its u8 result"
+  let some facts := strNode.compilerFacts | throw (IO.userError "str compiler facts absent")
+  let strWithoutQueries := { strNode with compilerFacts := some { facts with projectionQueries := none } }
+  let withoutQueries := withNodes runtime (runtime.source.types.map fun node =>
+    if node.id == strNode.id then strWithoutQueries else node)
+  for index in #[0, 7] do
+    let actual ← must (fieldAt withoutQueries strNode.id index)
     check (actual.ty == u8Node.id && actual.layout == u8Layout.layout)
-      s!"explicit str row-zero query did not map requested field {index} to u8"
-  IO.println "str field projection: legacy fallback, exact u8 failures, and explicit row-zero mapping passed"
+      s!"source str branch {index} lost its canonical u8 result"
+  let absent := withNodes withoutQueries (withoutQueries.source.types.map fun node =>
+    if node.id == u8Node.id then { node with shape := .never } else node)
+  check (!(fieldAt absent strNode.id 0).isOk) "str field succeeded without a canonical u8 type"
+  let ambiguous := withNodes withoutQueries (withoutQueries.source.types.push { u8Node with id := withoutQueries.source.types.size })
+  check (!(fieldAt ambiguous strNode.id 0).isOk) "str field succeeded with ambiguous u8 types"
+  let projection : ProjectionQueries := ⟨"fully_monomorphized",
+    #[⟨none, strNode.layoutId, #[⟨0, u8Node.id, u8Node.layoutId⟩]⟩]⟩
+  let explicitStr := { strNode with compilerFacts := some { facts with projectionQueries := some projection } }
+  let explicit := withNodes runtime (runtime.source.types.map fun node =>
+    if node.id == strNode.id then explicitStr else node)
+  for index in #[0, 1, 7, 99] do
+    let actual ← must (fieldAt explicit strNode.id index)
+    check (actual.ty == u8Node.id && actual.layout == u8Layout.layout)
+      s!"str row-zero query did not map requested field {index} to u8"
+  IO.println "str field projection: fresh compiler evidence, canonical u8 failures and row-zero mapping passed"

@@ -14,7 +14,7 @@ private def records (p : CompilerProviders.Prepared) : Result (Array Json) := do
   (← p.program.input.raw.getObjVal? "compiler_cast_queries").getArr?
 private def text (j : Json) (key : String) : Result String := do (← j.getObjVal? key).getStr?
 private def ref (j : Json) (key : String) : Result TyId := do
-  (← (← j.getObjVal? key).getObjVal? "type_id").getNat?
+  (← j.getObjVal? key).getNat?
 private def value (j : Json) : Result Json := CompilerCastQueryRecord.payload j
 private def unique (entries : Array Json) : Result Json := do
   let some first := entries[0]? | throw "missing exact cast compiler query"
@@ -83,7 +83,7 @@ def lockstepTails (p : CompilerProviders.Prepared) (source target : TyId) : Resu
 
 def boxLayout (p : CompilerProviders.Prepared) (pointee : TyId) : Result LocalLayout := do
   let result ← value (← query p "box_type" pointee)
-  let id ← (← result.getObjVal? "type_id").getNat?
+  let id ← (← result.getObjVal? "type").getNat?
   layout p id
 
 def supertraitSlot (p : CompilerProviders.Prepared) (source target : TyId) : Result (Option Nat) := do
@@ -92,27 +92,26 @@ def supertraitSlot (p : CompilerProviders.Prepared) (source target : TyId) : Res
 
 private def principalValue (j : Json) : Result (Option Nat) := do
   let result ← j.getObjVal? "principal_predicate"
-  if result == Json.null then pure none else pure (some (← (← result.getObjVal? "predicate_id").getNat?))
+  if result == Json.null then pure none else pure (some (← result.getNat?))
 
 /-- Full predicate-list identity is the key. The principal is exported by the
 compiler, not reconstructed by picking the first non-auto predicate. -/
-def principal (p : CompilerProviders.Prepared) (token : Nat) : Result (Option Nat) := do
-  let some predicates := (facts p).dynamicPredicates[token]? | throw "missing full dynamic predicate-list identity"
+def principal (p : CompilerProviders.Prepared) (predicates : PredicateList) : Result (Option Nat) := do
   let mut results := #[]
   for node in p.runtime.source.types do
     if node.shapeKind == .dynamicTraitObject then
-      let shape ← node.payload.getObjVal? "shape"
-      if (← shape.getObjVal? "predicates") == predicates then results := results.push (← principalValue shape)
+      let .dynamicTraitObject ids principal _ := node.shape | throw "dynamic type shape mismatch"
+      if ids == predicates then results := results.push principal
   for allocation in p.program.input.allocations do
     if let some (.vtable source) := allocation.data then
-      if (← source.payload.getObjVal? "predicates") == predicates then
-        results := results.push (← principalValue source.payload)
+      if source.predicates == predicates then
+        results := results.push source.principalPredicate
   let some first := results[0]? | throw "missing compiler principal query for exact predicate list"
   unless results.all (· == first) do throw "conflicting compiler principal queries"
   pure first
 
-def normalizePrincipal (p : CompilerProviders.Prepared) (token : Nat) : Result (Option Nat) := do
-  let some id ← principal p token | return none
+def normalizePrincipal (p : CompilerProviders.Prepared) (predicates : PredicateList) : Result (Option Nat) := do
+  let some id ← principal p predicates | return none
   let entries := p.program.input.compilerPredicates.filter (·.id == id)
   let some entry := entries[0]? | throw "missing principal predicate normalization evidence"
   unless entries.all (·.payload == entry.payload) do throw "conflicting principal normalization evidence"
@@ -134,7 +133,7 @@ def eraseSelfTraitRef (p : CompilerProviders.Prepared) (token : Nat) : Result Na
   for row in queryRows do
     let some metadata := (row.getObjVal? "vtable_metadata").toOption | continue
     let some typeRef := (row.getObjVal? "input_type").toOption | continue
-    let some sourceType := (typeRef.getObjValAs? Nat "type_id").toOption | continue
+    let some sourceType := (typeRef.getNat?).toOption | continue
     let some entryValues := ((metadata.getObjVal? "entries").bind Json.getArr?).toOption | continue
     for (entryValue, index) in entryValues.toList.zipIdx do
       let some entry := (Input.decodeVtableEntry entryValue

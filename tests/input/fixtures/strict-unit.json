@@ -1,6 +1,6 @@
 {
   "schema": "lean-miri-rustc-mir",
-  "schema_version": 3,
+  "schema_version": 4,
   "producer": {
     "miri_commit": "7fa591d7d4dd9af8154becbc8332f8096f8323b1",
     "rustc_commit": "8144389c895da997dbdecaa635e41d6a50be6ffd",
@@ -15,25 +15,8 @@
         "kind": "tuple",
         "elements": []
       },
-      "layout": {
-        "kind": "layout",
-        "size_bytes": 0,
-        "abi_align_bytes": 1,
-        "unadjusted_abi_align_bytes": 1,
-        "field_offsets_bytes": [],
-        "fields": {
-          "kind": "primitive",
-          "field_count": 0
-        },
-        "variants": {
-          "kind": "single",
-          "variant_index": 0
-        },
-        "backend_repr": {
-          "kind": "memory",
-          "sized": true
-        }
-      }
+      "layout": 0,
+      "layout_query_input_type": null
     },
     {
       "type_id": 1,
@@ -42,37 +25,8 @@
         "kind": "uint",
         "unsigned_kind": "u8"
       },
-      "layout": {
-        "kind": "layout",
-        "size_bytes": 1,
-        "abi_align_bytes": 1,
-        "unadjusted_abi_align_bytes": 1,
-        "field_offsets_bytes": [],
-        "fields": {
-          "kind": "primitive",
-          "field_count": 0
-        },
-        "variants": {
-          "kind": "single",
-          "variant_index": 0
-        },
-        "backend_repr": {
-          "kind": "scalar",
-          "scalar": {
-            "kind": "initialized",
-            "primitive": {
-              "kind": "integer",
-              "size_bytes": 1,
-              "integer_kind": "u8",
-              "signed": false
-            },
-            "valid_range": {
-              "start": "0",
-              "end": "255"
-            }
-          }
-        }
-      }
+      "layout": 1,
+      "layout_query_input_type": null
     },
     {
       "type_id": 2,
@@ -81,37 +35,8 @@
         "kind": "uint",
         "unsigned_kind": "u16"
       },
-      "layout": {
-        "kind": "layout",
-        "size_bytes": 2,
-        "abi_align_bytes": 2,
-        "unadjusted_abi_align_bytes": 2,
-        "field_offsets_bytes": [],
-        "fields": {
-          "kind": "primitive",
-          "field_count": 0
-        },
-        "variants": {
-          "kind": "single",
-          "variant_index": 0
-        },
-        "backend_repr": {
-          "kind": "scalar",
-          "scalar": {
-            "kind": "initialized",
-            "primitive": {
-              "kind": "integer",
-              "size_bytes": 2,
-              "integer_kind": "u16",
-              "signed": false
-            },
-            "valid_range": {
-              "start": "0",
-              "end": "65535"
-            }
-          }
-        }
-      }
+      "layout": 2,
+      "layout_query_input_type": null
     }
   ],
   "allocations": [
@@ -130,16 +55,10 @@
     {
       "instance_id": 0,
       "kind": "intrinsic_dispatch",
-      "def_id": {
-        "crate": 1,
-        "index": 1
-      },
+      "def_id": 0,
       "instance_kind": {
         "kind": "intrinsic",
-        "def_id": {
-          "crate": 1,
-          "index": 1
-        }
+        "def_id": 0
       },
       "generic_args": []
     }
@@ -155,24 +74,9 @@
       "locals": [
         {
           "local": 0,
-          "type": {
-            "type_id": 0
-          },
+          "type": 0,
           "source_info": {
-            "span": {
-              "lo": 0,
-              "hi": 0,
-              "start": {
-                "line": 1,
-                "column": 0
-              },
-              "end": {
-                "line": 1,
-                "column": 0
-              },
-              "ctxt": "root",
-              "file": "strict.rs"
-            },
+            "span": 0,
             "scope": 0
           }
         }
@@ -183,20 +87,7 @@
           "statements": [],
           "terminator": {
             "source_info": {
-              "span": {
-                "lo": 0,
-                "hi": 0,
-                "start": {
-                  "line": 1,
-                  "column": 0
-                },
-                "end": {
-                  "line": 1,
-                  "column": 0
-                },
-                "ctxt": "root",
-                "file": "strict.rs"
-              },
+              "span": 0,
               "scope": 0
             },
             "kind": {
@@ -205,19 +96,161 @@
           },
           "is_cleanup": false
         }
+      ],
+      "def_id": 0,
+      "span": 0,
+      "preamble_def_span": 0,
+      "backtrace_spans": [],
+      "source_scopes": [
+        {
+          "scope": 0,
+          "parent": null,
+          "span": 0,
+          "inlined": null,
+          "inlined_parent_scope": null
+        }
       ]
     }
   ],
-  "shared_payloads": {
-    "schema_version": 2,
-    "nodes": []
-  },
   "synthetic_reference_probe": {
-    "allocation": {
-      "allocation_id": 0
+    "allocation": 0,
+    "instance": 0
+  },
+  "layouts": [
+    {
+      "kind": "layout",
+      "size_bytes": 0,
+      "abi_align_bytes": 1,
+      "unadjusted_abi_align_bytes": 1,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "memory",
+        "sized": true
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
     },
-    "instance": {
-      "instance_id": 0
+    {
+      "kind": "layout",
+      "size_bytes": 1,
+      "abi_align_bytes": 1,
+      "unadjusted_abi_align_bytes": 1,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "scalar",
+        "scalar": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "integer",
+            "size_bytes": 1,
+            "integer_kind": "u8",
+            "signed": false
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "255"
+          }
+        }
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
+    },
+    {
+      "kind": "layout",
+      "size_bytes": 2,
+      "abi_align_bytes": 2,
+      "unadjusted_abi_align_bytes": 2,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "scalar",
+        "scalar": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "integer",
+            "size_bytes": 2,
+            "integer_kind": "u16",
+            "signed": false
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "65535"
+          }
+        }
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
     }
-  }
+  ],
+  "spans": [
+    {
+      "lo": 0,
+      "hi": 0,
+      "start": {
+        "line": 1,
+        "column": 0
+      },
+      "end": {
+        "line": 1,
+        "column": 0
+      },
+      "ctxt": "root",
+      "file": "strict.rs",
+      "is_dummy": false
+    }
+  ],
+  "fn_abis": [],
+  "definitions": [
+    {
+      "crate": 1,
+      "index": 1
+    }
+  ],
+  "type_constants": [],
+  "body_roots": [
+    {
+      "body": 0,
+      "entry_instance": 0,
+      "def_id": 0,
+      "def_path": "strict::empty",
+      "is_static": false,
+      "thread_local_static": false,
+      "promoted_bodies": []
+    }
+  ],
+  "predicates": [],
+  "compiler_abi_layout_schema": "physical_ty_and_layout_v1",
+  "compiler_predicate_queries": []
 }

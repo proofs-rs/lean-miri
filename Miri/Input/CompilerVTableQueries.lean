@@ -8,9 +8,9 @@ namespace Miri.Input.CompilerVTableQueries
 open Lean Miri.Interpreter
 structure Entry where
   inputType : TypeId
-  inputPredicates : Nat
+  inputPredicates : PredicateList
   outputType : TypeId
-  outputPredicates : Nat
+  outputPredicates : PredicateList
   typeMonomorphic : Bool
   predicatesMonomorphic : Bool
   diagnosticQueryId : Option Nat := none
@@ -19,7 +19,7 @@ structure Prepared where
   entries : Array Entry
   traceQueries : Bool := false
 private def ref (facts : CompilerFactAdapters.Prepared) (j : Json) (key : String) : Except String TypeId := do
-  let id ← (← (← j.getObjVal? key).getObjVal? "type_id").getNat?
+  let id ← (← j.getObjVal? key).getNat?
   let _ ← facts.context.runtime.node id |>.mapError toString
   pure id
 
@@ -29,8 +29,8 @@ def prepare (facts : CompilerFactAdapters.Prepared) : Except String Prepared := 
   for record in records do
     let input ← ref facts record "input_type"
     let output ← ref facts record "output_type"
-    let before ← CompilerVTableFacts.exportedArrayToken facts (← record.getObjVal? "input_predicates")
-    let after ← CompilerVTableFacts.exportedArrayToken facts (← record.getObjVal? "output_predicates")
+    let before ← (← (← record.getObjVal? "input_predicates").getArr?).mapM Json.getNat?
+    let after ← (← (← record.getObjVal? "output_predicates").getArr?).mapM Json.getNat?
     let typeMono ← (← record.getObjVal? "output_type_monomorphic_enough").getBool?
     let dynMono ← (← record.getObjVal? "output_predicates_monomorphic_enough").getBool?
     unless (← CompilerFacts.boolean facts.context output "is_monomorphic_enough") == typeMono do
@@ -43,17 +43,17 @@ def prepare (facts : CompilerFactAdapters.Prepared) : Except String Prepared := 
       ((record.getObjVal? "query_id").bind Json.getNat?).toOption⟩
   pure ⟨facts,entries,false⟩
 
-def eraseAndAnonymize (prepared : Prepared) (ty : TypeId) (predicates : Nat) : Except String (TypeId × Nat) := do
+def eraseAndAnonymize (prepared : Prepared) (ty : TypeId) (predicates : PredicateList) : Except String (TypeId × PredicateList) := do
   let found := prepared.entries.find? (fun entry => entry.inputType == ty && entry.inputPredicates == predicates)
   if prepared.traceQueries then
     let id := (found.bind (·.diagnosticQueryId)).map toString |>.getD "missing"
-    dbg_trace s!"vtable_query input_type={ty} input_token={predicates} query_id={id}"
+    dbg_trace s!"vtable_query input_type={ty} input_predicates={reprStr predicates} query_id={id}"
   let some entry := found
-    | throw s!"missing exact type/predicate-pair region erasure query (type_id={ty}, predicate_token={predicates})"
+    | throw s!"missing exact type/predicate-pair region erasure query (type_id={ty}, predicate_ids={reprStr predicates})"
   pure (entry.outputType,entry.outputPredicates)
 
 /-- Diagnostic output preserves the exact lookup, including missing-key errors. -/
-theorem eraseAndAnonymize_trace_identity (prepared : Prepared) (ty : TypeId) (predicates : Nat) :
+theorem eraseAndAnonymize_trace_identity (prepared : Prepared) (ty : TypeId) (predicates : PredicateList) :
     eraseAndAnonymize {prepared with traceQueries := true} ty predicates =
       eraseAndAnonymize {prepared with traceQueries := false} ty predicates := by
   rfl
@@ -62,7 +62,7 @@ def ensureMonomorphicType (prepared : Prepared) (ty : TypeId) : Except String Un
   unless (← CompilerFacts.boolean prepared.facts.context ty "is_monomorphic_enough") do
     throw "source TooGeneric: vtable concrete type has parameters"
 
-def ensureMonomorphicDyn (prepared : Prepared) (predicates : Nat) : Except String Unit := do
+def ensureMonomorphicDyn (prepared : Prepared) (predicates : PredicateList) : Except String Unit := do
   let matching := prepared.entries.filter (·.outputPredicates == predicates)
   let some entry := matching[0]? | throw "missing exact erased-predicate monomorphization query"
   unless matching.all (·.predicatesMonomorphic == entry.predicatesMonomorphic) do

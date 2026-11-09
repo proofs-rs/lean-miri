@@ -11,27 +11,19 @@ private def lift (value : Except String A) : EStateM StepError S A :=
 
 private def shape (p : CompilerProviders.Prepared) (layout : LocalLayout) : Except String Native.TypeShape := do
   let source ← p.runtime.node layout.ty |>.mapError toString
-  if source.shapeKind == .adt then
-    let value ← source.payload.getObjVal? "shape"
-    let repr ← value.getObjVal? "representation"
-    let reprC ← repr.getObjValAs? Bool "c"
-    let (isEnum,isStruct) ← match source.shapeMetadata.adtKind with
-      | some .enumKind => pure (true,false)
-      | some .structKind => pure (false,true)
-      | some .unionKind => pure (false,false)
-      | _ => throw "native ADT kind evidence missing or unresolved"
-    -- Scalar ABI queries only the ADT flags, not its unused field layouts.
+  match source.shape with
+  | .adt data =>
+    let reprC := data.representation.c
+    let (isEnum,isStruct) := match data.kind with
+      | .enumKind => (true,false) | .structKind => (false,true) | .unionKind => (false,false)
     if let .Scalar .. := layout.layout.backendRepr then return .adt isEnum isStruct reprC #[]
     if !isStruct || !reprC then return .adt isEnum isStruct reprC #[]
     let info ← CompilerFacts.adtInfo p.lifecycle.calls.symbols.facts.context layout.ty
     unless info.variants.size == 1 do throw "native struct lacks one non-enum variant"
     let some fields := info.variants[0]? | throw "native struct fields unavailable"
     pure (.adt isEnum isStruct reprC (fields.map (·.ty)))
-  else if source.shapeKind == .tuple then
-    let value ← source.payload.getObjVal? "shape"
-    let elements ← (← value.getObjVal? "elements").getArr?
-    pure (if elements.isEmpty then .emptyTuple else .other)
-  else pure .other
+  | .tuple elements => pure (if elements.isEmpty then .emptyTuple else .other)
+  | _ => pure .other
 
 /-- Genuine compiler-query failure becomes the source unsupported-FFI-type
 outcome. Missing/unresolved metadata remains a separate outer error. Runtime

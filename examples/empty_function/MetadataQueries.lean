@@ -44,13 +44,14 @@ theorem target_features {p options config} (fields : Fields p options config)
   with_unfolding_all rfl
 
 theorem not_closure {p options config} (fields : Fields p options config)
-    (limits : ExecutionMachine.Limits) (definition : DefId) (args : Array GenericArg) (abi : FnAbi TyId)
-    (query : CompilerCallFacts.isClosureLike p.intrinsics ⟨.Item definition,args⟩ = .ok false) :
-    (ExecutionMachine.callHooks config limits).nonCapturingClosure () ⟨.Item definition,args⟩ abi = pure false := by
-  change ExecutionCallLeaves.nonCapturingClosure config.calls.compiler ⟨.Item definition,args⟩ abi = _
+    (limits : ExecutionMachine.Limits) (fn : CallInstance) (definition : DefId) (abi : FnAbi TyId)
+    (kind : CompilerInstance.kindOf p.loweringContext p.program.compilerTables fn = .ok (.Item definition))
+    (query : CompilerCallFacts.isClosureLike p.intrinsics fn = .ok false) :
+    (ExecutionMachine.callHooks config limits).nonCapturingClosure () fn abi = pure false := by
+  change ExecutionCallLeaves.nonCapturingClosure config.calls.compiler fn abi = _
   rw [fields.callsCompiler]
   simp only [CompilerExecutionCallLeaves.make, ExecutionCallLeaves.nonCapturingClosure]
-  simp only [query]
+  simp only [kind, query]
   with_unfolding_all rfl
 
 end EmptyFunction.MetadataQueries

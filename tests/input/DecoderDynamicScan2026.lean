@@ -6,8 +6,6 @@ private def set (value : Json) (key : String) (child : Json) : Except String Jso
   let fields ← value.getObj?
   pure (Json.mkObj ((key, child) :: fields.toList.filter (fun item => item.1 != key)))
 
-private def ref (id : Nat) : Json := Json.mkObj [("$lean_miri_shared_ref", toJson id)]
-
 private def malformedCast : Json := Json.mkObj [
   ("kind", toJson ("Cast" : String)),
   ("vtable_allocation", Json.mkObj [
@@ -24,18 +22,13 @@ private def check (condition : Bool) (message : String) : IO Unit :=
 def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected current exporter MIR JSON")
   let base ← must (Json.parse (← IO.FS.readFile path))
-  let _ ← must (decodeRuntimeJson base.compress)
+  let _ ← must (decodeJson base.compress)
   IO.println "PASS direct-format input accepted before malformed-cast injection"
-  let catalog ← must (base.getObjVal? "shared_payloads")
-  let nodes ← must ((← must (catalog.getObjVal? "nodes")).getArr?)
-  let malformedId := nodes.size
-  let catalog ← must (set catalog "nodes" (.arr (nodes.push malformedCast)))
-  let withCatalog ← must (set base "shared_payloads" catalog)
-  let withFirst ← must (set withCatalog "synthetic_first" (ref malformedId))
-  let input ← must (set withFirst "synthetic_second" (ref malformedId))
-  match decodeRuntimeJson input.compress with
+  let withFirst ← must (set base "synthetic_first" malformedCast)
+  let input ← must (set withFirst "synthetic_second" malformedCast)
+  match decodeJson input.compress with
   | .error path =>
     check (path == "$.synthetic_first.vtable_allocation: supported dynamic vtable upcast lacks matching compiler cast evidence")
-      s!"shared malformed vtable must retain first DFS diagnostic path; got {path}"
-    IO.println s!"PASS shared malformed vtable first path: {path}"
+      s!"malformed vtable must retain first DFS diagnostic path; got {path}"
+    IO.println s!"PASS malformed vtable first path: {path}"
   | .ok _ => throw (IO.userError "malformed supported dynamic vtable upcast was accepted")

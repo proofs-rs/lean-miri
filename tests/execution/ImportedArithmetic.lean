@@ -283,7 +283,7 @@ private def execute (m : Metadata) (fuel : Nat) (state : State) : State × Excep
     | .error e => (state, .error e)
     | .ok false => (state, .ok ())
     | .ok true => execute m fuel state
-private def initialState (m : Metadata) (lowered : Input.LoweredBody) (loaded : LoadedBody) (argument : Nat) : Result State := do
+private def initialState (m : Metadata) (lowered : Input.LoweredBody) (loaded : LoadedBody) (fnInstance : CallInstance) (argument : Nat) : Result State := do
   if lowered.body.argumentCount != 1 then throw "expected one argument"
   let retTy ← need lowered.body.locals[0]? "return type"
   let retLayout ← (lookup m retTy).mapError reprStr
@@ -291,10 +291,9 @@ private def initialState (m : Metadata) (lowered : Input.LoweredBody) (loaded : 
   let _ := span
   let (returnMemory, output) ← (ReturnMemory.create m.target.base retLayout).mapError reprStr
   let returnPlace : RuntimeStackPlace AllocId := .memory ⟨output.mplace,retLayout⟩
-  let definition ← lowered.ownDefinitionId
   let (_,localsIdentity) := (LocalsIdentitySupply.mk 0).allocate
   let frame : Frame AllocId (TyAndLayout MIR.TyId) Unit :=
-    Frame.create loaded ⟨.Item definition, #[]⟩ () (.stop true) returnPlace ⟨0⟩ localsIdentity
+    Frame.create loaded fnInstance () (.stop true) returnPlace ⟨0⟩ localsIdentity
   let mut frame := { frame with location := .mir ⟨0,0⟩ }
   -- MIR locals without StorageLive are always live; source liveness analysis
   -- determines this set from the imported statements.
@@ -324,13 +323,13 @@ def main (args : List String) : IO Unit := do
   check (decoded.document.producer.targetTriple == "x86_64-unknown-linux-gnu") "unsupported fixture target"
   let program ← must (Input.lowerProgram decoded.document)
   let prepared ← must (Input.CallResolution.prepare program)
-  let definition ← must (prepared.program.rootDefinitionId 0)
-  let loaded ← must (Input.CallResolution.loadedBodyOfInstance prepared ⟨.Item definition,#[]⟩)
+  let root ← must (need prepared.program.input.bodyRoots[0]? "canonical root instance")
+  let loaded ← must (Input.CallResolution.loadedBodyOfInstance prepared root.entryInstance)
   let lowered ← must (need prepared.program.bundle.bodies[loaded.identity.index]? "canonical root instance body")
   let metadata := prepared.runtime
-  check (metadata.obligations.isEmpty) "fixture layout import obligations"
+  check (metadata.source.types.all (fun ty => (metadata.lookup ty.id).isOk)) "fixture layout import obligations"
   check (metadata.target.base == TargetDataLayout.mk .little .w64) "exported target mismatch"
-  let initial ← must (initialState metadata lowered loaded 41)
+  let initial ← must (initialState metadata lowered loaded root.entryInstance 41)
   let (_, beforeWrite) := ReturnMemory.read metadata.target.base initial.machine.returnMemory initial.machine.returnPlace
   check (!beforeWrite.isOk) "uninitialized return memory read succeeded"
   let (finished,outcome) := execute metadata 100 initial
@@ -349,14 +348,14 @@ def main (args : List String) : IO Unit := do
   check (finished.machine.trace.contains "scalarBinary" && finished.machine.trace.contains "project" &&
     finished.machine.trace.contains "writeLocal" && finished.machine.trace.contains "assertCondition" &&
     finished.machine.trace.contains "returnMemoryWrite") "integration path missing"
-  let overflowInitial ← must (initialState metadata lowered loaded 4294967295)
+  let overflowInitial ← must (initialState metadata lowered loaded root.entryInstance 4294967295)
   let (panicked,overflow) := execute metadata 100 overflowInitial
   check (overflow == Except.error (StepError.machineStop "assertion panic")) "overflow failed to reach Assert panic"
   check (!panicked.machine.returned && panicked.machine.trace.contains "assertPanic") "overflow returned normally"
   let unknown := runRvalue (ScalarOps.binary (scalarHooks metadata) () .Add
     ⟨.uninit, { returnedLayout with ty := 999999 }⟩ ⟨.uninit, returnedLayout⟩) initial
   check (!unknown.2.isOk) "unknown type accepted"
-  let missing := { metadata with layouts := #[], layoutCache := none }
+  let missing := { metadata with source := { metadata.source with layouts := #[] } }
   let rejected := execute missing 100 initial
   check (!rejected.2.isOk) "missing layout accepted"
   IO.println "returned=42"

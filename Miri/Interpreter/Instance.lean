@@ -6,6 +6,9 @@ payload; a definition ID alone is not function-instance identity. -/
 namespace Miri.Interpreter
 open Miri.MIR
 
+/-- A predicate sequence is owned by its type or query; elements address the canonical predicate table. -/
+abbrev PredicateList := Array Nat
+
 inductive CallReifyReason where
   | FnPtr | Vtable
   deriving Repr, DecidableEq
@@ -35,7 +38,7 @@ inductive CallInstanceKind where
   | Shim (shim : CallShimKind)
   deriving Repr, DecidableEq
 
-structure CallInstance where
+structure InstanceData where
   kind : CallInstanceKind
   args : Array GenericArg
   deriving Repr, DecidableEq
@@ -62,10 +65,6 @@ def defId : CallInstanceKind → DefId
 
 end CallInstanceKind
 
-namespace CallInstance
-
-def defId (self : CallInstance) : DefId := self.kind.defId
-
-end CallInstance
+abbrev CallInstance := Nat
 
 end Miri.Interpreter

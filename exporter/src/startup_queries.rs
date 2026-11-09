@@ -39,7 +39,7 @@ fn resolve_path<'tcx>(tcx: TyCtxt<'tcx>, path: &[&str], namespace: Namespace)
     None
 }
 
-pub(super) fn export(tcx: TyCtxt<'_>) -> Result<Value, String> {
+pub(super) fn export(tcx: TyCtxt<'_>, context: &mut ExportContext<'_>) -> Result<Value, String> {
     // Exact helpers::is_no_core: rustc_attr_ir::find_attr!(tcx, crate, NoCore).
     let no_core = rustc_attr_ir::find_attr!(tcx, crate, NoCore);
     if no_core {
@@ -51,7 +51,7 @@ pub(super) fn export(tcx: TyCtxt<'_>) -> Result<Value, String> {
         Namespace::ValueNS,
     ) {
         Some(definition) => compiler_fact(json!({
-            "definition": def_json(definition),
+            "definition": def_json(context, definition),
             "mir_available": tcx.is_mir_available(definition),
         })),
         None => export_failure(

@@ -74,7 +74,7 @@ def main (args : List String) : IO Unit := do
   if extra.contains "trace-map" then
     for entry in queries.entries do
       let some id := entry.diagnosticQueryId | throw (IO.userError "query trace lacks compiler query_id")
-      IO.println s!"vtable_query_map query_id={id} input_type={entry.inputType} input_token={entry.inputPredicates} output_type={entry.outputType} output_token={entry.outputPredicates}"
+      IO.println s!"vtable_query_map query_id={id} input_type={entry.inputType} input_predicates={entry.inputPredicates} output_type={entry.outputType} output_predicates={entry.outputPredicates}"
   check (!queries.entries.isEmpty) "no compiler vtable queries: no coverage"
   if extra.contains "predicate-contrast" then
     check (queries.entries.any fun first => queries.entries.any fun second =>

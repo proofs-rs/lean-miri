@@ -10,7 +10,7 @@ open Miri.ABI Miri.Memory
 inductive DynamicTypeKind where
   | adt (isSimd : Bool)
   | tuple (isSimd : Bool)
-  | dynamic (expectedTrait : Nat)
+  | dynamic (expectedTrait : PredicateList)
   | slice | str | foreign
   deriving DecidableEq, Repr
 
@@ -20,7 +20,7 @@ structure DynamicLayoutHooks (P S C : Type) where
   classify : C → MIR.TyId → RvalueM S DynamicTypeKind
   field : C → TyAndLayout MIR.TyId → Nat → RvalueM S (TyAndLayout MIR.TyId)
   packedAlign : C → MIR.TyId → RvalueM S (Option Align)
-  vtableSizeAndAlign : C → Pointer (Option P) → Option Nat → RvalueM S (Size × Align)
+  vtableSizeAndAlign : C → Pointer (Option P) → Option PredicateList → RvalueM S (Size × Align)
 
 namespace DynamicLayout
 private def liftResult (result : Except StepError A) : RvalueM S A :=

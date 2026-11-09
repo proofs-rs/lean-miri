@@ -12,8 +12,11 @@ import os
 import re
 from pathlib import Path
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+from mir_json import pool_entry
 
 
 def require_external_constant(document, name):
@@ -22,15 +25,6 @@ def require_external_constant(document, name):
     Inspect the original exported graph, not one of the salt probes created by
     prepared allocation closure. The Lean checks still consume the original bytes.
     """
-    def expand(value):
-        if isinstance(value, dict):
-            if set(value) == {'$lean_miri_shared_ref'}:
-                return expand(document['shared_payloads']['nodes'][value['$lean_miri_shared_ref']])
-            return {key: expand(item) for key, item in value.items()}
-        if isinstance(value, list):
-            return [expand(item) for item in value]
-        return value
-
     def walk(value):
         if isinstance(value, dict):
             yield value
@@ -40,22 +34,22 @@ def require_external_constant(document, name):
             for item in value:
                 yield from walk(item)
 
-    allocations = {row['allocation_id']: row for row in expand(document['allocations'])}
-    for body in expand(document['bodies']):
-        if body.get('def_path') != 'miri_start':
+    for root in document['body_roots']:
+        if root['def_path'] != 'miri_start':
             continue
+        body = pool_entry(document, 'bodies', root['body'])
         for constant in walk(body['basic_blocks']):
             source = constant.get('source', {})
             if (constant.get('kind') != 'evaluated_const' or source.get('def_path') != name or
-                    source.get('def_id', {}).get('crate', 0) == 0):
+                    pool_entry(document, 'definitions', source['def_id'])['crate'] == 0):
                 continue
             value = constant.get('value', {})
             if value.get('kind') != 'indirect_allocation':
                 continue
-            allocation = allocations[value['allocation']['allocation_id']]
-            for reference in walk(allocation):
-                target = reference.get('target', {}).get('allocation_id')
-                if allocations.get(target, {}).get('kind') == 'vtable':
+            allocation = pool_entry(document, 'allocations', value['allocation'])
+            for reference in allocation.get('relocations', []):
+                target = pool_entry(document, 'allocations', reference['target'])
+                if target.get('kind') == 'vtable':
                     print(f'vtable-erasure: external constant {name} -> symbolic vtable PASS')
                     return
     raise SystemExit(f'missing external constant with symbolic-vtable relocation: {name}')
@@ -70,15 +64,6 @@ def fingerprint(raw):
 
 def summarize_queries(raw, provenance, query_log, runtime_log):
     """Join producer rows to actual lookups; catalog presence is not consumption."""
-    def expand(value):
-        if isinstance(value, dict):
-            if set(value) == {'$lean_miri_shared_ref'}:
-                return expand(document['shared_payloads']['nodes'][value['$lean_miri_shared_ref']])
-            return {key: expand(item) for key, item in value.items()}
-        if isinstance(value, list):
-            return [expand(item) for item in value]
-        return value
-
     def events(log, prefix):
         for line in log.splitlines():
             if line.startswith(prefix + ' '):
@@ -92,9 +77,9 @@ def summarize_queries(raw, provenance, query_log, runtime_log):
     document = json.loads(raw)
     if (provenance['snapshot_fnv1a64'] != fingerprint(raw) or
             provenance['snapshot_byte_length'] != len(raw) or
-            provenance['rustc_commit'] != expand(document['producer'])['rustc_commit']):
+            provenance['rustc_commit'] != document['producer']['rustc_commit']):
         raise ValueError('producer provenance belongs to different input bytes/compiler')
-    rows = expand(document['compiler_vtable_queries'])
+    rows = document['compiler_vtable_queries']
     catalog = {row['query_id']: row for row in rows}
     origins = {row['query_id']: row for row in provenance['queries']}
     if len(catalog) != len(rows) or len(origins) != len(provenance['queries']) or catalog.keys() != origins.keys():
@@ -110,8 +95,8 @@ def summarize_queries(raw, provenance, query_log, runtime_log):
     result = []
     for query_id, row in sorted(catalog.items()):
         origin = origins[query_id]
-        before = (row['input_type']['type_id'], [p['predicate_id'] for p in row['input_predicates']])
-        after = (row['output_type']['type_id'], [p['predicate_id'] for p in row['output_predicates']])
+        before = (row['input_type'], row['input_predicates'])
+        after = (row['output_type'], row['output_predicates'])
         if (origin['input_type_id'], origin['input_predicate_ids']) != before or not origin['origins']:
             raise ValueError('producer provenance differs from complete query key')
         if any(o.get('parent_query_id') is not None and o['parent_query_id'] not in catalog

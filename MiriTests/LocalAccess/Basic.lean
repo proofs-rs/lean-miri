@@ -9,7 +9,7 @@ def frame (value : LocalValue Unit) (cached : Bool) : Frame Unit LocalLayout Uni
   { body := fixtureLoaded.body
     bodyIdentity := fixtureLoaded.identity
     localsIdentity := fixtureIdentity
-    functionInstance := ⟨.Item 0, #[]⟩, extra := (), returnContinuation := .stop true
+    functionInstance := 0, extra := (), returnContinuation := .stop true
     returnPlace := .frameLocal 0 0 none layout fixtureIdentity
     locals := #[⟨value, if cached then some layout else none⟩]
     vaList := #[], trackCallerArg := none, location := .unwinding ⟨0⟩ }

@@ -12,6 +12,14 @@ private def must {α : Type} (value : Except String α) : IO α :=
 private def check (condition : Bool) (message : String) : IO Unit :=
   unless condition do throw (IO.userError message)
 
+private def checkPools (source : LoweredProgram) (prepared : CompilerProviders.Prepared) : IO Unit := do
+  check (prepared.program.bundle.spans == source.bundle.spans)
+    "provider preparation changed canonical span IDs"
+  check (prepared.program.bundle.definitions == source.bundle.definitions)
+    "provider preparation changed canonical definition IDs"
+  check (prepared.program.bundle.typeConstants == source.bundle.typeConstants)
+    "provider preparation changed canonical type-constant IDs"
+
 def main (args : List String) : IO Unit := do
   let [firstPath, secondPath] := args
     | throw (IO.userError "usage: ProviderContextTests <root-u32> <control-flow>")
@@ -22,6 +30,8 @@ def main (args : List String) : IO Unit := do
   check (firstProgram.input.raw != secondProgram.input.raw)
     "two distinct genuine documents unexpectedly equal"
   let prepared ← must (CompilerProviders.prepare firstProgram)
+  checkPools firstProgram prepared
+  checkPools secondProgram (← must (CompilerProviders.prepare secondProgram))
   check (prepared.loweringContext.sourceDocument == some firstProgram.input.raw)
     "prepared provider cache does not point at own program"
   let nested := prepared.lifecycle.calls.symbols.facts.context
@@ -42,4 +52,4 @@ def main (args : List String) : IO Unit := do
   let rebound := wrongNested.withProgram firstProgram
   check (rebound.loweringContext.sourceDocument == some firstProgram.input.raw)
     "withProgram left a stale context certificate"
-  IO.println "source147 provider-own-program and nested-context fallback PASS"
+  IO.println "source147 canonical provider pools, own-program and nested-context fallback PASS"

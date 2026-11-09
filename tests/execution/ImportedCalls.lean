@@ -211,16 +211,12 @@ private def triviallySized (m : Metadata) : Nat → MIR.TyId → Except StackErr
   | 0,_ => .error (.layoutFailure "type-classifier recursion exhausted")
   | fuel+1,ty => do
     let value ← (node m ty).mapError (fun e => .layoutFailure (reprStr e))
-    match value.shapeKind with
-    | .uint | .bool | .never | .functionDefinition => pure true
-    | .tuple =>
-      let shape ← Input.RuntimeMetadata.jsonField value.payload "shape" |>.mapError (fun e => .layoutFailure (toString e))
-      let elements ← Input.RuntimeMetadata.array shape "elements" |>.mapError (fun e => .layoutFailure (toString e))
+    match value.shape with
+    | .uint _ | .bool | .never | .functionDefinition .. => pure true
+    | .tuple elements =>
       match elements.back? with
       | none => pure true
-      | some last =>
-        let id ← Input.RuntimeMetadata.number last "type_id" |>.mapError (fun e => .layoutFailure (toString e))
-        triviallySized m fuel id
+      | some id => triviallySized m fuel id
     | _ => throw (.unsupportedUnexpectedLocalType 0 ty)
 private def storageHooks (m : Metadata) : LocalStorageHooks AllocId (TyAndLayout MIR.TyId) Nat Unit := {
   veryTriviallySized := triviallySized m 32
@@ -267,20 +263,6 @@ private def jfield := Input.RuntimeMetadata.jsonField
 private def jnat := Input.RuntimeMetadata.number
 private def jtext := Input.RuntimeMetadata.text
 private def jarray := Input.RuntimeMetadata.array
-private def parseSpan (j : Lean.Json) : Except StepError Input.SourceSpanData := do
-  let start ← compiler (jfield j "start")
-  let stop ← compiler (jfield j "end")
-  return {
-    originalPayload := j.compress
-    lo := ← compiler (jnat j "lo"), hi := ← compiler (jnat j "hi")
-    start := ⟨← compiler (jnat start "line"), ← compiler (jnat start "column")⟩
-    «end» := ⟨← compiler (jnat stop "line"), ← compiler (jnat stop "column")⟩
-    context := ← compiler (jfield j "ctxt" >>= fun p => jtext p "rustc_debug")
-    file := ← compiler (jfield j "file" >>= fun p => jtext p "rustc_debug") }
-private def internSpan (spans : Array Input.SourceSpanData) (span : Input.SourceSpanData) : Array Input.SourceSpanData × MIR.SpanRef :=
-  match spans.toList.idxOf? span with
-  | some index => (spans, ⟨index⟩)
-  | none => (spans.push span, ⟨spans.size⟩)
 private def prepare (document : Input.ImportDocument) : Except StepError Program := do
   let lowered ← (Input.lowerProgram document).mapError StepError.invalidProgram
   let resolution ← (Input.CallResolution.prepare lowered).mapError StepError.invalidProgram
@@ -289,84 +271,68 @@ private def prepare (document : Input.ImportDocument) : Except StepError Program
   let signature ← (document.types.findSome? (·.signature)).toExcept (.unsupported "Rust signature")
   if signature.abi.kind.tag != "rust" then
     throw (.unsupported "non-Rust ABI fixture")
-  let mut spans := lowered.bundle.spans
+  let spans := lowered.bundle.spans
   let mut bodySpans := #[]
   let mut localSpans := #[]
   for body in lowered.bundle.bodies do
-    let span ← parseSpan (← compiler (jfield body.input.payload "span"))
-    let (next,bodySpan) := internSpan spans span
-    spans := next
-    bodySpans := bodySpans.push bodySpan
+    unless body.input.spanId < spans.size do throw (.invalidProgram "missing canonical body span")
+    bodySpans := bodySpans.push ⟨body.input.spanId⟩
     let mut localRefs := #[]
     for decl in body.input.locals do
-      let (next,ref) := internSpan spans decl.sourceInfo.span
-      spans := next
-      localRefs := localRefs.push ref
+      unless decl.sourceInfo.spanId < spans.size do throw (.invalidProgram "missing canonical local span")
+      localRefs := localRefs.push ⟨decl.sourceInfo.spanId⟩
     localSpans := localSpans.push localRefs
   return ⟨lowered, metadata, spans, bodySpans, localSpans, signature.abi, resolution⟩
 private def bodyAt (p : Program) (index : Nat) : Except StepError Input.LoweredBody :=
   p.lowered.bundle.bodies[index]?.toExcept (.invalidProgram "body index")
-private def sourceDefinition (p : Program) (id : Input.DefinitionId) : Except StepError MIR.DefId :=
-  (p.lowered.bundle.definitions.toList.idxOf? id).toExcept (.invalidProgram "definition absent from shared table")
-private def genericArgs (j : Lean.Json) : Except StepError (Array MIR.GenericArg) := do
-  let args ← j.getArr?.mapError StepError.invalidProgram
-  args.mapM fun arg => do
-    if (← compiler (jtext arg "kind")) != "type" then throw (.unsupported "non-type generic argument")
-    let value ← compiler (jfield arg "value")
-    return .Type (← compiler (jnat value "type_id"))
-private def currentResolution (p : Program) : Exec Lean.Json := do
+private def instanceNode (p : Program) (id : CallInstance) : Except StepError Input.InstanceNode := do
+  let source ← p.lowered.input.instances[id]?.toExcept (.invalidProgram "missing canonical instance")
+  unless source.id == id do throw (.invalidProgram "canonical instance position mismatch")
+  pure source
+private def currentResolution (p : Program) : Exec Input.CallResolutionEvidence := do
   let frame ← current
   if frame.extra != frame.bodyIdentity.index then throw (.invalidProgram "frame source body key mismatch")
   let body ← lift (bodyAt p frame.bodyIdentity.index)
   let .mir location := frame.location | block "call resolution outside MIR"
-  let blocks ← lift (compiler (jarray body.input.payload "basic_blocks"))
-  let source ← lift (blocks[location.block]?.toExcept (.invalidProgram "source block index"))
-  let kind ← lift (compiler (jfield source "terminator" >>= fun term => jfield term "kind"))
-  let result ← lift (compiler (jfield kind "resolution"))
-  if (← lift (compiler (jtext result "kind"))) != "resolved_instance" then block "unresolved compiler callee"
+  let source ← lift (body.input.blocks[location.block]?.toExcept (.invalidProgram "source block index"))
+  let result ← lift (source.callResolution.toExcept (.invalidProgram "missing typed call resolution"))
+  if result.kind != .direct then block "unresolved compiler callee"
   return result
-private def instanceFromResolution (p : Program) (resolution : Lean.Json) : Except StepError (CallInstance × Input.InstanceId) := do
-  let kind ← compiler (jfield resolution "instance_kind")
-  if (← compiler (jtext kind "kind")) != "item" then throw (.unsupported "non-Item fnInstance")
-  let source ← compiler (jfield kind "def_id")
-  let definition : Input.DefinitionId := ⟨← compiler (jnat source "crate"), ← compiler (jnat source "index")⟩
-  let id ← sourceDefinition p definition
-  let args ← genericArgs (← compiler (jfield resolution "generic_args"))
-  let instanceId ← compiler (jnat resolution "instance_id")
-  let node ← (p.lowered.input.instances.find? (·.id == instanceId)).toExcept (.invalidProgram "missing fnInstance")
-  if node.definitionId != some definition || node.instanceArgsAreMonomorphic != some true then
+private def instanceFromResolution (p : Program) (resolution : Input.CallResolutionEvidence) : Except StepError (CallInstance × Input.InstanceId) := do
+  let id ← resolution.instanceId.toExcept (.invalidProgram "missing resolved canonical instance ID")
+  let source ← instanceNode p id
+  let .Item definition := source.instanceKind | throw (.unsupported "non-Item fnInstance")
+  if source.definitionId != some definition || source.instanceArgsAreMonomorphic != some true then
     throw (.invalidProgram "fnInstance identity or monomorphization mismatch")
-  let sourceArgs ← genericArgs (← compiler (jfield node.payload "generic_args"))
-  if sourceArgs != args then throw (.invalidProgram "fnInstance generic arguments mismatch")
-  return (⟨.Item id, args⟩, instanceId)
+  unless source.genericArgs.all (fun arg => match arg with | .Type _ => true | _ => false) do
+    throw (.unsupported "non-type generic argument")
+  pure (id,id)
 private def currentInstance (p : Program) : Exec (CallInstance × Input.InstanceId) := do
   lift (instanceFromResolution p (← currentResolution p))
 private def resolvedBody (p : Program) (instanceId : Input.InstanceId) : Except StepError (Nat × Input.LoweredBody) := do
   let (_,index) ← (p.lowered.instances.find? (·.1 == instanceId)).toExcept (.unsupported "fnInstance body unavailable")
   return (index, ← bodyAt p index)
-private def resolutionFor (p : Program) (fnInstance : CallInstance) : Except StepError (Lean.Json × Input.InstanceId) := do
+private def resolutionFor (p : Program) (fnInstance : CallInstance) : Except StepError (Input.CallResolutionEvidence × Input.InstanceId) := do
   for body in p.lowered.bundle.bodies do
-    let blocks ← compiler (jarray body.input.payload "basic_blocks")
     for index in List.range body.body.basicBlocks.size do
       let block ← body.body.basicBlocks[index]?.toExcept (.invalidProgram "block index")
       match block.terminator.kind with
       | .Call .. | .TailCall .. =>
-        let block ← blocks[index]?.toExcept (.invalidProgram "source block index")
-        let kind ← compiler (jfield block "terminator" >>= fun term => jfield term "kind")
-        let resolution ← compiler (jfield kind "resolution")
+        let source ← body.input.blocks[index]?.toExcept (.invalidProgram "source block index")
+        let resolution ← source.callResolution.toExcept (.invalidProgram "missing typed call resolution")
         let (candidate,id) ← instanceFromResolution p resolution
         if candidate == fnInstance then return (resolution,id)
       | _ => pure ()
   throw (.unsupported "instance has no exported resolution query")
 private def getAbi (p : Program) (fnInstance : CallInstance) : Exec FnABI := do
   let (resolution,_) ← lift (resolutionFor p fnInstance)
-  let raw ← lift (compiler (jfield resolution "fn_abi"))
-  let source ← lift ((p.lowered.input.functionAbis.find? (·.payload == raw)).toExcept (.unsupported "compiler FnABI"))
+  let source ← lift (p.lowered.input.functionAbis[resolution.fnAbiId]?.toExcept (.unsupported "compiler FnABI"))
   if source.callingConvention.kind != .rust || source.cVariadic then
     block "unsupported calling convention or varargs"
   let arg (source : Input.AbiArgument) : Except StepError ArgABI := do
     if source.mode.kind != .direct then throw (.unsupported "non-Direct u32 argument ABI")
-    let layout ← lookup p.metadata source.typeId
+    let physical ← compiler (p.metadata.layoutById source.layoutId)
+    let layout := (⟨source.typeId,physical⟩ : TyAndLayout MIR.TyId)
     let node ← node p.metadata source.typeId
     if node.shapeKind != .uint || node.shapeMetadata.unsignedKind != some (.known .u32) then
       throw (.unsupported "non-u32 call ABI")
@@ -396,7 +362,7 @@ private def lifecycle (p : Program) (index : Nat) : StackLifecycleHooks AllocId 
   requiredConstants := fun stack machine =>
     let result : Except StackError Unit := do
       let body ← (bodyAt p index).mapError (fun e => .machineHookFailure (reprStr e))
-      let constants ← compiler (jarray body.input.payload "required_consts") |>.mapError (fun e => .machineHookFailure (reprStr e))
+      let constants ← body.input.requiredConsts.toExcept (.machineHookFailure "required constants metadata missing")
       if !constants.isEmpty then throw (.machineHookFailure "unimplemented required constants")
     ⟨stack,machine,result⟩
   afterPush := fun stack machine => ⟨stack,{ machine with trace := machine.trace ++ ["afterPush"] },.ok ()⟩
@@ -492,18 +458,26 @@ private def callHooks (p : Program) : CallHooks AllocId State Unit Nat Unit Inpu
     let node ← lift (node p.metadata ty)
     if node.shapeKind != .functionDefinition then block "non-FnDef callee"
     let (fnInstance,_) ← currentInstance p
-    return .FnDef fnInstance.defId fnInstance.args
+    let identity ← lift (instanceNode p fnInstance)
+    return .FnDef identity.instanceKind.defId identity.genericArgs
   readPointer := fun _ _ => block "function pointer"
   getPtrFn := fun _ _ => block "pointer function resolution"
   resolve := fun _ definition args => do
     let (fnInstance,_) ← currentInstance p
-    if fnInstance.defId != definition || fnInstance.args != args then throw (.invalidProgram "resolved identity mismatch")
+    let identity ← lift (instanceNode p fnInstance)
+    if identity.instanceKind.defId != definition || identity.genericArgs != args then throw (.invalidProgram "resolved identity mismatch")
     event (if args.isEmpty then "resolveItem" else "resolveGeneric")
     pure fnInstance
   fnAbiOfFnPtr := fun _ _ _ => block "function-pointer ABI"
   fnAbiOfInstance := fun _ fnInstance extra => do
     if !extra.isEmpty then block "variadic ABI"
     getAbi p fnInstance
+  instanceKind := fun id => return (← lift (instanceNode p id)).instanceKind
+  instanceArgs := fun id => return (← lift (instanceNode p id)).genericArgs
+  itemInstance := fun definition args => do
+    let source ← lift ((p.lowered.input.instances.find? fun source =>
+      source.instanceKind == .Item definition && source.genericArgs == args).toExcept (.invalidProgram "canonical Item instance missing"))
+    pure source.id
   requiresCallerLocation := fun fnInstance => do
     let abi ← getAbi p fnInstance
     let (_,id) ← lift (resolutionFor p fnInstance)
@@ -532,7 +506,9 @@ private def callHooks (p : Program) : CallHooks AllocId State Unit Nat Unit Inpu
     let (_,id) ← lift (resolutionFor p fnInstance)
     let node ← lift ((p.lowered.input.instances.find? (·.id == id)).toExcept (.unsupported "source fnInstance"))
     let definition ← lift (node.definitionId.toExcept (.unsupported "fnInstance definition"))
-    if definition.crateIndex != 0 || fnInstance.kind != .Item fnInstance.defId then block "non-fixture target features"
+    let sourceDefinition ← lift (p.lowered.input.definitions[definition]?.toExcept (.invalidProgram "definition ID missing"))
+    let identity ← lift (instanceNode p fnInstance)
+    if sourceDefinition.crateIndex != 0 || identity.instanceKind != .Item definition then block "non-fixture target features"
     event "fixtureNoTargetFeatures"
   tupleFields := fun _ => block "tuple ABI spreading"
   projectFnArg := fun _ _ _ => block "RustCall spread"
@@ -553,7 +529,8 @@ private def callHooks (p : Program) : CallHooks AllocId State Unit Nat Unit Inpu
     event "restoreMode"
     pure result
   nonCapturingClosure := fun _ fnInstance abi => do
-    match fnInstance.kind with
+    let identity ← lift (instanceNode p fnInstance)
+    match identity.instanceKind with
     | .Item _ => pure ()
     | _ => block "closure or shim entry policy"
     if abi.args.size != 1 || abi.args.any (fun arg => arg.layout.layout.is1zst) then
@@ -624,7 +601,11 @@ private def execute (p : Program) : Nat → State → State × Except StepError 
     | .ok true => execute p fuel state
 private def initialState (p : Program) (root : Nat) (argument : Nat) : Except StepError State := do
   let definition ← (p.lowered.rootDefinitionId root).mapError StepError.invalidProgram
-  let fnInstance : CallInstance := ⟨.Item definition,#[]⟩
+  let rootSource ← p.lowered.input.bodyRoots[root]?.toExcept (.invalidProgram "missing canonical root instance")
+  let fnInstance : CallInstance := rootSource.entryInstance
+  let identity ← instanceNode p fnInstance
+  unless identity.instanceKind == .Item definition && identity.genericArgs.isEmpty do
+    throw (.invalidProgram "root instance identity mismatch")
   let loaded ← (Input.CallResolution.loadedBodyOfInstance p.resolution fnInstance).mapError StepError.invalidProgram
   let index := loaded.identity.index
   let body ← bodyAt p index
@@ -654,7 +635,7 @@ private def must (value : Except String A) : IO A :=
 private def check (value : Bool) (message : String) : IO Unit :=
   unless value do throw (IO.userError message)
 private def rootIndex (p : Program) (name : String) : Except String Nat :=
-  (p.lowered.input.bodies.toList.findIdx? (·.defPath == name)).toExcept s!"missing root {name}"
+  (p.lowered.input.bodyRoots.toList.findIdx? (·.defPath == name)).toExcept s!"missing root {name}"
 private def runCase (p : Program) (name : String) (argument : Nat) : IO (State × Except StepError Unit) := do
   let index ← must (rootIndex p name)
   let initial ← must ((initialState p index argument).mapError reprStr)
@@ -695,7 +676,7 @@ def main (args : List String) : IO Unit := do
     let wrong := { arg with layout := { arg.layout with ty := 999999 } }
     (callHooks p).checkArgumentCompat () arg wrong) initial
   check (compatibility.2 == Except.ok false) "ABI mismatch accepted"
-  let unknown := runRvalue (getAbi p ⟨.Item 999999,#[]⟩) initial
+  let unknown := runRvalue (getAbi p 999999) initial
   check (!unknown.2.isOk) "unknown function ABI accepted"
   let incomplete := { p with resolution := { p.resolution with bodies := #[] } }
   let (_,missing) := execute incomplete 300 initial
@@ -709,4 +690,4 @@ def main (args : List String) : IO Unit := do
   IO.println "nested=42"
   IO.println "tail=42"
   IO.println "callee_overflow=panic"
-  IO.println s!"actual imported calls: shared identities, generic FnEntry, caller local return, tailcall, root return allocation; {normal.machine.trace.length} operations"
+  IO.println s!"actual imported calls: canonical identities, generic FnEntry, caller local return, tailcall, root return allocation; {normal.machine.trace.length} operations"

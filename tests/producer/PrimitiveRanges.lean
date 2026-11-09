@@ -12,21 +12,22 @@ private def replace (j : Json) (key : String) (value : Json) : Except String Jso
   | _ => .error "expected object"
 private def changeEnd (root : Json) (id : Nat) (last : Json) : Except String Json := do
   let types ← (← field root "types").getArr?
-  let types ← types.mapM fun ty => do
-    if (← (← field ty "type_id").getNat?) != id then return ty
-    let layout ← field ty "layout"
-    let backend ← field layout "backend_repr"
-    let scalar ← field backend "scalar"
-    let range ← field scalar "valid_range"
-    let range ← replace range "end" last
-    let scalar ← replace scalar "valid_range" range
-    let backend ← replace backend "scalar" scalar
-    let layout ← replace layout "backend_repr" backend
-    replace ty "layout" layout
-  replace root "types" (.arr types)
+  let some ty := types[id]? | throw "source u128 type missing"
+  let layoutId ← (← field ty "layout").getNat?
+  let layouts ← (← field root "layouts").getArr?
+  let some layout := layouts[layoutId]? | throw "physical layout missing"
+  let backend ← field layout "backend_repr"
+  let scalar ← field backend "scalar"
+  let range ← field scalar "valid_range"
+  let range ← replace range "end" last
+  let scalar ← replace scalar "valid_range" range
+  let backend ← replace backend "scalar" scalar
+  let layout ← replace layout "backend_repr" backend
+  replace root "layouts" (.arr (layouts.set! layoutId layout))
 private def rangeOf (document : ImportDocument) (id : Nat) : Except String (Nat × Nat) := do
   let some ty := document.types.find? (·.id == id) | throw "source u128 type missing"
-  let some backend := ty.layout.backendRepresentation | throw "scalar backend missing"
+  let some layout := document.layouts[ty.layoutId]? | throw "physical layout missing"
+  let some backend := layout.backendRepresentation | throw "scalar backend missing"
   let some scalar := backend.scalar | throw "scalar missing"
   let some range := scalar.validRange | throw "range missing"
   pure range
@@ -34,13 +35,9 @@ private def rangeOf (document : ImportDocument) (id : Nat) : Except String (Nat 
 def main (args : List String) : IO Unit := do
   let path::_ := args | throw (IO.userError "missing exported JSON")
   let source ← IO.FS.readFile path
-  -- Inspect and mutate semantic values after resolving shared transport. Keep
-  -- an empty catalog so edited documents reach the scalar/niche validators.
-  let original ← must (SharedPayloads.resolveCatalog (← must (Json.parse source)))
-  let original ← must (replace original "shared_payloads"
-    (Json.mkObj [("schema_version", toJson (2 : Nat)), ("nodes", toJson (#[] : Array Json))]))
+  let original ← must (Json.parse source)
   let primitive ← must (field (← must (field original "compiler_runtime_primitives")) "u128")
-  let id ← must ((← must (field primitive "type_id")).getNat?)
+  let id ← must primitive.getNat?
   let decoded ← must (decodeJson source)
   let range ← must (rangeOf decoded.document id)
   check (range == (0,2^128-1)) "actual compiler u128 range was clipped"
@@ -54,27 +51,27 @@ def main (args : List String) : IO Unit := do
     for encoded in [Json.str (toString value), toJson value] do
       let edited ← must (changeEnd original id encoded)
       let decoded ← must (decodeJson edited.compress)
-      check ((← must (rangeOf decoded.document id)).2 == value) "decimal/legacy natural changed"
-  check (metadata.layouts.any fun (_, entry) =>
-    entry.toOption.any fun value => value.layout.largestNiche.any fun niche =>
+      check ((← must (rangeOf decoded.document id)).2 == value) "decimal/numeric natural changed"
+  check (metadata.source.types.any fun node =>
+    (metadata.lookup node.id).toOption.any fun value => value.layout.largestNiche.any fun niche =>
       niche.value == .Int .I128 false && niche.validRange.start.toNat == 1 &&
         niche.validRange.end.toNat == 2^128-1) "actual compiler u128 niche range changed"
-  let some nicheType := decoded.document.types.find? (fun ty =>
-    match ty.layout.payload.getObjValAs? Json "largest_niche" with
-    | .ok niche => match niche.getObjVal? "valid_range" with
-      | .ok range => (range.getObjValAs? String "end").toOption == some (toString (2^128-1 : Nat))
-      | _ => false
-    | _ => false) | throw (IO.userError "actual NonZeroU128 niche missing")
+  let some nicheIndex := decoded.document.layouts.toList.findIdx? (fun layout =>
+    layout.largestNiche.any fun niche => niche.validRange.2 == 2^128-1)
+    | throw (IO.userError "actual NonZeroU128 niche missing")
+  let layouts ← must ((← must (field original "layouts")).getArr?)
+  let some nicheLayout := layouts[nicheIndex]? | throw (IO.userError "niche layout definition absent")
   let invalid : List Json := [Json.str "", .str "-1", .str "+1", .str "1_0", .str "0xFF", .str "1.0",
     .str (toString (2^128 : Nat)), toJson (2^128 : Nat), toJson (-1 : Int), .bool true, .null]
   for encoded in invalid do
     let edited ← must (changeEnd original id encoded)
     check (!(decodeJson edited.compress).isOk) s!"invalid u128 range accepted: {encoded.compress}"
-    let niche ← must (field nicheType.layout.payload "largest_niche")
+    let niche ← must (field nicheLayout "largest_niche")
     let range ← must (field niche "valid_range")
     let range ← must (replace range "end" encoded)
     let niche ← must (replace niche "valid_range" range)
-    let payload ← must (replace nicheType.layout.payload "largest_niche" niche)
-    check (!(RuntimeMetadata.layout metadata.target { nicheType.layout with payload }).isOk)
-      s!"invalid raw niche endpoint accepted: {encoded.compress}"
-  IO.println "actual u128 compiler/runtime range exact; 6 decimal/legacy cases preserved and 11 malformed/overflow scalar and niche cases rejected"
+    let payload ← must (replace nicheLayout "largest_niche" niche)
+    let edited ← must (replace original "layouts" (.arr (layouts.set! nicheIndex payload)))
+    check (!(decodeJson edited.compress).isOk)
+      s!"invalid niche endpoint accepted: {encoded.compress}"
+  IO.println "actual u128 compiler/runtime range exact; 6 decimal/numeric cases preserved and 11 malformed/overflow scalar and niche cases rejected"

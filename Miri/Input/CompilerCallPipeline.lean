@@ -13,27 +13,24 @@ structure Prepared where
   runtime : CompilerRuntimeQueries.Prepared
   symbols : CompilerVTableRuntime.Prepared
   calls : CallResolution.Prepared
-  sourceEquality : RuntimeMetadata.JsonReflexivity calls.runtime.source.raw
 
-/-- Each stage appends identities without moving existing indices. Rebind all
-views to the final table so full shim instances, inline spans, const arguments
-and executable body identities remain compilation-local and consistent. -/
+/-- Each stage reads decoded canonical identities. Rebind all views to the final
+program so full shim instances, inline spans, const arguments and executable body
+identities remain compilation-local and consistent. -/
 def prepareProfiled (profile : Lean.Options) (program : LoweredProgram) : Result Prepared := do
   let scopes := profileit "preparation.call.scopes" profile fun _ => CompilerScopes.prepare program
   let runtime ← profileit "preparation.call.runtime_queries" profile fun _ =>
     CompilerRuntimeQueries.prepare scopes.program
   let metadata ← profileit "preparation.call.runtime_metadata" profile fun _ =>
     (RuntimeMetadata.ofDocument runtime.program.input).mapError toString
-  let sourceEquality := profileit "preparation.call.source_equality" profile fun _ =>
-    RuntimeMetadata.JsonReflexivity.prepare (left := metadata.source.raw)
   let context ← profileit "preparation.call.compiler_facts" profile fun _ =>
-    CompilerFacts.ofProgram metadata runtime.program (some sourceEquality)
+    CompilerFacts.ofProgram metadata runtime.program
   let facts ← profileit "preparation.call.fact_adapters" profile fun _ =>
     CompilerFactAdapters.prepare context
   let symbols := profileit "preparation.call.vtable_runtime" profile fun _ =>
     CompilerVTableRuntime.prepare facts
   let calls ← profileit "preparation.call.resolution" profile fun _ =>
-    CallResolution.prepareWithRuntimeProfiled profile metadata symbols.facts.context.program (some sourceEquality)
+    CallResolution.prepareWithRuntimeProfiled profile metadata symbols.facts.context.program
   profileit "preparation.call.inline_attribute_validation" profile fun _ => do
     for (callee,trackCaller) in runtime.callerLocation do
       if let some inlineAttribute ← CompilerVirtualFacts.inlineAttribute scopes callee then
@@ -41,7 +38,7 @@ def prepareProfiled (profile : Lean.Options) (program : LoweredProgram) : Result
   let program := calls.program
   let context := symbols.facts.context.withProgram program
   let symbols := { symbols with facts := { symbols.facts with context } }
-  return ⟨{ scopes with program },{ runtime with program },symbols,calls,calls.sourceEquality⟩
+  return ⟨{ scopes with program },{ runtime with program },symbols,calls⟩
 
 def prepare (program : LoweredProgram) : Result Prepared :=
   prepareProfiled {} program

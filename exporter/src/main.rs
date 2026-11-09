@@ -13,7 +13,15 @@ mod main_queries;
 mod named_constants;
 mod named_statics;
 mod native_signature_queries;
-mod payload_sharing;
+mod typed_pool;
+mod pool_type;
+mod pool_layout;
+mod pool_instance;
+mod pool_values;
+mod pool_constant;
+mod pool_body;
+mod allocation_values;
+mod resolution_values;
 mod panic_queries;
 mod producer;
 mod projection_queries;
@@ -41,6 +49,7 @@ extern crate rustc_symbol_mangling;
 extern crate rustc_target;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use typed_pool::Pool;
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
@@ -65,7 +74,7 @@ fn export_failure<T>(context: &str, details: impl std::fmt::Display) -> Result<T
 
 const EXPECTED_RUSTC_COMMIT: &str = "8144389c895da997dbdecaa635e41d6a50be6ffd";
 const MIRI_COMMIT: &str = "7fa591d7d4dd9af8154becbc8332f8096f8323b1";
-const ROOT_SCHEMA_VERSION: u64 = 3;
+const ROOT_SCHEMA_VERSION: u64 = 4;
 
 struct Options {
     output: PathBuf,
@@ -90,28 +99,26 @@ struct ExportCallbacks {
 
 /// Compilation-scoped identities for the actual interned rustc types.
 /// The numeric IDs are serialization-local and deliberately carry no claim of
-/// cross-compilation stability. Type graph nodes live in `type_nodes`; MIR
+/// cross-compilation stability. Type graph nodes live in `type_ids`; MIR
 /// payloads refer to them by `type_id`.
 #[derive(Default)]
 struct ExportContext<'tcx> {
     vtable_diagnostics: vtable_diagnostics::Trace<'tcx>,
-    span_payload_cache: HashMap<rustc_span::Span, Value>,
-    layout_payload_cache: HashMap<rustc_abi::TyAndLayout<'tcx, ty::Ty<'tcx>>, Value>,
-    fn_abi_payload_cache:
-        HashMap<rustc_target::callconv::FnAbi<'tcx, ty::Ty<'tcx>>, Value>,
-    type_ids: HashMap<rustc_middle::ty::Ty<'tcx>, u64>,
+    bodies: Pool<BodyKey<'tcx>, pool_body::Body>,
+    definitions: Pool<rustc_hir::def_id::DefId, pool_values::Definition>,
+    type_constants: Pool<ty::Const<'tcx>, pool_values::TypeConstant>,
+    spans: Pool<rustc_span::Span, pool_values::Span>,
+    layouts: Pool<rustc_abi::TyAndLayout<'tcx, ty::Ty<'tcx>>, pool_layout::Layout>,
+    fn_abis: Pool<rustc_target::callconv::FnAbi<'tcx, ty::Ty<'tcx>>, pool_layout::FnAbi>,
+    type_ids: Pool<rustc_middle::ty::Ty<'tcx>, pool_type::Type>,
     /// Types demanded by serialized source MIR/signatures/metadata. Compiler
     /// query constructors can create type nodes without adding them here.
     runtime_type_query_demands: HashSet<rustc_middle::ty::Ty<'tcx>>,
     runtime_type_query_suppression: usize,
-    type_nodes: BTreeMap<u64, Value>,
     type_nodes_in_progress: HashSet<rustc_middle::ty::Ty<'tcx>>,
-    next_type_id: u64,
-    allocation_ids: HashMap<AllocId, u64>,
-    allocation_nodes: BTreeMap<u64, Value>,
+    allocation_ids: Pool<AllocId, allocation_values::Allocation>,
     allocations_in_progress: HashSet<AllocId>,
-    next_allocation_id: u64,
-    instance_ids: HashMap<ty::Instance<'tcx>, u64>,
+    instance_ids: Pool<ty::Instance<'tcx>, pool_instance::Instance>,
     /// DropGlue(None) identities first discovered as runtime type-query facts
     /// have no operation and should not seed ABI/MIR query closure by themselves.
     /// A real source use upgrades them in `register_instance`.
@@ -123,10 +130,12 @@ struct ExportContext<'tcx> {
     /// mono identity, but not the unrelated caller-location/target-feature
     /// query family. Remove them when a real MIR demand upgrades the entry.
     symbol_only_instances: HashSet<ty::Instance<'tcx>>,
+    // Metadata references must not seed runtime compiler-query demands.
+    metadata_only_instances: HashSet<ty::Instance<'tcx>>,
     pending_instances: Vec<ty::Instance<'tcx>>,
     emitted_instances: HashSet<ty::Instance<'tcx>>,
-    next_instance_id: u64,
-    predicate_ids: HashMap<ty::PolyExistentialPredicate<'tcx>, u64>,
+    predicate_ids: Pool<ty::PolyExistentialPredicate<'tcx>, allocation_values::Predicate>,
+    predicates_in_progress: HashSet<ty::PolyExistentialPredicate<'tcx>>,
     pending_predicates: Vec<ty::PolyExistentialPredicate<'tcx>>,
     instance_abi_requests: HashSet<(ty::Instance<'tcx>, &'tcx ty::List<ty::Ty<'tcx>>)>,
     caller_location_span_set: HashSet<rustc_span::Span>,
@@ -199,7 +208,23 @@ struct RuntimeCallbackTransferRequest<'tcx> {
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
+enum BodyMode {
+    Template,
+    Instantiated,
+    NormalizedTemplate,
+    NormalizedInstantiated,
+}
+
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+struct BodyKey<'tcx> {
+    instance: ty::Instance<'tcx>,
+    promoted: Option<rustc_middle::mir::Promoted>,
+    mode: BodyMode,
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 enum IdentityMembershipSet {
+    MetadataOnly,
     SymbolOnly,
     RuntimeQueryOnlyEmptyDrop,
 }
@@ -217,35 +242,24 @@ impl<'tcx> ExportContext<'tcx> {
     }
 
     fn predicate_id(&mut self, predicate: ty::PolyExistentialPredicate<'tcx>) -> u64 {
-        if let Some(id) = self.predicate_ids.get(&predicate) {
-            return *id;
+        let (id, fresh) = self.predicate_ids.reserve(predicate);
+        if fresh {
+            self.pending_predicates.push(predicate);
         }
-        let id = self.pending_predicates.len() as u64;
-        self.pending_predicates.push(predicate);
-        self.predicate_ids.insert(predicate, id);
-        id
+        id as u64
     }
     fn type_id(&mut self, ty: rustc_middle::ty::Ty<'tcx>) -> u64 {
-        if let Some(id) = self.type_ids.get(&ty) {
-            return *id;
-        }
-        let id = self.next_type_id;
-        self.next_type_id += 1;
-        self.type_ids.insert(ty, id);
-        id
+        self.type_ids.reserve(ty).0 as u64
     }
 
     fn allocation_id(&mut self, alloc_id: AllocId) -> u64 {
-        if let Some(id) = self.allocation_ids.get(&alloc_id) {
-            return *id;
-        }
-        let id = self.next_allocation_id;
-        self.next_allocation_id += 1;
-        self.allocation_ids.insert(alloc_id, id);
-        id
+        self.allocation_ids.reserve(alloc_id).0 as u64
     }
 
     fn register_instance(&mut self, instance: ty::Instance<'tcx>) -> u64 {
+        if self.metadata_only_instances.remove(&instance) {
+            self.note_identity_membership_change(IdentityMembershipSet::MetadataOnly, instance);
+        }
         if self.runtime_query_only_empty_drops.remove(&instance) {
             self.note_identity_membership_change(
                 IdentityMembershipSet::RuntimeQueryOnlyEmptyDrop,
@@ -266,11 +280,14 @@ impl<'tcx> ExportContext<'tcx> {
             }
             return *id;
         }
-        let id = self.next_instance_id;
-        self.next_instance_id += 1;
-        self.instance_ids.insert(instance, id);
+        let (id, _) = self.instance_ids.reserve(instance);
         self.pending_instances.push(instance);
-        id
+        id as u64
+    }
+
+    fn reserve_instance_identity(&mut self, instance: ty::Instance<'tcx>) -> (u64, bool) {
+        let (id, fresh) = self.instance_ids.reserve(instance);
+        (id as u64, fresh)
     }
 
     /// Register compiler identity without eagerly querying MIR. Miri resolves
@@ -278,13 +295,23 @@ impl<'tcx> ExportContext<'tcx> {
     /// the selected function. Some rustc symbols have no MIR (and querying
     /// them eagerly can ICE), so callers must request a body separately.
     fn register_instance_identity(&mut self, instance: ty::Instance<'tcx>) -> u64 {
-        if let Some(id) = self.instance_ids.get(&instance) {
-            return *id;
+        // Symbol lookup demands compiler queries even when metadata reserved the ID first.
+        if self.metadata_only_instances.remove(&instance) {
+            self.note_identity_membership_change(IdentityMembershipSet::MetadataOnly, instance);
         }
-        let id = self.next_instance_id;
-        self.next_instance_id += 1;
-        self.instance_ids.insert(instance, id);
-        if self.symbol_only_instances.insert(instance) {
+        let (id, fresh) = self.reserve_instance_identity(instance);
+        if fresh && self.symbol_only_instances.insert(instance) {
+            self.note_identity_membership_change(IdentityMembershipSet::SymbolOnly, instance);
+        }
+        id
+    }
+
+    fn register_metadata_instance(&mut self, instance: ty::Instance<'tcx>) -> u64 {
+        let (id, fresh) = self.reserve_instance_identity(instance);
+        if fresh {
+            self.metadata_only_instances.insert(instance);
+            self.note_identity_membership_change(IdentityMembershipSet::MetadataOnly, instance);
+            self.symbol_only_instances.insert(instance);
             self.note_identity_membership_change(IdentityMembershipSet::SymbolOnly, instance);
         }
         id
@@ -707,38 +734,27 @@ fn select_roots<'tcx>(
     Ok(selected)
 }
 
-fn mir_phase_json(phase: rustc_middle::mir::MirPhase) -> Value {
+fn mir_phase_json(phase: rustc_middle::mir::MirPhase) -> pool_body::Phase {
     use rustc_middle::mir::{AnalysisPhase as A, MirPhase as M, RuntimePhase as R};
     match phase {
-        M::Built => json!({"kind":"built"}),
-        M::Analysis(A::Initial) => {
-            json!({"kind":"analysis","phase":"initial"})
-        }
-        M::Analysis(A::PostCleanup) => {
-            json!({"kind":"analysis","phase":"post_cleanup"})
-        }
-        M::Runtime(R::Initial) => json!({"kind":"runtime","phase":"initial"}),
-        M::Runtime(R::PostCleanup) => {
-            json!({"kind":"runtime","phase":"post_cleanup"})
-        }
-        M::Runtime(R::Optimized) => {
-            json!({"kind":"runtime","phase":"optimized"})
-        }
+        M::Built => pool_body::Phase::Built,
+        M::Analysis(phase) => pool_body::Phase::Analysis { phase: match phase {
+            A::Initial => pool_body::AnalysisPhase::Initial,
+            A::PostCleanup => pool_body::AnalysisPhase::PostCleanup,
+        } },
+        M::Runtime(phase) => pool_body::Phase::Runtime { phase: match phase {
+            R::Initial => pool_body::RuntimePhase::Initial,
+            R::PostCleanup => pool_body::RuntimePhase::PostCleanup,
+            R::Optimized => pool_body::RuntimePhase::Optimized,
+        } },
     }
 }
 
-fn coroutine_kind_json(kind: rustc_hir::CoroutineKind) -> Value {
+fn coroutine_kind_json(kind: rustc_hir::CoroutineKind) -> pool_body::CoroutineKind {
     use rustc_hir::{CoroutineDesugaring as D, CoroutineKind as K, CoroutineSource as S};
     match kind {
-        K::Desugared(desugaring, source) => json!({
-            "kind":"desugared",
-            "desugaring":match desugaring { D::Async => "async", D::Gen => "gen", D::AsyncGen => "async_gen" },
-            "source":match source { S::Block => "block", S::Closure => "closure", S::Fn => "function" },
-        }),
-        K::Coroutine(movability) => json!({
-            "kind":"coroutine",
-            "movability":match movability { rustc_hir::Movability::Static => "static", rustc_hir::Movability::Movable => "movable" },
-        }),
+        K::Desugared(desugaring, source) => pool_body::CoroutineKind::Desugared { desugaring: match desugaring { D::Async => "async", D::Gen => "gen", D::AsyncGen => "async_gen" }, source: match source { S::Block => "block", S::Closure => "closure", S::Fn => "function" } },
+        K::Coroutine(movability) => pool_body::CoroutineKind::Coroutine { movability: match movability { rustc_hir::Movability::Static => "static", rustc_hir::Movability::Movable => "movable" } },
     }
 }
 
@@ -753,85 +769,45 @@ fn call_source_name(source: rustc_middle::mir::CallSource) -> &'static str {
     }
 }
 
-fn fake_read_cause_json(cause: rustc_middle::mir::FakeReadCause) -> Value {
+fn fake_read_cause_json(context: &mut ExportContext<'_>, cause: rustc_middle::mir::FakeReadCause) -> pool_body::FakeReadCause {
     use rustc_middle::mir::FakeReadCause as F;
+    use pool_body::FakeReadCause as C;
     match cause {
-        F::ForMatchGuard => json!({"kind":"match_guard"}),
-        F::ForMatchedPlace(def_id) => {
-            json!({"kind":"matched_place","hoisted_from":def_id.map(|id|json!(def_json(id.to_def_id())))})
-        }
-        F::ForGuardBinding => json!({"kind":"guard_binding"}),
-        F::ForLet(def_id) => {
-            json!({"kind":"let_binding","hoisted_from":def_id.map(|id|json!(def_json(id.to_def_id())))})
-        }
-        F::ForIndex => json!({"kind":"index"}),
+        F::ForMatchGuard => C::MatchGuard,
+        F::ForMatchedPlace(def_id) => C::MatchedPlace { hoisted_from: def_id.map(|id| def_json(context, id.to_def_id())) },
+        F::ForGuardBinding => C::GuardBinding,
+        F::ForLet(def_id) => C::LetBinding { hoisted_from: def_id.map(|id| def_json(context, id.to_def_id())) },
+        F::ForIndex => C::Index,
     }
 }
 
-fn runtime_check_json(tcx: TyCtxt<'_>, check: rustc_middle::mir::RuntimeChecks) -> Value {
+fn runtime_check_json(tcx: TyCtxt<'_>, check: rustc_middle::mir::RuntimeChecks) -> pool_body::RuntimeCheck {
     use rustc_middle::mir::RuntimeChecks as R;
-    let (kind, enabled) = match check {
-        R::UbChecks => ("ub_checks", check.value(tcx.sess)),
-        R::ContractChecks => ("contract_checks", check.value(tcx.sess)),
-        R::OverflowChecks => ("overflow_checks", check.value(tcx.sess)),
-    };
-    json!({"kind":kind,"enabled":enabled})
-}
-
-fn bound_region_kind_json(tcx: TyCtxt<'_>, kind: ty::BoundRegionKind<'_>) -> Value {
-    use ty::BoundRegionKind as B;
-    match kind {
-        B::Anon => json!({"kind":"anonymous"}),
-        B::NamedForPrinting(name) => {
-            json!({"kind":"named_for_printing","name":name.as_str()})
-        }
-        B::Named(def_id) => {
-            json!({"kind":"named","def_id":def_json(def_id),"def_path":tcx.def_path_str(def_id)})
-        }
-        B::ClosureEnv => json!({"kind":"closure_environment"}),
+    use pool_body::RuntimeCheck as C;
+    let enabled = check.value(tcx.sess);
+    match check {
+        R::UbChecks => C::UbChecks { enabled },
+        R::ContractChecks => C::ContractChecks { enabled },
+        R::OverflowChecks => C::OverflowChecks { enabled },
     }
 }
 
-fn region_json(tcx: TyCtxt<'_>, region: ty::Region<'_>) -> Result<Value, String> {
+fn bound_region_kind_json(context: &mut ExportContext<'_>, tcx: TyCtxt<'_>, kind: ty::BoundRegionKind<'_>) -> pool_values::BoundRegionKind {
+    use pool_values::BoundRegionKind as O;
+    match kind { ty::BoundRegionKind::Anon => O::Anonymous, ty::BoundRegionKind::NamedForPrinting(name) => O::NamedForPrinting { name: name.to_string() }, ty::BoundRegionKind::Named(def) => O::Named { def_id: def_json(context,def), def_path: tcx.def_path_str(def) }, ty::BoundRegionKind::ClosureEnv => O::ClosureEnvironment }
+}
+fn region_json(context: &mut ExportContext<'_>, tcx: TyCtxt<'_>, region: ty::Region<'_>) -> Result<pool_values::Region, String> {
     use ty::RegionKind as R;
-    Ok::<_, String>(match region.kind() {
-        R::ReEarlyParam(param) => json!({
-            "kind":"early_parameter","index":param.index,"name":param.name.as_str(),
-        }),
-        R::ReBound(index_kind, bound) => json!({
-            "kind":"bound",
-            "index_kind":match index_kind {
-                ty::BoundVarIndexKind::Bound(index) => json!({"kind":"bound","debruijn_index":index.as_u32()}),
-                ty::BoundVarIndexKind::Canonical => json!({"kind":"canonical"}),
-            },
-            "variable_index":bound.var.as_u32(),
-            "bound_kind":bound_region_kind_json(tcx,bound.kind),
-        }),
-        R::ReLateParam(param) => {
-            let parameter = match param.kind {
-                ty::LateParamRegionKind::Anon(index) => json!({"kind":"anonymous","index":index}),
-                ty::LateParamRegionKind::NamedAnon(index, name) => {
-                    json!({"kind":"named_anonymous","index":index,"name":name.as_str()})
-                }
-                ty::LateParamRegionKind::Named(def_id) => {
-                    json!({"kind":"named","def_id":def_json(def_id),"def_path":tcx.def_path_str(def_id)})
-                }
-                ty::LateParamRegionKind::ClosureEnv => json!({"kind":"closure_environment"}),
-            };
-            json!({"kind":"late_parameter","scope_def_id":def_json(param.scope),"scope_def_path":tcx.def_path_str(param.scope),"parameter":parameter})
-        }
-        R::ReStatic => json!({"kind":"static"}),
-        R::ReVar(variable) => export_failure(
-            "region",
-            format!("unresolved inference variable {}", variable.as_u32()),
-        )?,
-        R::RePlaceholder(placeholder) => json!({
-            "kind":"placeholder","universe":placeholder.universe().as_u32(),
-            "variable_index":placeholder.bound.var.as_u32(),
-            "bound_kind":bound_region_kind_json(tcx,placeholder.bound.kind),
-        }),
-        R::ReErased => json!({"kind":"erased"}),
-        R::ReError(_) => export_failure("main::region_json", "error")?,
+    use pool_values::{Region as O, BoundIndex as I, LateParameter as L};
+    Ok(match region.kind() {
+        R::ReEarlyParam(p) => O::EarlyParameter { index:p.index, name:p.name.to_string() },
+        R::ReBound(index,b) => O::Bound { index_kind:match index { ty::BoundVarIndexKind::Bound(i)=>I::Bound { debruijn_index:i.as_u32() }, ty::BoundVarIndexKind::Canonical=>I::Canonical }, variable_index:b.var.as_u32(), bound_kind:bound_region_kind_json(context,tcx,b.kind) },
+        R::ReLateParam(p) => O::LateParameter { scope_def_id:def_json(context,p.scope), scope_def_path:tcx.def_path_str(p.scope), parameter:match p.kind { ty::LateParamRegionKind::Anon(index)=>L::Anonymous {index}, ty::LateParamRegionKind::NamedAnon(index,name)=>L::NamedAnonymous {index,name:name.to_string()}, ty::LateParamRegionKind::Named(def)=>L::Named {def_id:def_json(context,def),def_path:tcx.def_path_str(def)}, ty::LateParamRegionKind::ClosureEnv=>L::ClosureEnvironment } },
+        R::ReStatic=>O::Static,
+        R::ReVar(v)=>return export_failure("region",format!("unresolved inference variable {}",v.as_u32())),
+        R::RePlaceholder(p)=>O::Placeholder {universe:p.universe().as_u32(),variable_index:p.bound.var.as_u32(),bound_kind:bound_region_kind_json(context,tcx,p.bound.kind)},
+        R::ReErased=>O::Erased,
+        R::ReError(_)=>return export_failure("main::region_json","error"),
     })
 }
 
@@ -1182,7 +1158,8 @@ impl ExportCallbacks {
         let _predicate_queries_seed = compiler_predicate_queries_json(tcx, &mut export_context)?;
         let _native_signature_queries_seed =
             native_signature_queries::export(tcx, &mut export_context)?;
-        let _retag_queries_seed = retag_queries::export(tcx, &export_context);
+        let _panic_queries_seed = panic_queries::export(tcx, &mut export_context);
+        let _retag_queries_seed = retag_queries::export(tcx, &mut export_context);
         let mut internal_target_features = tcx
             .sess
             .internal_target_features
@@ -1190,8 +1167,7 @@ impl ExportCallbacks {
             .map(|name| name.as_str().to_owned())
             .collect::<Vec<_>>();
         internal_target_features.sort();
-        let mut root_span = span_json(&mut export_context, tcx, rustc_span::DUMMY_SP);
-        root_span["is_dummy"] = json!(rustc_span::DUMMY_SP.is_dummy());
+        let root_span = span_json(&mut export_context, tcx, rustc_span::DUMMY_SP);
         // Every catalog below is a source-demand producer or a projection of
         // accumulated source demands. Recompute the projections until one full
         // round adds no types, predicates, instances, allocations, query keys,
@@ -1211,7 +1187,7 @@ impl ExportCallbacks {
             runtime_foreign_symbols,
             runtime_caller_instances,
             global_byte_queries,
-            symbol_identity_instances,
+            identity_only_instances,
             instance_abis,
             covariance_queries,
             function_facts,
@@ -1231,9 +1207,9 @@ impl ExportCallbacks {
                 export_context.pending_instances.len(),
                 export_context.emitted_instances.len(),
                 export_context.type_ids.len(),
-                export_context.type_nodes.len(),
+                export_context.type_ids.defined_len(),
                 export_context.allocation_ids.len(),
-                export_context.allocation_nodes.len(),
+                export_context.allocation_ids.defined_len(),
                 export_context.predicate_ids.len(),
                 export_context.pending_predicates.len(),
                 export_context.cast_unsize_requests.len(),
@@ -1294,15 +1270,15 @@ impl ExportCallbacks {
             let runtime_caller_instances =
                 compiler_caller_location_queries_json(tcx, &mut export_context)?;
             let global_byte_queries = global_byte_queries::export(tcx, &mut export_context)?;
-            let symbol_identity_instances =
-                symbol_identity_instances_json(tcx, &mut export_context)?;
+            let identity_only_instances =
+                identity_only_instances_json(tcx, &mut export_context)?;
             let instance_abis = compiler_instance_abis_json(tcx, &mut export_context)?;
             let covariance_queries = covariance_queries::export(tcx, &mut export_context)?;
             let function_facts = compiler_function_facts_json(tcx, &mut export_context)?;
             let predicate_queries = compiler_predicate_queries_json(tcx, &mut export_context)?;
             let native_signature_queries =
                 native_signature_queries::export(tcx, &mut export_context)?;
-            let retag_queries = retag_queries::export(tcx, &export_context);
+            let retag_queries = retag_queries::export(tcx, &mut export_context);
             let intrinsic_type_names =
                 intrinsic_value_queries::type_names(tcx, &mut export_context)?;
             let caller_location_constants =
@@ -1317,9 +1293,9 @@ impl ExportCallbacks {
                 export_context.pending_instances.len(),
                 export_context.emitted_instances.len(),
                 export_context.type_ids.len(),
-                export_context.type_nodes.len(),
+                export_context.type_ids.defined_len(),
                 export_context.allocation_ids.len(),
-                export_context.allocation_nodes.len(),
+                export_context.allocation_ids.defined_len(),
                 export_context.predicate_ids.len(),
                 export_context.pending_predicates.len(),
                 export_context.cast_unsize_requests.len(),
@@ -1357,7 +1333,7 @@ impl ExportCallbacks {
                     runtime_foreign_symbols,
                     runtime_caller_instances,
                     global_byte_queries,
-                    symbol_identity_instances,
+                    identity_only_instances,
                     instance_abis,
                     covariance_queries,
                     function_facts,
@@ -1369,11 +1345,17 @@ impl ExportCallbacks {
                 );
             }
         };
-        instances.extend(symbol_identity_instances);
+        instances.extend(identity_only_instances);
+        instances.sort_by_key(|row| row.instance_id);
+        if instances.len() != export_context.instance_ids.len()
+            || instances.iter().enumerate().any(|(id, row)| row.instance_id != id as u64)
+        {
+            return Err("instance table has missing or duplicate definitions".into());
+        }
         let runtime_queries = {
             let mut queries = serde_json::Map::new();
             if tcx.crate_types().contains(&rustc_structures::CrateType::Executable) {
-                queries.insert("startup".into(), startup_queries::export(tcx)?);
+                queries.insert("startup".into(), startup_queries::export(tcx, &mut export_context)?);
             }
             queries.insert("types".into(), Value::Array(runtime_type_queries));
             queries.insert("virtual".into(), runtime_virtual_queries);
@@ -1396,8 +1378,8 @@ impl ExportCallbacks {
             .insert("input_settings".into(), input_settings);
         let target_data_layout = runtime_target_data_layout_json(tcx)?;
         let frame_metadata = compiler_frame_metadata_json(tcx);
-        let panic_query_catalog = panic_queries::export(tcx);
-        let runtime_checks = Value::Array(vec![
+        let panic_query_catalog = panic_queries::export(tcx, &mut export_context);
+        let runtime_checks = json!([
             runtime_check_json(tcx, rustc_middle::mir::RuntimeChecks::UbChecks),
             runtime_check_json(tcx, rustc_middle::mir::RuntimeChecks::ContractChecks),
             runtime_check_json(tcx, rustc_middle::mir::RuntimeChecks::OverflowChecks),
@@ -1418,7 +1400,7 @@ impl ExportCallbacks {
                 .map(|def_id| {
                     json!({
                         "def_path":tcx.def_path_str(def_id.to_def_id()),
-                        "def_id":def_json(def_id.to_def_id()),
+                        "def_id":def_json(&mut export_context, def_id.to_def_id()),
                     })
                 })
                 .collect::<Vec<_>>()
@@ -1440,7 +1422,9 @@ impl ExportCallbacks {
             fields.insert("producer".into(), producer);
             fields.insert("runtime_target_data_layout".into(), target_data_layout);
             fields.insert("compiler_session_queries".into(), session_queries);
-            fields.insert("instances".into(), Value::Array(instances));
+            for (id, instance) in instances.into_iter().enumerate() {
+                export_context.instance_ids.define(id, instance);
+            }
             fields.insert("compiler_runtime_queries".into(), runtime_queries);
             fields.insert("compiler_frame_metadata".into(), frame_metadata);
             fields.insert("compiler_instance_abis".into(), instance_abis);
@@ -1466,7 +1450,7 @@ impl ExportCallbacks {
             if let Some(catalogs) = runtime_catalogs {
                 fields.extend(catalogs);
             }
-            fields.insert("bodies".into(), Value::Array(bodies));
+            fields.insert("body_roots".into(), serde_json::to_value(bodies).map_err(|e| e.to_string())?);
         }
         let allocator_world = if self.prepared_allocator_world {
             Some(allocator_world::capture(
@@ -1483,21 +1467,44 @@ impl ExportCallbacks {
         if tcx.dcx().has_errors().is_some() {
             return Err("compiler reported errors while exporting semantic metadata".into());
         }
-        let (type_nodes, allocation_nodes) = {
-            let context = export_context;
-            (context.type_nodes, context.allocation_nodes)
-        };
+        if export_context.type_ids.defined_len() != export_context.type_ids.len()
+            || !export_context.type_nodes_in_progress.is_empty()
+            || export_context.allocation_ids.defined_len() != export_context.allocation_ids.len()
+            || !export_context.allocations_in_progress.is_empty()
+            || export_context.predicate_ids.defined_len() != export_context.predicate_ids.len()
+            || !export_context.predicates_in_progress.is_empty()
+        {
+            return Err("type or allocation table has unfinished definitions".into());
+        }
+        let bodies = export_context.bodies.finish("body")?;
+        let definitions = export_context.definitions.finish("definition")?;
+        let type_constants = export_context.type_constants.finish("type_constant")?;
+        let spans = export_context.spans.finish("span_id")?;
+        let layouts = export_context.layouts.finish("layout_id")?;
+        let fn_abis = export_context.fn_abis.finish("fn_abi_id")?;
+        let instances = export_context.instance_ids.finish("instance_id")?;
+        let type_nodes = export_context.type_ids.finish("type_id")?;
+        let allocation_nodes = export_context.allocation_ids.finish("allocation_id")?;
+        let predicate_nodes = export_context.predicate_ids.finish("predicate_id")?;
         {
             let fields = document
                 .as_object_mut()
                 .expect("root document is an object");
+            fields.insert("instances".into(), serde_json::to_value(instances).map_err(|e| e.to_string())?);
+            fields.insert("predicates".into(), json!(predicate_nodes));
+            fields.insert("bodies".into(), serde_json::to_value(bodies).map_err(|e| e.to_string())?);
+            fields.insert("definitions".into(), serde_json::to_value(definitions).map_err(|e| e.to_string())?);
+            fields.insert("type_constants".into(), serde_json::to_value(type_constants).map_err(|e| e.to_string())?);
+            fields.insert("spans".into(), serde_json::to_value(spans).map_err(|e| e.to_string())?);
+            fields.insert("layouts".into(), serde_json::to_value(layouts).map_err(|e| e.to_string())?);
+            fields.insert("fn_abis".into(), serde_json::to_value(fn_abis).map_err(|e| e.to_string())?);
             fields.insert(
                 "types".into(),
-                Value::Array(type_nodes.into_values().collect()),
+                serde_json::to_value(type_nodes).map_err(|e| e.to_string())?,
             );
             fields.insert(
                 "allocations".into(),
-                Value::Array(allocation_nodes.into_values().collect()),
+                json!(allocation_nodes),
             );
             if let Some(world) = allocator_world {
                 fields.insert("compiler_alloc_id_world".into(), world);
@@ -1519,7 +1526,7 @@ impl ExportCallbacks {
             document["invocation"] = invocation;
         }
         // The reference sidecar records allocator-world metadata from the raw
-        // document. Once graph-encoded, this path may be a shared reference.
+        // document before the same-TyCtxt reference execution.
         #[cfg(feature = "miri-reference")]
         let miri_reference_frontier = if self.miri_reference {
             document
@@ -1530,7 +1537,6 @@ impl ExportCallbacks {
         } else {
             None
         };
-        payload_sharing::share_payloads(&mut document)?;
         vtable_diagnostics::write_report(vtable_diagnostics, &document)?;
         if self.miri_reference {
             if !self.prepared_allocator_world {
@@ -2039,7 +2045,7 @@ fn write_document(path: &Path, document: &Value) -> Result<(), String> {
 fn export_reachable_instances<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Vec<Value>, String> {
+) -> Result<Vec<pool_instance::Instance>, String> {
     let mut records = Vec::new();
     let mut cursor = 0;
     while cursor < context.pending_instances.len() {
@@ -2066,43 +2072,18 @@ fn export_reachable_instances<'tcx>(
                     args: instance.args,
                 };
                 let id = context.register_instance(fallback);
-                Some(
-                    json!({"instance_id":id,"instance_kind":instance_kind_json(context,tcx,fallback.def)?,
-                    "generic_args":generic_args_json(context,tcx,fallback.args)?}),
-                )
+                Some(id)
             } else {
                 None
             };
-            records.push(json!({
-                "instance_id":instance_id,
-                // Miri dispatches intrinsics through its intrinsic evaluator;
-                // the row is a valid source identity, not a claim that every
-                // intrinsic operation has an implementation in this machine.
-                "kind":"intrinsic_dispatch",
-                "fallback_instance":fallback,
-                "instance_kind":instance_kind_json(context,tcx,instance.def)?,
-                "def_id":def_json(def_id),
-                "def_path":tcx.def_path_str(def_id),
-                "generic_args":generic_args_json(context,tcx,instance.args)?,
-                "reason":"Miri executes intrinsic semantics outside a MIR body",
-            }));
+            records.push(pool_instance::Instance { instance_id:instance_id, instance_kind:instance_kind_json(context,tcx,instance.def)?, def_id:def_json(context,def_id), def_path:tcx.def_path_str(def_id), generic_args:generic_args_json(context,tcx,instance.args)?, data:pool_instance::InstanceData::IntrinsicDispatch { fallback_instance:fallback, reason:"Miri executes intrinsic semantics outside a MIR body" } });
             continue;
         }
         if matches!(instance.def, ty::InstanceKind::Item(_)) && tcx.is_foreign_item(def_id) {
             // A foreign declaration has no MIR by definition. Preserve the
             // exact compiler link name so the runtime can route it through
             // its foreign-item shim and retain Unsupported for unhandled calls.
-            records.push(json!({
-                "instance_id":instance_id,
-                "kind":"foreign_item_no_mir",
-                "instance_kind":instance_kind_json(context,tcx,instance.def)?,
-                "def_id":def_json(def_id),
-                "def_path":tcx.def_path_str(def_id),
-                "generic_args":generic_args_json(context,tcx,instance.args)?,
-                "foreign_item":true,
-                "symbol_name":tcx.symbol_name(instance).name.to_string(),
-                "reason":"foreign declaration has no MIR; source execution uses foreign-item dispatch",
-            }));
+            records.push(pool_instance::Instance { instance_id:instance_id, instance_kind:instance_kind_json(context,tcx,instance.def)?, def_id:def_json(context,def_id), def_path:tcx.def_path_str(def_id), generic_args:generic_args_json(context,tcx,instance.args)?, data:pool_instance::InstanceData::ForeignItemNoMir { foreign_item:true,symbol_name:tcx.symbol_name(instance).name.to_string(),reason:"foreign declaration has no MIR; source execution uses foreign-item dispatch" } });
             continue;
         }
         if let ty::InstanceKind::Virtual(def, slot) = instance.def {
@@ -2110,7 +2091,7 @@ fn export_reachable_instances<'tcx>(
             let fn_abi = match tcx.fn_abi_of_instance(
                 ty::TypingEnv::fully_monomorphized().as_query_input((instance, ty::List::empty())),
             ) {
-                Ok(abi) => compiler_fact(fn_abi_json(context, tcx, abi)?),
+                Ok(abi) => fn_abi_json(context, tcx, abi)?,
                 Err(error) => export_failure(
                     "main::export_reachable_instances",
                     format!(
@@ -2120,19 +2101,7 @@ fn export_reachable_instances<'tcx>(
                     ),
                 )?,
             };
-            records.push(json!({
-                "instance_id":instance_id,
-                "kind":"virtual_dispatch_target",
-                "instance_kind":instance_kind_json(context,tcx,instance.def)?,
-                "def_id":def_json(def),
-                "def_path":tcx.def_path_str(def),
-                "dispatch_slot":slot,
-                "generic_args":generic_args_json(context,tcx,instance.args)?,
-                "body_status":"not_applicable",
-                "virtual_identity":{"function_type":type_json(context,tcx,function_type)?,
-                    "fn_abi":fn_abi},
-                "reason":"exact virtual method identity and ABI; runtime dispatch selects its concrete implementation from the actual vtable",
-            }));
+            records.push(pool_instance::Instance { instance_id:instance_id, instance_kind:instance_kind_json(context,tcx,instance.def)?, def_id:def_json(context,def), def_path:tcx.def_path_str(def), generic_args:generic_args_json(context,tcx,instance.args)?, data:pool_instance::InstanceData::VirtualDispatchTarget { dispatch_slot:slot,body_status:"not_applicable", virtual_identity:pool_instance::VirtualIdentity { function_type:type_json(context,tcx,function_type)?,fn_abi }, reason:"exact virtual method identity and ABI; runtime dispatch selects its concrete implementation from the actual vtable" } });
             continue;
         }
         if matches!(instance.def, ty::InstanceKind::Item(_))
@@ -2173,47 +2142,27 @@ fn export_reachable_instances<'tcx>(
                     ty::EarlyBinder::bind(tcx, promoted_body.clone()),
                 );
                 Ok::<_, String>(match promoted_instance {
-                    Ok(body) => json!({
-                        "promoted_index":index.as_u32(),
-                        "body_instantiation":{"kind":"substituted_and_normalized"},
-                        "body":mir_body_with_constant_queries_json(tcx,&body,instance,true,context)?,
-                    }),
+                    Ok(body) => pool_instance::PromotedBody { promoted_index:index.as_u32(),body_instantiation:pool_instance::BodyInstantiation::SubstitutedAndNormalized,body:mir_body_with_constant_queries_json(tcx,&body,instance,true,context)? },
                     Err(error) => export_failure("promoted MIR instantiation", format!("{}: {error:?}", tcx.def_path_str(def_id)))?,
                 })
                 } }).collect::<Result<Vec<_>, String>>()?
         } else {
             Vec::new()
         };
-        records.push(json!({
-            "instance_id":instance_id,
-            "kind":"instance_mir",
-            "def_id":def_json(def_id),
-            "def_path":tcx.def_path_str(def_id),
-            "generic_args":generic_args_json(context,tcx,instance.args)?,
-            "instance_kind":instance_kind_json(context,tcx,instance.def)?,
-            "body_template_is_polymorphic":template.is_polymorphic,
-            "instance_args_are_monomorphic":!instance.args.has_non_region_param()
-                && !instance.args.has_escaping_bound_vars()
-                && !instance.args.has_infer()
-                && !instance.args.has_placeholders(),
-            "body_instantiation":{"kind":"substituted_and_normalized"},
-            "body":body_json,
-            "promoted_bodies":promoted,
-        }));
+        let definition=def_json(context,def_id);
+        let definition_path=tcx.def_path_str(def_id);
+        let generic_args=generic_args_json(context,tcx,instance.args)?;
+        let instance_kind=instance_kind_json(context,tcx,instance.def)?;
+        records.push(pool_instance::Instance { instance_id:instance_id, instance_kind, def_id:definition, def_path:definition_path, generic_args, data:pool_instance::InstanceData::InstanceMir { body_template_is_polymorphic:template.is_polymorphic,instance_args_are_monomorphic:!instance.args.has_non_region_param() && !instance.args.has_escaping_bound_vars() && !instance.args.has_infer() && !instance.args.has_placeholders(),body_instantiation:pool_instance::BodyInstantiation::SubstitutedAndNormalized,body:body_json,promoted_bodies:promoted } });
     }
     Ok::<_, String>(records)
 }
 
-/// Preserve exact exported-symbol instance identities that were registered
-/// only for source symbol lookup. They are not MIR-demanded, so querying their
-/// bodies would be an overreach (and can ICE for compiler-generated symbols),
-/// but compiler ABI rows may still refer to these identities. Emit explicit
-/// non-runtime identity rows so every reference closes without turning an
-/// identity registration into an eager MIR query.
-fn symbol_identity_instances_json<'tcx>(
+// Metadata-only references must retain identity without requesting executable MIR.
+fn identity_only_instances_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Vec<Value>, String> {
+) -> Result<Vec<pool_instance::Instance>, String> {
     let mut identities = context
         .symbol_only_instances
         .iter()
@@ -2229,15 +2178,7 @@ fn symbol_identity_instances_json<'tcx>(
         .into_iter()
         .map(|(id, instance)| {
             {
-                Ok::<_, String>(json!({
-                    "instance_id":id,
-                    "kind":"symbol_identity_only",
-                    "instance_kind":instance_kind_json(context,tcx,instance.def)?,
-                    "def_id":def_json(instance.def.def_id()),
-                    "def_path":tcx.def_path_str(instance.def.def_id()),
-                    "generic_args":generic_args_json(context,tcx,instance.args)?,
-                    "reason":"exact exported-symbol identity; source MIR was not demanded",
-                }))
+                Ok::<_, String>(pool_instance::Instance { instance_id:id, instance_kind:instance_kind_json(context,tcx,instance.def)?, def_id:def_json(context,instance.def.def_id()), def_path:tcx.def_path_str(instance.def.def_id()), generic_args:generic_args_json(context,tcx,instance.args)?, data:pool_instance::InstanceData::IdentityOnly { reason:"compiler instance identity; source MIR was not demanded" } })
             }
         })
         .collect::<Result<Vec<_>, String>>()
@@ -2254,7 +2195,12 @@ fn mir_body_with_constant_queries_json<'tcx>(
     instance: ty::Instance<'tcx>,
     already_instantiated: bool,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<u64, String> {
+    let mode = if already_instantiated { BodyMode::Instantiated } else { BodyMode::Template };
+    let (id, fresh) = context.bodies.reserve(BodyKey { instance, promoted: body.source.promoted, mode });
+    if !fresh {
+        return Ok(id as u64);
+    }
     let normalized = if already_instantiated
         && instance.def.has_polymorphic_mir_body()
         && (body.has_non_region_param()
@@ -2277,7 +2223,13 @@ fn mir_body_with_constant_queries_json<'tcx>(
             ty::EarlyBinder::bind(tcx, body.clone()),
         ) {
             Ok(normalized) => {
-                json!({"body":mir_body_json(tcx,&normalized,context,"normalized_query_body")?})
+                let mode = if already_instantiated { BodyMode::NormalizedInstantiated } else { BodyMode::NormalizedTemplate };
+                let (normalized_id, fresh) = context.bodies.reserve(BodyKey { instance, promoted: body.source.promoted, mode });
+                if fresh {
+                    let definition = mir_body_json(tcx, &normalized, context, "normalized_query_body")?;
+                    context.bodies.define(normalized_id, definition);
+                }
+                pool_body::Normalization { body: normalized_id }
             }
             Err(error) => export_failure(
                 "main::mir_body_with_constant_queries_json",
@@ -2289,11 +2241,13 @@ fn mir_body_with_constant_queries_json<'tcx>(
             )?,
         }
     };
-    let mut query_context = json!({"instance_kind":instance_kind_json(context,tcx,instance.def)?,
-        "generic_args":generic_args_json(context,tcx,instance.args)?,
-        "mir_input_phase":if already_instantiated { "already_instantiated" } else { "template" },
-        "required_constant_checks":required_constant_checks_json(tcx,body,instance,already_instantiated,context)?,
-        "normalization":normalized});
+    let query_instance_id = context.register_metadata_instance(instance);
+    let query_context = pool_body::ConstantQueryContext {
+        instance_id: query_instance_id,
+        mir_input_phase: if already_instantiated { pool_body::InputPhase::AlreadyInstantiated } else { pool_body::InputPhase::Template },
+        required_constant_checks: required_constant_checks_json(tcx, body, instance, already_instantiated, context)?,
+        normalization: normalized,
+    };
     let mut result = mir_body_json(
         tcx,
         body,
@@ -2304,14 +2258,9 @@ fn mir_body_with_constant_queries_json<'tcx>(
             "root_template"
         },
     )?;
-    if query_context["normalization"].get("body") == Some(&result) {
-        query_context["normalization"] = json!({"body_ref":"source_body"});
-    }
-    result
-        .as_object_mut()
-        .expect("body serializer returns an object")
-        .insert("constant_query_context".into(), query_context);
-    Ok::<_, String>(result)
+    result.constant_query_context = Some(query_context);
+    context.bodies.define(id, result);
+    Ok(id as u64)
 }
 
 fn export_body<'tcx>(
@@ -2334,18 +2283,15 @@ fn export_body<'tcx>(
     } else {
         None
     };
-    let mut result = mir_body_with_constant_queries_json(tcx, body, instance, false, context)?;
-    let object = result
-        .as_object_mut()
-        .expect("body serializer returns an object");
+    let body_id = mir_body_with_constant_queries_json(tcx, body, instance, false, context)?;
+    let mut result = json!({"body":body_id});
+    let object = result.as_object_mut().expect("body root is an object");
     object.insert("entry_instance".into(), match entry {
-        Some((id,canonical))=>json!({"instance_id":id,
-            "instance_kind":instance_kind_json(context,tcx,canonical.def)?,
-            "generic_args":generic_args_json(context,tcx,canonical.args)?}),
+        Some((id,_))=>json!(id),
         None=>unavailable_compiler_fact("root requires explicit type/const instantiation; Instance::mono cannot invent arguments")?,
     });
     object.insert("def_path".into(), json!(tcx.def_path_str(def_id)));
-    object.insert("def_id".into(), json!(def_json(def_id)));
+    object.insert("def_id".into(), json!(def_json(context, def_id)));
     object.insert("is_static".into(), json!(tcx.is_static(def_id)));
     object.insert(
         "thread_local_static".into(),
@@ -2370,7 +2316,7 @@ fn mir_body_json<'tcx>(
     body: &rustc_middle::mir::Body<'tcx>,
     context: &mut ExportContext<'tcx>,
     role: &'static str,
-) -> Result<Value, String> {
+) -> Result<pool_body::Body, String> {
     let previous = if context.vtable_diagnostics.enabled() {
         context
             .vtable_diagnostics
@@ -2388,85 +2334,75 @@ fn mir_body_json<'tcx>(
         export_failure::<()>("MIR", "coroutine layout serialization is not implemented")?;
     }
     intrinsic_value_queries::collect_spans(tcx, context, body);
-    let result = json!({
-        "source_instance_kind":instance_kind_json(context,tcx,body.source.instance)?,
-        "preamble_def_span":span_json(context,tcx,tcx.def_span(body.source.def_id())),
-        "backtrace_spans":backtrace_spans_json(context,tcx,body),
-        "source_def_id":def_json(body.source.def_id()),
-        "source_promoted":body.source.promoted.map(|value|value.as_u32()),
-        "phase": mir_phase_json(body.phase),
-        "pass_count": body.pass_count,
-        "is_polymorphic": body.has_non_region_param(),
-        "source_body_is_polymorphic": body.is_polymorphic,
-        "injection_phase": body.injection_phase.map(mir_phase_json),
-        "tainted_by_errors": body.tainted_by_errors.map(|value|debug_value(&value)),
-        "arg_count": body.arg_count,
-        "spread_arg": body.spread_arg.map(|local| local.as_u32()),
-        "span": span_json(context, tcx, body.span),
-        "locals": body.local_decls.iter_enumerated().map(|(local, decl)| Ok::<_, String>({ json!({
-            "local": local.as_u32(),
-            "mutability": mutability_json(decl.mutability),
-            "type": type_json(context, tcx, decl.ty)?,
-            "layout": layout_json(context, tcx, decl.ty)?,
-            "source_info": source_info_json(context, tcx, decl.source_info),
-            "local_info": debug_value(&decl.local_info),
-        }) })).collect::<Result<Vec<_>, String>>()?,
-        "basic_blocks": body.basic_blocks.iter_enumerated().map(|(bb, data)| Ok::<_, String>({ json!({
-            "block": bb.as_u32(),
-            "is_cleanup": data.is_cleanup,
-            "statements": data.statements.iter().map(|statement| Ok::<_, String>({ json!({
-                "source_info": source_info_json(context, tcx, statement.source_info),
-                "kind": statement_json(context, tcx, body, &statement.kind)?,
-            }) })).collect::<Result<Vec<_>, String>>()?,
-            "terminator": data.terminator.as_ref().map(|term| Ok::<_, String>({ json!({
-                "source_info": source_info_json(context, tcx, term.source_info),
-                "kind": terminator_json(context, tcx, body, &term.kind)?,
-            }) })).transpose()?,
-        }) })).collect::<Result<Vec<_>, String>>()?,
-        "source_scopes": body.source_scopes.iter_enumerated().map(|(scope, data)| Ok::<_, String>({ json!({
-            "scope": scope.as_u32(),
-            "parent": data.parent_scope.map(|parent| parent.as_u32()),
-            "span": span_json(context, tcx, data.span),
-            "inlined": data.inlined.map(|(instance, callsite)| Ok::<_, String>({ json!({
-                "instance_kind": instance_kind_json(context, tcx, instance.def)?,
-                "generic_args": generic_args_json(context, tcx, instance.args)?,
-                "callsite_span": span_json(context, tcx, callsite),
-                "requires_caller_location": instance.def.requires_caller_location(tcx),
-            }) })).transpose()?,
-            "inlined_parent_scope": data.inlined_parent_scope.map(|parent| parent.as_u32()),
-            "local_data": debug_value(&data.local_data),
-        }) })).collect::<Result<Vec<_>, String>>()?,
-        "var_debug_info": body.var_debug_info.iter().map(debug_value).collect::<Vec<_>>(),
-        "mentioned_items": body.mentioned_items.as_ref().map(debug_value),
-        "required_consts": body.required_consts.as_ref().map(|values| Ok::<_, String>({ values.iter().map(|v| Ok::<_, String>({ const_operand_json(context, tcx, body, v)? })).collect::<Result<Vec<_>, String>>()? })).transpose()?,
-        "user_type_annotations": debug_value(&body.user_type_annotations),
-        "coroutine_info":null,
-    });
+    let result = pool_body::Body {
+        source_instance_kind: instance_kind_json(context, tcx, body.source.instance)?,
+        preamble_def_span: span_json(context, tcx, tcx.def_span(body.source.def_id())),
+        backtrace_spans: backtrace_spans_json(context, tcx, body),
+        source_def_id: def_json(context, body.source.def_id()),
+        source_promoted: body.source.promoted.map(|value| value.as_u32()),
+        phase: mir_phase_json(body.phase),
+        pass_count: body.pass_count,
+        is_polymorphic: body.has_non_region_param(),
+        source_body_is_polymorphic: body.is_polymorphic,
+        injection_phase: body.injection_phase.map(mir_phase_json),
+        tainted_by_errors: body.tainted_by_errors.map(|value| pool_values::DebugPayload::new(&value)),
+        arg_count: body.arg_count,
+        spread_arg: body.spread_arg.map(|local| local.as_u32()),
+        span: span_json(context, tcx, body.span),
+        locals: body.local_decls.iter_enumerated().map(|(local, decl)| Ok(pool_body::Local {
+            local: local.as_u32(),
+            mutability: match decl.mutability { rustc_ast::Mutability::Mut => pool_body::Mutability::Mutable, rustc_ast::Mutability::Not => pool_body::Mutability::Immutable },
+            r#type: type_json(context, tcx, decl.ty)?,
+            layout: layout_json(context, tcx, decl.ty)?,
+            source_info: source_info_json(context, tcx, decl.source_info),
+            local_info: pool_body::DebugPayload::new(&decl.local_info),
+        })).collect::<Result<Vec<_>, String>>()?,
+        basic_blocks: body.basic_blocks.iter_enumerated().map(|(bb, data)| Ok(pool_body::BasicBlock {
+            block: bb.as_u32(),
+            is_cleanup: data.is_cleanup,
+            statements: data.statements.iter().map(|statement| Ok(pool_body::Statement {
+                source_info: source_info_json(context, tcx, statement.source_info),
+                kind: statement_json(context, tcx, body, &statement.kind)?,
+            })).collect::<Result<Vec<_>, String>>()?,
+            terminator: data.terminator.as_ref().map(|term| Ok::<_, String>(pool_body::Terminator {
+                source_info: source_info_json(context, tcx, term.source_info),
+                kind: terminator_json(context, tcx, body, &term.kind)?,
+            })).transpose()?,
+        })).collect::<Result<Vec<_>, String>>()?,
+        source_scopes: body.source_scopes.iter_enumerated().map(|(scope, data)| Ok(pool_body::SourceScope {
+            scope: scope.as_u32(),
+            parent: data.parent_scope.map(|parent| parent.as_u32()),
+            span: span_json(context, tcx, data.span),
+            inlined: data.inlined.map(|(instance, callsite)| pool_body::InlinedScope {
+                instance_id: context.register_metadata_instance(instance),
+                callsite_span: span_json(context, tcx, callsite),
+                requires_caller_location: instance.def.requires_caller_location(tcx),
+            }),
+            inlined_parent_scope: data.inlined_parent_scope.map(|parent| parent.as_u32()),
+            local_data: pool_body::DebugPayload::new(&data.local_data),
+        })).collect::<Result<Vec<_>, String>>()?,
+        var_debug_info: body.var_debug_info.iter().map(pool_values::DebugPayload::new).collect(),
+        mentioned_items: body.mentioned_items.as_ref().map(pool_values::DebugPayload::new),
+        required_consts: body.required_consts.as_ref().map(|values| values.iter().map(|v| const_operand_json(context, tcx, body, v)).collect::<Result<Vec<_>, String>>()).transpose()?,
+        user_type_annotations: pool_values::DebugPayload::new(&body.user_type_annotations),
+        coroutine_info: None,
+        constant_query_context: None,
+    };
     context.vtable_diagnostics.body = previous;
     Ok::<_, String>(result)
 }
 
-fn source_info_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, info: rustc_middle::mir::SourceInfo) -> Value {
-    json!({ "span": span_json(context, tcx, info.span), "scope": info.scope.as_u32() })
+fn source_info_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, info: rustc_middle::mir::SourceInfo) -> pool_body::SourceInfo {
+    pool_body::SourceInfo { span: span_json(context, tcx, info.span), scope: info.scope.as_u32() }
 }
 
-fn span_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, span: rustc_span::Span) -> Value {
-    if let Some(value) = context.span_payload_cache.get(&span) {
-        return value.clone();
+fn span_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, span: rustc_span::Span) -> u64 {
+    let (id, fresh) = context.spans.reserve(span);
+    if fresh {
+        let map=tcx.sess.source_map(); let start=map.lookup_char_pos(span.lo()); let end=map.lookup_char_pos(span.hi());
+        context.spans.define(id,pool_values::Span { is_dummy:span.is_dummy(),lo:span.lo().0,hi:span.hi().0,ctxt:pool_values::DebugPayload::new(&span.ctxt()),file:pool_values::DebugPayload::new(&start.file.name),start:pool_values::Position {line:start.line,column:start.col.to_usize()},end:pool_values::Position {line:end.line,column:end.col.to_usize()} });
     }
-    let source_map = tcx.sess.source_map();
-    let start = source_map.lookup_char_pos(span.lo());
-    let end = source_map.lookup_char_pos(span.hi());
-    let value = json!({
-        "lo": span.lo().0,
-        "hi": span.hi().0,
-        "ctxt": debug_value(&span.ctxt()),
-        "file": debug_value(&start.file.name),
-        "start": { "line": start.line, "column": start.col.to_usize() },
-        "end": { "line": end.line, "column": end.col.to_usize() },
-    });
-    context.span_payload_cache.insert(span, value.clone());
-    value
+    id as u64
 }
 
 fn debug_value<T: std::fmt::Debug>(value: &T) -> Value {
@@ -2477,7 +2413,7 @@ fn type_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     ty: rustc_middle::ty::Ty<'tcx>,
-) -> Result<Value, String> {
+) -> Result<u64, String> {
     // rustc layout is region-insensitive. Query the exact region-erased form
     // for late-bound region types while retaining the source Ty and its Binder
     // graph as the exported type identity and signature evidence.
@@ -2504,21 +2440,21 @@ fn type_json_with_query<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: rustc_middle::ty::Ty<'tcx>,
     query_ty: rustc_middle::ty::Ty<'tcx>,
-) -> Result<Value, String> {
+) -> Result<u64, String> {
     // Signature-bound types are metadata inside their Binder, not runtime
     // query inputs. The instantiated signature registers its closed types.
     if context.runtime_type_query_suppression == 0 && !ty.has_escaping_bound_vars() {
         context.runtime_type_query_demands.insert(ty);
     }
     let id = context.type_id(ty);
-    if context.type_nodes.contains_key(&id) || context.type_nodes_in_progress.contains(&ty) {
-        return Ok(json!({"type_id":id}));
+    if context.type_ids.definition(id).is_some() || context.type_nodes_in_progress.contains(&ty) {
+        return Ok(id);
     }
     context.type_nodes_in_progress.insert(ty);
     let node = type_json_inner(context, tcx, ty, query_ty)?;
     context.type_nodes_in_progress.remove(&ty);
-    context.type_nodes.insert(id, node);
-    Ok::<_, String>(json!({"type_id":id}))
+    context.type_ids.define(id as usize, node);
+    Ok(id)
 }
 
 /// Serialize a type produced only as a compiler runtime-query result. Its
@@ -2527,15 +2463,15 @@ fn query_generated_type_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     ty: rustc_middle::ty::Ty<'tcx>,
-) -> Result<Value, String> {
+) -> Result<u64, String> {
     context.runtime_type_query_suppression += 1;
     let result = type_json(context, tcx, ty)?;
     context.runtime_type_query_suppression -= 1;
     Ok::<_, String>(result)
 }
 
-fn compiler_fact(value: Value) -> Value {
-    value
+fn compiler_fact(value: impl serde::Serialize) -> Value {
+    serde_json::to_value(value).expect("semantic compiler fact serialization")
 }
 fn unavailable_compiler_fact(reason: &str) -> Result<Value, String> {
     export_failure("main::unavailable_compiler_fact", reason)
@@ -2547,15 +2483,20 @@ fn pattern_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     pattern: ty::Pattern<'tcx>,
-) -> Result<Value, String> {
-    Ok::<_, String>(match *pattern.0 {
-        ty::PatternKind::Range { start, end } => {
-            json!({"kind":"range","start":const_type_json(context,tcx,start)?,"end":const_type_json(context,tcx,end)?})
-        }
-        ty::PatternKind::Or(patterns) => {
-            json!({"kind":"or","patterns":patterns.iter().map(|pattern|Ok::<_, String>({ pattern_json(context,tcx,pattern)? })).collect::<Result<Vec<_>, String>>()?})
-        }
-        ty::PatternKind::NotNull => json!({"kind":"not_null"}),
+) -> Result<pool_type::Pattern, String> {
+    use pool_type::Pattern;
+    Ok(match *pattern.0 {
+        ty::PatternKind::Range { start, end } => Pattern::Range {
+            start: const_type_json(context, tcx, start)?,
+            end: const_type_json(context, tcx, end)?,
+        },
+        ty::PatternKind::Or(patterns) => Pattern::Or {
+            patterns: patterns
+                .iter()
+                .map(|p| pattern_json(context, tcx, p))
+                .collect::<Result<_, _>>()?,
+        },
+        ty::PatternKind::NotNull => Pattern::NotNull,
     })
 }
 
@@ -2588,55 +2529,64 @@ fn type_compiler_facts_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     source_input: ty::Ty<'tcx>,
-    query_input: ty::Ty<'tcx>,
-) -> Result<Value, String> {
+    input: ty::Ty<'tcx>,
+) -> Result<pool_type::CompilerFacts, String> {
+    use pool_type::*;
     let env = ty::TypingEnv::fully_monomorphized();
-    // Query types may come from instantiating a complete function-signature
-    // Binder with erased late-bound regions. Do not erase an escaping type or
-    // const variable: only region binders are discharged at that boundary.
-    let closed = !query_input.has_non_region_param()
-        && !query_input.has_escaping_bound_vars()
-        && !query_input.has_infer()
-        && !query_input.has_placeholders()
-        && !query_input.references_error();
+    let closed = !input.has_non_region_param()
+        && !input.has_escaping_bound_vars()
+        && !input.has_infer()
+        && !input.has_placeholders()
+        && !input.references_error();
     if !closed {
-        return unavailable_compiler_fact(
+        return export_failure(
+            "type queries",
             "type queries require a closed monomorphic typing environment",
         );
     }
-    let normalized = Some(
-        tcx.try_normalize_erasing_regions(env, ty::Unnormalized::new_wip(query_input))
-            .map_err(|error| format!("type normalization failed: {error:?}"))?,
-    );
-    let missing = || unavailable_compiler_fact("required compiler trait language item is missing");
-    let input = query_input;
-    let is_unsafe_cell = matches!(input.kind(),ty::Adt(def,_) if def.is_unsafe_cell());
-    let mut booleans = serde_json::Map::new();
-    booleans.insert(
-        "is_unsafe_cell".into(),
-        compiler_fact(json!(is_unsafe_cell)),
-    );
-    booleans.insert(
-        "has_erasable_regions".into(),
-        compiler_fact(json!(input.has_erasable_regions())),
-    );
-    booleans.insert(
-        "is_c_void".into(),
-        compiler_fact(json!(input.is_c_void(tcx))),
-    );
-    booleans.insert("is_simd".into(), compiler_fact(json!(input.is_simd())));
-    booleans.insert("is_box".into(), compiler_fact(json!(input.is_box())));
-    booleans.insert(
-        "is_global_box".into(),
-        compiler_fact(json!(input.is_box_global(tcx))),
-    );
-    booleans.insert(
-        "is_dynamic".into(),
-        compiler_fact(json!(matches!(input.kind(), ty::Dynamic(..)))),
-    );
-    booleans.insert(
-        "is_too_generic".into(),
-        compiler_fact(json!(matches!(
+    let normalized = tcx
+        .try_normalize_erasing_regions(env, ty::Unnormalized::new_wip(input))
+        .map_err(|e| format!("type normalization failed: {e:?}"))?;
+    let missing = || "required compiler trait language item is missing".to_owned();
+    let is_freeze = if normalized.is_trivially_freeze()
+        || tcx
+            .lang_items()
+            .get(rustc_attr_ir::LangItem::Freeze)
+            .is_some()
+    {
+        normalized.is_freeze(tcx, env)
+    } else {
+        return Err(missing());
+    };
+    let is_unpin = if unpin_query_needs_no_lang_item(normalized)
+        || tcx
+            .lang_items()
+            .get(rustc_attr_ir::LangItem::Unpin)
+            .is_some()
+    {
+        normalized.is_unpin(tcx, env)
+    } else {
+        return Err(missing());
+    };
+    let is_unsafe_unpin = if unpin_query_needs_no_lang_item(normalized)
+        || tcx
+            .lang_items()
+            .get(rustc_attr_ir::LangItem::UnsafeUnpin)
+            .is_some()
+    {
+        normalized.is_unsafe_unpin(tcx, env)
+    } else {
+        return Err(missing());
+    };
+    let boolean_queries = BooleanQueries {
+        is_unsafe_cell: matches!(input.kind(),ty::Adt(d,_) if d.is_unsafe_cell()),
+        has_erasable_regions: input.has_erasable_regions(),
+        is_c_void: input.is_c_void(tcx),
+        is_simd: input.is_simd(),
+        is_box: input.is_box(),
+        is_global_box: input.is_box_global(tcx),
+        is_dynamic: matches!(input.kind(), ty::Dynamic(..)),
+        is_too_generic: matches!(
             input.kind(),
             ty::Param(..)
                 | ty::Alias(..)
@@ -2644,166 +2594,62 @@ fn type_compiler_facts_json<'tcx>(
                 | ty::Placeholder(..)
                 | ty::Infer(..)
                 | ty::Error(..)
-        ))),
-    );
-    booleans.insert("is_monomorphic".into(), compiler_fact(json!(closed)));
-    booleans.insert(
-        "is_monomorphic_enough".into(),
-        compiler_fact(json!(!input.has_param())),
-    );
-    booleans.insert(
-        "is_like_maybe_dangling".into(),
-        compiler_fact(json!(input.is_like_maybe_dangling())),
-    );
-    booleans.insert(
-        "is_freeze".into(),
-        match normalized {
-            Some(ty)
-                if ty.is_trivially_freeze()
-                    || tcx
-                        .lang_items()
-                        .get(rustc_attr_ir::LangItem::Freeze)
-                        .is_some() =>
-            {
-                compiler_fact(json!(ty.is_freeze(tcx, env)))
-            }
-            _ => missing()?,
-        },
-    );
-    booleans.insert(
-        "is_unpin".into(),
-        match normalized {
-            Some(ty)
-                if unpin_query_needs_no_lang_item(ty)
-                    || tcx
-                        .lang_items()
-                        .get(rustc_attr_ir::LangItem::Unpin)
-                        .is_some() =>
-            {
-                compiler_fact(json!(ty.is_unpin(tcx, env)))
-            }
-            _ => missing()?,
-        },
-    );
-    booleans.insert(
-        "is_unsafe_unpin".into(),
-        match normalized {
-            Some(ty)
-                if unpin_query_needs_no_lang_item(ty)
-                    || tcx
-                        .lang_items()
-                        .get(rustc_attr_ir::LangItem::UnsafeUnpin)
-                        .is_some() =>
-            {
-                compiler_fact(json!(ty.is_unsafe_unpin(tcx, env)))
-            }
-            _ => missing()?,
-        },
-    );
-    booleans.insert(
-        "needs_drop".into(),
-        match normalized {
-            Some(ty) => compiler_fact(json!(ty.needs_drop(tcx, env))),
-            _ => missing()?,
-        },
-    );
-    booleans.insert(
-        "opsem_inhabited".into(),
-        match normalized {
-            Some(ty) => compiler_fact(json!(ty.is_opsem_inhabited(tcx, env))),
-            _ => missing()?,
-        },
-    );
-    let mut types = serde_json::Map::new();
-    types.insert(
-        "discriminant_type".into(),
-        match normalized {
-            Some(ty) => discriminant_type_fact_json(context, tcx, ty)?,
-            _ => missing()?,
-        },
-    );
-    types.insert(
-        "normalized".into(),
-        match normalized {
-            Some(ty) => compiler_fact(type_json(context, tcx, ty)?),
-            _ => missing()?,
-        },
-    );
-    types.insert(
-        "builtin_deref_explicit".into(),
-        compiler_fact(
-            input
-                .builtin_deref(true)
-                .map(|ty| type_json(context, tcx, ty))
-                .transpose()?
-                .unwrap_or(Value::Null),
         ),
-    );
-    types.insert(
-        "builtin_deref_implicit".into(),
-        compiler_fact(
-            input
-                .builtin_deref(false)
-                .map(|ty| type_json(context, tcx, ty))
-                .transpose()?
-                .unwrap_or(Value::Null),
-        ),
-    );
-    types.insert(
-        "boxed_type".into(),
-        compiler_fact(
-            input
-                .boxed_ty()
-                .map(|ty| type_json(context, tcx, ty))
-                .transpose()?
-                .unwrap_or(Value::Null),
-        ),
-    );
-    types.insert(
-        "unsafe_binder_erased".into(),
-        compiler_fact(match input.kind() {
-            ty::UnsafeBinder(bound) => type_json(
-                context,
-                tcx,
-                tcx.instantiate_bound_regions_with_erased((*bound).into()),
-            )?,
-            _ => Value::Null,
-        }),
-    );
-    if let Some(ty) = normalized {
-        let tail = tcx.struct_tail_for_codegen(ty, env);
-        types.insert(
-            "metadata_tail".into(),
-            compiler_fact(type_json(context, tcx, tail)?),
+        is_monomorphic: closed,
+        is_monomorphic_enough: !input.has_param(),
+        is_like_maybe_dangling: input.is_like_maybe_dangling(),
+        is_freeze,
+        is_unpin,
+        is_unsafe_unpin,
+        needs_drop: normalized.needs_drop(tcx, env),
+        opsem_inhabited: normalized.is_opsem_inhabited(tcx, env),
+        is_sized: normalized.is_sized(tcx, env),
+    };
+    let discriminant_type = discriminant_type_fact_json(context, tcx, normalized)?;
+    let normalized_id = type_json(context, tcx, normalized)?;
+    let builtin_deref_explicit = input
+        .builtin_deref(true)
+        .map(|t| type_json(context, tcx, t))
+        .transpose()?;
+    let builtin_deref_implicit = input
+        .builtin_deref(false)
+        .map(|t| type_json(context, tcx, t))
+        .transpose()?;
+    let boxed_type = input
+        .boxed_ty()
+        .map(|t| type_json(context, tcx, t))
+        .transpose()?;
+    let unsafe_binder_erased = match input.kind() {
+        ty::UnsafeBinder(b) => Some(type_json(
+            context,
+            tcx,
+            tcx.instantiate_bound_regions_with_erased((*b).into()),
+        )?),
+        _ => None,
+    };
+    let tail = tcx.struct_tail_for_codegen(normalized, env);
+    if matches!(tail.kind(), ty::UnsafeBinder(..)) {
+        return export_failure(
+            "pointer metadata",
+            "rustc ptr_metadata_ty_or_tail does not implement UnsafeBinder",
         );
-        types.insert(
-            "pointer_metadata_type".into(),
-            if matches!(tail.kind(), ty::UnsafeBinder(..)) {
-                unavailable_compiler_fact(
-                    "rustc ptr_metadata_ty_or_tail does not implement UnsafeBinder",
-                )?
-            } else {
-                match ty.ptr_metadata_ty_or_tail(tcx, |ty| tcx.normalize_erasing_regions(env, ty)) {
-                    Ok(metadata) => compiler_fact(type_json(context, tcx, metadata)?),
-                    Err(_) => unavailable_compiler_fact(
-                        "rustc could not determine pointer metadata type",
-                    )?,
-                }
-            },
-        );
-        booleans.insert(
-            "is_sized".into(),
-            compiler_fact(json!(ty.is_sized(tcx, env))),
-        );
-    } else {
-        types.insert("metadata_tail".into(), missing()?);
-        types.insert("pointer_metadata_type".into(), missing()?);
-        booleans.insert("is_sized".into(), missing()?);
     }
+    let metadata = normalized
+        .ptr_metadata_ty_or_tail(tcx, |t| tcx.normalize_erasing_regions(env, t))
+        .map_err(|_| "rustc could not determine pointer metadata type".to_owned())?;
+    let type_queries = TypeQueries {
+        discriminant_type,
+        normalized: normalized_id,
+        builtin_deref_explicit,
+        builtin_deref_implicit,
+        boxed_type,
+        unsafe_binder_erased,
+        metadata_tail: type_json(context, tcx, tail)?,
+        pointer_metadata_type: type_json(context, tcx, metadata)?,
+    };
     let capture_names = match input.kind() {
-        ty::Closure(def, _) | ty::CoroutineClosure(def, _) | ty::Coroutine(def, _) => {
-            let names = def
-                .as_local()
+        ty::Closure(def, _) | ty::CoroutineClosure(def, _) | ty::Coroutine(def, _) => Some(
+            def.as_local()
                 .map(|local| {
                     tcx.closure_captures(local)
                         .iter()
@@ -2817,239 +2663,296 @@ fn type_compiler_facts_json<'tcx>(
                                 None
                             }
                         })
-                        .collect::<Vec<_>>()
+                        .collect()
                 })
-                .unwrap_or_default();
-            compiler_fact(json!(names))
-        }
-        _ => compiler_fact(Value::Null),
+                .unwrap_or_default(),
+        ),
+        _ => None,
     };
     let adt = if let ty::Adt(def, _) = input.kind() {
-        Some(
-            json!({"definition":def_json(def.did()),"item_name":tcx.item_name(def.did()).as_str(),
-            "nonnull_optimization_guaranteed":rustc_attr_ir::find_attr!(tcx,def.did(),RustcNonnullOptimizationGuaranteed)}),
-        )
+        Some(AdtFacts {
+            definition: def_json(context, def.did()),
+            item_name: tcx.item_name(def.did()).as_str().to_owned(),
+            nonnull_optimization_guaranteed: rustc_attr_ir::find_attr!(
+                tcx,
+                def.did(),
+                RustcNonnullOptimizationGuaranteed
+            ),
+        })
     } else {
         None
     };
-    let simd_size_and_type = if !input.is_simd() {
-        compiler_fact(Value::Null)
-    } else if let Some(ty) = normalized {
-        let (count, element) = ty.simd_size_and_type(tcx);
-        compiler_fact(json!({"count":count,"element":type_json(context,tcx,element)?}))
+    let simd_size_and_type = if input.is_simd() {
+        let (count, element) = normalized.simd_size_and_type(tcx);
+        Some(Simd {
+            count: count as u64,
+            element: type_json(context, tcx, element)?,
+        })
     } else {
-        missing()?
+        None
     };
-    let mut facts = json!({"typing_env":"fully_monomorphized","input_type":type_json(context,tcx,source_input)?,
-        "query_input_type":type_json(context,tcx,query_input)?,
-        "boolean_queries":booleans,"type_queries":types,"adt":adt,"capture_names":capture_names,
-        "simd_size_and_type":simd_size_and_type,
-        "discriminants":match normalized {Some(ty)=>discriminant_facts_json(context,tcx,ty)?,_=>missing()?},
-        "projection_queries":projection_queries::export(tcx,context,input)?,
-        "definition":match input.kind() { ty::Adt(def,_)=>Some(def_json(def.did())),ty::FnDef(def,_)|ty::Closure(def,_)|ty::CoroutineClosure(def,_)|ty::Coroutine(def,_)=>Some(def_json(*def)),_=>None }});
-    // interpret/intrinsics.rs::write_type_id only queries region-free inputs.
-    // Its has_erasable_regions precondition is exported above, independently.
-    if !input.has_erasable_regions() {
-        facts["type_id_hash"] = intrinsic_symbol_queries::type_id_hash(tcx, input)?;
-    }
-    Ok(facts)
+    Ok(CompilerFacts {
+        typing_env: "fully_monomorphized",
+        input_type: type_json(context, tcx, source_input)?,
+        query_input_type: type_json(context, tcx, input)?,
+        boolean_queries,
+        type_queries,
+        adt,
+        capture_names,
+        simd_size_and_type,
+        discriminants: discriminant_facts_json(context, tcx, normalized)?,
+        projection_queries: projection_queries::export(tcx, context, input)?,
+        definition: match input.kind() {
+            ty::Adt(def, _) => Some(def_json(context, def.did())),
+            ty::FnDef(d, _)
+            | ty::Closure(d, _)
+            | ty::CoroutineClosure(d, _)
+            | ty::Coroutine(d, _) => Some(def_json(context, *d)),
+            _ => None,
+        },
+        type_id_hash: if input.has_erasable_regions() {
+            None
+        } else {
+            Some(tcx.type_id_hash(input).as_u128().to_string())
+        },
+    })
 }
+
 
 fn type_json_inner<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
-    ty: rustc_middle::ty::Ty<'tcx>,
-    query_ty: rustc_middle::ty::Ty<'tcx>,
-) -> Result<Value, String> {
-    let id = context.type_id(ty);
-    let shape = match *ty.kind() {
-        ty::Bool => json!({ "kind": "bool" }),
-        ty::Char => json!({ "kind": "char" }),
-        ty::Int(kind) => {
-            json!({ "kind": "int", "signed_kind": kind.name_str() })
-        }
-        ty::Uint(kind) => {
-            json!({ "kind": "uint", "unsigned_kind": kind.name_str() })
-        }
-        ty::Float(kind) => {
-            json!({ "kind": "float", "float_kind": kind.name_str() })
-        }
+    input: ty::Ty<'tcx>,
+    query_ty: ty::Ty<'tcx>,
+) -> Result<pool_type::Type, String> {
+    use pool_type::*;
+    let id = context.type_id(input);
+    let shape = match *input.kind() {
+        ty::Bool => Shape::Bool,
+        ty::Char => Shape::Char,
+        ty::Int(kind) => Shape::Int {
+            signed_kind: kind.name_str(),
+        },
+        ty::Uint(kind) => Shape::Uint {
+            unsigned_kind: kind.name_str(),
+        },
+        ty::Float(kind) => Shape::Float {
+            float_kind: kind.name_str(),
+        },
         ty::Adt(def, args) => {
             let adt = tcx.adt_def(def.did());
-            json!({
-                "kind": "adt",
-                "def_id": format!("{}:{}", def.did().krate.as_u32(), def.did().index.as_u32()),
-                "def_path": tcx.def_path_str(def.did()),
-                "adt_kind": match adt.adt_kind() {
-                    rustc_middle::ty::AdtKind::Struct => "struct",
-                    rustc_middle::ty::AdtKind::Union => "union",
-                    rustc_middle::ty::AdtKind::Enum => "enum",
+            Shape::Adt {
+                def_id: def_json(context, def.did()),
+                def_path: tcx.def_path_str(def.did()),
+                adt_kind: match adt.adt_kind() {
+                    ty::AdtKind::Struct => "struct",
+                    ty::AdtKind::Union => "union",
+                    ty::AdtKind::Enum => "enum",
                 },
-                "representation": repr_options_json(&adt.repr()),
-                "generic_args": generic_args_json_inner(context, tcx, args)?,
-                "variants": adt.variants().iter_enumerated().map(|(index, variant)| Ok::<_, String>({ json!({
-                    "index": index.as_u32(),
-                    "name": variant.name.as_str(),
-                    "fields": variant.fields.iter_enumerated().map(|(field_index, field)| Ok::<_, String>({ json!({
-                        "index": field_index.as_u32(),
-                        "name": field.name.as_str(),
-                        "type": type_json(context, tcx, field.ty(tcx, args).skip_normalization())?,
-                    }) })).collect::<Result<Vec<_>, String>>()?,
-                }) })).collect::<Result<Vec<_>, String>>()?,
-            })
+                representation: repr_options_json(&adt.repr()),
+                generic_args: generic_args_json_inner(context, tcx, args)?,
+                variants: adt
+                    .variants()
+                    .iter_enumerated()
+                    .map(|(index, v)| {
+                        Ok(Variant {
+                            index: index.as_u32(),
+                            name: v.name.as_str().to_owned(),
+                            fields: v
+                                .fields
+                                .iter_enumerated()
+                                .map(|(i, f)| {
+                                    Ok(Field {
+                                        index: i.as_u32(),
+                                        name: f.name.as_str().to_owned(),
+                                        ty: type_json(
+                                            context,
+                                            tcx,
+                                            f.ty(tcx, args).skip_normalization(),
+                                        )?,
+                                    })
+                                })
+                                .collect::<Result<_, String>>()?,
+                        })
+                    })
+                    .collect::<Result<_, String>>()?,
+            }
         }
-        ty::Foreign(def) => json!({
-            "kind": "foreign",
-            "def_id": format!("{}:{}", def.krate.as_u32(), def.index.as_u32()),
-            "def_path": tcx.def_path_str(def),
-        }),
-        ty::Str => json!({ "kind": "str" }),
-        ty::Array(element, length) => json!({
-            "kind": "array",
-            "element": type_json(context, tcx, element)?,
-            "length": const_type_json(context, tcx, length)?,
-            // This is an exact constructor equality query, not a layout-based
-            // approximation and not evaluation in an incomplete generic environment.
-            "constructor_identity":match tcx.try_normalize_erasing_regions(
-                ty::TypingEnv::fully_monomorphized(), ty::Unnormalized::new_wip(length))
-                .map_err(|error|format!("array length normalization failed: {error:?}"))?
-                .try_to_target_usize(tcx) {
-                Some(count)=>json!({"count":count,
-                    "canonical_value_constructor":ty==ty::Ty::new_array(tcx,element,count)}),
-                None=>unavailable_compiler_fact("closed array length did not normalize to target usize")?,
-            },
-        }),
-        ty::Pat(base, pattern) => json!({
-            "kind": "pattern_type",
-            "base": type_json(context, tcx, base)?, "pattern":pattern_json(context,tcx,pattern)?,
-        }),
-        ty::Slice(element) => {
-            json!({ "kind": "slice", "element": type_json(context, tcx, element)? })
+        ty::Foreign(def) => Shape::Foreign {
+            def_id: def_json(context, def),
+            def_path: tcx.def_path_str(def),
+        },
+        ty::Str => Shape::Str,
+        ty::Array(element, length) => {
+            let element_id = type_json(context, tcx, element)?;
+            let length_id = const_type_json(context, tcx, length)?;
+            let count = tcx
+                .try_normalize_erasing_regions(
+                    ty::TypingEnv::fully_monomorphized(),
+                    ty::Unnormalized::new_wip(length),
+                )
+                .map_err(|e| format!("array length normalization failed: {e:?}"))?
+                .try_to_target_usize(tcx)
+                .ok_or_else(|| {
+                    "closed array length did not normalize to target usize".to_owned()
+                })?;
+            Shape::Array {
+                element: element_id,
+                length: length_id,
+                constructor_identity: ArrayIdentity {
+                    count,
+                    canonical_value_constructor: input == ty::Ty::new_array(tcx, element, count),
+                },
+            }
         }
-        ty::RawPtr(pointee, mutability) => json!({
-            "kind": "raw_pointer",
-            "mutability": mutability_json(mutability), "pointee": type_json(context, tcx, pointee)?,
-        }),
-        ty::Ref(region, pointee, mutability) => json!({
-            "kind": "reference",
-            "region": region_json(tcx, region)?, "mutability": mutability_json(mutability),
-            "pointee": type_json(context, tcx, pointee)?,
-        }),
+        ty::Pat(base, pattern) => Shape::PatternType {
+            base: type_json(context, tcx, base)?,
+            pattern: pattern_json(context, tcx, pattern)?,
+        },
+        ty::Slice(element) => Shape::Slice {
+            element: type_json(context, tcx, element)?,
+        },
+        ty::RawPtr(pointee, mutability) => Shape::RawPointer {
+            mutability: mutability_json(mutability),
+            pointee: type_json(context, tcx, pointee)?,
+        },
+        ty::Ref(region, pointee, mutability) => Shape::Reference {
+            region: region_json(context, tcx, region)?,
+            mutability: mutability_json(mutability),
+            pointee: type_json(context, tcx, pointee)?,
+        },
         ty::FnDef(def, args) => {
             let signature = tcx
                 .fn_sig(def)
                 .instantiate(tcx, args.skip_binder())
                 .skip_normalization();
             let query_signature = tcx.instantiate_bound_regions_with_erased(signature);
-            json!({
-                "kind": "function_definition",
-                "def_id": format!("{}:{}", def.krate.as_u32(), def.index.as_u32()),
-                "def_path": tcx.def_path_str(def),
-                "generic_args": generic_args_json_inner(context, tcx, args.skip_binder())?,
-                "signature": fn_sig_json_with_query(context, tcx, signature.skip_binder(), query_signature)?,
-                "signature_bound_variables": signature.bound_vars().iter().map(|bound|bound_variable_json(tcx,bound)).collect::<Vec<_>>(),
-            })
+            Shape::FunctionDefinition {
+                def_id: def_json(context, def),
+                def_path: tcx.def_path_str(def),
+                generic_args: generic_args_json_inner(context, tcx, args.skip_binder())?,
+                signature: fn_sig_json_with_query(
+                    context,
+                    tcx,
+                    signature.skip_binder(),
+                    query_signature,
+                )?,
+                signature_bound_variables: signature
+                    .bound_vars()
+                    .iter()
+                    .map(|b| bound_variable_json(context, tcx, b))
+                    .collect(),
+            }
         }
         ty::FnPtr(signature, header) => {
             let signature = signature.with(header);
             let query_signature = tcx.instantiate_bound_regions_with_erased(signature);
-            json!({
-                "kind": "function_pointer",
-                "signature": fn_sig_json_with_query(context, tcx, signature.skip_binder(), query_signature)?,
-                "signature_bound_variables":signature.bound_vars().iter().map(|bound|bound_variable_json(tcx,bound)).collect::<Vec<_>>(),
-            })
+            Shape::FunctionPointer {
+                signature: fn_sig_json_with_query(
+                    context,
+                    tcx,
+                    signature.skip_binder(),
+                    query_signature,
+                )?,
+                signature_bound_variables: signature
+                    .bound_vars()
+                    .iter()
+                    .map(|b| bound_variable_json(context, tcx, b))
+                    .collect(),
+            }
         }
-        ty::UnsafeBinder(inner) => json!({
-            "kind": "unsafe_binder",
-            "inner":type_json(context,tcx,inner.skip_binder())?,
-            "bound_variables":inner.bound_vars().iter().map(|bound|bound_variable_json(tcx,bound)).collect::<Vec<_>>(),
-        }),
+        ty::UnsafeBinder(inner) => Shape::UnsafeBinder {
+            inner: type_json(context, tcx, inner.skip_binder())?,
+            bound_variables: inner
+                .bound_vars()
+                .iter()
+                .map(|b| bound_variable_json(context, tcx, b))
+                .collect(),
+        },
         ty::Dynamic(predicates, region) => {
             let principal_predicate = predicates
                 .principal()
                 .map(|p| {
-                    {
-                        existential_predicate_json(
-                            context,
-                            tcx,
-                            p.map_bound(ty::ExistentialPredicate::Trait),
-                        )
-                    }
+                    existential_predicate_json(
+                        context,
+                        tcx,
+                        p.map_bound(ty::ExistentialPredicate::Trait),
+                    )
                 })
                 .transpose()?;
             let predicates = predicates
                 .iter()
-                .map(|predicate| {
-                    let mut value = existential_predicate_json(context, tcx, predicate)?;
-                    value.as_object_mut().unwrap().insert(
-                        "bound_variables".into(),
-                        json!(
-                            predicate
-                                .bound_vars()
-                                .iter()
-                                .map(|bound| bound_variable_json(tcx, bound))
-                                .collect::<Vec<_>>()
-                        ),
-                    );
-                    Ok::<_, String>(value)
-                })
-                .collect::<Result<Vec<_>, String>>()?;
-            let region = region_json(tcx, region)?;
-            json!({"kind":"dynamic_trait_object","region":region,"predicates":predicates,"principal_predicate":principal_predicate})
+                .map(|p| existential_predicate_json(context, tcx, p))
+                .collect::<Result<_, String>>()?;
+            Shape::DynamicTraitObject {
+                region: region_json(context, tcx, region)?,
+                predicates,
+                principal_predicate,
+            }
         }
-        ty::Closure(def, args) => json!({
-            "kind": "closure",
-            "def_id": format!("{}:{}", def.krate.as_u32(), def.index.as_u32()),
-            "def_path": tcx.def_path_str(def), "generic_args": generic_args_json_inner(context, tcx, args)?,
-            "upvar_count":args.as_closure().upvar_tys().len(),
-        }),
-        ty::CoroutineClosure(def, args) => json!({
-            "kind": "coroutine_closure",
-            "def_id": format!("{}:{}", def.krate.as_u32(), def.index.as_u32()),
-            "def_path": tcx.def_path_str(def), "generic_args": generic_args_json_inner(context, tcx, args)?,
-        }),
-        ty::Coroutine(def, args) => json!({
-            "kind": "coroutine",
-            "def_id": format!("{}:{}", def.krate.as_u32(), def.index.as_u32()),
-            "def_path": tcx.def_path_str(def), "generic_args": generic_args_json_inner(context, tcx, args)?,
-        }),
-        ty::CoroutineWitness(def, args) => export_failure(
-            "coroutine witness",
-            format!("{}: {args:?}", tcx.def_path_str(def)),
-        )?,
-        ty::Never => json!({ "kind": "never" }),
-        ty::Tuple(types) => json!({
-            "kind": "tuple",
-            "elements": types.iter().map(|element| Ok::<_, String>({ type_json(context, tcx, element)? })).collect::<Result<Vec<_>, String>>()?,
-        }),
-        ty::Alias(_alias_kind, alias) => json!({
-            "kind": "alias",
-            "alias_payload": alias_payload_json(tcx, alias.kind),
-            "def_id": alias_def_id_json(alias.kind),
-            "generic_args": generic_args_json_inner(context, tcx, alias.args)?,
-        }),
-        ty::Param(param) => export_failure("uninstantiated type parameter", format!("{param:?}"))?,
-        ty::Bound(debruijn, bound) => {
-            export_failure("bound type", format!("{debruijn:?}: {bound:?}"))?
+        ty::Closure(def, args) => Shape::Closure {
+            def_id: def_json(context, def),
+            def_path: tcx.def_path_str(def),
+            generic_args: generic_args_json_inner(context, tcx, args)?,
+            upvar_count: args.as_closure().upvar_tys().len(),
+        },
+        ty::CoroutineClosure(def, args) => Shape::CoroutineClosure {
+            def_id: def_json(context, def),
+            def_path: tcx.def_path_str(def),
+            generic_args: generic_args_json_inner(context, tcx, args)?,
+        },
+        ty::Coroutine(def, args) => Shape::Coroutine {
+            def_id: def_json(context, def),
+            def_path: tcx.def_path_str(def),
+            generic_args: generic_args_json_inner(context, tcx, args)?,
+        },
+        ty::CoroutineWitness(def, args) => {
+            return export_failure(
+                "coroutine witness",
+                format!("{}: {args:?}", tcx.def_path_str(def)),
+            );
         }
-        ty::Placeholder(placeholder) => {
-            export_failure("placeholder type", format!("{placeholder:?}"))?
+        ty::Never => Shape::Never,
+        ty::Tuple(types) => Shape::Tuple {
+            elements: types
+                .iter()
+                .map(|t| type_json(context, tcx, t))
+                .collect::<Result<_, _>>()?,
+        },
+        ty::Alias(_, alias) => Shape::Alias {
+            alias_payload: alias_payload_json(context, tcx, alias.kind),
+            def_id: alias_def_id_json(context, alias.kind),
+            generic_args: generic_args_json_inner(context, tcx, alias.args)?,
+        },
+        ty::Param(param) => {
+            return export_failure("uninstantiated type parameter", format!("{param:?}"));
         }
-        ty::Infer(infer) => export_failure("type inference", format!("{infer:?}"))?,
-        ty::Error(error) => export_failure(
-            "main::type_json_inner",
-            format!("{}; {}", "error_type", format!("{error:?}")),
-        )?,
+        ty::Bound(d, b) => return export_failure("bound type", format!("{d:?}: {b:?}")),
+        ty::Placeholder(p) => return export_failure("placeholder type", format!("{p:?}")),
+        ty::Infer(i) => return export_failure("type inference", format!("{i:?}")),
+        ty::Error(e) => {
+            return export_failure("main::type_json_inner", format!("error_type; {e:?}"));
+        }
     };
-    Ok::<_, String>(
-        json!({ "type_id":id, "display": ty.to_string(), "shape": shape,
-        "layout": layout_json(context, tcx, query_ty)?,
-        "layout_query_input_type":if query_ty == ty {Value::Null} else {query_generated_type_json(context,tcx,query_ty)?},
-        "compiler_facts":type_compiler_facts_json(context,tcx,ty,query_ty)? }),
-    )
+    Ok(Type {
+        type_id: id,
+        display: input.to_string(),
+        shape,
+        layout: layout_json(context, tcx, query_ty)?,
+        layout_query_input_type: if query_ty == input {
+            None
+        } else {
+            Some(query_generated_type_json(context, tcx, query_ty)?)
+        },
+        compiler_facts: type_compiler_facts_json(context, tcx, input, query_ty)?,
+    })
 }
 
-fn alias_payload_json(tcx: TyCtxt<'_>, kind: ty::AliasTyKind<'_>) -> Value {
+fn alias_payload_json(
+    context: &mut ExportContext<'_>,
+    tcx: TyCtxt<'_>,
+    kind: ty::AliasTyKind<'_>,
+) -> pool_type::Alias {
     use ty::AliasTyKind as A;
     let (name, def) = match kind {
         A::Projection { def_id } => ("Projection", def_id),
@@ -3057,10 +2960,14 @@ fn alias_payload_json(tcx: TyCtxt<'_>, kind: ty::AliasTyKind<'_>) -> Value {
         A::Opaque { def_id } => ("Opaque", def_id),
         A::Free { def_id } => ("Free", def_id),
     };
-    json!({"kind":name,"def_id":def_json(def),"def_path":tcx.def_path_str(def)})
+    pool_type::Alias {
+        kind: name,
+        def_id: def_json(context, def),
+        def_path: tcx.def_path_str(def),
+    }
 }
 
-fn alias_def_id_json(kind: ty::AliasTyKind<'_>) -> Value {
+fn alias_def_id_json(context: &mut ExportContext<'_>, kind: ty::AliasTyKind<'_>) -> u64 {
     use ty::AliasTyKind as A;
     let def = match kind {
         A::Projection { def_id }
@@ -3068,124 +2975,78 @@ fn alias_def_id_json(kind: ty::AliasTyKind<'_>) -> Value {
         | A::Opaque { def_id }
         | A::Free { def_id } => def_id,
     };
-    def_json(def)
+    def_json(context, def)
 }
 
-fn repr_options_json(repr: &rustc_abi::ReprOptions) -> Value {
-    let integer = repr.int.map(|value| match value {
-        rustc_abi::IntegerType::Pointer(signed) => json!({"kind":"pointer_sized","signed":signed}),
-        rustc_abi::IntegerType::Fixed(integer,signed) => json!({"kind":"fixed","integer_kind":integer.int_ty_str(),"size_bits":integer.size().bits(),"signed":signed}),
-    });
-    json!({
-        "integer":integer,
-        "align_bytes":repr.align.map(|value|value.bytes()),
-        "pack_bytes":repr.pack.map(|value|value.bytes()),
-        "simd":repr.simd(),"c":repr.c(),"rust":repr.rust(),"packed":repr.packed(),
-        "transparent":repr.transparent(),"linear":repr.linear(),"scalable":repr.scalable(),
-        "flags_bits":repr.flags.bits(),
-        "scalable_element":repr.scalable.map(|value|match value { rustc_abi::ScalableElt::ElementCount(count)=>json!({"kind":"element_count","count":count}),rustc_abi::ScalableElt::Container=>json!({"kind":"container"}) }),
-        "can_randomize_type_layout":repr.can_randomize_type_layout(),
-        "inhibit_enum_layout_optimization":repr.inhibit_enum_layout_opt(),
-        "inhibit_struct_field_reordering":repr.inhibit_struct_field_reordering(),
-        "inhibit_newtype_abi_optimization":repr.inhibit_newtype_abi_optimization(),
-        "field_shuffle_seed":repr.field_shuffle_seed.as_u64()
-    })
-}
-
-fn generic_args_json<'tcx>(
-    context: &mut ExportContext<'tcx>,
-    tcx: TyCtxt<'tcx>,
-    args: ty::GenericArgsRef<'tcx>,
-) -> Result<Value, String> {
-    generic_args_json_inner(context, tcx, args)
-}
-
-fn generic_args_json_inner<'tcx>(
-    context: &mut ExportContext<'tcx>,
-    tcx: TyCtxt<'tcx>,
-    args: ty::GenericArgsRef<'tcx>,
-) -> Result<Value, String> {
-    Ok::<_, String>(Value::Array(
-        args.iter()
-            .map(|arg| {
-                Ok::<_, String>(match arg.kind() {
-                    ty::GenericArgKind::Type(inner) => {
-                        json!({ "kind": "type", "value": type_json(context, tcx, inner)? })
-                    }
-                    ty::GenericArgKind::Lifetime(region) => {
-                        json!({ "kind": "lifetime", "value": region_json(tcx, region)? })
-                    }
-                    ty::GenericArgKind::Const(value) => {
-                        json!({ "kind": "const", "value": const_type_json(context, tcx, value)? })
-                    }
-                })
-            })
-            .collect::<Result<Vec<_>, String>>()?,
-    ))
-}
-
-fn const_type_json<'tcx>(
-    context: &mut ExportContext<'tcx>,
-    tcx: TyCtxt<'tcx>,
-    value: ty::Const<'tcx>,
-) -> Result<Value, String> {
-    use ty::ConstKind as C;
-    Ok::<_, String>(match value.kind() {
-        C::Param(param) => export_failure("constant", format!("{param:?}"))?,
-        C::Value(constant) => json!({
-            "kind":"value",
-            "type":type_json(context,tcx,constant.ty)?,
-            "value":valtree_json(context,tcx,constant.valtree)?,
+fn repr_options_json(repr: &rustc_abi::ReprOptions) -> pool_type::Representation {
+    use pool_type::*;
+    Representation {
+        integer: repr.int.map(|value| match value {
+            rustc_abi::IntegerType::Pointer(signed) => {
+                RepresentationInteger::PointerSized { signed }
+            }
+            rustc_abi::IntegerType::Fixed(integer, signed) => RepresentationInteger::Fixed {
+                integer_kind: integer.int_ty_str(),
+                size_bits: integer.size().bits(),
+                signed,
+            },
         }),
-        C::Alias(rigidity, alias) => {
-            use ty::AliasConstKind as A;
-            let (kind, def_id) = match alias.kind {
-                A::Projection { def_id } => ("projection", def_id),
-                A::InherentSelf { def_id } => ("inherent_self", def_id),
-                A::InherentImpl { def_id } => ("inherent_impl", def_id),
-                A::Free { def_id } => ("free", def_id),
-                A::Anon { def_id } => ("anonymous", def_id),
-            };
-            let rigidity = match rigidity {
-                ty::IsRigid::Yes => "rigid",
-                ty::IsRigid::No => "not_rigid",
-            };
-            json!({
-                "kind":"alias",
-                "rigidity":rigidity,
-                "alias_kind":kind,
-                "def_id":def_json(def_id),
-                "def_path":tcx.def_path_str(def_id),
-                "generic_args":generic_args_json_inner(context,tcx,alias.args)?,
-            })
-        }
-        C::Expr(expression) => {
-            use ty::ExprKind as E;
-            let (kind, operator) = match expression.kind {
-                E::Binop(op) => ("binary_operator", Some(binop_name(op))),
-                E::UnOp(op) => ("unary_operator", Some(unop_name(op))),
-                E::FunctionCall => ("function_call", None),
-                E::Cast(cast) => (
-                    "cast",
-                    Some(match cast {
-                        ty::abstract_const::CastKind::As => "as",
-                        ty::abstract_const::CastKind::Use => "use",
-                    }),
-                ),
-            };
-            json!({
-                "kind":"expression",
-                "expression_kind":kind,
-                "operator":operator,
-                "arguments":generic_args_json_inner(context,tcx,expression.args())?,
-            })
-        }
-        C::Bound(debruijn, bound) => {
-            export_failure("bound constant", format!("{debruijn:?}: {bound:?}"))?
-        }
-        C::Placeholder(placeholder) => export_failure("constant", format!("{placeholder:?}"))?,
-        C::Infer(infer) => export_failure("constant", format!("{infer:?}"))?,
-        C::Error(_) => export_failure("main::const_type_json", "error")?,
+        align_bytes: repr.align.map(|v| v.bytes()),
+        pack_bytes: repr.pack.map(|v| v.bytes()),
+        simd: repr.simd(),
+        c: repr.c(),
+        rust: repr.rust(),
+        packed: repr.packed(),
+        transparent: repr.transparent(),
+        linear: repr.linear(),
+        scalable: repr.scalable(),
+        flags_bits: repr.flags.bits(),
+        scalable_element: repr.scalable.map(|v| match v {
+            rustc_abi::ScalableElt::ElementCount(count) => ScalableElement::ElementCount {
+                count: count as u64,
+            },
+            rustc_abi::ScalableElt::Container => ScalableElement::Container,
+        }),
+        can_randomize_type_layout: repr.can_randomize_type_layout(),
+        inhibit_enum_layout_optimization: repr.inhibit_enum_layout_opt(),
+        inhibit_struct_field_reordering: repr.inhibit_struct_field_reordering(),
+        inhibit_newtype_abi_optimization: repr.inhibit_newtype_abi_optimization(),
+        field_shuffle_seed: repr.field_shuffle_seed.as_u64(),
+    }
+}
+
+
+fn generic_args_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, args: ty::GenericArgsRef<'tcx>) -> Result<Vec<pool_values::GenericArgument>, String> { generic_args_json_inner(context,tcx,args) }
+fn generic_args_json_inner<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, args: ty::GenericArgsRef<'tcx>) -> Result<Vec<pool_values::GenericArgument>, String> {
+    args.iter().map(|arg| Ok(match arg.kind() {
+        ty::GenericArgKind::Type(ty)=>pool_values::GenericArgument::Type(type_json(context,tcx,ty)?),
+        ty::GenericArgKind::Lifetime(region)=>pool_values::GenericArgument::Lifetime(region_json(context,tcx,region)?),
+        ty::GenericArgKind::Const(value)=>pool_values::GenericArgument::Const(const_type_json(context,tcx,value)?),
+    })).collect()
+}
+
+fn const_type_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, value: ty::Const<'tcx>) -> Result<u64, String> {
+    let (id,fresh)=context.type_constants.reserve(value);
+    if fresh { let definition=const_type_definition_json(context,tcx,value)?; context.type_constants.define(id,definition); }
+    Ok(id as u64)
+}
+fn const_type_definition_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, value: ty::Const<'tcx>) -> Result<pool_values::TypeConstant,String> {
+    use ty::ConstKind as C; use pool_values::TypeConstant as O;
+    Ok(match value.kind() {
+        C::Value(c)=>O::Value {ty:type_json(context,tcx,c.ty)?,value:valtree_json(context,tcx,c.valtree)?},
+        C::Alias(r,a)=>{
+            let (alias_kind,def)=match a.kind {ty::AliasConstKind::Projection {def_id}=>("projection",def_id),ty::AliasConstKind::InherentSelf {def_id}=>("inherent_self",def_id),ty::AliasConstKind::InherentImpl {def_id}=>("inherent_impl",def_id),ty::AliasConstKind::Free {def_id}=>("free",def_id),ty::AliasConstKind::Anon {def_id}=>("anonymous",def_id)};
+            O::Alias {rigidity:match r {ty::IsRigid::Yes=>"rigid",ty::IsRigid::No=>"not_rigid"},alias_kind,def_id:def_json(context,def),def_path:tcx.def_path_str(def),generic_args:generic_args_json_inner(context,tcx,a.args)?}
+        },
+        C::Expr(e)=>{
+            let (expression_kind,operator)=match e.kind {ty::ExprKind::Binop(op)=>("binary_operator",Some(binop_name(op))),ty::ExprKind::UnOp(op)=>("unary_operator",Some(unop_name(op))),ty::ExprKind::FunctionCall=>("function_call",None),ty::ExprKind::Cast(c)=>("cast",Some(match c {ty::abstract_const::CastKind::As=>"as",ty::abstract_const::CastKind::Use=>"use"}))};
+            O::Expression {expression_kind,operator,arguments:generic_args_json_inner(context,tcx,e.args())?}
+        },
+        C::Param(p)=>return export_failure("constant",format!("{p:?}")),
+        C::Bound(d,b)=>return export_failure("bound constant",format!("{d:?}: {b:?}")),
+        C::Placeholder(p)=>return export_failure("constant",format!("{p:?}")),
+        C::Infer(i)=>return export_failure("constant",format!("{i:?}")),
+        C::Error(_)=>return export_failure("main::const_type_json","error"),
     })
 }
 
@@ -3230,21 +3091,10 @@ fn unop_name(operator: rustc_middle::mir::UnOp) -> &'static str {
     }
 }
 
-fn valtree_json<'tcx>(
-    context: &mut ExportContext<'tcx>,
-    tcx: TyCtxt<'tcx>,
-    value: ty::ValTree<'tcx>,
-) -> Result<Value, String> {
-    Ok::<_, String>(match &*value {
-        ty::ValTreeKind::Leaf(scalar) => json!({
-            "kind":"leaf",
-            "size_bytes":scalar.size().bytes(),
-            "bits_unsigned":scalar.to_bits_unchecked().to_string(),
-        }),
-        ty::ValTreeKind::Branch(values) => json!({
-            "kind":"branch",
-            "elements":values.iter().map(|value| Ok::<_, String>({ const_type_json(context,tcx,value)? })).collect::<Result<Vec<_>, String>>()?,
-        }),
+fn valtree_json<'tcx>(context: &mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,value:ty::ValTree<'tcx>)->Result<pool_values::ValTree,String>{
+    Ok(match &*value {
+        ty::ValTreeKind::Leaf(s)=>pool_values::ValTree::Leaf {size_bytes:s.size().bytes(),bits_unsigned:s.to_bits_unchecked().to_string()},
+        ty::ValTreeKind::Branch(v)=>pool_values::ValTree::Branch {elements:v.iter().map(|c|const_type_json(context,tcx,c)).collect::<Result<_,_>>()?},
     })
 }
 
@@ -3252,7 +3102,7 @@ fn fn_sig_json_inner<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     sig: ty::FnSig<'tcx>,
-) -> Result<Value, String> {
+) -> Result<pool_type::FunctionSignature, String> {
     fn_sig_json_with_query(context, tcx, sig, sig)
 }
 
@@ -3261,22 +3111,26 @@ fn fn_sig_json_with_query<'tcx>(
     tcx: TyCtxt<'tcx>,
     sig: ty::FnSig<'tcx>,
     query_sig: ty::FnSig<'tcx>,
-) -> Result<Value, String> {
-    Ok::<_, String>(json!({
-        "inputs": sig.inputs().iter().zip(query_sig.inputs()).map(|(input,query)|
-            Ok::<_, String>({ type_json_with_query(context, tcx, *input, *query)? })).collect::<Result<Vec<_>, String>>()?,
-        "output": type_json_with_query(context, tcx, sig.output(), query_sig.output())?,
-        "safety": safety_json(sig.safety()),
-        "abi": extern_abi_json(sig.abi()),
-        "c_variadic": sig.c_variadic(),
-    }))
+) -> Result<pool_type::FunctionSignature, String> {
+    Ok(pool_type::FunctionSignature {
+        inputs: sig
+            .inputs()
+            .iter()
+            .zip(query_sig.inputs())
+            .map(|(input, query)| type_json_with_query(context, tcx, *input, *query))
+            .collect::<Result<_, _>>()?,
+        output: type_json_with_query(context, tcx, sig.output(), query_sig.output())?,
+        safety: safety_json(sig.safety()),
+        abi: extern_abi_json(sig.abi()),
+        c_variadic: sig.c_variadic(),
+    })
 }
 
 fn layout_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     ty: rustc_middle::ty::Ty<'tcx>,
-) -> Result<Value, String> {
+) -> Result<u64, String> {
     if ty.has_escaping_bound_vars() {
         return Ok(export_failure(
             "main::layout_json",
@@ -3318,175 +3172,14 @@ fn layout_value_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     layout: rustc_abi::TyAndLayout<'tcx, ty::Ty<'tcx>>,
-) -> Value {
-    if let Some(value) = context.layout_payload_cache.get(&layout) {
-        return value.clone();
+) -> u64 {
+    let (id, fresh) = context.layouts.reserve(layout);
+    if !fresh {
+        return id as u64;
     }
-    let field_count = layout.fields.count();
-    let mut variant_data = variants_json(tcx, &layout.variants);
-    if let rustc_abi::Variants::Multiple { variants, .. } = &layout.variants {
-        for (index, _) in variants.iter_enumerated() {
-            let variant = rustc_abi::LayoutData::for_variant(&layout, index);
-            let entry = &mut variant_data["variants"][index.as_usize()];
-            entry["fields"] = fields_shape_json(&variant.fields);
-            entry["largest_niche"] = variant.largest_niche.map(|niche| json!({
-                        "offset_bytes": niche.offset.bytes(),
-                        "primitive": primitive_json(tcx, niche.value),
-                        "valid_range": { "start": niche.valid_range.start.to_string(), "end": niche.valid_range.end.to_string() },
-                    })).unwrap_or(Value::Null);
-        }
-    }
-    let value = json!({
-        "size_bytes": layout.size.bytes(),
-        "abi_align_bytes": layout.align.abi.bytes(),
-        "unadjusted_abi_align_bytes": layout.unadjusted_abi_align.bytes(),
-        "max_repr_align_bytes": layout.max_repr_align.map(|align| align.bytes()),
-        "repr_c": layout.repr_c,
-        "uninhabited": layout.uninhabited,
-        "fields": fields_shape_json(&layout.fields),
-        "field_offsets_bytes": (0..field_count).map(|index| layout.fields.offset(index).bytes()).collect::<Vec<_>>(),
-        "variants": variant_data,
-        "backend_repr": backend_repr_json(tcx, layout.backend_repr),
-        "largest_niche": layout.largest_niche.map(|niche| json!({
-            "offset_bytes": niche.offset.bytes(),
-            "primitive": primitive_json(tcx, niche.value),
-            "valid_range": { "start": niche.valid_range.start.to_string(), "end": niche.valid_range.end.to_string() },
-        })),
-        "randomization_seed": layout.randomization_seed.as_u64(),
-    });
-    context.layout_payload_cache.insert(layout, value.clone());
-    value
-}
-
-fn fields_shape_json<FieldIdx: rustc_index::Idx>(
-    fields: &rustc_abi::FieldsShape<FieldIdx>,
-) -> Value {
-    use rustc_abi::FieldsShape;
-    match fields {
-        FieldsShape::Primitive => json!({ "kind": "primitive", "field_count": 0 }),
-        FieldsShape::Union(count) => {
-            json!({ "kind": "union", "field_count": count.get(), "offset_bytes": 0 })
-        }
-        FieldsShape::Array { stride, count } => {
-            json!({ "kind": "array", "stride_bytes": stride.bytes(), "field_count": count })
-        }
-        FieldsShape::Arbitrary {
-            offsets,
-            in_memory_order,
-        } => json!({
-            "kind": "arbitrary",
-            "field_count": offsets.len(),
-            "offsets_bytes": offsets.iter().map(|offset| offset.bytes()).collect::<Vec<_>>(),
-            "memory_order": in_memory_order.iter().map(|index| index.index()).collect::<Vec<_>>(),
-        }),
-    }
-}
-
-fn variants_json<'tcx, FieldIdx: rustc_index::Idx, VariantIdx: rustc_index::Idx>(
-    tcx: TyCtxt<'tcx>,
-    variants: &rustc_abi::Variants<FieldIdx, VariantIdx>,
-) -> Value {
-    use rustc_abi::Variants;
-    match variants {
-        Variants::Empty => json!({ "kind": "empty" }),
-        Variants::Single { index } => json!({ "kind": "single", "variant_index": index.index() }),
-        Variants::Multiple {
-            tag,
-            tag_encoding,
-            tag_field,
-            variants,
-        } => json!({
-            "kind": "multiple",
-            "tag": scalar_json(tcx, *tag),
-            "tag_encoding": tag_encoding_json(tag_encoding),
-            "tag_field_index": tag_field.index(),
-            "variants": variants.iter_enumerated().map(|(index, variant)| json!({
-                "variant_index": index.index(),
-                "size_bytes": variant.size.bytes(),
-                "backend_repr": backend_repr_json(tcx, variant.backend_repr),
-                "field_offsets_bytes": variant.field_offsets.iter().map(|offset| offset.bytes()).collect::<Vec<_>>(),
-                "uninhabited": variant.is_uninhabited(),
-            })).collect::<Vec<_>>(),
-        }),
-    }
-}
-
-fn tag_encoding_json<VariantIdx: rustc_index::Idx>(
-    encoding: &rustc_abi::TagEncoding<VariantIdx>,
-) -> Value {
-    use rustc_abi::TagEncoding;
-    match encoding {
-        TagEncoding::Direct => json!({ "kind": "direct" }),
-        TagEncoding::Niche {
-            untagged_variant,
-            niche_variants,
-            niche_start,
-        } => json!({
-            "kind": "niche",
-            "untagged_variant": untagged_variant.index(),
-            "niche_variants": {
-                "start": niche_variants.start.index(),
-                "end": niche_variants.last.index(),
-            },
-            "niche_start": niche_start.to_string(),
-        }),
-    }
-}
-
-fn scalar_json(tcx: TyCtxt<'_>, scalar: rustc_abi::Scalar) -> Value {
-    use rustc_abi::Scalar;
-    match scalar {
-        Scalar::Initialized { value, valid_range } => json!({
-            "kind": "initialized",
-            "primitive": primitive_json(tcx, value),
-            "valid_range": { "start": valid_range.start.to_string(), "end": valid_range.end.to_string() },
-        }),
-        Scalar::Union { value } => {
-            json!({ "kind": "union", "primitive": primitive_json(tcx, value) })
-        }
-    }
-}
-
-fn primitive_json(tcx: TyCtxt<'_>, primitive: rustc_abi::Primitive) -> Value {
-    use rustc_abi::Primitive;
-    match primitive {
-        Primitive::Int(integer, signed) => json!({
-            "kind": "integer", "integer_kind": integer.int_ty_str(),
-            "signed": signed, "size_bytes": integer.size().bytes(),
-        }),
-        Primitive::Float(float) => {
-            json!({ "kind": "float", "float_kind": float.ty_str(), "size_bytes": float.size().bytes() })
-        }
-        Primitive::Pointer(address_space) => json!({
-            "kind": "pointer", "address_space": address_space.0,
-            "size_bytes": primitive.size(&tcx).bytes(),
-        }),
-    }
-}
-
-fn backend_repr_json(tcx: TyCtxt<'_>, repr: rustc_abi::BackendRepr) -> Value {
-    use rustc_abi::BackendRepr;
-    match repr {
-        BackendRepr::Scalar(scalar) => {
-            json!({ "kind": "scalar", "scalar": scalar_json(tcx, scalar) })
-        }
-        BackendRepr::ScalarPair { a, b, b_offset } => json!({
-            "kind": "scalar_pair", "first": scalar_json(tcx, a), "second": scalar_json(tcx, b),
-            "second_offset_bytes": b_offset.bytes(),
-        }),
-        BackendRepr::SimdScalableVector {
-            element,
-            count,
-            number_of_vectors,
-        } => json!({
-            "kind": "scalable_simd_vector", "element": scalar_json(tcx, element),
-            "lane_count": count.as_u64(), "vector_count": number_of_vectors.0,
-        }),
-        BackendRepr::SimdVector { element, count } => json!({
-            "kind": "simd_vector", "element": scalar_json(tcx, element), "lane_count": count.as_u64(),
-        }),
-        BackendRepr::Memory { sized } => json!({ "kind": "memory", "sized": sized }),
-    }
+    let value = pool_layout::Layout::new(tcx, layout);
+    context.layouts.define(id, value);
+    id as u64
 }
 
 fn statement_json<'tcx>(
@@ -3494,123 +3187,91 @@ fn statement_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &rustc_middle::mir::Body<'tcx>,
     kind: &rustc_middle::mir::StatementKind<'tcx>,
-) -> Result<Value, String> {
+) -> Result<pool_body::StatementKind, String> {
     use rustc_middle::mir::StatementKind as S;
+    use pool_body::{StatementKind as T, Intrinsic as I};
     Ok::<_, String>(match kind {
         S::Assign(pair) => {
-            json!({"variant":"Assign","place":place_json(context, tcx, body, &pair.0)?,"rvalue":rvalue_json(context, tcx, body, &pair.1)?})
+            T::Assign { place: place_json(context, tcx, body, &pair.0)?, rvalue: rvalue_json(context, tcx, body, &pair.1)? }
         }
         S::FakeRead(pair) => {
-            json!({"variant":"FakeRead","cause":fake_read_cause_json(pair.0),"place":place_json(context, tcx, body, &pair.1)?})
+            T::FakeRead { cause: fake_read_cause_json(context, pair.0), place: place_json(context, tcx, body, &pair.1)? }
         }
         S::SetDiscriminant {
             place,
             variant_index,
         } => {
-            json!({"variant":"SetDiscriminant","place":place_json(context, tcx, body, place)?,"variant_index":variant_index.as_u32()})
+            T::SetDiscriminant { place: place_json(context, tcx, body, place)?, variant_index: variant_index.as_u32() }
         }
         S::StorageLive(local) => {
-            json!({"variant":"StorageLive","local":local.as_u32()})
+            T::StorageLive { local: local.as_u32() }
         }
         S::StorageDead(local) => {
-            json!({"variant":"StorageDead","local":local.as_u32()})
+            T::StorageDead { local: local.as_u32() }
         }
         S::PlaceMention(place) => {
-            json!({"variant":"PlaceMention","place":place_json(context, tcx, body, place)?})
+            T::PlaceMention { place: place_json(context, tcx, body, place)? }
         }
         S::AscribeUserType(pair, variance) => {
-            json!({"variant":"AscribeUserType","execution":"no_op","place":place_json(context, tcx, body, &pair.0)?,"user_type_projection":user_type_projection_json(&pair.1),"variance":variance_json(*variance)})
+            T::AscribeUserType { execution: "no_op", place: place_json(context, tcx, body, &pair.0)?, user_type_projection: user_type_projection_json(&pair.1), variance: variance_json(*variance) }
         }
         S::Coverage(value) => {
-            json!({"variant":"Coverage","execution":"no_op","coverage":coverage_kind_json(value)})
+            T::Coverage { execution: "no_op", coverage: coverage_kind_json(context, value) }
         }
         S::Intrinsic(intrinsic) => match &**intrinsic {
             rustc_middle::mir::NonDivergingIntrinsic::Assume(value) => {
-                json!({"variant":"Intrinsic","intrinsic":"Assume","value":operand_json(context, tcx, body, value)?})
+                T::Intrinsic { intrinsic: I::Assume { value: operand_json(context, tcx, body, value)? } }
             }
             rustc_middle::mir::NonDivergingIntrinsic::CopyNonOverlapping(copy) => {
-                json!({"variant":"Intrinsic","intrinsic":"CopyNonOverlapping","src":operand_json(context, tcx, body, &copy.src)?,"dst":operand_json(context, tcx, body, &copy.dst)?,"count":operand_json(context, tcx, body, &copy.count)?})
+                T::Intrinsic { intrinsic: I::CopyNonOverlapping { src: operand_json(context, tcx, body, &copy.src)?, dst: operand_json(context, tcx, body, &copy.dst)?, count: operand_json(context, tcx, body, &copy.count)? } }
             }
         },
-        S::ConstEvalCounter => json!({"variant":"ConstEvalCounter"}),
-        S::Nop => json!({"variant":"Nop"}),
+        S::ConstEvalCounter => T::ConstEvalCounter,
+        S::Nop => T::Nop,
         S::BackwardIncompatibleDropHint { place, reason } => {
-            let reason = match reason {
-                rustc_middle::mir::BackwardIncompatibleDropReason::Edition2024 => "edition_2024",
-            };
-            json!({"variant":"BackwardIncompatibleDropHint","place":place_json(context, tcx, body, place)?,"reason":{"kind":reason}})
+            let reason = match reason { rustc_middle::mir::BackwardIncompatibleDropReason::Edition2024 => pool_body::DropHintReason::Edition2024 };
+            T::BackwardIncompatibleDropHint { place: place_json(context, tcx, body, place)?, reason }
         }
     })
 }
 
-fn variance_json(variance: ty::Variance) -> Value {
+fn variance_json(variance: ty::Variance) -> pool_body::Variance {
     use ty::Variance as V;
-    let kind = match variance {
-        V::Covariant => "covariant",
-        V::Contravariant => "contravariant",
-        V::Invariant => "invariant",
-        V::Bivariant => "bivariant",
-    };
-    json!({"kind":kind})
+    use pool_body::Variance as S;
+    match variance { V::Covariant => S::Covariant, V::Contravariant => S::Contravariant,
+        V::Invariant => S::Invariant, V::Bivariant => S::Bivariant }
 }
 
-fn user_type_projection_json(projection: &rustc_middle::mir::UserTypeProjection) -> Value {
+fn user_type_projection_json(projection: &rustc_middle::mir::UserTypeProjection) -> pool_body::UserTypeProjection {
     use rustc_middle::mir::ProjectionKind as P;
-    let projections = projection
-        .projs
-        .iter()
-        .map(|projection| match *projection {
-            P::Deref => json!({"kind":"Deref"}),
-            P::Field(index, ()) => json!({"kind":"Field","index":index.as_u32()}),
-            P::Index(()) => json!({"kind":"Index"}),
-            P::ConstantIndex { offset, min_length, from_end } => {
-                json!({"kind":"ConstantIndex","offset":offset,"min_length":min_length,"from_end":from_end})
-            }
-            P::Subslice { from, to, from_end } => {
-                json!({"kind":"Subslice","from":from,"to":to,"from_end":from_end})
-            }
-            P::Downcast(name, variant) => json!({
-                "kind":"Downcast",
-                "name":name.map(|name|name.as_str().to_owned()),
-                "variant_index":variant.as_u32(),
-            }),
-            P::OpaqueCast(()) => json!({"kind":"OpaqueCast"}),
-            P::UnwrapUnsafeBinder(()) => json!({"kind":"UnwrapUnsafeBinder"}),
-            P::PhantomDeref => json!({"kind":"PhantomDeref"}),
-        })
-        .collect::<Vec<_>>();
-    json!({
-        "base_index":projection.base.as_u32(),
-        "projections":projections,
-    })
+    use pool_body::UserProjection as U;
+    pool_body::UserTypeProjection {
+        base_index: projection.base.as_u32(),
+        projections: projection.projs.iter().map(|projection| match *projection {
+            P::Deref => U::Deref,
+            P::Field(index, ()) => U::Field { index: index.as_u32() },
+            P::Index(()) => U::Index,
+            P::ConstantIndex { offset, min_length, from_end } => U::ConstantIndex { offset, min_length, from_end },
+            P::Subslice { from, to, from_end } => U::Subslice { from, to, from_end },
+            P::Downcast(name, variant) => U::Downcast { name: name.map(|n| n.as_str().to_owned()), variant_index: variant.as_u32() },
+            P::OpaqueCast(()) => U::OpaqueCast,
+            P::UnwrapUnsafeBinder(()) => U::UnwrapUnsafeBinder,
+            P::PhantomDeref => U::PhantomDeref,
+        }).collect(),
+    }
 }
 
-fn coverage_kind_json(kind: &rustc_middle::mir::coverage::CoverageKind) -> Value {
+fn coverage_kind_json(context: &mut ExportContext<'_>, kind: &rustc_middle::mir::coverage::CoverageKind) -> pool_body::Coverage {
     use rustc_middle::mir::coverage::{CoverageKind as C, PointKind};
+    use pool_body::{Coverage as S, CoveragePoint as P};
     match kind {
-        C::Point { point_kind, hir_id } => {
-            let point_kind = match point_kind {
-                PointKind::Expr => "expr",
-                PointKind::ImplicitElse => "implicit_else",
-                PointKind::FunctionEnd => "function_end",
-            };
-            json!({
-                "kind":"point",
-                "point_kind":point_kind,
-                "hir_id":{
-                    "owner_def_id":def_json(hir_id.owner.def_id.to_def_id()),
-                    "local_id":hir_id.local_id.as_u32(),
-                },
-            })
-        }
-        C::BlockMarker { id } => json!({
-            "kind":"block_marker",
-            "id":id.as_u32(),
-        }),
-        C::VirtualCounter { bcb } => json!({
-            "kind":"virtual_counter",
-            "bcb":bcb.as_u32(),
-        }),
+        C::Point { point_kind, hir_id } => S::Point {
+            point_kind: match point_kind { PointKind::Expr => P::Expr,
+                PointKind::ImplicitElse => P::ImplicitElse, PointKind::FunctionEnd => P::FunctionEnd },
+            hir_id: pool_body::HirId { owner_def_id: def_json(context, hir_id.owner.def_id.to_def_id()), local_id: hir_id.local_id.as_u32() },
+        },
+        C::BlockMarker { id } => S::BlockMarker { id: id.as_u32() },
+        C::VirtualCounter { bcb } => S::VirtualCounter { bcb: bcb.as_u32() },
     }
 }
 
@@ -3619,8 +3280,9 @@ fn terminator_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &rustc_middle::mir::Body<'tcx>,
     kind: &rustc_middle::mir::TerminatorKind<'tcx>,
-) -> Result<Value, String> {
+) -> Result<pool_body::TerminatorKind, String> {
     use rustc_middle::mir::TerminatorKind as T;
+    use pool_body::TerminatorKind as S;
     if let Some(rustc_middle::mir::UnwindAction::Terminate(reason)) = kind.unwind() {
         panic_queries::register_unwind_termination(tcx, context, *reason)?;
     }
@@ -3632,26 +3294,26 @@ fn terminator_json<'tcx>(
             let hints = loop_hint_attrs
                 .iter()
                 .map(|hint| match hint {
-                    rustc_attr_ir::UnrollAttr::Hint => json!({"kind":"Hint"}),
-                    rustc_attr_ir::UnrollAttr::Full => json!({"kind":"Full"}),
-                    rustc_attr_ir::UnrollAttr::Never => json!({"kind":"Never"}),
+                    rustc_attr_ir::UnrollAttr::Hint => pool_body::LoopHint::Hint,
+                    rustc_attr_ir::UnrollAttr::Full => pool_body::LoopHint::Full,
+                    rustc_attr_ir::UnrollAttr::Never => pool_body::LoopHint::Never,
                     rustc_attr_ir::UnrollAttr::Count(count) => {
-                        json!({"kind":"Count","count":count})
+                        pool_body::LoopHint::Count { count: *count }
                     }
                 })
                 .collect::<Vec<_>>();
-            json!({"variant":"Goto","target":target.as_u32(),"loop_hints":hints})
+            S::Goto { target: target.as_u32(), loop_hints: hints }
         }
         T::SwitchInt { discr, targets } => {
-            json!({"variant":"SwitchInt","discriminant":operand_json(context, tcx, body, discr)?,"targets":targets.iter().map(|(value, block)| json!({"value":value.to_string(),"target":block.as_u32()})).collect::<Vec<_>>(),"otherwise":targets.otherwise().as_u32()})
+            S::SwitchInt { discriminant: operand_json(context, tcx, body, discr)?, targets: targets.iter().map(|(value, block)| pool_body::SwitchTarget { value: value.to_string(), target: block.as_u32() }).collect(), otherwise: targets.otherwise().as_u32() }
         }
-        T::UnwindResume => json!({"variant":"UnwindResume"}),
+        T::UnwindResume => S::UnwindResume,
         T::UnwindTerminate(reason) => {
             panic_queries::register_unwind_termination(tcx, context, *reason)?;
-            json!({"variant":"UnwindTerminate","reason":unwind_terminate_reason_json(*reason)})
+            S::UnwindTerminate { reason: unwind_terminate_reason_json(*reason) }
         }
-        T::Return => json!({"variant":"Return"}),
-        T::Unreachable => json!({"variant":"Unreachable"}),
+        T::Return => S::Return,
+        T::Unreachable => S::Unreachable,
         T::Drop {
             place,
             target,
@@ -3669,7 +3331,7 @@ fn terminator_json<'tcx>(
             if drop.is_some() {
                 export_failure::<()>("Drop", "async Drop requires expansion before export")?;
             }
-            json!({"variant":"Drop","place":place_json(context, tcx, body, place)?,"target":target.as_u32(),"unwind":unwind_json(*unwind),"replace":replace,"async_drop":drop.map(|bb| bb.as_u32())})
+            S::Drop { place: place_json(context, tcx, body, place)?, target: target.as_u32(), unwind: unwind_json(*unwind), replace: *replace, async_drop: drop.map(|bb| bb.as_u32()) }
         }
         T::Call {
             func,
@@ -3680,14 +3342,14 @@ fn terminator_json<'tcx>(
             call_source,
             fn_span,
         } => {
-            json!({"variant":"Call","function":operand_json(context, tcx, body, func)?,"resolution":resolve_callee_json(context, tcx, body, func, args, destination.ty(body,tcx).ty)?,"args":args.iter().map(|arg| Ok::<_, String>({ json!({"operand":operand_json(context, tcx, body, &arg.node)?,"span":span_json(context, tcx,arg.span)}) })).collect::<Result<Vec<_>, String>>()?,"destination":place_json(context, tcx, body, destination)?,"target":target.map(|bb| bb.as_u32()),"unwind":unwind_json(*unwind),"call_source":{"kind":call_source_name(*call_source)},"function_span":span_json(context, tcx,*fn_span)})
+            S::Call { function: operand_json(context, tcx, body, func)?, resolution: resolve_callee_json(context, tcx, body, func, args, destination.ty(body, tcx).ty)?, args: args.iter().map(|arg| Ok(pool_body::CallArgument { operand: operand_json(context, tcx, body, &arg.node)?, span: span_json(context, tcx, arg.span) })).collect::<Result<Vec<_>, String>>()?, destination: place_json(context, tcx, body, destination)?, target: target.map(|bb| bb.as_u32()), unwind: unwind_json(*unwind), call_source: pool_body::CallSource { kind: call_source_name(*call_source) }, function_span: span_json(context, tcx, *fn_span) }
         }
         T::TailCall {
             func,
             args,
             fn_span,
         } => {
-            json!({"variant":"TailCall","function":operand_json(context, tcx, body, func)?,"resolution":resolve_callee_json(context, tcx, body, func, args, body.local_decls[rustc_middle::mir::RETURN_PLACE].ty)?,"args":args.iter().map(|arg| Ok::<_, String>({ json!({"operand":operand_json(context, tcx, body, &arg.node)?,"span":span_json(context, tcx,arg.span)}) })).collect::<Result<Vec<_>, String>>()?,"function_span":span_json(context, tcx,*fn_span)})
+            S::TailCall { function: operand_json(context, tcx, body, func)?, resolution: resolve_callee_json(context, tcx, body, func, args, body.local_decls[rustc_middle::mir::RETURN_PLACE].ty)?, args: args.iter().map(|arg| Ok(pool_body::CallArgument { operand: operand_json(context, tcx, body, &arg.node)?, span: span_json(context, tcx, arg.span) })).collect::<Result<Vec<_>, String>>()?, function_span: span_json(context, tcx, *fn_span) }
         }
         T::Assert {
             cond,
@@ -3697,7 +3359,7 @@ fn terminator_json<'tcx>(
             unwind,
         } => {
             panic_queries::register_assert(tcx, context, body, msg)?;
-            json!({"variant":"Assert","condition":operand_json(context, tcx, body, cond)?,"expected":expected,"message":assert_message_json(context, tcx, body, msg)?,"target":target.as_u32(),"unwind":unwind_json(*unwind)})
+            S::Assert { condition: operand_json(context, tcx, body, cond)?, expected: *expected, message: assert_message_json(context, tcx, body, msg)?, target: target.as_u32(), unwind: unwind_json(*unwind) }
         }
         T::Yield {
             value,
@@ -3705,20 +3367,20 @@ fn terminator_json<'tcx>(
             resume_arg,
             drop,
         } => {
-            json!({"variant":"Yield","value":operand_json(context, tcx, body, value)?,"resume":resume.as_u32(),"resume_arg":place_json(context, tcx, body, resume_arg)?,"drop":drop.map(|bb| bb.as_u32())})
+            S::Yield { value: operand_json(context, tcx, body, value)?, resume: resume.as_u32(), resume_arg: place_json(context, tcx, body, resume_arg)?, drop: drop.map(|bb| bb.as_u32()) }
         }
-        T::CoroutineDrop => json!({"variant":"CoroutineDrop"}),
+        T::CoroutineDrop => S::CoroutineDrop,
         T::FalseEdge {
             real_target,
             imaginary_target,
         } => {
-            json!({"variant":"FalseEdge","real_target":real_target.as_u32(),"imaginary_target":imaginary_target.as_u32()})
+            S::FalseEdge { real_target: real_target.as_u32(), imaginary_target: imaginary_target.as_u32() }
         }
         T::FalseUnwind {
             real_target,
             unwind,
         } => {
-            json!({"variant":"FalseUnwind","real_target":real_target.as_u32(),"unwind":unwind_json(*unwind)})
+            S::FalseUnwind { real_target: real_target.as_u32(), unwind: unwind_json(*unwind) }
         }
         T::InlineAsm {
             asm_macro,
@@ -3735,31 +3397,37 @@ fn terminator_json<'tcx>(
             let arch = InlineAsmArch::from_arch(&tcx.sess.target.arch);
             let register = |register: R| match register {
                 R::Reg(reg) => {
-                    json!({"kind":"register","arch":arch.map(inline_asm_arch_name),"name":reg.name()})
+                    pool_body::AsmRegister::Register { arch: arch.map(inline_asm_arch_name), name: reg.name().into_owned() }
                 }
                 R::RegClass(class) => {
-                    json!({"kind":"register_class","arch":arch.map(inline_asm_arch_name),"name":class.name().as_str()})
+                    pool_body::AsmRegister::RegisterClass { arch: arch.map(inline_asm_arch_name), name: class.name().to_string() }
                 }
             };
             let pieces = template.iter().map(|piece| match piece {
-                P::String(text) => json!({"kind":"string","text":text}),
-                P::Placeholder { operand_idx, modifier, span } => json!({"kind":"placeholder","operand_index":operand_idx,"modifier":modifier.map(|c|c.to_string()),"span":span_json(context, tcx,*span)}),
+                P::String(text) => pool_body::AsmPiece::String { text: text.to_string() },
+                P::Placeholder { operand_idx, modifier, span } => pool_body::AsmPiece::Placeholder { operand_index: *operand_idx, modifier: modifier.map(|c| c.to_string()), span: span_json(context, tcx, *span) },
             }).collect::<Vec<_>>();
             let operands = operands.iter().map(|operand| { Ok::<_, String>(match operand {
-                A::In { reg, value } => json!({"kind":"in","register":register(*reg),"value":operand_json(context,tcx,body,value)?}),
-                A::Out { reg, late, place } => json!({"kind":"out","register":register(*reg),"late":late,"place":place.as_ref().map(|p|Ok::<_, String>({ place_json(context,tcx,body,p)? })).transpose()?}),
-                A::InOut { reg, late, in_value, out_place } => json!({"kind":"inout","register":register(*reg),"late":late,"input":operand_json(context,tcx,body,in_value)?,"output":out_place.as_ref().map(|p|Ok::<_, String>({ place_json(context,tcx,body,p)? })).transpose()?}),
-                A::Const { value } => json!({"kind":"const","value":const_operand_json(context,tcx,body,value)?}),
-                A::SymFn { value } => json!({"kind":"sym_fn","value":const_operand_json(context,tcx,body,value)?}),
-                A::SymStatic { def_id } => json!({"kind":"sym_static","def_id":def_json(*def_id)}),
-                A::Label { target_index } => json!({"kind":"label","target_index":target_index}),
+                A::In { reg, value } => pool_body::AsmOperand::In { register: register(*reg), value: operand_json(context, tcx, body, value)? },
+                A::Out { reg, late, place } => pool_body::AsmOperand::Out { register: register(*reg), late: *late, place: place.as_ref().map(|p| place_json(context, tcx, body, p)).transpose()? },
+                A::InOut { reg, late, in_value, out_place } => pool_body::AsmOperand::Inout { register: register(*reg), late: *late, input: operand_json(context, tcx, body, in_value)?, output: out_place.as_ref().map(|p| place_json(context, tcx, body, p)).transpose()? },
+                A::Const { value } => pool_body::AsmOperand::Const { value: const_operand_json(context, tcx, body, value)? },
+                A::SymFn { value } => pool_body::AsmOperand::SymFn { value: const_operand_json(context, tcx, body, value)? },
+                A::SymStatic { def_id } => pool_body::AsmOperand::SymStatic { def_id: def_json(context, *def_id) },
+                A::Label { target_index } => pool_body::AsmOperand::Label { target_index: *target_index },
             }) }).collect::<Result<Vec<_>, String>>()?;
-            json!({"variant":"InlineAsm","asm_macro":match asm_macro { M::Asm => "asm", M::NakedAsm => "naked_asm" },
-                "template":pieces,"operands":operands,
-                "options":{"pure":options.contains(O::PURE),"nomem":options.contains(O::NOMEM),"readonly":options.contains(O::READONLY),"preserves_flags":options.contains(O::PRESERVES_FLAGS),"noreturn":options.contains(O::NORETURN),"nostack":options.contains(O::NOSTACK),"att_syntax":options.contains(O::ATT_SYNTAX),"raw":options.contains(O::RAW),"may_unwind":options.contains(O::MAY_UNWIND)},
-                "line_spans":line_spans.iter().map(|span|span_json(context, tcx,*span)).collect::<Vec<_>>(),
-                "targets":targets.iter().map(|bb|bb.as_u32()).collect::<Vec<_>>(),"unwind":unwind_json(*unwind),
-                "execution_obligation":"target-specific assembly execution is not supplied by syntax lowering"})
+            S::InlineAsm {
+                asm_macro: match asm_macro { M::Asm => "asm", M::NakedAsm => "naked_asm" },
+                template: pieces, operands,
+                options: pool_body::AsmOptions {
+                    pure: options.contains(O::PURE), nomem: options.contains(O::NOMEM), readonly: options.contains(O::READONLY),
+                    preserves_flags: options.contains(O::PRESERVES_FLAGS), noreturn: options.contains(O::NORETURN), nostack: options.contains(O::NOSTACK),
+                    att_syntax: options.contains(O::ATT_SYNTAX), raw: options.contains(O::RAW), may_unwind: options.contains(O::MAY_UNWIND),
+                },
+                line_spans: line_spans.iter().map(|span| span_json(context, tcx, *span)).collect(),
+                targets: targets.iter().map(|bb| bb.as_u32()).collect(), unwind: unwind_json(*unwind),
+                execution_obligation: "target-specific assembly execution is not supplied by syntax lowering",
+            }
         }
     })
 }
@@ -3798,36 +3466,26 @@ fn inline_asm_arch_name(arch: rustc_target::asm::InlineAsmArch) -> &'static str 
     }
 }
 
-fn place_json<'tcx>(
-    context: &mut ExportContext<'tcx>,
-    tcx: TyCtxt<'tcx>,
-    body: &rustc_middle::mir::Body<'tcx>,
-    place: &rustc_middle::mir::Place<'tcx>,
-) -> Result<Value, String> {
+fn place_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, body: &rustc_middle::mir::Body<'tcx>, place: &rustc_middle::mir::Place<'tcx>) -> Result<pool_body::Place, String> {
     use rustc_middle::mir::ProjectionElem as P;
-    let projection = place.iter_projections().map(|(base, elem)| { {
+    use pool_body::ProjectionKind as S;
+    let projection = place.iter_projections().map(|(base, elem)| {
         let projected_place = base.project_deeper(&[elem], tcx);
-        let projected_type = type_json(context, tcx, projected_place.ty(body, tcx).ty)?;
-        let mut node = match elem {
-            P::Deref => json!({"kind":"Deref"}),
-            P::Field(index, ty) => json!({"kind":"Field","index":index.as_u32(),"field_type":type_json(context, tcx,ty)?}),
-            P::Index(local) => json!({"kind":"Index","local":local.as_u32()}),
-            P::ConstantIndex { offset, min_length, from_end } => json!({"kind":"ConstantIndex","offset":offset,"min_length":min_length,"from_end":from_end}),
-            P::Subslice { from, to, from_end } => json!({"kind":"Subslice","from":from,"to":to,"from_end":from_end}),
-            P::Downcast(name, variant) => json!({"kind":"Downcast","name":name.map(|n|n.as_str().to_owned()),"variant_index":variant.as_u32()}),
-            P::OpaqueCast(ty) => json!({"kind":"OpaqueCast","cast_type":type_json(context, tcx,ty)?}),
-            P::UnwrapUnsafeBinder(ty) => json!({"kind":"UnwrapUnsafeBinder","inner_type":type_json(context, tcx,ty)?}),
-            P::PhantomDeref => json!({"kind":"PhantomDeref"}),
+        let resulting_type = type_json(context, tcx, projected_place.ty(body, tcx).ty)?;
+        let kind = match elem {
+            P::Deref => S::Deref,
+            P::Field(index, ty) => S::Field { index: index.as_u32(), field_type: type_json(context, tcx, ty)? },
+            P::Index(local) => S::Index { local: local.as_u32() },
+            P::ConstantIndex { offset, min_length, from_end } => S::ConstantIndex { offset, min_length, from_end },
+            P::Subslice { from, to, from_end } => S::Subslice { from, to, from_end },
+            P::Downcast(name, variant) => S::Downcast { name: name.map(|n| n.as_str().to_owned()), variant_index: variant.as_u32() },
+            P::OpaqueCast(ty) => S::OpaqueCast { cast_type: type_json(context, tcx, ty)? },
+            P::UnwrapUnsafeBinder(ty) => S::UnwrapUnsafeBinder { inner_type: type_json(context, tcx, ty)? },
+            P::PhantomDeref => S::PhantomDeref,
         };
-        if let Some(fields) = node.as_object_mut() {
-            fields.insert("resulting_type".into(), projected_type);
-        }
-        Ok::<_, String>(node)
-    } }).collect::<Result<Vec<_>, String>>()?;
-    let place_ty = place.ty(body, tcx).ty;
-    Ok::<_, String>(
-        json!({"local":place.local.as_u32(),"projection":projection,"type":type_json(context, tcx,place_ty)?}),
-    )
+        Ok(pool_body::Projection { kind, resulting_type })
+    }).collect::<Result<Vec<_>, String>>()?;
+    Ok(pool_body::Place { local: place.local.as_u32(), projection, r#type: type_json(context, tcx, place.ty(body, tcx).ty)? })
 }
 
 fn operand_json<'tcx>(
@@ -3835,20 +3493,21 @@ fn operand_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &rustc_middle::mir::Body<'tcx>,
     operand: &rustc_middle::mir::Operand<'tcx>,
-) -> Result<Value, String> {
+) -> Result<pool_body::Operand, String> {
     use rustc_middle::mir::Operand as O;
+    use pool_body::Operand as S;
     Ok::<_, String>(match operand {
         O::Copy(place) => {
-            json!({"kind":"Copy","place":place_json(context, tcx,body,place)?})
+            S::Copy { place: place_json(context, tcx, body, place)? }
         }
         O::Move(place) => {
-            json!({"kind":"Move","place":place_json(context, tcx,body,place)?})
+            S::Move { place: place_json(context, tcx, body, place)? }
         }
         O::Constant(value) => {
-            json!({"kind":"Constant","constant":const_operand_json(context, tcx,body,value)?})
+            S::Constant { constant: const_operand_json(context, tcx, body, value)? }
         }
         O::RuntimeChecks(check) => {
-            json!({"kind":"RuntimeChecks","check":runtime_check_json(tcx,*check)})
+            S::RuntimeChecks { check: runtime_check_json(tcx, *check) }
         }
     })
 }
@@ -3954,7 +3613,8 @@ fn vtable_allocation_for_unsize<'tcx>(
     body: &rustc_middle::mir::Body<'tcx>,
     source: &rustc_middle::mir::Operand<'tcx>,
     target_ty: rustc_middle::ty::Ty<'tcx>,
-) -> Result<Option<Value>, String> {
+) -> Result<Option<pool_body::UnsizeVtable>, String> {
+    use pool_body::{UnsizeVtable as U, VtableAllocation as A, VtableQuery, VtableQueryKey, SupertraitSlotQuery};
     let source_ty = source.ty(body, tcx);
     let source_pointee = match *source_ty.kind() {
         ty::Ref(_, pointee, _) | ty::RawPtr(pointee, _) => pointee,
@@ -3992,31 +3652,20 @@ fn vtable_allocation_for_unsize<'tcx>(
         return Ok(None);
     };
     Ok::<_, String>(match source_tail.kind() {
-        ty::Dynamic(source_predicates, _) if source_predicates == predicates => Some(json!({
-            "kind":"same_dynamic_vtable_noop",
-            "type":type_json(context,tcx,source_tail)?,
-        })),
+        ty::Dynamic(source_predicates, _) if source_predicates == predicates => Some(U::Allocation(A::SameDynamicVtableNoop { r#type:type_json(context,tcx,source_tail)? })),
         ty::Dynamic(..) => {
             // Miri validates the source table and then asks get_vtable_ptr for
             // the same concrete type with the destination predicate list.
             // The exact concrete candidates are closed over in
             // compiler_vtable_queries_json; this request records the runtime
             // source/destination tail pair without guessing a concrete type.
-            Some(json!({
-                "kind":"dynamic_vtable_upcast",
-                "source_type":type_json(context,tcx,source_ty)?,
-                "target_type":type_json(context,tcx,target_ty)?,
-                "source_pointee_type":type_json(context,tcx,source_pointee)?,
-                "target_pointee_type":type_json(context,tcx,target_pointee)?,
-                "source_tail_type":type_json(context,tcx,source_tail)?,
-                "target_tail_type":type_json(context,tcx,target_tail)?,
-                "supertrait_slot_query":{
-                    "query_kind":"supertrait_slot",
-                    "typing_env":"fully_monomorphized",
-                    "input_source":type_json(context,tcx,source_tail)?,
-                    "input_target":type_json(context,tcx,target_tail)?,
-                },
-                "runtime_vtable":"source_operand_metadata",
+            Some(U::Allocation(A::DynamicVtableUpcast {
+                source_type:type_json(context,tcx,source_ty)?, target_type:type_json(context,tcx,target_ty)?,
+                source_pointee_type:type_json(context,tcx,source_pointee)?, target_pointee_type:type_json(context,tcx,target_pointee)?,
+                source_tail_type:type_json(context,tcx,source_tail)?, target_tail_type:type_json(context,tcx,target_tail)?,
+                supertrait_slot_query:SupertraitSlotQuery { query_kind:"supertrait_slot", typing_env:"fully_monomorphized",
+                    input_source:type_json(context,tcx,source_tail)?, input_target:type_json(context,tcx,target_tail)? },
+                runtime_vtable:"source_operand_metadata",
             }))
         }
         _ => {
@@ -4035,17 +3684,12 @@ fn vtable_allocation_for_unsize<'tcx>(
                 .iter()
                 .map(|predicate| existential_predicate_json(context, tcx, predicate))
                 .collect::<Result<Vec<_>, String>>()?;
-            Some(json!({
-                "kind":"symbolic_vtable_allocation",
-                "vtable_query":{"source_type":type_json(context,tcx,source_ty)?,
-                    "target_type":type_json(context,tcx,target_ty)?,
-                    "source_pointee_type":type_json(context,tcx,source_pointee)?,
-                    "target_pointee_type":type_json(context,tcx,target_pointee)?,
-                    "input_type":type_json(context,tcx,source_tail)?,
-                    "input_predicates":input_predicates,
-                    "source_tail_type":type_json(context,tcx,source_tail)?,
-                    "target_tail_type":type_json(context,tcx,target_tail)?,
-                    "_query_key":{"input_type_id":input_type_id,"input_predicate_ids":input_predicate_ids}},
+            Some(U::Query(VtableQuery {
+                source_type:type_json(context,tcx,source_ty)?, target_type:type_json(context,tcx,target_ty)?,
+                source_pointee_type:type_json(context,tcx,source_pointee)?, target_pointee_type:type_json(context,tcx,target_pointee)?,
+                input_type:type_json(context,tcx,source_tail)?, input_predicates,
+                source_tail_type:type_json(context,tcx,source_tail)?, target_tail_type:type_json(context,tcx,target_tail)?,
+                _query_key:VtableQueryKey { input_type_id, input_predicate_ids },
             }))
         }
     })
@@ -4056,17 +3700,18 @@ fn rvalue_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &rustc_middle::mir::Body<'tcx>,
     rvalue: &rustc_middle::mir::Rvalue<'tcx>,
-) -> Result<Value, String> {
+) -> Result<pool_body::Rvalue, String> {
     use rustc_middle::mir::Rvalue as R;
+    use pool_body::Rvalue as S;
     Ok::<_, String>(match rvalue {
         R::Use(value, retag) => {
-            json!({"kind":"Use","operand":operand_json(context, tcx,body,value)?,"retag":{"kind":if retag.yes() { "yes" } else { "no" },"performs_retag":retag.yes()}})
+            S::Use { operand: operand_json(context, tcx, body, value)?, retag: pool_body::Retag { kind: if retag.yes() { "yes" } else { "no" }, performs_retag: retag.yes() } }
         }
         R::Repeat(value, count) => {
-            json!({"kind":"Repeat","operand":operand_json(context, tcx,body,value)?,"count":const_type_json(context,tcx,*count)?})
+            S::Repeat { operand: operand_json(context, tcx, body, value)?, count: const_type_json(context, tcx, *count)? }
         }
         R::Ref(region, kind, place) => {
-            json!({"kind":"Ref","region":region_json(tcx,*region)?,"borrow_kind":borrow_kind_json(*kind),"place":place_json(context, tcx,body,place)?})
+            S::Ref { region: region_json(context, tcx, *region)?, borrow_kind: borrow_kind_json(*kind), place: place_json(context, tcx, body, place)? }
         }
         R::ThreadLocalRef(def) => {
             let initializer = if tcx.is_foreign_item(*def) {
@@ -4076,29 +3721,21 @@ fn rvalue_json<'tcx>(
                 )?
             } else {
                 match tcx.eval_static_initializer(*def) {
-                    Ok(value) => json!({
-                        "allocation":allocation_memory_payload(context,tcx,value.inner())?,
-                    }),
+                    Ok(value) => pool_body::ThreadLocalInitializer { allocation: allocation_memory_payload(context, tcx, value.inner())? },
                     Err(error) => {
                         export_failure("main::rvalue_json", format!("{}", format!("{error:?}")))?
                     }
                 }
             };
-            json!({
-                "kind":"ThreadLocalRef",
-                "global_info":static_global_info_json(tcx,*def),
-                "def_id":def_json(*def),
-                "def_path":tcx.def_path_str(*def),
-                "initializer":initializer,
-            })
+            S::ThreadLocalRef { global_info: static_global_info_json(tcx, *def), def_id: def_json(context, *def), def_path: tcx.def_path_str(*def), initializer }
         }
         R::RawPtr(kind, place) => {
             let pointer_kind = match kind {
-                rustc_middle::mir::RawPtrKind::Mut => "mutable",
-                rustc_middle::mir::RawPtrKind::Const => "constant",
-                rustc_middle::mir::RawPtrKind::FakeForPtrMetadata => "metadata_only",
+                rustc_middle::mir::RawPtrKind::Mut => pool_body::RawPointerKind::Mutable,
+                rustc_middle::mir::RawPtrKind::Const => pool_body::RawPointerKind::Constant,
+                rustc_middle::mir::RawPtrKind::FakeForPtrMetadata => pool_body::RawPointerKind::MetadataOnly,
             };
-            json!({"kind":"RawPtr","pointer_kind":{"kind":pointer_kind},"place":place_json(context, tcx,body,place)?})
+            S::RawPtr { pointer_kind, place: place_json(context, tcx, body, place)? }
         }
         R::Cast(kind, value, target) => {
             if matches!(
@@ -4151,20 +3788,13 @@ fn rvalue_json<'tcx>(
             } else {
                 None
             };
-            let vtable_query = vtable
-                .as_ref()
-                .and_then(|value| value.get("vtable_query"))
-                .cloned();
-            let vtable_probe = vtable
-                .as_ref()
-                .and_then(|value| value.get("vtable_probe"))
-                .cloned();
-            let vtable_allocation = if vtable_query.is_some() {
-                Value::Null
-            } else {
-                vtable.clone().unwrap_or(Value::Null)
+            let (vtable_allocation, vtable_query) = match vtable {
+                Some(pool_body::UnsizeVtable::Allocation(allocation)) => (Some(allocation), None),
+                Some(pool_body::UnsizeVtable::Query(query)) => (None, Some(query)),
+                None => (None, None),
             };
-            json!({"kind":"Cast","cast_kind":cast_kind_json(*kind),"operand":operand_json(context, tcx,body,value)?,"target_type":type_json(context, tcx,*target)?,"vtable_allocation":vtable_allocation,"vtable_query":vtable_query,"vtable_probe":vtable_probe})
+            S::Cast { cast_kind: cast_kind_json(*kind), operand: operand_json(context, tcx, body, value)?,
+                target_type: type_json(context, tcx, *target)?, vtable_allocation, vtable_query, vtable_probe: None }
         }
         R::BinaryOp(op, pair) => {
             // rustc's `ImmTy::from_pair` performs a real `layout_of` query for
@@ -4192,39 +3822,40 @@ fn rvalue_json<'tcx>(
                     }
                 })
                 .transpose()?;
-            json!({"kind":"BinaryOp","operator":{"kind":binop_name(*op)},"left":operand_json(context, tcx,body,&pair.0)?,"right":operand_json(context, tcx,body,&pair.1)?,"implicit_overflow_tuple_type":implicit_overflow_tuple_type})
+            S::BinaryOp { operator: pool_body::Operator { kind: binop_name(*op) }, left: operand_json(context, tcx, body, &pair.0)?, right: operand_json(context, tcx, body, &pair.1)?, implicit_overflow_tuple_type }
         }
         R::UnaryOp(op, value) => {
-            json!({"kind":"UnaryOp","operator":{"kind":unop_name(*op)},"operand":operand_json(context, tcx,body,value)?})
+            S::UnaryOp { operator: pool_body::Operator { kind: unop_name(*op) }, operand: operand_json(context, tcx, body, value)? }
         }
         R::Discriminant(place) => {
-            json!({"kind":"Discriminant","place":place_json(context, tcx,body,place)?})
+            S::Discriminant { place: place_json(context, tcx, body, place)? }
         }
         R::Aggregate(kind, values) => {
-            json!({"kind":"Aggregate","aggregate_kind":aggregate_kind_json(context, tcx,kind)?,"operands":values.iter().map(|value|Ok::<_, String>({ operand_json(context, tcx,body,value)? })).collect::<Result<Vec<_>, String>>()?})
+            S::Aggregate { aggregate_kind: aggregate_kind_json(context, tcx, kind)?, operands: values.iter().map(|value| operand_json(context, tcx, body, value)).collect::<Result<Vec<_>, String>>()? }
         }
         R::CopyForDeref(place) => {
-            json!({"kind":"CopyForDeref","place":place_json(context, tcx,body,place)?})
+            S::CopyForDeref { place: place_json(context, tcx, body, place)? }
         }
         R::WrapUnsafeBinder(value, ty) => {
-            json!({"kind":"WrapUnsafeBinder","operand":operand_json(context, tcx,body,value)?,"type":type_json(context, tcx,*ty)?})
+            S::WrapUnsafeBinder { operand: operand_json(context, tcx, body, value)?, r#type: type_json(context, tcx, *ty)? }
         }
         R::Reborrow(ty, mutability, place) => {
-            json!({"kind":"Reborrow","type":type_json(context, tcx,*ty)?,"mutability":mutability_json(*mutability),"place":place_json(context, tcx,body,place)?})
+            S::Reborrow { r#type: type_json(context, tcx, *ty)?, mutability: mutability_json(*mutability), place: place_json(context, tcx, body, place)? }
         }
     })
 }
 
-fn borrow_kind_json(kind: rustc_middle::mir::BorrowKind) -> Value {
+fn borrow_kind_json(kind: rustc_middle::mir::BorrowKind) -> pool_body::BorrowKind {
     use rustc_middle::mir::BorrowKind as B;
+    use pool_body::BorrowKind as S;
     match kind {
-        B::Shared => json!({"kind":"shared"}),
+        B::Shared => S::Shared,
         B::Fake(fake) => {
             let fake_kind = match fake {
                 rustc_middle::mir::FakeBorrowKind::Shallow => "shallow",
                 rustc_middle::mir::FakeBorrowKind::Deep => "deep",
             };
-            json!({"kind":"fake","fake_kind":fake_kind,"retag_mode":"default"})
+            S::Fake { fake_kind, retag_mode: "default" }
         }
         B::Mut { kind } => {
             let mut_kind = match kind {
@@ -4232,26 +3863,26 @@ fn borrow_kind_json(kind: rustc_middle::mir::BorrowKind) -> Value {
                 rustc_middle::mir::MutBorrowKind::TwoPhaseBorrow => "two_phase",
                 rustc_middle::mir::MutBorrowKind::ClosureCapture => "closure_capture",
             };
-            json!({"kind":"mutable","mutability_kind":mut_kind})
+            S::Mutable { mutability_kind: mut_kind }
         }
     }
 }
 
-fn safety_json(safety: rustc_hir::Safety) -> Value {
+fn safety_json(safety: rustc_hir::Safety) -> pool_type::Safety {
     match safety {
-        rustc_hir::Safety::Safe => json!({"kind":"safe"}),
-        rustc_hir::Safety::Unsafe => json!({"kind":"unsafe"}),
+        rustc_hir::Safety::Safe => pool_type::Safety::Safe,
+        rustc_hir::Safety::Unsafe => pool_type::Safety::Unsafe,
     }
 }
 
-fn mutability_json(mutability: rustc_ast::Mutability) -> Value {
+fn mutability_json(mutability: rustc_ast::Mutability) -> pool_type::Mutability {
     match mutability {
-        rustc_ast::Mutability::Mut => json!({"kind":"mutable"}),
-        rustc_ast::Mutability::Not => json!({"kind":"immutable"}),
+        rustc_ast::Mutability::Mut => pool_type::Mutability::Mutable,
+        rustc_ast::Mutability::Not => pool_type::Mutability::Immutable,
     }
 }
 
-fn extern_abi_json(abi: rustc_abi::ExternAbi) -> Value {
+fn extern_abi_json(abi: rustc_abi::ExternAbi) -> pool_type::ExternAbi {
     use rustc_abi::ExternAbi as A;
     let (kind, unwind) = match abi {
         A::C { unwind } => ("c", Some(unwind)),
@@ -4285,113 +3916,58 @@ fn extern_abi_json(abi: rustc_abi::ExternAbi) -> Value {
         A::SysV64 { unwind } => ("sysv64", Some(unwind)),
         A::Win64 { unwind } => ("win64", Some(unwind)),
     };
-    json!({"kind":kind,"unwind":unwind,"source_spelling":abi.as_str()})
-}
-
-fn canon_abi_json(abi: rustc_abi::CanonAbi) -> Value {
-    use rustc_abi::CanonAbi as A;
-    match abi {
-        A::C => json!({"kind":"c"}),
-        A::Rust => json!({"kind":"rust"}),
-        A::RustCold => json!({"kind":"rust_cold"}),
-        A::RustPreserveNone => json!({"kind":"rust_preserve_none"}),
-        A::RustTail => json!({"kind":"rust_tail"}),
-        A::Custom => json!({"kind":"custom"}),
-        A::Swift => json!({"kind":"swift"}),
-        A::Arm(call) => json!({"kind":"arm","arm_call":match call {
-            rustc_abi::ArmCall::Aapcs => "aapcs",
-            rustc_abi::ArmCall::CCmseNonSecureCall => "cmse_nonsecure_call",
-            rustc_abi::ArmCall::CCmseNonSecureEntry => "cmse_nonsecure_entry",
-        }}),
-        A::GpuKernel => json!({"kind":"gpu_kernel"}),
-        A::Interrupt(kind) => {
-            json!({"kind":"interrupt","interrupt_kind":match kind {
-                rustc_abi::InterruptKind::Avr => "avr",
-                rustc_abi::InterruptKind::AvrNonBlocking => "avr_non_blocking",
-                rustc_abi::InterruptKind::Msp430 => "msp430",
-                rustc_abi::InterruptKind::RiscvMachine => "riscv_machine",
-                rustc_abi::InterruptKind::RiscvSupervisor => "riscv_supervisor",
-                rustc_abi::InterruptKind::X86 => "x86",
-            }})
-        }
-        A::X86(call) => json!({"kind":"x86","x86_call":match call {
-            rustc_abi::X86Call::Fastcall => "fastcall",
-            rustc_abi::X86Call::Stdcall => "stdcall",
-            rustc_abi::X86Call::SysV64 => "sysv64",
-            rustc_abi::X86Call::Thiscall => "thiscall",
-            rustc_abi::X86Call::Vectorcall => "vectorcall",
-            rustc_abi::X86Call::Win64 => "win64",
-        }}),
+    pool_type::ExternAbi {
+        kind,
+        unwind,
+        source_spelling: abi.as_str(),
     }
 }
 
-fn arg_extension_json(extension: rustc_target::callconv::ArgExtension) -> Value {
-    use rustc_target::callconv::ArgExtension as E;
-    let kind = match extension {
-        E::None => "none",
-        E::Zext => "zero_extend",
-        E::Sext => "sign_extend",
-    };
-    json!({"kind":kind})
-}
-
-fn indirect_mode_json(mode: rustc_target::callconv::IndirectMode) -> Value {
-    use rustc_target::callconv::IndirectMode as M;
-    let kind = match mode {
-        M::Pointer => "pointer",
-        M::OnStack => "on_stack",
-        M::AmdgpuKernelArg => "amdgpu_kernel_argument",
-    };
-    json!({"kind":kind})
-}
-
-fn unwind_terminate_reason_json(reason: rustc_middle::mir::UnwindTerminateReason) -> Value {
+fn unwind_terminate_reason_json(reason: rustc_middle::mir::UnwindTerminateReason) -> pool_body::UnwindTerminateReason {
     use rustc_middle::mir::UnwindTerminateReason as R;
-    let kind = match reason {
-        R::Abi => "abi",
-        R::InCleanup => "in_cleanup",
-    };
-    json!({"kind":kind})
+    match reason { R::Abi => pool_body::UnwindTerminateReason::Abi,
+        R::InCleanup => pool_body::UnwindTerminateReason::InCleanup }
 }
 
-fn cast_kind_json(kind: rustc_middle::mir::CastKind) -> Value {
+fn cast_kind_json(kind: rustc_middle::mir::CastKind) -> pool_body::CastKind {
     use rustc_middle::mir::CastKind as C;
+    use pool_body::{CastKind as S, PointerCoercion as Q};
     use rustc_middle::ty::adjustment::PointerCoercion as P;
     match kind {
         C::PointerExposeProvenance => {
-            json!({"kind":"PointerExposeProvenance"})
+            S::PointerExposeProvenance
         }
         C::PointerWithExposedProvenance => {
-            json!({"kind":"PointerWithExposedProvenance"})
+            S::PointerWithExposedProvenance
         }
         C::PointerCoercion(coercion, source) => {
             let coercion = match coercion {
                 P::ReifyFnPointer(safety) => {
-                    json!({"kind":"ReifyFnPointer","safety":safety_json(safety)})
+                    Q::ReifyFnPointer { safety: safety_json(safety) }
                 }
-                P::UnsafeFnPointer => json!({"kind":"UnsafeFnPointer"}),
+                P::UnsafeFnPointer => Q::UnsafeFnPointer,
                 P::ClosureFnPointer(safety) => {
-                    json!({"kind":"ClosureFnPointer","safety":safety_json(safety)})
+                    Q::ClosureFnPointer { safety: safety_json(safety) }
                 }
-                P::MutToConstPointer => json!({"kind":"MutToConstPointer"}),
-                P::ArrayToPointer => json!({"kind":"ArrayToPointer"}),
-                P::Unsize => json!({"kind":"Unsize"}),
+                P::MutToConstPointer => Q::MutToConstPointer,
+                P::ArrayToPointer => Q::ArrayToPointer,
+                P::Unsize => Q::Unsize,
             };
             let source = match source {
-                rustc_middle::mir::CoercionSource::AsCast => "as_cast",
-                rustc_middle::mir::CoercionSource::Implicit => "implicit",
+                rustc_middle::mir::CoercionSource::AsCast => pool_body::CoercionSource::AsCast,
+                rustc_middle::mir::CoercionSource::Implicit => pool_body::CoercionSource::Implicit,
             };
-            json!({"kind":"PointerCoercion","coercion":coercion,"source":{"kind":source}})
+            S::PointerCoercion { coercion, source }
         }
-        C::IntToInt => json!({"kind":"IntToInt"}),
-        C::FloatToInt => json!({"kind":"FloatToInt"}),
-        C::FloatToFloat => json!({"kind":"FloatToFloat"}),
-        C::IntToFloat => json!({"kind":"IntToFloat"}),
-        C::PtrToPtr => json!({"kind":"PtrToPtr"}),
-        C::FnPtrToPtr => json!({"kind":"FnPtrToPtr"}),
-        C::Transmute => json!({"kind":"Transmute"}),
-        C::BoxDerefTransmute => json!({"kind":"BoxDerefTransmute"}),
-        C::Subtype => json!({"kind":"Subtype"}),
+        C::IntToInt => S::IntToInt,
+        C::FloatToInt => S::FloatToInt,
+        C::FloatToFloat => S::FloatToFloat,
+        C::IntToFloat => S::IntToFloat,
+        C::PtrToPtr => S::PtrToPtr,
+        C::FnPtrToPtr => S::FnPtrToPtr,
+        C::Transmute => S::Transmute,
+        C::BoxDerefTransmute => S::BoxDerefTransmute,
+        C::Subtype => S::Subtype,
     }
 }
 
@@ -4399,25 +3975,26 @@ fn aggregate_kind_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     kind: &rustc_middle::mir::AggregateKind<'tcx>,
-) -> Result<Value, String> {
+) -> Result<pool_body::AggregateKind, String> {
     use rustc_middle::mir::AggregateKind as A;
+    use pool_body::AggregateKind as S;
     Ok::<_, String>(match kind {
-        A::Array(ty) => json!({"kind":"Array","element_type":type_json(context, tcx,*ty)?}),
-        A::Tuple => json!({"kind":"Tuple"}),
+        A::Array(ty) => S::Array { element_type: type_json(context, tcx, *ty)? },
+        A::Tuple => S::Tuple,
         A::Adt(def, variant, args, user_ty, active_field) => {
-            json!({"kind":"Adt","def_id":def_json(*def),"def_path":tcx.def_path_str(*def),"variant_index":variant.as_u32(),"generic_args":generic_args_json(context, tcx,*args)?,"user_type_annotation":user_ty.map(|value|json!({"kind":"annotation_ref","index":value.as_u32()})),"active_union_field":active_field.map(|field|field.as_u32())})
+            S::Adt { def_id: def_json(context, *def), def_path: tcx.def_path_str(*def), variant_index: variant.as_u32(), generic_args: generic_args_json(context, tcx, *args)?, user_type_annotation: user_ty.map(|value| pool_constant::Annotation::AnnotationRef { index: value.as_u32() }), active_union_field: active_field.map(|field| field.as_u32()) }
         }
         A::Closure(def, args) => {
-            json!({"kind":"Closure","def_id":def_json(*def),"def_path":tcx.def_path_str(*def),"generic_args":generic_args_json(context, tcx,*args)?})
+            S::Closure { def_id: def_json(context, *def), def_path: tcx.def_path_str(*def), generic_args: generic_args_json(context, tcx, *args)? }
         }
         A::Coroutine(def, args) => {
-            json!({"kind":"Coroutine","def_id":def_json(*def),"def_path":tcx.def_path_str(*def),"generic_args":generic_args_json(context, tcx,*args)?})
+            S::Coroutine { def_id: def_json(context, *def), def_path: tcx.def_path_str(*def), generic_args: generic_args_json(context, tcx, *args)? }
         }
         A::CoroutineClosure(def, args) => {
-            json!({"kind":"CoroutineClosure","def_id":def_json(*def),"def_path":tcx.def_path_str(*def),"generic_args":generic_args_json(context, tcx,*args)?})
+            S::CoroutineClosure { def_id: def_json(context, *def), def_path: tcx.def_path_str(*def), generic_args: generic_args_json(context, tcx, *args)? }
         }
         A::RawPtr(ty, mutability) => {
-            json!({"kind":"RawPtr","pointee_type":type_json(context, tcx,*ty)?,"mutability":mutability_json(*mutability)})
+            S::RawPtr { pointee_type: type_json(context, tcx, *ty)?, mutability: mutability_json(*mutability) }
         }
     })
 }
@@ -4427,68 +4004,62 @@ fn assert_message_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &rustc_middle::mir::Body<'tcx>,
     message: &rustc_middle::mir::AssertMessage<'tcx>,
-) -> Result<Value, String> {
+) -> Result<pool_body::AssertMessage, String> {
     use rustc_middle::mir::AssertKind as A;
+    use pool_body::AssertMessage as S;
     Ok::<_, String>(match message {
         A::BoundsCheck { len, index } => {
-            json!({"kind":"BoundsCheck","length":operand_json(context, tcx,body,len)?,"index":operand_json(context, tcx,body,index)?})
+            S::BoundsCheck { length: operand_json(context, tcx, body, len)?, index: operand_json(context, tcx, body, index)? }
         }
         A::Overflow(op, left, right) => {
-            json!({"kind":"Overflow","operator":{"kind":binop_name(*op)},"left":operand_json(context, tcx,body,left)?,"right":operand_json(context, tcx,body,right)?})
+            S::Overflow { operator: pool_body::Operator { kind: binop_name(*op) }, left: operand_json(context, tcx, body, left)?, right: operand_json(context, tcx, body, right)? }
         }
         A::OverflowNeg(value) => {
-            json!({"kind":"OverflowNeg","operand":operand_json(context, tcx,body,value)?})
+            S::OverflowNeg { operand: operand_json(context, tcx, body, value)? }
         }
         A::DivisionByZero(value) => {
-            json!({"kind":"DivisionByZero","operand":operand_json(context, tcx,body,value)?})
+            S::DivisionByZero { operand: operand_json(context, tcx, body, value)? }
         }
         A::RemainderByZero(value) => {
-            json!({"kind":"RemainderByZero","operand":operand_json(context, tcx,body,value)?})
+            S::RemainderByZero { operand: operand_json(context, tcx, body, value)? }
         }
         A::ResumedAfterReturn(kind) => {
-            json!({"kind":"ResumedAfterReturn","coroutine_kind":coroutine_kind_json(*kind)})
+            S::ResumedAfterReturn { coroutine_kind: coroutine_kind_json(*kind) }
         }
         A::ResumedAfterPanic(kind) => {
-            json!({"kind":"ResumedAfterPanic","coroutine_kind":coroutine_kind_json(*kind)})
+            S::ResumedAfterPanic { coroutine_kind: coroutine_kind_json(*kind) }
         }
         A::ResumedAfterDrop(kind) => {
-            json!({"kind":"ResumedAfterDrop","coroutine_kind":coroutine_kind_json(*kind)})
+            S::ResumedAfterDrop { coroutine_kind: coroutine_kind_json(*kind) }
         }
         A::MisalignedPointerDereference { required, found } => {
-            json!({"kind":"MisalignedPointerDereference","required":operand_json(context, tcx,body,required)?,"found":operand_json(context, tcx,body,found)?})
+            S::MisalignedPointerDereference { required: operand_json(context, tcx, body, required)?, found: operand_json(context, tcx, body, found)? }
         }
-        A::NullPointerDereference => json!({"kind":"NullPointerDereference"}),
-        A::NullReferenceConstructed => json!({"kind":"NullReferenceConstructed"}),
+        A::NullPointerDereference => S::NullPointerDereference,
+        A::NullReferenceConstructed => S::NullReferenceConstructed,
         A::InvalidEnumConstruction(value) => {
-            json!({"kind":"InvalidEnumConstruction","operand":operand_json(context, tcx,body,value)?})
+            S::InvalidEnumConstruction { operand: operand_json(context, tcx, body, value)? }
         }
     })
 }
 
-fn unwind_json(unwind: rustc_middle::mir::UnwindAction) -> Value {
+fn unwind_json(unwind: rustc_middle::mir::UnwindAction) -> pool_body::Unwind {
     use rustc_middle::mir::UnwindAction as U;
+    use pool_body::Unwind as S;
     match unwind {
-        U::Continue => json!({"kind":"Continue"}),
-        U::Unreachable => json!({"kind":"Unreachable"}),
-        U::Terminate(reason) => {
-            json!({"kind":"Terminate","reason":unwind_terminate_reason_json(reason)})
-        }
-        U::Cleanup(block) => json!({"kind":"Cleanup","target":block.as_u32()}),
+        U::Continue => S::Continue,
+        U::Unreachable => S::Unreachable,
+        U::Terminate(reason) => S::Terminate { reason: unwind_terminate_reason_json(reason) },
+        U::Cleanup(block) => S::Cleanup { target: block.as_u32() },
     }
 }
 
-fn def_json(def: rustc_hir::def_id::DefId) -> Value {
-    json!({"crate":def.krate.as_u32(),"index":def.index.as_u32()})
+fn def_json(context: &mut ExportContext<'_>, def: rustc_hir::def_id::DefId) -> u64 {
+    let (id,fresh)=context.definitions.reserve(def);
+    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32() }); }
+    id as u64
 }
 
-/// Record the exact `copy_op_allow_transmute` type pairs created while Miri
-/// initializes a known callee frame and copies its return value. The source
-/// call path (interpret/call.rs `init_fn_call`/`pass_argument`) first untuples
-/// RustCall arguments, then copies each caller operand into an instantiated
-/// callee MIR argument local. `copy_op_no_validate` asks
-/// `mir_assign_valid_types` for every such copy, including when its answer is
-/// false. These are real source-demanded queries, unlike synthetic type
-/// constructors emitted by the covariance catalog itself.
 fn register_call_transfer_covariance<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
@@ -5220,76 +4791,29 @@ fn closed_covariance_ty(input: ty::Ty<'_>) -> bool {
         && !input.references_error()
 }
 
-fn instance_kind_json<'tcx>(
-    context: &mut ExportContext<'tcx>,
-    tcx: TyCtxt<'tcx>,
-    kind: ty::InstanceKind<'tcx>,
-) -> Result<Value, String> {
+fn instance_kind_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, kind: ty::InstanceKind<'tcx>) -> Result<pool_instance::InstanceKind, String> {
     use ty::{InstanceKind as I, ShimKind as S};
-    Ok::<_, String>(match kind {
-        I::Item(def) => json!({"kind":"item","def_id":def_json(def)}),
-        I::Intrinsic(def) => json!({"kind":"intrinsic","def_id":def_json(def)}),
-        I::LlvmIntrinsic(def) => json!({"kind":"llvm_intrinsic","def_id":def_json(def)}),
-        I::Virtual(def, slot) => {
-            json!({"kind":"virtual","def_id":def_json(def),"dispatch_slot":slot})
-        }
-        I::Shim(shim) => match shim {
-            S::VTable(def) => json!({"kind":"shim","shim_kind":"vtable","def_id":def_json(def)}),
-            S::Reify(def, reason) => json!({
-                "kind":"shim","shim_kind":"reify","def_id":def_json(def),
-                "reason":reason.map(|reason| match reason {
-                    ty::ReifyReason::FnPtr => "function_pointer",
-                    ty::ReifyReason::Vtable => "vtable",
-                }),
-            }),
-            S::FnPtr(def, fn_ty) => {
-                json!({"kind":"shim","shim_kind":"fn_pointer","def_id":def_json(def),"function_type":type_json(context,tcx,fn_ty)?})
-            }
-            S::ClosureOnce {
-                call_once,
-                closure,
-                track_caller,
-            } => json!({
-                "kind":"shim","shim_kind":"closure_once","call_once_def_id":def_json(call_once),
-                "closure_def_id":def_json(closure),"track_caller":track_caller,
-            }),
-            S::ConstructCoroutineInClosure {
-                coroutine_closure_def_id,
-                receiver_by_ref,
-            } => json!({
-                "kind":"shim","shim_kind":"construct_coroutine_in_closure",
-                "coroutine_closure_def_id":def_json(coroutine_closure_def_id),
-                "receiver_by_ref":receiver_by_ref,
-            }),
-            S::ThreadLocal(def) => {
-                json!({"kind":"shim","shim_kind":"thread_local","def_id":def_json(def)})
-            }
-            S::FutureDropPoll(def, proxy_ty, implementation_ty) => json!({
-                "kind":"shim","shim_kind":"future_drop_poll","def_id":def_json(def),
-                "proxy_coroutine_type":type_json(context,tcx,proxy_ty)?,
-                "implementation_coroutine_type":type_json(context,tcx,implementation_ty)?,
-            }),
-            S::DropGlue(def, drop_ty) => json!({
-                "kind":"shim","shim_kind":"drop_glue","def_id":def_json(def),
-                "drop_type":drop_ty.map(|ty|Ok::<_, String>({ type_json(context,tcx,ty)? })).transpose()?,
-            }),
-            S::Clone(def, clone_ty) => json!({
-                "kind":"shim","shim_kind":"clone","def_id":def_json(def),
-                "clone_type":type_json(context,tcx,clone_ty)?,
-            }),
-            S::FnPtrAsPtr(def, fn_ty) => {
-                json!({"kind":"shim","shim_kind":"fn_pointer_as_pointer","def_id":def_json(def),"function_type":type_json(context,tcx,fn_ty)?})
-            }
-            S::FnPtrFromPtr(def, fn_ty) => {
-                json!({"kind":"shim","shim_kind":"fn_pointer_from_pointer","def_id":def_json(def),"function_type":type_json(context,tcx,fn_ty)?})
-            }
-            S::AsyncDropGlueCtor(def, drop_ty) => {
-                json!({"kind":"shim","shim_kind":"async_drop_glue_constructor","def_id":def_json(def),"drop_type":type_json(context,tcx,drop_ty)?})
-            }
-            S::AsyncDropGlue(def, coroutine_ty) => {
-                json!({"kind":"shim","shim_kind":"async_drop_glue","def_id":def_json(def),"coroutine_type":type_json(context,tcx,coroutine_ty)?})
-            }
-        },
+    use pool_instance::{InstanceKind as O,ShimKind as H};
+    Ok(match kind {
+        I::Item(def)=>O::Item { def_id:def_json(context,def) },
+        I::Intrinsic(def)=>O::Intrinsic { def_id:def_json(context,def) },
+        I::LlvmIntrinsic(def)=>O::LlvmIntrinsic { def_id:def_json(context,def) },
+        I::Virtual(def,slot)=>O::Virtual { def_id:def_json(context,def),dispatch_slot:slot },
+        I::Shim(shim)=>O::Shim { shim: match shim {
+            S::VTable(def)=>H::Vtable { def_id:def_json(context,def) },
+            S::Reify(def,reason)=>H::Reify { def_id:def_json(context,def),reason:reason.map(|r|match r {ty::ReifyReason::FnPtr=>"function_pointer",ty::ReifyReason::Vtable=>"vtable"}) },
+            S::FnPtr(def,t)=>H::FnPointer {def_id:def_json(context,def),function_type:type_json(context,tcx,t)?},
+            S::ClosureOnce {call_once,closure,track_caller}=>H::ClosureOnce {call_once_def_id:def_json(context,call_once),closure_def_id:def_json(context,closure),track_caller},
+            S::ConstructCoroutineInClosure {coroutine_closure_def_id,receiver_by_ref}=>H::ConstructCoroutineInClosure {coroutine_closure_def_id:def_json(context,coroutine_closure_def_id),receiver_by_ref},
+            S::ThreadLocal(def)=>H::ThreadLocal {def_id:def_json(context,def)},
+            S::FutureDropPoll(def,p,i)=>H::FutureDropPoll {def_id:def_json(context,def),proxy_coroutine_type:type_json(context,tcx,p)?,implementation_coroutine_type:type_json(context,tcx,i)?},
+            S::DropGlue(def,t)=>H::DropGlue {def_id:def_json(context,def),drop_type:t.map(|t|type_json(context,tcx,t)).transpose()?},
+            S::Clone(def,t)=>H::Clone {def_id:def_json(context,def),clone_type:type_json(context,tcx,t)?},
+            S::FnPtrAsPtr(def,t)=>H::FnPointerAsPointer {def_id:def_json(context,def),function_type:type_json(context,tcx,t)?},
+            S::FnPtrFromPtr(def,t)=>H::FnPointerFromPointer {def_id:def_json(context,def),function_type:type_json(context,tcx,t)?},
+            S::AsyncDropGlueCtor(def,t)=>H::AsyncDropGlueConstructor {def_id:def_json(context,def),drop_type:type_json(context,tcx,t)?},
+            S::AsyncDropGlue(def,t)=>H::AsyncDropGlue {def_id:def_json(context,def),coroutine_type:type_json(context,tcx,t)?},
+        } },
     })
 }
 
@@ -5300,7 +4824,8 @@ fn resolve_callee_json<'tcx>(
     func: &rustc_middle::mir::Operand<'tcx>,
     call_args: &[rustc_span::Spanned<rustc_middle::mir::Operand<'tcx>>],
     return_destination: ty::Ty<'tcx>,
-) -> Result<Value, String> {
+) -> Result<resolution_values::Callee, String> {
+    use resolution_values::{Callee, VirtualResolution};
     let func_ty = func.ty(body, tcx);
     Ok::<_, String>(match *func_ty.kind() {
         ty::FnDef(def, args) => {
@@ -5346,23 +4871,18 @@ fn resolve_callee_json<'tcx>(
                                 instance,
                                 return_destination,
                             )?;
-                            let (kind, dispatch_slot) = match instance.def {
-                                ty::InstanceKind::Virtual(_, slot) => {
-                                    ("virtual_dispatch", Some(slot))
-                                }
-                                _ => ("resolved_instance", None),
-                            };
-                            let virtual_resolution =
-                                if let ty::InstanceKind::Virtual(def, slot) = instance.def {
-                                    json!({"instance_id":instance_id,
-                                    "method_definition":def_json(def),"dispatch_slot":slot,
-                                    "generic_args":generic_args_json(context,tcx,instance.args)?,
-                                    "candidate_query_ids":[],
-                                    "selection":"deferred to the runtime receiver vtable"})
-                                } else {
-                                    Value::Null
-                                };
-                            json!({"kind":kind,"function_type":type_json(context,tcx,func_ty)?,"instance_id":instance_id,"dispatch_slot":dispatch_slot,"instance_kind":instance_kind_json(context,tcx,instance.def)?,"instance_def_path":tcx.def_path_str(instance.def.def_id()),"generic_args":generic_args_json(context, tcx,instance.args)?,"fn_abi":fn_abi_json(context, tcx,abi)?,"virtual_resolution":virtual_resolution})
+                            let virtual_resolution = if let ty::InstanceKind::Virtual(def, slot) = instance.def {
+                                Some(VirtualResolution { instance_id, method_definition:def_json(context,def), dispatch_slot:slot,
+                                    candidate_query_ids:Vec::new(), selection:"deferred to the runtime receiver vtable" })
+                            } else { None };
+                            let dispatch_slot = virtual_resolution.as_ref().map(|resolution| resolution.dispatch_slot);
+                            let function_type = type_json(context,tcx,func_ty)?;
+                            let fn_abi = fn_abi_json(context,tcx,abi)?;
+                            if virtual_resolution.is_some() {
+                                Callee::VirtualDispatch { function_type, instance_id, dispatch_slot, fn_abi, virtual_resolution }
+                            } else {
+                                Callee::ResolvedInstance { function_type, instance_id, dispatch_slot, fn_abi, virtual_resolution }
+                            }
                         }
                         Err(error) => export_failure(
                             "main::resolve_callee_json",
@@ -5390,7 +4910,7 @@ fn resolve_callee_json<'tcx>(
                 || func_ty.has_infer()
                 || func_ty.has_placeholders()
             {
-                return unavailable_compiler_fact(
+                return export_failure("callee resolution",
                     "indirect function pointer still requires caller instantiation",
                 );
             }
@@ -5412,7 +4932,7 @@ fn resolve_callee_json<'tcx>(
                                 || extra.has_infer()
                                 || extra.has_placeholders()
                             {
-                                return unavailable_compiler_fact(
+                                return export_failure("callee resolution",
                                     "indirect extra argument types still require caller instantiation",
                                 );
                             }
@@ -5430,10 +4950,11 @@ fn resolve_callee_json<'tcx>(
                                     )? {
                                         context.fn_pointer_call_transfers.push(request);
                                     }
-                                    json!({"kind":"indirect_function_pointer",
-                                    "function_type":type_json(context,tcx,func_ty)?,"signature":fn_sig_json_inner(context,tcx,signature)?,
-                                    "extra_argument_types":extra.iter().map(|ty|Ok::<_, String>({ type_json(context,tcx,ty)? })).collect::<Result<Vec<_>, String>>()?,
-                                    "fn_abi":fn_abi_json(context,tcx,abi)?})
+                                    Callee::IndirectFunctionPointer {
+                                        function_type:type_json(context,tcx,func_ty)?, signature:fn_sig_json_inner(context,tcx,signature)?,
+                                        extra_argument_types:extra.iter().map(|ty|type_json(context,tcx,ty)).collect::<Result<Vec<_>,String>>()?,
+                                        fn_abi:fn_abi_json(context,tcx,abi)?,
+                                    }
                                 }
                                 Err(error) => export_failure(
                                     "main::resolve_callee_json",
@@ -5445,7 +4966,7 @@ fn resolve_callee_json<'tcx>(
                                 )?,
                             }
                         }
-                        None => unavailable_compiler_fact(
+                        None => export_failure("callee resolution",
                             "indirect call has fewer arguments than its normalized signature",
                         )?,
                     }
@@ -5468,230 +4989,46 @@ fn fn_abi_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     abi: &rustc_target::callconv::FnAbi<'tcx, rustc_middle::ty::Ty<'tcx>>,
-) -> Result<Value, String> {
-    if let Some(value) = context.fn_abi_payload_cache.get(abi) {
-        return Ok(value.clone());
+) -> Result<u64, String> {
+    let (id, fresh) = context.fn_abis.reserve(abi.clone());
+    if !fresh {
+        return Ok(id as u64);
     }
-    let value = json!({"calling_convention":canon_abi_json(abi.conv),"c_variadic":abi.c_variadic,"fixed_count":abi.fixed_count,"can_unwind":abi.can_unwind,"return":arg_abi_json(context, tcx,&abi.ret)?,"arguments":abi.args.iter().map(|arg|Ok::<_, String>({ arg_abi_json(context, tcx,arg)? })).collect::<Result<Vec<_>, String>>()?});
-    context
-        .fn_abi_payload_cache
-        .insert(abi.clone(), value.clone());
-    Ok::<_, String>(value)
+    let value = pool_layout::FnAbi::new(context, tcx, abi)?;
+    context.fn_abis.define(id, value);
+    Ok(id as u64)
 }
 
-fn arg_attributes_json(attrs: rustc_target::callconv::ArgAttributes) -> Value {
-    use rustc_target::callconv::ArgAttribute as A;
-    let captures = if attrs.regular.contains(A::CapturesNone) {
-        json!({"kind":"none"})
-    } else if attrs.regular.contains(A::CapturesAddress) {
-        json!({"kind":"address"})
-    } else if attrs.regular.contains(A::CapturesReadOnly) {
-        json!({"kind":"read_only"})
-    } else {
-        json!({"kind":"unrestricted"})
+fn const_operand_json<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,body:&rustc_middle::mir::Body<'tcx>,operand:&rustc_middle::mir::ConstOperand<'tcx>)->Result<pool_constant::Operand,String>{
+    use rustc_middle::mir::Const; use pool_constant::{Source as S,Constant,Annotation,Operand};
+    let ty=operand.const_.ty();
+    let source=match operand.const_ {
+        Const::Ty(ty,v)=>S::TypeSystemConst {ty:type_json(context,tcx,ty)?,constant:const_type_json(context,tcx,v)?},
+        Const::Unevaluated(v,ty)=>S::Unevaluated {def_id:def_json(context,v.def),def_path:tcx.def_path_str(v.def),generic_args:generic_args_json(context,tcx,v.args)?,promoted:v.promoted.map(|i|i.as_u32()),ty:type_json(context,tcx,ty)?},
+        Const::Val(_,_)=>S::AlreadyEvaluated,
     };
-    json!({
-        "regular_bits":attrs.regular.bits(),
-        "captures":captures,
-        "no_alias":attrs.regular.contains(A::NoAlias),
-        "non_null":attrs.regular.contains(A::NonNull),
-        "read_only":attrs.regular.contains(A::ReadOnly),
-        "in_register":attrs.regular.contains(A::InReg),
-        "no_undef":attrs.regular.contains(A::NoUndef),
-        "writable":attrs.regular.contains(A::Writable),
-        "no_free":attrs.regular.contains(A::NoFree),
-        "arg_extension":arg_extension_json(attrs.arg_ext),
-        "pointee_size_bytes":attrs.pointee_size.bytes(),
-        "pointee_align_bytes":attrs.pointee_align.map(|align|align.bytes())
-    })
+    let evaluated=operand.const_.eval(tcx,body.typing_env(tcx),operand.span).map_err(|e|format!("main::const_operand_json: const_evaluation_error; {e:?}"))?;
+    let value=const_value_json(context,tcx,ty,evaluated)?;
+    Ok(Operand {ty:type_json(context,tcx,ty)?,user_type_annotation:operand.user_ty.map(|a|Annotation::AnnotationRef {index:a.as_u32()}),constant:Constant::EvaluatedConst {source,value},span:span_json(context,tcx,operand.span)})
 }
-
-fn reg_json(reg: rustc_abi::Reg) -> Value {
-    use rustc_abi::RegKind;
-    let kind = match reg.kind {
-        RegKind::Integer => json!({"kind":"integer"}),
-        RegKind::Float => json!({"kind":"float"}),
-        RegKind::PpcF128 => json!({"kind":"ppc_f128"}),
-        RegKind::Vector { hint_vector_elem } => {
-            json!({"kind":"vector","hint_element":primitive_json_untyped(hint_vector_elem)})
-        }
-    };
-    json!({"kind":kind,"size_bits":reg.size.bits()})
-}
-
-fn primitive_json_untyped(primitive: rustc_abi::Primitive) -> Value {
-    use rustc_abi::Primitive;
-    match primitive {
-        Primitive::Int(integer, signed) => {
-            json!({"kind":"integer","integer_kind":integer.int_ty_str(),"signed":signed,"size_bytes":integer.size().bytes()})
-        }
-        Primitive::Float(float) => {
-            json!({"kind":"float","float_kind":float.ty_str(),"size_bytes":float.size().bytes()})
-        }
-        Primitive::Pointer(address_space) => {
-            json!({"kind":"pointer","address_space":address_space.0})
-        }
-    }
-}
-
-fn cast_target_json(cast: &rustc_target::callconv::CastTarget) -> Value {
-    json!({
-        "prefix_registers":cast.prefix.iter().copied().map(reg_json).collect::<Vec<_>>(),
-        "rest_offset_bytes":cast.rest_offset.map(|offset|offset.bytes()),
-        "rest_register":reg_json(cast.rest.unit),
-        "rest_total_bytes":cast.rest.total.bytes(),
-        "rest_is_consecutive":cast.rest.is_consecutive,
-        "attributes":arg_attributes_json(cast.attrs)
-    })
-}
-
-fn arg_abi_json<'tcx>(
-    context: &mut ExportContext<'tcx>,
-    tcx: TyCtxt<'tcx>,
-    arg: &rustc_target::callconv::ArgAbi<'tcx, rustc_middle::ty::Ty<'tcx>>,
-) -> Result<Value, String> {
-    use rustc_target::callconv::PassMode as P;
-    let mode = match &arg.mode {
-        P::Ignore => json!({"kind":"Ignore"}),
-        P::Direct(attrs) => json!({"kind":"Direct","attributes":arg_attributes_json(*attrs)}),
-        P::Pair(a, b) => {
-            json!({"kind":"Pair","first":arg_attributes_json(*a),"second":arg_attributes_json(*b)})
-        }
-        P::Cast {
-            pad_i32_count,
-            cast,
-        } => json!({"kind":"Cast","pad_i32_count":pad_i32_count,"target":cast_target_json(cast)}),
-        P::Indirect {
-            attrs,
-            address_space,
-            mode,
-        } => {
-            json!({"kind":"Indirect","attributes":arg_attributes_json(*attrs),"address_space":address_space.map(|space|space.0),"mode":indirect_mode_json(*mode)})
-        }
-        P::IndirectUnsized { attrs, meta_attrs } => {
-            json!({"kind":"IndirectUnsized","attributes":arg_attributes_json(*attrs),"metadata_attributes":arg_attributes_json(*meta_attrs)})
-        }
-    };
-    Ok::<_, String>(json!({
-        "type":type_json(context, tcx,arg.layout.ty)?,
-        "layout":layout_value_json(context, tcx, arg.layout),
-        "mode":mode
-    }))
-}
-
-fn const_operand_json<'tcx>(
-    context: &mut ExportContext<'tcx>,
-    tcx: TyCtxt<'tcx>,
-    body: &rustc_middle::mir::Body<'tcx>,
-    operand: &rustc_middle::mir::ConstOperand<'tcx>,
-) -> Result<Value, String> {
-    use rustc_middle::mir::Const;
-    let ty = operand.const_.ty();
-    let source = match operand.const_ {
-        Const::Ty(ty, value) => json!({
-            "kind":"type_system_const",
-            "type":type_json(context, tcx,ty)?,
-            "const":const_type_json(context,tcx,value)?,
-        }),
-        Const::Unevaluated(value, ty) => json!({
-            "kind":"unevaluated",
-            "def_id":def_json(value.def), "def_path":tcx.def_path_str(value.def),
-            "generic_args":generic_args_json(context, tcx,value.args)?,
-            "promoted":value.promoted.map(|id|id.as_u32()), "type":type_json(context, tcx,ty)?
-        }),
-        Const::Val(_, _) => json!({"kind":"already_evaluated"}),
-    };
-    let evaluated = operand.const_.eval(tcx, body.typing_env(tcx), operand.span);
-    let value = match evaluated {
-        Ok(value) => const_value_json(context, tcx, ty, value)?,
-        Err(error) => export_failure(
-            "main::const_operand_json",
-            format!("{}; {}", "const_evaluation_error", format!("{error:?}")),
-        )?,
-    };
-    let constant = json!({"kind":"evaluated_const","source":source,"value":value});
-    Ok::<_, String>(json!({
-        "type": type_json(context, tcx, ty)?,
-        "user_type_annotation": operand.user_ty.map(|value| json!({"kind":"annotation_ref","index":value.as_u32()})),
-        "constant": constant,
-        "span": span_json(context, tcx, operand.span),
-    }))
-}
-
-fn const_value_json<'tcx>(
-    context: &mut ExportContext<'tcx>,
-    tcx: TyCtxt<'tcx>,
-    ty: rustc_middle::ty::Ty<'tcx>,
-    value: rustc_middle::mir::ConstValue,
-) -> Result<Value, String> {
-    use rustc_middle::mir::ConstValue;
-    Ok::<_, String>(match value {
-        ConstValue::ZeroSized => json!({
-            "kind":"zero_sized",
-            "type":type_json(context,tcx,ty)?,
-        }),
-        ConstValue::Scalar(scalar) => {
-            // `Scalar` is an integer-or-pointer value independently of the
-            // enclosing MIR type. In particular, ADTs with pointer niches can
-            // carry `Scalar::Ptr` (for example `io::Error` constants). Miri's
-            // const_val_to_op preserves that variant and only adjusts pointer
-            // roots; converting it to bits here would both lose provenance
-            // and fail with ReadPointerAsInt. CtfeProvenance has
-            // OFFSET_IS_ADDR=false, so try_to_scalar_int distinguishes those
-            // pointer scalars without permitting a ptr-to-int conversion.
-            let scalar_has_provenance = scalar.try_to_scalar_int().is_err();
-            if matches!(*ty.kind(), ty::RawPtr(..) | ty::Ref(..) | ty::FnPtr(..))
-                || scalar_has_provenance
-            {
-                scalar_pointer_json(context, tcx, ty, scalar)?
-            } else {
-                let size = tcx
-                    .layout_of(ty::TypingEnv::fully_monomorphized().as_query_input(ty))
-                    .ok()
-                    .map(|layout| layout.size);
-                let conversion = size.map(|size| scalar.to_bits(size).report_err());
-                match conversion {
-                    Some(Ok(bits)) => json!({
-                        "kind":"scalar",
-                        "type":type_json(context,tcx,ty)?,
-                        "bits_unsigned":bits.to_string(),
-                    }),
-                    Some(Err(error)) => export_failure(
-                        "main::const_value_json",
-                        format!(
-                            "{}; {}",
-                            "scalar_with_provenance_or_invalid_bits",
-                            format!("{error:?}")
-                        ),
-                    )?,
-                    None => export_failure("main::const_value_json", "scalar_layout_unavailable")?,
-                }
-            }
-        }
-        ConstValue::Slice { alloc_id, meta } => {
-            let allocation = allocation_ref(context, tcx, alloc_id)?;
-            json!({
-                "kind":"slice_allocation",
-                "type":type_json(context,tcx,ty)?,
-                "allocation":allocation,
-                "metadata_length":meta,
-            })
-        }
-        ConstValue::Indirect { alloc_id, offset } => {
-            let allocation = allocation_ref(context, tcx, alloc_id)?;
-            json!({
-                "kind":"indirect_allocation",
-                "type":type_json(context,tcx,ty)?,
-                "allocation":allocation,
-                "offset_bytes":offset.bytes(),
-            })
-        }
+fn const_value_json<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,ty:ty::Ty<'tcx>,value:rustc_middle::mir::ConstValue)->Result<pool_constant::Value,String>{
+    use rustc_middle::mir::ConstValue as C; use pool_constant::Value as O;
+    Ok(match value {
+        C::ZeroSized=>O::ZeroSized {ty:type_json(context,tcx,ty)?},
+        C::Scalar(scalar)=>{
+            // Preserve Scalar::Ptr independently of the enclosing type: niche
+            // ADTs can carry provenance and must not be converted to integer bits.
+            if matches!(*ty.kind(),ty::RawPtr(..)|ty::Ref(..)|ty::FnPtr(..)) || scalar.try_to_scalar_int().is_err() {scalar_pointer_json(context,tcx,ty,scalar)?}
+            else {let layout=tcx.layout_of(ty::TypingEnv::fully_monomorphized().as_query_input(ty)).map_err(|_|"main::const_value_json: scalar_layout_unavailable".to_owned())?;let bits=scalar.to_bits(layout.size).report_err().map_err(|e|format!("main::const_value_json: scalar_with_provenance_or_invalid_bits; {e:?}"))?;O::Scalar {ty:type_json(context,tcx,ty)?,bits_unsigned:bits.to_string()}}
+        },
+        C::Slice {alloc_id,meta}=>{let allocation=allocation_ref(context,tcx,alloc_id)?; O::SliceAllocation {ty:type_json(context,tcx,ty)?,allocation,metadata_length:meta}},
+        C::Indirect {alloc_id,offset}=>{let allocation=allocation_ref(context,tcx,alloc_id)?; O::IndirectAllocation {ty:type_json(context,tcx,ty)?,allocation,offset_bytes:offset.bytes()}},
     })
 }
 
 // These are source compiler queries, not conclusions inferred from an
 // initializer image, a Rust type spelling or the target triple.
-fn static_global_info_json(tcx: TyCtxt<'_>, def: rustc_hir::def_id::DefId) -> Value {
+fn static_global_info_json(tcx: TyCtxt<'_>, def: rustc_hir::def_id::DefId) -> allocation_values::StaticGlobalInfo {
     let nested = match tcx.def_kind(def) {
         rustc_hir::def::DefKind::Static { nested, .. } => nested,
         _ => unreachable!("static global metadata requires a static definition"),
@@ -5700,39 +5037,20 @@ fn static_global_info_json(tcx: TyCtxt<'_>, def: rustc_hir::def_id::DefId) -> Va
     let typing_env = ty::TypingEnv::fully_monomorphized();
     let (size, align) = global.size_and_align(tcx, typing_env);
     let mutable = global.mutability(tcx, typing_env);
-    json!({"size_bytes":size.bytes(),"align_bytes":align.bytes(),
-        "mutability":match mutable { rustc_ast::Mutability::Mut => "mutable", rustc_ast::Mutability::Not => "immutable" },
-        "is_static":tcx.is_static(def),"is_foreign_item":tcx.is_foreign_item(def),"nested":nested,
-        "thread_local":tcx.is_thread_local_static(def)})
+    allocation_values::StaticGlobalInfo {
+        size_bytes: size.bytes(), align_bytes: align.bytes(),
+        mutability: match mutable { rustc_ast::Mutability::Mut => "mutable", rustc_ast::Mutability::Not => "immutable" },
+        is_static: tcx.is_static(def), is_foreign_item: tcx.is_foreign_item(def), nested,
+        thread_local: tcx.is_thread_local_static(def),
+    }
 }
 
-fn scalar_pointer_json<'tcx>(
-    context: &mut ExportContext<'tcx>,
-    tcx: TyCtxt<'tcx>,
-    ty: rustc_middle::ty::Ty<'tcx>,
-    scalar: rustc_middle::mir::interpret::Scalar,
-) -> Result<Value, String> {
-    let pointer = scalar.to_pointer(&tcx.data_layout);
-    let (provenance, offset) = pointer.into_raw_parts();
-    Ok::<_, String>(match provenance {
-        Some(provenance) => {
-            let (alloc_id, immutable, shared_ref) = provenance.into_parts();
-            let allocation = allocation_ref(context, tcx, alloc_id)?;
-            json!({
-                "kind":"pointer_scalar",
-                "type":type_json(context,tcx,ty)?,
-                "allocation":allocation,
-                "offset_bytes":offset.bytes(),
-                "immutable":immutable,
-                "shared_ref":shared_ref,
-            })
-        }
-        None => json!({
-            "kind":"pointer_scalar_without_provenance",
-            "type":type_json(context,tcx,ty)?,
-            "address":offset.bytes().to_string(),
-            "address_width_bytes":tcx.data_layout.pointer_size().bytes(),
-        }),
+fn scalar_pointer_json<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,ty:ty::Ty<'tcx>,scalar:rustc_middle::mir::interpret::Scalar)->Result<pool_constant::Value,String>{
+    use pool_constant::Value as O;
+    let (provenance,offset)=scalar.to_pointer(&tcx.data_layout).into_raw_parts();
+    Ok(match provenance {
+        Some(p)=>{let (alloc_id,immutable,shared_ref)=p.into_parts();let allocation=allocation_ref(context,tcx,alloc_id)?;O::PointerScalar {ty:type_json(context,tcx,ty)?,allocation,offset_bytes:offset.bytes(),immutable,shared_ref}},
+        None=>O::PointerScalarWithoutProvenance {ty:type_json(context,tcx,ty)?,address:offset.bytes().to_string(),address_width_bytes:tcx.data_layout.pointer_size().bytes()},
     })
 }
 
@@ -5740,68 +5058,37 @@ fn allocation_ref<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     alloc_id: AllocId,
-) -> Result<Value, String> {
+) -> Result<u64, String> {
     let id = context.allocation_id(alloc_id);
-    if context.allocation_nodes.contains_key(&id)
+    if context.allocation_ids.definition(id).is_some()
         || context.allocations_in_progress.contains(&alloc_id)
     {
-        return Ok(json!({"allocation_id":id}));
+        return Ok(id);
     }
     context.allocations_in_progress.insert(alloc_id);
-    let mut node = match tcx.try_get_global_alloc(alloc_id) {
+    use allocation_values::{Allocation, AllocationData as A, VtableEntry as E};
+    let data = match tcx.try_get_global_alloc(alloc_id) {
         None => export_failure("main::allocation_ref", "missing_global_allocation")?,
         Some(GlobalAlloc::Memory(memory)) => {
-            let mut node = allocation_memory_payload(context, tcx, memory.inner())?;
-            let object = node.as_object_mut().expect("memory payload is an object");
-            object.insert("allocation_id".into(), json!(id));
-            object.insert("kind".into(), json!("memory"));
-            node
+            A::Memory { memory: allocation_memory_payload(context, tcx, memory.inner())? }
         }
         Some(GlobalAlloc::Function { instance }) => {
             context.fn_pointer_targets.insert(instance);
             let instance_id = context.register_instance(instance);
-            json!({
-                "allocation_id":id,
-                "kind":"function",
-                "instance_id":instance_id,
-                "instance_def_id":def_json(instance.def.def_id()),
-                "instance_def_path":tcx.def_path_str(instance.def.def_id()),
-                "generic_args":generic_args_json(context,tcx,instance.args)?,
-            })
+            A::Function { instance_id }
         }
         Some(GlobalAlloc::Static(def)) => {
             let global_info = static_global_info_json(tcx, def);
-            if tcx.is_foreign_item(def) {
-                // rustc has no initializer for an extern static. Preserve its
-                // compiler allocation identity and declaration metadata so
-                // Miri's extern_static_pointer resolver can produce the
-                // runtime pointer. Never ask eval_static_initializer here:
-                // that query ICEs for foreign DefIds on the pinned compiler.
-                json!({
-                    "allocation_id":id,
-                    "kind":"static",
-                    "def_id":def_json(def),
-                    "def_path":tcx.def_path_str(def),
-                    "thread_local":tcx.is_thread_local_static(def),
-                    "global_info":global_info,
-                })
+            let def_id = def_json(context, def);
+            let initializer = if tcx.is_foreign_item(def) {
+                // Foreign statics have no compiler initializer; querying one ICEs.
+                None
             } else {
-                match tcx.eval_static_initializer(def) {
-                    Ok(initializer) => json!({
-                        "allocation_id":id,
-                        "kind":"static",
-                        "def_id":def_json(def),
-                        "def_path":tcx.def_path_str(def),
-                        "thread_local":tcx.is_thread_local_static(def),
-                        "global_info":global_info,
-                        "initializer":allocation_memory_payload(context,tcx,initializer.inner())?,
-                    }),
-                    Err(error) => export_failure(
-                        "main::allocation_ref",
-                        format!("{}; {}", "static_initializer_error", format!("{error:?}")),
-                    )?,
-                }
-            }
+                Some(allocation_memory_payload(context, tcx,
+                    tcx.eval_static_initializer(def).map_err(|error| format!("static initializer: {error:?}"))?.inner())?)
+            };
+            A::Static { def_id,
+                def_path: tcx.def_path_str(def), thread_local: tcx.is_thread_local_static(def), global_info, initializer }
         }
         Some(GlobalAlloc::VTable(ty, predicates)) => {
             let route = if context
@@ -5838,7 +5125,7 @@ fn allocation_ref<'tcx>(
                         if ty.needs_drop(tcx, ty::TypingEnv::fully_monomorphized()) {
                             let instance = ty::Instance::resolve_drop_glue(tcx, ty);
                             let instance_id = context.register_instance(instance);
-                            json!({"kind":"drop_in_place","instance_id":instance_id})
+                            E::DropInPlace { instance_id }
                         } else {
                             let instance = ty::Instance::resolve_drop_glue(tcx, ty);
                             // The null vtable entry is not itself invoked as a
@@ -5849,36 +5136,29 @@ fn allocation_ref<'tcx>(
                             // other concrete vtable targets while preserving
                             // the source null slot representation below.
                             context.register_vtable_target(instance);
-                            json!({"kind":"drop_in_place_null"})
+                            E::DropInPlaceNull
                         }
                     }
                     ty::VtblEntry::MetadataSize => {
-                        json!({"kind":"size_bytes"})
+                        E::SizeBytes
                     }
                     ty::VtblEntry::MetadataAlign => {
-                        json!({"kind":"align_bytes"})
+                        E::AlignBytes
                     }
-                    ty::VtblEntry::Vacant => json!({"kind":"vacant"}),
+                    ty::VtblEntry::Vacant => E::Vacant,
                     ty::VtblEntry::Method(instance) => {
                         let instance_id = context.register_vtable_target(instance);
-                        json!({
-                            "kind":"method",
-                            "instance_id":instance_id,
-                            "def_id":def_json(instance.def.def_id()),
-                            "def_path":tcx.def_path_str(instance.def.def_id()),
-                            "generic_args":generic_args_json(context,tcx,instance.args)?,
-                        })
+                        E::Method { instance_id }
                     }
                     ty::VtblEntry::TraitVPtr(trait_ref) => {
                         let existential = ty::ExistentialTraitRef::erase_self_ty(tcx, trait_ref);
                         let vtable_alloc = tcx.vtable_allocation((ty, Some(existential)));
-                        json!({
-                            "kind":"supertrait_vtable_pointer",
-                            "trait_def_id":def_json(trait_ref.def_id),
-                            "trait_def_path":tcx.def_path_str(trait_ref.def_id),
-                            "generic_args":generic_args_json(context,tcx,trait_ref.args)?,
-                            "allocation":allocation_ref(context,tcx,vtable_alloc)?,
-                        })
+                        E::SupertraitVtablePointer {
+                            trait_def_id: def_json(context, trait_ref.def_id),
+                            trait_def_path: tcx.def_path_str(trait_ref.def_id),
+                            generic_args: generic_args_json(context, tcx, trait_ref.args)?,
+                            allocation: allocation_ref(context,tcx,vtable_alloc)?,
+                        }
                     }
                 }) }).collect::<Result<Vec<_>, String>>()?;
             let layout = tcx.layout_of(ty::TypingEnv::fully_monomorphized().as_query_input(ty));
@@ -5889,47 +5169,29 @@ fn allocation_ref<'tcx>(
                 ),
                 Err(error) => export_failure("vtable layout", format!("{error:?}"))?,
             };
-            json!({
-                "allocation_id":id,
-                "kind":"vtable",
-                "type":type_json(context,tcx,ty)?,
-                "size_bytes":size_bytes,
-                "align_bytes":align_bytes,
-                "predicates":predicate_json,
-                "principal_predicate":predicates.principal().map(|p|Ok::<_, String>({ existential_predicate_json(context,tcx,p.map_bound(ty::ExistentialPredicate::Trait))? })).transpose()?,
-                "entries":entry_json,
-            })
+            A::Vtable {
+                ty: type_json(context, tcx, ty)?,
+                size_bytes: size_bytes.expect("vtable layout"), align_bytes: align_bytes.expect("vtable layout"),
+                predicates: predicate_json,
+                principal_predicate: predicates.principal().map(|p| existential_predicate_json(context,tcx,p.map_bound(ty::ExistentialPredicate::Trait))).transpose()?,
+                entries: entry_json,
+            }
         }
-        Some(GlobalAlloc::TypeId { ty }) => json!({
-            "allocation_id":id,
-            "kind":"type_id",
-            "type":type_json(context,tcx,ty)?,
-        }),
+        Some(GlobalAlloc::TypeId { ty }) => A::TypeId { ty: type_json(context,tcx,ty)? },
     };
-    // Preserve rustc's actual `AllocId.0.get()` independently of the
-    // compilation-local graph ID. Consumers may use this only as source
-    // identity evidence; it is not stable across compilations and must never
-    // be reconstructed from `id`.
-    if let Some(object) = node.as_object_mut() {
-        object.insert("source_alloc_id".into(), json!(alloc_id.0.get()));
-    }
+    let node = Allocation { allocation_id: id, source_alloc_id: alloc_id.0.get(), data };
     context.allocations_in_progress.remove(&alloc_id);
-    context.allocation_nodes.insert(id, node);
-    Ok::<_, String>(json!({"allocation_id":id}))
+    context.allocation_ids.define(id as usize, node);
+    Ok(id)
 }
 
-fn bound_variable_json(tcx: TyCtxt<'_>, kind: ty::BoundVariableKind<'_>) -> Value {
+fn bound_variable_json(context: &mut ExportContext<'_>, tcx: TyCtxt<'_>, kind: ty::BoundVariableKind<'_>) -> pool_values::BoundVariable {
+    use pool_values::{BoundVariable as O, BoundTypeKind as T};
     match kind {
-        ty::BoundVariableKind::Ty(ty::BoundTyKind::Anon) => {
-            json!({"kind":"type","type_kind":{"kind":"anonymous"}})
-        }
-        ty::BoundVariableKind::Ty(ty::BoundTyKind::Param(def)) => {
-            json!({"kind":"type","type_kind":{"kind":"parameter","def_id":def_json(def)}})
-        }
-        ty::BoundVariableKind::Region(region) => {
-            json!({"kind":"region","region_kind":bound_region_kind_json(tcx,region)})
-        }
-        ty::BoundVariableKind::Const => json!({"kind":"const"}),
+        ty::BoundVariableKind::Ty(ty::BoundTyKind::Anon)=>O::Type {type_kind:T::Anonymous},
+        ty::BoundVariableKind::Ty(ty::BoundTyKind::Param(def))=>O::Type {type_kind:T::Parameter {def_id:def_json(context,def)}},
+        ty::BoundVariableKind::Region(region)=>O::Region {region_kind:bound_region_kind_json(context,tcx,region)},
+        ty::BoundVariableKind::Const=>O::Const,
     }
 }
 
@@ -5937,24 +5199,19 @@ fn existential_predicate_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     predicate: ty::PolyExistentialPredicate<'tcx>,
-) -> Result<Value, String> {
+) -> Result<u64, String> {
     let id = context.predicate_id(predicate);
-    let mut payload = existential_predicate_payload_json(context, tcx, predicate)?;
-    let obj = payload
-        .as_object_mut()
-        .expect("predicate payload is object");
-    obj.insert("predicate_id".into(), json!(id));
-    obj.insert(
-        "bound_variables".into(),
-        json!(
-            predicate
-                .bound_vars()
-                .iter()
-                .map(|bound| bound_variable_json(tcx, bound))
-                .collect::<Vec<_>>()
-        ),
-    );
-    Ok::<_, String>(payload)
+    if context.predicate_ids.definition(id).is_some() || context.predicates_in_progress.contains(&predicate) {
+        return Ok(id);
+    }
+    context.predicates_in_progress.insert(predicate);
+    let payload = allocation_values::Predicate {
+        data: existential_predicate_payload_json(context, tcx, predicate)?,
+        bound_variables: predicate.bound_vars().iter().map(|bound| bound_variable_json(context, tcx, bound)).collect(),
+    };
+    context.predicates_in_progress.remove(&predicate);
+    context.predicate_ids.define(id as usize, payload);
+    Ok(id)
 }
 
 // Source interpret/traits.rs::check_vtable_for_type sorts skip_binder values,
@@ -6020,37 +5277,21 @@ fn existential_predicate_payload_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     predicate: ty::PolyExistentialPredicate<'tcx>,
-) -> Result<Value, String> {
-    Ok::<_, String>(match predicate.skip_binder() {
-        ty::ExistentialPredicate::Trait(trait_ref) => json!({
-            "kind":"trait",
-            "def_id":def_json(trait_ref.def_id),
-            "def_path":tcx.def_path_str(trait_ref.def_id),
-            "generic_args":generic_args_json(context,tcx,trait_ref.args)?,
-        }),
-        ty::ExistentialPredicate::AutoTrait(def) => json!({
-            "kind":"auto_trait",
-            "def_id":def_json(def),
-            "def_path":tcx.def_path_str(def),
-        }),
+) -> Result<allocation_values::PredicateData, String> {
+    use allocation_values::{PredicateData as P, ProjectionTerm};
+    Ok(match predicate.skip_binder() {
+        ty::ExistentialPredicate::Trait(trait_ref) => P::Trait {
+            def_id: def_json(context, trait_ref.def_id), def_path: tcx.def_path_str(trait_ref.def_id),
+            generic_args: generic_args_json(context,tcx,trait_ref.args)?,
+        },
+        ty::ExistentialPredicate::AutoTrait(def) => P::AutoTrait { def_id: def_json(context, def), def_path: tcx.def_path_str(def) },
         ty::ExistentialPredicate::Projection(projection) => {
             let term = match projection.term.kind() {
-                ty::TermKind::Ty(value) => json!({
-                    "kind":"type",
-                    "value":type_json(context,tcx,value)?,
-                }),
-                ty::TermKind::Const(value) => export_failure(
-                    "existential projection",
-                    format!("constant projection is not implemented: {value:?}"),
-                )?,
+                ty::TermKind::Ty(value) => ProjectionTerm::Type(type_json(context,tcx,value)?),
+                ty::TermKind::Const(value) => return export_failure("existential projection", format!("constant projection is not implemented: {value:?}")),
             };
-                    json!({
-                "kind":"projection",
-                "def_id":def_json(projection.def_id),
-                "def_path":tcx.def_path_str(projection.def_id),
-                "generic_args":generic_args_json(context,tcx,projection.args)?,
-                "term":term,
-            })
+            P::Projection { def_id: def_json(context, projection.def_id), def_path: tcx.def_path_str(projection.def_id),
+                generic_args: generic_args_json(context,tcx,projection.args)?, term }
         }
     })
 }
@@ -6059,7 +5300,7 @@ fn allocation_memory_payload<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     allocation: &rustc_middle::mir::interpret::Allocation,
-) -> Result<Value, String> {
+) -> Result<allocation_values::Memory, String> {
     let bytes = allocation.inspect_with_uninit_and_ptr_outside_interpreter(0..allocation.len());
     let initialized_ranges = allocation
         .init_mask()
@@ -6068,11 +5309,10 @@ fn allocation_memory_payload<'tcx>(
         ))
         .map(|chunk| {
             let range = chunk.range();
-            json!({
-                "state": if chunk.is_init() { "initialized" } else { "uninitialized" },
-                "start_bytes": range.start.bytes(),
-                "end_bytes_exclusive": range.end.bytes(),
-            })
+            allocation_values::InitializationRange {
+                state: if chunk.is_init() { "initialized" } else { "uninitialized" },
+                start_bytes: range.start.bytes(), end_bytes_exclusive: range.end.bytes(),
+            }
         })
         .collect::<Vec<_>>();
     let pointer_size = tcx.data_layout.pointer_size().bytes_usize();
@@ -6085,27 +5325,20 @@ fn allocation_memory_payload<'tcx>(
             let end = start + pointer_size;
             let (target_alloc, immutable, shared_ref) = provenance.into_parts();
             let target = allocation_ref(context, tcx, target_alloc)?;
-            Ok::<_, String>(json!({
-                "storage_offset_bytes": offset.bytes(),
-                "target": target,
-                "target_offset_encoded_bytes": bytes_hex(&bytes[start..end]),
-                "immutable": immutable,
-                "shared_ref": shared_ref,
-            }))
+            Ok::<_, String>(allocation_values::Relocation {
+                storage_offset_bytes: offset.bytes(), target,
+                target_offset_encoded_bytes: bytes_hex(&bytes[start..end]), immutable, shared_ref,
+            })
         })
         .collect::<Result<Vec<_>, String>>()?;
     let mutability = match allocation.mutability {
         rustc_ast::Mutability::Mut => "mutable",
         rustc_ast::Mutability::Not => "immutable",
     };
-    Ok::<_, String>(json!({
-        "size_bytes":allocation.size().bytes(),
-        "align_bytes":allocation.align.bytes(),
-        "mutability":mutability,
-        "bytes_hex":bytes_hex(bytes),
-        "initialization_ranges":initialized_ranges,
-        "relocations":relocations,
-    }))
+    Ok(allocation_values::Memory {
+        size_bytes: allocation.size().bytes(), align_bytes: allocation.align.bytes(), mutability,
+        bytes_hex: bytes_hex(bytes), initialization_ranges: initialized_ranges, relocations,
+    })
 }
 
 fn bytes_hex(bytes: &[u8]) -> String {
@@ -6164,9 +5397,7 @@ fn compiler_runtime_type_queries_json<'tcx>(
                 } else {
                     context.register_instance(instance)
                 };
-                compiler_fact(json!({"instance_id":instance_id,
-                    "instance_kind":instance_kind_json(context,tcx,instance.def)?,
-                    "generic_args":generic_args_json(context,tcx,instance.args)?}))
+                compiler_fact(json!(instance_id))
             }
             _=>unavailable_compiler_fact("drop glue requires normalized monomorphic type and drop_in_place lang item")?,
         }) };
@@ -6329,9 +5560,7 @@ fn compiler_runtime_virtual_queries_json<'tcx>(
                             register_virtual_call_transfers(
                                 context, tcx, original, concrete, instance,
                             )?;
-                            compiler_fact(json!({"instance_id":id,
-                                "instance_kind":instance_kind_json(context,tcx,instance.def)?,
-                                "generic_args":generic_args_json(context,tcx,instance.args)?}))
+                            compiler_fact(json!(id))
                         }
                     }
                     Ok(None) => unavailable_compiler_fact(
@@ -6353,8 +5582,7 @@ fn compiler_runtime_virtual_queries_json<'tcx>(
             };
             virtual_queries.push(json!({"typing_env":"fully_monomorphized",
                 "original_instance_id":original_instance_id,
-                "original":{"instance_kind":instance_kind_json(context,tcx,original.def)?,"generic_args":generic_args_json(context,tcx,original.args)?},
-                "method_definition":def_json(def),"parent_trait":def_json(parent),
+                "method_definition":def_json(context, def),"parent_trait":def_json(context, parent),
                 "concrete_type":input_type,
                 "rebased_args":generic_args_json(context,tcx,rebound)?,"resolved":resolved,
                 "vtable_query":{"input_type":type_json(context,tcx,concrete)?,
@@ -6423,8 +5651,7 @@ fn compiler_caller_location_queries_json<'tcx>(
     let mut records = Vec::new();
     for (id, instance) in instances {
         let mut row = json!({
-            "instance_id":id,"instance_kind":instance_kind_json(context,tcx,instance.def)?,
-            "generic_args":generic_args_json(context,tcx,instance.args)?,
+            "instance_id":id,
             "requires_caller_location":instance.def.requires_caller_location(tcx),
             "display":instance.to_string(),
             "inline_never":matches!(tcx.codegen_instance_attrs(instance.def).inline,rustc_attr_ir::InlineAttr::Never),
@@ -6491,7 +5718,9 @@ fn compiler_instance_abis_json<'tcx>(
 ) -> Result<Value, String> {
     let mut requests = context.instance_abi_requests.clone();
     for instance in context.instance_ids.keys() {
-        if context.runtime_query_only_empty_drops.contains(instance) {
+        if context.runtime_query_only_empty_drops.contains(instance)
+            || context.metadata_only_instances.contains(instance)
+        {
             continue;
         }
         // A VTable shim can be registered merely by serializing a vtable
@@ -6555,15 +5784,10 @@ fn compiler_instance_abis_json<'tcx>(
                 Ok(abi)=>compiler_fact(fn_abi_json(context,tcx,abi)?),
             Err(error)=>export_failure("main::compiler_instance_abis_json", format!("{}; {}", "rustc fn_abi_of_instance failed", format!("{error:?}")))?,
         }};
-        let mut record=json!({"typing_env":"fully_monomorphized",
-            "instance_kind":instance_kind_json(context,tcx,instance.def)?,
-            "generic_args":generic_args_json(context,tcx,instance.args)?,
+        let record=json!({"typing_env":"fully_monomorphized",
+            "instance_id":context.register_metadata_instance(instance),
             "extra_argument_types":extra.iter().map(|ty|Ok::<_, String>({ type_json(context,tcx,ty)? })).collect::<Result<Vec<_>, String>>()?,
             "abi_query":abi});
-        // Intrinsic fallback Item ABI keys need not have a separately emitted
-        // instance-MIR graph node. Omit that optional graph reference, retaining
-        // the complete actual instance key; null is not a valid instance ID.
-        if let Some(id)=context.instance_ids.get(&instance){record["instance_id"]=json!(id);}
         Ok::<_, String>(record)
     } }).collect::<Result<Vec<_>, String>>()?;
     Ok::<_, String>(Value::Array(records))
@@ -6572,7 +5796,7 @@ fn compiler_instance_abis_json<'tcx>(
 // backtrace.rs::handle_miri_get_backtrace and resolve_frame_pointer. The table
 // covers compiler-produced frame positions only. Forged/unseen byte positions
 // require additional source-map evidence; consumers must never guess a line.
-fn backtrace_spans_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, body: &rustc_middle::mir::Body<'tcx>) -> Value {
+fn backtrace_spans_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, body: &rustc_middle::mir::Body<'tcx>) -> Vec<pool_body::BacktraceSpan> {
     let mut spans = vec![body.span, tcx.def_span(body.source.def_id())];
     for local in body.local_decls.iter() {
         spans.push(local.source_info.span);
@@ -6592,51 +5816,36 @@ fn backtrace_spans_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tc
         .map(|span| {
             let collapsed = rustc_span::hygiene::walk_chain_collapsed(span, body.span);
             let position = tcx.sess.source_map().lookup_char_pos(collapsed.lo());
-            json!({"span":span_json(context, tcx,span),"collapsed_lo":collapsed.lo().0,
-            "source_position":{"byte_position":collapsed.lo().0,"line":position.line,
-                "zero_based_char_column":position.col.0,
-                "filename":position.file.name.prefer_remapped_unconditionally().to_string()}})
+            pool_body::BacktraceSpan {
+                span: span_json(context, tcx, span),
+                collapsed_lo: collapsed.lo().0,
+                source_position: pool_body::SourcePosition {
+                    byte_position: collapsed.lo().0, line: position.line,
+                    zero_based_char_column: position.col.0,
+                    filename: position.file.name.prefer_remapped_unconditionally().to_string(),
+                },
+            }
         })
         .collect::<Vec<_>>();
-    Value::Array(records)
+    records
 }
 
 // stack.rs::push_stack_frame post-monomorphization required constant checks.
 // Retain exact source order, normalized constants and eval query results.
-fn required_constant_checks_json<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    body: &rustc_middle::mir::Body<'tcx>,
-    instance: ty::Instance<'tcx>,
-    already_instantiated: bool,
-    context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
-    let Some(required) = body.required_consts.as_ref() else {
-        return unavailable_compiler_fact(
-            "compiler body has no required_consts list; absence does not establish an empty list",
-        );
-    };
-    let checks=required.iter().enumerate().map(|(index,operand)|{ {
+fn required_constant_checks_json<'tcx>(tcx:TyCtxt<'tcx>,body:&rustc_middle::mir::Body<'tcx>,instance:ty::Instance<'tcx>,already_instantiated:bool,context:&mut ExportContext<'tcx>)->Result<pool_constant::RequiredConstantChecks,String>{
+    use pool_constant::{RequiredConstantChecks as Checks,RequiredConstantCheck as Check,RequiredConstantResult as ResultValue};
+    let required=body.required_consts.as_ref().ok_or_else(||"main::required_constant_checks_json: compiler body has no required_consts list; absence does not establish an empty list".to_owned())?;
+    let checks=required.iter().enumerate().map(|(index,operand)|{
         let environment=body.typing_env(tcx);
-        let free_caller=already_instantiated && instance.def.has_polymorphic_mir_body()
-            && (operand.const_.has_non_region_param() || operand.const_.has_escaping_bound_vars()
-                || operand.const_.has_infer() || operand.const_.has_placeholders());
-        let result=if free_caller {
-            unavailable_compiler_fact("already substituted required constant retains caller parameters; complete caller environment required")?
-        }else{match instance.try_instantiate_mir_and_normalize_erasing_regions(tcx,environment,
-                ty::EarlyBinder::bind(tcx,operand.const_)) {
-            Err(error)=>export_failure("main::required_constant_checks_json", format!("{}; {}", "required_const_normalization_error", format!("{error:?}")))?,
-            Ok(normalized)=>{
-                let mut normalized_operand=operand.clone(); normalized_operand.const_=normalized;
-                match normalized.eval(tcx,environment,operand.span) {
-                    Ok(value)=>json!({"normalized_operand":const_operand_json(context,tcx,body,&normalized_operand)?,
-                        "value":const_value_json(context,tcx,normalized.ty(),value)?}),
-                    Err(error)=>export_failure("main::required_constant_checks_json", format!("{}; {}", "required_const_evaluation_error", format!("{error:?}")))?,
-                }
-            }
-        }};
-        Ok::<_, String>(json!({"index":index,"span":span_json(context, tcx,operand.span),"result":result}))
-    } }).collect::<Result<Vec<_>, String>>()?;
-    Ok::<_, String>(json!({"typing_env":"body_typing_env","checks":checks}))
+        let free_caller=already_instantiated && instance.def.has_polymorphic_mir_body() && (operand.const_.has_non_region_param() || operand.const_.has_escaping_bound_vars() || operand.const_.has_infer() || operand.const_.has_placeholders());
+        if free_caller {return export_failure("main::required_constant_checks_json","already substituted required constant retains caller parameters; complete caller environment required");}
+        let normalized=instance.try_instantiate_mir_and_normalize_erasing_regions(tcx,environment,ty::EarlyBinder::bind(tcx,operand.const_)).map_err(|e|format!("main::required_constant_checks_json: required_const_normalization_error; {e:?}"))?;
+        let mut normalized_operand=operand.clone();normalized_operand.const_=normalized;
+        let value=normalized.eval(tcx,environment,operand.span).map_err(|e|format!("main::required_constant_checks_json: required_const_evaluation_error; {e:?}"))?;
+        let result=ResultValue {normalized_operand:const_operand_json(context,tcx,body,&normalized_operand)?,value:const_value_json(context,tcx,normalized.ty(),value)?};
+        Ok(Check {index,span:span_json(context,tcx,operand.span),result})
+    }).collect::<Result<Vec<_>,String>>()?;
+    Ok(Checks {typing_env:"body_typing_env",checks})
 }
 
 // interpret/discriminant.rs and Ty::{discriminant_ty,discriminant_for_variant}.
@@ -6644,7 +5853,7 @@ fn discriminant_facts_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     input: ty::Ty<'tcx>,
-) -> Result<Value, String> {
+) -> Result<pool_type::Discriminants, String> {
     use rustc_middle::ty::CoroutineArgsExt;
     let (values, count) = match input.kind() {
         ty::Adt(def, _) => {
@@ -6657,7 +5866,8 @@ fn discriminant_facts_json<'tcx>(
         }
         ty::Coroutine(def, args) => {
             if tcx.coroutine_layout(*def, args).is_err() {
-                return unavailable_compiler_fact(
+                return export_failure(
+                    "discriminants",
                     "compiler coroutine layout unavailable for discriminant range",
                 );
             }
@@ -6679,31 +5889,41 @@ fn discriminant_facts_json<'tcx>(
         }
         _ => (None, None),
     };
-    Ok::<_, String>(compiler_fact(
-        json!({"has_discriminants":values.is_some(),"adt_variant_count":count,
-        "values":values.unwrap_or_default().into_iter().map(|(index,discriminant)|Ok::<_, String>({ json!({
-            "variant":index.as_u32(),"type":type_json(context,tcx,discriminant.ty)?,
-            "bits":discriminant.val.to_string()}) })).collect::<Result<Vec<_>, String>>()?}),
-    ))
+    Ok(pool_type::Discriminants {
+        has_discriminants: values.is_some(),
+        adt_variant_count: count,
+        values: values
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(index, d)| {
+                Ok(pool_type::Discriminant {
+                    variant: index.as_u32(),
+                    ty: type_json(context, tcx, d.ty)?,
+                    bits: d.val.to_string(),
+                })
+            })
+            .collect::<Result<_, String>>()?,
+    })
 }
 
 fn discriminant_type_fact_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     input: ty::Ty<'tcx>,
-) -> Result<Value, String> {
+) -> Result<u64, String> {
     Ok::<_, String>(match input.kind() {
         ty::UnsafeBinder(bound) => {
             let inner = tcx.instantiate_bound_regions_with_erased((*bound).into());
             if inner.has_escaping_bound_vars() || inner.has_non_region_param() {
-                return unavailable_compiler_fact(
+                return export_failure(
+                    "discriminant type",
                     "unsafe-binder discriminant query retains bound type/const variables",
                 );
             }
             discriminant_type_fact_json(context, tcx, inner)?
         }
         ty::Pat(base, _) => discriminant_type_fact_json(context, tcx, *base)?,
-        _ => compiler_fact(type_json(context, tcx, input.discriminant_ty(tcx))?),
+        _ => type_json(context, tcx, input.discriminant_ty(tcx))?,
     })
 }
 
@@ -6744,9 +5964,7 @@ fn compiler_vtable_metadata_json<'tcx>(
         ty::VtblEntry::Vacant=>json!({"kind":"vacant"}),
         ty::VtblEntry::Method(instance)=>{
             let instance_id=context.register_vtable_target(instance);
-            json!({"kind":"method","instance_id":instance_id,
-                "def_id":def_json(instance.def.def_id()),"def_path":tcx.def_path_str(instance.def.def_id()),
-                "generic_args":generic_args_json(context,tcx,instance.args)?})
+            json!({"kind":"method","instance_id":instance_id})
         },
         ty::VtblEntry::TraitVPtr(trait_ref)=>{
             let existential=ty::ExistentialTraitRef::erase_self_ty(tcx,trait_ref);
@@ -6765,7 +5983,7 @@ fn compiler_vtable_metadata_json<'tcx>(
             context.vtable_diagnostics.record((input, child_predicates), "trait_vptr",
                 Some((input, predicates)), None);
             json!({"kind":"supertrait_vtable_pointer",
-                "trait_def_id":def_json(trait_ref.def_id),"trait_def_path":tcx.def_path_str(trait_ref.def_id),
+                "trait_def_id":def_json(context, trait_ref.def_id),"trait_def_path":tcx.def_path_str(trait_ref.def_id),
                 "generic_args":generic_args_json(context,tcx,trait_ref.args)?,
                 "allocation":allocation_ref(context,tcx,allocation)?})
         },
@@ -7141,7 +6359,7 @@ fn compiler_function_facts_json<'tcx>(
             let kind = match *input.kind() {
                 ty::FnPtr(..) => json!({"kind":"function_pointer"}),
                 ty::FnDef(def, args) => {
-                    json!({"kind":"function_definition","instance_kind":instance_kind_json(context,tcx,ty::InstanceKind::Item(def))?,"generic_args":generic_args_json(context,tcx,args.skip_binder())?})
+                    json!({"kind":"function_definition","instance_id":context.register_metadata_instance(ty::Instance {def:ty::InstanceKind::Item(def),args:args.skip_binder()})})
                 }
                 _ => unreachable!(),
             };
@@ -7265,4 +6483,72 @@ fn compiler_function_facts_json<'tcx>(
     Ok::<_, String>(
         json!({"types":records,"pointer_abis":abis,"helper_signatures":helper_signatures}),
     )
+}
+
+#[cfg(test)]
+mod instance_demand_tests {
+    use super::*;
+
+    fn item() -> ty::Instance<'static> {
+        ty::Instance {
+            def: ty::InstanceKind::Item(rustc_hir::def_id::DefId {
+                krate: rustc_hir::def_id::LOCAL_CRATE,
+                index: rustc_hir::def_id::DefIndex::from_u32(0),
+            }),
+            args: ty::List::empty(),
+        }
+    }
+
+    #[test]
+    fn metadata_and_symbol_discovery_orders_preserve_the_same_query_demands() {
+        let instance = item();
+        let mut metadata_first = ExportContext::default();
+        let id = metadata_first.register_metadata_instance(instance);
+        assert_eq!(metadata_first.register_metadata_instance(instance), id);
+        assert!(metadata_first.metadata_only_instances.contains(&instance));
+        assert_eq!(metadata_first.register_instance_identity(instance), id);
+
+        let mut symbol_first = ExportContext::default();
+        assert_eq!(symbol_first.register_instance_identity(instance), id);
+        assert_eq!(symbol_first.register_metadata_instance(instance), id);
+        assert_eq!(symbol_first.register_metadata_instance(instance), id);
+
+        assert_eq!(metadata_first.instance_ids.iter().collect::<HashMap<_, _>>(), symbol_first.instance_ids.iter().collect::<HashMap<_, _>>());
+        assert_eq!(metadata_first.metadata_only_instances, symbol_first.metadata_only_instances);
+        assert_eq!(metadata_first.symbol_only_instances, symbol_first.symbol_only_instances);
+        assert_eq!(metadata_first.identity_membership_delta, symbol_first.identity_membership_delta);
+        assert!(!metadata_first.metadata_only_instances.contains(&instance));
+        assert!(metadata_first.symbol_only_instances.contains(&instance));
+        assert!(metadata_first.pending_instances.is_empty());
+    }
+
+    #[test]
+    fn symbol_and_real_upgrades_signal_fixpoint_changes_without_allocating_another_id() {
+        let instance = item();
+        let mut context = ExportContext::default();
+        let id = context.register_metadata_instance(instance);
+        context.identity_membership_delta.clear();
+        assert_eq!(context.register_instance_identity(instance), id);
+        assert!(context.identity_membership_delta.contains(&(IdentityMembershipSet::MetadataOnly, instance)));
+        assert!(context.pending_instances.is_empty());
+        context.identity_membership_delta.clear();
+        assert_eq!(context.register_instance(instance), id);
+        assert!(!context.symbol_only_instances.contains(&instance));
+        assert!(context.identity_membership_delta.contains(&(IdentityMembershipSet::SymbolOnly, instance)));
+        assert_eq!(context.pending_instances, vec![instance]);
+        context.identity_membership_delta.clear();
+        assert_eq!(context.register_metadata_instance(instance), id);
+        assert_eq!(context.register_instance_identity(instance), id);
+        assert!(context.identity_membership_delta.is_empty());
+        assert!(!context.metadata_only_instances.contains(&instance));
+        assert!(!context.symbol_only_instances.contains(&instance));
+        assert_eq!(context.instance_ids.len(), 1);
+
+        let mut direct = ExportContext::default();
+        direct.register_metadata_instance(instance);
+        direct.identity_membership_delta.clear();
+        assert_eq!(direct.register_instance(instance), id);
+        assert!(direct.identity_membership_delta.contains(&(IdentityMembershipSet::MetadataOnly, instance)));
+        assert!(direct.identity_membership_delta.contains(&(IdentityMembershipSet::SymbolOnly, instance)));
+    }
 }

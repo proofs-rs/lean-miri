@@ -24,13 +24,13 @@ structure Leaves (S C : Type) where
   validateImmediateABI : Immediate Provenance → LayoutData → Except StepError Unit
   fieldLayout : C → TyAndLayout TyId → Nat → RvalueM S (TyAndLayout TyId)
   lockstepTails : C → TyId → TyId → RvalueM S (TyId × TyId)
-  vtableType : C → Pointer (Option Provenance) → Option Nat → RvalueM S TyId
-  vtablePointer : C → TyId → Nat → RvalueM S (Pointer (Option Provenance))
-  principal : C → Nat → RvalueM S (Option Nat)
+  vtableType : C → Pointer (Option Provenance) → Option PredicateList → RvalueM S TyId
+  vtablePointer : C → TyId → PredicateList → RvalueM S (Pointer (Option Provenance))
+  principal : C → PredicateList → RvalueM S (Option Nat)
   vtableEntries : C → Option Nat → TyId → RvalueM S (Array (VTableEntry CallInstance))
   supertraitSlot : C → TyId → TyId → RvalueM S (Option Nat)
   eraseSelfTraitRef : C → Nat → RvalueM S Nat
-  normalizePrincipal : C → Nat → RvalueM S (Option Nat)
+  normalizePrincipal : C → PredicateList → RvalueM S (Option Nat)
 
 def Leaves.ofHooks (h : CastHooks Provenance S C V) : Leaves S C where
   typeInfo := h.typeInfo

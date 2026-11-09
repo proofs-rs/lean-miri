@@ -29,8 +29,8 @@ private def buildCovariance (raw : Json) : CovarianceData := Id.run do
   while index < entries.size && firstRowError.isNone do
     let some entry := entries[index]? | return { headerError := some "covariance row index invariant" }
     let key ← match do
-        let source ← (← entry.getObjVal? "source_type").getObjValAs? Nat "type_id"
-        let target ← (← entry.getObjVal? "target_type").getObjValAs? Nat "type_id"
+        let source ← (← entry.getObjVal? "source_type").getNat?
+        let target ← (← entry.getObjVal? "target_type").getNat?
         pure (covarianceKey source target) with
       | .ok key => pure key
       | .error error =>
@@ -50,7 +50,7 @@ def covariance (raw : Json) : Covariance raw := ⟨buildCovariance raw, rfl⟩
 
 private def functionType (runtime : RuntimeMetadata) (knownTypes : Std.HashSet Nat)
     (source : Json) : Except String Nat := do
-  let id ← source.getObjValAs? Nat "type_id"
+  let id ← source.getNat?
   unless knownTypes.contains id do
     let _ ← runtime.node id |>.mapError toString
   pure id
@@ -82,27 +82,22 @@ private def parseSignatureKey (runtime : RuntimeMetadata) (knownTypes : Std.Hash
   let splatted ← record.getObjValAs? Bool "splatted"
   pure (signatureKey inputs output abi safety variadic splatted)
 
-/-- A helper-signature row's raw query value and its demand-time ABI result.
+/-- A helper-signature row's raw query value and typed ABI table reference.
 The `Except`s retain malformed/unsupported row outcomes without making an
 unused query fail during index construction. -/
 structure SignatureAbiRow where
   index : Nat
   record : Json
   abiQuery : Except String Json
-  parsedAbi : Except String (FnAbi MIR.TyId)
+  abiId : Except String Nat
 
 structure SignatureAbiData where
   headerError : Option String := none
   firstRowError : Option (Nat × String) := none
   rows : Std.HashMap String (Array SignatureAbiRow) := {}
 
-private def parseSignatureAbiResult (runtime : RuntimeMetadata)
-    (abiCache : Option (CallResolution.FunctionAbiCache runtime)) (result : Json) :
-    Except String (FnAbi MIR.TyId) := do
-  CallResolution.functionAbiJson runtime result abiCache
-
 private def buildSignatureAbi (runtime : RuntimeMetadata)
-    (abiCache : Option (CallResolution.FunctionAbiCache runtime)) (raw : Json) : SignatureAbiData := Id.run do
+    (raw : Json) : SignatureAbiData := Id.run do
   let records ← match do
       let facts ← raw.getObjVal? "compiler_function_facts"
       let signatures ← facts.getObjVal? "helper_signatures"
@@ -119,8 +114,8 @@ private def buildSignatureAbi (runtime : RuntimeMetadata)
     match parseSignatureKey runtime knownTypes record with
     | .ok key =>
       let abiQuery := record.getObjVal? "abi_query"
-      let parsedAbi := abiQuery.bind (parseSignatureAbiResult runtime abiCache)
-      let row : SignatureAbiRow := ⟨index,record,abiQuery,parsedAbi⟩
+      let abiId := abiQuery.bind Json.getNat?
+      let row : SignatureAbiRow := ⟨index,record,abiQuery,abiId⟩
       rows := rows.insert key ((rows.getD key #[]).push row)
     | .error error => firstRowError := some (index,error)
     index := index + 1
@@ -128,13 +123,11 @@ private def buildSignatureAbi (runtime : RuntimeMetadata)
 
 structure SignatureAbi (runtime : RuntimeMetadata) (raw : Json) where
   private mk ::
-  abiCache : Option (CallResolution.FunctionAbiCache runtime)
   data : SignatureAbiData
-  exact : data = buildSignatureAbi runtime abiCache raw
+  exact : data = buildSignatureAbi runtime raw
 
-def signatureAbi (runtime : RuntimeMetadata) (raw : Json)
-    (abiCache : Option (CallResolution.FunctionAbiCache runtime) := none) : SignatureAbi runtime raw :=
-  ⟨abiCache,buildSignatureAbi runtime abiCache raw,rfl⟩
+def signatureAbi (runtime : RuntimeMetadata) (raw : Json) : SignatureAbi runtime raw :=
+  ⟨buildSignatureAbi runtime raw,rfl⟩
 
 def covarianceRows {raw : Json} (index : Covariance raw) (source target : Nat) : Array (Nat × Json) :=
   index.data.rows.getD (covarianceKey source target) #[]
@@ -143,7 +136,7 @@ def signatureRows {runtime : RuntimeMetadata} {raw : Json}
     (index : SignatureAbi runtime raw) (key : String) : Array (Nat × Json) :=
   (index.data.rows.getD key #[]).map fun row => (row.index,row.record)
 
-/-- Internal query path selecting predecoded ABI outcomes while retaining each
+/-- Internal query path selecting ABI references while retaining each
 source row's index and raw record for exact duplicate checks. -/
 def signatureAbiRows {runtime : RuntimeMetadata} {raw : Json}
     (index : SignatureAbi runtime raw) (key : String) : Array SignatureAbiRow :=

@@ -25,8 +25,9 @@ def main (args : List String) : IO Unit := do
   let doc ← must (decodeJson (← IO.FS.readFile path))
   let runtime ← must ((RuntimeMetadata.ofDocument doc.document).mapError toString)
   let program ← must (lowerProgram doc.document)
-  let fnInstance : CallInstance := ⟨.Item (← must (program.rootDefinitionId 0)), #[]⟩
-  let some ty := doc.document.types.find? (fun t => t.layout.sizeBytes == some 8 && (t.shapeKind == .reference || t.shapeKind == .rawPointer))
+  let some root := program.input.bodyRoots[0]? | throw (IO.userError "canonical root instance missing")
+  let fnInstance : CallInstance := root.entryInstance
+  let some ty := doc.document.types.find? (fun t => ((doc.document.layouts[t.layoutId]?).bind (·.sizeBytes)) == some 8 && (t.shapeKind == .reference || t.shapeKind == .rawPointer))
     | throw (IO.userError "fixture lacks pointer layout")
   let makeState (tls foreign : Bool) : Except String (ConstantState CtfeProvenance Unit Unit (Array String)) := do
     let initial : MemoryState CtfeProvenance Unit Unit := { MemoryState.empty with nextAllocId := 100 }

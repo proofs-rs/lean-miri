@@ -7,7 +7,7 @@ and bound-region erasure, with no normalization or FnAbi reconstruction. -/
 namespace Miri.Input.CompilerNativeSignatures
 open Lean Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
 private def typeRef (p : CompilerProviders.Prepared) (value : Json) : Except String TyId := do
-  let id ← value.getObjValAs? Nat "type_id"
+  let id ← value.getNat?
   let _ ← p.runtime.node id |>.mapError toString
   pure id
 
@@ -46,8 +46,7 @@ private def lift (value : Except String A) : EStateM StepError S A :=
 
 /-- Imported compiler functions resolve through their actual image identity;
 dynamic reservations resolve through the canonical full-instance registry. -/
-private def makeUsing (p : CompilerProviders.Prepared)
-    (lookup : CompilerVTableRuntime.GlobalLookup p.lifecycle.calls.symbols)
+def make (p : CompilerProviders.Prepared)
     (image : AllocationImage.Imported)
     (arrays : RuntimeArrayQueries.Access (MachineAddress.State K U))
     (registry : PointerMachine.User U → FunctionPointers.Registry Other) :
@@ -56,7 +55,7 @@ private def makeUsing (p : CompilerProviders.Prepared)
   functionSignature := fun _ id => do
     let machine ← get
     let callee ← if machine.memory.hasImportedRuntimeId id then do
-      let some callee ← lift (CompilerVTableRuntime.globalFunctionUsing p.lifecycle.calls.symbols lookup image machine.memory id)
+      let some callee ← lift (CompilerVTableRuntime.globalFunction p.lifecycle.calls.symbols image machine.memory id)
         | throw (.invalidProgram "native compiler function has non-function imported identity")
       pure callee
     else do
@@ -65,13 +64,6 @@ private def makeUsing (p : CompilerProviders.Prepared)
       let some entry := entries[0]? | throw (.invalidProgram "native function reservation vanished")
       pure entry.callee
     lift (query p callee)
-
-def make (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
-    (arrays : RuntimeArrayQueries.Access (MachineAddress.State K U))
-    (registry : PointerMachine.User U → FunctionPointers.Registry Other) :
-    NativeAddressSource.Compiler K U C :=
-  makeUsing p (CompilerVTableRuntime.GlobalLookup.prepare p.lifecycle.calls.symbols)
-    image arrays registry
 /-- Remaining native capabilities are actual allocator/libffi effects plus
 source build configuration and a finite compiler traversal budget. -/
 structure Host (K U C : Type) where

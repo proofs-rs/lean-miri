@@ -23,6 +23,7 @@ deriving instance DecidableEq for FieldShape
 deriving instance DecidableEq for PrimitiveLayout
 deriving instance DecidableEq for ScalarLayout
 deriving instance DecidableEq for BackendRepr
+deriving instance DecidableEq for NicheLayout
 deriving instance DecidableEq for LayoutVariant
 deriving instance DecidableEq for TagEncoding
 deriving instance DecidableEq for VariantsLayout
@@ -30,10 +31,18 @@ deriving instance DecidableEq for Layout
 deriving instance DecidableEq for ExternAbi
 deriving instance DecidableEq for CanonicalAbi
 deriving instance DecidableEq for FunctionSignature
+deriving instance DecidableEq for AdtCompilerFacts
+deriving instance DecidableEq for ProjectionField
+deriving instance DecidableEq for ProjectionParent
+deriving instance DecidableEq for ProjectionQueries
+deriving instance DecidableEq for DiscriminantValue
+deriving instance DecidableEq for DiscriminantInfo
 deriving instance DecidableEq for TypeCompilerFacts
+deriving instance DecidableEq for TypeShape
 deriving instance DecidableEq for TypeNode
 
 deriving instance DecidableEq for AbiAttributes
+deriving instance DecidableEq for AbiRegisterHint
 deriving instance DecidableEq for AbiRegister
 deriving instance DecidableEq for AbiCastTarget
 deriving instance DecidableEq for AbiPassMode
@@ -49,24 +58,21 @@ deriving instance DecidableEq for AllocationData
 deriving instance DecidableEq for AllocationNode
 
 deriving instance DecidableEq for MirNode
+deriving instance DecidableEq for CallResolutionEvidence
 deriving instance DecidableEq for BasicBlock
 deriving instance DecidableEq for LocalDecl
+deriving instance DecidableEq for RequiredConstantCheck
+deriving instance DecidableEq for ConstantQueryContext
 deriving instance DecidableEq for BodyCore
 deriving instance DecidableEq for PromotedBody
 deriving instance DecidableEq for Body
+deriving instance DecidableEq for BodyRoot
 deriving instance DecidableEq for InstanceNode
 deriving instance DecidableEq for SelectedScope
 deriving instance DecidableEq for TargetDataLayoutEvidence
 deriving instance DecidableEq for CompilerPredicateEvidence
--- Cache equality includes exact stored entries; proof fields use proof
--- irrelevance, just like the existing source-bound runtime caches below.
-deriving instance DecidableEq for DecoderValues.CompilerFunctionAbiTable
-deriving instance DecidableEq for DecoderValues.CompilerValueMemo
-deriving instance DecidableEq for ImportDocumentCore
 deriving instance DecidableEq for ImportDocument
 
-deriving instance DecidableEq for RuntimeNodeLookupCache
-deriving instance DecidableEq for RuntimeLayoutLookupCache
 deriving instance DecidableEq for RuntimeMetadata
 deriving instance DecidableEq for RuntimeArrayTypes.Entry
 deriving instance DecidableEq for RuntimeArrayTypes.World

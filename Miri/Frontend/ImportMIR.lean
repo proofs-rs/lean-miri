@@ -38,35 +38,46 @@ private def exprList (type : Expr) (items : List Expr) : Expr :=
   items.foldr (fun value rest => mkApp3 (mkConst ``List.cons [0]) type value rest)
     (mkApp (mkConst ``List.nil [0]) type)
 
-private partial def jsonExpr (shared : Std.HashMap Json Expr) (value : Json) : Expr :=
-  match (if shared.isEmpty then none else shared[value]?) with
-  | some expr => expr
-  | none => match value with
+private partial def jsonExpr (value : Json) : Expr :=
+  match value with
     | .null => mkConst ``Json.null
     | .bool b => mkApp (mkConst ``Json.bool) (toExpr b)
     | .num n => mkApp (mkConst ``Json.num) (toExpr n)
     | .str s => mkApp (mkConst ``Json.str) (toExpr s)
     | .arr xs =>
-      let items := xs.map (jsonExpr shared)
+      let items := xs.map jsonExpr
       mkApp (mkConst ``Json.arr) (mkApp2 (mkConst ``List.toArray [0]) (mkConst ``Json) (exprList (mkConst ``Json) items.toList))
     | .obj fields =>
       let pairs := fields.toList.map fun (key, value) =>
         mkApp4 (mkConst ``Prod.mk [0, 0]) (mkConst ``String) (mkConst ``Json)
-          (toExpr key) (jsonExpr shared value)
+          (toExpr key) (jsonExpr value)
       let list := exprList (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Json)) pairs
       mkApp (mkConst ``Json.mkObj) list
 
 instance : ToExpr Json where
   toTypeExpr := mkConst ``Json
-  toExpr := jsonExpr {}
+  toExpr := jsonExpr
 
 section
--- Propagate the import-local JSON quotation table through all derived quoters.
 variable [ToExpr Json]
 
 deriving instance ToExpr for MIR.IntegerKind
 deriving instance ToExpr for MIR.BinOp
 deriving instance ToExpr for MIR.UnOp
+deriving instance ToExpr for MIR.Mutability
+deriving instance ToExpr for MIR.BoundVarIndexKind
+deriving instance ToExpr for MIR.BoundRegionKind
+deriving instance ToExpr for MIR.BoundTypeKind
+deriving instance ToExpr for MIR.BoundVariableKind
+deriving instance ToExpr for MIR.LateParamRegionKind
+deriving instance ToExpr for MIR.Region
+deriving instance ToExpr for MIR.GenericArg
+deriving instance ToExpr for MIR.ConstAliasKind
+deriving instance ToExpr for MIR.ConstExpressionCastKind
+deriving instance ToExpr for MIR.ConstExpressionKind
+deriving instance ToExpr for MIR.ValTreeNode
+deriving instance ToExpr for MIR.ValTree
+deriving instance ToExpr for MIR.TypeConst
 deriving instance ToExpr for Input.TypeShapeKind
 deriving instance ToExpr for Input.StatementVariant
 deriving instance ToExpr for Input.TerminatorVariant
@@ -95,6 +106,7 @@ deriving instance ToExpr for Input.TaggedNode
 deriving instance ToExpr for Input.FieldShape
 deriving instance ToExpr for Input.PrimitiveLayout
 deriving instance ToExpr for Input.ScalarLayout
+deriving instance ToExpr for Input.NicheLayout
 deriving instance ToExpr for Input.BackendRepr
 deriving instance ToExpr for Input.LayoutVariant
 deriving instance ToExpr for Input.TagEncodingKind
@@ -112,14 +124,33 @@ deriving instance ToExpr for Input.UserTypeProjectionKind
 deriving instance ToExpr for Input.UserTypeProjection
 deriving instance ToExpr for Input.FunctionSignature
 deriving instance ToExpr for Input.CompilerPattern
+deriving instance ToExpr for Input.AdtCompilerFacts
+deriving instance ToExpr for Input.ProjectionField
+deriving instance ToExpr for Input.ProjectionParent
+deriving instance ToExpr for Input.ProjectionQueries
+deriving instance ToExpr for Input.DiscriminantValue
+deriving instance ToExpr for Input.DiscriminantInfo
 deriving instance ToExpr for Input.TypeCompilerFacts
+deriving instance ToExpr for Input.ReprInteger
+deriving instance ToExpr for Input.ScalableElement
+deriving instance ToExpr for Input.ReprOptions
+deriving instance ToExpr for Input.AdtField
+deriving instance ToExpr for Input.AdtVariant
+deriving instance ToExpr for Input.AdtShape
+deriving instance ToExpr for Input.ArrayConstructor
+deriving instance ToExpr for Input.AliasTypeKind
+deriving instance ToExpr for Input.TypeShape
 deriving instance ToExpr for Input.TypeNode
 deriving instance ToExpr for Input.InitRange
 deriving instance ToExpr for Input.Relocation
 deriving instance ToExpr for Input.MemoryMutability
 deriving instance ToExpr for Input.AllocationMemory
+deriving instance ToExpr for Input.ArgumentExtensionKind
+deriving instance ToExpr for Input.ArgumentCaptureKind
+deriving instance ToExpr for Input.IndirectModeKind
 deriving instance ToExpr for Input.AbiAttributes
 deriving instance ToExpr for Input.AbiRegisterKind
+deriving instance ToExpr for Input.AbiRegisterHint
 deriving instance ToExpr for Input.AbiRegister
 deriving instance ToExpr for Input.AbiCastTarget
 deriving instance ToExpr for Input.AbiPassMode
@@ -141,11 +172,24 @@ deriving instance ToExpr for Input.VtableAllocation
 deriving instance ToExpr for Input.AllocationData
 deriving instance ToExpr for Input.AllocationNode
 deriving instance ToExpr for Input.MirNode
+deriving instance ToExpr for Input.CallResolutionKind
+deriving instance ToExpr for Input.CallResolutionEvidence
+deriving instance ToExpr for Input.InlinedScope
+deriving instance ToExpr for Input.SourceScope
+deriving instance ToExpr for Input.CompilerSourcePosition
+deriving instance ToExpr for Input.BacktraceSpan
 deriving instance ToExpr for Input.BasicBlock
 deriving instance ToExpr for Input.LocalDecl
+deriving instance ToExpr for Input.BodyInputPhase
+deriving instance ToExpr for Input.RequiredConstantCheck
+deriving instance ToExpr for Input.ConstantQueryContext
 deriving instance ToExpr for Input.BodyCore
 deriving instance ToExpr for Input.PromotedBody
 deriving instance ToExpr for Input.Body
+deriving instance ToExpr for Input.BodyRoot
+deriving instance ToExpr for Interpreter.CallReifyReason
+deriving instance ToExpr for Interpreter.CallShimKind
+deriving instance ToExpr for Interpreter.CallInstanceKind
 deriving instance ToExpr for Input.InstanceNode
 deriving instance ToExpr for Input.ScopeRoot
 deriving instance ToExpr for Input.SelectedScope
@@ -161,12 +205,11 @@ deriving instance ToExpr for Input.SourceAllocIdDedupRow
 deriving instance ToExpr for Input.CompilerAllocIdWorld
 deriving instance ToExpr for Input.ImportDocument
 deriving instance ToExpr for Input.ExecutionInput
-deriving instance ToExpr for Input.DecodeResult
 
 end
 end
 
-private def addSharedDefinition (name : Name) (type value : Expr) : MetaM Unit := do
+private def addAuxDefinition (name : Name) (type value : Expr) : MetaM Unit := do
   let declaration := Declaration.defnDecl {
     name := name
     levelParams := []
@@ -184,12 +227,9 @@ private def addSharedDefinition (name : Name) (type value : Expr) : MetaM Unit :
 closed constructor subtrees. Every auxiliary declaration is kernel checked. -/
 private structure SplitState where
   next : Nat := 0
-  cache : Std.HashMap Expr (Expr × Nat) := {}
 
 private partial def splitValue (base : Name) (value : Expr) :
     StateT SplitState MetaM (Expr × Nat) := do
-  if let some cached := (← get).cache[value]? then return cached
-  let original := value
   let (value, size) ← match value with
     | .app fn arg => do
       let (fn, fnSize) ← splitValue base fn
@@ -197,32 +237,21 @@ private partial def splitValue (base : Name) (value : Expr) :
       pure (mkApp fn arg, fnSize + argSize + 1)
     | _ => pure (value, 1)
   if size < 1024 then
-    modify fun state => { state with cache := state.cache.insert original (value,size) }
     return (value,size)
   let type ← Meta.inferType value
   if type.isForall || (← Meta.isProp type) then
-    modify fun state => { state with cache := state.cache.insert original (value,size) }
     return (value,size)
   let index := (← get).next
   modify fun state => { state with next := index + 1 }
   let name := base ++ Name.mkSimple s!"_mir_chunk_{index}"
-  addSharedDefinition name type value
+  addAuxDefinition name type value
   let result := (mkConst name, 1)
-  modify fun state => { state with cache := state.cache.insert original result }
   return result
 
--- Intern constructor expressions while quoting the diagnostic projection too.
--- Its recursive arrays/objects are TypedValue rather than Json, so the JSON
--- table alone cannot prevent their repeated quotation.
 private def exprArray (type : Expr) (items : Array Expr) : Expr :=
   mkApp2 (mkConst ``List.toArray [0]) type (exprList type items.toList)
 
-private abbrev QuoteM := StateM (Std.HashMap Expr Expr)
-
-private def internExpr (value : Expr) : QuoteM Expr := do
-  if let some previous := (← get)[value]? then return previous
-  modify (·.insert value value)
-  return value
+private abbrev QuoteM := Id
 
 mutual
 private partial def typedValueExpr [ToExpr Json] (value : Input.TypedValue) : QuoteM Expr := do
@@ -296,27 +325,8 @@ private partial def typedValueExpr [ToExpr Json] (value : Input.TypedValue) : Qu
         pure <| mkApp4 (mkConst ``Prod.mk [0, 0]) (mkConst ``String)
           (mkConst ``Input.TypedValue) (toExpr key) child
       pure <| mkApp2 (mkConst ``Input.TypedValue.projection) (toExpr variant) (exprArray (mkApp2 (mkConst ``Prod [0, 0]) (mkConst ``String) (mkConst ``Input.TypedValue)) children)
-  internExpr expr
+  pure expr
 end
-
-/-- Quote the resolved catalog in dependency order. Every entry is an ordinary
-safe definition, so parents and all typed/raw projections can refer to the same
-JSON value without expanding its constructor tree again. The exact JSON key
-comparison also permits reuse by reconstructed, structurally equal projections.
-The table is local to one import; no unchecked values or global quotation state
-are introduced. -/
-private def quoteSharedJson (base : Name) (nodes : Array Json) :
-    MetaM (Std.HashMap Json Expr) := do
-  let mut shared : Std.HashMap Json Expr := {}
-  for h : index in [:nodes.size] do
-    let node := nodes[index]
-    if shared.contains node then continue
-    let value := jsonExpr shared node
-    let (value, _) ← (splitValue (base ++ Name.mkSimple s!"_mir_json_{index}") value).run' {}
-    let name := base ++ Name.mkSimple s!"_mir_json_{index}"
-    addSharedDefinition name (mkConst ``Json) value
-    shared := shared.insert node (mkConst name)
-  return shared
 
 /-- Import an accepted document as a closed, kernel-checked Lean value.
 Malformed or failed compiler input is rejected before declarations are created.
@@ -334,17 +344,16 @@ elab_rules : command
     -- Thousands of auxiliary definitions must not each retain an asynchronous
     -- environment snapshot until the end of this single command.
     let (value, _) ← liftTermElabM <| withOptions (Elab.async.set · false) do
-      let shared ← quoteSharedJson declName result.document.sharedNodes
-      letI : ToExpr Json := { toTypeExpr := mkConst ``Json, toExpr := jsonExpr shared }
+      letI : ToExpr Json := { toTypeExpr := mkConst ``Json, toExpr := jsonExpr }
       letI : ToExpr Input.TypedValue := {
         toTypeExpr := mkConst ``Input.TypedValue
-        toExpr := fun value => (typedValueExpr value).run' {}
+        toExpr := fun value => (typedValueExpr value).run
       }
       (splitValue declName (toExpr result)).run' {}
     liftCoreM <| withOptions (Elab.async.set · false) <| addAndCompile <| .defnDecl {
       name := declName
       levelParams := []
-      type := mkConst ``Input.DecodeResult
+      type := mkConst ``Input.ExecutionInput
       value := value
       hints := .regular 0
       safety := .safe

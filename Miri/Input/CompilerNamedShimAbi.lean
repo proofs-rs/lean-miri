@@ -7,11 +7,11 @@ namespace Miri.Input.CompilerNamedShimAbi
 open Lean Miri.ABI Miri.Interpreter
 structure Entry where
   name : String
-  abi : FnAbi MIR.TyId
+  abi : Nat
 structure Prepared where
+  runtime : RuntimeMetadata
   entries : Array Entry
-def prepare (runtime : RuntimeMetadata)
-    (abiCache : Option (CallResolution.FunctionAbiCache runtime) := none) : Except String Prepared := do
+def prepare (runtime : RuntimeMetadata) : Except String Prepared := do
   let records ← match runtime.source.raw.getObjVal? "compiler_named_shim_abis" with
     | .error _ => pure #[]
     | .ok value => value.getArr?
@@ -25,14 +25,14 @@ def prepare (runtime : RuntimeMetadata)
     let abi ← do
       let query ← recipe.getObjVal? "query"
       let result ← query.getObjVal? "abi_query"
-      CallResolution.functionAbiJson runtime result abiCache
+      result.getNat?
     entries := entries.push ⟨name,abi⟩
-  pure ⟨entries⟩
+  pure ⟨runtime,entries⟩
 
 def expectedAbi (prepared : Prepared) (name : String) : Except String (FnAbi MIR.TyId) := do
   let some entry := prepared.entries.find? (·.name == name)
     | throw s!"missing exact named compiler shim ABI query {name}"
-  pure entry.abi
+  CallResolution.functionAbiId prepared.runtime entry.abi
 
 def query (prepared : Prepared) (name : String) : EStateM StepError S (FnAbi MIR.TyId) :=
   match expectedAbi prepared name with

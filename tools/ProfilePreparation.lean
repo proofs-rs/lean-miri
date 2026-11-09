@@ -20,10 +20,10 @@ def main (args : List String) : IO Unit := do
   let profile := (({} : Options).setBool `profiler true).set `profiler.threshold (1 : Nat)
   boundary "decode: start"
   let text ← IO.FS.readFile path
-  let decoded ← must (decodeRuntimeJsonProfiled text profile)
+  let decoded ← must (decodeJsonProfiled text profile)
   boundary "decode: accepted"
   boundary "lower: start"
-  let program ← must (lowerCoreProgram decoded.document)
+  let program ← must (lowerProgram decoded.document)
   boundary "lower: complete"
   boundary s!"input_shape: types={program.input.types.size} instances={program.input.instances.size} bodies={program.bundle.bodies.size} allocations={program.input.allocations.size}"
   boundary "prepare: start"

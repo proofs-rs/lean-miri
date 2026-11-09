@@ -30,7 +30,7 @@ def main (args : List String) : IO Unit := do
   reject (CompilerNamedConstants.value constants "ENOENT") "missing exact constant query"
   for field in #["compiler_shim_abis", "compiler_named_shim_abis", "compiler_named_constants", "compiler_named_statics"] do
     let raw ← must (set runtime.source.raw field (.str "invalid array"))
-    let runtime := { runtime with source := { runtime.source with raw := raw }, nodeCache := none }
+    let runtime := { runtime with source := { runtime.source with raw := raw } }
     let program := { program with input := { program.input with raw := raw } }
     match field with
     | "compiler_shim_abis" => reject (CompilerShimAbi.prepare runtime) field

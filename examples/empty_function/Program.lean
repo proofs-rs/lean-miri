@@ -56,7 +56,8 @@ private def reflectRoot : IO (Except String Root) := do
     let lowered ← Input.lowerProgram decoded.document
     let prepared ← CallResolution.prepare lowered
     let definition ← prepared.program.rootDefinitionId 0
-    let functionInstance : CallInstance := ⟨.Item definition, #[]⟩
+    let functionInstance ← CompilerInstance.item (LowerContext.ofDocument prepared.program.input)
+      prepared.program.compilerTables definition #[]
     pure ⟨functionInstance, ← CallResolution.loadedBodyOfInstance prepared functionInstance⟩
 
 open Lean Elab Command in

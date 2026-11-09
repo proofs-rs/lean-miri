@@ -14,32 +14,37 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'tools'))
 from mir_json import load_mir_document
-TOOLCHAIN = ROOT/'.rustup/toolchains/miri-exporter-8144389c895d'
-MIRI = ROOT/'upstream/miri-source/target/debug/miri'
-SYSROOT = ROOT/'scratch/miri-sysroot'
+RUSTUP_HOME = Path(os.environ.get('RUSTUP_HOME', ROOT/'.rustup'))
+CARGO_HOME = Path(os.environ.get('CARGO_HOME', ROOT/'.cargo'))
+ELAN_HOME = Path(os.environ.get('ELAN_HOME', ROOT/'.elan'))
+TOOLCHAIN = RUSTUP_HOME/'toolchains/miri-exporter-8144389c895d'
+EXPORTER = Path(os.environ.get('CARGO_TARGET_DIR', ROOT/'exporter/target'))/'release/lean-miri-mir-exporter'
+LAKE = ELAN_HOME/'bin/lake'
+MIRI = Path(os.environ.get('MIRI_BINARY', ROOT/'upstream/miri-source/target/debug/miri'))
+SYSROOT = Path(os.environ.get('MIRI_SYSROOT', ROOT/'scratch/miri-sysroot'))
 
 def main():
-    env = dict(os.environ, ELAN_HOME=str(ROOT/'.elan'), RUSTUP_HOME=str(ROOT/'.rustup'), CARGO_HOME=str(ROOT/'.cargo'), MIRI_SYSROOT=str(SYSROOT))
-    env['PATH'] = str(TOOLCHAIN/'bin')+':'+str(ROOT/'.cargo/bin')+':'+env.get('PATH','')
+    env = dict(os.environ, ELAN_HOME=str(ELAN_HOME), RUSTUP_HOME=str(RUSTUP_HOME), CARGO_HOME=str(CARGO_HOME), MIRI_SYSROOT=str(SYSROOT))
+    env['PATH'] = str(TOOLCHAIN/'bin')+':'+str(CARGO_HOME/'bin')+':'+env.get('PATH','')
     env['LD_LIBRARY_PATH'] = str(TOOLCHAIN/'lib')+(':'+env['LD_LIBRARY_PATH'] if env.get('LD_LIBRARY_PATH') else '')
-    build = json.loads((ROOT/'scratch/miri-reference-build.json').read_text())
+    build = json.loads(Path(os.environ.get('MIRI_REFERENCE_BUILD', ROOT/'scratch/miri-reference-build.json')).read_text())
     assert hashlib.sha256(MIRI.read_bytes()).hexdigest() == build['binary_sha256'], 'pinned Miri binary changed'
     lock = json.loads((ROOT/'upstream/source-lock.json').read_text())
     source = ROOT/'tests/execution/fixture_calls.rs'
     with tempfile.TemporaryDirectory(prefix='lean-miri-execution-') as temporary:
         tmp = Path(temporary)
         exported = tmp/'selected.json'
-        subprocess.run([str(ROOT/'exporter/target/debug/lean-miri-mir-exporter'),'--output',str(exported),'--root','root','--root','tail_root','--root','overflow_root',str(source),'--crate-type=lib','--crate-name=fixture_calls'],cwd=ROOT,env=env,check=True)
+        subprocess.run([str(EXPORTER),'--output',str(exported),'--root','root','--root','tail_root','--root','overflow_root',str(source),'--crate-type=lib','--crate-name=fixture_calls'],cwd=ROOT,env=env,check=True)
         document = load_mir_document(exported)
         assert document['producer']['rustc_commit'] == lock['pins']['rustc']['commit']
         assert document['producer']['miri_commit'] == lock['pins']['miri']['commit']
         assert build['rustc_commit'] == lock['pins']['rustc']['commit']
         module = tmp/'tests/execution/ReturnMemory.olean'
         module.parent.mkdir(parents=True)
-        subprocess.run([str(ROOT/'.elan/bin/lake'),'env','lean','-o',str(module),'tests/execution/ReturnMemory.lean'],cwd=ROOT,env=env,check=True)
-        basepath = subprocess.check_output([str(ROOT/'.elan/bin/lake'),'env','printenv','LEAN_PATH'],cwd=ROOT,env=env,text=True).strip()
+        subprocess.run([str(LAKE),'env','lean','-o',str(module),'tests/execution/ReturnMemory.lean'],cwd=ROOT,env=env,check=True)
+        basepath = subprocess.check_output([str(LAKE),'env','printenv','LEAN_PATH'],cwd=ROOT,env=env,text=True).strip()
         env['LEAN_PATH'] = str(tmp)+':'+basepath
-        lean = subprocess.run([str(ROOT/'.elan/bin/lake'),'env','lean','--run','tests/execution/ImportedCalls.lean',str(exported)],cwd=ROOT,env=env,text=True,capture_output=True)
+        lean = subprocess.run([str(LAKE),'env','lean','--run','tests/execution/ImportedCalls.lean',str(exported)],cwd=ROOT,env=env,text=True,capture_output=True)
         assert lean.returncode == 0, lean.stdout+lean.stderr
         lines = lean.stdout.splitlines()
         assert 'nested=42' in lines and 'tail=42' in lines and 'callee_overflow=panic' in lines, lean.stdout

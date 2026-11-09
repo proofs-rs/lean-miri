@@ -269,15 +269,14 @@ private def raceStateInfo (state : OuterState) : String := Id.run do
 
 private def runRmwReleasePure (contents : String) (expectRace : Bool) (pageSize : UInt64)
     (numCpus hostPid : UInt32) : Except String String := do
-  let decoded ← must (Input.decodeRuntimeJson contents)
-  let program ← must (Input.lowerCoreProgram decoded.document)
+  let decoded ← must (Input.decodeJson contents)
+  let program ← must (Input.lowerProgram decoded.document)
   let attempt := Input.EvalPreparation.prepare program
   let prepared ← must attempt.outcome
   let compiler := prepared.compiler
   let image := prepared.image
   let memory := attempt.memory
-  let bytes ← must (Input.CompilerGlobalBytes.prepare compiler.program compiler.runtime memory
-    (some compiler.sourceEquality))
+  let bytes ← must (Input.CompilerGlobalBytes.prepare compiler.program compiler.runtime memory)
   let targetBits := compiler.runtime.target.base.pointerWidth.bits.toNat
   let arch ← must (Input.EvalArchitectureMachine.targetArch compiler.intrinsics)
   unless compiler.program.input.producer.targetTriple == "x86_64-unknown-linux-gnu" &&

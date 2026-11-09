@@ -9,5 +9,5 @@ if (($# == 0)); then
   set -- examples/empty_function/input.json
 fi
 for input in "$@"; do
-  lake env lean --run tests/input/LoweringReaderChecks2026.lean "$input"
+  lake env lean --run tests/input/SourceBodyPaths.lean "$input"
 done

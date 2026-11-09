@@ -258,15 +258,14 @@ private def raceStateInfo (state : OuterState) : String := Id.run do
 universe-0 boundary. Only file/profile/PID acquisition and final printing use IO. -/
 private def runDstProviderPure (contents : String) (pageSize : UInt64)
     (numCpus hostPid : UInt32) : Except String String := do
-  let decoded ← Input.decodeRuntimeJson contents
-  let program ← Input.lowerCoreProgram decoded.document
+  let decoded ← Input.decodeJson contents
+  let program ← Input.lowerProgram decoded.document
   let attempt := Input.EvalPreparation.prepare program
   let prepared ← attempt.outcome
   let compiler := prepared.compiler
   let image := prepared.image
   let memory := attempt.memory
   let bytes ← Input.CompilerGlobalBytes.prepare compiler.program compiler.runtime memory
-    (some compiler.sourceEquality)
   let targetBits := compiler.runtime.target.base.pointerWidth.bits.toNat
   let arch ← (Input.EvalArchitectureMachine.targetArch compiler.intrinsics).mapError toString
   unless compiler.program.input.producer.targetTriple == "x86_64-unknown-linux-gnu" &&

@@ -311,8 +311,7 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
   let selectedEntry ← (Input.CompilerMain.sourceCompilerEntry compiler.main).mapError toString
   let some (definition, .rustcMain sigpipe) := selectedEntry
     | throw "compiler did not select an rustc_main entry"
-  let bytes ← (Input.CompilerGlobalBytes.prepare compiler.program compiler.runtime initialMemory
-    (some compiler.sourceEquality)).mapError toString
+  let bytes ← (Input.CompilerGlobalBytes.prepare compiler.program compiler.runtime initialMemory).mapError toString
   let arrays ← compiler.initialArrays
   let targetBits := compiler.runtime.target.base.pointerWidth.bits.toNat
   let arch ← (Input.EvalArchitectureMachine.targetArch compiler.intrinsics).mapError toString
@@ -467,10 +466,10 @@ def main (args : List String) : IO Unit := do
   boundary "raw_host_poll: finite source initialization replay; no live poll capability"
   boundary "decode: start"
   let input ← readJson path
-  let decoded ← must (Input.decodeRuntimeJsonProfiled input profile)
+  let decoded ← must (Input.decodeJsonProfiled input profile)
   boundary "decode: accepted"
   boundary "lower: start"
-  let program ← must (Input.lowerCoreProgram decoded.document)
+  let program ← must (Input.lowerProgram decoded.document)
   boundary "lower: complete"
   boundary "prepare: start"
   let attempt := Input.EvalPreparation.prepareProfiled profile program

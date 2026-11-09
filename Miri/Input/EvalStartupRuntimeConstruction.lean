@@ -8,16 +8,13 @@ open Lean Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
 
 structure StartupFacts where
   noCore : Except String Bool
-  coreEscapeDefault : Except String (DefinitionId × Bool)
+  coreEscapeDefault : Except String (DefinitionRef × Bool)
 
 private def field (value : Json) (name : String) : Except String Json :=
   value.getObjVal? name
 
 private def fieldString (value : Json) (name : String) : Except String String := do
   (← field value name).getStr?
-
-private def fieldNat (value : Json) (name : String) : Except String Nat := do
-  (← field value name).getNat?
 
 /-- Prepare source facts from the pinned exporter query table. The escape-default identity must already be in the canonical
 definition table; no path or display-name identity is synthesized here. -/
@@ -30,7 +27,9 @@ def prepare (compiler : CompilerProviders.Prepared) : Except String StartupFacts
   let coreEscapeDefault := do
     let value ← field startup "core_escape_default"
     let rawDefinition ← field value "definition"
-    let source : DefinitionId := ⟨← fieldNat rawDefinition "crate", ← fieldNat rawDefinition "index"⟩
+    let source ← rawDefinition.getNat?
+    unless source < compiler.program.compilerTables.definitions.size do
+      throw "startup escape-default definition ID out of bounds"
     let available ← (← field value "mir_available").getBool?
     pure (source,available)
   return ⟨noCore, coreEscapeDefault⟩

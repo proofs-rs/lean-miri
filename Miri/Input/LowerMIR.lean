@@ -9,50 +9,13 @@ namespace Miri.Input
 
 abbrev LowerResult := Except String
 
-private def buildTypeSet (ids : Array TypeId) : Std.HashSet TypeId :=
-  ids.foldl (fun found id => found.insert id) {}
-
-private def buildAllocationSet (ids : Array AllocationId) : Std.HashSet AllocationId :=
-  ids.foldl (fun found id => found.insert id) {}
-
-/-- Preserve `Array.find?`'s first-row choice for duplicate scalar widths. -/
-private def buildScalarMap (sizes : Array (TypeId × Nat)) : Std.HashMap TypeId Nat :=
-  sizes.foldl (fun found (ty,size) =>
-    if (found.get? ty).isSome then found else found.insert ty size) {}
-
-set_option autoImplicit false in
-/-- Membership acceleration whose type ties it to the exact source array.
-Its constructor is private, and the exactness field proves that its value is
-the corresponding index built from that array. Any update must preserve this
-equality. -/
-structure LowerContextTypeIndex (source : Array TypeId) where
-  private mk ::
-  values : Std.HashSet TypeId
-  exact : values = buildTypeSet source
-
-set_option autoImplicit false in
-structure LowerContextAllocationIndex (source : Array AllocationId) where
-  private mk ::
-  values : Std.HashSet AllocationId
-  exact : values = buildAllocationSet source
-
-set_option autoImplicit false in
-structure LowerContextScalarIndex (source : Array (TypeId × Nat)) where
-  private mk ::
-  values : Std.HashMap TypeId Nat
-  exact : values = buildScalarMap source
-
-private def buildTypeIndex (ids : Array TypeId) : LowerContextTypeIndex ids :=
-  ⟨buildTypeSet ids, rfl⟩
-
-private def buildAllocationIndex (ids : Array AllocationId) : LowerContextAllocationIndex ids :=
-  ⟨buildAllocationSet ids, rfl⟩
-
-private def buildScalarIndex (sizes : Array (TypeId × Nat)) : LowerContextScalarIndex sizes :=
-  ⟨buildScalarMap sizes, rfl⟩
-
 structure LowerContext where
   /-- Each supplied type ID must refer to this compilation's metadata graph. -/
+  spans : Array SourceSpanData := #[]
+  layouts : Array Layout := #[]
+  definitions : Array DefinitionId := #[]
+  instances : Array InstanceNode := #[]
+  typeConstants : Array MIR.TypeConst := #[]
   typeIds : Array TypeId
   /-- Exact byte widths from compiler layout metadata; required for scalar constants. -/
   scalarSizes : Array (TypeId × Nat)
@@ -60,79 +23,72 @@ structure LowerContext where
   obligations : Array Obligation := #[]
   /-- Paired source for query metadata addressed by paths in decoded MIR. -/
   sourceDocument : Option Lean.Json := none
-  compilerValueMemo : Option CompilerValueMemo := none
-  /-- Optional exact-array certificates; hand-built contexts default to the
-  original linear lookup behavior. -/
-  typeIndex : Option (LowerContextTypeIndex typeIds) := none
-  allocationIndex : Option (LowerContextAllocationIndex allocationIds) := none
-  scalarIndex : Option (LowerContextScalarIndex scalarSizes) := none
 
 /-- Consume complete import-time compiler values; manual contexts decode directly. -/
 def LowerContext.decodeCompilerValue (ctx : LowerContext) (raw : Lean.Json) : Except String TypedValue :=
-  decodeCompilerValueWithMemo raw ctx.compilerValueMemo
+  DecoderValues.decodeCompilerValue raw
+
+def LowerContext.decodeCompilerSpan (ctx : LowerContext) (raw : Lean.Json) : Except String TypedValue := do
+  let id ← raw.getNat?
+  unless id < ctx.spans.size do throw s!"missing source span {id}"
+  pure (.sourceSpan id)
 
 def LowerContext.containsTypeId (ctx : LowerContext) (id : TypeId) : Bool :=
-  match ctx.typeIndex with
-  | some index => index.values.contains id
-  | none => ctx.typeIds.contains id
+  ctx.typeIds.contains id
 
 def LowerContext.containsAllocationId (ctx : LowerContext) (id : AllocationId) : Bool :=
-  match ctx.allocationIndex with
-  | some index => index.values.contains id
-  | none => ctx.allocationIds.contains id
+  ctx.allocationIds.contains id
 
 def LowerContext.scalarSize (ctx : LowerContext) (id : TypeId) : Option Nat :=
-  match ctx.scalarIndex with
-  | some index => index.values.get? id
-  | none => (ctx.scalarSizes.find? (fun pair => pair.1 == id)).map Prod.snd
+  (ctx.scalarSizes.find? (fun pair => pair.1 == id)).map Prod.snd
 
-/-- Rebase the source type universe and rebuild its private membership cache. -/
 def LowerContext.withTypeIds (ctx : LowerContext) (ids : Array TypeId) : LowerContext :=
-  { ctx with typeIds := ids, typeIndex := some (buildTypeIndex ids) }
+  { ctx with typeIds := ids }
 
-/-- Rebase the allocation universe and rebuild its private membership cache. -/
 def LowerContext.withAllocationIds (ctx : LowerContext) (ids : Array AllocationId) : LowerContext :=
-  { ctx with allocationIds := ids, allocationIndex := some (buildAllocationIndex ids) }
+  { ctx with allocationIds := ids }
 
-/-- Rebase scalar layouts and rebuild the first-row-preserving width cache. -/
 def LowerContext.withScalarSizes (ctx : LowerContext) (sizes : Array (TypeId × Nat)) : LowerContext :=
-  { ctx with scalarSizes := sizes, scalarIndex := some (buildScalarIndex sizes) }
+  { ctx with scalarSizes := sizes }
 
 /-- Derive scalar widths from compiler metadata, never from bits or host types. -/
-def LowerContext.ofTypes (types : Array TypeNode) : LowerContext := Id.run do
+def LowerContext.ofTypes (types : Array TypeNode) (layouts : Array Layout := #[]) : LowerContext := Id.run do
   let typeIds := types.map (·.id)
   let scalarSizes := types.filterMap fun ty =>
-    ty.layout.sizeBytes.map (ty.id, ·)
+    (layouts[ty.layoutId]?).bind fun layout => layout.sizeBytes.map (ty.id, ·)
   let obligations : Array Obligation := #[]
-  let mut ctx : LowerContext := {
+  let ctx : LowerContext := {
     typeIds
     scalarSizes
     allocationIds := #[]
     obligations
     sourceDocument := none
   }
-  ctx := { ctx with
-    typeIndex := some (buildTypeIndex typeIds)
-    scalarIndex := some (buildScalarIndex scalarSizes) }
   return ctx
 
 /-- Resolve graph identities from the same decoded compilation. Metadata
 semantics remain independent from syntax lowering and its obligations. -/
-def LowerContext.ofDocument (document : ImportDocumentCore) : LowerContext :=
-  let ctx := (ofTypes document.types).withAllocationIds (document.allocations.map (·.id))
-  { ctx with sourceDocument := some document.raw, compilerValueMemo := document.compilerValueMemo }
+def LowerContext.ofDocument (document : ImportDocument) : LowerContext :=
+  let ctx := (ofTypes document.types document.layouts).withAllocationIds (document.allocations.map (·.id))
+  { ctx with
+    sourceDocument := some document.raw
+    spans := document.spans
+    layouts := document.layouts
+    definitions := document.definitions
+    instances := document.instances
+    typeConstants := document.typeConstants }
 
 set_option autoImplicit false in
 /-- A prepared lowering context tied to one exact decoded source document.
 The private constructor and equality field prevent reusing it for a different
 document, even when the documents serialize to equal JSON. -/
-structure LowerContext.Bound (document : ImportDocumentCore) where
+structure LowerContext.Bound (document : ImportDocument) where
   private mk ::
   value : LowerContext
   exact : value = LowerContext.ofDocument document
 
 /-- Prepare the context and retain its exact document identity in the type. -/
-def LowerContext.bindDocument (document : ImportDocumentCore) : LowerContext.Bound document :=
+def LowerContext.bindDocument (document : ImportDocument) : LowerContext.Bound document :=
   ⟨LowerContext.ofDocument document, rfl⟩
 
 structure LoweredBody where
@@ -143,19 +99,13 @@ structure LoweredBody where
   typeConstants : Array MIR.TypeConst
   obligations : Array Obligation
 
-/-- Resolve a crate-qualified compiler definition into this bundle's dense
-identity. Raw rustc definition indices are never runtime definition IDs. -/
-def lookupDefinitionId (definitions : Array DefinitionId) (sourceId : DefinitionId)
-    : LowerResult MIR.DefId :=
-  -- Compiler queries repeat this lookup; keep the search on the array rather
-  -- than allocating a full list before examining the first matching ID.
-  match definitions.idxOf? sourceId with
-  | some id => pure id
-  | none => throw s!"unresolved compiler definition {sourceId.crateIndex}:{sourceId.index}"
+def lookupDefinitionId (definitions : Array DefinitionId) (id : Nat) : LowerResult MIR.DefId := do
+  unless id < definitions.size do throw s!"unresolved compiler definition {id}"
+  pure id
 
 def LoweredBody.ownDefinitionId (body : LoweredBody) : LowerResult MIR.DefId := do
-  let some sourceId := body.input.definitionId | throw "body is missing its source definition identity"
-  lookupDefinitionId body.definitions sourceId
+  let some id := body.input.definitionId | throw "body is missing its source definition identity"
+  lookupDefinitionId body.definitions id
 
 /-- Constructor inventory. `true` means a lowering branch exists, subject to
 child metadata checks; it does not mean execution semantics is implemented.
@@ -177,10 +127,6 @@ private structure LowerState where
   spans : Array SourceSpanData := #[]
   definitions : Array DefinitionId := #[]
   typeConstants : Array MIR.TypeConst := #[]
-  /-- Enabled only by `lowerBodies`; standalone lowering keeps the original
-  linear lookup path. Buckets are candidates, never substitutes for equality. -/
-  spanCandidates : Option (Std.HashMap (String × Nat × Nat) (Array Nat)) := none
-  definitionCandidates : Option (Std.HashMap (Nat × Nat) Nat) := none
 
 private abbrev LowerM := StateT LowerState (Except String)
 
@@ -219,33 +165,10 @@ private def typeId (ctx : LowerContext) : TypedValue → LowerResult MIR.TyId
   | .typeRef id => if ctx.containsTypeId id then .ok id else .error s!"unresolved type {id}"
   | _ => .error "expected type reference"
 
-private def spanCandidateKey (span : SourceSpanData) : String × Nat × Nat :=
-  (span.file, span.lo, span.hi)
-
-private def intern (span : SourceSpanData) : LowerM MIR.SpanRef := do
-  let state ← StateT.get
-  match state.spanCandidates with
-  | none =>
-    match state.spans.toList.idxOf? span with
-    | some i => pure ⟨i⟩
-    | none =>
-      StateT.set { state with spans := state.spans.push span }
-      pure ⟨state.spans.size⟩
-  | some candidates =>
-    let bucket := candidates.getD (spanCandidateKey span) #[]
-    if let some i := bucket.find? fun i =>
-        match state.spans[i]? with
-        | some previous => decide (previous = span)
-        | none => false then
-      pure ⟨i⟩
-    else
-      let i := state.spans.size
-      let nextCandidates := candidates.insert (spanCandidateKey span) (bucket.push i)
-      StateT.set { state with spans := state.spans.push span, spanCandidates := some nextCandidates }
-      pure ⟨i⟩
-
 private def source (info : SourceInfo) : LowerM MIR.SourceInfo := do
-  return ⟨← intern info.span, info.scope⟩
+  let state ← StateT.get
+  unless info.spanId < state.spans.size do throw s!"missing source span {info.spanId}"
+  return ⟨⟨info.spanId⟩, info.scope⟩
 
 private def optional (lower : TypedValue → LowerResult α) : TypedValue → LowerResult (Option α)
   | .scalar .null => pure none
@@ -261,44 +184,13 @@ private def number (v : TypedValue) : LowerResult Nat := do
   | v => nat v
 
 private def definition (v : TypedValue) : LowerM MIR.DefId := do
-  let id ← (show LowerM DefinitionId from match v with
-    | .object fs => return DefinitionId.mk (← nat (← get fs "crate")) (← nat (← get fs "index"))
-    | v => do
-      let encoded ← text v
-      match encoded.splitOn ":" with
-      | [cratePart, indexPart] =>
-        match cratePart.toNat?, indexPart.toNat? with
-        | some c, some i => pure (DefinitionId.mk c i)
-        | _, _ => throw "invalid compiler definition ID"
-      | _ => throw "expected crate-qualified definition ID")
-  let state ← StateT.get
-  let key := (id.crateIndex,id.index)
-  let found := match state.definitionCandidates with
-    | some candidates => candidates.get? key
-    | none => state.definitions.toList.idxOf? id
-  match found with
-  | some i => pure i
-  | none =>
-    let i := state.definitions.size
-    let candidates := state.definitionCandidates.map (·.insert key i)
-    StateT.set { state with definitions := state.definitions.push id, definitionCandidates := candidates }
-    pure i
-
-private def hasDefinition (state : LowerState) (id : DefinitionId) : Bool :=
-  match state.definitionCandidates with
-  | some candidates => (candidates.get? (id.crateIndex,id.index)).isSome
-  | none => state.definitions.contains id
-
-private def addDefinition (state : LowerState) (id : DefinitionId) : LowerState :=
-  if hasDefinition state id then state
-  else
-    let index := state.definitions.size
-    let candidates := state.definitionCandidates.map
-      (·.insert (id.crateIndex,id.index) index)
-    { state with definitions := state.definitions.push id, definitionCandidates := candidates }
+  let id ← nat v
+  lookupDefinitionId (← StateT.get).definitions id
 
 private def spanRef : TypedValue → LowerM MIR.SpanRef
-  | .sourceSpan span => intern span
+  | .sourceSpan id => do
+    unless id < (← StateT.get).spans.size do throw s!"missing source span {id}"
+    pure ⟨id⟩
   | _ => throw "missing typed source span"
 
 private def mutability (v : TypedValue) : LowerResult MIR.Mutability := do
@@ -463,69 +355,22 @@ private def unOp (v : TypedValue) : LowerResult MIR.UnOp := do
     | "pointer_metadata" => pure .PtrMetadata
     | _ => throw "unknown unary operator"
 
-private def internTypeConst (constant : MIR.TypeConst) : LowerM MIR.TypeConstId := do
-  let state ← StateT.get
-  match state.typeConstants.toList.idxOf? constant with
-  | some i => pure i
-  | none =>
-    StateT.set { state with typeConstants := state.typeConstants.push constant }
-    pure state.typeConstants.size
+private def typeConstRef (ctx : LowerContext) (value : TypedValue) : LowerResult MIR.TypeConstId := do
+  let id ← nat value
+  unless id < ctx.typeConstants.size do throw s!"unresolved type constant {id}"
+  pure id
 
-mutual
-private partial def typeConst (ctx : LowerContext) (v : TypedValue) : LowerM MIR.TypeConst := do
-  let fs ← fields v
-  match ← tag v with
-  | "alias" =>
-    let kind ← (show LowerM MIR.ConstAliasKind from match ← text (← get fs "alias_kind") with
-      | "projection" => pure .Projection
-      | "inherent_self" => pure .InherentSelf
-      | "inherent_impl" => pure .InherentImpl
-      | "free" => pure .Free
-      | "anonymous" => pure .Anon
-      | _ => throw "unknown const alias kind")
-    let rigid ← match ← text (← get fs "rigidity") with
-      | "rigid" => pure true
-      | "not_rigid" => pure false
-      | _ => throw "unknown const rigidity"
-    return .Alias rigid kind (← definition (← get fs "def_id")) (← genericArgs ctx (← get fs "generic_args"))
-  | "value" => return .Value (← typeId ctx (← get fs "type")) (← valTree ctx (← get fs "value"))
-  | "expression" =>
-    let kind ← (show LowerM MIR.ConstExpressionKind from match ← text (← get fs "expression_kind") with
-      | "binary_operator" => return .Binop (← binOp (← get fs "operator"))
-      | "unary_operator" => return .UnOp (← unOp (← get fs "operator"))
-      | "function_call" => pure .FunctionCall
-      | "cast" => do
-        match ← text (← get fs "operator") with
-        | "as" => pure (.Cast .As)
-        | "use" => pure (.Cast .Use)
-        | _ => throw "unknown abstract const cast"
-      | _ => throw "unknown const expression")
-    return .Expr kind (← genericArgs ctx (← get fs "arguments"))
-  | _ => throw "unknown type constant"
-
-private partial def genericArgs (ctx : LowerContext) (v : TypedValue) : LowerM (Array MIR.GenericArg) := do
+private def genericArgs (ctx : LowerContext) (v : TypedValue) : LowerM (Array MIR.GenericArg) := do
   (← array v).mapM fun arg => do
     let fs ← fields arg
     match ← tag arg with
     | "type" => return .Type (← typeId ctx (← get fs "value"))
     | "lifetime" => return .Lifetime (← region (← get fs "value"))
-    | "const" => return .Const (← internTypeConst (← typeConst ctx (← get fs "value")))
+    | "const" => return .Const (← typeConstRef ctx (← get fs "value"))
     | _ => throw "unknown generic argument"
 
-private partial def valTree (ctx : LowerContext) (v : TypedValue) : LowerM MIR.ValTree := do
-  let fs ← fields v
-  match ← tag v with
-  | "leaf" =>
-    let size ← nat (← get fs "size_bytes")
-    let bits ← number (← get fs "bits_unsigned")
-    unless size > 0 && bits < 2 ^ (size * 8) do throw "invalid valtree scalar width"
-    pure ⟨#[.Leaf bits size], 0⟩
-  | "branch" =>
-    let children ← (← array (← get fs "elements")).mapM fun child => do
-      internTypeConst (← typeConst ctx child)
-    pure ⟨#[.Branch children], 0⟩
-  | _ => throw "unknown valtree"
-end
+private def initialState (ctx : LowerContext) : LowerResult LowerState :=
+  pure { spans := ctx.spans, definitions := ctx.definitions, typeConstants := ctx.typeConstants }
 
 private def annotation (v : TypedValue) : LowerResult Nat := do
   match v with
@@ -578,7 +423,7 @@ private def constOperand (ctx : LowerContext) (v : TypedValue) : LowerM MIR.Cons
   let original ← fields originalValue
   let constant ← (show LowerM MIR.MirConst from match ← tag originalValue with
     | "already_evaluated" => return .Val (← constValue ctx ty (← get evaluated "value")) ty
-    | "type_system_const" => return .Ty (← typeId ctx (← get original "type")) (← typeConst ctx (← get original "const"))
+    | "type_system_const" => return .Ty (← typeId ctx (← get original "type")) (← typeConstRef ctx (← get original "const"))
     | "unevaluated" => return .Unevaluated ⟨← definition (← get original "def_id"), ← genericArgs ctx (← get original "generic_args"), ← optional nat (← get original "promoted")⟩ (← typeId ctx (← get original "type"))
     | _ => throw "unknown MIR constant source")
   pure ⟨span, userType, constant⟩
@@ -622,7 +467,7 @@ private def rvalue (ctx : LowerContext) : TypedValue → LowerM MIR.Rvalue
     | .discriminant => return .Discriminant (← place ctx (← get fs "place"))
     | .copyForDeref => return .CopyForDeref (← place ctx (← get fs "place"))
     | .wrapUnsafeBinder => return .WrapUnsafeBinder (← operand ctx (← get fs "operand")) (← typeId ctx (← get fs "type"))
-    | .repeat => return .Repeat (← operand ctx (← get fs "operand")) (← typeConst ctx (← get fs "count"))
+    | .repeat => return .Repeat (← operand ctx (← get fs "operand")) (← typeConstRef ctx (← get fs "count"))
     | .ref => return .Ref (← region (← get fs "region")) (← borrow (← get fs "borrow_kind")) (← place ctx (← get fs "place"))
     | .threadLocalRef => return .ThreadLocalRef (← definition (← get fs "def_id"))
     | .rawPtr =>
@@ -976,8 +821,7 @@ private def controlTargets : MIR.TerminatorKind → Array Nat
   | .InlineAsm asm => asm.targets ++ unwindTargets asm.unwind
   | .UnwindResume | .UnwindTerminate _ | .Return | .Unreachable | .TailCall .. | .CoroutineDrop => #[]
 
-/-- Construct source-shaped MIR, preserving its decoded envelope and interning
-actual source spans. Unsupported constructors and missing metadata are errors. -/
+/-- Unsupported constructors and missing metadata remain errors. -/
 private def lowerBodyState (ctx : LowerContext) (input : BodyCore) (initial : LowerState) : LowerResult (LoweredBody × LowerState) := do
   let mirPhase ← phase input.phase
   match input.injectionPhase with
@@ -1003,10 +847,8 @@ private def lowerBodyState (ctx : LowerContext) (input : BodyCore) (initial : Lo
   | none => pure ()
   let action : LowerM (Array MIR.BasicBlock) := input.blocks.mapM fun block => do
     return ⟨← block.statements.mapM (statement ctx), ← terminator ctx block.terminator, block.cleanup⟩
-  let initial := match input.definitionId with
-    | some sourceId =>
-      addDefinition initial sourceId
-    | none => initial
+  if let some id := input.definitionId then
+    let _ ← lookupDefinitionId initial.definitions id
   let (blocks, state) ← action.run initial
   for block in blocks do
     for target in controlTargets block.terminator.kind do
@@ -1026,8 +868,8 @@ private def lowerBodyState (ctx : LowerContext) (input : BodyCore) (initial : Lo
 
 /-- A standalone body's definition/type-constant/span IDs are local to this
 result. Use `lowerBodies` or `lowerProgram` for cross-function linking. -/
-def lowerBody (ctx : LowerContext) (input : BodyCore) : LowerResult LoweredBody :=
-  (lowerBodyState ctx input {}).map Prod.fst
+def lowerBody (ctx : LowerContext) (input : BodyCore) : LowerResult LoweredBody := do
+  (lowerBodyState ctx input (← initialState ctx)).map Prod.fst
 
 structure LoweredBodies where
   bodies : Array LoweredBody
@@ -1035,18 +877,9 @@ structure LoweredBodies where
   definitions : Array DefinitionId
   typeConstants : Array MIR.TypeConst
 
-/-- Lower a compilation's bodies through one shared interner, including
-mutually recursive references. Every returned body uses the same ID tables. -/
-def lowerBodies (ctx : LowerContext) (inputs : Array BodyCore)
-    (seedDefinitions : Array DefinitionId := #[]) : LowerResult LoweredBodies := do
-  let mut state : LowerState := { spanCandidates := some {}, definitionCandidates := some {} }
-  for id in seedDefinitions do
-    state := addDefinition state id
-  -- Seed definition identities before traversing instructions: references to
-  -- later and mutually recursive bodies resolve to the same dense identities.
-  for input in inputs do
-    if let some id := input.definitionId then
-      state := addDefinition state id
+
+def lowerBodies (ctx : LowerContext) (inputs : Array BodyCore) : LowerResult LoweredBodies := do
+  let mut state ← initialState ctx
   let mut bodies := #[]
   for input in inputs do
     let (body, next) ← lowerBodyState ctx input state
@@ -1067,7 +900,21 @@ structure LoweredProgram where
   instances : Array (InstanceId × Nat)
   /-- (parent body index, promoted index, body index). -/
   promoted : Array (Nat × Nat × Nat)
-  input : ImportDocumentCore
+  input : ImportDocument
+
+/-- Normalization rows supply compiler evidence without becoming execution roots. -/
+def LoweredProgram.executableBodyIds (program : LoweredProgram) : Array Nat := Id.run do
+  let mut pending := program.roots ++ program.instances.map Prod.snd
+  let mut seen : Std.HashSet Nat := {}
+  while !pending.isEmpty do
+    let current := pending
+    pending := #[]
+    for id in current do
+      if seen.contains id then continue
+      seen := seen.insert id
+      for (parent, _, child) in program.promoted do
+        if parent == id then pending := pending.push child
+  return (Array.range program.bundle.bodies.size).filter seen.contains
 
 /-- Look up a document root's frame identity without assuming it was called
 or that source and runtime definition indices coincide. -/
@@ -1079,42 +926,36 @@ def LoweredProgram.rootDefinitionId (program : LoweredProgram) (rootIndex : Nat)
 
 /-- Lower all present root, instance, and promoted bodies with global compiler
 identity tables. Unavailable bodies remain explicit source graph obligations. -/
-def lowerCoreProgram (input : ImportDocumentCore) : LowerResult LoweredProgram := do
-  let mut inputs : Array BodyCore := #[]
+def lowerProgram (input : ImportDocument) : LowerResult LoweredProgram := do
   let mut roots := #[]
   let mut instances := #[]
   let mut promoted := #[]
-  for body in input.bodies do
-    let parent := inputs.size
-    roots := roots.push parent
-    inputs := inputs.push body.toBodyCore
-    for child in body.promotedBodies do
-      if let some childBody := child.body then
-        promoted := promoted.push (parent, child.index, inputs.size)
-        inputs := inputs.push childBody
+  for root in input.bodyRoots do
+    unless root.bodyId < input.bodies.size do throw s!"missing root body {root.bodyId}"
+    roots := roots.push root.bodyId
+    for child in root.promotedBodies do
+      if let some bodyId := child.bodyId then
+        unless bodyId < input.bodies.size do throw s!"missing promoted body {bodyId}"
+        promoted := promoted.push (root.bodyId, child.index, bodyId)
   for inst in input.instances do
-    if let some body := inst.body then
-      let parent := inputs.size
-      instances := instances.push (inst.id, parent)
-      inputs := inputs.push body.toBodyCore
-      let children := if body.promotedBodies.isEmpty then inst.promotedBodies else body.promotedBodies
-      for child in children do
-        if let some childBody := child.body then
-          promoted := promoted.push (parent, child.index, inputs.size)
-          inputs := inputs.push childBody
-  -- The complete source body list includes root/instance/promoted identities;
-  -- seed all of them explicitly, plus graph instances that have no MIR body.
-  let definitions := inputs.filterMap (·.definitionId) ++ input.instances.filterMap (·.definitionId)
-  pure ⟨← lowerBodies (LowerContext.ofDocument input) inputs definitions, roots, instances, promoted, input⟩
+    if let some bodyId := inst.bodyId then
+      unless bodyId < input.bodies.size do throw s!"missing instance body {bodyId}"
+      instances := instances.push (inst.id, bodyId)
+      for child in inst.promotedBodies do
+        if let some childId := child.bodyId then
+          unless childId < input.bodies.size do throw s!"missing promoted body {childId}"
+          promoted := promoted.push (bodyId, child.index, childId)
+  for (body, bodyId) in input.bodies.toList.zipIdx do
+    for child in body.promotedBodies do
+      if let some childId := child.bodyId then
+        unless childId < input.bodies.size do throw s!"missing promoted body {childId}"
+        let entry := (bodyId, child.index, childId)
+        unless promoted.contains entry do promoted := promoted.push entry
+  pure ⟨← lowerBodies (LowerContext.ofDocument input) (input.bodies.map Body.toBodyCore),
+    roots, instances, promoted, input⟩
 
-/-- Compatibility entrypoint for full diagnostic documents. Runtime clients
-that decode without retaining the typed JSON tree should call
-`lowerCoreProgram`. -/
-def lowerProgram (input : ImportDocument) : LowerResult LoweredProgram :=
-  lowerCoreProgram input.toCore
 
-/-- Interner state shared by metadata-query lowering and MIR syntax. Appending
-entries preserves every previously lowered ID. -/
+
 structure CompilerTables where
   spans : Array SourceSpanData
   definitions : Array DefinitionId
@@ -1143,12 +984,12 @@ def lowerCompilerConstOperand (ctx : LowerContext) (tables : CompilerTables) (va
 def lowerCompilerConstValue (ctx : LowerContext) (ty : MIR.TyId) (value : TypedValue) :
     LowerResult MIR.ConstValue := constValue ctx ty value
 
-/-- Canonical type-constant interning for compiler pattern/query metadata. -/
+
 def lowerCompilerTypeConst (ctx : LowerContext) (tables : CompilerTables) (value : TypedValue) :
     LowerResult (MIR.TypeConstId × CompilerTables) := do
-  let (id, state) ← (do internTypeConst (← typeConst ctx value)).run
-    { spans := tables.spans, definitions := tables.definitions, typeConstants := tables.typeConstants }
-  pure (id, ⟨state.spans, state.definitions, state.typeConstants⟩)
+  let id ← typeConstRef ctx value
+  unless id < tables.typeConstants.size do throw s!"missing type constant {id}"
+  pure (id, tables)
 
 /-- Intern a compiler span without synthesizing a source location. -/
 def lowerCompilerSpan (tables : CompilerTables) (value : TypedValue) :
@@ -1156,91 +997,6 @@ def lowerCompilerSpan (tables : CompilerTables) (value : TypedValue) :
   let (id, state) ← (spanRef value).run
     { spans := tables.spans, definitions := tables.definitions, typeConstants := tables.typeConstants }
   pure (id, ⟨state.spans, state.definitions, state.typeConstants⟩)
-
-private structure SpanArrayReflexivity (spans : Array SourceSpanData) where
-  reflexive : (spans == spans) = true
-
-private theorem SpanArrayReflexivity.prepare
-    (spans : Array SourceSpanData) : SpanArrayReflexivity spans :=
-  ⟨by simp⟩
-
-private def SpanArrayReflexivity.matchesRight
-    {spans : Array SourceSpanData}
-    (certificate : SpanArrayReflexivity spans)
-    (candidate : Array SourceSpanData) : Bool :=
-  withPtrEq spans candidate (fun _ => spans == candidate)
-    (by intro equal; cases equal; exact certificate.reflexive)
-
-private theorem SpanArrayReflexivity.matchesRight_eq
-    {spans : Array SourceSpanData}
-    (certificate : SpanArrayReflexivity spans)
-    (candidate : Array SourceSpanData) :
-    certificate.matchesRight candidate = (spans == candidate) := by
-  simp [matchesRight, withPtrEq]
-
-/-- Incremental exact span interning for compiler source-map batches. The
-candidate index is seeded once from the existing table; buckets only narrow
-the search and full span equality remains authoritative. -/
-structure CompilerSpanInterner where
-  private mk ::
-  private tables : CompilerTables
-  private candidates : Std.HashMap (String × Nat × Nat) (Array Nat)
-  private spanReflexivity : SpanArrayReflexivity tables.spans
-
-def CompilerSpanInterner.ofTables (tables : CompilerTables) : CompilerSpanInterner := Id.run do
-  let mut candidates : Std.HashMap (String × Nat × Nat) (Array Nat) := {}
-  for index in [:tables.spans.size] do
-    if let some span := tables.spans[index]? then
-      let key := spanCandidateKey span
-      candidates := candidates.insert key ((candidates.getD key #[]).push index)
-  return ⟨tables, candidates, .prepare tables.spans⟩
-
-/-- Reuse an index only when the complete span arrays compare equal. The
-certificate makes the common same-array case constant time while preserving a
-full equality check for independently allocated or reordered tables. -/
-def CompilerSpanInterner.rebind (interner : CompilerSpanInterner) (tables : CompilerTables) :
-    CompilerSpanInterner :=
-  if interner.spanReflexivity.matchesRight tables.spans then
-    ⟨{ tables with spans := interner.tables.spans }, interner.candidates,
-      interner.spanReflexivity⟩
-  else
-    .ofTables tables
-
-def CompilerSpanInterner.getTables (interner : CompilerSpanInterner) : CompilerTables :=
-  interner.tables
-
-def lowerCompilerSpanWithInterner (interner : CompilerSpanInterner) (value : TypedValue) :
-    LowerResult (MIR.SpanRef × CompilerSpanInterner) := do
-  let (id, state) ← (spanRef value).run
-    { spans := interner.tables.spans
-      definitions := interner.tables.definitions
-      typeConstants := interner.tables.typeConstants
-      spanCandidates := some interner.candidates }
-  let tables : CompilerTables := ⟨state.spans, state.definitions, state.typeConstants⟩
-  return (id, ⟨tables, state.spanCandidates.getD interner.candidates,
-    .prepare state.spans⟩)
-
-/-- Compare the result of an independent lowering against the unchanged base.
-The checked pointer shortcut retains the full original array comparator. -/
-def CompilerSpanInterner.sameSpansAs (result base : CompilerSpanInterner) : Bool :=
-  base.spanReflexivity.matchesRight result.tables.spans
-
-theorem CompilerSpanInterner.sameSpansAs_eq (result base : CompilerSpanInterner) :
-    result.sameSpansAs base = (base.getTables.spans == result.getTables.spans) := by
-  exact base.spanReflexivity.matchesRight_eq result.tables.spans
-
-/-- Lower a compiler constant operand using an exact, persistent span index. -/
-def lowerCompilerConstOperandWithInterner (ctx : LowerContext)
-    (interner : CompilerSpanInterner) (value : TypedValue) :
-    LowerResult (MIR.ConstOperand × CompilerSpanInterner) := do
-  let (operand, state) ← (constOperand ctx value).run
-    { spans := interner.tables.spans
-      definitions := interner.tables.definitions
-      typeConstants := interner.tables.typeConstants
-      spanCandidates := some interner.candidates }
-  let tables : CompilerTables := ⟨state.spans, state.definitions, state.typeConstants⟩
-  return (operand, ⟨tables, state.spanCandidates.getD interner.candidates,
-    .prepare state.spans⟩)
 
 /-- Decode the source place key for compiler query evidence. Projection types
 must already belong to the shared input type graph. -/

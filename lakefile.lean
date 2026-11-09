@@ -48,17 +48,11 @@ lean_exe native_varying_choice125 where
   srcDir := "tools"
   root := `VaryingChoiceNative
 
--- Diagnostic only: structural hashing cost on a compact shared JSON DAG.
-lean_exe profile_json_sharing where
-  srcDir := "tools"
-  root := `ProfileJsonSharing
-
 -- Decode only, with the same native compiler as the full runner.
 lean_exe profile_runtime_decoder where
   srcDir := "tools"
   root := `ProfileRuntimeDecoder
 
--- Finite cached/reference decoder parity against the native runtime.
-lean_exe decoder_traversal_cache_tests where
+lean_exe typed_function_abi_tests where
   srcDir := "tests/input"
-  root := `DecoderTraversalCache2026
+  root := `TypedFunctionAbiTests

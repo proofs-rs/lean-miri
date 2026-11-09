@@ -9,7 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
-from mir_json import load_mir_document
+from mir_json import load_mir_document, pool_entry
 
 
 class FailClosedExportTests(unittest.TestCase):
@@ -91,14 +91,14 @@ class FailClosedExportTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         document = load_mir_document(self.output)
         self.assertEqual(set(document["compiler_named_types"]), {"c_ulong", "i32_pointer"})
-        self.assertIsInstance(document["compiler_named_types"]["c_ulong"]["type_id"], int)
+        self.assertIsInstance(document["compiler_named_types"]["c_ulong"], int)
         self.assertNotIn("compiler_named_constants", document)
         startup = document["compiler_runtime_queries"]["startup"]
         self.assertIs(startup["no_core"], False)
         sentinel = startup["core_escape_default"]
         self.assertIs(sentinel["mir_available"], True)
-        self.assertIsInstance(sentinel["definition"]["crate"], int)
-        self.assertIsInstance(sentinel["definition"]["index"], int)
+        self.assertIsInstance(pool_entry(document, "definitions", sentinel["definition"])["crate"], int)
+        self.assertIsInstance(pool_entry(document, "definitions", sentinel["definition"])["index"], int)
 
     def test_function_pointer_query_keeps_direct_instance_identity(self):
         document = self.accepted("function_pointer")
@@ -109,8 +109,30 @@ class FailClosedExportTests(unittest.TestCase):
             self.assertNotIn("value", record)
             self.assertEqual(record["resolution_kind"], "instance")
             self.assertIsInstance(record["instance_id"], int)
-            self.assertIn("instance_kind", record)
-            self.assertIn("generic_args", record)
+            instance = pool_entry(document, "instances", record["instance_id"])
+            self.assertIn("instance_kind", instance)
+            self.assertIn("generic_args", instance)
+            self.assertNotIn("instance_kind", record)
+            self.assertNotIn("generic_args", record)
+
+    def test_std_main_box_constructor_retains_numeric_result(self):
+        result = subprocess.run(
+            [str(self.exporter), "--output", str(self.output), "--",
+             str(ROOT / "tests/repro/startup/empty-main.rs"), "--crate-type=bin",
+             "--crate-name=box_query_main", "-Cpanic=abort"],
+            cwd=ROOT, env=self.environment, capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        document = load_mir_document(self.output)
+        queries = [row for row in document["compiler_cast_queries"]
+                   if row["query_kind"] == "box_type"]
+        self.assertTrue(queries)
+        for row in queries:
+            self.assertIsInstance(row["type"], int)
+            self.assertIsInstance(row["input_type"], int)
+            boxed = pool_entry(document, "types", row["type"])
+            self.assertEqual(boxed["shape"]["kind"], "adt")
+            self.assertIn("Box", boxed["shape"]["def_path"])
 
     def test_dynamic_lookup_closes_over_source_allowed_targets(self):
         document = self.accepted("dynamic_symbols")

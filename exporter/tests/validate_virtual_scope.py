@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-from mir_json import load_mir_document
+from mir_json import load_mir_document, pool_entry
 
 doc = load_mir_document(sys.argv[1])
 scope = doc["selected_scope"]
@@ -23,7 +23,7 @@ for target in virtual_targets:
     assert "status" not in target
     assert target["body_status"] == "not_applicable"
     assert "status" not in target["virtual_identity"]
-    assert "status" not in target["virtual_identity"]["fn_abi"]
+    assert "status" not in pool_entry(doc, "fn_abis", target["virtual_identity"]["fn_abi"])
 
 def walk(value):
     if isinstance(value, dict):
@@ -42,7 +42,7 @@ assert calls, "the MIR callsite lost its virtual operation"
 for call in calls:
     assert call["kind"] == "virtual_dispatch"
     assert isinstance(call.get("dispatch_slot"), int)
-    assert isinstance(call["virtual_resolution"].get("generic_args"), list)
+    assert isinstance(pool_entry(doc, "instances", call["virtual_resolution"]["instance_id"])["generic_args"], list)
     # An opaque input has no compiler-created concrete vtable candidate.
     # Runtime selection remains demand-local and returns Unsupported when the
     # actual receiver's table or matching method entry is absent.

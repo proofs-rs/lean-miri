@@ -93,7 +93,7 @@ Additional structural regressions are checked with
 `bash tools/check-structural-regressions.sh` (typechecking, kernel examples,
 #eval and executable assertions with pinned unit fixtures or no input). This is
 distinct from running supplemental guest harnesses that need fresh exports. The structural
-checker prepares pinned adapted schema3 unit fixtures and passes them to
+checker copies pinned schema-4 unit fixtures without changing their bytes and passes them to
 `LowerContext`, `ProviderContext` and `PrimitiveRebinding`, including their runtime
 source/cache and error-order assertions. These are not fresh producer comparisons.
 `tools/prepare-source-audit.py`
@@ -195,12 +195,11 @@ select **GitHub Actions** as the source. The published API entry point is
 
 ## MIR lowering
 
-`lowerProgram`/`lowerCoreProgram` accept decoder-produced MIR paired with its
+`lowerProgram` accepts decoder-produced MIR paired with its
 source document. Manually assembled or edited body/source pairs are outside this
 experimental API contract.
 
 `bash tools/check-lowering-reader.sh [INPUT.json ...]` checks source paths and
-agreement between full and runtime decoding after lowering, including MIR,
-identity tables, spans and ordered obligations. The default input is the fixed
+typed MIR, identity tables, spans and ordered obligations after lowering. The default input is the fixed
 empty-function fixture. Run `bash tools/check-empty-function.sh` for its
 UB-freedom proof and axiom audit.

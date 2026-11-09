@@ -44,6 +44,7 @@ structure Hooks (K User Other : Type) where
   registry : User → Registry Other
   putRegistry : User → Registry Other → User
   crossCrateInlineAlways : Bool
+  instanceArgs : CallInstance → M K User (Array GenericArg)
   inlineNever : CallInstance → M K User Bool
   chooseSalt : M K User (Fin 32)
   ptrGetAlloc : Pointer Provenance → M K User (Option (AllocId × Size))
@@ -58,7 +59,7 @@ private def setRegistry (h : Hooks K User Other) (value : Registry Other) : M K 
 /-- Both generic-argument inspection and inline-attribute query precede the
 uniqueness decision. The threshold Always short-circuits the compiler query. -/
 def globalSalt (h : Hooks K User Other) (callee : CallInstance) : M K User (Fin 32) := do
-  let generic := callee.args.any fun arg => match arg with | .Lifetime _ => false | _ => true
+  let generic := (← h.instanceArgs callee).any fun arg => match arg with | .Lifetime _ => false | _ => true
   let canInline : Bool ← if h.crossCrateInlineAlways then pure true else do
     let never ← h.inlineNever callee
     pure (!never)

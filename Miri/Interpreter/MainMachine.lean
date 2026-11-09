@@ -33,6 +33,7 @@ structure Hooks (U C O X F A Aff Payload : Type) where
   entrySignature : DefId → M U MainSignature
   startLangItem : M U (Option DefId)
   resolveInstance : DefId → Array GenericArg → M U (Option CallInstance)
+  itemInstance : DefId → Array GenericArg → M U CallInstance
   layoutOf : TyId → M U LocalLayout
 
 /-- Reassociate the unused termination-payload type parameter. The actual
@@ -58,6 +59,7 @@ def withTerminationPayload (h : Hooks U C O X F A Aff P) : Hooks U C O X F A Aff
   entrySignature := h.entrySignature
   startLangItem := h.startLangItem
   resolveInstance := h.resolveInstance
+  itemInstance := h.itemInstance
   layoutOf := h.layoutOf
  }
 
@@ -127,6 +129,7 @@ def mainQueries (h : Hooks U C O X F A Aff P) (choice : C) (token : Nat) :
   entrySignature := fun id => mainQuery h token (h.entrySignature id)
   startLangItem := mainQuery h token h.startLangItem
   resolveInstance := fun id args => mainQuery h token (h.resolveInstance id args)
+  itemInstance := fun id args => mainQuery h token (h.itemInstance id args)
   fnPointer := fun fnInstance => mainQuery h token (FunctionPointers.functionPointer h.functions (.Instance fnInstance))
   layoutOf := fun ty => mainQuery h token (h.layoutOf ty)
   allocate := fun layout kind => mainQuery h token do

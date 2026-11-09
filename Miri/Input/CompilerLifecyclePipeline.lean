@@ -5,8 +5,8 @@ import Miri.Input.CompilerFrameMetadata
 import Miri.Input.CompilerInstanceAbi
 
 /-! One final compilation-local identity table for actual frame lifecycle,
-full-instance ABI and backtrace source queries. Appending span/definition IDs
-never invalidates already prepared runtime dictionaries. -/
+full-instance ABI and backtrace source queries. Preparation reads canonical
+span/definition IDs without changing already prepared runtime dictionaries. -/
 namespace Miri.Input.CompilerLifecyclePipeline
 open Lean Miri.ABI Miri.Memory Miri.Interpreter
 structure Prepared where
@@ -30,7 +30,6 @@ def prepareProfiled (profile : Lean.Options) (calls : CompilerCallPipeline.Prepa
   let runtime := calls.calls.runtime
   let instances ← profileit "preparation.lifecycle.instance_abi" profile fun _ =>
     CompilerInstanceAbi.prepare runtime calls.calls.program
-      (some calls.sourceEquality) (some calls.calls.functionAbiCache)
   let lifecycle := profileit "preparation.lifecycle.compiler_lifecycle" profile fun _ =>
     CompilerLifecycle.prepare instances.program
   let backtrace ← profileit "preparation.lifecycle.backtrace_source" profile fun _ =>
@@ -40,7 +39,7 @@ def prepareProfiled (profile : Lean.Options) (calls : CompilerCallPipeline.Prepa
   let frames ← profileit "preparation.lifecycle.frame_metadata" profile fun _ =>
     CompilerFrameMetadata.prepare calls
   let shim ← profileit "preparation.lifecycle.shim_abi" profile fun _ =>
-    CompilerShimAbi.prepare runtime (some calls.calls.functionAbiCache)
+    CompilerShimAbi.prepare runtime
   return ⟨calls,{instances with program},{lifecycle with program},backtrace,frames,shim⟩
 
 def prepare (calls : CompilerCallPipeline.Prepared) : Except String Prepared :=

@@ -5,11 +5,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-from mir_json import load_mir_document
+from mir_json import load_mir_document, pool_entry
 
 doc = load_mir_document(sys.argv[1])
 assert doc["schema"] == "lean-miri-rustc-mir"
-assert doc["schema_version"] == 3
+assert doc["schema_version"] == 4
 assert doc["producer"]["rustc_commit"] == "8144389c895da997dbdecaa635e41d6a50be6ffd"
 assert doc["producer"]["miri_commit"] == "7fa591d7d4dd9af8154becbc8332f8096f8323b1"
 assert "completeness" not in doc
@@ -23,10 +23,10 @@ assert {node["shape"].get("adt_kind") for node in type_nodes.values() if node["s
 assert any(node["shape"].get("unsigned_kind") == "u32" for node in type_nodes.values())
 assert any(node["shape"].get("signed_kind") == "isize" for node in type_nodes.values())
 tag_encodings = [
-    node["layout"]["variants"]["tag_encoding"]
+    pool_entry(doc, "layouts", node["layout"])["variants"]["tag_encoding"]
     for node in type_nodes.values()
-    if "status" not in node["layout"]
-    and node["layout"].get("variants", {}).get("kind") == "multiple"
+    if node["layout"] is not None
+    and pool_entry(doc, "layouts", node["layout"]).get("variants", {}).get("kind") == "multiple"
 ]
 assert tag_encodings and all("status" not in tag for tag in tag_encodings)
 assert any(tag["kind"] == "direct" for tag in tag_encodings), "direct enum tag encoding missing"
@@ -42,19 +42,29 @@ assert all(
     for tag in niche_tags
 ), "niche tag payload must preserve exact range indices and u128 value"
 
-def check_type_refs(value):
+TYPE_REF_FIELDS = {"type", "element", "pointee", "base", "self_type", "source_type",
+                   "target_type", "input_type", "output_type", "return_type", "function_type"}
+TYPE_REF_ARRAYS = {"elements", "inputs", "argument_types", "extra_argument_types"}
+
+def _walk_type_refs(value):
     if isinstance(value, dict):
-        if set(value) == {"type_id"}:
-            assert value["type_id"] in type_nodes, f"dangling type reference {value}"
-        for child in value.values():
-            check_type_refs(child)
+        for key, child in value.items():
+            if key in TYPE_REF_FIELDS and isinstance(child, int):
+                yield child
+            elif key in TYPE_REF_ARRAYS and isinstance(child, list):
+                yield from (entry for entry in child if isinstance(entry, int))
+            yield from _walk_type_refs(child)
     elif isinstance(value, list):
         for child in value:
-            check_type_refs(child)
+            yield from _walk_type_refs(child)
+
+def check_type_refs(value):
+    for type_id in _walk_type_refs(value):
+        assert type_id in type_nodes, f"dangling type reference {type_id}"
 
 check_type_refs([doc["bodies"], doc["instances"], doc["allocations"]])
 check_type_refs(doc["types"])
-bodies = {body["def_path"]: body for body in doc["bodies"]}
+bodies = {root["def_path"]: root for root in doc["body_roots"]}
 assert {
     "exercise", "make_link", "direct_tag_value", "promoted_ref", "byte_string", "pointer_slice",
     "as_trait_object", "as_drop_trait_object", "call_trait_object",
@@ -64,7 +74,7 @@ assert bodies["promoted_ref"]["promoted_bodies"], "promoted MIR body missing"
 assert bodies["STATIC_DATA"]["is_static"] and not bodies["STATIC_DATA"]["thread_local_static"]
 assert bodies["TLS_WORD"]["is_static"] and bodies["TLS_WORD"]["thread_local_static"]
 
-exercise = bodies["exercise"]
+exercise = pool_entry(doc, "bodies", bodies["exercise"]["body"])
 assert exercise["locals"] and all("type" in local and "layout" in local for local in exercise["locals"])
 assert "status" not in exercise["phase"]
 assert exercise["phase"]["kind"] in ("built", "analysis", "runtime")
@@ -81,11 +91,11 @@ assert all(
     for call in calls
 )
 resolutions = [term["resolution"] for term in calls]
-assert any(r.get("kind") == "resolved_instance" and r.get("instance_def_path") == "id" for r in resolutions), "generic id::<u32> instance missing"
-atomic = [r for r in resolutions if r.get("kind") == "resolved_instance" and "fetch_add" in r.get("instance_def_path", "")]
-assert atomic and atomic[0]["fn_abi"]["arguments"], "atomic call and FnAbi missing"
-assert atomic[0]["fn_abi"]["calling_convention"] == {"kind": "rust"}
-for argument in [atomic[0]["fn_abi"]["return"], *atomic[0]["fn_abi"]["arguments"]]:
+assert any(r.get("kind") == "resolved_instance" and pool_entry(doc, "instances", r["instance_id"]).get("def_path") == "id" for r in resolutions), "generic id::<u32> instance missing"
+atomic = [r for r in resolutions if r.get("kind") == "resolved_instance" and "fetch_add" in pool_entry(doc, "instances", r["instance_id"]).get("def_path", "")]
+assert atomic and pool_entry(doc, "fn_abis", atomic[0]["fn_abi"])["arguments"], "atomic call and FnAbi missing"
+assert pool_entry(doc, "fn_abis", atomic[0]["fn_abi"])["calling_convention"] == {"kind": "rust"}
+for argument in [pool_entry(doc, "fn_abis", atomic[0]["fn_abi"])["return"], *pool_entry(doc, "fn_abis", atomic[0]["fn_abi"])["arguments"]]:
     mode = argument["mode"]
     if mode["kind"] == "Direct":
         assert "status" not in mode["attributes"]["arg_extension"]
@@ -100,11 +110,11 @@ id_instance = next(
     and instance.get("body_instantiation", {}).get("kind") == "substituted_and_normalized"
 )
 assert id_instance["instance_args_are_monomorphic"]
-assert not id_instance["body"]["is_polymorphic"], "generic instance body was not actually substituted"
+assert not pool_entry(doc, "bodies", id_instance["body"])["is_polymorphic"], "generic instance body was not actually substituted"
 assert id_instance["instance_kind"] == {"kind": "item", "def_id": id_instance["def_id"]}
-assert any(type_nodes[local["type"]["type_id"]]["display"] == "u32" for local in id_instance["body"]["locals"])
+assert any(type_nodes[local["type"]]["display"] == "u32" for local in pool_entry(doc, "bodies", id_instance["body"])["locals"])
 assert not any(
-    node["shape"].get("length", {}).get("kind") == "parameter"
+    (pool_entry(doc, "type_constants", node["shape"]["length"]).get("kind") if "length" in node["shape"] else None) == "parameter"
     for node in type_nodes.values()
 ), "uninstantiated generic constants must not enter a successful export"
 array_instance = next(
@@ -114,7 +124,7 @@ array_instance = next(
     and instance.get("kind") == "instance_mir"
     and instance.get("body_instantiation", {}).get("kind") == "substituted_and_normalized"
 )
-const_arg = next(arg["value"] for arg in array_instance["generic_args"] if arg["kind"] == "const")
+const_arg = pool_entry(doc, "type_constants", next(arg["value"] for arg in array_instance["generic_args"] if arg["kind"] == "const"))
 assert const_arg["kind"] == "value" and const_arg["value"] == {
     "bits_unsigned": "3", "kind": "leaf", "size_bytes": 8
 }, "monomorphized generic const argument must be structurally exported"
@@ -131,7 +141,7 @@ assert any(
     instance.get("kind") == "virtual_dispatch_target"
     and "status" not in instance
     and instance.get("body_status") == "not_applicable"
-    and "status" not in instance.get("virtual_identity", {}).get("fn_abi", {})
+    and "status" not in pool_entry(doc, "fn_abis", instance["virtual_identity"]["fn_abi"])
     for instance in instances.values()
 ), "virtual dispatch must retain exact non-body identity and ABI evidence"
 
@@ -181,15 +191,6 @@ assert '"active_union_field": 0' in serialized, "union active-field index missin
 assert "PointerExposeProvenance" in serialized, "pointer-to-integer cast kind missing"
 assert "Copy" in serialized and "Move" in serialized
 
-def _walk_type_refs(value):
-    if isinstance(value, dict):
-        if set(value) == {"type_id"}:
-            yield value
-        for child in value.values():
-            yield from _walk_type_refs(child)
-    elif isinstance(value, list):
-        for child in value:
-            yield from _walk_type_refs(child)
 
 def has_cycle(type_id, active, visited):
     if type_id in active:
@@ -198,7 +199,7 @@ def has_cycle(type_id, active, visited):
         return False
     active.add(type_id)
     for ref in _walk_type_refs(type_nodes[type_id]["shape"]):
-        if has_cycle(ref["type_id"], active, visited):
+        if has_cycle(ref, active, visited):
             return True
     active.remove(type_id)
     visited.add(type_id)
@@ -207,7 +208,7 @@ def has_cycle(type_id, active, visited):
 assert any(has_cycle(type_id, set(), set()) for type_id in type_nodes), "recursive ADT type graph cycle missing"
 assert "type_display" not in serialized, "ADT fields must carry structured type nodes"
 assert '"field_shuffle_seed":' in json.dumps(type_nodes), "repr/layout randomization input missing"
-assert '"regular_bits":' in serialized, "FnAbi attributes must be structurally represented"
+assert '"regular_bits":' in json.dumps(doc["fn_abis"]), "FnAbi attributes must be structurally represented"
 assert '"attributes_debug":' not in serialized, "FnAbi attributes must not rely on debug-only strings"
 assert '"source_instance_kind"' in serialized, "body source instance kind must be structured"
 fn_signatures = [node["shape"]["signature"] for node in type_nodes.values() if "signature" in node["shape"]]
@@ -238,7 +239,7 @@ vtable_queries = [
     if query.get("vtable_metadata", {}).get("entries") is not None
 ]
 assert any(
-    entry.get("def_path") == "<ValueCell as ValueSource>::get"
+    entry.get("kind") == "method" and pool_entry(doc, "instances", entry["instance_id"]).get("def_path") == "<ValueCell as ValueSource>::get"
     for vtable in vtable_queries for entry in vtable["entries"]
 )
 drop_entry = next(
@@ -254,7 +255,7 @@ assert "status" not in drop_glue and drop_glue["kind"] == "instance_mir"
 # A TLS `ThreadLocalRef` contains exact compiler metadata. Runtime allocation
 # and destruction are interpreter semantics, not synthetic exporter payload.
 tls_refs = []
-for block in bodies["read_tls"]["basic_blocks"]:
+for block in pool_entry(doc, "bodies", bodies["read_tls"]["body"])["basic_blocks"]:
     for statement in block["statements"]:
         value = statement["kind"].get("rvalue")
         if value and value.get("kind") == "ThreadLocalRef":
@@ -264,7 +265,7 @@ tls = tls_refs[0]
 assert "status" not in tls
 assert tls["global_info"]["is_static"] is True
 assert tls["global_info"]["thread_local"] is True
-assert tls["def_id"]["crate"] >= 0 and tls["def_id"]["index"] >= 0
+assert pool_entry(doc, "definitions", tls["def_id"])["crate"] >= 0 and pool_entry(doc, "definitions", tls["def_id"])["index"] >= 0
 assert tls["initializer"]["allocation"]["bytes_hex"] == "11000000"
 assert "runtime_allocation" not in tls
 
@@ -281,7 +282,7 @@ def check_allocation_refs(value):
 check_allocation_refs([doc["bodies"], doc["instances"], doc["allocations"]])
 
 # Every encountered operation in a successful document has typed semantics.
-for body in bodies.values():
+for body in doc["bodies"]:
     for block in body["basic_blocks"]:
         for statement in block["statements"]:
             assert statement["kind"].get("variant") and "status" not in statement["kind"]

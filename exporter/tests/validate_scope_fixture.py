@@ -15,8 +15,8 @@ assert scope["semantics"] == "structural_export_closure_only"
 assert "status" not in scope
 assert "unresolved_obligations" not in scope
 assert "retained_catalog_obligations" not in scope
-assert scope["roots"] == [{"def_path": "add_one", "def_id": doc["bodies"][0]["def_id"]}]
-assert len(doc["bodies"]) == 1 and doc["bodies"][0]["def_path"] == "add_one"
+assert scope["roots"] == [{"def_path": "add_one", "def_id": doc["body_roots"][0]["def_id"]}]
+assert len(doc["body_roots"]) == 1 and doc["body_roots"][0]["def_path"] == "add_one"
 
 
 def validate(document):

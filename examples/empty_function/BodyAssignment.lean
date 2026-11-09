@@ -50,10 +50,9 @@ private def literalType : StatementKind → Option TyId
   obtain ⟨functions, arithmetic, external, callback⟩ := source.constants
   let site : CompilerConstantQueries.Site := ⟨s.loaded.identity.index,⟨0,0⟩,
     #[.field "kind",.field "rvalue",.field "operand",.field "constant"]⟩
-  have literal := Literal.eval_unit s.prepared.compiler.constantBinding site functions arithmetic external
+  have literal := Literal.eval_unit s.prepared.compiler.constants s.prepared.compiler.runtime site functions arithmetic external
     MemoryErrors.constant metadata.literal s.abi.ret.layout
     (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) frames machine
-    metadata.constantBinding
     (by simp [BodyStep.withUnit, LocalUnit.withUnit, bodyIdentity, site])
     (by simp [BodyStep.withUnit, LocalUnit.withUnit, location, site])
     metadata.literalShape

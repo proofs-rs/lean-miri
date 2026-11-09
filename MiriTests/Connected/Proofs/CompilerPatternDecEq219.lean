@@ -74,7 +74,7 @@ def arrayDecEqWith {α : Type} (left right : Array α)
 /-- Exact recursive comparison, with the JSON endpoint equality provided by the
 caller. The array recursion uses a bounded `Fin` traversal and each recursive
 pattern comparison descends to an array member. -/
-def compilerPatternDecEq [DecidableEq Lean.Json] :
+def compilerPatternDecEq :
     (left right : CompilerPattern) → Decidable (left = right)
   | .range start finish, .range rightStart rightFinish =>
       if h : (start, finish) = (rightStart, rightFinish) then
@@ -107,10 +107,10 @@ decreasing_by
 
 /-- The decision procedure as an explicitly parameterized `DecidableEq` value.
 It is intentionally not registered globally: callers choose when to install it. -/
-def compilerPatternDecEqInstance [DecidableEq Lean.Json] : DecidableEq CompilerPattern :=
+def compilerPatternDecEqInstance : DecidableEq CompilerPattern :=
   compilerPatternDecEq
 
-theorem compilerPatternDecEq_reflect [DecidableEq Lean.Json]
+theorem compilerPatternDecEq_reflect
     (left right : CompilerPattern) :
     (compilerPatternDecEq left right).decide = true ↔ left = right := by
   cases hEq : compilerPatternDecEq left right with

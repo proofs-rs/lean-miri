@@ -17,7 +17,7 @@ inductive TypeKind where
   | reference (mutable : Bool)
   | string
   | sequence (element : MIR.TyId)
-  | dynamic (expectedTrait : Nat)
+  | dynamic (expectedTrait : PredicateList)
   | box
   | pattern (base : MIR.TyId)
   | aggregate (maybeDangling unsafeCell isEnum : Bool)
@@ -26,7 +26,7 @@ inductive TypeKind where
   deriving DecidableEq, Repr
 
 inductive MetadataTail where
-  | dynamic (expectedTrait : Nat)
+  | dynamic (expectedTrait : PredicateList)
   | sliceOrStr | foreign
   deriving DecidableEq, Repr
 

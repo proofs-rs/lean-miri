@@ -15,13 +15,13 @@ from cases import CASES, ORDERING_EXPORTS, SPECIAL_EXPORTS
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('case', choices=[c[0] for c in CASES] + [c[0] for c in ORDERING_EXPORTS] + [c[0] for c in SPECIAL_EXPORTS])
-    parser.add_argument('output', type=Path, help='new JSON path under scratch/')
+    parser.add_argument('output', type=Path, help='new JSON path under scratch/ or /tmp/')
     parser.add_argument('--libc', type=Path, help='libc rlib built with the pinned Miri sysroot')
     parser.add_argument('--exporter', type=Path, help='reference-only profile copy for exact retained argv[0]; required for fence-acqrel')
     args = parser.parse_args()
     output = args.output.resolve()
-    if not output.is_relative_to(ROOT / 'scratch') or output.exists():
-        parser.error('output must be a new file under scratch/')
+    if not (output.is_relative_to(ROOT / 'scratch') or output.is_relative_to(Path('/tmp'))) or output.exists():
+        parser.error('output must be a new file under scratch/ or /tmp/')
     output.parent.mkdir(parents=True, exist_ok=True)
     rustup = Path(os.environ.get('RUSTUP_HOME', ROOT / '.rustup'))
     toolchain = rustup / 'toolchains/miri-exporter-8144389c895d'
