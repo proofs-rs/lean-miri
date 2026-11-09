@@ -108,12 +108,52 @@ def Slice.object (value : Slice) : Except String (Array (String × Slice)) := va
   skipChar '{'; ws
   if (← peek!) == '}' then skip; pure #[] else objectFields #[]
 
-def Slice.optionalField (value : Slice) (name : String) : Except String (Option Slice) := do
-  pure (((← value.object).find? (fun field => field.1 == name)).map Prod.snd)
+structure Object where
+  source : Slice
+  fields : Array (String × Slice)
 
-def Slice.field (value : Slice) (name : String) : Except String Slice := do
+instance : Coe Object Slice where
+  coe := Object.source
+
+def parseObject (source : String) : Except String Object := (do
+  ws
+  let start ← position
+  skipChar '{'; ws
+  let fields ← if (← peek!) == '}' then
+    skip
+    pure #[]
+  else objectFields #[]
+  let stop ← position
+  ws; eof
+  pure ⟨⟨start, stop.2.offset⟩, fields⟩ : Parser Object).run source
+
+def Slice.view (value : Slice) : Except String Object := do
+  return ⟨value, ← value.object⟩
+
+def Object.optionalField (value : Object) (name : String) : Except String (Option Slice) :=
+  pure ((value.fields.find? (fun field => field.1 == name)).map Prod.snd)
+
+def Object.field (value : Object) (name : String) : Except String Slice := do
   let some field ← value.optionalField name | throw s!"missing field `{name}`"
   pure field
+
+def Slice.optionalField (value : Slice) (name : String) : Except String (Option Slice) := do
+  (← value.view).optionalField name
+
+def Slice.field (value : Slice) (name : String) : Except String Slice := do
+  (← value.view).field name
+
+class FieldSource (α : Type) where
+  lookupField : α → String → Except String Slice
+  members : α → Except String (Array (String × Slice))
+
+instance : FieldSource Slice where
+  lookupField := Slice.field
+  members := Slice.object
+
+instance : FieldSource Object where
+  lookupField := Object.field
+  members := fun value => pure value.fields
 
 def Slice.string (value : Slice) : Except String String :=
   value.read (skipChar '"' *> Lean.Json.Parser.str)

@@ -5,15 +5,16 @@ import Miri.Interpreter.Instance
 serialization-local numeric references; validation checks their table bounds. -/
 namespace Miri.Input.InstanceKindCodec
 open Lean Miri.Interpreter
-private def field (j : JsonReader.Slice) (key : String) : Except String JsonReader.Slice := j.field key
-private def str (j : JsonReader.Slice) (key : String) : Except String String := do (← field j key).string
-private def boolean (j : JsonReader.Slice) (key : String) : Except String Bool := do (← field j key).boolean
-private def natural (j : JsonReader.Slice) (key : String) : Except String Nat := do (← field j key).natural
-private def definition (j : JsonReader.Slice) (key : String) : Except String MIR.DefId :=
+private def field [JsonReader.FieldSource α] (j : α) (key : String) : Except String JsonReader.Slice := JsonReader.FieldSource.lookupField j key
+private def str [JsonReader.FieldSource α] (j : α) (key : String) : Except String String := do (← field j key).string
+private def boolean [JsonReader.FieldSource α] (j : α) (key : String) : Except String Bool := do (← field j key).boolean
+private def natural [JsonReader.FieldSource α] (j : α) (key : String) : Except String Nat := do (← field j key).natural
+private def definition [JsonReader.FieldSource α] (j : α) (key : String) : Except String MIR.DefId :=
   natural j key
-private def ty (j : JsonReader.Slice) (key : String) : Except String MIR.TyId :=
+private def ty [JsonReader.FieldSource α] (j : α) (key : String) : Except String MIR.TyId :=
   natural j key
 def decode (j : JsonReader.Slice) : Except String CallInstanceKind := do
+  let j ← j.view
   match ← str j "kind" with
   | "item" => pure (.Item (← definition j "def_id"))
   | "intrinsic" => pure (.Intrinsic (← definition j "def_id"))

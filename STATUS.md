@@ -174,11 +174,11 @@ and MIR-enabled std sysroot remains a validation gap; reusing retained artifacts
 does not establish that setup path.
 
 The ordinary standard-library startup closure from
-`tests/repro/startup/empty-main.rs` now decodes directly into MIR, including a
-fresh 7,254-body export. This removes the earlier `expected typed object`
-lowering failure. Complete guest execution of this larger closure still needs
-validation; successful rooted functions and the no_std startup witness do not
-establish support for it.
+`tests/repro/startup/empty-main.rs` now decodes directly into MIR. A fresh
+7,254-body export completed native execution with `finalized_exit code=0` under
+the bounded-diagnostic-zero choice profile, removing the earlier
+`expected typed object` lowering failure. This finite witness does not establish
+behavior for other standard-library closures or all permitted choices.
 
 ### Compiler query closure and prepared allocation identity
 

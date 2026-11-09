@@ -7,6 +7,7 @@ namespace Miri.Input.CompilerExternAbi
 open Lean
 
 def decode (source : JsonReader.Slice) : Except String ABI.ExternAbi := do
+  let source ← source.view
   let unwind ← source.field "unwind"
   let kind ← (← source.field "kind").string
   match kind with

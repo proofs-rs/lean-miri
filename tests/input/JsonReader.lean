@@ -51,3 +51,13 @@ private def item (values : Array Slice) (index : Nat) : IO Slice :=
       "01", "-", "1.", "1e", "1e+", "true false", "nullx", "\"unterminated",
       "\"\\x\"", "\"\\u12q4\"", "\"line\nfeed\"", "{\"ignored\":[0,{\"x\":tru}]}" ] do
     check (!(parse source).isOk) s!"invalid syntax accepted: {source}"
+
+#eval show IO Unit from do
+  let root ← expectOk (parseObject " {\"a\":0,\"nested\":{\"x\":[true,null]},\"a\":7,\"escaped\\u006b\":\"value\"} ")
+  check (root.fields.size == 3) "indexed object must retain last duplicate"
+  check ((← expectOk (← expectOk (root.field "a")).natural) == 7) "indexed duplicate field"
+  check ((← expectOk (← expectOk (root.field "escapedk")).string) == "value") "indexed escaped key"
+  check ((← expectOk (root.optionalField "missing")).isNone) "indexed absent member"
+  check ((parseObject "[]").isOk == false) "object entrypoint accepted array root"
+  check ((parseObject "{\"ignored\":[1,]}").isOk == false) "object entrypoint skipped malformed nested input"
+  check ((parseObject "{} null").isOk == false) "object entrypoint accepted trailing token"

@@ -5,18 +5,20 @@ import Miri.MIR.Syntax
 parsing does not expand the type, definition, or type-constant tables. -/
 namespace Miri.Input.GenericArgsCodec
 open Lean Miri.MIR
-private def field (j : JsonReader.Slice) (key : String) : Except String JsonReader.Slice := j.field key
-private def natural (j : JsonReader.Slice) (key : String) : Except String Nat := do (← field j key).natural
-private def text (j : JsonReader.Slice) (key : String) : Except String String := do (← field j key).string
-private def tag (j : JsonReader.Slice) : Except String String := text j "kind"
+private def field [JsonReader.FieldSource α] (j : α) (key : String) : Except String JsonReader.Slice := JsonReader.FieldSource.lookupField j key
+private def natural [JsonReader.FieldSource α] (j : α) (key : String) : Except String Nat := do (← field j key).natural
+private def text [JsonReader.FieldSource α] (j : α) (key : String) : Except String String := do (← field j key).string
+private def tag [JsonReader.FieldSource α] (j : α) : Except String String := text j "kind"
 
 def boundIndex (j : JsonReader.Slice) : Except String BoundVarIndexKind := do
+  let j ← j.view
   match ← tag j with
   | "bound" => return .Bound (← natural j "debruijn_index")
   | "canonical" => pure .Canonical
   | _ => throw "unknown bound index kind"
 
 def boundRegion (j : JsonReader.Slice) : Except String BoundRegionKind := do
+  let j ← j.view
   match ← tag j with
   | "anonymous" => pure .Anon
   | "named_for_printing" => return .NamedForPrinting (← text j "name")
@@ -25,9 +27,10 @@ def boundRegion (j : JsonReader.Slice) : Except String BoundRegionKind := do
   | _ => throw "unknown bound region kind"
 
 def boundVariable (j : JsonReader.Slice) : Except String BoundVariableKind := do
+  let j ← j.view
   match ← tag j with
   | "type" =>
-    let value ← field j "type_kind"
+    let value ← (← field j "type_kind").view
     match ← tag value with
     | "anonymous" => pure (.Type .Anon)
     | "parameter" => return .Type (.Param (← natural value "def_id"))
@@ -37,11 +40,12 @@ def boundVariable (j : JsonReader.Slice) : Except String BoundVariableKind := do
   | _ => throw "unknown bound variable kind"
 
 def region (j : JsonReader.Slice) : Except String Region := do
+  let j ← j.view
   match ← tag j with
   | "early_parameter" => return .EarlyParameter (← natural j "index") (← text j "name")
   | "bound" => return .Bound (← boundIndex (← field j "index_kind")) (← natural j "variable_index") (← boundRegion (← field j "bound_kind"))
   | "late_parameter" =>
-    let p ← field j "parameter"
+    let p ← (← field j "parameter").view
     let parameter : LateParamRegionKind ← match ← tag p with
       | "anonymous" => pure (LateParamRegionKind.Anon (← natural p "index"))
       | "named_anonymous" => pure (.NamedAnon (← natural p "index") (← text p "name"))
@@ -57,6 +61,7 @@ def region (j : JsonReader.Slice) : Except String Region := do
 def decode (j : JsonReader.Slice) : Except String (Array GenericArg) := do
   let values ← j.array
   values.mapM fun value => do
+    let value ← value.view
     let payload ← field value "value"
     match ← tag value with
     | "type" => return .Type (← payload.natural)

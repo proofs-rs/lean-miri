@@ -20,7 +20,7 @@ structure Context where
   path : Miri.Interpreter.OperandPath := #[]
   threadLocal : Slice → Result Catalog.ThreadLocal := fun _ => .error "TLS metadata decoder unavailable"
 
-private abbrev Fields := Array (String × Slice)
+private abbrev Fields := JsonReader.Object
 private abbrev DecodeM := StateT NodeFacts (ReaderT Context (Except String))
 
 private def atField (name : String) (action : DecodeM α) : DecodeM α :=
@@ -35,11 +35,9 @@ private def run (ctx : Context) (action : DecodeM α) : Result α :=
 private def runFacts (ctx : Context) (action : DecodeM α) : Result (α × NodeFacts) :=
   (action.run {}).run ctx
 
-private def fields (v : Slice) : Result Fields := v.object
-private def get (fs : Fields) (key : String) : Result Slice :=
-  match fs.find? (·.1 == key) with
-  | some (_, v) => pure v
-  | none => throw s!"missing MIR field {key}"
+private def fields (v : Slice) : Result Fields := v.view
+private def get (fs : Fields) (key : String) : Result Slice := fs.field key
+private def fieldTag (fs : Fields) : Result String := do (← get fs "kind").string
 private def nat (v : Slice) : Result Nat := v.natural
 private def text (v : Slice) : Result String := v.string
 private def bool (v : Slice) : Result Bool := v.boolean
@@ -69,8 +67,9 @@ private def spanRef (v : Slice) : DecodeM MIR.SpanRef := do
   unless id < (← read).spanCount do throw s!"missing source span {id}"
   pure ⟨id⟩
 private def source (v : Slice) : DecodeM MIR.SourceInfo := do
-  let span ← spanRef (← v.field "span")
-  let scope ← nat (← v.field "scope")
+  let fs ← fields v
+  let span ← spanRef (← get fs "span")
+  let scope ← nat (← get fs "scope")
   unless scope < (← read).scopeCount do throw "unresolved source scope"
   pure ⟨span, scope⟩
 private def Context.scalarSize (ctx : Context) (id : Nat) : Option Nat :=
@@ -90,13 +89,13 @@ private def safety (v : Slice) : Result MIR.Safety := do
 
 private def castKind (v : Slice) : Result MIR.CastKind := do
   let fs ← fields v
-  match ← tag v with
+  match ← fieldTag fs with
   | "PointerExposeProvenance" => pure .PointerExposeProvenance
   | "PointerWithExposedProvenance" => pure .PointerWithExposedProvenance
   | "PointerCoercion" =>
     let c ← get fs "coercion"
     let cf ← fields c
-    let coercion ← (show Result MIR.PointerCoercion from match ← tag c with
+    let coercion ← (show Result MIR.PointerCoercion from match ← fieldTag cf with
       | "ReifyFnPointer" => return MIR.PointerCoercion.ReifyFnPointer (← safety (← get cf "safety"))
       | "UnsafeFnPointer" => pure .UnsafeFnPointer
       | "ClosureFnPointer" => return .ClosureFnPointer (← safety (← get cf "safety"))
@@ -122,14 +121,14 @@ private def castKind (v : Slice) : Result MIR.CastKind := do
 
 private def boundIndex (v : Slice) : Result MIR.BoundVarIndexKind := do
   let fs ← fields v
-  match ← tag v with
+  match ← fieldTag fs with
   | "bound" => return .Bound (← nat (← get fs "debruijn_index"))
   | "canonical" => pure .Canonical
   | _ => throw "unknown bound index kind"
 
 private def boundRegion (v : Slice) : DecodeM MIR.BoundRegionKind := do
   let fs ← fields v
-  match ← tag v with
+  match ← fieldTag fs with
   | "anonymous" => pure .Anon
   | "named_for_printing" => return .NamedForPrinting (← text (← get fs "name"))
   | "named" => return .Named (← definition (← get fs "def_id"))
@@ -138,13 +137,13 @@ private def boundRegion (v : Slice) : DecodeM MIR.BoundRegionKind := do
 
 private def region (v : Slice) : DecodeM MIR.Region := do
   let fs ← fields v
-  match ← tag v with
+  match ← fieldTag fs with
   | "early_parameter" => return .EarlyParameter (← nat (← get fs "index")) (← text (← get fs "name"))
   | "bound" => return .Bound (← boundIndex (← get fs "index_kind")) (← nat (← get fs "variable_index")) (← boundRegion (← get fs "bound_kind"))
   | "late_parameter" =>
     let p ← get fs "parameter"
     let pf ← fields p
-    let kind ← (show DecodeM MIR.LateParamRegionKind from match ← tag p with
+    let kind ← (show DecodeM MIR.LateParamRegionKind from match ← fieldTag pf with
       | "anonymous" => return .Anon (← nat (← get pf "index"))
       | "named_anonymous" => return .NamedAnon (← nat (← get pf "index")) (← text (← get pf "name"))
       | "named" => return .Named (← definition (← get pf "def_id"))
@@ -158,7 +157,7 @@ private def region (v : Slice) : DecodeM MIR.Region := do
 
 private def borrow (v : Slice) : Result MIR.BorrowKind := do
   let fs ← fields v
-  match ← tag v with
+  match ← fieldTag fs with
   | "shared" => pure .Shared
   | "fake" =>
     unless (← tag (← get fs "retag_mode")) == "default" do throw "unknown fake-borrow retag mode"
@@ -174,9 +173,8 @@ private def borrow (v : Slice) : Result MIR.BorrowKind := do
     | _ => throw "unknown mutable borrow"
   | _ => throw "unknown borrow kind"
 
-private def projection (ctx : Context) (v : Slice) : Result MIR.ProjectionElem := do
-  let fs ← fields v
-  match ← tag v with
+private def projection (ctx : Context) (fs : Fields) : Result MIR.ProjectionElem := do
+  match ← fieldTag fs with
   | "Deref" => pure .Deref
   | "Field" => return .Field (← nat (← get fs "index")) (← typeId ctx (← get fs "field_type"))
   | "Index" =>
@@ -197,11 +195,11 @@ private def place (ctx : Context) (v : Slice) : DecodeM MIR.Place := do
   let fs ← fields v
   let id ← nat (← get fs "local")
   unless id < ctx.localCount do throw s!"out-of-range local {id}"
-  let projections ← array (← get fs "projection")
+  let projections ← ((← array (← get fs "projection")).mapM fields : Result _)
   let value : MIR.Place := ⟨id, ← (projections.mapM (projection ctx) : Result _)⟩
   let path := (← read).path
   let fact : PlaceFact := ⟨path, value, ← typeId ctx (← get fs "type"),
-    ← (projections.mapM fun item => do typeId ctx (← item.field "resulting_type") : Result _)⟩
+    ← (projections.mapM fun fs => do typeId ctx (← get fs "resulting_type") : Result _)⟩
   modify fun facts => { facts with places := facts.places.push fact }
   return value
 
@@ -264,7 +262,7 @@ private def annotation (v : Slice) : Result Nat :=
 
 private def aggregate (ctx : Context) (v : Slice) : DecodeM MIR.AggregateKind := do
   let fs ← fields v
-  match ← tag v with
+  match ← fieldTag fs with
   | "Array" => return .Array (← typeId ctx (← get fs "element_type"))
   | "Tuple" => pure .Tuple
   | "Adt" =>
@@ -284,7 +282,7 @@ private def allocationId (ctx : Context) (v : Slice) : Result MIR.AllocationId :
 
 private def constValue (ctx : Context) (ty : MIR.TyId) (v : Slice) : Result MIR.ConstValue := do
   let fs ← fields v
-  match ← tag v with
+  match ← fieldTag fs with
   | "zero_sized" => pure .ZeroSized
   | "scalar" =>
     let bits ← number (← get fs "bits_unsigned")
@@ -299,36 +297,45 @@ private def constValue (ctx : Context) (ty : MIR.TyId) (v : Slice) : Result MIR.
   | "indirect_allocation" => return .Indirect (← allocationId ctx (← get fs "allocation")) (← nat (← get fs "offset_bytes"))
   | _ => throw "unknown or unavailable evaluated constant"
 
-private def constOperand (ctx : Context) (v : Slice) : DecodeM MIR.ConstOperand := do
-  let c ← fields v
+private def constOperandFields (ctx : Context) (c : Fields) : DecodeM MIR.ConstOperand := do
   let ty ← typeId ctx (← get c "type")
   let userType ← optional annotation (← get c "user_type_annotation")
   let span ← spanRef (← get c "span")
-  let evaluatedValue ← get c "constant"
-  unless (← tag evaluatedValue) == "evaluated_const" do throw "unknown constant evaluation record"
-  let evaluated ← fields evaluatedValue
+  let evaluated ← fields (← get c "constant")
+  unless (← fieldTag evaluated) == "evaluated_const" do throw "unknown constant evaluation record"
   let originalValue ← get evaluated "source"
   let original ← fields originalValue
-  let constant ← (show DecodeM MIR.MirConst from match ← tag originalValue with
-    | "already_evaluated" => return .Val (← constValue ctx ty (← get evaluated "value")) ty
-    | "type_system_const" => return .Ty (← typeId ctx (← get original "type")) (← typeConstRef ctx (← get original "const"))
-    | "unevaluated" => return .Unevaluated ⟨← definition (← get original "def_id"), ← genericArgs ctx (← get original "generic_args"), ← optional nat (← get original "promoted")⟩ (← typeId ctx (← get original "type"))
+  let (constant, evaluated) ← (show DecodeM (MIR.MirConst × MIR.ConstValue) from
+    match ← fieldTag original with
+    | "already_evaluated" => do
+      let evaluated ← constValue ctx ty (← get evaluated "value")
+      pure (.Val evaluated ty, evaluated)
+    | "type_system_const" => do
+      let constant := MIR.MirConst.Ty (← typeId ctx (← get original "type")) (← typeConstRef ctx (← get original "const"))
+      pure (constant, ← constValue ctx ty (← get evaluated "value"))
+    | "unevaluated" => do
+      let constant := MIR.MirConst.Unevaluated ⟨← definition (← get original "def_id"),
+        ← genericArgs ctx (← get original "generic_args"), ← optional nat (← get original "promoted")⟩
+        (← typeId ctx (← get original "type"))
+      pure (constant, ← constValue ctx ty (← get evaluated "value"))
     | _ => throw "unknown MIR constant source")
   let value : MIR.ConstOperand := ⟨span, userType, constant⟩
-  let evaluated ← constValue ctx ty (← get evaluated "value")
   let path := (← read).path
   modify fun facts => { facts with constants := facts.constants.push ⟨path, value, ty, evaluated⟩ }
   pure value
 
+private def constOperand (ctx : Context) (v : Slice) : DecodeM MIR.ConstOperand := do
+  constOperandFields ctx (← fields v)
+
 private def operand (ctx : Context) (v : Slice) : DecodeM MIR.Operand := do
   let fs ← fields v
-  match ← tag v with
+  match ← fieldTag fs with
   | "Copy" => return .Copy (← atField "place" (place ctx (← get fs "place")))
   | "Move" => return .Move (← atField "place" (place ctx (← get fs "place")))
   | "RuntimeChecks" =>
-    let rawCheck ← get fs "check"
-    let _ ← bool (← rawCheck.field "enabled")
-    let check ← tag rawCheck
+    let rawCheck ← fields (← get fs "check")
+    let _ ← bool (← get rawCheck "enabled")
+    let check ← fieldTag rawCheck
     let check ← match check with
       | "ub_checks" => pure MIR.RuntimeChecks.UbChecks
       | "contract_checks" => pure .ContractChecks
@@ -338,42 +345,45 @@ private def operand (ctx : Context) (v : Slice) : DecodeM MIR.Operand := do
   | "Constant" => return .Constant (← atField "constant" (constOperand ctx (← get fs "constant")))
   | _ => throw "unknown operand"
 
-private def captureUpcast (ctx : Context) (v : Slice) (kind : MIR.CastKind) : DecodeM Unit := do
-  let some desc ← v.optionalField "vtable_allocation" | return
+private def captureUpcast (ctx : Context) (fs : Fields) (kind : MIR.CastKind) : DecodeM Unit := do
+  let some desc ← fs.optionalField "vtable_allocation" | return
   if desc.isNull then return
-  if (← tag desc) != "dynamic_vtable_upcast" then return
+  let desc ← fields desc
+  if (← fieldTag desc) != "dynamic_vtable_upcast" then return
   match kind with
   | .PointerCoercion .Unsize _ => pure ()
   | _ => throw "dynamic vtable descriptor requires an unsizing cast"
-  let operand ← v.field "operand"
-  let operandType ← match ← tag operand with
-    | "Copy" | "Move" => typeId ctx (← (← operand.field "place").field "type")
-    | "Constant" => typeId ctx (← (← operand.field "constant").field "type")
+  let operand ← get fs "operand"
+  let operand ← fields operand
+  let operandType ← match ← fieldTag operand with
+    | "Copy" | "Move" => typeId ctx (← (← get operand "place").field "type")
+    | "Constant" => typeId ctx (← (← get operand "constant").field "type")
     | _ => throw "dynamic vtable upcast lacks operand type"
-  let query ← desc.field "supertrait_slot_query"
-  unless (← text (← desc.field "runtime_vtable")) == "source_operand_metadata" &&
-      (← text (← query.field "query_kind")) == "supertrait_slot" &&
-      (← text (← query.field "typing_env")) == "fully_monomorphized" do
+  let query ← get desc "supertrait_slot_query"
+  let query ← fields query
+  unless (← text (← get desc "runtime_vtable")) == "source_operand_metadata" &&
+      (← text (← get query "query_kind")) == "supertrait_slot" &&
+      (← text (← get query "typing_env")) == "fully_monomorphized" do
     throw "invalid dynamic vtable query metadata"
   let evidence : DynamicUpcastEvidence := {
-    operandType, castTarget := ← typeId ctx (← v.field "target_type"),
-    sourceType := ← typeId ctx (← desc.field "source_type"),
-    targetType := ← typeId ctx (← desc.field "target_type"),
-    sourcePointeeType := ← typeId ctx (← desc.field "source_pointee_type"),
-    targetPointeeType := ← typeId ctx (← desc.field "target_pointee_type"),
-    sourceTailType := ← typeId ctx (← desc.field "source_tail_type"),
-    targetTailType := ← typeId ctx (← desc.field "target_tail_type"),
-    querySource := ← typeId ctx (← query.field "input_source"),
-    queryTarget := ← typeId ctx (← query.field "input_target") }
+    operandType, castTarget := ← typeId ctx (← get fs "target_type"),
+    sourceType := ← typeId ctx (← get desc "source_type"),
+    targetType := ← typeId ctx (← get desc "target_type"),
+    sourcePointeeType := ← typeId ctx (← get desc "source_pointee_type"),
+    targetPointeeType := ← typeId ctx (← get desc "target_pointee_type"),
+    sourceTailType := ← typeId ctx (← get desc "source_tail_type"),
+    targetTailType := ← typeId ctx (← get desc "target_tail_type"),
+    querySource := ← typeId ctx (← get query "input_source"),
+    queryTarget := ← typeId ctx (← get query "input_target") }
   modify fun facts => {facts with dynamicUpcasts := facts.dynamicUpcasts.push evidence}
 
 private def rvalue (ctx : Context) (v : Slice) : DecodeM MIR.Rvalue := do
   let fs ← fields v
-  match ← tag v with
+  match ← fieldTag fs with
   | "Use" =>
-    let rawRetag ← get fs "retag"
-    let retag ← tag rawRetag
-    unless (← bool (← rawRetag.field "performs_retag")) == (retag == "yes") do
+    let rawRetag ← fields (← get fs "retag")
+    let retag ← fieldTag rawRetag
+    unless (← bool (← get rawRetag "performs_retag")) == (retag == "yes") do
       throw "WithRetag boolean disagrees with tag"
     let retag ← match retag with
       | "yes" => pure MIR.WithRetag.Yes
@@ -404,7 +414,7 @@ private def rvalue (ctx : Context) (v : Slice) : DecodeM MIR.Rvalue := do
     return .RawPtr kind (← atField "place" (place ctx (← get fs "place")))
   | "Cast" =>
     let kind ← castKind (← get fs "cast_kind")
-    captureUpcast ctx v kind
+    captureUpcast ctx fs kind
     return .Cast kind (← atField "operand" (operand ctx (← get fs "operand"))) (← typeId ctx (← get fs "target_type"))
   | "Aggregate" => return .Aggregate (← aggregate ctx (← get fs "aggregate_kind")) (← atField "operands" ((← array (← get fs "operands")).mapIdxM fun i v => atIndex i (operand ctx v)))
   | "Reborrow" => return .Reborrow (← typeId ctx (← get fs "type")) (← mutability (← get fs "mutability")) (← atField "place" (place ctx (← get fs "place")))
@@ -412,7 +422,7 @@ private def rvalue (ctx : Context) (v : Slice) : DecodeM MIR.Rvalue := do
 
 private def fakeRead (v : Slice) : DecodeM MIR.FakeReadCause := do
   let fs ← fields v
-  match ← tag v with
+  match ← fieldTag fs with
   | "match_guard" => pure .ForMatchGuard
   | "matched_place" => return .ForMatchedPlace (← optionalM definition (← get fs "hoisted_from"))
   | "guard_binding" => pure .ForGuardBinding
@@ -430,7 +440,7 @@ private def variance (v : Slice) : Result MIR.Variance := do
 
 private def userProjectionKind (v : Slice) : Result MIR.ProjectionKind := do
   let fs ← fields v
-  match ← tag v with
+  match ← fieldTag fs with
   | "Deref" => pure .Deref
   | "Field" => return .Field (← nat (← get fs "index"))
   | "Index" => pure .Index
@@ -448,7 +458,7 @@ private def userProjection (v : Slice) : Result MIR.UserTypeProjection := do
 
 private def coverage (v : Slice) : DecodeM MIR.CoverageKind := do
   let fs ← fields v
-  match ← tag v with
+  match ← fieldTag fs with
   | "point" =>
     let kind ← (show DecodeM MIR.CoveragePointKind from match ← tag (← get fs "point_kind") with
       | "expr" => pure .Expr
@@ -461,9 +471,9 @@ private def coverage (v : Slice) : DecodeM MIR.CoverageKind := do
   | "virtual_counter" => return .VirtualCounter (← nat (← get fs "bcb"))
   | _ => throw "unknown coverage kind"
 
-private def statement (ctx : Context) (node : Slice) : DecodeM MIR.Statement := do
+private def statement (ctx : Context) (node : Fields) : DecodeM MIR.Statement := do
   let kind ← (show DecodeM MIR.StatementKind from do
-    let fs ← fields (← node.field "kind")
+    let fs ← fields (← get node "kind")
     match ← text (← get fs "variant") with
     | "Assign" => return MIR.StatementKind.Assign (← atField "place" (place ctx (← get fs "place"))) (← atField "rvalue" (rvalue ctx (← get fs "rvalue")))
     | "StorageLive" => return .StorageLive (← nat (← get fs "local"))
@@ -485,7 +495,7 @@ private def statement (ctx : Context) (node : Slice) : DecodeM MIR.Statement := 
       unless (← tag (← get fs "reason")) == "edition_2024" do throw "unknown backward drop reason"
       return .BackwardIncompatibleDropHint (← atField "place" (place ctx (← get fs "place"))) .Edition2024
     | _ => throw "unknown statement")
-  return ⟨← source (← node.field "source_info"), kind⟩
+  return ⟨← source (← get node "source_info"), kind⟩
 
 private def unwindReason (v : Slice) : Result MIR.UnwindTerminateReason := do
   match ← tag v with
@@ -495,7 +505,7 @@ private def unwindReason (v : Slice) : Result MIR.UnwindTerminateReason := do
 
 private def coroutine (v : Slice) : Result MIR.CoroutineKind := do
   let fs ← fields v
-  match ← tag v with
+  match ← fieldTag fs with
   | "desugared" =>
     let desugaring ← (show Result MIR.CoroutineDesugaring from match ← text (← get fs "desugaring") with
       | "async" => pure .Async
@@ -526,7 +536,7 @@ private def unwind (v : Slice) : Result MIR.UnwindAction := do
 
 private def assertKind (ctx : Context) (v : Slice) : DecodeM MIR.AssertKind := do
   let fs ← fields v
-  match ← tag v with
+  match ← fieldTag fs with
   | "Overflow" =>
     let op ← binOp (← get fs "operator")
     return .Overflow op (← atField "left" (operand ctx (← get fs "left"))) (← atField "right" (operand ctx (← get fs "right")))
@@ -601,14 +611,14 @@ private def asmRegister (v : Slice) : Result MIR.InlineAsmRegOrRegClass := do
   let fs ← fields v
   let arch ← asmArch (← get fs "arch")
   let name ← text (← get fs "name")
-  match ← tag v with
+  match ← fieldTag fs with
   | "register" => pure (.Reg arch name)
   | "register_class" => pure (.RegClass arch name)
   | _ => throw "unknown assembly register kind"
 
 private def asmPiece (v : Slice) : DecodeM MIR.InlineAsmTemplatePiece := do
   let fs ← fields v
-  match ← tag v with
+  match ← fieldTag fs with
   | "string" => return .String (← text (← get fs "text"))
   | "placeholder" =>
     let modifier ← optional (fun value => do
@@ -621,7 +631,7 @@ private def asmPiece (v : Slice) : DecodeM MIR.InlineAsmTemplatePiece := do
 
 private def asmOperand (ctx : Context) (v : Slice) : DecodeM MIR.InlineAsmOperand := do
   let fs ← fields v
-  match ← tag v with
+  match ← fieldTag fs with
   | "in" => return .In (← asmRegister (← get fs "register")) (← atField "value" (operand ctx (← get fs "value")))
   | "out" => return .Out (← asmRegister (← get fs "register")) (← bool (← get fs "late")) (← atField "place" (optionalM (place ctx) (← get fs "place")))
   | "inout" => return .InOut (← asmRegister (← get fs "register")) (← bool (← get fs "late")) (← atField "input" (operand ctx (← get fs "input"))) (← atField "output" (optionalM (place ctx) (← get fs "output")))
@@ -654,9 +664,8 @@ private def inlineAsm (ctx : Context) (fs : Fields) : DecodeM MIR.InlineAsmTermi
     | _ => pure ()
   return ⟨macroKind, template, operands, options, spans, targets, ← unwind (← get fs "unwind")⟩
 
-private def terminator (ctx : Context) (node : Slice) : DecodeM MIR.Terminator := do
+private def terminator (ctx : Context) (node : Fields) (fs : Fields) : DecodeM MIR.Terminator := do
   let kind ← (show DecodeM MIR.TerminatorKind from do
-    let fs ← fields (← node.field "kind")
     match ← text (← get fs "variant") with
     | "Return" => pure MIR.TerminatorKind.Return
     | "Unreachable" => pure .Unreachable
@@ -681,13 +690,13 @@ private def terminator (ctx : Context) (node : Slice) : DecodeM MIR.Terminator :
     | "FalseUnwind" => return .FalseUnwind (← nat (← get fs "real_target")) (← unwind (← get fs "unwind"))
     | "InlineAsm" => return .InlineAsm (← inlineAsm ctx fs)
     | _ => throw "unknown terminator")
-  return ⟨← source (← node.field "source_info"), kind⟩
+  return ⟨← source (← get node "source_info"), kind⟩
 
 private def phase (v : Slice) : Result MIR.MirPhase := do
   let fs ← fields v
-  match ← tag v with
+  match ← fieldTag fs with
   | "built" =>
-    unless (← v.optionalField "phase").isNone do throw "built MIR phase has a subphase"
+    unless (← fs.optionalField "phase").isNone do throw "built MIR phase has a subphase"
     pure .Built
   | "analysis" =>
     match ← tag (← get fs "phase") with
@@ -704,7 +713,7 @@ private def phase (v : Slice) : Result MIR.MirPhase := do
 
 
 
-private def optionalField (v : Slice) (key : String) (f : Slice → Result α) : Result (Option α) := do
+private def optionalField (v : Fields) (key : String) (f : Slice → Result α) : Result (Option α) := do
   match ← v.optionalField key with
   | none => pure none
   | some value => optional f value
@@ -714,54 +723,64 @@ private def sourceInfo (ctx : Context) (v : Slice) : Result SourceInfo := do
   pure ⟨info.span.id, info.scope⟩
 
 private def scope (ctx : Context) (v : Slice) : Result SourceScope := do
-  let inlined ← optionalField v "inlined" fun value => do
-    return { instanceId := ← nat (← value.field "instance_id")
-             callsiteSpanId := ← nat (← value.field "callsite_span")
-             requiresCallerLocation := ← bool (← value.field "requires_caller_location") }
-  let id ← nat (← v.field "scope")
-  let spanId ← nat (← v.field "span")
+  let fs ← fields v
+  let inlined ← optionalField fs "inlined" fun value => do
+    let value ← fields value
+    return { instanceId := ← nat (← get value "instance_id")
+             callsiteSpanId := ← nat (← get value "callsite_span")
+             requiresCallerLocation := ← bool (← get value "requires_caller_location") }
+  let id ← nat (← get fs "scope")
+  let spanId ← nat (← get fs "span")
   unless spanId < ctx.spanCount do throw s!"unresolved scope span {spanId}"
-  return { id, spanId, inlined, parent := ← optionalField v "parent" nat,
-           inlinedParent := ← optionalField v "inlined_parent_scope" nat }
+  return { id, spanId, inlined, parent := ← optionalField fs "parent" nat,
+           inlinedParent := ← optionalField fs "inlined_parent_scope" nat }
 
 private def backtrace (ctx : Context) (v : Slice) : Result BacktraceSpan := do
-  let spanId ← nat (← v.field "span")
+  let fs ← fields v
+  let spanId ← nat (← get fs "span")
   unless spanId < ctx.spanCount do throw s!"unresolved backtrace span {spanId}"
-  let pos ← v.field "source_position"
-  return { spanId, collapsedLo := ← nat (← v.field "collapsed_lo"), position := {
-    bytePosition := ← nat (← pos.field "byte_position"), line := ← nat (← pos.field "line"),
-    column := ← nat (← pos.field "zero_based_char_column"), filename := ← text (← pos.field "filename") } }
+  let pos ← get fs "source_position"
+  let pos ← fields pos
+  return { spanId, collapsedLo := ← nat (← get fs "collapsed_lo"), position := {
+    bytePosition := ← nat (← get pos "byte_position"), line := ← nat (← get pos "line"),
+    column := ← nat (← get pos "zero_based_char_column"), filename := ← text (← get pos "filename") } }
 
 private def callEvidence (ctx : Context) (v : Slice) : Result CallResolutionEvidence := do
-  let kind ← match ← tag v with
+  let fs ← fields v
+  let kind ← match ← fieldTag fs with
     | "resolved_instance" => pure CallResolutionKind.direct
     | "virtual_dispatch" => pure .virtualDispatch
     | "indirect_function_pointer" => pure .indirect
     | _ => throw "unknown call resolution"
-  let instanceId ← if kind == .indirect then pure none else some <$> nat (← v.field "instance_id")
-  let functionType ← typeId ctx (← v.field "function_type")
-  let dispatchSlot ← if kind == .virtualDispatch then some <$> nat (← v.field "dispatch_slot") else pure none
-  pure {kind, instanceId, functionType := some functionType, dispatchSlot, fnAbiId := ← nat (← v.field "fn_abi")}
+  let instanceId ← if kind == .indirect then pure none else some <$> nat (← get fs "instance_id")
+  let functionType ← typeId ctx (← get fs "function_type")
+  let dispatchSlot ← if kind == .virtualDispatch then some <$> nat (← get fs "dispatch_slot") else pure none
+  pure {kind, instanceId, functionType := some functionType, dispatchSlot, fnAbiId := ← nat (← get fs "fn_abi")}
 
 private def constantContext (ctx : Context) (v : Slice) : Result ConstantQueryContext := do
-  let inputPhase ← match ← text (← v.field "mir_input_phase") with
+  let fs ← fields v
+  let inputPhase ← match ← text (← get fs "mir_input_phase") with
     | "template" => pure BodyInputPhase.template
     | "already_instantiated" => pure .alreadyInstantiated
     | _ => throw "unknown body input phase"
-  let required ← v.field "required_constant_checks"
-  let requiredChecks ← (← array (← required.field "checks")).mapM fun check => do
-    let result ← check.field "result"
-    let rawOperand ← result.field "normalized_operand"
-    let normalizedOperand ← run ctx (constOperand ctx rawOperand)
-    let ty ← typeId ctx (← rawOperand.field "type")
-    let index ← nat (← check.field "index")
-    let spanId ← nat (← check.field "span")
-    let value ← constValue ctx ty (← result.field "value")
+  let required ← get fs "required_constant_checks"
+  let required ← fields required
+  let requiredChecks ← (← array (← get required "checks")).mapM fun check => do
+    let check ← fields check
+    let result ← get check "result"
+    let result ← fields result
+    let rawOperand ← get result "normalized_operand"
+    let rawOperand ← fields rawOperand
+    let normalizedOperand ← run ctx (constOperandFields ctx rawOperand)
+    let ty ← typeId ctx (← get rawOperand "type")
+    let index ← nat (← get check "index")
+    let spanId ← nat (← get check "span")
+    let value ← constValue ctx ty (← get result "value")
     return ({ index, spanId, normalizedOperand, value } : RequiredConstantCheck)
   return {
-    inputPhase, requiredChecks, instanceId := ← nat (← v.field "instance_id"),
-    normalizationBodyId := ← nat (← (← v.field "normalization").field "body"),
-    requiredTypingEnvironment := ← text (← required.field "typing_env") }
+    inputPhase, requiredChecks, instanceId := ← nat (← get fs "instance_id"),
+    normalizationBodyId := ← nat (← (← get fs "normalization").field "body"),
+    requiredTypingEnvironment := ← text (← get required "typing_env") }
 
 private def unwindTargets : MIR.UnwindAction → Array Nat
   | .Cleanup target => #[target]
@@ -781,9 +800,10 @@ private def controlTargets : MIR.TerminatorKind → Array Nat
 
 /-- Pool metadata is decoded before bodies so scalar constants use compiler byte widths. -/
 def decodeBody (ctx : Context) (v : Slice) (sourcePath : String) : Result Body := do
-  let locals ← array (← v.field "locals")
-  let blocks ← array (← v.field "basic_blocks")
-  let scopes ← array (← v.field "source_scopes")
+  let fs ← fields v
+  let locals ← array (← get fs "locals")
+  let blocks ← array (← get fs "basic_blocks")
+  let scopes ← array (← get fs "source_scopes")
   let ctx := {ctx with localCount := locals.size, blockCount := blocks.size, scopeCount := scopes.size}
   unless !blocks.isEmpty do throw "body has no entry basic block"
   let sourceScopes ← scopes.mapM (scope ctx)
@@ -794,19 +814,25 @@ def decodeBody (ctx : Context) (v : Slice) (sourcePath : String) : Result Body :
   let mut localTypes := #[]
   let mut localSources := #[]
   for (localDecl, i) in locals.toList.zipIdx do
-    unless (← nat (← localDecl.field "local")) == i do throw "noncontiguous local IDs"
-    localTypes := localTypes.push (← typeId ctx (← localDecl.field "type"))
-    localSources := localSources.push (← sourceInfo ctx (← localDecl.field "source_info"))
+    let localDecl ← fields localDecl
+    unless (← nat (← get localDecl "local")) == i do throw "noncontiguous local IDs"
+    localTypes := localTypes.push (← typeId ctx (← get localDecl "type"))
+    localSources := localSources.push (← sourceInfo ctx (← get localDecl "source_info"))
   let mut decodedBlocks : Array MIR.BasicBlock := #[]
   let mut callEvidenceRows := #[]
   let mut nodeFacts := #[]
   for (block, i) in blocks.toList.zipIdx do
-    unless (← nat (← block.field "block")) == i do throw "noncontiguous basic block IDs"
-    let statements ← array (← block.field "statements")
-    let decoded ← statements.mapM fun node => runFacts {ctx with path := #[.field "kind"]} (statement ctx node)
+    let block ← fields block
+    unless (← nat (← get block "block")) == i do throw "noncontiguous basic block IDs"
+    let statements ← array (← get block "statements")
+    let decoded ← statements.mapM fun node => do
+      let node ← fields node
+      runFacts {ctx with path := #[.field "kind"]} (statement ctx node)
     let decodedStatements := decoded.map Prod.fst
-    let rawTerminator ← block.field "terminator"
-    let (term, termFacts) ← runFacts {ctx with path := #[.field "kind"]} (terminator ctx rawTerminator)
+    let rawTerminator ← get block "terminator"
+    let rawTerminator ← fields rawTerminator
+    let termKind ← fields (← get rawTerminator "kind")
+    let (term, termFacts) ← runFacts {ctx with path := #[.field "kind"]} (terminator ctx rawTerminator termKind)
     for target in controlTargets term.kind do
       unless target < blocks.size do throw s!"out-of-range control-flow target {target}"
     for stmt in decodedStatements do
@@ -814,43 +840,43 @@ def decodeBody (ctx : Context) (v : Slice) (sourcePath : String) : Result Body :
       | .StorageLive localId | .StorageDead localId =>
         unless localId < locals.size do throw s!"out-of-range local {localId}"
       | _ => pure ()
-    let termKind ← rawTerminator.field "kind"
-    let termTag ← text (← termKind.field "variant")
+    let termTag ← text (← get termKind "variant")
     let evidence ← if termTag == "Call" || termTag == "TailCall" then
-      some <$> callEvidence ctx (← termKind.field "resolution") else pure none
+      some <$> callEvidence ctx (← get termKind "resolution") else pure none
     callEvidenceRows := callEvidenceRows.push evidence
     nodeFacts := nodeFacts.push ((decoded.map Prod.snd).push termFacts)
-    decodedBlocks := decodedBlocks.push ⟨decodedStatements, term, ← bool (← block.field "is_cleanup")⟩
-  let phase ← phase (← v.field "phase")
-  let injectionPhase ← optionalField v "injection_phase" DecodeMIR.phase
-  let argumentCount ← nat (← v.field "arg_count")
+    decodedBlocks := decodedBlocks.push ⟨decodedStatements, term, ← bool (← get block "is_cleanup")⟩
+  let phase ← phase (← get fs "phase")
+  let injectionPhase ← optionalField fs "injection_phase" DecodeMIR.phase
+  let argumentCount ← nat (← get fs "arg_count")
   unless argumentCount < locals.size do throw "argument count exceeds locals"
-  let spreadArgument ← optionalField v "spread_arg" nat
+  let spreadArgument ← optionalField fs "spread_arg" nat
   if let some index := spreadArgument then
     unless index > 0 && index ≤ argumentCount do throw "invalid spread argument"
-  let definitionId ← match ← optionalField v "def_id" nat with
+  let definitionId ← match ← optionalField fs "def_id" nat with
     | some id => pure (some id)
-    | none => optionalField v "source_def_id" nat
+    | none => optionalField fs "source_def_id" nat
   if let some id := definitionId then
     unless id < ctx.definitionCount do throw s!"unresolved definition {id}"
-  let spanId ← nat (← v.field "span")
-  let preambleDefSpanId ← nat (← v.field "preamble_def_span")
+  let spanId ← nat (← get fs "span")
+  let preambleDefSpanId ← nat (← get fs "preamble_def_span")
   unless spanId < ctx.spanCount && preambleDefSpanId < ctx.spanCount do throw "unresolved body span"
-  let requiredConsts ← optionalField v "required_consts" fun raw => do
+  let requiredConsts ← optionalField fs "required_consts" fun raw => do
     (← array raw).mapM fun item => run ctx (constOperand ctx item)
-  let promotedBodies ← match ← v.optionalField "promoted_bodies" with
+  let promotedBodies ← match ← fs.optionalField "promoted_bodies" with
     | none => pure #[]
     | some raw => (← array raw).mapM fun item => do
+      let item ← fields item
       pure { index := (← optionalField item "promoted_index" nat).getD 0,
              bodyId := ← optionalField item "body" nat : PromotedBody }
   let mir : MIR.Body := ⟨phase, argumentCount, spreadArgument, localTypes, decodedBlocks⟩
   pure {
     mir,
-    definitionId, defPath := (← optionalField v "def_path" text).getD sourcePath, sourcePath,
-    spanId, preambleDefSpanId, injectionPhase, isPolymorphic := ← optionalField v "is_polymorphic" bool, localSources, sourceScopes,
-    backtraceSpans := ← (← array (← v.field "backtrace_spans")).mapM (backtrace ctx),
+    definitionId, defPath := (← optionalField fs "def_path" text).getD sourcePath, sourcePath,
+    spanId, preambleDefSpanId, injectionPhase, isPolymorphic := ← optionalField fs "is_polymorphic" bool, localSources, sourceScopes,
+    backtraceSpans := ← (← array (← get fs "backtrace_spans")).mapM (backtrace ctx),
     callEvidence := callEvidenceRows, nodeFacts, requiredConsts,
-    constantQueryContext := ← optionalField v "constant_query_context" (constantContext ctx), promotedBodies }
+    constantQueryContext := ← optionalField fs "constant_query_context" (constantContext ctx), promotedBodies }
 
 def decodeGenericArgs (ctx : Context) (v : Slice) : Result (Array MIR.GenericArg) :=
   run ctx (genericArgs ctx v)

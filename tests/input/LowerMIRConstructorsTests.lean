@@ -1,5 +1,4 @@
-import Miri.Input.Decoder
-import Miri.Input.LowerMIR
+import Miri.Input.DecodeMIR
 
 open Miri Input
 

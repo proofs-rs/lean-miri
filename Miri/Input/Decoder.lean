@@ -54,9 +54,8 @@ private def parseInstanceArray (values : Array JsonReader.Slice) : Except String
     index := index + 1
   pure result
 
-private def parseDocument (input : JsonReader.Slice) (profile : Options := {}) : Except String ExecutionInput := do
-  let j := input
-  let root ← input.object
+private def parseDocument (input : JsonReader.Object) (profile : Options := {}) : Except String ExecutionInput := do
+  let root := input.fields
   let rootField (key : String) : Except String JsonReader.Slice := do
     let some (_, value) := root.find? (fun entry => entry.1 == key) | throw s!"$: missing field `{key}`"
     pure value
@@ -168,7 +167,7 @@ private def parseDocument (input : JsonReader.Slice) (profile : Options := {}) :
   let runtimeTargetDataLayout ← match rootOptional "runtime_target_data_layout" with
     | none => pure none
     | some value => some <$> CatalogDecoder.targetDataLayout value
-  let queries ← CatalogDecoder.decode bodyContext j
+  let queries ← CatalogDecoder.decodeObject bodyContext input
   let producerSettings ← CatalogDecoder.producerSettings (← field producerJson "input_settings" "$.producer")
   let core : ImportDocument := {
     compilerPredicates := compilerPredicates
@@ -195,7 +194,7 @@ private def parseDocument (input : JsonReader.Slice) (profile : Options := {}) :
   pure ⟨core⟩
 
 def decodeJsonProfiled (text : String) (profile : Options) : Except String ExecutionInput := do
-  let source ← profileit "decoder.syntax" profile fun _ => JsonReader.parse text
+  let source ← profileit "decoder.syntax" profile fun _ => JsonReader.parseObject text
   profileit "decoder.document" profile fun _ => parseDocument source profile
 
 def decodeJson (text : String) : Except String ExecutionInput := decodeJsonProfiled text {}

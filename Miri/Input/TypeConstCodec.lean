@@ -5,6 +5,7 @@ namespace Miri.Input.TypeConstCodec
 open Lean Miri.MIR DecoderValues
 
 private def valueTree (value : JsonReader.Slice) (path : String) : Except String ValTree := do
+  let value ← value.view
   match ← fieldString value "kind" path with
   | "leaf" =>
     let size ← fieldNat value "size_bytes" path
@@ -18,6 +19,7 @@ private def valueTree (value : JsonReader.Slice) (path : String) : Except String
   | tag => throw s!"{path}: unknown valtree kind {tag}"
 
 def decode (value : JsonReader.Slice) (path : String) : Except String TypeConst := do
+  let value ← value.view
   match ← fieldString value "kind" path with
   | "alias" =>
     let aliasKind ← fieldString value "alias_kind" path

@@ -12,13 +12,13 @@ abbrev Value := JsonReader.Slice
 private def natural := Slice.natural
 private def string := Slice.string
 private def boolean := Slice.boolean
-private def field (j : Value) (key : String) : Result Value := j.field key
+private def field [FieldSource α] (j : α) (key : String) : Result Value := FieldSource.lookupField j key
 private def arrayOf (decode : Value → Result α) (j : Value) : Result (Array α) := do
   (← j.array).mapM decode
 private def nullable (decode : Value → Result α) (j : Value) : Result (Option α) := do
   if j.isNull then pure none else some <$> decode j
-private def optional (decode : Value → Result α) (j : Value) (key : String) : Result (Option α) := do
-  match ← j.optionalField key with
+private def optional [FieldSource β] (decode : Value → Result α) (j : β) (key : String) : Result (Option α) := do
+  match ((← FieldSource.members j).find? (fun entry => entry.1 == key)).map Prod.snd with
   | none => pure none
   | some value => nullable decode value
 private def signature (j : Value) : Result Signature := do
@@ -32,12 +32,14 @@ private def signature (j : Value) : Result Signature := do
   }
 
 def frame_metadata (j : Value) : Result FrameMetadata := do
+  let j ← j.view
   return {
     localCrate := ← natural (← field j "local_crate")
     crates := ← arrayOf (fun value => do return (← (← value.field "crate").natural, ← (← value.field "name").string)) (← field j "crates")
   }
 
 def instance_abi (j : Value) : Result InstanceAbi := do
+  let j ← j.view
   return {
     instanceId := ← natural (← field j "instance_id")
     extraArgumentTypes := ← (arrayOf natural) (← field j "extra_argument_types")
@@ -45,6 +47,7 @@ def instance_abi (j : Value) : Result InstanceAbi := do
   }
 
 def pointer_abi (j : Value) : Result PointerAbi := do
+  let j ← j.view
   return {
     typeId := ← natural (← field j "type_id")
     extraArgumentTypes := ← (arrayOf natural) (← field j "extra_argument_types")
@@ -52,6 +55,7 @@ def pointer_abi (j : Value) : Result PointerAbi := do
   }
 
 def helper_signature (j : Value) : Result HelperSignature := do
+  let j ← j.view
   return {
     signature := ← signature (← field j "signature")
     splatted := ← boolean (← field j "splatted")
@@ -59,6 +63,7 @@ def helper_signature (j : Value) : Result HelperSignature := do
   }
 
 def native_signature (j : Value) : Result NativeSignature := do
+  let j ← j.view
   return {
     instanceId := ← natural (← field j "instance_id")
     query := ← string (← field j "query")
@@ -68,12 +73,14 @@ def native_signature (j : Value) : Result NativeSignature := do
   }
 
 def retag_query (j : Value) : Result RetagQuery := do
+  let j ← j.view
   return {
     definition := ← natural (← field j "definition")
     rustcNoWritable := ← boolean (← field j "rustc_no_writable")
   }
 
 def covariance_query (j : Value) : Result CovarianceQuery := do
+  let j ← j.view
   return {
     sourceType := ← natural (← field j "source_type")
     targetType := ← natural (← field j "target_type")
@@ -81,12 +88,14 @@ def covariance_query (j : Value) : Result CovarianceQuery := do
   }
 
 def start_resolution (j : Value) : Result StartResolution := do
+  let j ← j.view
   return {
     instanceId := ← natural (← field j "instance_id")
     functionType := ← natural (← field j "function_type")
   }
 
 def entry_signature (j : Value) : Result EntrySignature := do
+  let j ← j.view
   return {
     compilerSelectedEntry := ← boolean (← field j "compiler_selected_entry")
     hasBoundVariables := ← boolean (← field j "has_bound_variables")
@@ -97,6 +106,7 @@ def entry_signature (j : Value) : Result EntrySignature := do
   }
 
 def main_entry (j : Value) : Result MainEntry := do
+  let j ← j.view
   return {
     definition := ← natural (← field j "definition")
     genericParameters := ← (arrayOf string) (← field j "generic_parameters")
@@ -104,6 +114,7 @@ def main_entry (j : Value) : Result MainEntry := do
   }
 
 def compiler_entry (j : Value) : Result CompilerEntry := do
+  let j ← j.view
   return {
     definition := ← natural (← field j "definition")
     kind := ← string (← field j "kind")
@@ -111,6 +122,7 @@ def compiler_entry (j : Value) : Result CompilerEntry := do
   }
 
 def primitives (j : Value) : Result Primitives := do
+  let j ← j.view
   return {
     u8 := ← natural (← field j "u8")
     u16 := ← natural (← field j "u16")
@@ -137,6 +149,7 @@ def primitives (j : Value) : Result Primitives := do
   }
 
 def shim_signature (j : Value) : Result ShimSignature := do
+  let j ← j.view
   return {
     callingConvention := ← string (← field j "calling_convention")
     arguments := ← (arrayOf string) (← field j "arguments")
@@ -144,12 +157,14 @@ def shim_signature (j : Value) : Result ShimSignature := do
     cVariadic := ← boolean (← field j "c_variadic")
   }
 
-private def environment (j : Value) : Result Unit := do
-  unless (← (← j.field "typing_env").string) == "fully_monomorphized" do
+private def environment [FieldSource α] (j : α) : Result Unit := do
+  unless (← (← field j "typing_env").string) == "fully_monomorphized" do
     throw "expected fully monomorphized compiler query"
 
 def functionFacts (j : Value) : Result FunctionFacts := do
+  let j ← j.view
   let types ← arrayOf (fun row => do
+    let row ← row.view
     environment row
     let kind ← row.field "function_kind"
     let instanceId ← match ← (← kind.field "kind").string with
@@ -166,6 +181,7 @@ def functionFacts (j : Value) : Result FunctionFacts := do
   return { types, pointerAbis, helperSignatures }
 
 def castQuery (j : Value) : Result CastQuery := do
+  let j ← j.view
   environment j
   match ← (← j.field "query_kind").string with
   | "resolve_fn_ptr" =>
@@ -183,6 +199,7 @@ def castQuery (j : Value) : Result CastQuery := do
   | _ => throw "unknown compiler cast query"
 
 def panicQuery (j : Value) : Result PanicQuery := do
+  let j ← j.view
   return {
     langItem := ← (← j.field "lang_item").string
     definition := ← nullable natural (← j.field "definition")
@@ -190,8 +207,12 @@ def panicQuery (j : Value) : Result PanicQuery := do
   }
 
 def globalBytes (j : Value) : Result GlobalBytes := do
+  let j ← j.view
   let candidates ← arrayOf (fun row => do
-    let salts ← arrayOf (fun salt => do return (← (← salt.field "salt").natural,
+    let row ← row.view
+    let salts ← arrayOf (fun salt => do
+      let salt ← salt.view
+      return (← (← salt.field "salt").natural,
       ← nullable natural (← salt.field "existing_allocation"))) (← row.field "salts")
     return {
       bytesHex := ← (← row.field "bytes_hex").string
@@ -205,8 +226,10 @@ def globalBytes (j : Value) : Result GlobalBytes := do
   }
 
 def mainQueries (j : Value) : Result Main := do
+  let j ← j.view
   environment j
   let linkSections ← optional (arrayOf fun row => do
+    let row ← row.view
     let query ← row.field "global_query"
     return {
       sectionName := ← (← row.field "section").string
@@ -224,8 +247,9 @@ def mainQueries (j : Value) : Result Main := do
   }
 
 def shimAbi (j : Value) : Result ShimAbi := do
+  let j ← j.view
   environment j
-  let query ← j.field "query"
+  let query ← (← j.field "query").view
   return {
     signature := ← shim_signature (← j.field "signature")
     inputTypes := ← arrayOf natural (← query.field "input_types")
@@ -234,6 +258,7 @@ def shimAbi (j : Value) : Result ShimAbi := do
   }
 
 def namedShimAbi (j : Value) : Result NamedShimAbi := do
+  let j ← j.view
   return {
     name := ← (← j.field "name").string
     recipe := ← shimAbi (← j.field "recipe")
@@ -241,6 +266,7 @@ def namedShimAbi (j : Value) : Result NamedShimAbi := do
   }
 
 def typeLayouts (j : Value) : Result TypeLayouts := do
+  let j ← j.view
   environment j
   let entries ← (← (← j.field "entries").object).mapM fun (name, value) => do return (name, ← value.natural)
   return {
@@ -250,8 +276,9 @@ def typeLayouts (j : Value) : Result TypeLayouts := do
   }
 
 def namedConstant (ctx : DecodeMIR.Context) (j : Value) : Result NamedConstant := do
+  let j ← j.view
   environment j
-  let query ← j.field "query"
+  let query ← (← j.field "query").view
   let typeId ← (← query.field "type").natural
   return {
     name := ← (← j.field "name").string
@@ -262,11 +289,12 @@ def namedConstant (ctx : DecodeMIR.Context) (j : Value) : Result NamedConstant :
   }
 
 def namedStatic (j : Value) : Result NamedStatic := do
+  let j ← j.view
   environment j
   let name ← (← j.field "name").string
   let path ← arrayOf string (← j.field "path")
   unless path == #["libc", name] do throw "named global path does not match libc name"
-  let query ← j.field "query"
+  let query ← (← j.field "query").view
   let kind ← (← query.field "kind").string
   unless kind == "static" || kind == "const_allocation" do throw "unknown named global kind"
   return {
@@ -279,7 +307,8 @@ def namedStatic (j : Value) : Result NamedStatic := do
   }
 
 def vtableQuery (j : Value) : Result VtableQuery := do
-  let metadata ← j.field "vtable_metadata"
+  let j ← j.view
+  let metadata ← (← j.field "vtable_metadata").view
   let value : VtableAllocation := {
     typeId := ← (← metadata.field "type").natural
     sizeBytes := ← nullable natural (← metadata.field "size_bytes")
@@ -301,13 +330,14 @@ def vtableQuery (j : Value) : Result VtableQuery := do
   }
 
 private def covariance (row : Value) : Result CovarianceQuery := do
+  let row ← row.view
   environment row
   unless (← (← row.field "variance").string) == "covariant" do
     throw "expected covariant query"
   covariance_query row
 
-def decode (ctx : DecodeMIR.Context) (j : Value) : Result Queries := do
-  let root ← j.object
+def decodeObject (ctx : DecodeMIR.Context) (j : Object) : Result Queries := do
+  let root := j.fields
   let rootField (name : String) : Result Value := do
     let some (_, value) := root.find? (fun entry => entry.1 == name) | throw s!"missing field `{name}`"
     pure value
@@ -316,6 +346,7 @@ def decode (ctx : DecodeMIR.Context) (j : Value) : Result Queries := do
     | none => pure none
     | some (_, value) => nullable decode value
   let typeNames ← arrayOf (fun row => do
+    let row ← row.view
     environment row
     let resultType ← (← row.field "result_type").natural
     return {
@@ -360,5 +391,8 @@ def decode (ctx : DecodeMIR.Context) (j : Value) : Result Queries := do
     namedConstants := ← rootOptional (arrayOf (namedConstant ctx)) "compiler_named_constants"
     namedStatics := ← rootOptional (arrayOf namedStatic) "compiler_named_statics"
   }
+
+def decode (ctx : DecodeMIR.Context) (j : Value) : Result Queries := do
+  decodeObject ctx (← j.view)
 
 end Miri.Input.CatalogDecoder

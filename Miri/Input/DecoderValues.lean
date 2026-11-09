@@ -29,48 +29,48 @@ def joinPath (path key : String) : String :=
   let key := escapePathKey key
   if path.isEmpty then key else path ++ "." ++ key
 
-def field (j : JsonReader.Slice) (key path : String) : Except String JsonReader.Slice := do
-  j.field key |>.mapError fun e => s!"{path}: missing/invalid field `{key}` ({e})"
+def field [JsonReader.FieldSource α] (j : α) (key path : String) : Except String JsonReader.Slice := do
+  JsonReader.FieldSource.lookupField j key |>.mapError fun e => s!"{path}: missing/invalid field `{key}` ({e})"
 
-def fieldNat (j : JsonReader.Slice) (key path : String) : Except String Nat := do
+def fieldNat [JsonReader.FieldSource α] (j : α) (key path : String) : Except String Nat := do
   let v ← field j key path
   v.natural |>.mapError fun e => s!"{joinPath path key}: expected unsigned integer ({e})"
 
-def fieldString (j : JsonReader.Slice) (key path : String) : Except String String := do
+def fieldString [JsonReader.FieldSource α] (j : α) (key path : String) : Except String String := do
   let v ← field j key path
   v.string |>.mapError fun e => s!"{joinPath path key}: expected string ({e})"
 
-def fieldBool (j : JsonReader.Slice) (key path : String) : Except String Bool := do
+def fieldBool [JsonReader.FieldSource α] (j : α) (key path : String) : Except String Bool := do
   let v ← field j key path
   v.boolean |>.mapError fun e => s!"{joinPath path key}: expected boolean ({e})"
 
-def arrayField (j : JsonReader.Slice) (key path : String) : Except String (Array JsonReader.Slice) := do
+def arrayField [JsonReader.FieldSource α] (j : α) (key path : String) : Except String (Array JsonReader.Slice) := do
   let v ← field j key path
   v.array |>.mapError fun e => s!"{joinPath path key}: expected array ({e})"
 
-def optionalNatField (j : JsonReader.Slice) (key path : String) : Except String (Option Nat) := do
+def optionalNatField [JsonReader.FieldSource α] (j : α) (key path : String) : Except String (Option Nat) := do
   let v ← field j key path
   if v.isNull then pure none else
     (v.natural).map some |>.mapError fun e => s!"{joinPath path key}: expected unsigned integer or null ({e})"
 
-def optionalField (j : JsonReader.Slice) (key : String) : Option JsonReader.Slice :=
-  (j.field key).toOption
+def optionalField [JsonReader.FieldSource α] (j : α) (key : String) : Option JsonReader.Slice :=
+  (JsonReader.FieldSource.lookupField j key).toOption
 
-def optionalString (j : JsonReader.Slice) (key path : String) : Except String (Option String) := do
+def optionalString [JsonReader.FieldSource α] (j : α) (key path : String) : Except String (Option String) := do
   match optionalField j key with
   | none => pure none
   | some value => if value.isNull then pure none else (value.string).map some |>.mapError fun e => s!"{joinPath path key}: expected string ({e})"
 
-def objectFields (j : JsonReader.Slice) : Except String (Array (String × JsonReader.Slice)) :=
-  j.object
+def objectFields [JsonReader.FieldSource α] (j : α) : Except String (Array (String × JsonReader.Slice)) :=
+  JsonReader.FieldSource.members j
 
-def statusOf? (j : JsonReader.Slice) : Option String :=
+def statusOf? [JsonReader.FieldSource α] (j : α) : Option String :=
   match optionalField j "status" with
   | none => none
   | some value => match value.string with | .ok text => some text | .error _ => none
 
 
-def sourceDebugString (j : JsonReader.Slice) (key path : String) : Except String String := do
+def sourceDebugString [JsonReader.FieldSource α] (j : α) (key path : String) : Except String String := do
   let value ← field j key path
   if let .ok text := value.string then return text
   if statusOf? value != some "debug_payload" then
@@ -78,12 +78,14 @@ def sourceDebugString (j : JsonReader.Slice) (key path : String) : Except String
   fieldString value "rustc_debug" (joinPath path key)
 
 def parseSourcePosition (j : JsonReader.Slice) (path : String) : Except String SourcePosition := do
+  let j ← j.view
   return {
     line := ← fieldNat j "line" path
     column := ← fieldNat j "column" path
   }
 
 def parseSourceSpan (j : JsonReader.Slice) (path : String) : Except String SourceSpanData := do
+  let j ← j.view
   let start ← parseSourcePosition (← field j "start" path) (joinPath path "start")
   let endPos ← parseSourcePosition (← field j "end" path) (joinPath path "end")
   return {
@@ -97,12 +99,13 @@ def parseSourceSpan (j : JsonReader.Slice) (path : String) : Except String Sourc
   }
 
 def parseSourceInfo (j : JsonReader.Slice) (path : String) : Except String SourceInfo := do
+  let j ← j.view
   return {
     spanId := ← fieldNat j "span" path
     scope := ← fieldNat j "scope" path
   }
 
-def hasField (j : JsonReader.Slice) (key : String) : Bool := (j.field key).isOk
+def hasField [JsonReader.FieldSource α] (j : α) (key : String) : Bool := (JsonReader.FieldSource.lookupField j key).isOk
 
 def typeShapeKind (tag : String) : Except String TypeShapeKind :=
   match tag with
@@ -131,8 +134,8 @@ def typeShapeKind (tag : String) : Except String TypeShapeKind :=
   | "alias" => pure (.alias)
   | other => throw s!"unrecognized typeShapeKind tag `{other}`"
 
-def asTag? (j : JsonReader.Slice) (key : String) : Option String :=
-  (j.field key >>= JsonReader.Slice.string).toOption
+def asTag? [JsonReader.FieldSource α] (j : α) (key : String) : Option String :=
+  (JsonReader.FieldSource.lookupField j key >>= JsonReader.Slice.string).toOption
 
 def isTypeRef (j : JsonReader.Slice) : Option Nat := j.natural.toOption
 
@@ -195,20 +198,22 @@ def natArray (j : JsonReader.Slice) (path : String) : Except String (Array Nat) 
     index := index + 1
   return out
 
-def optionalNat (j : JsonReader.Slice) (key path : String) : Except String (Option Nat) := do
+def optionalNat [JsonReader.FieldSource α] (j : α) (key path : String) : Except String (Option Nat) := do
   match optionalField j key with
   | none => pure none
   | some value => if value.isNull then pure none else (value.natural).map some |>.mapError fun e => s!"{joinPath path key}: expected unsigned integer or null ({e})"
 
-def optionalJson (j : JsonReader.Slice) (key : String) : Option JsonReader.Slice :=
+def optionalJson [JsonReader.FieldSource α] (j : α) (key : String) : Option JsonReader.Slice :=
   optionalField j key |>.filter (!·.isNull)
 
 def parseTagged (j : JsonReader.Slice) (path : String) : Except String TaggedNode := do
+  let j ← j.view
   let tag ← fieldString j "kind" path
   return ⟨tag⟩
 
 def parseAbiTag (j : JsonReader.Slice) (path : String) : Except String TaggedNode := do
   if let .ok tag := j.string then return ⟨tag⟩
+  let j ← j.view
   let tag ← match optionalField j "kind" with
     | some value => value.string
     | none => match optionalField j "variant" with
@@ -232,12 +237,13 @@ def backendReprKind (tag : String) : Except String BackendReprKind :=
   | "scalable_simd_vector" => pure (.scalableSimdVector)
   | other => throw s!"unrecognized backendReprKind tag `{other}`"
 
-def optionalNatBefore (j : JsonReader.Slice) (key path : String) : Except String (Option Nat) := do
+def optionalNatBefore [JsonReader.FieldSource α] (j : α) (key path : String) : Except String (Option Nat) := do
   match optionalField j key with
   | none => pure none
   | some value => if value.isNull then pure none else (value.natural).map some |>.mapError fun e => s!"{joinPath path key}: expected unsigned integer or null ({e})"
 
 def parsePrimitiveLayout (j : JsonReader.Slice) (path : String) : Except String PrimitiveLayout := do
+  let j ← j.view
   let tag ← fieldString j "kind" path
   let kind : PrimitiveKind ← match tag with
     | "integer" => pure (.integer)
@@ -269,6 +275,7 @@ def parseU128Natural (j : JsonReader.Slice) (path : String) : Except String Nat 
   pure value
 
 def parseScalarLayout (j : JsonReader.Slice) (path : String) : Except String ScalarLayout := do
+  let j ← j.view
   let tag ← fieldString j "kind" path
   let kind : ScalarShapeKind ← match tag with
     | "initialized" => pure (.initialized)
@@ -276,7 +283,9 @@ def parseScalarLayout (j : JsonReader.Slice) (path : String) : Except String Sca
     | other => throw s!"{path}: unrecognized ScalarShapeKind `{other}`"
   let range ← match optionalJson j "valid_range" with
     | none => pure none
-    | some value => pure (some (← parseU128Natural (← field value "start" (joinPath path "valid_range")) (joinPath path "valid_range.start"), ← parseU128Natural (← field value "end" (joinPath path "valid_range")) (joinPath path "valid_range.end")))
+    | some value => do
+      let value ← value.view
+      pure (some (← parseU128Natural (← field value "start" (joinPath path "valid_range")) (joinPath path "valid_range.start"), ← parseU128Natural (← field value "end" (joinPath path "valid_range")) (joinPath path "valid_range.end")))
   return {
     kind := kind
     primitive := ← parsePrimitiveLayout (← field j "primitive" path) (joinPath path "primitive")
@@ -285,7 +294,8 @@ def parseScalarLayout (j : JsonReader.Slice) (path : String) : Except String Sca
 
 def parseNicheLayout (j : JsonReader.Slice) (path : String) : Except String (Option NicheLayout) := do
   if j.isNull then return none
-  let range ← field j "valid_range" path
+  let j ← j.view
+  let range ← (← field j "valid_range" path).view
   return some {
     offsetBytes := ← fieldNat j "offset_bytes" path
     primitive := ← parsePrimitiveLayout (← field j "primitive" path) (joinPath path "primitive")
@@ -294,6 +304,7 @@ def parseNicheLayout (j : JsonReader.Slice) (path : String) : Except String (Opt
   }
 
 def parseBackendRepr (j : JsonReader.Slice) (path : String) : Except String BackendRepr := do
+  let j ← j.view
   let tag ← fieldString j "kind" path
   let kind ← backendReprKind tag
   let scalar ← match optionalJson j "scalar" with
@@ -335,6 +346,7 @@ def parseBackendRepr (j : JsonReader.Slice) (path : String) : Except String Back
   }
 
 def parseFieldShape (j : JsonReader.Slice) (path : String) : Except String FieldShape := do
+  let j ← j.view
   let tag ← fieldString j "kind" path
   let kind : FieldShapeKind ← match tag with
     | "primitive" => pure (.primitive)
@@ -369,6 +381,7 @@ def parseFieldShape (j : JsonReader.Slice) (path : String) : Except String Field
   }
 
 def parseLayoutVariant (j : JsonReader.Slice) (path : String) : Except String LayoutVariant := do
+  let j ← j.view
   return {
     fields := ← parseFieldShape (← field j "fields" path) (joinPath path "fields")
     largestNiche := ← parseNicheLayout (← field j "largest_niche" path) (joinPath path "largest_niche")
@@ -388,6 +401,7 @@ def decimalNat (text path : String) : Except String Nat := do
   return value
 
 def parseTagEncoding (j : JsonReader.Slice) (path : String) : Except String TagEncoding := do
+  let j ← j.view
   let tag ← fieldString j "kind" path
   let kind : TagEncodingKind ← match tag with
     | "direct" => pure (TagEncodingKind.direct)
@@ -396,7 +410,9 @@ def parseTagEncoding (j : JsonReader.Slice) (path : String) : Except String TagE
   let untaggedVariant ← optionalNat j "untagged_variant" path
   let nicheVariants ← match optionalJson j "niche_variants" with
     | none => pure none
-    | some range => pure (some (← fieldNat range "start" (joinPath path "niche_variants"), ← fieldNat range "end" (joinPath path "niche_variants")))
+    | some range => do
+      let range ← range.view
+      pure (some (← fieldNat range "start" (joinPath path "niche_variants"), ← fieldNat range "end" (joinPath path "niche_variants")))
   let nicheStart ← match optionalField j "niche_start" with
     | none => pure none
     | some value => if value.isNull then pure none else
@@ -410,6 +426,7 @@ def parseTagEncoding (j : JsonReader.Slice) (path : String) : Except String TagE
   return ⟨kind, untaggedVariant, nicheVariants, nicheStart⟩
 
 def parseVariantsLayout (j : JsonReader.Slice) (path : String) : Except String VariantsLayout := do
+  let j ← j.view
   let tag ← fieldString j "kind" path
   let kind ← layoutVariantsKind tag
   let variantIndex ← optionalNatBefore j "variant_index" path
@@ -442,16 +459,11 @@ def parseVariantsLayout (j : JsonReader.Slice) (path : String) : Except String V
   }
 
 def parseLayout (j : JsonReader.Slice) (path : String) : Except String Layout := do
+  let j ← j.view
   let kind : LayoutKind ← match asTag? j "kind" with
     | some "layout" | none => pure (.layout)
     | some value => throw s!"{path}: unrecognized LayoutKind `{value}`"
   let offsets ← natArray (← field j "field_offsets_bytes" path) (joinPath path "field_offsets_bytes")
-  let variants ← match optionalJson j "variants" with
-    | none => pure none
-    | some value => pure (some (← parseTagged value (joinPath path "variants")))
-  let backend ← match optionalJson j "backend_repr" with
-    | none => pure none
-    | some value => pure (some (← parseTagged value (joinPath path "backend_repr")))
   let fields ← match optionalJson j "fields" with
     | none => pure none
     | some value => pure (some (← parseFieldShape value (joinPath path "fields")))
@@ -464,8 +476,13 @@ def parseLayout (j : JsonReader.Slice) (path : String) : Except String Layout :=
   let sizeBytes ← optionalNat j "size_bytes" path
   let abiAlignBytes ← optionalNat j "abi_align_bytes" path
   let unadjustedAbiAlignBytes ← optionalNat j "unadjusted_abi_align_bytes" path
-  let variantsKind ← variants.mapM fun value => layoutVariantsKind value.tag
-  let backendReprKind ← backend.mapM fun value => backendReprKind value.tag
+  let variantsKind := variantsLayout.map (·.kind)
+  let variants : Option TaggedNode := variantsKind.map fun kind => ⟨match kind with
+    | .single => "single" | .multiple => "multiple" | .empty => "empty"⟩
+  let backendReprKind := backendRepresentation.map (·.kind)
+  let backend : Option TaggedNode := backendReprKind.map fun kind => ⟨match kind with
+    | .scalar => "scalar" | .scalarPair => "scalar_pair" | .memory => "memory"
+    | .simdVector => "simd_vector" | .scalableSimdVector => "scalable_simd_vector"⟩
   if (sizeBytes.isNone || abiAlignBytes.isNone || unadjustedAbiAlignBytes.isNone) then
     throw s!"{path}: supported layout is missing size/alignment fields"
   if (fields.isNone || variantsLayout.isNone || backendRepresentation.isNone) then
@@ -496,6 +513,7 @@ def parseLayout (j : JsonReader.Slice) (path : String) : Except String Layout :=
   }
 
 def parseFunctionSignature (j : JsonReader.Slice) (path : String) : Except String FunctionSignature := do
+  let j ← j.view
   let inputsJson ← arrayField j "inputs" path
   let mut inputs := #[]
   let mut index := 0
@@ -521,6 +539,7 @@ def parseFunctionSignature (j : JsonReader.Slice) (path : String) : Except Strin
   }
 
 def decodeCompilerPredicateEvidence (j : JsonReader.Slice) : Except String CompilerPredicateEvidence := do
+  let j ← j.view
   let normalization ← field j "normalization" "$predicate"
   let normalized ← if normalization.isNull then pure none else normalization.natural.map some
   pure {
@@ -534,6 +553,7 @@ def decodeCompilerPredicateEvidence (j : JsonReader.Slice) : Except String Compi
 
 /-- Decode all source PatternKind branches; unknown kinds fail explicitly. -/
 partial def decodeCompilerPattern (j : JsonReader.Slice) : Except String CompilerPattern := do
+  let j ← j.view
   match ← fieldString j "kind" "$pattern" with
   | "range" => return .range (← fieldNat j "start" "$pattern") (← fieldNat j "end" "$pattern")
   | "or" => return .or (← (← arrayField j "patterns" "$pattern").mapM decodeCompilerPattern)
@@ -541,8 +561,11 @@ partial def decodeCompilerPattern (j : JsonReader.Slice) : Except String Compile
   | _ => throw "unknown compiler PatternKind"
 
 private def parseProjectionQueries (j : JsonReader.Slice) (path : String) : Except String ProjectionQueries := do
+  let j ← j.view
   let parents ← (← arrayField j "parents" path).mapM fun parent => do
+    let parent ← parent.view
     let fields ← (← arrayField parent "fields" path).mapM fun value => do
+      let value ← value.view
       let index ← fieldNat value "index" path
       let typeId ← fieldNat value "type" path
       let layoutId ← fieldNat value "layout" path
@@ -554,7 +577,9 @@ private def parseProjectionQueries (j : JsonReader.Slice) (path : String) : Exce
   pure { typingEnvironment, parents }
 
 private def parseDiscriminants (j : JsonReader.Slice) (path : String) : Except String DiscriminantInfo := do
+  let j ← j.view
   let values ← (← arrayField j "values" path).mapM fun value => do
+    let value ← value.view
     let variant ← fieldNat value "variant" path
     unless variant < 2^32 do throw s!"{path}: compiler variant index exceeds u32"
     let bits ← decimalNat (← fieldString value "bits" path) path
@@ -567,6 +592,7 @@ private def parseDiscriminants (j : JsonReader.Slice) (path : String) : Except S
 
 /-- Preserve the compiler query's exact type and typing-environment key. -/
 def decodeTypeCompilerFacts (j : JsonReader.Slice) (path : String := "$compiler_facts") : Except String TypeCompilerFacts := do
+  let j ← j.view
   let some inputType := isTypeRef (← field j "input_type" path) | throw "compiler fact input_type is not a type reference"
   let mut booleans := #[]
   for (name,value) in ← objectFields (← field j "boolean_queries" path) do
@@ -588,6 +614,7 @@ def decodeTypeCompilerFacts (j : JsonReader.Slice) (path : String := "$compiler_
   let adt ← do
     let value ← field j "adt" path
     if value.isNull then pure none else do
+      let value ← value.view
       let definitionId ← fieldNat value "definition" path
       let itemName ← fieldString value "item_name" path
       let nonnullOptimizationGuaranteed ← fieldBool value "nonnull_optimization_guaranteed" path
@@ -598,6 +625,7 @@ def decodeTypeCompilerFacts (j : JsonReader.Slice) (path : String := "$compiler_
   let simdSizeAndType : Option (Nat × TypeId) ← do
     let value ← field j "simd_size_and_type" path
     if value.isNull then pure none else do
+      let value ← value.view
       let count ← fieldNat value "count" path
       unless count < 2^64 do throw s!"{path}: SIMD lane count exceeds u64"
       let element ← fieldNat value "element" path
@@ -621,9 +649,11 @@ def decodeTypeCompilerFacts (j : JsonReader.Slice) (path : String := "$compiler_
     }
 
 private def parseReprOptions (j : JsonReader.Slice) (path : String) : Except String ReprOptions := do
+  let j ← j.view
   let integer ← do
     let value ← field j "integer" path
     if value.isNull then pure none else do
+      let value ← value.view
       let result ← match ← fieldString value "kind" path with
         | "pointer_sized" => do
           pure (ReprInteger.pointerSized (← fieldBool value "signed" path))
@@ -635,6 +665,7 @@ private def parseReprOptions (j : JsonReader.Slice) (path : String) : Except Str
   let scalableElement ← do
     let value ← field j "scalable_element" path
     if value.isNull then pure none else do
+      let value ← value.view
       let result ← match ← fieldString value "kind" path with
         | "element_count" => do
           pure (ScalableElement.elementCount (← fieldNat value "count" path))
@@ -660,10 +691,12 @@ private def parseReprOptions (j : JsonReader.Slice) (path : String) : Except Str
     inhibitNewtypeAbiOptimization := ← fieldBool j "inhibit_newtype_abi_optimization" path
     fieldShuffleSeed := ← fieldNat j "field_shuffle_seed" path }
 
-private def parseAdtShape (j : JsonReader.Slice) (path : String) : Except String AdtShape := do
+private def parseAdtShape (j : JsonReader.Object) (path : String) : Except String AdtShape := do
   let variants ← (← arrayField j "variants" path).mapIdxM fun index variant => do
+    let variant ← variant.view
     let p := s!"{path}.variants[{index}]"
     let fields ← (← arrayField variant "fields" p).mapIdxM fun fieldIndex f => do
+      let f ← f.view
       let fp := s!"{p}.fields[{fieldIndex}]"
       let id ← fieldNat f "index" fp
       unless id == fieldIndex do throw s!"{fp}.index: field/index mismatch"
@@ -682,16 +715,18 @@ private def parseAdtShape (j : JsonReader.Slice) (path : String) : Except String
     variants := variants }
 
 private def parseShapeMutability (j : JsonReader.Slice) (path : String) : Except String Miri.MIR.Mutability := do
+  let j ← j.view
   match ← fieldString j "kind" path with
   | "mutable" => pure .Mut
   | "immutable" => pure .Not
   | _ => throw s!"{path}: unknown mutability"
 
-private def parseShapeBoundVariables (j : JsonReader.Slice) (key path : String) :
+private def parseShapeBoundVariables [JsonReader.FieldSource α] (j : α) (key path : String) :
     Except String (Array Miri.MIR.BoundVariableKind) := do
   (← arrayField j key path).mapM GenericArgsCodec.boundVariable
 
 private def parseTypeShape (j : JsonReader.Slice) (path : String) : Except String TypeShape := do
+  let j ← j.view
   let args := do GenericArgsCodec.decode (← field j "generic_args" path)
   let definition := fieldNat j "def_id" path
   let region := do GenericArgsCodec.region (← field j "region" path)
@@ -716,7 +751,7 @@ private def parseTypeShape (j : JsonReader.Slice) (path : String) : Except Strin
   | "foreign" => return .foreign (← definition)
   | "str" => pure .str
   | "array" =>
-    let constructor ← field j "constructor_identity" path
+    let constructor ← (← field j "constructor_identity" path).view
     return .array (← fieldNat j "element" path) (← fieldNat j "length" path)
       ⟨← fieldNat constructor "count" (joinPath path "constructor_identity"),
        ← fieldBool constructor "canonical_value_constructor" (joinPath path "constructor_identity")⟩
@@ -738,7 +773,7 @@ private def parseTypeShape (j : JsonReader.Slice) (path : String) : Except Strin
   | "never" => pure .never
   | "tuple" => return .tuple (← (← arrayField j "elements" path).mapM JsonReader.Slice.natural)
   | "alias" =>
-    let payload ← field j "alias_payload" path
+    let payload ← (← field j "alias_payload" path).view
     let definition ← definition
     unless (← fieldNat payload "def_id" path) == definition do throw s!"{path}: alias definition mismatch"
     let kind ← match ← fieldString payload "kind" path with
@@ -751,6 +786,7 @@ private def parseTypeShape (j : JsonReader.Slice) (path : String) : Except Strin
   | tag => throw s!"{path}: unrecognized type shape `{tag}`"
 
 def parseTypeNode (j : JsonReader.Slice) (path : String) : Except String TypeNode := do
+  let j ← j.view
   return {
     layoutQueryInputTypeId := ← optionalNatField j "layout_query_input_type" path
     compilerFacts := ← match optionalField j "compiler_facts" with
@@ -767,6 +803,7 @@ def hexDigit (c : Char) : Bool :=
 def validHex (value : String) : Bool := value.toList.all hexDigit && value.length % 2 == 0
 
 def parseInitRange (j : JsonReader.Slice) (path : String) : Except String InitRange := do
+  let j ← j.view
   let state ← fieldString j "state" path
   let initialized ← match state with
     | "initialized" => pure true
@@ -778,6 +815,7 @@ def parseInitRange (j : JsonReader.Slice) (path : String) : Except String InitRa
   return ⟨initialized, first, last⟩
 
 def parseRelocation (j : JsonReader.Slice) (path : String) : Except String Relocation := do
+  let j ← j.view
   let targetRef ← field j "target" path
   let target ← match isAllocationRef targetRef with
     | some id => pure id
@@ -804,7 +842,7 @@ def parseRelocation (j : JsonReader.Slice) (path : String) : Except String Reloc
     ctfeProvenance := ctfeProvenance
   }
 
-def parseAllocationMemory (j : JsonReader.Slice) (path : String) : Except String AllocationMemory := do
+private def parseAllocationMemoryFields (j : JsonReader.Object) (path : String) : Except String AllocationMemory := do
   let bytes ← fieldString j "bytes_hex" path
   if !validHex bytes then throw s!"{joinPath path "bytes_hex"}: malformed hexadecimal bytes"
   let rangesJson ← arrayField j "initialization_ranges" path
@@ -844,6 +882,9 @@ def parseAllocationMemory (j : JsonReader.Slice) (path : String) : Except String
     relocations := relocations
   }
 
+def parseAllocationMemory (j : JsonReader.Slice) (path : String) : Except String AllocationMemory := do
+  parseAllocationMemoryFields (← j.view) path
+
 def allocationKind (kind : String) : Except String AllocationKind :=
   match kind with
   | "memory" => pure (.memory)
@@ -855,16 +896,19 @@ def allocationKind (kind : String) : Except String AllocationKind :=
   | other => throw s!"unrecognized allocationKind tag `{other}`"
 
 def parseDefinitionId (j : JsonReader.Slice) (path : String) : Except String DefinitionId := do
+  let j ← j.view
   return ⟨← fieldNat j "crate" path, ← fieldNat j "index" path⟩
 
 def parseDefinitionRef (j : JsonReader.Slice) (path : String) : Except String DefinitionRef :=
   j.natural |>.mapError fun error => s!"{path}: expected definition ID ({error})"
 
 def parseSelectedScope (j : JsonReader.Slice) (path : String) : Except String SelectedScope := do
+  let j ← j.view
   let kind ← fieldString j "kind" path
   let rootsJson ← arrayField j "roots" path
   let mut roots := #[]
   for (root, index) in rootsJson.toList.zipIdx do
+    let root ← root.view
     let rootPath := s!"{joinPath path "roots"}[{index}]"
     let defPath ← fieldString root "def_path" rootPath
     if defPath.isEmpty then throw s!"{joinPath rootPath "def_path"}: selected root path cannot be empty"
@@ -884,12 +928,13 @@ def vtablePredicateKind (tag : String) : Except String VtablePredicateKind :=
   | other => throw s!"unrecognized vtablePredicateKind tag `{other}`"
 
 def parseVtablePredicate (j : JsonReader.Slice) (path : String) : Except String VtablePredicate := do
+  let j ← j.view
   let tag ← fieldString j "kind" path
   let kind ← vtablePredicateKind tag
   let genericArgs ← if kind == .autoTrait then pure #[] else
     GenericArgsCodec.decode (← field j "generic_args" path)
   let projectionTerm ← if kind == .projection then do
-    let term ← field j "term" path
+    let term ← (← field j "term" path).view
     unless (← fieldString term "kind" (joinPath path "term")) == "type" do
       throw s!"{path}: unsupported predicate projection term"
     pure (some (← fieldNat term "value" (joinPath path "term")))
@@ -917,6 +962,7 @@ def vtableEntryKind (tag : String) : Except String VtableEntryKind :=
   | other => throw s!"unrecognized vtableEntryKind tag `{other}`"
 
 def parseVtableEntry (j : JsonReader.Slice) (path : String) : Except String VtableEntry := do
+  let j ← j.view
   let tag ← fieldString j "kind" path
   let traitDefinitionId ← match optionalJson j "trait_def_id" with
     | none => pure none
@@ -942,6 +988,7 @@ def decodeVtableEntry (j : JsonReader.Slice) (path : String := "$compiler_vtable
 
 /-- Decode compiler-query static metadata. -/
 def decodeStaticGlobalInfo (j : JsonReader.Slice) (path : String := "$static_global_info") : Except String StaticGlobalInfo := do
+  let j ← j.view
   return {
     nested := ← fieldBool j "nested" path
     sizeBytes := ← fieldNat j "size_bytes" path
@@ -956,6 +1003,7 @@ def decodeStaticGlobalInfo (j : JsonReader.Slice) (path : String := "$static_glo
   }
 
 def parseThreadLocal (j : JsonReader.Slice) : Except String Catalog.ThreadLocal := do
+  let j ← j.view
   let definition ← fieldNat j "def_id" "$thread_local"
   let info ← decodeStaticGlobalInfo (← field j "global_info" "$thread_local")
   unless info.isStatic && info.threadLocal do
@@ -967,13 +1015,14 @@ def parseThreadLocal (j : JsonReader.Slice) : Except String Catalog.ThreadLocal 
   pure { definition, info, initializer := memory }
 
 def parseAllocation (j : JsonReader.Slice) (path : String) : Except String AllocationNode := do
+  let j ← j.view
   let kindText ← fieldString j "kind" path
   let kind ← allocationKind kindText
   let mut memory := none
   let mut data := none
   match kind with
   | .memory =>
-    let value ← parseAllocationMemory j path
+    let value ← parseAllocationMemoryFields j path
     memory := some value
     data := some (.memory value)
   | .function =>
@@ -1071,6 +1120,7 @@ def parseSourceAllocIdDedupKind (value path : String) : Except String SourceAllo
   | _ => throw s!"{path}: unknown source AllocId dedup key kind `{value}`"
 
 def parseSourceAllocIdPoolRow (j : JsonReader.Slice) (path : String) : Except String SourceAllocIdPoolRow := do
+  let j ← j.view
   let raw ← fieldNat j "source_alloc_id" path
   if raw == 0 || raw >= 2^64 then throw s!"{joinPath path "source_alloc_id"}: expected nonzero u64"
   let kind ← parseSourceAllocIdKind (← fieldString j "kind" path) (joinPath path "kind")
@@ -1125,6 +1175,7 @@ def parseSourceAllocIdPoolRow (j : JsonReader.Slice) (path : String) : Except St
     memoryAllBytesInitialized, memoryHasProvenance, byteImageHex⟩
 
 def parseSourceAllocIdSaltResult (j : JsonReader.Slice) (path : String) : Except String SourceAllocIdSaltResult := do
+  let j ← j.view
   let sourceId ← fieldNat j "source_alloc_id" path
   if sourceId == 0 || sourceId >= 2^64 then throw s!"{joinPath path "source_alloc_id"}: expected nonzero u64"
   let outcome ← match ← fieldString j "probe_result" path with
@@ -1139,6 +1190,7 @@ def parseSourceAllocIdSaltResult (j : JsonReader.Slice) (path : String) : Except
   }
 
 def parseSourceAllocIdDedupRow (j : JsonReader.Slice) (path : String) : Except String SourceAllocIdDedupRow := do
+  let j ← j.view
   let keyKind ← parseSourceAllocIdDedupKind (← fieldString j "key_kind" path) (joinPath path "key_kind")
   let saltsJson ← arrayField j "salts" path
   let mut salts := #[]
@@ -1160,12 +1212,13 @@ def parseSourceAllocIdDedupRow (j : JsonReader.Slice) (path : String) : Except S
   pure ⟨keyKind, keyAllocationId, byteImageHex, salts⟩
 
 def parseCompilerAllocIdWorld (j : JsonReader.Slice) (nodes : Array AllocationNode) : Except String CompilerAllocIdWorld := do
+  let j ← j.view
   let path := "$.compiler_alloc_id_world"
   unless (← fieldString j "schema" path) == "rustc_alloc_id_world_v1" do
     throw "$.compiler_alloc_id_world.schema: unsupported source AllocId world schema"
   unless (← fieldString j "profile" path) == "prepared_post_export" do
     throw "$.compiler_alloc_id_world.profile: unsupported source AllocId world profile"
-  let frontier ← field j "frontier" path
+  let frontier ← (← field j "frontier" path).view
   let lastNat ← fieldNat frontier "last_reserved_source_alloc_id" (joinPath path "frontier")
   let nextNat ← fieldNat frontier "next_source_alloc_id" (joinPath path "frontier")
   let sentinelNat ← fieldNat frontier "final_sentinel_source_alloc_id" (joinPath path "frontier")
@@ -1197,12 +1250,13 @@ def parseCompilerAllocIdWorld (j : JsonReader.Slice) (nodes : Array AllocationNo
   validateCompilerAllocIdWorld nodes world
   pure world
 
-def parsePromotedBodies (j : JsonReader.Slice) (path _fallbackName : String) : Except String (Array PromotedBody) := do
+def parsePromotedBodies [JsonReader.FieldSource α] (j : α) (path _fallbackName : String) : Except String (Array PromotedBody) := do
   let promotedJson ← match optionalJson j "promoted_bodies" with
     | none => pure #[]
     | some value => jsonArray value (joinPath path "promoted_bodies")
   let mut promotedBodies := #[]
   for (entry, index) in promotedJson.toList.zipIdx do
+    let entry ← entry.view
     let promotedPath := s!"{joinPath path "promoted_bodies"}[{index}]"
     let promotedIndex ← match optionalField entry "promoted_index" with
       | none => pure index
@@ -1214,6 +1268,7 @@ def parsePromotedBodies (j : JsonReader.Slice) (path _fallbackName : String) : E
   return promotedBodies
 
 def parseBodyRoot (j : JsonReader.Slice) (path : String) : Except String BodyRoot := do
+  let j ← j.view
   let defPath ← fieldString j "def_path" path
   return {
     bodyId := ← fieldNat j "body" path
@@ -1226,6 +1281,7 @@ def parseBodyRoot (j : JsonReader.Slice) (path : String) : Except String BodyRoo
   }
 
 def parseInstance (j : JsonReader.Slice) (path : String) : Except String InstanceNode := do
+  let j ← j.view
   let kindText ← fieldString j "kind" path
   let kind : InstanceKind ← match kindText with
     | "instance_mir" => pure .instanceMir
@@ -1257,7 +1313,9 @@ def parseInstance (j : JsonReader.Slice) (path : String) : Except String Instanc
   let promotedBodies ← parsePromotedBodies j path fallback
   let virtualIdentity ← match optionalJson j "virtual_identity" with
     | none => pure none
-    | some value => some <$> ((·, ·) <$> fieldNat value "function_type" (joinPath path "virtual_identity")
+    | some value => do
+      let value ← value.view
+      some <$> ((·, ·) <$> fieldNat value "function_type" (joinPath path "virtual_identity")
         <*> fieldNat value "fn_abi" (joinPath path "virtual_identity"))
   let foreignItem ← match optionalJson j "foreign_item" with
     | none => pure none
@@ -1293,6 +1351,7 @@ def passModeKind (tag : String) : Except String PassModeKind :=
   | other => throw s!"unrecognized passModeKind tag `{other}`"
 
 def parseArgumentExtension (j : JsonReader.Slice) (path : String) : Except String ArgumentExtensionKind := do
+  let j ← j.view
   match ← fieldString j "kind" path with
   | "none" => pure .none
   | "zero_extend" => pure .zeroExtend
@@ -1300,6 +1359,7 @@ def parseArgumentExtension (j : JsonReader.Slice) (path : String) : Except Strin
   | _ => throw s!"{path}: unrecognized argument extension"
 
 def parseArgumentCapture (j : JsonReader.Slice) (path : String) : Except String ArgumentCaptureKind := do
+  let j ← j.view
   match ← fieldString j "kind" path with
   | "none" => pure .none
   | "address" => pure .address
@@ -1308,6 +1368,7 @@ def parseArgumentCapture (j : JsonReader.Slice) (path : String) : Except String 
   | _ => throw s!"{path}: unrecognized argument capture"
 
 def parseIndirectMode (j : JsonReader.Slice) (path : String) : Except String IndirectModeKind := do
+  let j ← j.view
   match ← fieldString j "kind" path with
   | "pointer" => pure .pointer
   | "on_stack" => pure .onStack
@@ -1315,6 +1376,7 @@ def parseIndirectMode (j : JsonReader.Slice) (path : String) : Except String Ind
   | _ => throw s!"{path}: unrecognized indirect argument mode"
 
 def parseAbiAttributes (j : JsonReader.Slice) (path : String) : Except String AbiAttributes := do
+  let j ← j.view
   return {
     noAlias := ← fieldBool j "no_alias" path
     noFree := ← fieldBool j "no_free" path
@@ -1381,6 +1443,7 @@ def x86CallKind (tag : String) : Except String X86CallKind :=
   | other => throw s!"unrecognized x86CallKind tag `{other}`"
 
 def parseCanonicalAbi (j : JsonReader.Slice) (path : String) : Except String CanonicalAbi := do
+  let j ← j.view
   let kindNode ← parseAbiTag j path
   return {
     kind := ← canonicalAbiKind kindNode.tag
@@ -1390,6 +1453,7 @@ def parseCanonicalAbi (j : JsonReader.Slice) (path : String) : Except String Can
   }
 
 def parseAbiRegisterHint (j : JsonReader.Slice) (path : String) : Except String AbiRegisterHint := do
+  let j ← j.view
   match ← fieldString j "kind" path with
   | "integer" => return .integer (← integerTypeTag (← fieldString j "integer_kind" path)) (← fieldBool j "signed" path)
   | "float" => return .float (← floatTypeTag (← fieldString j "float_kind" path))
@@ -1397,7 +1461,8 @@ def parseAbiRegisterHint (j : JsonReader.Slice) (path : String) : Except String 
   | _ => throw s!"{path}: unrecognized register primitive hint"
 
 def parseAbiRegister (j : JsonReader.Slice) (path : String) : Except String AbiRegister := do
-  let kindNode ← field j "kind" path
+  let j ← j.view
+  let kindNode ← (← field j "kind" path).view
   let kindTag ← fieldString kindNode "kind" (joinPath path "kind")
   let hintElement ← match optionalJson kindNode "hint_element" with
     | none => pure none
@@ -1409,6 +1474,7 @@ def parseAbiRegister (j : JsonReader.Slice) (path : String) : Except String AbiR
   }
 
 def parseAbiCastTarget (j : JsonReader.Slice) (path : String) : Except String AbiCastTarget := do
+  let j ← j.view
   let prefixJson ← arrayField j "prefix_registers" path
   let mut prefixRegisters := #[]
   for (register, index) in prefixJson.toList.zipIdx do
@@ -1423,6 +1489,7 @@ def parseAbiCastTarget (j : JsonReader.Slice) (path : String) : Except String Ab
   }
 
 def parseAbiPassMode (j : JsonReader.Slice) (path : String) : Except String AbiPassMode := do
+  let j ← j.view
   let tag ← fieldString j "kind" path
   let mut attributes := #[]
   for key in ["attributes", "first", "second", "metadata_attributes"] do
@@ -1454,6 +1521,7 @@ def parseAbiPassMode (j : JsonReader.Slice) (path : String) : Except String AbiP
   }
 
 def parseAbiArgument (j : JsonReader.Slice) (path : String) : Except String AbiArgument := do
+  let j ← j.view
   let typeRef ← field j "type" path
   let typeId ← match isTypeRef typeRef with
     | some id => pure id
@@ -1466,6 +1534,7 @@ def parseAbiArgument (j : JsonReader.Slice) (path : String) : Except String AbiA
   }
 
 def parseFunctionAbi (j : JsonReader.Slice) (path : String) : Except String FunctionAbi := do
+  let j ← j.view
   let argsJson ← arrayField j "arguments" path
   let mut args := #[]
   let mut index := 0
