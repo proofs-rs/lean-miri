@@ -235,10 +235,11 @@ correctness. The large catch guest still needs a fresh same-prepared-TyCtxt
 reference comparison; native completion of a diagnostic trace does not prove UB
 freedom over every permitted choice.
 
-Input decoding constructs interpreter MIR directly from source ranges after
-reading compiler pools. Query catalogs, layouts and per-instruction compiler
-facts are typed; input decoding retains no generic JSON or intermediate MIR
-value tree. Compiler table identities remain local to one input. Reusing guest
+Input decoding parses once into concrete typed tables and unresolved body/catalog
+constant data, then resolves references and scalar widths into interpreter MIR and
+per-instruction facts. Drafts and final data retain no JSON ranges or generic value
+tree. The file entrypoint still reads a complete `String`; bounded-memory file
+streaming is not implemented. Compiler table identities remain local to one input. Reusing guest
 pointers or allocation identities between executions would invalidate the
 execution model.
 

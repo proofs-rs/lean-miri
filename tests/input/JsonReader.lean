@@ -10,54 +10,40 @@ private def expectOk (result : Except String α) : IO α :=
   | .ok value => pure value
   | .error message => throw (IO.userError message)
 
-private def item (values : Array Slice) (index : Nat) : IO Slice :=
-  match values[index]? with
-  | some value => pure value
-  | none => throw (IO.userError "missing array element")
+private structure Example where
+  count : Option Nat := none
+  label : Option String := none
+  values : Option (Array Bool) := none
+  deriving BEq
+
+private def parseExample : Parser Example := do
+  let value ← object ({} : Example) fun v key => do
+    match key with
+    | "count" => return {v with count := some (← natural)}
+    | "label" => return {v with label := some (← string)}
+    | "values" => return {v with values := some (← array boolean)}
+    | _ => skipValue; return v
+  let _ ← required value.count "count"
+  let _ ← required value.label "label"
+  let _ ← required value.values "values"
+  return value
 
 #eval show IO Unit from do
-  let root ← expectOk (parse " {\"a\": [0, -5, 1.25e2, true, null, \"\\uD83D\\uDE03\"], \"empty\":{}, \"a\":[7]} ")
-  let fields ← expectOk root.object
-  check (fields.size == 2) "duplicate keys must retain only their final value"
-  let a ← expectOk (root.field "a")
-  let items ← expectOk a.array
-  check (items.size == 1) "duplicate key must use last value"
-  check ((← expectOk (← item items 0).natural) == 7) "natural extraction"
-  check ((← expectOk (root.optionalField "missing")).isNone) "missing optional field"
-  check (!(root.field "missing").isOk) "missing required field"
-  check ((← expectOk (← expectOk (root.field "empty")).object).isEmpty) "empty object"
-
-  let numbers ← expectOk (parse "[0, -5, 1.25e2, 1.0, 1e2, -0]")
-  let numbers ← expectOk numbers.array
-  check ((← expectOk (← item numbers 0).natural) == 0) "zero"
-  check ((← expectOk (← item numbers 1).integer) == -5) "negative integer"
-  check (!(← item numbers 1).natural.isOk) "negative natural rejected"
-  check ((← expectOk (← item numbers 2).number).mantissa == 125) "exponent number"
-  check (!(← item numbers 3).natural.isOk) "decimal representation remains distinct"
-  check ((← expectOk (← item numbers 4).natural) == 100) "positive exponent"
-  check ((← expectOk (← item numbers 5).natural) == 0) "negative zero"
-
-  let values ← expectOk (parse "[true,false,null,\"\\uD83D\\uDE03\\n\\t\\\\\\\"\"]")
-  let values ← expectOk values.array
-  check (← expectOk (← item values 0).boolean) "true"
-  check (!(← expectOk (← item values 1).boolean)) "false"
-  check (← item values 2).isNull "null"
-  check (!(← item values 0).isNull) "nonnull"
-  check ((← expectOk (← item values 3).string) == "😃\n\t\\\"") "Unicode and escapes"
-  check (!(← item values 2).string.isOk) "wrong scalar type"
-  check ((← expectOk (← expectOk (parse "\"é日本語\"")).string) == "é日本語") "UTF-8 byte positions"
-
+  let a ← expectOk (run parseExample "{\"count\":7,\"label\":\"é😃\",\"values\":[true,false]}")
+  let b ← expectOk (run parseExample "{\"values\":[true,false],\"ignored\":{\"a\":[null,1.5,\"ok\"]},\"label\":\"é\\uD83D\\uDE03\",\"count\":7}")
+  check (a == b) "field order or unknown data changed typed result"
+  check ((← expectOk (run integer "-5")) == -5) "signed integer"
+  check ((← expectOk (run natural "1e2")) == 100) "positive exponent"
+  check ((← expectOk (run (nullable natural) "null")).isNone) "nullable"
+  for source in ["-1", "1.0", "1.25", "null", "\"2\""] do
+    check (!(run natural source).isOk) s!"invalid natural accepted: {source}"
+  for source in ["{\"count\":7,\"count\":8,\"label\":\"x\",\"values\":[]}",
+      "{\"count\":7,\"label\":\"x\",\"values\":[],\"other\":1,\"other\":2}",
+      "{\"label\":\"x\",\"values\":[]}",
+      "{\"count\":null,\"label\":\"x\",\"values\":[]}"] do
+    check (!(run parseExample source).isOk) s!"invalid schema accepted: {source}"
   for source in ["", " ", "[", "{", "[1,]", "{\"x\":1,}", "[1 2]", "{\"x\" 1}",
       "01", "-", "1.", "1e", "1e+", "true false", "nullx", "\"unterminated",
-      "\"\\x\"", "\"\\u12q4\"", "\"line\nfeed\"", "{\"ignored\":[0,{\"x\":tru}]}" ] do
-    check (!(parse source).isOk) s!"invalid syntax accepted: {source}"
-
-#eval show IO Unit from do
-  let root ← expectOk (parseObject " {\"a\":0,\"nested\":{\"x\":[true,null]},\"a\":7,\"escaped\\u006b\":\"value\"} ")
-  check (root.fields.size == 3) "indexed object must retain last duplicate"
-  check ((← expectOk (← expectOk (root.field "a")).natural) == 7) "indexed duplicate field"
-  check ((← expectOk (← expectOk (root.field "escapedk")).string) == "value") "indexed escaped key"
-  check ((← expectOk (root.optionalField "missing")).isNone) "indexed absent member"
-  check ((parseObject "[]").isOk == false) "object entrypoint accepted array root"
-  check ((parseObject "{\"ignored\":[1,]}").isOk == false) "object entrypoint skipped malformed nested input"
-  check ((parseObject "{} null").isOk == false) "object entrypoint accepted trailing token"
+      "\"\\x\"", "\"\\u12q4\"", "\"line\nfeed\"", "{\"ignored\":[0,{\"x\":tru}]}",
+      "{\"x\":1,\"x\":2}"] do
+    check (!(run skipValue source).isOk) s!"invalid JSON accepted: {source}"

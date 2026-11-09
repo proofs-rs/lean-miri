@@ -6,13 +6,13 @@ private def must (value : Except String α) : IO α :=
   match value with | .ok value => pure value | .error error => throw (IO.userError error)
 
 private def parse (text : String) : IO TypeConst := do
-  TypeConstCodec.decode (← must (JsonReader.parse text)) "$constant" |> must
+  JsonReader.run (TypeConstCodec.decode "$constant") text |> must
 
 private def check (condition : Bool) (message : String) : IO Unit :=
   unless condition do throw (IO.userError message)
 
 def main : IO Unit := do
-  let expression ← parse "{\"kind\":\"expression\",\"expression_kind\":\"function_call\",\"arguments\":[{\"kind\":\"const\",\"value\":0},{\"kind\":\"const\",\"value\":42}]}"
+  let expression ← parse "{\"kind\":\"expression\",\"expression_kind\":\"function_call\",\"operator\":null,\"arguments\":[{\"kind\":\"const\",\"value\":0},{\"kind\":\"const\",\"value\":42}]}"
   check (decide (expression = .Expr .FunctionCall #[.Const 0, .Const 42]))
     "recursive and forward const IDs were expanded or rewritten"
   let alias ← parse "{\"kind\":\"alias\",\"rigidity\":\"rigid\",\"alias_kind\":\"free\",\"def_id\":7,\"generic_args\":[{\"kind\":\"type\",\"value\":1},{\"kind\":\"const\",\"value\":2},{\"kind\":\"lifetime\",\"value\":{\"kind\":\"static\"}}]}"
@@ -25,6 +25,11 @@ def main : IO Unit := do
     "{\"kind\":\"value\",\"type\":1,\"value\":{\"kind\":\"leaf\",\"bits_unsigned\":\"256\",\"size_bytes\":1}}",
     "{\"kind\":\"value\",\"type\":1,\"value\":{\"kind\":\"leaf\",\"bits_unsigned\":\"0\",\"size_bytes\":0}}",
     "{\"kind\":\"value\",\"type\":1,\"value\":{\"kind\":\"leaf\",\"bits_unsigned\":\"0\",\"size_bytes\":17}}"] do
-    let json ← must (JsonReader.parse text)
-    check (!(TypeConstCodec.decode json "$constant").isOk) "invalid scalar width accepted"
-  IO.println "type constants retain recursive IDs, alias identity and local arguments; scalar widths checked"
+    check (!(JsonReader.run (TypeConstCodec.decode "$constant") text).isOk) "invalid scalar width accepted"
+  for text in #[
+    "{\"kind\":\"value\",\"type\":1,\"value\":{\"kind\":\"leaf\",\"bits_unsigned\":\"7\",\"size_bytes\":1,\"elements\":[]}}",
+    "{\"kind\":\"expression\",\"expression_kind\":\"function_call\",\"operator\":\"add\",\"arguments\":[]}",
+    "{\"kind\":\"alias\",\"alias_kind\":\"free\",\"rigidity\":\"rigid\",\"def_id\":7,\"generic_args\":[],\"type\":1}"] do
+    check (!(JsonReader.run (TypeConstCodec.decode "$constant") text).isOk)
+      "mixed type-constant payload accepted"
+  IO.println "type constants retain recursive IDs, alias identity and local arguments; scalar widths and union payloads checked"

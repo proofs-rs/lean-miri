@@ -3,8 +3,8 @@ import Miri.Input.CatalogDecoder
 open Miri.Input
 
 private def parse (fields : String) : Except String Catalog.CastQuery := do
-  CatalogDecoder.castQuery (← JsonReader.parse
-    ("{\"typing_env\":\"fully_monomorphized\",\"query_kind\":\"resolve_fn_ptr\",\"input_type\":1,\"args_no_bound_vars\":true," ++ fields ++ "}"))
+  JsonReader.run CatalogDecoder.castQuery
+    ("{\"typing_env\":\"fully_monomorphized\",\"query_kind\":\"resolve_fn_ptr\",\"input_type\":1,\"args_no_bound_vars\":true," ++ fields ++ "}")
 
 def main : IO Unit := do
   unless (parse "\"resolution_kind\":\"instance\",\"instance_id\":7").toOption ==

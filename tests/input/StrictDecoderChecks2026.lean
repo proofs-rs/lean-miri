@@ -1,3 +1,4 @@
+import MiriTests.Input.JsonFixtures
 import Miri.Input.Decoder
 
 open Lean Miri.Input Miri.Input.DecoderValues
@@ -9,11 +10,11 @@ private def object (fields : List (String × String)) :=
   "{" ++ String.intercalate "," (fields.map fun (key,value) => string key ++ ":" ++ value) ++ "}"
 private def arr (values : Array String) := "[" ++ String.intercalate "," values.toList ++ "]"
 private def get (source key : String) : Except String String := do
-  return (← (← JsonReader.parse source).field key).text
+  return (← (← JsonFixtures.parse source).field key).text
 private def array (source : String) : Except String (Array String) := do
-  return (← (← JsonReader.parse source).array).map (·.text)
+  return (← (← JsonFixtures.parse source).array).map (·.text)
 private def set (source key child : String) : Except String String := do
-  let fields ← (← JsonReader.parse source).object
+  let fields ← (← JsonFixtures.parse source).object
   let retained := fields.filterMap fun (name,value) =>
     if name == key then none else some (name,value.text)
   pure (object ((key,child)::retained.toList))
@@ -69,24 +70,21 @@ def main : IO Unit := do
   let operand := object [("kind",string "FutureOperand")]
   rejects (decodeJson (← must (replaceBodyNode fixture (assign (object [("kind",string "Use"),("operand",operand),
     ("retag",object [("kind",string "no"),("performs_retag","false")])])) false))) "operand"
-  let context : DecodeMIR.Context := {
-    typeCount := 1, allocationCount := 0, definitionCount := 1, typeConstantCount := 0,
-    spanCount := 1, scalarSizes := #[some 1], localCount := 1 }
   let projection := object [("local","0"),("type","0"),("projection",arr #[object [("kind",string "FutureProjection")]])]
-  rejects (DecodeMIR.decodePlace context (← must (JsonReader.parse projection))) "projection"
+  rejects (JsonReader.run DecodeMIR.place projection) "projection"
   rejects (typeShapeKind "future_type") "type shape"
   for kind in #["coroutine_witness", "parameter", "bound_type", "placeholder_type", "inference_type", "error_type"] do
     rejects (typeShapeKind kind) s!"unresolved type shape {kind}"
   for kind in #["inference_variable", "error"] do
-    rejects (GenericArgsCodec.region (← must (JsonReader.parse (object [("kind",string kind)])))) s!"unresolved region {kind}"
+    rejects (JsonReader.run GenericArgsCodec.region (object [("kind",string kind)])) s!"unresolved region {kind}"
   for kind in #["parameter", "bound", "placeholder", "inference", "error"] do
     let constant := object [("kind",string kind)]
     let argument := arr #[object [("kind",string "const"),("value",constant)]]
-    rejects (GenericArgsCodec.decode (← must (JsonReader.parse argument))) s!"unresolved constant {kind}"
+    rejects (JsonReader.run GenericArgsCodec.decode argument) s!"unresolved constant {kind}"
   rejects (integerTypeTag "u256") "integer kind"
   rejects (layoutVariantsKind "future_layout") "layout variant"
   rejects (backendReprKind "future_backend") "backend representation"
   rejects (canonicalAbiKind "future_abi") "ABI"
   rejects (allocationKind "future_allocation") "allocation"
-  rejects (parseTagEncoding (← must (JsonReader.parse (string "legacy debug"))) "$tag") "legacy tag encoding"
+  rejects (JsonReader.run (parseTagEncoding "$tag") (string "legacy debug")) "legacy tag encoding"
   IO.println "StrictDecoderChecks2026: typed references, unknown MIR constructors and unresolved compiler values rejected"

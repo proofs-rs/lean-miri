@@ -9,11 +9,11 @@ private def check (value : Bool) (message : String) : IO Unit :=
   unless value do throw (IO.userError message)
 
 def main : IO Unit := do
-  let args ← match (JsonReader.parse referenceArgs >>= GenericArgsCodec.decode) with
+  let args ← match (JsonReader.run GenericArgsCodec.decode referenceArgs) with
     | .ok value => pure value | .error error => throw (IO.userError error)
   check (decide (args = #[.Type 17, .Const 23, .Lifetime (.Bound (.Bound 2) 3 (.Named 41))]))
     "generic references or bound region identity changed"
-  let obsolete := JsonReader.parse
-    "[{\"kind\":\"const\",\"value\":{\"type_constant_id\":23}}]" >>= GenericArgsCodec.decode
+  let obsolete := JsonReader.run GenericArgsCodec.decode
+    "[{\"kind\":\"const\",\"value\":{\"type_constant_id\":23}}]"
   check (!obsolete.isOk) "obsolete wrapped constant reference accepted"
   IO.println "generic argument IDs and binder identity preserved; obsolete wrapper rejected"

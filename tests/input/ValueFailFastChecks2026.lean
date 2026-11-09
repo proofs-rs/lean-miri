@@ -23,7 +23,7 @@ private def decode (statements : List String) (phase : String := tag "runtime" [
     ("source_scopes",arr [obj [("scope","0"),("parent","null"),("span","0"),("inlined","null"),("inlined_parent_scope","null")]]),
     ("basic_blocks",arr [obj [("block","0"),("is_cleanup","false"),("statements",arr (statements.map node)),
       ("terminator",node (obj [("variant",s "Return")]))]])]
-  DecodeMIR.decodeBody context (← JsonReader.parse body) "$body"
+  DecodeMIR.resolveBody context (← JsonReader.run (DecodeMIR.parseBody "$body") body)
 
 private def rejects (result : Except String α) (message : String) : IO Unit :=
   unless !result.isOk do throw (IO.userError message)

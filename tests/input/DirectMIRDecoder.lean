@@ -23,7 +23,7 @@ private def body (bits : String) (localId : Nat := 0) :=
   "\"source_def_id\":0,\"span\":0,\"preamble_def_span\":0,\"backtrace_spans\":[],\"required_consts\":[]}"
 
 private def decode (text : String) := do
-  DecodeMIR.decodeBody context (← JsonReader.parse text) "bodies[0]"
+  DecodeMIR.resolveBody context (← JsonReader.run (DecodeMIR.parseBody "bodies[0]") text)
 
 def main : IO Unit := do
   let .ok result := decode (body "255") | throw (IO.userError "valid scalar MIR did not decode")

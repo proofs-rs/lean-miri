@@ -1,3 +1,4 @@
+import MiriTests.Input.JsonFixtures
 import Miri.Input.Decoder
 import Miri.Input.LowerMIR
 
@@ -7,7 +8,7 @@ private def check (condition : Bool) (message : String) : IO Unit :=
   unless condition do throw (IO.userError message)
 private def must (value : Except String α) : IO α :=
   match value with | .ok v => pure v | .error e => throw (IO.userError e)
-private def replaceField (value : JsonReader.Slice) (name replacement : String) : Except String String := do
+private def replaceField (value : JsonFixtures.Value) (name replacement : String) : Except String String := do
   let fields ← value.object
   pure ("{" ++ String.intercalate "," ((fields.toList.map fun (key,child) =>
     "\"" ++ key ++ "\":" ++ if key == name then replacement else child.text)) ++ "}")
@@ -30,7 +31,7 @@ def main (args : List String) : IO Unit := do
   check (lowered.body.basicBlocks.any fun b => b.statements.any fun s => match s.kind with
     | .Assign _ (.BinaryOp .AddWithOverflow _ _) => true | _ => false)
     "add_one arithmetic did not decode"
-  let root ← must (JsonReader.parse source)
+  let root ← must (JsonFixtures.parse source)
   let bodies ← must ((← must (root.field "bodies")).array)
   let some raw := bodies.find? (fun body => ((body.field "def_path").bind (·.string)).toOption == some input.defPath)
     | throw (IO.userError "missing body source")
@@ -39,11 +40,11 @@ def main (args : List String) : IO Unit := do
     typeCount := document.types.size, allocationCount := document.allocations.size,
     definitionCount := document.definitions.size, typeConstantCount := document.typeConstants.size,
     spanCount := document.spans.size, scalarSizes := document.types.map fun ty =>
-      (document.layouts[ty.layoutId]?).bind (·.sizeBytes), threadLocal := DecoderValues.parseThreadLocal }
-  check ((DecodeMIR.decodeBody {ctx with typeCount := 0} raw input.sourcePath).isOk == false) "unresolved type accepted"
-  check ((DecodeMIR.decodeBody {ctx with scalarSizes := #[]} raw input.sourcePath).isOk == false) "missing scalar width accepted"
+      (document.layouts[ty.layoutId]?).bind (·.sizeBytes) }
+  check (((JsonReader.run (DecodeMIR.parseBody input.sourcePath) raw.text >>= DecodeMIR.resolveBody {ctx with typeCount := 0})).isOk == false) "unresolved type accepted"
+  check (((JsonReader.run (DecodeMIR.parseBody input.sourcePath) raw.text >>= DecodeMIR.resolveBody {ctx with scalarSizes := #[]})).isOk == false) "missing scalar width accepted"
   let decodeMutation (name value : String) := do
-    DecodeMIR.decodeBody ctx (← JsonReader.parse (← replaceField raw name value)) input.sourcePath
+    DecodeMIR.resolveBody ctx (← JsonReader.run (DecodeMIR.parseBody input.sourcePath) (← replaceField raw name value))
   check ((decodeMutation "phase" "{\"kind\":\"unknown\"}").isOk == false) "unknown phase accepted"
   check ((decodeMutation "source_scopes" "null").isOk == false) "missing source scopes accepted"
   check ((decodeMutation "spread_arg" (toString (input.mir.locals.size + 1))).isOk == false) "invalid spread argument accepted"

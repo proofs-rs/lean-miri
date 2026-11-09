@@ -18,6 +18,13 @@ private def op : String := tagged "Copy" [("place", pl)]
 private def defRef : String := n 0
 private def unwind : String := tagged "Continue"
 private def tc (_ : Nat) : String := n 0
+private def tlsGlobalInfo : String := obj [
+  ("nested", b false), ("size_bytes", n 0), ("align_bytes", n 1),
+  ("mutability", s "immutable"), ("is_static", b true),
+  ("is_foreign_item", b false), ("thread_local", b true)]
+private def tlsInitializer : String := obj [("allocation", obj [
+  ("size_bytes", n 0), ("align_bytes", n 1), ("mutability", s "immutable"),
+  ("bytes_hex", s ""), ("initialization_ranges", arr []), ("relocations", arr [])])]
 private def constant (ty span : Nat) : String := obj [
   ("type", n ty), ("user_type_annotation", nil), ("span", n span),
   ("constant", tagged "evaluated_const" [("source", tagged "already_evaluated"), ("value", tagged "scalar" [("bits_unsigned", s "1")])])]
@@ -26,7 +33,8 @@ private def rvalues (ty : Nat) : Array (String × Array (String × String)) := #
   ("Use", #[("operand", op), ("retag", tagged "no" [("performs_retag", b false)])]),
   ("Repeat", #[("operand", op), ("count", tc ty)]),
   ("Ref", #[("region", tagged "late_parameter" [("scope_def_id", defRef), ("parameter", tagged "named_anonymous" [("index", n 8), ("name", s "r")])]), ("borrow_kind", tagged "shared"), ("place", pl)]),
-  ("ThreadLocalRef", #[("def_id", defRef)]),
+  ("ThreadLocalRef", #[("def_id", defRef), ("global_info", tlsGlobalInfo),
+    ("initializer", tlsInitializer)]),
   ("RawPtr", #[("pointer_kind", tagged "metadata_only"), ("place", pl)]),
   ("Cast", #[("cast_kind", tagged "PointerCoercion" [("coercion", tagged "ClosureFnPointer" [("safety", tagged "unsafe")]), ("source", tagged "as_cast")]), ("operand", op), ("target_type", n ty)]),
   ("BinaryOp", #[("operator", tagged "add"), ("left", op), ("right", op)]),
@@ -83,10 +91,9 @@ private def body (statements : List String) (term : String) := obj [
   ("basic_blocks",arr [obj [("block",n 0),("is_cleanup",b false),("statements",arr (statements.map node)),("terminator",node term)]])]
 private def context : DecodeMIR.Context := {
   typeCount := 1,allocationCount := 0,definitionCount := 4,typeConstantCount := 1,spanCount := 1,
-  scalarSizes := #[some 1],
-  threadLocal := fun _ => pure ⟨0,⟨false,1,1,.immutable,true,false,true⟩,none⟩ }
+  scalarSizes := #[some 1] }
 private def decode (statements : List String) (term : String) := do
-  DecodeMIR.decodeBody context (← JsonReader.parse (body statements term)) "bodies[0]"
+  DecodeMIR.resolveBody context (← JsonReader.run (DecodeMIR.parseBody "bodies[0]") (body statements term))
 
 def main (_args : List String) : IO Unit := do
   for (kind, fs) in rvalues 0 do

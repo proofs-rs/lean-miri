@@ -1,3 +1,4 @@
+import MiriTests.Input.JsonFixtures
 import Miri.Input.Decoder
 
 open Lean
@@ -15,20 +16,20 @@ private def object (fields : List (String × String)) : String :=
 private def number (value : Nat) : String := toString value
 private def encodeArray (values : Array String) := "[" ++ String.intercalate "," values.toList ++ "]"
 private def getField (source key : String) : Except String String := do
-  return (← (← JsonReader.parse source).field key).text
+  return (← (← JsonFixtures.parse source).field key).text
 private def array (source : String) : Except String (Array String) := do
-  return (← (← JsonReader.parse source).array).map (·.text)
+  return (← (← JsonFixtures.parse source).array).map (·.text)
 private def getAt (values : Array α) (index : Nat) : Except String α :=
   match values[index]? with | some value => .ok value | none => .error s!"array index {index} is out of range"
 private def setField (source key value : String) : Except String String := do
-  let fields ← (← JsonReader.parse source).object
+  let fields ← (← JsonFixtures.parse source).object
   let retained := fields.filterMap fun (name, child) => if name == key then none else some (name,child.text)
   pure (object ((key,value)::retained.toList))
 private def updateAt (values : Array String) (index : Nat) (value : String) : Except String (Array String) := do
   if index >= values.size then throw s!"array index {index} is out of range"
   pure (values.set! index value)
 private partial def replaceFirstField (source key replacement : String) : Except String (String × Bool) := do
-  let node ← JsonReader.parse source
+  let node ← JsonFixtures.parse source
   if let .ok values := node.array then
     let mut out := #[]
     let mut changed := false
@@ -88,7 +89,7 @@ def main (args : List String) : IO UInt32 := do
     | value :: _ => pure value
     | [] => fail "usage: DecoderTests <schema-v4-export.json>"
   let source ← IO.FS.readFile path
-  let _ ← must (JsonReader.parse source)
+  let _ ← must (JsonFixtures.parse source)
   let original := source
 
   let decoded ← match decodeJson source with
