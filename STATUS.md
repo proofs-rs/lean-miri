@@ -219,8 +219,8 @@ provider lies outside the selected local rustc source corpus.
 
 ### Performance and optimization assurance
 
-Remaining performance work includes runtime-value decoding, residual equality
-and validation work, and preparation outside the optimized call-resolution
+Remaining performance work includes residual equality and validation work,
+and preparation outside typed input decoding and the optimized call-resolution
 lookup. Caller-location still scans its catalog; optimization must retain
 source-order diagnostics, malformed-row handling and fresh Location allocations.
 Measure current immutable artifacts with the protocol in [AGENTS](AGENTS.md);

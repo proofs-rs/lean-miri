@@ -48,10 +48,14 @@ def main : IO Unit := do
   | .error message =>
     unless message.contains "selected_scope" do throw (IO.userError s!"wrong scope diagnostic: {message}")
   | .ok _ => throw (IO.userError "invalid selected scope was accepted")
+  let malformedOnly ← must (set fixture "compiler_predicate_queries" "[null]")
+  let expectedTableError ← match decodeJson malformedOnly with
+    | .error message => pure message
+    | .ok _ => throw (IO.userError "malformed predicate definition was accepted")
   let malformedTable ← must (set invalidScopeInput "compiler_predicate_queries" "[null]")
   match decodeJson malformedTable with
   | .error message =>
-    unless message.contains "normalization" do
+    unless message == expectedTableError do
       throw (IO.userError s!"malformed table did not precede scope validation: {message}")
   | .ok _ => throw (IO.userError "malformed predicate definition was accepted")
 
