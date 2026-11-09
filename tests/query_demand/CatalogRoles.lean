@@ -36,10 +36,8 @@ def main (args : List String) : IO Unit := do
       let mutated ← must (CompilerProviders.prepare (← must (lowerProgram decoded.document)))
       match ← must (row.getObjValAs? String "provider") with
       | "native" =>
-        let entries ← must (arr baseline.document.raw "compiler_native_signature_queries")
-        let entry ← must (getAt entries (← must (row.getObjValAs? Nat "index")))
-        let (callee,_) ← must (CompilerInstance.decode
-          (LowerContext.ofDocument prepared.program.input) prepared.program.compilerTables entry)
+        let entry ← must (getAt baseline.document.queries.nativeSignatures (← must (row.getObjValAs? Nat "index")))
+        let callee := entry.instanceId
         discard <| must (CompilerNativeSignatures.query prepared callee)
         check (!(CompilerNativeSignatures.query mutated callee).isOk)
           s!"demanded malformed native signature accepted: {name}"
@@ -47,7 +45,8 @@ def main (args : List String) : IO Unit := do
         let definitionJson ← must (row.getObjVal? "definition")
         let definition : DefinitionId := ⟨← must (definitionJson.getObjValAs? Nat "crate"),
           ← must (definitionJson.getObjValAs? Nat "index")⟩
-        let definition ← must (lookupDefinitionId program.bundle.definitions definition)
+        let some definition := program.bundle.definitions.findIdx? (· == definition) |
+          throw (IO.userError "TLS definition absent from compiler pool")
         discard <| must (CompilerThreadLocal.forDefinition prepared.program definition)
         check (!(CompilerThreadLocal.forDefinition mutated.program definition).isOk)
           s!"demanded malformed TLS initializer accepted: {name}"

@@ -5,57 +5,43 @@ open Lean Miri.Input Miri.Interpreter
 
 private def must (value : Except String α) : IO α :=
   match value with | .ok x => pure x | .error e => throw (IO.userError e)
-private def set (j : Json) (key : String) (value : Json) : Json :=
-  match j with
-  | .obj fields => Json.mkObj ((key,value) :: fields.toList.filter (fun e => e.1 != key))
-  | _ => Json.mkObj [(key,value)]
-private def withRows (p : CompilerProviders.Prepared) (rows : Json) : CompilerProviders.Prepared :=
-  let raw := set p.program.input.raw "compiler_caller_location_constants" rows
-  let program := {p.program with input := {p.program.input with raw}}
-  {p with program, lowering := none
-          covarianceIndex := CompilerQueryIndices.covariance raw
-          signatureAbiIndex := CompilerQueryIndices.signatureAbi p.runtime raw}
-private def compare (p : CompilerProviders.Prepared) (span : Miri.MIR.SpanRef) : IO Unit := do
-  let expected := CompilerValueConstants.callerLocationReference p span
-  let actual := CompilerValueConstants.callerLocation p span
-  unless decide (actual = expected) do throw (IO.userError s!"caller-location outcome differs at span{span.id}")
+
+private def withRows (p : CompilerProviders.Prepared) (rows : Array Catalog.CallerLocation) :
+    CompilerProviders.Prepared :=
+  let queries := {p.program.input.queries with callerLocations := rows}
+  {p with program := {p.program with input := {p.program.input with queries}}, lowering := none}
+
+private def check (condition : Bool) (message : String) : IO Unit :=
+  unless condition do throw (IO.userError message)
 
 def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected ordinary export fixture")
   let decoded ← must (decodeJson (← IO.FS.readFile path))
   let program ← must (lowerProgram decoded.document)
   let p := (← must (EvalPreparation.prepare program).outcome).compiler
-  let records ← must ((← must (p.program.input.raw.getObjVal? "compiler_caller_location_constants")).getArr?)
-  let some row := records[0]? | throw (IO.userError "fixture has no caller-location rows")
-  let some storedSpan := p.program.compilerTables.spans[0]? | throw (IO.userError "fixture has no source spans")
-  let spanJson ← must (Json.parse storedSpan.originalPayload)
-  let row := set row "span" spanJson
+  let some source := p.program.input.queries.callerLocations[0]? |
+    throw (IO.userError "fixture has no caller-location rows")
+  let row := {source with span := 0}
   let span : Miri.MIR.SpanRef := ⟨0⟩
-  unless (CompilerValueConstants.callerLocationReference (withRows p (.arr #[row])) span).isOk do
-    throw (IO.userError "positive caller-location fixture did not decode")
-  let resultType ← must (row.getObjVal? "result_type")
-  let resultTypeId ← must (resultType.getObjValAs? Nat "type_id")
-  let typeNameRow := set (set row "input_type" resultType) "typing_env" (.str "fully_monomorphized")
-  let raw := set p.program.input.raw "compiler_type_name_constants" (.arr #[typeNameRow])
-  let program := {p.program with input := {p.program.input with raw}}
-  let typeNameProvider : CompilerProviders.Prepared :=
-    {p with program, lowering := none
-            covarianceIndex := CompilerQueryIndices.covariance raw
-            signatureAbiIndex := CompilerQueryIndices.signatureAbi p.runtime raw}
-  let typeName ← must (CompilerValueConstants.typeName typeNameProvider resultTypeId)
-  let caller ← must (CompilerValueConstants.callerLocationReference (withRows p (.arr #[row])) span)
-  unless decide (typeName = caller) do
-    throw (IO.userError "direct intrinsic constant payload differs between type-name and caller-location consumers")
-  compare (withRows p (.arr #[row])) span
-  compare (withRows p (.arr #[row,row])) span
-  compare (withRows p (.arr #[row,set row "kind" (.str "unknown_caller_location_constant")])) span
-  compare (withRows p (.arr #[row,Json.mkObj []])) span
-  compare (withRows p (.arr #[Json.mkObj [],row])) span
-  compare (withRows p (.arr #[])) span
-  compare (withRows p (.str "not-an-array")) span
-  -- Same coarse file/lo/hi key, distinct complete span: must not alias.
-  let missing := set row "span" (set spanJson "ctxt" (.str "absent-context"))
-  compare (withRows p (.arr #[missing,row])) span
-  compare (withRows p (.arr #[row,missing])) span
-  compare (withRows p (.arr #[Json.mkObj []])) ⟨p.program.compilerTables.spans.size⟩
-  IO.println "caller-location reference/indexed success, duplicates, errors, collisions and base isolation: PASS"
+  let expected ← must (CompilerValueConstants.callerLocation (withRows p #[row]) span)
+  let duplicate ← must (CompilerValueConstants.callerLocation (withRows p #[row,row]) span)
+  check (decide (duplicate = expected)) "duplicate caller-location row changed result"
+  let some resultType := row.resultType | throw (IO.userError "caller result type absent")
+  let typeName : Catalog.TypeName := ⟨resultType, resultType, row.value⟩
+  let queries := {p.program.input.queries with typeNames := #[typeName]}
+  let typeNameProvider := {p with program := {p.program with input := {p.program.input with queries}}, lowering := none}
+  check (decide ((← must (CompilerValueConstants.typeName typeNameProvider resultType)) = expected))
+    "type-name and caller-location constant paths disagree"
+  let conflict := {row with resultType := none}
+  check (!(CompilerValueConstants.callerLocation (withRows p #[row, conflict]) span).isOk)
+    "conflicting caller-location rows were accepted"
+  check (!(CompilerValueConstants.callerLocation (withRows p #[]) span).isOk)
+    "missing caller-location row was accepted"
+  check (!(CompilerValueConstants.callerLocation (withRows p #[conflict]) span).isOk)
+    "missing caller-location type was accepted"
+  let other := {row with span := 1}
+  let selected ← must (CompilerValueConstants.callerLocation (withRows p #[other,row]) span)
+  check (decide (selected = expected)) "caller-location selected a different span identity"
+  check (!(CompilerValueConstants.callerLocation (withRows p #[row])
+    ⟨p.program.compilerTables.spans.size⟩).isOk) "out-of-bounds source span was accepted"
+  IO.println "typed caller-location IDs, duplicates, conflicts, missing types and span bounds: PASS"

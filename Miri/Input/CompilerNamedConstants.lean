@@ -3,7 +3,7 @@ import Miri.Interpreter.Constant
 
 /-! Actual compiler ValueNS path resolution and const_eval_instance evidence
 for helpers.rs::eval_path_scalar/eval_libc. Original full constant identity,
-query environment, type, value and raw payload remain available. Allocation
+type and value remain available. Allocation
 values use the canonical Constant pipeline, preserving graph provenance.
 -/
 namespace Miri.Input.CompilerNamedConstants
@@ -15,33 +15,24 @@ structure Value where
 structure Entry where
   name : String
   result : Value
-  payload : Json
 structure Prepared where
   program : LoweredProgram
   runtime : RuntimeMetadata
   entries : Array Entry
 def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except String Prepared := do
-  let records ← match program.input.raw.getObjVal? "compiler_named_constants" with
-    | .error _ => pure #[]
-    | .ok value => value.getArr?
+  let records := program.input.queries.namedConstants.getD #[]
   let ctx := LowerContext.ofDocument program.input
-  let mut tables := program.compilerTables
   let mut entries := #[]
   for record in records do
-    let name ← (← record.getObjVal? "name").getStr?
+    let name := record.name
     unless !(entries.any (·.name == name)) do throw "duplicate compiler named constant query"
-    unless (← (← record.getObjVal? "typing_env").getStr?) == "fully_monomorphized" do
-      throw "named constant compiler environment mismatch"
-    let query ← record.getObjVal? "query"
-    let (sourceInstance, next) ← CompilerInstance.decode ctx tables query
-    tables := next
-    let ty ← (← query.getObjVal? "type").getNat?
+    let sourceInstance := record.instanceId
+    let _ ← CompilerInstance.source ctx sourceInstance
+    let ty := record.typeId
     unless ctx.containsTypeId ty do throw "named constant references missing compiler type"
-    let evaluated ← query.getObjVal? "evaluation"
-    let value ← lowerCompilerConstValue ctx ty (← ctx.decodeCompilerValue evaluated)
-    let result : Value := ⟨sourceInstance, ty, value⟩
-    entries := entries.push ⟨name,result,record⟩
-  pure ⟨program.withCompilerTables tables,runtime,entries⟩
+    let result : Value := ⟨sourceInstance, ty, record.value⟩
+    entries := entries.push ⟨name, result⟩
+  pure ⟨program, runtime, entries⟩
 
 def value (prepared : Prepared) (name : String) : Except String Value := do
   let some entry := prepared.entries.find? (·.name == name)

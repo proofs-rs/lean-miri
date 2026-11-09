@@ -36,8 +36,7 @@ def main (args : List String) : IO Unit := do
       throw (IO.userError "bundle body uses inconsistent compiler identity tables")
   let knownGeneric := program.bundle.bodies.find? (fun body => body.input.defPath.endsWith "array_len")
   if let some generic := knownGeneric then
-    unless (generic.input.payload.getObjValAs? Bool "is_polymorphic").toOption == some false &&
-        generic.obligations.isEmpty do
+    unless generic.input.isPolymorphic == some false && generic.obligations.isEmpty do
       throw (IO.userError "concrete generic instantiation retained unresolved parameters")
   let knownTLS := program.bundle.bodies.find? (fun body => body.input.defPath.endsWith "read_tls")
   if let some tls := knownTLS then

@@ -26,8 +26,7 @@ namespace Miri.Input.CompilerProviders
 open Lean Miri.ABI Miri.Memory Miri.Interpreter
 structure Prepared where
   program : LoweredProgram
-  /-- Lowering evidence bound to this provider's exact input. -/
-  lowering : Option (LowerContext.Bound program.input) := none
+  lowering : Option LowerContext := none
   runtime : RuntimeMetadata
   lifecycle : CompilerLifecyclePipeline.Prepared
   functions : CompilerFunctionFacts.Prepared
@@ -43,22 +42,15 @@ structure Prepared where
   /-- Immutable compiler export table. Errors remain stored so source
   consumers retain their original demand-local failure boundary. -/
   foreignSymbols : Except String CompilerForeignSymbolTables.Prepared
-  /-- Source-ordered exact lookup index. Global row parse errors remain stored
-  and are reported only when a non-reflexive covariance query is demanded. -/
-  covarianceIndex : CompilerQueryIndices.Covariance program.input.raw
-  /-- Parsed helper-signature keys and exact duplicate rows, retaining the
-  first malformed source row for demand-time error ordering. -/
-  signatureAbiIndex : CompilerQueryIndices.SignatureAbi runtime program.input.raw
+  covarianceIndex : CompilerQueryIndices.Covariance
+  signatureAbiIndex : CompilerQueryIndices.SignatureAbi
   /-- Initial persistent interner. Runtime execution must thread its updated World. -/
   initialArrays : Except String RuntimeArrayTypes.World
   tls : Except String (Array CompilerThreadLocal.Entry)
 
-/-- Reuse lowering indices only when certified for this provider's own source
-document. This remains correct for manually assembled records whose nested
-fact context happens to refer to a different program. -/
 def Prepared.loweringContext (p : Prepared) : LowerContext :=
   match p.lowering with
-  | some prepared => prepared.value
+  | some prepared => prepared
   | none => LowerContext.ofDocument p.program.input
 
 /-- Resolve the exact primitive reference at its operation. -/
@@ -121,16 +113,16 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
   let foreignSymbols := profileit "preparation.providers.foreign_symbols" profile fun _ =>
     CompilerForeignSymbolTables.prepare lifecycle.calls.symbols
   let covarianceIndex := profileit "preparation.providers.covariance_index" profile fun _ =>
-    CompilerQueryIndices.covariance program.input.raw
+    CompilerQueryIndices.covariance program.input.queries.covariance
   let signatureAbiIndex := profileit "preparation.providers.signature_abi_index" profile fun _ =>
-    CompilerQueryIndices.signatureAbi runtime program.input.raw
+    CompilerQueryIndices.signatureAbi program.input.queries.functionFacts.helperSignatures
   let arrays := profileit "preparation.providers.runtime_arrays" profile fun _ =>
     RuntimeArrayTypes.create runtime |>.mapError reprStr
   let tls := profileit "preparation.providers.thread_local" profile fun _ => CompilerThreadLocal.ofProgram program
   let constants := profileit "preparation.providers.rebind_constants" profile fun _ => {constants with program}
   return {
     program
-    lowering := some (LowerContext.bindDocument program.input)
+    lowering := some (LowerContext.ofDocument program.input)
     runtime
     lifecycle
     functions := {functions with program}
@@ -197,7 +189,7 @@ def executionHooks (p : Prepared) (image : AllocationImage.Imported)
     resolve := fun _ definition args => resolveCurrent p definition args
     functionSignature := fun _ layout => lift do
       let (count,abi) ← CompilerFunctionFacts.signature p.functions layout.ty
-      pure (count,← CompilerExternAbi.decode abi)
+      pure (count, abi)
     functionKind := fun ty => lift (CompilerFunctionFacts.kind p.functions ty)
     fnAbiOfFnPtr := fun _ layout extra => lift (CompilerFunctionFacts.pointerAbi p.functions layout.ty extra)
     fnAbiOfInstance := fun _ callee extra =>

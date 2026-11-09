@@ -2,67 +2,87 @@ import Miri.Input.Decoder
 
 open Lean Miri.Input Miri.Input.DecoderValues
 
-private def must (outcome : Except String α) : IO α := do
-  match outcome with
-  | .ok value => pure value
-  | .error message => throw (IO.userError message)
+private def must (outcome : Except String α) : IO α :=
+  match outcome with | .ok value => pure value | .error message => throw (IO.userError message)
+private def string (value : String) := Json.renderString value
+private def object (fields : List (String × String)) :=
+  "{" ++ String.intercalate "," (fields.map fun (key,value) => string key ++ ":" ++ value) ++ "}"
+private def arr (values : Array String) := "[" ++ String.intercalate "," values.toList ++ "]"
+private def get (source key : String) : Except String String := do
+  return (← (← JsonReader.parse source).field key).text
+private def array (source : String) : Except String (Array String) := do
+  return (← (← JsonReader.parse source).array).map (·.text)
+private def set (source key child : String) : Except String String := do
+  let fields ← (← JsonReader.parse source).object
+  let retained := fields.filterMap fun (name,value) =>
+    if name == key then none else some (name,value.text)
+  pure (object ((key,child)::retained.toList))
+private def rejects (outcome : Except String α) (label : String) : IO Unit :=
+  if outcome.isOk then throw (IO.userError s!"{label}: invalid input was accepted") else pure ()
 
-private def set (value : Json) (key : String) (child : Json) : Except String Json := do
-  let fields ← value.getObj?
-  pure (Json.mkObj ((key, child) :: fields.toList.filter (fun item => item.1 != key)))
-
-private def reject (input : Json) (label : String) : IO Unit := do
-  if (decodeJson input.compress).isOk then
-    throw (IO.userError s!"{label}: failed input was accepted")
-
-private def rejectSelector (outcome : Except String α) (label : String) : IO Unit :=
-  if outcome.isOk then throw (IO.userError s!"{label}: unknown enum was accepted") else pure ()
+private def replaceBodyNode (fixture : String) (kind : String) (terminator : Bool) : Except String String := do
+  let bodies ← array (← get fixture "bodies")
+  let some body := bodies[0]? | throw "fixture has no body"
+  let blocks ← array (← get body "basic_blocks")
+  let some block := blocks[0]? | throw "fixture has no block"
+  let term ← get block "terminator"
+  let info ← get term "source_info"
+  let node := object [("source_info",info),("kind",kind)]
+  let block ← if terminator then set block "terminator" node else set block "statements" (arr #[node])
+  let body ← set body "basic_blocks" (arr (blocks.set! 0 block))
+  set fixture "bodies" (arr (bodies.set! 0 body))
 
 def main : IO Unit := do
-  let fixture ← must (Json.parse (← IO.FS.readFile "tests/input/fixtures/strict-unit.json"))
-  let full ← must (decodeJson fixture.compress)
-  unless full.document.types.size == 3 && full.document.layouts.size == 3 do
+  let fixture ← IO.FS.readFile "tests/input/fixtures/strict-unit.json"
+  let full ← must (decodeJson fixture)
+  unless full.document.types.size == 20 && full.document.layouts.size == 20 do
     throw (IO.userError "typed table definitions were discarded")
-  let types ← must ((fixture.getObjVal? "types").bind Json.getArr?)
-  let badType ← must (set types[0]! "layout" (toJson (99999 : Nat)))
-  reject (← must (set fixture "types" (.arr (types.set! 0 badType)))) "out of bounds layout"
-  -- Table decoding precedes downstream scope validation.
-  let invalidScope := Json.mkObj [("kind", .str "future_scope"),
-    ("semantics", .str "structural_export_closure_only"), ("roots", .arr #[])]
+  let types ← must (array (← must (get fixture "types")))
+  let some firstType := types[0]? | throw (IO.userError "fixture has no type")
+  let badType ← must (set firstType "layout" "99999")
+  rejects (decodeJson (← must (set fixture "types" (arr (types.set! 0 badType))))) "out of bounds layout"
+  let invalidScope := object [("kind",string "future_scope"),
+    ("semantics",string "structural_export_closure_only"),("roots","[]")]
   let invalidScopeInput ← must (set fixture "selected_scope" invalidScope)
-  match decodeJson invalidScopeInput.compress with
+  match decodeJson invalidScopeInput with
   | .error message =>
-    unless message == "$.selected_scope.kind: unrecognized selected-scope kind `future_scope`" do
-      throw (IO.userError s!"isolated scope diagnostic changed: {message}")
+    unless message.contains "selected_scope" do throw (IO.userError s!"wrong scope diagnostic: {message}")
   | .ok _ => throw (IO.userError "invalid selected scope was accepted")
-  let malformedTable ← must (set invalidScopeInput "compiler_predicate_queries" (.arr #[.null]))
-  match decodeJson malformedTable.compress with
+  let malformedTable ← must (set invalidScopeInput "compiler_predicate_queries" "[null]")
+  match decodeJson malformedTable with
   | .error message =>
-    unless message == "$predicate: missing/invalid field `normalization` (object expected)" do
+    unless message.contains "normalization" do
       throw (IO.userError s!"malformed table did not precede scope validation: {message}")
   | .ok _ => throw (IO.userError "malformed predicate definition was accepted")
-  rejectSelector (statementVariant "FutureStatement") "statement"
-  rejectSelector (terminatorVariant "FutureTerminator") "terminator"
-  rejectSelector (rvalueVariant "FutureRvalue") "rvalue"
-  rejectSelector (operandVariant "FutureOperand") "operand"
-  rejectSelector (projectionVariant "FutureProjection") "projection"
-  rejectSelector (typeShapeKind "future_type") "type shape"
+
+  let badStatement := object [("variant",string "FutureStatement")]
+  rejects (decodeJson (← must (replaceBodyNode fixture badStatement false))) "statement"
+  let badTerminator := object [("variant",string "FutureTerminator")]
+  rejects (decodeJson (← must (replaceBodyNode fixture badTerminator true))) "terminator"
+  let place := object [("local","0"),("type","0"),("projection","[]")]
+  let assign (rvalue : String) := object [("variant",string "Assign"),("place",place),("rvalue",rvalue)]
+  rejects (decodeJson (← must (replaceBodyNode fixture (assign (object [("kind",string "FutureRvalue")])) false))) "rvalue"
+  let operand := object [("kind",string "FutureOperand")]
+  rejects (decodeJson (← must (replaceBodyNode fixture (assign (object [("kind",string "Use"),("operand",operand),
+    ("retag",object [("kind",string "no"),("performs_retag","false")])])) false))) "operand"
+  let context : DecodeMIR.Context := {
+    typeCount := 1, allocationCount := 0, definitionCount := 1, typeConstantCount := 0,
+    spanCount := 1, scalarSizes := #[some 1], localCount := 1 }
+  let projection := object [("local","0"),("type","0"),("projection",arr #[object [("kind",string "FutureProjection")]])]
+  rejects (DecodeMIR.decodePlace context (← must (JsonReader.parse projection))) "projection"
+  rejects (typeShapeKind "future_type") "type shape"
   for kind in #["coroutine_witness", "parameter", "bound_type", "placeholder_type", "inference_type", "error_type"] do
-    rejectSelector (typeShapeKind kind) s!"unresolved type shape {kind}"
+    rejects (typeShapeKind kind) s!"unresolved type shape {kind}"
   for kind in #["inference_variable", "error"] do
-    let region := Json.mkObj [("kind", .str kind)]
-    rejectSelector (decodeValue region "$region" .any (some .regionKind)) s!"unresolved region {kind}"
+    rejects (GenericArgsCodec.region (← must (JsonReader.parse (object [("kind",string kind)])))) s!"unresolved region {kind}"
   for kind in #["parameter", "bound", "placeholder", "inference", "error"] do
-    let constant := Json.mkObj [("kind", .str kind)]
-    let argument := Json.mkObj [("kind", .str "const"), ("value", constant)]
-    rejectSelector (decodeValue argument "$generic_argument") s!"unresolved constant {kind}"
-  rejectSelector (integerTypeTag "u256") "integer kind"
-  rejectSelector (layoutVariantsKind "future_layout") "layout variant"
-  rejectSelector (backendReprKind "future_backend") "backend representation"
-  rejectSelector (canonicalAbiKind "future_abi") "ABI"
-  rejectSelector (allocationKind "future_allocation") "allocation"
-  rejectSelector (parseTagEncoding (.str "legacy debug") "$tag") "legacy tag encoding"
-  -- Diagnostic text does not become a semantic success status.
-  let diagnostic := Json.mkObj [("status", .str "debug_payload"), ("text", .str "unknown")]
-  discard <| must (decodeValue diagnostic "$diagnostic")
-  IO.println "StrictDecoderChecks2026: successful input accepted; invalid typed references and unknown enums rejected"
+    let constant := object [("kind",string kind)]
+    let argument := arr #[object [("kind",string "const"),("value",constant)]]
+    rejects (GenericArgsCodec.decode (← must (JsonReader.parse argument))) s!"unresolved constant {kind}"
+  rejects (integerTypeTag "u256") "integer kind"
+  rejects (layoutVariantsKind "future_layout") "layout variant"
+  rejects (backendReprKind "future_backend") "backend representation"
+  rejects (canonicalAbiKind "future_abi") "ABI"
+  rejects (allocationKind "future_allocation") "allocation"
+  rejects (parseTagEncoding (← must (JsonReader.parse (string "legacy debug"))) "$tag") "legacy tag encoding"
+  IO.println "StrictDecoderChecks2026: typed references, unknown MIR constructors and unresolved compiler values rejected"

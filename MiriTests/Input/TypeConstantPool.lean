@@ -6,7 +6,7 @@ private def must (value : Except String α) : IO α :=
   match value with | .ok value => pure value | .error error => throw (IO.userError error)
 
 private def parse (text : String) : IO TypeConst := do
-  TypeConstCodec.decode (← must (Json.parse text)) "$constant" |> must
+  TypeConstCodec.decode (← must (JsonReader.parse text)) "$constant" |> must
 
 private def check (condition : Bool) (message : String) : IO Unit :=
   unless condition do throw (IO.userError message)
@@ -25,6 +25,6 @@ def main : IO Unit := do
     "{\"kind\":\"value\",\"type\":1,\"value\":{\"kind\":\"leaf\",\"bits_unsigned\":\"256\",\"size_bytes\":1}}",
     "{\"kind\":\"value\",\"type\":1,\"value\":{\"kind\":\"leaf\",\"bits_unsigned\":\"0\",\"size_bytes\":0}}",
     "{\"kind\":\"value\",\"type\":1,\"value\":{\"kind\":\"leaf\",\"bits_unsigned\":\"0\",\"size_bytes\":17}}"] do
-    let json ← must (Json.parse text)
+    let json ← must (JsonReader.parse text)
     check (!(TypeConstCodec.decode json "$constant").isOk) "invalid scalar width accepted"
   IO.println "type constants retain recursive IDs, alias identity and local arguments; scalar widths checked"

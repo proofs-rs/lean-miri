@@ -33,101 +33,62 @@ structure Prepared where
   compilerEntryType : Except String (Option (MIR.DefId × MainEntryType))
   entries : Array Entry
   sections : Except String (Array SectionQuery)
-private def intern (tables : CompilerTables) (value : Json) : Except String (MIR.DefId × CompilerTables) := do
-  let id ← value.getNat?
+private def definition (tables : CompilerTables) (id : Nat) : Except String MIR.DefId := do
   unless id < tables.definitions.size do throw "compiler definition ID out of bounds"
-  pure (id,tables)
+  pure id
 
-private def typeId (context : LowerContext) (j : Json) : Except String MIR.TyId := do
-  let id ← j.getNat?
+private def typeId (context : LowerContext) (id : Nat) : Except String MIR.TyId := do
   unless context.containsTypeId id do throw "main compiler query references missing type"
   pure id
 
 def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except String Prepared := do
-  let source ← program.input.raw.getObjVal? "compiler_main_queries"
-  unless (← (← source.getObjVal? "typing_env").getStr?) == "fully_monomorphized" do throw "main query environment mismatch"
+  let source := program.input.queries.main
   let ctx := LowerContext.ofDocument program.input
-  let mut tables := program.compilerTables
-  let startSource ← source.getObjVal? "start_lang_item"
-  let start ← if startSource == .null then pure none else do
-    let (id,next) ← intern tables startSource
-    tables := next
-    pure (some id)
-  let entrySource ← source.getObjVal? "compiler_entry"
-  let compilerEntry ← if entrySource == .null then pure none else do
-    let (id,next) ← intern tables entrySource
-    tables := next
-    pure (some id)
+  let tables := program.compilerTables
+  let start ← source.startLangItem.mapM (definition tables)
+  let compilerEntry ← source.compilerEntry.mapM (definition tables)
   let compilerEntryType : Except String (Option (MIR.DefId × MainEntryType)) := do
-    match source.getObjVal? "compiler_entry_type" with
-      | .error _ =>
-        if compilerEntry.isSome then throw "rustc selected main lacks exact EntryFnType query"
-        else pure none
-      | .ok query => do
-        let value := query
-        if value == .null then
-          if compilerEntry.isSome then throw "rustc selected main lacks exact EntryFnType"
-          pure none
-        else do
-          let definitionJson ← value.getObjVal? "definition"
-          let (definition,_) ← intern tables definitionJson
-          unless compilerEntry == some definition do
-            throw "rustc EntryFnType definition differs from compiler-selected entry"
-          let kind ← (← value.getObjVal? "kind").getStr?
-          unless kind == "rustc_main" do throw s!"unsupported rustc EntryFnType `{kind}`"
-          let sigpipe ← (← value.getObjVal? "sigpipe").getNat?
-          unless sigpipe <= 255 do throw "rustc EntryFnType sigpipe does not fit u8"
-          pure (some (definition,.rustcMain (UInt8.ofNat sigpipe)))
+    match source.compilerEntryType with
+    | none =>
+      if compilerEntry.isSome then throw "rustc selected main lacks exact EntryFnType query"
+      pure none
+    | some value =>
+      let id ← definition tables value.definition
+      unless compilerEntry == some id do throw "rustc EntryFnType definition differs from compiler-selected entry"
+      unless value.kind == "rustc_main" do throw s!"unsupported rustc EntryFnType `{value.kind}`"
+      unless value.sigpipe <= 255 do throw "rustc EntryFnType sigpipe does not fit u8"
+      pure (some (id, .rustcMain (UInt8.ofNat value.sigpipe)))
   let mut entries : Array Entry := #[]
-  for record in ← (← source.getObjVal? "entries").getArr? do
-    let (definition,next) ← intern tables (← record.getObjVal? "definition")
-    tables := next
-    if entries.any (·.definition == definition) then throw "duplicate source main definition key"
-    let parameters ← (← (← record.getObjVal? "generic_parameters").getArr?).mapM fun value => do
-      match ← value.getStr? with
+  for record in source.entries do
+    let id ← definition tables record.definition
+    if entries.any (·.definition == id) then throw "duplicate source main definition key"
+    let parameters ← record.genericParameters.mapM fun value => do
+      match value with
       | "lifetime" => pure MainGenericParameter.lifetime
       | "type_parameter" => pure .typeParameter | "const_parameter" => pure .constParameter
       | _ => throw "unknown main generic parameter kind"
     let signature := do
-      let value ← record.getObjVal? "signature_query"
-      pure (⟨← (← value.getObjVal? "has_bound_variables").getBool?,
-        ← (← value.getObjVal? "output_has_bound_variables").getBool?,
-        ← typeId ctx (← value.getObjVal? "return_type"),
-        ← typeId ctx (← value.getObjVal? "function_pointer_type")⟩ : MainSignature)
-    let resolution := do
-      let value ← record.getObjVal? "signature_query"
-      unless (← (← value.getObjVal? "compiler_selected_entry").getBool?) do
+      pure (⟨record.signature.hasBoundVariables, record.signature.outputHasBoundVariables,
+        ← typeId ctx record.signature.returnType,
+        ← typeId ctx record.signature.functionPointerType⟩ : MainSignature)
+    let outcome : Except String (Option CallInstance) := do
+      unless record.signature.compilerSelectedEntry do
         throw "lang_start query not requested for a non-compiler-selected entry"
-      value.getObjVal? "start_resolution"
-    let outcome : Except String (Option CallInstance) ← match resolution with
-      | .error error => pure (.error error)
-      | .ok value =>
-        if value == .null then pure (.ok none) else
-          match CompilerInstance.decode ctx tables value with
-          | .error error => pure (.error error)
-          | .ok (callee,next) => tables := next; pure (.ok (some callee))
-    entries := entries.push ⟨definition,parameters,signature,outcome⟩
-  let sectionSources := do (← source.getObjVal? "link_sections").getArr?
-  let mut sections : Array SectionQuery := #[]
-  let sectionsResult : Except String (Array SectionQuery) ← match sectionSources with
-    | .error error => pure (.error error)
-    | .ok records =>
-      for record in records do
-        let name ← (← record.getObjVal? "section").getStr?
-        let decoded := do
-          let (definition,next) ← intern tables (← record.getObjVal? "definition")
-          let (span,next) ← lowerCompilerSpan next (← ctx.decodeCompilerSpan (← record.getObjVal? "span"))
-          let value ← record.getObjVal? "global_query"
-          let ty ← typeId ctx (← value.getObjVal? "type")
-          let allocation ← (← value.getObjVal? "allocation").getNat?
-          unless ctx.containsAllocationId allocation do throw "link-section static allocation missing from compiler graph"
-          pure ((⟨definition,span,ty,allocation⟩ : Section),next)
-        let result ← match decoded with
-          | .error error => pure (.error error)
-          | .ok (value,next) => tables := next; pure (.ok value)
-        sections := sections.push ⟨name,result⟩
-      pure (.ok sections)
-  pure ⟨program.withCompilerTables tables,runtime,start,compilerEntry,compilerEntryType,entries,sectionsResult⟩
+      record.signature.startResolution.mapM fun value => do
+        let _ ← CompilerInstance.source ctx value.instanceId
+        pure value.instanceId
+    entries := entries.push ⟨id, parameters, signature, outcome⟩
+  let sectionsResult : Except String (Array SectionQuery) := do
+    let some records := source.linkSections | throw "compiler link-section catalog absent"
+    records.mapM fun record => do
+      let result := do
+        let id ← definition tables record.definition
+        unless record.span < tables.spans.size do throw "link-section span absent from compiler table"
+        let ty ← typeId ctx record.typeId
+        unless ctx.containsAllocationId record.allocation do throw "link-section static allocation missing from compiler graph"
+        pure (⟨id, ⟨record.span⟩, ty, record.allocation⟩ : Section)
+      pure ⟨record.sectionName, result⟩
+  pure ⟨program, runtime, start, compilerEntry, compilerEntryType, entries, sectionsResult⟩
 private def entry (p : Prepared) (definition : MIR.DefId) : Except String Entry := do
   let some entry := p.entries.find? (·.definition == definition) | throw "missing exact source main entry query"
   pure entry

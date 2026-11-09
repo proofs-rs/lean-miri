@@ -16,65 +16,25 @@ structure Value where
 structure Entry where
   name : String
   result : Value
-  payload : Json
 
 structure Prepared where
   program : LoweredProgram
   runtime : RuntimeMetadata
   entries : Array Entry
 
-private def field (j : Json) (key : String) : Except String Json := j.getObjVal? key
-
-private def definition (tables : CompilerTables) (raw : Json) :
-    Except String (MIR.DefId × CompilerTables) := do
-  let id ← raw.getNat?
-  unless id < tables.definitions.size do throw "compiler definition ID out of bounds"
-  pure (id,tables)
-
-private def sourcePath (record : Json) (name : String) : Except String Unit := do
-  let parts ← (← field record "path").getArr?
-  unless parts.size == 2 do throw "named compiler global path must be exactly libc::<name>"
-  let some first := parts[0]? | throw "named compiler global path is missing its crate component"
-  let some second := parts[1]? | throw "named compiler global path is missing its item component"
-  unless (← first.getStr?) == "libc" && (← second.getStr?) == name do
-    throw "named compiler global path must be exactly libc::<name>"
-  pure ()
-
-private def decodeValue (ctx : LowerContext) (tables : CompilerTables) (record : Json) (name : String) :
-    Except String (Value × CompilerTables) := do
-  let query ← field record "query"
-  let payload := query
-  let (defId, tables) ← definition tables (← field payload "definition")
-  let kind ← (← field payload "kind").getStr?
-  let isStatic ← match kind with
-    | "static" => pure true
-    | "const_allocation" => pure false
-    | _ => throw s!"named compiler global {name} has unknown allocation kind `{kind}`"
-  let ty ← (← field payload "type").getNat?
-  unless ctx.containsTypeId ty do throw "named compiler global references absent compiler type"
-  let allocation ← (← field payload "allocation").getNat?
-  unless ctx.containsAllocationId allocation do throw "named compiler global references absent allocation image"
-  pure (⟨defId, ty, allocation, isStatic⟩, tables)
-
-/-- Retain every exact path query, including unavailable rows. Failed queries
-are raised only when the corresponding source path is demanded. -/
 def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except String Prepared := do
-  let records ← match program.input.raw.getObjVal? "compiler_named_statics" with
-    | .error _ => pure #[]
-    | .ok value => value.getArr?
   let ctx := LowerContext.ofDocument program.input
-  let mut tables := program.compilerTables
   let mut entries := #[]
-  for record in records do
-    let name ← (← field record "name").getStr?
-    sourcePath record name
-    unless (← (← field record "typing_env").getStr?) == "fully_monomorphized" do
-      throw "named global compiler environment mismatch"
+  for record in program.input.queries.namedStatics.getD #[] do
+    let name := record.name
+    unless record.path == #["libc", name] do throw "named compiler global path must be exactly libc::<name>"
     unless !(entries.any (·.name == name)) do throw "duplicate compiler named global query"
-    let (result, next) ← decodeValue ctx tables record name
-    tables := next
-    entries := entries.push ⟨name, result, record⟩
-  pure ⟨program.withCompilerTables tables, runtime, entries⟩
+    unless record.definition < program.compilerTables.definitions.size do throw "compiler definition ID out of bounds"
+    unless ctx.containsTypeId record.typeId do throw "named compiler global references absent compiler type"
+    unless ctx.containsAllocationId record.allocation do throw "named compiler global references absent allocation image"
+    let result : Value := ⟨record.definition, record.typeId, record.allocation, record.isStatic⟩
+    entries := entries.push ⟨name, result⟩
+  pure ⟨program, runtime, entries⟩
 
 private def value (prepared : Prepared) (name : String) : Except String Value := do
   let some entry := prepared.entries.find? (·.name == name)

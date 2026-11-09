@@ -47,9 +47,14 @@ def main : IO Unit := do
   let badDynamic ← must (Json.parse "{\"kind\":\"dynamic_trait_object\",\"predicates\":[99999],\"principal_predicate\":99999,\"region\":{\"kind\":\"erased\"}}")
   let badType ← must (set types[0]! "shape" badDynamic)
   reject (← must (set source "types" (.arr (types.set! 0 badType)))) "out of bounds predicate ID"
-  let badReference := Json.mkObj [("allocation", toJson (99999 : Nat))]
-  reject (← must (set source "synthetic_reference_probe" badReference)) "out of bounds allocation ID"
   let allocations ← must ((source.getObjVal? "allocations").bind Json.getArr?)
+  let badReference ← must (Json.parse "{\"storage_offset_bytes\":0,\"target\":99999,\"target_offset_encoded_bytes\":\"0000000000000000\",\"immutable\":false,\"shared_ref\":false}")
+  let withRelocation ← must (set allocations[0]! "size_bytes" (toJson (8 : Nat)))
+  let withRelocation ← must (set withRelocation "bytes_hex" (.str "0000000000000000"))
+  let initialized ← must (Json.parse "{\"start_bytes\":0,\"end_bytes_exclusive\":8,\"state\":\"initialized\"}")
+  let withRelocation ← must (set withRelocation "initialization_ranges" (.arr #[initialized]))
+  let withRelocation ← must (set withRelocation "relocations" (.arr #[badReference]))
+  reject (← must (set source "allocations" (.arr (allocations.set! 0 withRelocation)))) "out of bounds allocation ID"
   let second ← must (set allocations[0]! "allocation_id" (toJson (1 : Nat)))
   let duplicated ← must (set source "allocations" (.arr (allocations.push second)))
   let imported ← must (decodeJson duplicated.compress)

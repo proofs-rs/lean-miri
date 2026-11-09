@@ -254,22 +254,18 @@ private structure Program where
   spans : Array Input.SourceSpanData
   bodySpans : Array MIR.SpanRef
   localSpans : Array (Array MIR.SpanRef)
-  rustAbi : Input.ExternAbi
+  rustAbi : ABI.ExternAbi
   resolution : Input.CallResolution.Prepared
 
 private def compiler (value : Except Input.RuntimeMetadataError A) : Except StepError A :=
   value.mapError metadataError
-private def jfield := Input.RuntimeMetadata.jsonField
-private def jnat := Input.RuntimeMetadata.number
-private def jtext := Input.RuntimeMetadata.text
-private def jarray := Input.RuntimeMetadata.array
 private def prepare (document : Input.ImportDocument) : Except StepError Program := do
   let lowered ← (Input.lowerProgram document).mapError StepError.invalidProgram
   let resolution ← (Input.CallResolution.prepare lowered).mapError StepError.invalidProgram
   let lowered := resolution.program
   let metadata := resolution.runtime
   let signature ← (document.types.findSome? (·.signature)).toExcept (.unsupported "Rust signature")
-  if signature.abi.kind.tag != "rust" then
+  if signature.abi != .Rust then
     throw (.unsupported "non-Rust ABI fixture")
   let spans := lowered.bundle.spans
   let mut bodySpans := #[]
@@ -278,9 +274,9 @@ private def prepare (document : Input.ImportDocument) : Except StepError Program
     unless body.input.spanId < spans.size do throw (.invalidProgram "missing canonical body span")
     bodySpans := bodySpans.push ⟨body.input.spanId⟩
     let mut localRefs := #[]
-    for decl in body.input.locals do
-      unless decl.sourceInfo.spanId < spans.size do throw (.invalidProgram "missing canonical local span")
-      localRefs := localRefs.push ⟨decl.sourceInfo.spanId⟩
+    for source in body.input.localSources do
+      unless source.spanId < spans.size do throw (.invalidProgram "missing canonical local span")
+      localRefs := localRefs.push ⟨source.spanId⟩
     localSpans := localSpans.push localRefs
   return ⟨lowered, metadata, spans, bodySpans, localSpans, signature.abi, resolution⟩
 private def bodyAt (p : Program) (index : Nat) : Except StepError Input.LoweredBody :=
@@ -294,8 +290,8 @@ private def currentResolution (p : Program) : Exec Input.CallResolutionEvidence 
   if frame.extra != frame.bodyIdentity.index then throw (.invalidProgram "frame source body key mismatch")
   let body ← lift (bodyAt p frame.bodyIdentity.index)
   let .mir location := frame.location | block "call resolution outside MIR"
-  let source ← lift (body.input.blocks[location.block]?.toExcept (.invalidProgram "source block index"))
-  let result ← lift (source.callResolution.toExcept (.invalidProgram "missing typed call resolution"))
+  let source ← lift (body.input.callEvidence[location.block]?.toExcept (.invalidProgram "source block index"))
+  let result ← lift (source.toExcept (.invalidProgram "missing typed call resolution"))
   if result.kind != .direct then block "unresolved compiler callee"
   return result
 private def instanceFromResolution (p : Program) (resolution : Input.CallResolutionEvidence) : Except StepError (CallInstance × Input.InstanceId) := do
@@ -318,8 +314,8 @@ private def resolutionFor (p : Program) (fnInstance : CallInstance) : Except Ste
       let block ← body.body.basicBlocks[index]?.toExcept (.invalidProgram "block index")
       match block.terminator.kind with
       | .Call .. | .TailCall .. =>
-        let source ← body.input.blocks[index]?.toExcept (.invalidProgram "source block index")
-        let resolution ← source.callResolution.toExcept (.invalidProgram "missing typed call resolution")
+        let source ← body.input.callEvidence[index]?.toExcept (.invalidProgram "source block index")
+        let resolution ← source.toExcept (.invalidProgram "missing typed call resolution")
         let (candidate,id) ← instanceFromResolution p resolution
         if candidate == fnInstance then return (resolution,id)
       | _ => pure ()
@@ -439,7 +435,7 @@ private def copyToRuntime (m : Metadata) (op : OpTy AllocId) (destination : Runt
     writeLocal dest value.imm
     event "callerLocalReturn"
 
-private def callHooks (p : Program) : CallHooks AllocId State Unit Nat Unit Input.ExternAbi FnABI ArgABI := {
+private def callHooks (p : Program) : CallHooks AllocId State Unit Nat Unit ABI.ExternAbi FnABI ArgABI := {
   debugAssertions := false
   getFrame := current
   setFrame := putFrame
@@ -451,7 +447,7 @@ private def callHooks (p : Program) : CallHooks AllocId State Unit Nat Unit Inpu
   functionSignature := fun _ layout => do
     let node ← lift (node p.metadata layout.ty)
     let signature ← lift (node.signature.toExcept (.unsupported "function signature"))
-    if signature.cVariadic || signature.abi.kind.tag != "rust" then
+    if signature.cVariadic || signature.abi != .Rust then
       block "non-Rust function signature"
     return (signature.inputs.size,signature.abi)
   functionKind := fun ty => do
@@ -490,8 +486,8 @@ private def callHooks (p : Program) : CallHooks AllocId State Unit Nat Unit Inpu
   abiFixedCount := fun abi => abi.source.fixedCount
   abiArgs := FnABI.args
   abiReturn := FnABI.ret
-  sameConvention := fun a b => a.source.callingConvention.payload == b.source.callingConvention.payload
-  isRustCall := fun abi => abi.kind.tag == "rust_call"
+  sameConvention := fun a b => a.source.callingConvention == b.source.callingConvention
+  isRustCall := fun abi => abi == .RustCall
   rustAbi := p.rustAbi
   argLayout := ArgABI.layout
   argIsIgnore := fun arg => arg.source.mode.kind == .ignore
@@ -499,9 +495,9 @@ private def callHooks (p : Program) : CallHooks AllocId State Unit Nat Unit Inpu
   checkArgumentCompat := fun _ a b => do
     event "argumentCompat"
     -- Restricted source layout_compat: identical u32 types, layout and eq_abi;
-    -- ABI mode and every compiler attribute payload must also agree.
+    -- ABI mode and every compiler attribute must also agree.
     pure (a.layout.ty == b.layout.ty && a.layout.layout == b.layout.layout &&
-      a.layout.layout.eqAbi b.layout.layout && a.source.mode.payload == b.source.mode.payload)
+      a.layout.layout.eqAbi b.layout.layout && a.source.mode == b.source.mode)
   checkTargetFeatures := fun _ fnInstance => do
     let (_,id) ← lift (resolutionFor p fnInstance)
     let node ← lift ((p.lowered.input.instances.find? (·.id == id)).toExcept (.unsupported "source fnInstance"))

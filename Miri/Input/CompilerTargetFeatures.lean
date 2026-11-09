@@ -7,27 +7,23 @@ source driver performs the initial guard, diagnostic filtering and wasm abort.
 -/
 namespace Miri.Input.CompilerTargetFeatures
 open Lean Miri.Interpreter
-private def payload (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) : Except String Json := do
+private def facts (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) : Except String Catalog.RuntimeInstance := do
   let some entry := p.entries.find? (·.callee == callee) | throw "missing exact full-instance target features"
-  pure entry.payload
+  pure entry.facts
 
 def required (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) :
     Except String (Array ExecutionCallLeaves.TargetFeature) := do
-  (← (← (← payload p callee).getObjVal? "target_features").getArr?).mapM fun feature => do
-    let name ← (← feature.getObjVal? "name").getStr?
-    let implied ← match ← (← feature.getObjVal? "kind").getStr? with
+  (← facts p callee).targetFeatures.mapM fun feature => do
+    let implied ← match feature.kind with
       | "implied" => pure true | "enabled" | "forced" => pure false
       | _ => throw "unknown compiler target-feature kind"
-    pure ⟨name,implied⟩
+    pure ⟨feature.name, implied⟩
 
-def available (p : CompilerIntrinsicFacts.Prepared) (name : String) : Except String Bool := do
-  let session ← p.program.input.raw.getObjVal? "compiler_session_queries"
-  let names ← (← (← session.getObjVal? "internal_target_features").getArr?).mapM Json.getStr?
-  pure (names.contains name)
+def available (p : CompilerIntrinsicFacts.Prepared) (name : String) : Except String Bool :=
+  pure (p.program.input.queries.session.internalTargetFeatures.contains name)
 
-def isLikeWasm (p : CompilerIntrinsicFacts.Prepared) : Except String Bool := do
-  let session ← p.program.input.raw.getObjVal? "compiler_session_queries"
-  (← session.getObjVal? "is_like_wasm").getBool?
+def isLikeWasm (p : CompilerIntrinsicFacts.Prepared) : Except String Bool :=
+  pure p.program.input.queries.session.isLikeWasm
 private def lift (query : Except String A) : EStateM StepError S A :=
   match query with | .ok value => pure value | .error error => throw (.unsupported error)
 

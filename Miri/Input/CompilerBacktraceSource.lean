@@ -29,8 +29,8 @@ private def spans (ctx : LowerContext) (tables : CompilerTables) (body : BodyCor
   let mut tables := tables
   let mut entries := #[]
   for record in body.backtraceSpans do
-    let (span,next) ← lowerCompilerSpan tables (.sourceSpan record.spanId)
-    tables := next
+    unless record.spanId < tables.spans.size do throw "backtrace span ID out of bounds"
+    let span : MIR.SpanRef := ⟨record.spanId⟩
     let location ← position record.position
     unless record.collapsedLo == location.bytePosition.toNat do
       throw "collapsed hygiene BytePos/source-map position mismatch"
@@ -62,13 +62,13 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
           positionIndex := positionIndex.insert entry.position.bytePosition entry.position
           positions := positions.push entry.position
   let ctx := LowerContext.ofDocument program.input
-  let records ← (← (← program.input.raw.getObjVal? "compiler_runtime_queries").getObjVal? "instances").getArr?
+  let records := program.input.queries.runtime.instances
   let mut names := #[]
   let mut namesByDefinition : Std.HashMap Nat (Array Nat) := {}
   for record in records do
-    let (callee,next) ← CompilerInstance.decode ctx tables record
-    tables := next
-    let name ← (← record.getObjVal? "display").getStr?
+    let callee := record.instanceId
+    let _ ← CompilerInstance.source ctx callee
+    let name := record.display
     let candidates := namesByDefinition.getD callee #[]
     if let some index := candidates.find? fun index =>
         match names[index]? with

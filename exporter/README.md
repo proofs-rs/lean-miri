@@ -91,8 +91,10 @@ fields. There are no success-status wrappers or completeness flag. Lean validate
 required fields, semantic tags and references before returning an execution input.
 An ID is reserved before its definition is traversed, so mutually recursive
 references do not require a table ordering. Export fails if a reserved definition
-is unfinished. Lean reads each table directly, checks reference bounds and keeps
-IDs through lowering and execution. Runtime lookups return checked errors.
+is unfinished. Lean indexes source ranges, decodes compiler pools, and constructs interpreter
+MIR directly while reading bodies. It retains typed query records, checks
+reference bounds and keeps IDs through execution; it does not retain a generic
+JSON tree or an intermediate MIR value tree. Runtime lookups return checked errors.
 Malformed table definitions are reported before downstream scope validation.
 
 A successful export describes the requested compiler data. Runtime values, including a

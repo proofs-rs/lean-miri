@@ -16,7 +16,8 @@ private def check (condition : Bool) (message : String) : IO Unit :=
     check (selected.id == node.id && selected.layoutId == node.layoutId) "type lookup changed its definition"
   for key in #["bool", "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "usize", "isize", "unit", "unit_pointer_const", "unit_pointer_mut"] do
     if let .ok physical := CompilerPrimitiveFacts.primitiveLayout runtime key then
-      check (decide (runtime.lookup physical.ty = .ok physical)) s!"primitive {key} changed its typed layout"
+      check (decide (runtime.lookup physical.ty = Except.ok (ε := RuntimeMetadataError) physical))
+        s!"primitive {key} changed its typed layout"
   let .ok unit := CompilerPrimitiveFacts.unitLayout runtime | throw (IO.userError "unit compiler query missing")
   let .ok unitNode := runtime.node unit.ty | throw (IO.userError "unit type missing")
   check (match unitNode.shape with | .tuple elements => elements.isEmpty | _ => false)

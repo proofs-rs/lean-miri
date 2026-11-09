@@ -53,7 +53,6 @@ private def prepare (raw : Json) (definitions : Array DefinitionId := #[]) :
     definitions := definitions
     instances := instanceNodes
     spans := #[{
-      originalPayload := "symbol"
       lo := 0
       hi := 1
       start := ⟨1,0⟩

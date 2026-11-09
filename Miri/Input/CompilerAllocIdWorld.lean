@@ -1,5 +1,4 @@
 import Miri.Input.Model
-import Miri.Input.Decoder
 import Miri.Memory.MemoryState
 
 /-! Validated installation of the optional prepared post-export rustc
@@ -9,9 +8,8 @@ namespace Miri.Input.CompilerAllocIdWorld
 open Miri.Memory
 
 set_option autoImplicit false in
-def install {P E K : Type} (raw : Lean.Json) (world? : Option CompilerAllocIdWorld) (nodes : Array AllocationNode)
+def install {P E K : Type} (world? : Option CompilerAllocIdWorld) (nodes : Array AllocationNode)
     (memory : MemoryState P E K) : Except String (MemoryState P E K) := do
-  Miri.Input.validateCompilerAllocIdWorldRaw raw nodes world?
   let some world := world? | return memory
   if memory.sourceAllocIdWorldActive then throw "source AllocId world is already installed"
   if !memory.live.isEmpty || !memory.dead.isEmpty || !memory.extraFnPtrIds.isEmpty ||

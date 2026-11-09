@@ -44,12 +44,10 @@ def prepare (program : LoweredProgram) (runtime : RuntimeMetadata)
     (memory : MemoryState P E K) : Except String Prepared := do
   if memory.byteGlobalKeysReady || !memory.byteGlobalKeys.isEmpty then
     throw "global byte keys already initialized"
-  let source ← program.input.raw.getObjVal? "compiler_global_byte_queries"
-  unless (← source.getObjValAs? Nat "salt_count") == 32 do throw "global byte salt support differs from pinned source"
+  let source := program.input.queries.globalBytes
+  unless source.saltCount == 32 do throw "global byte salt support differs from pinned source"
   let mut keys := #[]
   if let some world := program.input.compilerAllocIdWorld then
-    Miri.Input.validateCompilerAllocIdWorldRaw program.input.raw program.input.allocations
-      (some world) |>.mapError fun error => s!"compiler AllocId world: {error}"
     unless memory.sourceAllocIdWorldActive do
       throw "prepared source AllocId world was not installed before byte-key attachment"
     let mut runtimeByGraph : Std.HashMap Nat AllocId := {}
@@ -72,8 +70,7 @@ def prepare (program : LoweredProgram) (runtime : RuntimeMetadata)
             keys := keys.push (bytes,⟨result.salt,proof⟩,id)
           else throw "prepared source AllocId world byte-key salt exceeds 31"
   else
-    let covered ← (← source.getObjVal? "covered_allocation_ids").getArr?
-    let ids ← covered.mapM Json.getNat?
+    let ids := source.coveredAllocations
     let expected := program.input.allocations.map (·.id)
     unless ids.size == expected.size && ids.all expected.contains && expected.all ids.contains do
       throw "global byte query coverage differs from imported graph"
@@ -86,26 +83,25 @@ def prepare (program : LoweredProgram) (runtime : RuntimeMetadata)
     for global in memory.globals do
       if let some bytes ← candidate global then candidates := candidates.push (bytes,global.allocId)
     let mut seen : Array (Array UInt8) := #[]
-    for row in ← (← source.getObjVal? "candidates").getArr? do
-      let bytes ← hexBytes (← row.getObjValAs? String "bytes_hex")
+    for row in source.candidates do
+      let bytes ← hexBytes row.bytesHex
       unless candidates.any (·.1 == bytes) do throw "global byte query contains a noncandidate allocation"
       if seen.contains bytes then throw "duplicate global byte query content"
       seen := seen.push bytes
-      let salts ← (← row.getObjVal? "salts").getArr?
+      let salts := row.salts
       unless salts.size == 32 do throw "global byte candidate omits salt outcomes"
       for index in [:32] do
         let some result := salts[index]? | throw "global byte salt result absent"
-        unless (← result.getObjValAs? Nat "salt") == index do throw "global byte salt index mismatch"
-        let allocation ← result.getObjVal? "existing_allocation"
-        unless allocation == .null do
-          let id ← AllocationImage.runtimeId memory (← allocation.getNat?)
+        unless result.1 == index do throw "global byte salt index mismatch"
+        if let some allocation := result.2 then
+          let id ← AllocationImage.runtimeId memory allocation
           unless candidates.any (fun entry => entry.1 == bytes && entry.2 == id) do
             throw "global byte salt query refers to incompatible global contents"
           if proof : index < 32 then keys := keys.push (bytes,⟨index,proof⟩,id)
           else throw "global byte salt exceeds support"
     unless candidates.all (fun entry => seen.contains entry.1) do
       throw "global byte query omits imported candidate content"
-  let strType ← (← source.getObjVal? "str_type").getNat?
+  let strType := source.strType
   let node ← runtime.node strType |>.mapError toString
   unless node.shapeKind == .str do
     throw "global byte str type is not the compiler str primitive"

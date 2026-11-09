@@ -1,22 +1,22 @@
-import Lean
+import Miri.Input.JsonReader
 import Miri.MIR.Syntax
 
 /-! Typed local generic arguments. References are serialization-local IDs;
 parsing does not expand the type, definition, or type-constant tables. -/
 namespace Miri.Input.GenericArgsCodec
 open Lean Miri.MIR
-private def field (j : Json) (key : String) : Except String Json := j.getObjVal? key
-private def natural (j : Json) (key : String) : Except String Nat := do (← field j key).getNat?
-private def text (j : Json) (key : String) : Except String String := do (← field j key).getStr?
-private def tag (j : Json) : Except String String := text j "kind"
+private def field (j : JsonReader.Slice) (key : String) : Except String JsonReader.Slice := j.field key
+private def natural (j : JsonReader.Slice) (key : String) : Except String Nat := do (← field j key).natural
+private def text (j : JsonReader.Slice) (key : String) : Except String String := do (← field j key).string
+private def tag (j : JsonReader.Slice) : Except String String := text j "kind"
 
-def boundIndex (j : Json) : Except String BoundVarIndexKind := do
+def boundIndex (j : JsonReader.Slice) : Except String BoundVarIndexKind := do
   match ← tag j with
   | "bound" => return .Bound (← natural j "debruijn_index")
   | "canonical" => pure .Canonical
   | _ => throw "unknown bound index kind"
 
-def boundRegion (j : Json) : Except String BoundRegionKind := do
+def boundRegion (j : JsonReader.Slice) : Except String BoundRegionKind := do
   match ← tag j with
   | "anonymous" => pure .Anon
   | "named_for_printing" => return .NamedForPrinting (← text j "name")
@@ -24,7 +24,7 @@ def boundRegion (j : Json) : Except String BoundRegionKind := do
   | "closure_environment" => pure .ClosureEnv
   | _ => throw "unknown bound region kind"
 
-def boundVariable (j : Json) : Except String BoundVariableKind := do
+def boundVariable (j : JsonReader.Slice) : Except String BoundVariableKind := do
   match ← tag j with
   | "type" =>
     let value ← field j "type_kind"
@@ -36,7 +36,7 @@ def boundVariable (j : Json) : Except String BoundVariableKind := do
   | "const" => pure .Const
   | _ => throw "unknown bound variable kind"
 
-def region (j : Json) : Except String Region := do
+def region (j : JsonReader.Slice) : Except String Region := do
   match ← tag j with
   | "early_parameter" => return .EarlyParameter (← natural j "index") (← text j "name")
   | "bound" => return .Bound (← boundIndex (← field j "index_kind")) (← natural j "variable_index") (← boundRegion (← field j "bound_kind"))
@@ -54,13 +54,13 @@ def region (j : Json) : Except String Region := do
   | "erased" => pure .Erased
   | _ => throw "unknown region"
 
-def decode (j : Json) : Except String (Array GenericArg) := do
-  let values ← j.getArr?
+def decode (j : JsonReader.Slice) : Except String (Array GenericArg) := do
+  let values ← j.array
   values.mapM fun value => do
     let payload ← field value "value"
     match ← tag value with
-    | "type" => return .Type (← payload.getNat?)
-    | "const" => return .Const (← payload.getNat?)
+    | "type" => return .Type (← payload.natural)
+    | "const" => return .Const (← payload.natural)
     | "lifetime" => return .Lifetime (← region payload)
     | _ => throw "unknown generic argument kind"
 

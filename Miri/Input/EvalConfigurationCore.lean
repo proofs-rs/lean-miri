@@ -940,14 +940,7 @@ private def buildSourceCallbacks [DecidableEq MiriMemoryKind] [DecidableEq Os]
                 .ok (product,afterFutex)
 
 private def sourcePanicUnwinds (p : CompilerProviders.Prepared) : Except StepError Bool := do
-  let producer ← (p.program.input.raw.getObjVal? "producer").mapError fun _ =>
-    StepError.unsupported "source compiler panic strategy is missing"
-  let settings ← (producer.getObjVal? "input_settings").mapError fun _ =>
-    StepError.unsupported "source compiler panic strategy is missing"
-  let strategy ← (settings.getObjVal? "effective_panic_strategy").mapError fun _ =>
-    StepError.unsupported "source compiler panic strategy is missing"
-  let strategy ← strategy.getStr?.mapError fun _ =>
-    StepError.unsupported "source compiler panic strategy is malformed"
+  let strategy := p.program.input.producerSettings.effectivePanicStrategy
   match strategy with
   | "unwind" => pure true
   | "abort" | "immediate-abort" => pure false

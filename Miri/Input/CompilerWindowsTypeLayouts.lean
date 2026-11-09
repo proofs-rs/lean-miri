@@ -7,26 +7,12 @@ catalog; neither target spelling nor layout coincidence is used as a fallback.
 namespace Miri.Input.CompilerWindowsTypeLayouts
 open Lean Miri.ABI
 
-private def typeRef (entry : Json) : Except String TypeId := do
-  let value := entry
-  value.getNat?
-
-/-- Resolve one exact source Windows C type and return its compiler-derived
-layout. This intentionally stays demand-local so unused Windows structures do
-not become a startup prerequisite. -/
 def layout (runtime : RuntimeMetadata) (name : String) : Except String (TyAndLayout TypeId) := do
-  let catalog ← runtime.source.raw.getObjVal? "compiler_windows_type_layouts"
-  unless (← (← catalog.getObjVal? "crate_path").getArr?) ==
-      #[toJson ("std" : String),toJson ("sys" : String),toJson ("pal" : String),
-        toJson ("windows" : String),toJson ("c" : String)] do
+  let some catalog := runtime.source.queries.windowsTypeLayouts | throw "compiler Windows type catalog absent"
+  unless catalog.cratePath == #["std", "sys", "pal", "windows", "c"] do
     throw "compiler Windows type query has wrong canonical crate path"
-  unless (← (← catalog.getObjVal? "namespace").getStr?) == "TypeNS" do
+  unless catalog.namespaceName == "TypeNS" do
     throw "compiler Windows type query has wrong namespace"
-  unless (← (← catalog.getObjVal? "typing_env").getStr?) == "fully_monomorphized" do
-    throw "compiler Windows type query has wrong typing environment"
-  let entries ← catalog.getObjVal? "entries"
-  let entry ← entries.getObjVal? name
-  let id ← typeRef entry
+  let some (_, id) := catalog.entries.find? (·.1 == name) | throw s!"compiler Windows type absent: {name}"
   runtime.lookup id |>.mapError toString
-
 end Miri.Input.CompilerWindowsTypeLayouts

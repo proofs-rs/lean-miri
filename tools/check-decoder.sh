@@ -3,6 +3,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export ELAN_HOME="${LEAN_MIRI_ELAN_HOME:-$PWD/.elan}"
 export PATH="$ELAN_HOME/bin:$PATH"
+lake env lean tests/input/JsonReader.lean
+lake env lean --run tests/input/DirectMIRDecoder.lean
+lake env lean --run tests/input/LowerMIRConstructorsTests.lean
 lake env lean --run tests/input/StrictDecoderChecks2026.lean
 lake env lean --run tests/input/ValueFailFastChecks2026.lean
 lake env lean --run tests/input/CastQueryRecordChecks2026.lean

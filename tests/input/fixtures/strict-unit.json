@@ -5,7 +5,25 @@
     "miri_commit": "7fa591d7d4dd9af8154becbc8332f8096f8323b1",
     "rustc_commit": "8144389c895da997dbdecaa635e41d6a50be6ffd",
     "rustc_version": "pinned",
-    "target_triple": "x86_64-unknown-linux-gnu"
+    "target_triple": "x86_64-unknown-linux-gnu",
+    "input_settings": {
+      "sysroot_path": "synthetic-decoder-fixture",
+      "hash_algorithm": "sha256",
+      "sysroot_manifest_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "loaded_artifacts_manifest_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "artifacts": [],
+      "requested_cfg_miri": false,
+      "miri_default_args": [],
+      "rustc_args": [],
+      "effective_panic_strategy": "unwind",
+      "mir_opt_level": null,
+      "mir_enable_passes": [],
+      "mir_preserve_ub": false,
+      "extra_const_ub_checks": false,
+      "always_encode_mir": false,
+      "deduplicate_diagnostics": false,
+      "qualification": "synthetic decoder-only fixture; not compiler or execution evidence"
+    }
   },
   "types": [
     {
@@ -36,6 +54,192 @@
         "unsigned_kind": "u16"
       },
       "layout": 2,
+      "layout_query_input_type": null
+    },
+    {
+      "type_id": 3,
+      "display": "u32",
+      "shape": {
+        "kind": "uint",
+        "unsigned_kind": "u32"
+      },
+      "layout": 3,
+      "layout_query_input_type": null
+    },
+    {
+      "type_id": 4,
+      "display": "u64",
+      "shape": {
+        "kind": "uint",
+        "unsigned_kind": "u64"
+      },
+      "layout": 4,
+      "layout_query_input_type": null
+    },
+    {
+      "type_id": 5,
+      "display": "u128",
+      "shape": {
+        "kind": "uint",
+        "unsigned_kind": "u128"
+      },
+      "layout": 5,
+      "layout_query_input_type": null
+    },
+    {
+      "type_id": 6,
+      "display": "i8",
+      "shape": {
+        "kind": "int",
+        "signed_kind": "i8"
+      },
+      "layout": 6,
+      "layout_query_input_type": null
+    },
+    {
+      "type_id": 7,
+      "display": "i16",
+      "shape": {
+        "kind": "int",
+        "signed_kind": "i16"
+      },
+      "layout": 7,
+      "layout_query_input_type": null
+    },
+    {
+      "type_id": 8,
+      "display": "i32",
+      "shape": {
+        "kind": "int",
+        "signed_kind": "i32"
+      },
+      "layout": 8,
+      "layout_query_input_type": null
+    },
+    {
+      "type_id": 9,
+      "display": "i64",
+      "shape": {
+        "kind": "int",
+        "signed_kind": "i64"
+      },
+      "layout": 9,
+      "layout_query_input_type": null
+    },
+    {
+      "type_id": 10,
+      "display": "i128",
+      "shape": {
+        "kind": "int",
+        "signed_kind": "i128"
+      },
+      "layout": 10,
+      "layout_query_input_type": null
+    },
+    {
+      "type_id": 11,
+      "display": "bool",
+      "shape": {
+        "kind": "bool"
+      },
+      "layout": 11,
+      "layout_query_input_type": null
+    },
+    {
+      "type_id": 12,
+      "display": "usize",
+      "shape": {
+        "kind": "uint",
+        "unsigned_kind": "usize"
+      },
+      "layout": 12,
+      "layout_query_input_type": null
+    },
+    {
+      "type_id": 13,
+      "display": "isize",
+      "shape": {
+        "kind": "int",
+        "signed_kind": "isize"
+      },
+      "layout": 13,
+      "layout_query_input_type": null
+    },
+    {
+      "type_id": 14,
+      "display": "*const ()",
+      "shape": {
+        "kind": "raw_pointer",
+        "pointee": 0,
+        "mutability": {
+          "kind": "immutable"
+        }
+      },
+      "layout": 14,
+      "layout_query_input_type": null
+    },
+    {
+      "type_id": 15,
+      "display": "*mut ()",
+      "shape": {
+        "kind": "raw_pointer",
+        "pointee": 0,
+        "mutability": {
+          "kind": "mutable"
+        }
+      },
+      "layout": 15,
+      "layout_query_input_type": null
+    },
+    {
+      "type_id": 16,
+      "display": "*const u8",
+      "shape": {
+        "kind": "raw_pointer",
+        "pointee": 1,
+        "mutability": {
+          "kind": "immutable"
+        }
+      },
+      "layout": 16,
+      "layout_query_input_type": null
+    },
+    {
+      "type_id": 17,
+      "display": "*const *const u8",
+      "shape": {
+        "kind": "raw_pointer",
+        "pointee": 16,
+        "mutability": {
+          "kind": "immutable"
+        }
+      },
+      "layout": 17,
+      "layout_query_input_type": null
+    },
+    {
+      "type_id": 18,
+      "display": "str",
+      "shape": {
+        "kind": "str"
+      },
+      "layout": 18,
+      "layout_query_input_type": null
+    },
+    {
+      "type_id": 19,
+      "display": "&str",
+      "shape": {
+        "kind": "reference",
+        "pointee": 18,
+        "mutability": {
+          "kind": "immutable"
+        },
+        "region": {
+          "kind": "erased"
+        }
+      },
+      "layout": 19,
       "layout_query_input_type": null
     }
   ],
@@ -112,10 +316,6 @@
       ]
     }
   ],
-  "synthetic_reference_probe": {
-    "allocation": 0,
-    "instance": 0
-  },
   "layouts": [
     {
       "kind": "layout",
@@ -212,6 +412,616 @@
       "uninhabited": false,
       "largest_niche": null,
       "randomization_seed": 0
+    },
+    {
+      "kind": "layout",
+      "size_bytes": 4,
+      "abi_align_bytes": 4,
+      "unadjusted_abi_align_bytes": 4,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "scalar",
+        "scalar": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "integer",
+            "size_bytes": 4,
+            "integer_kind": "u32",
+            "signed": false
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "4294967295"
+          }
+        }
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
+    },
+    {
+      "kind": "layout",
+      "size_bytes": 8,
+      "abi_align_bytes": 8,
+      "unadjusted_abi_align_bytes": 8,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "scalar",
+        "scalar": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "integer",
+            "size_bytes": 8,
+            "integer_kind": "u64",
+            "signed": false
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "18446744073709551615"
+          }
+        }
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
+    },
+    {
+      "kind": "layout",
+      "size_bytes": 16,
+      "abi_align_bytes": 16,
+      "unadjusted_abi_align_bytes": 16,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "scalar",
+        "scalar": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "integer",
+            "size_bytes": 16,
+            "integer_kind": "u128",
+            "signed": false
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "340282366920938463463374607431768211455"
+          }
+        }
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
+    },
+    {
+      "kind": "layout",
+      "size_bytes": 1,
+      "abi_align_bytes": 1,
+      "unadjusted_abi_align_bytes": 1,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "scalar",
+        "scalar": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "integer",
+            "size_bytes": 1,
+            "integer_kind": "i8",
+            "signed": true
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "255"
+          }
+        }
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
+    },
+    {
+      "kind": "layout",
+      "size_bytes": 2,
+      "abi_align_bytes": 2,
+      "unadjusted_abi_align_bytes": 2,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "scalar",
+        "scalar": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "integer",
+            "size_bytes": 2,
+            "integer_kind": "i16",
+            "signed": true
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "65535"
+          }
+        }
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
+    },
+    {
+      "kind": "layout",
+      "size_bytes": 4,
+      "abi_align_bytes": 4,
+      "unadjusted_abi_align_bytes": 4,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "scalar",
+        "scalar": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "integer",
+            "size_bytes": 4,
+            "integer_kind": "i32",
+            "signed": true
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "4294967295"
+          }
+        }
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
+    },
+    {
+      "kind": "layout",
+      "size_bytes": 8,
+      "abi_align_bytes": 8,
+      "unadjusted_abi_align_bytes": 8,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "scalar",
+        "scalar": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "integer",
+            "size_bytes": 8,
+            "integer_kind": "i64",
+            "signed": true
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "18446744073709551615"
+          }
+        }
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
+    },
+    {
+      "kind": "layout",
+      "size_bytes": 16,
+      "abi_align_bytes": 16,
+      "unadjusted_abi_align_bytes": 16,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "scalar",
+        "scalar": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "integer",
+            "size_bytes": 16,
+            "integer_kind": "i128",
+            "signed": true
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "340282366920938463463374607431768211455"
+          }
+        }
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
+    },
+    {
+      "kind": "layout",
+      "size_bytes": 1,
+      "abi_align_bytes": 1,
+      "unadjusted_abi_align_bytes": 1,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "scalar",
+        "scalar": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "integer",
+            "size_bytes": 1,
+            "integer_kind": "u8",
+            "signed": false
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "1"
+          }
+        }
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
+    },
+    {
+      "kind": "layout",
+      "size_bytes": 8,
+      "abi_align_bytes": 8,
+      "unadjusted_abi_align_bytes": 8,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "scalar",
+        "scalar": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "integer",
+            "size_bytes": 8,
+            "integer_kind": "u64",
+            "signed": false
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "18446744073709551615"
+          }
+        }
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
+    },
+    {
+      "kind": "layout",
+      "size_bytes": 8,
+      "abi_align_bytes": 8,
+      "unadjusted_abi_align_bytes": 8,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "scalar",
+        "scalar": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "integer",
+            "size_bytes": 8,
+            "integer_kind": "i64",
+            "signed": true
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "18446744073709551615"
+          }
+        }
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
+    },
+    {
+      "kind": "layout",
+      "size_bytes": 8,
+      "abi_align_bytes": 8,
+      "unadjusted_abi_align_bytes": 8,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "scalar",
+        "scalar": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "pointer",
+            "size_bytes": 8,
+            "address_space": 0
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "18446744073709551615"
+          }
+        }
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
+    },
+    {
+      "kind": "layout",
+      "size_bytes": 8,
+      "abi_align_bytes": 8,
+      "unadjusted_abi_align_bytes": 8,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "scalar",
+        "scalar": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "pointer",
+            "size_bytes": 8,
+            "address_space": 0
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "18446744073709551615"
+          }
+        }
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
+    },
+    {
+      "kind": "layout",
+      "size_bytes": 8,
+      "abi_align_bytes": 8,
+      "unadjusted_abi_align_bytes": 8,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "scalar",
+        "scalar": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "pointer",
+            "size_bytes": 8,
+            "address_space": 0
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "18446744073709551615"
+          }
+        }
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
+    },
+    {
+      "kind": "layout",
+      "size_bytes": 8,
+      "abi_align_bytes": 8,
+      "unadjusted_abi_align_bytes": 8,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "scalar",
+        "scalar": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "pointer",
+            "size_bytes": 8,
+            "address_space": 0
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "18446744073709551615"
+          }
+        }
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
+    },
+    {
+      "kind": "layout",
+      "size_bytes": 0,
+      "abi_align_bytes": 1,
+      "unadjusted_abi_align_bytes": 1,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "array",
+        "field_count": 0,
+        "stride_bytes": 1
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "memory",
+        "sized": false
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
+    },
+    {
+      "kind": "layout",
+      "size_bytes": 16,
+      "abi_align_bytes": 8,
+      "unadjusted_abi_align_bytes": 8,
+      "field_offsets_bytes": [],
+      "fields": {
+        "kind": "primitive",
+        "field_count": 0
+      },
+      "variants": {
+        "kind": "single",
+        "variant_index": 0
+      },
+      "backend_repr": {
+        "kind": "scalar_pair",
+        "first": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "pointer",
+            "size_bytes": 8,
+            "address_space": 0
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "18446744073709551615"
+          }
+        },
+        "second": {
+          "kind": "initialized",
+          "primitive": {
+            "kind": "integer",
+            "size_bytes": 8,
+            "integer_kind": "u64",
+            "signed": false
+          },
+          "valid_range": {
+            "start": "0",
+            "end": "18446744073709551615"
+          }
+        },
+        "second_offset_bytes": 8
+      },
+      "max_repr_align_bytes": null,
+      "repr_c": false,
+      "uninhabited": false,
+      "largest_niche": null,
+      "randomization_seed": 0
     }
   ],
   "spans": [
@@ -252,5 +1062,91 @@
   ],
   "predicates": [],
   "compiler_abi_layout_schema": "physical_ty_and_layout_v1",
-  "compiler_predicate_queries": []
+  "compiler_predicate_queries": [],
+  "compiler_session_queries": {
+    "internal_target_features": [],
+    "is_like_wasm": false,
+    "target_arch": "x86_64",
+    "root_span": 0,
+    "runtime_checks": []
+  },
+  "compiler_runtime_queries": {
+    "types": [],
+    "virtual": [],
+    "instances": [],
+    "foreign_symbols": {
+      "target": {
+        "os": "linux",
+        "env": "gnu",
+        "binary_format": "elf",
+        "families": [
+          "unix"
+        ]
+      },
+      "no_alloc_shim_symbol": "__rust_no_alloc_shim_is_unstable",
+      "allocator_shims": [],
+      "exported_candidates": []
+    }
+  },
+  "compiler_frame_metadata": {
+    "local_crate": 0,
+    "crates": [
+      {
+        "crate": 0,
+        "name": "strict"
+      }
+    ]
+  },
+  "compiler_function_facts": {
+    "types": [],
+    "pointer_abis": [],
+    "helper_signatures": []
+  },
+  "compiler_instance_abis": [],
+  "compiler_cast_queries": [],
+  "compiler_type_name_constants": [],
+  "compiler_panic_queries": [],
+  "compiler_native_signature_queries": [],
+  "compiler_retag_queries": [],
+  "compiler_covariance_queries": [],
+  "compiler_caller_location_constants": [],
+  "compiler_vtable_queries": [],
+  "compiler_global_byte_queries": {
+    "salt_count": 32,
+    "str_type": 18,
+    "covered_allocation_ids": [],
+    "candidates": []
+  },
+  "compiler_main_queries": {
+    "typing_env": "fully_monomorphized",
+    "start_lang_item": null,
+    "compiler_entry": null,
+    "compiler_entry_type": null,
+    "entries": [],
+    "link_sections": []
+  },
+  "compiler_runtime_primitives": {
+    "u8": 1,
+    "u16": 2,
+    "u32": 3,
+    "u64": 4,
+    "u128": 5,
+    "i8": 6,
+    "i16": 7,
+    "i32": 8,
+    "i64": 9,
+    "i128": 10,
+    "bool": 11,
+    "usize": 12,
+    "isize": 13,
+    "pointer_tag_integer": 4,
+    "unit": 0,
+    "unit_pointer_const": 14,
+    "unit_pointer_mut": 15,
+    "imm_u8_pointer": 16,
+    "imm_u8_pointer_pointer": 17,
+    "type_name_result_type": 19,
+    "caller_location_type": null,
+    "ordering_enum": null
+  }
 }

@@ -39,7 +39,8 @@ private def legacyFunctionInstance (prepared : CompilerVTableRuntime.Prepared)
     (id : InstanceId) : Except String CallInstance := do
   let ctx := prepared.facts.context.loweringContext
   let tables := prepared.facts.context.program.compilerTables
-  pure (← CompilerInstance.decode ctx tables (toJson id)).1
+  let _ ← CompilerInstance.source ctx id
+  pure id
 
 private def legacyGlobalFunction (prepared : CompilerVTableRuntime.Prepared)
     (image : AllocationImage.Imported)
@@ -84,7 +85,7 @@ private def legacySeedFunctions (prepared : CompilerFunctionPointers.Prepared)
   unless memory.sourceAllocIdWorldActive do throw "prepared function catalog requires the active source AllocId world"
   unless image.source == input.allocations do
     throw "prepared function catalog allocation image differs from its owning program"
-  validateCompilerAllocIdWorldRaw input.raw input.allocations (some world)
+  validateCompilerAllocIdWorld input.allocations world
     |>.mapError fun error => s!"prepared AllocId world: {error}"
   for row in world.dedupCatalog do
     if row.keyKind == .function then
@@ -121,7 +122,7 @@ private def legacySeedVTables (prepared : CompilerVTableMachine.Prepared)
   unless memory.sourceAllocIdWorldActive do throw "prepared vtable catalog requires the active source AllocId world"
   unless image.source == input.allocations do
     throw "prepared vtable catalog allocation image differs from its owning program"
-  validateCompilerAllocIdWorldRaw input.raw input.allocations (some world)
+  validateCompilerAllocIdWorld input.allocations world
     |>.mapError fun error => s!"prepared AllocId world: {error}"
   for row in world.dedupCatalog do
     if row.keyKind == .vtable then

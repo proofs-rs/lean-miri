@@ -1,7 +1,7 @@
 import Lean.Util.Profile
 import Miri.Input.CompilerInstance
 import Miri.Input.NormalizationBody
-import Miri.Input.TypedValueAccess
+import Miri.Interpreter.OperandPath
 import Miri.Input.RuntimeMetadata
 import Miri.Interpreter.Constant
 
@@ -14,10 +14,7 @@ metadata remains an error when requested. -/
 namespace Miri.Input.CompilerConstantQueries
 open Lean Miri.Interpreter
 
-inductive PathElement where
-  | field (name : String)
-  | index (value : Nat)
-  deriving Repr, DecidableEq
+abbrev PathElement := OperandPathElement
 structure Site where
   bodyIndex : Nat
   location : MIR.Location
@@ -26,60 +23,32 @@ structure Site where
 structure Evidence where
   site : Site
   query : CompilerConstantEvidence
-  sourceOperand : TypedValue
-  normalizedOperand : TypedValue
+  sourceOperand : MIR.ConstOperand
+  normalizedOperand : MIR.ConstOperand
 structure Prepared where
   program : LoweredProgram
   evidence : Array Evidence
   obligations : Array Obligation
 
-private partial def constants (value : TypedValue) (path : Array PathElement := #[]) :
-    Array (Array PathElement × TypedValue) :=
-  if ((value.field "constant").bind TypedValue.tag).toOption == some "evaluated_const" then #[(path,value)]
-  else match value with
-  | .array values => (values.mapIdx fun index child => constants child (path.push (.index index))).flatten
-  | value => match value.fields with
-    | .ok fields => (fields.map fun (name,child) => constants child (path.push (.field name))).flatten
-    | .error _ => #[]
-
-private def lookupPath (value : TypedValue) (path : Array PathElement) : Except String TypedValue :=
-  path.foldlM (fun value key => match key with
-    | .field name => value.field name
-    | .index index => do
-      let values ← value.elements
-      match values[index]? with
-      | some child => pure child
-      | none => throw "normalized query changed operand structural path") value
-
-private def sourceConstants (bodyIndex : Nat) (body : BodyCore) : Array (Site × TypedValue) := Id.run do
+private def sourceConstants (bodyIndex : Nat) (body : BodyCore) : Array (Site × ConstantFact) := Id.run do
   let mut found := #[]
-  for block in body.blocks do
-    for (statement, index) in block.statements.toList.zipIdx do
-      for (path, value) in constants statement.envelope do
-        found := found.push (⟨bodyIndex, ⟨block.id,index⟩, path⟩,value)
-    for (path,value) in constants block.terminator.envelope do
-      found := found.push (⟨bodyIndex, ⟨block.id,block.statements.size⟩,path⟩,value)
-  pure found
+  for (block, blockIndex) in body.nodeFacts.toList.zipIdx do
+    for (node, statementIndex) in block.toList.zipIdx do
+      for fact in node.constants do
+        found := found.push (⟨bodyIndex, ⟨blockIndex,statementIndex⟩, fact.path⟩,fact)
+  return found
 
-private def normalizedOperand (body : BodyCore) (site : Site) : Except String TypedValue := do
-  let some block := body.blocks.find? (·.id == site.location.block)
-    | throw "normalized body is missing source basic block"
-  let node ← if site.location.statementIndex == block.statements.size then pure block.terminator
-    else match block.statements[site.location.statementIndex]? with
-      | some statement => pure statement
-      | none => throw "normalized body is missing source statement"
-  lookupPath node.envelope site.path
+private def normalizedOperand (body : BodyCore) (site : Site) : Except String ConstantFact := do
+  let some block := body.nodeFacts[site.location.block]? | throw "normalized block is absent"
+  let some node := block[site.location.statementIndex]? | throw "normalized instruction is absent"
+  let some fact := node.constants.find? (·.path == site.path) | throw "normalized constant site is absent"
+  pure fact
 
-private def evidenceAt (ctx : LowerContext) (tables : CompilerTables) (fnInstance : CallInstance)
-    (site : Site) (original normalized : TypedValue) : Except String (Evidence × CompilerTables) := do
-  unless (← (← original.field "span").natural) == (← (← normalized.field "span").natural) do throw "normalization changed constant source span"
-  let (source,tables) ← lowerCompilerConstOperand ctx tables original
-  let (normal,tables) ← lowerCompilerConstOperand ctx tables normalized
-  let evaluated ← normalized.field "constant"
-  let ty ← (← normalized.field "type").natural
-  let value ← lowerCompilerConstValue ctx ty (← evaluated.field "value")
-  pure (⟨site, ⟨fnInstance,source.value,normal.value,normal.span,value⟩, original, normalized⟩,
-    tables)
+private def evidenceAt (_ctx : LowerContext) (tables : CompilerTables) (fnInstance : CallInstance)
+    (site : Site) (original normalized : ConstantFact) : Except String (Evidence × CompilerTables) := do
+  unless original.operand.span == normalized.operand.span do throw "normalization changed constant source span"
+  pure (⟨site, ⟨fnInstance,original.operand.value,normalized.operand.value,normalized.operand.span,
+    normalized.evaluated⟩, original.operand, normalized.operand⟩, tables)
 
 private structure PrepareState where
   tables : CompilerTables

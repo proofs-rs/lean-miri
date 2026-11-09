@@ -195,11 +195,13 @@ select **GitHub Actions** as the source. The published API entry point is
 
 ## MIR lowering
 
-`lowerProgram` accepts decoder-produced MIR paired with its
-source document. Manually assembled or edited body/source pairs are outside this
-experimental API contract.
+The input decoder reads compiler pools before constructing interpreter MIR
+from each body. It indexes JSON source ranges without constructing a generic
+JSON value tree. Scalar constants use their compiler layout widths; pool IDs
+remain local to the input and runtime lookups retain bounds checks.
 
-`bash tools/check-lowering-reader.sh [INPUT.json ...]` checks source paths and
-typed MIR, identity tables, spans and ordered obligations after lowering. The default input is the fixed
-empty-function fixture. Run `bash tools/check-empty-function.sh` for its
+`lowerProgram` packages the decoded MIR and typed compiler metadata for execution.
+The input API remains experimental. `bash tools/check-lowering-reader.sh
+[INPUT.json ...]` checks body paths, MIR, identity tables and source spans. Its
+default input is the fixed empty-function fixture. Run `bash tools/check-empty-function.sh` for its
 UB-freedom proof and axiom audit.

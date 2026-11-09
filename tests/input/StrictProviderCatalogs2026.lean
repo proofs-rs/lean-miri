@@ -16,7 +16,8 @@ private def reject (value : Except String α) (label : String) : IO Unit :=
 
 def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected successful root with no shim catalogs")
-  let decoded ← must (decodeJson (← IO.FS.readFile path))
+  let source ← IO.FS.readFile path
+  let decoded ← must (decodeJson source)
   let program ← must (lowerProgram decoded.document)
   let runtime ← must ((RuntimeMetadata.ofDocument decoded.document).mapError toString)
   let shim ← must (CompilerShimAbi.prepare runtime)
@@ -29,12 +30,6 @@ def main (args : List String) : IO Unit := do
   reject (CompilerNamedShimAbi.expectedAbi named "getrandom") "missing exact named query"
   reject (CompilerNamedConstants.value constants "ENOENT") "missing exact constant query"
   for field in #["compiler_shim_abis", "compiler_named_shim_abis", "compiler_named_constants", "compiler_named_statics"] do
-    let raw ← must (set runtime.source.raw field (.str "invalid array"))
-    let runtime := { runtime with source := { runtime.source with raw := raw } }
-    let program := { program with input := { program.input with raw := raw } }
-    match field with
-    | "compiler_shim_abis" => reject (CompilerShimAbi.prepare runtime) field
-    | "compiler_named_shim_abis" => reject (CompilerNamedShimAbi.prepare runtime) field
-    | "compiler_named_constants" => reject (CompilerNamedConstants.prepare runtime program) field
-    | _ => reject (CompilerNamedGlobals.prepare runtime program) field
+    let raw ← must (set (← must (Json.parse source)) field (.str "invalid array"))
+    reject (decodeJson raw.compress) field
   IO.println "StrictProviderCatalogs2026: absent catalogs stay empty; requests and malformed catalogs fail"

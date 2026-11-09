@@ -41,8 +41,6 @@ inductive Error where
   | missingRuntimeType (id : TypeId)
   | fieldOutOfBounds (index count : Nat)
   deriving DecidableEq, Repr
-private def convert (result : Except String A) : Except Error A :=
-  result.mapError Error.metadata
 private def metadata (result : Except RuntimeMetadataError A) : Except Error A :=
   result.mapError (Error.metadata ∘ toString)
 
@@ -63,9 +61,8 @@ def calculate (target : RuntimeTargetDataLayout) (element : LayoutData)
     unadjustedAbiAlign := element.align.abi
     reprC := element.reprC
     randomizationSeed := element.randomizationSeed + count }
-private def primitive (runtime : RuntimeMetadata) (refs : Json) (key : String)
+private def primitive (runtime : RuntimeMetadata) (id : TypeId) (key : String)
     (kind : Miri.MIR.IntegerKind) : Except Error (TyAndLayout TypeId) := do
-  let id ← convert ((refs.getObjVal? key).bind fun value => value.getNat?)
   let source ← metadata (runtime.node id)
   unless source.shapeMetadata.unsignedKind == some (.known kind) do
     throw (.metadata s!"runtime primitive {key} is not the exact compiler unsigned type")
@@ -88,9 +85,9 @@ private def elementLayout (world : World) : Element → Except Error (TyAndLayou
 in unrelated compiler catalog entries do not turn World creation into execution
 of those types; requesting their constructors still fails explicitly. -/
 def create (runtime : RuntimeMetadata) : Except Error World := do
-  let refs ← convert (runtime.source.raw.getObjVal? "compiler_runtime_primitives")
-  let byte ← primitive runtime refs "u8" .u8
-  let wide ← primitive runtime refs "u16" .u16
+  let refs := runtime.source.queries.primitives
+  let byte ← primitive runtime refs.u8 "u8" .u8
+  let wide ← primitive runtime refs.u16 "u16" .u16
   let next := runtime.source.types.foldl (fun next node => max next (node.id + 1)) 0
   let mut world : World := {
     metadata := runtime

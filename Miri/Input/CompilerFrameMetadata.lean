@@ -11,16 +11,14 @@ structure Prepared where
   crates : Array (Nat × String)
 
 def prepare (calls : CompilerCallPipeline.Prepared) : Except String Prepared := do
-  let raw ← calls.calls.program.input.raw.getObjVal? "compiler_frame_metadata"
-  let localId ← (← raw.getObjVal? "local_crate").getNat?
+  let source := calls.calls.program.input.queries.frameMetadata
+  let localId := source.localCrate
   let mut crates := #[]
-  for entry in (← (← raw.getObjVal? "crates").getArr?) do
-    let id ← (← entry.getObjVal? "crate").getNat?
-    let name ← (← entry.getObjVal? "name").getStr?
+  for (id, name) in source.crates do
     if crates.any (·.1 == id) then throw "duplicate compiler crate identity"
-    crates := crates.push (id,name)
+    crates := crates.push (id, name)
   unless crates.any (·.1 == localId) do throw "local compiler crate name absent"
-  return ⟨calls,localId,crates⟩
+  return ⟨calls, localId, crates⟩
 
 private def lift (result : Except String A) : MachineHooks.M K User A :=
   match result with

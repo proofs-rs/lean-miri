@@ -54,72 +54,40 @@ symbolic vtable's full higher-ranked predicate list. Use the compiler's exact
 late-bound-erasure/normalization evidence; never compare names or discard the
 predicate identity on the original symbolic query. -/
 private def allocationPrincipal (facts : CompilerFactAdapters.Prepared)
-    (value : Json) : Result (Nat × Json) := do
-  let id ← value.getNat?
+    (id : Nat) : Result Nat := do
   let sources := facts.context.program.input.compilerPredicates.filter (·.id == id)
   let some source := sources[0]? | throw "memory-backed vtable principal normalization evidence missing"
-  unless sources.all (·.payload == source.payload) && source.original == id do
+  unless sources.all (· == source) && source.original == id do
     throw "memory-backed vtable principal conflicts with normalization evidence"
   let normalized ← CompilerVTableFacts.normalizePredicate facts ⟨id,source.stableKey,source.autoTrait⟩
   let targets := facts.context.program.input.compilerPredicates.filter (·.id == normalized)
   let some target := targets[0]? | throw "normalized memory-backed vtable principal evidence missing"
   let some targetDefinition := facts.context.program.input.predicates[target.original]?
     | throw "normalized compiler principal predicate ID out of bounds"
-  unless targets.all (·.payload == target.payload) &&
-      targetDefinition.kind == .trait do
+  unless targets.all (· == target) && targetDefinition.kind == .trait do
     throw "normalized memory-backed vtable principal evidence conflicts"
-  return (normalized, toJson target.original)
+  return normalized
 
-/-- Resolve a memory-backed vtable through the exact compiler allocation ID
-recorded for a principal/type query. Query metadata alone is not enough: the
-source TraitVPtr allocation must equal this ID. Each row must agree with its
-complete predicate key, while rows sharing the allocation must agree on the
-allocation's type, compiler-normalized principal, layout, and entries. A named
-HRTB and its instantiated principal can legitimately share this memory image;
-their symbolic type/predicate/salt keys remain distinct. -/
 def queryTargetPrincipal (facts : CompilerFactAdapters.Prepared)
-    (raw : Json) (sourceType allocationId : Nat) : Result Nat := do
-  let queryRows ← (← raw.getObjVal? "compiler_vtable_queries").getArr?
-  let mut found : Option (Nat × Json) := none
-  for (row, rowIndex) in queryRows.toList.zipIdx do
-    unless (row.getObjValAs? Nat "vtable_allocation_id").toOption == some allocationId do
-      continue
-    let rowType ← (← row.getObjVal? "input_type").getNat?
-    unless rowType == sourceType do
-      throw "memory-backed supertrait target compiler type mismatch"
-    let some metadata := (row.getObjVal? "vtable_metadata").toOption
-      | throw s!"compiler vtable target row {rowIndex} lacks metadata"
-    let metadataType ← metadata.getObjVal? "type"
-    unless ((metadataType.getNat?).toOption == some sourceType) do
-      throw "memory-backed supertrait target metadata type mismatch"
-    let metadataPredicates ← (metadata.getObjVal? "predicates").bind Json.getArr?
-    let rowPredicates ← (row.getObjVal? "input_predicates").bind Json.getArr?
-    unless metadataPredicates == rowPredicates do
+    (queries : Array Catalog.VtableQuery) (sourceType allocationId : Nat) : Result Nat := do
+  let mut found : Option (Nat × Nat × Option Nat × Option Nat × Array Input.VtableEntry) := none
+  for row in queries do
+    unless row.vtableAllocation == some allocationId do continue
+    unless row.inputType == sourceType do throw "memory-backed supertrait target compiler type mismatch"
+    let metadata := row.metadata
+    unless metadata.typeId == sourceType do throw "memory-backed supertrait target metadata type mismatch"
+    unless metadata.predicates == row.inputPredicates do
       throw "memory-backed supertrait target predicates disagree with query key"
-    let principalPredicate ← metadata.getObjVal? "principal_predicate"
-    unless principalPredicate != Json.null do
-      throw "memory-backed supertrait target has no supported principal trait"
-    let predicateId ← principalPredicate.getNat?
+    let some predicateId := metadata.principalPredicate
+      | throw "memory-backed supertrait target has no supported principal trait"
     let some definition := facts.context.program.input.predicates[predicateId]?
       | throw "compiler principal predicate ID out of bounds"
-    unless definition.kind == .trait do
-      throw "memory-backed supertrait target has no supported principal trait"
-    let (targetPrincipal, allocationPredicate) ← allocationPrincipal facts principalPredicate
-    let entries ← metadata.getObjVal? "entries"
-    let _ ← entries.getArr?
-    let size ← (metadata.getObjVal? "size_bytes").bind Json.getNat?
-    let align ← (metadata.getObjVal? "align_bytes").bind Json.getNat?
-    let evidence := Json.mkObj [
-      ("type", metadataType),
-      ("principal_predicate", allocationPredicate),
-      ("size_bytes", toJson size),
-      ("align_bytes", toJson align),
-      ("entries", entries)]
-    if let some (previousPrincipal, previousEvidence) := found then
-      unless previousPrincipal == targetPrincipal && previousEvidence == evidence do
-        throw "conflicting compiler vtable rows for exact allocation identity"
-    else
-      found := some (targetPrincipal, evidence)
+    unless definition.kind == .trait do throw "memory-backed supertrait target has no supported principal trait"
+    let targetPrincipal ← allocationPrincipal facts predicateId
+    let evidence := (targetPrincipal, metadata.typeId, metadata.sizeBytes, metadata.alignBytes, metadata.entries)
+    if let some previous := found then
+      unless previous == evidence do throw "conflicting compiler vtable rows for exact allocation identity"
+    else found := some evidence
   let some (targetPrincipal, _) := found
     | throw "exact compiler vtable query for supertrait allocation is missing"
   return targetPrincipal
@@ -143,7 +111,7 @@ def supertraitPrincipal (prepared : Prepared) (sourceType : MIR.TyId)
       | throw "supertrait vtable has no principal"
     return targetPrincipal
   | .memory, some (.memory _) =>
-    queryTargetPrincipal prepared.facts prepared.facts.context.program.input.raw sourceType sourceId
+    queryTargetPrincipal prepared.facts prepared.facts.context.program.input.queries.vtables sourceType sourceId
   | _, _ => throw "supertrait allocation is neither a compiler vtable nor its memory image"
 
 private def methodInstance (prepared : Prepared)
@@ -177,35 +145,19 @@ def entries (prepared : Prepared)
       if source.typeId == ty then
         if (← principal source) == expectedPrincipal then
           if let some previous := found then
-            unless previous.map (·.payload) == source.entries.map (·.payload) do
+            unless previous == source.entries do
               throw "conflicting compiler vtable_entries queries"
           else found := some source.entries
-  let raw := prepared.facts.context.program.input.raw
-  let queryRows ← (← raw.getObjVal? "compiler_vtable_queries").getArr?
-  for (row, rowIndex) in queryRows.toList.zipIdx do
-    let some rowType := (row.getObjVal? "input_type").toOption | continue
-    unless ((rowType.getNat?).toOption == some ty) do continue
-    let some metadata := (row.getObjVal? "vtable_metadata").toOption | continue
-    let predicate := (metadata.getObjVal? "principal_predicate").toOption.getD .null
-    let rowPrincipal ← if predicate == .null then pure none else
-      predicate.getNat? |>.map some
-    unless rowPrincipal == expectedPrincipal do continue
-    let metadataPredicates ← (metadata.getObjVal? "predicates").bind Json.getArr?
-    let rowPredicates ← (row.getObjVal? "input_predicates").bind Json.getArr?
-    unless metadataPredicates == rowPredicates do
+  for row in prepared.facts.context.program.input.queries.vtables do
+    unless row.inputType == ty do continue
+    let metadata := row.metadata
+    unless metadata.principalPredicate == expectedPrincipal do continue
+    unless metadata.predicates == row.inputPredicates do
       throw "compiler vtable metadata predicate identity disagrees with its query key"
-    let metadataType ← metadata.getObjVal? "type"
-    unless ((metadataType.getNat?).toOption == some ty) do
-      throw "compiler vtable metadata type disagrees with its query key"
-    let entryJson ← (metadata.getObjVal? "entries").bind Json.getArr?
-    let mut sourceEntries := #[]
-    for (entry, index) in entryJson.toList.zipIdx do
-      sourceEntries := sourceEntries.push (← Input.decodeVtableEntry entry
-        s!"$.compiler_vtable_queries[{rowIndex}].vtable_metadata.entries[{index}]")
+    unless metadata.typeId == ty do throw "compiler vtable metadata type disagrees with its query key"
     if let some previous := found then
-      unless previous.map (·.payload) == sourceEntries.map (·.payload) do
-        throw "conflicting source compiler vtable_entries query metadata"
-    else found := some sourceEntries
+      unless previous == metadata.entries do throw "conflicting source compiler vtable_entries query metadata"
+    else found := some metadata.entries
   let some source := found | throw "exact compiler principal/type vtable_entries query missing"
   source.mapM (entryValue prepared ty)
 

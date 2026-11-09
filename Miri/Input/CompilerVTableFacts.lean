@@ -11,7 +11,7 @@ private def evidence (prepared : CompilerFactAdapters.Prepared) (id : Nat) : Res
   let entries := prepared.context.program.input.compilerPredicates.filter (·.id == id)
   let some entry := entries[0]? | throw "compiler predicate query identity missing"
   unless entry.typingEnvironment == "fully_monomorphized" do throw "compiler predicate typing environment mismatch"
-  unless entries.all (fun other => other.payload == entry.payload) do throw "conflicting compiler predicate evidence"
+  unless entries.all (fun other => other.original == entry.original && other.normalizedId == entry.normalizedId && other.stableKey == entry.stableKey && other.autoTrait == entry.autoTrait) do throw "conflicting compiler predicate evidence"
   let actualId := entry.original
   unless actualId == id do throw "compiler predicate original/query key mismatch"
   pure entry

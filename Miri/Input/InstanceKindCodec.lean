@@ -1,19 +1,19 @@
-import Lean
+import Miri.Input.JsonReader
 import Miri.Interpreter.Instance
 
 /-! A single canonical instance row's typed kind. Definitions and types remain
 serialization-local numeric references; validation checks their table bounds. -/
 namespace Miri.Input.InstanceKindCodec
 open Lean Miri.Interpreter
-private def field (j : Json) (key : String) : Except String Json := j.getObjVal? key
-private def str (j : Json) (key : String) : Except String String := do (← field j key).getStr?
-private def boolean (j : Json) (key : String) : Except String Bool := do (← field j key).getBool?
-private def natural (j : Json) (key : String) : Except String Nat := do (← field j key).getNat?
-private def definition (j : Json) (key : String) : Except String MIR.DefId :=
+private def field (j : JsonReader.Slice) (key : String) : Except String JsonReader.Slice := j.field key
+private def str (j : JsonReader.Slice) (key : String) : Except String String := do (← field j key).string
+private def boolean (j : JsonReader.Slice) (key : String) : Except String Bool := do (← field j key).boolean
+private def natural (j : JsonReader.Slice) (key : String) : Except String Nat := do (← field j key).natural
+private def definition (j : JsonReader.Slice) (key : String) : Except String MIR.DefId :=
   natural j key
-private def ty (j : Json) (key : String) : Except String MIR.TyId :=
+private def ty (j : JsonReader.Slice) (key : String) : Except String MIR.TyId :=
   natural j key
-def decode (j : Json) : Except String CallInstanceKind := do
+def decode (j : JsonReader.Slice) : Except String CallInstanceKind := do
   match ← str j "kind" with
   | "item" => pure (.Item (← definition j "def_id"))
   | "intrinsic" => pure (.Intrinsic (← definition j "def_id"))
@@ -25,8 +25,8 @@ def decode (j : Json) : Except String CallInstanceKind := do
         | "vtable" => pure (CallShimKind.VTable (← definition j "def_id"))
         | "reify" =>
           let reason ← field j "reason"
-          let reason ← if reason == .null then pure none else do
-            match ← reason.getStr? with
+          let reason ← if reason.isNull then pure none else do
+            match ← reason.string with
             | "function_pointer" => pure (some CallReifyReason.FnPtr)
             | "vtable" => pure (some CallReifyReason.Vtable)
             | _ => throw "unknown compiler reify reason"
@@ -38,7 +38,7 @@ def decode (j : Json) : Except String CallInstanceKind := do
         | "future_drop_poll" => pure (.FutureDropPoll (← definition j "def_id") (← ty j "proxy_coroutine_type") (← ty j "implementation_coroutine_type"))
         | "drop_glue" =>
           let value ← field j "drop_type"
-          let dropTy ← if value == .null then pure none else (ty j "drop_type").map some
+          let dropTy ← if value.isNull then pure none else (ty j "drop_type").map some
           pure (.DropGlue (← definition j "def_id") dropTy)
         | "clone" => pure (.Clone (← definition j "def_id") (← ty j "clone_type"))
         | "fn_pointer_as_pointer" => pure (.FnPtrAsPtr (← definition j "def_id") (← ty j "function_type"))

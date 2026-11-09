@@ -8,10 +8,6 @@ evidence reports no binding name, as in the source fallback. -/
 namespace Miri.Input.CompilerPaths
 open Lean Miri.ABI Miri.Memory Miri.Interpreter
 abbrev Result := Except String
-private def field (j : Json) (key : String) : Result Json := j.getObjVal? key
-private def array (j : Json) (key : String) : Result (Array Json) := do (← field j key).getArr?
-private def natural (j : Json) (key : String) : Result Nat := do (← field j key).getNat?
-private def string (j : Json) (key : String) : Result String := do (← field j key).getStr?
 private def node (context : CompilerFacts.Context) (id : TypeId) : Result TypeNode :=
   (context.runtime.node id).mapError toString
 private def sourceVariant (source : TypeNode) (index : Nat) : Result AdtVariant := do

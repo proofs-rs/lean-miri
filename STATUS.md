@@ -25,8 +25,7 @@ Pending references cannot serialize. The export document and peripheral metadata
 write directly through serde without constructing a JSON Value tree. Diagnostic
 fingerprints use
 the emitted bytes, and prepared-reference sidecars receive the allocator frontier
-directly. Concrete-MIR constant evaluation timing and Lean input/lowering changes
-remain separate work.
+directly. Concrete-MIR constant evaluation timing remains separate work.
 Cast-query consumers, including dynamic-upcast evidence validation, read direct
 result fields. Executables with custom `no_main` entry points retain startup
 preflight facts and the core C-ulong and mutable i32-pointer types required by
@@ -237,10 +236,12 @@ correctness. The large catch guest still needs a fresh same-prepared-TyCtxt
 reference comparison; native completion of a diagnostic trace does not prove UB
 freedom over every permitted choice.
 
-Import-time typing remains selective: query envelopes, layout extras and some
-specialized adapters still inspect source payloads. Compiler table identities
-remain local to one input. Reusing guest pointers or allocation identities
-between executions would invalidate the execution model.
+Input decoding constructs interpreter MIR directly from source ranges after
+reading compiler pools. Query catalogs, layouts and per-instruction compiler
+facts are typed; input decoding retains no generic JSON or intermediate MIR
+value tree. Compiler table identities remain local to one input. Reusing guest
+pointers or allocation identities between executions would invalidate the
+execution model.
 
 ## Feature support outside the current acceptance scope
 
