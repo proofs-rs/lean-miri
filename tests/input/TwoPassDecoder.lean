@@ -52,7 +52,26 @@ private def forwardOrder (source : String) : Except String String := do
   return obj (#[("bodies",body)] ++
     fs.filter (fun item => item.1 != "bodies" && item.1 != "layouts") ++ #[("layouts",layouts)])
 
+private def checkCallEvidence : IO Unit := do
+  let parse (kind inst slot : String) := JsonReader.run DecodeMIR.callEvidence (obj #[
+    ("dispatch_slot", slot), ("fn_abi", "0"), ("function_type", "0"),
+    ("instance_id", inst), ("kind", Json.renderString kind)])
+  let direct ← must (parse "resolved_instance" "3" "null")
+  check (direct.kind == .direct && direct.instanceId == some 3 && direct.dispatchSlot == none)
+    "direct-call nullable dispatch slot changed resolution"
+  let indirect ← must (parse "indirect_function_pointer" "null" "null")
+  check (indirect.kind == .indirect && indirect.instanceId == none && indirect.dispatchSlot == none)
+    "indirect-call nullable instance changed resolution"
+  let virtualCall ← must (parse "virtual_dispatch" "3" "4")
+  check (virtualCall.kind == .virtualDispatch && virtualCall.instanceId == some 3 &&
+    virtualCall.dispatchSlot == some 4) "virtual-call required resolution changed"
+  check (!(parse "virtual_dispatch" "null" "4").isOk)
+    "virtual call accepted a null required instance"
+  check (!(parse "virtual_dispatch" "3" "null").isOk)
+    "virtual call accepted a null required dispatch slot"
+
 def main : IO Unit := do
+  checkCallEvidence
   let fixture ← IO.FS.readFile "tests/input/fixtures/strict-unit.json"
   let baseline ← must (decodeJson fixture)
   let withConstant ← must (replaceBody fixture fun body => set body "required_consts" (arr #[constant "255"]))

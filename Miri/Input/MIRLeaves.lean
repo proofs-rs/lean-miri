@@ -642,18 +642,18 @@ def backtrace : Parser (BacktraceSpan) := do
 
 private structure CallEvidenceFields where
   kind : Option (String) := none
-  instance_id : Option (Nat) := none
+  instance_id : Option (Option Nat) := none
   function_type : Option (Nat) := none
-  dispatch_slot : Option (Nat) := none
+  dispatch_slot : Option (Option Nat) := none
   fn_abi : Option (Nat) := none
 
 def callEvidence : Parser (CallResolutionEvidence) := do
   let v ← object ({} : CallEvidenceFields) fun v key => do
     match key with
     | "kind" => return { v with kind := some (← string) }
-    | "instance_id" => return { v with instance_id := some (← natural) }
+    | "instance_id" => return { v with instance_id := some (← nullable natural) }
     | "function_type" => return { v with function_type := some (← natural) }
-    | "dispatch_slot" => return { v with dispatch_slot := some (← natural) }
+    | "dispatch_slot" => return { v with dispatch_slot := some (← nullable natural) }
     | "fn_abi" => return { v with fn_abi := some (← natural) }
     | _ => skipValue; pure v
   let kind ← match (← required v.kind "kind") with
@@ -661,8 +661,8 @@ def callEvidence : Parser (CallResolutionEvidence) := do
     | "virtual_dispatch" => pure .virtualDispatch
     | "indirect_function_pointer" => pure .indirect
     | _ => fail "unknown call resolution"
-  let instanceId ← if kind == .indirect then pure none else some <$> required v.instance_id "instance_id"
-  let dispatchSlot ← if kind == .virtualDispatch then some <$> required v.dispatch_slot "dispatch_slot" else pure none
+  let instanceId ← if kind == .indirect then pure none else some <$> (required (← required v.instance_id "instance_id") "non-null instance_id")
+  let dispatchSlot ← if kind == .virtualDispatch then some <$> (required (← required v.dispatch_slot "dispatch_slot") "non-null dispatch_slot") else pure none
   return { kind, instanceId, dispatchSlot, functionType := some (← required v.function_type "function_type"), fnAbiId := (← required v.fn_abi "fn_abi") }
 
 private structure SupertraitQueryFields where

@@ -651,19 +651,18 @@ private def runScLitmusPure [DecidableEq OuterState] (contents : String) (nodeBu
         let changedLayoutsState := withSource
           {source with layouts := source.layouts.push firstLayout}
         let changedLayoutsEq := decide (afterCallbacks = changedLayoutsState)
-        unless source.raw != Lean.Json.null do
-          throw "fixture unexpectedly has a null source document"
-        let changedRawState := withSource {source with raw := Lean.Json.null}
-        let changedRawEq := decide (afterCallbacks = changedRawState)
+        let changedSettingsState := withSource {source with producerSettings :=
+          {source.producerSettings with qualification := source.producerSettings.qualification ++ ".changed"}}
+        let changedSettingsEq := decide (afterCallbacks = changedSettingsState)
         let timestampRead := Miri.Concurrency.VTimestamp.ofPacked 2 (by decide)
         let timestampRetag := Miri.Concurrency.VTimestamp.ofPacked 3 (by decide)
         let timestampSameTime := Miri.Concurrency.VTimestamp.sameTime timestampRead timestampRetag
         let timestampExactEq := decide (timestampRead = timestampRetag)
         unless stateSelfEq && rebuiltStateEq && !changedLedgerEq && !changedLayoutsEq &&
-            !changedRawEq && timestampSameTime && !timestampExactEq do
-          throw s!"exact equality runtime smoke failed: self={stateSelfEq}; rebuilt={rebuiltStateEq}; changed_generated={changedLedgerEq}; changed_layouts={changedLayoutsEq}; changed_raw={changedRawEq}; timestamp_same_time={timestampSameTime}; timestamp_exact={timestampExactEq}"
+            !changedSettingsEq && timestampSameTime && !timestampExactEq do
+          throw s!"exact equality runtime smoke failed: self={stateSelfEq}; rebuilt={rebuiltStateEq}; changed_generated={changedLedgerEq}; changed_layouts={changedLayoutsEq}; changed_settings={changedSettingsEq}; timestamp_same_time={timestampSameTime}; timestamp_exact={timestampExactEq}"
         let graph := exploreConnected loop choiceAccess afterCallbacks nodeBudget
-        pure s!"canonical_source_route=makeFromSourcePackage+callbackBuilder+MiriConnected+hooksFromSource\nequality_smoke=self_eq={stateSelfEq};rebuilt_eq={rebuiltStateEq};changed_generated_eq={changedLedgerEq};changed_layouts_eq={changedLayoutsEq};changed_raw_eq={changedRawEq};timestamp_same_time={timestampSameTime};timestamp_exact_eq={timestampExactEq}\nsource_entry=miri_start; scheduler=fixedScheduling_false; foreign=canonical Unix/Pthread\n{renderGraphReport graph}"
+        pure s!"canonical_source_route=makeFromSourcePackage+callbackBuilder+MiriConnected+hooksFromSource\nequality_smoke=self_eq={stateSelfEq};rebuilt_eq={rebuiltStateEq};changed_generated_eq={changedLedgerEq};changed_layouts_eq={changedLayoutsEq};changed_settings_eq={changedSettingsEq};timestamp_same_time={timestampSameTime};timestamp_exact_eq={timestampExactEq}\nsource_entry=miri_start; scheduler=fixedScheduling_false; foreign=canonical Unix/Pthread\n{renderGraphReport graph}"
 
 def mainWithEq [DecidableEq OuterState] (args : List String) : IO Unit := do
   let some input := args.head? | throw (IO.userError "usage: ConnectedGraph215 <untouched-export.json> [node-budget]")

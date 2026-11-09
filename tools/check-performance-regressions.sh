@@ -18,7 +18,7 @@ performance_toolchain=miri-exporter-8144389c895d
 performance_sysroot="$(rustup run "$performance_toolchain" rustc --print sysroot)"
 export PATH="$performance_sysroot/bin:$PATH"
 export LD_LIBRARY_PATH="$performance_sysroot/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-cargo +"$performance_toolchain" build --locked --offline --manifest-path exporter/Cargo.toml
+rustup run "$performance_toolchain" cargo build --locked --offline --manifest-path exporter/Cargo.toml
 exporter/target/debug/lean-miri-mir-exporter \
   --output scratch/decoder-id-inputs/genuine-mir-features.json exporter/fixtures/mir_features.rs \
   --crate-type=lib --crate-name=mir_features
