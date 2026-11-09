@@ -64,8 +64,7 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                 let boundary = tcx.reserve_alloc_id();
                 let selected = tcx.reserve_and_set_fn_alloc(instance, salt);
                 let source_id = raw_id(selected);
-                let graph_ref = allocation_ref(context, tcx, selected)?;
-                let _ = allocation_graph_id(&graph_ref)?;
+                allocation_ref(context, tcx, selected)?;
                 let graph_id = supported_global_graph_id(context, selected, "function")?;
                 if salt == 0 {
                     key_graph_id = Some(graph_id);
@@ -133,8 +132,7 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                         .insert(selected);
                 }
                 let source_id = raw_id(selected);
-                let graph_ref = allocation_ref(context, tcx, selected)?;
-                let _ = allocation_graph_id(&graph_ref)?;
+                allocation_ref(context, tcx, selected)?;
                 let graph_id = supported_global_graph_id(context, selected, "vtable")?;
                 if salt == 0 {
                     key_graph_id = Some(graph_id);
@@ -175,11 +173,9 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             }
             let observed_graph_id = context.allocation_ids.get(&observed_id).copied();
             let observed_node =
-                observed_graph_id.and_then(|graph_id| context.allocation_nodes.get(&graph_id));
+                observed_graph_id.and_then(|graph_id| context.allocation_ids.definition(graph_id));
             if observed_node.map_or(true, |node| {
-                node.get("kind").and_then(Value::as_str) != Some("static")
-                    || node.get("source_alloc_id").and_then(Value::as_u64)
-                        != Some(raw_id(observed_id))
+                node.kind() != "static" || node.source_alloc_id != raw_id(observed_id)
             }) {
                 continue;
             }
@@ -187,15 +183,14 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             let boundary = tcx.reserve_alloc_id();
             let selected = tcx.reserve_and_set_static_alloc(def);
             let source_id = raw_id(selected);
-            let graph_ref = allocation_ref(context, tcx, selected)?;
-            let _ = allocation_graph_id(&graph_ref)?;
+            allocation_ref(context, tcx, selected)?;
             let graph_id = supported_global_graph_id(context, selected, "static")?;
             let node = context
-                .allocation_nodes
-                .get(&graph_id)
+                .allocation_ids
+                .definition(graph_id)
                 .ok_or_else(|| "selected static allocation has no graph node".to_owned())?;
-            if node.get("kind").and_then(Value::as_str) != Some("static")
-                || node.get("source_alloc_id").and_then(Value::as_u64) != Some(source_id)
+            if node.kind() != "static"
+                || node.source_alloc_id != source_id
                 || tcx.try_get_global_alloc(selected) != Some(GlobalAlloc::Static(def))
             {
                 return Err("selected static key does not match its exact DefId allocation".into());
@@ -264,15 +259,14 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             let boundary = tcx.reserve_alloc_id();
             let selected = tcx.reserve_and_set_type_id_alloc(ty);
             let source_id = raw_id(selected);
-            let graph_ref = allocation_ref(context, tcx, selected)?;
-            let _ = allocation_graph_id(&graph_ref)?;
+            allocation_ref(context, tcx, selected)?;
             let graph_id = supported_global_graph_id(context, selected, "type_id")?;
             let node = context
-                .allocation_nodes
-                .get(&graph_id)
+                .allocation_ids
+                .definition(graph_id)
                 .ok_or_else(|| "selected TypeId allocation has no graph node".to_owned())?;
-            if node.get("kind").and_then(Value::as_str) != Some("type_id")
-                || node.get("source_alloc_id").and_then(Value::as_u64) != Some(source_id)
+            if node.kind() != "type_id"
+                || node.source_alloc_id != source_id
                 || tcx.try_get_global_alloc(selected) != Some(GlobalAlloc::TypeId { ty })
             {
                 return Err("selected TypeId key does not match its exact Ty allocation".into());
@@ -381,12 +375,6 @@ fn scan_byte_keys<'tcx>(
     Ok(keys)
 }
 
-fn allocation_graph_id(reference: &Value) -> Result<u64, String> {
-    reference
-        .as_u64()
-        .ok_or_else(|| "serialized allocator-world allocation has no graph ID".to_owned())
-}
-
 fn supported_memory_graph_id<'tcx>(
     context: &ExportContext<'tcx>,
     id: AllocId,
@@ -398,12 +386,10 @@ fn supported_memory_graph_id<'tcx>(
         )
     })?;
     let node = context
-        .allocation_nodes
-        .get(&graph_id)
+        .allocation_ids
+        .definition(graph_id)
         .ok_or_else(|| format!("eligible byte allocation {} has no graph node", raw_id(id)))?;
-    if node.get("kind").and_then(Value::as_str) != Some("memory")
-        || node.get("source_alloc_id").and_then(Value::as_u64) != Some(raw_id(id))
-    {
+    if node.kind() != "memory" || node.source_alloc_id != raw_id(id) {
         return Err(format!(
             "eligible byte allocation {} is not a supported source-linked memory node",
             raw_id(id)
@@ -423,18 +409,13 @@ fn supported_global_graph_id<'tcx>(
             raw_id(id)
         )
     })?;
-    let node = context
-        .allocation_nodes
-        .get(&graph_id)
-        .ok_or_else(|| {
-            format!(
-                "selected {expected_kind} allocation {} has no graph node",
-                raw_id(id)
-            )
-        })?;
-    if node.get("kind").and_then(Value::as_str) != Some(expected_kind)
-        || node.get("source_alloc_id").and_then(Value::as_u64) != Some(raw_id(id))
-    {
+    let node = context.allocation_ids.definition(graph_id).ok_or_else(|| {
+        format!(
+            "selected {expected_kind} allocation {} has no graph node",
+            raw_id(id)
+        )
+    })?;
+    if node.kind() != expected_kind || node.source_alloc_id != raw_id(id) {
         return Err(format!(
             "selected {expected_kind} allocation {} is not a supported source-linked node",
             raw_id(id)
@@ -465,10 +446,8 @@ fn pool_row<'tcx>(
             && context
                 .allocation_ids
                 .get(&id)
-                .and_then(|graph_id| context.allocation_nodes.get(graph_id))
-                .is_some_and(|node| {
-                    node.get("source_alloc_id").and_then(Value::as_u64) == Some(raw)
-                })
+                .and_then(|graph_id| context.allocation_ids.definition(*graph_id))
+                .is_some_and(|node| node.source_alloc_id == raw)
         {
             return Err(format!(
                 "source AllocId {raw} is dangling but has a linked allocation node"
@@ -487,12 +466,10 @@ fn pool_row<'tcx>(
     let kind = kind_name(&global);
     let candidate_graph_id = context.allocation_ids.get(&id).copied();
     let supported_graph_id = if let Some(graph_id) = candidate_graph_id {
-        let node = context.allocation_nodes.get(&graph_id).ok_or_else(|| {
+        let node = context.allocation_ids.definition(graph_id).ok_or_else(|| {
             format!("allocation node {graph_id} for source AllocId {raw} is absent")
         })?;
-        if node.get("kind").and_then(Value::as_str) != Some(kind)
-            || node.get("source_alloc_id").and_then(Value::as_u64) != Some(raw)
-        {
+        if node.kind() != kind || node.source_alloc_id != raw {
             return Err(format!(
                 "allocation node {graph_id} disagrees with source AllocId {raw} ({kind})"
             ));
@@ -555,16 +532,14 @@ pub(super) fn capture<'tcx>(
             .filter(|(hex, _)| !catalog.contains_key(hex))
             .collect::<Vec<_>>();
         for (hex, key) in unseen {
-            let representative_ref = allocation_ref(context, tcx, key.representative)?;
-            let _ = allocation_graph_id(&representative_ref)?;
+            allocation_ref(context, tcx, key.representative)?;
             let key_graph_id = supported_memory_graph_id(context, key.representative)?;
             let probe_boundary = tcx.reserve_alloc_id();
             let mut salts = Vec::with_capacity(32);
             for salt in 0..32usize {
                 let selected = tcx.allocate_bytes_dedup(&key.bytes, salt);
                 let source_id = raw_id(selected);
-                let graph_ref = allocation_ref(context, tcx, selected)?;
-                let _ = allocation_graph_id(&graph_ref)?;
+                allocation_ref(context, tcx, selected)?;
                 let allocation_id = supported_memory_graph_id(context, selected)?;
                 salts.push(json!({
                     "salt":salt,

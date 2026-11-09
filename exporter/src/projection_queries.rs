@@ -8,7 +8,7 @@ fn parent<'tcx>(
     cx: &ty::layout::LayoutCx<'tcx>,
     layout: rustc_abi::TyAndLayout<'tcx, ty::Ty<'tcx>>,
     variant: Option<usize>,
-) -> Result<Value, String> {
+) -> Result<pool_type::ProjectionParent, String> {
     // `TyAndLayout::field` has a source-defined `str` special case that
     // returns `u8` even though `str`'s layout has zero ordinary fields. Keep
     // that exact query result available to the importer without inventing a
@@ -18,19 +18,27 @@ fn parent<'tcx>(
     } else {
         layout.fields.count()
     };
-    let fields=(0..query_count).map(|index|{ {
-        let field=layout.field(cx,index);
-        Ok::<_, String>(json!({"index":index,"type":type_json(context,tcx,field.ty)?,"layout":layout_value_json(context,tcx,field)}))
-    } }).collect::<Result<Vec<_>, String>>()?;
-    Ok::<_, String>(
-        json!({"variant":variant,"layout":layout_value_json(context,tcx,layout),"fields":fields}),
-    )
+    let fields = (0..query_count)
+        .map(|index| {
+            let field = layout.field(cx, index);
+            Ok(pool_type::ProjectionField {
+                index,
+                ty: type_json(context, tcx, field.ty)?,
+                layout: layout_value_json(context, tcx, field),
+            })
+        })
+        .collect::<Result<_, String>>()?;
+    Ok(pool_type::ProjectionParent {
+        variant,
+        layout: layout_value_json(context, tcx, layout),
+        fields,
+    })
 }
 pub(super) fn export<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
     input: ty::Ty<'tcx>,
-) -> Result<Value, String> {
+) -> Result<Option<pool_type::ProjectionQueries>, String> {
     if !matches!(
         input.kind(),
         ty::Closure(..)
@@ -42,14 +50,15 @@ pub(super) fn export<'tcx>(
             | ty::Pat(..)
             | ty::Str
     ) {
-        return Ok(compiler_fact(Value::Null));
+        return Ok(None);
     }
     if input.has_non_region_param()
         || input.has_escaping_bound_vars()
         || input.has_infer()
         || input.has_placeholders()
     {
-        return unavailable_compiler_fact(
+        return export_failure(
+            "projection queries",
             "projection queries require a complete monomorphic parent type",
         );
     }
@@ -81,7 +90,8 @@ pub(super) fn export<'tcx>(
         let selected = layout.for_variant(&cx, rustc_abi::VariantIdx::from_usize(index));
         records.push(parent(tcx, context, &cx, selected, Some(index))?);
     }
-    Ok::<_, String>(compiler_fact(
-        json!({"typing_env":"fully_monomorphized","parents":records}),
-    ))
+    Ok(Some(pool_type::ProjectionQueries {
+        typing_env: "fully_monomorphized",
+        parents: records,
+    }))
 }

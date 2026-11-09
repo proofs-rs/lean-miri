@@ -39,8 +39,8 @@ pub(super) fn type_names<'tcx>(
                         rustc_middle::mir::ConstValue::Slice { alloc_id, meta },
                     )?)
                 };
-                result["input_type"] = type_json(context, tcx, input)?;
-                result["result_type"] = type_json(context, tcx, result_type)?;
+                result["input_type"] = json!(type_json(context, tcx, input)?);
+                result["result_type"] = json!(type_json(context, tcx, result_type)?);
                 result["typing_env"] = json!("fully_monomorphized");
                 Ok::<_, String>(result)
             })
@@ -104,13 +104,13 @@ pub(super) fn caller_locations<'tcx>(
         } else {
             unavailable_compiler_fact("caller location constant requires PanicLocation lang item")?
         };
-        result["span"] = span_json(context, tcx, span);
+        result["span"] = json!(span_json(context, tcx, span));
         result["result_type"] = if tcx
             .lang_items()
             .get(rustc_attr_ir::LangItem::PanicLocation)
             .is_some()
         {
-            type_json(context, tcx, tcx.caller_location_ty())?
+            json!(type_json(context, tcx, tcx.caller_location_ty())?)
         } else {
             Value::Null
         };

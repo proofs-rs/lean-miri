@@ -67,6 +67,14 @@ tables with document-local, dense, zero-based IDs:
 | `predicates` | Full bound existential predicate; comparison rank is separate |
 | `bodies` | Instance, promoted index and source/query mode |
 
+The Rust collector uses one `Pool<K, D>` implementation for all ten tables.
+Each compiler key `K` owns its reserved index and a single concrete semantic
+value `D`, such as `pool_layout::Layout`, `pool_type::Type` or `pool_body::Body`.
+Nested fields are Rust records, enums, optional values and typed references;
+collection does not store JSON trees in these pools. Serialization converts the
+completed values to JSON when assembling the output document. Query-specific
+catalogs still use their own JSON output adapters.
+
 References are numeric indices interpreted by the field's schema. Layouts retain
 exact compiler `TyAndLayout` keys, including field and variant layouts. Allocation
 IDs retain compiler allocation identity even when bytes are equal. IDs are local

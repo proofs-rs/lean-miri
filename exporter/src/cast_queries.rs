@@ -93,7 +93,7 @@ pub(super) fn export<'tcx>(
         };
         result["query_kind"] = json!(kind);
         result["typing_env"] = json!("fully_monomorphized");
-        result["input_type"] = type_json(context, tcx, input)?;
+        result["input_type"] = json!(type_json(context, tcx, input)?);
         result["args_no_bound_vars"] = json!(no_bound);
         records.push(result);
     }
@@ -117,8 +117,8 @@ pub(super) fn export<'tcx>(
         }
         result["query_kind"] = json!("lockstep_tails");
         result["typing_env"] = json!("fully_monomorphized");
-        result["input_source"] = type_json(context, tcx, source)?;
-        result["input_target"] = type_json(context, tcx, target)?;
+        result["input_source"] = json!(type_json(context, tcx, source)?);
+        result["input_target"] = json!(type_json(context, tcx, target)?);
         records.push(result);
     }
     let mut boxes = context
@@ -135,7 +135,7 @@ pub(super) fn export<'tcx>(
         };
         result["query_kind"] = json!("box_type");
         result["typing_env"] = json!("fully_monomorphized");
-        result["input_type"] = type_json(context, tcx, input)?;
+        result["input_type"] = json!(type_json(context, tcx, input)?);
         records.push(result);
     }
     Ok::<_, String>(Value::Array(records))

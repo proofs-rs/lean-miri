@@ -19,7 +19,7 @@ fn query<'tcx>(
     context: &mut ExportContext<'tcx>,
     name: &str,
 ) -> Result<Value, String> {
-    let result = (|| -> Result<Value, String> {
+    let result = (|| -> Result<u64, String> {
         let path = ["std", "sys", "pal", "windows", "c", name];
         let instance = shim_abi::named_instance(tcx, &path, rustc_hir::def::Namespace::TypeNS)?;
         let ty = instance.ty(tcx, ty::TypingEnv::fully_monomorphized());
@@ -35,7 +35,7 @@ fn query<'tcx>(
         Ok(type_json(context, tcx, ty)?)
     })();
     Ok::<_, String>(match result {
-        Ok(value) => value,
+        Ok(value) => json!(value),
         Err(reason) => export_failure("windows_type_layouts::query", reason)?,
     })
 }
