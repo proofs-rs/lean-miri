@@ -17,6 +17,16 @@ The exporter aborts when requested semantic compiler data is unavailable; the
 Lean input API no longer retains failed exporter payloads as execution inputs.
 Successful values are serialized without success-status wrappers or a
 completeness flag; consumers validate the semantic fields they use.
+Compiler query catalogs and the owned final `ExportDocument` use concrete Rust
+serialization types. Required vtable references finalize locally against the
+closed query map;
+virtual candidates are sorted and deduplicated for the exact original instance.
+Pending references cannot serialize. The export document and peripheral metadata
+write directly through serde without constructing a JSON Value tree. Diagnostic
+fingerprints use
+the emitted bytes, and prepared-reference sidecars receive the allocator frontier
+directly. Concrete-MIR constant evaluation timing and Lean input/lowering changes
+remain separate work.
 Cast-query consumers, including dynamic-upcast evidence validation, read direct
 result fields. Executables with custom `no_main` entry points retain startup
 preflight facts and the core C-ulong and mutable i32-pointer types required by
@@ -25,6 +35,13 @@ caller-location constants are lowered from their direct compiler payloads. A gen
 function-pointer target has `resolution_kind: none` and no instance identity;
 `resolution_kind: instance` carries a canonical instance ID. This preserves
 the optional answer when exact query-key fields are attached.
+The full vtable-erasure wrapper checks remain blocked by existing harness
+expectations: the TraitVPtr check reads numeric references as wrapped objects,
+and the cross-crate metadata fixture is required to contain lockstep cast rows
+that it does not produce. The HRTB upcast fixture currently has only identity
+query answers, so its nonidentity expectation also fails. Baseline and current
+exports agree on these inputs; direct catalog joins and canonical source-run
+checks pass separately. These harness repairs remain with input/lowering work.
 Coroutine frame layout serialization and foreign TLS initializers remain
 unimplemented and now stop export. This boundary does not establish compiler
 query closure or interpreter correspondence.

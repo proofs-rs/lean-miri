@@ -2,6 +2,13 @@
 //! The finite names below were collected from pinned Miri source call sites;
 //! target-specific paths follow the same source OS guards.
 use super::*;
+#[derive(serde::Serialize)]
+pub(super) struct Catalog {
+    crate_path: [&'static str; 1],
+    namespace: &'static str,
+    typing_env: &'static str,
+    entries: BTreeMap<String, u64>,
+}
 
 const LIBC_LAYOUT_PATHS: &[&str] = &[
     "_umtx_time",
@@ -61,7 +68,7 @@ fn query<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
     name: &str,
-) -> Result<Value, String> {
+) -> Result<u64, String> {
     let result = (|| -> Result<u64, String> {
         // This is the same exact crate/type namespace query as Miri's
         // resolve_path(tcx, &["libc", name], TypeNS), followed by layout_of.
@@ -83,7 +90,7 @@ fn query<'tcx>(
         }
     })();
     Ok::<_, String>(match result {
-        Ok(value) => json!(value),
+        Ok(value) => value,
         Err(reason) => export_failure("libc_type_layouts::query", format!("{}", reason))?,
     })
 }
@@ -91,8 +98,8 @@ fn query<'tcx>(
 pub(super) fn export<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
-    let mut entries = serde_json::Map::new();
+) -> Result<Catalog, String> {
+    let mut entries = BTreeMap::new();
     for name in LIBC_LAYOUT_PATHS.iter().filter(|name| {
         (shim_abi::is_unix_target(tcx)
             || (**name == "wchar_t" && tcx.sess.target.os != rustc_target::spec::Os::Windows))
@@ -100,12 +107,12 @@ pub(super) fn export<'tcx>(
     }) {
         entries.insert((*name).to_owned(), query(tcx, context, name)?);
     }
-    Ok::<_, String>(json!({
-        "crate_path": ["libc"],
-        "namespace": "TypeNS",
-        "typing_env": "fully_monomorphized",
-        "entries": entries,
-    }))
+    Ok::<_, String>(Catalog {
+        crate_path: ["libc"],
+        namespace: "TypeNS",
+        typing_env: "fully_monomorphized",
+        entries,
+    })
 }
 
 #[cfg(test)]

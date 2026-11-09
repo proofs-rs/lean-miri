@@ -1,11 +1,25 @@
 //! helpers.rs::eval_path_scalar / eval_libc compiler evidence. No host libc,
 //! target-triple constants, or name-based integer guesses supply values.
 use super::*;
+#[derive(serde::Serialize)]
+pub(super) struct Record {
+    name: &'static str,
+    path: Vec<&'static str>,
+    typing_env: &'static str,
+    query: Query,
+}
+#[derive(serde::Serialize)]
+struct Query {
+    instance_id: u64,
+    #[serde(rename = "type")]
+    ty: u64,
+    evaluation: pool_constant::Value,
+}
 fn query<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
     name: &str,
-) -> Result<Value, String> {
+) -> Result<Query, String> {
     let path = ["libc", name];
     let instance = match shim_abi::named_instance(tcx, &path, rustc_hir::def::Namespace::ValueNS) {
         Ok(instance) => instance,
@@ -38,10 +52,11 @@ fn query<'tcx>(
             ),
         )?,
     };
-    Ok::<_, String>(
-        json!({"instance_id":context.register_metadata_instance(instance),"type":type_json(context,tcx,ty)?,
-        "evaluation":value}),
-    )
+    Ok(Query {
+        instance_id: context.register_metadata_instance(instance),
+        ty: type_json(context, tcx, ty)?,
+        evaluation: value,
+    })
 }
 // Match the OS dispatch and guards in pinned shims/unix/{linux_like,
 // linux,macos,freebsd,solarish}, fd.rs, socket.rs, poll.rs and time.rs.
@@ -93,9 +108,9 @@ fn required_on(os: &rustc_target::spec::Os, name: &str) -> bool {
 pub(super) fn export<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<Vec<Record>, String> {
     if !shim_abi::is_unix_target(tcx) {
-        return Ok(json!([]));
+        return Ok(vec![]);
     }
     // Currently ported unix/mem.rs and CPU affinity error branches.
     let mut names = vec![
@@ -385,18 +400,18 @@ pub(super) fn export<'tcx>(
         "_SC_PAGE_SIZE",
         "kCCSuccess",
     ]);
-    Ok::<_, String>(Value::Array(
-        names
-            .into_iter()
-            .filter(|name| required_on(&tcx.sess.target.os, name))
-            .map(|name| {
-                Ok::<_, String>({
-                    json!({"name":name,"path":["libc",name],
-        "typing_env":"fully_monomorphized","query":query(tcx,context,name)?})
-                })
+    names
+        .into_iter()
+        .filter(|name| required_on(&tcx.sess.target.os, name))
+        .map(|name| {
+            Ok(Record {
+                name,
+                path: vec!["libc", name],
+                typing_env: "fully_monomorphized",
+                query: query(tcx, context, name)?,
             })
-            .collect::<Result<Vec<_>, String>>()?,
-    ))
+        })
+        .collect()
 }
 
 #[cfg(test)]

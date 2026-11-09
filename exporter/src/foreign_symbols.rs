@@ -3,11 +3,123 @@
 use super::*;
 
 use rustc_ast::expand::allocator;
+use rustc_attr_ir::Linkage as SymbolLinkage;
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags as F;
 use rustc_middle::middle::dependency_format::Linkage as DependencyLinkage;
-use rustc_attr_ir::Linkage as SymbolLinkage;
 use rustc_middle::middle::exported_symbols::ExportedSymbol;
+
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ImportLinkage {
+    None,
+    ExternalWeak { raw: String },
+    Other { raw: String },
+}
+#[derive(serde::Serialize)]
+struct Declaration {
+    definition: u64,
+    symbol: String,
+    typing_env: &'static str,
+    #[serde(rename = "type")]
+    ty: u64,
+    layout: u64,
+    import_linkage: ImportLinkage,
+    definition_mutability: &'static str,
+    type_is_freeze: bool,
+    decl_is_mut: bool,
+}
+#[derive(Clone, serde::Serialize)]
+struct Candidate {
+    iteration_index: usize,
+    used: bool,
+    symbol: String,
+    definition: u64,
+    explicit_symbol: bool,
+    crate_index: u32,
+    crate_name: String,
+    weak: bool,
+    span: u64,
+    definition_kind: &'static str,
+    compiler_builtins: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instance_id: Option<u64>,
+}
+#[derive(serde::Serialize)]
+struct Ambiguous {
+    symbol: String,
+    resolution: &'static str,
+    reason: &'static str,
+}
+impl Ambiguous {
+    fn new(symbol: String) -> Self {
+        Self {
+            symbol,
+            resolution: "ambiguous",
+            reason: "source lookup_exported_symbol found equal-strength duplicate definitions",
+        }
+    }
+}
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum SelectedExport {
+    Ambiguous(Ambiguous),
+    Other {
+        symbol: String,
+        kind: &'static str,
+        definition: u64,
+        instance_id: Option<u64>,
+    },
+    Static {
+        symbol: String,
+        kind: &'static str,
+        definition: u64,
+        declaration: Declaration,
+        allocation: u64,
+    },
+}
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum Fallback {
+    Ambiguous(Ambiguous),
+    Candidate(Candidate),
+}
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum AllocatorTarget {
+    Special { method: &'static str },
+    Redirect { symbol: String },
+}
+#[derive(serde::Serialize)]
+struct AllocatorShim {
+    symbol: String,
+    target: AllocatorTarget,
+}
+#[derive(serde::Serialize)]
+struct TargetFacts {
+    os: String,
+    env: String,
+    binary_format: String,
+    families: Vec<String>,
+}
+#[derive(serde::Serialize)]
+struct ExternStatics {
+    declarations: Vec<Declaration>,
+    selected_exported: Vec<SelectedExport>,
+    typing_env: &'static str,
+}
+#[derive(serde::Serialize)]
+pub(super) struct Catalog {
+    target: TargetFacts,
+    no_alloc_shim_symbol: String,
+    allocator_shims: Vec<AllocatorShim>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exported_candidates: Option<Vec<Candidate>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selected_foreign_fallbacks: Option<Vec<Fallback>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    extern_statics: Option<ExternStatics>,
+}
 
 fn definition_kind(tcx: TyCtxt<'_>, def: rustc_hir::def_id::DefId) -> &'static str {
     use rustc_hir::def::DefKind;
@@ -27,7 +139,7 @@ fn extern_static_declaration<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
     def: rustc_hir::def_id::DefId,
-) -> Result<Value, String> {
+) -> Result<Declaration, String> {
     use rustc_hir::def::DefKind;
     let DefKind::Static { mutability, .. } = tcx.def_kind(def) else {
         return Ok(export_failure(
@@ -41,11 +153,13 @@ fn extern_static_declaration<'tcx>(
     let env = ty::TypingEnv::fully_monomorphized();
     let attrs = tcx.codegen_fn_attrs(def);
     let import_linkage = match attrs.import_linkage {
-        None => json!({"kind":"none"}),
-        Some(rustc_attr_ir::Linkage::ExternalWeak) => json!({
-            "kind":"external_weak", "raw":format!("{:?}", rustc_attr_ir::Linkage::ExternalWeak)
-        }),
-        Some(linkage) => json!({"kind":"other", "raw":format!("{linkage:?}")}),
+        None => ImportLinkage::None,
+        Some(rustc_attr_ir::Linkage::ExternalWeak) => ImportLinkage::ExternalWeak {
+            raw: format!("{:?}", rustc_attr_ir::Linkage::ExternalWeak),
+        },
+        Some(linkage) => ImportLinkage::Other {
+            raw: format!("{linkage:?}"),
+        },
     };
     let definition_mutability = match mutability {
         rustc_ast::Mutability::Mut => "mutable",
@@ -56,17 +170,17 @@ fn extern_static_declaration<'tcx>(
         Ok(layout) => {
             let ty_is_freeze = layout.ty.is_freeze(tcx, env);
             let declaration_mutable = !(mutability == rustc_ast::Mutability::Not && ty_is_freeze);
-            json!({
-                "definition":def_json(context, def),
-                "symbol":symbol,
-                "typing_env":"fully_monomorphized",
-                "type":type_ref,
-                "layout":layout_value_json(context,tcx,layout),
-                "import_linkage":import_linkage,
-                "definition_mutability":definition_mutability,
-                "type_is_freeze":ty_is_freeze,
-                "decl_is_mut":declaration_mutable,
-            })
+            Declaration {
+                definition: def_json(context, def),
+                symbol,
+                typing_env: "fully_monomorphized",
+                ty: type_ref,
+                layout: layout_value_json(context, tcx, layout),
+                import_linkage,
+                definition_mutability,
+                type_is_freeze: ty_is_freeze,
+                decl_is_mut: declaration_mutable,
+            }
         }
         Err(error) => export_failure(
             "foreign_symbols::extern_static_declaration",
@@ -86,7 +200,7 @@ fn candidate<'tcx>(
     def: rustc_hir::def_id::DefId,
     iteration_index: usize,
     used: bool,
-) -> Result<Option<Value>, String> {
+) -> Result<Option<Candidate>, String> {
     let attrs = tcx.codegen_fn_attrs(def);
     // foreign_items.rs::lookup_exported_symbol performs this exact gate
     // before Instance::mono and tcx.symbol_name. Do not query non-candidates:
@@ -108,23 +222,20 @@ fn candidate<'tcx>(
         None
     };
     let span = tcx.def_span(def);
-    let mut record = json!({
-        "iteration_index": iteration_index,
-        "used": used,
-        "symbol": symbol,
-        "definition": def_json(context, def),
-        "explicit_symbol": explicit_symbol,
-        "crate_index": crate_num.as_u32(),
-        "crate_name": tcx.crate_name(crate_num).as_str(),
-        "weak": attrs.linkage == Some(SymbolLinkage::WeakAny),
-        "span": span_json(context, tcx, span),
-        "definition_kind": kind,
-        "compiler_builtins": tcx.is_compiler_builtins(crate_num),
-    });
-    if let Some(instance_id) = instance_id {
-        record["instance_id"] = json!(instance_id);
-    }
-    Ok::<_, String>(Some(record))
+    Ok(Some(Candidate {
+        iteration_index,
+        used,
+        symbol,
+        definition: def_json(context, def),
+        explicit_symbol,
+        crate_index: crate_num.as_u32(),
+        crate_name: tcx.crate_name(crate_num).as_str().to_owned(),
+        weak: attrs.linkage == Some(SymbolLinkage::WeakAny),
+        span: span_json(context, tcx, span),
+        definition_kind: kind,
+        compiler_builtins: tcx.is_compiler_builtins(crate_num),
+        instance_id,
+    }))
 }
 
 /// Export source lookup winners for every exact symbol identity. The winner
@@ -134,23 +245,23 @@ fn candidate<'tcx>(
 fn selected_exports<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-    candidates: &[Value],
+    candidates: &[Candidate],
     demanded_symbols: &[String],
-) -> Result<Value, String> {
-    let mut winners: Vec<(String, Value, bool)> = Vec::new();
+) -> Result<Vec<SelectedExport>, String> {
+    let mut winners: Vec<(String, Candidate, bool)> = Vec::new();
     for candidate in candidates {
-        let symbol = candidate["symbol"].as_str().unwrap_or_default().to_owned();
+        let symbol = candidate.symbol.clone();
         if !demanded_symbols.contains(&symbol) {
             continue;
         }
-        let weak = candidate["weak"].as_bool().unwrap_or(false);
+        let weak = candidate.weak;
         if let Some((_, current, ambiguous)) =
             winners.iter_mut().find(|(name, _, _)| *name == symbol)
         {
             if *ambiguous {
                 continue;
             }
-            let current_weak = current["weak"].as_bool().unwrap_or(false);
+            let current_weak = current.weak;
             match (weak, current_weak) {
                 (false, true) => *current = candidate.clone(),
                 (true, false) => (),
@@ -161,36 +272,50 @@ fn selected_exports<'tcx>(
         }
     }
 
-    Ok::<_, String>(Value::Array(winners.into_iter().map(|(symbol, winner, ambiguous)| { {
-        if ambiguous {
-            return Ok(json!({"symbol":symbol,"resolution":"ambiguous",
-                "reason":"source lookup_exported_symbol found equal-strength duplicate definitions"}));
-        }
-        let Some(definition) = winner.get("definition") else {
-            return Ok(export_failure("foreign_symbols::selected_exports", "selected source symbol has no exact DefId")?);
-        };
-        let definition_id = definition.as_u64().ok_or("selected definition is not an ID")?;
-        let def = context.definitions.key(usize::try_from(definition_id)
-            .map_err(|_| "selected definition ID exceeds host bounds")?).copied()
-            .ok_or("selected definition ID is outside the definition pool")?;
-        let kind = definition_kind(tcx, def);
-        if kind != "static" {
-            return Ok(json!({"symbol":symbol,"kind":kind,
-                "definition":definition,
-                "instance_id":winner.get("instance_id").cloned().unwrap_or(Value::Null)}));
-        }
-
-        let declaration = extern_static_declaration(tcx, context, def)?;
-        let allocation = if matches!(tcx.def_kind(def), rustc_hir::def::DefKind::Static { .. }) {
-            let alloc_id = tcx.reserve_and_set_static_alloc(def);
-            let reference = allocation_ref(context, tcx, alloc_id)?;
-            compiler_fact(reference)
-        } else {
-            export_failure("foreign_symbols::selected_exports", "selected definition ceased to be a static")?
-        };
-        Ok::<_, String>(json!({"symbol":symbol,"kind":"static","definition":definition,"declaration":declaration,
-            "allocation":allocation}))
-    } }).collect::<Result<Vec<_>, String>>()?))
+    winners
+        .into_iter()
+        .map(|(symbol, winner, ambiguous)| {
+            if ambiguous {
+                return Ok(SelectedExport::Ambiguous(Ambiguous::new(symbol)));
+            }
+            let definition = winner.definition;
+            let def = context
+                .definitions
+                .key(
+                    usize::try_from(definition)
+                        .map_err(|_| "selected definition ID exceeds host bounds")?,
+                )
+                .copied()
+                .ok_or("selected definition ID is outside the definition pool")?;
+            let kind = definition_kind(tcx, def);
+            if kind != "static" {
+                return Ok(SelectedExport::Other {
+                    symbol,
+                    kind,
+                    definition,
+                    instance_id: winner.instance_id,
+                });
+            }
+            let declaration = extern_static_declaration(tcx, context, def)?;
+            let allocation = if matches!(tcx.def_kind(def), rustc_hir::def::DefKind::Static { .. })
+            {
+                let alloc_id = tcx.reserve_and_set_static_alloc(def);
+                allocation_ref(context, tcx, alloc_id)?
+            } else {
+                return export_failure(
+                    "foreign_symbols::selected_exports",
+                    "selected definition ceased to be a static",
+                );
+            };
+            Ok(SelectedExport::Static {
+                symbol,
+                kind: "static",
+                definition,
+                declaration,
+                allocation,
+            })
+        })
+        .collect()
 }
 
 /// Record the exact `lookup_exported_symbol` winner for demanded foreign-call
@@ -198,18 +323,21 @@ fn selected_exports<'tcx>(
 /// symbol kinds first, then `lookup_exported_fn` checks that the winner is a
 /// function; a static or other definition must therefore prevent a weaker
 /// same-name function from being promoted.
-fn selected_foreign_fallbacks(candidates: &[Value], demanded_symbols: &[String]) -> Value {
+fn selected_foreign_fallbacks(
+    candidates: &[Candidate],
+    demanded_symbols: &[String],
+) -> Vec<Fallback> {
     let mut selected = Vec::new();
     for symbol in demanded_symbols {
-        let mut winner: Option<&Value> = None;
+        let mut winner: Option<&Candidate> = None;
         let mut ambiguous = false;
         for candidate in candidates {
-            if candidate["symbol"].as_str() != Some(symbol.as_str()) {
+            if candidate.symbol != *symbol {
                 continue;
             }
-            let weak = candidate["weak"].as_bool().unwrap_or(false);
+            let weak = candidate.weak;
             if let Some(current) = winner {
-                let current_weak = current["weak"].as_bool().unwrap_or(false);
+                let current_weak = current.weak;
                 match (weak, current_weak) {
                     (false, true) => winner = Some(candidate),
                     (true, false) => (),
@@ -223,20 +351,19 @@ fn selected_foreign_fallbacks(candidates: &[Value], demanded_symbols: &[String])
             }
         }
         if ambiguous {
-            selected.push(json!({"symbol":symbol,"resolution":"ambiguous",
-                "reason":"source lookup_exported_symbol found equal-strength duplicate definitions"}));
+            selected.push(Fallback::Ambiguous(Ambiguous::new(symbol.clone())));
         } else if let Some(candidate) = winner {
             let row = candidate.clone();
-            selected.push(row);
+            selected.push(Fallback::Candidate(row));
         }
     }
-    Value::Array(selected)
+    selected
 }
 
 fn demanded_extern_statics<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<Vec<Declaration>, String> {
     let mut definitions = context
         .allocation_ids
         .keys()
@@ -251,17 +378,17 @@ fn demanded_extern_statics<'tcx>(
         .collect::<Vec<_>>();
     definitions.sort_by_key(|def| (def.krate.as_u32(), def.index.as_u32()));
     definitions.dedup();
-    Ok::<_, String>(Value::Array(
+    Ok::<_, String>(
         definitions
             .into_iter()
             .map(|def| extern_static_declaration(tcx, context, def))
             .collect::<Result<Vec<_>, String>>()?,
-    ))
+    )
 }
 
-fn allocator_shims<'tcx>(tcx: TyCtxt<'tcx>) -> Value {
+fn allocator_shims<'tcx>(tcx: TyCtxt<'tcx>) -> Vec<AllocatorShim> {
     let Some(kind) = tcx.allocator_kind(()) else {
-        return compiler_fact(json!([]));
+        return Vec::new();
     };
     let records = rustc_codegen_ssa::base::allocator_shim_contents(tcx, kind)
         .into_iter()
@@ -278,33 +405,41 @@ fn allocator_shims<'tcx>(tcx: TyCtxt<'tcx>) -> Value {
                         allocator::SpecialAllocatorMethod::Dealloc => "dealloc",
                         allocator::SpecialAllocatorMethod::Realloc => "realloc",
                     };
-                    json!({"kind":"special","method":method})
+                    AllocatorTarget::Special { method }
                 }
-                None => json!({"kind":"redirect","symbol":
-                    rustc_symbol_mangling::mangle_internal_symbol(
-                        tcx, &allocator::default_fn_name(method.name))}),
+                None => AllocatorTarget::Redirect {
+                    symbol: rustc_symbol_mangling::mangle_internal_symbol(
+                        tcx,
+                        &allocator::default_fn_name(method.name),
+                    ),
+                },
             };
-            json!({"symbol":source,"target":target})
+            AllocatorShim {
+                symbol: source,
+                target,
+            }
         })
         .collect::<Vec<_>>();
-    compiler_fact(json!(records))
+    records
 }
 
 /// Exact target facts used by `init_extern_statics` and dynamic-symbol
 /// registration. These come from rustc's parsed Session target, not from the
 /// target triple (whose spelling does not determine cfg families).
-fn target_facts(tcx: TyCtxt<'_>) -> Value {
+fn target_facts(tcx: TyCtxt<'_>) -> TargetFacts {
     let target = &tcx.sess.target;
-    let mut families = target.families.iter()
+    let mut families = target
+        .families
+        .iter()
         .map(|family| family.as_ref().to_owned())
         .collect::<Vec<_>>();
     families.sort();
-    compiler_fact(json!({
-        "os": target.os.desc_symbol().as_str().to_owned(),
-        "env": target.env.desc_symbol().as_str().to_owned(),
-        "binary_format": target.binary_format.desc_symbol().as_str().to_owned(),
-        "families": families,
-    }))
+    TargetFacts {
+        os: target.os.desc_symbol().as_str().to_owned(),
+        env: target.env.desc_symbol().as_str().to_owned(),
+        binary_format: target.binary_format.desc_symbol().as_str().to_owned(),
+        families,
+    }
 }
 
 /// Reproduce `helpers::iter_exported_symbols` in its source order. For a
@@ -313,7 +448,7 @@ fn target_facts(tcx: TyCtxt<'_>) -> Value {
 pub(super) fn export<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<Catalog, String> {
     if !tcx
         .crate_types()
         .contains(&rustc_structures::CrateType::Executable)
@@ -323,10 +458,14 @@ pub(super) fn export<'tcx>(
             tcx,
             allocator::NO_ALLOC_SHIM_IS_UNSTABLE,
         );
-        return Ok(
-            json!({"target":target_facts(tcx),"no_alloc_shim_symbol":compiler_fact(json!(no_alloc)),
-            "allocator_shims":allocator_shims(tcx)}),
-        );
+        return Ok(Catalog {
+            target: target_facts(tcx),
+            no_alloc_shim_symbol: no_alloc,
+            allocator_shims: allocator_shims(tcx),
+            exported_candidates: None,
+            selected_foreign_fallbacks: None,
+            extern_statics: None,
+        });
     }
     let mut records = Vec::new();
     let mut iteration_index = 0usize;
@@ -387,15 +526,8 @@ pub(super) fn export<'tcx>(
         rustc_symbol_mangling::mangle_internal_symbol(tcx, allocator::NO_ALLOC_SHIM_IS_UNSTABLE);
     let declarations = demanded_extern_statics(tcx, context)?;
     let demanded_symbols = declarations
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|record| {
-            record
-                .get("symbol")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
+        .iter()
+        .map(|record| record.symbol.clone())
         .collect::<Vec<_>>();
     let selected = selected_exports(tcx, context, &records, &demanded_symbols)?;
     // foreign_items.rs first runs its Miri shim and then resolves an exported
@@ -421,31 +553,28 @@ pub(super) fn export<'tcx>(
     demanded_foreign_functions.dedup();
     let selected_fallbacks = selected_foreign_fallbacks(&records, &demanded_foreign_functions);
     let mut promote = Vec::new();
-    if let Some(rows) = selected_fallbacks.as_array() {
-        for row in rows {
-            if !matches!(
-                row["definition_kind"].as_str(),
-                Some("function" | "associated_function")
-            ) {
-                continue;
-            }
-            let symbol = row["symbol"].as_str().unwrap_or_default();
-            if !demanded_foreign_functions
-                .iter()
-                .any(|demanded| demanded == symbol)
-            {
-                continue;
-            }
-            let Some(id) = row["instance_id"].as_u64() else {
-                continue;
-            };
-            if let Some((instance, _)) = context
-                .instance_ids
-                .iter()
-                .find(|(_, candidate_id)| **candidate_id == id)
-            {
-                promote.push(*instance);
-            }
+    for row in &selected_fallbacks {
+        let Fallback::Candidate(row) = row else {
+            continue;
+        };
+        if !matches!(row.definition_kind, "function" | "associated_function") {
+            continue;
+        }
+        if !demanded_foreign_functions
+            .iter()
+            .any(|demanded| demanded == &row.symbol)
+        {
+            continue;
+        }
+        let Some(id) = row.instance_id else {
+            continue;
+        };
+        if let Some((instance, _)) = context
+            .instance_ids
+            .iter()
+            .find(|(_, candidate_id)| **candidate_id == id)
+        {
+            promote.push(*instance);
         }
     }
     promote.sort_by_key(|instance| context.instance_ids[instance]);
@@ -453,16 +582,16 @@ pub(super) fn export<'tcx>(
     for instance in promote {
         context.register_instance(instance);
     }
-    Ok::<_, String>(json!({
-        "target":target_facts(tcx),
-        "no_alloc_shim_symbol":compiler_fact(json!(no_alloc)),
-        "exported_candidates":compiler_fact(json!(records)),
-        "selected_foreign_fallbacks":compiler_fact(selected_fallbacks),
-        "extern_statics":compiler_fact(json!({
-            "declarations":declarations,
-            "selected_exported":selected,
-            "typing_env":"fully_monomorphized",
-        })),
-        "allocator_shims":allocator_shims(tcx),
-    }))
+    Ok(Catalog {
+        target: target_facts(tcx),
+        no_alloc_shim_symbol: no_alloc,
+        exported_candidates: Some(records),
+        selected_foreign_fallbacks: Some(selected_fallbacks),
+        extern_statics: Some(ExternStatics {
+            declarations,
+            selected_exported: selected,
+            typing_env: "fully_monomorphized",
+        }),
+        allocator_shims: allocator_shims(tcx),
+    })
 }

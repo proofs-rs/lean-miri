@@ -3,11 +3,60 @@
 use super::*;
 use rustc_hir::def_id::DefId;
 use rustc_session::config::EntryFnType;
+#[derive(serde::Serialize)]
+pub(super) struct Entry {
+    definition: u64,
+    generic_parameters: Vec<&'static str>,
+    signature_query: EntrySignature,
+}
+#[derive(serde::Serialize)]
+struct EntrySignature {
+    compiler_selected_entry: bool,
+    has_bound_variables: bool,
+    output_has_bound_variables: bool,
+    return_type: u64,
+    function_pointer_type: u64,
+    start_resolution: Option<StartResolution>,
+}
+#[derive(serde::Serialize)]
+struct StartResolution {
+    instance_id: u64,
+    function_type: u64,
+}
+#[derive(serde::Serialize)]
+pub(super) struct Catalog {
+    typing_env: &'static str,
+    start_lang_item: Option<u64>,
+    compiler_entry: Option<u64>,
+    compiler_entry_type: Option<CompilerEntry>,
+    entries: Vec<Entry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    link_sections: Option<Vec<LinkSection>>,
+}
+#[derive(serde::Serialize)]
+struct CompilerEntry {
+    definition: u64,
+    kind: &'static str,
+    sigpipe: u8,
+}
+#[derive(serde::Serialize)]
+struct LinkSection {
+    section: String,
+    definition: u64,
+    span: u64,
+    global_query: GlobalQuery,
+}
+#[derive(serde::Serialize)]
+struct GlobalQuery {
+    #[serde(rename = "type")]
+    ty: u64,
+    allocation: u64,
+}
 fn entry<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
     def: DefId,
-) -> Result<Value, String> {
+) -> Result<Entry, String> {
     let args = ty::GenericArgs::identity_for_item(tcx, def);
     let parameters = args
         .iter()
@@ -28,7 +77,7 @@ fn entry<'tcx>(
         let fn_pointer = ty::Ty::new_fn_ptr(tcx, signature);
         let selected_entry = tcx.entry_fn(()).map(|(entry, _)| entry) == Some(def);
         let start = if !selected_entry {
-            Value::Null // Explicitly absent: no source lang_start request for this entry.
+            None // Explicitly absent: no source lang_start request for this entry.
         } else if let Some(start) = tcx.lang_items().start_fn() {
             let args = tcx.mk_args(&[result.into()]);
             if result.has_escaping_bound_vars() {
@@ -53,10 +102,12 @@ fn entry<'tcx>(
                         // unsupported even though rustc can answer it.
                         let function_type = instance.ty(tcx, ty::TypingEnv::fully_monomorphized());
                         let function_type = type_json(context, tcx, function_type)?;
-                        json!({"instance_id":id,
-                        "function_type":function_type})
+                        Some(StartResolution {
+                            instance_id: id,
+                            function_type,
+                        })
                     }
-                    Ok(None) => compiler_fact(Value::Null),
+                    Ok(None) => None,
                     Err(error) => export_failure(
                         "main_queries::entry",
                         format!(
@@ -68,24 +119,28 @@ fn entry<'tcx>(
                 }
             }
         } else {
-            compiler_fact(Value::Null)
+            None
         };
-        compiler_fact(
-            json!({"compiler_selected_entry":selected_entry,"has_bound_variables":!signature.bound_vars().is_empty(),
-            "output_has_bound_variables":result.has_escaping_bound_vars(),
-            "return_type":type_json(context,tcx,result)?,"function_pointer_type":type_json(context,tcx,fn_pointer)?,
-            "start_resolution":start}),
-        )
+        EntrySignature {
+            compiler_selected_entry: selected_entry,
+            has_bound_variables: !signature.bound_vars().is_empty(),
+            output_has_bound_variables: result.has_escaping_bound_vars(),
+            return_type: type_json(context, tcx, result)?,
+            function_pointer_type: type_json(context, tcx, fn_pointer)?,
+            start_resolution: start,
+        }
     };
-    Ok::<_, String>(
-        json!({"definition":def_json(context, def),"generic_parameters":parameters,"signature_query":signature}),
-    )
+    Ok(Entry {
+        definition: def_json(context, def),
+        generic_parameters: parameters,
+        signature_query: signature,
+    })
 }
 pub(super) fn export<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
     roots: &[DefId],
-) -> Result<Value, String> {
+) -> Result<Catalog, String> {
     // eval.rs::call_main constructs `FnVal::Instance(entry_instance)` before
     // invoking lang_start. That conversion asks Miri's compiler interface for
     // the entry Instance's function-pointer allocation even though no MIR
@@ -111,19 +166,28 @@ pub(super) fn export<'tcx>(
     let compiler_entry_type = tcx
         .entry_fn(())
         .map(|(definition, entry_type)| match entry_type {
-            EntryFnType::Main { sigpipe } => {
-                json!({"definition":def_json(context, definition),"kind":"rustc_main","sigpipe":sigpipe})
-            }
+            EntryFnType::Main { sigpipe } => CompilerEntry {
+                definition: def_json(context, definition),
+                kind: "rustc_main",
+                sigpipe,
+            },
         });
-    let mut result = json!({"typing_env":"fully_monomorphized","start_lang_item":tcx.lang_items().start_fn().map(|def| def_json(context, def)),
-    "compiler_entry":tcx.entry_fn(()).map(|(entry,_)|def_json(context, entry)),
-    "compiler_entry_type":compiler_fact(compiler_entry_type.unwrap_or(Value::Null)),"entries":entries,
-    });
+    let mut result = Catalog {
+        typing_env: "fully_monomorphized",
+        start_lang_item: tcx
+            .lang_items()
+            .start_fn()
+            .map(|def| def_json(context, def)),
+        compiler_entry: tcx.entry_fn(()).map(|(entry, _)| def_json(context, entry)),
+        compiler_entry_type,
+        entries,
+        link_sections: None,
+    };
     if tcx
         .crate_types()
         .contains(&rustc_structures::CrateType::Executable)
     {
-        result["link_sections"] = link_sections(tcx, context)?;
+        result.link_sections = Some(link_sections(tcx, context)?);
     }
     Ok::<_, String>(result)
 }
@@ -134,7 +198,7 @@ pub(super) fn export<'tcx>(
 fn link_sections<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<Vec<LinkSection>, String> {
     use rustc_hir::def_id::LOCAL_CRATE;
     use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags as F;
     use rustc_middle::middle::dependency_format::Linkage;
@@ -179,17 +243,24 @@ fn link_sections<'tcx>(
         let query = if tcx.is_static(def) {
             let instance = ty::Instance::mono(tcx, def);
             let ty = instance.ty(tcx, ty::TypingEnv::fully_monomorphized());
-            compiler_fact(json!({"type":type_json(context,tcx,ty)?,
-                "allocation":allocation_ref(context,tcx,tcx.reserve_and_set_static_alloc(def))?}))
+            GlobalQuery {
+                ty: type_json(context, tcx, ty)?,
+                allocation: allocation_ref(context, tcx, tcx.reserve_and_set_static_alloc(def))?,
+            }
         } else {
             unavailable_compiler_fact(
                 "source link-section eval_global requires a function-pointer or function-pointer-array static",
             )?
         };
-        entries.push(json!({"section":section.as_str(),"definition":def_json(context, def),"span":span_json(context,tcx,tcx.def_span(def)),"global_query":query}));
+        entries.push(LinkSection {
+            section: section.as_str().to_owned(),
+            definition: def_json(context, def),
+            span: span_json(context, tcx, tcx.def_span(def)),
+            global_query: query,
+        });
     }
     Ok::<_, String>(if complete {
-        compiler_fact(json!(entries))
+        entries
     } else {
         export_failure(
             "main_queries::link_sections",

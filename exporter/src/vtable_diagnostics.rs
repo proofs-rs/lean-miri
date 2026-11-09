@@ -1,6 +1,44 @@
 //! Optional provenance only: never interns keys or issues compiler queries.
 use super::*;
 
+#[derive(serde::Serialize)]
+pub(super) struct Report {
+    schema: &'static str,
+    rustc_commit: &'static str,
+    queries: Vec<Query>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snapshot_fnv1a64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snapshot_byte_length: Option<u64>,
+}
+#[derive(serde::Serialize)]
+struct Query {
+    query_id: u64,
+    input_type_id: u64,
+    input_predicate_ids: Vec<u64>,
+    origins: Vec<OriginRecord>,
+}
+#[derive(serde::Serialize)]
+struct OriginRecord {
+    body: Option<BodyRecord>,
+    parent_query_id: Option<u64>,
+    route: &'static str,
+    source_alloc_id: Option<u64>,
+}
+#[derive(serde::Serialize)]
+struct BodyRecord {
+    def_id: Definition,
+    phase: String,
+    promoted: Option<u32>,
+    role: &'static str,
+}
+#[derive(serde::Serialize)]
+struct Definition {
+    #[serde(rename = "crate")]
+    krate: u32,
+    index: u32,
+}
+
 type Pair<'tcx> = (
     ty::Ty<'tcx>,
     &'tcx ty::List<ty::PolyExistentialPredicate<'tcx>>,
@@ -106,7 +144,7 @@ impl<'tcx> Trace<'tcx> {
         &self,
         context: &ExportContext<'tcx>,
         ids: &HashMap<(u64, Vec<u64>), u64>,
-    ) -> Result<Option<(PathBuf, Value)>, String> {
+    ) -> Result<Option<(PathBuf, Report)>, String> {
         let Some(path) = &self.path else {
             return Ok(None);
         };
@@ -142,59 +180,78 @@ impl<'tcx> Trace<'tcx> {
                             .ok_or("diagnostic parent query not closed")
                     })
                     .transpose()?;
-                records.push(json!({"route":origin.route,
-                    "body":origin.body.as_ref().map(|body| json!({"role":body.role,
-                        "def_id":{"crate":body.def_id.krate.as_u32(),"index":body.def_id.index.as_u32()},"promoted":body.promoted,"phase":body.phase})),
-                    "parent_query_id":parent_id,"source_alloc_id":origin.source_alloc_id}));
+                records.push(OriginRecord {
+                    route: origin.route,
+                    body: origin.body.as_ref().map(|body| BodyRecord {
+                        role: body.role,
+                        def_id: Definition {
+                            krate: body.def_id.krate.as_u32(),
+                            index: body.def_id.index.as_u32(),
+                        },
+                        promoted: body.promoted,
+                        phase: body.phase.clone(),
+                    }),
+                    parent_query_id: parent_id,
+                    source_alloc_id: origin.source_alloc_id,
+                });
             }
-            records.sort_by_key(Value::to_string);
-            rows.push(json!({"query_id":query_id,"input_type_id":key.0,
-                "input_predicate_ids":key.1,"origins":records}));
+            // Sorting the small diagnostic records preserves stable evidence order.
+            let mut keyed = records
+                .into_iter()
+                .map(|record| {
+                    serde_json::to_string(&record)
+                        .map(|key| (key, record))
+                        .map_err(|e| e.to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            keyed.sort_by(|left, right| left.0.cmp(&right.0));
+            rows.push(Query {
+                query_id: *query_id,
+                input_type_id: key.0,
+                input_predicate_ids: key.1,
+                origins: keyed.into_iter().map(|(_, record)| record).collect(),
+            });
         }
-        rows.sort_by_key(|row| row["query_id"].as_u64());
+        rows.sort_by_key(|row| row.query_id);
         Ok(Some((
             path.clone(),
-            json!({"schema":"lean-miri-vtable-origins-v1",
-            "rustc_commit":EXPECTED_RUSTC_COMMIT,"queries":rows}),
+            Report {
+                schema: "lean-miri-vtable-origins-v1",
+                rustc_commit: EXPECTED_RUSTC_COMMIT,
+                queries: rows,
+                snapshot_fnv1a64: None,
+                snapshot_byte_length: None,
+            },
         )))
     }
 }
 
-// Hash the exact compact serialization without retaining another input-sized buffer.
-struct Fingerprint {
-    hash: u64,
-    length: u64,
-}
-impl Write for Fingerprint {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.length = self
-            .length
-            .checked_add(bytes.len() as u64)
-            .ok_or_else(|| std::io::Error::other("diagnostic snapshot length overflow"))?;
-        for byte in bytes {
-            self.hash = (self.hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3);
-        }
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 pub(super) fn write_report(
-    report: Option<(PathBuf, Value)>,
-    document: &Value,
+    report: Option<(PathBuf, Report)>,
+    snapshot: &Path,
 ) -> Result<(), String> {
     let Some((path, mut report)) = report else {
         return Ok(());
     };
-    let mut fingerprint = Fingerprint {
-        hash: 0xcbf29ce484222325,
-        length: 0,
-    };
-    serde_json::to_writer(&mut fingerprint, document).map_err(|e| e.to_string())?;
-    report["snapshot_fnv1a64"] = json!(format!("{:016x}", fingerprint.hash));
-    report["snapshot_byte_length"] = json!(fingerprint.length);
+    // Read the committed bytes: serializer field order is not a hash contract.
+    let mut file = fs::File::open(snapshot).map_err(|e| e.to_string())?;
+    let mut hash = 0xcbf29ce484222325u64;
+    let mut length = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = std::io::Read::read(&mut file, &mut buffer).map_err(|e| e.to_string())?;
+        if count == 0 {
+            break;
+        }
+        length = length
+            .checked_add(count as u64)
+            .ok_or("diagnostic snapshot length overflow")?;
+        for byte in &buffer[..count] {
+            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3);
+        }
+    }
+    report.snapshot_fnv1a64 = Some(format!("{hash:016x}"));
+    report.snapshot_byte_length = Some(length);
     // Refuse to replace an earlier diagnostic run or an export input.
     let mut file = fs::OpenOptions::new()
         .write(true)
@@ -202,4 +259,36 @@ pub(super) fn write_report(
         .open(&path)
         .map_err(|e| format!("cannot create vtable diagnostics {}: {e}", path.display()))?;
     serde_json::to_writer_pretty(&mut file, &report).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absent_origin_evidence_stays_null_and_uncomputed_hash_is_omitted() {
+        let report = Report {
+            schema: "lean-miri-vtable-origins-v1",
+            rustc_commit: "pinned",
+            queries: vec![Query {
+                query_id: 3,
+                input_type_id: 7,
+                input_predicate_ids: vec![],
+                origins: vec![OriginRecord {
+                    body: None,
+                    parent_query_id: None,
+                    route: "allocation",
+                    source_alloc_id: None,
+                }],
+            }],
+            snapshot_fnv1a64: None,
+            snapshot_byte_length: None,
+        };
+        let serialized = serde_json::to_string(&report).unwrap();
+        assert!(serialized.contains(
+            r#""body":null,"parent_query_id":null,"route":"allocation","source_alloc_id":null"#
+        ));
+        assert!(!serialized.contains("snapshot_fnv1a64"));
+        assert!(!serialized.contains("snapshot_byte_length"));
+    }
 }

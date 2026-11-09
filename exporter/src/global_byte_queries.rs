@@ -2,10 +2,27 @@
 //! Probes that allocate a new rustc global are not imported: runtime reservation
 //! remains lazy and uses its canonical allocation supply.
 use super::*;
+#[derive(serde::Serialize)]
+pub(super) struct Queries {
+    salt_count: usize,
+    str_type: u64,
+    covered_allocation_ids: Vec<u64>,
+    candidates: Vec<Candidate>,
+}
+#[derive(serde::Serialize)]
+struct Candidate {
+    bytes_hex: String,
+    salts: Vec<Salt>,
+}
+#[derive(serde::Serialize)]
+struct Salt {
+    salt: usize,
+    existing_allocation: Option<u64>,
+}
 pub(super) fn export<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<Queries, String> {
     let str_type = type_json(context, tcx, tcx.types.str_)?;
     // `type_json` above may extend type metadata, but this producer never
     // mutates allocation_ids. Borrow the completed allocation map instead of
@@ -42,23 +59,37 @@ pub(super) fn export<'tcx>(
         let bytes = allocation.inspect_with_uninit_and_ptr_outside_interpreter(0..allocation.len());
         contents.entry(bytes_hex(bytes)).or_insert(*alloc);
     }
-    let candidates=contents.into_iter().map(|(hex,representative)|{
-        let Some(GlobalAlloc::Memory(memory))=tcx.try_get_global_alloc(representative) else {
-            unreachable!("global-byte representative must remain allocated")
-        };
-        let allocation=memory.inner();
-        let bytes=allocation.inspect_with_uninit_and_ptr_outside_interpreter(0..allocation.len());
-        let salts=(0..32usize).map(|salt|{
-            // The rustc API accepts `Into<Cow<[u8]>>`; borrowing avoids a
-            // full byte-vector clone for every salt without changing probes.
-            let selected=tcx.allocate_bytes_dedup(bytes,salt);
-            json!({"salt":salt,"existing_allocation":original.get(&selected).map(|id|json!(id))})
-        }).collect::<Vec<_>>();
-        json!({"bytes_hex":hex,"salts":salts})
-    }).collect::<Vec<_>>();
+    let candidates = contents
+        .into_iter()
+        .map(|(hex, representative)| {
+            let Some(GlobalAlloc::Memory(memory)) = tcx.try_get_global_alloc(representative) else {
+                unreachable!("global-byte representative must remain allocated")
+            };
+            let allocation = memory.inner();
+            let bytes =
+                allocation.inspect_with_uninit_and_ptr_outside_interpreter(0..allocation.len());
+            let salts = (0..32usize)
+                .map(|salt| {
+                    // The rustc API accepts `Into<Cow<[u8]>>`; borrowing avoids a
+                    // full byte-vector clone for every salt without changing probes.
+                    let selected = tcx.allocate_bytes_dedup(bytes, salt);
+                    Salt {
+                        salt,
+                        existing_allocation: original.get(&selected).copied(),
+                    }
+                })
+                .collect::<Vec<_>>();
+            Candidate {
+                bytes_hex: hex,
+                salts,
+            }
+        })
+        .collect::<Vec<_>>();
     // No allocation_ref call here: the covered graph is unchanged by probing.
-    Ok::<_, String>(
-        json!({"salt_count":32,"str_type":str_type,
-        "covered_allocation_ids":covered,"candidates":candidates}),
-    )
+    Ok::<_, String>(Queries {
+        salt_count: 32,
+        str_type,
+        covered_allocation_ids: covered,
+        candidates,
+    })
 }

@@ -1,6 +1,48 @@
 //! Exact shims/sig.rs ShimSig::as_abi and shim_sig_arg constructors.
 //! Recipes mirror currently ported alloc/foreign_items/mem/miri source arms.
 use super::*;
+#[derive(serde::Serialize)]
+pub(super) struct Recipe {
+    typing_env: &'static str,
+    signature: Signature,
+    query: Query,
+}
+#[derive(serde::Serialize)]
+struct Signature {
+    calling_convention: String,
+    arguments: Vec<String>,
+    #[serde(rename = "return")]
+    result: String,
+    c_variadic: bool,
+}
+#[derive(serde::Serialize)]
+struct Query {
+    input_types: Vec<u64>,
+    output_type: u64,
+    abi_query: u64,
+}
+#[derive(serde::Serialize)]
+pub(super) struct NamedSignature {
+    name: String,
+    recipe: Recipe,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_target_op_is_ulong: Option<bool>,
+}
+impl NamedSignature {
+    fn new(name: &str, recipe: Recipe) -> Self {
+        Self {
+            name: name.to_owned(),
+            recipe,
+            source_target_op_is_ulong: None,
+        }
+    }
+}
+#[derive(serde::Serialize)]
+pub(super) struct StartupNamedTypes {
+    c_ulong: u64,
+    i32_pointer: u64,
+}
+
 pub(super) fn is_unix_target(tcx: TyCtxt<'_>) -> bool {
     tcx.sess
         .target
@@ -108,10 +150,14 @@ pub(super) fn descriptor<'tcx>(tcx: TyCtxt<'tcx>, key: &str) -> Result<ty::Ty<'t
         "libc::clockid_t" => named_type(tcx, &["libc", "clockid_t"])?,
         "libc::time_t" => named_type(tcx, &["libc", "time_t"])?,
         "libc::timeval_pointer" => ty::Ty::new_mut_ptr(tcx, named_type(tcx, &["libc", "timeval"])?),
-        "libc::timezone_pointer" => ty::Ty::new_mut_ptr(tcx, named_type(tcx, &["libc", "timezone"])?),
+        "libc::timezone_pointer" => {
+            ty::Ty::new_mut_ptr(tcx, named_type(tcx, &["libc", "timezone"])?)
+        }
         "libc::time_t_pointer" => ty::Ty::new_mut_ptr(tcx, named_type(tcx, &["libc", "time_t"])?),
         "libc::tm_pointer" => ty::Ty::new_mut_ptr(tcx, named_type(tcx, &["libc", "tm"])?),
-        "libc::timespec_pointer" => ty::Ty::new_mut_ptr(tcx, named_type(tcx, &["libc", "timespec"])?),
+        "libc::timespec_pointer" => {
+            ty::Ty::new_mut_ptr(tcx, named_type(tcx, &["libc", "timespec"])?)
+        }
 
         "libc::uid_t" => named_type(tcx, &["libc", "uid_t"])?,
         "libc::pthread_t" => named_type(tcx, &["libc", "pthread_t"])?,
@@ -150,7 +196,7 @@ fn query<'tcx>(
     abi: &str,
     args: &[&str],
     ret: &str,
-) -> Result<Value, String> {
+) -> Result<Recipe, String> {
     variadic_query(tcx, context, abi, args, ret, false)
 }
 fn variadic_query<'tcx>(
@@ -160,8 +206,8 @@ fn variadic_query<'tcx>(
     args: &[&str],
     ret: &str,
     variadic: bool,
-) -> Result<Value, String> {
-    let result = (|| -> Result<Value, String> {
+) -> Result<Recipe, String> {
+    let result = (|| -> Result<Query, String> {
         let inputs = args
             .iter()
             .map(|key| descriptor(tcx, key))
@@ -200,21 +246,29 @@ fn variadic_query<'tcx>(
                 ),
             )?,
         };
-        Ok(
-            json!({"input_types":input_types,"output_type":output_type,"abi_query":value}),
-        )
+        Ok(Query {
+            input_types,
+            output_type,
+            abi_query: value,
+        })
     })();
-    Ok::<_, String>(
-        json!({"typing_env":"fully_monomorphized","signature":{"calling_convention":abi,"arguments":args,"return":ret,"c_variadic":variadic},
-        "query":result.map_err(|reason| format!("shim ABI {abi}({args:?}) -> {ret}: {reason}"))?}),
-    )
+    Ok::<_, String>(Recipe {
+        typing_env: "fully_monomorphized",
+        signature: Signature {
+            calling_convention: abi.to_owned(),
+            arguments: args.iter().map(|s| (*s).to_owned()).collect(),
+            result: ret.to_owned(),
+            c_variadic: variadic,
+        },
+        query: result.map_err(|reason| format!("shim ABI {abi}({args:?}) -> {ret}: {reason}"))?,
+    })
 }
 pub(super) fn export<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
     portable_only: bool,
     allocator_required: bool,
-) -> Result<Value, String> {
+) -> Result<Vec<Recipe>, String> {
     let recipes: &[(&str, &[&str], &str)] = &[
         ("Rust", &[], "unit"),
         ("Rust", &["usize", "alignment"], "unitPointer"),
@@ -267,7 +321,7 @@ pub(super) fn export<'tcx>(
             "unit",
         ),
     ];
-    Ok::<_, String>(Value::Array(
+    Ok::<_, String>(
         recipes
             .iter()
             .filter(|(abi, args, _)| {
@@ -276,7 +330,7 @@ pub(super) fn export<'tcx>(
             })
             .map(|(abi, args, ret)| query(tcx, context, abi, args, ret))
             .collect::<Result<Vec<_>, String>>()?,
-    ))
+    )
 }
 
 fn unix_signature_required(os: &rustc_target::spec::Os, name: &str) -> bool {
@@ -368,7 +422,7 @@ fn is_dynamic_symbol(target: &rustc_target::spec::Target, name: &str) -> bool {
 pub(super) fn named_signatures<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<Vec<NamedSignature>, String> {
     let names = context
         .pending_instances
         .iter()
@@ -377,8 +431,7 @@ pub(super) fn named_signatures<'tcx>(
         .collect::<HashSet<_>>();
     let dynamic_lookup = names.contains("dlsym") || names.contains("GetProcAddress");
     let required = |name: &str| {
-        names.contains(name)
-            || (dynamic_lookup && is_dynamic_symbol(&tcx.sess.target, name))
+        names.contains(name) || (dynamic_lookup && is_dynamic_symbol(&tcx.sess.target, name))
     };
     let recipes: &[(&str, &[&str], &str)] = &[
         // Unix environment/system-information checks from
@@ -662,7 +715,10 @@ pub(super) fn named_signatures<'tcx>(
                 && required(name)
         })
         .map(|(name, args, ret)| {
-            Ok::<_, String>(json!({"name":name,"recipe":query(tcx,context,"C",args,ret)?}))
+            Ok::<_, String>(NamedSignature::new(
+                name,
+                query(tcx, context, "C", args, ret)?,
+            ))
         })
         .collect::<Result<Vec<_>, String>>()?;
     // Linux GNU TLS destructor registration is strict in
@@ -673,10 +729,10 @@ pub(super) fn named_signatures<'tcx>(
         && tcx.sess.target.env == rustc_target::spec::Env::Gnu
     {
         if required("__cxa_thread_atexit_impl") {
-            result.push(json!({
-                "name":"__cxa_thread_atexit_impl",
-                "recipe":query(tcx,context,"C",&["pointer","pointer","pointer"],"i32")?
-            }))
+            result.push(NamedSignature::new(
+                "__cxa_thread_atexit_impl",
+                query(tcx, context, "C", &["pointer", "pointer", "pointer"], "i32")?,
+            ))
         };
     }
     // The pinned Linux foreign-item arm checks this exact variadic C
@@ -685,10 +741,17 @@ pub(super) fn named_signatures<'tcx>(
     // return and four fixed arguments from shim_sig!.
     if tcx.sess.target.os == rustc_target::spec::Os::Linux {
         if required("mremap") {
-            result.push(json!({
-            "name":"mremap",
-            "recipe":variadic_query(tcx,context,"C",&["pointer","usize","usize","i32"],"pointer",true)?
-        }))
+            result.push(NamedSignature::new(
+                "mremap",
+                variadic_query(
+                    tcx,
+                    context,
+                    "C",
+                    &["pointer", "usize", "usize", "i32"],
+                    "pointer",
+                    true,
+                )?,
+            ))
         };
     }
     // `open` and `openat` have source-checked C varargs, so retain variadic
@@ -707,9 +770,10 @@ pub(super) fn named_signatures<'tcx>(
                 ))
         {
             if required(name) {
-                result.push(
-                    json!({"name":name,"recipe":variadic_query(tcx,context,"C",args,"i32",true)?}),
-                )
+                result.push(NamedSignature::new(
+                    name,
+                    variadic_query(tcx, context, "C", args, "i32", true)?,
+                ))
             };
         }
     }
@@ -953,14 +1017,19 @@ pub(super) fn named_signatures<'tcx>(
         .filter(|_| tcx.sess.target.os == rustc_target::spec::Os::Windows)
     {
         if required(name) {
-            result.push(json!({"name":name,"recipe":query(tcx,context,"System",args,ret)?}))
+            result.push(NamedSignature::new(
+                name,
+                query(tcx, context, "System", args, ret)?,
+            ))
         };
     }
     if tcx.sess.target.os == rustc_target::spec::Os::Windows {
         if tcx.sess.target.env == rustc_target::spec::Env::Gnu {
             if required("_Unwind_RaiseException") {
-                result.push(json!({"name":"_Unwind_RaiseException",
-            "recipe":query(tcx,context,"C",&["pointer"],"unwind_reason_code")?}))
+                result.push(NamedSignature::new(
+                    "_Unwind_RaiseException",
+                    query(tcx, context, "C", &["pointer"], "unwind_reason_code")?,
+                ))
             };
         }
         // windows/foreign_items.rs random shims, preserving source System ABI.
@@ -974,7 +1043,10 @@ pub(super) fn named_signatures<'tcx>(
             ),
         ] {
             if required(name) {
-                result.push(json!({"name":name,"recipe":query(tcx,context,"System",args,ret)?}))
+                result.push(NamedSignature::new(
+                    name,
+                    query(tcx, context, "System", args, ret)?,
+                ))
             };
         }
     }
@@ -983,19 +1055,24 @@ pub(super) fn named_signatures<'tcx>(
         rustc_target::spec::Os::Linux | rustc_target::spec::Os::Android
     ) {
         if required("syscall") {
-            result.push(
-        json!({"name":"syscall","recipe":variadic_query(tcx,context,"C",&["isize"],"isize",true)?}),
-    )
+            result.push(NamedSignature::new(
+                "syscall",
+                variadic_query(tcx, context, "C", &["isize"], "isize", true)?,
+            ))
         };
         if required("prctl") {
-            result.push(json!({"name":"prctl","recipe":variadic_query(tcx,context,"C",&["i32"],"i32",true)?}));
+            result.push(NamedSignature::new(
+                "prctl",
+                variadic_query(tcx, context, "C", &["i32"], "i32", true)?,
+            ));
         }
     }
     if is_unix_target(tcx) {
         if required("fcntl") {
-            result.push(
-        json!({"name":"fcntl","recipe":variadic_query(tcx,context,"C",&["i32","i32"],"i32",true)?}),
-    )
+            result.push(NamedSignature::new(
+                "fcntl",
+                variadic_query(tcx, context, "C", &["i32", "i32"], "i32", true)?,
+            ))
         };
         // unix/foreign_items.rs:328 target-spec query, not host/triple inference.
         let ulong = match tcx.sess.target.os {
@@ -1010,11 +1087,23 @@ pub(super) fn named_signatures<'tcx>(
             _ => false,
         };
         if required("ioctl") {
-            result.push(json!({"name":"ioctl","recipe":variadic_query(tcx,context,"C",&["i32",if ulong{"usize"}else{"i32"}],"i32",true)?,
-        "source_target_op_is_ulong":ulong}))
+            result.push(NamedSignature {
+                source_target_op_is_ulong: Some(ulong),
+                ..NamedSignature::new(
+                    "ioctl",
+                    variadic_query(
+                        tcx,
+                        context,
+                        "C",
+                        &["i32", if ulong { "usize" } else { "i32" }],
+                        "i32",
+                        true,
+                    )?,
+                )
+            })
         };
     }
-    Ok::<_, String>(Value::Array(result))
+    Ok::<_, String>(result)
 }
 
 /// Machine construction needs the exact core C-ulong layout even when no
@@ -1022,19 +1111,19 @@ pub(super) fn named_signatures<'tcx>(
 pub(super) fn startup_named_types<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
+) -> Result<StartupNamedTypes, String> {
     let ty = named_type(tcx, &["core", "ffi", "c_ulong"])?;
-    Ok(json!({
-        "c_ulong": type_json(context, tcx, ty)?,
-        "i32_pointer": type_json(context, tcx, ty::Ty::new_mut_ptr(tcx, tcx.types.i32))?,
-    }))
+    Ok(StartupNamedTypes {
+        c_ulong: type_json(context, tcx, ty)?,
+        i32_pointer: type_json(context, tcx, ty::Ty::new_mut_ptr(tcx, tcx.types.i32))?,
+    })
 }
 
 pub(super) fn named_types<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Value, String> {
-    let mut result = serde_json::Map::new();
+) -> Result<BTreeMap<String, u64>, String> {
+    let mut result = BTreeMap::new();
     for (name, path) in [
         ("c_ulong", &["core", "ffi", "c_ulong"][..]),
         ("pid_t", &["libc", "pid_t"][..]),
@@ -1104,7 +1193,7 @@ pub(super) fn named_types<'tcx>(
             ty::Ty::new_mut_ptr(tcx, tcx.types.i32),
         )?),
     );
-    Ok::<_, String>(Value::Object(result))
+    Ok::<_, String>(result)
 }
 
 #[cfg(test)]
