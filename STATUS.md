@@ -146,6 +146,11 @@ remain unvalidated.
 Selected finite checks do not close general proof or source-correspondence gaps.
 
 The typed-pool input revision still needs full `tools/check.sh` and hosted CI.
+`tools/check-structural-regressions.sh` currently fails to elaborate
+`tests/regression/PrimitiveCatalog.lean:19`: the `.ok` constructor in its
+`runtime.lookup` equality has no inferred expected type. The provider
+pool-preservation and context/runtime assertions pass separately; this test API
+elaboration failure remains unresolved.
 The full regression result for an earlier revision does not validate later
 changes. Separate canonical12, ordering,
 large-TB, SC-schedule, connected-proof and structural-regression entry points

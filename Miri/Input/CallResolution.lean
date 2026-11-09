@@ -99,7 +99,7 @@ private def decodeResolution (ctx : LowerContext) (tables : CompilerTables)
   | _ => unless !virtual do throw "virtual dispatch query did not return a Virtual instance"
   pure ⟨callee,callee,function,source.fnAbiId,source⟩
 
-/-- Appended identities are rebound through all bodies; existing IDs never move.
+/-- Resolution reads decoded canonical identities; existing IDs never move.
 Query failures are retained per call site, without deleting the imported MIR. -/
 private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgram) (runtime : RuntimeMetadata) :
     Result Prepared := do

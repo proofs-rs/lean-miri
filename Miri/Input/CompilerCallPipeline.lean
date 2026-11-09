@@ -14,9 +14,9 @@ structure Prepared where
   symbols : CompilerVTableRuntime.Prepared
   calls : CallResolution.Prepared
 
-/-- Each stage appends identities without moving existing indices. Rebind all
-views to the final table so full shim instances, inline spans, const arguments
-and executable body identities remain compilation-local and consistent. -/
+/-- Each stage reads decoded canonical identities. Rebind all views to the final
+program so full shim instances, inline spans, const arguments and executable body
+identities remain compilation-local and consistent. -/
 def prepareProfiled (profile : Lean.Options) (program : LoweredProgram) : Result Prepared := do
   let scopes := profileit "preparation.call.scopes" profile fun _ => CompilerScopes.prepare program
   let runtime ← profileit "preparation.call.runtime_queries" profile fun _ =>

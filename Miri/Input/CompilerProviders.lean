@@ -18,9 +18,9 @@ import Miri.Input.CompilerQueryIndices
 
 /-! One compilation-local provider assembly. Source queries are the pinned
 step.rs/call.rs/operand.rs/stack.rs/traits.rs query sites documented by the
-constituent adapters. Preparation is ordered state threading, not independent
-local ID allocation followed by merging. Every earlier view is rebound to the
-final tables; source failures remain failures, not execution-readiness claims.
+constituent adapters. Preparation threads decoded canonical IDs without allocating
+or merging identity tables. Every earlier view is rebound to the final program;
+source failures remain failures, not execution-readiness claims.
 -/
 namespace Miri.Input.CompilerProviders
 open Lean Miri.ABI Miri.Memory Miri.Interpreter
@@ -72,16 +72,6 @@ def Prepared.orderingLayout (p : Prepared) : Except String (TyAndLayout TypeId) 
 def Prepared.callerLocationType (p : Prepared) : Except String TypeId :=
   CompilerPrimitiveFacts.callerLocationType p.runtime
 
-/-- Check index preservation at each append stage, including exact source spans.
-No table contents may be normalized, reordered or silently replaced. -/
-private def extension (old fresh : CompilerTables) : Except String Unit := do
-  unless fresh.spans.size ≥ old.spans.size && fresh.spans.extract 0 old.spans.size == old.spans do
-    throw "compiler provider preparation changed existing span identities"
-  unless fresh.definitions.size ≥ old.definitions.size && fresh.definitions.extract 0 old.definitions.size == old.definitions do
-    throw "compiler provider preparation changed existing definition identities"
-  unless fresh.typeConstants.size ≥ old.typeConstants.size && fresh.typeConstants.extract 0 old.typeConstants.size == old.typeConstants do
-    throw "compiler provider preparation changed existing type-constant identities"
-
 private def rebindCalls (p : CompilerCallPipeline.Prepared) (program : LoweredProgram) : CompilerCallPipeline.Prepared :=
   {p with calls := {p.calls with program}
           scopes := {p.scopes with program}
@@ -96,7 +86,7 @@ private def rebindLifecycle (p : CompilerLifecyclePipeline.Prepared) (program : 
           backtrace := {p.backtrace with program}
           frames := {p.frames with calls}}
 
-/-- All identity-appending adapters run on the immediately preceding program.
+/-- All adapters consume the canonical identity tables of the preceding program.
 Predicate tokens are established exactly once by CompilerCallPipeline's shared
 FactAdapters preparation, then consumed by vtable adapters without re-interning.
 -/
@@ -106,41 +96,23 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
     CompilerContextSpan.prepare input
   let calls ← profileit "preparation.providers.call_pipeline" profile fun _ =>
     CompilerCallPipeline.prepareProfiled profile seeded
-  profileit "preparation.providers.extension_after_calls" profile fun _ =>
-    extension input.compilerTables calls.calls.program.compilerTables
   let lifecycle ← profileit "preparation.providers.lifecycle" profile fun _ =>
     CompilerLifecyclePipeline.prepareProfiled profile calls
   let program := lifecycle.backtrace.program
-  profileit "preparation.providers.extension_after_lifecycle" profile fun _ =>
-    extension calls.calls.program.compilerTables program.compilerTables
   let runtime := lifecycle.calls.calls.runtime
   let functions ← profileit "preparation.providers.function_facts" profile fun _ =>
     CompilerFunctionFacts.prepare runtime program
-  profileit "preparation.providers.extension_after_functions" profile fun _ =>
-    extension program.compilerTables functions.program.compilerTables
   let main ← profileit "preparation.providers.main" profile fun _ =>
     CompilerMain.prepare runtime functions.program
-  profileit "preparation.providers.extension_after_main" profile fun _ =>
-    extension functions.program.compilerTables main.program.compilerTables
   let intrinsics ← profileit "preparation.providers.intrinsics" profile fun _ => CompilerIntrinsicFacts.prepare main.program
-  profileit "preparation.providers.extension_after_intrinsics" profile fun _ =>
-    extension main.program.compilerTables intrinsics.program.compilerTables
   let constants ← profileit "preparation.providers.constants" profile fun _ =>
     CompilerConstantQueries.prepareProfiled profile intrinsics.program
-  profileit "preparation.providers.extension_after_constants" profile fun _ =>
-    extension intrinsics.program.compilerTables constants.program.compilerTables
   let namedConstants ← profileit "preparation.providers.named_constants" profile fun _ =>
     CompilerNamedConstants.prepare runtime constants.program
-  profileit "preparation.providers.extension_after_named_constants" profile fun _ =>
-    extension constants.program.compilerTables namedConstants.program.compilerTables
   let namedGlobals ← profileit "preparation.providers.named_globals" profile fun _ =>
     CompilerNamedGlobals.prepare runtime namedConstants.program
-  profileit "preparation.providers.extension_after_named_globals" profile fun _ =>
-    extension namedConstants.program.compilerTables namedGlobals.program.compilerTables
   let externStatics ← profileit "preparation.providers.extern_statics" profile fun _ =>
     CompilerExternStatic.prepare runtime namedGlobals.program
-  profileit "preparation.providers.extension_after_extern_statics" profile fun _ =>
-    extension namedGlobals.program.compilerTables externStatics.program.compilerTables
   let program := externStatics.program
   let lifecycle := profileit "preparation.providers.rebind_lifecycle" profile fun _ => rebindLifecycle lifecycle program
   let pointers ← profileit "preparation.providers.function_pointers" profile fun _ => CompilerFunctionPointers.prepare lifecycle.calls

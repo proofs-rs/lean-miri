@@ -5,8 +5,8 @@ import Miri.Input.CompilerFrameMetadata
 import Miri.Input.CompilerInstanceAbi
 
 /-! One final compilation-local identity table for actual frame lifecycle,
-full-instance ABI and backtrace source queries. Appending span/definition IDs
-never invalidates already prepared runtime dictionaries. -/
+full-instance ABI and backtrace source queries. Preparation reads canonical
+span/definition IDs without changing already prepared runtime dictionaries. -/
 namespace Miri.Input.CompilerLifecyclePipeline
 open Lean Miri.ABI Miri.Memory Miri.Interpreter
 structure Prepared where
