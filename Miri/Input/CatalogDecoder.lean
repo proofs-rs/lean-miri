@@ -263,12 +263,15 @@ def namedConstant (ctx : DecodeMIR.Context) (j : Value) : Result NamedConstant :
 
 def namedStatic (j : Value) : Result NamedStatic := do
   environment j
+  let name ← (← j.field "name").string
+  let path ← arrayOf string (← j.field "path")
+  unless path == #["libc", name] do throw "named global path does not match libc name"
   let query ← j.field "query"
   let kind ← (← query.field "kind").string
   unless kind == "static" || kind == "const_allocation" do throw "unknown named global kind"
   return {
-    name := ← (← j.field "name").string
-    path := ← arrayOf string (← j.field "path")
+    name
+    path
     definition := ← (← query.field "definition").natural
     isStatic := kind == "static"
     typeId := ← (← query.field "type").natural

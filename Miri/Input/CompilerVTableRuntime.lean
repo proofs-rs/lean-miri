@@ -84,7 +84,9 @@ def queryTargetPrincipal (facts : CompilerFactAdapters.Prepared)
       | throw "compiler principal predicate ID out of bounds"
     unless definition.kind == .trait do throw "memory-backed supertrait target has no supported principal trait"
     let targetPrincipal ← allocationPrincipal facts predicateId
-    let evidence := (targetPrincipal, metadata.typeId, metadata.sizeBytes, metadata.alignBytes, metadata.entries)
+    let some size := metadata.sizeBytes | throw "memory-backed vtable size is absent"
+    let some align := metadata.alignBytes | throw "memory-backed vtable alignment is absent"
+    let evidence := (targetPrincipal, metadata.typeId, some size, some align, metadata.entries)
     if let some previous := found then
       unless previous == evidence do throw "conflicting compiler vtable rows for exact allocation identity"
     else found := some evidence

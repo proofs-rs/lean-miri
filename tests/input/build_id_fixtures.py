@@ -110,6 +110,9 @@ def main():
     write("nested-debug-payload-skips-references", doc)
 
     doc = base()
+    # Removing an unreferenced pool is valid; retain a real catalog edge.
+    doc["compiler_global_byte_queries"]["covered_allocation_ids"] = [0]
+    write("valid-allocation-reference", doc)
     set_table_empty(doc, "allocations")
     write("empty-allocations", doc)
     doc = base()

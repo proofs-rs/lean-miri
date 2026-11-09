@@ -11,6 +11,7 @@ private def typeRef (p : CompilerProviders.Prepared) (id : TyId) : Except String
   pure id
 
 def query (p : CompilerProviders.Prepared) (callee : CallInstance) : Except String (Array TyId × TyId) := do
+  let _ ← CompilerInstance.source p.loweringContext callee
   let mut found : Option (Array TyId × TyId) := none
   for entry in p.program.input.queries.nativeSignatures do
     if entry.instanceId == callee then

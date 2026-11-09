@@ -31,6 +31,12 @@ private def checkMemoryAlias (runtime : CompilerVTableRuntime.Prepared)
     metadata := {parent.metadata with entries := target.metadata.entries}}
   let conflict := "conflicting compiler vtable rows for exact allocation identity"
   rejects (CompilerVTableRuntime.queryTargetPrincipal facts (rows.push alias) ty allocation) conflict
+  let missingSize := rows.set! index {target with metadata := {target.metadata with sizeBytes := none}}
+  rejects (CompilerVTableRuntime.queryTargetPrincipal facts missingSize ty allocation)
+    "memory-backed vtable size is absent"
+  let missingAlign := rows.set! index {target with metadata := {target.metadata with alignBytes := none}}
+  rejects (CompilerVTableRuntime.queryTargetPrincipal facts missingAlign ty allocation)
+    "memory-backed vtable alignment is absent"
   let some size := target.metadata.sizeBytes | throw (IO.userError "vtable size absent")
   let wrongSize := {target with metadata := {target.metadata with sizeBytes := some (size + 1)}}
   let wrongRows := rows.set! index wrongSize

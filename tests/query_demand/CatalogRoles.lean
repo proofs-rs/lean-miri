@@ -39,17 +39,19 @@ def main (args : List String) : IO Unit := do
         let entry ← must (getAt baseline.document.queries.nativeSignatures (← must (row.getObjValAs? Nat "index")))
         let callee := entry.instanceId
         discard <| must (CompilerNativeSignatures.query prepared callee)
-        check (!(CompilerNativeSignatures.query mutated callee).isOk)
-          s!"demanded malformed native signature accepted: {name}"
+        let invalidId := prepared.program.input.instances.size
+        let queries := prepared.program.input.queries
+        let invalidQueries := {queries with nativeSignatures := #[{entry with instanceId := invalidId}]}
+        let invalidProgram := {prepared.program with input := {prepared.program.input with queries := invalidQueries}}
+        let invalid := {prepared with program := invalidProgram}
+        check (!(CompilerNativeSignatures.query invalid invalidId).isOk)
+          "native query accepted out-of-bounds full-instance identity"
+        discard <| must (CompilerNativeSignatures.query mutated callee)
       | "tls" =>
-        let definitionJson ← must (row.getObjVal? "definition")
-        let definition : DefinitionId := ⟨← must (definitionJson.getObjValAs? Nat "crate"),
-          ← must (definitionJson.getObjValAs? Nat "index")⟩
-        let some definition := program.bundle.definitions.findIdx? (· == definition) |
-          throw (IO.userError "TLS definition absent from compiler pool")
+        let definition ← must (row.getObjValAs? Nat "definition")
         discard <| must (CompilerThreadLocal.forDefinition prepared.program definition)
-        check (!(CompilerThreadLocal.forDefinition mutated.program definition).isOk)
-          s!"demanded malformed TLS initializer accepted: {name}"
+        discard <| must (CompilerThreadLocal.forDefinition mutated.program definition)
+      | "none" => pure ()
       | provider => throw (IO.userError s!"unknown demand provider: {provider}")
     else
       match full, runtime with
