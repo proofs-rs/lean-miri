@@ -12,7 +12,6 @@ def runtimeChecks : Array (String × Bool) := #[
   ("MiriTests/AtomicScalar/CompareExchangeFailureTail.lean", true),
   ("MiriTests/Connected/Focused/KeyedArray166QA.lean", true),
   ("MiriTests/Connected/Focused/MemoryState166QA.lean", true),
-  ("MiriTests/Constant/EvidenceTests.lean", true),
   ("MiriTests/DataRace/ThreadClockReuseReachability.lean", true),
   ("MiriTests/FunctionPointers/PersistentReservations.lean", false),
   ("MiriTests/Input/AllocationImageIndexed2026.lean", true),

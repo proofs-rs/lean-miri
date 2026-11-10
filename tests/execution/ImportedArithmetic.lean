@@ -195,7 +195,6 @@ private def rvalueHooks (m : Metadata) : RvalueHooks AllocId State Unit Dest := 
   enforceValidity := fun _ _ => block "enforceValidity reference"
   retagPtrValue := fun _ _ _ => block "retag pointer"
   placeBaseRaw := fun _ _ => block "raw base"
-  normalize := fun _ _ => block "normalize"
   cast := fun _ _ _ _ _ => block "cast"
   readDiscriminant := fun _ _ => block "discriminant"
   discriminantForVariant := fun _ _ _ => block "discriminant value" }

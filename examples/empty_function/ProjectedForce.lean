@@ -53,7 +53,7 @@ without asking any future materialization operation to succeed. -/
     (capacity : 0 < s.capacity) (frames : Array LocalUnit.F) (frame : LocalUnit.F)
     (machine : MachineHooks.MachineState MiriMemoryKind EmptyFunction.Configuration.RootUser)
     (id : MIR.LocalId) (ty : TyId)
-    (normalized : Input.CompilerFrameContext.normalizedLocalType s.prepared.compiler frame id = .ok ty)
+    (normalized : Input.CompilerFrameContext.localType s.prepared.compiler frame id = .ok ty)
     (place : MPlaceTy Provenance) (allocation : AllocId) (tag : BorTag)
     (provenance : place.mplace.ptr.provenance = some (.concrete allocation tag))
     (live : machine.memory.live.any (fun row => row.1 == allocation) = true)

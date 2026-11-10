@@ -7,9 +7,7 @@ private def scalarText (scalar : Scalar CtfeProvenance) : String :=
   | .ok (.bits bits) => s!"int:{bits.toNat}"
   | .ok (.pointer p) => s!"ptr:{p.provenance.allocId.value}:{p.offset.bytes}:{p.provenance.immutable}:{p.provenance.sharedRef}"
   | .error e => s!"error:{e}"
-private def queries : ConstantQueries CtfeProvenance Unit Unit (Array String) := {
-  instantiateAndNormalize := fun _ _ => throw (.query "not used by const_val_to_op source comparison")
-  evaluate := fun _ _ _ => throw (.query "not used by const_val_to_op source comparison")
+private def queries : ConstantValueQueries CtfeProvenance Unit Unit (Array String) := {
   adjustGlobalRootPointer := fun p => do
     let state ← EStateM.get
     EStateM.set { state with hooks := state.hooks.push s!"root:{p.provenance.allocId.value}:{p.offset.bytes}:{p.provenance.immutable}:{p.provenance.sharedRef}" }
@@ -22,9 +20,6 @@ def main (args : List String) : IO Unit := do
   let runtime ← must ((RuntimeMetadata.ofDocument doc.document).mapError toString)
   let some ty := doc.document.types.find? (fun t => ((doc.document.layouts[t.layoutId]?).bind (·.sizeBytes)) == some 4 && t.shapeKind == .uint)
     | throw (IO.userError "fixture requires u32 layout")
-  let program ← must (lowerProgram doc.document)
-  let some root := program.input.bodyRoots[0]? | throw (IO.userError "canonical root instance missing")
-  let own := root.entryInstance
   let initial : MemoryState CtfeProvenance Unit Unit := { MemoryState.empty with nextAllocId := 100 }
   let registered := MemoryLifecycle.registerImportedGlobal initial () 0 .memory (.ofBytes 32) .ONE
   let _ ← must (registered.outcome.mapError toString)
@@ -38,7 +33,7 @@ def main (args : List String) : IO Unit := do
     ("pointer", .Scalar (.Ptr (.Allocation 0 6 false false)), pointerTy.id), ("zst", .ZeroSized, zstTy.id),
     ("slice", .Slice 0 11, sliceTy.id), ("indirect", .Indirect 0 6, ty.id)]
   for (name,value,tyId) in cases do
-    let state : ConstantState CtfeProvenance Unit Unit (Array String) := ⟨registered.memory, #[], own⟩
+    let state : ConstantState CtfeProvenance Unit Unit (Array String) := ⟨registered.memory, #[]⟩
     match constValueToOp runtime queries value tyId state with
     | .error e _ => throw (IO.userError (reprStr e))
     | .ok op after =>

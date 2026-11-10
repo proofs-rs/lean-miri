@@ -9,7 +9,8 @@ private def rejected : List String := [
   "duplicate-and-range-first", "out-of-range-type-id", "negative-type-id",
   "malformed-table-type-id", "dangling-type", "dangling-allocation", "dangling-instance",
   "malformed-type-reference", "malformed-allocation-reference", "malformed-instance-reference",
-  "empty-allocations", "empty-instances"]
+  "empty-allocations", "empty-instances", "dangling-body-instance",
+  "malformed-body-instance", "negative-body-instance"]
 
 def main (args : List String) : IO Unit := do
   let [directory] := args | throw (IO.userError "expected decoder ID case directory")

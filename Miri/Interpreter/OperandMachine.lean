@@ -1,4 +1,3 @@
-import Miri.Interpreter.OperandPath
 import Miri.Interpreter.PlaceDynamic
 import Miri.Interpreter.PlaceMachine
 
@@ -16,7 +15,6 @@ structure Hooks (K User C : Type) where
   runtimeChecks : C → RuntimeChecks → M K User Bool
   boolLayout : C → M K User LocalLayout
   constant : C → ConstOperand → Option LocalLayout → M K User (OpTy Provenance)
-  constantAt : C → OperandPath → ConstOperand → Option LocalLayout → M K User (OpTy Provenance) := fun c _ => constant c
 
 private def lift (result : Except StepError A) : M K User A :=
   match result with | .ok value => pure value | .error error => throw error
@@ -103,14 +101,4 @@ def evalOperand (h : Hooks K User C) (c : C) (operand : MIR.Operand) (known : Op
     let value ← h.runtimeChecks c checks
     let layout ← h.boolLayout c
     return ⟨.immediate (.scalar (.fromBool value)),layout⟩
-/-- The path is carried by the structural caller, not recovered from the operand. -/
-def evalOperandAt (h : Hooks K User C) (c : C) (path : OperandPath)
-    (operand : MIR.Operand) (known : Option LocalLayout) : M K User (OpTy Provenance) :=
-  match operand with
-  | .Constant value =>
-    -- OperandPath identifies the field holding the MIR Operand. Exported
-    -- ConstOperand query evidence is keyed at its nested `constant` payload,
-    -- so carry the final constructor edge rather than querying the wrapper.
-    h.constantAt c (path.push (.field "constant")) value known
-  | _ => evalOperand h c operand known
 end Miri.Interpreter.OperandMachine

@@ -1,4 +1,3 @@
-import Miri.Interpreter.OperandPath
 import Miri.Interpreter.Rvalue
 import Miri.Interpreter.LocalAccess
 
@@ -12,7 +11,6 @@ structure AggregateHooks (Prov S C V : Type) where
   target : TargetDataLayout
   placeLayout : V → LocalLayout
   evalOperand : C → MIR.Operand → Option LocalLayout → RvalueM S (OpTy Prov)
-  evalOperandAt : C → OperandPath → MIR.Operand → Option LocalLayout → RvalueM S (OpTy Prov) := fun c _ => evalOperand c
   readPointer : C → OpTy Prov → RvalueM S (Pointer (Option Prov))
   readScalar : C → OpTy Prov → RvalueM S (Scalar Prov)
   projectDowncast : C → V → MIR.VariantIndex → RvalueM S V
@@ -50,9 +48,9 @@ def writeAggregate (h : AggregateHooks P S C V) (choice : C)
       if operands.size != 2 then throw (.invalidProgram "raw pointer aggregate requires two operands")
       let some data := operands[0]? | throw (.invalidProgram "missing raw pointer data")
       let some metadataOperand := operands[1]? | throw (.invalidProgram "missing raw pointer metadata")
-      let data ← h.evalOperandAt choice (OperandPath.aggregate 0) data none
+      let data ← h.evalOperand choice data none
       let data ← h.readPointer choice data
-      let metadataOperand ← h.evalOperandAt choice (OperandPath.aggregate 1) metadataOperand none
+      let metadataOperand ← h.evalOperand choice metadataOperand none
       let metadata ← if metadataOperand.layout.layout.isZst then pure MemPlaceMeta.none
         else do pure (.metadata (← h.readScalar choice metadataOperand))
       let pointer ← match Immediate.newPointerWithMeta data metadata h.target with
@@ -67,7 +65,7 @@ def writeAggregate (h : AggregateHooks P S C V) (choice : C)
   for index in [:operands.size] do
     let some operand := operands[index]? | throw (.invalidProgram "aggregate operand index")
     let field ← h.projectField choice variantDest (activeField.getD index)
-    let operand ← h.evalOperandAt choice (OperandPath.aggregate index) operand (some (h.placeLayout field))
+    let operand ← h.evalOperand choice operand (some (h.placeLayout field))
     h.copyOpNoValidate choice operand field false
   h.writeDiscriminant choice variant dest
   if ← h.enforceValidity choice (h.placeLayout dest) then
@@ -79,7 +77,7 @@ Positive lengths copy once and replicate the resulting bytes; the source can
 alias the destination, so evaluating/copying every element would be incorrect. -/
 def writeRepeat (h : AggregateHooks P S C V) (choice : C)
     (operand : MIR.Operand) (dest : V) : RvalueM S Unit := do
-  let source ← h.evalOperandAt choice (OperandPath.rvalue "operand") operand none
+  let source ← h.evalOperand choice operand none
   if !source.layout.layout.isSized then throw (.invalidProgram "repeat source is unsized")
   let dest ← h.forceAllocation choice dest
   let length ← h.length choice dest

@@ -90,9 +90,15 @@ IDs retain compiler allocation identity even when bytes are equal. IDs are local
 to the document; exported `source_alloc_id` records the separate raw Miri AllocId.
 Generic arguments remain in their owning records, with type and type-constant
 references into the corresponding tables. `body_roots` records root metadata and
-body IDs; instance bodies, promoted bodies and normalization results also retain
-body IDs. Body keys distinguish templates, instantiated MIR and normalization
-query results, even when their serialized instructions coincide.
+body IDs. Each concrete instance and promoted index identifies one executable
+body, with generic arguments substituted, types normalized and constants
+evaluated before export. Roots and instance records reference that same body.
+Generic templates are not executable inputs; normalization or constant-evaluation
+failures abort export, including unused required constants. Diagnostic spans and
+scopes remain attached to the resolved instructions.
+This is a breaking wire-format change: earlier source/normalization-body
+snapshots must be regenerated. The reader requires each body's concrete
+`instance_id` and evaluated constants; it does not support the earlier shape.
 [Decoder](../Miri/Input/Decoder.lean) validates typed-table and query contracts.
 Successful query results are serialized directly: booleans remain booleans,
 optional results use JSON null, and structured results carry their semantic

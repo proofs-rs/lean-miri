@@ -1,4 +1,3 @@
-import Miri.Interpreter.OperandPath
 import Miri.Interpreter.Projection
 import Miri.Interpreter.Step
 import Miri.TreeBorrows.RetagPolicy
@@ -20,7 +19,6 @@ structure RvalueHooks (Prov S C V : Type) where
   placeLayout : V → TyAndLayout MIR.TyId
   evalPlace : C → MIR.Place → Bool → RvalueM S V
   evalOperand : C → MIR.Operand → Option (TyAndLayout MIR.TyId) → RvalueM S (OpTy Prov)
-  evalOperandAt : C → OperandPath → MIR.Operand → Option (TyAndLayout MIR.TyId) → RvalueM S (OpTy Prov) := fun c _ => evalOperand c
   evalPlaceToOp : C → MIR.Place → Option (TyAndLayout MIR.TyId) → RvalueM S (OpTy Prov)
   readImmediate : C → OpTy Prov → RvalueM S (RvalueImmTy Prov)
   writeImmediate : C → Immediate Prov → V → RvalueM S Unit
@@ -38,7 +36,6 @@ structure RvalueHooks (Prov S C V : Type) where
   enforceValidity : C → TyAndLayout MIR.TyId → RvalueM S Bool
   retagPtrValue : C → RvalueImmTy Prov → MIR.TyId → RvalueM S (Option (RvalueImmTy Prov))
   placeBaseRaw : C → MIR.Place → RvalueM S Bool
-  normalize : C → MIR.TyId → RvalueM S MIR.TyId
   cast : C → OpTy Prov → MIR.CastKind → MIR.TyId → V → RvalueM S Unit
   readDiscriminant : C → OpTy Prov → RvalueM S MIR.VariantIndex
   discriminantForVariant : C → MIR.TyId → MIR.VariantIndex → RvalueM S (RvalueImmTy Prov)
@@ -57,20 +54,20 @@ def evalRvalueIntoPlace (h : RvalueHooks P S C V) (choice : C)
       let ptr ← h.threadLocalPointer choice definition
       h.writePointer choice ptr dest
   | .Use operand retag =>
-      let op ← h.evalOperandAt choice (OperandPath.rvalue "operand") operand (some layout)
+      let op ← h.evalOperand choice operand (some layout)
       h.withRetagMode choice (if retag == .Yes then .Default else .None)
         (h.copyOp choice op dest)
   | .CopyForDeref _ => throw (.invalidProgram "CopyForDeref in runtime MIR")
   | .BinaryOp operator left right =>
-      let left ← h.evalOperandAt choice (OperandPath.rvalue "left") left (if operator.leftHomogeneous then some layout else none)
+      let left ← h.evalOperand choice left (if operator.leftHomogeneous then some layout else none)
       let left ← h.readImmediate choice left
-      let right ← h.evalOperandAt choice (OperandPath.rvalue "right") right (if operator.rightHomogeneous then some left.layout else none)
+      let right ← h.evalOperand choice right (if operator.rightHomogeneous then some left.layout else none)
       let right ← h.readImmediate choice right
       let result ← h.binaryOp choice operator left right
       assertRvalueLayout result.layout layout
       h.writeImmediate choice result.imm dest
   | .UnaryOp operator operand =>
-      let val ← h.evalOperandAt choice (OperandPath.rvalue "operand") operand (if operator.homogeneous then some layout else none)
+      let val ← h.evalOperand choice operand (if operator.homogeneous then some layout else none)
       let val ← h.readImmediate choice val
       let result ← h.unaryOp choice operator val
       assertRvalueLayout result.layout layout
@@ -103,8 +100,7 @@ def evalRvalueIntoPlace (h : RvalueHooks P S C V) (choice : C)
           return (← h.retagPtrValue choice val val.layout.ty).getD val
       h.writeImmediate choice val.imm dest
   | .Cast kind operand ty =>
-      let src ← h.evalOperandAt choice (OperandPath.rvalue "operand") operand none
-      let ty ← h.normalize choice ty
+      let src ← h.evalOperand choice operand none
       h.cast choice src kind ty dest
   | .Discriminant src =>
       let op ← h.evalPlaceToOp choice src none
@@ -112,7 +108,7 @@ def evalRvalueIntoPlace (h : RvalueHooks P S C V) (choice : C)
       let discr ← h.discriminantForVariant choice op.layout.ty variant
       h.writeImmediate choice discr.imm dest
   | .WrapUnsafeBinder operand _ =>
-      let op ← h.evalOperandAt choice (OperandPath.rvalue "operand") operand none
+      let op ← h.evalOperand choice operand none
       h.copyOpAllowTransmute choice op dest
 
 /-- Adapt the effect result to the statement driver's state-preserving result. -/

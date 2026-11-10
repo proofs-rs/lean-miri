@@ -10,10 +10,10 @@ private def context : DecodeMIR.Context := {
 private def source := "{\"span\":0,\"scope\":0}"
 private def literal (bits : String) :=
   "{\"kind\":\"Constant\",\"constant\":{\"type\":0,\"span\":0,\"user_type_annotation\":null," ++
-  "\"constant\":{\"kind\":\"evaluated_const\",\"source\":{\"kind\":\"already_evaluated\"}," ++
+  "\"constant\":{\"kind\":\"evaluated_const\"," ++
   "\"value\":{\"kind\":\"scalar\",\"bits_unsigned\":\"" ++ bits ++ "\"}}}}"
 private def body (bits : String) (localId : Nat := 0) :=
-  "{\"phase\":{\"kind\":\"built\"},\"arg_count\":0,\"spread_arg\":null," ++
+  "{\"phase\":{\"kind\":\"built\"},\"instance_id\":0,\"arg_count\":0,\"spread_arg\":null," ++
   "\"locals\":[{\"local\":0,\"type\":0,\"source_info\":" ++ source ++ "}]," ++
   "\"basic_blocks\":[{\"block\":0,\"is_cleanup\":false,\"statements\":[{" ++
   "\"source_info\":" ++ source ++ ",\"kind\":{\"variant\":\"Assign\",\"place\":{\"local\":" ++ toString localId ++
@@ -31,10 +31,6 @@ def main : IO Unit := do
   let some stmt := block.statements[0]? | throw (IO.userError "missing statement")
   let .Assign _ (.Use (.Constant constant) _) := stmt.kind | throw (IO.userError "wrong MIR constructors")
   unless constant.value == .Val (.Scalar (.Int 255 1)) 0 do throw (IO.userError "wrong scalar byte width")
-  let some facts := (result.nodeFacts[0]?).bind (·[0]?) | throw (IO.userError "missing node facts")
-  let some fact := facts.constants[0]? | throw (IO.userError "missing constant fact")
-  unless fact.path == #[.field "kind",.field "rvalue",.field "operand",.field "constant"] do
-    throw (IO.userError "constant structural path changed")
   unless (decode (body "256")).isOk == false do throw (IO.userError "oversized scalar accepted")
   unless (decode (body "0" 1)).isOk == false do throw (IO.userError "out-of-range place accepted")
   unless (decode ((body "0").replace "\"variant\":\"Return\"" "\"variant\":\"Goto\",\"target\":1,\"loop_hints\":[]")).isOk == false do

@@ -27,7 +27,7 @@ private def tlsInitializer : String := obj [("allocation", obj [
   ("bytes_hex", s ""), ("initialization_ranges", arr []), ("relocations", arr [])])]
 private def constant (ty span : Nat) : String := obj [
   ("type", n ty), ("user_type_annotation", nil), ("span", n span),
-  ("constant", tagged "evaluated_const" [("source", tagged "already_evaluated"), ("value", tagged "scalar" [("bits_unsigned", s "1")])])]
+  ("constant", tagged "evaluated_const" [("value", tagged "scalar" [("bits_unsigned", s "1")])])]
 
 private def rvalues (ty : Nat) : Array (String × Array (String × String)) := #[
   ("Use", #[("operand", op), ("retag", tagged "no" [("performs_retag", b false)])]),
@@ -84,7 +84,7 @@ private def source := obj [("span",n 0),("scope",n 0)]
 private def node (kind : String) := obj [("source_info",source),("kind",kind)]
 private def ret := obj [("variant",s "Return")]
 private def body (statements : List String) (term : String) := obj [
-  ("source_def_id",n 0),("phase",tagged "built"),("arg_count",n 0),("spread_arg",nil),
+  ("source_def_id",n 0),("instance_id",n 0),("phase",tagged "built"),("arg_count",n 0),("spread_arg",nil),
   ("span",n 0),("preamble_def_span",n 0),("backtrace_spans",arr []),("required_consts",arr []),
   ("locals",arr [obj [("local",n 0),("type",n 0),("source_info",source)]]),
   ("source_scopes",arr [obj [("scope",n 0),("parent",nil),("span",n 0),("inlined",nil),("inlined_parent_scope",nil)]]),

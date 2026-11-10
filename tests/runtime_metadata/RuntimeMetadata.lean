@@ -48,7 +48,7 @@ def main (args : List String) : IO Unit := do
   let first ← must ((RuntimeMetadata.require decoded.document.types[0]? "first type").mapError toString)
   let physical ← must ((RuntimeMetadata.require decoded.document.layouts[first.layoutId]? "first physical layout").mapError toString)
   check (!(RuntimeMetadata.layout metadata.target { physical with fields := none }).isOk) "missing fields accepted"
-  let missingSize := do JsonReader.run decodeCompilerLayout ("{\"kind\":\"layout\",\"field_offsets_bytes\":[]}")
+  let missingSize := do JsonReader.run DecoderValues.decodeCompilerLayout ("{\"kind\":\"layout\",\"field_offsets_bytes\":[]}")
   check (match missingSize with | .error reason => reason.contains "size/alignment" | .ok _ => false)
     "missing layout size was not rejected at the input boundary"
   let duplicate := { decoded.document with types := decoded.document.types.push first }

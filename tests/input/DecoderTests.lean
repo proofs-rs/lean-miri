@@ -100,9 +100,9 @@ def main (args : List String) : IO UInt32 := do
   check (document.producer.rustcCommit == expectedRustcCommit) "wrong rustc pin in decoded document"
   check (!document.bodies.isEmpty && !document.types.isEmpty) "typed body/type graph is empty"
   check (document.instances.any fun inst => inst.bodyId.isSome) "instance MIR body was not decoded into typed Body"
-  check (document.instances.any fun inst => inst.kind == .instanceMir && inst.bodyInstantiation.isSome &&
-      inst.instanceArgsAreMonomorphic == some true)
-    "substituted instance body metadata was not decoded"
+  check (document.instances.any fun inst => inst.kind == .instanceMir &&
+      inst.bodyId.any (fun id => (document.bodies[id]?).any (·.instanceId == inst.id)))
+    "resolved instance does not identify its executable body"
   check (document.bodyRoots.any fun body => body.promotedBodies.any fun promoted => promoted.bodyId.isSome)
     "promoted MIR bodies were not decoded into typed body cores"
   check ((rvalues document).any fun value => match value with | .BinaryOp .Lt .. => true | _ => false) "binary operator did not use the canonical BinOp type"

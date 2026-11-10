@@ -63,7 +63,7 @@ def i32 (prepared : Prepared) (name : String) : Except String Int32 := do
   let some integer := integer | throw "libc i32 bits exceed compiler scalar width"
   integer.toInt32 |>.mapError (fun error => reprStr error)
 
-def toOp [DecidableEq K] (prepared : Prepared) (queries : ConstantQueries P E K H) (name : String) :
+def toOp [DecidableEq K] (prepared : Prepared) (queries : ConstantValueQueries P E K H) (name : String) :
     ConstantM P E K H (OpTy P) := do
   let entry ← match value prepared name with
     | .ok value => pure value

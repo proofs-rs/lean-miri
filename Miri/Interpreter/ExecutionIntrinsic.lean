@@ -234,7 +234,6 @@ def make [DecidableEq K]
     (typeIdHooks : IntrinsicTypeIdHooks Provenance (State K U) C (RuntimePlace Provenance))
     (varArgsHooks : IntrinsicVarArgsHooks Provenance (State K U) C (RuntimePlace Provenance))
     (evalOperand : C → MIR.Operand → RvalueM (State K U) (OpTy Provenance))
-    (evalOperandAt : C → OperandPath → MIR.Operand → RvalueM (State K U) (OpTy Provenance))
     (derefPointer : C → OpTy Provenance → RvalueM (State K U) (RuntimePlace Provenance))
     (immPointerToPlace : C → RvalueImmTy Provenance → RvalueM (State K U) (OpTy Provenance))
     (scalarOps : ScalarOpsHooks Provenance (State K U) C)
@@ -273,7 +272,6 @@ def make [DecidableEq K]
     usizeLayout := leaves.usizeLayout
     isizeLayout := leaves.isizeLayout
     evalOperand := evalOperand
-    evalOperandAt := evalOperandAt
     derefPointer := derefPointer
     immPointerToPlace := immPointerToPlace
     scalarOps := scalarOps

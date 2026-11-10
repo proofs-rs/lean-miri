@@ -76,10 +76,11 @@ theorem imported_local_source_alignment (index : Fin imported.document.bodies.si
     (imported.document.bodies[index]).localSources.size =
       (imported.document.bodies[index]).mir.locals.size := by
   rcases index with ⟨index, bound⟩
-  have range : index = 0 ∨ index = 1 ∨ index = 2 ∨ index = 3 := by
-    change index < 4 at bound
+  have only : index = 0 := by
+    change index < 1 at bound
     omega
-  rcases range with h | h | h | h <;> subst index <;> rfl
+  subst index
+  rfl
 
 theorem imported_body_local_source_alignment (body : Input.Body)
     (member : body ∈ imported.document.bodies) :

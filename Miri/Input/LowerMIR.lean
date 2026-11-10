@@ -71,20 +71,6 @@ structure LoweredProgram where
   promoted : Array (Nat × Nat × Nat)
   input : ImportDocument
 
-/-- Normalization rows supply compiler evidence without becoming execution roots. -/
-def LoweredProgram.executableBodyIds (program : LoweredProgram) : Array Nat := Id.run do
-  let mut pending := program.roots ++ program.instances.map Prod.snd
-  let mut seen : Std.HashSet Nat := {}
-  while !pending.isEmpty do
-    let current := pending
-    pending := #[]
-    for id in current do
-      if seen.contains id then continue
-      seen := seen.insert id
-      for (parent, _, child) in program.promoted do
-        if parent == id then pending := pending.push child
-  return (Array.range program.bundle.bodies.size).filter seen.contains
-
 /-- Look up a document root's frame identity without assuming it was called
 or that source and runtime definition indices coincide. -/
 def LoweredProgram.rootDefinitionId (program : LoweredProgram) (rootIndex : Nat)

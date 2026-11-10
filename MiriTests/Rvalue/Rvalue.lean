@@ -43,7 +43,6 @@ private def hooks : RvalueHooks Unit Trace Unit Unit := {
   enforceValidity := fun _ _ => blocked "enforceValidity"
   retagPtrValue := fun _ _ _ => blocked "retagPtrValue"
   placeBaseRaw := fun _ _ => log "baseRaw" true
-  normalize := fun _ ty => log "normalize" ty
   cast := fun _ _ _ _ _ => blocked "cast"
   readDiscriminant := fun _ _ => blocked "readDiscriminant"
   discriminantForVariant := fun _ _ _ => blocked "discriminantForVariant" }
@@ -107,7 +106,7 @@ private def freshRaw : RvalueHooks Unit Trace Unit Unit := {
     ["place:true", "baseRaw", "place:false", "forceAllocation", "toRef", "writeImmediate"]) do throw (IO.userError "runtime assertion failed")
 #eval show IO Unit from do
   unless (trace (.Cast .IntToInt operand 0) =
-    ["place:true", "operand:false", "normalize", "cast"]) do throw (IO.userError "runtime assertion failed")
+    ["place:true", "operand:false", "cast"]) do throw (IO.userError "runtime assertion failed")
 #eval show IO Unit from do
   unless (trace (.Repeat operand 0) == ["place:true", "repeat"]) do throw (IO.userError "runtime assertion failed")
 #eval show IO Unit from do

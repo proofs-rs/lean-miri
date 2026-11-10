@@ -102,6 +102,13 @@ def main():
         doc["body_roots"][0]["entry_instance"] = value
         write(name, doc)
 
+    for name, value in [("dangling-body-instance", 10**30),
+                        ("malformed-body-instance", "bad"),
+                        ("negative-body-instance", -1)]:
+        doc = base()
+        doc["bodies"][0]["instance_id"] = value
+        write(name, doc)
+
     doc = base()
     doc["synthetic_debug_payload"] = {
         "status": "debug_payload", "type_id": 10**30,

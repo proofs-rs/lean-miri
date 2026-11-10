@@ -256,11 +256,11 @@ inductive PointerInput (s : Static) (before : State) (tracker : MachineHooks.Bor
         before.machine.user.addresses.exposed.contains row.allocId = true →
         WildcardCandidate before pointer row → Backing s before row.allocId)
 
-/-- Pure compiler binding for an arbitrary current caller, including generic
-local normalization. Neither query executes a memory/call/retag operation. -/
+/-- Pure compiler binding for an arbitrary current caller and its resolved
+local type. Neither query executes a memory/call/retag operation. -/
 structure LocalMetadata (s : Static) (caller : F) (id : LocalId) (layout : LocalLayout) where
   normalizedTy : TyId
-  normalization : Input.CompilerFrameContext.normalizedLocalType s.prepared.compiler caller id = .ok normalizedTy
+  normalization : Input.CompilerFrameContext.localType s.prepared.compiler caller id = .ok normalizedTy
   lookup : s.prepared.compiler.runtime.lookup normalizedTy = .ok layout
 
 /-- Raw extent of an existing nonzero enclosing local's indirect backing.

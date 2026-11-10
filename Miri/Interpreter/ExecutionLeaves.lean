@@ -7,7 +7,6 @@ namespace Miri.Interpreter.ExecutionLeaves
 open Miri.Memory
 structure Rvalue (S C : Type) where
   threadLocalPointer : C → MIR.DefId → RvalueM S (Pointer (Option Provenance))
-  normalize : C → MIR.TyId → RvalueM S MIR.TyId
 structure Discriminant (S C : Type) where
   discriminantLayout : C → MIR.TyId → RvalueM S LocalLayout
   tagLayout : C → ABI.Scalar → RvalueM S LocalLayout
@@ -23,7 +22,7 @@ structure Operand (S C : Type) where
   dereference : C → OpTy Provenance → RvalueM S (MPlaceTy Provenance)
   runtimeChecks : C → MIR.RuntimeChecks → RvalueM S Bool
   boolLayout : C → RvalueM S LocalLayout
-  constantAt : C → OperandPath → MIR.ConstOperand → Option LocalLayout → RvalueM S (OpTy Provenance)
+  constant : C → MIR.ConstOperand → Option LocalLayout → RvalueM S (OpTy Provenance)
 structure Control (P L E : Type) where
   bodySpan : Frame P L E → Except StepError MIR.SpanRef
 end Miri.Interpreter.ExecutionLeaves

@@ -51,6 +51,9 @@ private def testCallHooks : CallHooks Provenance TestState Unit MachineHooks.Fra
   readPointer := fun _ _ => fail
   getPtrFn := fun _ _ => fail
   resolve := fun _ _ _ => fail
+  instanceKind := fun _ => fail
+  instanceArgs := fun _ => fail
+  itemInstance := fun _ _ => fail
   fnAbiOfFnPtr := fun _ _ _ => fail
   fnAbiOfInstance := fun _ _ _ => fail
   requiresCallerLocation := fun _ => fail

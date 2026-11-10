@@ -1,4 +1,3 @@
-import Miri.Interpreter.OperandPath
 import Miri.Interpreter.Cast
 import Miri.Interpreter.IntrinsicFloat
 import Miri.Interpreter.Discriminant
@@ -33,7 +32,6 @@ structure IntrinsicHooks (P S C V : Type) where
   isizeLayout : C → RvalueM S (TyAndLayout TyId)
   readImmediate : C → OpTy P → RvalueM S (RvalueImmTy P)
   evalOperand : C → MIR.Operand → RvalueM S (OpTy P)
-  evalOperandAt : C → OperandPath → MIR.Operand → RvalueM S (OpTy P) := fun c _ => evalOperand c
   writeImmediate : C → Immediate P → V → RvalueM S Unit
   writePointer : C → Pointer (Option P) → V → RvalueM S Unit
   copyOp : C → OpTy P → V → RvalueM S Unit
@@ -559,24 +557,24 @@ def memoryCopyAdapter [DecidableEq K]
 
 /-- Source statement intrinsics preserve operand evaluation order and UB. -/
 def evalNondivergingWith [PointerProvenance P] (h : MemoryIntrinsicHooks P S C)
-    (evalOperandAt : C → OperandPath → MIR.Operand → RvalueM S (OpTy P)) (choice : C)
+    (evalOperand : C → MIR.Operand → RvalueM S (OpTy P)) (choice : C)
     (intrinsic : NonDivergingIntrinsic) : RvalueM S Unit := do
   match intrinsic with
   | .Assume condition =>
-    let op ← evalOperandAt choice (OperandPath.instruction "value") condition
+    let op ← evalOperand choice condition
     let value ← h.readImmediate choice op
     let scalar ← liftResult (value.imm.toScalar |>.mapError ScalarOps.immediateError)
     let condition ← liftResult (scalar.toBool |>.mapError ScalarOps.scalarError)
     if !condition then ub "assume called with false"
   | .CopyNonOverlapping args =>
-    let source ← evalOperandAt choice (OperandPath.instruction "src") args.source
-    let dest ← evalOperandAt choice (OperandPath.instruction "dst") args.destination
-    let count ← evalOperandAt choice (OperandPath.instruction "count") args.count
+    let source ← evalOperand choice args.source
+    let dest ← evalOperand choice args.destination
+    let count ← evalOperand choice args.count
     copyWith h choice source dest count true
 
 def evalNondiverging [PointerProvenance P] (h : IntrinsicHooks P S C V) (choice : C)
     (intrinsic : NonDivergingIntrinsic) : RvalueM S Unit :=
-  evalNondivergingWith h.memory h.evalOperandAt choice intrinsic
+  evalNondivergingWith h.memory h.evalOperand choice intrinsic
 
 end Intrinsics
 end Miri.Interpreter

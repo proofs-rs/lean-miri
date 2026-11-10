@@ -179,6 +179,39 @@ class FailClosedExportTests(unittest.TestCase):
         self.assertNotIn("reported compilation errors", result.stderr)
         self.assertFalse(self.output.exists())
 
+    def test_resolved_generic_has_one_body_and_no_source_constant_payload(self):
+        document = self.accepted("resolved_generic", "root")
+        bodies = document["bodies"]
+        self.assertEqual(len({(body["instance_id"], body.get("source_promoted"))
+                              for body in bodies}), len(bodies))
+        resolved = [row for row in document["instances"]
+                    if row.get("def_path", "").endswith("resolved")]
+        self.assertTrue(resolved)
+        body = pool_entry(document, "bodies", resolved[0]["body"])
+        self.assertEqual(body["instance_id"], resolved[0]["instance_id"])
+        self.assertTrue(any(pool_entry(document, "types", local["type"])["shape"].get("kind")
+                            == "raw_pointer" for local in body["locals"]))
+
+        def inspect(value):
+            if isinstance(value, dict):
+                self.assertNotIn("constant_query_context", value)
+                self.assertNotIn("source_body_is_polymorphic", value)
+                if value.get("kind") == "evaluated_const":
+                    self.assertEqual(set(value), {"kind", "value"})
+                for child in value.values():
+                    inspect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    inspect(child)
+
+        inspect(document)
+
+    def test_unused_required_constant_failure_aborts_without_output(self):
+        result = self.export("unused_required_const", "root")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("evaluation", result.stderr.lower())
+        self.assertFalse(self.output.exists())
+
     def test_producer_hash_failure_aborts_without_output(self):
         commands = Path(self.directory.name) / "commands"
         commands.mkdir()

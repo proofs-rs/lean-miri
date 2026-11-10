@@ -106,7 +106,6 @@ private def rvalueHooks : RvalueHooks AllocId Trace Unit Unit where
   enforceValidity := fun _ _ => blocked "validity"
   retagPtrValue := fun _ _ _ => blocked "retag"
   placeBaseRaw := fun _ _ => blocked "baseRaw"
-  normalize := fun _ _ => blocked "normalize"
   cast := fun _ _ _ _ _ => blocked "cast"
   readDiscriminant := fun _ _ => blocked "discriminant"
   discriminantForVariant := fun _ _ _ => blocked "discriminantValue"

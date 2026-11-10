@@ -44,7 +44,7 @@ def cached (frame : F) (id : MIR.LocalId) (slot : LocalState Provenance LocalLay
 
  theorem local_layout (p : CompilerProviders.Prepared) (layout : LocalLayout)
     (frames : Array F) (frame : F) (machine : MachineHooks.MachineState K U) (id : MIR.LocalId)
-    (normalized : CompilerFrameContext.normalizedLocalType p frame id = .ok layout.ty)
+    (normalized : CompilerFrameContext.localType p frame id = .ok layout.ty)
     (lookup : p.runtime.lookup layout.ty = .ok layout) :
     CompilerFrameContext.computeLocalLayout p id (LocalUnit.current frames frame machine) =
       .ok layout (LocalUnit.current frames frame machine) := by

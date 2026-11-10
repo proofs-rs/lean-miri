@@ -20,7 +20,7 @@ def leaves (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
  theorem local_layout (p : CompilerProviders.Prepared) (unit : LocalLayout)
     (frames : Array BodyStep.F) (frame : BodyStep.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
-    (normalized : CompilerFrameContext.normalizedLocalType p
+    (normalized : CompilerFrameContext.localType p
       (BodyStep.withUnit frame .uninit none) 0 = .ok unit.ty)
     (lookup : p.runtime.lookup unit.ty = .ok unit) :
     CompilerFrameContext.computeLocalLayout p 0

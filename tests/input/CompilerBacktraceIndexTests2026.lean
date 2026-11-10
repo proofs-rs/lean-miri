@@ -21,7 +21,7 @@ def main (args : List String) : IO Unit := do
   let decoded ← must (decodeJson (← IO.FS.readFile path))
   let program ← must (lowerProgram decoded.document)
   let baseline ← must (CompilerBacktraceSource.prepare program)
-  let some firstIndex := program.executableBodyIds.find? (fun index =>
+  let some firstIndex := (List.range program.bundle.bodies.size).toArray.find? (fun index =>
       ((program.bundle.bodies[index]?).map fun body => !body.input.backtraceSpans.isEmpty).getD false)
     | throw (IO.userError "fixture has no executable body source-map rows")
   let some firstBody := program.bundle.bodies[firstIndex]? | throw (IO.userError "body disappeared")
@@ -33,10 +33,10 @@ def main (args : List String) : IO Unit := do
   check (error == "conflicting body/span hygiene query") "body conflict diagnostic changed"
   check (conflict.bodySpans.size == baseline.bodySpans.size) "body error stopped later body preparation"
 
-  let some nextIndex := program.executableBodyIds.find? (· > firstIndex)
+  let some nextIndex := (List.range program.bundle.bodies.size).toArray.find? (· > firstIndex)
     | throw (IO.userError "fixture needs a later executable body")
   let mut cleared := program
-  for index in program.executableBodyIds do
+  for index in (List.range program.bundle.bodies.size).toArray do
     cleared ← must (replaceSpans cleared index #[])
   let firstOnly ← must (replaceSpans cleared firstIndex #[firstRow])
   let crossConflict ← must (replaceSpans firstOnly nextIndex #[changed])

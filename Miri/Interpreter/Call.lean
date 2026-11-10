@@ -1,5 +1,4 @@
 import Miri.ABI.FnAbi
-import Miri.Interpreter.OperandPath
 import Miri.Interpreter.ControlFlow
 import Miri.Interpreter.Rvalue
 import Miri.Interpreter.LocalAccess
@@ -67,7 +66,6 @@ structure CallHooks (P S C E Other Extern FnABI ArgABI : Type) where
   setFrame : Frame P LocalLayout E → CallM S Unit
   frameIndex : CallM S Nat
   evalOperand : C → MIR.Operand → CallM S (OpTy P)
-  evalOperandAt : C → OperandPath → MIR.Operand → CallM S (OpTy P) := fun c _ => evalOperand c
   evalPlace : C → MIR.Place → Bool → CallM S (RuntimeStackPlace P)
   placeToOp : C → RuntimeStackPlace P → CallM S (OpTy P)
   forceAllocation : C → RuntimeStackPlace P → CallM S (MPlaceTy P)
@@ -164,10 +162,10 @@ def moveDefinitelyDisjoint (args : Array SpannedOperand) (dest : Place) : Bool :
     seen := seen.push place.localId
   return true
 
-def evalFnCallArgumentAt (h : Hooks) (choice : C) (operand : MIR.Operand)
-    (disjoint : Bool) (path : OperandPath) : M (FnArg P) := do
+def evalFnCallArgument (h : Hooks) (choice : C) (operand : MIR.Operand)
+    (disjoint : Bool) : M (FnArg P) := do
   match operand with
-  | .Copy _ | .Constant _ | .RuntimeChecks _ => return .Copy (← h.evalOperandAt choice path operand)
+  | .Copy _ | .Constant _ | .RuntimeChecks _ => return .Copy (← h.evalOperand choice operand)
   | .Move place =>
     let place ← h.evalPlace choice place true
     if disjoint then
@@ -177,18 +175,14 @@ def evalFnCallArgumentAt (h : Hooks) (choice : C) (operand : MIR.Operand)
       | .immediate _ => return .Copy op
     else return .InPlace (← h.forceAllocation choice place)
 
-def evalFnCallArgument (h : Hooks) (choice : C) (operand : MIR.Operand)
-    (disjoint : Bool) : M (FnArg P) :=
-  evalFnCallArgumentAt h choice operand disjoint #[]
-
 def evalCalleeAndArgs (h : Hooks) (choice : C) (func : MIR.Operand)
     (args : Array SpannedOperand) (dest : Place) : M (EvaluatedCall P Other Extern FnABI) := do
-  let func ← h.evalOperandAt choice (OperandPath.instruction "function") func
+  let func ← h.evalOperand choice func
   let disjoint := moveDefinitelyDisjoint args dest
   let mut evaluated := #[]
   for index in [:args.size] do
     let some arg := args[index]? | throw (.invalidProgram "missing source call argument")
-    evaluated := evaluated.push (← evalFnCallArgumentAt h choice arg.operand disjoint (OperandPath.argument index))
+    evaluated := evaluated.push (← evalFnCallArgument h choice arg.operand disjoint)
   let (inputCount, externAbi) ← h.functionSignature choice func.layout
   require (inputCount ≤ evaluated.size) "call has fewer args than normalized signature"
   let extra := (evaluated.extract inputCount evaluated.size).map fun arg => arg.layout.ty

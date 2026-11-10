@@ -41,13 +41,9 @@ def main(path):
                 f"{def_path} is not an Item instance: {row['instance_kind']}")
         require(row["kind"] == "instance_mir" and "status" not in row,
                 f"{def_path} is not supported instance MIR: {row['kind']}")
-        require(row["body_instantiation"] == {"kind": "substituted_and_normalized"},
-                f"{def_path} body was not normalized: {row.get('body_instantiation')}")
-        require(row["instance_args_are_monomorphic"] is True,
-                f"{def_path} arguments are not monomorphic")
-        require(row["body_template_is_polymorphic"] is False,
-                f"{def_path} body template is polymorphic")
         body = pool_entry(document, "bodies", row["body"])
+        require(body["instance_id"] == row["instance_id"],
+                f"{def_path} body belongs to another concrete instance")
         require(pool_entry(document, "definitions", body["source_def_id"]) == {"crate": crate, "index": index},
                 f"{def_path} loaded body has a different source DefId")
         require(body["source_instance_kind"] == row["instance_kind"],

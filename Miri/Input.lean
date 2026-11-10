@@ -5,7 +5,6 @@ import Miri.Input.AllocationImage
 import Miri.Input.CompilerGlobals
 import Miri.Input.CompilerInstance
 import Miri.Input.CompilerThreadLocal
-import Miri.Input.CompilerConstantQueries
 import Miri.Input.CallCompatibility
 import Miri.Input.CallResolution
 import Miri.Input.CompilerFacts
@@ -31,7 +30,6 @@ import Miri.Input.CompilerCpuAffinity
 import Miri.Input.CompilerVTableQueries
 import Miri.Input.CompilerUnixMemoryQueries
 import Miri.Input.CompilerShimSignatures
-import Miri.Input.CompilerConstantMachine
 import Miri.Input.CompilerVTableMachine
 import Miri.Input.EvalWorld
 import Miri.Input.EvalCoreMachine
@@ -40,7 +38,6 @@ import Miri.Input.InitialMachine
 import Miri.Input.CompilerLinuxSyscall
 import Miri.Input.CompilerUnixThreadDispatch
 import Miri.Input.CompilerRandomDispatch
-import Miri.Input.CompilerOperandSites
 import Miri.Input.HostRuntime
 import Miri.Input.MachineConstruction
 import Miri.Input.EvalHostMachine

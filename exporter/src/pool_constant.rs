@@ -1,25 +1,5 @@
 //! Typed compiler-evaluated MIR constants, preserving pointer provenance.
-use crate::pool_values::GenericArgument;
 use serde::Serialize;
-#[derive(Clone, Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub(crate) enum Source {
-    TypeSystemConst {
-        #[serde(rename = "type")]
-        ty: u64,
-        #[serde(rename = "const")]
-        constant: u64,
-    },
-    Unevaluated {
-        def_id: u64,
-        def_path: String,
-        generic_args: Vec<GenericArgument>,
-        promoted: Option<u32>,
-        #[serde(rename = "type")]
-        ty: u64,
-    },
-    AlreadyEvaluated,
-}
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum Value {
@@ -67,7 +47,7 @@ pub(crate) enum Annotation {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum Constant {
-    EvaluatedConst { source: Source, value: Value },
+    EvaluatedConst { value: Value },
 }
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct Operand {
@@ -77,23 +57,6 @@ pub(crate) struct Operand {
     pub constant: Constant,
     pub span: u64,
 }
-#[derive(Clone, Debug, Serialize)]
-pub(crate) struct RequiredConstantChecks {
-    pub typing_env: &'static str,
-    pub checks: Vec<RequiredConstantCheck>,
-}
-#[derive(Clone, Debug, Serialize)]
-pub(crate) struct RequiredConstantCheck {
-    pub index: usize,
-    pub span: u64,
-    pub result: RequiredConstantResult,
-}
-#[derive(Clone, Debug, Serialize)]
-pub(crate) struct RequiredConstantResult {
-    pub normalized_operand: Operand,
-    pub value: Value,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

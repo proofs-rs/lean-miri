@@ -3,7 +3,6 @@ import Miri.Memory.CtfeProvenance
 import Miri.MIR.Operators
 import Miri.ABI.ExternAbi
 import Miri.Interpreter.Instance
-import Miri.Interpreter.OperandPath
 
 /-!
 Typed data model for the pinned rustc MIR export.  These structures describe
@@ -712,26 +711,15 @@ structure LocalDecl where
   typeId : TypeId
   sourceInfo : SourceInfo
 
-inductive BodyInputPhase where
-  | template | alreadyInstantiated
-  deriving Repr, DecidableEq
-
 structure ThreadLocalEvidence where
   definition : DefinitionRef
   info : StaticGlobalInfo
   initializer : Option AllocationMemory
 
 structure PlaceFact where
-  path : Miri.Interpreter.OperandPath
   place : Miri.MIR.Place
   typeId : TypeId
   projectionTypes : Array TypeId
-
-structure ConstantFact where
-  path : Miri.Interpreter.OperandPath
-  operand : Miri.MIR.ConstOperand
-  typeId : TypeId
-  evaluated : Miri.MIR.ConstValue
 
 structure DynamicUpcastEvidence where
   operandType : TypeId
@@ -747,22 +735,9 @@ structure DynamicUpcastEvidence where
 
 structure NodeFacts where
   places : Array PlaceFact := #[]
-  constants : Array ConstantFact := #[]
+  constantAllocations : Array AllocationId := #[]
   threadLocals : Array ThreadLocalEvidence := #[]
   dynamicUpcasts : Array DynamicUpcastEvidence := #[]
-
-structure RequiredConstantCheck where
-  index : Nat
-  spanId : SpanId
-  normalizedOperand : Miri.MIR.ConstOperand
-  value : Miri.MIR.ConstValue
-
-structure ConstantQueryContext where
-  instanceId : InstanceId
-  inputPhase : BodyInputPhase
-  normalizationBodyId : BodyId
-  requiredTypingEnvironment : String
-  requiredChecks : Array RequiredConstantCheck
 
 structure BodyCore where
   mir : Miri.MIR.Body
@@ -772,14 +747,13 @@ structure BodyCore where
   spanId : SpanId
   preambleDefSpanId : SpanId
   injectionPhase : Option Miri.MIR.MirPhase
-  isPolymorphic : Option Bool := none
+  instanceId : InstanceId
   localSources : Array SourceInfo
   sourceScopes : Array SourceScope
   backtraceSpans : Array BacktraceSpan
   callEvidence : Array (Option CallResolutionEvidence)
   nodeFacts : Array (Array NodeFacts)
-  requiredConsts : Option (Array Miri.MIR.ConstOperand)
-  constantQueryContext : Option ConstantQueryContext
+  requiredConsts : Array Miri.MIR.ConstOperand
 
 def BodyCore.threadLocals (body : BodyCore) : Array ThreadLocalEvidence :=
   (body.nodeFacts.map fun block => (block.map (·.threadLocals)).flatten).flatten
@@ -807,9 +781,6 @@ structure InstanceNode where
   kind : InstanceKind
   defPath : Option String
   definitionId : Option DefinitionRef
-  bodyInstantiation : Option TaggedNode
-  bodyTemplateIsPolymorphic : Option Bool
-  instanceArgsAreMonomorphic : Option Bool
   bodyId : Option BodyId
   promotedBodies : Array PromotedBody
   dispatchSlot : Option Nat := none

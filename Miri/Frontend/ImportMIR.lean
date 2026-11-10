@@ -85,7 +85,6 @@ deriving instance ToExpr for MIR.GenericArg
 deriving instance ToExpr for MIR.ValTreeNode
 deriving instance ToExpr for MIR.ValTree
 deriving instance ToExpr for MIR.TypeConst
-deriving instance ToExpr for MIR.UnevaluatedConst
 deriving instance ToExpr for MIR.MirConst
 deriving instance ToExpr for MIR.ConstOperand
 deriving instance ToExpr for MIR.ProjectionElem
@@ -112,7 +111,6 @@ deriving instance ToExpr for MIR.Statement
 deriving instance ToExpr for MIR.Terminator
 deriving instance ToExpr for MIR.BasicBlock
 deriving instance ToExpr for MIR.Body
-deriving instance ToExpr for Interpreter.OperandPathElement
 deriving instance ToExpr for Interpreter.CallReifyReason
 deriving instance ToExpr for Interpreter.CallShimKind
 deriving instance ToExpr for Interpreter.CallInstanceKind
@@ -210,14 +208,10 @@ deriving instance ToExpr for Input.SourceScope
 deriving instance ToExpr for Input.CompilerSourcePosition
 deriving instance ToExpr for Input.BacktraceSpan
 deriving instance ToExpr for Input.LocalDecl
-deriving instance ToExpr for Input.BodyInputPhase
 deriving instance ToExpr for Input.ThreadLocalEvidence
 deriving instance ToExpr for Input.PlaceFact
-deriving instance ToExpr for Input.ConstantFact
 deriving instance ToExpr for Input.DynamicUpcastEvidence
 deriving instance ToExpr for Input.NodeFacts
-deriving instance ToExpr for Input.RequiredConstantCheck
-deriving instance ToExpr for Input.ConstantQueryContext
 deriving instance ToExpr for Input.BodyCore
 deriving instance ToExpr for Input.PromotedBody
 deriving instance ToExpr for Input.Body

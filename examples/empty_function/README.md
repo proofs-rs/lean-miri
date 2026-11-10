@@ -46,7 +46,8 @@ interleavings and later caller execution are outside this theorem.
 Miri source additions expose proof-only APIs; the interpreter implementation
 is unchanged by this example. The fixed Rust/MIR hashes are recorded in
 `SHA256SUMS`. The schema-4 input retains canonical instance, body, type, layout
-and span IDs; metadata premises refer to checked table lookups and span bounds. The proof-only reflected MIR block is `noncomputable` to avoid
+and span IDs. Each concrete instance has one resolved body with evaluated
+constants; metadata premises refer to checked table lookups and span bounds. The proof-only reflected MIR block is `noncomputable` to avoid
 a Lean native-code-generation boxing panic; no native executable validation
 of that block is claimed.
 

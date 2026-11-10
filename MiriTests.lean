@@ -19,6 +19,7 @@ import MiriTests.Connected.Proofs.ScEventProof202
 import MiriTests.Connected.Proofs.SelectorProof195
 import MiriTests.ControlFlow.Transitions
 import MiriTests.FloatOps.Typed
+import MiriTests.Input.JsonFixtures
 import MiriTests.Input.CompilerForeignSymbolTables
 import MiriTests.Input.DecoderProfile2026
 import MiriTests.Input.DefinitionLookup2026

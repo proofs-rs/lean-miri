@@ -205,7 +205,8 @@ private def runPrepared (prepared : Input.EvalPreparation.Prepared)
   let compiler := prepared.compiler
   let dummy := prepared.dummySpan
   let definition ← compiler.program.rootDefinitionId 0
-  let rootInstance : CallInstance := ⟨.Item definition, #[]⟩
+  let rootInstance ← Input.CompilerInstance.item compiler.loweringContext
+    compiler.program.compilerTables definition #[]
   let _body ← Input.CallResolution.loadedBodyOfInstance compiler.lifecycle.calls.calls rootInstance
   let image := prepared.image
   let arrays ← compiler.initialArrays

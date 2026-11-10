@@ -39,7 +39,7 @@ def main (args : List String) : IO Unit := do
   if let some inst := knownGeneric then
     let some bodyId := inst.bodyId | throw (IO.userError "generic instance lost its body ID")
     let some generic := program.bundle.bodies[bodyId]? | throw (IO.userError "generic instance body is absent")
-    unless generic.input.isPolymorphic == some false && generic.obligations.isEmpty do
+    unless generic.input.instanceId == inst.id && generic.obligations.isEmpty do
       throw (IO.userError "concrete generic instantiation retained unresolved parameters")
   let knownTLS := doc.bodyRoots.find? (fun root => root.defPath.endsWith "read_tls")
   if let some root := knownTLS then

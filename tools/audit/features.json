@@ -173,7 +173,7 @@
         "Miri/Input/CompilerInstance.lean",
         "Miri/Input/CompilerThreadLocal.lean",
         "Miri/Interpreter/ThreadLocal.lean",
-        "Miri/Input/CompilerConstantQueries.lean"
+        "Miri/Interpreter/ConstantMachine.lean"
       ],
       "proofs": [],
       "source_modules": [
@@ -3572,8 +3572,7 @@
         "Miri/Interpreter/FunctionPointerConsumers.lean",
         "Miri/Interpreter/VTableMachine.lean",
         "Miri/Interpreter/ConstantMachine.lean",
-        "Miri/Input/CompilerVTableMachine.lean",
-        "Miri/Input/CompilerConstantMachine.lean"
+        "Miri/Input/CompilerVTableMachine.lean"
       ],
       "proofs": [],
       "source_modules": [
@@ -3957,12 +3956,10 @@
       "tests": []
     },
     {
-      "description": "Connected source port. See linked code/assertions/theorems for scope; current outstanding work is in STATUS.md.",
+      "description": "Resolved executable MIR operands use direct compiler values and runtime pointer conversion. Diagnostic spans remain attached to instructions; no source operand matching is needed. See linked code/assertions/theorems for scope; current outstanding work is in STATUS.md.",
       "id": "wave18.source_operand_sites",
       "kind": "semantic_feature",
       "lean_definitions": [
-        "Miri/Interpreter/OperandPath.lean",
-        "Miri/Input/CompilerOperandSites.lean",
         "Miri/Interpreter/Rvalue.lean",
         "Miri/Interpreter/Aggregate.lean",
         "Miri/Interpreter/Call.lean",
@@ -3970,8 +3967,7 @@
         "Miri/Interpreter/Intrinsics.lean",
         "Miri/Interpreter/OperandMachine.lean",
         "Miri/Interpreter/Constant.lean",
-        "Miri/Interpreter/ConstantMachine.lean",
-        "Miri/Input/CompilerConstantMachine.lean"
+        "Miri/Interpreter/ConstantMachine.lean"
       ],
       "proofs": [],
       "source_modules": [
@@ -4295,8 +4291,7 @@
         "Miri/Interpreter/ExecutionLeaves.lean",
         "Miri/Interpreter/ExecutionMachine.lean",
         "Miri/Input/CompilerFrameContext.lean",
-        "Miri/Input/CompilerExecutionFacts.lean",
-        "Miri/Input/CompilerOperandSites.lean"
+        "Miri/Input/CompilerExecutionFacts.lean"
       ],
       "proofs": [],
       "source_modules": [
