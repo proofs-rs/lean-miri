@@ -24,6 +24,20 @@ queries = document["compiler_runtime_queries"]
 virtual_rows = queries["virtual"]
 covariance = document["compiler_covariance_queries"]
 
+# The catalog is a projection of the final pool. Each exact ordered pair must
+# occur once, retain both boolean answers, and reference fully emitted types.
+pair_keys = [(row["source_type"], row["target_type"]) for row in covariance]
+require(pair_keys == sorted(set(pair_keys)),
+        "covariance pairs are duplicated or not in numeric type-ID order")
+for row in covariance:
+    require(row["source_type"] in types and row["target_type"] in types,
+            "covariance pair references a missing type definition")
+    require(row["source_type"] != row["target_type"],
+            "covariance catalog contains a redundant reflexive pair")
+    require(type(row["value"]) is bool,
+            "covariance answer is not a compiler boolean")
+
+
 
 def display(type_ref):
     if not isinstance(type_ref, int):
@@ -44,6 +58,13 @@ def relation_ids(source_ref, target_ref):
         and type_id(row.get("target_type")) == target_id
         for row in covariance
     )
+
+
+def require_false_relation(source_ref, target_ref, label):
+    rows = [row for row in covariance
+            if row["source_type"] == source_ref and row["target_type"] == target_ref]
+    require(len(rows) == 1 and rows[0]["value"] is False,
+            f"{label}: exact negative covariance answer was lost")
 
 
 def require_transfer(source_ref, target_ref, label):
@@ -188,6 +209,9 @@ receiver_source = next(
 receiver_target = local_type_ref(virtual_target_body, 1)
 require(receiver_source is not None and receiver_target is not None and relation_ids(receiver_source, receiver_target),
         "exact virtual receiver transfer from *mut ConcreteObject to callee local is absent")
+# Receiver ABI compatibility does not make a raw pointer covariant with a
+# reference. Demand discovery must preserve this negative compiler answer.
+require_false_relation(receiver_source, receiver_target, "virtual receiver")
 virtual_argument_source = operand_type_ref(virtual_callsite.get("args", [{}, {}])[1].get("operand"))
 virtual_argument_target = local_type_ref(virtual_target_body, 2)
 virtual_return_source = local_type_ref(virtual_target_body, 0)
@@ -265,6 +289,9 @@ require_transfer(callback_return_source, unit_pointer_destination,
                 "pthread generated callback return")
 require(type_id(callback_return_source) != type_id(unit_pointer_destination),
         "pthread callback return did not exercise *mut c_void to *mut ()")
+
+require_false_relation(callback_return_source, unit_pointer_destination,
+                       "pthread generated callback return")
 
 # Confirm the registration call itself is retained as an indirect FnPtr call
 # and its exact foreign function identity is in the exported instance graph.
