@@ -33,12 +33,7 @@ private def globals (image : AllocationImage.Imported) : GlobalAllocationHooks C
   adjustGlobalAllocation := fun memory state _ allocation => ⟨memory, state.push "adjust", .ok (.owned allocation)⟩
 }
 
-private def constantQueries (program : LoweredProgram) : ConstantQueries CtfeProvenance Unit Unit (Array String) := {
-  instantiateAndNormalize := fun fnInstance constant => do
-    let some identity := program.input.instances[fnInstance]? | throw (.query "fixture instance ID missing")
-    unless identity.genericArgs.isEmpty do throw (.query "fixture normalization requires monomorphic empty InstanceArgs")
-    pure constant
-  evaluate := fun _ _ _ => throw (.query "no compiler type-constant evaluation evidence in this fixture adapter")
+private def constantQueries (_program : LoweredProgram) : ConstantValueQueries CtfeProvenance Unit Unit (Array String) := {
   adjustGlobalRootPointer := fun pointer => do
     let state ← EStateM.get
     EStateM.set { state with hooks := state.hooks.push "root" }
@@ -81,9 +76,8 @@ def main (args : List String) : IO Unit := do
   check (second.hooks == first.hooks) "cached owned global repeated initializer/hooks"
   let some primitive := decoded.document.types.find? (fun ty => ty.shapeKind == .uint && ((decoded.document.layouts[ty.layoutId]?).bind (·.sizeBytes)) == some 4)
     | throw (IO.userError "fixture lacks u32 layout")
-  let some root := program.input.bodyRoots[0]? | throw (IO.userError "canonical root instance missing")
   let state : ConstantState CtfeProvenance Unit Unit (Array String) :=
-    ⟨imported.memory, #[], root.entryInstance⟩
+    ⟨imported.memory, #[]⟩
   match constValueToOp runtime (constantQueries program) (.Indirect static.id 0) primitive.id state with
   | .error error _ => throw (IO.userError (reprStr error))
   | .ok operand after =>
@@ -103,11 +97,8 @@ def main (args : List String) : IO Unit := do
       | none, .Assign _ (.Use (.Constant constant) _) => some constant
       | none, _ => none) found) (none : Option MIR.ConstOperand)
   let some actualConstant := actualConstant | throw (IO.userError "actual compiler constant operand was lost")
-  let definition ← must staticRefBody.ownDefinitionId
-  let some identity := program.input.instances.find? (fun row => row.instanceKind == .Item definition && row.genericArgs.isEmpty)
-    | throw (IO.userError "canonical static instance missing")
-  let actualState := { state with currentInstance := identity.id }
-  match evalConstOperand runtime (constantQueries program) actualConstant actualState with
+  let actualState := state
+  match (let .Val value ty := actualConstant.value; constValueToOp runtime (constantQueries program) value ty actualState) with
   | .error error _ => throw (IO.userError (reprStr error))
   | .ok actual after =>
     match actual.op with
@@ -128,12 +119,4 @@ def main (args : List String) : IO Unit := do
     check (after.hooks == #["root"]) "actual constant operand initialized static eagerly"
   let unknown := AllocationImage.runtimeId imported.memory 999999
   check (!unknown.isOk) "missing compiler allocation metadata accepted"
-  let parameterId := runtime.source.typeConstants.size
-  let parameterRuntime := { runtime with source := { runtime.source with
-    typeConstants := runtime.source.typeConstants.push (.Param 0 "N" none) } }
-  let parameter : MIR.MirConst := .Ty primitive.id parameterId
-  let result := evalMirConstant parameterRuntime (constantQueries program) parameter ⟨0⟩ state
-  match result with
-  | .error (.query _) _ => pure ()
-  | _ => throw (IO.userError "unknown generic constant became a successful default")
   IO.println s!"actual compiler graph imported: {image.source.size} globals; relocation identity/flags, lazy initializer order/cache, indirect constant root and missing-query rejection passed"

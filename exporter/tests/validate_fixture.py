@@ -107,10 +107,8 @@ id_instance = next(
     for instance in instances.values()
     if instance.get("def_path") == "id"
     and instance.get("kind") == "instance_mir"
-    and instance.get("body_instantiation", {}).get("kind") == "substituted_and_normalized"
 )
-assert id_instance["instance_args_are_monomorphic"]
-assert not pool_entry(doc, "bodies", id_instance["body"])["is_polymorphic"], "generic instance body was not actually substituted"
+assert pool_entry(doc, "bodies", id_instance["body"])["instance_id"] == id_instance["instance_id"]
 assert id_instance["instance_kind"] == {"kind": "item", "def_id": id_instance["def_id"]}
 assert any(type_nodes[local["type"]]["display"] == "u32" for local in pool_entry(doc, "bodies", id_instance["body"])["locals"])
 assert not any(
@@ -122,13 +120,12 @@ array_instance = next(
     for instance in instances.values()
     if instance.get("def_path") == "array_len"
     and instance.get("kind") == "instance_mir"
-    and instance.get("body_instantiation", {}).get("kind") == "substituted_and_normalized"
 )
+assert pool_entry(doc, "bodies", array_instance["body"])["instance_id"] == array_instance["instance_id"]
 const_arg = pool_entry(doc, "type_constants", next(arg["value"] for arg in array_instance["generic_args"] if arg["kind"] == "const"))
 assert const_arg["kind"] == "value" and const_arg["value"] == {
     "bits_unsigned": "3", "kind": "leaf", "size_bytes": 8
 }, "monomorphized generic const argument must be structurally exported"
-assert array_instance["instance_args_are_monomorphic"]
 assert any(
     instance.get("kind") == "intrinsic_dispatch"
     and "status" not in instance

@@ -52,11 +52,8 @@ deriving instance DecidableEq for CallResolutionEvidence
 deriving instance DecidableEq for LocalDecl
 deriving instance DecidableEq for ThreadLocalEvidence
 deriving instance DecidableEq for PlaceFact
-deriving instance DecidableEq for ConstantFact
 deriving instance DecidableEq for DynamicUpcastEvidence
 deriving instance DecidableEq for NodeFacts
-deriving instance DecidableEq for RequiredConstantCheck
-deriving instance DecidableEq for ConstantQueryContext
 deriving instance DecidableEq for BodyCore
 deriving instance DecidableEq for PromotedBody
 deriving instance DecidableEq for Body

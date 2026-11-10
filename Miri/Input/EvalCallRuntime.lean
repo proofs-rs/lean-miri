@@ -72,5 +72,5 @@ def panic (p : CompilerProviders.Prepared) (queries : PanicQueries K U C)
   genericParameters := queries.genericParameters
   itemInstance := fun _ definition args => query (CompilerInstance.item p.loweringContext p.program.compilerTables definition args)
   evalOperand := fun c op => OperandMachine.evalOperand operands c op none
-  evalOperandAt := fun c path op => OperandMachine.evalOperandAt operands c path op none
+
 end Miri.Input.EvalCallRuntime

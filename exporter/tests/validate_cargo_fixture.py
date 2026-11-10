@@ -26,7 +26,7 @@ instances = [
     if item.get("kind") == "instance_mir" and "status" not in item
 ]
 # A DefId/path can have several distinct generic instantiations. Discovery
-# retains symbolic instances too; choose the concrete full argument key.
+# chooses the concrete full argument key.
 types = {item["type_id"]: item for item in app["types"]}
 def u32_argument(instance):
     args = instance.get("generic_args", [])
@@ -34,8 +34,8 @@ def u32_argument(instance):
 wrap = next(item for item in instances if item["def_path"].endswith("::wrap") and u32_argument(item))
 identity = next(item for item in instances if item["def_path"].endswith("::identity") and item["generic_args"] == wrap["generic_args"])
 assert identity["instance_id"] != wrap["instance_id"]
-assert wrap["body_instantiation"] == {"kind": "substituted_and_normalized"}
-assert "status" not in identity["body_instantiation"]
+assert pool_entry(app, "bodies", wrap["body"])["instance_id"] == wrap["instance_id"]
+assert pool_entry(app, "bodies", identity["body"])["instance_id"] == identity["instance_id"]
 
 types = {item["type_id"]: item for item in app["types"]}
 
@@ -56,6 +56,6 @@ if os.environ.get("MIRI_SYSROOT"):
         item for item in instances
         if "Vec" in item.get("def_path", "") and item.get("def_path", "").endswith("::len")
     )
-    assert "status" not in vector_len["body_instantiation"]
+    assert pool_entry(app, "bodies", vector_len["body"])["instance_id"] == vector_len["instance_id"]
     assert any("Vec<u32>" in ty for ty in local_displays(vector_len)), "Miri sysroot std MIR was not monomorphized"
 print(f"validated Cargo MIR for {len(documents)} crates and concrete external generic closure")

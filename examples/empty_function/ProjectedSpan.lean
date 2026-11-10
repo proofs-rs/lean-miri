@@ -10,12 +10,12 @@ set_option linter.unusedSimpArgs false
  theorem declaration (p : CompilerProviders.Prepared) (frame : LocalUnit.F) (id : MIR.LocalId) (ty : TyId)
     (aligned : ∀ body ∈ p.program.bundle.bodies,
       body.input.localSources.size = body.input.mir.locals.size)
-    (normalized : CompilerFrameContext.normalizedLocalType p frame id = .ok ty) :
+    (normalized : CompilerFrameContext.localType p frame id = .ok ty) :
     ∃ body decl, CompilerFrameContext.bodyOfFrame p frame = .ok body ∧
       body.input.localSources[id]? = some decl ∧ body ∈ p.program.bundle.bodies := by
   cases bodyEq : CompilerFrameContext.bodyOfFrame p frame with
   | error error =>
-    simp [CompilerFrameContext.normalizedLocalType,bodyEq,bind,Bind.bind,Except.bind] at normalized
+    simp [CompilerFrameContext.localType,LoweredBody.body,bodyEq,bind,Bind.bind,Except.bind] at normalized
   | ok body =>
     have member : body ∈ p.program.bundle.bodies := by
       unfold CompilerFrameContext.bodyOfFrame at bodyEq
@@ -26,7 +26,7 @@ set_option linter.unusedSimpArgs false
         simp only [row] at bodyEq
         repeat' (split at bodyEq <;> try simp_all [bind,Bind.bind,Except.bind,pure,Pure.pure,Except.pure])
     cases declEq : body.input.mir.locals[id]? with
-    | none => simp [CompilerFrameContext.normalizedLocalType,bodyEq,declEq,bind,Bind.bind,Except.bind] at normalized
+    | none => simp [CompilerFrameContext.localType,LoweredBody.body,bodyEq,declEq,bind,Bind.bind,Except.bind] at normalized
     | some localTy =>
       obtain ⟨inRange, _⟩ := Array.getElem?_eq_some_iff.mp declEq
       have sourceRange : id < body.input.localSources.size := by
@@ -36,7 +36,7 @@ set_option linter.unusedSimpArgs false
  theorem local_span (s : Static) (metadata : Metadata s) (capacity : 0 < s.capacity)
     (frames : Array LocalUnit.F) (frame : LocalUnit.F)
     (machine : MachineHooks.MachineState MiriMemoryKind RootUser) (id : MIR.LocalId) (ty : TyId)
-    (normalized : CompilerFrameContext.normalizedLocalType s.prepared.compiler frame id = .ok ty) :
+    (normalized : CompilerFrameContext.localType s.prepared.compiler frame id = .ok ty) :
     ∃ span, s.cfg.compiler.localSpan frame.body id (LocalUnit.current frames frame machine) =
       .ok span (LocalUnit.current frames frame machine) := by
   obtain ⟨body,decl,bodyEq,declEq,member⟩ := declaration s.prepared.compiler frame id ty metadata.compilerLocalSourceAlignment normalized

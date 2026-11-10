@@ -42,7 +42,7 @@ private def reject (source label : String) : IO Unit :=
 
 private def constant (bits : String) : String :=
   "{\"constant\":{\"value\":{\"bits_unsigned\":" ++ Json.renderString bits ++
-  ",\"kind\":\"scalar\"},\"source\":{\"kind\":\"already_evaluated\"}," ++
+  ",\"kind\":\"scalar\"}," ++
   "\"kind\":\"evaluated_const\"},\"user_type_annotation\":null,\"span\":0,\"type\":1}"
 
 private def forwardOrder (source : String) : Except String String := do
@@ -82,7 +82,7 @@ def main : IO Unit := do
   check (decoded.document.bodies.map (·.mir) == expected.document.bodies.map (·.mir))
     "recursive field permutation changed final MIR"
   let some body := decoded.document.bodies[0]? | throw (IO.userError "missing decoded body")
-  let some cs := body.requiredConsts | throw (IO.userError "missing required constants")
+  let cs := body.requiredConsts
   let some c := cs[0]? | throw (IO.userError "missing required constant")
   match c.value with
   | .Val (.Scalar (.Int bits width)) ty =>

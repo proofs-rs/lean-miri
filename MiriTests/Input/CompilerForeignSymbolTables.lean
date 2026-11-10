@@ -50,8 +50,7 @@ private def symbols (allocators : Array (String × Catalog.AllocatorTarget))
 
 private def instanceNode (id : Nat) : InstanceNode := {
   id, kind := .identityOnly, instanceKind := .Item id, genericArgs := #[]
-  defPath := none, definitionId := some id, bodyInstantiation := none
-  bodyTemplateIsPolymorphic := none, instanceArgsAreMonomorphic := none
+  defPath := none, definitionId := some id
   bodyId := none, promotedBodies := #[] }
 
 private def prepare (symbols : Catalog.ForeignSymbols) (definitions : Array DefinitionId := #[]) :

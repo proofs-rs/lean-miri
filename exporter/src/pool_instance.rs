@@ -107,9 +107,6 @@ pub(super) enum InstanceData {
         reason: &'static str,
     },
     InstanceMir {
-        body_template_is_polymorphic: bool,
-        instance_args_are_monomorphic: bool,
-        body_instantiation: BodyInstantiation,
         body: u64,
         promoted_bodies: Vec<PromotedBody>,
     },
@@ -123,14 +120,8 @@ pub(super) struct VirtualIdentity {
     pub fn_abi: u64,
 }
 #[derive(Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub(super) enum BodyInstantiation {
-    SubstitutedAndNormalized,
-}
-#[derive(Serialize)]
 pub(super) struct PromotedBody {
     pub promoted_index: u32,
-    pub body_instantiation: BodyInstantiation,
     pub body: u64,
 }
 

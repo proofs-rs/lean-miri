@@ -82,18 +82,6 @@ pub(super) enum Mutability {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub(super) struct Normalization {
-    pub body: usize,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum InputPhase {
-    Template,
-    AlreadyInstantiated,
-}
-
-#[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind")]
 pub(super) enum ProjectionKind {
     Deref,
@@ -787,14 +775,8 @@ pub(super) struct BasicBlock<Q = VtableQueryKey, C = crate::resolution_values::P
     pub terminator: Option<Terminator<C>>,
 }
 #[derive(Serialize)]
-pub(super) struct ConstantQueryContext {
-    pub instance_id: u64,
-    pub mir_input_phase: InputPhase,
-    pub required_constant_checks: crate::pool_constant::RequiredConstantChecks,
-    pub normalization: Normalization,
-}
-#[derive(Serialize)]
 pub(super) struct Body<Q = VtableQueryKey, C = crate::resolution_values::PendingCandidates> {
+    pub instance_id: u64,
     pub source_instance_kind: crate::pool_instance::InstanceKind,
     pub preamble_def_span: u64,
     pub backtrace_spans: Vec<BacktraceSpan>,
@@ -802,8 +784,6 @@ pub(super) struct Body<Q = VtableQueryKey, C = crate::resolution_values::Pending
     pub source_promoted: Option<u32>,
     pub phase: Phase,
     pub pass_count: usize,
-    pub is_polymorphic: bool,
-    pub source_body_is_polymorphic: bool,
     pub injection_phase: Option<Phase>,
     pub tainted_by_errors: Option<crate::pool_values::DebugPayload>,
     pub arg_count: usize,
@@ -814,11 +794,9 @@ pub(super) struct Body<Q = VtableQueryKey, C = crate::resolution_values::Pending
     pub source_scopes: Vec<SourceScope>,
     pub var_debug_info: Vec<crate::pool_values::DebugPayload>,
     pub mentioned_items: Option<crate::pool_values::DebugPayload>,
-    pub required_consts: Option<Vec<crate::pool_constant::Operand>>,
+    pub required_consts: Vec<crate::pool_constant::Operand>,
     pub user_type_annotations: crate::pool_values::DebugPayload,
     pub coroutine_info: Option<CoroutineInfo>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub constant_query_context: Option<ConstantQueryContext>,
 }
 // Coroutine bodies fail export before a Body is constructed.
 #[derive(Serialize)]
@@ -1216,6 +1194,7 @@ impl Body<VtableQueryKey, crate::resolution_values::PendingCandidates> {
     ) -> Result<Body<u64, Vec<u64>>, String> {
         Ok({
             let Self {
+                instance_id,
                 source_instance_kind,
                 preamble_def_span,
                 backtrace_spans,
@@ -1223,8 +1202,6 @@ impl Body<VtableQueryKey, crate::resolution_values::PendingCandidates> {
                 source_promoted,
                 phase,
                 pass_count,
-                is_polymorphic,
-                source_body_is_polymorphic,
                 injection_phase,
                 tainted_by_errors,
                 arg_count,
@@ -1238,9 +1215,9 @@ impl Body<VtableQueryKey, crate::resolution_values::PendingCandidates> {
                 required_consts,
                 user_type_annotations,
                 coroutine_info,
-                constant_query_context,
             } = self;
             Body {
+                instance_id,
                 source_instance_kind: source_instance_kind,
                 preamble_def_span: preamble_def_span,
                 backtrace_spans: backtrace_spans,
@@ -1248,8 +1225,6 @@ impl Body<VtableQueryKey, crate::resolution_values::PendingCandidates> {
                 source_promoted: source_promoted,
                 phase: phase,
                 pass_count: pass_count,
-                is_polymorphic: is_polymorphic,
-                source_body_is_polymorphic: source_body_is_polymorphic,
                 injection_phase: injection_phase,
                 tainted_by_errors: tainted_by_errors,
                 arg_count: arg_count,
@@ -1266,7 +1241,6 @@ impl Body<VtableQueryKey, crate::resolution_values::PendingCandidates> {
                 required_consts: required_consts,
                 user_type_annotations: user_type_annotations,
                 coroutine_info: coroutine_info,
-                constant_query_context: constant_query_context,
             }
         })
     }

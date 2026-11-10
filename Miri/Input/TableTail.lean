@@ -779,9 +779,6 @@ private structure ParseInstanceFields where
   generic_args : Option (Array Miri.MIR.GenericArg) := none
   def_path : Option (Option String) := none
   def_id : Option (Option Nat) := none
-  body_instantiation : Option (Option TaggedNode) := none
-  body_template_is_polymorphic : Option (Option Bool) := none
-  instance_args_are_monomorphic : Option (Option Bool) := none
   body : Option (Option Nat) := none
   dispatch_slot : Option (Option Nat) := none
   body_status : Option (Option String) := none
@@ -792,7 +789,7 @@ private structure ParseInstanceFields where
   promoted_bodies : Option (Array PromotedBody) := none
 
 def parseInstance (path : String) : Parser (InstanceNode) := do
-  let s ← object (ParseInstanceFields.mk none none none none none none none none none none none none none none none none none) fun s key => do
+  let s ← object ({} : ParseInstanceFields) fun s key => do
     match key with
     | "kind" => return { s with kind := some (← string) }
     | "instance_id" => return { s with instance_id := some (← natural) }
@@ -800,9 +797,6 @@ def parseInstance (path : String) : Parser (InstanceNode) := do
     | "generic_args" => return { s with generic_args := some (← GenericArgsCodec.decode) }
     | "def_path" => return { s with def_path := some (← nullable (string)) }
     | "def_id" => return { s with def_id := some (← nullable (natural)) }
-    | "body_instantiation" => return { s with body_instantiation := some (← nullable (parseAbiTag (path ++ ".body_instantiation"))) }
-    | "body_template_is_polymorphic" => return { s with body_template_is_polymorphic := some (← nullable (boolean)) }
-    | "instance_args_are_monomorphic" => return { s with instance_args_are_monomorphic := some (← nullable (boolean)) }
     | "body" => return { s with body := some (← nullable (natural)) }
     | "dispatch_slot" => return { s with dispatch_slot := some (← nullable (natural)) }
     | "body_status" => return { s with body_status := some (← nullable (string)) }
@@ -818,9 +812,6 @@ def parseInstance (path : String) : Parser (InstanceNode) := do
   let generic_args ← required s.generic_args (path ++ ".generic_args")
   let def_path ← pure (s.def_path.getD none)
   let def_id ← pure (s.def_id.getD none)
-  let body_instantiation ← pure (s.body_instantiation.getD none)
-  let body_template_is_polymorphic ← pure (s.body_template_is_polymorphic.getD none)
-  let instance_args_are_monomorphic ← pure (s.instance_args_are_monomorphic.getD none)
   let body ← pure (s.body.getD none)
   let dispatch_slot ← pure (s.dispatch_slot.getD none)
   let body_status ← pure (s.body_status.getD none)
@@ -838,8 +829,7 @@ def parseInstance (path : String) : Parser (InstanceNode) := do
     | other => fail s!"{path}.kind: unrecognized instance kind `{other}`"
   return {
     instanceKind := instance_kind, genericArgs := generic_args, id := instance_id, kind := kind,
-    defPath := def_path, definitionId := def_id, bodyInstantiation := body_instantiation,
-    bodyTemplateIsPolymorphic := body_template_is_polymorphic, instanceArgsAreMonomorphic := instance_args_are_monomorphic,
+    defPath := def_path, definitionId := def_id,
     bodyId := body, promotedBodies := promoted_bodies, dispatchSlot := dispatch_slot,
     bodyStatus := body_status, virtualIdentity := virtual_identity, foreignItem := foreign_item,
     symbolName := symbol_name, fallbackInstance := fallback_instance}

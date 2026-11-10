@@ -313,7 +313,9 @@
           "inlined": null,
           "inlined_parent_scope": null
         }
-      ]
+      ],
+      "instance_id": 0,
+      "required_consts": []
     }
   ],
   "layouts": [

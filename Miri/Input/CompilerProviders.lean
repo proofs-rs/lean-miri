@@ -32,7 +32,6 @@ structure Prepared where
   functions : CompilerFunctionFacts.Prepared
   main : CompilerMain.Prepared
   intrinsics : CompilerIntrinsicFacts.Prepared
-  constants : CompilerConstantQueries.Prepared
   namedConstants : CompilerNamedConstants.Prepared
   namedGlobals : CompilerNamedGlobals.Prepared
   externStatics : CompilerExternStatic.Prepared
@@ -97,10 +96,8 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
   let main ← profileit "preparation.providers.main" profile fun _ =>
     CompilerMain.prepare runtime functions.program
   let intrinsics ← profileit "preparation.providers.intrinsics" profile fun _ => CompilerIntrinsicFacts.prepare main.program
-  let constants ← profileit "preparation.providers.constants" profile fun _ =>
-    CompilerConstantQueries.prepareProfiled profile intrinsics.program
   let namedConstants ← profileit "preparation.providers.named_constants" profile fun _ =>
-    CompilerNamedConstants.prepare runtime constants.program
+    CompilerNamedConstants.prepare runtime intrinsics.program
   let namedGlobals ← profileit "preparation.providers.named_globals" profile fun _ =>
     CompilerNamedGlobals.prepare runtime namedConstants.program
   let externStatics ← profileit "preparation.providers.extern_statics" profile fun _ =>
@@ -119,7 +116,6 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
   let arrays := profileit "preparation.providers.runtime_arrays" profile fun _ =>
     RuntimeArrayTypes.create runtime |>.mapError reprStr
   let tls := profileit "preparation.providers.thread_local" profile fun _ => CompilerThreadLocal.ofProgram program
-  let constants := profileit "preparation.providers.rebind_constants" profile fun _ => {constants with program}
   return {
     program
     lowering := some (LowerContext.ofDocument program.input)
@@ -128,7 +124,6 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
     functions := {functions with program}
     main := {main with program}
     intrinsics := {intrinsics with program}
-    constants
     namedConstants
     namedGlobals
     externStatics
@@ -202,7 +197,6 @@ def executionHooks (p : Prepared) (image : AllocationImage.Imported)
   let facts := p.lifecycle.calls.symbols.facts.context
   CompilerExecutionFacts.hooks p.intrinsics {base with
     functions, calls, helpers
-    rvalues := {base.rvalues with normalize := fun _ ty => lift (CompilerFacts.requiredType facts ty "normalized")}
     isRawPointer := fun _ ty => lift do
       let node ← p.runtime.node ty |>.mapError toString
       pure (node.shapeKind == .rawPointer)

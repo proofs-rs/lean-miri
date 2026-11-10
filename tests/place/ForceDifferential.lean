@@ -35,7 +35,7 @@ private def fixtureBodies : Array MIR.Body := #[⟨.Built, 0, none, #[layout.ty]
 private def fixtureLoaded : LoadedBody := ⟨BodyIdentity.ofCanonicalIndex 0, fixtureBodies[0]⟩
 private def fixtureIdentity : LocalsIdentity := (LocalsIdentitySupply.allocate ⟨0⟩).2
 private def frame (operand : Operand AllocId) : Frame AllocId LocalLayout Unit := {
-  body := fixtureLoaded.body, bodyIdentity := fixtureLoaded.identity, localsIdentity := fixtureIdentity, functionInstance := ⟨.Item 0, #[]⟩, extra := ()
+  body := fixtureLoaded.body, bodyIdentity := fixtureLoaded.identity, localsIdentity := fixtureIdentity, functionInstance := 0, extra := ()
   returnContinuation := .stop true, returnPlace := .frameLocal 0 0 none layout fixtureIdentity
   locals := #[⟨.live operand, some layout⟩], vaList := #[], trackCallerArg := none,
   location := .unwinding ⟨0⟩ }

@@ -28,7 +28,7 @@ theorem uninit (s : Static) (metadata : Metadata s) (profile : Profile s) (capac
     (slot : LocalState Provenance LocalLayout) (bound : destination.localId < frame.locals.size)
     (atSlot : frame.locals[destination.localId]? = some slot)
     (live : slot.value = .live (.immediate .uninit)) (cache : slot.layout = some destination.baseLayout)
-    (normalized : CompilerFrameContext.normalizedLocalType s.prepared.compiler frame destination.localId =
+    (normalized : CompilerFrameContext.localType s.prepared.compiler frame destination.localId =
       .ok destination.metadata.normalizedTy) (noClocks : frame.extra.dataRace = none) :
     ∃ (id : AllocId) (tag : BorTag) (base : UInt64) (allocatedMachine movedMachine : MachineHooks.MachineState MiriMemoryKind RootUser),
       PlaceMachine.allocateStack s.cfg.allocation destination.baseLayout (LocalUnit.current frames frame machine) =

@@ -134,7 +134,7 @@ call_body, call = indirect_call
 pointer_target_rows = [row for row in instance_rows if row.get("def_path", "").endswith("pointer_target")]
 require(pointer_target_rows, "pointer_target candidate instance/body is absent")
 pointer_target_body = next(
-    (row for row in pointer_target_rows if row.get("body_instantiation", {}).get("kind") == "substituted_and_normalized"),
+    (row for row in pointer_target_rows if "body" in row),
     None,
 )
 require(pointer_target_body, "pointer_target candidate has no substituted MIR body")
@@ -189,8 +189,7 @@ require(virtual_callsite, "trait-object virtual callsite is absent")
 virtual_target = fixture_virtual_targets[0]
 virtual_target_body = next(
     (row for row in instance_rows
-     if row.get("instance_id") == virtual_target.get("instance_id")
-     and row.get("body_instantiation", {}).get("kind") == "substituted_and_normalized"),
+     if row.get("instance_id") == virtual_target.get("instance_id") and "body" in row),
     None,
 )
 require(virtual_target_body, "validated virtual target has no substituted MIR body")
@@ -242,7 +241,7 @@ callback_data_source = operand_type_ref(pthread_callsite["args"][3]["operand"])
 callback_operand_type = operand_type_ref(pthread_callsite["args"][2]["operand"])
 callback_rows = [row for row in instance_rows if row.get("def_path", "").endswith("thread_start")]
 callback_body = next(
-    (row for row in callback_rows if row.get("body_instantiation", {}).get("kind") == "substituted_and_normalized"),
+    (row for row in callback_rows if "body" in row),
     None,
 )
 require(callback_body is not None and callback_data_source is not None and callback_operand_type is not None,

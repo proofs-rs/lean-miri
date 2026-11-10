@@ -72,12 +72,12 @@ structure Metadata (s : Static) where
       (LowerContext.ofDocument s.prepared.compiler.lifecycle.frames.calls.calls.program.input)
       s.prepared.compiler.lifecycle.frames.calls.calls.program.compilerTables s.functionInstance = .ok definitionIndex ∧
     s.prepared.compiler.lifecycle.frames.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition
-  /-- Normalization depends on the current frame's static body/instance key,
-  while locals, memory, thread state and caches are unconstrained by this fact. -/
+  /-- Resolved local types depend on the current frame's body/instance key;
+  local values, memory, thread state and caches are unconstrained by this fact. -/
   normalizedLocal : ∀ frame : CompilerFrameContext.ActualFrame,
     frame.bodyIdentity = s.loaded.identity → frame.body = s.loaded.body →
     frame.functionInstance = s.functionInstance →
-    CompilerFrameContext.normalizedLocalType s.prepared.compiler frame 0 = .ok s.abi.ret.layout.ty
+    CompilerFrameContext.localType s.prepared.compiler frame 0 = .ok s.abi.ret.layout.ty
   loweredBody : LoweredBody
   bodyRow : s.prepared.compiler.program.bundle.bodies[s.loaded.identity.index]? = some loweredBody
   bodyContents : loweredBody.body = s.loaded.body
@@ -85,22 +85,16 @@ structure Metadata (s : Static) where
     some loweredBody
   preamble : SpanRef
   lifecycleRow : s.prepared.compiler.lifecycle.lifecycle.entries[s.loaded.identity.index]? =
-    some ⟨.ok preamble, .ok s.functionInstance, .ok #[]⟩
+    some ⟨.ok preamble, .ok s.functionInstance⟩
   localSpan : SpanRef
   localSourceSpan : ∃ decl, loweredBody.input.localSources[0]? = some decl ∧
     decl.spanId = localSpan.id
   /-- The literal is tied to the fixed instruction, not chosen to supply an
-  operational result. Its exact structural site selects compiler evidence. -/
+  operational result. -/
   literal : ConstOperand
   literalShape : literal.value = .Val .ZeroSized s.abi.ret.layout.ty
   literalStatement : ((s.loaded.body.basicBlocks[0]?).bind (fun block => block.statements[0]?)).map
     (fun statement => statement.kind) = some (.Assign ⟨0,#[]⟩ (.Use (.Constant literal) .Yes))
-  literalNormalization : normalizationFromEvidence
-    ((s.prepared.compiler.constants.evidence.filter (fun entry => entry.site ==
-      (⟨s.loaded.identity.index,⟨0,0⟩,#[.field "kind",.field "rvalue",.field "operand",.field "constant"]⟩ :
-        CompilerConstantQueries.Site))).map (fun entry => entry.query))
-    s.functionInstance literal.value = .ok literal.value
-
   /-- The default address-space pointer width agrees with the selected x86_64 target. -/
   pointerSize : s.prepared.compiler.runtime.target.pointerSize = Size.ofBytes 8
 

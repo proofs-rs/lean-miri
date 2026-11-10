@@ -45,11 +45,7 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
   let mut bodySpans := #[]
   let mut positions := #[]
   let mut positionIndex : Std.HashMap UInt32 Position := {}
-  let executable := program.executableBodyIds
-  for (body, bodyId) in program.bundle.bodies.toList.zipIdx do
-    if !executable.contains bodyId then
-      bodySpans := bodySpans.push (.error "compiler query body is not executable")
-      continue
+  for body in program.bundle.bodies do
     match spans ctx tables body.input with
     | .error error => bodySpans := bodySpans.push (.error error)
     | .ok (entries,next) =>

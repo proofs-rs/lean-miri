@@ -3,9 +3,7 @@ import Miri.Interpreter.Constant
 open Miri Input Memory ABI Interpreter
 private def must (v : Except String A) : IO A := match v with | .ok a => pure a | .error e => throw (IO.userError e)
 private def check (c : Bool) (message : String) : IO Unit := unless c do throw (IO.userError message)
-private def queries (failAdjust : Bool) : ConstantQueries CtfeProvenance Unit Unit (Array String) := {
-  instantiateAndNormalize := fun _ _ => throw (.query "synthetic root routing fixture has no normalization query")
-  evaluate := fun _ _ _ => throw (.query "synthetic root routing fixture has no evaluation query")
+private def queries (failAdjust : Bool) : ConstantValueQueries CtfeProvenance Unit Unit (Array String) := {
   adjustGlobalRootPointer := fun pointer => do
     let state ← EStateM.get
     EStateM.set { state with hooks := state.hooks.push "adjust-root" }
@@ -25,8 +23,6 @@ def main (args : List String) : IO Unit := do
   let doc ← must (decodeJson (← IO.FS.readFile path))
   let runtime ← must ((RuntimeMetadata.ofDocument doc.document).mapError toString)
   let program ← must (lowerProgram doc.document)
-  let some root := program.input.bodyRoots[0]? | throw (IO.userError "canonical root instance missing")
-  let fnInstance : CallInstance := root.entryInstance
   let some ty := doc.document.types.find? (fun t => ((doc.document.layouts[t.layoutId]?).bind (·.sizeBytes)) == some 8 && (t.shapeKind == .reference || t.shapeKind == .rawPointer))
     | throw (IO.userError "fixture lacks pointer layout")
   let makeState (tls foreign : Bool) : Except String (ConstantState CtfeProvenance Unit Unit (Array String)) := do
@@ -34,7 +30,7 @@ def main (args : List String) : IO Unit := do
     let registered := MemoryLifecycle.registerImportedGlobal initial () 0 .static (.ofBytes 8) .ONE .Not
       (some (.static 22 true tls foreign))
     let _ ← registered.outcome.mapError toString
-    pure ⟨registered.memory, #[], fnInstance⟩
+    pure ⟨registered.memory, #[]⟩
   let tls ← must (makeState true false)
   match constValueToOp runtime (queries false) (.Scalar (.Ptr (.Allocation 0 0 false false))) ty.id tls with
   | .error (.tlsConstantPointer _) after => check after.hooks.isEmpty "TLS reached machine root hook"

@@ -110,9 +110,7 @@ private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgr
     | .ok _ => bodies := bodies.push ⟨sourceId,sourceId,index⟩
   let mut entries := #[]
   let mut indirect := #[]
-  let executable := program.executableBodyIds
   for (body,index) in program.bundle.bodies.toList.zipIdx do
-    if !executable.contains index then continue
     for (block,blockIndex) in body.body.basicBlocks.toList.zipIdx do
       let function ← match block.terminator.kind with
         | .Call function .. | .TailCall function .. => pure (some function)
@@ -197,16 +195,13 @@ def loadedBodyOfInstance (prepared : Prepared) (fnInstance : CallInstance) : Res
   let source ← require prepared.program.input.instances[candidate.sourceInstanceId]?
     "canonical source instance record is missing"
   unless source.kind == .instanceMir do throw "compiler body is not a substituted executable instance"
-  let instantiated ← require source.bodyInstantiation "instance body lacks substitution evidence"
-  unless instantiated.tag == "substituted_and_normalized" do
-    throw "instance body substitution/normalization is unresolved"
-  unless source.instanceArgsAreMonomorphic == some true do throw "instance arguments are not known monomorphic"
   let body ← require prepared.program.bundle.bodies[candidate.bodyIndex]? "instance body index is absent"
+  unless body.input.instanceId == candidate.sourceInstanceId do throw "instance/body identity mismatch"
   unless body.obligations.isEmpty do throw "lowered instance body has unresolved obligations"
   return ⟨.ofCanonicalIndex candidate.bodyIndex, body.body⟩
 
 /-- Compatibility syntax-only view of the exact loaded body. It retains the
-same unique-key and instantiation checks; equal bodies are not merged. -/
+same unique-key and body ownership checks; equal bodies are not merged. -/
 def bodyOfInstance (prepared : Prepared) (fnInstance : CallInstance) : Result MIR.Body := do
   return (← loadedBodyOfInstance prepared fnInstance).body
 

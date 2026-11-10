@@ -201,7 +201,6 @@ private def rvalueHooks (m : Metadata) : RvalueHooks AllocId State Unit Dest := 
   enforceValidity := fun _ _ => block "enforceValidity reference"
   retagPtrValue := fun _ _ _ => block "retag pointer"
   placeBaseRaw := fun _ _ => block "raw base"
-  normalize := fun _ _ => block "normalize"
   cast := fun _ _ _ _ _ => block "cast"
   readDiscriminant := fun _ _ => block "discriminant"
   discriminantForVariant := fun _ _ _ => block "discriminant value" }
@@ -298,7 +297,7 @@ private def instanceFromResolution (p : Program) (resolution : Input.CallResolut
   let id ← resolution.instanceId.toExcept (.invalidProgram "missing resolved canonical instance ID")
   let source ← instanceNode p id
   let .Item definition := source.instanceKind | throw (.unsupported "non-Item fnInstance")
-  if source.definitionId != some definition || source.instanceArgsAreMonomorphic != some true then
+  if source.definitionId != some definition then
     throw (.invalidProgram "fnInstance identity or monomorphization mismatch")
   unless source.genericArgs.all (fun arg => match arg with | .Type _ => true | _ => false) do
     throw (.unsupported "non-type generic argument")
@@ -357,9 +356,8 @@ private def lifecycle (p : Program) (index : Nat) : StackLifecycleHooks AllocId 
     ⟨{ machine with trace := machine.trace ++ ["initFrame"] }, .ok { frame with extra := index }⟩
   requiredConstants := fun stack machine =>
     let result : Except StackError Unit := do
-      let body ← (bodyAt p index).mapError (fun e => .machineHookFailure (reprStr e))
-      let constants ← body.input.requiredConsts.toExcept (.machineHookFailure "required constants metadata missing")
-      if !constants.isEmpty then throw (.machineHookFailure "unimplemented required constants")
+      let _ ← (bodyAt p index).mapError (fun e => .machineHookFailure (reprStr e))
+      pure ()
     ⟨stack,machine,result⟩
   afterPush := fun stack machine => ⟨stack,{ machine with trace := machine.trace ++ ["afterPush"] },.ok ()⟩
   beforePop := fun stack machine => ⟨stack,{ machine with trace := machine.trace ++ ["beforePop"] },.ok ()⟩

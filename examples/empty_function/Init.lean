@@ -38,7 +38,7 @@ theorem push_raw (h : CallMachine.Lifecycle K U C) (before : MachineHooks.State 
     (definitionAt : metadata.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition)
     (row : lifecycle.program.bundle.bodies[body.identity.index]? = some actual)
     (contents : actual.body = body.body)
-    (evidence : lifecycle.entries[body.identity.index]? = some ⟨.ok span,.ok fnInstance,.ok #[]⟩)
+    (evidence : lifecycle.entries[body.identity.index]? = some ⟨.ok span,.ok fnInstance⟩)
     (thread : ThreadRecord) (index : Nat)
     (active : (h.freshLocalsIdentity before.machine).1.threads.activeThread? = some thread)
     (previous : Frame Provenance LocalLayout MachineHooks.FrameExtra)

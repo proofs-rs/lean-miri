@@ -16,9 +16,8 @@ structure Fields (p : CompilerProviders.Prepared) (options : EvalConfigurationCo
   constants : ∃ (functions : FunctionPointers.Hooks MiriMemoryKind RootUser Unit)
       (arithmetic : PointerArithmetic)
       (external : DefId → MachineHooks.M MiriMemoryKind RootUser (Pointer Provenance)),
-    options.place.debugAssertions = false → config.operands.constantAt = fun _ path constant known => do
-      let site ← CompilerOperandSites.current path
-      CompilerConstantMachine.evalAt p.constants p.runtime site functions arithmetic external
+    options.place.debugAssertions = false → config.operands.constant = fun _ constant known =>
+      ConstantMachine.evalOperandWithLayout p.runtime functions arithmetic external
         MemoryErrors.constant constant known none
 def pointers (p : CompilerProviders.Prepared) (image : AllocationImage.Imported) (leaves : RootLeaves) :=
   (EvalPointerSource.make p image
@@ -41,12 +40,11 @@ def external (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
     (functions p image options leaves)
     (fun user => EvalWorld.roots.externStatics (ExecutionStateTransport.toOuter user))
 
-def constantAt (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
+def evalConstant (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
     (options : EvalConfigurationCore.Options) (leaves : RootLeaves) :
-    Unit → OperandPath → ConstOperand → Option LocalLayout → MachineHooks.M MiriMemoryKind RootUser (OpTy Provenance) :=
-  fun _ path constant known => do
-    let site ← CompilerOperandSites.current path
-    CompilerConstantMachine.evalAt p.constants p.runtime site (functions p image options leaves)
+    Unit → ConstOperand → Option LocalLayout → MachineHooks.M MiriMemoryKind RootUser (OpTy Provenance) :=
+  fun _ constant known =>
+    ConstantMachine.evalOperandWithLayout p.runtime (functions p image options leaves)
       (pointers p image leaves).arithmetic (external p image options leaves)
       MemoryErrors.constant constant known
       (if options.place.debugAssertions then some (fun left right =>
@@ -58,7 +56,7 @@ def constantAt (p : CompilerProviders.Prepared) (image : AllocationImage.Importe
     (leaves : RootLeaves) (remaining : Nat) (contract : Construction p)
     (debugOff : options.place.debugAssertions = false) :
     (EvalConfigurationCore.make p image bytes options leaves () (remaining + 1)).map
-      (fun config => config.operands.constantAt) = .ok (constantAt p image options leaves) := by
+      (fun config => config.operands.constant) = .ok (evalConstant p image options leaves) := by
   rw [EvalConfigurationCore.make_eq_context, EvalConfigurationCore.makeWithForeignContext]
   simp (config := {zeta := false}) only [contract.maximum_eq,
     EvalConfigurationCore.pureQuery_eq, EvalConfigurationCore.liftConstruction_eq,
@@ -70,8 +68,8 @@ def constantAt (p : CompilerProviders.Prepared) (image : AllocationImage.Importe
     contract.i32_eq, contract.bool_eq, contract.u8_eq, contract.unit_eq, contract.rootSpan_eq,
     Except.mapError, Except.map, bind, Except.bind, pure, Except.pure]
   apply congrArg Except.ok
-  funext choice path constant known
-  simp only [constantAt, debugOff, Bool.false_eq_true, ↓reduceIte]
+  funext choice constant known
+  simp only [evalConstant, debugOff, Bool.false_eq_true, ↓reduceIte]
   unfold functions pointers external
   rfl
 
@@ -86,8 +84,8 @@ def constantAt (p : CompilerProviders.Prepared) (image : AllocationImage.Importe
   have law := projected p image bytes options leaves remaining contract debugOff
   rw [built] at law
   have eq := Except.ok.inj law
-  funext choice path constant known
-  have point := congrFun (congrFun (congrFun (congrFun eq choice) path) constant) known
-  simpa only [constantAt, debugOff, Bool.false_eq_true, ↓reduceIte] using point
+  funext choice constant known
+  have point := congrFun (congrFun (congrFun eq choice) constant) known
+  simpa only [evalConstant, debugOff, Bool.false_eq_true, ↓reduceIte] using point
 
 end EmptyFunction.BodyConstantDictionary

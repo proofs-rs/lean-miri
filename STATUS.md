@@ -13,6 +13,12 @@ the ability to verify arbitrary Rust are not claimed.
 
 ## Exported input coverage
 
+Each concrete instance and promoted index has one executable MIR body. The
+exporter substitutes generic arguments, normalizes types, and evaluates MIR
+constants, including unused required constants, before emitting that body.
+Runtime storage, pointer and layout queries use the resolved types. Unbound
+generic templates are rejected as executable roots; diagnostic spans and scopes
+remain attached to the resolved instructions.
 The exporter aborts when requested semantic compiler data is unavailable; the
 Lean input API no longer retains failed exporter payloads as execution inputs.
 Successful values are serialized without success-status wrappers or a
@@ -25,7 +31,7 @@ Pending references cannot serialize. The export document and peripheral metadata
 write directly through serde without constructing a JSON Value tree. Diagnostic
 fingerprints use
 the emitted bytes, and prepared-reference sidecars receive the allocator frontier
-directly. Concrete-MIR constant evaluation timing remains separate work.
+directly.
 Cast-query consumers, including dynamic-upcast evidence validation, read direct
 result fields. Executables with custom `no_main` entry points retain startup
 preflight facts and the core C-ulong and mutable i32-pointer types required by
@@ -47,7 +53,7 @@ query closure or interpreter correspondence.
 
 Fifteen fixed connected inputs with their same-TyCtxt reference observations
 and three eval-core inputs have been regenerated
-under the schema-4 typed-pool contract. Runtime-metadata checks export their
+under the schema-4 resolved-body typed-pool contract. Runtime-metadata checks export their
 Rust inputs afresh. Performance checks now obtain
 fresh producer inputs. The DST and large Tree Borrows connected cases now
 generate inputs and same-TyCtxt references in CI from unchanged tracked sources,
@@ -55,10 +61,10 @@ flags and reviewed guest configuration; fixed assertions and choice tapes are
 preserved. This adds pinned toolchain/sysroot build cost and replaces saved
 allocation-history replay for those two cases. Their historical archives are
 not CI inputs.
-The full CI matrix and the 17-case Lean connected replay remain unexecuted;
-regeneration and focused replay results do not
-validate those executions or establish compiler query closure, interpreter
-correspondence or whole-machine safety.
+The 17-case Lean connected replay passes with freshly exported inputs and
+unchanged expected outcomes, including the DST and large Tree Borrows cases.
+The full CI matrix remains unexecuted. These finite executions do not establish
+compiler query closure, interpreter correspondence or whole-machine safety.
 
 ## Empty-function caller-domain transport
 

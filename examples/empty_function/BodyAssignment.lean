@@ -36,7 +36,7 @@ private def literalType : StatementKind → Option TyId
     (bodyIdentity : frame.bodyIdentity = s.loaded.identity)
     (function : frame.functionInstance = s.functionInstance)
     (location : frame.location = .mir ⟨0,0⟩) :
-    s.cfg.operands.constantAt () ((OperandPath.rvalue "operand").push (.field "constant"))
+    s.cfg.operands.constant ()
       metadata.literal (some s.abi.ret.layout)
       (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) =
       .ok ⟨.immediate .uninit,s.abi.ret.layout⟩
@@ -48,22 +48,17 @@ private def literalType : StatementKind → Option TyId
   have source := BodyConstantDictionary.fields_of_make s.prepared.compiler s.prepared.image s.bytes
     s.options leaves (remaining+1) metadata.construction s.cfg outer
   obtain ⟨functions, arithmetic, external, callback⟩ := source.constants
-  let site : CompilerConstantQueries.Site := ⟨s.loaded.identity.index,⟨0,0⟩,
-    #[.field "kind",.field "rvalue",.field "operand",.field "constant"]⟩
-  have literal := Literal.eval_unit s.prepared.compiler.constants s.prepared.compiler.runtime site functions arithmetic external
+  have literal := Literal.eval_unit s.prepared.compiler.runtime functions arithmetic external
     MemoryErrors.constant metadata.literal s.abi.ret.layout
     (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) frames machine
-    (by simp [BodyStep.withUnit, LocalUnit.withUnit, bodyIdentity, site])
-    (by simp [BodyStep.withUnit, LocalUnit.withUnit, location, site])
     metadata.literalShape
-    (by simpa only [BodyStep.withUnit, LocalUnit.withUnit, function, site] using metadata.literalNormalization)
   rw [callback profile.debug]
-  simp only [CompilerOperandSites.current, MachineHooks.currentFrame,
+  simp only [MachineHooks.currentFrame,
     BodyStep.current, LocalUnit.current, Stack.currentFrame?, Array.back?_push,
-    BodyStep.withUnit, LocalUnit.withUnit, location, bodyIdentity, OperandPath.rvalue,
+    BodyStep.withUnit, LocalUnit.withUnit, location, bodyIdentity,
     get, getThe, MonadStateOf.get, EStateM.get, bind, Bind.bind, EStateM.bind,
     pure, Pure.pure, EStateM.pure]
-  simpa [site, BodyStep.current, LocalUnit.current, BodyStep.withUnit, LocalUnit.withUnit,
+  simpa [BodyStep.current, LocalUnit.current, BodyStep.withUnit, LocalUnit.withUnit,
     Array.map_push, bodyIdentity, location] using literal
 
 private theorem bound_copy_eq (s : Static) (layout : LocalLayout)
@@ -170,19 +165,19 @@ private theorem bound_copy_eq (s : Static) (layout : LocalLayout)
     · exact source.projection
     · exact check
     · exact computed
-  have literal : h.evalOperandAt () (OperandPath.rvalue "operand") (.Constant metadata.literal)
+  have literal : h.evalOperand () (.Constant metadata.literal)
       (some s.abi.ret.layout)
       (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) =
       .ok ⟨.immediate .uninit,s.abi.ret.layout⟩
         (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) := by
-    change s.cfg.operands.constantAt () ((OperandPath.rvalue "operand").push (.field "constant"))
+    change s.cfg.operands.constant ()
       metadata.literal (some s.abi.ret.layout) _ = _
     exact constant s metadata profile remaining capacity frames frame machine bodyIdentity function location
   have transfer := bound_copy_eq s s.abi.ret.layout frames frame compatible padding metadata.unitSized
   change evalRvalueIntoPlace h () _ _ _ = _
   unfold evalRvalueIntoPlace
   simp only [bind, Bind.bind, EStateM.bind, destination]
-  change (h.evalOperandAt () (OperandPath.rvalue "operand") (.Constant metadata.literal)
+  change (h.evalOperand () (.Constant metadata.literal)
       (some s.abi.ret.layout) >>= fun op => MachineHooks.withRetagMode .Default
         (h.copyOp () op (BodyStep.destination frames frame s.abi.ret.layout))) _ = _
   simp only [bind, Bind.bind, EStateM.bind, literal]

@@ -157,14 +157,7 @@ private def evalPlaceOp (m : Metadata) (place : MIR.Place) (known : Option Local
   if let some known := known then
     if known != op.layout then throw (.invalidProgram "known place layout")
   return op
-private def constantQueries (m : Metadata) : ConstantQueries CtfeProvenance Unit Unit (Array String) := {
-  instantiateAndNormalize := fun fnInstance constant => do
-    let some identity := m.source.instances[fnInstance]? | throw (.query "canonical constant instance missing")
-    if !identity.genericArgs.isEmpty then throw (.query "generic constant normalization unavailable")
-    match constant with
-    | .Val .. => pure constant
-    | _ => throw (.query "non-value normalization evidence unavailable")
-  evaluate := fun _ _ _ => throw (.query "compiler constant query unavailable")
+private def constantQueries (_m : Metadata) : ConstantValueQueries CtfeProvenance Unit Unit (Array String) := {
   adjustGlobalRootPointer := fun pointer => do
     modify fun state => { state with hooks := state.hooks.push "constant-root" }
     pure pointer
@@ -173,10 +166,10 @@ private def evalOperand (m : Metadata) (operand : MIR.Operand) (known : Option L
   match operand with
   | .Copy place | .Move place => evalPlaceOp m place known
   | .Constant constant =>
-    let frame ← current
     let state ← get
-    let view := ConstantState.fromFrame state.machine.returnMemory.memory state.machine.returnMemory.events frame
-    let result := evalConstOperand m (constantQueries m) constant view
+    let view : ConstantState CtfeProvenance Unit Unit (Array String) :=
+      ⟨state.machine.returnMemory.memory, state.machine.returnMemory.events⟩
+    let result := (let .Val value ty := constant.value; constValueToOp m (constantQueries m) value ty view)
     let (after,outcome) := match result with
       | .ok value state => (state,Except.ok value)
       | .error error state => (state,Except.error (StepError.invalidProgram (reprStr error)))
@@ -287,7 +280,6 @@ private def rvalueHooks (m : Metadata) : RvalueHooks CtfeProvenance State Unit D
   enforceValidity := fun _ _ => block "enforceValidity reference"
   retagPtrValue := fun _ _ _ => block "retag pointer"
   placeBaseRaw := fun _ _ => block "raw base"
-  normalize := fun _ _ => block "normalize"
   cast := fun _ _ _ _ _ => block "cast"
   readDiscriminant := fun _ _ => block "discriminant"
   discriminantForVariant := fun _ _ _ => block "discriminant value" }
@@ -384,7 +376,7 @@ private def instanceFromResolution (p : Program) (resolution : Input.CallResolut
   let id ← resolution.instanceId.toExcept (.invalidProgram "missing resolved canonical instance ID")
   let source ← instanceNode p id
   let .Item definition := source.instanceKind | throw (.unsupported "non-Item fnInstance")
-  if source.definitionId != some definition || source.instanceArgsAreMonomorphic != some true then
+  if source.definitionId != some definition then
     throw (.invalidProgram "fnInstance identity or monomorphization mismatch")
   unless source.genericArgs.all (fun arg => match arg with | .Type _ => true | _ => false) do
     throw (.unsupported "non-type generic argument")
@@ -443,9 +435,8 @@ private def lifecycle (p : Program) (index : Nat) : StackLifecycleHooks CtfeProv
     ⟨{ machine with trace := machine.trace ++ ["initFrame"] }, .ok { frame with extra := index }⟩
   requiredConstants := fun stack machine =>
     let result : Except StackError Unit := do
-      let body ← (bodyAt p index).mapError (fun e => .machineHookFailure (reprStr e))
-      let constants ← body.input.requiredConsts.toExcept (.machineHookFailure "required constants metadata missing")
-      if !constants.isEmpty then throw (.machineHookFailure "unimplemented required constants")
+      let _ ← (bodyAt p index).mapError (fun e => .machineHookFailure (reprStr e))
+      pure ()
     ⟨stack,machine,result⟩
   afterPush := fun stack machine => ⟨stack,{ machine with trace := machine.trace ++ ["afterPush"] },.ok ()⟩
   beforePop := fun stack machine => ⟨stack,{ machine with trace := machine.trace ++ ["beforePop"] },.ok ()⟩

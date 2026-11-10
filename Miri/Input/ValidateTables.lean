@@ -315,16 +315,6 @@ private def validateExtraSemantic (types : Array TypeNode) (allocations : Array 
     | .instanceMir =>
       if node.bodyId.isNone then
         throw (s!"instances[{node.id}].body" ++ ": " ++ "instance MIR is missing its decoded body")
-      match node.bodyInstantiation with
-      | none => throw (s!"instances[{node.id}].body_instantiation" ++ ": " ++ "instance body is missing substitution/normalization evidence")
-      | some detail =>
-
-        if detail.tag != "substituted_and_normalized" then
-          throw (s!"instances[{node.id}].body_instantiation.kind" ++ ": " ++ s!"unsupported instance body transformation `{detail.tag}`")
-      if node.bodyTemplateIsPolymorphic.isNone then
-        throw (s!"instances[{node.id}].body_template_is_polymorphic" ++ ": " ++ "instance lacks polymorphism metadata for its body template")
-      if node.instanceArgsAreMonomorphic != some true then
-        throw (s!"instances[{node.id}].instance_args_are_monomorphic" ++ ": " ++ "instance arguments are not known to be monomorphic")
     | .intrinsicDispatch =>
       if node.bodyId.isSome then throw s!"instances[{node.id}].body: intrinsic identity cannot carry MIR"
       match node.instanceKind with
@@ -598,19 +588,15 @@ private def validateRequiredExecution (document : ImportDocument) : Except Strin
       visited := visited.insert (kind,id)
       if kind == 0 then
         let some body := document.bodies[id]? | throw "required body is absent"
-        for constant in body.requiredConsts.getD #[] do
-          if let .Val value _ := constant.value then
-            pending := pending ++ (valueAllocations value).map (2, ·)
-        if let some context := body.constantQueryContext then
-          for check in context.requiredChecks do
-            pending := pending ++ (valueAllocations check.value).map (2, ·)
+        for constant in body.requiredConsts do
+          let .Val value _ := constant.value
+          pending := pending ++ (valueAllocations value).map (2, ·)
         for call in body.callEvidence do
           if let some call := call then
             if let some inst := call.instanceId then pending := pending.push (1, inst)
         for block in body.nodeFacts do
           for node in block do
-            for constant in node.constants do
-              pending := pending ++ (valueAllocations constant.evaluated).map (2, ·)
+            pending := pending ++ node.constantAllocations.map (2, ·)
             for tls in node.threadLocals do
               unless tls.info.isStatic && tls.info.threadLocal do
                 throw s!"{body.sourcePath}: ThreadLocalRef lacks static/thread-local compiler evidence"
@@ -671,8 +657,16 @@ def validatePrimaryTables (document : ImportDocument) : Except String Unit := do
     instanceKind b s!"{path}.instance_kind" value.instanceKind
     genericArgs b s!"{path}.generic_args" value.genericArgs
     if let some id := value.definitionId then checkId b.definitions id s!"{path}.def_id" "definition"
-    if let some id := value.bodyId then checkId b.bodies id s!"{path}.body" "body"
+    if let some id := value.bodyId then
+      checkId b.bodies id s!"{path}.body" "body"
+      let some body := document.bodies[id]? | throw s!"{path}.body: body is absent"
+      unless body.instanceId == value.id do throw s!"{path}.body: instance identity mismatch"
     promoted b s!"{path}.promoted_bodies" value.promotedBodies
+    for entry in value.promotedBodies do
+      if let some childId := entry.bodyId then
+        let some child := document.bodies[childId]? | throw s!"{path}.promoted_bodies: body is absent"
+        unless child.instanceId == value.id do
+          throw s!"{path}.promoted_bodies: instance identity mismatch"
   for (value, index) in document.functionAbis.toList.zipIdx do
     for (argument, ai) in (value.arguments.push value.returnValue).toList.zipIdx do
       checkId b.types argument.typeId s!"$.fn_abis[{index}].arguments[{ai}].type" "type"
@@ -704,11 +698,7 @@ def validatePrimaryTables (document : ImportDocument) : Except String Unit := do
         throw s!"{path}.backtrace_spans[{ei}]: compiler BytePos exceeds u32"
       unless entry.collapsedLo == entry.position.bytePosition do
         throw s!"{path}.backtrace_spans[{ei}]: collapsed hygiene BytePos/source-map position mismatch"
-    if let some context := value.constantQueryContext then
-      checkId b.instances context.instanceId s!"{path}.constant_query_context.instance_id" "instance"
-      checkId b.bodies context.normalizationBodyId s!"{path}.constant_query_context.normalization.body" "body"
-      for check in context.requiredChecks do
-        checkId b.spans check.spanId path "span"
+    checkId b.instances value.instanceId s!"{path}.instance_id" "instance"
     for scope in value.sourceScopes do
       if let some inlined := scope.inlined then
         checkId b.instances inlined.instanceId path "instance"
@@ -723,12 +713,24 @@ def validatePrimaryTables (document : ImportDocument) : Except String Unit := do
           checkId b.definitions tls.definition path "definition"
           if let some image := tls.initializer then memory b path image
     promoted b s!"{path}.promoted_bodies" value.promotedBodies
+    for entry in value.promotedBodies do
+      if let some childId := entry.bodyId then
+        let some child := document.bodies[childId]? | throw s!"{path}.promoted_bodies: body is absent"
+        unless child.instanceId == value.instanceId do
+          throw s!"{path}.promoted_bodies: instance identity mismatch"
   for (value, index) in document.bodyRoots.toList.zipIdx do
     let path := s!"$.body_roots[{index}]"
     checkId b.bodies value.bodyId s!"{path}.body" "body"
     checkId b.instances value.entryInstance s!"{path}.entry_instance" "instance"
+    let some body := document.bodies[value.bodyId]? | throw s!"{path}.body: body is absent"
+    unless body.instanceId == value.entryInstance do throw s!"{path}.body: instance identity mismatch"
     checkId b.definitions value.definitionId s!"{path}.def_id" "definition"
     promoted b s!"{path}.promoted_bodies" value.promotedBodies
+    for entry in value.promotedBodies do
+      if let some childId := entry.bodyId then
+        let some child := document.bodies[childId]? | throw s!"{path}.promoted_bodies: body is absent"
+        unless child.instanceId == value.entryInstance do
+          throw s!"{path}.promoted_bodies: instance identity mismatch"
   if let some selected := document.selectedScope then
     for (root, index) in selected.roots.toList.zipIdx do
       checkId b.definitions root.definitionId s!"$.selected_scope.roots[{index}].def_id" "definition"

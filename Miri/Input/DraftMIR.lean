@@ -11,16 +11,10 @@ inductive DraftConstValue where
   | ready (value : MIR.ConstValue)
   | scalar (bits : Nat)
 
-inductive DraftConstSource where
-  | evaluated
-  | typeSystem (ty : Nat) (constant : Nat)
-  | unevaluated (value : MIR.UnevaluatedConst) (ty : Nat)
-
 structure DraftConstant where
   typeId : Nat
   span : MIR.SpanRef
   userType : Option Nat
-  source : DraftConstSource
   evaluated : DraftConstValue
 
 /- The draft duplicates only the MIR spine that contains constants and the
@@ -168,19 +162,6 @@ structure BasicBlock where
 
 end Draft
 
-structure DraftRequiredConstantCheck where
-  index : Nat
-  spanId : Nat
-  normalizedOperand : DraftConstant
-  value : DraftConstValue
-
-structure DraftConstantQueryContext where
-  instanceId : Nat
-  inputPhase : BodyInputPhase
-  normalizationBodyId : Nat
-  requiredTypingEnvironment : String
-  requiredChecks : Array DraftRequiredConstantCheck
-
 structure DraftBody where
   sourcePath : String := ""
   phase : MIR.MirPhase
@@ -193,11 +174,10 @@ structure DraftBody where
   spanId : Nat
   preambleDefSpanId : Nat
   injectionPhase : Option MIR.MirPhase
-  isPolymorphic : Option Bool
+  instanceId : Nat
   sourceScopes : Array SourceScope
   backtraceSpans : Array BacktraceSpan
-  requiredConsts : Option (Array DraftConstant)
-  constantQueryContext : Option DraftConstantQueryContext
+  requiredConsts : Array DraftConstant
   promotedBodies : Array PromotedBody
 
 end Miri.Input.DecodeMIR

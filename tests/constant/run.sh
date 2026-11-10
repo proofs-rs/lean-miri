@@ -18,5 +18,4 @@ lake env lean --run tests/constant/AllocationImageTests.lean "$FIXTURE"
 lake env lean --run tests/constant/ImageInvariantTests.lean "$FIXTURE"
 lake env lean --run tests/constant/RootPointerTests.lean "$FIXTURE"
 lake env lean --run tests/constant/TypedTableReferences.lean "$FIXTURE"
-lake env lean --run MiriTests/Constant/EvidenceTests.lean
 python3 tests/constant/compare_source.py "$FIXTURE"

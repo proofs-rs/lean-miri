@@ -1,27 +1,21 @@
 import Miri.Input.CompilerFrameContext
 
 /-! Exact debug-only place/operand type checks, place.rs:626–643 and
-operand.rs:805–830. The compiler's instantiated body supplies each expected
+operand.rs:805–830. The resolved executable body supplies each expected
 place type. Runtime projection/layouts never substitute for that query. -/
 namespace Miri.Input.CompilerPlaceTypes
 open Lean Miri.ABI Miri.Interpreter Miri.Memory
 
 def expectedLayout (p : CompilerProviders.Prepared) (frame : CompilerFrameContext.ActualFrame)
     (requested : MIR.Place) : Except String LocalLayout := do
-  let source ← CompilerFrameContext.bodyOfFrame p frame
-  let normalized ← CompilerFrameContext.normalizedBody p frame
+  let body ← CompilerFrameContext.bodyOfFrame p frame
   let mut ids := #[]
-  for (block, blockIndex) in source.input.nodeFacts.toList.zipIdx do
-    let some actualBlock := normalized.nodeFacts[blockIndex]? | throw "normalized block is absent"
-    for (node, instructionIndex) in block.toList.zipIdx do
-      let some actualNode := actualBlock[instructionIndex]? | throw "normalized instruction is absent"
+  for block in body.input.nodeFacts do
+    for node in block do
       for place in node.places do
-        if place.place == requested then
-          let some actual := actualNode.places.find? (·.path == place.path)
-            | throw "normalized place site is absent"
-          ids := ids.push actual.typeId
-  let some id := ids[0]? | throw "place has no exact compiler normalization evidence in canonical body"
-  unless ids.all (· == id) do throw "same source place has conflicting normalized compiler types"
+        if place.place == requested then ids := ids.push place.typeId
+  let some id := ids[0]? | throw "place has no compiler type in its executable body"
+  unless ids.all (· == id) do throw "same place has conflicting compiler types"
   p.runtime.lookup id |>.mapError toString
 
 def check (p : CompilerProviders.Prepared) (debugAssertions : Bool)

@@ -45,11 +45,12 @@ private def vtable : VTableHooks AllocId S Unit Nat Nat := {
   globalVTable := fun _ id => do
     event "vtable-global"
     let s ← get
-    return if (s.memory.findGlobal? id).any (fun g => g.kind == .vtable) then some (0, 42) else none
+    return if (s.memory.findGlobal? id).any (fun g => g.kind == .vtable) then some (0, #[42]) else none
   globalFunction := fun _ _ => unavailable "function"
   predicates := fun _ trait => do
-    event s!"predicates:{trait}"
-    return #[⟨trait, trait, false⟩]
+    let some id := trait[0]? | unavailable "missing predicate"
+    event s!"predicates:{id}"
+    return #[⟨id, id, false⟩]
   normalizePredicate := fun _ pred => do
     event "normalize"
     if (← get).rejectTrait then throw (.unsupported "predicate normalization unavailable")
@@ -69,7 +70,7 @@ private def dynHooks : DynamicLayoutHooks AllocId S Unit := PlaceDynamic.withVTa
   target, maxSizeOfVal := Size.ofBytes 1024
   classify := fun _ ty => do
     event s!"classify:{ty}"
-    if ty == 1 then pure (.dynamic 42) else unavailable "dynamic classification"
+    if ty == 1 then pure (.dynamic #[42]) else unavailable "dynamic classification"
   field := fun _ _ _ => unavailable "dynamic field"
   packedAlign := fun _ _ => unavailable "dynamic packed"
   vtableSizeAndAlign := fun _ _ _ => unavailable "vtable binding" } vtable

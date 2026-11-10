@@ -26,11 +26,7 @@ def prepare (program : LoweredProgram) : Prepared := Id.run do
   let ctx := LowerContext.ofDocument program.input
   let mut tables := program.compilerTables
   let mut all := #[]
-  let executable := program.executableBodyIds
-  for (body, bodyId) in program.bundle.bodies.toList.zipIdx do
-    if !executable.contains bodyId then
-      all := all.push #[]
-      continue
+  for body in program.bundle.bodies do
     let mut entries := #[]
     let scopes := body.input.sourceScopes
     for index in [:scopes.size] do

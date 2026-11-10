@@ -362,18 +362,9 @@ struct RuntimeCallbackTransferRequest<'tcx> {
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
-enum BodyMode {
-    Template,
-    Instantiated,
-    NormalizedTemplate,
-    NormalizedInstantiated,
-}
-
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
 struct BodyKey<'tcx> {
     instance: ty::Instance<'tcx>,
     promoted: Option<rustc_middle::mir::Promoted>,
-    mode: BodyMode,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -2291,37 +2282,18 @@ fn export_reachable_instances<'tcx>(
         }
         let template = tcx.instance_mir(instance.def);
         context.runtime_mir_frame_instances.insert(instance);
-        let typing_env = template.typing_env(tcx);
-        let instantiated = instance.try_instantiate_mir_and_normalize_erasing_regions(
-            tcx,
-            typing_env,
-            ty::EarlyBinder::bind(tcx, template.clone()),
-        );
-        let body = instantiated.map_err(|error| {
-            format!(
-                "{}: MIR instantiation failed: {error:?}",
-                tcx.def_path_str(def_id)
-            )
-        })?;
-        let body_json = mir_body_with_constant_queries_json(tcx, &body, instance, true, context)?;
+        let body_json = resolved_mir_body_json(tcx, template, instance, context)?;
         // Local HIR bodies own a promoted table even when empty. Imported or
         // compiler-generated MIR can lack that optional table; query it only
         // when the body actually carries a promoted reference.
         let promoted = if has_local_hir_body(tcx, def_id) || body_uses_promoted(template) {
             tcx.promoted_mir(def_id)
                 .iter_enumerated()
-                .map(|(index, promoted_body)| { {
-                let promoted_typing_env = promoted_body.typing_env(tcx);
-                let promoted_instance = instance.try_instantiate_mir_and_normalize_erasing_regions(
-                    tcx,
-                    promoted_typing_env,
-                    ty::EarlyBinder::bind(tcx, promoted_body.clone()),
-                );
-                Ok::<_, String>(match promoted_instance {
-                    Ok(body) => pool_instance::PromotedBody { promoted_index:index.as_u32(),body_instantiation:pool_instance::BodyInstantiation::SubstitutedAndNormalized,body:mir_body_with_constant_queries_json(tcx,&body,instance,true,context)? },
-                    Err(error) => export_failure("promoted MIR instantiation", format!("{}: {error:?}", tcx.def_path_str(def_id)))?,
-                })
-                } }).collect::<Result<Vec<_>, String>>()?
+                .map(|(index, body)| Ok(pool_instance::PromotedBody {
+                    promoted_index: index.as_u32(),
+                    body: resolved_mir_body_json(tcx, body, instance, context)?,
+                }))
+                .collect::<Result<Vec<_>, String>>()?
         } else {
             Vec::new()
         };
@@ -2329,7 +2301,7 @@ fn export_reachable_instances<'tcx>(
         let definition_path=tcx.def_path_str(def_id);
         let generic_args=generic_args_json(context,tcx,instance.args)?;
         let instance_kind=instance_kind_json(context,tcx,instance.def)?;
-        records.push(InstanceFact { instance_id:instance_id, instance_kind, def_id:definition, def_path:definition_path, generic_args, data:pool_instance::InstanceData::InstanceMir { body_template_is_polymorphic:template.is_polymorphic,instance_args_are_monomorphic:!instance.args.has_non_region_param() && !instance.args.has_escaping_bound_vars() && !instance.args.has_infer() && !instance.args.has_placeholders(),body_instantiation:pool_instance::BodyInstantiation::SubstitutedAndNormalized,body:body_json,promoted_bodies:promoted } });
+        records.push(InstanceFact { instance_id:instance_id, instance_kind, def_id:definition, def_path:definition_path, generic_args, data:pool_instance::InstanceData::InstanceMir { body:body_json,promoted_bodies:promoted } });
     }
     Ok::<_, String>(records)
 }
@@ -2391,82 +2363,40 @@ fn identity_only_instances_json<'tcx>(
     Ok(())
 }
 
-// Instance::try_instantiate_mir_and_normalize_erasing_regions expects MIR
-// whose parameters belong to that instance's binder. After substitution any
-// remaining parameters belong to its caller, not to the callee: binding that
-// body again can substitute the wrong parameter or panic in ArgFolder.
-// See rustc_middle/ty/instance.rs::args_for_mir_body and the try_* method.
-fn mir_body_with_constant_queries_json<'tcx>(
+// Each concrete instance owns one executable body. Normalize only its template:
+// rebinding a substituted body can capture caller parameters incorrectly.
+fn resolved_mir_body_json<'tcx>(
     tcx: TyCtxt<'tcx>,
-    body: &rustc_middle::mir::Body<'tcx>,
+    template: &rustc_middle::mir::Body<'tcx>,
     instance: ty::Instance<'tcx>,
-    already_instantiated: bool,
     context: &mut ExportContext<'tcx>,
 ) -> Result<u64, String> {
-    let mode = if already_instantiated { BodyMode::Instantiated } else { BodyMode::Template };
-    let (id, fresh) = context.bodies.reserve(BodyKey { instance, promoted: body.source.promoted, mode });
+    if instance.args.has_non_region_param()
+        || instance.args.has_escaping_bound_vars()
+        || instance.args.has_infer()
+        || instance.args.has_placeholders()
+    {
+        return export_failure("resolved MIR", "instance requires concrete type and const arguments");
+    }
+    let (id, fresh) = context.bodies.reserve(BodyKey {
+        instance,
+        promoted: template.source.promoted,
+    });
     if !fresh {
         return Ok(id as u64);
     }
-    let normalized = if already_instantiated
-        && instance.def.has_polymorphic_mir_body()
-        && (body.has_non_region_param()
-            || body.has_escaping_bound_vars()
-            || body.has_infer()
-            || body.has_placeholders())
+    let body = instance.try_instantiate_mir_and_normalize_erasing_regions(
+        tcx, template.typing_env(tcx), ty::EarlyBinder::bind(tcx, template.clone()),
+    ).map_err(|error| format!("resolved MIR: instantiation or normalization failed: {error:?}"))?;
+    if body.has_non_region_param()
+        || body.has_escaping_bound_vars()
+        || body.has_infer()
+        || body.has_placeholders()
     {
-        export_failure(
-            "main::mir_body_with_constant_queries_json",
-            format!(
-                "{}; {}",
-                "MIR has already been substituted; its remaining caller parameters cannot be rebound to this instance's arguments",
-                "free_caller_parameters_in_instantiated_mir"
-            ),
-        )?
-    } else {
-        match instance.try_instantiate_mir_and_normalize_erasing_regions(
-            tcx,
-            body.typing_env(tcx),
-            ty::EarlyBinder::bind(tcx, body.clone()),
-        ) {
-            Ok(normalized) => {
-                let mode = if already_instantiated { BodyMode::NormalizedInstantiated } else { BodyMode::NormalizedTemplate };
-                let (normalized_id, fresh) = context.bodies.reserve(BodyKey { instance, promoted: body.source.promoted, mode });
-                if fresh {
-                    let definition = mir_body_json(tcx, &normalized, context, "normalized_query_body")?;
-                    context.bodies.define(normalized_id, definition);
-                }
-                pool_body::Normalization { body: normalized_id }
-            }
-            Err(error) => export_failure(
-                "main::mir_body_with_constant_queries_json",
-                format!(
-                    "{}; {}",
-                    "substitution_or_normalization_error",
-                    format!("{error:?}")
-                ),
-            )?,
-        }
-    };
-    let query_instance_id = context.register_metadata_instance(instance);
-    let query_context = pool_body::ConstantQueryContext {
-        instance_id: query_instance_id,
-        mir_input_phase: if already_instantiated { pool_body::InputPhase::AlreadyInstantiated } else { pool_body::InputPhase::Template },
-        required_constant_checks: required_constant_checks_json(tcx, body, instance, already_instantiated, context)?,
-        normalization: normalized,
-    };
-    let mut result = mir_body_json(
-        tcx,
-        body,
-        context,
-        if already_instantiated {
-            "instantiated_body"
-        } else {
-            "root_template"
-        },
-    )?;
-    result.constant_query_context = Some(query_context);
-    context.bodies.define(id, result);
+        return export_failure("resolved MIR", "body retains unresolved generic parameters");
+    }
+    let definition = mir_body_json(tcx, &body, instance, context, "resolved_body")?;
+    context.bodies.define(id, definition);
     Ok(id as u64)
 }
 
@@ -2483,20 +2413,22 @@ fn export_body<'tcx>(
     };
     // Instance::mono erases lifetime parameters only. Do not fabricate type or
     // const arguments for generic roots, even when optimized MIR ignores them.
-    let entry = if !instance.args.has_non_region_param() {
-        let canonical = ty::Instance::mono(tcx, def_id);
-        context.runtime_mir_frame_instances.insert(canonical);
-        Some((context.register_instance(canonical), canonical))
-    } else {
-        None
-    };
-    let body_id = mir_body_with_constant_queries_json(tcx, body, instance, false, context)?;
+    if instance.args.has_non_region_param() {
+        return unavailable_compiler_fact(
+            "root requires explicit type/const instantiation; Instance::mono cannot invent arguments",
+        );
+    }
+    let instance = ty::Instance::mono(tcx, def_id);
+    context.runtime_mir_frame_instances.insert(instance);
+    let entry_instance = context.register_instance(instance);
+    let body_id = resolved_mir_body_json(tcx, body, instance, context)?;
     Ok(BodyRoot { body:body_id,
-        entry_instance:match entry { Some((id,_))=>id, None=>unavailable_compiler_fact("root requires explicit type/const instantiation; Instance::mono cannot invent arguments")? },
+        entry_instance,
         def_path:tcx.def_path_str(def_id), def_id:def_json(context,def_id), is_static:tcx.is_static(def_id),
         thread_local_static:tcx.is_thread_local_static(def_id),
         promoted_bodies:tcx.promoted_mir(def_id).iter_enumerated().map(|(index,promoted)|Ok(PromotedRoot {
-            promoted_index:index.as_u32(), body:mir_body_with_constant_queries_json(tcx,promoted,instance,false,context)?,
+            promoted_index:index.as_u32(),
+            body:resolved_mir_body_json(tcx, promoted, instance, context)?,
         })).collect::<Result<Vec<_>,String>>()?,
     })
 }
@@ -2504,6 +2436,7 @@ fn export_body<'tcx>(
 fn mir_body_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &rustc_middle::mir::Body<'tcx>,
+    instance: ty::Instance<'tcx>,
     context: &mut ExportContext<'tcx>,
     role: &'static str,
 ) -> Result<pool_body::Body, String> {
@@ -2525,6 +2458,7 @@ fn mir_body_json<'tcx>(
     }
     intrinsic_value_queries::collect_spans(tcx, context, body);
     let result = pool_body::Body {
+        instance_id: context.register_metadata_instance(instance),
         source_instance_kind: instance_kind_json(context, tcx, body.source.instance)?,
         preamble_def_span: span_json(context, tcx, tcx.def_span(body.source.def_id())),
         backtrace_spans: backtrace_spans_json(context, tcx, body),
@@ -2532,8 +2466,6 @@ fn mir_body_json<'tcx>(
         source_promoted: body.source.promoted.map(|value| value.as_u32()),
         phase: mir_phase_json(body.phase),
         pass_count: body.pass_count,
-        is_polymorphic: body.has_non_region_param(),
-        source_body_is_polymorphic: body.is_polymorphic,
         injection_phase: body.injection_phase.map(mir_phase_json),
         tainted_by_errors: body.tainted_by_errors.map(|value| pool_values::DebugPayload::new(&value)),
         arg_count: body.arg_count,
@@ -2573,10 +2505,12 @@ fn mir_body_json<'tcx>(
         })).collect::<Result<Vec<_>, String>>()?,
         var_debug_info: body.var_debug_info.iter().map(pool_values::DebugPayload::new).collect(),
         mentioned_items: body.mentioned_items.as_ref().map(pool_values::DebugPayload::new),
-        required_consts: body.required_consts.as_ref().map(|values| values.iter().map(|v| const_operand_json(context, tcx, body, v)).collect::<Result<Vec<_>, String>>()).transpose()?,
+        required_consts: body.required_consts.as_ref().ok_or_else(||
+            "resolved MIR: compiler body has no required_consts list".to_owned())?
+            .iter().map(|v| const_operand_json(context, tcx, body, v))
+            .collect::<Result<Vec<_>, String>>()?,
         user_type_annotations: pool_values::DebugPayload::new(&body.user_type_annotations),
         coroutine_info: None,
-        constant_query_context: None,
     };
     context.vtable_diagnostics.body = previous;
     Ok::<_, String>(result)
@@ -5165,16 +5099,11 @@ fn fn_abi_json<'tcx>(
 }
 
 fn const_operand_json<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,body:&rustc_middle::mir::Body<'tcx>,operand:&rustc_middle::mir::ConstOperand<'tcx>)->Result<pool_constant::Operand,String>{
-    use rustc_middle::mir::Const; use pool_constant::{Source as S,Constant,Annotation,Operand};
+    use pool_constant::{Constant,Annotation,Operand};
     let ty=operand.const_.ty();
-    let source=match operand.const_ {
-        Const::Ty(ty,v)=>S::TypeSystemConst {ty:type_json(context,tcx,ty)?,constant:const_type_json(context,tcx,v)?},
-        Const::Unevaluated(v,ty)=>S::Unevaluated {def_id:def_json(context,v.def),def_path:tcx.def_path_str(v.def),generic_args:generic_args_json(context,tcx,v.args)?,promoted:v.promoted.map(|i|i.as_u32()),ty:type_json(context,tcx,ty)?},
-        Const::Val(_,_)=>S::AlreadyEvaluated,
-    };
     let evaluated=operand.const_.eval(tcx,body.typing_env(tcx),operand.span).map_err(|e|format!("main::const_operand_json: const_evaluation_error; {e:?}"))?;
     let value=const_value_json(context,tcx,ty,evaluated)?;
-    Ok(Operand {ty:type_json(context,tcx,ty)?,user_type_annotation:operand.user_ty.map(|a|Annotation::AnnotationRef {index:a.as_u32()}),constant:Constant::EvaluatedConst {source,value},span:span_json(context,tcx,operand.span)})
+    Ok(Operand {ty:type_json(context,tcx,ty)?,user_type_annotation:operand.user_ty.map(|a|Annotation::AnnotationRef {index:a.as_u32()}),constant:Constant::EvaluatedConst {value},span:span_json(context,tcx,operand.span)})
 }
 fn const_value_json<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,ty:ty::Ty<'tcx>,value:rustc_middle::mir::ConstValue)->Result<pool_constant::Value,String>{
     use rustc_middle::mir::ConstValue as C; use pool_constant::Value as O;
@@ -6098,24 +6027,6 @@ fn backtrace_spans_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tc
         })
         .collect::<Vec<_>>();
     records
-}
-
-// stack.rs::push_stack_frame post-monomorphization required constant checks.
-// Retain exact source order, normalized constants and eval query results.
-fn required_constant_checks_json<'tcx>(tcx:TyCtxt<'tcx>,body:&rustc_middle::mir::Body<'tcx>,instance:ty::Instance<'tcx>,already_instantiated:bool,context:&mut ExportContext<'tcx>)->Result<pool_constant::RequiredConstantChecks,String>{
-    use pool_constant::{RequiredConstantChecks as Checks,RequiredConstantCheck as Check,RequiredConstantResult as ResultValue};
-    let required=body.required_consts.as_ref().ok_or_else(||"main::required_constant_checks_json: compiler body has no required_consts list; absence does not establish an empty list".to_owned())?;
-    let checks=required.iter().enumerate().map(|(index,operand)|{
-        let environment=body.typing_env(tcx);
-        let free_caller=already_instantiated && instance.def.has_polymorphic_mir_body() && (operand.const_.has_non_region_param() || operand.const_.has_escaping_bound_vars() || operand.const_.has_infer() || operand.const_.has_placeholders());
-        if free_caller {return export_failure("main::required_constant_checks_json","already substituted required constant retains caller parameters; complete caller environment required");}
-        let normalized=instance.try_instantiate_mir_and_normalize_erasing_regions(tcx,environment,ty::EarlyBinder::bind(tcx,operand.const_)).map_err(|e|format!("main::required_constant_checks_json: required_const_normalization_error; {e:?}"))?;
-        let mut normalized_operand=operand.clone();normalized_operand.const_=normalized;
-        let value=normalized.eval(tcx,environment,operand.span).map_err(|e|format!("main::required_constant_checks_json: required_const_evaluation_error; {e:?}"))?;
-        let result=ResultValue {normalized_operand:const_operand_json(context,tcx,body,&normalized_operand)?,value:const_value_json(context,tcx,normalized.ty(),value)?};
-        Ok(Check {index,span:span_json(context,tcx,operand.span),result})
-    }).collect::<Result<Vec<_>,String>>()?;
-    Ok(Checks {typing_env:"body_typing_env",checks})
 }
 
 // interpret/discriminant.rs and Ty::{discriminant_ty,discriminant_for_variant}.

@@ -69,59 +69,25 @@ def finishConstValueFields (s : ConstValueFields) : JsonReader.Parser (DraftCons
   | _ => reject "unknown or unavailable evaluated constant"
 def parseConstValue : JsonReader.Parser (DraftConstValue) := do
   finishConstValueFields (← object {} parseConstValueField)
-structure ParseConstSourceFields where
-  kind : Option (String) := none
-  type : Option (Nat) := none
-  const : Option (Nat) := none
-  def_id : Option (Nat) := none
-  generic_args : Option (Array GenericArg) := none
-  promoted : Option (Option Nat) := none
-
-def parseConstSourceField (s : ParseConstSourceFields) (key : String) : JsonReader.Parser (ParseConstSourceFields) := do
-  match key with
-  | "kind" => return {s with kind := some (← string)}
-  | "type" => return {s with type := some (← natural)}
-  | "const" => return {s with const := some (← natural)}
-  | "def_id" => return {s with def_id := some (← natural)}
-  | "generic_args" => return {s with generic_args := some (← GenericArgsCodec.decode)}
-  | "promoted" => return {s with promoted := some (← nullable natural)}
-  | _ => skipValue; pure s
-def finishParseConstSourceFields (s : ParseConstSourceFields) : JsonReader.Parser (DraftConstSource) := do
-  let discriminator ← required s.kind "kind"
-  let allowed : List String := match discriminator with
-    | "already_evaluated" => ["kind"]
-    | "type_system_const" => ["kind", "type", "const"]
-    | "unevaluated" => ["kind", "type", "def_id", "generic_args", "promoted"]
-    | _ => ["kind"]
-  rejectIncompatible allowed [("kind", s.kind.isSome), ("type", s.type.isSome), ("const", s.const.isSome), ("def_id", s.def_id.isSome), ("generic_args", s.generic_args.isSome), ("promoted", s.promoted.isSome)]
-  match (← required s.kind "kind") with
-  | "already_evaluated" => pure .evaluated
-  | "type_system_const" => pure (.typeSystem (← required s.type "type") (← required s.const "const"))
-  | "unevaluated" => pure (.unevaluated ⟨(← required s.def_id "def_id"), (← required s.generic_args "generic_args"), (← required s.promoted "promoted")⟩ (← required s.type "type"))
-  | _ => reject "unknown MIR constant source"
-def parseConstSource : JsonReader.Parser (DraftConstSource) := do
-  finishParseConstSourceFields (← object {} parseConstSourceField)
 structure ParseEvaluatedFields where
   kind : Option (String) := none
-  source : Option (DraftConstSource) := none
   value : Option (DraftConstValue) := none
 
 def parseEvaluatedField (s : ParseEvaluatedFields) (key : String) : JsonReader.Parser (ParseEvaluatedFields) := do
   match key with
   | "kind" => return {s with kind := some (← string)}
-  | "source" => return {s with source := some (← parseConstSource)}
   | "value" => return {s with value := some (← parseConstValue)}
   | _ => skipValue; pure s
-def finishParseEvaluatedFields (s : ParseEvaluatedFields) : JsonReader.Parser (DraftConstSource × DraftConstValue) := do
+def finishParseEvaluatedFields (s : ParseEvaluatedFields) : JsonReader.Parser (DraftConstValue) := do
   unless (← required s.kind "kind") == "evaluated_const" do reject "unknown constant evaluation record"
-  return ((← required s.source "source"), (← required s.value "value"))
-def parseEvaluated : JsonReader.Parser (DraftConstSource × DraftConstValue) := do
+  required s.value "value"
+def parseEvaluated : JsonReader.Parser (DraftConstValue) := do
   finishParseEvaluatedFields (← object {} parseEvaluatedField)
 structure ParseConstOperandFields where
   type : Option (Nat) := none
   span : Option (Nat) := none
   user_type_annotation : Option (Option Nat) := none
-  constant : Option (DraftConstSource × DraftConstValue) := none
+  constant : Option (DraftConstValue) := none
 
 def parseConstOperandField (s : ParseConstOperandFields) (key : String) : JsonReader.Parser (ParseConstOperandFields) := do
   match key with
@@ -132,7 +98,7 @@ def parseConstOperandField (s : ParseConstOperandFields) (key : String) : JsonRe
   | _ => skipValue; pure s
 def finishParseConstOperandFields (s : ParseConstOperandFields) : JsonReader.Parser (DraftConstant) := do
   let pair ← required s.constant "constant"
-  return ⟨(← required s.type "type"), ⟨(← required s.span "span")⟩, (← required s.user_type_annotation "user_type_annotation"), pair.1, pair.2⟩
+  return ⟨(← required s.type "type"), ⟨(← required s.span "span")⟩, (← required s.user_type_annotation "user_type_annotation"), pair⟩
 def parseConstOperand : JsonReader.Parser (DraftConstant) := do
   finishParseConstOperandFields (← object {} parseConstOperandField)
 structure RuntimeCheckFields where
@@ -523,18 +489,16 @@ constant operand for `const` and `sym_fn`. Both are parsed forward into this
 schema-specific union before the enclosing tag is inspected. -/
 private structure AsmConstantFields where
   kind : Option String := none
-  source : Option DraftConstSource := none
   value : Option DraftConstValue := none
   type : Option Nat := none
   span : Option Nat := none
   user_type_annotation : Option (Option Nat) := none
-  constant : Option (DraftConstSource × DraftConstValue) := none
+  constant : Option (DraftConstValue) := none
 
-private def asmConstant : JsonReader.Parser ((Sum (DraftConstSource × DraftConstValue) DraftConstant)) := do
+private def asmConstant : JsonReader.Parser ((Sum (DraftConstValue) DraftConstant)) := do
   let s ← object ({} : AsmConstantFields) fun s key => do
     match key with
     | "kind" => return {s with kind := some (← string)}
-    | "source" => return {s with source := some (← parseConstSource)}
     | "value" => return {s with value := some (← parseConstValue)}
     | "type" => return {s with type := some (← natural)}
     | "span" => return {s with span := some (← natural)}
@@ -543,17 +507,17 @@ private def asmConstant : JsonReader.Parser ((Sum (DraftConstSource × DraftCons
     | _ => skipValue; pure s
   match s.kind with
   | some "evaluated_const" =>
-    return .inl ((← required s.source "source"), (← required s.value "value"))
+    return .inl (← required s.value "value")
   | none =>
     let c ← required s.constant "constant"
     return .inr ⟨(← required s.type "type"), ⟨(← required s.span "span")⟩,
-      (← required s.user_type_annotation "user_type_annotation"), c.1, c.2⟩
+      (← required s.user_type_annotation "user_type_annotation"), c⟩
   | _ => reject "unknown assembly constant record"
 
 structure AsmValueFields where
   kind : Option String := none
   place : Option Draft.Place := none
-  constant : Option (Sum (DraftConstSource × DraftConstValue) DraftConstant) := none
+  constant : Option (Sum (DraftConstValue) DraftConstant) := none
   check : Option MIR.RuntimeChecks := none
   type : Option Nat := none
   span : Option Nat := none
@@ -580,7 +544,7 @@ def finishAsmValueFields (s : AsmValueFields) : JsonReader.Parser (Draft.Operand
   | none =>
     let .inl c ← required s.constant "constant" | reject "expected assembly evaluated constant"
     pure (.Constant ⟨(← required s.type "type"), ⟨(← required s.span "span")⟩,
-      (← required s.user_type_annotation "user_type_annotation"), c.1, c.2⟩)
+      (← required s.user_type_annotation "user_type_annotation"), c⟩)
   | _ => reject "unknown inline assembly input operand"
 def asmValue : JsonReader.Parser (Draft.Operand) := do
   finishAsmValueFields (← object {} asmValueField)
@@ -855,81 +819,6 @@ def finishLocalDeclFields (s : LocalDeclFields) : JsonReader.Parser (LocalDecl) 
   return ⟨(← required s.«local» "local"), (← required s.type "type"), (← required s.source_info "source_info")⟩
 def localDecl : JsonReader.Parser (LocalDecl) := do
   finishLocalDeclFields (← object {} localDeclField)
-structure RequiredResultFields where
-  normalized_operand : Option (DraftConstant) := none
-  value : Option (DraftConstValue) := none
-
-def requiredResultField (s : RequiredResultFields) (key : String) : JsonReader.Parser (RequiredResultFields) := do
-  match key with
-  | "normalized_operand" => return {s with normalized_operand := some (← parseConstOperand)}
-  | "value" => return {s with value := some (← parseConstValue)}
-  | _ => skipValue; pure s
-def finishRequiredResultFields (s : RequiredResultFields) : JsonReader.Parser (DraftConstant × DraftConstValue) := do
-  return ((← required s.normalized_operand "normalized_operand"), (← required s.value "value"))
-def requiredResult : JsonReader.Parser (DraftConstant × DraftConstValue) := do
-  finishRequiredResultFields (← object {} requiredResultField)
-structure RequiredCheckFields where
-  index : Option (Nat) := none
-  span : Option (Nat) := none
-  result : Option (DraftConstant × DraftConstValue) := none
-
-def requiredCheckField (s : RequiredCheckFields) (key : String) : JsonReader.Parser (RequiredCheckFields) := do
-  match key with
-  | "index" => return {s with index := some (← natural)}
-  | "span" => return {s with span := some (← natural)}
-  | "result" => return {s with result := some (← requiredResult)}
-  | _ => skipValue; pure s
-def finishRequiredCheckFields (s : RequiredCheckFields) : JsonReader.Parser (DraftRequiredConstantCheck) := do
-  let pair ← required s.result "result"
-  return ⟨(← required s.index "index"), (← required s.span "span"), pair.1, pair.2⟩
-def requiredCheck : JsonReader.Parser (DraftRequiredConstantCheck) := do
-  finishRequiredCheckFields (← object {} requiredCheckField)
-structure RequiredChecksFields where
-  typing_env : Option (String) := none
-  checks : Option (Array DraftRequiredConstantCheck) := none
-
-def requiredChecksField (s : RequiredChecksFields) (key : String) : JsonReader.Parser (RequiredChecksFields) := do
-  match key with
-  | "typing_env" => return {s with typing_env := some (← string)}
-  | "checks" => return {s with checks := some (← array requiredCheck)}
-  | _ => skipValue; pure s
-def finishRequiredChecksFields (s : RequiredChecksFields) : JsonReader.Parser (String × Array DraftRequiredConstantCheck) := do
-  return ((← required s.typing_env "typing_env"), (← required s.checks "checks"))
-def requiredChecks : JsonReader.Parser (String × Array DraftRequiredConstantCheck) := do
-  finishRequiredChecksFields (← object {} requiredChecksField)
-structure NormalizationFields where
-  body : Option (Nat) := none
-
-def normalizationField (s : NormalizationFields) (key : String) : JsonReader.Parser (NormalizationFields) := do
-  match key with
-  | "body" => return {s with body := some (← natural)}
-  | _ => skipValue; pure s
-def finishNormalizationFields (s : NormalizationFields) : JsonReader.Parser (Nat) := do
-  required s.body "body"
-def normalization : JsonReader.Parser (Nat) := do
-  finishNormalizationFields (← object {} normalizationField)
-structure ConstantContextFields where
-  mir_input_phase : Option (String) := none
-  instance_id : Option (Nat) := none
-  normalization : Option (Nat) := none
-  required_constant_checks : Option (String × Array DraftRequiredConstantCheck) := none
-
-def constantContextField (s : ConstantContextFields) (key : String) : JsonReader.Parser (ConstantContextFields) := do
-  match key with
-  | "mir_input_phase" => return {s with mir_input_phase := some (← string)}
-  | "instance_id" => return {s with instance_id := some (← natural)}
-  | "normalization" => return {s with normalization := some (← normalization)}
-  | "required_constant_checks" => return {s with required_constant_checks := some (← requiredChecks)}
-  | _ => skipValue; pure s
-def finishConstantContextFields (s : ConstantContextFields) : JsonReader.Parser (DraftConstantQueryContext) := do
-  let phase ← match (← required s.mir_input_phase "mir_input_phase") with
-    | "template" => pure BodyInputPhase.template
-    | "already_instantiated" => pure .alreadyInstantiated
-    | _ => reject "unknown body input phase"
-  let checks ← required s.required_constant_checks "required_constant_checks"
-  return ⟨(← required s.instance_id "instance_id"), phase, (← required s.normalization "normalization"), checks.1, checks.2⟩
-def constantContext : JsonReader.Parser (DraftConstantQueryContext) := do
-  finishConstantContextFields (← object {} constantContextField)
 structure PromotedBodyFields where
   promoted_index : Option (Option Nat) := none
   body : Option (Option Nat) := none
@@ -955,11 +844,10 @@ structure ParseBodyFields where
   span : Option (Nat) := none
   preamble_def_span : Option (Nat) := none
   injection_phase : Option (Option MIR.MirPhase) := none
-  is_polymorphic : Option (Option Bool) := none
+  instance_id : Option Nat := none
   source_scopes : Option (Array SourceScope) := none
   backtrace_spans : Option (Array BacktraceSpan) := none
-  required_consts : Option (Option (Array DraftConstant)) := none
-  constant_query_context : Option (Option DraftConstantQueryContext) := none
+  required_consts : Option (Array DraftConstant) := none
   promoted_bodies : Option (Array PromotedBody) := none
 
 def parseBodyField (s : ParseBodyFields) (key : String) : JsonReader.Parser (ParseBodyFields) := do
@@ -975,11 +863,10 @@ def parseBodyField (s : ParseBodyFields) (key : String) : JsonReader.Parser (Par
   | "span" => return {s with span := some (← natural)}
   | "preamble_def_span" => return {s with preamble_def_span := some (← natural)}
   | "injection_phase" => return {s with injection_phase := some (← nullable phase)}
-  | "is_polymorphic" => return {s with is_polymorphic := some (← nullable boolean)}
+  | "instance_id" => return {s with instance_id := some (← natural)}
   | "source_scopes" => return {s with source_scopes := some (← array scope)}
   | "backtrace_spans" => return {s with backtrace_spans := some (← array backtrace)}
-  | "required_consts" => return {s with required_consts := some (← nullable (array parseConstOperand))}
-  | "constant_query_context" => return {s with constant_query_context := some (← nullable constantContext)}
+  | "required_consts" => return {s with required_consts := some (← array parseConstOperand)}
   | "promoted_bodies" => return {s with promoted_bodies := some (← array promotedBody)}
   | _ => skipValue; pure s
 def finishParseBodyFields (s : ParseBodyFields) : JsonReader.Parser (DraftBody) := do
@@ -991,9 +878,9 @@ def finishParseBodyFields (s : ParseBodyFields) : JsonReader.Parser (DraftBody) 
     locals := (← required s.locals "locals"), blocks := blocks.map Prod.snd,
     definitionId := s.def_id.join.orElse (fun _ => s.source_def_id.join), defPath := s.def_path.join,
     spanId := (← required s.span "span"), preambleDefSpanId := (← required s.preamble_def_span "preamble_def_span"),
-    injectionPhase := s.injection_phase.join, isPolymorphic := s.is_polymorphic.join,
+    injectionPhase := s.injection_phase.join, instanceId := (← required s.instance_id "instance_id"),
     sourceScopes := (← required s.source_scopes "source_scopes"), backtraceSpans := (← required s.backtrace_spans "backtrace_spans"),
-    requiredConsts := s.required_consts.join, constantQueryContext := s.constant_query_context.join,
+    requiredConsts := (← required s.required_consts "required_consts"),
     promotedBodies := s.promoted_bodies.getD #[] }
 def parseBodyRaw : JsonReader.Parser (DraftBody) := do
   finishParseBodyFields (← object {} parseBodyField)
@@ -1008,13 +895,8 @@ structure Context where
   localCount : Nat := 0
   blockCount : Nat := 0
   scopeCount : Nat := 0
-  path : Miri.Interpreter.OperandPath := #[]
 
 private abbrev ResolveM := StateT NodeFacts (ReaderT Context (Except String))
-private def atField (name : String) (action : ResolveM α) : ResolveM α :=
-  fun facts ctx => action facts {ctx with path := ctx.path.push (.field name)}
-private def atIndex (index : Nat) (action : ResolveM α) : ResolveM α :=
-  fun facts ctx => action facts {ctx with path := ctx.path.push (.index index)}
 private def runResolve (ctx : Context) (action : ResolveM α) : Result α :=
   ((action.run {}).run ctx).map Prod.fst
 private def runFacts (ctx : Context) (action : ResolveM α) : Result (α × NodeFacts) :=
@@ -1072,16 +954,11 @@ private def resolveConstant (c : DraftConstant) : ResolveM MIR.ConstOperand := d
   checkType ctx c.typeId
   checkSpan ctx c.span.id
   let evaluated ← resolveConstValue ctx c.typeId c.evaluated
-  let source ← match c.source with
-    | .evaluated => pure (MIR.MirConst.Val evaluated c.typeId)
-    | .typeSystem ty id =>
-      checkType ctx ty; check id ctx.typeConstantCount "type constant"
-      pure (.Ty ty id)
-    | .unevaluated value ty =>
-      checkType ctx ty; checkDef ctx value.definition; checkArgs ctx value.arguments
-      pure (.Unevaluated value ty)
-  let value : MIR.ConstOperand := ⟨c.span, c.userType, source⟩
-  modify fun facts => {facts with constants := facts.constants.push ⟨ctx.path, value, c.typeId, evaluated⟩}
+  let value : MIR.ConstOperand := ⟨c.span, c.userType, .Val evaluated c.typeId⟩
+  match evaluated with
+  | .Scalar (.Ptr (.Allocation id _ _ _)) | .Slice id _ | .Indirect id _ =>
+    modify fun facts => {facts with constantAllocations := facts.constantAllocations.push id}
+  | _ => pure ()
   pure value
 
 def resolveConstOperand (ctx : Context) (c : DraftConstant) : Result MIR.ConstOperand :=
@@ -1097,14 +974,14 @@ private def resolvePlace (p : Draft.Place) : ResolveM MIR.Place := do
     | .Field _ ty | .OpaqueCast ty | .UnwrapUnsafeBinder ty => checkType ctx ty
     | .Index id => check id ctx.localCount "local"
     | _ => pure ()
-  modify fun facts => {facts with places := facts.places.push ⟨ctx.path, p.value, p.typeId, p.projectionTypes⟩}
+  modify fun facts => {facts with places := facts.places.push ⟨p.value, p.typeId, p.projectionTypes⟩}
   pure p.value
 
 private def resolveOperand (o : Draft.Operand) : ResolveM MIR.Operand := do
   match o with
-  | .Copy p => return .Copy (← atField "place" (resolvePlace p))
-  | .Move p => return .Move (← atField "place" (resolvePlace p))
-  | .Constant c => return .Constant (← atField "constant" (resolveConstant c))
+  | .Copy p => return .Copy (← resolvePlace p)
+  | .Move p => return .Move (← resolvePlace p)
+  | .Constant c => return .Constant (← resolveConstant c)
   | .RuntimeChecks check => pure (.RuntimeChecks check)
 
 private def operandType : Draft.Operand → Result Nat
@@ -1115,18 +992,18 @@ private def operandType : Draft.Operand → Result Nat
 private def resolveRvalue (r : Draft.Rvalue) : ResolveM MIR.Rvalue := do
   let ctx ← read
   match r with
-  | .Use o retag => return .Use (← atField "operand" (resolveOperand o)) retag
+  | .Use o retag => return .Use (← resolveOperand o) retag
   | .Repeat o count =>
     check count ctx.typeConstantCount "type constant"
-    return .Repeat (← atField "operand" (resolveOperand o)) count
+    return .Repeat (← resolveOperand o) count
   | .Ref region borrow p =>
     checkRegion ctx region
-    return .Ref region borrow (← atField "place" (resolvePlace p))
+    return .Ref region borrow (← resolvePlace p)
   | .ThreadLocalRef entry =>
     checkDef ctx entry.definition
     modify fun facts => {facts with threadLocals := facts.threadLocals.push entry}
     pure (.ThreadLocalRef entry.definition)
-  | .RawPtr kind p => return .RawPtr kind (← atField "place" (resolvePlace p))
+  | .RawPtr kind p => return .RawPtr kind (← resolvePlace p)
   | .Cast kind o ty desc =>
     checkType ctx ty
     if let some desc := desc then
@@ -1136,72 +1013,72 @@ private def resolveRvalue (r : Draft.Rvalue) : ResolveM MIR.Rvalue := do
           desc.sourcePointeeType, desc.targetPointeeType, desc.sourceTailType, desc.targetTailType,
           desc.querySource, desc.queryTarget] do checkType ctx id
       modify fun facts => {facts with dynamicUpcasts := facts.dynamicUpcasts.push desc}
-    return .Cast kind (← atField "operand" (resolveOperand o)) ty
-  | .BinaryOp op l r => return .BinaryOp op (← atField "left" (resolveOperand l)) (← atField "right" (resolveOperand r))
-  | .UnaryOp op o => return .UnaryOp op (← atField "operand" (resolveOperand o))
-  | .Discriminant p => return .Discriminant (← atField "place" (resolvePlace p))
+    return .Cast kind (← resolveOperand o) ty
+  | .BinaryOp op l r => return .BinaryOp op (← resolveOperand l) (← resolveOperand r)
+  | .UnaryOp op o => return .UnaryOp op (← resolveOperand o)
+  | .Discriminant p => return .Discriminant (← resolvePlace p)
   | .Aggregate kind os =>
     checkAggregate ctx kind
-    return .Aggregate kind (← atField "operands" (os.mapIdxM fun i o => atIndex i (resolveOperand o)))
-  | .CopyForDeref p => return .CopyForDeref (← atField "place" (resolvePlace p))
+    return .Aggregate kind (← (os.mapM fun o => (resolveOperand o)))
+  | .CopyForDeref p => return .CopyForDeref (← resolvePlace p)
   | .WrapUnsafeBinder o ty =>
     checkType ctx ty
-    return .WrapUnsafeBinder (← atField "operand" (resolveOperand o)) ty
+    return .WrapUnsafeBinder (← resolveOperand o) ty
   | .Reborrow ty mutability p =>
     checkType ctx ty
-    return .Reborrow ty mutability (← atField "place" (resolvePlace p))
+    return .Reborrow ty mutability (← resolvePlace p)
 
 private def resolveStatement (s : Draft.Statement) : ResolveM MIR.Statement := do
   let ctx ← read
   checkSource ctx s.sourceInfo
   let kind : MIR.StatementKind ← match s.kind with
-    | .Assign p r => pure (MIR.StatementKind.Assign (← atField "place" (resolvePlace p)) (← atField "rvalue" (resolveRvalue r)))
+    | .Assign p r => pure (MIR.StatementKind.Assign (← resolvePlace p) (← resolveRvalue r))
     | .FakeRead cause p =>
       match cause with
       | .ForMatchedPlace (some id) | .ForLet (some id) => checkDef ctx id
       | _ => pure ()
-      pure (.FakeRead cause (← atField "place" (resolvePlace p)))
-    | .SetDiscriminant p index => pure (.SetDiscriminant (← atField "place" (resolvePlace p)) index)
+      pure (.FakeRead cause (← resolvePlace p))
+    | .SetDiscriminant p index => pure (.SetDiscriminant (← resolvePlace p) index)
     | .StorageLive id => check id ctx.localCount "local"; pure (.StorageLive id)
     | .StorageDead id => check id ctx.localCount "local"; pure (.StorageDead id)
-    | .PlaceMention p => pure (.PlaceMention (← atField "place" (resolvePlace p)))
-    | .AscribeUserType p projection variance => pure (.AscribeUserType (← atField "place" (resolvePlace p)) projection variance)
+    | .PlaceMention p => pure (.PlaceMention (← resolvePlace p))
+    | .AscribeUserType p projection variance => pure (.AscribeUserType (← resolvePlace p) projection variance)
     | .Coverage c =>
       match c with
       | .Point _ hir => checkDef ctx hir.owner
       | _ => pure ()
       pure (.Coverage c)
-    | .Intrinsic (.Assume o) => pure (.Intrinsic (.Assume (← atField "value" (resolveOperand o))))
-    | .Intrinsic (.CopyNonOverlapping c) => pure (.Intrinsic (.CopyNonOverlapping ⟨← atField "src" (resolveOperand c.source), ← atField "dst" (resolveOperand c.destination), ← atField "count" (resolveOperand c.count)⟩))
+    | .Intrinsic (.Assume o) => pure (.Intrinsic (.Assume (← resolveOperand o)))
+    | .Intrinsic (.CopyNonOverlapping c) => pure (.Intrinsic (.CopyNonOverlapping ⟨← (resolveOperand c.source), ← (resolveOperand c.destination), ← (resolveOperand c.count)⟩))
     | .ConstEvalCounter => pure .ConstEvalCounter
     | .Nop => pure .Nop
-    | .BackwardIncompatibleDropHint p reason => pure (.BackwardIncompatibleDropHint (← atField "place" (resolvePlace p)) reason)
+    | .BackwardIncompatibleDropHint p reason => pure (.BackwardIncompatibleDropHint (← resolvePlace p) reason)
   pure ⟨s.sourceInfo, kind⟩
 
 private def resolveAssert (a : Draft.AssertKind) : ResolveM MIR.AssertKind := do
   match a with
-  | .BoundsCheck l i => return .BoundsCheck (← atField "length" (resolveOperand l)) (← atField "index" (resolveOperand i))
-  | .Overflow op l r => return .Overflow op (← atField "left" (resolveOperand l)) (← atField "right" (resolveOperand r))
-  | .OverflowNeg o => return .OverflowNeg (← atField "operand" (resolveOperand o))
-  | .DivisionByZero o => return .DivisionByZero (← atField "operand" (resolveOperand o))
-  | .RemainderByZero o => return .RemainderByZero (← atField "operand" (resolveOperand o))
+  | .BoundsCheck l i => return .BoundsCheck (← resolveOperand l) (← resolveOperand i)
+  | .Overflow op l r => return .Overflow op (← resolveOperand l) (← resolveOperand r)
+  | .OverflowNeg o => return .OverflowNeg (← resolveOperand o)
+  | .DivisionByZero o => return .DivisionByZero (← resolveOperand o)
+  | .RemainderByZero o => return .RemainderByZero (← resolveOperand o)
   | .ResumedAfterReturn c => pure (.ResumedAfterReturn c)
   | .ResumedAfterPanic c => pure (.ResumedAfterPanic c)
   | .ResumedAfterDrop c => pure (.ResumedAfterDrop c)
-  | .MisalignedPointerDereference r f => return .MisalignedPointerDereference (← atField "required" (resolveOperand r)) (← atField "found" (resolveOperand f))
+  | .MisalignedPointerDereference r f => return .MisalignedPointerDereference (← resolveOperand r) (← resolveOperand f)
   | .NullPointerDereference => pure .NullPointerDereference
   | .NullReferenceConstructed => pure .NullReferenceConstructed
-  | .InvalidEnumConstruction o => return .InvalidEnumConstruction (← atField "operand" (resolveOperand o))
+  | .InvalidEnumConstruction o => return .InvalidEnumConstruction (← resolveOperand o)
 private def resolveSpanned (o : Draft.SpannedOperand) : ResolveM MIR.SpannedOperand := do
   checkSpan (← read) o.span.id
-  return ⟨o.span, ← atField "operand" (resolveOperand o.operand)⟩
+  return ⟨o.span, ← (resolveOperand o.operand)⟩
 private def resolveAsmOperand (o : Draft.InlineAsmOperand) : ResolveM MIR.InlineAsmOperand := do
   match o with
-  | .In reg o => return .In reg (← atField "value" (resolveOperand o))
-  | .Out reg late p => return .Out reg late (← atField "place" (p.mapM resolvePlace))
-  | .InOut reg late o p => return .InOut reg late (← atField "input" (resolveOperand o)) (← atField "output" (p.mapM resolvePlace))
-  | .Const c => return .Const (← atField "value" (resolveConstant c))
-  | .SymFn c => return .SymFn (← atField "value" (resolveConstant c))
+  | .In reg o => return .In reg (← resolveOperand o)
+  | .Out reg late p => return .Out reg late (← p.mapM resolvePlace)
+  | .InOut reg late o p => return .InOut reg late (← resolveOperand o) (← p.mapM resolvePlace)
+  | .Const c => return .Const (← resolveConstant c)
+  | .SymFn c => return .SymFn (← resolveConstant c)
   | .SymStatic id => checkDef (← read) id; pure (.SymStatic id)
   | .Label index => pure (.Label index)
 private def resolveAsm (a : Draft.InlineAsmTerminator) : ResolveM MIR.InlineAsmTerminator := do
@@ -1211,7 +1088,7 @@ private def resolveAsm (a : Draft.InlineAsmTerminator) : ResolveM MIR.InlineAsmT
     match p with
     | .Placeholder _ _ s => checkSpan ctx s.id
     | _ => pure ()
-  let operands ← atField "operands" (a.operands.mapIdxM fun i o => atIndex i (resolveAsmOperand o))
+  let operands ← (a.operands.mapM fun o => (resolveAsmOperand o))
   return ⟨a.asmMacro, a.template, operands, a.options, a.lineSpans, a.targets, a.unwind⟩
 
 private def resolveTerminator (t : Draft.Terminator) : ResolveM MIR.Terminator := do
@@ -1221,20 +1098,20 @@ private def resolveTerminator (t : Draft.Terminator) : ResolveM MIR.Terminator :
     for ty in e.functionType do checkType ctx ty
   let kind : MIR.TerminatorKind ← match t.kind with
     | .Goto b hs => pure (MIR.TerminatorKind.Goto b hs)
-    | .SwitchInt o ts => pure (.SwitchInt (← atField "discriminant" (resolveOperand o)) ts)
+    | .SwitchInt o ts => pure (.SwitchInt (← resolveOperand o) ts)
     | .UnwindResume => pure .UnwindResume
     | .UnwindTerminate r => pure (.UnwindTerminate r)
     | .Return => pure .Return
     | .Unreachable => pure .Unreachable
-    | .Drop p b u r a => pure (.Drop (← atField "place" (resolvePlace p)) b u r a)
+    | .Drop p b u r a => pure (.Drop (← resolvePlace p) b u r a)
     | .Call f args p b u s span =>
       checkSpan ctx span.id
-      pure (.Call (← atField "function" (resolveOperand f)) (← atField "args" (args.mapIdxM fun i a => atIndex i (resolveSpanned a))) (← atField "destination" (resolvePlace p)) b u s span)
+      pure (.Call (← resolveOperand f) (← (args.mapM fun a => (resolveSpanned a))) (← resolvePlace p) b u s span)
     | .TailCall f args span =>
       checkSpan ctx span.id
-      pure (.TailCall (← atField "function" (resolveOperand f)) (← atField "args" (args.mapIdxM fun i a => atIndex i (resolveSpanned a))) span)
-    | .Assert o e a b u => pure (.Assert (← atField "condition" (resolveOperand o)) e (← atField "message" (resolveAssert a)) b u)
-    | .Yield o b p d => pure (.Yield (← atField "value" (resolveOperand o)) b (← atField "resume_arg" (resolvePlace p)) d)
+      pure (.TailCall (← resolveOperand f) (← (args.mapM fun a => (resolveSpanned a))) span)
+    | .Assert o e a b u => pure (.Assert (← resolveOperand o) e (← resolveAssert a) b u)
+    | .Yield o b p d => pure (.Yield (← resolveOperand o) b (← resolvePlace p) d)
     | .CoroutineDrop => pure .CoroutineDrop
     | .FalseEdge r i => pure (.FalseEdge r i)
     | .FalseUnwind r u => pure (.FalseUnwind r u)
@@ -1281,7 +1158,6 @@ def resolveBody (ctx : Context) (d : DraftBody) : Result Body := do
   let mut facts := #[]
   let mut evidence := #[]
   for block in d.blocks do
-    let ctx := {ctx with path := #[.field "kind"]}
     let statements ← block.statements.mapM fun s => runFacts ctx (resolveStatement s)
     let (term, termFacts) ← runFacts ctx (resolveTerminator block.terminator)
     for target in controlTargets term.kind do check target ctx.blockCount "control-flow target"
@@ -1294,27 +1170,14 @@ def resolveBody (ctx : Context) (d : DraftBody) : Result Body := do
   for id in d.definitionId do checkDef ctx id
   checkSpan ctx d.spanId
   checkSpan ctx d.preambleDefSpanId
-  let requiredConsts ← d.requiredConsts.mapM (fun cs => cs.mapM (resolveConstOperand ctx))
-  let constantQueryContext ← d.constantQueryContext.mapM fun c => do
-    let checks ← c.requiredChecks.mapM fun check => do
-      checkSpan ctx check.spanId
-      let normalizedOperand ← resolveConstOperand ctx check.normalizedOperand
-      let value ← resolveConstValue ctx check.normalizedOperand.typeId check.value
-      pure ({index := check.index, spanId := check.spanId, normalizedOperand, value} : RequiredConstantCheck)
-    let value : ConstantQueryContext := {
-      instanceId := c.instanceId
-      inputPhase := c.inputPhase
-      normalizationBodyId := c.normalizationBodyId
-      requiredTypingEnvironment := c.requiredTypingEnvironment
-      requiredChecks := checks }
-    pure value
+  let requiredConsts ← d.requiredConsts.mapM (resolveConstOperand ctx)
   return {
     mir := ⟨d.phase, d.argumentCount, d.spreadArgument, d.locals.map (·.typeId), blocks⟩,
     definitionId := d.definitionId, defPath := d.defPath.getD d.sourcePath, sourcePath := d.sourcePath,
     spanId := d.spanId, preambleDefSpanId := d.preambleDefSpanId, injectionPhase := d.injectionPhase,
-    isPolymorphic := d.isPolymorphic, localSources := d.locals.map (·.sourceInfo), sourceScopes := d.sourceScopes,
+    instanceId := d.instanceId, localSources := d.locals.map (·.sourceInfo), sourceScopes := d.sourceScopes,
     backtraceSpans := d.backtraceSpans, callEvidence := evidence, nodeFacts := facts, requiredConsts,
-    constantQueryContext, promotedBodies := d.promotedBodies }
+    promotedBodies := d.promotedBodies }
 
 def decodeGenericArgs (ctx : Context) (args : Array MIR.GenericArg) : Result (Array MIR.GenericArg) := do
   checkArgs ctx args

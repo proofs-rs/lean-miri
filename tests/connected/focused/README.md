@@ -49,3 +49,14 @@ The pthread-only race reproduction shares `AtomicHandoff.lean`'s canonical
 scheduler/Unix setup. Its `expect-race` mode checks two thread records and the
 exact typed `DataRace` error, and rejects exit, Unsupported, failure and pending
 outcomes. A separate copy of that runner is unnecessary.
+
+The resolved generic regression exercises an associated unsized type, a fat raw
+pointer round trip, and an associated constant through a concrete instantiation.
+It requires successful native guest completion and rejects duplicate executable
+bodies for an instance/promoted pair:
+
+```bash
+python3 tests/connected/focused/check_resolved_generic.py \
+  --exporter exporter/target/release/lean-miri-mir-exporter \
+  --runner .lake/build/bin/native_runner
+```

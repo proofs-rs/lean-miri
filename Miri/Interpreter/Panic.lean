@@ -1,4 +1,3 @@
-import Miri.Interpreter.OperandPath
 import Miri.Interpreter.Unwind
 import Miri.Interpreter.MainThread
 
@@ -67,7 +66,6 @@ structure Hooks (K User C Other : Type) where
   genericParameters : C → DefId → M K User (Array MainGenericParameter)
   itemInstance : C → DefId → Array GenericArg → M K User CallInstance
   evalOperand : C → MIR.Operand → M K User (OpTy Provenance)
-  evalOperandAt : C → OperandPath → MIR.Operand → M K User (OpTy Provenance) := fun c _ => evalOperand c
 
 private def mono (h : Hooks K User C Other) (choice : C) (item : LangItem) : M K User CallInstance := do
   let some definition ← h.langItem choice item |
@@ -105,12 +103,12 @@ def assertPanic (h : Hooks K User C Other) (choice : C)
     (message : AssertKind) (unwind : UnwindAction) : M K User Unit := do
   match message with
   | .BoundsCheck len index =>
-    let index ← h.driver.readImmediate choice (← h.evalOperandAt choice (OperandPath.assertion "index") index)
-    let len ← h.driver.readImmediate choice (← h.evalOperandAt choice (OperandPath.assertion "length") len)
+    let index ← h.driver.readImmediate choice (← h.evalOperand choice index)
+    let len ← h.driver.readImmediate choice (← h.evalOperand choice len)
     call h choice .PanicBoundsCheck #[index, len] unwind
   | .MisalignedPointerDereference required found =>
-    let required ← h.driver.readImmediate choice (← h.evalOperandAt choice (OperandPath.assertion "required") required)
-    let found ← h.driver.readImmediate choice (← h.evalOperandAt choice (OperandPath.assertion "found") found)
+    let required ← h.driver.readImmediate choice (← h.evalOperand choice required)
+    let found ← h.driver.readImmediate choice (← h.evalOperand choice found)
     call h choice .PanicMisalignedPointerDereference #[required, found] unwind
   | _ =>
     let item ← match assertLangItem message with

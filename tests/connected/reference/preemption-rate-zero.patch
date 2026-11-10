@@ -1,84 +1,57 @@
 --- a/exporter/src/main.rs
 +++ b/scratch/reference-profile-exporter/src/main.rs
-@@ -544,13 +544,64 @@
+@@ -662,7 +662,34 @@
  }
  
  #[cfg(feature = "miri-reference")]
-+fn prepared_miri_reference_seed() -> Result<Option<u64>, String> {
-+    match env::var("LEAN_MIRI_REFERENCE_SEED") {
-+        Ok(value) => value
-+            .parse::<u64>()
-+            .map(Some)
-+            .map_err(|_| "LEAN_MIRI_REFERENCE_SEED must be an unsigned 64-bit integer".into()),
-+        Err(env::VarError::NotPresent) => Ok(None),
-+        Err(error) => Err(format!("cannot read prepared Miri seed: {error}")),
-+    }
-+}
-+
-+#[cfg(feature = "miri-reference")]
-+fn prepared_miri_reference_preemption_rate() -> Result<Option<f64>, String> {
-+    match env::var("LEAN_MIRI_REFERENCE_PREEMPTION_RATE") {
++fn prepared_miri_reference_profile() -> Result<(Option<u64>, Option<f64>, Option<String>), String> {
++    let seed = match env::var("LEAN_MIRI_REFERENCE_SEED") {
++        Ok(value) => Some(value.parse::<u64>().map_err(|_| "LEAN_MIRI_REFERENCE_SEED must be an unsigned 64-bit integer".to_owned())?),
++        Err(env::VarError::NotPresent) => None,
++        Err(error) => return Err(format!("cannot read prepared Miri seed: {error}")),
++    };
++    let rate = match env::var("LEAN_MIRI_REFERENCE_PREEMPTION_RATE") {
 +        Ok(value) => {
-+            let rate = value
-+                .parse::<f64>()
-+                .map_err(|_| "LEAN_MIRI_REFERENCE_PREEMPTION_RATE must be a finite number in [0,1]".to_owned())?;
++            let rate = value.parse::<f64>().map_err(|_| "LEAN_MIRI_REFERENCE_PREEMPTION_RATE must be finite and in [0,1]".to_owned())?;
 +            if !rate.is_finite() || !(0.0..=1.0).contains(&rate) {
-+                return Err("LEAN_MIRI_REFERENCE_PREEMPTION_RATE must be a finite number in [0,1]".into());
++                return Err("LEAN_MIRI_REFERENCE_PREEMPTION_RATE must be finite and in [0,1]".into());
 +            }
-+            Ok(Some(rate))
-+        }
-+        Err(env::VarError::NotPresent) => Ok(None),
-+        Err(error) => Err(format!("cannot read prepared Miri preemption rate: {error}")),
-+    }
++            Some(rate)
++        },
++        Err(env::VarError::NotPresent) => None,
++        Err(error) => return Err(format!("cannot read prepared Miri preemption rate: {error}")),
++    };
++    let argv0 = match env::var("LEAN_MIRI_REFERENCE_ARGV0") {
++        Ok(value) => Some(value),
++        Err(env::VarError::NotPresent) => None,
++        Err(error) => return Err(format!("cannot read prepared Miri argv[0]: {error}")),
++    };
++    Ok((seed, rate, argv0))
 +}
 +
 +#[cfg(feature = "miri-reference")]
- fn run_prepared_miri_reference_entry(
-     tcx: TyCtxt<'_>,
-     entry: rustc_hir::def_id::DefId,
-     entry_type: miri::MiriEntryFnType,
+ fn prepared_miri_reference_arguments() -> Result<Vec<String>, String> {
++    prepared_miri_reference_profile()?;
+     match env::var("LEAN_MIRI_REFERENCE_ARGS_JSON") {
+         Ok(value) => serde_json::from_str::<Vec<String>>(&value)
+             .map_err(|error| format!("invalid LEAN_MIRI_REFERENCE_ARGS_JSON: {error}")),
+@@ -679,7 +706,10 @@
      extra_args: &[String],
- ) -> Value {
-+    let seed = match prepared_miri_reference_seed() {
-+        Ok(seed) => seed,
-+        Err(error) => {
-+            return json!({
-+                "status":"failed",
-+                "outcome":{"kind":"invalid_configuration","error":error},
-+            });
-+        }
-+    };
-+    let preemption_rate = match prepared_miri_reference_preemption_rate() {
-+        Ok(rate) => rate,
-+        Err(error) => {
-+            return json!({
-+                "status":"failed",
-+                "outcome":{"kind":"invalid_configuration","error":error},
-+            });
-+        }
-+    };
+ ) -> reference_values::Result {
+     use reference_values::{Config, TreeBorrows, Result as R, Status as S, Outcome as O};
++    let (seed, rate, argv0) = prepared_miri_reference_profile().expect("reference profile validated before execution");
      let mut config = miri::MiriConfig::default();
 +    config.seed = seed;
-+    if let Some(rate) = preemption_rate {
-+        config.preemption_rate = rate;
-+    }
++    if let Some(rate) = rate { config.preemption_rate = rate; }
      config.borrow_tracker = Some(miri::BorrowTrackerMethod::TreeBorrows(
          miri::TreeBorrowsParams {
              precise_interior_mut: true,
-@@ -559,7 +610,15 @@
+@@ -688,7 +718,7 @@
      ));
      config.env = env::vars_os().collect();
      let file_name = tcx.sess.io.input.file_name(tcx.sess);
 -    let mut args = vec![file_name.prefer_local_unconditionally().to_string()];
-+    let argv0 = match env::var("LEAN_MIRI_REFERENCE_ARGV0") {
-+        Ok(value) => value,
-+        Err(env::VarError::NotPresent) => file_name.prefer_local_unconditionally().to_string(),
-+        Err(error) => {
-+            return json!({"status":"failed",
-+                "outcome":{"kind":"invalid_configuration","error":format!("cannot read prepared Miri argv[0]: {error}")}});
-+        }
-+    };
-+    let mut args = vec![argv0];
++    let mut args = vec![argv0.unwrap_or_else(|| file_name.prefer_local_unconditionally().to_string())];
      args.extend_from_slice(extra_args);
      config.args = args.clone();
      config.current_exe = file_name
