@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutate fresh exporter evidence; never fabricate compiler layouts/identities."""
+"""Mutate fresh typed compiler evidence without inventing layouts or identities."""
 import argparse
 import copy
 import json
@@ -19,61 +19,43 @@ a.output.mkdir(parents=True, exist_ok=True)
 base = load_mir_document(a.base)
 cases = []
 
+
 def save(name, value):
     (a.output / name).write_text(json.dumps(value, indent=2) + '\n')
 
-save('plain.json', base)
 
 def add(name, value, ready, provider='none', index=0, baseline='plain.json', **extra):
     save(name + '.json', value)
     cases.append(dict(file=name + '.json', baseline=baseline, ready=ready,
                       provider=provider, index=index, **extra))
 
-def diagnostic(doc, path):
-    doc.setdefault('selected_scope', {}).setdefault('retained_catalog_obligations', []).append(
-        dict(path=path, type_id=10**30, reason='qa23 invalid retained compiler evidence'))
 
-def unsupported():
-    return dict(type_id=10**30, reason='qa23 invalid compiler evidence')
-
-for family, catalog, suffix, provider in [
-    ('native', 'compiler_native_signature_queries', '.signature_query', 'native'),
+save('plain.json', base)
+rows = base['compiler_native_signature_queries']
+if not rows:
+    raise ValueError('fresh compiler export has no native signature query')
+index = 0
+add('native-control', base, True, 'native', index)
+for name, mutate in [
+    ('signature-shape', lambda row: row.update(signature_query={})),
+    ('input-type', lambda row: row['signature_query'].update(inputs=[len(base['types'])])),
+    ('output-type', lambda row: row['signature_query'].update(output=len(base['types']))),
+    ('instance', lambda row: row.update(instance_id=len(base['instances']))),
 ]:
-    rows = base[catalog]
-    index = next((i for i, row in enumerate(rows)
-                  if (row['signature_query'] if suffix else row).get('kind') != 'unsupported'), None)
-    if index is None:
-        raise ValueError(f'fresh compiler export has no supported {catalog} row')
     doc = copy.deepcopy(base)
-    if suffix:
-        doc[catalog][index]['signature_query'] = unsupported()
-    else:
-        doc[catalog][index].update(unsupported())
-    add(family + '-demand', doc, True, provider, index)
-    retained = copy.deepcopy(doc)
-    diagnostic(retained, f'{catalog}[{index}]{suffix}')
-    add(family + '-retained', retained, False, index=index)
-    for label, path in [
-        ('leading-zero', f'{catalog}[00]{suffix}'),
-        ('leading-one', f'{catalog}[01]{suffix}'),
-        ('empty', f'{catalog}[]{suffix}'),
-        ('signed', f'{catalog}[-1]{suffix}'),
-        ('extra-bracket', f'{catalog}[0][1]{suffix}'),
-        ('nondigit', f'{catalog}[x]{suffix}'),
-        ('unknown-descendant', f'{catalog}[0]{suffix}.unknown'),
-        ('similar-prefix', f'{catalog}_shadow[0]{suffix}'),
-    ]:
-        negative = copy.deepcopy(base)
-        diagnostic(negative, path)
-        add(f'{family}-{label}', negative, False)
-    nested = copy.deepcopy(base)
-    target = nested[catalog][index]['signature_query'] if suffix else nested[catalog][index]
-    target['qa23_unknown_descendant'] = dict(kind='Cast', vtable_allocation=dict(kind='dynamic_vtable_upcast'))
-    add(family + '-actual-unknown-descendant', nested, False, index=index)
+    mutate(doc['compiler_native_signature_queries'][index])
+    add('native-' + name, doc, False, index=index)
+
+extra = copy.deepcopy(base)
+extra['compiler_native_signature_queries'][index]['ignored_extension'] = {
+    'kind': 'Cast', 'type_id': 10**30, 'allocation': 10**30,
+}
+add('native-irrelevant-extension', extra, True)
 
 if a.tls_base:
     tls = load_mir_document(a.tls_base)
     save('tls-plain.json', tls)
+
     def collect(value):
         if isinstance(value, dict):
             if value.get('kind') == 'ThreadLocalRef':
@@ -83,22 +65,24 @@ if a.tls_base:
         elif isinstance(value, list):
             for child in value:
                 yield from collect(child)
+
     nodes = list(collect(tls['bodies']))
-    if not nodes or not any('initializer' in n for n in nodes):
-        raise ValueError('TLS baseline lacks actual supported inline ThreadLocalRef initializer')
-    definition = next(n['def_id'] for n in nodes if 'initializer' in n)
+    if not nodes or not any('initializer' in node for node in nodes):
+        raise ValueError('TLS baseline lacks an inline ThreadLocalRef initializer')
+    definition = next(node['def_id'] for node in nodes if 'initializer' in node)
+    add('tls-control', tls, True, 'tls', baseline='tls-plain.json', definition=definition)
     doc = copy.deepcopy(tls)
     for node in collect(doc['bodies']):
         if node['def_id'] == definition:
-            node['initializer'] = unsupported()
-    # Required inline TLS allocation images are validated by both decoders.
-    add('tls-initializer-demand', doc, False, baseline='tls-plain.json', definition=definition)
-    nested = copy.deepcopy(tls)
-    next(n for n in collect(nested['bodies']) if n['def_id'] == definition)['initializer']['qa23_unknown_descendant'] = dict(kind='Cast', vtable_allocation=dict(kind='dynamic_vtable_upcast'))
-    add('tls-unknown-descendant', nested, False, baseline='tls-plain.json')
-    lookalike = copy.deepcopy(tls)
-    lookalike['qa23_initializer_lookalike'] = dict(kind='ThreadLocalRef', def_id=10**30, initializer=dict(allocation=10**30))
-    add('tls-outside-body-lookalike', lookalike, False, baseline='tls-plain.json')
+            node['initializer'] = {}
+    add('tls-initializer-shape', doc, False, baseline='tls-plain.json')
+    doc = copy.deepcopy(tls)
+    next(node for node in collect(doc['bodies']) if node['def_id'] == definition)['def_id'] = len(tls['definitions'])
+    add('tls-definition-bounds', doc, False, baseline='tls-plain.json')
+    extra = copy.deepcopy(tls)
+    extra['ignored_extension'] = {'kind': 'ThreadLocalRef', 'def_id': 10**30,
+                                  'initializer': {'allocation': 10**30}}
+    add('tls-irrelevant-extension', extra, True, baseline='tls-plain.json')
 
 save('cases.json', dict(cases=cases, source_exports=dict(
     base=str(a.base), tls_base=str(a.tls_base) if a.tls_base else None)))

@@ -87,8 +87,8 @@ structure Metadata (s : Static) where
   lifecycleRow : s.prepared.compiler.lifecycle.lifecycle.entries[s.loaded.identity.index]? =
     some ⟨.ok preamble, .ok s.functionInstance, .ok #[]⟩
   localSpan : SpanRef
-  localSourceSpan : ∃ decl, loweredBody.input.locals[0]? = some decl ∧
-    decl.sourceInfo.spanId = localSpan.id
+  localSourceSpan : ∃ decl, loweredBody.input.localSources[0]? = some decl ∧
+    decl.spanId = localSpan.id
   /-- The literal is tied to the fixed instruction, not chosen to supply an
   operational result. Its exact structural site selects compiler evidence. -/
   literal : ConstOperand
@@ -111,11 +111,17 @@ structure Metadata (s : Static) where
     s.prepared.compiler.runtime.lookup ty = .ok layout →
     InputDraft.AlignmentRepresentation layout.layout.align.abi
 
+  /-- The paired local declaration representation previously made this equality
+  structural. The typed MIR and source metadata arrays now record it explicitly;
+  it is a compiler-data alignment fact, not an execution-success premise. -/
+  compilerLocalSourceAlignment : ∀ body ∈ s.prepared.compiler.program.bundle.bodies,
+    body.input.localSources.size = body.input.mir.locals.size
+
   /-- Canonical compiler span collection covers declarations in every imported
   body, including arbitrary callers whose locals are later materialized. -/
   compilerLocalSourceSpans : ∀ body ∈ s.prepared.compiler.program.bundle.bodies,
-    ∀ decl ∈ body.input.locals,
-      decl.sourceInfo.spanId < s.prepared.compiler.program.bundle.spans.size
+    ∀ decl ∈ body.input.localSources,
+      decl.spanId < s.prepared.compiler.program.bundle.spans.size
 
 structure Profile (s : Static) : Prop where
   debug : s.options.place.debugAssertions = false

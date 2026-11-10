@@ -1,4 +1,5 @@
-import Miri.Input.DecoderValues
+import Miri.Input.Model.Types
+import Miri.Input.Model.Catalogs
 
 namespace Miri.Input
 
@@ -21,7 +22,8 @@ structure ImportDocument where
   functionAbis : Array FunctionAbi
   bodyRoots : Array BodyRoot := #[]
   bodies : Array Body
-  raw : Lean.Json
+  queries : Catalog.Queries
+  producerSettings : Catalog.ProducerSettings
 
 structure ExecutionInput where
   document : ImportDocument

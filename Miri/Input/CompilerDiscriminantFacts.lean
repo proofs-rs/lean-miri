@@ -1,4 +1,5 @@
 import Miri.Input.CompilerFacts
+import Miri.Input.CompilerPrimitiveFacts
 import Miri.Interpreter.Discriminant
 
 /-! Actual rustc Ty::discriminant_ty, ADT/coroutine discriminants and
@@ -28,9 +29,7 @@ private def primitiveKey : Primitive → Except String String
 source nondefault-address-space limitation), never a guessed usize/layout. -/
 def tagLayout (context : CompilerFacts.Context) (tag : Scalar) : Except String (TyAndLayout TypeId) := do
   let key ← primitiveKey tag.primitive
-  let refs ← context.runtime.source.raw.getObjVal? "compiler_runtime_primitives"
-  let id ← (← refs.getObjVal? key).getNat?
-  CompilerFacts.layoutOf context id
+  CompilerPrimitiveFacts.primitiveLayout context.runtime key
 private def values (context : CompilerFacts.Context) (info : DiscriminantInfo) :
     Except String (Array (Nat × TypeId × U128)) :=
   info.values.mapM fun value => do

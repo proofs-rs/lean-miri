@@ -52,9 +52,6 @@ def functionAbiId (runtime : RuntimeMetadata) (id : Nat) : Result (FnAbi TypeId)
   let source ← require runtime.source.functionAbis[id]? s!"compiler FnAbi ID {id} out of bounds"
   functionAbi runtime source
 
-/-- Read a schema-typed ABI reference and resolve it at demand. -/
-def functionAbiJson (runtime : RuntimeMetadata) (raw : Json) : Result (FnAbi TypeId) := do
-  functionAbiId runtime (← raw.getNat?)
 
 structure Site where
   bodyIndex : Nat
@@ -121,8 +118,7 @@ private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgr
         | .Call function .. | .TailCall function .. => pure (some function)
         | _ => pure none
       if let some function := function then
-        let sourceBlock ← require body.input.blocks[blockIndex]? "missing source block"
-        let sourceResolution ← require sourceBlock.callResolution "missing compiler call resolution"
+        let sourceResolution ← require (body.input.callEvidence[blockIndex]?).join "missing compiler call resolution"
         if sourceResolution.kind == .indirect then
           let result : Result (TypeId × FunctionAbiId) := do
             let typeId ← require sourceResolution.functionType "indirect function type is missing"

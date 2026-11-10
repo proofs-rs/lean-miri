@@ -6,33 +6,21 @@ The catalog records the actual compiler query after full-instance substitution
 and bound-region erasure, with no normalization or FnAbi reconstruction. -/
 namespace Miri.Input.CompilerNativeSignatures
 open Lean Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
-private def typeRef (p : CompilerProviders.Prepared) (value : Json) : Except String TyId := do
-  let id ← value.getNat?
+private def typeRef (p : CompilerProviders.Prepared) (id : TyId) : Except String TyId := do
   let _ ← p.runtime.node id |>.mapError toString
   pure id
 
 def query (p : CompilerProviders.Prepared) (callee : CallInstance) : Except String (Array TyId × TyId) := do
-  let entries ← (← p.program.input.raw.getObjVal? "compiler_native_signature_queries").getArr?
-  let ctx := LowerContext.ofDocument p.program.input
-  let tables := p.program.compilerTables
+  let _ ← CompilerInstance.source p.loweringContext callee
   let mut found : Option (Array TyId × TyId) := none
-  for entry in entries do
-    let (actual,next) ← match CompilerInstance.decode ctx tables entry with
-      | .ok value => pure value
-      | .error _ => continue
-    if actual == callee then
-      unless next.definitions == tables.definitions && next.typeConstants == tables.typeConstants do
-        throw "native signature query requires unprepared compiler identity"
-      unless (← entry.getObjValAs? String "query") ==
-          "instantiate_bound_regions_with_erased(fn_sig(instance.def_id()).instantiate(instance.args))" &&
-          (← entry.getObjValAs? String "normalization") == "none" &&
-          (← entry.getObjValAs? String "bound_regions") == "erased" do
+  for entry in p.program.input.queries.nativeSignatures do
+    if entry.instanceId == callee then
+      unless entry.query == "instantiate_bound_regions_with_erased(fn_sig(instance.def_id()).instantiate(instance.args))" &&
+          entry.normalization == "none" && entry.boundRegions == "erased" do
         throw "native signature query operation/region-erasure evidence mismatch"
-      let value ← entry.getObjVal? "signature_query"
-      let signature := value
-      let inputs ← (← (← signature.getObjVal? "inputs").getArr?).mapM (typeRef p)
-      let output ← typeRef p (← signature.getObjVal? "output")
-      let result := (inputs,output)
+      let inputs ← entry.signature.inputs.mapM (typeRef p)
+      let output ← typeRef p entry.signature.output
+      let result := (inputs, output)
       if let some old := found then
         unless old == result do throw "conflicting native signature queries for exact full instance"
       found := some result

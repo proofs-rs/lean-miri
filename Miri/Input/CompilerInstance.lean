@@ -10,15 +10,6 @@ def source (ctx : LowerContext) (id : Nat) : Except String InstanceNode := do
   let some identity := ctx.instances[id]? | throw s!"compiler instance ID {id} out of bounds"
   pure identity
 
-/-- Query envelopes preserve the serialization-local instance ID. -/
-def decode (ctx : LowerContext) (tables : CompilerTables) (j : Json) :
-    Except String (CallInstance × CompilerTables) := do
-  let id ← match j with
-    | .num _ => j.getNat?
-    | _ => (← j.getObjVal? "instance_id").getNat?
-  let _ ← source ctx id
-  pure (id,tables)
-
 /-- Only the operation requesting the instance kind reads this field. -/
 def kindOf (ctx : LowerContext) (tables : CompilerTables) (id : CallInstance) :
     Except String CallInstanceKind := do

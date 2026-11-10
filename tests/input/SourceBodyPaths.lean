@@ -15,9 +15,7 @@ def main (args : List String) : IO Unit := do
       program.bundle.definitions == input.document.definitions &&
       program.bundle.typeConstants == input.document.typeConstants do
     throw (IO.userError "lowering changed compiler pool definitions or body IDs")
-  let rawBodies ← must ((program.input.raw.getObjVal? "bodies").bind Lean.Json.getArr?)
   for (lowered, index) in program.bundle.bodies.toList.zipIdx do
-    unless lowered.input.sourcePath == s!"$.bodies[{index}]" &&
-        rawBodies[index]? == some lowered.input.payload do
+    unless lowered.input.sourcePath == s!"$.bodies[{index}]" do
       throw (IO.userError s!"body diagnostic path does not resolve to its source definition: {index}")
   IO.println s!"source body paths and compiler pool IDs preserved for {program.bundle.bodies.size} definitions"

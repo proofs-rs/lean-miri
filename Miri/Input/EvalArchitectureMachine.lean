@@ -17,8 +17,7 @@ private def liftQuery (query : Except String A) : EStateM StepError S A :=
 
 /-- Exact compiler session target.arch, added independently of target triple. -/
 def targetArch (prepared : CompilerIntrinsicFacts.Prepared) : Except String String := do
-  let session ← prepared.program.input.raw.getObjVal? "compiler_session_queries"
-  (← session.getObjVal? "target_arch").getStr?
+  pure prepared.program.input.queries.session.targetArch
 
 /-- helpers.rs:940–952: absent enabled ISA feature is UB, whereas absent
 compiler evidence is an unresolved input obligation. -/

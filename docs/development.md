@@ -195,11 +195,26 @@ select **GitHub Actions** as the source. The published API entry point is
 
 ## MIR lowering
 
-`lowerProgram` accepts decoder-produced MIR paired with its
-source document. Manually assembled or edited body/source pairs are outside this
-experimental API contract.
+The input decoder makes one forward pass over JSON into `DraftDocument`: concrete
+compiler tables, typed body drafts and typed catalog constants. Every schema object
+uses its own typed accumulator, so object fields may appear in any order, including
+bodies before types and layouts. Duplicate fields are rejected; unknown fields are
+skipped structurally and still require valid JSON.
 
-`bash tools/check-lowering-reader.sh [INPUT.json ...]` checks source paths and
-typed MIR, identity tables, spans and ordered obligations after lowering. The default input is the fixed
-empty-function fixture. Run `bash tools/check-empty-function.sh` for its
+`resolveDocument` then checks table references and consistency and resolves scalar
+constants using their compiler layout widths while constructing interpreter MIR and
+per-node facts. Pool IDs stay numeric and local to the input; runtime lookups retain
+bounds checks. Neither draft nor final data stores JSON ranges or a generic value
+tree. `decodeFile` currently reads the complete file as a `String` before parsing,
+so this is not a bounded-memory streaming file reader.
+
+Use `decodeJson` or `decodeFile` for the complete checked input. Callers that need
+the phase boundary can run `JsonReader.run parseDocument text` and then
+`resolveDocument`. Individual codecs now expose forward parsers consumed with
+`JsonReader.run`; the former token-slice and object-view APIs have been removed.
+
+`lowerProgram` packages the decoded MIR and typed compiler metadata for execution.
+The input API remains experimental. `bash tools/check-lowering-reader.sh
+[INPUT.json ...]` checks body paths, MIR, identity tables and source spans. Its
+default input is the fixed empty-function fixture. Run `bash tools/check-empty-function.sh` for its
 UB-freedom proof and axiom audit.

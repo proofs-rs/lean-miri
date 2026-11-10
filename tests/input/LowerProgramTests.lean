@@ -34,13 +34,16 @@ def main (args : List String) : IO Unit := do
         throw (IO.userError "body source identity is absent from shared definitions")
     unless body.definitions == program.bundle.definitions && body.typeConstants == program.bundle.typeConstants && body.spans == program.bundle.spans do
       throw (IO.userError "bundle body uses inconsistent compiler identity tables")
-  let knownGeneric := program.bundle.bodies.find? (fun body => body.input.defPath.endsWith "array_len")
-  if let some generic := knownGeneric then
-    unless (generic.input.payload.getObjValAs? Bool "is_polymorphic").toOption == some false &&
-        generic.obligations.isEmpty do
+  let knownGeneric := doc.instances.find? (fun inst =>
+    inst.defPath.any (·.endsWith "array_len") && inst.bodyId.isSome)
+  if let some inst := knownGeneric then
+    let some bodyId := inst.bodyId | throw (IO.userError "generic instance lost its body ID")
+    let some generic := program.bundle.bodies[bodyId]? | throw (IO.userError "generic instance body is absent")
+    unless generic.input.isPolymorphic == some false && generic.obligations.isEmpty do
       throw (IO.userError "concrete generic instantiation retained unresolved parameters")
-  let knownTLS := program.bundle.bodies.find? (fun body => body.input.defPath.endsWith "read_tls")
-  if let some tls := knownTLS then
+  let knownTLS := doc.bodyRoots.find? (fun root => root.defPath.endsWith "read_tls")
+  if let some root := knownTLS then
+    let some tls := program.bundle.bodies[root.bodyId]? | throw (IO.userError "TLS root body is absent")
     unless tls.body.basicBlocks.any (fun block => block.statements.any fun statement =>
         match statement.kind with
         | .Assign _ (.ThreadLocalRef _) => true

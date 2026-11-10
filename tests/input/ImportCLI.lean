@@ -11,7 +11,7 @@ def main (args : List String) : IO UInt32 := do
       IO.eprintln error
       return 1
     | .ok decoded =>
-      IO.println s!"imported schema-v3 MIR: bodies={decoded.document.bodies.size}, instances={decoded.document.instances.size}, types={decoded.document.types.size}, allocations={decoded.document.allocations.size}"
+      IO.println s!"imported schema-4 MIR: bodies={decoded.document.bodies.size}, instances={decoded.document.instances.size}, types={decoded.document.types.size}, allocations={decoded.document.allocations.size}"
       return 0
   | _ =>
     IO.eprintln "usage: ImportCLI <export.json>"

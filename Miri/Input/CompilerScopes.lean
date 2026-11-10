@@ -18,7 +18,8 @@ private def decodeEntry (ctx : LowerContext) (tables : CompilerTables) (scope : 
   | none => pure (⟨⟨none,scope.inlinedParent⟩,none⟩,tables)
   | some inlined =>
     let _ ← CompilerInstance.source ctx inlined.instanceId
-    let (span,tables) ← lowerCompilerSpan tables (.sourceSpan inlined.callsiteSpanId)
+    unless inlined.callsiteSpanId < tables.spans.size do throw "inline callsite span ID out of bounds"
+    let span : MIR.SpanRef := ⟨inlined.callsiteSpanId⟩
     pure (⟨⟨some (inlined.instanceId,span),scope.inlinedParent⟩,some inlined.requiresCallerLocation⟩,tables)
 
 def prepare (program : LoweredProgram) : Prepared := Id.run do
@@ -31,20 +32,17 @@ def prepare (program : LoweredProgram) : Prepared := Id.run do
       all := all.push #[]
       continue
     let mut entries := #[]
-    match body.input.sourceScopes with
-    | none => entries := #[.error "missing source_scopes compiler metadata"]
-    | some scopes =>
-      for index in [:scopes.size] do
-        let result := do
-          let some scope := scopes[index]? | throw "source scope canonical index missing"
-          unless scope.id == index do
-            throw "source scope index does not match canonical position"
-          decodeEntry ctx tables scope
-        match result with
-        | .error e => entries := entries.push (.error e)
-        | .ok (entry,next) =>
-          tables := next
-          entries := entries.push (.ok entry)
+    let scopes := body.input.sourceScopes
+    for index in [:scopes.size] do
+      let result := do
+        let some scope := scopes[index]? | throw "source scope canonical index missing"
+        unless scope.id == index do throw "source scope index does not match canonical position"
+        decodeEntry ctx tables scope
+      match result with
+      | .error e => entries := entries.push (.error e)
+      | .ok (entry,next) =>
+        tables := next
+        entries := entries.push (.ok entry)
     all := all.push entries
   return ⟨program.withCompilerTables tables,all⟩
 

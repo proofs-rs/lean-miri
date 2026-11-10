@@ -1,83 +1,64 @@
-import Miri.Input.Decoder
-import Miri.Input.LowerMIR
+import Miri.Input.DecodeMIR
 
 open Miri Input
 
 private def must (value : Except String α) : IO α :=
   match value with | .ok v => pure v | .error e => throw (IO.userError e)
 
-private partial def containsProbe : TypedValue → Bool
-  | .array values => values.any containsProbe
-  | .object fields => fields.any fun (key, value) =>
-      (key == "kind" && value == .scalar (.str "same_dynamic_vtable_noop")) || containsProbe value
-  | .statement _ fields | .terminator _ fields | .rvalue _ fields
-  | .operand _ fields | .projection _ fields | .enumTag _ _ fields =>
-      fields.any fun (_, value) => containsProbe value
-  | _ => false
+private def s (x : String) : String := "\"" ++ x ++ "\""
+private def n (x : Nat) : String := toString x
+private def b (x : Bool) : String := if x then "true" else "false"
+private def nil : String := "null"
+private def obj (fs : List (String × String)) : String :=
+  "{" ++ String.intercalate "," (fs.map fun (k,v) => s k ++ ":" ++ v) ++ "}"
+private def arr (xs : List String) : String := "[" ++ String.intercalate "," xs ++ "]"
+private def tagged (kind : String) (fs : List (String × String) := []) : String := obj (("kind", s kind) :: fs)
+private def pl : String := obj [("local", n 0), ("type", n 0), ("projection", arr [])]
+private def op : String := tagged "Copy" [("place", pl)]
+private def defRef : String := n 0
+private def unwind : String := tagged "Continue"
+private def tc (_ : Nat) : String := n 0
+private def tlsGlobalInfo : String := obj [
+  ("nested", b false), ("size_bytes", n 0), ("align_bytes", n 1),
+  ("mutability", s "immutable"), ("is_static", b true),
+  ("is_foreign_item", b false), ("thread_local", b true)]
+private def tlsInitializer : String := obj [("allocation", obj [
+  ("size_bytes", n 0), ("align_bytes", n 1), ("mutability", s "immutable"),
+  ("bytes_hex", s ""), ("initialization_ranges", arr []), ("relocations", arr [])])]
+private def constant (ty span : Nat) : String := obj [
+  ("type", n ty), ("user_type_annotation", nil), ("span", n span),
+  ("constant", tagged "evaluated_const" [("source", tagged "already_evaluated"), ("value", tagged "scalar" [("bits_unsigned", s "1")])])]
 
-private partial def mutateProbeMetadata : TypedValue → TypedValue
-  | .array values => .array (values.map mutateProbeMetadata)
-  | .object fields =>
-      let isProbe := fields.any fun (key, value) =>
-        key == "kind" && value == .scalar (.str "same_dynamic_vtable_noop")
-      if isProbe then .diagnostic (Lean.Json.mkObj [("status", .str "debug_payload"),
-        ("rustc_debug", .str "missing exact dynamic vtable evidence")])
-      else .object (fields.map fun (key, value) => (key, mutateProbeMetadata value))
-  | .statement variant fields => .statement variant (fields.map fun (key, value) => (key, mutateProbeMetadata value))
-  | .terminator variant fields => .terminator variant (fields.map fun (key, value) => (key, mutateProbeMetadata value))
-  | .rvalue variant fields => .rvalue variant (fields.map fun (key, value) => (key, mutateProbeMetadata value))
-  | .operand variant fields => .operand variant (fields.map fun (key, value) => (key, mutateProbeMetadata value))
-  | .projection variant fields => .projection variant (fields.map fun (key, value) => (key, mutateProbeMetadata value))
-  | .enumTag category tag fields => .enumTag category tag (fields.map fun (key, value) => (key, mutateProbeMetadata value))
-  | value => value
+private def rvalues (ty : Nat) : Array (String × Array (String × String)) := #[
+  ("Use", #[("operand", op), ("retag", tagged "no" [("performs_retag", b false)])]),
+  ("Repeat", #[("operand", op), ("count", tc ty)]),
+  ("Ref", #[("region", tagged "late_parameter" [("scope_def_id", defRef), ("parameter", tagged "named_anonymous" [("index", n 8), ("name", s "r")])]), ("borrow_kind", tagged "shared"), ("place", pl)]),
+  ("ThreadLocalRef", #[("def_id", defRef), ("global_info", tlsGlobalInfo),
+    ("initializer", tlsInitializer)]),
+  ("RawPtr", #[("pointer_kind", tagged "metadata_only"), ("place", pl)]),
+  ("Cast", #[("cast_kind", tagged "PointerCoercion" [("coercion", tagged "ClosureFnPointer" [("safety", tagged "unsafe")]), ("source", tagged "as_cast")]), ("operand", op), ("target_type", n ty)]),
+  ("BinaryOp", #[("operator", tagged "add"), ("left", op), ("right", op)]),
+  ("UnaryOp", #[("operator", tagged "not"), ("operand", op)]),
+  ("Discriminant", #[("place", pl)]),
+  ("Aggregate", #[("aggregate_kind", tagged "Adt" [("def_id", defRef), ("variant_index", n 2), ("generic_args", arr [tagged "const" [("value", tc ty)]]), ("user_type_annotation", tagged "annotation_ref" [("index", n 1)]), ("active_union_field", n 4)]), ("operands", arr [op])]),
+  ("CopyForDeref", #[("place", pl)]),
+  ("WrapUnsafeBinder", #[("operand", op), ("type", n ty)]),
+  ("Reborrow", #[("type", n ty), ("mutability", tagged "mutable"), ("place", pl)])]
 
-private def obj (fs : List (String × TypedValue)) : TypedValue := .object fs.toArray
-private def n (x : Nat) : TypedValue := .scalar (Lean.toJson x)
-private def s (x : String) : TypedValue := .scalar (.str x)
-private def b (x : Bool) : TypedValue := .scalar (.bool x)
-private def nil : TypedValue := .scalar .null
-private def arr (xs : List TypedValue) : TypedValue := .array xs.toArray
-private def tagged (kind : String) (fs : List (String × TypedValue) := []) : TypedValue := obj (("kind", s kind) :: fs)
-private def pl : TypedValue := obj [("local", .localRef 0), ("projection", arr [])]
-private def op : TypedValue := .operand .copy #[("place", pl)]
-private def defRef : TypedValue := n 0
-private def unwind : TypedValue := tagged "Continue"
+private def statements (ty : Nat) : Array (String × Array (String × String)) := #[
+  ("Assign", #[("place", pl), ("rvalue", tagged "Repeat" [("operand", op), ("count", tc ty)])]),
+  ("FakeRead", #[("cause", tagged "matched_place" [("hoisted_from", defRef)]), ("place", pl)]),
+  ("SetDiscriminant", #[("place", pl), ("variant_index", n 2)]),
+  ("StorageLive", #[("local", n 0)]), ("StorageDead", #[("local", n 0)]),
+  ("PlaceMention", #[("place", pl)]),
+  ("AscribeUserType", #[("place", pl), ("user_type_projection", obj [("base_index", n 2), ("projections", arr [tagged "Deref", tagged "Field" [("index", n 1)], tagged "Index", tagged "ConstantIndex" [("offset", n 1), ("min_length", n 3), ("from_end", b false)], tagged "Subslice" [("from", n 1), ("to", n 2), ("from_end", b true)], tagged "Downcast" [("name", s "V"), ("variant_index", n 2)], tagged "OpaqueCast", tagged "UnwrapUnsafeBinder", tagged "PhantomDeref"])]), ("variance", tagged "contravariant")]),
+  ("Coverage", #[("coverage", tagged "point" [("point_kind", s "function_end"), ("hir_id", obj [("owner_def_id", defRef), ("local_id", n 3)])])]),
+  ("Intrinsic", #[("intrinsic", s "CopyNonOverlapping"), ("src", op), ("dst", op), ("count", op)]),
+  ("ConstEvalCounter", #[]), ("Nop", #[]),
+  ("BackwardIncompatibleDropHint", #[("place", pl), ("reason", tagged "edition_2024")])]
 
-private def tc (_ : Nat) : TypedValue := n 0
-
-private def constant (ty : Nat) (span : Nat) : TypedValue := obj [
-  ("type", .typeRef ty), ("user_type_annotation", nil), ("span", .sourceSpan span),
-  ("constant", obj [("source", tagged "already_evaluated"), ("value", tagged "scalar" [("bits_unsigned", s "1")])])]
-
-private def rvalues (ty : Nat) : Array (RvalueVariant × Array (String × TypedValue)) := #[
-  (.use, #[("operand", op), ("retag", tagged "no")]),
-  (.repeat, #[("operand", op), ("count", tc ty)]),
-  (.ref, #[("region", tagged "late_parameter" [("scope_def_id", defRef), ("parameter", tagged "named_anonymous" [("index", n 8), ("name", s "r")])]), ("borrow_kind", tagged "shared"), ("place", pl)]),
-  (.threadLocalRef, #[("def_id", defRef)]),
-  (.rawPtr, #[("pointer_kind", tagged "metadata_only"), ("place", pl)]),
-  (.cast, #[("cast_kind", tagged "PointerCoercion" [("coercion", tagged "ClosureFnPointer" [("safety", tagged "unsafe")]), ("source", tagged "as_cast")]), ("operand", op), ("target_type", .typeRef ty)]),
-  (.binaryOp, #[("operator", .binOperator .Add), ("left", op), ("right", op)]),
-  (.unaryOp, #[("operator", .unOperator .Not), ("operand", op)]),
-  (.discriminant, #[("place", pl)]),
-  (.aggregate, #[("aggregate_kind", tagged "Adt" [("def_id", defRef), ("variant_index", n 2), ("generic_args", arr [tagged "const" [("value", tc ty)]]), ("user_type_annotation", tagged "annotation_ref" [("index", n 1)]), ("active_union_field", n 4)]), ("operands", arr [op])]),
-  (.copyForDeref, #[("place", pl)]),
-  (.wrapUnsafeBinder, #[("operand", op), ("type", .typeRef ty)]),
-  (.reborrow, #[("type", .typeRef ty), ("mutability", tagged "mutable"), ("place", pl)])]
-
-private def statements (ty : Nat) : Array (StatementVariant × Array (String × TypedValue)) := #[
-  (.assign, #[("place", pl), ("rvalue", .rvalue .repeat #[("operand", op), ("count", tc ty)])]),
-  (.fakeRead, #[("cause", tagged "matched_place" [("hoisted_from", defRef)]), ("place", pl)]),
-  (.setDiscriminant, #[("place", pl), ("variant_index", n 2)]),
-  (.storageLive, #[("local", .localRef 0)]), (.storageDead, #[("local", .localRef 0)]),
-  (.placeMention, #[("place", pl)]),
-  (.ascribeUserType, #[("place", pl), ("user_type_projection", .userTypeProjection ⟨some 2, some #[.deref, .field 1, .index, .constantIndex 1 3 false, .subslice 1 2 true, .downcast (some "V") 2, .opaqueCast, .unwrapUnsafeBinder, .phantomDeref], .null⟩), ("variance", tagged "contravariant")]),
-  (.coverage, #[("coverage", tagged "point" [("point_kind", s "function_end"), ("hir_id", obj [("owner_def_id", defRef), ("local_id", n 3)])])]),
-  (.intrinsic, #[("intrinsic", s "CopyNonOverlapping"), ("src", op), ("dst", op), ("count", op)]),
-  (.constEvalCounter, #[]), (.nop, #[]),
-  (.backwardIncompatibleDropHint, #[("place", pl), ("reason", tagged "edition_2024")])]
-
-private def asm (ty : Nat) (span : Nat) : Array (String × TypedValue) := #[
-  ("asm_macro", s "asm"), ("template", arr [tagged "string" [("text", s "x")], tagged "placeholder" [("operand_index", n 0), ("modifier", s "e"), ("span", .sourceSpan span)]]),
+private def asm (ty : Nat) (span : Nat) : Array (String × String) := #[
+  ("asm_macro", s "asm"), ("template", arr [tagged "string" [("text", s "x")], tagged "placeholder" [("operand_index", n 0), ("modifier", s "e"), ("span", n span)]]),
   ("operands", arr [
     tagged "in" [("register", tagged "register_class" [("arch", s "X86_64"), ("name", s "reg")]), ("value", op)],
     tagged "out" [("register", tagged "register" [("arch", s "X86_64"), ("name", s "rax")]), ("late", b true), ("place", pl)],
@@ -85,117 +66,58 @@ private def asm (ty : Nat) (span : Nat) : Array (String × TypedValue) := #[
     tagged "const" [("value", constant ty span)], tagged "sym_fn" [("value", constant ty span)],
     tagged "sym_static" [("def_id", defRef)], tagged "label" [("target_index", n 0)]]),
   ("options", obj ((["pure", "nomem", "readonly", "preserves_flags", "noreturn", "nostack", "att_syntax", "raw", "may_unwind"]).map (fun key => (key, b false)))),
-  ("line_spans", arr [.sourceSpan span]), ("targets", arr [.blockRef 0]), ("unwind", unwind)]
+  ("line_spans", arr [n span]), ("targets", arr [n 0]), ("unwind", unwind)]
 
-private def terms (ty : Nat) (span : Nat) : Array (TerminatorVariant × Array (String × TypedValue)) := #[
-  (.goto, #[("target", .blockRef 0), ("loop_hints", arr [tagged "Hint", tagged "Full", tagged "Never", tagged "Count" [("count", n 7)]])]),
-  (.switchInt, #[("discriminant", op), ("targets", arr [obj [("value", s "18446744073709551615"), ("target", .blockRef 0)]]), ("otherwise", .blockRef 0)]),
-  (.unwindResume, #[]), (.unwindTerminate, #[("reason", tagged "in_cleanup")]), (.return, #[]), (.unreachable, #[]),
-  (.drop, #[("place", pl), ("target", .blockRef 0), ("unwind", tagged "Terminate" [("reason", tagged "abi")]), ("replace", b true), ("async_drop", n 0)]),
-  (.call, #[("function", op), ("args", arr [obj [("operand", op), ("span", .sourceSpan span)]]), ("destination", pl), ("target", .blockRef 0), ("unwind", tagged "Cleanup" [("target", .blockRef 0)]), ("call_source", tagged "normal_call"), ("function_span", .sourceSpan span)]),
-  (.tailCall, #[("function", op), ("args", arr []), ("function_span", .sourceSpan span)]),
-  (.assert, #[("condition", op), ("expected", b false), ("message", tagged "ResumedAfterDrop" [("coroutine_kind", tagged "desugared" [("desugaring", s "async_gen"), ("source", s "closure")])]), ("target", .blockRef 0), ("unwind", unwind)]),
-  (.yield, #[("value", op), ("resume", .blockRef 0), ("resume_arg", pl), ("drop", n 0)]), (.coroutineDrop, #[]),
-  (.falseEdge, #[("real_target", .blockRef 0), ("imaginary_target", .blockRef 0)]),
-  (.falseUnwind, #[("real_target", .blockRef 0), ("unwind", tagged "Unreachable")]), (.inlineAsm, asm ty span)]
+private def terms (ty : Nat) (span : Nat) : Array (String × Array (String × String)) := #[
+  ("Goto", #[("target", n 0), ("loop_hints", arr [tagged "Hint", tagged "Full", tagged "Never", tagged "Count" [("count", n 7)]])]),
+  ("SwitchInt", #[("discriminant", op), ("targets", arr [obj [("value", s "18446744073709551615"), ("target", n 0)]]), ("otherwise", n 0)]),
+  ("UnwindResume", #[]), ("UnwindTerminate", #[("reason", tagged "in_cleanup")]), ("Return", #[]), ("Unreachable", #[]),
+  ("Drop", #[("place", pl), ("target", n 0), ("unwind", tagged "Terminate" [("reason", tagged "abi")]), ("replace", b true), ("async_drop", n 0)]),
+  ("Call", #[("function", op), ("args", arr [obj [("operand", op), ("span", n span)]]), ("destination", pl), ("target", n 0), ("unwind", tagged "Cleanup" [("target", n 0)]), ("call_source", tagged "normal_call"), ("function_span", n span)]),
+  ("TailCall", #[("function", op), ("args", arr []), ("function_span", n span)]),
+  ("Assert", #[("condition", op), ("expected", b false), ("message", tagged "ResumedAfterDrop" [("coroutine_kind", tagged "desugared" [("desugaring", s "async_gen"), ("source", s "closure")])]), ("target", n 0), ("unwind", unwind)]),
+  ("Yield", #[("value", op), ("resume", n 0), ("resume_arg", pl), ("drop", n 0)]), ("CoroutineDrop", #[]),
+  ("FalseEdge", #[("real_target", n 0), ("imaginary_target", n 0)]),
+  ("FalseUnwind", #[("real_target", n 0), ("unwind", tagged "Unreachable")]), ("InlineAsm", asm ty span)]
 
-def main (args : List String) : IO Unit := do
-  let path ← match args with | path :: _ => pure path | [] => throw (IO.userError "expected compiler fixture path")
-  let decoded ← must (decodeJson (← IO.FS.readFile path))
-  let some original := decoded.document.bodies[0]? | throw (IO.userError "empty bodies")
-  let some first := original.blocks[0]? | throw (IO.userError "empty blocks")
-  let info := first.terminator.sourceInfo
-  let some decl := original.locals[0]? | throw (IO.userError "empty locals")
-  let ty := decl.typeId
-  let definitions : Array DefinitionId := #[⟨2, 7⟩, ⟨1, 4⟩, ⟨1, 5⟩, ⟨3, 99⟩]
-  let ctx := { LowerContext.ofDocument decoded.document with
-    definitions := definitions, typeConstants := #[.Value ty ⟨#[.Leaf 3 4],0⟩] }
-  let input := { original.toBodyCore with argumentCount := 0, spreadArgument := none, definitionId := some 0 }
-  let lower (ss : Array MirNode) (term : TypedValue) := lowerBody ctx { input with blocks := #[{ first with id := 0, statements := ss, terminator := ⟨term, info⟩ }] }
-  for (kind, fs) in rvalues ty do
-    let _ ← must (lower #[⟨.statement .assign #[("place", pl), ("rvalue", .rvalue kind fs)], info⟩] (.terminator .return #[]))
-  for (kind, fs) in statements ty do
-    let _ ← must (lower #[⟨.statement kind fs, info⟩] (.terminator .return #[]))
-  for (kind, fs) in terms ty info.spanId do
-    let _ ← must (lower #[] (.terminator kind fs))
-  let pending ← must (lower #[⟨.statement .assign #[("place", pl), ("rvalue", .rvalue .threadLocalRef #[("def_id", defRef)])], info⟩] (.terminator .return #[]))
-  unless pending.definitions == definitions && pending.definitions[0]? == some ⟨2, 7⟩ do
-    throw (IO.userError "crate-qualified definition identity was lost")
-  unless !(DecoderValues.rvalueVariant "FutureRvalue").isOk do
-    throw (IO.userError "unknown rvalue selector accepted by decoder")
-  let own ← must pending.ownDefinitionId
-  unless own == 0 do throw (IO.userError "standalone body did not seed its own compiler identity")
-  let missing ← must (lowerBody ctx { input with definitionId := none, blocks := #[{ first with id := 0, statements := #[], terminator := ⟨.terminator .return #[], info⟩ }] })
-  unless !missing.obligations.isEmpty && !missing.ownDefinitionId.isOk do
-    throw (IO.userError "missing source identity became an invented frame definition")
-  let mkBody (self other : Nat) (name : String) : BodyCore :=
-    { input with
-      definitionId := some self
-      defPath := name
-      blocks := #[{ first with
-        id := 0
-        statements := #[⟨.statement .assign #[("place", pl), ("rvalue", .rvalue .aggregate #[("aggregate_kind", tagged "Closure" [("def_id", n other), ("generic_args", arr [tagged "const" [("value", tc ty)]])]), ("operands", arr [])])], info⟩]
-        terminator := ⟨.terminator .call #[
-          ("function", .operand .constant #[("constant", obj [
-            ("type", .typeRef ty), ("span", .sourceSpan info.spanId), ("user_type_annotation", nil),
-            ("constant", obj [("source", tagged "unevaluated" [("def_id", n other), ("generic_args", arr [tagged "const" [("value", tc ty)]]), ("promoted", nil), ("type", .typeRef ty)])])])]),
-          ("args", arr []), ("destination", pl), ("target", nil), ("unwind", unwind),
-          ("call_source", tagged "normal_call"), ("function_span", .sourceSpan info.spanId)], info⟩ }] }
-  let linked ← must (lowerBodies ctx #[mkBody 1 2 "a", mkBody 2 1 "b"])
-  unless linked.definitions == definitions && linked.typeConstants.size == 1 do
-    throw (IO.userError "cross-body definition or generic-constant interning lost identity")
-  let linkedA ← match linked.bodies[0]? with | some b => pure b | none => throw (IO.userError "missing a")
-  let linkedB ← match linked.bodies[1]? with | some b => pure b | none => throw (IO.userError "missing b")
-  let closureRef (body : LoweredBody) : Option (Nat × Nat) := do
-    let block ← body.body.basicBlocks[0]?
+private def source := obj [("span",n 0),("scope",n 0)]
+private def node (kind : String) := obj [("source_info",source),("kind",kind)]
+private def ret := obj [("variant",s "Return")]
+private def body (statements : List String) (term : String) := obj [
+  ("source_def_id",n 0),("phase",tagged "built"),("arg_count",n 0),("spread_arg",nil),
+  ("span",n 0),("preamble_def_span",n 0),("backtrace_spans",arr []),("required_consts",arr []),
+  ("locals",arr [obj [("local",n 0),("type",n 0),("source_info",source)]]),
+  ("source_scopes",arr [obj [("scope",n 0),("parent",nil),("span",n 0),("inlined",nil),("inlined_parent_scope",nil)]]),
+  ("basic_blocks",arr [obj [("block",n 0),("is_cleanup",b false),("statements",arr (statements.map node)),("terminator",node term)]])]
+private def context : DecodeMIR.Context := {
+  typeCount := 1,allocationCount := 0,definitionCount := 4,typeConstantCount := 1,spanCount := 1,
+  scalarSizes := #[some 1] }
+private def decode (statements : List String) (term : String) := do
+  DecodeMIR.resolveBody context (← JsonReader.run (DecodeMIR.parseBody "bodies[0]") (body statements term))
+
+def main (_args : List String) : IO Unit := do
+  for (kind, fs) in rvalues 0 do
+    let value ← must (decode [obj [("variant",s "Assign"),("place",pl),("rvalue",tagged kind fs.toList)]] ret)
+    unless value.mir.basicBlocks.size == 1 do throw (IO.userError "missing rvalue block")
+  for (kind, fs) in statements 0 do
+    let _ ← must (decode [obj (("variant",s kind)::fs.toList)] ret)
+  for (kind, fs) in terms 0 0 do
+    let fs := if kind == "Call" || kind == "TailCall" then fs.push ("resolution",tagged "resolved_instance" [("instance_id",n 0),("function_type",n 0),("fn_abi",n 0)]) else fs
+    let _ ← must (decode [] (obj (("variant",s kind)::fs.toList)))
+  unless (decode [obj [("variant",s "FutureStatement")]] ret).isOk == false do
+    throw (IO.userError "unknown statement accepted")
+  unless (decode [] (obj [("variant",s "FutureTerminator")])).isOk == false do
+    throw (IO.userError "unknown terminator accepted")
+  let mkClosure (other : Nat) := obj [("variant",s "Assign"),("place",pl),
+    ("rvalue",tagged "Aggregate" [("aggregate_kind",tagged "Closure" [("def_id",n other),("generic_args",arr [tagged "const" [("value",n 0)]])]),("operands",arr [])])]
+  let a ← must (decode [mkClosure 2] ret)
+  let b ← must (decode [mkClosure 1] ret)
+  let closureRef (body : Body) := do
+    let block ← body.mir.basicBlocks[0]?
     let statement ← block.statements[0]?
     match statement.kind with
-    | .Assign _ (.Aggregate (.Closure defId #[.Const constId]) _) => some (defId, constId)
+    | .Assign _ (.Aggregate (.Closure defId #[.Const constId]) _) => some (defId,constId)
     | _ => none
-  unless closureRef linkedA == some (2, 0) && closureRef linkedB == some (1, 0) do
-    throw (IO.userError "mutually recursive references use inconsistent compiler IDs")
-  let callee (body : LoweredBody) : Option Nat := do
-    let block ← body.body.basicBlocks[0]?
-    match block.terminator.kind with
-    | .Call (.Constant c) _ _ _ _ _ _ =>
-      match c.value with | .Unevaluated u _ => some u.definition | _ => none
-    | _ => none
-  unless callee linkedA == some 2 && callee linkedB == some 1 do
-    throw (IO.userError "mutually recursive Call references lost program-global identities")
-  let standaloneCore := { mkBody 3 1 "never_called" with
-    blocks := #[{ first with id := 0, statements := #[], terminator := ⟨.terminator .return #[], info⟩ }] }
-  let some root := decoded.document.bodyRoots[0]? | throw (IO.userError "fixture has no body root")
-  let syntheticDoc := { decoded.document with
-    bodyRoots := #[{ root with bodyId := 0, definitionId := 1, promotedBodies := #[] },
-      { root with bodyId := 1, definitionId := 2, promotedBodies := #[] },
-      { root with bodyId := 2, definitionId := 1, promotedBodies := #[] },
-      { root with bodyId := 3, definitionId := 3, promotedBodies := #[] }]
-    bodies := #[⟨mkBody 1 2 "a", #[]⟩,
-      ⟨mkBody 2 1 "b", #[]⟩,
-      ⟨mkBody 1 2 "a_same_source", #[]⟩,
-      ⟨standaloneCore, #[]⟩]
-    instances := #[], definitions := definitions, typeConstants := #[.Value ty ⟨#[.Leaf 3 4],0⟩] }
-  let program ← must (lowerProgram syntheticDoc)
-  let rootA ← must (program.rootDefinitionId 0)
-  let rootB ← must (program.rootDefinitionId 1)
-  let sameA ← must (program.rootDefinitionId 2)
-  let uncalled ← must (program.rootDefinitionId 3)
-  unless rootA == sameA && rootA != rootB && program.bundle.definitions[uncalled]? == some ⟨3, 99⟩ do
-    throw (IO.userError "root alias or never-called root identity lost during program seeding")
-  for lowered in program.bundle.bodies do
-    unless lowered.definitions == program.bundle.definitions && lowered.typeConstants == program.bundle.typeConstants && lowered.spans == program.bundle.spans do
-      throw (IO.userError "identity seeding rewrote shared constant/span tables inconsistently")
-  let candidates := decoded.document.bodies.map (·.toBodyCore)
-  let probeBody? := candidates.find? fun body =>
-    body.blocks.any fun block =>
-      block.statements.any (fun node => containsProbe node.value) || containsProbe block.terminator.value
-  let some probeBody := probeBody? | throw (IO.userError "fixture has no exact dynamic vtable evidence to mutate")
-  let mutatedCore := { probeBody with blocks := probeBody.blocks.map fun block =>
-    { block with
-      statements := block.statements.map fun node => { node with value := mutateProbeMetadata node.value }
-      terminator := { block.terminator with value := mutateProbeMetadata block.terminator.value } } }
-  let mutatedLowering ← must (lowerBody (LowerContext.ofDocument decoded.document) mutatedCore)
-  unless mutatedLowering.obligations.any (fun obligation =>
-      obligation.message == "diagnostic-only compiler metadata remains unresolved") do
-    throw (IO.userError "mutated typed MIR inherited a raw-document vtable-probe exemption")
-  IO.println "all 13 rvalue, 12 statement, 15 terminator source constructor branches lowered; typed metadata and execution obligations retained"
+  unless closureRef a == some (2,0) && closureRef b == some (1,0) do
+    throw (IO.userError "cross-body compiler IDs changed")
+  IO.println "all 13 rvalue, 12 statement, 15 terminator variants decoded directly to MIR"

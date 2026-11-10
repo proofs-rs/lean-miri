@@ -1,3 +1,4 @@
+import MiriTests.Input.JsonFixtures
 import Miri.Input.CallResolution
 
 open Lean Miri.Input
@@ -15,28 +16,32 @@ private def rejects (value : Except String α) (message : String) : IO Unit :=
   | .error _ => pure ()
   | .ok _ => throw (IO.userError message)
 
-private def set (value : Json) (key : String) (child : Json) : Except String Json := do
-  let fields ← value.getObj?
-  pure (Json.mkObj ((key, child) :: fields.toList.filter (fun item => item.1 != key)))
+private def set (value : JsonFixtures.Value) (key child : String) : Except String JsonFixtures.Value := do
+  let fields ← value.object
+  let entries := fields.map fun (name, old) =>
+    "\"" ++ name ++ "\":" ++ (if name == key then child else old.text)
+  JsonFixtures.parse ("{" ++ String.intercalate "," entries.toList ++ "}")
 
 def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected exporter MIR input")
-  let decoded ← must (decodeJson (← IO.FS.readFile path))
+  let text ← IO.FS.readFile path
+  let decoded ← must (decodeJson text)
+  let source ← must (JsonFixtures.parse text)
+  let rawAbis ← must ((← must (source.field "fn_abis")).array)
+  let rawLayouts ← must ((← must (source.field "layouts")).array)
   let runtime ← must ((RuntimeMetadata.ofDocument decoded.document).mapError toString)
   check (!runtime.source.functionAbis.isEmpty) "fixture contains no function ABI definitions"
   for (abi, id) in runtime.source.functionAbis.toList.zipIdx do
-    let parsed ← must (DecoderValues.decodeCompilerFunctionAbi abi.payload)
-    check (parsed.arguments.map (·.payload) == abi.arguments.map (·.payload) &&
-      parsed.returnValue.payload == abi.returnValue.payload &&
-      parsed.callingConvention.payload == abi.callingConvention.payload &&
-      parsed.fixedCount == abi.fixedCount && parsed.canUnwind == abi.canUnwind &&
-      parsed.cVariadic == abi.cVariadic) "typed ABI table differs from its definition"
-    check (CallResolution.functionAbiJson runtime (toJson id) ==
-      CallResolution.functionAbi runtime abi) "numeric ABI lookup differs from typed conversion"
+    let some rawAbi := rawAbis[id]? | throw (IO.userError "missing input ABI row")
+    let parsed ← must (JsonReader.run DecoderValues.decodeCompilerFunctionAbi rawAbi.text)
+    check (CallResolution.functionAbi runtime parsed == CallResolution.functionAbi runtime abi)
+      "typed ABI table differs from its definition"
+    check (CallResolution.functionAbiId runtime id == CallResolution.functionAbi runtime abi)
+      "numeric ABI lookup differs from typed conversion"
   rejects (CallResolution.functionAbiId runtime runtime.source.functionAbis.size)
     "out of bounds ABI accepted"
-  rejects (CallResolution.functionAbiJson runtime (Json.mkObj [("fn_abi_id", toJson (0 : Nat))]))
-    "object ABI reference accepted"
+  let wrappedId ← must (JsonFixtures.parse "{\"fn_abi_id\":0}")
+  rejects wrappedId.natural "object ABI reference accepted"
   let some sample := runtime.source.functionAbis[0]? | throw (IO.userError "missing first function ABI")
   let invalidArity := { sample with fixedCount := sample.arguments.size + 1 }
   let arityRuntime := { runtime with source := { runtime.source with functionAbis := #[invalidArity] } }
@@ -59,10 +64,12 @@ def main (args : List String) : IO Unit := do
   let layoutRuntime := { runtime with source := { runtime.source with
     functionAbis := #[{ sample with returnValue := invalidLayout }] } }
   rejects (CallResolution.functionAbiId layoutRuntime 0) "out of bounds physical layout accepted"
-  let malformedLayout ← must (set layout.payload "field_offsets_bytes" (.str "not-an-array"))
-  rejects (DecoderValues.decodeCompilerLayout malformedLayout) "malformed layout definition accepted"
-  let returnJson ← must (sample.payload.getObjVal? "return")
-  let inlineReturn ← must (set returnJson "layout" layout.payload)
-  let inlineAbi ← must (set sample.payload "return" inlineReturn)
-  rejects (DecoderValues.decodeCompilerFunctionAbi inlineAbi) "inline physical layout accepted at ID position"
+  let some rawLayout := rawLayouts[layoutId]? | throw (IO.userError "missing raw return layout")
+  let malformedLayout ← must (set rawLayout "field_offsets_bytes" "\"not-an-array\"")
+  rejects (JsonReader.run DecoderValues.decodeCompilerLayout malformedLayout.text) "malformed layout definition accepted"
+  let some rawSample := rawAbis[0]? | throw (IO.userError "missing raw ABI sample")
+  let returnValue ← must (rawSample.field "return")
+  let inlineReturn ← must (set returnValue "layout" rawLayout.text)
+  let inlineAbi ← must (set rawSample "return" inlineReturn.text)
+  rejects (JsonReader.run DecoderValues.decodeCompilerFunctionAbi inlineAbi.text) "inline physical layout accepted at ID position"
   IO.println s!"typed ABI table: {runtime.source.functionAbis.size} definitions; bounds, arity, convention and physical layout checks passed"

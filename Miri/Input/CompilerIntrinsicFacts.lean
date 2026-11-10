@@ -14,39 +14,28 @@ structure Entry where
   callee : CallInstance
   name : Except String String
   intrinsic : Except String (Option Metadata)
-  payload : Json
+  facts : Catalog.RuntimeInstance
 structure Prepared where
   program : LoweredProgram
   entries : Array Entry
   checks : Array (MIR.RuntimeChecks × Bool)
 def prepare (program : LoweredProgram) : Except String Prepared := do
-  let query ← program.input.raw.getObjVal? "compiler_runtime_queries"
-  let records ← (← query.getObjVal? "instances").getArr?
   let ctx := LowerContext.ofDocument program.input
-  let mut tables := program.compilerTables
   let mut entries := #[]
-  for record in records do
-    let (callee,next) ← CompilerInstance.decode ctx tables record
-    tables := next
+  for record in program.input.queries.runtime.instances do
+    let callee := record.instanceId
+    let _ ← CompilerInstance.source ctx callee
     unless !(entries.any (·.callee == callee)) do throw "duplicate full-instance intrinsic metadata key"
-    let name := do (← record.getObjVal? "item_name").getStr?
+    let name := match record.itemName with | some value => .ok value | none => .error "compiler item name absent"
     let intrinsic := do
-      let value ← record.getObjVal? "intrinsic_metadata"
-      if value == Json.null then pure none else
-        pure (some (⟨← (← value.getObjVal? "must_be_overridden").getBool?,
-          ← (← value.getObjVal? "fallback_is_spec").getBool?⟩ : Metadata))
-    entries := entries.push ⟨callee,name,intrinsic,record⟩
-  let session ← program.input.raw.getObjVal? "compiler_session_queries"
+      let some query := record.intrinsicMetadata | throw "compiler intrinsic metadata query absent"
+      pure (query.map fun value => (⟨value.mustOverride, value.fallbackIsSpec⟩ : Metadata))
+    entries := entries.push ⟨callee, name, intrinsic, record⟩
   let mut checks := #[]
-  for check in (← (← session.getObjVal? "runtime_checks").getArr?) do
-    let kind ← (← check.getObjVal? "kind").getStr?
-    let kind : MIR.RuntimeChecks ← match kind with
-      | "ub_checks" => pure .UbChecks | "contract_checks" => pure .ContractChecks
-      | "overflow_checks" => pure .OverflowChecks
-      | _ => throw "unknown compiler runtime-check kind"
+  for (kind, enabled) in program.input.queries.session.runtimeChecks do
     unless !(checks.any (·.1 == kind)) do throw "duplicate compiler runtime-check query"
-    checks := checks.push (kind,← (← check.getObjVal? "enabled").getBool?)
-  pure ⟨program.withCompilerTables tables,entries,checks⟩
+    checks := checks.push (kind, enabled)
+  pure ⟨program, entries, checks⟩
 private def entry (prepared : Prepared) (callee : CallInstance) : Except String Entry := do
   let some entry := prepared.entries.find? (·.callee == callee)
     | throw "missing exact full-instance intrinsic metadata"

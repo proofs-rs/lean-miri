@@ -10,7 +10,6 @@ def main (args : List String) : IO Unit := do
   let decoded ← must (decodeJson (← IO.FS.readFile path))
   let metadata ← must ((RuntimeMetadata.ofDocument decoded.document).mapError toString)
   check metadata.obligations.isEmpty s!"metadata obligations: {reprStr metadata.obligations}"
-  check (metadata.source.raw == decoded.document.raw) "original source evidence lost"
   check ((metadata.target.validate).isOk) "invalid canonical target"
   let values := metadata.source.types.filterMap fun node => (metadata.lookup node.id).toOption
   check (values.any fun x => match x.layout.fields with | .Union _ => true | _ => false) "union missing"
@@ -38,17 +37,18 @@ def main (args : List String) : IO Unit := do
   let some body := decoded.document.bodies.find? (·.definitionId == some root.definitionId)
     | throw (IO.userError "canonical root body missing")
   -- records(e, u, p, ...) has p in MIR local3, after return local0.
-  let parameter ← must ((RuntimeMetadata.require body.locals[3]? "records p parameter").mapError toString)
-  let reference ← must ((metadata.lookup parameter.typeId).mapError toString)
+  let parameter ← must ((RuntimeMetadata.require body.mir.locals[3]? "records p parameter").mapError toString)
+  let reference ← must ((metadata.lookup parameter).mapError toString)
   let pointee ← must ((metadata.pointee reference).mapError toString)
   let expected ← must ((metadata.integerLayout .u32).mapError toString)
   check (pointee.ty == expected.ty && pointee.ty != reference.ty) "source u32 pointee identity changed"
   check (!(metadata.lookup 999999).isOk) "unknown type accepted"
-  check (!(RuntimeMetadata.importTarget .null).isOk) "missing target accepted"
+  let missingTarget := { decoded.document with runtimeTargetDataLayout := none }
+  check (!(RuntimeMetadata.ofDocument missingTarget).isOk) "missing target accepted"
   let first ← must ((RuntimeMetadata.require decoded.document.types[0]? "first type").mapError toString)
   let physical ← must ((RuntimeMetadata.require decoded.document.layouts[first.layoutId]? "first physical layout").mapError toString)
   check (!(RuntimeMetadata.layout metadata.target { physical with fields := none }).isOk) "missing fields accepted"
-  let missingSize := decodeCompilerLayout (Lean.Json.mkObj [("kind", .str "layout"), ("field_offsets_bytes", .arr #[])])
+  let missingSize := do JsonReader.run decodeCompilerLayout ("{\"kind\":\"layout\",\"field_offsets_bytes\":[]}")
   check (match missingSize with | .error reason => reason.contains "size/alignment" | .ok _ => false)
     "missing layout size was not rejected at the input boundary"
   let duplicate := { decoded.document with types := decoded.document.types.push first }
@@ -57,5 +57,5 @@ def main (args : List String) : IO Unit := do
   let incomplete := { decoded.document with layouts := incompleteLayouts }
   let kept ← must ((RuntimeMetadata.ofDocument incomplete).mapError toString)
   check (!kept.obligations.isEmpty && !(kept.lookup first.id).isOk) "layout failure was hidden"
-  check (kept.source.raw == incomplete.raw) "failed-query source lost"
+  check ((kept.source.layouts[first.layoutId]?).bind (·.fields) |>.isNone) "failed-query layout lost"
   IO.println s!"runtime metadata: {values.size} exact layouts, {multiple} multiple-variant layouts; queries and explicit failures passed"

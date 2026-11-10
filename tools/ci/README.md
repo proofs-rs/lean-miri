@@ -132,8 +132,8 @@ missing or ambiguous artifacts and stale records after a failed rebuild fail.
 and reference-exporter/libc preparation. Each gets its own retained log and
 failure status; one failed guest does not prevent later guests from running.
 The query-demand check exports the existing call-transfer and TLS fixtures before
-mutating native-signature roles and TLS initializers. Its existing missing
-CatalogRoles TLS-provider branch remains a visible failure. Runtime type
+checking malformed native-signature and TLS fields at the decoder boundary,
+then exercising valid provider queries and ignored extension-field controls. Runtime type
 closure exports the existing nested-vtable fixture and checks LateOnly plus both
 reached virtual methods. The cross-crate control compiles its producer separately
 and requires the consumer's genuine external constant/vtable relocation.

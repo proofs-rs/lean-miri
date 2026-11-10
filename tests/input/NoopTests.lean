@@ -1,31 +1,15 @@
 import Miri.Input.Decoder
 
-open Lean
 open Miri.Input
-
-private def fail (message : String) : IO α := throw (IO.userError message)
-
-private partial def hasCoverage (value : TypedValue) : Bool :=
-  match value with
-  | .enumTag .coverageKind tag _ =>
-      (tag.tag == "point" || tag.tag == "block_marker" || tag.tag == "virtual_counter")
-  | .array values => values.any hasCoverage
-  | .object fields => fields.any fun (_, child) => hasCoverage child
-  | .statement _ fields | .terminator _ fields | .rvalue _ fields
-  | .operand _ fields | .projection _ fields | .enumTag _ _ fields =>
-    fields.any fun (_, child) => hasCoverage child
-  | _ => false
 
 def main (args : List String) : IO UInt32 := do
   let path ← match args with
     | value :: _ => pure value
-    | [] => fail "usage: NoopTests <rooted-coverage-export.json>"
-  let source ← IO.FS.readFile path
-  let result ← match decodeJson source with
-    | .ok value => pure value
-    | .error error => fail s!"valid rooted coverage export rejected: {error}"
-  if !(result.document.bodies.any fun body => body.blocks.any fun block =>
-      block.statements.any (fun statement => hasCoverage statement.value) || hasCoverage block.terminator.value) then
-    fail "Coverage payload was not decoded to a typed coverage tag"
-  IO.println "typed rooted Coverage payload accepted as structural input"
+    | [] => throw (IO.userError "usage: NoopTests <rooted-coverage-export.json>")
+  let .ok result := decodeJson (← IO.FS.readFile path)
+    | throw (IO.userError "rooted coverage export rejected")
+  unless result.document.bodies.any (fun body => body.mir.basicBlocks.any fun block =>
+      block.statements.any fun statement => match statement.kind with | .Coverage _ => true | _ => false) do
+    throw (IO.userError "Coverage did not decode directly to MIR")
+  IO.println "rooted Coverage decoded directly to MIR"
   return 0

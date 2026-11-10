@@ -22,38 +22,23 @@ private def descriptor (key : String) : Except String ForeignItems.SignatureType
   | "byteSlice" => pure .byteSlice | "functionPointer" => pure .functionPointer
   | _ => throw "unknown compiler shim type descriptor"
 def prepare (runtime : RuntimeMetadata) : Except String Prepared := do
-  let records ← match runtime.source.raw.getObjVal? "compiler_shim_abis" with
-    | .error _ => pure #[]
-    | .ok value => value.getArr?
   let mut entries := #[]
-  for record in records do
-    unless (← (← record.getObjVal? "typing_env").getStr?) == "fully_monomorphized" do
-      throw "shim ABI query typing environment mismatch"
-    let signature ← record.getObjVal? "signature"
-    let convention ← (← signature.getObjVal? "calling_convention").getStr?
-    let convention : CanonAbi ← match convention with
+  for record in runtime.source.queries.shimAbis.getD #[] do
+    let convention : CanonAbi ← match record.signature.callingConvention with
       | "C" => pure .C | "Rust" => pure .Rust
       | _ => throw "unknown compiler shim signature convention"
-    unless !(← (← signature.getObjVal? "c_variadic").getBool?) do
+    unless !record.signature.cVariadic do
       throw "variadic compiler shim recipe unsupported by current Signature API"
-    let args ← (← (← signature.getObjVal? "arguments").getArr?).mapM fun arg => do
-      descriptor (← arg.getStr?)
-    let ret ← descriptor (← (← signature.getObjVal? "return").getStr?)
-    let signature : ForeignItems.Signature := ⟨convention,args,ret⟩
+    let args ← record.signature.arguments.mapM descriptor
+    let ret ← descriptor record.signature.result
+    let signature : ForeignItems.Signature := ⟨convention, args, ret⟩
     unless !(entries.any (·.signature == signature)) do throw "duplicate compiler shim signature key"
-    let abi ← do
-      let query ← record.getObjVal? "query"
-      let inputs ← (← query.getObjVal? "input_types").getArr?
-      unless inputs.size == args.size do throw "compiler shim type count mismatch"
-      for input in inputs do
-        let id ← input.getNat?
-        let _ ← runtime.node id |>.mapError toString
-      let outputId ← (← query.getObjVal? "output_type").getNat?
-      let _ ← runtime.node outputId |>.mapError toString
-      let result ← query.getObjVal? "abi_query"
-      result.getNat?
-    entries := entries.push ⟨signature,abi⟩
-  pure ⟨runtime,entries⟩
+    unless record.inputTypes.size == args.size do throw "compiler shim type count mismatch"
+    for id in record.inputTypes do
+      let _ ← runtime.node id |>.mapError toString
+    let _ ← runtime.node record.outputType |>.mapError toString
+    entries := entries.push ⟨signature, record.abiId⟩
+  pure ⟨runtime, entries⟩
 
 def expectedAbi (prepared : Prepared) (signature : ForeignItems.Signature) :
     Except String (FnAbi MIR.TyId) := do

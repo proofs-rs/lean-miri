@@ -2,7 +2,7 @@ import Miri.Input.Decoder
 
 open Miri.Input
 
-private def accepted : List String := ["valid-dense", "nested-debug-payload-skips-references"]
+private def accepted : List String := ["valid-dense", "valid-allocation-reference", "nested-debug-payload-skips-references"]
 
 private def rejected : List String := [
   "missing-type-shape-kind", "missing-type-layout-size", "permuted-type-rows",

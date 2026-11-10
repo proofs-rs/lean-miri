@@ -40,13 +40,6 @@ structure Prepared where
   allocatorEntries : Array AllocatorEntry
   deriving Repr, DecidableEq
 
-private def field (j : Lean.Json) (name : String) : Except String Lean.Json := j.getObjVal? name
-private def text (j : Lean.Json) (name : String) : Except String String := do
-  (← field j name).getStr?
-private def natural (j : Lean.Json) (name : String) : Except String Nat := do
-  (← field j name).getNat?
-private def boolean (j : Lean.Json) (name : String) : Except String Bool := do
-  (← field j name).getBool?
 private def exportKind (value : String) : Except String ForeignItems.ExportKind :=
   match value with
   | "function" => pure .function
@@ -55,87 +48,52 @@ private def exportKind (value : String) : Except String ForeignItems.ExportKind 
   | "other" => pure .other
   | _ => throw s!"unknown exported symbol definition kind `{value}`"
 
-private def allocatorTarget (record : Lean.Json) : Except String AllocatorTarget := do
-  let target ← field record "target"
-  match ← text target "kind" with
-  | "redirect" => return .redirect (← text target "symbol")
-  | "special" =>
-    let method ← text target "method"
-    match method with
-    | "alloc" => return .special .Alloc
-    | "alloc_zeroed" => return .special .AllocZeroed
-    | "dealloc" => return .special .Dealloc
-    | "realloc" => return .special .Realloc
+private def allocatorTarget : Catalog.AllocatorTarget → Except String AllocatorTarget
+  | .redirect symbol => pure (.redirect symbol)
+  | .special method => match method with
+    | "alloc" => pure (.special .Alloc)
+    | "alloc_zeroed" => pure (.special .AllocZeroed)
+    | "dealloc" => pure (.special .Dealloc)
+    | "realloc" => pure (.special .Realloc)
     | _ => throw s!"unknown compiler special allocator method `{method}`"
-  | kind => throw s!"unknown compiler allocator target `{kind}`"
 
-/-- Callable exports can have compiler identity without an eager MIR body.
-Resolve their ID through the finalized `compiler_runtime_queries.instances`
-identity table; a later selected lookup still uses CallResolution.loadMir and
-preserves a missing-body error. -/
-private def callableInstance (prepared : CompilerVTableRuntime.Prepared)
-    (ctx : LowerContext) (identity : Lean.Json) : Except String CallInstance := do
-  let program := prepared.facts.context.program
-  let tables := program.compilerTables
-  let (callee,next) ← CompilerInstance.decode ctx tables identity
-  unless next.definitions == tables.definitions && next.typeConstants == tables.typeConstants do
-    throw "exported callable identity is absent from finalized compiler tables"
-  return callee
-
-/-- Decode the exact compiler symbol tables. `CompilerVTableRuntime.Prepared`
-already owns the final shared instance table, so every emitted candidate ID is
-resolved through that table and never reconstructed from a path/display. -/
 def prepare (instances : CompilerVTableRuntime.Prepared) : Except String Prepared := do
   let program := instances.facts.context.program
-  let queries ← field program.input.raw "compiler_runtime_queries"
-  let source ← field queries "foreign_symbols"
-  let noAlloc ← field source "no_alloc_shim_symbol"
-  let noAllocName ← noAlloc.getStr?
-  let candidateRecords ← (← field source "exported_candidates").getArr?
-  let mut lowering : Option LowerContext := none
+  let source := program.input.queries.runtime.foreignSymbols
+  let some records := source.exportedCandidates | throw "compiler exported candidates absent"
+  let ctx := LowerContext.ofDocument program.input
   let mut candidates := #[]
   let mut previousIndex : Option Nat := none
-  for position in [:candidateRecords.size] do
-    let some record := candidateRecords[position]? | throw "exported symbol candidate missing"
-    let index ← natural record "iteration_index"
+  for record in records do
     if let some previous := previousIndex then
-      unless previous < index do
+      unless previous < record.iterationIndex do
         throw "exported symbol iterator order is missing or inconsistent"
-    previousIndex := some index
-    let kind ← exportKind (← text record "definition_kind")
+    previousIndex := some record.iterationIndex
+    let kind ← exportKind record.definitionKind
     let callee ← if kind == .function || kind == .associatedFunction then do
-        let identity ← field record "instance_id"
-        let ctx := match lowering with
-          | some ctx => ctx
-          | none => LowerContext.ofDocument program.input
-        lowering := some ctx
-        let decoded ← callableInstance instances ctx identity
-        -- The separate ID remains globally unique for table joins; decoding
-        -- uses only this minimal mono identity, not eager instance metadata.
-        pure (some decoded)
-      else pure none
-    let spanId ← (← field record "span").getNat?
-    let some span := program.input.spans[spanId]? | throw "exported symbol span ID out of bounds"
-    let candidate : Candidate := {
-      symbol := ← text record "symbol"
-      explicitSymbol := ← boolean record "explicit_symbol"
+      let some id := record.instanceId | throw "exported callable instance absent"
+      let _ ← CompilerInstance.source ctx id
+      pure (some id)
+    else pure none
+    let some span := program.input.spans[record.span]? | throw "exported symbol span ID out of bounds"
+    candidates := candidates.push {
+      symbol := record.symbol
+      explicitSymbol := record.explicitSymbol
       fnInstance := callee
-      crateIndex := ← natural record "crate_index"
-      crateName := ← text record "crate_name"
-      weak := ← boolean record "weak"
+      crateIndex := record.crateIndex
+      crateName := record.crateName
+      weak := record.weak
       spanLo := span.lo
       spanHi := span.hi
       kind := kind
-      compilerBuiltins := ← boolean record "compiler_builtins" }
-    candidates := candidates.push candidate
-  let allocatorRecords ← (← field source "allocator_shims").getArr?
+      compilerBuiltins := record.compilerBuiltins }
   let mut allocatorEntries := #[]
-  for record in allocatorRecords do
-    let entry : AllocatorEntry := ⟨← text record "symbol",← allocatorTarget record⟩
+  for (symbol, target) in source.allocatorShims do
+    let entry : AllocatorEntry := ⟨symbol, ← allocatorTarget target⟩
     if allocatorEntries.any (·.symbol == entry.symbol) then
       throw s!"duplicate compiler allocator shim symbol `{entry.symbol}`"
     allocatorEntries := allocatorEntries.push entry
-  return ⟨noAllocName,candidates,allocatorEntries⟩
+  return ⟨source.noAllocShimSymbol, candidates, allocatorEntries⟩
 
 private def earlierSpan (left right : Candidate) : Bool :=
   left.spanLo < right.spanLo ||

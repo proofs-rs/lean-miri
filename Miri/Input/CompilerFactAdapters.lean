@@ -43,10 +43,6 @@ structure Prepared where
   castTypes : Array (TypeId × Result CastTypeInfo)
   obligations : Array Obligation
 
-private def field (j : Json) (key : String) : Result Json := j.getObjVal? key
-private def natural (j : Json) (key : String) : Result Nat := do (← field j key).getNat?
-private def string (j : Json) (key : String) : Result String := do (← field j key).getStr?
-private def array (j : Json) (key : String) : Result (Array Json) := do (← field j key).getArr?
 private def source (context : CompilerFacts.Context) (id : TypeId) : Result TypeNode :=
   (context.runtime.node id).mapError toString
 private def castType (context : CompilerFacts.Context) (tables : CompilerTables)

@@ -17,7 +17,6 @@ import MiriTests.Connected.Proofs.MachineStateExact207
 import MiriTests.Connected.Proofs.RuntimeDocumentExact207
 import MiriTests.Connected.Proofs.ScEventProof202
 import MiriTests.Connected.Proofs.SelectorProof195
-import MiriTests.Connected.Proofs.TypedValueDecidableEq207
 import MiriTests.ControlFlow.Transitions
 import MiriTests.FloatOps.Typed
 import MiriTests.Input.CompilerForeignSymbolTables

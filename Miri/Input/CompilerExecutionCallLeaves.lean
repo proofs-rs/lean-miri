@@ -33,7 +33,7 @@ def make (p : CompilerProviders.Prepared) (compatibilityBudget : Nat) :
     ExecutionCallLeaves.Compiler (MachineHooks.State K U) C ABI.ExternAbi := {
   functionSignature := fun _ layout => lift do
     let (count,sourceAbi) ← CompilerFunctionFacts.signature p.functions layout.ty
-    pure (count,← CompilerExternAbi.decode sourceAbi)
+    pure (count, sourceAbi)
   instanceKind := fun inst => lift (CompilerInstance.kindOf p.loweringContext p.program.compilerTables inst)
   instanceArgs := fun inst => lift (CompilerInstance.argsOf p.loweringContext p.program.compilerTables inst)
   itemInstance := fun definition args => lift (CompilerInstance.item p.loweringContext p.program.compilerTables definition args)

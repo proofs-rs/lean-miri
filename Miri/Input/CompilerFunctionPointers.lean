@@ -39,37 +39,33 @@ private def findFunctionKey (functions : Array FunctionPointers.FunctionEntry) (
       if entry.callee == callee && entry.salt.val == salt then return some entry
   return none
 
-structure InlineLookup (prepared : Prepared) where
+structure InlineLookup where
   private mk ::
-  private rows : Array (CallInstance × Bool)
   private index : InlineIndex
-  private exactRows : rows = prepared.inlineAttributes
 
-def InlineLookup.prepare (prepared : Prepared) : InlineLookup prepared := Id.run do
+def InlineLookup.prepare (prepared : Prepared) : InlineLookup := Id.run do
   let rows := prepared.inlineAttributes
   let mut index : InlineIndex := {}
   for entry in rows do
     let key := entry.1
     index := index.insert key ((index[key]?).getD #[] |>.push entry)
-  return ⟨rows,index,rfl⟩
+  return ⟨index⟩
 
-def inlineNeverUsing (lookup : InlineLookup prepared) (callee : CallInstance) :
+def inlineNeverUsing (lookup : InlineLookup) (callee : CallInstance) :
     Option Bool := Id.run do
   for (candidate, value) in (lookup.index[callee]?).getD #[] do
     if candidate == callee then return some value
   return none
 
 def prepare (calls : CompilerCallPipeline.Prepared) : Except String Prepared := do
-  let raw ← (← (← calls.calls.program.input.raw.getObjVal? "compiler_runtime_queries").getObjVal? "instances").getArr?
+  let records := calls.calls.program.input.queries.runtime.instances
   let ctx := LowerContext.ofDocument calls.calls.program.input
-  let tables := calls.calls.program.compilerTables
   let mut entries := #[]
   let mut indexed : InlineIndex := {}
-  for record in raw do
-    let (callee,next) ← CompilerInstance.decode ctx tables record
-    unless next.definitions == tables.definitions && next.typeConstants == tables.typeConstants do
-      throw "function inline query requires unprepared shared compiler identities"
-    let never ← (← record.getObjVal? "inline_never").getBool?
+  for record in records do
+    let callee := record.instanceId
+    let _ ← CompilerInstance.source ctx callee
+    let never := record.inlineNever
     let key := callee
     let bucket := (indexed[key]?).getD #[]
     if let some (_,old) := bucket.find? (fun e : CallInstance × Bool => e.1 == callee) then
@@ -112,8 +108,6 @@ private def seedImportedImpl (p : Prepared) (image : AllocationImage.Imported)
       throw "prepared function catalog requires the active source AllocId world"
     unless image.source == input.allocations do
       throw "prepared function catalog allocation image differs from its owning program"
-    Miri.Input.validateCompilerAllocIdWorldRaw input.raw input.allocations (some world)
-      |>.mapError fun error => s!"prepared AllocId world: {error}"
   else
     for (_,id) in memory.importedGlobalIds do
       if let some callee ← CompilerVTableRuntime.globalFunction p.calls.symbols image memory id then

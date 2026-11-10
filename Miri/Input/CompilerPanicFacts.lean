@@ -41,38 +41,27 @@ def name : Panic.LangItem → String
 private def parameterTag : MainGenericParameter → Nat
   | .lifetime => 0 | .typeParameter => 1 | .constParameter => 2
 
-private def definition (program : LoweredProgram) (source : Json) : Except String MIR.DefId := do
-  let id ← source.getNat?
+private def definition (program : LoweredProgram) (id : Nat) : Except String MIR.DefId := do
   unless id < program.compilerTables.definitions.size do throw "panic compiler definition ID out of bounds"
   pure id
-private def rows (p : LoweredProgram) : Except String (Array Json) := do
-  (← p.input.raw.getObjVal? "compiler_panic_queries").getArr?
 
-/-- An absent catalog is not demanded by preparing an unrelated function.
-Actual panic queries still fail. Present references must address the immutable
-exporter definition table; no compiler DefId is invented at the call event. -/
+private def rows (p : LoweredProgram) : Array Catalog.PanicQuery := p.input.queries.panic
+
 def prepareProgram (program : LoweredProgram) : Except String LoweredProgram := do
-  let source ← match program.input.raw.getObjVal? "compiler_panic_queries" with
-    | .error _ => return program | .ok value => pure value
   let mut tags : Array String := #[]
-  for row in ← source.getArr? do
-    let tag ← row.getObjValAs? String "lang_item"
-    if tags.contains tag then throw "duplicate panic language-item query"
-    tags := tags.push tag
-    let item ← row.getObjVal? "definition"
-    unless item == .null do
-      let _ ← definition program item
+  for row in rows program do
+    if tags.contains row.langItem then throw "duplicate panic language-item query"
+    tags := tags.push row.langItem
+    if let some id := row.definition then
+      let _ ← definition program id
       pure ()
   pure program
 
 def langItemByName (program : LoweredProgram) (tag : String) : Except String (Option MIR.DefId) := do
-  let selected := (← rows program).filter fun row =>
-    (row.getObjValAs? String "lang_item").toOption == some tag
+  let selected := (rows program).filter fun row => row.langItem == tag
   unless selected.size == 1 do throw "exact panic language-item query is missing or duplicated"
   let some row := selected[0]? | throw "panic language-item query absent"
-  let value ← row.getObjVal? "definition"
-  if value == .null then return none
-  pure (some (← definition program value))
+  row.definition.mapM (definition program)
 
 def langItem (program : LoweredProgram) (item : Panic.LangItem) : Except String (Option MIR.DefId) :=
   langItemByName program (name item)
@@ -80,13 +69,13 @@ def langItem (program : LoweredProgram) (item : Panic.LangItem) : Except String 
 def genericParameters (program : LoweredProgram) (requested : MIR.DefId) :
     Except String (Array MainGenericParameter) := do
   let mut found : Option (Array MainGenericParameter) := none
-  for row in ← rows program do
-    let value ← row.getObjVal? "definition"
-    if value == .null then continue
-    let id ← definition program value
+  for row in rows program do
+    let some rawId := row.definition | continue
+    let id ← definition program rawId
     unless id == requested do continue
-    let params ← (← (← row.getObjVal? "generic_parameters").getArr?).mapM fun value => do
-      match ← value.getStr? with
+    let some rawParams := row.genericParameters | throw "compiler panic generic parameters absent"
+    let params ← rawParams.mapM fun value => do
+      match value with
       | "lifetime" => pure MainGenericParameter.lifetime
       | "type_parameter" => pure .typeParameter
       | "const_parameter" => pure .constParameter

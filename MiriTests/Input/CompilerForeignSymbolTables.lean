@@ -1,21 +1,39 @@
 import Miri.Input.CompilerForeignSymbolTables
 import Miri.Input.CompilerFactAdapters
 
-/-! Parser regression for compiler foreign symbol tables, including callable
-exports sharing a lowering context. The fixtures exercise raw `foreign_symbols`
-JSON through `prepare`, rather than preconstructed Prepared entries. -/
+/-! Typed compiler foreign-symbol fixtures exercise allocator selection,
+canonical callable identities, and duplicate/order rejection in preparation. -/
 
 open Lean Miri.Input Miri.Interpreter
 
-private def document (raw : Json) : ImportDocument :=
-  { producer := ⟨"miri", "rustc", "version", "target"⟩
-    types := #[]
-    allocations := #[]
-    instances := #[]
-    selectedScope := none
-    functionAbis := #[]
-    bodies := #[]
-    raw := raw }
+private def unusedSettings : Catalog.ProducerSettings := {
+  sysrootPath := "", hashAlgorithm := "sha256", sysrootManifestSha256 := ""
+  loadedArtifactsManifestSha256 := "", artifacts := #[], requestedCfgMiri := false
+  miriDefaultArgs := #[], rustcArgs := #[], effectivePanicStrategy := "abort", mirOptLevel := none
+  mirEnablePasses := #[], mirPreserveUb := false, extraConstUbChecks := false
+  alwaysEncodeMir := false, deduplicateDiagnostics := false, qualification := "fixture" }
+
+private def unusedPrimitives : Catalog.Primitives := {
+  u8 := 0, u16 := 0, u32 := 0, u64 := 0, u128 := 0
+  i8 := 0, i16 := 0, i32 := 0, i64 := 0, i128 := 0, bool := 0
+  pointerTagInteger := 0, usize := 0, isize := 0, unit := 0
+  unitPointerConst := 0, unitPointerMut := 0, immU8Pointer := 0, immU8PointerPointer := 0
+  typeNameResultType := 0, callerLocationType := none, orderingEnum := none }
+
+private def document (symbols : Catalog.ForeignSymbols) : ImportDocument := {
+  producer := ⟨"miri", "rustc", "version", "target"⟩
+  types := #[], allocations := #[], instances := #[], selectedScope := none
+  functionAbis := #[], bodies := #[], producerSettings := unusedSettings
+  queries := {
+    session := ⟨#[], false, "test", 0, #[]⟩
+    runtime := ⟨none, #[], #[], #[], symbols⟩
+    frameMetadata := ⟨0, #[]⟩, instanceAbis := #[]
+    functionFacts := ⟨#[], #[], #[]⟩, casts := #[], typeNames := #[], panic := #[]
+    nativeSignatures := #[], retag := #[], covariance := #[]
+    globalBytes := ⟨0, 0, #[], #[]⟩, callerLocations := #[]
+    main := ⟨none, none, none, #[], none⟩, primitives := unusedPrimitives
+    vtables := #[], namedTypes := none, shimAbis := none, namedShimAbis := none
+    libcTypeLayouts := none, windowsTypeLayouts := none, namedConstants := none, namedStatics := none } }
 
 private def target : Miri.ABI.RuntimeTargetDataLayout := Id.run do
   let size : Miri.ABI.Size := ⟨8⟩
@@ -23,65 +41,40 @@ private def target : Miri.ABI.RuntimeTargetDataLayout := Id.run do
   return ⟨⟨.little, .w64⟩, .ONE, .ONE, .ONE, .ONE, .ONE, .ONE,
     .ONE, .ONE, .ONE, .ONE, .ONE, #[], .ZERO, ptr, #[], .ZERO, .I32⟩
 
-private def rawSymbols (allocators : Json) (candidates : Array Json := #[]) : Json :=
-  Json.mkObj [("instances", .arr (#[0,1].map fun id => Json.mkObj [
-    ("instance_id", toJson id), ("kind", .str "identity_only"), ("def_id", toJson id), ("instance_kind", Json.mkObj [
-      ("kind", .str "item"), ("def_id", toJson id)]), ("generic_args", .arr #[])])),
-    ("compiler_runtime_queries", Json.mkObj [("foreign_symbols",
-    Json.mkObj [
-      ("no_alloc_shim_symbol", toJson "__no_alloc"),
-      ("exported_candidates", Json.arr candidates),
-      ("allocator_shims", allocators)
-    ])])]
+private def symbols (allocators : Array (String × Catalog.AllocatorTarget))
+    (candidates : Array Catalog.ForeignCandidate := #[]) : Catalog.ForeignSymbols := {
+  os := "test", env := "", binaryFormat := "", families := #[]
+  noAllocShimSymbol := "__no_alloc", allocatorShims := allocators
+  exportedCandidates := some candidates, selectedForeignFallbacks := none
+  externDeclarations := none, selectedExports := none }
 
-private def allocator (name : String) (target : Json) : Json :=
-  Json.mkObj [("symbol", toJson name), ("target", target)]
+private def instanceNode (id : Nat) : InstanceNode := {
+  id, kind := .identityOnly, instanceKind := .Item id, genericArgs := #[]
+  defPath := none, definitionId := some id, bodyInstantiation := none
+  bodyTemplateIsPolymorphic := none, instanceArgsAreMonomorphic := none
+  bodyId := none, promotedBodies := #[] }
 
-private def special (method : String) : Json :=
-  Json.mkObj [("kind", toJson "special"), ("method", toJson method)]
-
-private def redirect (symbol : String) : Json :=
-  Json.mkObj [("kind", toJson "redirect"), ("symbol", toJson symbol)]
-
-private def prepare (raw : Json) (definitions : Array DefinitionId := #[]) :
+private def prepare (symbols : Catalog.ForeignSymbols) (definitions : Array DefinitionId := #[]) :
     Except String CompilerForeignSymbolTables.Prepared := do
-  let instanceRows ← ((raw.getObjVal? "instances").bind Json.getArr?)
-  let instanceNodes ← instanceRows.mapIdxM fun index row => DecoderValues.parseInstance row s!"instances[{index}]"
-  let base := document raw
+  let base := document symbols
   let source : ImportDocument := {
     base with
-    definitions := definitions
-    instances := instanceNodes
-    spans := #[{
-      originalPayload := "symbol"
-      lo := 0
-      hi := 1
-      start := ⟨1,0⟩
-      «end» := ⟨1,1⟩
-      context := "root"
-      file := "test.rs" }] }
+    definitions, instances := #[instanceNode 0, instanceNode 1]
+    spans := #[{ lo := 0, hi := 1, start := ⟨1,0⟩, «end» := ⟨1,1⟩, context := "root", file := "test.rs" }] }
   let program : LoweredProgram := ⟨⟨#[], #[], definitions, #[]⟩, #[], #[], #[], source⟩
-  let runtime : RuntimeMetadata := {
-    source := source
-    target := target
-  }
-  let context : CompilerFacts.Context := {
-    runtime := runtime
-    program := program
-  }
-  let facts : CompilerFactAdapters.Prepared := { context := context, patterns := #[], castTypes := #[], obligations := #[] }
-  let instances : CompilerVTableRuntime.Prepared := ⟨facts, #[]⟩
-  CompilerForeignSymbolTables.prepare instances
+  let runtime : RuntimeMetadata := { source, target }
+  let context : CompilerFacts.Context := { runtime, program }
+  let facts : CompilerFactAdapters.Prepared := { context, patterns := #[], castTypes := #[], obligations := #[] }
+  CompilerForeignSymbolTables.prepare ⟨facts, #[]⟩
 
-private def allocatorRows : Array Json := #[
-  allocator "_RNvCsaeuD6Zm55dc_7___rustc12___rust_alloc" (special "alloc"),
-  allocator "__alloc_zeroed" (special "alloc_zeroed"),
-  allocator "__dealloc" (special "dealloc"),
-  allocator "__realloc" (special "realloc"),
-  allocator "__redirect" (redirect "real_allocator")
-]
+private def allocatorRows : Array (String × Catalog.AllocatorTarget) := #[
+  ("_RNvCsaeuD6Zm55dc_7___rustc12___rust_alloc", .special "alloc"),
+  ("__alloc_zeroed", .special "alloc_zeroed"),
+  ("__dealloc", .special "dealloc"),
+  ("__realloc", .special "realloc"),
+  ("__redirect", .redirect "real_allocator") ]
 
-private def decoded := prepare (rawSymbols (Json.arr allocatorRows))
+private def decoded := prepare (symbols allocatorRows)
 
 private def allocatorIs (prepared : CompilerForeignSymbolTables.Prepared)
     (symbol : String) (expected : ForeignItems.AllocatorSymbol CallInstance) : Bool :=
@@ -100,25 +93,22 @@ private def allocatorIs (prepared : CompilerForeignSymbolTables.Prepared)
       allocatorIs prepared "__redirect" (.redirect "real_allocator") &&
       (CompilerForeignSymbolTables.allocatorSymbol prepared "__missing").isNone
 
-#guard match prepare (rawSymbols (Json.arr (allocatorRows.push
-    (allocator "_RNvCsaeuD6Zm55dc_7___rustc12___rust_alloc" (special "alloc"))))) with
+#guard match prepare (symbols (allocatorRows.push
+    ("_RNvCsaeuD6Zm55dc_7___rustc12___rust_alloc", .special "alloc"))) with
   | .error message => message == "duplicate compiler allocator shim symbol `_RNvCsaeuD6Zm55dc_7___rustc12___rust_alloc`"
   | .ok _ => false
 
-private def callableCandidate (iteration definition : Nat) : Json := Json.mkObj [
-  ("iteration_index", toJson iteration),
-  ("definition_kind", toJson "function"),
-  ("instance_id", toJson definition),
-  ("span", toJson (0 : Nat)),
-  ("symbol", toJson s!"callable{iteration}"), ("explicit_symbol", toJson true),
-  ("crate_index", toJson (1 : Nat)), ("crate_name", toJson "test"),
-  ("weak", toJson false), ("compiler_builtins", toJson false)]
+private def callableCandidate (iteration definition : Nat) : Catalog.ForeignCandidate := {
+  iterationIndex := iteration, used := true, definitionKind := "function"
+  instanceId := some definition, definition, span := 0
+  symbol := s!"callable{iteration}", explicitSymbol := true
+  crateIndex := 1, crateName := "test", weak := false, compilerBuiltins := false }
 
 private def callableDefinitions : Array DefinitionId := #[⟨1,7⟩, ⟨1,8⟩]
 
 -- Two callable identities share the lowering context while retaining distinct
 -- dense definitions and the original finalized-table validation.
-#guard match prepare (rawSymbols (.arr #[]) #[callableCandidate 0 0, callableCandidate 1 1])
+#guard match prepare (symbols #[] #[callableCandidate 0 0, callableCandidate 1 1])
     callableDefinitions with
   | .error _ => false
   | .ok prepared =>
@@ -126,7 +116,7 @@ private def callableDefinitions : Array DefinitionId := #[⟨1,7⟩, ⟨1,8⟩]
       (prepared.candidates[0]?.bind (·.fnInstance)) == some 0 &&
       (prepared.candidates[1]?.bind (·.fnInstance)) == some 1
 
-#guard match prepare (rawSymbols (.arr #[]) #[callableCandidate 0 0, callableCandidate 1 999])
+#guard match prepare (symbols #[] #[callableCandidate 0 0, callableCandidate 1 999])
     callableDefinitions with
   | .error message => message == "compiler instance ID 999 out of bounds"
   | .ok _ => false

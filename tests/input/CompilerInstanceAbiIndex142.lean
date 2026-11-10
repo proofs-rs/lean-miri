@@ -37,8 +37,11 @@ def main (args : List String) : IO Unit := do
   let prepared ← must (prepare raw)
   check (!prepared.entries.isEmpty) "fixture contains no exact instance ABI queries"
   compare prepared
-  let manual : CompilerInstanceAbi.Prepared := ⟨prepared.runtime, prepared.program, prepared.entries, none⟩
-  compare manual
+  let some firstEntry := prepared.entries[0]? | throw (IO.userError "missing first ABI query")
+  let missingIndex : CompilerInstanceAbi.Prepared :=
+    ⟨prepared.runtime, prepared.program, prepared.entries, {}⟩
+  check (!(CompilerInstanceAbi.abiOfInstance missingIndex firstEntry.callee firstEntry.extra).isOk)
+    "an incomplete ABI index silently fell back to scanning entries"
   let rows ← must ((raw.getObjVal? "compiler_instance_abis").bind Json.getArr?)
   let first := rows[0]!
   let duplicate ← must (set raw "compiler_instance_abis" (.arr (rows.push first)))

@@ -10,29 +10,18 @@ structure StartupFacts where
   noCore : Except String Bool
   coreEscapeDefault : Except String (DefinitionRef × Bool)
 
-private def field (value : Json) (name : String) : Except String Json :=
-  value.getObjVal? name
-
-private def fieldString (value : Json) (name : String) : Except String String := do
-  (← field value name).getStr?
-
 /-- Prepare source facts from the pinned exporter query table. The escape-default identity must already be in the canonical
 definition table; no path or display-name identity is synthesized here. -/
 def prepare (compiler : CompilerProviders.Prepared) : Except String StartupFacts := do
-  let queries ← field compiler.program.input.raw "compiler_runtime_queries"
-  let startup ← field queries "startup"
-  let noCore := do
-    let value ← field startup "no_core"
-    value.getBool?
+  let some startup := compiler.program.input.queries.runtime.startup
+    | throw "compiler startup queries absent"
   let coreEscapeDefault := do
-    let value ← field startup "core_escape_default"
-    let rawDefinition ← field value "definition"
-    let source ← rawDefinition.getNat?
+    let some (source, available) := startup.coreEscapeDefault
+      | throw "compiler core escape-default query absent"
     unless source < compiler.program.compilerTables.definitions.size do
       throw "startup escape-default definition ID out of bounds"
-    let available ← (← field value "mir_available").getBool?
-    pure (source,available)
-  return ⟨noCore, coreEscapeDefault⟩
+    pure (source, available)
+  return ⟨.ok startup.noCore, coreEscapeDefault⟩
 
 private def demanded (query : Except String A) : MachineHooks.M K U A :=
   match query with

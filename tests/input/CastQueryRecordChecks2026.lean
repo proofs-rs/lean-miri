@@ -1,34 +1,19 @@
-import Miri.Input.CompilerCastQueryRecord
+import Miri.Input.CatalogDecoder
 
-open Lean Miri.Input.CompilerCastQueryRecord
+open Miri.Input
 
-private def record (fields : List (String × Json)) : Json :=
-  Json.mkObj (("typing_env", .str "fully_monomorphized") :: fields)
+private def parse (fields : String) : Except String Catalog.CastQuery := do
+  JsonReader.run CatalogDecoder.castQuery
+    ("{\"typing_env\":\"fully_monomorphized\",\"query_kind\":\"resolve_fn_ptr\",\"input_type\":1,\"args_no_bound_vars\":true," ++ fields ++ "}")
 
 def main : IO Unit := do
-  let resolved := record [("resolution_kind", .str "instance"), ("instance_id", toJson (7 : Nat)),
-    ("instance_kind", Json.mkObj [("kind", .str "item")]),
-    ("generic_args", .arr #[])]
-  unless (functionResult resolved).toOption == some (some resolved) do
+  unless (parse "\"resolution_kind\":\"instance\",\"instance_id\":7").toOption ==
+      some (.resolveFnPtr 1 true (some 7)) do
     throw (IO.userError "direct resolved instance was not preserved")
-  let direct := record [("instance_id", toJson (7 : Nat))]
-  unless (functionResult direct).toOption == some (some direct) do
-    throw (IO.userError "direct positive snapshot now requires a redundant tag")
-  unless (functionResult (record [("resolution_kind", .str "none")])).toOption == some none do
+  unless (parse "\"resolution_kind\":\"none\"").toOption == some (.resolveFnPtr 1 true none) do
     throw (IO.userError "genuine absent compiler target was not preserved")
-  for malformed in [record [], record [("resolution_kind", .str "instance"), ("instance_id", .str "7")],
-      record [("resolution_kind", .str "none"), ("instance_id", toJson (7 : Nat))],
-      record [("resolution_kind", .str "future")],
-      Json.mkObj [("instance_id", .null)],
-      record [("value", resolved)]] do
-    unless !(functionResult malformed).isOk do
-      throw (IO.userError "missing, malformed or legacy instance identity accepted")
-  for direct in [resolved,
-      record [("source_tail", Json.mkObj [("type_id", toJson (1 : Nat))]),
-        ("target_tail", Json.mkObj [("type_id", toJson (2 : Nat))])],
-      record [("type_id", toJson (3 : Nat))]] do
-    unless (payload direct).toOption == some direct do
-      throw (IO.userError "direct cast result incorrectly requires value envelope")
-  unless !(payload (Json.mkObj [("typing_env", .str "generic")])).isOk do
-    throw (IO.userError "incorrect typing environment accepted")
-  IO.println "CastQueryRecordChecks2026: direct casts and optional targets preserved"
+  for fields in ["\"instance_id\":7", "\"resolution_kind\":\"instance\",\"instance_id\":\"7\"",
+      "\"resolution_kind\":\"none\",\"instance_id\":7", "\"resolution_kind\":\"future\""] do
+    unless !(parse fields).isOk do
+      throw (IO.userError "missing or malformed instance identity accepted")
+  IO.println "CastQueryRecordChecks2026: typed direct casts and optional targets preserved"

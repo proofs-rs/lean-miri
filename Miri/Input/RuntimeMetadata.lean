@@ -1,5 +1,4 @@
 import Miri.Input.Model
-import Miri.Input.Decoder
 import Miri.ABI.Layout
 
 /-! Internal compiler-metadata bridge, not the public import API. Successful
@@ -26,30 +25,6 @@ abbrev Result := Except RuntimeMetadataError
 
 def require (value : Option A) (path : String) : Result A :=
   match value with | some value => pure value | none => throw (.missing path)
-private def convert (path : String) (result : Except String A) : Result A :=
-  result.mapError (.invalid path)
-def jsonField (j : Lean.Json) (name : String) : Result Lean.Json :=
-  convert name (j.getObjVal? name)
-def number (j : Lean.Json) (name : String) : Result Nat := do
-  convert name ((← jsonField j name).getNat?)
-/-- Full-width rustc u128 JSON endpoints, with backward numeric encoding. -/
-def u128Number (j : Lean.Json) (name : String) : Result Nat := do
-  let value ← jsonField j name
-  let natural ← match value with
-    | .str text =>
-      unless !text.isEmpty && text.toList.all Char.isDigit do throw (.invalid name "expected exact unsigned decimal")
-      match text.toNat? with
-      | some value => pure value
-      | none => throw (.invalid name "invalid unsigned decimal")
-    | _ => convert name value.getNat?
-  unless natural < 2^128 do throw (.invalid name "u128 overflow")
-  pure natural
-def truth (j : Lean.Json) (name : String) : Result Bool := do
-  convert name ((← jsonField j name).getBool?)
-def text (j : Lean.Json) (name : String) : Result String := do
-  convert name ((← jsonField j name).getStr?)
-def array (j : Lean.Json) (name : String) : Result (Array Lean.Json) := do
-  convert name ((← jsonField j name).getArr?)
 def u64 (n : Nat) (path : String) : Result UInt64 :=
   if n < 2^64 then pure (UInt64.ofNat n) else throw (.invalid path "u64 overflow")
 def u32 (n : Nat) (path : String) : Result UInt32 :=
@@ -199,42 +174,47 @@ def layout (target : RuntimeTargetDataLayout) (source : Input.Layout) : Result L
     reprC := source.reprC, randomizationSeed := ← u64 source.randomizationSeed "seed" }
 
 
-private def pointerSpec (j : Lean.Json) : Result PointerSpec := do
-  return ⟨← size (← number j "pointer_size_bytes"),
-    ← alignment (← number j "pointer_align_bytes"),
-    ← size (← number j "pointer_offset_bytes"), ← truth j "is_fat"⟩
+private def pointerSpec (source : TargetPointerSpec) : Result PointerSpec := do
+  return ⟨← size source.pointerSizeBytes, ← alignment source.pointerAlignBytes,
+    ← size source.pointerOffsetBytes, source.isFat⟩
 
-/-- Every canonical target field is required. LLVM's original layout string
-and address-space bounds stay in the enclosing source document as evidence. -/
-def importTarget (j : Lean.Json) : Result RuntimeTargetDataLayout := do
-  let endian ← match ← text j "endian" with
+def importTarget (source : TargetDataLayoutEvidence) : Result RuntimeTargetDataLayout := do
+  let endian ← match source.endian with
     | "little" => pure Endian.little | "big" => pure .big
     | _ => throw (.unsupported "target endian")
-  let width ← match ← number j "pointer_width_bits" with
+  let width ← match source.pointerWidthBits with
     | 16 => pure PointerWidth.w16 | 32 => pure .w32 | 64 => pure .w64
     | _ => throw (.unsupported "target pointer width")
   let base : TargetDataLayout := ⟨endian, width⟩
-  if (← u64 (← number j "object_size_bound_bytes") "object bound") != base.objSizeBound then
+  let objectBound ← require source.objectSizeBoundBytes "object bound"
+  if (← u64 objectBound "object bound") != base.objSizeBound then
     throw (.invalid "object bound" "target arithmetic view mismatch")
-  let align (name : String) := do alignment (← number j (name ++ "_align_bytes"))
-  let vectors ← (← array j "vector_align").mapM fun entry => do
-    pure (← size (← number entry "size_bytes"), ← alignment (← number entry "align_bytes"))
-  let spaces ← (← array j "address_space_info").mapM fun entry => do
-    pure (AddressSpace.mk (← u32 (← number entry "address_space") "address space"),
-      ← pointerSpec (← jsonField entry "spec"))
-  let cEnum ← match ← text j "c_enum_min_size" with
+  let vectors ← source.vectorAlign.mapM fun (width, align) => do
+    pure (← size width, ← alignment align)
+  let spaces ← source.addressSpaceInfo.mapM fun entry => do
+    pure (AddressSpace.mk (← u32 entry.addressSpace "address space"),
+      ← pointerSpec entry.spec)
+  let cEnum ← match source.cEnumMinSize with
     | "I8" => pure Integer.I8 | "I16" => pure .I16 | "I32" => pure .I32
     | "I64" => pure .I64 | "I128" => pure .I128
     | _ => throw (.unsupported "C enum min size")
   let result : RuntimeTargetDataLayout := {
-    base, i1Align := ← align "i1", i8Align := ← align "i8", i16Align := ← align "i16",
-    i32Align := ← align "i32", i64Align := ← align "i64", i128Align := ← align "i128",
-    f16Align := ← align "f16", f32Align := ← align "f32", f64Align := ← align "f64",
-    f128Align := ← align "f128", aggregateAlign := ← align "aggregate", vectorAlign := vectors,
-    defaultAddressSpace := ⟨← u32 (← number j "default_address_space") "default address space"⟩,
-    defaultAddressSpacePointerSpec := ← pointerSpec (← jsonField j "default_address_space_pointer_spec"),
+    base, i1Align := ← alignment source.i1AlignBytes,
+    i8Align := ← alignment source.i8AlignBytes,
+    i16Align := ← alignment source.i16AlignBytes,
+    i32Align := ← alignment source.i32AlignBytes,
+    i64Align := ← alignment source.i64AlignBytes,
+    i128Align := ← alignment source.i128AlignBytes,
+    f16Align := ← alignment source.f16AlignBytes,
+    f32Align := ← alignment source.f32AlignBytes,
+    f64Align := ← alignment source.f64AlignBytes,
+    f128Align := ← alignment source.f128AlignBytes,
+    aggregateAlign := ← alignment source.aggregateAlignBytes,
+    vectorAlign := vectors,
+    defaultAddressSpace := ⟨← u32 source.defaultAddressSpace "default address space"⟩,
+    defaultAddressSpacePointerSpec := ← pointerSpec source.defaultAddressSpacePointerSpec,
     addressSpaceInfo := spaces,
-    instructionAddressSpace := ⟨← u32 (← number j "instruction_address_space") "instruction address space"⟩,
+    instructionAddressSpace := ⟨← u32 source.instructionAddressSpace "instruction address space"⟩,
     cEnumMinSize := cEnum }
   result.validate.mapError (fun e => .invalid "target" (toString e))
   return result
@@ -250,7 +230,7 @@ structure RuntimeMetadata where
 namespace RuntimeMetadata
 
 def ofDocument (document : ImportDocument) : Result RuntimeMetadata := do
-  let target ← importTarget (← jsonField document.raw "runtime_target_data_layout")
+  let target ← importTarget (← require document.runtimeTargetDataLayout "runtime_target_data_layout")
   let mut seen : Std.HashSet TypeId := {}
   for node in document.types do
     if seen.contains node.id then throw (.duplicateType node.id)
@@ -316,8 +296,6 @@ def tupleLayout (metadata : RuntimeMetadata) (elements : Array TypeId) : Result 
 def overflowTupleLayout (metadata : RuntimeMetadata) (element : TyAndLayout TypeId) : Result (TyAndLayout TypeId) := do
   let boolean ← metadata.findKind .bool
   metadata.tupleLayout #[element.ty,boolean.ty]
-
-private def typeRef (source : Lean.Json) : Result TypeId := convert "compiler type ID" source.getNat?
 
 private def projectionParents (metadata : RuntimeMetadata) (id : TypeId) : Result (Array ProjectionParent) := do
   let node ← metadata.node id

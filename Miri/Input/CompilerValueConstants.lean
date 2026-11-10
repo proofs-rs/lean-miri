@@ -6,57 +6,29 @@ allocation identities are materialized by the actual constant root-pointer
 pipeline, with supplied destination layout checked at the original event. -/
 namespace Miri.Input.CompilerValueConstants
 open Lean Miri.ABI Miri.Interpreter Miri.Memory
-private def ref (j : Json) : Except String MIR.TyId := j.getNat?
-private def records (p : CompilerProviders.Prepared) (key : String) : Except String (Array Json) := do
-  (← p.program.input.raw.getObjVal? key).getArr?
-private def unique (entries : Array Json) : Except String Json := do
-  let some first := entries[0]? | throw "missing exact compiler intrinsic constant query"
-  unless entries.all (· == first) do throw "conflicting exact compiler intrinsic constant queries"
-  pure first
-private def decode (p : CompilerProviders.Prepared) (record : Json) :
+private def checked (p : CompilerProviders.Prepared) (ty : MIR.TyId) (value : MIR.ConstValue) :
     Except String (MIR.TyId × MIR.ConstValue) := do
-  let ty ← ref (← record.getObjVal? "result_type")
   let _ ← p.runtime.node ty |>.mapError toString
-  let value ← lowerCompilerConstValue p.loweringContext ty
-    (← p.loweringContext.decodeCompilerValue record)
-  pure (ty,value)
+  pure (ty, value)
 
 def typeName (p : CompilerProviders.Prepared) (ty : MIR.TyId) :
     Except String (MIR.TyId × MIR.ConstValue) := do
-  let matching := (← records p "compiler_type_name_constants").filter fun record =>
-    ((record.getObjVal? "input_type").bind ref).toOption == some ty
-  let record ← unique matching
-  unless (← record.getObjValAs? String "typing_env") == "fully_monomorphized" do
-    throw "type_name compiler query typing environment mismatch"
-  decode p record
+  let matching := p.program.input.queries.typeNames.filter (·.inputType == ty)
+  let some first := matching[0]? | throw "missing exact compiler intrinsic constant query"
+  unless matching.all (· == first) do throw "conflicting exact compiler intrinsic constant queries"
+  checked p first.resultType first.value
 
-def callerLocationReference (p : CompilerProviders.Prepared) (span : MIR.SpanRef) :
-    Except String (MIR.TyId × MIR.ConstValue) := do
-  unless span.id < p.program.compilerTables.spans.size do throw "caller-location span absent from shared table"
-  let mut matching := #[]
-  for record in ← records p "compiler_caller_location_constants" do
-    let (actual,tables) ← lowerCompilerSpan p.program.compilerTables
-      (← p.loweringContext.decodeCompilerSpan (← record.getObjVal? "span"))
-    if tables.spans == p.program.compilerTables.spans && actual == span then
-      matching := matching.push record
-  decode p (← unique matching)
-
-/-- Retain the scan's demand-local error order, but build its span index once.
-Each row starts from the same base: missing spans cannot pollute later rows.
-The immutable ConstValue is still materialized as a fresh runtime global by
-EvalCallerLocationConstruction; no guest pointer is cached here. -/
 def callerLocation (p : CompilerProviders.Prepared) (span : MIR.SpanRef) :
     Except String (MIR.TyId × MIR.ConstValue) := do
   unless span.id < p.program.compilerTables.spans.size do throw "caller-location span absent from shared table"
-  let entries ← records p "compiler_caller_location_constants"
-  let base := p.program.compilerTables
-  let mut matching := #[]
-  for record in entries do
-    let (actual,next) ← lowerCompilerSpan base
-      (← p.loweringContext.decodeCompilerSpan (← record.getObjVal? "span"))
-    if (base.spans == next.spans) && actual == span then
-      matching := matching.push record
-  decode p (← unique matching)
+  let matching := p.program.input.queries.callerLocations.filter (·.span == span.id)
+  let some first := matching[0]? | throw "missing exact compiler intrinsic constant query"
+  unless matching.all (· == first) do throw "conflicting exact compiler intrinsic constant queries"
+  let some ty := first.resultType | throw "compiler caller-location result type absent"
+  checked p ty first.value
+
+def callerLocationReference (p : CompilerProviders.Prepared) (span : MIR.SpanRef) :
+    Except String (MIR.TyId × MIR.ConstValue) := callerLocation p span
 
 def eval (p : CompilerProviders.Prepared)
     (functions : FunctionPointers.Hooks K U Other) (arithmetic : PointerArithmetic)

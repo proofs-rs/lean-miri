@@ -25,8 +25,7 @@ Pending references cannot serialize. The export document and peripheral metadata
 write directly through serde without constructing a JSON Value tree. Diagnostic
 fingerprints use
 the emitted bytes, and prepared-reference sidecars receive the allocator frontier
-directly. Concrete-MIR constant evaluation timing and Lean input/lowering changes
-remain separate work.
+directly. Concrete-MIR constant evaluation timing remains separate work.
 Cast-query consumers, including dynamic-upcast evidence validation, read direct
 result fields. Executables with custom `no_main` entry points retain startup
 preflight facts and the core C-ulong and mutable i32-pointer types required by
@@ -35,13 +34,13 @@ caller-location constants are lowered from their direct compiler payloads. A gen
 function-pointer target has `resolution_kind: none` and no instance identity;
 `resolution_kind: instance` carries a canonical instance ID. This preserves
 the optional answer when exact query-key fields are attached.
-The full vtable-erasure wrapper checks remain blocked by existing harness
-expectations: the TraitVPtr check reads numeric references as wrapped objects,
-and the cross-crate metadata fixture is required to contain lockstep cast rows
-that it does not produce. The HRTB upcast fixture currently has only identity
-query answers, so its nonidentity expectation also fails. Baseline and current
-exports agree on these inputs; direct catalog joins and canonical source-run
-checks pass separately. These harness repairs remain with input/lowering work.
+The vtable-erasure reader now uses typed predicate/type references, including
+TraitVPtr child joins. Remaining wrapper coverage expectations still need
+reconciliation: the cross-crate metadata fixture does not produce the required
+lockstep cast rows, and the HRTB fixture has only identity query answers despite
+its nonidentity expectation. Baseline and current exports agree on these inputs;
+direct catalog joins and canonical source-run checks pass separately. A successful
+full wrapper run remains unverified.
 Coroutine frame layout serialization and foreign TLS initializers remain
 unimplemented and now stop export. This boundary does not establish compiler
 query closure or interpreter correspondence.
@@ -151,9 +150,10 @@ The fresh CI lane now schedules the six supplemental focused guests, native/TLS
 query-demand mutations, runtime-type closure and the cross-crate vtable control;
 a successful hosted run remains required. Fresh regeneration/comparison of every
 canonical guest and standalone unregistered harnesses remain outside workflow
-coverage. The existing CatalogRoles consumer
-lacks the TLS-provider branch required by its optional generator mode.
-Saved replay cannot validate changed producers.
+coverage. Catalog-role checks now distinguish malformed typed fields from ignored
+extension fields and include the optional TLS-provider branch; hosted validation
+of these updated checks remains required. Saved replay cannot validate changed
+producers.
 
 The upstream UI workflow ports PR #9’s test harness without its compiler/runtime
 fixes. Main’s reference environment and Lean choice/argv/CPU/float/CAS/I/O profile
@@ -162,25 +162,21 @@ with attempted Lean outcomes retained. Full hosted sweep and aggregate coverage
 remain unvalidated.
 Selected finite checks do not close general proof or source-correspondence gaps.
 
-The typed-pool input revision still needs full `tools/check.sh` and hosted CI.
-`tools/check-structural-regressions.sh` currently fails to elaborate
-`tests/regression/PrimitiveCatalog.lean:19`: the `.ok` constructor in its
-`runtime.lookup` equality has no inferred expected type. The provider
-pool-preservation and context/runtime assertions pass separately; this test API
-elaboration failure remains unresolved.
+The two-pass typed input revision passes the local library/frontend/native
+build, runtime registry, decoder, fresh input, structural, optimization and
+connected-proof checks. Full `tools/check.sh` and hosted CI remain unvalidated;
+these finite checks do not replace the complete comparison lanes.
 The full regression result for an earlier revision does not validate later
 changes. Separate canonical12, ordering,
-large-TB, SC-schedule, connected-proof and structural-regression entry points
-also need current-revision execution. Fresh construction of the reference Miri
+large-TB and SC-schedule entry points also need current-revision execution. Fresh construction of the reference Miri
 and MIR-enabled std sysroot remains a validation gap; reusing retained artifacts
 does not establish that setup path.
 
 The ordinary standard-library startup closure from
-`tests/repro/startup/empty-main.rs` still stops during lowering with
-`expected typed object`, before guest execution. Both the main baseline
-`a0967d39` and the typed-pool input exhibit this failure; their same-TyCtxt Miri
-references complete normally. Successful rooted functions and the constructor
-startup witness do not establish support for this larger closure.
+`tests/repro/startup/empty-main.rs` now decodes directly into MIR. A fresh
+7,322-body export completed native execution with `finalized_exit code=0` under
+the bounded-diagnostic-zero choice profile. This finite witness does not establish
+behavior for other standard-library closures or all permitted choices.
 
 ### Compiler query closure and prepared allocation identity
 
@@ -221,8 +217,8 @@ provider lies outside the selected local rustc source corpus.
 
 ### Performance and optimization assurance
 
-Remaining performance work includes runtime-value decoding, residual equality
-and validation work, and preparation outside the optimized call-resolution
+Remaining performance work includes residual equality and validation work,
+and preparation outside typed input decoding and the optimized call-resolution
 lookup. Caller-location still scans its catalog; optimization must retain
 source-order diagnostics, malformed-row handling and fresh Location allocations.
 Measure current immutable artifacts with the protocol in [AGENTS](AGENTS.md);
@@ -237,10 +233,13 @@ correctness. The large catch guest still needs a fresh same-prepared-TyCtxt
 reference comparison; native completion of a diagnostic trace does not prove UB
 freedom over every permitted choice.
 
-Import-time typing remains selective: query envelopes, layout extras and some
-specialized adapters still inspect source payloads. Compiler table identities
-remain local to one input. Reusing guest pointers or allocation identities
-between executions would invalidate the execution model.
+Input decoding parses once into concrete typed tables and unresolved body/catalog
+constant data, then resolves references and scalar widths into interpreter MIR and
+per-instruction facts. Drafts and final data retain no JSON ranges or generic value
+tree. The file entrypoint still reads a complete `String`; bounded-memory file
+streaming is not implemented. Compiler table identities remain local to one input. Reusing guest
+pointers or allocation identities between executions would invalidate the
+execution model.
 
 ## Feature support outside the current acceptance scope
 

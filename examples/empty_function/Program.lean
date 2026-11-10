@@ -70,6 +70,24 @@ run_cmd do
     name := `EmptyFunction.Program.root, levelParams := [], type := mkConst ``Root
     value := toExpr value, hints := .regular 0, safety := .safe }
 
+/-- Kernel-checked alignment of the split typed MIR/source-local arrays in the
+concrete imported data. No execution outcome or source-buffer equality is used. -/
+theorem imported_local_source_alignment (index : Fin imported.document.bodies.size) :
+    (imported.document.bodies[index]).localSources.size =
+      (imported.document.bodies[index]).mir.locals.size := by
+  rcases index with ⟨index, bound⟩
+  have range : index = 0 ∨ index = 1 ∨ index = 2 ∨ index = 3 := by
+    change index < 4 at bound
+    omega
+  rcases range with h | h | h | h <;> subst index <;> rfl
+
+theorem imported_body_local_source_alignment (body : Input.Body)
+    (member : body ∈ imported.document.bodies) :
+    body.localSources.size = body.mir.locals.size := by
+  obtain ⟨index, bound, equal⟩ := Array.mem_iff_getElem.mp member
+  rw [← equal]
+  exact imported_local_source_alignment ⟨index, bound⟩
+
 theorem no_arguments : root.loaded.body.argumentCount = 0 := by rfl
 theorem one_local : root.loaded.body.locals.size = 1 := by rfl
 theorem one_block : root.loaded.body.basicBlocks.size = 1 := by rfl
@@ -84,7 +102,7 @@ end EmptyFunction.Program
 open Lean Elab Command in
 run_cmd do
   for name in #[``EmptyFunction.Program.imported, ``EmptyFunction.Program.root,
-      ``EmptyFunction.Program.no_arguments, ``EmptyFunction.Program.one_local, ``EmptyFunction.Program.one_block,
+      ``EmptyFunction.Program.imported_local_source_alignment, ``EmptyFunction.Program.imported_body_local_source_alignment, ``EmptyFunction.Program.no_arguments, ``EmptyFunction.Program.one_local, ``EmptyFunction.Program.one_block,
       ``EmptyFunction.Program.one_statement, ``EmptyFunction.Program.normal_return, ``EmptyFunction.Program.no_cleanup] do
     for dependency in (← collectAxioms name) do
       unless #[``propext, ``Quot.sound, ``Classical.choice].contains dependency do

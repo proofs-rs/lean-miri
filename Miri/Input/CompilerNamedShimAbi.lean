@@ -12,22 +12,11 @@ structure Prepared where
   runtime : RuntimeMetadata
   entries : Array Entry
 def prepare (runtime : RuntimeMetadata) : Except String Prepared := do
-  let records ← match runtime.source.raw.getObjVal? "compiler_named_shim_abis" with
-    | .error _ => pure #[]
-    | .ok value => value.getArr?
   let mut entries := #[]
-  for record in records do
-    let name ← (← record.getObjVal? "name").getStr?
-    unless !(entries.any (·.name == name)) do throw "duplicate named compiler shim query"
-    let recipe ← record.getObjVal? "recipe"
-    unless (← (← recipe.getObjVal? "typing_env").getStr?) == "fully_monomorphized" do
-      throw "named shim typing environment mismatch"
-    let abi ← do
-      let query ← recipe.getObjVal? "query"
-      let result ← query.getObjVal? "abi_query"
-      result.getNat?
-    entries := entries.push ⟨name,abi⟩
-  pure ⟨runtime,entries⟩
+  for record in runtime.source.queries.namedShimAbis.getD #[] do
+    unless !(entries.any (·.name == record.name)) do throw "duplicate named compiler shim query"
+    entries := entries.push ⟨record.name, record.recipe.abiId⟩
+  pure ⟨runtime, entries⟩
 
 def expectedAbi (prepared : Prepared) (name : String) : Except String (FnAbi MIR.TyId) := do
   let some entry := prepared.entries.find? (·.name == name)

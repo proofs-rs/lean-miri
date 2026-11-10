@@ -22,22 +22,16 @@ private def decodeChecks (ctx : LowerContext) (tables : CompilerTables)
     throw "required-constant typing environment mismatch"
   let checks := query.requiredChecks
   unless checks.size == original.size do throw "required-constant query count mismatch"
-  let mut tables := tables
   let mut evidence := #[]
   for index in [:checks.size] do
     let some check := checks[index]? | throw "required check absent"
     let some source := original[index]? | throw "required source operand absent"
     unless check.index == index do throw "required-constant source order mismatch"
-    let sourceSpan ← (← source.field "span").natural
+    let sourceSpan := source.span.id
     unless check.spanId == sourceSpan do throw "required-constant source span mismatch"
-    let normalized := check.normalizedOperand
-    unless (← (← normalized.field "span").natural) == sourceSpan do
-      throw "required constant normalization changed source span"
-    let (source,nextTables) ← lowerCompilerConstOperand ctx tables source
-    let (normal,nextTables) ← lowerCompilerConstOperand ctx nextTables normalized
-    let ty ← (← normalized.field "type").natural
-    let value ← lowerCompilerConstValue ctx ty check.value
-    tables := nextTables
+    let normal := check.normalizedOperand
+    unless normal.span.id == sourceSpan do throw "required constant normalization changed source span"
+    let value := check.value
     evidence := evidence.push (.ok ⟨callee,source.value,normal.value,normal.span,value⟩)
   return (evidence,tables)
 
@@ -52,7 +46,7 @@ def prepare (program : LoweredProgram) : Prepared := Id.run do
       entries := entries.push ⟨.error unavailable, .error unavailable, .error unavailable⟩
       continue
     let preamble := do
-      lowerCompilerSpan tables (.sourceSpan body.input.preambleDefSpanId)
+      lowerCompilerSpan tables ⟨body.input.preambleDefSpanId⟩
     let preamble ← match preamble with
       | .error error => pure (.error error)
       | .ok (span,next) =>

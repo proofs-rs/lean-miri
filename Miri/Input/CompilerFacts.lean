@@ -23,12 +23,11 @@ private def computeUnitLayout (runtime : RuntimeMetadata) :
 structure Context where
   runtime : RuntimeMetadata
   program : LoweredProgram
-  /-- Lowering evidence is bound to the exact owned source document. -/
-  lowering : Option (LowerContext.Bound program.input) := none
+  lowering : Option LowerContext := none
 
 def Context.loweringContext (context : Context) : LowerContext :=
   match context.lowering with
-  | some prepared => prepared.value
+  | some prepared => prepared
   | none => LowerContext.ofDocument context.program.input
 
 def Context.primitiveLayout (context : Context) (key : String) :
@@ -38,16 +37,16 @@ def Context.primitiveLayout (context : Context) (key : String) :
 def Context.orderingLayout (context : Context) : Except String (TyAndLayout TypeId) :=
   CompilerPrimitiveFacts.orderingLayout context.runtime
 
-/-- Bind lowering evidence when the owning lowered program changes. -/
+/-- Prepare lowering metadata for the current program. -/
 def Context.withProgram (context : Context) (program : LoweredProgram) : Context :=
-  { context with program, lowering := some (LowerContext.bindDocument program.input) }
+  { context with program, lowering := some (LowerContext.ofDocument program.input) }
 
 def ofProgram (runtime : RuntimeMetadata) (program : LoweredProgram) : Result Context := do
   let program := CompilerGlobals.prepareProgram program
   return {
     runtime
     program
-    lowering := some (LowerContext.bindDocument program.input)
+    lowering := some (LowerContext.ofDocument program.input)
   }
 private def node (context : Context) (id : TypeId) : Result TypeNode :=
   (context.runtime.node id).mapError toString
@@ -72,11 +71,6 @@ def optionalType (context : Context) (id : TypeId) (query : String) : Result (Op
 def requiredType (context : Context) (id : TypeId) (query : String) : Result TypeId := do
   let some ty ← optionalType context id query | throw s!"compiler query {query} returned None"
   pure ty
-private def field (j : Json) (key : String) : Result Json := j.getObjVal? key
-private def string (j : Json) (key : String) : Result String := do (← field j key).getStr?
-private def bool (j : Json) (key : String) : Result Bool := do (← field j key).getBool?
-private def array (j : Json) (key : String) : Result (Array Json) := do (← field j key).getArr?
-
 def layoutOf (context : Context) (id : TypeId) : Result (TyAndLayout TypeId) :=
   (context.runtime.lookup id).mapError toString
 

@@ -48,11 +48,11 @@ def main : IO Unit := do
   let memoryNode : AllocationNode := {
     id := 12, kind := .memory,
     data := some (.memory ⟨2, 1, .immutable, "ff", #[], #[]⟩),
-    memory := none, payload := Lean.Json.null
+    memory := none
   }
   let functionNode : AllocationNode := {
     id := 11, kind := .typeId,
-    data := some (.typeId 0), memory := none, payload := Lean.Json.null
+    data := some (.typeId 0), memory := none
   }
   let result := AllocationImage.importGraph RuntimeTargetDataLayout.default #[]
     { staticInfo := fun _ => throw "unexpected static query" } #[functionNode, memoryNode]
@@ -72,10 +72,10 @@ def main : IO Unit := do
 
   let sourceFirst : AllocationNode := {
     id := 42, kind := .typeId,
-    data := some (.typeId 1), memory := none, payload := .str "first"
+    data := some (.typeId 1), memory := none
   }
   let sourceDuplicate : AllocationNode := {
-    sourceFirst with payload := .str "duplicate"
+    sourceFirst with data := some (.typeId 2)
   }
   let indexedManual := AllocationImage.Imported.withSourceIndex
     #[sourceFirst, sourceDuplicate] #[]
