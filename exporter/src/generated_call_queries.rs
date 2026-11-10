@@ -115,41 +115,27 @@ pub(super) fn register_catch_unwind_transfers<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
 ) -> Result<(), String> {
-    let sites = context
-        .runtime_catch_unwind_sites
-        .iter()
-        .copied()
-        .collect::<Vec<_>>();
-    Ok::<_, String>(for (try_ty, data_ty, catch_ty) in sites {
-        // A normal return from the try callback writes into the Miri helper's
-        // fake unit destination. This is the exact destination type used by
-        // helpers.rs::call_function with `dest: None`.
-        register_runtime_callback_call_types(
-            context,
-            tcx,
-            "miri_catch_unwind_try".to_owned(),
-            try_ty,
-            vec![data_ty],
-            tcx.types.unit,
-            rustc_abi::ExternAbi::Rust,
-        )?;
-        let payload_types = context
-            .runtime_unwind_payload_types
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
-        for payload_ty in payload_types {
+    let frontier = context.catch_unwind_frontier;
+    let sites = context.runtime_catch_unwind_sites.len();
+    let payloads = context.runtime_unwind_payload_types.len();
+    for site in frontier.site_start(payloads)..sites {
+        let (try_ty, data_ty, catch_ty) = *context.runtime_catch_unwind_sites.get_index(site).unwrap();
+        if site >= frontier.sites {
             register_runtime_callback_call_types(
-                context,
-                tcx,
-                "miri_catch_unwind_catch".to_owned(),
-                catch_ty,
-                vec![data_ty, payload_ty],
-                tcx.types.unit,
-                rustc_abi::ExternAbi::Rust,
+                context, tcx, "miri_catch_unwind_try".to_owned(), try_ty,
+                vec![data_ty], tcx.types.unit, rustc_abi::ExternAbi::Rust,
             )?;
         }
-    })
+        for payload_index in frontier.target_start(site)..payloads {
+            let payload_ty = *context.runtime_unwind_payload_types.get_index(payload_index).unwrap();
+            register_runtime_callback_call_types(
+                context, tcx, "miri_catch_unwind_catch".to_owned(), catch_ty,
+                vec![data_ty, payload_ty], tcx.types.unit, rustc_abi::ExternAbi::Rust,
+            )?;
+        }
+    }
+    context.catch_unwind_frontier.complete(sites, payloads);
+    Ok(())
 }
 
 /// Shared request constructor for callbacks whose exact target identities are

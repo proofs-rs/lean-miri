@@ -608,28 +608,21 @@ def parseSourceAllocIdPoolRow (path : String) : Parser (SourceAllocIdPoolRow) :=
 
 private structure ParseSourceAllocIdSaltResultFields where
   source_alloc_id : Option (Nat) := none
-  probe_result : Option (String) := none
   salt : Option (Nat) := none
   allocation_id : Option (Nat) := none
 
 def parseSourceAllocIdSaltResult (path : String) : Parser (SourceAllocIdSaltResult) := do
-  let s ← object (ParseSourceAllocIdSaltResultFields.mk none none none none) fun s key => do
+  let s ← object (ParseSourceAllocIdSaltResultFields.mk none none none) fun s key => do
     match key with
     | "source_alloc_id" => return { s with source_alloc_id := some (← natural) }
-    | "probe_result" => return { s with probe_result := some (← string) }
     | "salt" => return { s with salt := some (← natural) }
     | "allocation_id" => return { s with allocation_id := some (← natural) }
     | _ => skipValue; pure s
   let source_alloc_id ← required s.source_alloc_id (path ++ ".source_alloc_id")
-  let probe_result ← required s.probe_result (path ++ ".probe_result")
   let salt ← required s.salt (path ++ ".salt")
   let allocation_id ← required s.allocation_id (path ++ ".allocation_id")
   unless source_alloc_id > 0 && source_alloc_id < 2^64 do fail s!"{path}.source_alloc_id: expected nonzero u64"
-  let outcome ← match probe_result with
-    | "preexisting_hit" => pure SourceAllocIdProbeOutcome.preexistingHit
-    | "miss_reserved_by_probe" => pure .missReservedByProbe
-    | value => fail s!"{path}.probe_result: unknown probe result `{value}`"
-  return ⟨salt, allocation_id, UInt64.ofNat source_alloc_id, outcome⟩
+  return ⟨salt, allocation_id, UInt64.ofNat source_alloc_id⟩
 
 private structure ParseSourceAllocIdDedupRowFields where
   key_kind : Option (String) := none

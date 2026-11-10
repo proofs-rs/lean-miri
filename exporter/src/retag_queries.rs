@@ -7,20 +7,25 @@ pub(super) struct Query {
     rustc_no_writable: bool,
 }
 
-pub(super) fn export(tcx: TyCtxt<'_>, context: &mut ExportContext<'_>) -> Vec<Query> {
-    let mut definitions = context
-        .instance_ids
-        .keys()
+#[derive(Default)]
+pub(super) struct State {
+    events: usize,
+}
+pub(super) fn discover(context: &mut ExportContext<'_>, state: &mut State) {
+    let definitions = context.instance_events[state.events..].iter()
         .filter(|instance| !context.metadata_only_instances.contains(instance))
-        .map(|instance| instance.def_id())
-        .collect::<Vec<_>>();
+        .map(|instance| instance.def_id()).collect::<Vec<_>>();
+    state.events = context.instance_events.len();
+    for definition in definitions { def_json(context, definition); }
+}
+pub(super) fn finish(tcx: TyCtxt<'_>, context: &ExportContext<'_>) -> Vec<Query> {
+    let mut definitions = context.instance_ids.keys()
+        .filter(|instance| !context.metadata_only_instances.contains(instance))
+        .map(|instance| instance.def_id()).collect::<Vec<_>>();
     definitions.sort_by_key(|definition| (definition.krate.as_u32(), definition.index.as_u32()));
     definitions.dedup();
-    definitions
-        .into_iter()
-        .map(|definition| Query {
-            definition: def_json(context, definition),
-            rustc_no_writable: rustc_attr_ir::find_attr!(tcx, definition, RustcNoWritable),
-        })
-        .collect()
+    definitions.into_iter().map(|definition| Query {
+        definition: context.definitions[&definition],
+        rustc_no_writable: rustc_attr_ir::find_attr!(tcx, definition, RustcNoWritable),
+    }).collect()
 }

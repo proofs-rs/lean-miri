@@ -13,7 +13,6 @@ pub(super) struct Salt {
     salt: usize,
     allocation_id: u64,
     source_alloc_id: u64,
-    probe_result: &'static str,
 }
 #[derive(Clone, serde::Serialize)]
 pub(super) struct DedupKey {
@@ -84,10 +83,43 @@ struct ByteKey {
     allocations: Vec<AllocId>,
 }
 
+// Retain observations during allocator discovery, then project wire rows only
+// after all probes have completed. Failed probes still abort collection.
+struct SaltFact {
+    salt: usize,
+    allocation_id: u64,
+    source_alloc_id: u64,
+}
+struct ProbeFact {
+    key_kind: &'static str,
+    key_allocation_id: u64,
+    bytes_hex: Option<String>,
+    salts: Vec<SaltFact>,
+}
+impl ProbeFact {
+    fn finish(&self) -> DedupKey {
+        DedupKey {
+            key_kind: self.key_kind,
+            key_allocation_id: self.key_allocation_id,
+            bytes_hex: self.bytes_hex.clone(),
+            salts: self.salts.iter().map(|fact| Salt {
+                salt: fact.salt,
+                allocation_id: fact.allocation_id,
+                source_alloc_id: fact.source_alloc_id,
+            }).collect(),
+        }
+    }
+}
+
 /// Exact dedup key identities selected by the exporter's ordinary
 /// compiler-demand closure. Probes run inside that closure because
 /// serializing an allocation or vtable can discover further demands.
 pub(super) struct SelectedKeyProbes<'tcx> {
+    function_cursor: usize,
+    allocation_cursor: usize,
+    vtable_cursor: usize,
+    instance_event_cursor: usize,
+    pending_statics: Vec<(AllocId, rustc_hir::def_id::DefId)>,
     functions: HashSet<ty::Instance<'tcx>>,
     vtables: HashSet<(
         ty::Ty<'tcx>,
@@ -95,12 +127,17 @@ pub(super) struct SelectedKeyProbes<'tcx> {
     )>,
     statics: HashSet<rustc_hir::def_id::DefId>,
     type_ids: HashSet<ty::Ty<'tcx>>,
-    rows: Vec<DedupKey>,
+    rows: Vec<ProbeFact>,
 }
 
 impl<'tcx> SelectedKeyProbes<'tcx> {
     pub(super) fn new() -> Self {
         Self {
+            function_cursor: 0,
+            allocation_cursor: 0,
+            vtable_cursor: 0,
+            instance_event_cursor: 0,
+            pending_statics: Vec::new(),
             functions: HashSet::new(),
             vtables: HashSet::new(),
             statics: HashSet::new(),
@@ -117,12 +154,21 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
         tcx: TyCtxt<'tcx>,
         context: &mut ExportContext<'tcx>,
     ) -> Result<(), String> {
-        let mut functions = context
-            .fn_pointer_targets
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
-        functions.sort_by_key(|instance| format!("{instance:?}"));
+        let functions = context.fn_pointer_targets.suffix(self.function_cursor).to_vec();
+        self.function_cursor = context.fn_pointer_targets.len();
+        let allocation_end = context.allocation_ids.len();
+        let mut new_vtables = Vec::new();
+        let mut new_type_ids = Vec::new();
+        for index in self.allocation_cursor..allocation_end {
+            let alloc = *context.allocation_ids.key(index).unwrap();
+            match tcx.try_get_global_alloc(alloc) {
+                Some(GlobalAlloc::VTable(input, predicates)) => new_vtables.push((input, predicates)),
+                Some(GlobalAlloc::Static(def)) => self.pending_statics.push((alloc, def)),
+                Some(GlobalAlloc::TypeId { ty }) => new_type_ids.push(ty),
+                _ => {},
+            }
+        }
+        self.allocation_cursor = allocation_end;
         for instance in functions {
             if self.functions.contains(&instance) {
                 continue;
@@ -131,7 +177,6 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             let mut salts = Vec::with_capacity(32);
             let mut key_graph_id = None;
             for salt in 0..32usize {
-                let boundary = tcx.reserve_alloc_id();
                 let selected = tcx.reserve_and_set_fn_alloc(instance, salt);
                 let source_id = raw_id(selected);
                 allocation_ref(context, tcx, selected)?;
@@ -139,20 +184,15 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                 if salt == 0 {
                     key_graph_id = Some(graph_id);
                 }
-                salts.push(Salt {
+                salts.push(SaltFact {
                     salt,
                     allocation_id: graph_id,
                     source_alloc_id: source_id,
-                    probe_result: if source_id < raw_id(boundary) {
-                        "preexisting_hit"
-                    } else {
-                        "miss_reserved_by_probe"
-                    },
                 });
             }
             let key_allocation_id =
                 key_graph_id.ok_or_else(|| "function dedup probe omitted salt zero".to_owned())?;
-            self.rows.push(DedupKey {
+            self.rows.push(ProbeFact {
                 key_kind: "function",
                 key_allocation_id,
                 bytes_hex: None,
@@ -161,16 +201,10 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             self.functions.insert(instance);
         }
 
-        let mut vtables = context
-            .vtable_query_requests
-            .iter()
-            .map(|(ty, predicates)| tcx.erase_and_anonymize_regions((*ty, *predicates)))
-            .collect::<HashSet<_>>();
-        for alloc in context.allocation_ids.keys() {
-            if let Some(GlobalAlloc::VTable(ty, predicates)) = tcx.try_get_global_alloc(*alloc) {
-                vtables.insert(tcx.erase_and_anonymize_regions((ty, predicates)));
-            }
-        }
+        new_vtables.extend(context.vtable_query_requests.suffix(self.vtable_cursor).iter().copied());
+        self.vtable_cursor = context.vtable_query_requests.len();
+        let vtables = new_vtables.into_iter()
+            .map(|key| tcx.erase_and_anonymize_regions(key)).collect::<HashSet<_>>();
         let mut vtables =
             vtables
                 .into_iter()
@@ -198,34 +232,22 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             let mut salts = Vec::with_capacity(32);
             let mut key_graph_id = None;
             for salt in 0..32usize {
-                let boundary = tcx.reserve_alloc_id();
                 let selected = tcx.reserve_and_set_vtable_alloc(ty, predicates, salt);
-                if context.vtable_diagnostics.enabled() && raw_id(selected) >= raw_id(boundary) {
-                    context
-                        .vtable_diagnostics
-                        .probe_allocations
-                        .insert(selected);
-                }
                 let source_id = raw_id(selected);
                 allocation_ref(context, tcx, selected)?;
                 let graph_id = supported_global_graph_id(context, selected, "vtable")?;
                 if salt == 0 {
                     key_graph_id = Some(graph_id);
                 }
-                salts.push(Salt {
+                salts.push(SaltFact {
                     salt,
                     allocation_id: graph_id,
                     source_alloc_id: source_id,
-                    probe_result: if source_id < raw_id(boundary) {
-                        "preexisting_hit"
-                    } else {
-                        "miss_reserved_by_probe"
-                    },
                 });
             }
             let key_allocation_id =
                 key_graph_id.ok_or_else(|| "vtable dedup probe omitted salt zero".to_owned())?;
-            self.rows.push(DedupKey {
+            self.rows.push(ProbeFact {
                 key_kind: "vtable",
                 key_allocation_id,
                 bytes_hex: None,
@@ -238,14 +260,7 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
         // already present in the ordinary serialized allocation closure.
         // Do not infer static demands from initializer memory or claim the
         // family is exhaustive.
-        let mut static_candidates = context
-            .allocation_ids
-            .keys()
-            .filter_map(|id| match tcx.try_get_global_alloc(*id) {
-                Some(GlobalAlloc::Static(def)) => Some((*id, def)),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        let mut static_candidates = std::mem::take(&mut self.pending_statics);
         static_candidates.sort_by_key(|(id, _)| raw_id(*id));
         for (observed_id, def) in static_candidates {
             if self.statics.contains(&def) {
@@ -257,10 +272,10 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             if observed_node.map_or(true, |node| {
                 node.kind() != "static" || node.source_alloc_id != raw_id(observed_id)
             }) {
+                self.pending_statics.push((observed_id, def));
                 continue;
             }
 
-            let boundary = tcx.reserve_alloc_id();
             let selected = tcx.reserve_and_set_static_alloc(def);
             let source_id = raw_id(selected);
             allocation_ref(context, tcx, selected)?;
@@ -275,19 +290,14 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             {
                 return Err("selected static key does not match its exact DefId allocation".into());
             }
-            self.rows.push(DedupKey {
+            self.rows.push(ProbeFact {
                 key_kind: "static",
                 key_allocation_id: graph_id,
                 bytes_hex: None,
-                salts: vec![Salt {
+                salts: vec![SaltFact {
                     salt: 0,
                     allocation_id: graph_id,
                     source_alloc_id: source_id,
-                    probe_result: if source_id < raw_id(boundary) {
-                        "preexisting_hit"
-                    } else {
-                        "miss_reserved_by_probe"
-                    },
                 }],
             });
             self.statics.insert(def);
@@ -297,15 +307,10 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
         // intrinsic call is a source demand; arbitrary serialized types and
         // `type_id_eq` reads are not. Already-observed TypeId allocations are
         // also exact selected keys.
-        let mut type_id_candidates = context
-            .allocation_ids
-            .keys()
-            .filter_map(|id| match tcx.try_get_global_alloc(*id) {
-                Some(GlobalAlloc::TypeId { ty }) => Some(ty),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        for instance in context.instance_ids.keys().copied() {
+        let mut type_id_candidates = new_type_ids;
+        let event_end = context.instance_events.len();
+        for event in self.instance_event_cursor..event_end {
+            let instance = context.instance_events[event];
             if context.metadata_only_instances.contains(&instance) {
                 continue;
             }
@@ -319,11 +324,12 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                 type_id_candidates.push(instance.args.type_at(0));
             }
         }
-        for ty in type_id_candidates.iter().copied() {
-            context.type_id(ty);
-        }
-        type_id_candidates.sort_by_key(|ty| context.type_ids.get(ty).copied().unwrap_or(u64::MAX));
-        type_id_candidates.dedup();
+        self.instance_event_cursor = event_end;
+        // Pool iteration follows discovery order. Deduplicate without reserving
+        // type identities merely to sort candidate keys: only accepted probes
+        // serialize their actual TypeId allocation and discover its type.
+        let mut seen_candidates = HashSet::new();
+        type_id_candidates.retain(|ty| seen_candidates.insert(*ty));
         for ty in type_id_candidates {
             if self.type_ids.contains(&ty) {
                 continue;
@@ -341,7 +347,6 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                 continue;
             }
 
-            let boundary = tcx.reserve_alloc_id();
             let selected = tcx.reserve_and_set_type_id_alloc(ty);
             let source_id = raw_id(selected);
             allocation_ref(context, tcx, selected)?;
@@ -356,19 +361,14 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             {
                 return Err("selected TypeId key does not match its exact Ty allocation".into());
             }
-            self.rows.push(DedupKey {
+            self.rows.push(ProbeFact {
                 key_kind: "type_id",
                 key_allocation_id: graph_id,
                 bytes_hex: None,
-                salts: vec![Salt {
+                salts: vec![SaltFact {
                     salt: 0,
                     allocation_id: graph_id,
                     source_alloc_id: source_id,
-                    probe_result: if source_id < raw_id(boundary) {
-                        "preexisting_hit"
-                    } else {
-                        "miss_reserved_by_probe"
-                    },
                 }],
             });
             self.type_ids.insert(ty);
@@ -377,7 +377,7 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
     }
 
     fn rows(&self) -> impl Iterator<Item = DedupKey> + '_ {
-        self.rows.iter().cloned()
+        self.rows.iter().map(ProbeFact::finish)
     }
 }
 
@@ -588,14 +588,13 @@ fn pool_row<'tcx>(
 }
 
 /// Capture the post-export TCX continuation. Probe-created mappings are
-/// present in this prepared world and therefore become runtime hits; the
-/// `probe_result` field records only how the capture populated the source.
+/// present in this prepared world and therefore become runtime hits.
 pub(super) fn capture<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
     selected_keys: &SelectedKeyProbes<'tcx>,
 ) -> Result<World, String> {
-    let mut catalog = BTreeMap::<String, DedupKey>::new();
+    let mut catalog = BTreeMap::<String, ProbeFact>::new();
     loop {
         // A temporary reserved ID bounds a read-only enumeration of the
         // current pool. AllocMap IDs are monotone and never reused.
@@ -614,27 +613,21 @@ pub(super) fn capture<'tcx>(
         for (hex, key) in unseen {
             allocation_ref(context, tcx, key.representative)?;
             let key_graph_id = supported_memory_graph_id(context, key.representative)?;
-            let probe_boundary = tcx.reserve_alloc_id();
             let mut salts = Vec::with_capacity(32);
             for salt in 0..32usize {
                 let selected = tcx.allocate_bytes_dedup(&key.bytes, salt);
                 let source_id = raw_id(selected);
                 allocation_ref(context, tcx, selected)?;
                 let allocation_id = supported_memory_graph_id(context, selected)?;
-                salts.push(Salt {
+                salts.push(SaltFact {
                     salt,
                     allocation_id: allocation_id,
                     source_alloc_id: source_id,
-                    probe_result: if source_id < raw_id(probe_boundary) {
-                        "preexisting_hit"
-                    } else {
-                        "miss_reserved_by_probe"
-                    },
                 });
             }
             catalog.insert(
                 hex.clone(),
-                DedupKey {
+                ProbeFact {
                     key_kind: "byte_memory",
                     key_allocation_id: key_graph_id,
                     bytes_hex: Some(hex),
@@ -695,7 +688,7 @@ pub(super) fn capture<'tcx>(
         },
         global_pool_complete_through: frontier,
         raw_pool,
-        dedup_catalog: catalog.into_values().chain(selected_keys.rows()).collect(),
+        dedup_catalog: catalog.into_values().map(|fact| fact.finish()).chain(selected_keys.rows()).collect(),
         complete_key_families: ["byte_memory"],
         non_exhaustive_key_families: [
             "function",

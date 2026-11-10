@@ -26,15 +26,16 @@ fn closed(input: ty::Ty<'_>) -> bool {
 pub(super) fn discover<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<HashSet<(ty::Ty<'tcx>, ty::Ty<'tcx>)>, String> {
+) -> Result<(), String> {
     let env = ty::TypingEnv::fully_monomorphized();
-    let mut pairs = HashSet::new();
+    let mut pairs = std::mem::take(&mut context.covariance_pairs);
+    let pair_start = pairs.len();
     // rustc's Transmute/Subtype/BoxDerefTransmute evaluator calls
     // copy_op_allow_transmute, which still checks mir_assign_valid_types
     // (interpret/cast.rs, place.rs, eval_context.rs). Export the exact MIR
     // operand and cast-target pair even when normalization puts them in
     // different identity groups; do not infer the relation from layouts.
-    for (source, target) in context.covariance_query_requests.iter().copied() {
+    for (source, target) in context.covariance_query_requests.suffix(context.covariance_pair_cursor).iter().copied() {
         if source != target && closed(source) && closed(target) {
             pairs.insert((source, target));
         }
@@ -46,12 +47,9 @@ pub(super) fn discover<'tcx>(
     // operand is the raw mutable pointer used to invoke the vtable entry; the
     // destination type comes from that concrete method's first FnAbi argument.
     // Query only these compiler-derived pairs from reached vtable metadata.
-    let mut vtable_requests = context
-        .vtable_query_requests
-        .iter()
-        .copied()
-        .collect::<Vec<_>>();
-    vtable_requests.sort_by_cached_key(|(input, predicates)| format!("{input:?}|{predicates:?}"));
+    context.covariance_pair_cursor = context.covariance_query_requests.len();
+    let vtable_requests = context.vtable_query_requests.suffix(context.covariance_vtable_cursor).to_vec();
+    context.covariance_vtable_cursor = context.vtable_query_requests.len();
     for (input, predicates) in vtable_requests {
         if !closed(input)
             || predicates.has_non_region_param()
@@ -86,15 +84,15 @@ pub(super) fn discover<'tcx>(
             }
         }
     }
-    let mut ordered = pairs.iter().copied().collect::<Vec<_>>();
-    ordered.sort_by_cached_key(|(source, target)| (format!("{source:?}"), format!("{target:?}")));
+    let ordered = pairs.suffix(pair_start).to_vec();
     for (source, target) in ordered {
         // Suppression applies recursively while exporting the complete node:
         // query-generated pointer/reference types must not become source demands.
         query_generated_type_json(context, tcx, source)?;
         query_generated_type_json(context, tcx, target)?;
     }
-    Ok(pairs)
+    context.covariance_pairs = pairs;
+    Ok(())
 }
 
 // Evaluation is a read-only projection of the completed type pool. No relation

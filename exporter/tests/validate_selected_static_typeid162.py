@@ -33,7 +33,6 @@ def main(path: str) -> None:
 
     nodes = {node["allocation_id"]: node for node in document["allocations"]}
     selected = {"static": 0, "type_id": 0}
-    outcomes = {"preexisting_hit": 0, "miss_reserved_by_probe": 0}
     identities = {"static": set(), "type_id": set()}
     for row_index, catalog in enumerate(world["dedup_catalog"]):
         kind = catalog["key_kind"]
@@ -42,11 +41,11 @@ def main(path: str) -> None:
         selected[kind] += 1
         require(len(catalog["salts"]) == 1, f"{kind} catalog row {row_index} must have one salt")
         result = catalog["salts"][0]
+        require(set(result) == {"salt", "allocation_id", "source_alloc_id"},
+                f"{kind} row {row_index} has unexpected salt fields")
         require(result["salt"] == 0, f"{kind} row {row_index} is not salt zero")
         require(result["allocation_id"] == catalog["key_allocation_id"],
                 f"{kind} row {row_index} result is not its selected graph witness")
-        require(result["probe_result"] in outcomes, f"unknown {kind} probe result")
-        outcomes[result["probe_result"]] += 1
         graph_id = result["allocation_id"]
         key_node = nodes[graph_id]
         require(key_node["kind"] == kind and "status" not in key_node,
@@ -79,7 +78,7 @@ def main(path: str) -> None:
     print("selected static/TypeId crosswalk PASS: "
           f"prefix={last}, static_keys={selected['static']}, type_id_keys={selected['type_id']}, "
           f"static_identities={len(identities['static'])}, type_id_identities={len(identities['type_id'])}, "
-          f"probe_outcomes={outcomes}, complete={world['complete_key_families']}")
+          f"complete={world['complete_key_families']}")
 
 
 if __name__ == "__main__":

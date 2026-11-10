@@ -1,7 +1,7 @@
 //! Exact interpret/cast.rs compiler queries. Constructor requests are collected
 //! from actual MIR casts; resolved instances enter the ordinary shared graph.
 use super::*;
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 #[serde(untagged)]
 pub(super) enum Query {
     ResolveFnPtr {
@@ -51,7 +51,7 @@ pub(super) enum QueryKind {
     LockstepTails,
     BoxType,
 }
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 #[serde(tag = "resolution_kind", rename_all = "snake_case")]
 pub(super) enum OptionalInstance {
     Instance { instance_id: u64 },
@@ -74,26 +74,71 @@ fn closed(input: ty::Ty<'_>) -> bool {
         && !input.has_placeholders()
         && !input.references_error()
 }
-pub(super) fn export<'tcx>(
+// Compiler answers retained without constructing the public query rows.
+pub(super) enum Fact {
+    ResolveFnPtr { input_type: u64, args_no_bound_vars: bool, resolution: Option<u64> },
+    ResolveClosureFnOnce { input_type: u64, args_no_bound_vars: bool, instance_id: u64 },
+    SupertraitSlot { input_source: u64, input_target: u64, value: Option<usize> },
+    LockstepTails { input_source: u64, input_target: u64, source_tail: u64, target_tail: u64 },
+    BoxType { input_type: u64, ty: u64 },
+}
+pub(super) fn finish(facts: Vec<Fact>) -> Vec<Query> {
+    facts.into_iter().map(|fact| match fact {
+        Fact::ResolveFnPtr { input_type, args_no_bound_vars, resolution } => Query::ResolveFnPtr {
+            query_kind: QueryKind::ResolveFnPtr, typing_env: "fully_monomorphized",
+            input_type, args_no_bound_vars,
+            resolution: match resolution {
+                Some(instance_id) => OptionalInstance::Instance { instance_id },
+                None => OptionalInstance::None,
+            },
+        },
+        Fact::ResolveClosureFnOnce { input_type, args_no_bound_vars, instance_id } => Query::ResolveClosureFnOnce {
+            query_kind: QueryKind::ResolveClosureFnOnce, typing_env: "fully_monomorphized",
+            input_type, args_no_bound_vars, instance_id,
+        },
+        Fact::SupertraitSlot { input_source, input_target, value } => Query::SupertraitSlot {
+            query_kind: QueryKind::SupertraitSlot, typing_env: "fully_monomorphized", input_source, input_target, value,
+        },
+        Fact::LockstepTails { input_source, input_target, source_tail, target_tail } => Query::LockstepTails {
+            query_kind: QueryKind::LockstepTails, typing_env: "fully_monomorphized", input_source, input_target, source_tail, target_tail,
+        },
+        Fact::BoxType { input_type, ty } => Query::BoxType {
+            query_kind: QueryKind::BoxType, typing_env: "fully_monomorphized", input_type, ty,
+        },
+    }).collect()
+}
+pub(super) fn discover<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Vec<Query>, String> {
+) -> Result<(), String> {
     let env = ty::TypingEnv::fully_monomorphized();
+    let mut state = std::mem::take(&mut context.cast_state);
     let mut records = Vec::new();
-    let mut types = context
-        .type_ids
-        .iter()
-        .filter(|(input, _)| {
-            matches!(input.kind(), ty::FnDef(..) | ty::Closure(..))
-                && (closed(**input) || context.fn_pointer_cast_inputs.contains(input))
-        })
-        .map(|(input, id)| (*id, *input))
+    // A type may have been resolved before a source cast made it a target.
+    // Replay only newly observed cast inputs against the retained resolution.
+    let cast_end = context.fn_pointer_cast_inputs.len();
+    for index in state.inputs..cast_end {
+        let input = *context.fn_pointer_cast_inputs.get_index(index).unwrap();
+        if !closed(input) {
+            return export_failure("cast resolution", "requires normalized monomorphic input");
+        }
+        if let Some(instance) = state.resolutions.get(&input).copied() {
+            context.fn_pointer_targets.insert(instance);
+            context.register_instance(instance);
+        }
+    }
+    state.inputs = cast_end;
+    let type_end = context.type_ids.len();
+    let types = (state.types..type_end)
+        .map(|id| (id as u64, *context.type_ids.key(id).unwrap()))
+        .filter(|(_, input)| matches!(input.kind(), ty::FnDef(..) | ty::Closure(..))
+            && (closed(*input) || context.fn_pointer_cast_inputs.contains(input)))
         .collect::<Vec<_>>();
-    types.sort_by_key(|(id, _)| *id);
+    state.types = type_end;
     for (_, input) in types {
-        let (kind, no_bound) = match input.kind() {
-            ty::FnDef(_, args) => (QueryKind::ResolveFnPtr, args.no_bound_vars().is_some()),
-            ty::Closure(..) => (QueryKind::ResolveClosureFnOnce, true),
+        let no_bound = match input.kind() {
+            ty::FnDef(_, args) => args.no_bound_vars().is_some(),
+            ty::Closure(..) => true,
             _ => unreachable!(),
         };
         if !closed(input) {
@@ -102,7 +147,6 @@ pub(super) fn export<'tcx>(
         let normal = tcx
             .try_normalize_erasing_regions(env, ty::Unnormalized::new_wip(input))
             .map_err(|error| format!("cast input normalization failed: {error:?}"))?;
-        let typing_env = "fully_monomorphized";
         let result = match *normal.kind() {
             ty::FnDef(def, args) => {
                 let args = match args.no_bound_vars() {
@@ -117,14 +161,13 @@ pub(super) fn export<'tcx>(
                     .map_err(|error| format!("function-pointer resolution failed: {error:?}"))?;
                 let source_cast = context.fn_pointer_cast_inputs.contains(&input);
                 let resolution = match ty::Instance::resolve_for_fn_ptr(tcx, env, def, args) {
-                    Some(resolved) => OptionalInstance::Instance {
-                        instance_id: instance(context, resolved, source_cast),
+                    Some(resolved) => {
+                        state.resolutions.insert(input, resolved);
+                        Some(instance(context, resolved, source_cast))
                     },
-                    None => OptionalInstance::None,
+                    None => None,
                 };
-                Query::ResolveFnPtr {
-                    query_kind: kind,
-                    typing_env,
+                Fact::ResolveFnPtr {
                     input_type: type_json(context, tcx, input)?,
                     args_no_bound_vars: no_bound,
                     resolution,
@@ -132,14 +175,10 @@ pub(super) fn export<'tcx>(
             }
             ty::Closure(def, args) => {
                 let source_cast = context.fn_pointer_cast_inputs.contains(&input);
-                let instance_id = instance(
-                    context,
-                    ty::Instance::resolve_closure(tcx, def, args, ty::ClosureKind::FnOnce),
-                    source_cast,
-                );
-                Query::ResolveClosureFnOnce {
-                    query_kind: kind,
-                    typing_env,
+                let resolved = ty::Instance::resolve_closure(tcx, def, args, ty::ClosureKind::FnOnce);
+                state.resolutions.insert(input, resolved);
+                let instance_id = instance(context, resolved, source_cast);
+                Fact::ResolveClosureFnOnce {
                     input_type: type_json(context, tcx, input)?,
                     args_no_bound_vars: no_bound,
                     instance_id,
@@ -154,12 +193,8 @@ pub(super) fn export<'tcx>(
         };
         records.push(result);
     }
-    let mut pairs = context
-        .cast_unsize_requests
-        .iter()
-        .copied()
-        .collect::<Vec<_>>();
-    pairs.sort_by_key(|(source, target)| (context.type_id(*source), context.type_id(*target)));
+    let pairs = context.cast_unsize_requests.suffix(state.pairs).to_vec();
+    state.pairs = context.cast_unsize_requests.len();
     for (source, target) in pairs {
         if !closed(source) || !closed(target) {
             export_failure::<()>("lockstep tails", "requires monomorphic source and target")?;
@@ -168,29 +203,21 @@ pub(super) fn export<'tcx>(
         let source_tail = type_json(context, tcx, a)?;
         let target_tail = type_json(context, tcx, b)?;
         if matches!(a.kind(), ty::Dynamic(..)) && matches!(b.kind(), ty::Dynamic(..)) {
-            records.push(Query::SupertraitSlot {
-                query_kind: QueryKind::SupertraitSlot,
-                typing_env: "fully_monomorphized",
+            records.push(Fact::SupertraitSlot {
                 input_source: type_json(context, tcx, a)?,
                 input_target: type_json(context, tcx, b)?,
                 value: tcx.supertrait_vtable_slot((a, b)),
             });
         }
-        records.push(Query::LockstepTails {
-            query_kind: QueryKind::LockstepTails,
-            typing_env: "fully_monomorphized",
+        records.push(Fact::LockstepTails {
             input_source: type_json(context, tcx, source)?,
             input_target: type_json(context, tcx, target)?,
             source_tail,
             target_tail,
         });
     }
-    let mut boxes = context
-        .cast_box_requests
-        .iter()
-        .copied()
-        .collect::<Vec<_>>();
-    boxes.sort_by_key(|input| context.type_id(*input));
+    let boxes = context.cast_box_requests.suffix(state.boxes).to_vec();
+    state.boxes = context.cast_box_requests.len();
     for input in boxes {
         let ty = if tcx.lang_items().owned_box().is_some() {
             type_json(context, tcx, ty::Ty::new_box(tcx, input))?
@@ -200,14 +227,14 @@ pub(super) fn export<'tcx>(
                 "Box constructor requires owned_box lang item",
             );
         };
-        records.push(Query::BoxType {
-            query_kind: QueryKind::BoxType,
-            typing_env: "fully_monomorphized",
+        records.push(Fact::BoxType {
             input_type: type_json(context, tcx, input)?,
             ty,
         });
     }
-    Ok(records)
+    state.rows.extend(records);
+    context.cast_state = state;
+    Ok(())
 }
 
 #[cfg(test)]

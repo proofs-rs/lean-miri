@@ -72,8 +72,17 @@ Each compiler key `K` owns its reserved index and a single concrete semantic
 value `D`, such as `pool_layout::Layout`, `pool_type::Type` or `pool_body::Body`.
 Nested fields are Rust records, enums, optional values and typed references;
 collection does not store JSON trees in these pools. Serialization converts the
-completed values to JSON when assembling the output document. Query-specific
-catalogs still use their own JSON output adapters.
+completed values to JSON when assembling the output document.
+
+Discovery retains compiler query results until the reachable graph closes.
+Append-only request domains have consumer cursors; pair consumers visit new sites
+against all targets and old sites against new targets, including negative query
+results. Instance eligibility changes notify dependent consumers. Signature,
+predicate, allocation-byte, and identity collectors retain their completed facts.
+After convergence, read-only finalization builds query rows, orders vtable queries,
+resolves their final allocation references, and assigns predicate comparison ranks.
+Pool serialization stays in discovery when it can reveal another compiler key;
+output projection does not create keys or rerun discovery.
 
 References are numeric indices interpreted by the field's schema. Layouts retain
 exact compiler `TyAndLayout` keys, including field and variant layouts. Allocation
@@ -176,7 +185,10 @@ validated selected domain. Unrequested compiler globals may reserve opaque raw
 IDs, but cannot point to an imported or failed semantic allocation. General
 constant-memory keys have no selected-key support; requests remain explicit
 runtime errors. This snapshot contract does not assert completeness of arbitrary
-runtime key discovery.
+runtime key discovery. Salt rows record the actual dedup allocation identities in
+the prepared post-export TCX; they do not record whether a lookup populated a
+previously absent entry. Snapshot and closure sentinels remain reserved source
+IDs, and the final sentinel fixes the next runtime allocation ID.
 
 After building the pinned exporter and Lean decoder, this boundary check uses a
 fresh prepared snapshot (not a saved historical input):

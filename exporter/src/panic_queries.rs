@@ -70,7 +70,7 @@ pub(super) struct Query {
     definition: Option<u64>,
     generic_parameters: Option<Vec<&'static str>>,
 }
-pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>) -> Vec<Query> {
+pub(super) fn discover<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>) -> Vec<Fact> {
     let items = [
         ("Panic", rustc_attr_ir::LangItem::Panic),
         ("PanicNounwind", rustc_attr_ir::LangItem::PanicNounwind),
@@ -198,7 +198,7 @@ pub(super) fn export<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>)
                     })
                     .collect::<Vec<_>>()
             });
-            Query {
+            Fact {
                 lang_item: name,
                 definition: definition.map(|def| def_json(context, def)),
                 generic_parameters: parameters,
@@ -248,4 +248,17 @@ pub(super) fn register_assert<'tcx>(
             )?;
         }
     })
+}
+
+pub(super) struct Fact {
+    lang_item: &'static str,
+    definition: Option<u64>,
+    generic_parameters: Option<Vec<&'static str>>,
+}
+pub(super) fn finish(facts: Vec<Fact>) -> Vec<Query> {
+    facts.into_iter().map(|fact| Query {
+        lang_item: fact.lang_item,
+        definition: fact.definition,
+        generic_parameters: fact.generic_parameters,
+    }).collect()
 }

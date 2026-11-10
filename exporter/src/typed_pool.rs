@@ -27,13 +27,13 @@ impl<K: Clone + Eq + Hash, D> Pool<K, D> {
         self.ids.get(key)
     }
     pub(super) fn keys(&self) -> impl Iterator<Item = &K> {
-        self.ids.keys()
+        self.keys.iter()
     }
     pub(super) fn values(&self) -> impl Iterator<Item = &u64> {
         self.ids.values()
     }
     pub(super) fn iter(&self) -> impl Iterator<Item = (&K, &u64)> {
-        self.ids.iter()
+        self.keys.iter().map(|key| (key, &self.ids[key]))
     }
     pub(super) fn len(&self) -> usize {
         self.keys.len()
@@ -120,6 +120,26 @@ mod tests {
     }
 
     #[test]
+    fn enumeration_preserves_first_discovery_order() {
+        let mut pool: Pool<_, ()> = Pool::default();
+        for key in [9, 2, 7, 2] {
+            pool.reserve(key);
+        }
+        assert_eq!(pool.keys().copied().collect::<Vec<_>>(), vec![9, 2, 7]);
+        assert_eq!(
+            pool.iter().map(|(key, id)| (*key, *id)).collect::<Vec<_>>(),
+            vec![(9, 0), (2, 1), (7, 2)]
+        );
+        let mut requests = super::OrderedSet::default();
+        requests.extend([9, 2, 7, 2]);
+        assert!(!requests.insert(9));
+        assert_eq!(requests.get_index(1), Some(&2));
+        assert_eq!(requests.suffix(2), &[7]);
+        assert!(requests.contains(&9));
+        assert_eq!(requests.into_iter().collect::<Vec<_>>(), vec![9, 2, 7]);
+    }
+
+    #[test]
     fn unfinished_definitions_fail_export() {
         let mut pool: Pool<_, ()> = Pool::default();
         pool.reserve("missing");
@@ -180,5 +200,52 @@ mod tests {
     fn unreserved_definitions_fail() {
         let mut pool: Pool<&str, ()> = Pool::default();
         pool.define(0, ());
+    }
+}
+
+/// Deduplicated requests in deterministic first-discovery order. Unlike pool
+/// reservation, insertion here assigns no serialized identity.
+#[derive(Clone)]
+pub(super) struct OrderedSet<K> {
+    seen: std::collections::HashMap<K, usize>,
+    order: Vec<K>,
+}
+impl<K> Default for OrderedSet<K> {
+    fn default() -> Self {
+        Self {
+            seen: Default::default(),
+            order: Vec::new(),
+        }
+    }
+}
+impl<K: Clone + Eq + Hash> OrderedSet<K> {
+    pub(super) fn insert(&mut self, key: K) -> bool {
+        if self.seen.contains_key(&key) {
+            return false;
+        }
+        self.seen.insert(key.clone(), self.order.len());
+        self.order.push(key);
+        true
+    }
+    pub(super) fn contains(&self, key: &K) -> bool { self.seen.contains_key(key) }
+    pub(super) fn get_index(&self, index: usize) -> Option<&K> { self.order.get(index) }
+    pub(super) fn suffix(&self, cursor: usize) -> &[K] { &self.order[cursor..] }
+    pub(super) fn iter(&self) -> std::slice::Iter<'_, K> {
+        self.order.iter()
+    }
+    pub(super) fn len(&self) -> usize {
+        self.order.len()
+    }
+    pub(super) fn extend(&mut self, keys: impl IntoIterator<Item = K>) {
+        for key in keys {
+            self.insert(key);
+        }
+    }
+}
+impl<K> IntoIterator for OrderedSet<K> {
+    type Item = K;
+    type IntoIter = std::vec::IntoIter<K>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.order.into_iter()
     }
 }
