@@ -65,7 +65,6 @@ pub(super) struct Trace<'tcx> {
     pub body: Option<BodyOrigin>,
     origins: HashMap<Pair<'tcx>, Vec<Origin<'tcx>>>,
     upcasts: HashMap<(ty::Ty<'tcx>, ty::Ty<'tcx>), Vec<Option<BodyOrigin>>>,
-    pub probe_allocations: HashSet<AllocId>,
 }
 
 impl Default for Trace<'_> {
@@ -75,7 +74,6 @@ impl Default for Trace<'_> {
             body: None,
             origins: HashMap::new(),
             upcasts: HashMap::new(),
-            probe_allocations: HashSet::new(),
         }
     }
 }

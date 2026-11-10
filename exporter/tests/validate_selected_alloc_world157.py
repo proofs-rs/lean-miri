@@ -42,7 +42,6 @@ def main(path: str) -> None:
 
     nodes = {node["allocation_id"]: node for node in document["allocations"]}
     selected_counts = {"function": 0, "vtable": 0}
-    probe_counts = {"preexisting_hit": 0, "miss_reserved_by_probe": 0}
     for row_index, catalog in enumerate(world["dedup_catalog"]):
         kind = catalog["key_kind"]
         if kind not in selected_counts:
@@ -57,10 +56,9 @@ def main(path: str) -> None:
         require(salts[0]["allocation_id"] == catalog["key_allocation_id"],
                 f"catalog row {row_index} salt zero is not the selected key node")
         for salt, result in enumerate(salts):
+            require(set(result) == {"salt", "allocation_id", "source_alloc_id"},
+                    f"catalog row {row_index} salt {salt} has unexpected fields")
             require(result["salt"] == salt, f"catalog row {row_index} salt ordering differs")
-            outcome = result["probe_result"]
-            require(outcome in probe_counts, f"unknown probe outcome {outcome}")
-            probe_counts[outcome] += 1
             pool_row = by_source[result["source_alloc_id"]]
             require(pool_row["status"] == "serialized" and
                     pool_row["allocation_id"] == result["allocation_id"],
@@ -75,7 +73,6 @@ def main(path: str) -> None:
                     f"catalog row {row_index} salt {salt} changes its exact typed key")
 
     require(selected_counts == {"function": 1, "vtable": 1}, "fixture must select exactly one function and one vtable key")
-    require(probe_counts == {"preexisting_hit": 0, "miss_reserved_by_probe": 64}, "selected salt probes differ from the captured fixture expectations")
     require(world["complete_key_families"] == ["byte_memory"],
             "selected functions/vtables were incorrectly marked exhaustive")
     require({"function", "vtable"}.issubset(set(world["non_exhaustive_key_families"])),
@@ -85,7 +82,7 @@ def main(path: str) -> None:
         f"prefix={through}, function_keys={selected_counts['function']}, "
         f"vtable_keys={selected_counts['vtable']}, "
         f"selected_salts={sum(selected_counts.values()) * 32}, "
-        f"probe_outcomes={probe_counts}, complete={world['complete_key_families']}"
+        f"complete={world['complete_key_families']}"
     )
 
 

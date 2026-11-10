@@ -185,7 +185,10 @@ validated selected domain. Unrequested compiler globals may reserve opaque raw
 IDs, but cannot point to an imported or failed semantic allocation. General
 constant-memory keys have no selected-key support; requests remain explicit
 runtime errors. This snapshot contract does not assert completeness of arbitrary
-runtime key discovery.
+runtime key discovery. Salt rows record the actual dedup allocation identities in
+the prepared post-export TCX; they do not record whether a lookup populated a
+previously absent entry. Snapshot and closure sentinels remain reserved source
+IDs, and the final sentinel fixes the next runtime allocation ID.
 
 After building the pinned exporter and Lean decoder, this boundary check uses a
 fresh prepared snapshot (not a saved historical input):

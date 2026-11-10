@@ -13,7 +13,6 @@ pub(super) struct Salt {
     salt: usize,
     allocation_id: u64,
     source_alloc_id: u64,
-    probe_result: &'static str,
 }
 #[derive(Clone, serde::Serialize)]
 pub(super) struct DedupKey {
@@ -90,7 +89,6 @@ struct SaltFact {
     salt: usize,
     allocation_id: u64,
     source_alloc_id: u64,
-    preexisting: bool,
 }
 struct ProbeFact {
     key_kind: &'static str,
@@ -108,7 +106,6 @@ impl ProbeFact {
                 salt: fact.salt,
                 allocation_id: fact.allocation_id,
                 source_alloc_id: fact.source_alloc_id,
-                probe_result: if fact.preexisting { "preexisting_hit" } else { "miss_reserved_by_probe" },
             }).collect(),
         }
     }
@@ -180,7 +177,6 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             let mut salts = Vec::with_capacity(32);
             let mut key_graph_id = None;
             for salt in 0..32usize {
-                let boundary = tcx.reserve_alloc_id();
                 let selected = tcx.reserve_and_set_fn_alloc(instance, salt);
                 let source_id = raw_id(selected);
                 allocation_ref(context, tcx, selected)?;
@@ -192,7 +188,6 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                     salt,
                     allocation_id: graph_id,
                     source_alloc_id: source_id,
-                    preexisting: source_id < raw_id(boundary),
                 });
             }
             let key_allocation_id =
@@ -237,14 +232,7 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             let mut salts = Vec::with_capacity(32);
             let mut key_graph_id = None;
             for salt in 0..32usize {
-                let boundary = tcx.reserve_alloc_id();
                 let selected = tcx.reserve_and_set_vtable_alloc(ty, predicates, salt);
-                if context.vtable_diagnostics.enabled() && raw_id(selected) >= raw_id(boundary) {
-                    context
-                        .vtable_diagnostics
-                        .probe_allocations
-                        .insert(selected);
-                }
                 let source_id = raw_id(selected);
                 allocation_ref(context, tcx, selected)?;
                 let graph_id = supported_global_graph_id(context, selected, "vtable")?;
@@ -255,7 +243,6 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                     salt,
                     allocation_id: graph_id,
                     source_alloc_id: source_id,
-                    preexisting: source_id < raw_id(boundary),
                 });
             }
             let key_allocation_id =
@@ -289,7 +276,6 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                 continue;
             }
 
-            let boundary = tcx.reserve_alloc_id();
             let selected = tcx.reserve_and_set_static_alloc(def);
             let source_id = raw_id(selected);
             allocation_ref(context, tcx, selected)?;
@@ -312,7 +298,6 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                     salt: 0,
                     allocation_id: graph_id,
                     source_alloc_id: source_id,
-                    preexisting: source_id < raw_id(boundary),
                 }],
             });
             self.statics.insert(def);
@@ -362,7 +347,6 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                 continue;
             }
 
-            let boundary = tcx.reserve_alloc_id();
             let selected = tcx.reserve_and_set_type_id_alloc(ty);
             let source_id = raw_id(selected);
             allocation_ref(context, tcx, selected)?;
@@ -385,7 +369,6 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                     salt: 0,
                     allocation_id: graph_id,
                     source_alloc_id: source_id,
-                    preexisting: source_id < raw_id(boundary),
                 }],
             });
             self.type_ids.insert(ty);
@@ -605,8 +588,7 @@ fn pool_row<'tcx>(
 }
 
 /// Capture the post-export TCX continuation. Probe-created mappings are
-/// present in this prepared world and therefore become runtime hits; the
-/// `probe_result` field records only how the capture populated the source.
+/// present in this prepared world and therefore become runtime hits.
 pub(super) fn capture<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
@@ -631,7 +613,6 @@ pub(super) fn capture<'tcx>(
         for (hex, key) in unseen {
             allocation_ref(context, tcx, key.representative)?;
             let key_graph_id = supported_memory_graph_id(context, key.representative)?;
-            let probe_boundary = tcx.reserve_alloc_id();
             let mut salts = Vec::with_capacity(32);
             for salt in 0..32usize {
                 let selected = tcx.allocate_bytes_dedup(&key.bytes, salt);
@@ -642,7 +623,6 @@ pub(super) fn capture<'tcx>(
                     salt,
                     allocation_id: allocation_id,
                     source_alloc_id: source_id,
-                    preexisting: source_id < raw_id(probe_boundary),
                 });
             }
             catalog.insert(

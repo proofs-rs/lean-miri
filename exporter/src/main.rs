@@ -5256,18 +5256,9 @@ fn allocation_ref<'tcx>(
                 def_path: tcx.def_path_str(def), thread_local: tcx.is_thread_local_static(def), global_info, initializer }
         }
         Some(GlobalAlloc::VTable(ty, predicates)) => {
-            let route = if context
-                .vtable_diagnostics
-                .probe_allocations
-                .contains(&alloc_id)
-            {
-                "prepared_salt_probe_global"
-            } else {
-                "symbolic_global"
-            };
             context.vtable_diagnostics.record(
                 (ty, predicates),
-                route,
+                "symbolic_global",
                 None,
                 Some(allocator_world::raw_id(alloc_id)),
             );
@@ -6298,18 +6289,9 @@ fn compiler_vtable_queries_json<'tcx>(
         let alloc = *context.allocation_ids.key(index).unwrap();
         if let Some(GlobalAlloc::VTable(input, predicates)) = tcx.try_get_global_alloc(alloc) {
             context.vtable_query_requests.insert((input, predicates));
-            let route = if context
-                .vtable_diagnostics
-                .probe_allocations
-                .contains(&alloc)
-            {
-                "prepared_salt_probe_global"
-            } else {
-                "symbolic_global"
-            };
             context.vtable_diagnostics.record(
                 (input, predicates),
-                route,
+                "symbolic_global",
                 None,
                 Some(allocator_world::raw_id(alloc)),
             );

@@ -200,7 +200,6 @@ deriving instance ToExpr for Input.SourceAllocIdKind
 deriving instance ToExpr for Input.SourceAllocIdStatus
 deriving instance ToExpr for Input.SourceAllocIdPoolRow
 deriving instance ToExpr for Input.SourceAllocIdDedupKind
-deriving instance ToExpr for Input.SourceAllocIdProbeOutcome
 deriving instance ToExpr for Input.SourceAllocIdSaltResult
 deriving instance ToExpr for Input.SourceAllocIdDedupRow
 deriving instance ToExpr for Input.CompilerAllocIdWorld

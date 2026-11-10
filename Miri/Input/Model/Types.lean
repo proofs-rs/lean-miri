@@ -643,15 +643,10 @@ inductive SourceAllocIdDedupKind where
   | function | vtable | static | typeId | memory | bytes
   deriving Repr, DecidableEq
 
-inductive SourceAllocIdProbeOutcome where
-  | preexistingHit | missReservedByProbe
-  deriving Repr, DecidableEq
-
 structure SourceAllocIdSaltResult where
   salt : Nat
   allocationId : AllocationId
   sourceAllocId : UInt64
-  outcome : SourceAllocIdProbeOutcome
   deriving Repr, DecidableEq
 
 structure SourceAllocIdDedupRow where
