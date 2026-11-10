@@ -28,7 +28,7 @@ pub(super) fn discover<'tcx>(
     context: &mut ExportContext<'tcx>,
 ) -> Result<HashSet<(ty::Ty<'tcx>, ty::Ty<'tcx>)>, String> {
     let env = ty::TypingEnv::fully_monomorphized();
-    let mut pairs = HashSet::new();
+    let mut pairs = OrderedSet::default();
     // rustc's Transmute/Subtype/BoxDerefTransmute evaluator calls
     // copy_op_allow_transmute, which still checks mir_assign_valid_types
     // (interpret/cast.rs, place.rs, eval_context.rs). Export the exact MIR
@@ -46,12 +46,11 @@ pub(super) fn discover<'tcx>(
     // operand is the raw mutable pointer used to invoke the vtable entry; the
     // destination type comes from that concrete method's first FnAbi argument.
     // Query only these compiler-derived pairs from reached vtable metadata.
-    let mut vtable_requests = context
+    let vtable_requests = context
         .vtable_query_requests
         .iter()
         .copied()
         .collect::<Vec<_>>();
-    vtable_requests.sort_by_cached_key(|(input, predicates)| format!("{input:?}|{predicates:?}"));
     for (input, predicates) in vtable_requests {
         if !closed(input)
             || predicates.has_non_region_param()
@@ -86,15 +85,14 @@ pub(super) fn discover<'tcx>(
             }
         }
     }
-    let mut ordered = pairs.iter().copied().collect::<Vec<_>>();
-    ordered.sort_by_cached_key(|(source, target)| (format!("{source:?}"), format!("{target:?}")));
+    let ordered = pairs.iter().copied().collect::<Vec<_>>();
     for (source, target) in ordered {
         // Suppression applies recursively while exporting the complete node:
         // query-generated pointer/reference types must not become source demands.
         query_generated_type_json(context, tcx, source)?;
         query_generated_type_json(context, tcx, target)?;
     }
-    Ok(pairs)
+    Ok(pairs.into_iter().collect())
 }
 
 // Evaluation is a read-only projection of the completed type pool. No relation

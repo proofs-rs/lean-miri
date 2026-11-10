@@ -52,7 +52,7 @@ extern crate rustc_symbol_mangling;
 extern crate rustc_target;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use typed_pool::Pool;
+use typed_pool::{OrderedSet, Pool};
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
@@ -272,15 +272,15 @@ struct ExportContext<'tcx> {
     predicate_ids: Pool<ty::PolyExistentialPredicate<'tcx>, allocation_values::Predicate>,
     predicates_in_progress: HashSet<ty::PolyExistentialPredicate<'tcx>>,
     pending_predicates: Vec<ty::PolyExistentialPredicate<'tcx>>,
-    instance_abi_requests: HashSet<(ty::Instance<'tcx>, &'tcx ty::List<ty::Ty<'tcx>>)>,
+    instance_abi_requests: OrderedSet<(ty::Instance<'tcx>, &'tcx ty::List<ty::Ty<'tcx>>)>,
     caller_location_span_set: HashSet<rustc_span::Span>,
     caller_location_spans: Vec<rustc_span::Span>,
     /// Caller-location construction is a rustc hook, not a memoized query;
     /// each invocation allocates a fresh global. Cache the exact serialized
     /// result once per source span so closure rounds do not invent identities.
     caller_location_constant_rows: HashMap<rustc_span::Span, intrinsic_value_queries::CallerLocation>,
-    cast_unsize_requests: HashSet<(ty::Ty<'tcx>, ty::Ty<'tcx>)>,
-    vtable_query_requests: HashSet<(
+    cast_unsize_requests: OrderedSet<(ty::Ty<'tcx>, ty::Ty<'tcx>)>,
+    vtable_query_requests: OrderedSet<(
         ty::Ty<'tcx>,
         &'tcx ty::List<ty::PolyExistentialPredicate<'tcx>>,
     )>,
@@ -288,13 +288,13 @@ struct ExportContext<'tcx> {
     /// concrete type carried by the source vtable. Keep the exact lockstep
     /// dynamic tails so compiler_vtable_queries_json can close those demands
     /// over source vtables discovered from MIR and globals.
-    dynamic_vtable_upcast_requests: HashSet<(ty::Ty<'tcx>, ty::Ty<'tcx>)>,
+    dynamic_vtable_upcast_requests: OrderedSet<(ty::Ty<'tcx>, ty::Ty<'tcx>)>,
     /// Exact type pairs which Miri's transmute/subtype cast path passes to
     /// rustc's `mir_assign_valid_types`, even when their normalized types do
     /// not share the finite identity-group query domain.
-    covariance_query_requests: HashSet<(ty::Ty<'tcx>, ty::Ty<'tcx>)>,
-    cast_box_requests: HashSet<ty::Ty<'tcx>>,
-    fn_pointer_abi_requests: HashSet<(ty::Ty<'tcx>, &'tcx ty::List<ty::Ty<'tcx>>)>,
+    covariance_query_requests: OrderedSet<(ty::Ty<'tcx>, ty::Ty<'tcx>)>,
+    cast_box_requests: OrderedSet<ty::Ty<'tcx>>,
+    fn_pointer_abi_requests: OrderedSet<(ty::Ty<'tcx>, &'tcx ty::List<ty::Ty<'tcx>>)>,
     /// Concrete candidates produced by function allocations referenced in
     /// compiler constants or by resolved function-pointer casts present in
     /// actual MIR. This is not a flow-sensitive points-to set.
@@ -4607,7 +4607,7 @@ fn register_fn_pointer_call_transfers<'tcx>(
         .iter()
         .copied()
         .collect::<Vec<_>>();
-    targets.sort_by_key(|target| format!("{target:?}"));
+    targets.sort_by_key(|target| context.instance_ids[target]);
     Ok::<_, String>(
         for call_site in 0..context.fn_pointer_call_transfers.len() {
             let request = context.fn_pointer_call_transfers[call_site].clone();
@@ -4836,7 +4836,7 @@ fn register_runtime_callback_transfers<'tcx>(
         .iter()
         .copied()
         .collect::<Vec<_>>();
-    targets.sort_by_key(|target| format!("{target:?}"));
+    targets.sort_by_key(|target| context.instance_ids[target]);
     Ok::<_, String>(
         for call_site in 0..context.runtime_callback_transfers.len() {
             let callback = context.runtime_callback_transfers[call_site].clone();
@@ -5542,28 +5542,18 @@ fn compiler_runtime_virtual_queries_json<'tcx>(
         .collect::<Vec<_>>();
     virtuals.sort_by_key(|(id, _, _)| *id);
     let mut concrete_pairs = context.vtable_query_requests.clone();
-    for alloc in context.allocation_ids.keys() {
+    for alloc in (0..context.allocation_ids.len()).map(|id| context.allocation_ids.key(id).unwrap()) {
         if let Some(GlobalAlloc::VTable(ty, predicates)) = tcx.try_get_global_alloc(*alloc) {
             concrete_pairs.insert((ty, predicates));
         }
     }
-    let mut concrete = concrete_pairs.into_iter().collect::<Vec<_>>();
-    concrete.sort_by_key(|(ty, predicates)| format!("{ty:?}|{predicates:?}"));
+    let concrete = concrete_pairs.into_iter().collect::<Vec<_>>();
     for (ty, predicates) in concrete.iter().copied() {
         context.type_id(ty);
         for predicate in predicates.iter() {
             context.predicate_id(predicate);
         }
     }
-    concrete.sort_by_key(|(ty, predicates)| {
-        (
-            context.type_id(*ty),
-            predicates
-                .iter()
-                .map(|p| context.predicate_id(p))
-                .collect::<Vec<_>>(),
-        )
-    });
     let mut virtual_queries = Vec::new();
     for (original_instance_id, original, def) in virtuals {
         // call.rs::eval_fn_call obtains the runtime receiver's dynamic tail,
@@ -5893,7 +5883,7 @@ fn compiler_instance_abis_json<'tcx>(
     context: &mut ExportContext<'tcx>,
 ) -> Result<Vec<InstanceAbi>, String> {
     let mut requests = context.instance_abi_requests.clone();
-    for instance in context.instance_ids.keys() {
+    for instance in (0..context.instance_ids.len()).map(|id| context.instance_ids.key(id).unwrap()) {
         if context.runtime_query_only_empty_drops.contains(instance)
             || context.metadata_only_instances.contains(instance)
         {
@@ -5935,17 +5925,6 @@ fn compiler_instance_abis_json<'tcx>(
             ));
         }
     }
-    let mut requests = requests.into_iter().collect::<Vec<_>>();
-    requests.sort_by_key(|(instance, extra)| {
-        (
-            context.instance_ids.get(instance).copied(),
-            tcx.def_path_str(instance.def_id()),
-            extra
-                .iter()
-                .map(|ty| context.type_id(ty))
-                .collect::<Vec<_>>(),
-        )
-    });
     let records=requests.into_iter().map(|(instance,extra)|{ {
         let closed=!instance.args.has_non_region_param() && !instance.args.has_escaping_bound_vars()
             && !instance.args.has_infer() && !instance.args.has_placeholders()
@@ -6203,12 +6182,11 @@ fn compiler_vtable_queries_json<'tcx>(
             );
         }
     }
-    let mut dynamic_upcasts = context
+    let dynamic_upcasts = context
         .dynamic_vtable_upcast_requests
         .iter()
         .copied()
         .collect::<Vec<_>>();
-    dynamic_upcasts.sort_by_key(|(source, target)| format!("{source:?}|{target:?}"));
     let mut processed = HashSet::new();
     let mut rows = Vec::new();
     loop {
@@ -6241,14 +6219,12 @@ fn compiler_vtable_queries_json<'tcx>(
                 }
             }
         }
-        let mut pending = pairs.difference(&processed).copied().collect::<Vec<_>>();
+        let pending = pairs.iter().filter(|pair| !processed.contains(*pair)).copied().collect::<Vec<_>>();
         if pending.is_empty() {
             break;
         }
-        // Seed any query-only identities in a deterministic compiler-type order
-        // before assigning serialization-local IDs. HashSet iteration must never
-        // decide either type IDs or the canonical query row order.
-        pending.sort_by_key(|(input, predicates)| format!("{input:?}|{predicates:?}"));
+        // Requests retain source discovery order, including query-only identities.
+        // Assigning IDs never depends on hash iteration or diagnostic formatting.
         for (input, predicates) in pending {
             processed.insert((input, predicates));
             let input_json = type_json(context, tcx, input)?;
@@ -6473,16 +6449,6 @@ fn compiler_function_facts_json<'tcx>(
             requests.insert((input, ty::List::empty()));
         }
     }
-    let mut requests = requests.into_iter().collect::<Vec<_>>();
-    requests.sort_by_key(|(ty, extra)| {
-        (
-            context.type_id(*ty),
-            extra
-                .iter()
-                .map(|ty| context.type_id(ty))
-                .collect::<Vec<_>>(),
-        )
-    });
     let abis=requests.into_iter().map(|(input,extra)|{ {
         let closed=!input.has_non_region_param() && !input.has_escaping_bound_vars() && !input.has_infer() && !input.has_placeholders()
             && !extra.has_non_region_param() && !extra.has_escaping_bound_vars() && !extra.has_infer() && !extra.has_placeholders();

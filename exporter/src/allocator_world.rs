@@ -122,7 +122,7 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             .iter()
             .copied()
             .collect::<Vec<_>>();
-        functions.sort_by_key(|instance| format!("{instance:?}"));
+        functions.sort_by_key(|instance| context.instance_ids[instance]);
         for instance in functions {
             if self.functions.contains(&instance) {
                 continue;
@@ -319,11 +319,11 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                 type_id_candidates.push(instance.args.type_at(0));
             }
         }
-        for ty in type_id_candidates.iter().copied() {
-            context.type_id(ty);
-        }
-        type_id_candidates.sort_by_key(|ty| context.type_ids.get(ty).copied().unwrap_or(u64::MAX));
-        type_id_candidates.dedup();
+        // Pool iteration follows discovery order. Deduplicate without reserving
+        // type identities merely to sort candidate keys: only accepted probes
+        // serialize their actual TypeId allocation and discover its type.
+        let mut seen_candidates = HashSet::new();
+        type_id_candidates.retain(|ty| seen_candidates.insert(*ty));
         for ty in type_id_candidates {
             if self.type_ids.contains(&ty) {
                 continue;

@@ -19,17 +19,19 @@ pub(super) fn type_names<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
 ) -> Result<Vec<TypeName>, String> {
-    let mut requested = context
-        .instance_ids
-        .keys()
-        .filter_map(|instance| {
-            (tcx.intrinsic(instance.def_id()).is_some()
-                && tcx.item_name(instance.def_id()).as_str() == "type_name")
-                .then(|| instance.args.type_at(0))
-        })
-        .collect::<Vec<_>>();
-    requested.sort_by_key(|ty| context.type_id(*ty));
-    requested.dedup();
+    let mut requested = Vec::new();
+    // Intrinsic argument types need not yet have IDs. Preserve instance discovery
+    // order instead of allocating IDs while comparing sort keys.
+    let mut seen = HashSet::new();
+    for id in 0..context.instance_ids.len() {
+        let instance = context.instance_ids.key(id).unwrap();
+        if tcx.intrinsic(instance.def_id()).is_some()
+            && tcx.item_name(instance.def_id()).as_str() == "type_name"
+        {
+            let input = instance.args.type_at(0);
+            if seen.insert(input) { requested.push(input); }
+        }
+    }
     let result_type = ty::Ty::new_imm_ref(tcx, tcx.lifetimes.re_erased, tcx.types.str_);
     Ok::<_, String>(
         requested

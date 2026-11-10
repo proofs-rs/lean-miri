@@ -154,12 +154,11 @@ pub(super) fn export<'tcx>(
         };
         records.push(result);
     }
-    let mut pairs = context
+    let pairs = context
         .cast_unsize_requests
         .iter()
         .copied()
         .collect::<Vec<_>>();
-    pairs.sort_by_key(|(source, target)| (context.type_id(*source), context.type_id(*target)));
     for (source, target) in pairs {
         if !closed(source) || !closed(target) {
             export_failure::<()>("lockstep tails", "requires monomorphic source and target")?;
@@ -185,12 +184,11 @@ pub(super) fn export<'tcx>(
             target_tail,
         });
     }
-    let mut boxes = context
+    let boxes = context
         .cast_box_requests
         .iter()
         .copied()
         .collect::<Vec<_>>();
-    boxes.sort_by_key(|input| context.type_id(*input));
     for input in boxes {
         let ty = if tcx.lang_items().owned_box().is_some() {
             type_json(context, tcx, ty::Ty::new_box(tcx, input))?
