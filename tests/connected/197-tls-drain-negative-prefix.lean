@@ -302,7 +302,7 @@ private def checkFailurePrefix (compiler : Input.CompilerProviders.Prepared)
   let some callbackSpan := compiler.program.bundle.spans[callbackBlock.terminator.sourceInfo.span.id]?
     | throw "destructor_a UB call span is absent from the compiler span table"
   unless callbackSpan.start.line == 41 && callbackSpan.«end».line == 41 &&
-      callbackSpan.file.splitOn "negative-001/source.rs" != [callbackSpan.file] do
+      callbackSpan.file.splitOn "tests/connected/fixtures/197-tls-drain-negative-prefix.rs" != [callbackSpan.file] do
     throw s!"destructor_a callsite is not the source null-read at line 41: {reprStr callbackSpan}"
   let manager := state.machine.threads
   unless manager.threads.length == 2 do
