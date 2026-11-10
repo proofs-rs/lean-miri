@@ -97,6 +97,19 @@ reference bounds and keeps IDs through execution; it does not retain a generic
 JSON tree or an intermediate MIR value tree. Runtime lookups return checked errors.
 Malformed table definitions are reported before downstream scope validation.
 
+Covariance collection has two phases. During source-demand closure, explicit
+MIR/call-transfer requests and reached vtable receiver requests serialize their
+endpoint types. Serialization retains recursive query-demand suppression for
+query-generated types, while allowing their definitions and referenced compiler
+data to complete the export closure. Relation answers do not drive that closure.
+After convergence, a read-only pass groups all closed pool types by normalized
+identity and combines the distinct ordered pairs in each group with the demanded
+pairs. Exact compiler-type equality deduplicates requests; existing numeric type
+IDs order the rows. Each pair is evaluated once with rustc's covariant relation,
+including successful false answers, before allocation-world capture. Normalization
+failure still aborts export, but is reported during this final pass. The schema
+and query meaning are unchanged; document-local ID assignment can change.
+
 A successful export describes the requested compiler data. Runtime values, including a
 virtual call's receiver and vtable, still determine execution. Export success is
 neither a proof of interpreter correspondence nor a proof of UB freedom.

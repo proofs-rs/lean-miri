@@ -1379,7 +1379,7 @@ impl ExportCallbacks {
             global_byte_queries,
             identity_only_instances,
             instance_abis,
-            covariance_queries,
+            covariance_requests,
             function_facts,
             predicate_queries,
             native_signature_queries,
@@ -1457,7 +1457,7 @@ impl ExportCallbacks {
             let global_byte_queries = global_byte_queries::export(tcx, &mut export_context)?;
             let identity_only_instances = identity_only_instances_json(tcx, &mut export_context)?;
             let instance_abis = compiler_instance_abis_json(tcx, &mut export_context)?;
-            let covariance_queries = covariance_queries::export(tcx, &mut export_context)?;
+            let covariance_requests = covariance_queries::discover(tcx, &mut export_context)?;
             let function_facts = compiler_function_facts_json(tcx, &mut export_context)?;
             let predicate_queries = compiler_predicate_queries_json(tcx, &mut export_context)?;
             let native_signature_queries =
@@ -1519,7 +1519,7 @@ impl ExportCallbacks {
                     global_byte_queries,
                     identity_only_instances,
                     instance_abis,
-                    covariance_queries,
+                    covariance_requests,
                     function_facts,
                     predicate_queries,
                     native_signature_queries,
@@ -1529,6 +1529,8 @@ impl ExportCallbacks {
                 );
             }
         };
+        let covariance_queries =
+            covariance_queries::evaluate(tcx, &export_context, covariance_requests)?;
         instances.extend(identity_only_instances);
         instances.sort_by_key(|row| row.instance_id);
         if instances.len() != export_context.instance_ids.len()
