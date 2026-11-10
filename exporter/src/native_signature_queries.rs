@@ -9,32 +9,28 @@ pub(super) struct Query {
     bound_regions: &'static str,
     signature_query: pool_type::FunctionSignature,
 }
-pub(super) fn export<'tcx>(
+pub(super) fn discover<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Vec<Query>, String> {
-    let mut requests = context
-        .instance_ids
-        .iter()
-        .filter(|(instance, _)| {
-            !context.runtime_query_only_empty_drops.contains(instance)
-                && !context.symbol_only_instances.contains(instance)
-                && !matches!(instance.def, ty::InstanceKind::Virtual(..))
-        })
-        // alloc_addresses requests FnSig only for native function callbacks;
-        // static roots are valid MIR instances but never callable values.
-        .filter(|(instance, _)| {
+    state: &mut State,
+) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    let mut requests = context.instance_events[state.events..].iter().copied()
+        .filter(|instance| seen.insert(*instance))
+        .filter(|instance| !context.runtime_query_only_empty_drops.contains(instance)
+            && !context.symbol_only_instances.contains(instance)
+            && !matches!(instance.def, ty::InstanceKind::Virtual(..)))
+        .filter(|instance| {
             let kind = tcx.def_kind(instance.def_id());
-            kind.is_fn_like()
-                || matches!(
-                    kind,
-                    rustc_hir::def::DefKind::Ctor(_, rustc_hir::def::CtorKind::Fn)
-                )
+            kind.is_fn_like() || matches!(kind,
+                rustc_hir::def::DefKind::Ctor(_, rustc_hir::def::CtorKind::Fn))
         })
-        .map(|(instance, id)| (*id, *instance))
+        .map(|instance| (context.instance_ids[&instance], instance))
+        .filter(|(id, _)| !state.facts.contains_key(id))
         .collect::<Vec<_>>();
+    state.events = context.instance_events.len();
     requests.sort_by_key(|(id, _)| *id);
-    Ok::<_, String>(requests.into_iter().map(|(id,instance)| { {
+    let facts = requests.into_iter().map(|(id,instance)| { {
         let closed=!instance.args.has_non_region_param() && !instance.args.has_escaping_bound_vars()
             && !instance.args.has_infer() && !instance.args.has_placeholders() && !instance.args.references_error();
         let def_kind=tcx.def_kind(instance.def_id());
@@ -62,7 +58,34 @@ pub(super) fn export<'tcx>(
             (compiler_fact(fn_sig_json_inner(context,tcx,sig)?),
                 "instantiate_bound_regions_with_erased(fn_sig(instance.def_id()).instantiate(instance.args))")
         };
-        Ok::<_, String>(Query { instance_id: id, query,
-            normalization: "none", bound_regions: "erased", signature_query: signature })
-    } }).collect::<Result<Vec<_>, String>>()?)
+        Ok::<_, String>(SignatureFact { instance_id: id, query, signature })
+    } }).collect::<Result<Vec<_>, String>>()?;
+    for fact in facts { state.facts.insert(fact.instance_id, fact); }
+    Ok(())
+}
+
+// Discovery owns all signature serialization; finalization only projects the
+// retained facts into the public query schema.
+pub(super) struct SignatureFact {
+    instance_id: u64,
+    query: &'static str,
+    signature: pool_type::FunctionSignature,
+}
+#[derive(Default)]
+pub(super) struct State {
+    events: usize,
+    facts: BTreeMap<u64, SignatureFact>,
+}
+pub(super) fn finish(state: State, context: &ExportContext<'_>) -> Vec<Query> {
+    state.facts.into_values().filter(|fact| {
+        let instance = context.instance_ids.key(fact.instance_id as usize).unwrap();
+        !context.symbol_only_instances.contains(instance)
+            && !context.runtime_query_only_empty_drops.contains(instance)
+    }).map(|fact| Query {
+        instance_id: fact.instance_id,
+        query: fact.query,
+        normalization: "none",
+        bound_regions: "erased",
+        signature_query: fact.signature,
+    }).collect()
 }

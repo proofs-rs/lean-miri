@@ -84,6 +84,36 @@ struct ByteKey {
     allocations: Vec<AllocId>,
 }
 
+// Retain observations during allocator discovery, then project wire rows only
+// after all probes have completed. Failed probes still abort collection.
+struct SaltFact {
+    salt: usize,
+    allocation_id: u64,
+    source_alloc_id: u64,
+    preexisting: bool,
+}
+struct ProbeFact {
+    key_kind: &'static str,
+    key_allocation_id: u64,
+    bytes_hex: Option<String>,
+    salts: Vec<SaltFact>,
+}
+impl ProbeFact {
+    fn finish(&self) -> DedupKey {
+        DedupKey {
+            key_kind: self.key_kind,
+            key_allocation_id: self.key_allocation_id,
+            bytes_hex: self.bytes_hex.clone(),
+            salts: self.salts.iter().map(|fact| Salt {
+                salt: fact.salt,
+                allocation_id: fact.allocation_id,
+                source_alloc_id: fact.source_alloc_id,
+                probe_result: if fact.preexisting { "preexisting_hit" } else { "miss_reserved_by_probe" },
+            }).collect(),
+        }
+    }
+}
+
 /// Exact dedup key identities selected by the exporter's ordinary
 /// compiler-demand closure. Probes run inside that closure because
 /// serializing an allocation or vtable can discover further demands.
@@ -100,7 +130,7 @@ pub(super) struct SelectedKeyProbes<'tcx> {
     )>,
     statics: HashSet<rustc_hir::def_id::DefId>,
     type_ids: HashSet<ty::Ty<'tcx>>,
-    rows: Vec<DedupKey>,
+    rows: Vec<ProbeFact>,
 }
 
 impl<'tcx> SelectedKeyProbes<'tcx> {
@@ -158,20 +188,16 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                 if salt == 0 {
                     key_graph_id = Some(graph_id);
                 }
-                salts.push(Salt {
+                salts.push(SaltFact {
                     salt,
                     allocation_id: graph_id,
                     source_alloc_id: source_id,
-                    probe_result: if source_id < raw_id(boundary) {
-                        "preexisting_hit"
-                    } else {
-                        "miss_reserved_by_probe"
-                    },
+                    preexisting: source_id < raw_id(boundary),
                 });
             }
             let key_allocation_id =
                 key_graph_id.ok_or_else(|| "function dedup probe omitted salt zero".to_owned())?;
-            self.rows.push(DedupKey {
+            self.rows.push(ProbeFact {
                 key_kind: "function",
                 key_allocation_id,
                 bytes_hex: None,
@@ -225,20 +251,16 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
                 if salt == 0 {
                     key_graph_id = Some(graph_id);
                 }
-                salts.push(Salt {
+                salts.push(SaltFact {
                     salt,
                     allocation_id: graph_id,
                     source_alloc_id: source_id,
-                    probe_result: if source_id < raw_id(boundary) {
-                        "preexisting_hit"
-                    } else {
-                        "miss_reserved_by_probe"
-                    },
+                    preexisting: source_id < raw_id(boundary),
                 });
             }
             let key_allocation_id =
                 key_graph_id.ok_or_else(|| "vtable dedup probe omitted salt zero".to_owned())?;
-            self.rows.push(DedupKey {
+            self.rows.push(ProbeFact {
                 key_kind: "vtable",
                 key_allocation_id,
                 bytes_hex: None,
@@ -282,19 +304,15 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             {
                 return Err("selected static key does not match its exact DefId allocation".into());
             }
-            self.rows.push(DedupKey {
+            self.rows.push(ProbeFact {
                 key_kind: "static",
                 key_allocation_id: graph_id,
                 bytes_hex: None,
-                salts: vec![Salt {
+                salts: vec![SaltFact {
                     salt: 0,
                     allocation_id: graph_id,
                     source_alloc_id: source_id,
-                    probe_result: if source_id < raw_id(boundary) {
-                        "preexisting_hit"
-                    } else {
-                        "miss_reserved_by_probe"
-                    },
+                    preexisting: source_id < raw_id(boundary),
                 }],
             });
             self.statics.insert(def);
@@ -359,19 +377,15 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             {
                 return Err("selected TypeId key does not match its exact Ty allocation".into());
             }
-            self.rows.push(DedupKey {
+            self.rows.push(ProbeFact {
                 key_kind: "type_id",
                 key_allocation_id: graph_id,
                 bytes_hex: None,
-                salts: vec![Salt {
+                salts: vec![SaltFact {
                     salt: 0,
                     allocation_id: graph_id,
                     source_alloc_id: source_id,
-                    probe_result: if source_id < raw_id(boundary) {
-                        "preexisting_hit"
-                    } else {
-                        "miss_reserved_by_probe"
-                    },
+                    preexisting: source_id < raw_id(boundary),
                 }],
             });
             self.type_ids.insert(ty);
@@ -380,7 +394,7 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
     }
 
     fn rows(&self) -> impl Iterator<Item = DedupKey> + '_ {
-        self.rows.iter().cloned()
+        self.rows.iter().map(ProbeFact::finish)
     }
 }
 
@@ -598,7 +612,7 @@ pub(super) fn capture<'tcx>(
     context: &mut ExportContext<'tcx>,
     selected_keys: &SelectedKeyProbes<'tcx>,
 ) -> Result<World, String> {
-    let mut catalog = BTreeMap::<String, DedupKey>::new();
+    let mut catalog = BTreeMap::<String, ProbeFact>::new();
     loop {
         // A temporary reserved ID bounds a read-only enumeration of the
         // current pool. AllocMap IDs are monotone and never reused.
@@ -624,20 +638,16 @@ pub(super) fn capture<'tcx>(
                 let source_id = raw_id(selected);
                 allocation_ref(context, tcx, selected)?;
                 let allocation_id = supported_memory_graph_id(context, selected)?;
-                salts.push(Salt {
+                salts.push(SaltFact {
                     salt,
                     allocation_id: allocation_id,
                     source_alloc_id: source_id,
-                    probe_result: if source_id < raw_id(probe_boundary) {
-                        "preexisting_hit"
-                    } else {
-                        "miss_reserved_by_probe"
-                    },
+                    preexisting: source_id < raw_id(probe_boundary),
                 });
             }
             catalog.insert(
                 hex.clone(),
-                DedupKey {
+                ProbeFact {
                     key_kind: "byte_memory",
                     key_allocation_id: key_graph_id,
                     bytes_hex: Some(hex),
@@ -698,7 +708,7 @@ pub(super) fn capture<'tcx>(
         },
         global_pool_complete_through: frontier,
         raw_pool,
-        dedup_catalog: catalog.into_values().chain(selected_keys.rows()).collect(),
+        dedup_catalog: catalog.into_values().map(|fact| fact.finish()).chain(selected_keys.rows()).collect(),
         complete_key_families: ["byte_memory"],
         non_exhaustive_key_families: [
             "function",

@@ -19,23 +19,24 @@ struct Salt {
     salt: usize,
     existing_allocation: Option<u64>,
 }
-pub(super) fn export<'tcx>(
+pub(super) fn discover<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Queries, String> {
-    let str_type = type_json(context, tcx, tcx.types.str_)?;
-    // `type_json` above may extend type metadata, but this producer never
-    // mutates allocation_ids. Borrow the completed allocation map instead of
-    // cloning the full catalog on every fixpoint round.
+    state: &mut State,
+) -> Result<(), String> {
+    if state.str_type.is_none() {
+        state.str_type = Some(type_json(context, tcx, tcx.types.str_)?);
+    }
+    // This producer never mutates allocation_ids. Inspect only the newly
+    // discovered allocation suffix, retaining completed content probes.
     let original = &context.allocation_ids;
-    let mut covered = original.values().copied().collect::<Vec<_>>();
-    covered.sort_unstable();
     // The hex key is the serialized content. Retain one source allocation as
     // the representative and re-borrow its bytes during the salt probes;
     // keeping a second Vec for every unique global needlessly duplicates all
     // immutable string bytes at once.
     let mut contents = BTreeMap::<String, AllocId>::new();
-    for alloc in original.keys() {
+    for index in state.allocations..original.len() {
+        let alloc = original.key(index).unwrap();
         let Some(GlobalAlloc::Memory(memory)) = tcx.try_get_global_alloc(*alloc) else {
             continue;
         };
@@ -57,8 +58,12 @@ pub(super) fn export<'tcx>(
             continue;
         }
         let bytes = allocation.inspect_with_uninit_and_ptr_outside_interpreter(0..allocation.len());
-        contents.entry(bytes_hex(bytes)).or_insert(*alloc);
+        let key = bytes_hex(bytes);
+        if !state.candidates.contains_key(&key) {
+            contents.entry(key).or_insert(*alloc);
+        }
     }
+    state.allocations = original.len();
     let candidates = contents
         .into_iter()
         .map(|(hex, representative)| {
@@ -72,24 +77,38 @@ pub(super) fn export<'tcx>(
                 .map(|salt| {
                     // The rustc API accepts `Into<Cow<[u8]>>`; borrowing avoids a
                     // full byte-vector clone for every salt without changing probes.
-                    let selected = tcx.allocate_bytes_dedup(bytes, salt);
-                    Salt {
-                        salt,
-                        existing_allocation: original.get(&selected).copied(),
-                    }
+                    tcx.allocate_bytes_dedup(bytes, salt)
                 })
                 .collect::<Vec<_>>();
-            Candidate {
-                bytes_hex: hex,
-                salts,
-            }
+            (hex, salts)
         })
         .collect::<Vec<_>>();
     // No allocation_ref call here: the covered graph is unchanged by probing.
-    Ok::<_, String>(Queries {
+    state.candidates.extend(candidates);
+    Ok(())
+}
+
+// A salt probe may reserve a compiler allocation before another producer
+// discovers it. Resolve graph membership only against the completed pool.
+#[derive(Default)]
+pub(super) struct State {
+    allocations: usize,
+    str_type: Option<u64>,
+    candidates: BTreeMap<String, Vec<AllocId>>,
+}
+pub(super) fn finish(facts: State, context: &ExportContext<'_>) -> Queries {
+    let mut covered = context.allocation_ids.values().copied().collect::<Vec<_>>();
+    covered.sort_unstable();
+    Queries {
         salt_count: 32,
-        str_type,
+        str_type: facts.str_type.expect("global-byte discovery initialized str"),
         covered_allocation_ids: covered,
-        candidates,
-    })
+        candidates: facts.candidates.into_iter().map(|(bytes_hex, selected)| Candidate {
+            bytes_hex,
+            salts: selected.into_iter().enumerate().map(|(salt, selected)| Salt {
+                salt,
+                existing_allocation: context.allocation_ids.get(&selected).copied(),
+            }).collect(),
+        }).collect(),
+    }
 }

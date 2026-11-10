@@ -33,22 +33,21 @@ pub(super) struct Casts<'tcx> {
     pub pairs: usize,
     pub boxes: usize,
     pub resolutions: HashMap<ty::Ty<'tcx>, ty::Instance<'tcx>>,
-    pub rows: Vec<cast_queries::Query>,
+    pub rows: Vec<cast_queries::Fact>,
 }
 #[derive(Default)]
 pub(super) struct Abis<'tcx> {
     pub explicit: usize,
     pub events: usize,
     pub completed: HashSet<(ty::Instance<'tcx>, &'tcx ty::List<ty::Ty<'tcx>>)>,
-    pub rows: Vec<InstanceAbi>,
+    pub rows: Vec<InstanceAbiFact>,
 }
 #[derive(Default)]
 pub(super) struct Vtables {
     pub allocations: usize,
     pub requests: usize,
-    pub allocation_rows: HashMap<AllocId, Vec<usize>>,
     pub upcasts: PairFrontier,
-    pub rows: Vec<((u64, Vec<u64>, u64, Vec<u64>), (u64, Vec<u64>), query_values::VtableQuery)>,
+    pub rows: Vec<((u64, Vec<u64>, u64, Vec<u64>), (u64, Vec<u64>), VtableFact)>,
 }
 #[derive(Default)]
 pub(super) struct Virtuals<'tcx> {
@@ -56,7 +55,7 @@ pub(super) struct Virtuals<'tcx> {
     pub instances: usize,
     pub virtuals: Vec<(u64, ty::Instance<'tcx>, rustc_hir::def_id::DefId)>,
     pub frontier: PairFrontier,
-    pub rows: Vec<query_values::RuntimeVirtualQuery<query_values::PendingVtableRef>>,
+    pub rows: Vec<VirtualFact>,
     pub resolved: OrderedSet<(ty::Instance<'tcx>, ty::Ty<'tcx>, ty::Instance<'tcx>)>,
     pub transfers: PairFrontier,
 }

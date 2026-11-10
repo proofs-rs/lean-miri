@@ -58,11 +58,11 @@ struct EscapeDefault {
     definition: u64,
     mir_available: bool,
 }
-pub(super) fn export(tcx: TyCtxt<'_>, context: &mut ExportContext<'_>) -> Result<Catalog, String> {
+pub(super) fn discover(tcx: TyCtxt<'_>, context: &mut ExportContext<'_>) -> Result<Facts, String> {
     // Exact helpers::is_no_core: rustc_attr_ir::find_attr!(tcx, crate, NoCore).
     let no_core = rustc_attr_ir::find_attr!(tcx, crate, NoCore);
     if no_core {
-        return Ok(Catalog {
+        return Ok(Facts {
             no_core: true,
             core_escape_default: None,
         });
@@ -72,17 +72,30 @@ pub(super) fn export(tcx: TyCtxt<'_>, context: &mut ExportContext<'_>) -> Result
         &["core", "ascii", "escape_default"],
         Namespace::ValueNS,
     ) {
-        Some(definition) => EscapeDefault {
-            definition: def_json(context, definition),
-            mir_available: tcx.is_mir_available(definition),
-        },
+        Some(definition) => (
+            def_json(context, definition),
+            tcx.is_mir_available(definition),
+        ),
         None => export_failure(
             "startup_queries::export",
             "source try_resolve_path did not find core::ascii::escape_default in the value namespace",
         )?,
     };
-    Ok(Catalog {
+    Ok(Facts {
         no_core,
         core_escape_default: Some(core_escape_default),
     })
+}
+
+pub(super) struct Facts {
+    no_core: bool,
+    core_escape_default: Option<(u64, bool)>,
+}
+pub(super) fn finish(facts: Facts) -> Catalog {
+    Catalog {
+        no_core: facts.no_core,
+        core_escape_default: facts.core_escape_default.map(|(definition, mir_available)| EscapeDefault {
+            definition, mir_available,
+        }),
+    }
 }

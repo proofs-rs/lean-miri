@@ -15,26 +15,23 @@ pub(super) struct CallerLocation {
     span: u64,
     result_type: Option<u64>,
 }
-pub(super) fn type_names<'tcx>(
+pub(super) fn discover_type_names<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Vec<TypeName>, String> {
+    state: &mut TypeNames<'tcx>,
+) -> Result<(), String> {
     let mut requested = Vec::new();
-    // Intrinsic argument types need not yet have IDs. Preserve instance discovery
-    // order instead of allocating IDs while comparing sort keys.
-    let mut seen = HashSet::new();
-    for id in 0..context.instance_ids.len() {
-        let instance = context.instance_ids.key(id).unwrap();
+    for instance in context.instance_events[state.events..].iter().copied() {
         if tcx.intrinsic(instance.def_id()).is_some()
             && tcx.item_name(instance.def_id()).as_str() == "type_name"
         {
             let input = instance.args.type_at(0);
-            if seen.insert(input) { requested.push(input); }
+            if state.completed.insert(input) { requested.push(input); }
         }
     }
+    state.events = context.instance_events.len();
     let result_type = ty::Ty::new_imm_ref(tcx, tcx.lifetimes.re_erased, tcx.types.str_);
-    Ok::<_, String>(
-        requested
+    let facts = requested
             .into_iter()
             .map(|input| {
                 let value = if input.has_non_region_param()
@@ -56,15 +53,15 @@ pub(super) fn type_names<'tcx>(
                         rustc_middle::mir::ConstValue::Slice { alloc_id, meta },
                     )?)
                 };
-                Ok::<_, String>(TypeName {
+                Ok::<_, String>(TypeNameFact {
                     value,
                     input_type: type_json(context, tcx, input)?,
                     result_type: type_json(context, tcx, result_type)?,
-                    typing_env: "fully_monomorphized",
                 })
             })
-            .collect::<Result<Vec<_>, String>>()?,
-    )
+            .collect::<Result<Vec<_>, String>>()?;
+    state.facts.extend(facts);
+    Ok(())
 }
 pub(super) fn collect_spans<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -102,10 +99,10 @@ pub(super) fn collect_spans<'tcx>(
         }
     }
 }
-pub(super) fn caller_locations<'tcx>(
+pub(super) fn discover_caller_locations<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Vec<CallerLocation>, String> {
+) -> Result<(), String> {
     // `span_as_caller_location` invokes a rustc hook rather than a memoized
     // query. Its provider allocates fresh CallerLocation memory on every
     // invocation, so revisiting already-seen spans in a closure round would
@@ -123,7 +120,7 @@ pub(super) fn caller_locations<'tcx>(
         {
             return unavailable_compiler_fact("track_caller requires PanicLocation language item");
         }
-        return Ok(Vec::new());
+        return Ok(());
     }
     let spans = context.caller_location_spans.clone();
     for span in spans.iter().copied() {
@@ -156,18 +153,55 @@ pub(super) fn caller_locations<'tcx>(
         };
         context.caller_location_constant_rows.insert(
             span,
-            CallerLocation {
+            CallerLocationFact {
                 value,
                 span: span_id,
                 result_type,
             },
         );
     }
-    // Preserve source span discovery order on every returned catalog snapshot.
-    Ok::<_, String>(
-        spans
-            .iter()
-            .map(|span| context.caller_location_constant_rows[span].clone())
-            .collect(),
-    )
+    Ok(())
+}
+
+pub(super) struct TypeNameFact {
+    value: pool_constant::Value,
+    input_type: u64,
+    result_type: u64,
+}
+#[derive(Default)]
+pub(super) struct TypeNames<'tcx> {
+    events: usize,
+    completed: HashSet<ty::Ty<'tcx>>,
+    facts: Vec<TypeNameFact>,
+}
+pub(super) fn finish_type_names(mut state: TypeNames<'_>) -> Vec<TypeName> {
+    state.facts.sort_by_key(|fact| fact.input_type);
+    state.facts.into_iter().map(|fact| TypeName {
+        value: fact.value,
+        input_type: fact.input_type,
+        result_type: fact.result_type,
+        typing_env: "fully_monomorphized",
+    }).collect()
+}
+
+#[derive(Clone)]
+pub(super) struct CallerLocationFact {
+    value: pool_constant::Value,
+    span: u64,
+    result_type: Option<u64>,
+}
+pub(super) fn finish_caller_locations(tcx: TyCtxt<'_>, context: &ExportContext<'_>) -> Vec<CallerLocation> {
+    if tcx.lang_items().get(rustc_attr_ir::LangItem::PanicLocation).is_none() {
+        return Vec::new();
+    }
+    // Preserve source span discovery order; distinct spans stay distinct even
+    // when the compiler reports the same source location.
+    context.caller_location_spans.iter().map(|span| {
+        let fact = &context.caller_location_constant_rows[span];
+        CallerLocation {
+            value: fact.value.clone(),
+            span: fact.span,
+            result_type: fact.result_type,
+        }
+    }).collect()
 }

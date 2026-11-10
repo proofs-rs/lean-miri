@@ -54,23 +54,6 @@ pub(super) struct RuntimeVirtualQuery<R> {
     pub resolved: u64,
     pub vtable_query: R,
 }
-impl RuntimeVirtualQuery<PendingVtableRef> {
-    pub fn finish(
-        self,
-        ids: &HashMap<(u64, Vec<u64>), u64>,
-    ) -> Result<RuntimeVirtualQuery<VtableRef>, String> {
-        Ok(RuntimeVirtualQuery {
-            typing_env: self.typing_env,
-            original_instance_id: self.original_instance_id,
-            method_definition: self.method_definition,
-            parent_trait: self.parent_trait,
-            concrete_type: self.concrete_type,
-            rebased_args: self.rebased_args,
-            resolved: self.resolved,
-            vtable_query: self.vtable_query.finish(ids)?,
-        })
-    }
-}
 #[derive(Clone, Serialize)]
 pub(super) struct VtableMetadata {
     pub r#type: u64,

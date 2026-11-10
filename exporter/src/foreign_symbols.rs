@@ -16,6 +16,62 @@ enum ImportLinkage {
     ExternalWeak { raw: String },
     Other { raw: String },
 }
+struct DeclarationFact {
+    definition: u64,
+    symbol: String,
+    typing_env: &'static str,
+    ty: u64,
+    layout: u64,
+    import_linkage: ImportLinkage,
+    definition_mutability: &'static str,
+    type_is_freeze: bool,
+    decl_is_mut: bool,
+}
+#[derive(Clone)]
+struct CandidateFact {
+    iteration_index: usize,
+    used: bool,
+    symbol: String,
+    definition: u64,
+    explicit_symbol: bool,
+    crate_index: u32,
+    crate_name: String,
+    weak: bool,
+    span: u64,
+    definition_kind: &'static str,
+    compiler_builtins: bool,
+    instance_id: Option<u64>,
+}
+struct AmbiguousFact {
+    symbol: String,
+}
+impl AmbiguousFact {
+    fn new(symbol: String) -> Self {
+        Self {
+            symbol,
+        }
+    }
+}
+enum SelectedExportFact {
+    Ambiguous(AmbiguousFact),
+    Other {
+        symbol: String,
+        kind: &'static str,
+        definition: u64,
+        instance_id: Option<u64>,
+    },
+    Static {
+        symbol: String,
+        kind: &'static str,
+        definition: u64,
+        declaration: DeclarationFact,
+        allocation: u64,
+    },
+}
+enum FallbackFact {
+    Ambiguous(AmbiguousFact),
+    Candidate(CandidateFact),
+}
 #[derive(serde::Serialize)]
 struct Declaration {
     definition: u64,
@@ -121,6 +177,73 @@ pub(super) struct Catalog {
     extern_statics: Option<ExternStatics>,
 }
 
+/// Compiler-derived selection facts retained by collection. The public catalog
+/// and its query wrappers are assembled only after discovery reaches closure.
+pub(super) struct Facts {
+    executable: Option<ExecutableFacts>,
+}
+struct ExecutableFacts {
+    candidates: Vec<CandidateFact>,
+    fallbacks: Vec<FallbackFact>,
+    declarations: Vec<DeclarationFact>,
+    selected: Vec<SelectedExportFact>,
+}
+pub(super) fn finish(tcx: TyCtxt<'_>, facts: Facts) -> Catalog {
+    let (exported_candidates, selected_foreign_fallbacks, extern_statics) =
+        match facts.executable {
+            None => (None, None, None),
+            Some(facts) => (Some(facts.candidates.into_iter().map(Into::into).collect()), Some(facts.fallbacks.into_iter().map(Into::into).collect()), Some(ExternStatics {
+                declarations: facts.declarations.into_iter().map(Into::into).collect(),
+                selected_exported: facts.selected.into_iter().map(Into::into).collect(),
+                typing_env: "fully_monomorphized",
+            })),
+        };
+    Catalog {
+        target: target_facts(tcx),
+        no_alloc_shim_symbol: rustc_symbol_mangling::mangle_internal_symbol(
+            tcx, allocator::NO_ALLOC_SHIM_IS_UNSTABLE),
+        allocator_shims: allocator_shims(tcx),
+        exported_candidates,
+        selected_foreign_fallbacks,
+        extern_statics,
+    }
+}
+
+impl From<DeclarationFact> for Declaration {
+    fn from(f: DeclarationFact) -> Self { Self {
+        definition:f.definition, symbol:f.symbol, typing_env:f.typing_env, ty:f.ty,
+        layout:f.layout, import_linkage:f.import_linkage,
+        definition_mutability:f.definition_mutability, type_is_freeze:f.type_is_freeze,
+        decl_is_mut:f.decl_is_mut,
+    } }
+}
+impl From<CandidateFact> for Candidate {
+    fn from(f: CandidateFact) -> Self { Self {
+        iteration_index:f.iteration_index, used:f.used, symbol:f.symbol,
+        definition:f.definition, explicit_symbol:f.explicit_symbol, crate_index:f.crate_index,
+        crate_name:f.crate_name, weak:f.weak, span:f.span, definition_kind:f.definition_kind,
+        compiler_builtins:f.compiler_builtins, instance_id:f.instance_id,
+    } }
+}
+impl From<AmbiguousFact> for Ambiguous {
+    fn from(f: AmbiguousFact) -> Self { Ambiguous::new(f.symbol) }
+}
+impl From<SelectedExportFact> for SelectedExport {
+    fn from(f: SelectedExportFact) -> Self { match f {
+        SelectedExportFact::Ambiguous(f) => Self::Ambiguous(f.into()),
+        SelectedExportFact::Other { symbol,kind,definition,instance_id } =>
+            Self::Other { symbol,kind,definition,instance_id },
+        SelectedExportFact::Static { symbol,kind,definition,declaration,allocation } =>
+            Self::Static { symbol,kind,definition,declaration:declaration.into(),allocation },
+    } }
+}
+impl From<FallbackFact> for Fallback {
+    fn from(f: FallbackFact) -> Self { match f {
+        FallbackFact::Ambiguous(f) => Self::Ambiguous(f.into()),
+        FallbackFact::Candidate(f) => Self::Candidate(f.into()),
+    } }
+}
+
 fn definition_kind(tcx: TyCtxt<'_>, def: rustc_hir::def_id::DefId) -> &'static str {
     use rustc_hir::def::DefKind;
     match tcx.def_kind(def) {
@@ -139,7 +262,7 @@ fn extern_static_declaration<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
     def: rustc_hir::def_id::DefId,
-) -> Result<Declaration, String> {
+) -> Result<DeclarationFact, String> {
     use rustc_hir::def::DefKind;
     let DefKind::Static { mutability, .. } = tcx.def_kind(def) else {
         return Ok(export_failure(
@@ -170,7 +293,7 @@ fn extern_static_declaration<'tcx>(
         Ok(layout) => {
             let ty_is_freeze = layout.ty.is_freeze(tcx, env);
             let declaration_mutable = !(mutability == rustc_ast::Mutability::Not && ty_is_freeze);
-            Declaration {
+            DeclarationFact {
                 definition: def_json(context, def),
                 symbol,
                 typing_env: "fully_monomorphized",
@@ -200,7 +323,7 @@ fn candidate<'tcx>(
     def: rustc_hir::def_id::DefId,
     iteration_index: usize,
     used: bool,
-) -> Result<Option<Candidate>, String> {
+) -> Result<Option<CandidateFact>, String> {
     let attrs = tcx.codegen_fn_attrs(def);
     // foreign_items.rs::lookup_exported_symbol performs this exact gate
     // before Instance::mono and tcx.symbol_name. Do not query non-candidates:
@@ -222,7 +345,7 @@ fn candidate<'tcx>(
         None
     };
     let span = tcx.def_span(def);
-    Ok(Some(Candidate {
+    Ok(Some(CandidateFact {
         iteration_index,
         used,
         symbol,
@@ -245,10 +368,10 @@ fn candidate<'tcx>(
 fn selected_exports<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-    candidates: &[Candidate],
+    candidates: &[CandidateFact],
     demanded_symbols: &[String],
-) -> Result<Vec<SelectedExport>, String> {
-    let mut winners: Vec<(String, Candidate, bool)> = Vec::new();
+) -> Result<Vec<SelectedExportFact>, String> {
+    let mut winners: Vec<(String, CandidateFact, bool)> = Vec::new();
     for candidate in candidates {
         let symbol = candidate.symbol.clone();
         if !demanded_symbols.contains(&symbol) {
@@ -276,7 +399,7 @@ fn selected_exports<'tcx>(
         .into_iter()
         .map(|(symbol, winner, ambiguous)| {
             if ambiguous {
-                return Ok(SelectedExport::Ambiguous(Ambiguous::new(symbol)));
+                return Ok(SelectedExportFact::Ambiguous(AmbiguousFact::new(symbol)));
             }
             let definition = winner.definition;
             let def = context
@@ -289,7 +412,7 @@ fn selected_exports<'tcx>(
                 .ok_or("selected definition ID is outside the definition pool")?;
             let kind = definition_kind(tcx, def);
             if kind != "static" {
-                return Ok(SelectedExport::Other {
+                return Ok(SelectedExportFact::Other {
                     symbol,
                     kind,
                     definition,
@@ -307,7 +430,7 @@ fn selected_exports<'tcx>(
                     "selected definition ceased to be a static",
                 );
             };
-            Ok(SelectedExport::Static {
+            Ok(SelectedExportFact::Static {
                 symbol,
                 kind: "static",
                 definition,
@@ -324,12 +447,12 @@ fn selected_exports<'tcx>(
 /// function; a static or other definition must therefore prevent a weaker
 /// same-name function from being promoted.
 fn selected_foreign_fallbacks(
-    candidates: &[Candidate],
+    candidates: &[CandidateFact],
     demanded_symbols: &[String],
-) -> Vec<Fallback> {
+) -> Vec<FallbackFact> {
     let mut selected = Vec::new();
     for symbol in demanded_symbols {
-        let mut winner: Option<&Candidate> = None;
+        let mut winner: Option<&CandidateFact> = None;
         let mut ambiguous = false;
         for candidate in candidates {
             if candidate.symbol != *symbol {
@@ -351,10 +474,10 @@ fn selected_foreign_fallbacks(
             }
         }
         if ambiguous {
-            selected.push(Fallback::Ambiguous(Ambiguous::new(symbol.clone())));
+            selected.push(FallbackFact::Ambiguous(AmbiguousFact::new(symbol.clone())));
         } else if let Some(candidate) = winner {
             let row = candidate.clone();
-            selected.push(Fallback::Candidate(row));
+            selected.push(FallbackFact::Candidate(row));
         }
     }
     selected
@@ -363,7 +486,7 @@ fn selected_foreign_fallbacks(
 fn demanded_extern_statics<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Vec<Declaration>, String> {
+) -> Result<Vec<DeclarationFact>, String> {
     let mut definitions = context
         .allocation_ids
         .keys()
@@ -445,27 +568,16 @@ fn target_facts(tcx: TyCtxt<'_>) -> TargetFacts {
 /// Reproduce `helpers::iter_exported_symbols` in its source order. For a
 /// non-executable compilation does not demand executable-symbol lookup;
 /// its catalog omits those queries instead of claiming an empty symbol set.
-pub(super) fn export<'tcx>(
+pub(super) fn discover<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Catalog, String> {
+) -> Result<Facts, String> {
     if !tcx
         .crate_types()
         .contains(&rustc_structures::CrateType::Executable)
     {
         // Executable exported-symbol traversal is not a query in library scope.
-        let no_alloc = rustc_symbol_mangling::mangle_internal_symbol(
-            tcx,
-            allocator::NO_ALLOC_SHIM_IS_UNSTABLE,
-        );
-        return Ok(Catalog {
-            target: target_facts(tcx),
-            no_alloc_shim_symbol: no_alloc,
-            allocator_shims: allocator_shims(tcx),
-            exported_candidates: None,
-            selected_foreign_fallbacks: None,
-            extern_statics: None,
-        });
+        return Ok(Facts { executable: None });
     }
     let mut records = Vec::new();
     let mut iteration_index = 0usize;
@@ -522,8 +634,6 @@ pub(super) fn export<'tcx>(
         }
     }
 
-    let no_alloc =
-        rustc_symbol_mangling::mangle_internal_symbol(tcx, allocator::NO_ALLOC_SHIM_IS_UNSTABLE);
     let declarations = demanded_extern_statics(tcx, context)?;
     let demanded_symbols = declarations
         .iter()
@@ -554,7 +664,7 @@ pub(super) fn export<'tcx>(
     let selected_fallbacks = selected_foreign_fallbacks(&records, &demanded_foreign_functions);
     let mut promote = Vec::new();
     for row in &selected_fallbacks {
-        let Fallback::Candidate(row) = row else {
+        let FallbackFact::Candidate(row) = row else {
             continue;
         };
         if !matches!(row.definition_kind, "function" | "associated_function") {
@@ -582,16 +692,10 @@ pub(super) fn export<'tcx>(
     for instance in promote {
         context.register_instance(instance);
     }
-    Ok(Catalog {
-        target: target_facts(tcx),
-        no_alloc_shim_symbol: no_alloc,
-        exported_candidates: Some(records),
-        selected_foreign_fallbacks: Some(selected_fallbacks),
-        extern_statics: Some(ExternStatics {
-            declarations,
-            selected_exported: selected,
-            typing_env: "fully_monomorphized",
-        }),
-        allocator_shims: allocator_shims(tcx),
-    })
+    Ok(Facts { executable: Some(ExecutableFacts {
+        candidates: records,
+        fallbacks: selected_fallbacks,
+        declarations,
+        selected,
+    }) })
 }

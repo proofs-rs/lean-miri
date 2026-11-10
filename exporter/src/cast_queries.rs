@@ -74,10 +74,43 @@ fn closed(input: ty::Ty<'_>) -> bool {
         && !input.has_placeholders()
         && !input.references_error()
 }
-pub(super) fn export<'tcx>(
+// Compiler answers retained without constructing the public query rows.
+pub(super) enum Fact {
+    ResolveFnPtr { input_type: u64, args_no_bound_vars: bool, resolution: Option<u64> },
+    ResolveClosureFnOnce { input_type: u64, args_no_bound_vars: bool, instance_id: u64 },
+    SupertraitSlot { input_source: u64, input_target: u64, value: Option<usize> },
+    LockstepTails { input_source: u64, input_target: u64, source_tail: u64, target_tail: u64 },
+    BoxType { input_type: u64, ty: u64 },
+}
+pub(super) fn finish(facts: Vec<Fact>) -> Vec<Query> {
+    facts.into_iter().map(|fact| match fact {
+        Fact::ResolveFnPtr { input_type, args_no_bound_vars, resolution } => Query::ResolveFnPtr {
+            query_kind: QueryKind::ResolveFnPtr, typing_env: "fully_monomorphized",
+            input_type, args_no_bound_vars,
+            resolution: match resolution {
+                Some(instance_id) => OptionalInstance::Instance { instance_id },
+                None => OptionalInstance::None,
+            },
+        },
+        Fact::ResolveClosureFnOnce { input_type, args_no_bound_vars, instance_id } => Query::ResolveClosureFnOnce {
+            query_kind: QueryKind::ResolveClosureFnOnce, typing_env: "fully_monomorphized",
+            input_type, args_no_bound_vars, instance_id,
+        },
+        Fact::SupertraitSlot { input_source, input_target, value } => Query::SupertraitSlot {
+            query_kind: QueryKind::SupertraitSlot, typing_env: "fully_monomorphized", input_source, input_target, value,
+        },
+        Fact::LockstepTails { input_source, input_target, source_tail, target_tail } => Query::LockstepTails {
+            query_kind: QueryKind::LockstepTails, typing_env: "fully_monomorphized", input_source, input_target, source_tail, target_tail,
+        },
+        Fact::BoxType { input_type, ty } => Query::BoxType {
+            query_kind: QueryKind::BoxType, typing_env: "fully_monomorphized", input_type, ty,
+        },
+    }).collect()
+}
+pub(super) fn discover<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<Vec<Query>, String> {
+) -> Result<(), String> {
     let env = ty::TypingEnv::fully_monomorphized();
     let mut state = std::mem::take(&mut context.cast_state);
     let mut records = Vec::new();
@@ -103,9 +136,9 @@ pub(super) fn export<'tcx>(
         .collect::<Vec<_>>();
     state.types = type_end;
     for (_, input) in types {
-        let (kind, no_bound) = match input.kind() {
-            ty::FnDef(_, args) => (QueryKind::ResolveFnPtr, args.no_bound_vars().is_some()),
-            ty::Closure(..) => (QueryKind::ResolveClosureFnOnce, true),
+        let no_bound = match input.kind() {
+            ty::FnDef(_, args) => args.no_bound_vars().is_some(),
+            ty::Closure(..) => true,
             _ => unreachable!(),
         };
         if !closed(input) {
@@ -114,7 +147,6 @@ pub(super) fn export<'tcx>(
         let normal = tcx
             .try_normalize_erasing_regions(env, ty::Unnormalized::new_wip(input))
             .map_err(|error| format!("cast input normalization failed: {error:?}"))?;
-        let typing_env = "fully_monomorphized";
         let result = match *normal.kind() {
             ty::FnDef(def, args) => {
                 let args = match args.no_bound_vars() {
@@ -131,13 +163,11 @@ pub(super) fn export<'tcx>(
                 let resolution = match ty::Instance::resolve_for_fn_ptr(tcx, env, def, args) {
                     Some(resolved) => {
                         state.resolutions.insert(input, resolved);
-                        OptionalInstance::Instance { instance_id: instance(context, resolved, source_cast) }
+                        Some(instance(context, resolved, source_cast))
                     },
-                    None => OptionalInstance::None,
+                    None => None,
                 };
-                Query::ResolveFnPtr {
-                    query_kind: kind,
-                    typing_env,
+                Fact::ResolveFnPtr {
                     input_type: type_json(context, tcx, input)?,
                     args_no_bound_vars: no_bound,
                     resolution,
@@ -148,9 +178,7 @@ pub(super) fn export<'tcx>(
                 let resolved = ty::Instance::resolve_closure(tcx, def, args, ty::ClosureKind::FnOnce);
                 state.resolutions.insert(input, resolved);
                 let instance_id = instance(context, resolved, source_cast);
-                Query::ResolveClosureFnOnce {
-                    query_kind: kind,
-                    typing_env,
+                Fact::ResolveClosureFnOnce {
                     input_type: type_json(context, tcx, input)?,
                     args_no_bound_vars: no_bound,
                     instance_id,
@@ -175,17 +203,13 @@ pub(super) fn export<'tcx>(
         let source_tail = type_json(context, tcx, a)?;
         let target_tail = type_json(context, tcx, b)?;
         if matches!(a.kind(), ty::Dynamic(..)) && matches!(b.kind(), ty::Dynamic(..)) {
-            records.push(Query::SupertraitSlot {
-                query_kind: QueryKind::SupertraitSlot,
-                typing_env: "fully_monomorphized",
+            records.push(Fact::SupertraitSlot {
                 input_source: type_json(context, tcx, a)?,
                 input_target: type_json(context, tcx, b)?,
                 value: tcx.supertrait_vtable_slot((a, b)),
             });
         }
-        records.push(Query::LockstepTails {
-            query_kind: QueryKind::LockstepTails,
-            typing_env: "fully_monomorphized",
+        records.push(Fact::LockstepTails {
             input_source: type_json(context, tcx, source)?,
             input_target: type_json(context, tcx, target)?,
             source_tail,
@@ -203,17 +227,14 @@ pub(super) fn export<'tcx>(
                 "Box constructor requires owned_box lang item",
             );
         };
-        records.push(Query::BoxType {
-            query_kind: QueryKind::BoxType,
-            typing_env: "fully_monomorphized",
+        records.push(Fact::BoxType {
             input_type: type_json(context, tcx, input)?,
             ty,
         });
     }
     state.rows.extend(records);
-    let records = state.rows.clone();
     context.cast_state = state;
-    Ok(records)
+    Ok(())
 }
 
 #[cfg(test)]

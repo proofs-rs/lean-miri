@@ -26,7 +26,7 @@ fn closed(input: ty::Ty<'_>) -> bool {
 pub(super) fn discover<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-) -> Result<HashSet<(ty::Ty<'tcx>, ty::Ty<'tcx>)>, String> {
+) -> Result<(), String> {
     let env = ty::TypingEnv::fully_monomorphized();
     let mut pairs = std::mem::take(&mut context.covariance_pairs);
     let pair_start = pairs.len();
@@ -91,9 +91,8 @@ pub(super) fn discover<'tcx>(
         query_generated_type_json(context, tcx, source)?;
         query_generated_type_json(context, tcx, target)?;
     }
-    let result = pairs.iter().copied().collect();
     context.covariance_pairs = pairs;
-    Ok(result)
+    Ok(())
 }
 
 // Evaluation is a read-only projection of the completed type pool. No relation

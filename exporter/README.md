@@ -72,8 +72,17 @@ Each compiler key `K` owns its reserved index and a single concrete semantic
 value `D`, such as `pool_layout::Layout`, `pool_type::Type` or `pool_body::Body`.
 Nested fields are Rust records, enums, optional values and typed references;
 collection does not store JSON trees in these pools. Serialization converts the
-completed values to JSON when assembling the output document. Query-specific
-catalogs still use their own JSON output adapters.
+completed values to JSON when assembling the output document.
+
+Discovery retains compiler query results until the reachable graph closes.
+Append-only request domains have consumer cursors; pair consumers visit new sites
+against all targets and old sites against new targets, including negative query
+results. Instance eligibility changes notify dependent consumers. Signature,
+predicate, allocation-byte, and identity collectors retain their completed facts.
+After convergence, read-only finalization builds query rows, orders vtable queries,
+resolves their final allocation references, and assigns predicate comparison ranks.
+Pool serialization stays in discovery when it can reveal another compiler key;
+output projection does not create keys or rerun discovery.
 
 References are numeric indices interpreted by the field's schema. Layouts retain
 exact compiler `TyAndLayout` keys, including field and variant layouts. Allocation
