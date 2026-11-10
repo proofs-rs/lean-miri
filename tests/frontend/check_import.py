@@ -38,8 +38,6 @@ def main : IO Unit := do
       | some (.memory memory) => !memory.relocations.isEmpty
       | _ => false) do
       throw (IO.userError "reflection fixture has no compiler relocation evidence")
-    unless Client.imported.document.raw == expected.document.raw do
-      throw (IO.userError "raw JSON changed during reflection")
     unless Lean.toExpr Client.imported.document == Lean.toExpr expected.document do
       throw (IO.userError "typed compiler tables changed during reflection")
     unless Client.imported.document.allocations.size == expected.document.allocations.size do

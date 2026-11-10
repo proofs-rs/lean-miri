@@ -43,7 +43,13 @@ def main (args : List String) : IO Unit := do
   check (!(CompilerInstanceAbi.abiOfInstance missingIndex firstEntry.callee firstEntry.extra).isOk)
     "an incomplete ABI index silently fell back to scanning entries"
   let rows ← must ((raw.getObjVal? "compiler_instance_abis").bind Json.getArr?)
-  let first := rows[0]!
+  let mut selected := none
+  for row in rows do
+    let id ← must ((row.getObjVal? "instance_id").bind Json.getNat?)
+    if let some node :=  prepared.program.input.instances[id]? then
+      if node.virtualIdentity.isNone && selected.isNone then
+        selected := some row
+  let some first := selected | throw (IO.userError "fixture lacks a nonvirtual ABI query")
   let duplicate ← must (set raw "compiler_instance_abis" (.arr (rows.push first)))
   let duplicated ← must (prepare duplicate)
   check (duplicated.entries.size == prepared.entries.size) "identical query evidence was duplicated"

@@ -30,7 +30,7 @@ private def hooks : DynamicLayoutHooks AllocId Trace Unit where
     match ty with
     | 1 => pure .slice | 2 => pure .str
     | 3 | 7 | 8 => pure (.adt false) | 4 => pure (.tuple false)
-    | 5 => pure .foreign | 6 => pure (.dynamic 42)
+    | 5 => pure .foreign | 6 => pure (.dynamic #[42])
     | _ => throw (.unsupported "missing dynamic type kind")
   field := fun _ parent index => do
     let _ ← log s!"field:{parent.ty}:{index}" ()
@@ -43,7 +43,7 @@ private def hooks : DynamicLayoutHooks AllocId Trace Unit where
     | _ => throw (.unsupported "missing field")
   packedAlign := fun _ ty => log "packedAlign" (if ty == 7 then some .ONE else none)
   vtableSizeAndAlign := fun _ _ expected => do
-    let _ ← log (if expected == some 42 then "vtable:42" else "vtable:unknown") ()
+    let _ ← log (if expected == some #[42] then "vtable:42" else "vtable:unknown") ()
     pure (Size.ofBytes 16, ⟨3⟩)
 private def run (action : RvalueM Trace A) := runRvalue action []
 private def compute (l : TyAndLayout MIR.TyId) (n : UInt64) :=
@@ -91,9 +91,11 @@ private def vtableHooks : VTableHooks AllocId Trace Unit Nat Nat where
   isDynamic := fun _ _ => pure true
   memoryOffset := fun _ place _ _ md => pure { place with metadata := md }
   resolvePointer := fun _ ptr => log "resolve" (.ok (allocId, ptr.offset))
-  globalVTable := fun _ _ => log "globalVTable" (some (0, 1))
+  globalVTable := fun _ _ => log "globalVTable" (some (0, #[1]))
   globalFunction := fun _ _ => log "globalFunction" (some 7)
-  predicates := fun _ which => log s!"predicates:{which}" (predicates which)
+  predicates := fun _ which =>
+    let key := which[0]?.getD 0
+    log s!"predicates:{key}" (predicates key)
   normalizePredicate := fun _ pred => log s!"normalize:{pred.id}" (if pred.id == 11 then 10 else pred.id)
   layoutOf := fun _ _ => log "layoutOf" sizedLayout
   eraseAndAnonymize := fun _ ty dyn => log "erase" (ty, dyn)
@@ -107,12 +109,12 @@ private def vtableHooks : VTableHooks AllocId Trace Unit Nat Nat where
 private def validateABI (_ : Unit) (_ : Nat) (expected : Nat) : RvalueM Trace Unit := do
   let _ ← log "abiCheck" ()
   if expected != 1 then throw (.undefinedBehavior "function ABI mismatch")
-example : (run (VTable.getSizeAndAlign (A := Nat) vtableHooks () pointer (some 2))).2 =
+example : (run (VTable.getSizeAndAlign (A := Nat) vtableHooks () pointer (some #[2]))).2 =
     .ok (Size.ofBytes 4, ⟨2⟩) := by decide
-example : (run (VTable.getSizeAndAlign (A := Nat) vtableHooks () pointer (some 2))).1 =
+example : (run (VTable.getSizeAndAlign (A := Nat) vtableHooks () pointer (some #[2]))).1 =
     ["resolve", "globalVTable", "predicates:1", "predicates:2", "normalize:20", "normalize:20",
      "normalize:10", "normalize:11", "layoutOf"] := by decide
-example : (run (VTable.getSizeAndAlign (A := Nat) vtableHooks () pointer (some 3))).2 =
+example : (run (VTable.getSizeAndAlign (A := Nat) vtableHooks () pointer (some #[3]))).2 =
     .error (.undefinedBehavior "InvalidVTableTrait") := by decide
 example : (run (VTable.getPtrVTableType (A := Nat) vtableHooks () { pointer with offset := Size.ofBytes 1 } none)).1 =
     ["resolve"] := by decide
@@ -122,16 +124,16 @@ example : (run (VTable.getPtrVTableType (A := Nat) { vtableHooks with
 example : (run (VTable.getPtrVTableType (A := Nat) { vtableHooks with
     globalVTable := fun _ _ => pure none } () pointer none)).2 =
     .error (.undefinedBehavior "InvalidVTablePointer") := by decide
-example : (run (VTable.getPointer (A := Nat) vtableHooks () 0 1)).1 =
+example : (run (VTable.getPointer (A := Nat) vtableHooks () 0 #[1])).1 =
     ["erase", "monoType", "monoDyn", "salt", "reserve", "globalRoot"] := by decide
 example : (run (VTable.getCallableFunction (A := Nat) vtableHooks validateABI () pointer 0)).2 =
     .error (.undefinedBehavior "function ABI mismatch") := by decide
 example : (run (VTable.getCallableFunction (A := Nat) vtableHooks validateABI () pointer 1)).1 =
     ["resolve", "globalFunction", "abiCheck"] := by decide
-example : (run (VTable.getMethod (A := Nat) vtableHooks validateABI () pointer 2 (some 1) 2 0 7 1)).1 =
+example : (run (VTable.getMethod (A := Nat) vtableHooks validateABI () pointer #[2] (some 1) 2 0 7 1)).1 =
     ["resolve", "globalVTable", "predicates:1", "predicates:2", "normalize:20", "normalize:20",
      "normalize:10", "normalize:11", "entries", "instanceCheck", "abiCheck"] := by decide
-example : (run (VTable.getMethod (A := Nat) vtableHooks validateABI () pointer 2 (some 1) 1 0 7 1)).2 =
+example : (run (VTable.getMethod (A := Nat) vtableHooks validateABI () pointer #[2] (some 1) 1 0 7 1)).2 =
     .error (.undefinedBehavior "dyn call trying to call something that is not a method") := by decide
 
 example : (run (DynamicLayout.sizeAndAlignFromMeta { hooks with
@@ -149,14 +151,14 @@ example : (run (VTable.getPtrFn (A := Nat) { vtableHooks with globalFunction := 
 example : (run (VTable.getPointer (A := Nat) { vtableHooks with
     ensureMonomorphicDyn := fun _ _ => do
       let _ ← log "monoDynFailed" ()
-      throw (.unsupported "TooGeneric") } () 0 1)).1 = ["erase", "monoType", "monoDynFailed"] := by decide
+      throw (.unsupported "TooGeneric") } () 0 #[1])).1 = ["erase", "monoType", "monoDynFailed"] := by decide
 private def dynPlace : OpTy AllocId :=
   ⟨.indirect ⟨pointer, .metadata (.fromPointer ⟨.little, .w64⟩ ⟨Size.ZERO, allocId⟩), none⟩, dynLayout⟩
-example : (match (run (VTable.unpackDynTrait (A := Nat) vtableHooks () dynPlace 2)).2 with
+example : (match (run (VTable.unpackDynTrait (A := Nat) vtableHooks () dynPlace #[2])).2 with
     | .ok ⟨.indirect place, l⟩ => place.metadata == .none && place.ptr == pointer && l == sizedLayout
     | _ => false) = true := by decide
 example : (match (run (VTable.unpackDynTrait (A := Nat) { vtableHooks with isDynamic := fun _ _ => pure false }
-    () dynPlace 2)).2 with
+    () dynPlace #[2])).2 with
     | .error (.invalidProgram "unpack_dyn_trait requires dynamic type") => true
     | _ => false) = true := by decide
 
@@ -194,12 +196,12 @@ def main : IO Unit := do
 
 -- Dynamic trait sizing actually routes through symbolic vtable validation.
 example : (run (DynamicLayout.sizeAndAlignFromMeta { hooks with
-    classify := fun _ _ => pure (.dynamic 2)
+    classify := fun _ _ => pure (.dynamic #[2])
     vtableSizeAndAlign := VTable.getSizeAndAlign (A := Nat) vtableHooks }
     () 8 (.metadata (.fromPointer ⟨.little, .w64⟩ ⟨Size.ZERO, allocId⟩)) dynLayout)).2 =
     .ok (some (Size.ofBytes 4, ⟨2⟩)) := by decide
 example : (run (DynamicLayout.sizeAndAlignFromMeta { hooks with
-    classify := fun _ _ => pure (.dynamic 2)
+    classify := fun _ _ => pure (.dynamic #[2])
     vtableSizeAndAlign := VTable.getSizeAndAlign (A := Nat) { vtableHooks with
       resolvePointer := fun _ _ => pure (.error .danglingInteger) } }
     () 8 (.metadata (.fromPointer ⟨.little, .w64⟩ ⟨Size.ZERO, allocId⟩)) dynLayout)).2 =
@@ -214,6 +216,6 @@ example : (DynamicLayout.memoryResolver { memoryHooks with
 example : ([0, 1, 2, 3, 4, 6].all fun index =>
     match (run (VTable.getMethod (A := Nat) { vtableHooks with
       entries := fun _ _ _ => pure #[.dropInPlace, .size, .align, .vacant, .traitVPtr 1, .method 7] }
-      validateABI () pointer 2 (some 1) index 0 7 1)).2 with
+      validateABI () pointer #[2] (some 1) index 0 7 1)).2 with
     | .error (.undefinedBehavior "dyn call trying to call something that is not a method") => true
     | _ => false) = true := by decide
