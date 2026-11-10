@@ -1,5 +1,6 @@
 #![feature(rustc_private)]
 
+mod incremental;
 mod cast_queries;
 mod allocator_world;
 mod covariance_queries;
@@ -238,6 +239,24 @@ struct ExportCallbacks {
 /// payloads refer to them by `type_id`.
 #[derive(Default)]
 struct ExportContext<'tcx> {
+    reachable_instance_cursor: usize,
+    backtrace_event_cursor: usize,
+    backtrace_frame_cursor: usize,
+    backtrace_demanded: bool,
+    runtime_type_cursor: usize,
+    runtime_type_deferred: Vec<ty::Ty<'tcx>>,
+    catch_unwind_frontier: incremental::PairFrontier,
+    /// Fresh identities and membership changes wake consumers whose eligibility
+    /// depends on metadata-only or runtime-only status. Unchanged registration
+    /// emits no event, so completed ABI and allocator requests stay completed.
+    instance_events: Vec<ty::Instance<'tcx>>,
+    covariance_pair_cursor: usize,
+    covariance_vtable_cursor: usize,
+    covariance_pairs: OrderedSet<(ty::Ty<'tcx>, ty::Ty<'tcx>)>,
+    cast_state: incremental::Casts<'tcx>,
+    abi_state: incremental::Abis<'tcx>,
+    vtable_state: incremental::Vtables,
+    virtual_state: incremental::Virtuals<'tcx>,
     vtable_diagnostics: vtable_diagnostics::Trace<'tcx>,
     bodies: Pool<BodyKey<'tcx>, pool_body::Body>,
     definitions: Pool<rustc_hir::def_id::DefId, pool_values::Definition>,
@@ -248,7 +267,7 @@ struct ExportContext<'tcx> {
     type_ids: Pool<rustc_middle::ty::Ty<'tcx>, pool_type::Type>,
     /// Types demanded by serialized source MIR/signatures/metadata. Compiler
     /// query constructors can create type nodes without adding them here.
-    runtime_type_query_demands: HashSet<rustc_middle::ty::Ty<'tcx>>,
+    runtime_type_query_demands: OrderedSet<rustc_middle::ty::Ty<'tcx>>,
     runtime_type_query_suppression: usize,
     type_nodes_in_progress: HashSet<rustc_middle::ty::Ty<'tcx>>,
     allocation_ids: Pool<AllocId, allocation_values::Allocation>,
@@ -298,27 +317,27 @@ struct ExportContext<'tcx> {
     /// Concrete candidates produced by function allocations referenced in
     /// compiler constants or by resolved function-pointer casts present in
     /// actual MIR. This is not a flow-sensitive points-to set.
-    fn_pointer_targets: HashSet<ty::Instance<'tcx>>,
+    fn_pointer_targets: OrderedSet<ty::Instance<'tcx>>,
     /// Instances with source MIR bodies that this exporter emitted. Miri's
     /// backtrace shims turn active frame instances into function pointers even
     /// when MIR contains no corresponding reification cast.
-    runtime_mir_frame_instances: HashSet<ty::Instance<'tcx>>,
+    runtime_mir_frame_instances: OrderedSet<ty::Instance<'tcx>>,
     /// Types used as the source of actual MIR ReifyFnPointer or
     /// ClosureFnPointer casts. `cast_queries` resolves all demanded function
     /// types, but only these source casts add their result as a candidate.
-    fn_pointer_cast_inputs: HashSet<ty::Ty<'tcx>>,
+    fn_pointer_cast_inputs: OrderedSet<ty::Ty<'tcx>>,
     fn_pointer_call_transfers: Vec<CallTransferRequest<'tcx>>,
     runtime_callback_transfers: Vec<RuntimeCallbackTransferRequest<'tcx>>,
     runtime_callback_transfer_keys: HashSet<(String, ty::Ty<'tcx>, Vec<ty::Ty<'tcx>>, ty::Ty<'tcx>)>,
-    processed_runtime_callback_transfers: HashSet<(usize, ty::Instance<'tcx>)>,
+    processed_runtime_callback_transfers: incremental::PairFrontier,
     /// Exact source argument types for intrinsic catch_unwind calls whose
     /// helper-internal callbacks have no MIR Call terminator.
-    runtime_catch_unwind_sites: HashSet<(ty::Ty<'tcx>, ty::Ty<'tcx>, ty::Ty<'tcx>)>,
+    runtime_catch_unwind_sites: OrderedSet<(ty::Ty<'tcx>, ty::Ty<'tcx>, ty::Ty<'tcx>)>,
     /// Payload argument types reaching Miri's panic-start shim and later
     /// forwarded to the catch_unwind callback.
-    runtime_unwind_payload_types: HashSet<ty::Ty<'tcx>>,
+    runtime_unwind_payload_types: OrderedSet<ty::Ty<'tcx>>,
     virtual_call_transfers: Vec<(ty::Instance<'tcx>, CallTransferRequest<'tcx>)>,
-    processed_fn_pointer_transfers: HashSet<(usize, ty::Instance<'tcx>)>,
+    processed_fn_pointer_transfers: incremental::PairFrontier,
     processed_virtual_transfers: HashSet<(usize, ty::Instance<'tcx>)>,
 }
 
@@ -370,6 +389,7 @@ impl<'tcx> ExportContext<'tcx> {
         set: IdentityMembershipSet,
         instance: ty::Instance<'tcx>,
     ) {
+        self.instance_events.push(instance);
         let key = (set, instance);
         if !self.identity_membership_delta.remove(&key) {
             self.identity_membership_delta.insert(key);
@@ -415,13 +435,14 @@ impl<'tcx> ExportContext<'tcx> {
             }
             return *id;
         }
-        let (id, _) = self.instance_ids.reserve(instance);
+        let (id, _) = self.reserve_instance_identity(instance);
         self.pending_instances.push(instance);
         id as u64
     }
 
     fn reserve_instance_identity(&mut self, instance: ty::Instance<'tcx>) -> (u64, bool) {
         let (id, fresh) = self.instance_ids.reserve(instance);
+        if fresh { self.instance_events.push(instance); }
         (id as u64, fresh)
     }
 
@@ -2187,10 +2208,9 @@ fn export_reachable_instances<'tcx>(
     context: &mut ExportContext<'tcx>,
 ) -> Result<Vec<pool_instance::Instance>, String> {
     let mut records = Vec::new();
-    let mut cursor = 0;
-    while cursor < context.pending_instances.len() {
-        let instance = context.pending_instances[cursor];
-        cursor += 1;
+    while context.reachable_instance_cursor < context.pending_instances.len() {
+        let instance = context.pending_instances[context.reachable_instance_cursor];
+        context.reachable_instance_cursor += 1;
         if !context.emitted_instances.insert(instance) {
             continue;
         }
@@ -4574,50 +4594,35 @@ fn register_backtrace_frame_pointer_demands<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
 ) {
-    let frame_api_demanded = context
-        .instance_ids
-        .keys()
-        .chain(context.fn_pointer_targets.iter())
-        .any(|instance| {
-            matches!(instance.def, ty::InstanceKind::Item(_))
-                && tcx.is_foreign_item(instance.def_id())
-                && matches!(
-                    tcx.symbol_name(*instance).name,
-                    "miri_get_backtrace" | "miri_resolve_frame"
-                )
-        });
-    if !frame_api_demanded {
-        return;
+    if !context.backtrace_demanded {
+        context.backtrace_demanded = context.instance_events[context.backtrace_event_cursor..]
+            .iter().any(|instance| {
+                matches!(instance.def, ty::InstanceKind::Item(_))
+                    && tcx.is_foreign_item(instance.def_id())
+                    && matches!(tcx.symbol_name(*instance).name,
+                        "miri_get_backtrace" | "miri_resolve_frame")
+            });
     }
-
-    // Only use exact Instance identities for bodies already admitted to the
-    // emitted MIR closure. This is a static may-frame set, not a claim about
-    // which frames a particular execution reaches.
-    context
-        .fn_pointer_targets
-        .extend(context.runtime_mir_frame_instances.iter().copied());
+    context.backtrace_event_cursor = context.instance_events.len();
+    if context.backtrace_demanded {
+        // Only emitted MIR frames are eligible; append each new frame once.
+        context.fn_pointer_targets.extend(
+            context.runtime_mir_frame_instances.suffix(context.backtrace_frame_cursor).iter().copied());
+        context.backtrace_frame_cursor = context.runtime_mir_frame_instances.len();
+    }
 }
 
 fn register_fn_pointer_call_transfers<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
 ) -> Result<(), String> {
-    let mut targets = context
-        .fn_pointer_targets
-        .iter()
-        .copied()
-        .collect::<Vec<_>>();
-    targets.sort_by_key(|target| context.instance_ids[target]);
-    Ok::<_, String>(
-        for call_site in 0..context.fn_pointer_call_transfers.len() {
+    let targets = context.fn_pointer_targets.len();
+    let sites = context.fn_pointer_call_transfers.len();
+    let frontier = context.processed_fn_pointer_transfers;
+    for call_site in frontier.site_start(targets)..sites {
             let request = context.fn_pointer_call_transfers[call_site].clone();
-            for target in targets.iter().copied() {
-                if !context
-                    .processed_fn_pointer_transfers
-                    .insert((call_site, target))
-                {
-                    continue;
-                }
+            for target_index in frontier.target_start(call_site)..targets {
+                let target = *context.fn_pointer_targets.get_index(target_index).unwrap();
                 if matches!(target.def, ty::InstanceKind::Item(_))
                     && tcx.is_foreign_item(target.def_id())
                     && fn_pointer_call_abi_matches_candidate(tcx, &request, target)?
@@ -4631,8 +4636,9 @@ fn register_fn_pointer_call_transfers<'tcx>(
                 }
                 register_call_transfer_for_target(context, tcx, &request, target, None, true)?;
             }
-        },
-    )
+        }
+    context.processed_fn_pointer_transfers.complete(sites, targets);
+    Ok(())
 }
 
 /// A function-pointer candidate can contribute a runtime-generated callback
@@ -4831,14 +4837,10 @@ fn register_runtime_callback_transfers<'tcx>(
     tcx: TyCtxt<'tcx>,
 ) -> Result<(), String> {
     generated_call_queries::register_catch_unwind_transfers(context, tcx)?;
-    let mut targets = context
-        .fn_pointer_targets
-        .iter()
-        .copied()
-        .collect::<Vec<_>>();
-    targets.sort_by_key(|target| context.instance_ids[target]);
-    Ok::<_, String>(
-        for call_site in 0..context.runtime_callback_transfers.len() {
+    let targets = context.fn_pointer_targets.len();
+    let sites = context.runtime_callback_transfers.len();
+    let frontier = context.processed_runtime_callback_transfers;
+    for call_site in frontier.site_start(targets)..sites {
             let callback = context.runtime_callback_transfers[call_site].clone();
             // Keep the registration operand type attached to the request as
             // provenance. It intentionally is not an exact type-equality filter:
@@ -4846,13 +4848,8 @@ fn register_runtime_callback_transfers<'tcx>(
             // can differ in Ty while still reaching this generated call path.
             let _registration_operand_type = callback.callback_operand_type;
             let _registration_symbol = callback.source_symbol;
-            for target in targets.iter().copied() {
-                if !context
-                    .processed_runtime_callback_transfers
-                    .insert((call_site, target))
-                {
-                    continue;
-                }
+            for target_index in frontier.target_start(call_site)..targets {
+                let target = *context.fn_pointer_targets.get_index(target_index).unwrap();
                 // Generic VTable shim projections are not concrete callback
                 // bodies; querying their FnAbi can ICE on an escaping projection.
                 // They remain in the exact candidate catalog and source dispatch
@@ -4870,8 +4867,9 @@ fn register_runtime_callback_transfers<'tcx>(
                     false,
                 )?;
             }
-        },
-    )
+        }
+    context.processed_runtime_callback_transfers.complete(sites, targets);
+    Ok(())
 }
 
 fn register_virtual_call_transfers<'tcx>(
@@ -4880,16 +4878,17 @@ fn register_virtual_call_transfers<'tcx>(
     virtual_instance: ty::Instance<'tcx>,
     concrete_self: ty::Ty<'tcx>,
     concrete_target: ty::Instance<'tcx>,
+    call_site: usize,
 ) -> Result<(), String> {
     let receiver = ty::Ty::new_mut_ptr(tcx, concrete_self);
-    Ok::<_, String>(for call_site in 0..context.virtual_call_transfers.len() {
+
         let (recorded_instance, request) = context.virtual_call_transfers[call_site].clone();
         if recorded_instance != virtual_instance
             || !context
                 .processed_virtual_transfers
                 .insert((call_site, concrete_target))
         {
-            continue;
+            return Ok(());
         }
         register_call_transfer_for_target(
             context,
@@ -4899,7 +4898,7 @@ fn register_virtual_call_transfers<'tcx>(
             Some(receiver),
             false,
         )?;
-    })
+    Ok(())
 }
 
 fn closed_covariance_ty(input: ty::Ty<'_>) -> bool {
@@ -5476,12 +5475,17 @@ fn compiler_runtime_type_queries_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     processed: &mut HashSet<ty::Ty<'tcx>>,
 ) -> Result<Vec<query_values::RuntimeTypeQuery>, String> {
-    let mut types = context
-        .runtime_type_query_demands
-        .iter()
-        .filter(|ty| !processed.contains(ty))
-        .filter_map(|ty| context.type_ids.get(ty).map(|id| (*id, *ty)))
-        .collect::<Vec<_>>();
+    let mut pending = std::mem::take(&mut context.runtime_type_deferred);
+    pending.extend_from_slice(context.runtime_type_query_demands.suffix(context.runtime_type_cursor));
+    context.runtime_type_cursor = context.runtime_type_query_demands.len();
+    let mut types = Vec::new();
+    for input in pending {
+        if let Some(id) = context.type_ids.get(&input) {
+            types.push((*id, input));
+        } else {
+            context.runtime_type_deferred.push(input);
+        }
+    }
     types.sort_by_key(|(id, _)| *id);
     let records=types.into_iter().map(|(id,input)| { {
         processed.insert(input);
@@ -5532,30 +5536,33 @@ fn compiler_runtime_virtual_queries_json<'tcx>(
 ) -> Result<Vec<query_values::RuntimeVirtualQuery<query_values::PendingVtableRef>>, String> {
     // call.rs::assert_virtual_instance_matches_concrete: preserve original
     // complete virtual args and use rustc from_assoc/erase_self_ty/rebase_onto.
-    let mut virtuals = context
-        .instance_ids
-        .iter()
-        .filter_map(|(instance, id)| match instance.def {
-            ty::InstanceKind::Virtual(def, _) => Some((*id, *instance, def)),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    virtuals.sort_by_key(|(id, _, _)| *id);
-    let mut concrete_pairs = context.vtable_query_requests.clone();
-    for alloc in (0..context.allocation_ids.len()).map(|id| context.allocation_ids.key(id).unwrap()) {
-        if let Some(GlobalAlloc::VTable(ty, predicates)) = tcx.try_get_global_alloc(*alloc) {
-            concrete_pairs.insert((ty, predicates));
+    let mut state = std::mem::take(&mut context.virtual_state);
+    let instance_end = context.instance_ids.len();
+    for index in state.instances..instance_end {
+        let instance = *context.instance_ids.key(index).unwrap();
+        if let ty::InstanceKind::Virtual(def, _) = instance.def {
+            state.virtuals.push((index as u64, instance, def));
         }
     }
-    let concrete = concrete_pairs.into_iter().collect::<Vec<_>>();
-    for (ty, predicates) in concrete.iter().copied() {
-        context.type_id(ty);
-        for predicate in predicates.iter() {
-            context.predicate_id(predicate);
+    state.instances = instance_end;
+    let allocation_end = context.allocation_ids.len();
+    for index in state.allocations..allocation_end {
+        let alloc = *context.allocation_ids.key(index).unwrap();
+        if let Some(GlobalAlloc::VTable(input, predicates)) = tcx.try_get_global_alloc(alloc) {
+            context.vtable_query_requests.insert((input, predicates));
         }
     }
-    let mut virtual_queries = Vec::new();
-    for (original_instance_id, original, def) in virtuals {
+    state.allocations = allocation_end;
+    let targets = context.vtable_query_requests.len();
+    // Ensure identities only for the new concrete prefix.
+    for index in state.frontier.targets..targets {
+        let (input, predicates) = *context.vtable_query_requests.get_index(index).unwrap();
+        context.type_id(input);
+        for predicate in predicates.iter() { context.predicate_id(predicate); }
+    }
+    let virtual_count = state.virtuals.len();
+    for site in state.frontier.site_start(targets)..virtual_count {
+        let (original_instance_id, original, def) = state.virtuals[site];
         // call.rs::eval_fn_call obtains the runtime receiver's dynamic tail,
         // validates the vtable predicates against that exact receiver trait,
         // and only then indexes that trait's vtable. `Self` in a Virtual
@@ -5572,7 +5579,8 @@ fn compiler_runtime_virtual_queries_json<'tcx>(
             ty::InstanceKind::Virtual(_, slot) => slot,
             _ => unreachable!(),
         };
-        for (concrete, predicates) in concrete.iter().copied() {
+        for target in state.frontier.target_start(site)..targets {
+            let (concrete, predicates) = *context.vtable_query_requests.get_index(target).unwrap();
             let predicate_match = receiver_predicates
                 .map(|expected| vtable_predicates_match(tcx, expected, predicates))
                 .transpose()?;
@@ -5662,9 +5670,7 @@ fn compiler_runtime_virtual_queries_json<'tcx>(
                             )?
                         } else {
                             let id = context.register_vtable_target(instance);
-                            register_virtual_call_transfers(
-                                context, tcx, original, concrete, instance,
-                            )?;
+                            state.resolved.insert((original, concrete, instance));
                             id
                         }
                     }
@@ -5685,14 +5691,26 @@ fn compiler_runtime_virtual_queries_json<'tcx>(
                     "virtual target query requires complete monomorphic arguments",
                 )?
             };
-            virtual_queries.push(query_values::RuntimeVirtualQuery { typing_env:"fully_monomorphized",
+            state.rows.push(query_values::RuntimeVirtualQuery { typing_env:"fully_monomorphized",
                 original_instance_id, method_definition:def_json(context,def), parent_trait:def_json(context,parent),
                 concrete_type:input_type, rebased_args:generic_args_json(context,tcx,rebound)?, resolved,
                 vtable_query:query_values::PendingVtableRef { input_type:type_json(context,tcx,concrete)?,
                     input_predicates, key:(input_type_id,input_predicate_ids) } });
         }
     }
-    Ok(virtual_queries)
+    state.frontier.complete(virtual_count, targets);
+    let sites = context.virtual_call_transfers.len();
+    let targets = state.resolved.len();
+    for site in state.transfers.site_start(targets)..sites {
+        for target in state.transfers.target_start(site)..targets {
+            let (original, concrete, instance) = *state.resolved.get_index(target).unwrap();
+            register_virtual_call_transfers(context, tcx, original, concrete, instance, site)?;
+        }
+    }
+    state.transfers.complete(sites, targets);
+    let rows = state.rows.clone();
+    context.virtual_state = state;
+    Ok(rows)
 }
 
 enum VtablePredicateMatch {
@@ -5876,14 +5894,19 @@ fn compiler_frame_metadata_json(tcx: TyCtxt<'_>) -> FrameMetadata {
 
 // FnAbiOf::fn_abi_of_instance. Complete instance+extra-argument vector+env is
 // the query key; empty arguments are also recorded for runtime drop/vtable calls.
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 struct InstanceAbi { typing_env:&'static str, instance_id:u64, extra_argument_types:Vec<u64>, abi_query:u64 }
 fn compiler_instance_abis_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
 ) -> Result<Vec<InstanceAbi>, String> {
-    let mut requests = context.instance_abi_requests.clone();
-    for instance in (0..context.instance_ids.len()).map(|id| context.instance_ids.key(id).unwrap()) {
+    let mut state = std::mem::take(&mut context.abi_state);
+    let mut requests = OrderedSet::default();
+    requests.extend(context.instance_abi_requests.suffix(state.explicit).iter().copied());
+    state.explicit = context.instance_abi_requests.len();
+    let event_end = context.instance_events.len();
+    for index in state.events..event_end {
+        let instance = &context.instance_events[index];
         if context.runtime_query_only_empty_drops.contains(instance)
             || context.metadata_only_instances.contains(instance)
         {
@@ -5925,6 +5948,8 @@ fn compiler_instance_abis_json<'tcx>(
             ));
         }
     }
+    state.events = event_end;
+    let requests = requests.into_iter().filter(|key| state.completed.insert(*key)).collect::<Vec<_>>();
     let records=requests.into_iter().map(|(instance,extra)|{ {
         let closed=!instance.args.has_non_region_param() && !instance.args.has_escaping_bound_vars()
             && !instance.args.has_infer() && !instance.args.has_placeholders()
@@ -5942,6 +5967,9 @@ fn compiler_instance_abis_json<'tcx>(
         let record=InstanceAbi { typing_env:"fully_monomorphized", instance_id:context.register_metadata_instance(instance), extra_argument_types:extra.iter().map(|ty| type_json(context,tcx,ty)).collect::<Result<Vec<_>, String>>()?, abi_query:abi };
         Ok::<_, String>(record)
     } }).collect::<Result<Vec<_>, String>>()?;
+    state.rows.extend(records);
+    let records = state.rows.clone();
+    context.abi_state = state;
     Ok::<_, String>(records)
 }
 
@@ -6155,16 +6183,15 @@ fn compiler_vtable_queries_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
 ) -> Result<(Vec<query_values::VtableQuery>, HashMap<(u64, Vec<u64>), u64>), String> {
-    let mut allocations = context
-        .allocation_ids
-        .iter()
-        .map(|(alloc, id)| (*id, *alloc))
-        .collect::<Vec<_>>();
-    allocations.sort_by_key(|(id, _)| *id);
-    let mut pairs = context.vtable_query_requests.clone();
-    for (_, alloc) in allocations {
+    let mut state = std::mem::take(&mut context.vtable_state);
+    let allocation_end = context.allocation_ids.len();
+    for index in state.allocations..allocation_end {
+        let alloc = *context.allocation_ids.key(index).unwrap();
+        if let Some(rows) = state.allocation_rows.remove(&alloc) {
+            for row in rows { state.rows[row].2.vtable_allocation_id = Some(index as u64); }
+        }
         if let Some(GlobalAlloc::VTable(input, predicates)) = tcx.try_get_global_alloc(alloc) {
-            pairs.insert((input, predicates));
+            context.vtable_query_requests.insert((input, predicates));
             let route = if context
                 .vtable_diagnostics
                 .probe_allocations
@@ -6182,34 +6209,28 @@ fn compiler_vtable_queries_json<'tcx>(
             );
         }
     }
-    let dynamic_upcasts = context
-        .dynamic_vtable_upcast_requests
-        .iter()
-        .copied()
-        .collect::<Vec<_>>();
-    let mut processed = HashSet::new();
-    let mut rows = Vec::new();
+    state.allocations = allocation_end;
     loop {
         // cast.rs::unsize_into_ptr validates the source vtable's concrete
         // type, then get_vtable_ptr(ty, destination_predicates) constructs a
         // destination vtable for that same type. Candidate source vtables are
         // the exact compiler requests and globals already reached by MIR;
         // recursively discovered TraitVPtr requests join on later rounds.
-        let source_candidates = pairs.iter().copied().collect::<Vec<_>>();
-        for (source_tail, target_tail) in dynamic_upcasts.iter().copied() {
+        let upcast_end = context.dynamic_vtable_upcast_requests.len();
+        let source_end = context.vtable_query_requests.len();
+        for site in state.upcasts.site_start(source_end)..upcast_end {
+            let (source_tail, target_tail) = *context.dynamic_vtable_upcast_requests.get_index(site).unwrap();
             let (ty::Dynamic(source_predicates, _), ty::Dynamic(target_predicates, _)) =
                 (source_tail.kind(), target_tail.kind())
-            else {
-                continue;
-            };
-            for (concrete, actual_predicates) in source_candidates.iter().copied() {
+            else { continue; };
+            for target in state.upcasts.target_start(site)..source_end {
+                let (concrete, actual_predicates) = *context.vtable_query_requests.get_index(target).unwrap();
                 if matches!(
                     vtable_predicates_match(tcx, source_predicates, actual_predicates)?,
                     VtablePredicateMatch::Match
                 ) {
                     let demand = (concrete, *target_predicates);
                     context.vtable_query_requests.insert(demand);
-                    pairs.insert(demand);
                     context.vtable_diagnostics.upcast_demand(
                         demand,
                         (concrete, actual_predicates),
@@ -6219,14 +6240,12 @@ fn compiler_vtable_queries_json<'tcx>(
                 }
             }
         }
-        let pending = pairs.iter().filter(|pair| !processed.contains(*pair)).copied().collect::<Vec<_>>();
-        if pending.is_empty() {
-            break;
-        }
-        // Requests retain source discovery order, including query-only identities.
-        // Assigning IDs never depends on hash iteration or diagnostic formatting.
+        state.upcasts.complete(upcast_end, source_end);
+        let request_end = context.vtable_query_requests.len();
+        if state.requests == request_end { break; }
+        let pending = context.vtable_query_requests.suffix(state.requests).to_vec();
+        state.requests = request_end;
         for (input, predicates) in pending {
-            processed.insert((input, predicates));
             let input_json = type_json(context, tcx, input)?;
             let input_type_id = context.type_id(input);
             let mut input_predicates = Vec::new();
@@ -6244,7 +6263,6 @@ fn compiler_vtable_queries_json<'tcx>(
             if (output, erased) != (input, predicates) {
                 let canonical = (output, erased);
                 context.vtable_query_requests.insert(canonical);
-                pairs.insert(canonical);
                 context.vtable_diagnostics.record(
                     canonical,
                     "canonical_output",
@@ -6269,11 +6287,14 @@ fn compiler_vtable_queries_json<'tcx>(
             // entry's `allocation_ref` uses. Do not allocate a new exporter
             // graph ID here: a missing mapping means this row is not a
             // serialized target identity, and consumers must not guess one.
-            let vtable_allocation_id = predicates.principal().and_then(|principal| {
+            let vtable_allocation = predicates.principal().map(|principal| {
                 let principal = tcx.instantiate_bound_regions_with_erased(principal);
-                let allocation = tcx.vtable_allocation((input, Some(principal)));
-                context.allocation_ids.get(&allocation).copied()
+                tcx.vtable_allocation((input, Some(principal)))
             });
+            let vtable_allocation_id = vtable_allocation.and_then(|allocation| context.allocation_ids.get(&allocation).copied());
+            if let Some(allocation) = vtable_allocation.filter(|_| vtable_allocation_id.is_none()) {
+                state.allocation_rows.entry(allocation).or_default().push(state.rows.len());
+            }
             let ordering = (
                 input_type_id,
                 input_predicate_ids.clone(),
@@ -6284,10 +6305,11 @@ fn compiler_vtable_queries_json<'tcx>(
                 input_predicates, output_type:output_json, output_predicates,
                 output_type_monomorphic_enough:!output.has_param(), output_predicates_monomorphic_enough:!erased.has_param(),
                 vtable_allocation_id, vtable_metadata };
-            rows.push((ordering, (input_type_id, input_predicate_ids), row));
-            pairs.extend(context.vtable_query_requests.iter().copied());
+            state.rows.push((ordering, (input_type_id, input_predicate_ids), row));
         }
     }
+    let mut rows = state.rows.clone();
+    context.vtable_state = state;
     rows.sort_by(|left, right| left.0.cmp(&right.0));
     let mut query_ids = HashMap::new();
     let records = rows
@@ -6604,8 +6626,10 @@ mod instance_demand_tests {
         assert!(context.identity_membership_delta.contains(&(IdentityMembershipSet::SymbolOnly, instance)));
         assert_eq!(context.pending_instances, vec![instance]);
         context.identity_membership_delta.clear();
+        let completed_events = context.instance_events.len();
         assert_eq!(context.register_metadata_instance(instance), id);
         assert_eq!(context.register_instance_identity(instance), id);
+        assert_eq!(context.instance_events.len(), completed_events);
         assert!(context.identity_membership_delta.is_empty());
         assert!(!context.metadata_only_instances.contains(&instance));
         assert!(!context.symbol_only_instances.contains(&instance));

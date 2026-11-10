@@ -133,6 +133,9 @@ mod tests {
         let mut requests = super::OrderedSet::default();
         requests.extend([9, 2, 7, 2]);
         assert!(!requests.insert(9));
+        assert_eq!(requests.get_index(1), Some(&2));
+        assert_eq!(requests.suffix(2), &[7]);
+        assert!(requests.contains(&9));
         assert_eq!(requests.into_iter().collect::<Vec<_>>(), vec![9, 2, 7]);
     }
 
@@ -204,7 +207,7 @@ mod tests {
 /// reservation, insertion here assigns no serialized identity.
 #[derive(Clone)]
 pub(super) struct OrderedSet<K> {
-    seen: std::collections::HashSet<K>,
+    seen: std::collections::HashMap<K, usize>,
     order: Vec<K>,
 }
 impl<K> Default for OrderedSet<K> {
@@ -217,12 +220,16 @@ impl<K> Default for OrderedSet<K> {
 }
 impl<K: Clone + Eq + Hash> OrderedSet<K> {
     pub(super) fn insert(&mut self, key: K) -> bool {
-        if !self.seen.insert(key.clone()) {
+        if self.seen.contains_key(&key) {
             return false;
         }
+        self.seen.insert(key.clone(), self.order.len());
         self.order.push(key);
         true
     }
+    pub(super) fn contains(&self, key: &K) -> bool { self.seen.contains_key(key) }
+    pub(super) fn get_index(&self, index: usize) -> Option<&K> { self.order.get(index) }
+    pub(super) fn suffix(&self, cursor: usize) -> &[K] { &self.order[cursor..] }
     pub(super) fn iter(&self) -> std::slice::Iter<'_, K> {
         self.order.iter()
     }

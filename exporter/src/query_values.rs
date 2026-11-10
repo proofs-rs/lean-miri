@@ -1,7 +1,7 @@
 //! Typed compiler query catalogs and their local reference finalization.
 use serde::Serialize;
 use std::collections::HashMap;
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct PredicateQuery {
     pub predicate_id: usize,
     pub typing_env: &'static str,
@@ -10,7 +10,7 @@ pub(super) struct PredicateQuery {
     pub normalization: u64,
     pub stable_key: u64,
 }
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct RuntimeTypeQuery {
     pub input_type_id: u64,
     pub typing_env: &'static str,
@@ -19,12 +19,13 @@ pub(super) struct RuntimeTypeQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drop_glue: Option<u64>,
 }
+#[derive(Clone)]
 pub(super) struct PendingVtableRef {
     pub input_type: u64,
     pub input_predicates: Vec<u64>,
     pub key: (u64, Vec<u64>),
 }
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct VtableRef {
     pub input_type: u64,
     pub input_predicates: Vec<u64>,
@@ -42,7 +43,7 @@ impl PendingVtableRef {
         })
     }
 }
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct RuntimeVirtualQuery<R> {
     pub typing_env: &'static str,
     pub original_instance_id: u64,
@@ -70,7 +71,7 @@ impl RuntimeVirtualQuery<PendingVtableRef> {
         })
     }
 }
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct VtableMetadata {
     pub r#type: u64,
     pub size_bytes: Option<u64>,
@@ -79,7 +80,7 @@ pub(super) struct VtableMetadata {
     pub principal_predicate: Option<u64>,
     pub entries: Vec<super::allocation_values::VtableEntry>,
 }
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct VtableQuery {
     pub query_id: u64,
     pub input_type: u64,
