@@ -9,7 +9,7 @@ import hashlib,json,re,sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'tools'))
-from mir_json import load_mir_document
+from mir_json import load_mir_document, pool_entry
 ORIGINAL_SOURCES={'fence-acqrel': ['/workspace/lean-miri/docs/verification/sc-ordering-controls264/inputs/259-fence-acqrel-yield-control.rs'], 'fence-sc': ['/workspace/lean-miri/docs/verification/sc-ordering-controls264/inputs/259-fence-sc-yield.rs'], 'rmw-relaxed': ['/workspace/lean-miri/docs/verification/sc-ordering-controls264/inputs/259-rmw-relaxed-yield-control.rs'], 'rmw-sc': ['/workspace/lean-miri/docs/verification/sc-ordering-controls264/inputs/259-rmw-sc-yield.rs']}
 SOURCE_HASHES={'fence-acqrel': '2c6645e8da4e849ea7e13e3a1bcc5c1293a8965e7ab53605997a18d412048c26', 'fence-sc': 'e55a059e733243d97e9a4ef5aa7e3ff9a264dcfbdcd07b74c04fc79fffc76905', 'rmw-relaxed': '31042ff16963a0730d1d5d6f511bf240bc293d3a3e46880b8ab8ba7cea90975e', 'rmw-sc': '059cb871809b85b579e70e0ae372203681be184c82df093d2032dccd38a00be0'}
 def need(ok,msg):
@@ -33,38 +33,28 @@ def events(text):
         out.append({'request':{'kind':rk,'site':site,'support':int(support)},'input':{'kind':ik,'site':site,'value':val}})
     need(len(out)==final,f'event parse count {len(out)} != final cursor {final}')
     return out
-STEP=re.compile(r'sc264_core_step thread=\{ value := (\d+) \}; choice_cursor=(\d+); frame=some \(\{ kind := Miri.Interpreter.CallInstanceKind.Item (\d+), args := #\[\] \},\s*Miri.Interpreter.FrameLocation.mir \{ block := (\d+), statementIndex := (\d+)')
+STEP=re.compile(r'sc264_core_step thread=\{ value := (\d+) \}; choice_cursor=(\d+); frame=some \((\d+),\s*Miri.Interpreter.FrameLocation.mir \{ block := (\d+), statementIndex := (\d+)')
 def source_map(document):
-    # Decoder.parseBodyCore chooses def_id, falling back to source_def_id.
-    # LowerMIR.lowerCoreProgram collects roots/promoted then instance bodies;
-    # lowerBodies interns their source definitions before remaining instances.
+    # Schema-4 bodies and call resolutions carry typed pool references.
+    # Core frame traces carry the document's instance index.
     bodies=[]
-    def append(b,name,promoted=None):
-        bodies.append((b,name))
-        for child in (b.get('promoted_bodies',[]) or promoted or []):
-            if child.get('body') is not None:bodies.append((child['body'],name+'::promoted'))
-    for b in document['bodies']:append(b,b.get('def_path','root'))
-    for i in document['instances']:
-        if i.get('body') is not None:append(i['body'],i['def_path'],i.get('promoted_bodies'))
-    definitions=[]
-    def identity(b):return b.get('def_id',b.get('source_def_id'))
-    for b,_ in bodies:
-        d=identity(b)
-        if d is not None and d not in definitions:definitions.append(d)
-    for i in document['instances']:
-        d=i.get('def_id')
-        if d is not None and d not in definitions:definitions.append(d)
+    for row in [*document['body_roots'], *document['instances']]:
+        if row.get('body') is not None:
+            bodies.append((pool_entry(document, 'bodies', row['body']), row['def_path'],
+                           row.get('instance_id', row.get('entry_instance'))))
     sites={}
     workers={}
-    for b,name in bodies:
+    for body,name,instance_id in bodies:
         if name not in ('child_a','child_b','miri_start'):continue
-        dense=definitions.index(identity(b))
-        if name.startswith('child_'):workers[name]=dense
-        for block in b['basic_blocks']:
+        pool_entry(document, 'instances', instance_id)
+        if name.startswith('child_'):workers[name]=instance_id
+        for block in body['basic_blocks']:
             kind=block['terminator']['kind']
             if kind.get('variant')!='Call':continue
-            callee=kind.get('resolution',{}).get('instance_def_path')
-            sites[(dense,block['block'],len(block['statements']))]=(name,callee)
+            resolution=kind.get('resolution',{})
+            instance=resolution.get('instance_id')
+            callee=None if instance is None else pool_entry(document, 'instances', instance)['def_path']
+            sites[(instance_id,block['block'],len(block['statements']))]=(name,callee)
     need(set(workers)=={'child_a','child_b'},'missing exact workers')
     return sites,workers
 def check(row):
@@ -124,7 +114,7 @@ def check(row):
     need(len(target_context)==2,'target event/step correlation missing or duplicated')
     need({x['worker'] for x in target_context}=={'child_a','child_b'},'targets do not cover both workers')
     scheduling=[e for e in ev[:len(inputs)] if e['request']['site'] in ('scheduler','preemption')]
-    return {'case':row['case'],'log':str(log.relative_to(ROOT)),'log_sha256':sha(log),'prefix_sha256':sha(prefix),'snapshot_sha256':sha(raw),'miri_sidecar_sha256':sha(sidecar),'miri_seed':side['reference']['config']['rng_seed'],'miri_preemption_rate':side['reference']['config']['preemption_rate'],'original_rust_source_sha256':sha(source),'preserved_actual_prefix':True,'modified_input_indices':modifications,'dense_worker_definitions':workers,'worker_operation_projection':projected,'scheduling_projection_through_targets':scheduling,'targets':target_context}
+    return {'case':row['case'],'log':str(log.relative_to(ROOT)),'log_sha256':sha(log),'prefix_sha256':sha(prefix),'snapshot_sha256':sha(raw),'miri_sidecar_sha256':sha(sidecar),'miri_seed':side['reference']['config']['rng_seed'],'miri_preemption_rate':side['reference']['config']['preemption_rate'],'original_rust_source_sha256':sha(source),'preserved_actual_prefix':True,'modified_input_indices':modifications,'worker_instances':workers,'worker_operation_projection':projected,'scheduling_projection_through_targets':scheduling,'targets':target_context}
 def main():
     rows=json.loads(path(sys.argv[1]).read_text());checked=[check(r) for r in rows]
     by={r['case']:r for r in checked};pairs=[]
