@@ -246,7 +246,7 @@ def parseAllocationMemory (path : String)
     (sharedArray initPool (path ++ ".initialization_ranges"))
     (sharedArray relocationPool (path ++ ".relocations"))
 
-/-- Constructor-level evidence parsing, separate from the schema10 document format. -/
+/-- Constructor-level evidence parsing, separate from the schema11 document format. -/
 def parseAllocationMemoryInline (path : String) : Parser AllocationMemory :=
   parseAllocationMemoryWith path
     (array (parseInitRange (path ++ ".initialization_ranges")))
