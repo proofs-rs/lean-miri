@@ -424,6 +424,30 @@ private def runSelected (path : String) : IO Unit := do
       afterFreshReverse.machine.memory.sourceAllocIdNext == afterFresh.machine.memory.sourceAllocIdNext)
     "source identity lookups mutated the fresh allocation frontier"
 
+  let mut checkedByteWitness := false
+  for (row, index) in world.dedupCatalog.toList.zipIdx do
+    if row.keyKind == .bytes && !checkedByteWitness then
+      checkedByteWitness := true
+      let some originalHex := row.byteImageHex | throw (IO.userError "valid byte witness image absent")
+      for (hex, expectedError) in #[(none, "prepared byte-key catalog row lacks its exact image"),
+          (some "zz", "prepared byte-key catalog image differs from its key allocation"),
+          (some (originalHex ++ "00"), "prepared byte-key catalog image differs from its key allocation")] do
+        let changedWorld := {world with dedupCatalog := world.dedupCatalog.set! index {row with byteImageHex := hex}}
+        let changedProgram := {prepared.compiler.program with input :=
+          {prepared.compiler.program.input with compilerAllocIdWorld := some changedWorld}}
+        match CompilerGlobalBytes.prepare changedProgram prepared.compiler.runtime memory with
+        | .error message => check (message == expectedError) "byte witness mutation returned an unrelated error"
+        | .ok _ => throw (IO.userError "manually constructed invalid byte witness was accepted")
+      let changedRow := {row with keyAllocationId := prepared.compiler.program.input.allocations.size + 1}
+      let changedWorld := {world with dedupCatalog := world.dedupCatalog.set! index changedRow}
+      let changedProgram := {prepared.compiler.program with input :=
+        {prepared.compiler.program.input with compilerAllocIdWorld := some changedWorld}}
+      match CompilerGlobalBytes.prepare changedProgram prepared.compiler.runtime memory with
+      | .error message =>
+          check (message == "prepared byte-key catalog key allocation is absent") "wrong byte-key identity returned an unrelated error"
+      | .ok _ => throw (IO.userError "manually constructed missing byte-key identity was accepted")
+  check checkedByteWitness "selected fixture has no byte witness to validate"
+
   let (byteState, byteAttach) := MachineHooks.run
     (CompilerGlobalBytes.attach prepared.compiler.program prepared.compiler.runtime) initial
   match byteAttach with

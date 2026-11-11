@@ -10,8 +10,8 @@ from mir_json import MirJSONError, POOL_NAMES, decode_mir_document, load_mir_doc
 
 
 def document(**fields):
-    return {"schema": "lean-miri-rustc-mir", "schema_version": 6,
-            **{name: [] for name in POOL_NAMES}, "files": [], **fields}
+    return {"schema": "lean-miri-rustc-mir", "schema_version": 7,
+            **{name: [] for name in POOL_NAMES}, "files": [], "byte_images": [], **fields}
 
 
 class MirJSONTests(unittest.TestCase):
@@ -24,10 +24,22 @@ class MirJSONTests(unittest.TestCase):
 
     def test_pool_spaces_and_allocation_identity(self):
         encoded = document(types=[{"kind": "type"}], instances=[{"kind": "instance"}],
-                           allocations=[{"bytes": []}, {"bytes": []}])
+                           allocations=[{"allocation_id": 0, "byte_image_id": 0}, {"allocation_id": 1, "byte_image_id": 0}],
+                           byte_images=[""])
         self.assertEqual(pool_entry(encoded, "types", 0)["kind"], "type")
         self.assertEqual(pool_entry(encoded, "instances", 0)["kind"], "instance")
         self.assertIsNot(pool_entry(encoded, "allocations", 0), pool_entry(encoded, "allocations", 1))
+
+    def test_grouped_functions_keep_exact_graph_and_source_ids(self):
+        encoded = document(allocations=[
+            {"allocation_id": 1, "kind": "memory", "byte_image_id": 0},
+            {"kind": "function", "instance_id": 7, "identities": [[0, 11], [2, 29]]}],
+            byte_images=[""])
+        self.assertEqual(pool_entry(encoded, "allocations", 2), {
+            "kind": "function", "instance_id": 7, "allocation_id": 2, "source_alloc_id": 29})
+        self.assertEqual(pool_entry(encoded, "allocations", 1)["kind"], "memory")
+        with self.assertRaises(MirJSONError):
+            pool_entry(encoded, "allocations", 3)
 
     def test_rejects_invalid_pool_access(self):
         encoded = document(types=[{}])
@@ -44,7 +56,7 @@ class MirJSONTests(unittest.TestCase):
                     decode_mir_document(document(**{name: value}))
 
     def test_requires_current_schema_version(self):
-        with self.assertRaisesRegex(MirJSONError, "schema_version must be 6"):
+        with self.assertRaisesRegex(MirJSONError, "schema_version must be 7"):
             decode_mir_document(document(schema_version=4))
 
     def test_filename_ids_stay_shared_and_unexpanded(self):

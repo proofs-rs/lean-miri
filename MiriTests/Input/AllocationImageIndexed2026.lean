@@ -47,7 +47,7 @@ def main : IO Unit := do
 
   let memoryNode : AllocationNode := {
     id := 12, kind := .memory,
-    data := some (.memory ⟨2, 1, .immutable, "ff", #[], #[]⟩),
+    data := some (.memory ⟨2, 1, .immutable, .image #[255], #[], #[]⟩),
     memory := none
   }
   let functionNode : AllocationNode := {

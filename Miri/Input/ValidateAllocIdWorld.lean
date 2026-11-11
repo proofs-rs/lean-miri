@@ -46,25 +46,6 @@ def validateCompilerAllocIdWorld (nodes : Array AllocationNode)
         | .typeId, some (.typeId _) => true
         | _, _ => false
       unless expectedData do throw s!"{rowPath}: serialized source global lacks matching typed payload"
-      if row.kind == .memory then
-        let some projectionMutability := row.memoryMutability | throw s!"{rowPath}: memory projection mutability is absent"
-        let some projectionAlign := row.memoryAlignBytes | throw s!"{rowPath}: memory projection alignment is absent"
-        let some projectionInitialized := row.memoryAllBytesInitialized | throw s!"{rowPath}: memory projection initialization status is absent"
-        let some projectionProvenance := row.memoryHasProvenance | throw s!"{rowPath}: memory projection provenance status is absent"
-        let some (.memory image) := node.data | throw s!"{rowPath}: serialized memory node has no memory image"
-        let actualMutability := image.mutability
-        let actualInitialized := image.initializationRanges.all (·.initialized)
-        let actualProvenance := !image.relocations.isEmpty
-        unless projectionMutability == actualMutability && projectionAlign == image.alignBytes &&
-            projectionInitialized == actualInitialized && projectionProvenance == actualProvenance do
-          throw s!"{rowPath}: source byte-key projection disagrees with serialized memory image"
-        let actualByteEligible := actualMutability == .immutable && image.alignBytes == 1 &&
-          actualInitialized && !actualProvenance
-        if actualByteEligible then
-          unless row.byteImageHex == some image.bytesHex do
-            throw s!"{rowPath}: eligible byte-memory projection differs from serialized bytes"
-        else unless row.byteImageHex.isNone do
-          throw s!"{rowPath}: ineligible memory image must not publish a byte key"
     else if nodeIndexBySourceId.contains row.sourceAllocId.toNat then
       throw s!"{rowPath}: non-serialized source ID is attached to an allocation node"
   let some sentinel := pool[pool.size - 1]? | throw "$.compiler_alloc_id_world.raw_pool: sentinel row absent"
@@ -72,11 +53,12 @@ def validateCompilerAllocIdWorld (nodes : Array AllocationNode)
     throw "$.compiler_alloc_id_world.raw_pool: final reserved sentinel must be dangling"
   for node in nodes do
     let some sourceId := node.sourceAllocId | throw "$.compiler_alloc_id_world: every imported allocation must carry an exact source_alloc_id witness"
+    if sourceId == 0 then throw "$.compiler_alloc_id_world: source AllocId must be nonzero"
     let some row := pool[sourceId.toNat - 1]? | throw "$.compiler_alloc_id_world: allocation witness lies outside captured raw prefix"
     unless row.status == .serialized && row.allocationId == some node.id do
       throw "$.compiler_alloc_id_world: allocation node is not covered by exactly one serialized pool row"
   let dedup := world.dedupCatalog
-  let mut byteRowByImage : Std.HashMap String Nat := {}
+  let mut byteRowByImage : Std.HashMap (Array UInt8) Nat := {}
   let mut functionRowByInstance : Std.HashMap InstanceId Nat := {}
   let mut vtableRowsByType : Std.HashMap TypeId (Array (Array Nat)) := {}
   let mut staticDefinitionsSeen : Std.HashMap Nat Nat := {}
@@ -151,11 +133,8 @@ def validateCompilerAllocIdWorld (nodes : Array AllocationNode)
     if row.keyKind == .bytes then
       let some imageHex := row.byteImageHex | throw s!"{rowPath}: byte key lacks its exact image"
       let some (.memory image) := keyNode.data | throw s!"{rowPath}: byte key node has no memory image"
-      let some keySourceId := keyNode.sourceAllocId | throw s!"{rowPath}: byte key node lacks a source identity"
-      let some keyPoolRow := pool[keySourceId.toNat - 1]? | throw s!"{rowPath}: byte key node is absent from the source pool"
-      unless keyPoolRow.memoryMutability == some .immutable && keyPoolRow.memoryAlignBytes == some 1 &&
-          keyPoolRow.memoryAllBytesInitialized == some true && keyPoolRow.memoryHasProvenance == some false &&
-          keyPoolRow.byteImageHex == some imageHex && keyNode.memory == some image && image.bytesHex == imageHex &&
+      let rawImage ← decodeAllocationHex imageHex
+      unless (← image.bytesHex.checkedBytes) == rawImage &&
           image.mutability == .immutable && image.alignBytes == 1 && image.relocations.isEmpty &&
           image.initializationRanges.all (·.initialized) do
         throw s!"{rowPath}: byte key image is not the exact immutable aligned initialized provenance-free source key"
@@ -165,13 +144,12 @@ def validateCompilerAllocIdWorld (nodes : Array AllocationNode)
         let some resultNode := nodes[resultIndex]? | throw s!"{rowPath}.salts: result node index is absent"
         let some (.memory resultImage) := resultNode.data
           | throw s!"{rowPath}.salts: byte-key result is not a memory global"
-        unless resultImage.bytesHex == imageHex && resultImage.alignBytes == 1 &&
+        unless (← resultImage.bytesHex.checkedBytes) == rawImage && resultImage.alignBytes == 1 &&
             resultImage.mutability == .immutable && resultImage.relocations.isEmpty &&
             resultImage.initializationRanges.all (·.initialized) do
           throw s!"{rowPath}.salts: byte-key result does not contain the exact queried byte image"
-      let some imageHex := row.byteImageHex | throw s!"{rowPath}: byte key lacks its exact image"
-      if byteRowByImage.contains imageHex then throw s!"{rowPath}: duplicate exact byte-image key"
-      byteRowByImage := byteRowByImage.insert imageHex index
+      if byteRowByImage.contains rawImage then throw s!"{rowPath}: duplicate exact byte-image key"
+      byteRowByImage := byteRowByImage.insert rawImage index
     else if row.keyKind == .function then
       unless row.byteImageHex.isNone do throw s!"{rowPath}: typed function key carries an unexpected byte image"
       let some (.function keyFunction) := keyNode.data
@@ -239,16 +217,23 @@ def validateCompilerAllocIdWorld (nodes : Array AllocationNode)
   if completeFamilies.contains .bytes then
     for row in pool do
       if row.kind == .memory then
-        unless row.memoryMutability.isSome && row.memoryAlignBytes.isSome &&
-            row.memoryAllBytesInitialized.isSome && row.memoryHasProvenance.isSome do
-          throw "$.compiler_alloc_id_world.raw_pool: byte_memory completeness requires all source memory projection dimensions"
-        let eligible := row.memoryMutability == some .immutable && row.memoryAlignBytes == some 1 &&
-          row.memoryAllBytesInitialized == some true && row.memoryHasProvenance == some false
-        if eligible then
-          unless row.status == .serialized do
+        if row.status == .serialized then
+          let some graph := row.allocationId | throw "$.compiler_alloc_id_world.raw_pool: serialized memory lacks graph ID"
+          let some index := nodeIndexByGraphId[graph]? | throw "$.compiler_alloc_id_world.raw_pool: serialized memory graph absent"
+          let some node := nodes[index]? | throw "$.compiler_alloc_id_world.raw_pool: serialized memory node absent"
+          let some (.memory image) := node.data | throw "$.compiler_alloc_id_world.raw_pool: serialized memory lacks typed data"
+          let eligible := image.mutability == .immutable && image.alignBytes == 1 &&
+            image.initializationRanges.all (·.initialized) && image.relocations.isEmpty
+          if eligible then
+            unless byteRowByImage.contains (← image.bytesHex.checkedBytes) do
+              throw "$.compiler_alloc_id_world.dedup_catalog: complete byte_memory family omits an eligible image"
+        else
+          unless row.memoryMutability.isSome && row.memoryAlignBytes.isSome &&
+              row.memoryAllBytesInitialized.isSome && row.memoryHasProvenance.isSome do
+            throw "$.compiler_alloc_id_world.raw_pool: byte_memory completeness requires all source memory projection dimensions"
+          let eligible := row.memoryMutability == some .immutable && row.memoryAlignBytes == some 1 &&
+            row.memoryAllBytesInitialized == some true && row.memoryHasProvenance == some false
+          if eligible then
             throw "$.compiler_alloc_id_world.raw_pool: eligible byte-memory global is not serialized"
-          let some imageHex := row.byteImageHex | throw "$.compiler_alloc_id_world.raw_pool: eligible byte key has no exact image"
-          unless byteRowByImage.contains imageHex do
-            throw "$.compiler_alloc_id_world.dedup_catalog: complete byte_memory family omits an eligible image"
 
 end Miri.Input

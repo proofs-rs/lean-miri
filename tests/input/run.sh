@@ -24,6 +24,8 @@ lake env lean --run "$ROOT/MiriTests/Input/SpanPool.lean"
 lake env lean --run "$ROOT/MiriTests/Input/AllocationImageIndexed2026.lean"
 lake env lean "$ROOT/tests/input/JsonReader.lean"
 lake env lean --run "$ROOT/tests/input/TypedPoolTests.lean"
+python3 "$ROOT/tests/input/build_compact_allocation_fixtures.py"
+lake env lean --run "$ROOT/tests/input/CompactAllocationTests.lean"
 
 OUT="$(mktemp "${TMPDIR:-/tmp}/lean-miri-input-XXXXXX.json")"
 SCOPE_OUT="$(mktemp "${TMPDIR:-/tmp}/lean-miri-input-scope-XXXXXX.json")"

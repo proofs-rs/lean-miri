@@ -333,8 +333,9 @@ def finishRvalueFields (s : RvalueFields) : MIRParser.Parser (MIR.Rvalue) := do
     unless info.isStatic && info.threadLocal do reject "TLS declaration compiler query evidence is unresolved or inconsistent"
     let initializer ← required s.initializer "initializer"
     if !info.foreignItem && initializer.isNone then reject "missing TLS initializer allocation"
+    if info.foreignItem && initializer.isSome then reject "foreign TLS declaration cannot carry an initializer allocation"
     let definition ← required s.def_id "def_id"
-    modify fun s => {s with facts.threadLocals := s.facts.threadLocals.push ⟨definition, info, if info.foreignItem then none else initializer⟩}
+    modify fun s => {s with facts.threadLocals := s.facts.threadLocals.push ⟨definition, info, initializer⟩}
     pure (.ThreadLocalRef definition)
   | "RawPtr" => pure (.RawPtr (← required s.pointer_kind "pointer_kind") (← required s.place "place"))
   | "Cast" =>

@@ -21,8 +21,8 @@ def decode_mir_document(document: Any) -> dict[str, Any]:
         raise MirJSONError("MIR document root must be an object")
     if document.get("schema") != "lean-miri-rustc-mir":
         raise MirJSONError("document is not a lean-miri-rustc-mir export")
-    if type(document.get("schema_version")) is not int or document["schema_version"] != 6:
-        raise MirJSONError("MIR root schema_version must be 6")
+    if type(document.get("schema_version")) is not int or document["schema_version"] != 7:
+        raise MirJSONError("MIR root schema_version must be 7")
     for name in sorted(POOL_NAMES):
         if not isinstance(document.get(name), list):
             raise MirJSONError(f"{name} must be a pool array")
@@ -31,6 +31,9 @@ def decode_mir_document(document: Any) -> dict[str, Any]:
     files = document.get("files")
     if not isinstance(files, list) or any(not isinstance(name, str) for name in files):
         raise MirJSONError("files must be a string array")
+    images = document.get("byte_images")
+    if not isinstance(images, list) or any(not isinstance(image, str) for image in images):
+        raise MirJSONError("byte_images must be a string array")
     return document
 
 
@@ -40,6 +43,23 @@ def pool_entry(document: dict[str, Any], pool: str, index: Any) -> dict[str, Any
     rows = document.get(pool)
     if not isinstance(rows, list):
         raise MirJSONError(f"{pool} must be a pool array")
+    if pool == "allocations":
+        if type(index) is not int or index < 0:
+            raise MirJSONError(f"{pool} reference {index!r} is out of range")
+        matches = []
+        for row in rows:
+            if not isinstance(row, dict):
+                raise MirJSONError("allocations definitions must be objects")
+            if row.get("kind") == "function":
+                for identity in row.get("identities", []):
+                    if identity[0] == index:
+                        matches.append({"kind": "function", "instance_id": row["instance_id"],
+                                        "allocation_id": identity[0], "source_alloc_id": identity[1]})
+            elif row.get("allocation_id") == index:
+                matches.append(row)
+        if len(matches) != 1:
+            raise MirJSONError(f"allocations reference {index!r} does not identify one graph node")
+        return matches[0]
     if type(index) is not int or index < 0 or index >= len(rows):
         raise MirJSONError(f"{pool} reference {index!r} is out of range")
     row = rows[index]

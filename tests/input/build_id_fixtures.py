@@ -87,7 +87,8 @@ def main():
         doc = base()
         memory = doc["allocations"][0]
         memory["size_bytes"] = 8
-        memory["bytes_hex"] = "00" * 8
+        doc["byte_images"].append("00" * 8)
+        memory["byte_image_id"] = len(doc["byte_images"]) - 1
         memory["initialization_ranges"] = [
             {"state": "initialized", "start_bytes": 0, "end_bytes_exclusive": 8}
         ]

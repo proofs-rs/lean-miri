@@ -9,7 +9,7 @@ from mir_json import load_mir_document, pool_entry
 
 doc = load_mir_document(sys.argv[1])
 assert doc["schema"] == "lean-miri-rustc-mir"
-assert doc["schema_version"] == 6
+assert doc["schema_version"] == 7
 assert doc["producer"]["rustc_commit"] == "8144389c895da997dbdecaa635e41d6a50be6ffd"
 assert doc["producer"]["miri_commit"] == "7fa591d7d4dd9af8154becbc8332f8096f8323b1"
 assert "completeness" not in doc
@@ -241,11 +241,12 @@ assert fn_signatures and all(
     for signature in fn_signatures
 ), "function signatures must carry typed safety and ExternAbi tags"
 
-allocations = {allocation["allocation_id"]: allocation for allocation in doc["allocations"]}
-assert len(allocations) == len(doc["allocations"]), "allocation IDs must be unique"
+graph_count = sum(len(row["identities"]) if row["kind"] == "function" else 1
+                  for row in doc["allocations"])
+allocations = {graph: pool_entry(doc, "allocations", graph) for graph in range(graph_count)}
 assert all("status" not in allocation for allocation in allocations.values()), "fixture allocation unexpectedly incomplete"
 memory_allocations = [allocation for allocation in allocations.values() if allocation.get("kind") == "memory"]
-assert any(allocation["bytes_hex"] == "6c65616e2d6d697269" for allocation in memory_allocations), "byte-string allocation contents missing"
+assert any(doc["byte_images"][allocation["byte_image_id"]] == "6c65616e2d6d697269" for allocation in memory_allocations), "byte-string allocation contents missing"
 assert any(
     relocation.get("immutable") is True and relocation.get("shared_ref") is True
     for allocation in memory_allocations
@@ -253,7 +254,7 @@ assert any(
 ), "CtfeProvenance flags missing from allocation relocation"
 static = next(allocation for allocation in allocations.values() if allocation.get("kind") == "static")
 assert static["thread_local"] is False
-assert static["initializer"]["bytes_hex"] == "0b0000000d000000"
+assert doc["byte_images"][static["initializer"]["byte_image_id"]] == "0b0000000d000000"
 vtable_queries = [
     query["vtable_metadata"]
     for query in doc["compiler_vtable_queries"]
@@ -287,7 +288,7 @@ assert "status" not in tls
 assert tls["global_info"]["is_static"] is True
 assert tls["global_info"]["thread_local"] is True
 assert pool_entry(doc, "definitions", tls["def_id"])["crate"] >= 0 and pool_entry(doc, "definitions", tls["def_id"])["index"] >= 0
-assert tls["initializer"]["allocation"]["bytes_hex"] == "11000000"
+assert doc["byte_images"][tls["initializer"]["allocation"]["byte_image_id"]] == "11000000"
 assert "runtime_allocation" not in tls
 
 def check_allocation_refs(value):

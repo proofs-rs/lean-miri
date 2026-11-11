@@ -169,7 +169,7 @@ preparation and selected allocator-world metadata. The frontend check imports
 fresh JSON into Lean constants. Runtime-metadata checks connect fresh compiler
 queries to Lean providers. Execution checks compare selected arithmetic, calls
 and globals with pinned Miri. Eval-core's six checks use three hash-checked
-genuine schema-6 exports regenerated with the current producer. The preparation helper preserves their
+genuine schema-7 exports regenerated with the current producer. The preparation helper preserves their
 decompressed bytes exactly; it does not adapt an old wire format.
 
 The script uses `set -euo pipefail`: a failure stops it and later phases remain
@@ -194,14 +194,15 @@ None of these top-level commands is called by `tools/check.sh`:
 | `python3 tools/check-connected.py --large-tb` | Fresh larger Rust export; assert the expected Frozen-tag write UB. |
 | `python3 tests/connected/compare_selector.py` | Finite comparison of choice selection with extracted upstream code; does not execute the whole Miri interpreter. |
 
-Fifteen cases use stored same-TyCtxt reference observations and genuine schema-6 bytes.
+Fifteen cases use stored same-TyCtxt reference observations and genuine schema-7 bytes.
 The DST and large Tree Borrows cases generate fresh exports and same-TyCtxt
 Miri references in CI from tracked Rust sources, unchanged flags and exactly
 reviewed guest configuration/argv0. Their Lean assertions and choice tapes
 remain fixed. Replay therefore needs the pinned Rust/sysroot and reference
 exporter build; these two cases no longer compare immutable saved allocation
-histories. Their historical archives are not CI inputs. The latest CI matrix
-and 17-case Lean connected execution have not been run at the user's request.
+histories. Their historical archives are not CI inputs. The 17-case Lean connected run
+passes under schema 7 with the unchanged expected outcomes. The full CI matrix
+remains unexecuted.
 Fresh generation is a separate operation via
 [tools/export-connected.py](../tools/export-connected.py).
 Changing exporter/query collection requires fresh checks as well as replay:

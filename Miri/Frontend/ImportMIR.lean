@@ -171,6 +171,7 @@ deriving instance ToExpr for Input.TypeNode
 deriving instance ToExpr for Input.InitRange
 deriving instance ToExpr for Input.Relocation
 deriving instance ToExpr for Input.MemoryMutability
+deriving instance ToExpr for Input.AllocationBytes
 deriving instance ToExpr for Input.AllocationMemory
 deriving instance ToExpr for Input.ArgumentExtensionKind
 deriving instance ToExpr for Input.ArgumentCaptureKind

@@ -22,9 +22,12 @@ assert len(doc["body_roots"]) == 1 and doc["body_roots"][0]["def_path"] == "add_
 def validate(document):
     catalogs = {
         key: {node[key] for node in document[table]}
-        for key, table in [("type_id", "types"), ("allocation_id", "allocations"),
+        for key, table in [("type_id", "types"),
                            ("instance_id", "instances")]
     }
+    catalogs["allocation_id"] = {row["allocation_id"] for row in document["allocations"] if row["kind"] != "function"}
+    catalogs["allocation_id"].update(identity[0] for row in document["allocations"]
+                                     if row["kind"] == "function" for identity in row["identities"])
     seen = set()
 
     def visit(value):

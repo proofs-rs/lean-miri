@@ -446,11 +446,35 @@ inductive MemoryMutability where
   | mutable | immutable
   deriving Repr, DecidableEq
 
+def decodeAllocationHex (hex : String) : Except String (Array UInt8) := do
+  let chars := hex.toList.toArray
+  unless chars.size % 2 == 0 do throw "odd hexadecimal byte count"
+  let digit (c : Char) : Except String Nat :=
+    if c ≥ '0' && c ≤ '9' then pure (c.toNat - '0'.toNat)
+    else if c ≥ 'a' && c ≤ 'f' then pure (c.toNat - 'a'.toNat + 10)
+    else if c ≥ 'A' && c ≤ 'F' then pure (c.toNat - 'A'.toNat + 10)
+    else throw "invalid hexadecimal allocation byte"
+  let mut out := #[]
+  for i in [:chars.size / 2] do
+    let some hi := chars[2*i]? | throw "missing hexadecimal high nibble"
+    let some lo := chars[2*i+1]? | throw "missing hexadecimal low nibble"
+    out := out.push (UInt8.ofNat (16 * (← digit hi) + (← digit lo)))
+  pure out
+
+inductive AllocationBytes where
+  | image (bytes : Array UInt8)
+  | reference (id : Nat)
+  deriving Repr, DecidableEq
+
+def AllocationBytes.checkedBytes : AllocationBytes → Except String (Array UInt8)
+  | .image bytes => pure bytes
+  | .reference id => throw s!"unresolved allocation byte image {id}"
+
 structure AllocationMemory where
   sizeBytes : Nat
   alignBytes : Nat
   mutability : MemoryMutability
-  bytesHex : String
+  bytesHex : AllocationBytes
   initializationRanges : Array InitRange
   relocations : Array Relocation
   deriving Repr, DecidableEq

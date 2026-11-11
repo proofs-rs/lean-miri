@@ -181,47 +181,57 @@ private def memoryMutability : Parser MemoryMutability := do
   | "immutable" => pure .immutable
   | value => fail s!"unknown memory mutability `{value}`"
 
-private def checkedMemory (path : String) (size align : Nat) (mutability : MemoryMutability)
-    (bytes : String) (ranges : Array InitRange) (relocations : Array Relocation) : Parser AllocationMemory := do
-  unless validHex bytes do fail s!"{path}.bytes_hex: malformed hexadecimal bytes"
-  unless bytes.length / 2 == size do fail s!"{path}.bytes_hex: byte buffer length does not equal size_bytes"
+def checkedMemory (path : String) (size align : Nat) (mutability : MemoryMutability)
+    (bytes : AllocationBytes) (ranges : Array InitRange) (relocations : Array Relocation) : Except String AllocationMemory := do
+  match bytes with
+  | .reference _ => pure ()
+  | .image raw => unless raw.size == size do throw s!"{path}.byte_image_id: byte buffer length does not equal size_bytes"
   let mut cursor := 0
   for chunk in ranges do
-    unless chunk.startBytes == cursor do fail s!"{path}.initialization_ranges: ranges overlap or leave a gap"
-    unless chunk.endBytesExclusive ≤ size do fail s!"{path}.initialization_ranges: range exceeds allocation size"
+    unless chunk.startBytes == cursor do throw s!"{path}.initialization_ranges: ranges overlap or leave a gap"
+    unless chunk.endBytesExclusive ≤ size do throw s!"{path}.initialization_ranges: range exceeds allocation size"
     cursor := chunk.endBytesExclusive
-  unless cursor == size do fail s!"{path}.initialization_ranges: ranges do not cover the allocation"
+  unless cursor == size do throw s!"{path}.initialization_ranges: ranges do not cover the allocation"
   for relocation in relocations do
     unless relocation.storageOffsetBytes + relocation.targetOffsetEncodedBytes.length / 2 ≤ size do
-      fail s!"{path}.relocations: relocation's encoded pointer bytes exceed allocation size"
-  unless align > 0 do fail s!"{path}.align_bytes: allocation alignment must be nonzero"
+      throw s!"{path}.relocations: relocation's encoded pointer bytes exceed allocation size"
+  unless align > 0 do throw s!"{path}.align_bytes: allocation alignment must be nonzero"
   return ⟨size, align, mutability, bytes, ranges, relocations⟩
 
+def resolveAllocationMemory (images : Array AllocationBytes) (path : String)
+    (memory : AllocationMemory) : Except String AllocationMemory := do
+  let bytes ← match memory.bytesHex with
+    | .reference id => match images[id]? with
+      | some bytes => pure bytes
+      | none => throw s!"{path}.byte_image_id: out of bounds byte image {id}"
+    | _ => throw s!"{path}.byte_image_id: expected pooled allocation bytes"
+  checkedMemory path memory.sizeBytes memory.alignBytes memory.mutability bytes memory.initializationRanges memory.relocations
+
 private structure ParseAllocationMemoryFields where
-  size_bytes : Option (Nat) := none
-  align_bytes : Option (Nat) := none
-  mutability : Option (MemoryMutability) := none
-  bytes_hex : Option (String) := none
+  size_bytes : Option Nat := none
+  align_bytes : Option Nat := none
+  mutability : Option MemoryMutability := none
+  byte_image_id : Option Nat := none
   initialization_ranges : Option (Array InitRange) := none
   relocations : Option (Array Relocation) := none
 
-def parseAllocationMemory (path : String) : Parser (AllocationMemory) := do
-  let s ← object (ParseAllocationMemoryFields.mk none none none none none none) fun s key => do
+def parseAllocationMemory (path : String) : Parser AllocationMemory := do
+  let s ← object ({} : ParseAllocationMemoryFields) fun s key => do
     match key with
     | "size_bytes" => return { s with size_bytes := some (← natural) }
     | "align_bytes" => return { s with align_bytes := some (← natural) }
     | "mutability" => return { s with mutability := some (← memoryMutability) }
-    | "bytes_hex" => return { s with bytes_hex := some (← string) }
+    | "byte_image_id" => return { s with byte_image_id := some (← natural) }
     | "initialization_ranges" => return { s with initialization_ranges := some (← array (parseInitRange (path ++ ".initialization_ranges"))) }
     | "relocations" => return { s with relocations := some (← array (parseRelocation (path ++ ".relocations"))) }
+    | "bytes_hex" => fail s!"{path}: inline allocation bytes are not supported"
     | _ => skipValue; pure s
-  let size_bytes ← required s.size_bytes (path ++ ".size_bytes")
-  let align_bytes ← required s.align_bytes (path ++ ".align_bytes")
-  let mutability ← required s.mutability (path ++ ".mutability")
-  let bytes_hex ← required s.bytes_hex (path ++ ".bytes_hex")
-  let initialization_ranges ← required s.initialization_ranges (path ++ ".initialization_ranges")
-  let relocations ← required s.relocations (path ++ ".relocations")
-  checkedMemory path size_bytes align_bytes mutability bytes_hex initialization_ranges relocations
+  liftExcept (checkedMemory path (← required s.size_bytes (path ++ ".size_bytes"))
+    (← required s.align_bytes (path ++ ".align_bytes"))
+    (← required s.mutability (path ++ ".mutability"))
+    (.reference (← required s.byte_image_id (path ++ ".byte_image_id")))
+    (← required s.initialization_ranges (path ++ ".initialization_ranges"))
+    (← required s.relocations (path ++ ".relocations")))
 
 private structure ParseDefinitionIdFields where
   crate : Option (Nat) := none
@@ -417,16 +427,18 @@ def parseThreadLocal (path : String := "$thread_local") : Parser (Catalog.Thread
   let initializer ← required s.initializer (path ++ ".initializer")
   unless global_info.isStatic && global_info.threadLocal do fail "TLS declaration compiler query evidence is unresolved or inconsistent"
   unless global_info.foreignItem || initializer.isSome do fail "TLS declaration initializer is missing"
-  return ⟨def_id, global_info, if global_info.foreignItem then none else initializer⟩
+  if global_info.foreignItem && initializer.isSome then fail "foreign TLS declaration cannot carry an initializer allocation"
+  return ⟨def_id, global_info, initializer⟩
 
 private structure ParseAllocationFields where
+  identities : Option (Array (Nat × UInt64)) := none
   allocation_id : Option (Nat) := none
   source_alloc_id : Option (Option Nat) := none
   kind : Option (String) := none
   size_bytes : Option (Option (Nat)) := none
   align_bytes : Option (Option (Nat)) := none
   mutability : Option (Option (MemoryMutability)) := none
-  bytes_hex : Option (Option (String)) := none
+  byte_image_id : Option (Option Nat) := none
   initialization_ranges : Option (Option (Array InitRange)) := none
   relocations : Option (Option (Array Relocation)) := none
   instance_id : Option (Option Nat) := none
@@ -440,16 +452,26 @@ private structure ParseAllocationFields where
   type : Option (Option Nat) := none
   principal_predicate : Option (Option Nat) := none
 
-def parseAllocation (path : String) : Parser (AllocationNode) := do
-  let s ← object (ParseAllocationFields.mk none none none none none none none none none none none none none none none none none none none) fun s key => do
+private def parseAllocationIdentity (path : String) : Parser (Nat × UInt64) := do
+  let pair ← array natural
+  unless pair.size == 2 do fail s!"{path}: expected [graph ID, source AllocId]"
+  let some graph := pair[0]? | fail s!"{path}: missing graph ID"
+  let some source := pair[1]? | fail s!"{path}: missing source AllocId"
+  unless source > 0 && source < 2^64 do fail s!"{path}: expected nonzero source u64"
+  pure (graph, UInt64.ofNat source)
+
+def parseAllocation (path : String) : Parser (Array AllocationNode) := do
+  let s ← object ({} : ParseAllocationFields) fun s key => do
     match key with
+    | "identities" => return { s with identities := some (← array (parseAllocationIdentity (path ++ ".identities"))) }
     | "allocation_id" => return { s with allocation_id := some (← natural) }
     | "source_alloc_id" => return { s with source_alloc_id := some (← nullable natural) }
     | "kind" => return { s with kind := some (← string) }
     | "size_bytes" => return { s with size_bytes := some (← nullable (natural)) }
     | "align_bytes" => return { s with align_bytes := some (← nullable (natural)) }
     | "mutability" => return { s with mutability := some (← nullable (memoryMutability)) }
-    | "bytes_hex" => return { s with bytes_hex := some (← nullable (string)) }
+    | "byte_image_id" => return { s with byte_image_id := some (← nullable natural) }
+    | "bytes_hex" => fail s!"{path}: inline allocation bytes are not supported"
     | "initialization_ranges" => return { s with initialization_ranges := some (← nullable (array (parseInitRange (path ++ ".initialization_ranges")))) }
     | "relocations" => return { s with relocations := some (← nullable (array (parseRelocation (path ++ ".relocations")))) }
     | "instance_id" => return { s with instance_id := some (← nullable natural) }
@@ -463,13 +485,12 @@ def parseAllocation (path : String) : Parser (AllocationNode) := do
     | "type" => return { s with type := some (← nullable natural) }
     | "principal_predicate" => return { s with principal_predicate := some (← nullable natural) }
     | _ => skipValue; pure s
-  let allocation_id ← required s.allocation_id (path ++ ".allocation_id")
   let source_alloc_id ← pure (s.source_alloc_id.getD none)
   let kind ← required s.kind (path ++ ".kind")
   let size_bytes ← pure (s.size_bytes.getD none)
   let align_bytes ← pure (s.align_bytes.getD none)
   let mutability ← pure (s.mutability.getD none)
-  let bytes_hex ← pure (s.bytes_hex.getD none)
+  let byte_image_id ← pure (s.byte_image_id.getD none)
   let initialization_ranges ← pure (s.initialization_ranges.getD none)
   let relocations ← pure (s.relocations.getD none)
   let instance_id ← pure (s.instance_id.getD none)
@@ -484,7 +505,7 @@ def parseAllocation (path : String) : Parser (AllocationNode) := do
   let principal_predicate ← pure (s.principal_predicate.getD none)
   let kind ← liftExcept (allocationKind kind)
   let allowed : List String := match kind with
-    | .memory => ["size_bytes", "align_bytes", "mutability", "bytes_hex", "initialization_ranges", "relocations"]
+    | .memory => ["size_bytes", "align_bytes", "mutability", "byte_image_id", "initialization_ranges", "relocations"]
     | .function => ["instance_id"]
     | .static => ["global_info", "initializer", "def_id", "def_path", "thread_local"]
     | .vtable => ["type", "size_bytes", "align_bytes", "predicates", "principal_predicate", "entries"]
@@ -492,7 +513,7 @@ def parseAllocation (path : String) : Parser (AllocationNode) := do
   if s.size_bytes.isSome && !(allowed.contains "size_bytes") then fail s!"{path}: field `size_bytes` is incompatible with the selected variant"
   if s.align_bytes.isSome && !(allowed.contains "align_bytes") then fail s!"{path}: field `align_bytes` is incompatible with the selected variant"
   if s.mutability.isSome && !(allowed.contains "mutability") then fail s!"{path}: field `mutability` is incompatible with the selected variant"
-  if s.bytes_hex.isSome && !(allowed.contains "bytes_hex") then fail s!"{path}: field `bytes_hex` is incompatible with the selected variant"
+  if s.byte_image_id.isSome && !(allowed.contains "byte_image_id") then fail s!"{path}: field `byte_image_id` is incompatible with the selected variant"
   if s.initialization_ranges.isSome && !(allowed.contains "initialization_ranges") then fail s!"{path}: field `initialization_ranges` is incompatible with the selected variant"
   if s.relocations.isSome && !(allowed.contains "relocations") then fail s!"{path}: field `relocations` is incompatible with the selected variant"
   if s.instance_id.isSome && !(allowed.contains "instance_id") then fail s!"{path}: field `instance_id` is incompatible with the selected variant"
@@ -506,14 +527,28 @@ def parseAllocation (path : String) : Parser (AllocationNode) := do
   if s.type.isSome && !(allowed.contains "type") then fail s!"{path}: field `type` is incompatible with the selected variant"
   if s.principal_predicate.isSome && !(allowed.contains "principal_predicate") then fail s!"{path}: field `principal_predicate` is incompatible with the selected variant"
   if kind == .vtable && s.principal_predicate.isNone then fail s!"{path}: missing principal_predicate"
-  let sourceAllocId ← source_alloc_id.mapM fun value => do
-    unless value > 0 && value < 2^64 do fail s!"{path}.source_alloc_id: expected nonzero u64"
-    pure (UInt64.ofNat value)
+  let identities ← if kind == .function then do
+      if s.allocation_id.isSome || s.source_alloc_id.isSome then
+        fail s!"{path}: function identities belong in the identity list"
+      let identities ← required s.identities (path ++ ".identities")
+      if identities.isEmpty then fail s!"{path}.identities: function group must be nonempty"
+      let mut previous : Option Nat := none
+      for (graph, _) in identities do
+        if let some last := previous then
+          unless last < graph do fail s!"{path}.identities: graph IDs must be strictly increasing"
+        previous := some graph
+      pure identities
+    else do
+      if s.identities.isSome then fail s!"{path}.identities: valid only for function groups"
+      let graph ← required s.allocation_id (path ++ ".allocation_id")
+      let source ← required source_alloc_id (path ++ ".source_alloc_id")
+      unless source > 0 && source < 2^64 do fail s!"{path}.source_alloc_id: expected nonzero u64"
+      pure #[(graph, UInt64.ofNat source)]
   let (memory, data) ← match kind with
     | .memory => do
-      let value ← checkedMemory path (← required size_bytes "size_bytes") (← required align_bytes "align_bytes")
-        (← required mutability "mutability") (← required bytes_hex "bytes_hex")
-        (← required initialization_ranges "initialization_ranges") (← required relocations "relocations")
+      let value ← liftExcept (checkedMemory path (← required size_bytes "size_bytes") (← required align_bytes "align_bytes")
+        (← required mutability "mutability") (.reference (← required byte_image_id "byte_image_id"))
+        (← required initialization_ranges "initialization_ranges") (← required relocations "relocations"))
       pure (some value, some (AllocationData.memory value))
     | .function => pure (none, some (.function ⟨← required instance_id "instance_id"⟩))
     | .static => do
@@ -525,134 +560,69 @@ def parseAllocation (path : String) : Parser (AllocationNode) := do
     | .vtable => pure (none, some (.vtable ⟨principal_predicate, ← required type "type", size_bytes, align_bytes,
         ← required predicates "predicates", ← required entries "entries"⟩))
     | .typeId => pure (none, some (.typeId (← required type "type")))
-  return ⟨allocation_id, sourceAllocId, kind, memory, data⟩
+  return identities.map fun (graph, source) => ⟨graph, some source, kind, memory, data⟩
 
 private structure ParseSourceAllocIdPoolRowFields where
-  source_alloc_id : Option (Nat) := none
-  kind : Option (String) := none
-  status : Option (String) := none
-  allocation_id : Option (Option Nat) := none
-  memory_mutability : Option (Option MemoryMutability) := none
-  memory_align_bytes : Option (Option Nat) := none
-  memory_all_bytes_initialized : Option (Option Bool) := none
-  memory_has_provenance : Option (Option Bool) := none
-  byte_image_hex : Option (Option String) := none
-  opaque_allocation_id : Option (Option Nat) := none
+  kind : Option String := none
+  status : Option String := none
+  memory_mutability : Option MemoryMutability := none
+  memory_align_bytes : Option Nat := none
+  memory_all_bytes_initialized : Option Bool := none
+  memory_has_provenance : Option Bool := none
 
-def parseSourceAllocIdPoolRow (path : String) : Parser (SourceAllocIdPoolRow) := do
-  let s ← object (ParseSourceAllocIdPoolRowFields.mk none none none none none none none none none none) fun s key => do
+def parseSourceAllocIdPoolRow (path : String) (index : Nat) : Parser SourceAllocIdPoolRow := do
+  let s ← object ({} : ParseSourceAllocIdPoolRowFields) fun s key => do
     match key with
-    | "source_alloc_id" => return { s with source_alloc_id := some (← natural) }
     | "kind" => return { s with kind := some (← string) }
     | "status" => return { s with status := some (← string) }
-    | "allocation_id" => return { s with allocation_id := some (← nullable natural) }
-    | "memory_mutability" => return { s with memory_mutability := some (← nullable memoryMutability) }
-    | "memory_align_bytes" => return { s with memory_align_bytes := some (← nullable natural) }
-    | "memory_all_bytes_initialized" => return { s with memory_all_bytes_initialized := some (← nullable boolean) }
-    | "memory_has_provenance" => return { s with memory_has_provenance := some (← nullable boolean) }
-    | "byte_image_hex" => return { s with byte_image_hex := some (← nullable string) }
-    | "opaque_allocation_id" => return { s with opaque_allocation_id := some (← nullable natural) }
+    | "memory_mutability" => return { s with memory_mutability := some (← memoryMutability) }
+    | "memory_align_bytes" => return { s with memory_align_bytes := some (← natural) }
+    | "memory_all_bytes_initialized" => return { s with memory_all_bytes_initialized := some (← boolean) }
+    | "memory_has_provenance" => return { s with memory_has_provenance := some (← boolean) }
+    | "source_alloc_id" | "allocation_id" | "byte_image_hex" | "byte_image_id" | "opaque_allocation_id" =>
+      fail s!"{path}: exceptional source rows cannot repeat serialized allocation facts"
     | _ => skipValue; pure s
-  let source_alloc_id ← required s.source_alloc_id (path ++ ".source_alloc_id")
-  let kind ← required s.kind (path ++ ".kind")
-  let status ← required s.status (path ++ ".status")
-  let allocation_id ← required s.allocation_id (path ++ ".allocation_id")
-  let memory_mutability ← pure (s.memory_mutability.getD none)
-  let memory_align_bytes ← pure (s.memory_align_bytes.getD none)
-  let memory_all_bytes_initialized ← pure (s.memory_all_bytes_initialized.getD none)
-  let memory_has_provenance ← pure (s.memory_has_provenance.getD none)
-  let byte_image_hex ← pure (s.byte_image_hex.getD none)
-  let opaque_allocation_id ← pure (s.opaque_allocation_id.getD none)
-  let raw := source_alloc_id
-  unless raw > 0 && raw < 2^64 do fail s!"{path}.source_alloc_id: expected nonzero u64"
-  let kind ← liftExcept (parseSourceAllocIdKind kind (path ++ ".kind"))
-  if kind != .memory && (s.memory_mutability.isSome || s.memory_align_bytes.isSome || s.memory_all_bytes_initialized.isSome || s.memory_has_provenance.isSome || s.byte_image_hex.isSome) then fail s!"{path}: memory payload belongs only to memory source allocation rows"
-  let status ← match status with
+  let kind ← liftExcept (parseSourceAllocIdKind (← required s.kind (path ++ ".kind")) (path ++ ".kind"))
+  let status ← match ← required s.status (path ++ ".status") with
     | "dangling" => pure SourceAllocIdStatus.dangling
-    | "serialized" => pure .serialized
     | "opaque" => pure .opaque
-    | value => fail s!"{path}.status: unknown source AllocId pool status `{value}`"
-  if s.opaque_allocation_id.isSome then fail s!"{path}: opaque_allocation_id is not a semantic allocation witness"
-  let allocationId := allocation_id
-  let (memoryMutability, memoryAlignBytes, memoryAllBytesInitialized, memoryHasProvenance) ← match kind with
-    | .memory => pure (some (← required memory_mutability "memory_mutability"), some (← required memory_align_bytes "memory_align_bytes"), some (← required memory_all_bytes_initialized "memory_all_bytes_initialized"), some (← required memory_has_provenance "memory_has_provenance"))
-    | _ => pure (none, none, none, none)
-  let byteImageHex := byte_image_hex
-  if let some image := byteImageHex then
-    unless canonicalLowerHex image do fail s!"{joinPath path "byte_image_hex"}: expected canonical lowercase hexadecimal"
-  let shapeIsValid := match kind, status, allocationId with
-    | .dangling, .dangling, none => true
-    | .memory, .serialized, some _ => true
-    | .function, .serialized, some _ => true
-    | .vtable, .serialized, some _ => true
-    | .static, .serialized, some _ => true
-    | .typeId, .serialized, some _ => true
-    | .memory, .opaque, none => true
-    | .function, .opaque, none => true
-    | .vtable, .opaque, none => true
-    | .static, .opaque, none => true
-    | .typeId, .opaque, none => true
-    | _, _, _ => false
-  unless shapeIsValid do fail s!"{path}: inconsistent kind/status/allocation_id in source AllocId pool row"
-  let byteEligible := kind == .memory && memoryMutability == some .immutable && memoryAlignBytes == some 1 &&
-    memoryAllBytesInitialized == some true && memoryHasProvenance == some false
-  match kind, byteEligible, byteImageHex with
-  | .memory, true, some _ =>
-    unless status == .serialized && allocationId.isSome do
+    | value => fail s!"{path}.status: invalid exceptional source status `{value}`"
+  unless (kind == .dangling && status == .dangling) || (kind != .dangling && status == .opaque) do
+    fail s!"{path}: inconsistent exceptional source kind/status"
+  if kind == .memory then
+    let mutability ← required s.memory_mutability (path ++ ".memory_mutability")
+    let align ← required s.memory_align_bytes (path ++ ".memory_align_bytes")
+    let initialized ← required s.memory_all_bytes_initialized (path ++ ".memory_all_bytes_initialized")
+    let provenance ← required s.memory_has_provenance (path ++ ".memory_has_provenance")
+    if mutability == .immutable && align == 1 && initialized && !provenance then
       fail s!"{path}: eligible byte-memory key requires a serialized allocation node"
-  | .memory, false, none => pure ()
-  | .memory, _, _ => fail s!"{path}: inconsistent byte-memory eligibility and image"
-  | _, _, none => pure ()
-  | _, _, some _ => fail s!"{path}: byte-memory image is only valid for memory globals"
-  pure ⟨UInt64.ofNat raw, kind, status, allocationId, memoryMutability, memoryAlignBytes,
-    memoryAllBytesInitialized, memoryHasProvenance, byteImageHex⟩
+  else if s.memory_mutability.isSome || s.memory_align_bytes.isSome ||
+      s.memory_all_bytes_initialized.isSome || s.memory_has_provenance.isSome then
+    fail s!"{path}: memory payload belongs only to memory source allocation rows"
+  unless index + 1 < 2^64 do fail s!"{path}: source AllocId exceeds u64"
+  pure ⟨UInt64.ofNat (index + 1), kind, status, none, s.memory_mutability, s.memory_align_bytes,
+    s.memory_all_bytes_initialized, s.memory_has_provenance, none⟩
 
-
-private structure ParseSourceAllocIdSaltResultFields where
-  source_alloc_id : Option (Nat) := none
-  salt : Option (Nat) := none
-  allocation_id : Option (Nat) := none
-
-def parseSourceAllocIdSaltResult (path : String) : Parser (SourceAllocIdSaltResult) := do
-  let s ← object (ParseSourceAllocIdSaltResultFields.mk none none none) fun s key => do
-    match key with
-    | "source_alloc_id" => return { s with source_alloc_id := some (← natural) }
-    | "salt" => return { s with salt := some (← natural) }
-    | "allocation_id" => return { s with allocation_id := some (← natural) }
-    | _ => skipValue; pure s
-  let source_alloc_id ← required s.source_alloc_id (path ++ ".source_alloc_id")
-  let salt ← required s.salt (path ++ ".salt")
-  let allocation_id ← required s.allocation_id (path ++ ".allocation_id")
-  unless source_alloc_id > 0 && source_alloc_id < 2^64 do fail s!"{path}.source_alloc_id: expected nonzero u64"
-  return ⟨salt, allocation_id, UInt64.ofNat source_alloc_id⟩
+structure PendingSourceAllocIdDedupRow where
+  keyKind : SourceAllocIdDedupKind
+  keyAllocationId : Nat
+  salts : Array Nat
 
 private structure ParseSourceAllocIdDedupRowFields where
-  key_kind : Option (String) := none
-  salts : Option (Array SourceAllocIdSaltResult) := none
-  bytes_hex : Option (Option String) := none
-  key_allocation_id : Option (Nat) := none
+  key_kind : Option String := none
+  salts : Option (Array Nat) := none
+  key_allocation_id : Option Nat := none
 
-def parseSourceAllocIdDedupRow (path : String) : Parser (SourceAllocIdDedupRow) := do
-  let s ← object (ParseSourceAllocIdDedupRowFields.mk none none none none) fun s key => do
+def parseSourceAllocIdDedupRow (path : String) : Parser PendingSourceAllocIdDedupRow := do
+  let s ← object ({} : ParseSourceAllocIdDedupRowFields) fun s key => do
     match key with
     | "key_kind" => return { s with key_kind := some (← string) }
-    | "salts" => return { s with salts := some (← array (parseSourceAllocIdSaltResult (path ++ ".salts"))) }
-    | "bytes_hex" => return { s with bytes_hex := some (← nullable string) }
+    | "salts" => return { s with salts := some (← array natural) }
     | "key_allocation_id" => return { s with key_allocation_id := some (← natural) }
+    | "bytes_hex" | "byte_image_id" => fail s!"{path}: dedup byte image derives from the key allocation"
     | _ => skipValue; pure s
-  let key_kind ← required s.key_kind (path ++ ".key_kind")
-  let salts ← required s.salts (path ++ ".salts")
-  let bytes_hex ← pure (s.bytes_hex.getD none)
-  let key_allocation_id ← required s.key_allocation_id (path ++ ".key_allocation_id")
-  let keyKind ← liftExcept (parseSourceAllocIdDedupKind key_kind (path ++ ".key_kind"))
-  if let some image := bytes_hex then
-    unless canonicalLowerHex image do fail s!"{path}.bytes_hex: expected canonical lowercase hexadecimal"
-  match keyKind, bytes_hex with
-  | .bytes, some _ => pure ()
-  | .bytes, none => fail s!"{path}.bytes_hex: required for byte-image dedup key"
-  | _, some _ => fail s!"{path}.bytes_hex: only valid for byte-image dedup key"
-  | _, none => pure ()
-  return ⟨keyKind, key_allocation_id, bytes_hex, salts⟩
+  let kind ← liftExcept (parseSourceAllocIdDedupKind (← required s.key_kind (path ++ ".key_kind")) (path ++ ".key_kind"))
+  pure ⟨kind, ← required s.key_allocation_id (path ++ ".key_allocation_id"), ← required s.salts (path ++ ".salts")⟩
 
 private structure ParseAllocFrontierFields where
   last_reserved_source_alloc_id : Option (Nat) := none
@@ -679,24 +649,33 @@ private def completeKeyFamily : Parser SourceAllocIdDedupKind := do
 private def nonExhaustiveKeyFamily : Parser SourceAllocIdDedupKind := do
   liftExcept (parseSourceAllocIdDedupKind (← string) "$compiler_alloc_id_world.non_exhaustive_key_families")
 
+structure PendingCompilerAllocIdWorld where
+  lastReservedSourceAllocId : UInt64
+  nextSourceAllocId : UInt64
+  finalSentinelSourceAllocId : UInt64
+  rawPool : Array (Option SourceAllocIdPoolRow)
+  dedupCatalog : Array PendingSourceAllocIdDedupRow
+  completeKeyFamilies : Array SourceAllocIdDedupKind
+  nonExhaustiveKeyFamilies : Array SourceAllocIdDedupKind
+
 private structure ParseCompilerAllocIdWorldFields where
   schema : Option (String) := none
   profile : Option (String) := none
   frontier : Option (Nat × Nat × Nat) := none
   global_pool_complete_through : Option (Nat) := none
-  raw_pool : Option (Array SourceAllocIdPoolRow) := none
-  dedup_catalog : Option (Array SourceAllocIdDedupRow) := none
+  raw_pool : Option (Array (Option SourceAllocIdPoolRow)) := none
+  dedup_catalog : Option (Array PendingSourceAllocIdDedupRow) := none
   complete_key_families : Option (Array SourceAllocIdDedupKind) := none
   non_exhaustive_key_families : Option (Array SourceAllocIdDedupKind) := none
 
-def parseCompilerAllocIdWorld (path : String := "$.compiler_alloc_id_world") : Parser (CompilerAllocIdWorld) := do
+def parseCompilerAllocIdWorld (path : String := "$.compiler_alloc_id_world") : Parser PendingCompilerAllocIdWorld := do
   let s ← object (ParseCompilerAllocIdWorldFields.mk none none none none none none none none) fun s key => do
     match key with
     | "schema" => return { s with schema := some (← string) }
     | "profile" => return { s with profile := some (← string) }
     | "frontier" => return { s with frontier := some (← parseAllocFrontier (path ++ ".frontier")) }
     | "global_pool_complete_through" => return { s with global_pool_complete_through := some (← natural) }
-    | "raw_pool" => return { s with raw_pool := some (← array (parseSourceAllocIdPoolRow (path ++ ".raw_pool"))) }
+    | "raw_pool" => return { s with raw_pool := some (← arrayIndexed (fun index => nullable (parseSourceAllocIdPoolRow s!"{path}.raw_pool[{index}]" index))) }
     | "dedup_catalog" => return { s with dedup_catalog := some (← array (parseSourceAllocIdDedupRow (path ++ ".dedup_catalog"))) }
     | "complete_key_families" => return { s with complete_key_families := some (← array completeKeyFamily) }
     | "non_exhaustive_key_families" => return { s with non_exhaustive_key_families := some (← array nonExhaustiveKeyFamily) }
@@ -709,7 +688,7 @@ def parseCompilerAllocIdWorld (path : String := "$.compiler_alloc_id_world") : P
   let dedup_catalog ← required s.dedup_catalog (path ++ ".dedup_catalog")
   let complete_key_families ← required s.complete_key_families (path ++ ".complete_key_families")
   let non_exhaustive_key_families ← required s.non_exhaustive_key_families (path ++ ".non_exhaustive_key_families")
-  unless schema == "rustc_alloc_id_world_v1" do fail s!"{path}.schema: unsupported source AllocId world schema"
+  unless schema == "rustc_alloc_id_world_v2" do fail s!"{path}.schema: unsupported source AllocId world schema"
   unless profile == "prepared_post_export" do fail s!"{path}.profile: unsupported source AllocId world profile"
   unless global_pool_complete_through == frontier.1 do fail s!"{path}.global_pool_complete_through: does not equal frontier"
   return ⟨UInt64.ofNat frontier.1, UInt64.ofNat frontier.2.1, UInt64.ofNat frontier.2.2,

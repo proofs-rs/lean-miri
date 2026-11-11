@@ -5,7 +5,7 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "tools"))
-from mir_json import load_mir_document
+from mir_json import load_mir_document, pool_entry
 
 
 def require(condition: bool, message: str) -> None:
@@ -16,7 +16,7 @@ def require(condition: bool, message: str) -> None:
 def main(path: str) -> None:
     document = load_mir_document(path)
     world = document["compiler_alloc_id_world"]
-    require(world["schema"] == "rustc_alloc_id_world_v1", "wrong allocator-world schema")
+    require(world["schema"] == "rustc_alloc_id_world_v2", "wrong allocator-world schema")
     require(world["profile"] == "prepared_post_export", "wrong allocator-world profile")
     rows = world["raw_pool"]
     frontier = world["frontier"]
@@ -24,14 +24,20 @@ def main(path: str) -> None:
     require(len(rows) == last, "raw pool length differs from source frontier")
     require(frontier["final_sentinel_source_alloc_id"] == last, "wrong final source sentinel")
     require(frontier["next_source_alloc_id"] == last + 1, "wrong next source ID")
-    source_rows = {}
-    for source_id, row in enumerate(rows, 1):
-        require(row["source_alloc_id"] == source_id, f"source AllocId gap at {source_id}")
-        source_rows[source_id] = row
-    require((rows[-1]["kind"], rows[-1]["status"], rows[-1]["allocation_id"]) ==
-            ("dangling", "dangling", None), "last pool row is not the dangling sentinel")
+    require(rows[-1] == {"kind": "dangling", "status": "dangling"},
+            "final pool row is not dangling")
+    graph_count = sum(len(row["identities"]) if row["kind"] == "function" else 1
+                      for row in document["allocations"])
+    nodes = {graph: pool_entry(document, "allocations", graph) for graph in range(graph_count)}
+    sources = set()
+    for graph, node in nodes.items():
+        source = node["source_alloc_id"]
+        require(type(source) is int and 1 <= source <= last, "source AllocId outside raw prefix")
+        require(source not in sources, "duplicate source AllocId witness")
+        sources.add(source)
+        require(rows[source - 1] is None, "serialized source lacks an implicit raw slot")
+    require(sum(row is None for row in rows) == len(nodes), "unmatched serialized raw slot")
 
-    nodes = {node["allocation_id"]: node for node in document["allocations"]}
     selected = {"static": 0, "type_id": 0}
     identities = {"static": set(), "type_id": set()}
     for row_index, catalog in enumerate(world["dedup_catalog"]):
@@ -41,19 +47,14 @@ def main(path: str) -> None:
         selected[kind] += 1
         require(len(catalog["salts"]) == 1, f"{kind} catalog row {row_index} must have one salt")
         result = catalog["salts"][0]
-        require(set(result) == {"salt", "allocation_id", "source_alloc_id"},
-                f"{kind} row {row_index} has unexpected salt fields")
-        require(result["salt"] == 0, f"{kind} row {row_index} is not salt zero")
-        require(result["allocation_id"] == catalog["key_allocation_id"],
+        require(type(result) is int, f"{kind} row {row_index} result is not a graph ID")
+        require(result == catalog["key_allocation_id"],
                 f"{kind} row {row_index} result is not its selected graph witness")
-        graph_id = result["allocation_id"]
+        graph_id = result
         key_node = nodes[graph_id]
         require(key_node["kind"] == kind and "status" not in key_node,
                 f"{kind} key node kind/status mismatch")
-        require(key_node["source_alloc_id"] == result["source_alloc_id"],
-                f"{kind} key node source witness mismatch")
-        pool_row = source_rows[result["source_alloc_id"]]
-        require((pool_row["status"], pool_row["allocation_id"]) == ("serialized", graph_id),
+        require(rows[key_node["source_alloc_id"] - 1] is None,
                 f"{kind} key source ID does not join its serialized graph node")
         if kind == "static":
             global_info = key_node["global_info"]

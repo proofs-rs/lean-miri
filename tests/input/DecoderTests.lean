@@ -87,7 +87,7 @@ private def rvalues (document : ImportDocument) : Array Miri.MIR.Rvalue :=
 def main (args : List String) : IO UInt32 := do
   let path ← match args with
     | value :: _ => pure value
-    | [] => fail "usage: DecoderTests <schema-v4-export.json>"
+    | [] => fail "usage: DecoderTests <schema-v7-export.json>"
   let source ← IO.FS.readFile path
   let _ ← must (JsonFixtures.parse source)
   let original := source
@@ -144,11 +144,12 @@ def main (args : List String) : IO UInt32 := do
   check (malformedResult badVersion) "unsupported schema version was accepted"
 
   let syntheticFunction := object [
-    ("allocation_id", number document.allocations.size),
+    ("identities", "[[" ++ number document.allocations.size ++ ",18446744073709551614]]"),
     ("kind", string "function"),
     ("instance_id", number 0)]
   let syntheticTypeId := object [
     ("allocation_id", number (document.allocations.size + 1)),
+    ("source_alloc_id", number 18446744073709551615),
     ("kind", string "type_id"),
     ("type", number 0)]
   let allocations ← must (array (← must (getField original "allocations")))
@@ -248,8 +249,7 @@ def main (args : List String) : IO UInt32 := do
   let allocationsJson ← must (getField original "allocations")
   let allocations ← must (array allocationsJson)
   let firstAllocation ← must (getAt allocations 0)
-  let duplicateAllocation ← must (setField firstAllocation "allocation_id" (number 1))
-  let duplicateAllocations ← must (updateAt allocations 0 duplicateAllocation)
+  let duplicateAllocations := allocations.push firstAllocation
   let duplicateAllocationId ← must (setField original "allocations" (encodeArray duplicateAllocations))
   check (malformedResult duplicateAllocationId) "duplicate allocation ID was accepted"
 

@@ -93,7 +93,7 @@ Additional structural regressions are checked with
 `bash tools/check-structural-regressions.sh` (typechecking, kernel examples,
 #eval and executable assertions with pinned unit fixtures or no input). This is
 distinct from running supplemental guest harnesses that need fresh exports. The structural
-checker copies pinned schema-6 unit fixtures without changing their bytes and passes them to
+checker copies pinned schema-7 unit fixtures without changing their bytes and passes them to
 `LowerContext`, `ProviderContext` and `PrimitiveRebinding`, including their runtime
 source/cache and error-order assertions. These are not fresh producer comparisons.
 `tools/prepare-source-audit.py`
@@ -209,6 +209,17 @@ references, cross-table joins and required execution graphs before returning the
 final `ImportDocument`; its completion bookkeeping is private and discarded.
 Pool IDs remain numeric and local to the input, with runtime bounds checks.
 Neither JSON ranges nor a generic value tree nor a second MIR spine is retained.
+
+Schema 7 stores allocation byte vectors once in the document-local `byte_images`
+array. Memory payloads retain independent size, alignment, mutability,
+initialization and relocation metadata and reference an exact byte image by ID.
+Function payloads group one Instance with ordered graph/source identity pairs;
+expansion preserves both identity namespaces. Prepared allocator-world raw slots
+use their array index plus one as the source ID. A null slot refers to its unique
+serialized node; opaque and dangling slots remain explicit. Salt arrays contain
+graph IDs in source salt order, including all 32 results for applicable families.
+The reader rejects unmatched slots, repeated identities and out-of-range image IDs.
+Earlier schema versions require fresh export.
 
 Use `decodeJson` or `decodeFile` for the complete checked execution input, or
 `JsonReader.run (parseDocument {}) text` for the checked `ImportDocument`.

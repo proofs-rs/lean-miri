@@ -27,6 +27,19 @@ private def hexBytes (value : String) : Except String (Array UInt8) := do
     bytes := bytes.push (UInt8.ofNat (16*(← digit hi)+(← digit lo)))
   pure bytes
 
+private def matchesHex (hex : String) (bytes : Array UInt8) : Bool := Id.run do
+  let text := hex.toUTF8
+  unless text.size == 2 * bytes.size do return false
+  let digit := fun n => UInt8.ofNat (if n < 10 then n + 48 else n + 87)
+  for index in [:bytes.size] do
+    let some raw := bytes[index]? | return false
+    let some hi := text[2 * index]? | return false
+    let some lo := text[2 * index + 1]? | return false
+    let byte := raw.toNat
+    unless hi == digit (byte / 16) && lo == digit (byte % 16) do
+      return false
+  return true
+
 private def candidate (global : GlobalAllocation) : Except String (Option (Array UInt8)) := do
   let some (.memory allocation) := global.payload | return none
   if allocation.mutability != .Not || allocation.align != .ONE then return none
@@ -54,19 +67,29 @@ def prepare (program : LoweredProgram) (runtime : RuntimeMetadata)
     for (graphId, runtimeId) in memory.importedGlobalIds do
       if runtimeByGraph.contains graphId then throw "duplicate imported graph ID while preparing byte-key catalog"
       runtimeByGraph := runtimeByGraph.insert graphId runtimeId
-    let mut seen : Std.HashMap (String × Nat) Bool := {}
+    let mut seen : Std.HashMap (Array UInt8 × Nat) Bool := {}
     for row in world.dedupCatalog do
       if row.keyKind == .bytes then
         let some imageHex := row.byteImageHex | throw "prepared byte-key catalog row lacks its exact image"
-        let bytes ← hexBytes imageHex
+        let some keyNode := program.input.allocations[row.keyAllocationId]? |
+          throw "prepared byte-key catalog key allocation is absent"
+        unless keyNode.id == row.keyAllocationId && keyNode.kind == .memory do
+          throw "prepared byte-key catalog key graph identity/kind disagrees"
+        let some (.memory image) := keyNode.data | throw "prepared byte-key catalog key is not memory"
+        unless image.mutability == .immutable && image.alignBytes == 1 && image.relocations.isEmpty &&
+            image.initializationRanges.all (·.initialized) do
+          throw "prepared byte-key catalog key is not eligible immutable memory"
+        let bytes ← image.bytesHex.checkedBytes
+        unless matchesHex imageHex bytes do
+          throw "prepared byte-key catalog image differs from its key allocation"
         for result in row.salts do
           if proof : result.salt < 32 then
             let some id := runtimeByGraph[result.allocationId]? | throw s!"missing runtime mapping for compiler allocation {result.allocationId}"
             unless memory.sourceAllocIdForRuntime? id == some result.sourceAllocId do
               throw "prepared byte result raw AllocId does not match the active memory world"
-            if seen.contains (imageHex, result.salt) then
+            if seen.contains (bytes, result.salt) then
               throw "prepared source AllocId world contains duplicate byte key/salt results"
-            seen := seen.insert (imageHex, result.salt) true
+            seen := seen.insert (bytes, result.salt) true
             keys := keys.push (bytes,⟨result.salt,proof⟩,id)
           else throw "prepared source AllocId world byte-key salt exceeds 31"
   else

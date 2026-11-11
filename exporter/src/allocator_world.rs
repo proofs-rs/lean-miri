@@ -9,18 +9,10 @@ use rustc_middle::mir::interpret::{AllocId, AllocRange, GlobalAlloc};
 use std::num::NonZeroU64;
 
 #[derive(Clone, serde::Serialize)]
-pub(super) struct Salt {
-    salt: usize,
-    allocation_id: u64,
-    source_alloc_id: u64,
-}
-#[derive(Clone, serde::Serialize)]
 pub(super) struct DedupKey {
     key_kind: &'static str,
     key_allocation_id: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    bytes_hex: Option<String>,
-    salts: Vec<Salt>,
+    salts: Vec<u64>,
 }
 #[derive(serde::Serialize)]
 pub(super) struct Frontier {
@@ -34,17 +26,15 @@ pub(super) struct World {
     profile: &'static str,
     pub frontier: Frontier,
     global_pool_complete_through: u64,
-    raw_pool: Vec<PoolRow>,
+    raw_pool: Vec<Option<PoolRow>>,
     dedup_catalog: Vec<DedupKey>,
     complete_key_families: [&'static str; 1],
     non_exhaustive_key_families: [&'static str; 5],
 }
 #[derive(serde::Serialize)]
 struct PoolRow {
-    source_alloc_id: u64,
     kind: &'static str,
     status: &'static str,
-    allocation_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     memory_mutability: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -53,26 +43,16 @@ struct PoolRow {
     memory_all_bytes_initialized: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     memory_has_provenance: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    byte_image_hex: Option<String>,
 }
 impl PoolRow {
-    fn new(
-        source_alloc_id: u64,
-        kind: &'static str,
-        status: &'static str,
-        allocation_id: Option<u64>,
-    ) -> Self {
+    fn new(kind: &'static str, status: &'static str) -> Self {
         Self {
-            source_alloc_id,
             kind,
             status,
-            allocation_id,
             memory_mutability: None,
             memory_align_bytes: None,
             memory_all_bytes_initialized: None,
             memory_has_provenance: None,
-            byte_image_hex: None,
         }
     }
 }
@@ -81,34 +61,6 @@ struct ByteKey {
     representative: AllocId,
     bytes: Vec<u8>,
     allocations: Vec<AllocId>,
-}
-
-// Retain observations during allocator discovery, then project wire rows only
-// after all probes have completed. Failed probes still abort collection.
-struct SaltFact {
-    salt: usize,
-    allocation_id: u64,
-    source_alloc_id: u64,
-}
-struct ProbeFact {
-    key_kind: &'static str,
-    key_allocation_id: u64,
-    bytes_hex: Option<String>,
-    salts: Vec<SaltFact>,
-}
-impl ProbeFact {
-    fn finish(&self) -> DedupKey {
-        DedupKey {
-            key_kind: self.key_kind,
-            key_allocation_id: self.key_allocation_id,
-            bytes_hex: self.bytes_hex.clone(),
-            salts: self.salts.iter().map(|fact| Salt {
-                salt: fact.salt,
-                allocation_id: fact.allocation_id,
-                source_alloc_id: fact.source_alloc_id,
-            }).collect(),
-        }
-    }
 }
 
 /// Exact dedup key identities selected by the exporter's ordinary
@@ -127,7 +79,7 @@ pub(super) struct SelectedKeyProbes<'tcx> {
     )>,
     statics: HashSet<rustc_hir::def_id::DefId>,
     type_ids: HashSet<ty::Ty<'tcx>>,
-    rows: Vec<ProbeFact>,
+    rows: Vec<DedupKey>,
 }
 
 impl<'tcx> SelectedKeyProbes<'tcx> {
@@ -154,7 +106,10 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
         tcx: TyCtxt<'tcx>,
         context: &mut ExportContext<'tcx>,
     ) -> Result<(), String> {
-        let functions = context.fn_pointer_targets.suffix(self.function_cursor).to_vec();
+        let functions = context
+            .fn_pointer_targets
+            .suffix(self.function_cursor)
+            .to_vec();
         self.function_cursor = context.fn_pointer_targets.len();
         let allocation_end = context.allocation_ids.len();
         let mut new_vtables = Vec::new();
@@ -162,10 +117,12 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
         for index in self.allocation_cursor..allocation_end {
             let alloc = *context.allocation_ids.key(index).unwrap();
             match tcx.try_get_global_alloc(alloc) {
-                Some(GlobalAlloc::VTable(input, predicates)) => new_vtables.push((input, predicates)),
+                Some(GlobalAlloc::VTable(input, predicates)) => {
+                    new_vtables.push((input, predicates))
+                }
                 Some(GlobalAlloc::Static(def)) => self.pending_statics.push((alloc, def)),
                 Some(GlobalAlloc::TypeId { ty }) => new_type_ids.push(ty),
-                _ => {},
+                _ => {}
             }
         }
         self.allocation_cursor = allocation_end;
@@ -178,33 +135,35 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             let mut key_graph_id = None;
             for salt in 0..32usize {
                 let selected = tcx.reserve_and_set_fn_alloc(instance, salt);
-                let source_id = raw_id(selected);
                 allocation_ref(context, tcx, selected)?;
                 let graph_id = supported_global_graph_id(context, selected, "function")?;
                 if salt == 0 {
                     key_graph_id = Some(graph_id);
                 }
-                salts.push(SaltFact {
-                    salt,
-                    allocation_id: graph_id,
-                    source_alloc_id: source_id,
-                });
+                salts.push(graph_id);
             }
             let key_allocation_id =
                 key_graph_id.ok_or_else(|| "function dedup probe omitted salt zero".to_owned())?;
-            self.rows.push(ProbeFact {
+            self.rows.push(DedupKey {
                 key_kind: "function",
                 key_allocation_id,
-                bytes_hex: None,
                 salts,
             });
             self.functions.insert(instance);
         }
 
-        new_vtables.extend(context.vtable_query_requests.suffix(self.vtable_cursor).iter().copied());
+        new_vtables.extend(
+            context
+                .vtable_query_requests
+                .suffix(self.vtable_cursor)
+                .iter()
+                .copied(),
+        );
         self.vtable_cursor = context.vtable_query_requests.len();
-        let vtables = new_vtables.into_iter()
-            .map(|key| tcx.erase_and_anonymize_regions(key)).collect::<HashSet<_>>();
+        let vtables = new_vtables
+            .into_iter()
+            .map(|key| tcx.erase_and_anonymize_regions(key))
+            .collect::<HashSet<_>>();
         let mut vtables =
             vtables
                 .into_iter()
@@ -233,24 +192,18 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             let mut key_graph_id = None;
             for salt in 0..32usize {
                 let selected = tcx.reserve_and_set_vtable_alloc(ty, predicates, salt);
-                let source_id = raw_id(selected);
                 allocation_ref(context, tcx, selected)?;
                 let graph_id = supported_global_graph_id(context, selected, "vtable")?;
                 if salt == 0 {
                     key_graph_id = Some(graph_id);
                 }
-                salts.push(SaltFact {
-                    salt,
-                    allocation_id: graph_id,
-                    source_alloc_id: source_id,
-                });
+                salts.push(graph_id);
             }
             let key_allocation_id =
                 key_graph_id.ok_or_else(|| "vtable dedup probe omitted salt zero".to_owned())?;
-            self.rows.push(ProbeFact {
+            self.rows.push(DedupKey {
                 key_kind: "vtable",
                 key_allocation_id,
-                bytes_hex: None,
                 salts,
             });
             self.vtables.insert((ty, predicates));
@@ -290,15 +243,10 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             {
                 return Err("selected static key does not match its exact DefId allocation".into());
             }
-            self.rows.push(ProbeFact {
+            self.rows.push(DedupKey {
                 key_kind: "static",
                 key_allocation_id: graph_id,
-                bytes_hex: None,
-                salts: vec![SaltFact {
-                    salt: 0,
-                    allocation_id: graph_id,
-                    source_alloc_id: source_id,
-                }],
+                salts: vec![graph_id],
             });
             self.statics.insert(def);
         }
@@ -361,23 +309,14 @@ impl<'tcx> SelectedKeyProbes<'tcx> {
             {
                 return Err("selected TypeId key does not match its exact Ty allocation".into());
             }
-            self.rows.push(ProbeFact {
+            self.rows.push(DedupKey {
                 key_kind: "type_id",
                 key_allocation_id: graph_id,
-                bytes_hex: None,
-                salts: vec![SaltFact {
-                    salt: 0,
-                    allocation_id: graph_id,
-                    source_alloc_id: source_id,
-                }],
+                salts: vec![graph_id],
             });
             self.type_ids.insert(ty);
         }
         Ok(())
-    }
-
-    fn rows(&self) -> impl Iterator<Item = DedupKey> + '_ {
-        self.rows.iter().map(ProbeFact::finish)
     }
 }
 
@@ -529,7 +468,7 @@ fn pool_row<'tcx>(
     context: &ExportContext<'tcx>,
     id: AllocId,
     sentinel: bool,
-) -> Result<PoolRow, String> {
+) -> Result<Option<PoolRow>, String> {
     let raw = raw_id(id);
     if sentinel || tcx.try_get_global_alloc(id).is_none() {
         if !sentinel
@@ -543,7 +482,7 @@ fn pool_row<'tcx>(
                 "source AllocId {raw} is dangling but has a linked allocation node"
             ));
         }
-        return Ok(PoolRow::new(raw, "dangling", "dangling", None));
+        return Ok(Some(PoolRow::new("dangling", "dangling")));
     }
     let global = tcx
         .try_get_global_alloc(id)
@@ -565,12 +504,10 @@ fn pool_row<'tcx>(
         // not an imported semantic allocation or a failed serialization.
         None
     };
-    let status = if supported_graph_id.is_some() {
-        "serialized"
-    } else {
-        "opaque"
-    };
-    let mut row = PoolRow::new(raw, kind, status, supported_graph_id);
+    if supported_graph_id.is_some() {
+        return Ok(None);
+    }
+    let mut row = PoolRow::new(kind, "opaque");
     if let GlobalAlloc::Memory(memory) = global {
         let projection = byte_image(memory);
         // These are direct rustc allocation facts; the Lean decoder applies
@@ -580,11 +517,8 @@ fn pool_row<'tcx>(
         row.memory_align_bytes = Some(projection.align_bytes);
         row.memory_all_bytes_initialized = Some(projection.all_bytes_initialized);
         row.memory_has_provenance = Some(projection.has_provenance);
-        if let Some(bytes) = projection.bytes {
-            row.byte_image_hex = Some(bytes_hex(&bytes));
-        }
     }
-    Ok(row)
+    Ok(Some(row))
 }
 
 /// Capture the post-export TCX continuation. Probe-created mappings are
@@ -592,9 +526,9 @@ fn pool_row<'tcx>(
 pub(super) fn capture<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
-    selected_keys: &SelectedKeyProbes<'tcx>,
+    selected_keys: SelectedKeyProbes<'tcx>,
 ) -> Result<World, String> {
-    let mut catalog = BTreeMap::<String, ProbeFact>::new();
+    let mut catalog = BTreeMap::<String, DedupKey>::new();
     loop {
         // A temporary reserved ID bounds a read-only enumeration of the
         // current pool. AllocMap IDs are monotone and never reused.
@@ -616,21 +550,15 @@ pub(super) fn capture<'tcx>(
             let mut salts = Vec::with_capacity(32);
             for salt in 0..32usize {
                 let selected = tcx.allocate_bytes_dedup(&key.bytes, salt);
-                let source_id = raw_id(selected);
                 allocation_ref(context, tcx, selected)?;
                 let allocation_id = supported_memory_graph_id(context, selected)?;
-                salts.push(SaltFact {
-                    salt,
-                    allocation_id: allocation_id,
-                    source_alloc_id: source_id,
-                });
+                salts.push(allocation_id);
             }
             catalog.insert(
-                hex.clone(),
-                ProbeFact {
+                hex,
+                DedupKey {
                     key_kind: "byte_memory",
                     key_allocation_id: key_graph_id,
-                    bytes_hex: Some(hex),
                     salts,
                 },
             );
@@ -679,7 +607,7 @@ pub(super) fn capture<'tcx>(
         raw_pool.push(pool_row(tcx, context, id, raw == frontier)?);
     }
     Ok(World {
-        schema: "rustc_alloc_id_world_v1",
+        schema: "rustc_alloc_id_world_v2",
         profile: "prepared_post_export",
         frontier: Frontier {
             last_reserved_source_alloc_id: frontier,
@@ -688,7 +616,7 @@ pub(super) fn capture<'tcx>(
         },
         global_pool_complete_through: frontier,
         raw_pool,
-        dedup_catalog: catalog.into_values().map(|fact| fact.finish()).chain(selected_keys.rows()).collect(),
+        dedup_catalog: catalog.into_values().chain(selected_keys.rows).collect(),
         complete_key_families: ["byte_memory"],
         non_exhaustive_key_families: [
             "function",
