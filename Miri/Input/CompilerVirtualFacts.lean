@@ -47,21 +47,10 @@ def compilerHooks (prepared : CompilerFactAdapters.Prepared)
     layoutOf := fun ty => lift (CompilerFacts.layoutOf prepared.context ty)
     unitLayout := lift (CompilerFacts.unitLayout prepared.context) }
 
-/-- Source inlinecallee attribute evidence is optional only when that full
-instance does not occur in any inline scope. Conflicts/unresolved entries are
-errors; they must not be hidden by a fallback query. -/
-def inlineAttribute (prepared : CompilerScopes.Prepared) (fnInstance : CallInstance) : Result (Option Bool) := do
-  let mut found := none
-  for scopes in prepared.scopes do
-    for outcome in scopes do
-      if let .ok entry := outcome then
-        if let some (callee,_) := entry.scope.inlined then
-          if callee == fnInstance then
-            let some value := entry.trackCaller | throw "inlinecallee attribute evidence missing"
-            if let some previous := found then
-              unless previous == value do throw "conflicting full-instance inlinecallee attributes"
-            found := some value
-  return found
+/-- Construction validates all inlinecallee evidence, including unused instances.
+An absent full instance delegates to the mandatory base query. -/
+def inlineAttribute (prepared : CompilerScopes.Prepared) (fnInstance : CallInstance) : Option Bool :=
+  prepared.inlineAttributes[fnInstance]?
 
 /-- The canonical body key comes directly from the saved frame. Body equality
 is only a consistency assertion after indexing, never a body lookup strategy.
@@ -76,7 +65,7 @@ def scopeHooks (prepared : CompilerScopes.Prepared) (base : VirtualCalls.Compile
       unless actual.body == body do throw (.invalidProgram "frame body identity/content mismatch")
       lift (CompilerScopes.sourceScope prepared identity.index scope)
     requiresCallerLocation := fun fnInstance => do
-      match ← lift (inlineAttribute prepared fnInstance) with
+      match inlineAttribute prepared fnInstance with
       | some value => pure value
       | none => base.requiresCallerLocation fnInstance }
 

@@ -18,7 +18,7 @@ structure Prepared where
 program so full shim instances, inline spans, const arguments and executable body
 identities remain compilation-local and consistent. -/
 def prepareProfiled (profile : Lean.Options) (program : LoweredProgram) : Result Prepared := do
-  let scopes := profileit "preparation.call.scopes" profile fun _ => CompilerScopes.prepare program
+  let scopes ← profileit "preparation.call.scopes" profile fun _ => CompilerScopes.prepare program
   let runtime ← profileit "preparation.call.runtime_queries" profile fun _ =>
     CompilerRuntimeQueries.prepare scopes.program
   let metadata ← profileit "preparation.call.runtime_metadata" profile fun _ =>
@@ -33,7 +33,7 @@ def prepareProfiled (profile : Lean.Options) (program : LoweredProgram) : Result
     CallResolution.prepareWithRuntimeProfiled profile metadata symbols.facts.context.program
   profileit "preparation.call.inline_attribute_validation" profile fun _ => do
     for (callee,trackCaller) in runtime.callerLocation do
-      if let some inlineAttribute ← CompilerVirtualFacts.inlineAttribute scopes callee then
+      if let some inlineAttribute := CompilerVirtualFacts.inlineAttribute scopes callee then
         unless inlineAttribute == trackCaller do throw "inlined/global full-instance caller attributes conflict"
   let program := calls.program
   let context := symbols.facts.context.withProgram program

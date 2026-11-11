@@ -41,9 +41,9 @@ structure Metadata (s : Static) where
   itemDefinition : DefId
   itemKind : CompilerInstance.kindOf s.prepared.compiler.loweringContext.instances s.functionInstance = .ok (.Item itemDefinition)
   inlineAttribute : CompilerVirtualFacts.inlineAttribute
-    s.prepared.compiler.lifecycle.calls.scopes s.functionInstance = .ok none ∨
+    s.prepared.compiler.lifecycle.calls.scopes s.functionInstance = none ∨
     CompilerVirtualFacts.inlineAttribute
-      s.prepared.compiler.lifecycle.calls.scopes s.functionInstance = .ok (some false)
+      s.prepared.compiler.lifecycle.calls.scopes s.functionInstance = (some false)
   trackCaller : CompilerRuntimeQueries.requiresCallerLocation
     s.prepared.compiler.lifecycle.calls.runtime s.functionInstance = .ok false
   targetFeatures : CompilerTargetFeatures.required
@@ -64,9 +64,9 @@ structure Metadata (s : Static) where
   unitStorageSized : CompilerStorage.veryTriviallySized
     s.prepared.compiler.runtime s.abi.ret.layout.ty = .ok true
   frameInlineAttribute : CompilerVirtualFacts.inlineAttribute
-    s.prepared.compiler.lifecycle.frames.calls.scopes s.functionInstance = .ok none ∨
+    s.prepared.compiler.lifecycle.frames.calls.scopes s.functionInstance = none ∨
     CompilerVirtualFacts.inlineAttribute
-      s.prepared.compiler.lifecycle.frames.calls.scopes s.functionInstance = .ok (some false)
+      s.prepared.compiler.lifecycle.frames.calls.scopes s.functionInstance = (some false)
   frameTrackCaller : CompilerRuntimeQueries.requiresCallerLocation
     s.prepared.compiler.lifecycle.frames.calls.runtime s.functionInstance = .ok false
   frameDefinition : ∃ definitionIndex definition,
