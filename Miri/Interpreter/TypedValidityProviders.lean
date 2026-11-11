@@ -71,7 +71,7 @@ def retagHooks [DecidableEq K] (prepared : CompilerFactAdapters.Prepared)
   let base := TypedMachineBindings.retagHooks access base
   {base with writeUninit := fun place => do
     let access ← ValidityMachine.scopedAccess access
-    PlaceMachine.writeMemory access (fun _ => false) .uninit place}
+    PlaceMachine.writeUninitMemory access place}
 
 /-- Compose compiler type/path evidence, real Box projection, actual immediate
 pointer construction and existing canonical memory/ghost/retag visitor. The

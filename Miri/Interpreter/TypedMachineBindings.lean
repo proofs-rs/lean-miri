@@ -14,7 +14,7 @@ remaining required dictionary contains genuine compiler/pointer queries. -/
 def retagHooks [DecidableEq K] (access : PlaceMachine.AccessConfig K User)
     (queries : TypedRetag.Hooks K User) : TypedRetag.Hooks K User :=
   { queries with
-    writeUninit := PlaceMachine.writeMemory access (fun _ => false) .uninit
+    writeUninit := PlaceMachine.writeUninitMemory access
     reconstruct := fun value place => do
       let immediate ← match place.mplace.toRef access.runtime.base with
         | .ok value => pure value

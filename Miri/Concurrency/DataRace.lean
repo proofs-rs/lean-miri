@@ -185,6 +185,9 @@ end ByteSize
 inductive DataRaceResult where
   | ok
   | race
+  /-- The exact incompatible-size atomic-access rejection, before any clock
+  or cell update. This remains a detected race, with its cause retained. -/
+  | mixedSizeRace
   | invalidClockUpdate (error : ClockError)
   | internalInvariantViolation
   | outOfBounds
@@ -290,7 +293,7 @@ def atomicAccess (cell : MemoryCellClocks) (thread : ThreadClockSet)
     else if !isWrite && atomic.writeVector.le thread.clock then
       .ok { atomic with size := none }
     else
-      .error .race
+      .error .mixedSizeRace
 
 /-- A cell operation returns mutated states even when a race is detected. This
 matches the source's mutation-before-check order; execution then terminates at

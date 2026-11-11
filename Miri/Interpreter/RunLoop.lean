@@ -86,6 +86,9 @@ def iteration (hooks : RunLoopHooks S C Callback) (choice : C)
 supplied hooks or establish a Rust safety theorem. -/
 def reportsUB : StepError → Bool
   | .undefinedBehavior _ => true
+  -- Pinned interpret/stack.rs LocalState::access/access_mut both report
+  -- DeadLocal as UB. Other stack errors remain interpreter failures.
+  | .stack (.localExpectedLive _) => true
   | .retagWriteToReadOnly => true
   | .termination info => info.isUbReport
   | _ => false

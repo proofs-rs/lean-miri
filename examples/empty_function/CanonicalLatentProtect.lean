@@ -92,7 +92,7 @@ theorem protect (s : WholeCall.Static) (p : WholeCall.Packet)
     (retain : ∀ machine, s.cfg.access.retainTouched machine none = machine)
     (writeBinding : ∀ place, s.cfg.retag.writeUninit place = (do
       let currentAccess ← ValidityMachine.scopedAccess s.cfg.access
-      PlaceMachine.writeMemory currentAccess (fun _ => false) .uninit place))
+      PlaceMachine.writeUninitMemory currentAccess place))
     (globals : GlobalAllocationHooks Provenance BorrowTree MiriMemoryKind (PlaceMachine.AccessState MiriMemoryKind Configuration.RootUser))
     (extraBinding : s.cfg.retag.ensureTreeExtra = GlobalAllocationMachine.ensure .global globals)
     (synchronize : ∀ memory view, globals.synchronizeMemory memory view = {view with machine := {view.machine with memory}}) :

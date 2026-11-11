@@ -50,7 +50,7 @@ def hooks [DecidableEq K] (access : PlaceMachine.AccessConfig K User)
       lift ((← readScalar operand).toUInt32.mapError ScalarOps.scalarError)
     writeUnsigned
     writeScalar
-    writeUninit := fun place => PlaceMachine.writeMemory access (fun _ => false) .uninit place
+    writeUninit := fun place => PlaceMachine.writeUninitMemory access place
     projectNamed := fun place name => do
       let index ← namedField place.layout.ty name
       let projected ← PlaceDynamic.field projection choice ⟨.memory place.mplace,place.layout⟩ index

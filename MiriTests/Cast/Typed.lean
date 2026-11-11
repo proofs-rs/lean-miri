@@ -84,4 +84,28 @@ example : (run (op 5 .uninit) .IntToInt 1 1).1 = ["validity","type:5"] := by dec
 example : (run (op 0 .uninit) .Transmute 0 0).1 = ["copy"] := by decide
 example : (run (op 0 .uninit) .Transmute 1 1).2 = .error (.undefinedBehavior "transmute size mismatch") := by decide
 example : (run (op 2 (.scalar (.fromScalarInt (.ofUInt16 15360)))) .FloatToFloat 3 3).2 = .ok () := by decide
+
+-- Pinned cast.rs permits every concrete sized pointee, including tuples, to
+-- unsize to dyn. The compiler's exact vtable query remains mandatory.
+private def tupleHooks : CastHooks AllocId Trace Unit (TyAndLayout MIR.TyId) := {
+  hooks with
+  typeInfo := fun _ ty =>
+    if ty == 7 then log "tuple" (.tuple #[1,1])
+    else if ty == 8 then log "dyn" (.dynamic #[])
+    else blocked "unsupported cast type"
+  lockstepTails := fun _ source target => log "tails" (source,target)
+  vtablePointer := fun _ source predicates =>
+    if source == 7 && predicates.isEmpty then log "vtable" (Pointer.new none (Size.ofBytes 64))
+    else blocked "wrong vtable query"
+  writeImmediate := fun _ value _ =>
+    if value == .scalarPair (.fromScalarInt (.ofUInt64 16)) (.fromScalarInt (.ofUInt64 64)) then
+      log "write tuple dyn" ()
+    else blocked "wrong tuple dyn value" }
+private def tupleUnsize (source : Nat) :=
+  runRvalue (Cast.unsizeIntoPointer tupleHooks ()
+    (op 4 (.scalar (.fromScalarInt (.ofUInt64 16)))) (layout 4) source 8) []
+example : (tupleUnsize 7).2 = .ok () := by decide
+example : (tupleUnsize 7).1 = ["tails","tuple","dyn","vtable","read","write tuple dyn"] := by decide
+example : (tupleUnsize 99).2 = .error (.unsupported "unsupported cast type") := by decide
+example : (tupleUnsize 99).1 = ["tails","unsupported cast type"] := by decide
 end CastQA

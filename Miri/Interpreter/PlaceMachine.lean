@@ -35,12 +35,12 @@ structure AccessConfig (K User : Type) where
   retainTouched : Machine K User → Option (AllocationAccessRef Provenance BorrowTree) → Machine K User
   memoryError : MemoryOperandError → StepError
 
-private def treeError (status : BorrowTree.BorrowTreeAccessStatus) : StepError :=
+private def treeError (write : Bool) (status : BorrowTree.BorrowTreeAccessStatus) : StepError :=
   match status with
   | .AccessFailure _ (.TransitionError ..)
   | .WildcardFailure _ (.TransitionError ..)
   | .WildcardFailure _ (.NoValidExposedReferences ..) =>
-    .undefinedBehavior s!"Tree Borrows: {reprStr status}"
+    .undefinedBehavior s!"Tree Borrows {if write then "write" else "read"} access: {reprStr status}"
   | _ => .invalidProgram s!"Tree Borrows invariant: {reprStr status}"
 
 private def bridge (state : AccessState K User) (action : MachineM K User A) :
@@ -73,7 +73,7 @@ def memoryAccess (config : AccessConfig K User) (write : Bool)
       (if write then .Write else .Read) tracker.global.protectedTags .VisitChildrenOfAccessed
     tree := accessed.tree
     if accessed.status != .Completed then
-      let error := treeError accessed.status
+      let error := treeError write accessed.status
       return ⟨{state with pendingError := some error}, tree, .error (reprStr error)⟩
   let sync := bridge state (config.syncAccess write allocId range)
   return ⟨sync.state, tree, sync.outcome⟩
@@ -124,6 +124,34 @@ def writeMemory [DecidableEq K] (config : AccessConfig K User)
     config.globalHooks (accessHooks config) config.dynamicLayout willValidate
   commit config result.memory result.hooks result.touched
   finish config result.hooks result.outcome
+
+/-- Write uninitialized bytes across the full dynamic place, as required by
+retag-in-place. Unlike an immediate write, this also handles unsized places. -/
+def writeUninitMemory [DecidableEq K] (config : AccessConfig K User)
+    (place : MPlaceTy Provenance) : M K User Unit := do
+  let state ← get
+  let result := writeUninitToMplace state.machine.memory ⟨state.machine, none⟩
+    ⟨place.mplace, localMemoryLayout place.layout⟩ config.runtime config.ghostMode config.globalKind
+    config.globalHooks (accessHooks config) config.dynamicLayout
+  commit config result.memory result.hooks result.touched
+  finish config result.hooks result.outcome
+
+/-- Full-place uninitialization of a zero-sized memory place preserves every
+machine/stack field without resolving an allocation or invoking access hooks. -/
+theorem writeUninitMemory_zero [DecidableEq K]
+    (config : AccessConfig K User) (place : MPlaceTy Provenance)
+    (pointer : Pointer (Option Provenance)) (ty : Option Nat) (pointerSize : Size)
+    (unitLayout : localMemoryLayout place.layout =
+      ⟨Size.ZERO, Align.ONE, .Memory (sized := true), ty⟩)
+    (placeMemory : place.mplace = ⟨pointer, .none, none⟩)
+    (pointerMetadata : config.runtime.pointerSizeIn config.runtime.defaultAddressSpace = .ok pointerSize)
+    (retain : ∀ machine, config.retainTouched machine none = machine)
+    (state : State K User) :
+    writeUninitMemory config place state = .ok () state := by
+  simp only [writeUninitMemory, unitLayout, placeMemory]
+  simp only [zero_uninit_full_write (pointerSize := pointerSize) (pointerMetadata := pointerMetadata)]
+  simp [commit, finish, retain]
+  with_unfolding_all rfl
 
 /-- The canonical zero-sized unit write preserves the entire machine and stack.
 No allocation lookup, pointer resolution or permission transition is assumed.
@@ -325,7 +353,7 @@ def retagHooks [DecidableEq K] (access : AccessConfig K User) (queries : RetagQu
   reconstructImmediate := queries.reconstructImmediate
   preparePlaceProtection := queries.preparePlaceProtection
   ensureTreeExtra := queries.ensureTreeExtra
-  writeUninit := writeMemory access (fun _ => false) .uninit }
+  writeUninit := writeUninitMemory access }
 
 /-- Bind canonical typed places and actual retag/race hooks to the existing
 rvalue interpreter. The supplied evaluator is normally PlaceDynamic.evalPlace;

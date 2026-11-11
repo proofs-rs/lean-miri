@@ -47,7 +47,7 @@ private theorem protect_live_from_resolution {K U : Type} [DecidableEq K]
     (retain : ∀ machine, access.retainTouched machine none = machine)
     (writeBinding : ∀ p, h.writeUninit p = (do
       let currentAccess ← ValidityMachine.scopedAccess access
-      PlaceMachine.writeMemory currentAccess (fun _ => false) .uninit p)) :
+      PlaceMachine.writeUninitMemory currentAccess p)) :
     ∃ finalTree,
       TypedRetag.protectInPlaceFunctionArgument h budget place (withCurrent frames frame machine) =
         .ok () (withCurrent frames (registeredFrame frame borrowFrame id tracker.global.nextPointerTag)
@@ -128,7 +128,7 @@ private theorem protect_nondata_from_resolution {K U : Type} [DecidableEq K]
     (retain : ∀ machine, access.retainTouched machine none = machine)
     (writeBinding : ∀ p, h.writeUninit p = (do
       let currentAccess ← ValidityMachine.scopedAccess access
-      PlaceMachine.writeMemory currentAccess (fun _ => false) .uninit p)) :
+      PlaceMachine.writeUninitMemory currentAccess p)) :
     TypedRetag.protectInPlaceFunctionArgument h budget place (withCurrent frames frame machine) =
       .ok () (withCurrent frames (registeredFrame frame {} id tracker.global.nextPointerTag)
         (registeredMachine (allocatedMachine machine tracker tagRoom) (allocatedTracker tracker tagRoom)
@@ -193,7 +193,7 @@ private theorem protect_miss_from_resolution {K U : Type} [DecidableEq K]
     (retain : ∀ machine, access.retainTouched machine none = machine)
     (writeBinding : ∀ p, h.writeUninit p = (do
       let currentAccess ← ValidityMachine.scopedAccess access
-      PlaceMachine.writeMemory currentAccess (fun _ => false) .uninit p)) :
+      PlaceMachine.writeUninitMemory currentAccess p)) :
     TypedRetag.protectInPlaceFunctionArgument h budget place state =
       .ok () {state with machine := allocatedMachine state.machine tracker room} := by
   let after := {state with machine := allocatedMachine state.machine tracker room}

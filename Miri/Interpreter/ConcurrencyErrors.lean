@@ -31,6 +31,7 @@ def storeBuffer : StoreBufferAllocError → StepError
 def dataRace : DataRaceResult → StepError
   | .ok => .invalidProgram "successful data-race result supplied as an error"
   | .race => .undefinedBehavior "DataRace"
+  | .mixedSizeRace => .undefinedBehavior "MixedSizeRace"
   | .invalidClockUpdate error => .invalidProgram s!"data-race clock invariant: {reprStr error}"
   | .internalInvariantViolation => .invalidProgram "data-race metadata invariant"
   | .outOfBounds => .invalidProgram "data-race metadata range outside allocation"

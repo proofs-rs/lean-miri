@@ -4,6 +4,7 @@ import Miri.Input.EvalRunConstruction
 import Miri.Input.EvalBootstrap
 import Miri.Input.EvalStartupRuntimeConstruction
 import Miri.Input.CompilerForeignSymbols
+import Miri.Input.CompilerMiriEntry
 import Miri.Input.CompilerPrimitiveFacts
 import Miri.Input.EvalUnixSourceConstruction
 import Miri.Input.InitialMachine
@@ -116,11 +117,10 @@ private def sourceMainConfiguration {Os : Type}
     (compiler : CompilerProviders.Prepared)
     (configuration : EvalBootstrap.Configuration Os) :
     Except StepError (ULift.{1} (EvalBootstrap.Configuration Os)) := do
-  match CompilerMain.sourceCompilerEntry compiler.main with
-  | .ok (some (entry,entryType)) =>
+  match CompilerMiriEntry.select compiler with
+  | .ok (entry,entryType) =>
       pure ⟨{configuration with entry,entryType}⟩
-  | .ok none => throw (.unsupported "compiler has no selected Rust main entry")
-  | .error reason => throw (.unsupported s!"compiler main entry metadata: {reason}")
+  | .error reason => throw (.unsupported s!"compiler process entry metadata: {reason}")
 
 def sourceClockToOuter
     {Os R P H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error : Type}

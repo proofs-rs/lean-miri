@@ -88,9 +88,9 @@ theorem scoped_uninit {K U : Type} [DecidableEq K]
     (state : ValidityMachine.State K U) :
     (do
       let currentAccess ← ValidityMachine.scopedAccess access
-      PlaceMachine.writeMemory currentAccess (fun _ => false) .uninit place) state = .ok () state := by
-  have written := PlaceMachine.writeMemory_zero_uninit
-    {access with ghostMode := state.machine.user.payload.ghost} (fun _ => false)
+      PlaceMachine.writeUninitMemory currentAccess place) state = .ok () state := by
+  have written := PlaceMachine.writeUninitMemory_zero
+    {access with ghostMode := state.machine.user.payload.ghost}
     place pointer ty pointerSize unitLayout encoding target retain state
   simpa only [ValidityMachine.scopedAccess,ValidityMachine.validationInProgress,
     get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure] using written

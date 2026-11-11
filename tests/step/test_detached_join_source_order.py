@@ -8,7 +8,9 @@ ROOT = Path(__file__).resolve().parents[2]
 UPSTREAM = ROOT / "upstream/miri-source/src/concurrency/thread.rs"
 LEAN = ROOT / "Miri/Interpreter/ThreadMachine.lean"
 UPSTREAM_SHA256 = "6df8d025689d9fea1ee60a7db0ca493667725b8947d80df12c7754165487a6a6"
-LEAN_SHA256 = "6dca48f885f192be0fd565dea6c340ce2fe181c01113572d191ad4b340cfb846"
+# Allocation initialization now captures leak backtraces; joinExclusive is
+# byte-identical to the reviewed pre-collector implementation.
+LEAN_SHA256 = "47e29678f335f844954c4ea10eae5738394dd5692f16eb801254849940709bba"
 
 
 def body_after(source: str, marker: str, end: str) -> str:

@@ -28,7 +28,7 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-BASE198_SHA256 = "aaeae9720a062f4b68e54878db881574ec5f033417cd6e11146198716923e325"
+BASE198_SHA256 = "077faa556211d64c1e8eae8e95a014e28cef02cd344fe3addf2ffc569eb76a53"
 
 STEP = re.compile(
     r"sc264_core_step thread=\{ value := (\d+) \}; choice_cursor=(\d+); "

@@ -64,6 +64,7 @@ private def castType (context : CompilerFacts.Context) (tables : CompilerTables)
   | .reference pointee .. => unchanged (.reference pointee)
   | .functionPointer .. => unchanged .fnPointer
   | .adt data => unchanged (.adt data.definition)
+  | .tuple elements => unchanged (.tuple elements)
   | .functionDefinition definition args .. => unchanged (.fnDefinition definition args)
   | .closure definition args count => unchanged (.closure definition args count)
   | .array element .. =>

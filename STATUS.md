@@ -49,7 +49,9 @@ compiler MIR and checks the exported root allocation’s symbolic-vtable relocat
 This is a fixture-specific provenance check, not a general translation proof.
 Local fresh wrapper checks pass for static, cross-crate, HRTB and HRTB-upcast
 controls, including same-TyCtxt references, exact catalog joins over 32 salts,
-and canonical Lean guest exit zero. A successful hosted rerun remains required.
+and canonical Lean guest exit zero. These controls also passed the hosted
+extended/fresh suites at `6a76fcbd`; the overall results and remaining failures
+are described under Hosted regressions and coverage below.
 Coroutine frame layout serialization and foreign TLS initializers remain
 unimplemented and now stop export. This boundary does not establish compiler
 query closure or interpreter correspondence.
@@ -76,8 +78,11 @@ Borrows cases. Decoder controls reject missing byte images, repeated identities,
 unmatched raw slots, incomplete salt arrays and unchecked foreign TLS
 initializers. A decoded shared-byte cyclic graph retains distinct runtime IDs,
 mutability, initialization and CTFE provenance flags.
-The full CI matrix remains unexecuted. These finite executions do not establish
-compiler query closure, interpreter correspondence or whole-machine safety.
+The earlier hosted replay lane also passed at `6a76fcbd`. Neither result
+establishes validation of the newly integrated schema-8 follow-up source; the
+broader hosted results and remaining failures are described below. These finite
+executions do not establish compiler query closure, interpreter correspondence
+or whole-machine safety.
 
 ## Empty-function caller-domain transport
 
@@ -160,25 +165,37 @@ budget of OPEN exploration does not resolve the proofs above.
 
 ### Hosted regressions and coverage
 
-A successful hosted regression rerun remains required after the
-`MiriTests/Rvalue/Rvalue.lean` assertion elaboration fix and the hosted ripgrep
-setup fix. These fixes do not establish the complete comparisons/replays or the
-later exporter and fresh-input/execution phases that the failures prevented.
+At merged main `6a76fcbd2f24afaf6c0114efc205479560fb280b`, the
+[Miri regression run](https://github.com/proofs-rs/lean-miri/actions/runs/43069997521)
+passed the regression, fresh and replay lanes. Extended passed 21 of 22 suites;
+its sole failure was the detached-join source-order check's stale whole-file
+`ThreadMachine.lean` SHA after allocation initialization changed. The checked
+`joinExclusive` slice is byte-identical to the prior reviewed implementation.
+The local SHA refresh passes the unchanged ordering assertions; a hosted rerun
+of that refresh and subsequent changes remains required.
 See [CI coverage](tools/ci/README.md) for lane commands and artifacts.
 
-Timezone also needs a successful hosted rerun. Its CI wrapper failed before
-guest execution because its libc filename glob did not identify exactly one
-archive; the match count and paths were not logged. The Cargo compiler-artifact
-selection fix needs hosted validation rather than relying on the old glob.
+Upstream main subsequently advanced through the allocation-compaction and wire
+field-deduplication revisions to schema 8 at
+`affc8c4128cda426557eeb5c04d273d1602917b5`. Its latest hosted runs are
+[Miri regression](https://github.com/proofs-rs/lean-miri/actions/runs/43085783786),
+[UI](https://github.com/proofs-rs/lean-miri/actions/runs/43085783770),
+[empty-function proof](https://github.com/proofs-rs/lean-miri/actions/runs/43085783789)
+and [documentation](https://github.com/proofs-rs/lean-miri/actions/runs/43085783868).
+They were queued or running when checked; their conclusions remain unestablished.
+The local follow-up is now being integrated with that main revision. Its
+post-integration build, runtime, proof and fresh-input checks have not completed;
+earlier-revision successes do not certify the integrated source.
 
-The fresh CI lane now schedules the six supplemental focused guests, native/TLS
-query-demand mutations, runtime-type closure and the cross-crate vtable control;
-a successful hosted run remains required. Fresh regeneration/comparison of every
-canonical guest and standalone unregistered harnesses remain outside workflow
-coverage. Catalog-role checks now distinguish malformed typed fields from ignored
-extension fields and include the optional TLS-provider branch; hosted validation
-of these updated checks remains required. Saved replay cannot validate changed
-producers.
+The successful hosted suites include timezone with Cargo-reported libc archive
+selection, fresh producer/decoder u128 boundaries, powi and all four vtable
+controls, supplemental guests, native/TLS query-demand mutations and runtime-type
+closure. The replay lane includes canonical12, ordering, large-TB and SC schedules.
+Pinned reference Miri and MIR-enabled standard-library setup also completed.
+These results validate that revision's scheduled checks, not later producer or
+interpreter changes. Fresh regeneration/comparison of every canonical guest and
+standalone unregistered harnesses remain outside workflow coverage; saved replay
+cannot validate changed producers.
 
 The upstream UI workflow applies the requested reference and Lean settings
 through explicit opt-in adapters: empty guest environment, seed zero, source
@@ -193,29 +210,48 @@ ordinary runner defaults keep it disabled. Eight focused unchanged upstream
 sources pass the strict reference/profile/terminal oracles, including an actual
 UB stop with fourteen retained allocation backtraces. Native leak-report
 rendering remains Unsupported and needs implementation. This does not establish
-the full UI sweep: coroutine ABI layout remains unsupported, as do Stacked
+the full UI sweep: coroutine frame-layout serialization remains unsupported, as do Stacked
 Borrows profiles, host-isolation/output-capture settings and compile-time or
 nonlocal-diagnostic oracles outside the runtime profile. Export errors,
-Unsupported outcomes and other interpreter mismatches remain failures. A full
-successful hosted sweep and aggregate coverage remain unvalidated.
+Unsupported outcomes and other interpreter mismatches remain failures.
+The [merged-main UI run](https://github.com/proofs-rs/lean-miri/actions/runs/43069997560)
+completed all 32 comparison shards, each failing. Their terminal console summaries
+cover 1,118 revision/profile cases: 600 passed, 309 profile-unsupported, 119 UB-kind
+mismatches, 47 export failures, 22 Lean Unsupported outcomes, eight UB-site
+mismatches, five timeouts, four Lean failures, three failed Lean processes and
+one reference-annotation mismatch. No profile mismatch was reported. The
+inventory-coverage collector subsequently confirmed `complete=true`,
+`passed=false` and `expected_cases=observed_cases=1118`, with exactly these
+counts. This establishes inventory coverage, not a successful UI sweep.
 
-The 6aca6f0 regression run also exposed stale schema assumptions in SC schedule
-validation, powi root lookup and vtable wrapper checks, and a decoder rejection
-of exact JSON-natural u128 range endpoints. Local checks pass for the repaired
-range boundaries, powi guest, all four vtable wrappers, and SC seeds 0–11 with
-four rejected malformed logs. These finite checks require a successful hosted
-rerun and do not establish whole-machine safety.
-Selected finite checks do not close general proof or source-correspondence gaps.
+The earlier `6aca6f0` failures in SC schedule validation, powi root lookup,
+vtable wrappers and JSON-natural u128 endpoints are covered by the successful
+`6a76fcbd` hosted suites above. Local follow-up checks do not establish a new
+hosted result. Full `tools/check.sh` and a successful complete CI matrix remain
+outstanding; selected finite checks do not close general proof or
+source-correspondence gaps.
 
-The two-pass typed input revision passes the local library/frontend/native
-build, runtime registry, decoder, fresh input, structural, optimization and
-connected-proof checks. Full `tools/check.sh` and hosted CI remain unvalidated;
-these finite checks do not replace the complete comparison lanes.
-The full regression result for an earlier revision does not validate later
-changes. Separate canonical12, ordering,
-large-TB and SC-schedule entry points also need current-revision execution. Fresh construction of the reference Miri
-and MIR-enabled std sysroot remains a validation gap; reusing retained artifacts
-does not establish that setup path.
+Local follow-up checks pass the concrete runtime Codegen ABI probe and 19
+exporter boundary tests, including nested bound-region query views and the exact
+callee ABI needed before rejecting a variadic fixed-count mismatch. Five
+unchanged variadic guests, four focused diagnostic guests and four UB-kind
+controls pass their strict local reference/profile/terminal oracles. This does
+not provide a new hosted result. Coroutine runtime ABI queries succeed in the
+probe; coroutine frame-layout serialization remains unsupported.
+
+The shared compiler-owned `miri_start` selector passes two focused no-main
+guests, but `pass/no_core.rs` still fails with `compiler named types absent`
+after its matching reference exits zero. The dedicated unsized uninitialization
+writer passes exact dynamic-range, permission-partial-state and zero-size checks.
+After explicit tuple cast classification, the unchanged `pass/unsized.rs@tree`
+guest passes a fresh same-TyCtxt reference and Lean execution with exit zero and
+matching strict profiles. This is a finite local result, not a new hosted sweep.
+Before integration with `affc8c41`, the follow-up based on `6a76fcbd` passed
+all 268 empty-function proof roots and its transitive axiom audit of 76,819
+declarations using only the three permitted axioms. Those results apply to the
+pre-integration source and inputs. Final runtime-registry, proof and fresh-input
+validation of the integrated schema-8 source remains pending, as does its hosted
+validation. The no-core, full-UI and performance gaps remain unresolved.
 
 The ordinary standard-library startup closure from
 `tests/repro/startup/empty-main.rs` now decodes directly into MIR. A fresh
@@ -268,6 +304,14 @@ lookup. Caller-location still scans its catalog; optimization must retain
 source-order diagnostics, malformed-row handling and fresh Location allocations.
 Measure current immutable artifacts with the protocol in [AGENTS](AGENTS.md);
 old timings and shared-host samples do not establish a general speedup.
+At `6a76fcbd`, hosted `pass/btreemap.rs@tree` exceeded its 900-second execution
+budget. A diagnostic prefix using an immutable runner from that revision with
+a newer ABI-query exporter also remained unfinished at 900 seconds after
+695,759 iterations. Decode took 5.44 seconds; reported slow complete iterations included
+returns, reference creation and calls. This mixed-artifact, shared-host profile
+does not identify an internal CPU hotspot or establish an optimization. The
+execution budget and acceptance conditions are unchanged. This does not measure
+the later schema-8/indexing revisions or establish their result for this guest.
 The native harness runs until a source terminal/error outcome or process
 interruption, with demand-driven diagnostic choices and no scheduler-iteration,
 generated-choice-count or generated-byte-length cap. Finite proof/test APIs

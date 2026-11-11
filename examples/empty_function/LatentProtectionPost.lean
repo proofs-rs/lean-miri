@@ -32,7 +32,7 @@ theorem protect_from_reborrow {K U : Type} [DecidableEq K]
     (retain : ∀ machine, access.retainTouched machine none = machine)
     (writeBinding : ∀ p, h.writeUninit p = (do
       let currentAccess ← ValidityMachine.scopedAccess access
-      PlaceMachine.writeMemory currentAccess (fun _ => false) .uninit p)) :
+      PlaceMachine.writeUninitMemory currentAccess p)) :
     TypedRetag.protectInPlaceFunctionArgument h budget place (withCurrent frames frame machine) = .ok () after := by
   let result : MPlaceTy Provenance := {place with mplace := {place.mplace with ptr :=
     {place.mplace.ptr with provenance := some (.concrete id tracker.global.nextPointerTag)}}}

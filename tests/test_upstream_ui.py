@@ -7,7 +7,7 @@ import json
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'upstream_ui'))
-from suite import (Case, compare, discover, reference_oracle,
+from suite import (Case, category_reference, compare, discover, reference_oracle,
                    reference_profile_differences, runtime_profile)
 
 
@@ -159,6 +159,46 @@ fn main() {
         self.assertEqual(compare(case, terminal, 'tb_write'), 'passed')
         self.assertEqual(compare(case, terminal | {'detail': terminal['detail'].replace('write', 'read')}, 'tb_write'), 'ub_kind_mismatch')
         self.assertEqual(compare(case, terminal | {'detail': 'Tree Borrows reborrow: ChildAccessForbidden Frozen'}, 'tb_write'), 'ub_kind_mismatch')
+
+    def test_deallocation_layout_takes_precedence_over_alignment(self):
+        message = ('incorrect layout on deallocation: alloc1 has size 1 and alignment 1, '
+                   'but gave size 2 and alignment 1')
+        self.assertEqual(category_reference(message), 'deallocation_layout')
+        self.assertEqual(category_reference('accessing memory with alignment 1, but alignment 2 is required'),
+                         'alignment')
+        case = Case('fail/test.rs', errors=[(3, 'incorrect layout on deallocation')])
+        terminal = {'kind': 'ub', 'detail': 'deallocation: Miri.Memory.MemoryLifecycleError.layoutMismatch',
+                    'frames': [{'file': case.path, 'line': 3}]}
+        self.assertEqual(compare(case, terminal, 'deallocation_layout'), 'passed')
+        for unrelated in ('misaligned pointer', 'outOfBounds', 'MemoryLifecycleError.memoryKindMismatch'):
+            self.assertEqual(compare(case, terminal | {'detail': unrelated}, 'deallocation_layout'),
+                             'ub_kind_mismatch')
+
+    def test_exact_validation_diagnostics_keep_their_semantic_categories(self):
+        case = Case('fail/test.rs', errors=[(3, 'invalid value')])
+        terminal = {'kind': 'ub', 'frames': [{'file': case.path, 'line': 3}]}
+        for category, actual, unrelated in (
+                ('never', 'validation: zero-variant enum value', 'validation: invalid enum tag'),
+                ('metadata_size', 'InvalidMeta(TooBig)', 'InvalidMeta(TooSmall)')):
+            with self.subTest(category=category):
+                self.assertEqual(compare(case, terminal | {'detail': actual}, category), 'passed')
+                self.assertEqual(compare(case, terminal | {'detail': unrelated}, category), 'ub_kind_mismatch')
+                self.assertEqual(compare(case, terminal | {'detail': actual, 'frames': []}, category),
+                                 'ub_site_mismatch')
+
+    def test_variadic_exhaustion_requires_the_exact_typed_cause(self):
+        case = Case('fail/test.rs', errors=[(3, 'more C-variadic arguments read than were passed')])
+        terminal = {'kind': 'ub', 'detail': 'VaArgOutOfBounds', 'frames': [{'file': case.path, 'line': 3}]}
+        self.assertEqual(compare(case, terminal, 'variadic_exhausted'), 'passed')
+        for unrelated in ('VaArgMismatch', 'VaArgTypeMismatch', 'outOfBounds', 'DataRace'):
+            self.assertEqual(compare(case, terminal | {'detail': unrelated}, 'variadic_exhausted'),
+                             'ub_kind_mismatch')
+
+    def test_generic_race_is_not_a_mixed_size_race(self):
+        case = Case('fail/test.rs', errors=[(3, 'Race condition detected')])
+        terminal = {'kind': 'ub', 'detail': 'MixedSizeRace', 'frames': [{'file': case.path, 'line': 3}]}
+        self.assertEqual(compare(case, terminal, 'mixed_size_race'), 'passed')
+        self.assertEqual(compare(case, terminal | {'detail': 'DataRace'}, 'mixed_size_race'), 'ub_kind_mismatch')
 
     def test_pass_requires_final_exit_zero(self):
         case = Case('pass/test.rs')

@@ -59,7 +59,7 @@ def main : IO Unit := do
     | .ok clock => pure clock
   let mixed := bufferedAtomicRead storedState managerWorker range2 .Acquire 11 0
   match mixed.outcome with
-  | .error (.validation .race) => pure ()
+  | .error (.validation .mixedSizeRace) => pure ()
   | _ => throw (IO.userError "unordered mixed-size load did not report a race")
   let afterRace ← match currentClock mixed.state.global managerWorker with
     | .error _ => throw (IO.userError "worker clock missing after mixed-size load")
