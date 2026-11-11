@@ -165,12 +165,7 @@ private def memory (b : ReferenceBounds) (path : String) (value : AllocationMemo
   for (relocation, index) in value.relocations.toList.zipIdx do
     checkId b.allocations relocation.target s!"{path}.relocations[{index}].target" "allocation"
 
-private def validateExtraReferences (types : Array TypeNode) (allocations : Array AllocationNode)
-    (instances : Array InstanceNode) : Except String Unit := do
-  for node in allocations do
-    if let some (.function function) := node.data then
-      let canonical := instances.filter (·.id == function.instanceId)
-      unless canonical.size == 1 do throw s!"allocations[{node.id}]: missing canonical function instance"
+private def validateExtraReferences (types : Array TypeNode) (instances : Array InstanceNode) : Except String Unit := do
   for node in instances do
     if node.kind == .virtualDispatchTarget then
       let some (ty, _) := node.virtualIdentity |
@@ -448,8 +443,7 @@ private def validateRequiredExecution (document : ImportDocument) : Except Strin
           | .typeId _ => pure ()
 
 /-- Validate forward table references and graph relationships after row-local
-invariants have been established by the typed parsers. For arbitrary Lean data,
-use `validatePrimaryTables`, which checks both classes of invariants. -/
+invariants, including dense instance IDs, have been established by the parsers. -/
 def validateParsedTables (document : ImportDocument) : Except String Unit := do
   let b : ReferenceBounds := {
     types := document.types.size
@@ -504,6 +498,7 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
     if let some data := value.data then
       match data with
       | .memory image => memory b path image
+      -- Dense IDs established by parseInstances make an in-bounds reference unique.
       | .function value => checkId b.instances value.instanceId s!"{path}.instance_id" "instance"
       | .static value =>
         checkId b.definitions value.definitionId s!"{path}.def_id" "definition"
@@ -560,7 +555,7 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
     for (root, index) in selected.roots.toList.zipIdx do
       checkId b.definitions root.definitionId s!"$.selected_scope.roots[{index}].def_id" "definition"
   catalogs b document.queries
-  validateExtraReferences document.types document.allocations document.instances
+  validateExtraReferences document.types document.instances
   for node in document.instances do
     if let some (ty, abi) := node.virtualIdentity then
       checkId b.types ty s!"$.instances[{node.id}].virtual_identity.function_type" "type"
@@ -574,27 +569,5 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
       for node in block do
         for upcast in node.dynamicUpcasts do validateUpcast document body.sourcePath upcast
   validateRequiredExecution document
-
-/-- Validate arbitrary typed input, including rows constructed directly in Lean.
-The decoder uses `validateParsedTables` after establishing row-local invariants
-while parsing, avoiding a second walk over each row's leaf payloads. -/
-def validatePrimaryTables (document : ImportDocument) : Except String Unit := do
-  let mut filenames : Std.HashSet String := {}
-  for (filename, index) in document.files.toList.zipIdx do
-    if filenames.contains filename then
-      throw s!"$.files[{index}]: duplicate filename identity"
-    filenames := filenames.insert filename
-  for node in document.types do
-    LocalValidation.validateType node
-    let some layout := document.layouts[node.layoutId]? |
-      throw s!"types[{node.id}].layout: missing layout {node.layoutId}"
-    LocalValidation.validateLayout layout s!"types[{node.id}].layout"
-  for node in document.allocations do LocalValidation.validateAllocation node
-  for node in document.instances do LocalValidation.validateInstance node
-  for (abi, index) in document.functionAbis.toList.zipIdx do
-    LocalValidation.validateFunctionAbi abi s!"function_abis[{index}]"
-  for (body, index) in document.bodies.toList.zipIdx do
-    LocalValidation.validateBody body s!"$.bodies[{index}]"
-  validateParsedTables document
 
 end Miri.Input
