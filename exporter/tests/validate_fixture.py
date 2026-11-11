@@ -9,7 +9,7 @@ from mir_json import load_mir_inspection_document as load_mir_document, pool_ent
 
 doc = load_mir_document(sys.argv[1])
 assert doc["schema"] == "lean-miri-rustc-mir"
-assert doc["schema_version"] == 10
+assert doc["schema_version"] == 11
 assert doc["producer"]["rustc_commit"] == "8144389c895da997dbdecaa635e41d6a50be6ffd"
 assert doc["producer"]["miri_commit"] == "7fa591d7d4dd9af8154becbc8332f8096f8323b1"
 assert "completeness" not in doc
@@ -257,7 +257,7 @@ def check_attribute_fields(value):
             check_attribute_fields(child)
 
 check_attribute_fields(doc)
-assert '"source_instance_kind"' in serialized, "body source instance kind must be structured"
+assert '"source_instance_kind"' not in serialized, "unused body source instance kind must be omitted"
 fn_signatures = [node["shape"]["signature"] for node in type_nodes.values() if "signature" in node["shape"]]
 assert fn_signatures and all(
     isinstance(signature["safety"], dict)

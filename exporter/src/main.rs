@@ -80,7 +80,7 @@ fn export_failure<T>(context: &str, details: impl std::fmt::Display) -> Result<T
 
 const EXPECTED_RUSTC_COMMIT: &str = "8144389c895da997dbdecaa635e41d6a50be6ffd";
 const MIRI_COMMIT: &str = "7fa591d7d4dd9af8154becbc8332f8096f8323b1";
-const ROOT_SCHEMA_VERSION: u64 = 10;
+const ROOT_SCHEMA_VERSION: u64 = 11;
 
 struct Options {
     output: PathBuf,
@@ -1818,6 +1818,10 @@ impl Callbacks for ExportCallbacks {
         _compiler: &interface::Compiler,
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
+        // Match Miri: compiler diagnostics must stop execution before export.
+        tcx.dcx().emit_stashed_diagnostics();
+        tcx.dcx().abort_if_errors();
+        tcx.dcx().flush_delayed();
         match self.export_document(tcx) {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -2415,6 +2419,11 @@ fn resolved_mir_body_json<'tcx>(
     instance: ty::Instance<'tcx>,
     context: &mut ExportContext<'tcx>,
 ) -> Result<u64, String> {
+    // rustc_const_eval::interpret::InterpCx::load_mir rejects both ordinary
+    // and promoted bodies here, even when the body was already interned.
+    if template.tainted_by_errors.is_some() {
+        return export_failure("resolved MIR", "MIR body is tainted by compiler errors");
+    }
     if instance.args.has_non_region_param()
         || instance.args.has_escaping_bound_vars()
         || instance.args.has_infer()
@@ -2501,27 +2510,24 @@ fn mir_body_json<'tcx>(
         export_failure::<()>("MIR", "coroutine layout serialization is not implemented")?;
     }
     intrinsic_value_queries::collect_spans(tcx, context, body);
+    let instance_id = context.register_metadata_instance(instance);
+    // Source shim kinds can discover compiler metadata through type_json.
+    // Keep that discovery even though the decoder does not consume the kind.
+    let _ = instance_kind_json(context, tcx, body.source.instance)?;
     let result = pool_body::Body {
-        instance_id: context.register_metadata_instance(instance),
-        source_instance_kind: instance_kind_json(context, tcx, body.source.instance)?,
+        instance_id,
         preamble_def_span: span_json(context, tcx, tcx.def_span(body.source.def_id())),
         backtrace_spans: backtrace_spans_json(context, tcx, body).into(),
         source_def_id: def_json(context, body.source.def_id()),
-        source_promoted: body.source.promoted.map(|value| value.as_u32()),
         phase: mir_phase_json(body.phase),
-        pass_count: body.pass_count,
         injection_phase: body.injection_phase.map(mir_phase_json),
-        tainted_by_errors: body.tainted_by_errors.map(|value| pool_values::DebugPayload::new(&value)),
         arg_count: body.arg_count,
         spread_arg: body.spread_arg.map(|local| local.as_u32()),
         span: span_json(context, tcx, body.span),
         locals: body.local_decls.iter_enumerated().map(|(local, decl)| Ok(pool_body::Local {
             local: local.as_u32(),
-            mutability: match decl.mutability { rustc_ast::Mutability::Mut => pool_body::Mutability::Mutable, rustc_ast::Mutability::Not => pool_body::Mutability::Immutable },
             r#type: type_json(context, tcx, decl.ty)?,
-            layout: layout_json(context, tcx, decl.ty)?,
             source_info: source_info_json(context, tcx, decl.source_info).into(),
-            local_info: pool_body::DebugPayload::new(&decl.local_info),
         })).collect::<Result<Vec<_>, String>>()?,
         basic_blocks: body.basic_blocks.iter_enumerated().map(|(bb, data)| Ok(pool_body::BasicBlock {
             block: bb.as_u32(),
@@ -2545,16 +2551,11 @@ fn mir_body_json<'tcx>(
                 requires_caller_location: instance.def.requires_caller_location(tcx),
             }),
             inlined_parent_scope: data.inlined_parent_scope.map(|parent| parent.as_u32()),
-            local_data: pool_body::DebugPayload::new(&data.local_data),
         })).collect::<Result<Vec<_>, String>>()?,
-        var_debug_info: body.var_debug_info.iter().map(pool_values::DebugPayload::new).collect(),
-        mentioned_items: body.mentioned_items.as_ref().map(pool_values::DebugPayload::new),
         required_consts: body.required_consts.as_ref().ok_or_else(||
             "resolved MIR: compiler body has no required_consts list".to_owned())?
             .iter().map(|v| const_operand_json(context, tcx, body, v))
             .collect::<Result<Vec<_>, String>>()?,
-        user_type_annotations: pool_values::DebugPayload::new(&body.user_type_annotations),
-        coroutine_info: None,
     };
     context.vtable_diagnostics.body = previous;
     Ok::<_, String>(result)
@@ -6784,5 +6785,56 @@ mod extern_abi_tests {
                    extern_abi_json(rustc_abi::ExternAbi::System { unwind: false }).kind);
         assert_ne!(extern_abi_json(rustc_abi::ExternAbi::C { unwind: false }).unwind,
                    extern_abi_json(rustc_abi::ExternAbi::C { unwind: true }).unwind);
+    }
+}
+
+#[cfg(test)]
+mod tainted_mir_tests {
+    use super::*;
+
+    #[test]
+    fn compiler_errors_and_tainted_promoted_bodies_cannot_export() {
+        struct RejectTaint { checked: bool }
+        impl Callbacks for RejectTaint {
+            fn after_analysis<'tcx>(
+                &mut self,
+                _: &interface::Compiler,
+                tcx: TyCtxt<'tcx>,
+            ) -> Compilation {
+                let (def_id, _) = tcx.entry_fn(()).unwrap();
+                let instance = ty::Instance::mono(tcx, def_id);
+                let error = tcx.dcx().err("injected MIR taint regression");
+                let mut context = ExportContext::default();
+                let ordinary = tcx.instance_mir(instance.def);
+                let promoted = tcx.promoted_mir(def_id);
+                assert!(!promoted.is_empty(), "fixture must exercise promoted MIR");
+                for template in std::iter::once(ordinary).chain(promoted.iter()) {
+                    let mut body = template.clone();
+                    body.tainted_by_errors = Some(error);
+                    // A previously reserved key must not bypass the check.
+                    context.bodies.reserve(BodyKey { instance, promoted: body.source.promoted });
+                    let result = resolved_mir_body_json(tcx, &body, instance, &mut context);
+                    assert!(result.unwrap_err().contains("MIR body is tainted by compiler errors"));
+                }
+                self.checked = true;
+                Compilation::Stop
+            }
+        }
+        let directory = env::temp_dir().join(format!("lean-miri-taint-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("tainted.rs");
+        fs::write(&source, "fn main() { let x: &'static [u8; 2] = &[1, 2]; std::hint::black_box(x); }").unwrap();
+        let args = vec![
+            "rustc".to_owned(), source.display().to_string(),
+            "--sysroot".to_owned(), env!("LEAN_MIRI_PINNED_RUSTC_SYSROOT").to_owned(),
+            "--emit=metadata".to_owned(), "--out-dir".to_owned(), directory.display().to_string(),
+        ];
+        let mut callbacks = RejectTaint { checked: false };
+        let status = rustc_driver::catch_with_exit_code(|| {
+            rustc_driver::compiler_entrypoint(&args, &mut callbacks)
+        });
+        assert!(callbacks.checked, "rustc did not reach the tainted-body regression");
+        assert_ne!(status, std::process::ExitCode::SUCCESS);
+        fs::remove_dir_all(directory).unwrap();
     }
 }
