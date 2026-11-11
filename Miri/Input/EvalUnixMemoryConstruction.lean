@@ -47,20 +47,6 @@ private def allocationForKind
         (state.allocationSpans.filter fun entry => entry.1 != id).push (id,span,none)}
   pure {config with allocationSpan := spanTail}
 
-private def allocationCreation
-    (memory : EvalHostRuntimeConstruction.EnvironmentMemory U C Payload)
-    (extras : MemoryExtras.Hooks MiriMemoryKind (PointerMachine.User U) Payload)
-    (spans : AllocationDriver.SpanHooks) (kind : MiriMemoryKind) :
-    M U (ReallocationDriver.CreationHooks MiriMemoryKind U Payload) := do
-  let state ← get
-  let allocation ← allocationForKind memory spans kind
-  pure {
-    extras
-    allocation
-    weakMemory := state.machine.dataRace.any (·.weakMemory)
-    globalKind := memory.access.globalKind.map MemoryKind.machine
-  }
-
 private def readScalar
     (access : PlaceMachine.AccessConfig MiriMemoryKind (PointerMachine.User U))
     (operand : OpTy Provenance) : M U (Scalar Provenance) := do
@@ -193,8 +179,10 @@ def fromSource [DecidableEq MiriMemoryKind]
         fun error => .invalidProgram s!"shim operand transmute: {reprStr error}")
     allocate := fun size align init allocationKind => do
       let kind := sourceKind allocationKind
-      let creation ← allocationCreation memory extras spans kind
-      let pointer ← ReallocationDriver.allocateSourceFrom creation (Size.ofBytes size) align
+      -- environmentMemoryFromCore supplies a configuration that already owns
+      -- init_allocation's tree/race/extras tail. Do not bind that tail again.
+      let config ← allocationForKind memory spans kind
+      let pointer ← ReallocationDriver.allocateConfigured config (Size.ofBytes size) align
         (.machine kind) (match init with | .uninit => .Uninit | .zero => .Zero)
       return pointer.withOptionalProvenance
     deallocate := fun pointer old allocationKind =>
@@ -202,8 +190,8 @@ def fromSource [DecidableEq MiriMemoryKind]
         (.machine (sourceKind allocationKind))
     reallocate := fun pointer old size align allocationKind => do
       let kind := sourceKind allocationKind
-      let creation ← allocationCreation memory extras spans kind
-      let pointer ← ReallocationDriver.reallocateFrom access creation arithmetic
+      let config ← allocationForKind memory spans kind
+      let pointer ← ReallocationDriver.reallocateConfiguredFrom access extras arithmetic config
         memory.deallocate pointer (old.map fun (size,align) => (Size.ofBytes size,align))
         (Size.ofBytes size) align (.machine kind) .Uninit
       return pointer.withOptionalProvenance
@@ -242,8 +230,8 @@ def fromSource [DecidableEq MiriMemoryKind]
     checkAccess := checkAccess access arithmetic }
   let linux := LinuxMemory.Hooks.mk unix (fun pointer oldSize newSize align => do
     let kind := MemoryKind.machine MiriMemoryKind.mmap
-    let creation ← allocationCreation memory extras spans .mmap
-    let pointer ← ReallocationDriver.reallocateFrom access creation arithmetic
+    let config ← allocationForKind memory spans .mmap
+    let pointer ← ReallocationDriver.reallocateConfiguredFrom access extras arithmetic config
       memory.deallocate pointer (some (oldSize,align)) (newSize) align kind .Zero
     return pointer.withOptionalProvenance)
   pure linux
