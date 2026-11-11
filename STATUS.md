@@ -182,13 +182,17 @@ field-deduplication revisions to schema 8 at
 [UI](https://github.com/proofs-rs/lean-miri/actions/runs/43085783770),
 [empty-function proof](https://github.com/proofs-rs/lean-miri/actions/runs/43085783789)
 and [documentation](https://github.com/proofs-rs/lean-miri/actions/runs/43085783868).
-They were queued or running when checked; their conclusions remain unestablished.
-The local follow-up is now being integrated with that main revision. Its
-post-integration build, runtime, proof and fresh-input checks have not completed;
-earlier-revision successes do not certify the integrated source.
+At that upstream revision, documentation build/deploy and the empty-function
+proof passed, as did the fresh regression lane. Replay failed only at the stale
+SC-snapshot SHA; its build, reference-profile, canonical12, ordering and large-TB
+suites passed. Extended failed only at the stale detached-join file SHA. Both
+pins are corrected in this follow-up, with their original checks retained.
+The regression lane was still running and UI shards were queued when checked.
+These upstream results do not validate the integrated local follow-up; its
+completed local checks are recorded below and a new hosted result is required.
 
-The successful hosted suites include timezone with Cargo-reported libc archive
-selection, fresh producer/decoder u128 boundaries, powi and all four vtable
+At `6a76fcbd`, the successful hosted suites include timezone with Cargo-reported
+libc archive selection, fresh producer/decoder u128 boundaries, powi and all four vtable
 controls, supplemental guests, native/TLS query-demand mutations and runtime-type
 closure. The replay lane includes canonical12, ordering, large-TB and SC schedules.
 Pinned reference Miri and MIR-enabled standard-library setup also completed.
@@ -231,7 +235,7 @@ hosted result. Full `tools/check.sh` and a successful complete CI matrix remain
 outstanding; selected finite checks do not close general proof or
 source-correspondence gaps.
 
-Local follow-up checks pass the concrete runtime Codegen ABI probe and 19
+Local follow-up checks pass the concrete runtime Codegen ABI probe and 20
 exporter boundary tests, including nested bound-region query views and the exact
 callee ABI needed before rejecting a variadic fixed-count mismatch. Five
 unchanged variadic guests, four focused diagnostic guests and four UB-kind
@@ -246,12 +250,21 @@ writer passes exact dynamic-range, permission-partial-state and zero-size checks
 After explicit tuple cast classification, the unchanged `pass/unsized.rs@tree`
 guest passes a fresh same-TyCtxt reference and Lean execution with exit zero and
 matching strict profiles. This is a finite local result, not a new hosted sweep.
-Before integration with `affc8c41`, the follow-up based on `6a76fcbd` passed
-all 268 empty-function proof roots and its transitive axiom audit of 76,819
-declarations using only the three permitted axioms. Those results apply to the
-pre-integration source and inputs. Final runtime-registry, proof and fresh-input
-validation of the integrated schema-8 source remains pending, as does its hosted
-validation. The no-core, full-UI and performance gaps remain unresolved.
+
+The frozen schema-8 follow-up passes the 1,281-job library/test/native build,
+46 self-contained runtime checks, the quick check with 110 Python tests, 36 Rust
+unit tests, the direct runtime-ABI integration probe and the 20 producer boundary
+checks. The library axiom audit covers 74,171 declarations with only `propext`,
+`Quot.sound` and `Classical.choice`. SC seeds 0–11 and four malformed-log controls,
+and 16 selected genuine UI cases, pass their unchanged local assertions/oracles.
+
+All 268 empty-function proof roots pass on that integrated source. Its transitive
+axiom audit covers 76,837 declarations using only the same three allowed axioms;
+recorded Rust, input, library and proof hashes match before and after validation.
+These are completed local results, not a successful full hosted matrix or a
+whole-machine correspondence theorem. Hosted validation of the integrated
+follow-up is still required. The no-core, full-UI and performance gaps remain
+unresolved.
 
 The ordinary standard-library startup closure from
 `tests/repro/startup/empty-main.rs` now decodes directly into MIR. A fresh
