@@ -11,9 +11,11 @@ The Lean tests use that compiler graph and target metadata to check allocation
 images, relocations, constant operands, lazy static initialization and supplied compiler query
 results. Negative cases cover malformed images, missing metadata, unknown
 evaluation queries, TLS/extern routing and failed-hook state retention.
-`TypedTableReferences.lean` also mutates decoded typed fields while retaining the
-original JSON, checking bounds for shapes, generic arguments, binders, regions,
-predicates and constant children.
+`ParserTableReferences.lean` mutates exported JSON and passes it through the normal
+streaming decoder, checking bounds for shapes, generic arguments, binders, regions,
+predicates and constant children. It also checks dense instance IDs, duplicate
+semantic instance identities and function-allocation instance bounds. Each negative
+case requires an error from its intended invariant.
 
 Runtime allocation IDs are deliberately different from exporter graph IDs.
 Image checks preserve bytes, initialization masks and provenance independently;

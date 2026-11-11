@@ -9,10 +9,18 @@ from mir_json import load_mir_document, pool_entry
 
 doc = load_mir_document(sys.argv[1])
 assert doc["schema"] == "lean-miri-rustc-mir"
-assert doc["schema_version"] == 4
+assert doc["schema_version"] == 6
 assert doc["producer"]["rustc_commit"] == "8144389c895da997dbdecaa635e41d6a50be6ffd"
 assert doc["producer"]["miri_commit"] == "7fa591d7d4dd9af8154becbc8332f8096f8323b1"
 assert "completeness" not in doc
+assert all(isinstance(name, str) for name in doc["files"])
+assert len(doc["files"]) == len(set(doc["files"])), "duplicate filename spellings"
+for span in doc["spans"]:
+    assert type(span["file"]) is int and 0 <= span["file"] < len(doc["files"])
+for body in doc["bodies"]:
+    for span in body["backtrace_spans"]:
+        filename = span["source_position"]["filename"]
+        assert type(filename) is int and 0 <= filename < len(doc["files"])
 type_nodes = {node["type_id"]: node for node in doc["types"]}
 assert type_nodes, "compilation-scoped type graph missing"
 assert sorted(type_nodes) == list(range(len(type_nodes))), "type IDs must be session-local monotonic IDs"
@@ -61,6 +69,22 @@ def _walk_type_refs(value):
 def check_type_refs(value):
     for type_id in _walk_type_refs(value):
         assert type_id in type_nodes, f"dangling type reference {type_id}"
+
+def check_scalar_widths(value):
+    if isinstance(value, dict):
+        if value.get("kind") == "scalar" and "bits_unsigned" in value:
+            size = value["size_bytes"]
+            assert type(size) is int and size > 0, "scalar byte width must be positive"
+            assert 0 <= int(value["bits_unsigned"]) < 2 ** (8 * size), "scalar bits exceed byte width"
+            layout = pool_entry(doc, "layouts", type_nodes[value["type"]]["layout"])
+            assert size == layout["size_bytes"], "scalar byte width differs from compiler type layout"
+        for child in value.values():
+            check_scalar_widths(child)
+    elif isinstance(value, list):
+        for child in value:
+            check_scalar_widths(child)
+
+check_scalar_widths(doc)
 
 check_type_refs([doc["bodies"], doc["instances"], doc["allocations"]])
 check_type_refs(doc["types"])

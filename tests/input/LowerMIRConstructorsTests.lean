@@ -27,7 +27,7 @@ private def tlsInitializer : String := obj [("allocation", obj [
   ("bytes_hex", s ""), ("initialization_ranges", arr []), ("relocations", arr [])])]
 private def constant (ty span : Nat) : String := obj [
   ("type", n ty), ("user_type_annotation", nil), ("span", n span),
-  ("constant", tagged "evaluated_const" [("value", tagged "scalar" [("bits_unsigned", s "1")])])]
+  ("constant", tagged "evaluated_const" [("value", tagged "scalar" [("bits_unsigned", s "1"), ("size_bytes", n 1)])])]
 
 private def rvalues (ty : Nat) : Array (String × Array (String × String)) := #[
   ("Use", #[("operand", op), ("retag", tagged "no" [("performs_retag", b false)])]),
@@ -91,7 +91,7 @@ private def body (statements : List String) (term : String) := obj [
   ("basic_blocks",arr [obj [("block",n 0),("is_cleanup",b false),("statements",arr (statements.map node)),("terminator",node term)]])]
 private def context : DecodeMIR.Context := {
   typeCount := 1,allocationCount := 0,definitionCount := 4,typeConstantCount := 1,spanCount := 1,
-  scalarSizes := #[some 1] }
+  scalarSize := fun id => if id == 0 then some 1 else none }
 private def decode (statements : List String) (term : String) := do
   DecodeMIR.resolveBody context (← JsonReader.run (DecodeMIR.parseBody "bodies[0]") (body statements term))
 

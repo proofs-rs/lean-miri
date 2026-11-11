@@ -93,7 +93,7 @@ Additional structural regressions are checked with
 `bash tools/check-structural-regressions.sh` (typechecking, kernel examples,
 #eval and executable assertions with pinned unit fixtures or no input). This is
 distinct from running supplemental guest harnesses that need fresh exports. The structural
-checker copies pinned schema-4 unit fixtures without changing their bytes and passes them to
+checker copies pinned schema-6 unit fixtures without changing their bytes and passes them to
 `LowerContext`, `ProviderContext` and `PrimitiveRebinding`, including their runtime
 source/cache and error-order assertions. These are not fresh producer comparisons.
 `tools/prepare-source-audit.py`
@@ -195,23 +195,26 @@ select **GitHub Actions** as the source. The published API entry point is
 
 ## MIR lowering
 
-The input decoder makes one forward pass over JSON into `DraftDocument`: concrete
-compiler tables, typed body drafts and typed catalog constants. Every schema object
-uses its own typed accumulator, so object fields may appear in any order, including
-bodies before types and layouts. Duplicate fields are rejected; unknown fields are
+The input decoder makes one forward pass over JSON, constructing final compiler
+tables, MIR bodies, catalog values and per-node facts. Each schema object uses a
+local typed accumulator, so fields may appear in any order, including bodies
+before types and layouts. Duplicate fields are rejected; unknown fields are
 skipped structurally and still require valid JSON.
 
-`resolveDocument` then checks table references and consistency and resolves scalar
-constants using their compiler layout widths while constructing interpreter MIR and
-per-node facts. Pool IDs stay numeric and local to the input; runtime lookups retain
-bounds checks. Neither draft nor final data stores JSON ranges or a generic value
-tree. `decodeFile` currently reads the complete file as a `String` before parsing,
-so this is not a bounded-memory streaming file reader.
+Scalar constants carry their compiler byte width. Their range and constructor
+shape are checked immediately, along with local body bounds and table identities.
+Only compact numeric MIR-reference summaries and type/width pairs remain pending
+until the relevant tables are complete. `parseDocument` checks these forward
+references, cross-table joins and required execution graphs before returning the
+final `ImportDocument`; its completion bookkeeping is private and discarded.
+Pool IDs remain numeric and local to the input, with runtime bounds checks.
+Neither JSON ranges nor a generic value tree nor a second MIR spine is retained.
 
-Use `decodeJson` or `decodeFile` for the complete checked input. Callers that need
-the phase boundary can run `JsonReader.run parseDocument text` and then
-`resolveDocument`. Individual codecs now expose forward parsers consumed with
-`JsonReader.run`; the former token-slice and object-view APIs have been removed.
+Use `decodeJson` or `decodeFile` for the complete checked execution input, or
+`JsonReader.run (parseDocument {}) text` for the checked `ImportDocument`.
+Individual codecs expose forward parsers consumed with `JsonReader.run`.
+`decodeFile` still reads the complete file as a `String`, so this is not a
+bounded-memory streaming file reader.
 
 `lowerProgram` packages the decoded MIR and typed compiler metadata for execution.
 The input API remains experimental. `bash tools/check-lowering-reader.sh

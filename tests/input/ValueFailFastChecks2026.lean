@@ -14,7 +14,7 @@ private def node (value : String) := obj [("source_info",info),("kind",value)]
 private def assignment (rvalue : String) := obj [("variant",s "Assign"),("place",place),("rvalue",rvalue)]
 private def context : DecodeMIR.Context := {
   typeCount := 1, allocationCount := 0, definitionCount := 1,
-  typeConstantCount := 0, spanCount := 1, scalarSizes := #[some 1] }
+  typeConstantCount := 0, spanCount := 1, scalarSize := fun id => if id == 0 then some 1 else none }
 private def decode (statements : List String) (phase : String := tag "runtime" [("phase",s "optimized")]) := do
   let body := obj [
     ("def_id","0"),("instance_id","0"),("phase",phase),("arg_count","0"),("spread_arg","null"),

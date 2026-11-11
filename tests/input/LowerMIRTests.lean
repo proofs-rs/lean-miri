@@ -41,10 +41,10 @@ def main (args : List String) : IO Unit := do
   let ctx : DecodeMIR.Context := {
     typeCount := document.types.size, allocationCount := document.allocations.size,
     definitionCount := document.definitions.size, typeConstantCount := document.typeConstants.size,
-    spanCount := document.spans.size, scalarSizes := document.types.map fun ty =>
+    spanCount := document.spans.size, scalarSize := fun id => (document.types[id]?).bind fun ty =>
       (document.layouts[ty.layoutId]?).bind (·.sizeBytes) }
   check (((JsonReader.run (DecodeMIR.parseBody input.sourcePath) raw.text >>= DecodeMIR.resolveBody {ctx with typeCount := 0})).isOk == false) "unresolved type accepted"
-  check (((JsonReader.run (DecodeMIR.parseBody input.sourcePath) raw.text >>= DecodeMIR.resolveBody {ctx with scalarSizes := #[]})).isOk == false) "missing scalar width accepted"
+  check (((JsonReader.run (DecodeMIR.parseBody input.sourcePath) raw.text >>= DecodeMIR.resolveBody {ctx with scalarSize := fun _ => none})).isOk == false) "missing scalar width accepted"
   let decodeMutation (name value : String) := do
     DecodeMIR.resolveBody ctx (← JsonReader.run (DecodeMIR.parseBody input.sourcePath) (← replaceField raw name value))
   check ((decodeMutation "phase" "{\"kind\":\"unknown\"}").isOk == false) "unknown phase accepted"

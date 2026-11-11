@@ -8,12 +8,6 @@ import Miri.Input.CatalogDecoder
 namespace Miri.Input
 open Lean DecoderValues
 
-private def validateDense (ids : Array Nat) (what : String) : Except String Unit := do
-  for (id, index) in ids.toList.zipIdx do
-    unless id == index do throw s!"{what}: expected ID {index} at table position {index}, got {id}"
-
-private def jsonToNatArray (nodes : Array α) (getId : α → Nat) : Array Nat := nodes.map getId
-
 private def validateSelectedScope (scope : SelectedScope) (_bodies : Array Body)
     (instances : Array InstanceNode) (bodyRoots : Array BodyRoot) : Except String Unit := do
   if scope.kind != "rooted_structural_closure" then
@@ -54,28 +48,57 @@ private def parseProducer : JsonReader.Parser (Producer × Catalog.ProducerSetti
   }
   return (producer, ← JsonReader.required p.settings "input_settings")
 
-/-- Concrete unresolved input. It owns typed data only, never JSON source ranges. -/
-structure DraftDocument where
+/-- The completed import plus numeric reference bounds that require all tables.
+MIR and catalogs already have their final representation. -/
+private structure ParsedDocument where
+  value : ImportDocument
   schema : String
   schemaVersion : Nat
-  producer : Producer × Catalog.ProducerSettings
-  predicates : Array VtablePredicate
-  compilerPredicates : Array CompilerPredicateEvidence
-  definitions : Array DefinitionId
-  typeConstants : Array MIR.TypeConst
-  spans : Array SourceSpanData
-  layouts : Array Layout
-  functionAbis : Array FunctionAbi
-  types : Array TypeNode
-  allocations : Array AllocationNode
-  instances : Array InstanceNode
-  compilerAbiLayoutSchema : String
-  bodies : Array DecodeMIR.DraftBody
-  bodyRoots : Array BodyRoot
-  compilerAllocIdWorld : Option CompilerAllocIdWorld
-  selectedScope : Option SelectedScope
-  runtimeTargetDataLayout : Option TargetDataLayoutEvidence
-  queries : CatalogDecoder.UnresolvedQueries
+  bodyReferences : Array DecodeMIR.References
+
+private def denseRow (what : String) (index : Nat) (getId : α → Nat)
+    (parser : JsonReader.Parser α) : JsonReader.Parser α := do
+  let value ← parser
+  unless getId value == index do
+    JsonReader.fail s!"{what}: expected ID {index} at table position {index}, got {getId value}"
+  pure value
+
+private def parsePredicates : JsonReader.Parser (Array VtablePredicate) :=
+  JsonReader.arrayWithState ({} : Std.HashMap Nat (Array VtablePredicate)) fun seen index => do
+    let value ← parseVtablePredicate s!"$.predicates[{index}]"
+    let previous := seen.getD value.definitionId #[]
+    if previous.any (fun other => decide (other.kind = value.kind ∧ other.genericArgs = value.genericArgs ∧
+        other.boundVariables = value.boundVariables ∧ other.projectionTerm = value.projectionTerm)) then
+      JsonReader.fail s!"$.predicates[{index}]: duplicate compiler predicate identity"
+    pure (value, seen.insert value.definitionId (previous.push value))
+
+private def parseDefinitions : JsonReader.Parser (Array DefinitionId) :=
+  JsonReader.arrayWithState ({} : Std.HashSet (Nat × Nat)) fun seen index => do
+    let value ← parseDefinitionId s!"$.definitions[{index}]"
+    let key := (value.crateIndex, value.index)
+    if seen.contains key then JsonReader.fail s!"$.definitions[{index}]: duplicate compiler definition identity"
+    pure (value, seen.insert key)
+
+private def parseConstants : JsonReader.Parser (Array MIR.TypeConst) :=
+  JsonReader.arrayWithState (#[] : Array MIR.TypeConst) fun seen index => do
+    let value ← TypeConstCodec.decode s!"$.type_constants[{index}]"
+    if seen.contains value then JsonReader.fail s!"$.type_constants[{index}]: duplicate compiler type-constant identity"
+    pure (value, seen.push value)
+
+private def parseInstances : JsonReader.Parser (Array InstanceNode) :=
+  JsonReader.arrayWithState ({} : Std.HashMap Nat (Array InstanceNode)) fun seen index => do
+    let value ← denseRow "instance IDs" index (·.id) (parseInstance s!"$.instances[{index}]")
+    let definition := value.instanceKind.defId
+    let previous := seen.getD definition #[]
+    if previous.any (fun other => decide (other.instanceKind = value.instanceKind ∧ other.genericArgs = value.genericArgs)) then
+      JsonReader.fail s!"$.instances[{index}]: duplicate compiler instance identity"
+    pure (value, seen.insert definition (previous.push value))
+
+private def parseFiles : JsonReader.Parser (Array String) :=
+  JsonReader.arrayWithState ({} : Std.HashSet String) fun seen index => do
+    let value ← JsonReader.string
+    if seen.contains value then JsonReader.fail s!"$.files[{index}]: duplicate filename identity"
+    pure (value, seen.insert value)
 
 private structure DocumentFields where
   schema : Option (String) := none
@@ -85,6 +108,7 @@ private structure DocumentFields where
   compilerPredicates : Option (Array CompilerPredicateEvidence) := none
   definitions : Option (Array DefinitionId) := none
   typeConstants : Option (Array MIR.TypeConst) := none
+  files : Option (Array String) := none
   spans : Option (Array SourceSpanData) := none
   layouts : Option (Array Layout) := none
   functionAbis : Option (Array FunctionAbi) := none
@@ -92,31 +116,35 @@ private structure DocumentFields where
   allocations : Option (Array AllocationNode) := none
   instances : Option (Array InstanceNode) := none
   compilerAbiLayoutSchema : Option (String) := none
-  bodies : Option (Array DecodeMIR.DraftBody) := none
+  bodies : Option (Array Body) := none
+  bodyReferences : Array DecodeMIR.References := #[]
   bodyRoots : Option (Array BodyRoot) := none
   compilerAllocIdWorld : Option CompilerAllocIdWorld := none
   selectedScope : Option SelectedScope := none
   runtimeTargetDataLayout : Option TargetDataLayoutEvidence := none
-  queries : CatalogDecoder.DraftQueries := {}
+  queries : CatalogDecoder.QueryFields := {}
 
-def parseDocument : JsonReader.Parser DraftDocument := do
+private def parseDocumentFields : JsonReader.Parser ParsedDocument := do
   let d ← JsonReader.object ({} : DocumentFields) fun d key => do
     match key with
     | "schema" => return {d with schema := some (← JsonReader.string)}
     | "schema_version" => return {d with schemaVersion := some (← JsonReader.natural)}
     | "producer" => return {d with producer := some (← parseProducer)}
-    | "predicates" => return {d with predicates := some (← JsonReader.arrayIndexed (fun index => parseVtablePredicate s!"$.predicates[{index}]"))}
+    | "predicates" => return {d with predicates := some (← parsePredicates)}
     | "compiler_predicate_queries" => return {d with compilerPredicates := some (← JsonReader.array decodeCompilerPredicateEvidence)}
-    | "definitions" => return {d with definitions := some (← JsonReader.arrayIndexed (fun index => parseDefinitionId s!"$.definitions[{index}]"))}
-    | "type_constants" => return {d with typeConstants := some (← JsonReader.arrayIndexed (fun index => TypeConstCodec.decode s!"$.type_constants[{index}]"))}
+    | "definitions" => return {d with definitions := some (← parseDefinitions)}
+    | "type_constants" => return {d with typeConstants := some (← parseConstants)}
+    | "files" => return {d with files := some (← parseFiles)}
     | "spans" => return {d with spans := some (← JsonReader.arrayIndexed (fun index => parseSourceSpan s!"$.spans[{index}]"))}
     | "layouts" => return {d with layouts := some (← JsonReader.arrayIndexed (fun index => parseLayout s!"$.layouts[{index}]"))}
     | "fn_abis" => return {d with functionAbis := some (← JsonReader.arrayIndexed (fun index => parseFunctionAbi s!"$.fn_abis[{index}]"))}
-    | "types" => return {d with types := some (← JsonReader.arrayIndexed (fun index => parseTypeNode s!"$.types[{index}]"))}
-    | "allocations" => return {d with allocations := some (← JsonReader.arrayIndexed (fun index => parseAllocation s!"$.allocations[{index}]"))}
-    | "instances" => return {d with instances := some (← JsonReader.arrayIndexed (fun index => parseInstance s!"$.instances[{index}]"))}
+    | "types" => return {d with types := some (← JsonReader.arrayIndexed (fun index => denseRow "type IDs" index (·.id) (parseTypeNode s!"$.types[{index}]")))}
+    | "allocations" => return {d with allocations := some (← JsonReader.arrayIndexed (fun index => denseRow "allocation IDs" index (·.id) (parseAllocation s!"$.allocations[{index}]")))}
+    | "instances" => return {d with instances := some (← parseInstances)}
     | "compiler_abi_layout_schema" => return {d with compilerAbiLayoutSchema := some (← JsonReader.string)}
-    | "bodies" => return {d with bodies := some (← JsonReader.arrayIndexed (fun index => DecodeMIR.parseBody s!"$.bodies[{index}]"))}
+    | "bodies" =>
+      let bodies ← JsonReader.arrayIndexed (fun index => DecodeMIR.parseBody s!"$.bodies[{index}]")
+      return {d with bodies := some (bodies.map (·.value)), bodyReferences := bodies.map (·.references)}
     | "body_roots" => return {d with bodyRoots := some (← JsonReader.arrayIndexed (fun index => parseBodyRoot s!"$.body_roots[{index}]"))}
     | "compiler_alloc_id_world" => return {d with compilerAllocIdWorld := ← JsonReader.nullable (parseCompilerAllocIdWorld)}
     | "selected_scope" => return {d with selectedScope := ← JsonReader.nullable (parseSelectedScope "$.selected_scope")}
@@ -125,21 +153,24 @@ def parseDocument : JsonReader.Parser DraftDocument := do
       match ← CatalogDecoder.parseField d.queries key with
       | some queries => return {d with queries}
       | none => JsonReader.skipValue; return d
-  return {
-    schema := ← JsonReader.required d.schema "schema"
-    schemaVersion := ← JsonReader.required d.schemaVersion "schema_version"
-    producer := ← JsonReader.required d.producer "producer"
+  let schema ← JsonReader.required d.schema "schema"
+  let schemaVersion ← JsonReader.required d.schemaVersion "schema_version"
+  let (producer, producerSettings) ← JsonReader.required d.producer "producer"
+  let compilerAbiLayoutSchema ← JsonReader.required d.compilerAbiLayoutSchema "compiler_abi_layout_schema"
+  let value : ImportDocument := {
+    producer, producerSettings
     predicates := ← JsonReader.required d.predicates "predicates"
     compilerPredicates := ← JsonReader.required d.compilerPredicates "compiler_predicate_queries"
     definitions := ← JsonReader.required d.definitions "definitions"
     typeConstants := ← JsonReader.required d.typeConstants "type_constants"
+    files := ← JsonReader.required d.files "files"
     spans := ← JsonReader.required d.spans "spans"
     layouts := ← JsonReader.required d.layouts "layouts"
     functionAbis := ← JsonReader.required d.functionAbis "fn_abis"
     types := ← JsonReader.required d.types "types"
     allocations := ← JsonReader.required d.allocations "allocations"
     instances := ← JsonReader.required d.instances "instances"
-    compilerAbiLayoutSchema := ← JsonReader.required d.compilerAbiLayoutSchema "compiler_abi_layout_schema"
+    compilerAbiLayoutSchema := some compilerAbiLayoutSchema
     bodies := ← JsonReader.required d.bodies "bodies"
     bodyRoots := ← JsonReader.required d.bodyRoots "body_roots"
     compilerAllocIdWorld := d.compilerAllocIdWorld
@@ -147,10 +178,12 @@ def parseDocument : JsonReader.Parser DraftDocument := do
     runtimeTargetDataLayout := d.runtimeTargetDataLayout
     queries := ← CatalogDecoder.finish d.queries
   }
+  return ⟨value, schema, schemaVersion, d.bodyReferences⟩
 
-def resolveDocument (d : DraftDocument) (profile : Options := {}) : Except String ExecutionInput := do
-  let schema := d.schema
-  let schemaVersion := d.schemaVersion
+private def validateParsedDocument (parsed : ParsedDocument) (profile : Options) : Except String ImportDocument := do
+  let d := parsed.value
+  let schema := parsed.schema
+  let schemaVersion := parsed.schemaVersion
   let producer := d.producer
   let predicates := d.predicates
   let compilerPredicates := d.compilerPredicates
@@ -158,7 +191,6 @@ def resolveDocument (d : DraftDocument) (profile : Options := {}) : Except Strin
   let typeConstants := d.typeConstants
   let spans := d.spans
   let layouts := d.layouts
-  let functionAbis := d.functionAbis
   let types := d.types
   let allocations := d.allocations
   let instances := d.instances
@@ -167,98 +199,55 @@ def resolveDocument (d : DraftDocument) (profile : Options := {}) : Except Strin
   let bodyRoots := d.bodyRoots
   let compilerAllocIdWorld := d.compilerAllocIdWorld
   let selectedScope := d.selectedScope
-  let runtimeTargetDataLayout := d.runtimeTargetDataLayout
-  let producerSettings := producer.2
-  let producer := producer.1
   if schema != expectedSchema then throw s!"$.schema: expected `{expectedSchema}`"
   if schemaVersion != expectedSchemaVersion then throw "$.schema_version: unsupported schema version"
   if producer.miriCommit != expectedMiriCommit then throw "$.producer.miri_commit: input is from the wrong pinned Miri revision"
   if producer.rustcCommit != expectedRustcCommit then throw "$.producer.rustc_commit: input is from the wrong pinned rustc revision"
-  unless compilerAbiLayoutSchema == expectedCompilerAbiLayoutSchema do
+  unless compilerAbiLayoutSchema == some expectedCompilerAbiLayoutSchema do
     throw s!"$.compiler_abi_layout_schema: unsupported schema `{compilerAbiLayoutSchema}`"
   if types.isEmpty then throw "$.types: input has no type graph; refusing an empty import"
   if bodies.isEmpty then throw "$.bodies: input has no MIR bodies; refusing an empty import"
-  let mut predicateIdentities : Std.HashMap Nat (Array VtablePredicate) := {}
-  for (predicate, index) in predicates.toList.zipIdx do
-    let previous := predicateIdentities.getD predicate.definitionId #[]
-    if previous.any (fun other => decide (other.kind = predicate.kind ∧ other.genericArgs = predicate.genericArgs ∧
-        other.boundVariables = predicate.boundVariables ∧ other.projectionTerm = predicate.projectionTerm)) then
-      throw s!"$.predicates[{index}]: duplicate compiler predicate identity"
-    predicateIdentities := predicateIdentities.insert predicate.definitionId (previous.push predicate)
-  unless compilerPredicates.size == predicates.size do
-    throw "$.compiler_predicate_queries: predicate query and definition tables differ in size"
-  for (query, index) in compilerPredicates.toList.zipIdx do
-    unless query.id == index && query.original == index do
-      throw s!"$.compiler_predicate_queries[{index}]: predicate query identity mismatch"
-    let some definition := predicates[index]? | throw "compiler predicate table index invariant"
-    unless query.autoTrait == (definition.kind == .autoTrait) do
-      throw s!"$.compiler_predicate_queries[{index}]: auto-trait query disagrees with predicate definition"
-    if let some normalized := query.normalizedId then
-      unless normalized < predicates.size do
-        throw s!"$.compiler_predicate_queries[{index}]: dangling normalized predicate reference {normalized}"
-  let mut definitionKeys : Std.HashSet (Nat × Nat) := {}
-  for (definition, index) in definitions.toList.zipIdx do
-    let key := (definition.crateIndex, definition.index)
-    if definitionKeys.contains key then throw s!"$.definitions[{index}]: duplicate compiler definition identity"
-    definitionKeys := definitionKeys.insert key
-  let mut constantValues : Array MIR.TypeConst := #[]
-  for (constant, index) in typeConstants.toList.zipIdx do
-    if constantValues.contains constant then
-      throw s!"$.type_constants[{index}]: duplicate compiler type-constant identity"
-    constantValues := constantValues.push constant
-  let mut instanceIdentities : Std.HashMap Nat (Array InstanceNode) := {}
-  for (node, index) in instances.toList.zipIdx do
-    let definition := node.instanceKind.defId
-    let previous := instanceIdentities.getD definition #[]
-    if previous.any (fun other => decide (other.instanceKind = node.instanceKind ∧ other.genericArgs = node.genericArgs)) then
-      throw s!"$.instances[{index}]: duplicate compiler instance identity"
-    instanceIdentities := instanceIdentities.insert definition (previous.push node)
-  if let some world := compilerAllocIdWorld then validateCompilerAllocIdWorld allocations world
+  profileit "decoder.validate_predicate_queries" profile fun _ => do
+    unless compilerPredicates.size == predicates.size do
+      throw "$.compiler_predicate_queries: predicate query and definition tables differ in size"
+    for (query, index) in compilerPredicates.toList.zipIdx do
+      unless query.id == index && query.original == index do
+        throw s!"$.compiler_predicate_queries[{index}]: predicate query identity mismatch"
+      let some definition := predicates[index]? | throw "compiler predicate table index invariant"
+      unless query.autoTrait == (definition.kind == .autoTrait) do
+        throw s!"$.compiler_predicate_queries[{index}]: auto-trait query disagrees with predicate definition"
+      if let some normalized := query.normalizedId then
+        unless normalized < predicates.size do
+          throw s!"$.compiler_predicate_queries[{index}]: dangling normalized predicate reference {normalized}"
+  profileit "decoder.validate_alloc_id_world" profile fun _ => do
+    if let some world := compilerAllocIdWorld then validateCompilerAllocIdWorld allocations world
   let bodyContext : DecodeMIR.Context := {
     typeCount := types.size, allocationCount := allocations.size,
     definitionCount := definitions.size, typeConstantCount := typeConstants.size,
     spanCount := spans.size,
-    scalarSizes := types.map fun ty => (layouts[ty.layoutId]?).bind (·.sizeBytes) }
-  let bodies ← profileit "decoder.resolve_bodies" profile fun _ =>
-    bodies.mapM (DecodeMIR.resolveBody bodyContext)
-  let typeIds := jsonToNatArray types (·.id)
-  let allocationIds := jsonToNatArray allocations (·.id)
-  let instanceIds := jsonToNatArray instances (·.id)
-  profileit "decoder.validate_dense_type_ids" profile fun _ => validateDense typeIds "type IDs"
-  profileit "decoder.validate_dense_allocation_ids" profile fun _ => validateDense allocationIds "allocation IDs"
-  profileit "decoder.validate_dense_instance_ids" profile fun _ => validateDense instanceIds "instance IDs"
+    scalarSize := fun id => (types[id]?).bind fun ty => (layouts[ty.layoutId]?).bind (·.sizeBytes) }
+  profileit "decoder.validate_body_references" profile fun _ =>
+    parsed.bodyReferences.forM (DecodeMIR.validateReferences bodyContext)
   match selectedScope with
   | some scope => profileit "decoder.selected_scope_validation" profile fun _ =>
       validateSelectedScope scope bodies instances bodyRoots
   | none => pure ()
-  let queries ← CatalogDecoder.resolveQueries bodyContext d.queries
-  let core : ImportDocument := {
-    compilerPredicates := compilerPredicates
-    compilerAbiLayoutSchema := some compilerAbiLayoutSchema
-    producer := producer
-    runtimeTargetDataLayout := runtimeTargetDataLayout
-    predicates := predicates
-    definitions := definitions
-    typeConstants := typeConstants
-    layouts := layouts
-    spans := spans
-    types := types
-    allocations := allocations
-    compilerAllocIdWorld := compilerAllocIdWorld
-    instances := instances
-    selectedScope := selectedScope
-    functionAbis := functionAbis
-    bodyRoots := bodyRoots
-    bodies := bodies
-    queries
-    producerSettings
-  }
-  validatePrimaryTables core
-  pure ⟨core⟩
+  profileit "decoder.validate_catalog_queries" profile fun _ =>
+    CatalogDecoder.validateQueries bodyContext d.queries
+  let core := d
+  profileit "decoder.validate_cross_table_references" profile fun _ => validateParsedTables core
+  pure core
+
+/-- Parse complete input, including all forward-reference and graph checks,
+before returning the final import. Completion bookkeeping stays internal. -/
+def parseDocument (profile : Options := {}) : JsonReader.Parser ImportDocument := do
+  let parsed ← parseDocumentFields
+  JsonReader.liftExcept (profileit "decoder.validate_forward_references" profile fun _ =>
+    validateParsedDocument parsed profile)
 
 def decodeJsonProfiled (text : String) (profile : Options) : Except String ExecutionInput := do
-  let draft ← profileit "decoder.parse" profile fun _ => JsonReader.run parseDocument text
-  profileit "decoder.resolve" profile fun _ => resolveDocument draft profile
+  let document ← profileit "decoder.parse" profile fun _ => JsonReader.run (parseDocument profile) text
+  pure ⟨document⟩
 
 def decodeJson (text : String) : Except String ExecutionInput := decodeJsonProfiled text {}
 

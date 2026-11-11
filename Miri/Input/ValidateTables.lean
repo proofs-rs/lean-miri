@@ -1,7 +1,6 @@
-import Miri.Input.Model
+import Miri.Input.LocalValidation
 
 namespace Miri.Input
-private def joinPath (path key : String) : String := path ++ "." ++ key
 
 private structure ReferenceBounds where
   types : Nat
@@ -68,10 +67,9 @@ private def typeShape (b : ReferenceBounds) (path : String) : TypeShape → Exce
       for (field, fi) in variant.fields.toList.zipIdx do
         checkId b.types field.typeId s!"{path}.variants[{vi}].fields[{fi}].type" "type"
   | .foreign definition => checkId b.definitions definition s!"{path}.def_id" "definition"
-  | .array element length constructor => do
+  | .array element length _ => do
     checkId b.types element s!"{path}.element" "type"
     checkId b.constants length s!"{path}.length" "type constant"
-    unless constructor.count < 2^64 do throw s!"{path}.constructor.count: array count exceeds u64"
   | .patternType base value => do
     checkId b.types base s!"{path}.base" "type"
     pattern b s!"{path}.pattern" value
@@ -167,196 +165,15 @@ private def memory (b : ReferenceBounds) (path : String) (value : AllocationMemo
   for (relocation, index) in value.relocations.toList.zipIdx do
     checkId b.allocations relocation.target s!"{path}.relocations[{index}].target" "allocation"
 
-private def validatePrimitiveLayout (primitive : PrimitiveLayout) (path : String) : Except String Unit := do
-  match primitive.kind with
-  | .integer =>
-    if primitive.integerKind.isNone || primitive.signed.isNone then
-      throw (path ++ ": " ++ "integer primitive layout is missing integer kind or signedness")
-  | .float =>
-    if primitive.floatKind.isNone then throw (path ++ ": " ++ "float primitive layout is missing float kind")
-  | .pointer =>
-    if primitive.addressSpace.isNone then throw (path ++ ": " ++ "pointer primitive layout is missing address space")
-  return ()
-
-private def validateScalarLayout (scalar : ScalarLayout) (path : String) : Except String Unit := do
-  validatePrimitiveLayout scalar.primitive (joinPath path "primitive")
-  match scalar.kind with
-  | .initialized =>
-    if scalar.validRange.isNone then throw (path ++ ": " ++ "initialized scalar layout is missing its valid range")
-  | .union => pure ()
-  return ()
-
-private def validateBackendRepr (repr : BackendRepr) (path : String) : Except String Unit := do
-  for (key, scalar) in [("scalar", repr.scalar), ("first", repr.first), ("second", repr.second), ("element", repr.element)] do
-    match scalar with
-    | some value => validateScalarLayout value (joinPath path key)
-    | none => pure ()
-  return ()
-
-private def validateCanonicalAbi (abi : CanonicalAbi) (path : String) : Except String Unit := do
-  match abi.kind with
-  | .arm =>
-    match abi.armCall with
-    | none => throw (joinPath path "arm_call" ++ ": " ++ "ARM calling convention is missing its call kind")
-    | _ => pure ()
-  | .interrupt =>
-    match abi.interruptKind with
-    | none => throw (joinPath path "interrupt_kind" ++ ": " ++ "interrupt calling convention is missing its interrupt kind")
-    | _ => pure ()
-  | .x86 =>
-    match abi.x86Call with
-    | none => throw (joinPath path "x86_call" ++ ": " ++ "x86 calling convention is missing its call kind")
-    | _ => pure ()
-  | _ => pure ()
-  return ()
-
-private def validateAbiRegister (reg : AbiRegister) (path : String) : Except String Unit := do
-  match reg.kind with
-  | .vector =>
-    match reg.hintElement with
-    | none => throw (joinPath path "kind.hint_element" ++ ": " ++ "vector ABI register is missing its element hint")
-    | some _ => pure ()
-  | _ => pure ()
-  return ()
-
-private def validateAbiPassMode (mode : AbiPassMode) (path : String) : Except String Unit := do
-  match mode.castTarget with
-  | some target =>
-    for (register, index) in target.prefixRegisters.toList.zipIdx do
-      validateAbiRegister register s!"{path}.target.prefix_registers[{index}]"
-    validateAbiRegister target.restRegister (joinPath path "target.rest_register")
-  | none => pure ()
-  return ()
-
-private def validateAllocationMemory (memory : AllocationMemory) (path : String) : Except String Unit := do
-  match memory.mutability with
-  | .mutable | .immutable => pure ()
-  if memory.alignBytes == 0 then throw (joinPath path "align_bytes" ++ ": " ++ "allocation alignment must be nonzero")
-  return ()
-
-private def validateTagEncoding (encoding : TagEncoding) (path : String) : Except String Unit := do
-  match encoding.kind with
-  | .direct => pure ()
-  | .niche =>
-    if encoding.untaggedVariant.isNone || encoding.nicheVariants.isNone || encoding.nicheStart.isNone then
-      throw (path ++ ": " ++ "niche tag encoding is missing its structured variant range or niche start")
-    match encoding.nicheVariants with
-    | some (first, last) => if last < first then throw (joinPath path "niche_variants" ++ ": " ++ "inclusive niche range has its end before its start")
-    | none => pure ()
-  return ()
-
-private def validatePromotedBody (promoted : Array PromotedBody) (path : String) : Except String Unit := do
-  for entry in promoted do
-    if entry.bodyId.isNone then
-      throw (s!"{path}[{entry.index}]" ++ ": " ++ "promoted MIR body is absent; cannot import it as typed MIR")
-  return ()
-
-private def validateExtraSemantic (types : Array TypeNode) (allocations : Array AllocationNode)
-    (instances : Array InstanceNode) (functionAbis : Array FunctionAbi) (bodies : Array Body)
-    (layouts : Array Layout) : Except String Unit := do
-  for node in types do
-    let shapePath := s!"types[{node.id}].shape"
-    match node.shapeKind, node.shapeMetadata.signedKind, node.shapeMetadata.unsignedKind,
-        node.shapeMetadata.floatKind, node.shapeMetadata.adtKind with
-    | .int, none, _, _, _ => throw (joinPath shapePath "signed_kind" ++ ": " ++ "signed integer type shape is missing its exact integer type")
-    | .int, some (.known kind), _, _, _ =>
-      if !kind.signed then
-        throw (joinPath shapePath "signed_kind" ++ ": " ++ "signed integer type shape carries an unsigned integer kind")
-    | .uint, _, none, _, _ => throw (joinPath shapePath "unsigned_kind" ++ ": " ++ "unsigned integer type shape is missing its exact integer type")
-    | .uint, _, some (.known kind), _, _ =>
-      if kind.signed then
-        throw (joinPath shapePath "unsigned_kind" ++ ": " ++ "unsigned integer type shape carries a signed integer kind")
-    | .float, _, _, none, _ => throw (joinPath shapePath "float_kind" ++ ": " ++ "float type shape is missing its exact float type")
-    | .adt, _, _, _, none => throw (joinPath shapePath "adt_kind" ++ ": " ++ "ADT type shape is missing its struct/union/enum kind")
-    | _, _, _, _, _ => pure ()
-    let some layout := layouts[node.layoutId]? | throw s!"types[{node.id}].layout: missing layout {node.layoutId}"
-    match layout.kind with
-    | .layout => pure ()
-    match layout.backendRepresentation with
-    | some repr => validateBackendRepr repr s!"types[{node.id}].layout.backend_repr"
-    | none => pure ()
-    match layout.variantsLayout with
-    | some variants =>
-      match variants.tagEncoding with
-      | some encoding => validateTagEncoding encoding s!"types[{node.id}].layout.variants.tag_encoding"
-      | none => if variants.kind == .multiple then throw (s!"types[{node.id}].layout.variants.tag_encoding" ++ ": " ++ "multi-variant layout is missing tag encoding")
-      match variants.tag with
-      | some scalar => validateScalarLayout scalar s!"types[{node.id}].layout.variants.tag"
-      | none => pure ()
-      for variant in variants.variants do
-        validateBackendRepr variant.backendRepr s!"types[{node.id}].layout.variants[{variant.variantIndex}].backend_repr"
-    | none => pure ()
-  for node in allocations do
-    let allocPath := s!"allocations[{node.id}]"
-    match node.kind, node.data with
-    | .memory, some (.memory memory) =>
-      validateAllocationMemory memory allocPath
-    | .function, some (.function function) =>
-      let canonical := instances.filter (·.id == function.instanceId)
-      unless canonical.size == 1 do throw s!"{allocPath}: missing canonical function instance"
-    | .static, some (.static static) =>
-      if static.definitionPath.isEmpty then throw (s!"{allocPath}.def_path" ++ ": " ++ "static allocation is missing its definition path")
-      match static.initializer, static.globalInfo with
-      | some initializer, _ =>
-        validateAllocationMemory initializer (joinPath allocPath "initializer")
-      | none, some info =>
-        if !info.foreignItem then throw (joinPath allocPath "initializer" ++ ": " ++ "non-foreign static is missing its initializer image")
-      | none, none =>
-        throw (joinPath allocPath "initializer" ++ ": " ++ "static without an initializer lacks exact foreign-item compiler evidence")
-    | .vtable, some (.vtable _) => pure ()
-    | .typeId, some (.typeId _) => pure ()
-    | _, none => throw (allocPath ++ ": " ++ "supported allocation is missing its typed payload")
-    | _, some _ => throw (allocPath ++ ": " ++ "allocation kind and typed payload disagree")
+private def validateExtraReferences (types : Array TypeNode) (instances : Array InstanceNode) : Except String Unit := do
   for node in instances do
-    if let some definition := node.definitionId then
-      unless definition == node.instanceKind.defId do
-        throw s!"instances[{node.id}]: canonical instance kind and definition disagree"
-    match node.kind with
-    | .instanceMir =>
-      if node.bodyId.isNone then
-        throw (s!"instances[{node.id}].body" ++ ": " ++ "instance MIR is missing its decoded body")
-    | .intrinsicDispatch =>
-      if node.bodyId.isSome then throw s!"instances[{node.id}].body: intrinsic identity cannot carry MIR"
-      match node.instanceKind with
-      | .Intrinsic _ | .LlvmIntrinsic _ => pure ()
-      | _ => throw s!"instances[{node.id}].instance_kind: intrinsic dispatch requires an intrinsic identity"
-      if node.definitionId.isNone then throw s!"instances[{node.id}].def_id: intrinsic identity lacks its definition"
-    | .foreignItemNoMir =>
-      if node.bodyId.isSome then throw s!"instances[{node.id}].body: foreign declaration cannot carry MIR"
-      unless node.foreignItem == some true do
-        throw s!"instances[{node.id}].foreign_item: foreign dispatch requires compiler evidence"
-      if node.symbolName.getD "" |>.isEmpty then
-        throw s!"instances[{node.id}].symbol_name: foreign dispatch requires a nonempty compiler symbol"
-      match node.instanceKind with
-      | .Item _ => pure ()
-      | _ => throw s!"instances[{node.id}].instance_kind: foreign dispatch requires an Item identity"
-      if node.definitionId.isNone then throw s!"instances[{node.id}].def_id: foreign identity lacks its definition"
-    | .virtualDispatchTarget =>
-      unless node.bodyStatus == some "not_applicable" && node.bodyId.isNone do
-        throw s!"instances[{node.id}].body: virtual identity must explicitly have no MIR body"
-      match node.instanceKind with
-      | .Virtual _ slot =>
-        unless node.dispatchSlot == some slot do
-          throw s!"instances[{node.id}].dispatch_slot: virtual identity slot disagrees with its instance kind"
-      | _ => throw s!"instances[{node.id}].instance_kind: virtual dispatch requires Virtual identity"
+    if node.kind == .virtualDispatchTarget then
       let some (ty, _) := node.virtualIdentity |
         throw s!"instances[{node.id}].virtual_identity: virtual identity lacks its compiler function type and ABI"
       let some functionType := types[ty]? |
         throw s!"instances[{node.id}].virtual_identity.function_type: missing compiler function type"
       unless functionType.shapeKind == .functionPointer || functionType.shapeKind == .functionDefinition do
         throw s!"instances[{node.id}].virtual_identity.function_type: expected compiler function type"
-    | .identityOnly =>
-      if node.bodyId.isSome then
-        throw (s!"instances[{node.id}].body" ++ ": " ++ "symbol identity catalog row must not provide an executable MIR body")
-  for (abi, abiIndex) in functionAbis.toList.zipIdx do
-    validateCanonicalAbi abi.callingConvention s!"function_abis[{abiIndex}].calling_convention"
-    for (arg, argIndex) in (abi.arguments.push abi.returnValue).toList.zipIdx do
-      validateAbiPassMode arg.mode s!"function_abis[{abiIndex}].arguments[{argIndex}].mode"
-  for (body, index) in bodies.toList.zipIdx do
-    validatePromotedBody body.promotedBodies s!"bodies[{index}].promoted_bodies"
-  for node in instances do
-    validatePromotedBody node.promotedBodies s!"instances[{node.id}].promoted_bodies"
-  return ()
 
 private def catalogSignature (b : ReferenceBounds) (path : String) (value : Catalog.Signature) : Except String Unit := do
   for id in value.inputs do checkId b.types id path "type"
@@ -625,7 +442,9 @@ private def validateRequiredExecution (document : ImportDocument) : Except Strin
               if let some allocation := entry.allocationId then pending := pending.push (2, allocation)
           | .typeId _ => pure ()
 
-def validatePrimaryTables (document : ImportDocument) : Except String Unit := do
+/-- Validate forward table references and graph relationships after row-local
+invariants, including dense instance IDs, have been established by the parsers. -/
+def validateParsedTables (document : ImportDocument) : Except String Unit := do
   let b : ReferenceBounds := {
     types := document.types.size
     allocations := document.allocations.size
@@ -637,6 +456,8 @@ def validatePrimaryTables (document : ImportDocument) : Except String Unit := do
     constants := document.typeConstants.size
     bodies := document.bodies.size
     predicates := document.predicates.size }
+  for (span, index) in document.spans.toList.zipIdx do
+    checkId document.files.size span.file s!"$.spans[{index}].file" "file"
   for (node, index) in document.types.toList.zipIdx do
     let path := s!"$.types[{index}]"
     checkId b.layouts node.layoutId s!"{path}.layout" "layout"
@@ -677,6 +498,7 @@ def validatePrimaryTables (document : ImportDocument) : Except String Unit := do
     if let some data := value.data then
       match data with
       | .memory image => memory b path image
+      -- Dense IDs established by parseInstances make an in-bounds reference unique.
       | .function value => checkId b.instances value.instanceId s!"{path}.instance_id" "instance"
       | .static value =>
         checkId b.definitions value.definitionId s!"{path}.def_id" "definition"
@@ -694,10 +516,8 @@ def validatePrimaryTables (document : ImportDocument) : Except String Unit := do
   for (value, index) in document.bodies.toList.zipIdx do
     let path := s!"$.bodies[{index}]"
     for (entry, ei) in value.backtraceSpans.toList.zipIdx do
-      unless entry.position.bytePosition < 2^32 do
-        throw s!"{path}.backtrace_spans[{ei}]: compiler BytePos exceeds u32"
-      unless entry.collapsedLo == entry.position.bytePosition do
-        throw s!"{path}.backtrace_spans[{ei}]: collapsed hygiene BytePos/source-map position mismatch"
+      checkId document.files.size entry.position.filename
+        s!"{path}.backtrace_spans[{ei}].source_position.filename" "file"
     checkId b.instances value.instanceId s!"{path}.instance_id" "instance"
     for scope in value.sourceScopes do
       if let some inlined := scope.inlined then
@@ -735,8 +555,7 @@ def validatePrimaryTables (document : ImportDocument) : Except String Unit := do
     for (root, index) in selected.roots.toList.zipIdx do
       checkId b.definitions root.definitionId s!"$.selected_scope.roots[{index}].def_id" "definition"
   catalogs b document.queries
-  validateExtraSemantic document.types document.allocations document.instances
-    document.functionAbis document.bodies document.layouts
+  validateExtraReferences document.types document.instances
   for node in document.instances do
     if let some (ty, abi) := node.virtualIdentity then
       checkId b.types ty s!"$.instances[{node.id}].virtual_identity.function_type" "type"

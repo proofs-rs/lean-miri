@@ -26,6 +26,19 @@ def main (args : List String) : IO Unit := do
     | throw (IO.userError "fixture has no executable body source-map rows")
   let some firstBody := program.bundle.bodies[firstIndex]? | throw (IO.userError "body disappeared")
   let some firstRow := firstBody.input.backtraceSpans[0]? | throw (IO.userError "source row disappeared")
+  let some (.ok entries) := baseline.bodySpans[firstIndex]?
+    | throw (IO.userError "baseline source rows failed")
+  let some entry := entries[0]? | throw (IO.userError "baseline source row disappeared")
+  check (entry.position.filename == firstRow.position.filename)
+    "source preparation expanded or changed filename ID"
+  let invalidFile := {firstRow with position :=
+    {firstRow.position with filename := program.input.files.size}}
+  let invalidProgram ← must (replaceSpans program firstIndex #[invalidFile])
+  let invalidPrepared ← must (CompilerBacktraceSource.prepare invalidProgram)
+  let some (.error fileError) := invalidPrepared.bodySpans[firstIndex]?
+    | throw (IO.userError "invalid prepared filename ID accepted")
+  check (fileError == "backtrace filename ID out of bounds")
+    "invalid prepared filename diagnostic changed"
   let changed := {firstRow with position := {firstRow.position with line := firstRow.position.line + 1}}
   let conflicting ← must (replaceSpans program firstIndex (firstBody.input.backtraceSpans.push changed))
   let conflict ← must (CompilerBacktraceSource.prepare conflicting)

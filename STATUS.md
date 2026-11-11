@@ -52,8 +52,10 @@ unimplemented and now stop export. This boundary does not establish compiler
 query closure or interpreter correspondence.
 
 Fifteen fixed connected inputs with their same-TyCtxt reference observations
-and three eval-core inputs have been regenerated
-under the schema-4 resolved-body typed-pool contract. Runtime-metadata checks export their
+and three eval-core inputs are regenerated under the schema-6 resolved-body
+typed-pool contract. Span and backtrace filenames remain validated numeric IDs
+in a shared exact-string file table until diagnostics or backtrace APIs present
+them. Runtime-metadata checks export their
 Rust inputs afresh. Performance checks now obtain
 fresh producer inputs. The DST and large Tree Borrows connected cases now
 generate inputs and same-TyCtxt references in CI from unchanged tracked sources,
@@ -244,11 +246,16 @@ correctness. The large catch guest still needs a fresh same-prepared-TyCtxt
 reference comparison; native completion of a diagnostic trace does not prove UB
 freedom over every permitted choice.
 
-Input decoding parses once into concrete typed tables and unresolved body/catalog
-constant data, then resolves references and scalar widths into interpreter MIR and
-per-instruction facts. Drafts and final data retain no JSON ranges or generic value
-tree. The file entrypoint still reads a complete `String`; bounded-memory file
-streaming is not implemented. Compiler table identities remain local to one input. Reusing guest
+Input decoding constructs final MIR, catalog values and per-instruction facts
+while parsing concrete typed tables. Integer scalar values carry their exact
+compiler byte width; the reader checks their range immediately and checks width
+agreement against the completed type/layout tables. Constructor shape, local
+body bounds and table identities are checked during parsing. Compact numeric
+MIR-reference summaries survive until table counts are known; cross-table
+references, joins and required execution graphs still require completed tables.
+No duplicate MIR spine, generic JSON tree or source ranges are retained. The file
+entrypoint still reads a complete `String`; bounded-memory file streaming is not
+implemented. Compiler table identities remain local to one input. Reusing guest
 pointers or allocation identities between executions would invalidate the
 execution model.
 

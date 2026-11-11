@@ -42,7 +42,7 @@ private def reject (source label : String) : IO Unit :=
 
 private def constant (bits : String) : String :=
   "{\"constant\":{\"value\":{\"bits_unsigned\":" ++ Json.renderString bits ++
-  ",\"kind\":\"scalar\"}," ++
+  ",\"size_bytes\":1,\"kind\":\"scalar\"}," ++
   "\"kind\":\"evaluated_const\"},\"user_type_annotation\":null,\"span\":0,\"type\":1}"
 
 private def forwardOrder (source : String) : Except String String := do
@@ -70,9 +70,42 @@ private def checkCallEvidence : IO Unit := do
   check (!(parse "virtual_dispatch" "3" "null").isOk)
     "virtual call accepted a null required dispatch slot"
 
+private def checkPlaceFactsOrder (fixture : String) : IO Unit := do
+  let some original := (← must (items (← must (get fixture "bodies"))))[0]?
+    | throw (IO.userError "missing fixture body")
+  let info := obj #[("span", "0"), ("scope", "0")]
+  let place (id : Nat) := obj #[("local", toString id), ("type", "0"), ("projection", "[]")]
+  let declaration (id : Nat) := obj #[("local", toString id), ("type", "0"), ("source_info", info)]
+  let operand := obj #[("kind", Json.renderString "Copy"), ("place", place 1)]
+  let value := obj #[("kind", Json.renderString "Use"), ("operand", operand),
+    ("retag", obj #[("kind", Json.renderString "no"), ("performs_retag", "false")])]
+  let statement := obj #[("source_info", info), ("kind", obj #[
+    ("variant", Json.renderString "Assign"), ("place", place 0), ("rvalue", value)])]
+  let terminator := obj #[("source_info", info), ("kind", obj #[("variant", Json.renderString "Return")])]
+  let block := obj #[("block", "0"), ("is_cleanup", "false"),
+    ("statements", arr #[statement]), ("terminator", terminator)]
+  let source ← must (set (← must (set original "locals" (arr #[declaration 0, declaration 1])))
+    "basic_blocks" (arr #[block]))
+  let context : DecodeMIR.Context := {
+    typeCount := 1, allocationCount := 0, definitionCount := 1,
+    typeConstantCount := 0, spanCount := 1 }
+  let parse (text : String) := JsonReader.run (DecodeMIR.parseBody "body") text >>= DecodeMIR.resolveBody context
+  let originalBody ← must (parse source)
+  let reorderedBody ← must (parse (permuted (← must (Json.parse source))))
+  check (originalBody.mir == reorderedBody.mir) "field order changed final assignment MIR"
+  for body in #[originalBody, reorderedBody] do
+    let some facts := (body.nodeFacts[0]?).bind (·[0]?)
+      | throw (IO.userError "missing assignment facts")
+    check (facts.places.size == 2) "field order dropped or duplicated assignment place facts"
+    for id in #[0, 1] do
+      check (facts.places.any fun fact => fact.place.localId == id &&
+        fact.place.projection.isEmpty && fact.typeId == 0 && fact.projectionTypes.isEmpty)
+        s!"field order changed facts for local {id}"
+
 def main : IO Unit := do
   checkCallEvidence
   let fixture ← IO.FS.readFile "tests/input/fixtures/strict-unit.json"
+  checkPlaceFactsOrder fixture
   let baseline ← must (decodeJson fixture)
   let withConstant ← must (replaceBody fixture fun body => set body "required_consts" (arr #[constant "255"]))
   let expected ← must (decodeJson withConstant)
@@ -86,17 +119,23 @@ def main : IO Unit := do
   let some c := cs[0]? | throw (IO.userError "missing required constant")
   match c.value with
   | .Val (.Scalar (.Int bits width)) ty =>
-    check (bits == 255 && width == 1 && ty == 1) "forward layout did not resolve scalar width"
+    check (bits == 255 && width == 1 && ty == 1) "explicit scalar width changed across forward tables"
   | _ => throw (IO.userError "wrong resolved scalar constant")
+  let asmContext : DecodeMIR.Context := {
+    typeCount := baseline.document.types.size, allocationCount := baseline.document.allocations.size,
+    definitionCount := baseline.document.definitions.size, typeConstantCount := baseline.document.typeConstants.size,
+    spanCount := baseline.document.spans.size,
+    scalarSize := fun id => (baseline.document.types[id]?).bind fun ty =>
+      (baseline.document.layouts[ty.layoutId]?).bind (·.sizeBytes) }
   let asmRegister := "{\"name\":\"reg\",\"arch\":\"X86_64\",\"kind\":\"register_class\"}"
   let asmInput := obj #[("value", obj #[("constant", constant "255"), ("kind", "\"Constant\"")]),
     ("register", asmRegister), ("kind", "\"in\"")]
-  let parsedAsm ← must (JsonReader.run DecodeMIR.asmOperand asmInput)
+  let parsedAsm ← must (JsonReader.run (DecodeMIR.MIRParser.checked asmContext DecodeMIR.asmOperand) asmInput)
   match parsedAsm with
-  | .In _ (.Constant c) => check (c.typeId == 1 && c.span.id == 0) "inline assembly input constant metadata changed"
+  | .In _ (.Constant c) => check (c.value == .Val (.Scalar (.Int 255 1)) 1 && c.span.id == 0) "inline assembly input constant metadata changed"
   | _ => throw (IO.userError "inline assembly input constant was not decoded")
   for kind in #["const", "sym_fn"] do
-    let _ ← must (JsonReader.run DecodeMIR.asmOperand (obj #[("value", constant "255"),
+    let _ ← must (JsonReader.run (DecodeMIR.MIRParser.checked asmContext DecodeMIR.asmOperand) (obj #[("value", constant "255"),
       ("kind", Json.renderString kind)]))
     pure ()
   reject (← must (replaceBody fixture fun body => set body "required_consts" (arr #[constant "256"]))) "scalar overflow"
@@ -114,4 +153,4 @@ def main : IO Unit := do
   reject (← must (set fixture "future_metadata" "{\"x\":1,\"x\":2}")) "duplicate unknown member"
   reject (← must (set fixture "future_metadata" "{\"rows\":[1,]}")) "malformed unknown payload"
   reject (← must (replaceBody fixture fun body => set body "phase" "{\"kind\":\"built\",\"phase\":null}")) "invalid union payload"
-  IO.println "TwoPassDecoder: arbitrary object order, forward scalar widths, duplicate keys and malformed references checked"
+  IO.println "TwoPassDecoder: arbitrary object order, explicit scalar widths and forward references, duplicate keys and malformed references checked"

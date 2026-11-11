@@ -51,8 +51,11 @@ exact arguments cannot be fingerprinted.
 
 ## Input contract
 
-The root schema is `lean-miri-rustc-mir` version 4. Compiler values have separate
-tables with document-local, dense, zero-based IDs:
+The root schema is `lean-miri-rustc-mir` version 6. Evaluated integer scalars carry
+`bits_unsigned` and the compiler layout's `size_bytes`, so consumers can construct
+the machine scalar before reading the type and layout tables. Zero-sized and
+pointer constants retain their separate representations. Compiler values have
+separate tables with document-local, dense, zero-based IDs:
 
 | Table | Interning key |
 | --- | --- |
@@ -62,12 +65,13 @@ tables with document-local, dense, zero-based IDs:
 | `instances` | Exact rustc `InstanceKind` and its local generic arguments |
 | `allocations` | Compiler `AllocId`, independently of memory contents |
 | `spans` | Compiler `Span`, including its hygiene context |
+| `files` | Exact filename spelling (string values, shared across spans and backtraces) |
 | `definitions` | Compiler `DefId` (crate and definition index) |
 | `type_constants` | Compiler `Const`, including its type and constructor |
 | `predicates` | Full bound existential predicate; comparison rank is separate |
 | `bodies` | Instance, promoted index and source/query mode |
 
-The Rust collector uses one `Pool<K, D>` implementation for all ten tables.
+The Rust collector uses one `Pool<K, D>` implementation for the ten compiler identity tables. The additional `files` table interns strings.
 Each compiler key `K` owns its reserved index and a single concrete semantic
 value `D`, such as `pool_layout::Layout`, `pool_type::Type` or `pool_body::Body`.
 Nested fields are Rust records, enums, optional values and typed references;
@@ -84,7 +88,13 @@ resolves their final allocation references, and assigns predicate comparison ran
 Pool serialization stays in discovery when it can reveal another compiler key;
 output projection does not create keys or rerun discovery.
 
-References are numeric indices interpreted by the field's schema. Layouts retain
+References are numeric indices interpreted by the field's schema. Span `file` and
+backtrace `source_position.filename` reference the global `files` string table.
+Span filenames retain rustc's debug spelling; backtrace filenames retain its
+remapped display spelling. Distinct spellings remain distinct, even when they
+refer to the same source file. Lean retains these IDs through decoding and
+preparation and resolves text only when displaying diagnostics or serving the
+guest backtrace filename query. Layouts retain
 exact compiler `TyAndLayout` keys, including field and variant layouts. Allocation
 IDs retain compiler allocation identity even when bytes are equal. IDs are local
 to the document; exported `source_alloc_id` records the separate raw Miri AllocId.

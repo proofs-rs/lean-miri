@@ -1,3 +1,4 @@
+import Miri.Input.LocalValidation
 import Miri.Input.ValidateAllocIdWorld
 import Miri.Input.Model.Types
 import Miri.Input.Model.Catalogs
@@ -14,7 +15,7 @@ open Lean
 def expectedMiriCommit : String := "7fa591d7d4dd9af8154becbc8332f8096f8323b1"
 def expectedRustcCommit : String := "8144389c895da997dbdecaa635e41d6a50be6ffd"
 def expectedSchema : String := "lean-miri-rustc-mir"
-def expectedSchemaVersion : Nat := 4
+def expectedSchemaVersion : Nat := 6
 def expectedCompilerAbiLayoutSchema : String := "physical_ty_and_layout_v1"
 
 def escapePathKey (key : String) : String :=
@@ -166,7 +167,7 @@ private structure parseSourceSpanFields where
   «start» : Option (SourcePosition) := none
   «end» : Option (SourcePosition) := none
   «ctxt» : Option (String) := none
-  «file» : Option (String) := none
+  «file» : Option (Nat) := none
 
 def parseSourceSpan (_path : String := "$parseSourceSpan") : Parser (SourceSpanData) := do
   let s ← object (parseSourceSpanFields.mk none none none none none none none) fun s key => do
@@ -177,7 +178,7 @@ def parseSourceSpan (_path : String := "$parseSourceSpan") : Parser (SourceSpanD
     | "start" => return { s with «start» := some (← parseSourcePosition) }
     | "end" => return { s with «end» := some (← parseSourcePosition) }
     | "ctxt" => return { s with «ctxt» := some (← sourceDebugString) }
-    | "file" => return { s with «file» := some (← sourceDebugString) }
+    | "file" => return { s with «file» := some (← natural) }
     | _ => skipValue; pure s
   return {
     isDummy := (← required s.«is_dummy» "is_dummy"), lo := (← required s.«lo» "lo"), hi := (← required s.«hi» "hi"), start := (← required s.«start» "start"),
@@ -480,6 +481,8 @@ def parseTagEncoding (path : String := "$parseTagEncoding") : Parser (TagEncodin
   let nicheStart ← s.niche_start.join.mapM (fun text => liftExcept (decimalNat text path))
   if kind == .niche && (untaggedVariant.isNone || nicheVariants.isNone || nicheStart.isNone) then
     fail s!"{path}: supported niche tag encoding is missing its range or start value"
+  if let some (first, last) := nicheVariants then
+    if last < first then fail s!"{path}.niche_variants: inclusive niche range has its end before its start"
   return ⟨kind, untaggedVariant, nicheVariants, nicheStart⟩
 
 private structure parseVariantsLayoutFields where
@@ -1110,8 +1113,10 @@ def parseTypeNode (_path : String := "$parseTypeNode") : Parser (TypeNode) := do
     | "shape" => return { s with «shape» := some (← parseTypeShape) }
     | "layout" => return { s with «layout» := some (← natural) }
     | _ => skipValue; pure s
-  return {
+  let node : TypeNode := {
     layoutQueryInputTypeId := (← required s.«layout_query_input_type» "layout_query_input_type"), compilerFacts := s.compiler_facts,
     id := (← required s.«type_id» "type_id"), display := (← required s.«display» "display"), shape := (← required s.«shape» "shape"), layoutId := (← required s.«layout» "layout") }
+  liftExcept (LocalValidation.validateType node)
+  pure node
 
 end Miri.Input.DecoderValues

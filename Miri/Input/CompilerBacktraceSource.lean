@@ -10,7 +10,7 @@ structure Position where
   bytePosition : UInt32
   line : Nat
   column : Nat
-  filename : String
+  filename : Nat
   deriving DecidableEq
 structure SpanEntry where
   span : MIR.SpanRef
@@ -21,17 +21,18 @@ structure Prepared where
   positions : Array Position
   names : Array (CallInstance × String)
 
-private def position (source : CompilerSourcePosition) : Except String Position := do
+private def position (files : Array String) (source : CompilerSourcePosition) : Except String Position := do
+  unless source.filename < files.size do throw "backtrace filename ID out of bounds"
   unless source.bytePosition < 2^32 do throw "compiler BytePos exceeds u32"
   pure ⟨UInt32.ofNat source.bytePosition,source.line,source.column,source.filename⟩
-private def spans (ctx : LowerContext) (tables : CompilerTables) (body : BodyCore) :
+private def spans (files : Array String) (ctx : LowerContext) (tables : CompilerTables) (body : BodyCore) :
     Except String (Array SpanEntry × CompilerTables) := do
   let mut tables := tables
   let mut entries := #[]
   for record in body.backtraceSpans do
     unless record.spanId < tables.spans.size do throw "backtrace span ID out of bounds"
     let span : MIR.SpanRef := ⟨record.spanId⟩
-    let location ← position record.position
+    let location ← position files record.position
     unless record.collapsedLo == location.bytePosition.toNat do
       throw "collapsed hygiene BytePos/source-map position mismatch"
     if let some old := entries.find? (fun entry : SpanEntry => entry.span == span) then
@@ -46,7 +47,7 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
   let mut positions := #[]
   let mut positionIndex : Std.HashMap UInt32 Position := {}
   for body in program.bundle.bodies do
-    match spans ctx tables body.input with
+    match spans program.input.files ctx tables body.input with
     | .error error => bodySpans := bodySpans.push (.error error)
     | .ok (entries,next) =>
       tables := next
@@ -107,7 +108,10 @@ def source (p : Prepared) (hostUsizeMax : Nat)
   renderInstance := fun callee => lift do
     let some (_,name) := p.names.find? (·.1 == callee) | throw "exact full-instance rendering absent"
     return name
-  remappedFilename := fun location => pure location.filename }
+  remappedFilename := fun location => lift do
+    let some filename := p.program.input.files[location.filename]?
+      | throw "backtrace filename ID out of bounds"
+    return filename }
 
 def hooks (p : Prepared) (base : Backtrace.Hooks P S D MD B I E Position) :
     Backtrace.Hooks P S D MD B I E Position :=
@@ -126,5 +130,8 @@ def hooks (p : Prepared) (base : Backtrace.Hooks P S D MD B I E Position) :
     renderInstance := fun callee => lift do
       let some (_,name) := p.names.find? (·.1 == callee) | throw "exact full-instance rendering absent"
       return name
-    remappedFilename := fun location => pure location.filename }
+    remappedFilename := fun location => lift do
+      let some filename := p.program.input.files[location.filename]?
+        | throw "backtrace filename ID out of bounds"
+      return filename }
 end Miri.Input.CompilerBacktraceSource
