@@ -140,6 +140,65 @@ fn main() {
         self.assertEqual(compare(case, terminal | {'frames': [{'file': case.path, 'line': 1, 'end_line': 9}]}, 'invalid_bool'), 'ub_site_mismatch')
         self.assertEqual(compare(case, terminal, None), 'ub_kind_mismatch')
 
+    def test_vtable_null_and_shim_convention_keep_exact_categories(self):
+        self.assertEqual(category_reference(
+            'encountered null pointer, but expected a vtable pointer'), 'invalid_vtable')
+        for message in ('null pointer', 'null reference', 'dereferencing a null box'):
+            self.assertEqual(category_reference(message), 'null_pointer')
+        case = Case('fail/test.rs', errors=[(3, 'invalid value')])
+        terminal = {'kind': 'ub', 'frames': [{'file': case.path, 'line': 3}]}
+        for category, detail, negatives in (
+            ('invalid_vtable', 'InvalidVTablePointer',
+             ('nullPointer', 'InvalidVTableTrait', 'DanglingIntPointer')),
+            ('calling_convention',
+             'Miri.Interpreter.StepError.undefinedBehavior "shim calling convention mismatch"',
+             ('shim variadic ABI mismatch', 'shim argument count mismatch',
+              'shim return ABI mismatch', 'shim argument ABI mismatch', 'ABI mismatch',
+              'C math shim calling convention mismatch',
+              '"shim calling convention mismatch extra"')),
+        ):
+            actual = terminal | {'detail': detail}
+            self.assertEqual(compare(case, actual, category), 'passed')
+            for negative in negatives:
+                self.assertEqual(compare(case, terminal | {'detail': negative}, category),
+                                 'ub_kind_mismatch')
+            self.assertEqual(compare(case, actual | {'frames': [{'file': case.path, 'line': 4}]},
+                                     category), 'ub_site_mismatch')
+            self.assertEqual(compare(case, actual | {'kind': 'unsupported'}, category),
+                             'lean_unsupported')
+
+    def test_nonzero_dangling_integer_has_exact_no_provenance_cause(self):
+        case = Case('fail/test.rs', errors=[(3, 'is a dangling pointer')])
+        terminal = {'kind': 'ub', 'frames': [{'file': case.path, 'line': 3}]}
+        detail = 'Miri.Memory.AccessError.danglingIntegerPointer 16 4'
+        actual = terminal | {'detail': detail}
+        self.assertEqual(compare(case, actual, 'no_provenance'), 'passed')
+        self.assertEqual(compare(case, actual, 'null_pointer'), 'ub_kind_mismatch')
+        for negative in ('Miri.Memory.AccessError.danglingIntegerPointer 0 4',
+                         'Other.AccessError.danglingIntegerPointer 16 4',
+                         'Other.Miri.Memory.AccessError.danglingIntegerPointer 16 4',
+                         'OtherMiri.Memory.AccessError.danglingIntegerPointer 16 4',
+                         'miri.Memory.AccessError.danglingIntegerPointer 16 4',
+                         'Miri.Memory.AccessError.DanglingIntegerPointer 16 4',
+                         'Miri.Memory.AccessError.danglingIntegerPointer 16.5 4',
+                         'Miri.Memory.AccessError.danglingIntegerPointer 16-4',
+                         'Miri.Memory.AccessError.danglingIntegerPointer 16e4',
+                         'Miri.Memory.AccessError.danglingIntegerPointer 016 4',
+                         'Miri.Memory.AccessError.danglingIntegerPointer 16suffix 4',
+                         'Miri.Memory.AccessError.pointerOutOfBounds', 'deadAllocation',
+                         'InvalidVTablePointer', 'undefinedBehavior'):
+            self.assertEqual(compare(case, terminal | {'detail': negative}, 'no_provenance'),
+                             'ub_kind_mismatch')
+        self.assertEqual(compare(case, actual | {'frames': [{'file': case.path, 'line': 4}]},
+                                 'no_provenance'), 'ub_site_mismatch')
+        self.assertEqual(compare(case, actual | {'kind': 'unsupported'}, 'no_provenance'),
+                         'lean_unsupported')
+        # Existing zero-pointer and null-box classifications stay separate.
+        for detail in ('nullPointer', 'dereferencing a null box'):
+            self.assertEqual(compare(case, terminal | {'detail': detail}, 'null_pointer'), 'passed')
+            self.assertEqual(compare(case, terminal | {'detail': detail}, 'no_provenance'),
+                             'ub_kind_mismatch')
+
     def test_uninitialized_bool_is_not_an_invalid_bool_oracle(self):
         case = Case('fail/test.rs', errors=[(3, 'uninitialized')])
         diagnostic = ('error: Undefined Behavior: constructing invalid value of type bool: '
