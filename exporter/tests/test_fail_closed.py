@@ -69,6 +69,23 @@ class FailClosedExportTests(unittest.TestCase):
         check(document)
         return document
 
+    def test_layout_query_types_keep_runtime_query_demands(self):
+        source = ROOT / "upstream/miri-source/tests/pass/unops.rs"
+        result = subprocess.run(
+            [str(self.exporter), "--output", str(self.output), "--root", "main", "--",
+             str(source), "--crate-type=lib", "--crate-name=layout_query_demand"],
+            cwd=ROOT, env=self.environment, capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        document = load_mir_document(self.output)
+        demands = {row["input_type_id"] for row in document["compiler_runtime_queries"]["types"]}
+        erased_demands = {
+            row["layout_query_input_type"] for row in document["types"]
+            if row.get("layout_query_input_type") is not None
+        }
+        self.assertTrue(erased_demands)
+        self.assertFalse(erased_demands - demands, "canonical layout-query types lost runtime demand rows")
+
     def test_nested_foreign_block_is_not_an_ambiguous_mir_root(self):
         self.accepted("nested_foreign_root")
         result = self.export("nested_foreign_root", "missing")

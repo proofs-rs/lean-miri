@@ -2847,6 +2847,11 @@ fn type_compiler_facts_json<'tcx>(
     } else {
         None
     };
+    // The canonical layout-query type remains a runtime query demand even
+    // though its id is already exported by layout_query_input_type.
+    if context.runtime_type_query_suppression == 0 && !input.has_escaping_bound_vars() {
+        context.runtime_type_query_demands.insert(input);
+    }
     Ok(CompilerFacts {
         typing_env: "fully_monomorphized",
         boolean_queries,
