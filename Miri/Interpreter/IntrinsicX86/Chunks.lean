@@ -14,6 +14,10 @@ def pack [PointerProvenance P] (h : Hooks P S C V) (choice : C) (inputBits : Nat
   let outSize := Size.fromBits (UInt64.ofNat (inputBits/2))
   let lo : Int := if signed then -(2^(inputBits/2-1) : Int) else 0
   let hi : Int := if signed then 2^(inputBits/2-1)-1 else 2^(inputBits/2)-1
+  -- The unsigned instructions clamp to a nonnegative u8/u16 result, then
+  -- construct that unsigned bit pattern (pinned packuswb/packusdw).
+  let encode (value : Int) : M S (Memory.Scalar P) :=
+    if signed then fromInt value outSize else fromUInt value.toNat outSize
   for i in [:chunks.toNat] do
     let i := UInt64.ofNat i
     let left ← h.architecture.simd.indexRead choice left i
@@ -26,8 +30,8 @@ def pack [PointerProvenance P] (h : Hooks P S C V) (choice : C) (inputBits : Nat
       let rightDest ← h.architecture.simd.indexWrite choice dest (← checkedIndex (j+items.toNat))
       let left ← scalarResult (left.toInt inSize)
       let right ← scalarResult (right.toInt inSize)
-      let left ← fromInt (max lo (min hi left)) outSize
-      let right ← fromInt (max lo (min hi right)) outSize
+      let left ← encode (max lo (min hi left))
+      let right ← encode (max lo (min hi right))
       write h choice left leftDest
       write h choice right rightDest
 
