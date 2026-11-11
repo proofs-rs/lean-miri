@@ -223,12 +223,15 @@ CATEGORIES = [
     ('tb_read', r'read access through .* is forbidden', r'Tree Borrows read access:.*(?:ChildAccessForbidden|ProtectedDisabled|NoValidExposedReferences)'),
     ('tb_deallocate', r'deallocation through .* is forbidden', r'Tree Borrows deallocation:.*(?:ProtectedDealloc|AccessFailure)'),
     ('tb_reborrow', r'reborrow through .* is forbidden', r'Tree Borrows reborrow:.*(?:ChildAccessForbidden|ProtectedDisabled|NoValidExposedReferences)'),
-    ('no_provenance', r'no provenance', r'DanglingIntPointer|dangling pointer|has no provenance'),
+    # Pinned interpret/memory.rs::check_and_deref_ptr raises DanglingIntPointer
+    # on resolution failure; Access.checkAndDerefPtr preserves this typed cause. Nonzero decimal addresses correspond to Miri's no-provenance
+    # cause; zero remains subject to the separate null-pointer oracle.
+    ('no_provenance', r'no provenance', r'DanglingIntPointer|dangling pointer|has no provenance|(?<![\w.])(?-i:Miri\.Memory\.AccessError\.danglingIntegerPointer) [1-9][0-9]*(?=[\s),}\]]|$)'),
     ('assume', r'`assume` called with `false`', r'assume called with false'),
     ('float_to_int', r'`float_to_int_unchecked`.*cannot be represented', r'float_to_int_unchecked value cannot be represented'),
     ('different_allocations', r'not both derived from the same allocation', r'ptr_offset_from pointers do not share allocation'),
     ('track_caller', r'track_caller.*(?:declaration|function)', r'caller/callee.*track_caller.*mismatch'),
-    ('calling_convention', r'calling convention', r'caller/callee calling convention mismatch'),
+    ('calling_convention', r'calling convention', r'caller/callee calling convention mismatch|(?:^|")shim calling convention mismatch(?:"|$)'),
     ('extra_arguments', r'more arguments than it expected', r'more arguments than it expected'),
     ('missing_arguments', r'fewer arguments than', r'fewer arguments than'),
     ('vtable_trait', r'wrong trait in wide pointer vtable|using vtable for', r'InvalidVTableTrait'),
@@ -276,6 +279,9 @@ def category_reference(text):
     # The uninitialized-memory cause takes precedence over that expected type.
     if re.search(r'\b(?:encountered uninitialized|uninitialized (?:memory|data|bytes|value)|memory is uninitialized)\b', text, re.I):
         return 'uninitialized'
+    # Vtable validity is specific even when its malformed metadata is null.
+    if re.search(r'\bexpected a vtable pointer\b', text, re.I):
+        return 'invalid_vtable'
     for name, reference, _ in CATEGORIES:
         if re.search(reference, text, re.I):
             return name
