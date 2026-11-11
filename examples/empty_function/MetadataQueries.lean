@@ -20,8 +20,7 @@ theorem caller_location {p options config} (fields : Fields p options config)
   simp only [CompilerVirtualLeaves.make, CompilerVirtualFacts.scopeHooks]
   rcases inline with inline | inline
   all_goals
-    simp only [inline, query]
-    with_unfolding_all rfl
+    simp only [inline, query] <;> with_unfolding_all rfl
 
 theorem instance_abi {p options config} (fields : Fields p options config)
     (limits : ExecutionMachine.Limits) (fn : CallInstance) (abi : FnAbi TyId)
