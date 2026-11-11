@@ -78,6 +78,16 @@ def main (args : List String) : IO Unit := do
   rejects (JsonReader.run parseAbi missingArgument.text) "out of bounds shared ABI argument accepted"
   let returnId ← must ((← must (rawSample.field "return")).natural)
   let some returnValue := rawArguments[returnId]? | throw (IO.userError "missing return argument")
+  let withUnused (argument : JsonFixtures.Value) : Except String JsonFixtures.Value :=
+    set source "abi_arguments" ("[" ++ String.intercalate "," ((rawArguments.push argument).toList.map (·.text)) ++ "]")
+  let validUnused ← must (withUnused returnValue)
+  let _ ← must (decodeJson validUnused.text)
+  let invalidType ← must (set returnValue "type" (toString decoded.document.types.size))
+  let invalidUnusedType ← must (withUnused invalidType)
+  rejects (decodeJson invalidUnusedType.text) "unused ABI argument with dangling type accepted"
+  let invalidLayoutRef ← must (set returnValue "layout" (toString decoded.document.layouts.size))
+  let invalidUnusedLayout ← must (withUnused invalidLayoutRef)
+  rejects (decodeJson invalidUnusedLayout.text) "unused ABI argument with dangling layout accepted"
   let inlineArgument ← must (set rawSample "return" returnValue.text)
   rejects (JsonReader.run parseAbi inlineArgument.text) "inline ABI argument accepted at pooled ID position"
   let inlineReturn ← must (set returnValue "layout" rawLayout.text)

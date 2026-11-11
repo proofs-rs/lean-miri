@@ -56,6 +56,7 @@ private structure ParsedDocument where
   schema : String
   schemaVersion : Nat
   bodyReferences : Array DecodeMIR.References
+  abiArguments : Array AbiArgument
 
 private def denseRow (what : String) (index : Nat) (getId : α → Nat)
     (parser : JsonReader.Parser α) : JsonReader.Parser α := do
@@ -290,7 +291,7 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
     runtimeTargetDataLayout := d.runtimeTargetDataLayout
     queries := ← CatalogDecoder.finish d.queries
   }
-  return ⟨value, schema, schemaVersion, d.bodyReferences⟩
+  return ⟨value, schema, schemaVersion, d.bodyReferences, pools.abiArguments⟩
 
 private def validateParsedDocument (parsed : ParsedDocument) (profile : Options) : Except String ImportDocument := do
   let d := parsed.value
@@ -349,6 +350,11 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
     CatalogDecoder.validateQueries bodyContext d.queries
   let core := d
   profileit "decoder.validate_cross_table_references" profile fun _ => validateParsedTables core
+  for (argument, index) in parsed.abiArguments.toList.zipIdx do
+    unless argument.typeId < types.size do
+      throw s!"$.abi_arguments[{index}].type: dangling type reference {argument.typeId}"
+    unless argument.layoutId < layouts.size do
+      throw s!"$.abi_arguments[{index}].layout: dangling layout reference {argument.layoutId}"
   pure core
 
 /-- Parse complete input, including all forward-reference and graph checks,
