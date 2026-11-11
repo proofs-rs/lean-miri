@@ -1,5 +1,6 @@
 import Miri.Input.EvalSourceRunFinalization
 import Miri.Input.ExecutionChoicePolicy
+import Miri.Input.CompilerMiriEntry
 import Miri.Input.NativeMathHost
 
 /-! Standalone source run harness draft. It enters through
@@ -337,8 +338,9 @@ private def summarize (result : Input.EvalSourceRunFinalization.Result OuterStat
   | .failed state error => s!"failed {reprStr error}; {stateInfo state}"
   | .pending state cause => s!"pending {reprStr cause}; {stateInfo state}"
 
-/-- Diagnostics use the stopped frames' exact MIR source spans. This is separate
-from the allocation span hooks and does not change interpreter execution. -/
+/-- Diagnostics retain raw MIR spans and use only exact canonical body/span
+compiler hygiene queries for user-facing locations. This is separate from
+allocation span hooks and does not change interpreter execution. -/
 private def terminalDiagnostic (prepared : Input.EvalPreparation.Prepared)
     (result : Input.EvalSourceRunFinalization.Result OuterState) (allocationTraces : Bool := false) : Lean.Json := Id.run do
   let (kind, error, state) := match result with
@@ -358,12 +360,35 @@ private def terminalDiagnostic (prepared : Input.EvalPreparation.Prepared)
           let statement ← block.statements[location.statementIndex]?
           pure statement.sourceInfo.span
     let source? := span?.bind fun span => prepared.compiler.program.bundle.spans[span.id]?
+    let collapsed? : Option Input.CompilerBacktraceSource.Position := do
+      let span ← span?
+      let body ← prepared.compiler.program.bundle.bodies[frame.bodyIdentity.index]?
+      if body.body != frame.body || body.input.instanceId != frame.functionInstance then none
+      else do
+        let records ← prepared.compiler.lifecycle.backtrace.bodySpans[frame.bodyIdentity.index]?
+        let entries ← match records with | .ok entries => some entries | .error _ => none
+        let entry ← entries.find? (·.span == span)
+        pure entry.position
     return match source? with
     | none => Lean.Json.null
-    | some source => Lean.Json.mkObj [
-        ("file", toJson (prepared.compiler.program.input.files[source.file]?)), ("line", toJson source.start.line),
-        ("end_line", toJson source.«end».line), ("column", toJson source.start.column),
-        ("lo", toJson source.lo), ("hi", toJson source.hi)]
+    | some source =>
+      let raw := [
+        ("raw_file", toJson (prepared.compiler.program.input.files[source.file]?)),
+        ("raw_line", toJson source.start.line), ("raw_end_line", toJson source.«end».line),
+        ("raw_column", toJson source.start.column),
+        ("lo", toJson source.lo), ("hi", toJson source.hi),
+        ("body_id", toJson frame.bodyIdentity.index), ("span_id", toJson (span?.map (·.id)))]
+      match collapsed? with
+      | some position => Lean.Json.mkObj (raw ++ [
+          ("location_mode", toJson ("compiler_hygiene" : String)),
+          ("file", toJson (prepared.compiler.program.input.files[position.filename]?)),
+          ("line", toJson position.line), ("column", toJson position.column),
+          ("collapsed_lo", toJson position.bytePosition.toNat)])
+      | none => Lean.Json.mkObj (raw ++ [
+          ("location_mode", toJson ("raw_span_no_exact_hygiene" : String)),
+          ("file", toJson (prepared.compiler.program.input.files[source.file]?)),
+          ("line", toJson source.start.line), ("end_line", toJson source.«end».line),
+          ("column", toJson source.start.column)])
   let fields := [("kind", toJson kind), ("detail", toJson error), ("frames", .arr frames)]
   if !allocationTraces then return Lean.Json.mkObj fields
   let extras := state.machine.user.user.payload.payload.runtime.extras
@@ -385,8 +410,11 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
   let compiler := prepared.compiler
   let dummy := prepared.dummySpan
   let selectedEntry ← (Input.CompilerMain.sourceCompilerEntry compiler.main).mapError toString
-  let some (definition, .rustcMain sigpipe) := selectedEntry
-    | throw "compiler did not select an rustc_main entry"
+  let (definition, entryType) ← match selectedEntry with
+    | some entry => pure entry
+    | none => do
+      unless ui.isSome do throw "compiler did not select an rustc_main entry"
+      pure (← Input.CompilerMiriEntry.miriStart compiler, MainEntryType.miriStart)
   let bytes ← (Input.CompilerGlobalBytes.prepare compiler.program compiler.runtime initialMemory).mapError toString
   let arrays ← compiler.initialArrays
   let targetBits := compiler.runtime.target.base.pointerWidth.bits.toNat
@@ -406,7 +434,7 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
     validation := options.place.validation
     alignment := (ui.map (·.alignment)).getD .Int, affinity := none, muteOutput := true, hostUsizeBits := 64 }
   let bootstrap : Input.EvalBootstrap.Configuration Os := {
-    arguments := #[(ui.map (·.source)).getD "/workspace/lean-miri/scratch/main31.rs"], entry := definition, entryType := .rustcMain sigpipe
+    arguments := #[(ui.map (·.source)).getD "/workspace/lean-miri/scratch/main31.rs"], entry := definition, entryType
     communicate := false, forwarded := #[], environment := #[], overrides := #[] }
   let targetFacts ← compiler.externStatics.targetFacts.mapError id
   let startupFacts ← (Input.EvalStartupRuntimeConstruction.prepare compiler).mapError id

@@ -1,5 +1,6 @@
 import Miri.Input.EvalConfigurationCore
 import Miri.Input.CompilerGlobals
+import Miri.Input.CompilerAllocIdWorld
 import Miri.Input.CompilerFunctionPointers
 import Miri.Input.CompilerVTableMachine
 import Miri.Input.CompilerIntrinsicSymbols
@@ -168,6 +169,10 @@ private def runPrepared (prepared : Input.CompilerProviders.Prepared) : Except S
   let imported := Input.CompilerGlobals.importGraph prepared.runtime.target prepared.program
     (MemoryState.empty : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind)
   let image ← imported.outcome
+  -- Match canonical EvalPreparation: preserve the supplied raw-ID frontier
+  -- and crosswalk before any runtime allocation or byte-key attachment.
+  let memory ← Input.CompilerAllocIdWorld.install
+    prepared.program.input.compilerAllocIdWorld prepared.program.input.allocations imported.memory
   let arrays ← prepared.initialArrays
   let host : Host := {
     blocking := ⟨none, #[]⟩, clock := .virtual 0, deadlines := .empty
@@ -188,7 +193,7 @@ private def runPrepared (prepared : Input.CompilerProviders.Prepared) : Except S
     alignment := .Int, affinity := none, muteOutput := true, hostUsizeBits := 64 }
   let initial ← (Input.InitialMachine.create (Os := Unit) (R := Unit) (P := Unit)
     (H := Unit) (D := Unit) (O := String) (Aff := Unit) (B := Unit)
-    machineConfig imported.memory arrays
+    machineConfig memory arrays
       { inputs := #[Miri.Interpreter.ExecutionChoices.Input.index (Miri.Interpreter.ExecutionChoices.IndexSite.addressSlack) 0,
   Miri.Interpreter.ExecutionChoices.Input.boolean (Miri.Interpreter.ExecutionChoices.BoolSite.preemption) false,
   Miri.Interpreter.ExecutionChoices.Input.boolean

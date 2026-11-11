@@ -271,6 +271,25 @@ private def writeUninitFull [DecidableEq MachineKind]
   let mutation := Allocation.writeUninit reference.range pointerSize reference.allocation
   return commitAllocationMutation memory hooks reference mutation
 
+/-- Pinned place.rs::write_uninit for an existing memory place. Unlike an
+immediate write, this operation accepts unsized destinations and obtains their
+actual dynamic range before performing the ordinary mutable access checks. -/
+def writeUninitToMplace [DecidableEq MachineKind]
+    (memory : MemoryState Prov Extra MachineKind) (hooks : HookState)
+    (place : MemoryOperandPlace Prov) (runtime : RuntimeTargetDataLayout)
+    (ghostMode : Bool) (globalKind : Option MachineKind)
+    (globalHooks : GlobalAllocationHooks Prov Extra MachineKind HookState)
+    (accessHooks : AllocationAccessHooks Prov Extra MachineKind HookState ProvExtra)
+    (dynamicLayout : DynamicLayoutResolver Prov Extra MachineKind HookState) :
+    MemoryOperandResult Prov Extra MachineKind HookState Unit := Id.run do
+  let access := getPlaceAllocMut memory hooks place runtime ghostMode globalKind
+    globalHooks accessHooks dynamicLayout
+  match access.outcome with
+  | .error error => return ⟨access.memory, access.hooks, access.touched, .error error⟩
+  | .ok none => return ⟨access.memory, access.hooks, access.touched, .ok ()⟩
+  | .ok (some reference) =>
+    return writeUninitFull access.memory access.hooks reference runtime.pointerSize
+
 /-! Source `read_immediate_from_mplace_raw`. In particular, an unsized layout
 returns before touching memory; a zero-sized access with no allocation becomes
 `Uninit`; all layouts that are not fully initialized scalar/scalar-pair ABIs
@@ -494,6 +513,24 @@ theorem unsized_raw_read_does_not_call_dynamic_access
     (readImmediateFromMplaceRaw memory hooks place runtime ghostMode globalKind
       globalHooks accessHooks dynamicLayout).memory = memory := by
   simp [readImmediateFromMplaceRaw, h]
+
+/-- The dedicated uninitialization writer preserves zero-sized memory places. -/
+theorem zero_uninit_full_write {P E K H X : Type} [DecidableEq K]
+    (memory : MemoryState P E K) (hooks : H)
+    (pointer : Pointer (Option P)) (runtime : RuntimeTargetDataLayout)
+    (pointerSize : Size)
+    (pointerMetadata : runtime.pointerSizeIn runtime.defaultAddressSpace = .ok pointerSize)
+    (ghost : Bool) (kind : Option K)
+    (globals : GlobalAllocationHooks P E K H)
+    (access : AllocationAccessHooks P E K H X)
+    (dynamic : DynamicLayoutResolver P E K H) (ty : Option Nat) :
+    writeUninitToMplace memory hooks
+      ⟨⟨pointer, .none, none⟩, ⟨Size.ZERO, Align.ONE, .Memory (sized := true), ty⟩⟩
+      runtime ghost kind globals access dynamic = ⟨memory, hooks, none, .ok ()⟩ := by
+  unfold writeUninitToMplace getPlaceAllocMut selectedSizeAndAlign pointerArithmeticFor
+  simp only [BackendRepr.isUnsized]
+  rw [pointerMetadata]
+  cases ghost <;> with_unfolding_all rfl
 
 /-- Unit storage has no byte write, for any aligned pointer and arbitrary
 memory/access hooks. Only the target pointer-size query is a metadata premise. -/

@@ -27,7 +27,7 @@ theorem atomic_access_rejects_incompatible_write
     (hReads : oldAtomic.readVector.le thread.clock = false)
     (hWrites : oldAtomic.writeVector.le thread.clock = false)
     (hCell : cell.atomicOps = some oldAtomic) :
-    cell.atomicAccess thread newSize true = .error .race := by
+    cell.atomicAccess thread newSize true = .error .mixedSizeRace := by
   simp [MemoryCellClocks.atomicAccess, hCell, hOldSize, hReads, hWrites]
 
 end Miri.Concurrency.Verification

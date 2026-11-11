@@ -126,6 +126,39 @@ sys.exit(CODE)
                 record = driver.run_case(case, args, __import__('os').environ.copy(), output)
                 self.assertEqual(record['status'], expected)
                 self.assertEqual(record['lean_exit'], 0)
+                before = json.dumps(record, sort_keys=True)
+                diagnostic = driver.failure_diagnostic(record)
+                self.assertEqual(json.dumps(record, sort_keys=True), before)
+                if expected == 'passed':
+                    self.assertIsNone(diagnostic)
+                else:
+                    self.assertEqual(diagnostic['actual']['status'], expected)
+                    self.assertEqual(diagnostic['terminal']['detail'], 'invalidBool 2')
+                    if expected == 'export_failed':
+                        self.assertTrue(any('Undefined Behavior' in line
+                                            for line in diagnostic['export_log_tail']['lines']))
+
+    def test_failure_console_details_are_bounded_and_omit_environment_and_commands(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            log = directory / 'export.log'
+            log.write_text('discarded preamble\n' * 1000 + '\n'.join(f'line {i}' for i in range(30)))
+            record = Case('pass/test.rs').record() | {
+                'status': 'export_failed', 'directory': str(directory), 'export_exit': 2,
+                'command': ['DO_NOT_PRINT_COMMAND'], 'environment': {'TOKEN': 'DO_NOT_PRINT_ENV'},
+                'terminal': {'kind': 'failed', 'detail': 'x' * 100000},
+                'lean_profile_differences': {'choice_policy': {'expected': 'seeded-generated-0',
+                                                              'actual': 'wrong'}}}
+            diagnostic = driver.failure_diagnostic(record)
+            self.assertTrue(diagnostic['terminal']['truncated'])
+            self.assertLessEqual(len(diagnostic['terminal']['json_prefix']), 4096)
+            self.assertEqual(diagnostic['export_log_tail']['lines'], [f'line {i}' for i in range(10, 30)])
+            self.assertTrue(diagnostic['export_log_tail']['truncated'])
+            encoded = json.dumps(diagnostic)
+            self.assertNotIn('DO_NOT_PRINT', encoded)
+            self.assertLess(len(encoded), 10000)
+            self.assertEqual(diagnostic['actual'], {'status': 'export_failed', 'export_exit': 2})
+            self.assertEqual(diagnostic['lean_profile_differences'], record['lean_profile_differences'])
 
     def test_main_profile_is_not_silently_accepted(self):
         case = next(c for c in discover() if not c.reasons)

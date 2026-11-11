@@ -147,7 +147,7 @@ theorem Fields.writeUninit {p options config} (fields : Fields p options config)
     (place : MPlaceTy Provenance) :
     config.retag.writeUninit place = (do
       let access ← ValidityMachine.scopedAccess config.access
-      PlaceMachine.writeMemory access (fun _ => false) .uninit place) := by
+      PlaceMachine.writeUninitMemory access place) := by
   obtain ⟨pointers, table, globals, retag, _⟩ := fields.construction
   rw [retag]
   rfl

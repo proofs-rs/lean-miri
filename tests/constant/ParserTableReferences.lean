@@ -60,9 +60,22 @@ def main (args : List String) : IO Unit := do
   reject "permuted instance IDs" "instance IDs: expected ID" (withInstances ((instances.set! 0 instances[1]!).set! 1 instances[0]!))
   reject "displaced instance ID" "instance IDs: expected ID" (withInstances (instances.set! 0 (instances[0]!.setObjVal! "instance_id" (nat instances.size))))
   reject "duplicate semantic instance" "duplicate compiler instance identity" (withInstances (instances.set! 1 (instances[0]!.setObjVal! "instance_id" (nat 1))))
-  -- This fixture has no function allocation; add a valid one before corrupting its ID.
-  let function := obj [("allocation_id", nat allocations.size), ("kind", str "function"), ("instance_id", nat 0)]
+  -- Schema 8 groups function allocations by instance while preserving each
+  -- distinct [graph ID, source AllocId]. Wire row count is not graph ID count.
+  let graphId := document.allocations.size
+  let sourceId := document.allocations.foldl (fun highest node =>
+    max highest ((node.sourceAllocId.map UInt64.toNat).getD 0)) 0 + 1
+  unless sourceId < 2^64 do throw (IO.userError "fixture has no fresh source AllocId")
+  let some instanceId := (List.range instances.size).find? (fun id =>
+    !document.allocations.any (fun node => match node.data with
+      | some (.function function) => function.instanceId == id
+      | _ => false)) | throw (IO.userError "fixture needs an unused function instance")
+  let function := obj [("kind", str "function"), ("instance_id", nat instanceId),
+    ("identities", arr #[arr #[nat graphId, nat sourceId]])]
   let withFunction (row : Json) := json.setObjVal! "allocations" (arr (allocations.push row))
   let _ ← must (decodeJson (withFunction function).compress)
-  reject "function allocation instance" s!"$.allocations[{allocations.size}].instance_id: dangling instance reference" (withFunction (function.setObjVal! "instance_id" (nat instances.size)))
+  reject "legacy function identity" "function identities belong in the identity list"
+    (withFunction (obj [("allocation_id", nat graphId), ("source_alloc_id", nat sourceId),
+      ("kind", str "function"), ("instance_id", nat instanceId)]))
+  reject "function allocation instance" s!"$.allocations[{graphId}].instance_id: dangling instance reference" (withFunction (function.setObjVal! "instance_id" (nat instances.size)))
   IO.println "parser table references passed: 12 payload cases, dense IDs, semantic identities and function allocation bounds"

@@ -21,6 +21,7 @@ inductive CastTypeInfo where
   | closure (definition : DefId) (args : Array GenericArg) (upvarCount : Nat)
   | pattern (inner : TyId) (patternId : Nat)
   | adt (definition : DefId)
+  | tuple (elements : Array TyId)
   | array (element : TyId) (length : UInt64)
   | slice (element : TyId)
   | dynamic (predicates : PredicateList)

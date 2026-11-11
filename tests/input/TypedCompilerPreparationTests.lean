@@ -90,12 +90,13 @@ def main (args : List String) : IO Unit := do
       | .reference pointee .. => some (.reference pointee)
       | .functionDefinition definition args .. => some (.fnDefinition definition args)
       | .slice element => some (.slice element)
+      | .tuple elements => some (.tuple elements)
       | _ => none
     if let some expected := expected then
       check (actual == .ok expected) s!"cast type {node.id} changed its source classification"
       classifiedCases := classifiedCases + 1
     match node.shape with
-    | .tuple _ | .never | .str =>
+    | .never | .str =>
       check (actual == .error "type kind is outside the cast operand domain")
         s!"cast type {node.id} lost its deferred domain error"
       deferredCases := deferredCases + 1

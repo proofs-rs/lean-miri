@@ -244,7 +244,7 @@ pub(super) fn register_assert<'tcx>(
                 caller_args,
                 tcx.types.unit,
                 rustc_abi::ExternAbi::Rust,
-                body.typing_env(tcx),
+                ty::TypingEnv::fully_monomorphized(),
             )?;
         }
     })

@@ -151,6 +151,57 @@ def runner_profile_differences(case, source, profile):
     return profile_differences(expected, profile)
 
 
+def bounded_json(value, limit=4096):
+    encoded = json.dumps(value, ensure_ascii=True)
+    if len(encoded) <= limit:
+        return value
+    return {'truncated': True, 'json_characters': len(encoded),
+            'json_prefix': encoded[:limit]}
+
+
+def diagnostic_log_tail(path, max_bytes=4096, max_lines=20):
+    """Bound both file reads and console output; the full log stays in artifacts."""
+    if not path.is_file():
+        return None
+    with path.open('rb') as stream:
+        size = stream.seek(0, 2)
+        stream.seek(max(0, size - max_bytes))
+        text = stream.read(max_bytes).decode(errors='replace')
+    lines = text.splitlines()
+    return {'lines': lines[-max_lines:],
+            'truncated': size > max_bytes or len(lines) > max_lines}
+
+
+def failure_diagnostic(record):
+    """Allowlisted observations only: never serialize commands or environments."""
+    if record['status'] in ('passed', 'profile_unsupported'):
+        return None
+    negative = record['path'].startswith('fail/')
+    terminal = record.get('terminal', {})
+    detail = {
+        'id': record['id'],
+        'expected': bounded_json({'status': 'passed', 'terminal_kind': 'ub' if negative else 'exit',
+                                  'exit_detail': None if negative else '0',
+                                  'category': record.get('category'), 'source_errors': record.get('errors', [])}),
+        'actual': {key: record[key] for key in ('status', 'reference_status', 'lean_status',
+                  'lean_outcome_status', 'export_exit', 'lean_exit') if key in record},
+        'terminal': bounded_json({key: terminal[key] for key in ('kind', 'detail') if key in terminal}),
+        'terminal_frames': bounded_json(terminal.get('frames', [])[-8:]),
+        'reference_profile_differences': bounded_json(record.get('reference_profile_differences', {})),
+        'lean_profile_differences': bounded_json(record.get('lean_profile_differences', {})),
+    }
+    reference = record.get('reference', {})
+    reference = reference.get('reference', reference)
+    detail['reference_outcome'] = bounded_json(reference.get('outcome', {}))
+    directory = record.get('directory')
+    if directory:
+        if record['status'].startswith('export_') or record.get('reference_status') == 'export_failed':
+            detail['export_log_tail'] = diagnostic_log_tail(Path(directory) / 'export.log')
+        if not terminal:
+            detail['lean_log_tail'] = diagnostic_log_tail(Path(directory) / 'lean.log')
+    return detail
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--inventory', action='store_true', help='list all cases and profile exclusions without building')
@@ -234,6 +285,9 @@ def main():
             stream.write(json.dumps(record) + '\n')
             stream.flush()
             print(f'{record["status"]}: {case.id}', flush=True)
+            diagnostic = failure_diagnostic(record)
+            if diagnostic is not None:
+                print('upstream_failure: ' + json.dumps(diagnostic, ensure_ascii=True), flush=True)
     if source_fingerprint() != source_hash:
         raise RuntimeError('project sources changed during comparisons; run is invalid')
     if sha256(args.exporter) != exporter_hash or sha256(args.runner) != runner_hash:

@@ -38,7 +38,7 @@ pub(super) fn register_target_call<'tcx>(
     args: Vec<ty::Ty<'tcx>>,
     destination: ty::Ty<'tcx>,
     caller_abi: rustc_abi::ExternAbi,
-    caller_env: ty::TypingEnv<'tcx>,
+    runtime_abi_env: ty::TypingEnv<'tcx>,
 ) -> Result<(), String> {
     Ok::<_, String>({
         if !closed(destination) || args.iter().any(|arg| !closed(*arg)) {
@@ -69,7 +69,7 @@ pub(super) fn register_target_call<'tcx>(
         }
         let request = CallTransferRequest {
             function_ty,
-            caller_env,
+            runtime_abi_env,
             caller_instance: None,
             caller_args: args,
             extra_types: ty::List::empty(),
@@ -183,7 +183,7 @@ pub(super) fn register_runtime_callback_call_types<'tcx>(
                 callback_operand_type,
                 request: CallTransferRequest {
                     function_ty,
-                    caller_env: ty::TypingEnv::fully_monomorphized(),
+                    runtime_abi_env: ty::TypingEnv::fully_monomorphized(),
                     caller_instance: None,
                     caller_args,
                     extra_types: ty::List::empty(),

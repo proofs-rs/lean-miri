@@ -355,7 +355,9 @@ struct ExportContext<'tcx> {
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct CallTransferRequest<'tcx> {
     function_ty: ty::Ty<'tcx>,
-    caller_env: ty::TypingEnv<'tcx>,
+    /// Miri's interpreter owns a Codegen environment independently of the
+    /// template body's PostAnalysis normalization environment.
+    runtime_abi_env: ty::TypingEnv<'tcx>,
     caller_instance: Option<ty::Instance<'tcx>>,
     caller_args: Vec<ty::Ty<'tcx>>,
     extra_types: &'tcx ty::List<ty::Ty<'tcx>>,
@@ -2573,20 +2575,7 @@ fn type_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: rustc_middle::ty::Ty<'tcx>,
 ) -> Result<u64, String> {
-    // rustc layout is region-insensitive. Query the exact region-erased form
-    // for late-bound region types while retaining the source Ty and its Binder
-    // graph as the exported type identity and signature evidence.
-    let query_ty = if ty.has_escaping_bound_vars()
-        && !ty.has_non_region_param()
-        && !ty.has_infer()
-        && !ty.has_placeholders()
-        && !ty.references_error()
-    {
-        ty::fold_regions(tcx, ty, |_, _| tcx.lifetimes.re_erased)
-    } else {
-        ty
-    };
-    type_json_with_query(context, tcx, ty, query_ty)
+    type_json_with_query(context, tcx, ty, ty)
 }
 
 /// Serialize the source type while attaching query evidence computed from an
@@ -2600,6 +2589,21 @@ fn type_json_with_query<'tcx>(
     ty: rustc_middle::ty::Ty<'tcx>,
     query_ty: rustc_middle::ty::Ty<'tcx>,
 ) -> Result<u64, String> {
+    // Query views nested below a signature Binder can still reference an
+    // enclosing Binder after this signature's own regions were instantiated.
+    // Layout is region-insensitive: erase only those escaping regions from
+    // the query view, just as for an ordinary type_json call. The source Ty,
+    // its nested Binders and every non-region generic variable remain intact.
+    let query_ty = if query_ty.has_escaping_bound_vars()
+        && !query_ty.has_non_region_param()
+        && !query_ty.has_infer()
+        && !query_ty.has_placeholders()
+        && !query_ty.references_error()
+    {
+        ty::fold_regions(tcx, query_ty, |_, _| tcx.lifetimes.re_erased)
+    } else {
+        query_ty
+    };
     // Signature-bound types are metadata inside their Binder, not runtime
     // query inputs. The instantiated signature registers its closed types.
     if context.runtime_type_query_suppression == 0 && !ty.has_escaping_bound_vars() {
@@ -3097,7 +3101,8 @@ fn type_json_inner<'tcx>(
         type_id: id,
         display: input.to_string(),
         shape,
-        layout: layout_json(context, tcx, query_ty)?,
+        layout: layout_json(context, tcx, query_ty)
+            .map_err(|error| format!("{error}; source_type={input:?}; query_type={query_ty:?}"))?,
         layout_query_input_type: if query_ty == input {
             None
         } else {
@@ -3283,9 +3288,7 @@ fn layout_json<'tcx>(
         return Ok(export_failure(
             "main::layout_json",
             format!(
-                "{}; {}",
-                "type contains escaping bound variables; the pinned layout query may panic on this non-monomorphic input",
-                "layout"
+                "type contains escaping bound variables; the pinned layout query may panic on this non-monomorphic input; layout; type={ty:?}"
             ),
         )?);
     }
@@ -4271,7 +4274,9 @@ fn call_transfer_request<'tcx>(
     };
     Ok(Some(CallTransferRequest {
         function_ty: func_ty,
-        caller_env: env,
+        // eval.rs::create_ecx sets fully_monomorphized (Codegen). In
+        // particular, PostAnalysis deliberately rejects coroutine layouts.
+        runtime_abi_env: ty::TypingEnv::fully_monomorphized(),
         caller_instance,
         caller_args: caller_arg_types,
         extra_types,
@@ -4329,10 +4334,14 @@ fn register_call_transfer_for_target<'tcx>(
         _ => {}
     }
     let Some(callee_abi) =
-        instance_fn_abi_with_extras(tcx, request.caller_env, instance, request.extra_types)?
+        instance_fn_abi_with_extras(tcx, request.runtime_abi_env, instance, request.extra_types)?
     else {
         return Ok(());
     };
+    // call.rs::init_stack_frame queries the selected callee with extras
+    // derived from the caller before checking variadic/fixed-count mismatch.
+    // Keep that exact compiler answer even if no covariance transfer follows.
+    context.instance_abi_requests.insert((instance, request.extra_types));
     let caller_location = if request.generated_caller_abi.is_some() {
         instance.def.requires_caller_location(tcx)
     } else {
@@ -4362,14 +4371,14 @@ fn register_call_transfer_for_target<'tcx>(
     let caller_abi = if let Some(caller_instance) = request.caller_instance {
         instance_fn_abi_with_extras(
             tcx,
-            request.caller_env,
+            request.runtime_abi_env,
             caller_instance,
             request.extra_types,
         )?
     } else {
         fn_ptr_abi_with_extras(
             tcx,
-            request.caller_env,
+            request.runtime_abi_env,
             generated_caller_ty.fn_sig(tcx),
             request.extra_types,
         )?
@@ -4688,7 +4697,7 @@ fn fn_pointer_call_abi_matches_candidate<'tcx>(
     Ok({
         let Some(callsite_abi) = fn_ptr_abi_with_extras(
             tcx,
-            request.caller_env,
+            request.runtime_abi_env,
             request.function_ty.fn_sig(tcx),
             request.extra_types,
         )?
@@ -4696,7 +4705,7 @@ fn fn_pointer_call_abi_matches_candidate<'tcx>(
             return Ok(false);
         };
         let Some(candidate_abi) =
-            instance_fn_abi_with_extras(tcx, request.caller_env, candidate, request.extra_types)?
+            instance_fn_abi_with_extras(tcx, request.runtime_abi_env, candidate, request.extra_types)?
         else {
             return Ok(false);
         };
@@ -5002,8 +5011,11 @@ fn resolve_callee_json<'tcx>(
                             context.instance_abi_requests.insert((instance, extra));
                         }
                     }
+                    // Runtime ABI queries use the interpreter's Codegen
+                    // environment (eval.rs::create_ecx), not the template
+                    // body's PostAnalysis environment used for normalization.
                     let abi = tcx.fn_abi_of_instance(
-                        body.typing_env(tcx)
+                        ty::TypingEnv::fully_monomorphized()
                             .as_query_input((instance, ty::List::empty())),
                     );
                     match abi {
@@ -5089,7 +5101,8 @@ fn resolve_callee_json<'tcx>(
                                 );
                             }
                             match tcx.fn_abi_of_fn_ptr(
-                                environment.as_query_input((func_ty.fn_sig(tcx), extra)),
+                                ty::TypingEnv::fully_monomorphized()
+                                    .as_query_input((func_ty.fn_sig(tcx), extra)),
                             ) {
                                 Ok(abi) => {
                                     if let Some(request) = call_transfer_request(
@@ -6482,7 +6495,12 @@ fn compiler_function_facts_json<'tcx>(
         let type_end = context.type_ids.len();
         let pending = (state.type_cursor..type_end)
             .map(|id| (id as u64, *context.type_ids.key(id).unwrap()))
-            .filter(|(_, input)| matches!(input.kind(), ty::FnDef(..) | ty::FnPtr(..)))
+            // A signature's source Binder graph can contain function types
+            // referring to an enclosing region Binder. Those are metadata,
+            // not runtime query inputs (see type_json_with_query). Their
+            // separately interned closed query views remain eligible here.
+            .filter(|(_, input)| matches!(input.kind(), ty::FnDef(..) | ty::FnPtr(..))
+                && !input.has_escaping_bound_vars())
             .collect::<Vec<_>>();
         state.type_cursor = type_end;
         let helper_inputs = pending.clone();

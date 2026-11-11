@@ -207,9 +207,85 @@ class FailClosedExportTests(unittest.TestCase):
         result = self.export("coroutine", "root")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("lean-miri-mir-exporter:", result.stderr)
-        self.assertIn("coroutine", result.stderr)
+        self.assertIn("MIR: coroutine layout serialization is not implemented", result.stderr)
+        self.assertNotIn("TooGeneric", result.stderr)
         self.assertNotIn("reported compilation errors", result.stderr)
         self.assertFalse(self.output.exists())
+
+    def test_concrete_async_return_abi_exports_before_polling_coroutine(self):
+        document = self.accepted("runtime_async_abi", "root")
+        instance = next(row for row in document["instances"]
+                        if row["def_path"] == "make_future")
+        queries = [row for row in document["compiler_instance_abis"]
+                   if row["instance_id"] == instance["instance_id"]
+                   and row["extra_argument_types"] == []]
+        self.assertEqual(len(queries), 1)
+        self.assertEqual(queries[0]["typing_env"], "fully_monomorphized")
+        abi = pool_entry(document, "fn_abis", queries[0]["abi_query"])
+        returned = pool_entry(document, "types", abi["return"]["type"])
+        self.assertEqual(returned["shape"]["kind"], "coroutine")
+        root = pool_entry(document, "bodies", document["body_roots"][0]["body"])
+        calls = [block["terminator"]["kind"] for block in root["basic_blocks"]
+                 if block["terminator"]["kind"].get("variant") == "Call"]
+        calls = [call for call in calls
+                 if call["resolution"].get("instance_id") == instance["instance_id"]]
+        self.assertTrue(calls, "fixture must call the concrete async constructor")
+        self.assertTrue(all(call["resolution"]["fn_abi"] == queries[0]["abi_query"]
+                            for call in calls))
+
+    def test_nested_signature_regions_keep_source_identity_and_closed_query_view(self):
+        document = self.accepted("higher_ranked_variadic", "root")
+        enclosing = [row for row in document["types"]
+                     if row["shape"].get("kind") == "reference"
+                     and row["shape"]["region"].get("kind") == "bound"
+                     and row["shape"]["region"]["index_kind"]["debruijn_index"] == 1
+                     and "va_arg::" in row["shape"]["region"]["bound_kind"].get("def_path", "")]
+        self.assertTrue(enclosing, "fixture must preserve the enclosing VaList region Binder")
+        function_facts = {row["type_id"] for row in document["compiler_function_facts"]["types"]}
+        runtime_demands = {row["input_type_id"]
+                           for row in document["compiler_runtime_queries"]["types"]}
+        for source in enclosing:
+            query_id = source["layout_query_input_type"]
+            query = pool_entry(document, "types", query_id)
+            self.assertNotEqual(source["type_id"], query_id)
+            self.assertEqual(query["shape"]["region"], {"kind": "erased"})
+            self.assertEqual(source["layout"], query["layout"])
+            self.assertEqual(source["compiler_facts"], query["compiler_facts"])
+            self.assertIn(query_id, runtime_demands)
+            pointers = [row for row in document["types"]
+                        if row["shape"].get("kind") == "function_pointer"
+                        and row["shape"]["signature"]["output"] == source["type_id"]]
+            self.assertTrue(pointers, "source signature must still reference its original bound region")
+            for pointer in pointers:
+                closed_id = pointer["layout_query_input_type"]
+                closed = pool_entry(document, "types", closed_id)
+                self.assertEqual(closed["shape"]["signature"]["output"], query_id)
+                self.assertNotIn(pointer["type_id"], function_facts)
+                self.assertIn(closed_id, function_facts)
+                self.assertIn(closed_id, runtime_demands)
+
+    def test_variadic_fixed_count_mismatch_keeps_target_extra_argument_abi(self):
+        # This guest would be UB. Export must retain the exact query needed
+        # to report that mismatch, rather than stopping at missing metadata.
+        document = self.accepted("variadic_fixed_count_mismatch", "root")
+        callee = next(row for row in document["instances"]
+                      if row["def_path"] == "callee")
+        rows = [row for row in document["compiler_instance_abis"]
+                if row["instance_id"] == callee["instance_id"]
+                and len(row["extra_argument_types"]) == 1]
+        self.assertEqual(len(rows), 1)
+        extra = pool_entry(document, "types", rows[0]["extra_argument_types"][0])
+        self.assertEqual(extra["shape"], {"kind": "int", "signed_kind": "i32"})
+        callee_abi = pool_entry(document, "fn_abis", rows[0]["abi_query"])
+        self.assertTrue(callee_abi["c_variadic"])
+        self.assertEqual(callee_abi["fixed_count"], 1)
+        self.assertEqual(len(callee_abi["arguments"]), 2)
+        caller_rows = [row for row in document["compiler_function_facts"]["pointer_abis"]
+                       if row["extra_argument_types"] == rows[0]["extra_argument_types"]]
+        caller_abis = [pool_entry(document, "fn_abis", row["abi_query"]) for row in caller_rows]
+        self.assertTrue(any(abi["c_variadic"] and abi["fixed_count"] == 0
+                            and len(abi["arguments"]) == 1 for abi in caller_abis),
+                        "the actual caller/callee fixed-count mismatch must remain visible")
 
     def test_resolved_generic_has_one_body_and_no_source_constant_payload(self):
         document = self.accepted("resolved_generic", "root")

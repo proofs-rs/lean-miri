@@ -33,7 +33,9 @@ def zeroOffset : ByteSize := ByteSize.ofU64 0 (by decide)
 
 def codeResult : DataRaceResult → String
   | .ok => "ok"
-  | .race => "race"
+  -- Upstream's Result<(), DataRace> oracle groups both race causes. Preserve
+  -- that comparison while the interpreter carries the more precise cause.
+  | .race | .mixedSizeRace => "race"
   | .invalidClockUpdate _ => "clock-error"
   | .internalInvariantViolation => "invariant-error"
   | .outOfBounds => "out-of-bounds"
@@ -129,6 +131,8 @@ def main : IO Unit := do
   let initialCell := MemoryCellClocks.new t2 i0
   let olderThread := threadWith i0 t1
   let retagRead := MemoryCellClocks.nonAtomicReadDetect initialCell olderThread i0 .Retag
+  unless retagRead.result == .race do
+    throw (IO.userError "ordinary non-atomic conflict lost its regular race cause")
   IO.println s!"cell:retag-race:{codeResult retagRead.result}:{packedAt retagRead.thread.clock i0}:{codeNaReadType (retagRead.thread.clock.index i0).readType}"
 
   let orderedThread := threadWith i0 (tRead 3 (by decide))
@@ -142,6 +146,8 @@ def main : IO Unit := do
 
   let unorderedMixedWrite := MemoryCellClocks.atomicWriteDetect
     atomicRead.cell (threadWith i0 t1) i0 eightBytes
+  unless unorderedMixedWrite.result == .mixedSizeRace do
+    throw (IO.userError "unordered atomic size conflict lost its mixed-size cause")
   IO.println s!"cell:mixed-size-write-race:{codeResult unorderedMixedWrite.result}:{atomicSizeCode unorderedMixedWrite.cell}"
 
   let orderedSizeChange := MemoryCellClocks.atomicWriteDetect

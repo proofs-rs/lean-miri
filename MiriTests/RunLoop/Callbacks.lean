@@ -48,6 +48,13 @@ example : (RunLoop.iteration (hooks (.ok false) (.ok .pending) false false (.sle
 example : RunLoop.reportsUB (.termination (.treeBorrowsUb "x")) = true := by decide
 example : RunLoop.reportsUB (.termination .interrupted) = false := by decide
 example : RunLoop.reportsUB (.termination (.exit 0 true)) = false := by decide
+-- DeadLocal is a source UB constructor, not a blanket stack-error conversion.
+example : RunLoop.reportsUB (.stack (.localExpectedLive 1)) = true := by decide
+example : RunLoop.reportsUB (.stack (.invalidLocal 1 0)) = false := by decide
+example : RunLoop.reportsUB (.stack .emptyStack) = false := by decide
+example : RunLoop.reportsUB (.invalidProgram "dead local text is not a typed DeadLocal") = false := by decide
+example : (RunLoop.stepCurrentThread (hooks (.error (.stack (.localExpectedLive 1)))) () {}).2 =
+    .error (.stack (.localExpectedLive 1)) := by decide
 def takeFail : RunLoopHooks State Unit Unit := { hooks with
   takeStackEmptyCallback := fun s => (log 2 s, .error (.invalidProgram "take")) }
 example : (RunLoop.stepCurrentThread takeFail () {}).1.events = [1,2] := by decide

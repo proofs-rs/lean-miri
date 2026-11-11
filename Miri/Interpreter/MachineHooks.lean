@@ -249,6 +249,7 @@ def memoryRaceAccess (machine : MachineState K User) (allocId : AllocId)
   let outcome := match result.result with
     | .ok => .ok ()
     | .race => .error (.undefinedBehavior "DataRace")
+    | .mixedSizeRace => .error (.undefinedBehavior "MixedSizeRace")
     | other => .error (.invalidProgram s!"memory race detector invariant: {reprStr other}")
   return (machine, outcome)
 
