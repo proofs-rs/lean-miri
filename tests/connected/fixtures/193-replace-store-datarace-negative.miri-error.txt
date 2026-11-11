@@ -1,11 +1,11 @@
 error: Undefined Behavior: Data race detected between (1) non-atomic write on thread `unnamed-1` and (2) non-atomic read on thread `main` at alloc1
-  --> /workspace/resolved-mir/tests/connected/fixtures/193-replace-store-datarace-negative.rs:45:29
+  --> /workspace/file-pool/tests/connected/fixtures/193-replace-store-datarace-negative.rs:45:29
    |
 45 |     let observed = unsafe { core::ptr::addr_of!(SHARED).read() };
    |                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ (2) just happened here
    |
 help: and (1) occurred earlier here
-  --> /workspace/resolved-mir/tests/connected/fixtures/193-replace-store-datarace-negative.rs:13:14
+  --> /workspace/file-pool/tests/connected/fixtures/193-replace-store-datarace-negative.rs:13:14
    |
 13 |     unsafe { core::ptr::addr_of_mut!(SHARED).write(42); }
    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -14,7 +14,3 @@ help: and (1) occurred earlier here
    = note: this is on thread `main`
 
 note: some details are omitted, run with `MIRIFLAGS=-Zmiri-backtrace=full` for a verbose backtrace
-
-error: aborting due to 1 previous error
-
-lean-miri-mir-exporter: pinned rustc driver reported compilation errors

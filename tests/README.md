@@ -169,7 +169,7 @@ preparation and selected allocator-world metadata. The frontend check imports
 fresh JSON into Lean constants. Runtime-metadata checks connect fresh compiler
 queries to Lean providers. Execution checks compare selected arithmetic, calls
 and globals with pinned Miri. Eval-core's six checks use three hash-checked
-genuine schema-4 exports regenerated with the current producer. The preparation helper preserves their
+genuine schema-5 exports regenerated with the current producer. The preparation helper preserves their
 decompressed bytes exactly; it does not adapt an old wire format.
 
 The script uses `set -euo pipefail`: a failure stops it and later phases remain
@@ -194,7 +194,7 @@ None of these top-level commands is called by `tools/check.sh`:
 | `python3 tools/check-connected.py --large-tb` | Fresh larger Rust export; assert the expected Frozen-tag write UB. |
 | `python3 tests/connected/compare_selector.py` | Finite comparison of choice selection with extracted upstream code; does not execute the whole Miri interpreter. |
 
-Fifteen cases use stored same-TyCtxt reference observations and genuine schema-4 bytes.
+Fifteen cases use stored same-TyCtxt reference observations and genuine schema-5 bytes.
 The DST and large Tree Borrows cases generate fresh exports and same-TyCtxt
 Miri references in CI from tracked Rust sources, unchanged flags and exactly
 reviewed guest configuration/argv0. Their Lean assertions and choice tapes

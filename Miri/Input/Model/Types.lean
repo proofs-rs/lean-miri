@@ -98,8 +98,8 @@ structure Obligation where
   deriving Repr, DecidableEq
 
 /-- Exact source coordinate payload emitted by the pinned rustc span exporter.
-`file` and `context` retain the compiler's diagnostic spellings; no consumer
-should parse them to recover instruction semantics. -/
+`file` indexes the document filename table; `context` retains the compiler's
+diagnostic spelling. Neither carries instruction semantics. -/
 structure SourcePosition where
   line : Nat
   column : Nat
@@ -112,7 +112,7 @@ structure SourceSpanData where
   start : SourcePosition
   «end» : SourcePosition
   context : String
-  file : String
+  file : Nat
   deriving Repr, DecidableEq
 
 structure SourceInfo where
@@ -696,7 +696,7 @@ structure CompilerSourcePosition where
   bytePosition : Nat
   line : Nat
   column : Nat
-  filename : String
+  filename : Nat
   deriving Repr, DecidableEq
 
 structure BacktraceSpan where

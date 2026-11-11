@@ -77,7 +77,7 @@ fn export_failure<T>(context: &str, details: impl std::fmt::Display) -> Result<T
 
 const EXPECTED_RUSTC_COMMIT: &str = "8144389c895da997dbdecaa635e41d6a50be6ffd";
 const MIRI_COMMIT: &str = "7fa591d7d4dd9af8154becbc8332f8096f8323b1";
-const ROOT_SCHEMA_VERSION: u64 = 4;
+const ROOT_SCHEMA_VERSION: u64 = 5;
 
 struct Options {
     output: PathBuf,
@@ -170,6 +170,7 @@ struct ExportDocument {
     bodies: Vec<pool_body::Body<u64, Vec<u64>>>,
     definitions: Vec<pool_values::Definition>,
     type_constants: Vec<pool_values::TypeConstant>,
+    files: Vec<String>,
     spans: Vec<pool_values::Span>,
     layouts: Vec<pool_layout::Layout>,
     fn_abis: Vec<pool_layout::FnAbi>,
@@ -261,6 +262,7 @@ struct ExportContext<'tcx> {
     bodies: Pool<BodyKey<'tcx>, pool_body::Body>,
     definitions: Pool<rustc_hir::def_id::DefId, pool_values::Definition>,
     type_constants: Pool<ty::Const<'tcx>, pool_values::TypeConstant>,
+    files: pool_values::Files,
     spans: Pool<rustc_span::Span, pool_values::Span>,
     layouts: Pool<rustc_abi::TyAndLayout<'tcx, ty::Ty<'tcx>>, pool_layout::Layout>,
     fn_abis: Pool<rustc_target::callconv::FnAbi<'tcx, ty::Ty<'tcx>>, pool_layout::FnAbi>,
@@ -1678,6 +1680,7 @@ impl ExportCallbacks {
             bodies,
             definitions: export_context.definitions.finish("definition")?,
             type_constants: export_context.type_constants.finish("type_constant")?,
+            files: export_context.files.finish(),
             spans: export_context.spans.finish("span_id")?,
             layouts: export_context.layouts.finish("layout_id")?,
             fn_abis: export_context.fn_abis.finish("fn_abi_id")?,
@@ -2524,7 +2527,7 @@ fn span_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, span: r
     let (id, fresh) = context.spans.reserve(span);
     if fresh {
         let map=tcx.sess.source_map(); let start=map.lookup_char_pos(span.lo()); let end=map.lookup_char_pos(span.hi());
-        context.spans.define(id,pool_values::Span { is_dummy:span.is_dummy(),lo:span.lo().0,hi:span.hi().0,ctxt:pool_values::DebugPayload::new(&span.ctxt()),file:pool_values::DebugPayload::new(&start.file.name),start:pool_values::Position {line:start.line,column:start.col.to_usize()},end:pool_values::Position {line:end.line,column:end.col.to_usize()} });
+        context.spans.define(id,pool_values::Span { is_dummy:span.is_dummy(),lo:span.lo().0,hi:span.hi().0,ctxt:pool_values::DebugPayload::new(&span.ctxt()),file:context.files.intern(format!("{:?}", start.file.name)),start:pool_values::Position {line:start.line,column:start.col.to_usize()},end:pool_values::Position {line:end.line,column:end.col.to_usize()} });
     }
     id as u64
 }
@@ -6021,7 +6024,7 @@ fn backtrace_spans_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tc
                 source_position: pool_body::SourcePosition {
                     byte_position: collapsed.lo().0, line: position.line,
                     zero_based_char_column: position.col.0,
-                    filename: position.file.name.prefer_remapped_unconditionally().to_string(),
+                    filename: context.files.intern(position.file.name.prefer_remapped_unconditionally().to_string()),
                 },
             }
         })

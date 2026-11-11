@@ -37,7 +37,7 @@ pub(super) struct SourcePosition {
     pub byte_position: u32,
     pub line: usize,
     pub zero_based_char_column: usize,
-    pub filename: String,
+    pub filename: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]

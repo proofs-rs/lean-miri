@@ -637,6 +637,13 @@ def validatePrimaryTables (document : ImportDocument) : Except String Unit := do
     constants := document.typeConstants.size
     bodies := document.bodies.size
     predicates := document.predicates.size }
+  let mut filenames : Std.HashSet String := {}
+  for (filename, index) in document.files.toList.zipIdx do
+    if filenames.contains filename then
+      throw s!"$.files[{index}]: duplicate filename identity"
+    filenames := filenames.insert filename
+  for (span, index) in document.spans.toList.zipIdx do
+    checkId document.files.size span.file s!"$.spans[{index}].file" "file"
   for (node, index) in document.types.toList.zipIdx do
     let path := s!"$.types[{index}]"
     checkId b.layouts node.layoutId s!"{path}.layout" "layout"
@@ -694,6 +701,8 @@ def validatePrimaryTables (document : ImportDocument) : Except String Unit := do
   for (value, index) in document.bodies.toList.zipIdx do
     let path := s!"$.bodies[{index}]"
     for (entry, ei) in value.backtraceSpans.toList.zipIdx do
+      checkId document.files.size entry.position.filename
+        s!"{path}.backtrace_spans[{ei}].source_position.filename" "file"
       unless entry.position.bytePosition < 2^32 do
         throw s!"{path}.backtrace_spans[{ei}]: compiler BytePos exceeds u32"
       unless entry.collapsedLo == entry.position.bytePosition do

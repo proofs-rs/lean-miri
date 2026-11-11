@@ -1,6 +1,6 @@
 {
   "schema": "lean-miri-rustc-mir",
-  "schema_version": 4,
+  "schema_version": 5,
   "producer": {
     "miri_commit": "7fa591d7d4dd9af8154becbc8332f8096f8323b1",
     "rustc_commit": "8144389c895da997dbdecaa635e41d6a50be6ffd",
@@ -1039,7 +1039,7 @@
         "column": 0
       },
       "ctxt": "root",
-      "file": "strict.rs",
+      "file": 0,
       "is_dummy": false
     }
   ],
@@ -1150,5 +1150,8 @@
     "type_name_result_type": 19,
     "caller_location_type": null,
     "ordering_enum": null
-  }
+  },
+  "files": [
+    "strict.rs"
+  ]
 }

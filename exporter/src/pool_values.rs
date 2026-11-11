@@ -31,7 +31,7 @@ pub(crate) struct Span {
     pub lo: u32,
     pub hi: u32,
     pub ctxt: DebugPayload,
-    pub file: DebugPayload,
+    pub file: u64,
     pub start: Position,
     pub end: Position,
 }
@@ -133,4 +133,44 @@ pub(crate) enum TypeConstant {
         operator: Option<&'static str>,
         arguments: Vec<GenericArgument>,
     },
+}
+
+/// Exact presentation text, shared across source spans and backtrace positions.
+/// Debug filenames and remapped display filenames have different consumers;
+/// only identical strings share an ID, without normalizing either spelling.
+#[derive(Default)]
+pub(crate) struct Files {
+    ids: std::collections::HashMap<String, u64>,
+    values: Vec<String>,
+}
+impl Files {
+    pub fn intern(&mut self, text: String) -> u64 {
+        if let Some(&id) = self.ids.get(&text) {
+            return id;
+        }
+        let id = self.values.len() as u64;
+        self.ids.insert(text.clone(), id);
+        self.values.push(text);
+        id
+    }
+    pub fn finish(self) -> Vec<String> {
+        self.values
+    }
+}
+
+#[cfg(test)]
+mod file_tests {
+    use super::Files;
+    #[test]
+    fn exact_text_shares_ids_across_uses_without_normalizing_paths() {
+        let mut files = Files::default();
+        assert_eq!(files.intern("src/main.rs".into()), 0);
+        assert_eq!(files.intern("src/other.rs".into()), 1);
+        assert_eq!(files.intern("src/main.rs".into()), 0);
+        assert_eq!(files.intern("Real(\"src/main.rs\")".into()), 2);
+        assert_eq!(files.intern("src/../src/main.rs".into()), 3);
+        assert_eq!(files.intern("src/other.rs".into()), 1);
+        assert_eq!(files.finish(), vec!["src/main.rs", "src/other.rs",
+            "Real(\"src/main.rs\")", "src/../src/main.rs"]);
+    }
 }

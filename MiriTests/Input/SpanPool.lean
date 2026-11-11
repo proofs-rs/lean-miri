@@ -4,13 +4,13 @@ open Miri Miri.Input
 
 private def span : SourceSpanData := {
   lo := 3, hi := 8,
-  start := ⟨1, 2⟩, «end» := ⟨1, 7⟩, context := "ctx", file := "src.rs" }
+  start := ⟨1, 2⟩, «end» := ⟨1, 7⟩, context := "ctx", file := 0 }
 
 private def check (ok : Bool) (message : String) : IO Unit :=
   unless ok do throw (IO.userError message)
 
 def main : IO Unit := do
-  let tables : CompilerTables := ⟨#[span, span], #[], #[]⟩
+  let tables : CompilerTables := {spans := #[span, span], definitions := #[], typeConstants := #[]}
   for id in #[0, 1] do
     let .ok (reference, after) := lowerCompilerSpan tables ⟨id⟩
       | throw (IO.userError "valid span ID rejected")

@@ -52,8 +52,10 @@ unimplemented and now stop export. This boundary does not establish compiler
 query closure or interpreter correspondence.
 
 Fifteen fixed connected inputs with their same-TyCtxt reference observations
-and three eval-core inputs have been regenerated
-under the schema-4 resolved-body typed-pool contract. Runtime-metadata checks export their
+and three eval-core inputs are regenerated under the schema-5 resolved-body
+typed-pool contract. Span and backtrace filenames remain validated numeric IDs
+in a shared exact-string file table until diagnostics or backtrace APIs present
+them. Runtime-metadata checks export their
 Rust inputs afresh. Performance checks now obtain
 fresh producer inputs. The DST and large Tree Borrows connected cases now
 generate inputs and same-TyCtxt references in CI from unchanged tracked sources,

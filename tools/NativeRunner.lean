@@ -293,7 +293,7 @@ private def terminalDiagnostic (prepared : Input.EvalPreparation.Prepared)
     return match source? with
     | none => Lean.Json.null
     | some source => Lean.Json.mkObj [
-        ("file", toJson source.file), ("line", toJson source.start.line),
+        ("file", toJson (prepared.compiler.program.input.files[source.file]?)), ("line", toJson source.start.line),
         ("end_line", toJson source.«end».line), ("column", toJson source.start.column),
         ("lo", toJson source.lo), ("hi", toJson source.hi)]
   return Lean.Json.mkObj [("kind", toJson kind), ("detail", toJson error),

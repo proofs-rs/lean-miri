@@ -14,7 +14,7 @@ open Lean
 def expectedMiriCommit : String := "7fa591d7d4dd9af8154becbc8332f8096f8323b1"
 def expectedRustcCommit : String := "8144389c895da997dbdecaa635e41d6a50be6ffd"
 def expectedSchema : String := "lean-miri-rustc-mir"
-def expectedSchemaVersion : Nat := 4
+def expectedSchemaVersion : Nat := 5
 def expectedCompilerAbiLayoutSchema : String := "physical_ty_and_layout_v1"
 
 def escapePathKey (key : String) : String :=
@@ -166,7 +166,7 @@ private structure parseSourceSpanFields where
   «start» : Option (SourcePosition) := none
   «end» : Option (SourcePosition) := none
   «ctxt» : Option (String) := none
-  «file» : Option (String) := none
+  «file» : Option (Nat) := none
 
 def parseSourceSpan (_path : String := "$parseSourceSpan") : Parser (SourceSpanData) := do
   let s ← object (parseSourceSpanFields.mk none none none none none none none) fun s key => do
@@ -177,7 +177,7 @@ def parseSourceSpan (_path : String := "$parseSourceSpan") : Parser (SourceSpanD
     | "start" => return { s with «start» := some (← parseSourcePosition) }
     | "end" => return { s with «end» := some (← parseSourcePosition) }
     | "ctxt" => return { s with «ctxt» := some (← sourceDebugString) }
-    | "file" => return { s with «file» := some (← sourceDebugString) }
+    | "file" => return { s with «file» := some (← natural) }
     | _ => skipValue; pure s
   return {
     isDummy := (← required s.«is_dummy» "is_dummy"), lo := (← required s.«lo» "lo"), hi := (← required s.«hi» "hi"), start := (← required s.«start» "start"),

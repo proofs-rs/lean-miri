@@ -21,13 +21,16 @@ def decode_mir_document(document: Any) -> dict[str, Any]:
         raise MirJSONError("MIR document root must be an object")
     if document.get("schema") != "lean-miri-rustc-mir":
         raise MirJSONError("document is not a lean-miri-rustc-mir export")
-    if type(document.get("schema_version")) is not int or document["schema_version"] != 4:
-        raise MirJSONError("MIR root schema_version must be 4")
+    if type(document.get("schema_version")) is not int or document["schema_version"] != 5:
+        raise MirJSONError("MIR root schema_version must be 5")
     for name in sorted(POOL_NAMES):
         if not isinstance(document.get(name), list):
             raise MirJSONError(f"{name} must be a pool array")
         if any(not isinstance(row, dict) for row in document[name]):
             raise MirJSONError(f"{name} definitions must be objects")
+    files = document.get("files")
+    if not isinstance(files, list) or any(not isinstance(name, str) for name in files):
+        raise MirJSONError("files must be a string array")
     return document
 
 

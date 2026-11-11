@@ -63,6 +63,7 @@ structure DraftDocument where
   compilerPredicates : Array CompilerPredicateEvidence
   definitions : Array DefinitionId
   typeConstants : Array MIR.TypeConst
+  files : Array String
   spans : Array SourceSpanData
   layouts : Array Layout
   functionAbis : Array FunctionAbi
@@ -85,6 +86,7 @@ private structure DocumentFields where
   compilerPredicates : Option (Array CompilerPredicateEvidence) := none
   definitions : Option (Array DefinitionId) := none
   typeConstants : Option (Array MIR.TypeConst) := none
+  files : Option (Array String) := none
   spans : Option (Array SourceSpanData) := none
   layouts : Option (Array Layout) := none
   functionAbis : Option (Array FunctionAbi) := none
@@ -109,6 +111,7 @@ def parseDocument : JsonReader.Parser DraftDocument := do
     | "compiler_predicate_queries" => return {d with compilerPredicates := some (← JsonReader.array decodeCompilerPredicateEvidence)}
     | "definitions" => return {d with definitions := some (← JsonReader.arrayIndexed (fun index => parseDefinitionId s!"$.definitions[{index}]"))}
     | "type_constants" => return {d with typeConstants := some (← JsonReader.arrayIndexed (fun index => TypeConstCodec.decode s!"$.type_constants[{index}]"))}
+    | "files" => return {d with files := some (← JsonReader.array JsonReader.string)}
     | "spans" => return {d with spans := some (← JsonReader.arrayIndexed (fun index => parseSourceSpan s!"$.spans[{index}]"))}
     | "layouts" => return {d with layouts := some (← JsonReader.arrayIndexed (fun index => parseLayout s!"$.layouts[{index}]"))}
     | "fn_abis" => return {d with functionAbis := some (← JsonReader.arrayIndexed (fun index => parseFunctionAbi s!"$.fn_abis[{index}]"))}
@@ -133,6 +136,7 @@ def parseDocument : JsonReader.Parser DraftDocument := do
     compilerPredicates := ← JsonReader.required d.compilerPredicates "compiler_predicate_queries"
     definitions := ← JsonReader.required d.definitions "definitions"
     typeConstants := ← JsonReader.required d.typeConstants "type_constants"
+    files := ← JsonReader.required d.files "files"
     spans := ← JsonReader.required d.spans "spans"
     layouts := ← JsonReader.required d.layouts "layouts"
     functionAbis := ← JsonReader.required d.functionAbis "fn_abis"
@@ -241,6 +245,7 @@ def resolveDocument (d : DraftDocument) (profile : Options := {}) : Except Strin
     definitions := definitions
     typeConstants := typeConstants
     layouts := layouts
+    files := d.files
     spans := spans
     types := types
     allocations := allocations

@@ -614,7 +614,7 @@ private structure BacktracePositionFields where
   byte_position : Option (Nat) := none
   line : Option (Nat) := none
   zero_based_char_column : Option (Nat) := none
-  filename : Option (String) := none
+  filename : Option (Nat) := none
 
 def backtracePosition : Parser (CompilerSourcePosition) := do
   let v ← object ({} : BacktracePositionFields) fun v key => do
@@ -622,7 +622,7 @@ def backtracePosition : Parser (CompilerSourcePosition) := do
     | "byte_position" => return { v with byte_position := some (← natural) }
     | "line" => return { v with line := some (← natural) }
     | "zero_based_char_column" => return { v with zero_based_char_column := some (← natural) }
-    | "filename" => return { v with filename := some (← string) }
+    | "filename" => return { v with filename := some (← natural) }
     | _ => skipValue; pure v
   return { bytePosition := (← required v.byte_position "byte_position"), line := (← required v.line "line"), column := (← required v.zero_based_char_column "zero_based_char_column"), filename := (← required v.filename "filename") }
 

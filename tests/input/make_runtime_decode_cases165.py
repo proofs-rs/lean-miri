@@ -27,8 +27,8 @@ def replace_first_span(value):
 def replace_first_debug(value):
     if isinstance(value, dict):
         for key, child in value.items():
-            if key == "file" and isinstance(child, dict) and child.get("status") == "debug_payload":
-                value[key] = {"kind": "invalid_source_file"}
+            if key == "ctxt" and isinstance(child, dict) and child.get("status") == "debug_payload":
+                value[key] = {"kind": "invalid_source_context"}
                 return True
             if replace_first_debug(child):
                 return True

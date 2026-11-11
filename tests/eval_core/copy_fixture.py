@@ -32,7 +32,7 @@ def copy_fixture(source_path, output_path):
     return {"source": str(source_path), "output": str(output_path),
             "source_sha256": hashlib.sha256(raw).hexdigest(),
             "output_sha256": hashlib.sha256(raw).hexdigest(),
-            "schema_version": 4, "all_json_exactly_unchanged": True}
+            "schema_version": 5, "all_json_exactly_unchanged": True}
 
 
 def main(argv=None):

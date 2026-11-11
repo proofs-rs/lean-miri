@@ -10,8 +10,8 @@ from mir_json import MirJSONError, POOL_NAMES, decode_mir_document, load_mir_doc
 
 
 def document(**fields):
-    return {"schema": "lean-miri-rustc-mir", "schema_version": 4,
-            **{name: [] for name in POOL_NAMES}, **fields}
+    return {"schema": "lean-miri-rustc-mir", "schema_version": 5,
+            **{name: [] for name in POOL_NAMES}, "files": [], **fields}
 
 
 class MirJSONTests(unittest.TestCase):
@@ -44,8 +44,19 @@ class MirJSONTests(unittest.TestCase):
                     decode_mir_document(document(**{name: value}))
 
     def test_requires_current_schema_version(self):
-        with self.assertRaisesRegex(MirJSONError, "schema_version must be 4"):
-            decode_mir_document(document(schema_version=3))
+        with self.assertRaisesRegex(MirJSONError, "schema_version must be 5"):
+            decode_mir_document(document(schema_version=4))
+
+    def test_filename_ids_stay_shared_and_unexpanded(self):
+        encoded = document(files=["src/a.rs", "src/b.rs"],
+                           spans=[{"file": 0}, {"file": 1}, {"file": 0}],
+                           bodies=[{"backtrace_spans": [{"source_position": {"filename": 0}}]}])
+        self.assertIs(decode_mir_document(encoded), encoded)
+        self.assertEqual([row["file"] for row in encoded["spans"]], [0, 1, 0])
+        self.assertEqual(encoded["bodies"][0]["backtrace_spans"][0]["source_position"]["filename"], 0)
+        for invalid in (None, {}, [0], ["src/a.rs", False]):
+            with self.subTest(invalid=invalid), self.assertRaises(MirJSONError):
+                decode_mir_document(document(files=invalid))
 
     def test_loads_gzip_archives(self):
         encoded = document(payload={"type": 0}, types=[{}])

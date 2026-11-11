@@ -13,6 +13,8 @@ structure ImportDocument where
   definitions : Array DefinitionId := #[]
   typeConstants : Array Miri.MIR.TypeConst := #[]
   layouts : Array Layout := #[]
+  /-- Exact diagnostic and remapped filenames, shared across all source records. -/
+  files : Array String := #[]
   spans : Array SourceSpanData := #[]
   types : Array TypeNode
   allocations : Array AllocationNode
