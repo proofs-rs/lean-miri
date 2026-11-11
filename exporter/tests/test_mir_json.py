@@ -10,7 +10,7 @@ from mir_json import MirJSONError, POOL_NAMES, decode_mir_document, load_mir_doc
 
 
 def document(**fields):
-    return {"schema": "lean-miri-rustc-mir", "schema_version": 7,
+    return {"schema": "lean-miri-rustc-mir", "schema_version": 8,
             **{name: [] for name in POOL_NAMES}, "files": [], "byte_images": [], **fields}
 
 
@@ -56,8 +56,8 @@ class MirJSONTests(unittest.TestCase):
                     decode_mir_document(document(**{name: value}))
 
     def test_requires_current_schema_version(self):
-        for version in (4, 6, True, "7", 7.0):
-            with self.subTest(version=version), self.assertRaisesRegex(MirJSONError, "schema_version must be 7"):
+        for version in (4, 6, 7, True, "8", 8.0):
+            with self.subTest(version=version), self.assertRaisesRegex(MirJSONError, "schema_version must be 8"):
                 decode_mir_document(document(schema_version=version))
 
     def test_filename_ids_stay_shared_and_unexpanded(self):

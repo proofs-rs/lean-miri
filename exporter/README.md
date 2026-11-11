@@ -51,7 +51,7 @@ exact arguments cannot be fingerprinted.
 
 ## Input contract
 
-The root schema is `lean-miri-rustc-mir` version 7. Evaluated integer scalars carry
+The root schema is `lean-miri-rustc-mir` version 8. Evaluated integer scalars carry
 `bits_unsigned` and the compiler layout's `size_bytes`, so consumers can construct
 the machine scalar before reading the type and layout tables. Zero-sized and
 pointer constants retain their separate representations. Compiler values have
@@ -111,7 +111,7 @@ guest backtrace filename query. Layouts retain
 exact compiler `TyAndLayout` keys, including field and variant layouts. Allocation
 IDs retain compiler allocation identity even when bytes are equal. IDs are local
 to the document; exported `source_alloc_id` records the separate raw Miri AllocId.
-Schema 7 stores ABI argument attributes only as `regular_bits`, argument extension,
+Schema 8 stores ABI argument attributes only as `regular_bits`, argument extension,
 and pointee size/alignment. Boolean attributes and capture mode are derived from
 those bits. External ABIs retain their structured `kind` and `unwind`; their
 canonical source spelling is not stored. ADT representation stores `flags_bits`,

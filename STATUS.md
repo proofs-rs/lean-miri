@@ -55,7 +55,7 @@ unimplemented and now stop export. This boundary does not establish compiler
 query closure or interpreter correspondence.
 
 Fifteen fixed connected inputs with their same-TyCtxt reference observations
-and three eval-core inputs are regenerated under the schema-7 resolved-body
+and three eval-core inputs are regenerated under the schema-8 resolved-body
 typed-pool contract. Allocation byte vectors share a document-local exact byte
 image pool; function payloads group identities by Instance. Graph IDs, raw source
 IDs, initialization and provenance remain independent. Prepared raw-pool slots
