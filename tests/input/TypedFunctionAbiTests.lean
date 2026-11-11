@@ -28,13 +28,16 @@ def main (args : List String) : IO Unit := do
   let decoded ← must (decodeJson text)
   let source ← must (JsonFixtures.parse text)
   let rawAbis ← must ((← must (source.field "fn_abis")).array)
+  let rawArguments ← must ((← must (source.field "abi_arguments")).array)
+  let argumentPool ← rawArguments.mapM fun value => must (JsonReader.run (DecoderValues.parseAbiArgument "$.abi_arguments") value.text)
+  let parseAbi := DecoderValues.parseFunctionAbi "$.fn_abis" (some argumentPool)
   let layoutIds ← must ((← must (source.field "layouts")).array)
   let rawLayouts ← must ((← must (source.field "layout_values")).array)
   let runtime ← must ((RuntimeMetadata.ofDocument decoded.document).mapError toString)
   check (!runtime.source.functionAbis.isEmpty) "fixture contains no function ABI definitions"
   for (abi, id) in runtime.source.functionAbis.toList.zipIdx do
     let some rawAbi := rawAbis[id]? | throw (IO.userError "missing input ABI row")
-    let parsed ← must (JsonReader.run DecoderValues.decodeCompilerFunctionAbi rawAbi.text)
+    let parsed ← must (JsonReader.run parseAbi rawAbi.text)
     check (CallResolution.functionAbi runtime parsed == CallResolution.functionAbi runtime abi)
       "typed ABI table differs from its definition"
     check (CallResolution.functionAbiId runtime id == CallResolution.functionAbi runtime abi)
@@ -71,8 +74,13 @@ def main (args : List String) : IO Unit := do
   let malformedLayout ← must (set rawLayout "field_offsets_bytes" "\"not-an-array\"")
   rejects (JsonReader.run DecoderValues.decodeCompilerLayout malformedLayout.text) "malformed layout definition accepted"
   let some rawSample := rawAbis[0]? | throw (IO.userError "missing raw ABI sample")
-  let returnValue ← must (rawSample.field "return")
+  let missingArgument ← must (set rawSample "return" (toString argumentPool.size))
+  rejects (JsonReader.run parseAbi missingArgument.text) "out of bounds shared ABI argument accepted"
+  let returnId ← must ((← must (rawSample.field "return")).natural)
+  let some returnValue := rawArguments[returnId]? | throw (IO.userError "missing return argument")
+  let inlineArgument ← must (set rawSample "return" returnValue.text)
+  rejects (JsonReader.run parseAbi inlineArgument.text) "inline ABI argument accepted at pooled ID position"
   let inlineReturn ← must (set returnValue "layout" rawLayout.text)
   let inlineAbi ← must (set rawSample "return" inlineReturn.text)
-  rejects (JsonReader.run DecoderValues.decodeCompilerFunctionAbi inlineAbi.text) "inline physical layout accepted at ID position"
+  rejects (JsonReader.run parseAbi inlineAbi.text) "inline physical layout accepted at ID position"
   IO.println s!"typed ABI table: {runtime.source.functionAbis.size} definitions; bounds, arity, convention and physical layout checks passed"

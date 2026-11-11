@@ -7,12 +7,14 @@ open JsonReader DecoderValues
 /-- Wire-only sharing. Semantic IDs continue to index the expanded tables, and
 body-local effects of shared statements are checked separately at every use. -/
 structure SharedPools where
+  abiArguments : Array AbiArgument
   layouts : Array Layout
   booleans : Array (Array (String × Bool))
   discriminants : Array DiscriminantInfo
   mir : DecodeMIR.MIRParser.SharedPools
 
 private structure Fields where
+  abiArguments : Option (Array AbiArgument) := none
   layouts : Option (Array Layout) := none
   booleans : Option (Array (Array (String × Bool))) := none
   discriminants : Option (Array DiscriminantInfo) := none
@@ -32,6 +34,7 @@ private def captureValue : Parser String := fun start =>
 private def parsePools : Parser SharedPools := do
   let fields ← object ({} : Fields) fun fields key => do
     match key with
+    | "abi_arguments" => return {fields with abiArguments := some (← arrayIndexed fun i => parseAbiArgument s!"$.abi_arguments[{i}]")}
     | "layout_values" => return {fields with layouts := some (← arrayIndexed fun i => parseLayout s!"$.layout_values[{i}]")}
     | "boolean_queries" => return {fields with booleans := some (← array booleanQueries)}
     | "discriminants" => return {fields with discriminants := some (← array parseDiscriminants)}
@@ -49,6 +52,7 @@ private def parsePools : Parser SharedPools := do
   let statements ← liftExcept (JsonReader.run (array (DecodeMIR.parseSharedStatement mir))
     (← required fields.statements "statement_kinds") |>.mapError (fun error => s!"$.statement_kinds: {error}"))
   pure {
+    abiArguments := ← required fields.abiArguments "abi_arguments"
     layouts := ← required fields.layouts "layout_values"
     booleans := ← required fields.booleans "boolean_queries"
     discriminants := ← required fields.discriminants "discriminants"

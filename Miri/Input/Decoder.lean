@@ -232,7 +232,7 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
         let some value := pools.layouts[id]? | JsonReader.fail s!"$.layouts[{index}]: unresolved layout value {id}"
         pure value
       return {d with layouts := some values}
-    | "fn_abis" => return {d with functionAbis := some (← JsonReader.arrayIndexed (fun index => parseFunctionAbi s!"$.fn_abis[{index}]"))}
+    | "fn_abis" => return {d with functionAbis := some (← JsonReader.arrayIndexed (fun index => parseFunctionAbi s!"$.fn_abis[{index}]" (some pools.abiArguments)))}
     | "types" => return {d with types := some (← JsonReader.arrayIndexed (fun index => denseRow "type IDs" index (·.id) (parseTypeNode s!"$.types[{index}]" pools.booleans pools.discriminants)))}
     | "byte_images" => return {d with byteImages := some (← parseByteImages)}
     | "allocations" => return {d with allocations := some (← JsonReader.arrayIndexed (fun index => parseAllocation s!"$.allocations[{index}]" pools.mir.initializationRanges pools.mir.relocations))}
