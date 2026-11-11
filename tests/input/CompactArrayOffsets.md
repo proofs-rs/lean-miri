@@ -20,7 +20,7 @@ lake env lean --run tests/input/CompactArrayOffsets.lean
 ```
 
 `tools/check-structural-regressions.sh` includes this check. The document/version
-control takes the current pooled dense-offset input and a fresh schema-10 export:
+control takes the current pooled dense-offset input and a fresh schema-11 export:
 
 ```bash
 lake env lean --run tests/input/CompactArrayDocument.lean \

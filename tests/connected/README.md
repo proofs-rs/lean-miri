@@ -28,7 +28,7 @@ Even for expected UB, the harness itself exits 0 when its assertions hold.
 Unsupported, failure and fuel exhaustion cannot replace expected UB.
 The large TB case checks the final write to a Frozen tag after a parent read.
 
-Saved gzip files contain schema-10 payload projections of genuine compiler exports.
+Saved gzip files contain schema-11 payload projections of genuine compiler exports.
 An exact inverse check preserves all compiler data, raw IDs and prepared query
 order. The projection manifest pins original canonical payloads and current files;
 reference sidecars retain their original byte binding under `wire_projection`.

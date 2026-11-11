@@ -31,7 +31,7 @@ def main (args : List String) : IO Unit := do
   let _ ← must (decodeJson legacyText)
   let calls := decoded.document.bodies.flatMap (·.callEvidence.filterMap id)
   check (calls.any (·.abi == .llvmIntrinsic)) "fixture has no LLVM call evidence"
-  for version in #[(8 : Nat), 9] do
+  for version in #[(8 : Nat), 9, 10] do
     rejects (decodeJson (set raw "schema_version" (toJson version)).compress)
       s!"obsolete schema {version} accepted current LLVM evidence"
   rejects (decodeJson (mutateCalls raw (fun j => set j "fn_abi" (toJson (0 : Nat)))).compress)

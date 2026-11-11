@@ -93,7 +93,7 @@ Additional structural regressions are checked with
 `bash tools/check-structural-regressions.sh` (typechecking, kernel examples,
 #eval and executable assertions with pinned unit fixtures or no input). This is
 distinct from running supplemental guest harnesses that need fresh exports. The structural
-checker copies pinned schema-10 unit fixtures without changing their bytes and passes them to
+checker copies pinned schema-11 unit fixtures without changing their bytes and passes them to
 `LowerContext`, `ProviderContext` and `PrimitiveRebinding`, including their runtime
 source/cache and error-order assertions. These are not fresh producer comparisons.
 `tools/prepare-source-audit.py`

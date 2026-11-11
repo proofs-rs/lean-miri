@@ -1,7 +1,7 @@
-"""Lossless wire projection for maintained schema-8 compiler fixtures.
+"""Wire projection for maintained compiler fixtures.
 
-This only moves repeated values into exact-equality pools. It does not rerun
-rustc, change compiler facts, or provide new reference-execution evidence.
+This removes unused diagnostic metadata and moves repeated values into exact-equality
+pools. It does not rerun rustc or provide new reference-execution evidence.
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import json
 SHARED_POOLS = {
     "layout_values": dict, "boolean_queries": dict, "discriminants": dict,
     "initialization_ranges": list, "relocations": list, "backtrace_spans": list,
-    "statement_kinds": dict, "source_infos": dict,
+    "statement_kinds": dict, "source_infos": dict, "abi_arguments": dict,
 }
 FIELD_POOLS = {name: name for name in (
     "boolean_queries", "discriminants", "initialization_ranges", "relocations", "backtrace_spans")}
@@ -27,6 +27,12 @@ def _walk(value, transform):
     for key, child in value.items():
         if key in FIELD_POOLS:
             result[key] = None if key == "discriminants" and child is None else transform(FIELD_POOLS[key], child)
+        elif key == "fn_abis" and isinstance(child, list):
+            result[key] = [{**_walk({field: item for field, item in abi.items()
+                                   if field not in ("return", "arguments")}, transform),
+                            "return": transform("abi_arguments", abi["return"]),
+                            "arguments": [transform("abi_arguments", item) for item in abi["arguments"]]}
+                           for abi in child]
         elif key == "statements" and isinstance(child, list):
             result[key] = [{**_walk({field: item for field, item in statement.items() if field != "kind"}, transform),
                             "kind": transform("statement_kinds", statement["kind"])} for statement in child]
@@ -35,10 +41,32 @@ def _walk(value, transform):
     return result
 
 
+def project_unused_metadata(document):
+    """Drop fields the interpreter never consumes; preserve diagnostic text."""
+    result = copy.deepcopy(document)
+    for body in result.get("bodies", []):
+        if body.get("tainted_by_errors") is not None:
+            raise ValueError("cannot project tainted MIR")
+        for key in ("mentioned_items", "var_debug_info", "user_type_annotations",
+                    "source_instance_kind", "tainted_by_errors", "source_promoted",
+                    "coroutine_info", "pass_count"):
+            body.pop(key, None)
+        for local in body.get("locals", []):
+            for key in ("local_info", "mutability", "layout"):
+                local.pop(key, None)
+        for scope in body.get("source_scopes", []):
+            scope.pop("local_data", None)
+    for span in result.get("spans", []):
+        if isinstance(span.get("ctxt"), dict):
+            span["ctxt"] = span["ctxt"]["rustc_debug"]
+    return result
+
+
 def pool_document(document):
-    """Project schema 8 to 10, asserting exact inverse including null/false/[]."""
+    """Project expanded schema 8 to 11, checking the retained payloads exactly."""
     if document.get("schema_version") != 8:
         raise ValueError("fixture pooling requires schema 8")
+    document = project_unused_metadata(document)
     pools = {name: [] for name in SHARED_POOLS}
     keys = {name: {} for name in SHARED_POOLS}
 
@@ -54,12 +82,12 @@ def pool_document(document):
     result = _walk(copy.deepcopy(document), intern)
     result["layouts"] = [intern("layout_values", row) for row in result["layouts"]]
     result.update(pools)
-    result["schema_version"] = 10
+    result["schema_version"] = 11
     assert expand_document(result, schema_version=8) == document, "pool projection changed payloads"
     return result
 
 
-def expand_document(document, *, schema_version=10):
+def expand_document(document, *, schema_version=11):
     """Return an independent semantic inspection view with shared payloads resolved.
 
     Callers retaining wire identities should use the original document. Lean's

@@ -23,10 +23,10 @@ def main (args : List String) : IO Unit := do
   let payloads ← must (json.getObjValAs? (Array Json) "layout_values")
   unless references.size == compact.document.layouts.size && references.all (· < payloads.size) do
     throw (IO.userError "compact layout payload pool changed LayoutId identities")
-  for version in #[8, 9] do
+  for version in #[8, 9, 10] do
     match decodeJson (json.setObjVal! "schema_version" (toJson version)).compress with
     | .error error =>
       unless (error.splitOn "unsupported schema version").length > 1 do
         throw (IO.userError s!"wrong obsolete-version rejection: {error}")
     | .ok _ => throw (IO.userError s!"obsolete schema {version} accepted current array encoding")
-  IO.println "PASS current dense and compact pooled inputs; schemas 8 and 9 rejected"
+  IO.println "PASS current dense and compact pooled inputs; schemas 8, 9 and 10 rejected"
