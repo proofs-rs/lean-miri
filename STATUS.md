@@ -56,8 +56,9 @@ Coroutine frame layout serialization and foreign TLS initializers remain
 unimplemented and now stop export. This boundary does not establish compiler
 query closure or interpreter correspondence.
 
-The producer now emits schema 9; the reader strictly supports schemas 8 and 9.
-Schema 8 retains its existing dense-layout and call-evidence validation and
+The schema-9 follow-up emitted schema 9 and strictly supported schemas 8 and 9
+at that revision (the later schema-10 baseline is described below).
+Schema 8 retained its existing dense-layout and call-evidence validation and
 rejects the new compact-array and LLVM no-ABI forms. Array offsets in schema 9
 use an explicit stride/count formula instead of an enumerated vector. The
 reader checks shape agreement, u64 bounds and the last offset without traversing
@@ -321,6 +322,40 @@ documentation build/deploy and all four core lanes (fresh, replay, extended
 and regression) pass. The UI sweep remains unfinished; its shard-9 AVX2
 export failure used the old producer and is covered by the local repair below. These results
 belong to that main revision; schema 9 has not yet received hosted validation.
+
+### Schema-10 UI oracle follow-up: local validation
+
+The oracle-only follow-up on main `17330f08` changes two test/harness files.
+Vtable-specific reference diagnostics take precedence over generic null-pointer
+wording while uninitialized-value precedence remains intact. The calling-
+convention category accepts the exact shim-convention diagnostic. The no-
+provenance category recognizes only the fully qualified, case-exact typed
+`Miri.Memory.AccessError.danglingIntegerPointer` constructor with a nonzero
+canonical decimal address and strict namespace/integer-token boundaries.
+Adjacent ABI errors, zero addresses, other namespaces, malformed address tokens,
+bounds/dead-allocation/vtable errors and generic UB remain negative controls;
+wrong sites and Unsupported outcomes still fail.
+
+The latest-base quick check passes all 114 Python tests, including 19 UI-oracle
+unit tests. Fresh strict comparisons pass the four repaired cases
+(`invalid_wide_raw`, `check_arg_abi`, `deref-invalid-ptr` and `cast_dangling_ref`)
+and two existing null-box/null-reference controls. These comparisons use sealed
+schema-10 binaries from the separate Unix-allocation candidate `11c7e251`, also
+based on `17330f08`: exporter SHA256 `1e0b4eb44eeddb9aa6ebdab13932c5166d773244b7f478a519e1f31471ec443a`
+and native runner SHA256 `d2a20a77451114ed9881cde05d0423f7091631e3130eddeb07261fa0b0c96d9a`.
+That candidate adds configured Unix allocation ownership; its vtable, foreign
+ABI and memory-access cause sources have exactly the same SHA256 as this
+checkout, with no terminal diagnostic changes. Source/binary identities,
+same-TyCtxt snapshot bindings, strict profiles and exact source-line checks all
+pass. This is a combined-candidate comparison, not a pure-main binary result.
+
+This follow-up changes no Miri/proof source, protocol, line matching, profile,
+budget or case inventory. The 268 proof roots were not rerun for these oracle
+changes. The adapters identify the actual source UB causes; they do not turn
+unrelated failures into accepted UB or close the remaining implementation gaps.
+On hosted main `17330f08`, the proof, fresh lane and documentation build pass;
+other checks are still in progress when checked. These local six-case results
+do not establish a green hosted UI sweep.
 
 ### Schema-9 metadata follow-up: local validation
 
