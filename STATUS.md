@@ -396,9 +396,14 @@ pointer-provenance and initialization-mask copying, both growth policies, and
 retained state after copy/free failures. A fresh Linux control passes strict
 same-TyCtxt Miri/native comparisons through C allocation/reallocation/free and
 mmap/mremap/munmap, including copied bytes, page alignment and zeroed growth.
-Source, snapshot, profiles and frozen executable identities match. The full
-268-root proof rerun on schema 11 is in progress; fixed inputs and checksum
-records are unchanged by this follow-up.
+Source, snapshot, profiles and frozen executable identities match. All 268 proof
+roots pass on schema 11, with a transitive audit of 77,063 declarations using
+only the same three allowed axioms. Fixed Rust/input checksums and library/proof
+bindings match before and after. After rebasing onto main `3241cb6b`, all 1,012
+recorded library, runner, test, proof and fixed-input source hashes remain
+identical, so this proof result also applies to those unchanged sources.
+The exporter rebuilt from that latest base also passes the fresh strict
+three-route control with the hash-matched schema-11 native runner.
 
 The preceding schema-10 cohort passed all 268 roots and its 77,078-declaration
 transitive audit with only the three allowed axioms. Its original unchanged
