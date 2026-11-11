@@ -892,7 +892,7 @@ fn select_roots<'tcx>(
         if !tcx.is_mir_available(def) || is_required_trait_method(tcx, def) {
             return Err(format!("--root {requested:?} has no available MIR body"));
         }
-        let body = tcx.instance_mir(ty::InstanceKind::Item(def));
+        let body = checked_instance_mir(tcx, ty::InstanceKind::Item(def))?;
         if body.is_polymorphic {
             return Err(format!(
                 "--root {requested:?} is generic; rooted export currently requires a non-generic named body"
@@ -2328,7 +2328,7 @@ fn export_reachable_instances<'tcx>(
             )?);
             continue;
         }
-        let template = tcx.instance_mir(instance.def);
+        let template = checked_instance_mir(tcx, instance.def)?;
         context.runtime_mir_frame_instances.insert(instance);
         let body_json = resolved_mir_body_json(tcx, template, instance, context)?;
         // Local HIR bodies own a promoted table even when empty. Imported or
@@ -2411,6 +2411,24 @@ fn identity_only_instances_json<'tcx>(
     Ok(())
 }
 
+fn ensure_untainted_mir(body: &rustc_middle::mir::Body<'_>) -> Result<(), String> {
+    // Match rustc_const_eval::interpret::InterpCx::load_mir for ordinary and
+    // promoted bodies, including MIR read only to derive call-transfer facts.
+    if body.tainted_by_errors.is_some() {
+        return export_failure("resolved MIR", "MIR body is tainted by compiler errors");
+    }
+    Ok(())
+}
+
+fn checked_instance_mir<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    kind: ty::InstanceKind<'tcx>,
+) -> Result<&'tcx rustc_middle::mir::Body<'tcx>, String> {
+    let body = tcx.instance_mir(kind);
+    ensure_untainted_mir(body)?;
+    Ok(body)
+}
+
 // Each concrete instance owns one executable body. Normalize only its template:
 // rebinding a substituted body can capture caller parameters incorrectly.
 fn resolved_mir_body_json<'tcx>(
@@ -2419,11 +2437,7 @@ fn resolved_mir_body_json<'tcx>(
     instance: ty::Instance<'tcx>,
     context: &mut ExportContext<'tcx>,
 ) -> Result<u64, String> {
-    // rustc_const_eval::interpret::InterpCx::load_mir rejects both ordinary
-    // and promoted bodies here, even when the body was already interned.
-    if template.tainted_by_errors.is_some() {
-        return export_failure("resolved MIR", "MIR body is tainted by compiler errors");
-    }
+    ensure_untainted_mir(template)?;
     if instance.args.has_non_region_param()
         || instance.args.has_escaping_bound_vars()
         || instance.args.has_infer()
@@ -2459,7 +2473,7 @@ fn export_body<'tcx>(
     context: &mut ExportContext<'tcx>,
 ) -> Result<BodyRoot, String> {
     let def_id = local_def_id.to_def_id();
-    let body = tcx.instance_mir(ty::InstanceKind::Item(def_id));
+    let body = checked_instance_mir(tcx, ty::InstanceKind::Item(def_id))?;
     let instance = ty::Instance {
         def: body.source.instance,
         args: ty::GenericArgs::identity_for_item(tcx, def_id),
@@ -4430,7 +4444,7 @@ fn register_call_transfer_for_target<'tcx>(
     // Use the same substituted body that the source interpreter enters. ABI
     // argument types are validation metadata; the actual copy destination is
     // the instantiated MIR local (or spread tuple field).
-    let template = tcx.instance_mir(instance.def);
+    let template = checked_instance_mir(tcx, instance.def)?;
     let callee_body = match instance.try_instantiate_mir_and_normalize_erasing_regions(
         tcx,
         template.typing_env(tcx),
@@ -6835,6 +6849,13 @@ mod tainted_mir_tests {
         });
         assert!(callbacks.checked, "rustc did not reach the tainted-body regression");
         assert_ne!(status, std::process::ExitCode::SUCCESS);
+        fs::write(&source, "fn main() { let _: u8 = \"type error\"; }").unwrap();
+        callbacks.checked = false;
+        let status = rustc_driver::catch_with_exit_code(|| {
+            rustc_driver::compiler_entrypoint(&args, &mut callbacks)
+        });
+        assert_ne!(status, std::process::ExitCode::SUCCESS);
+        assert!(!callbacks.checked, "typecheck errors must stop rustc before after_analysis");
         fs::remove_dir_all(directory).unwrap();
     }
 }
