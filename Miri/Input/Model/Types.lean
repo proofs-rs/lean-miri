@@ -195,6 +195,27 @@ structure VariantsLayout where
   tagFieldIndex : Option Nat
   variants : Array LayoutVariant
 
+inductive LayoutFieldOffsets where
+  | explicit (offsets : Array Nat)
+  | arrayFormula (strideBytes count : Nat)
+  deriving Repr, DecidableEq
+
+namespace LayoutFieldOffsets
+
+/-- Formula metadata is bounded without enumerating any array fields. The
+last product bounds every permitted `stride * index`, including zero stride. -/
+def validate (offsets : LayoutFieldOffsets) (shape : FieldShape) : Except String Unit := do
+  match offsets with
+  | .explicit values =>
+    unless shape.fieldCount == values.size do throw "field shape count does not match field_offsets_bytes"
+  | .arrayFormula stride count =>
+    unless shape.kind == .array && shape.strideBytes == some stride && shape.fieldCount == count do
+      throw "array offset formula does not match field shape"
+    unless stride < 2^64 && count < 2^64 do throw "array offset formula exceeds u64"
+    if count > 0 && stride * (count - 1) >= 2^64 then throw "array offset formula overflows u64"
+
+end LayoutFieldOffsets
+
 structure Layout where
   maxReprAlignBytes : Option Nat
   reprC : Bool
@@ -205,7 +226,7 @@ structure Layout where
   sizeBytes : Option Nat
   abiAlignBytes : Option Nat
   unadjustedAbiAlignBytes : Option Nat
-  fieldOffsetsBytes : Array Nat
+  fieldOffsetsBytes : LayoutFieldOffsets
   fields : Option FieldShape
   variantsLayout : Option VariantsLayout
   backendRepresentation : Option BackendRepr
@@ -690,7 +711,13 @@ structure CompilerAllocIdWorld where
 
 
 inductive CallResolutionKind where
-  | direct | virtualDispatch | indirect
+  | direct | virtualDispatch | indirect | llvmIntrinsic
+  deriving Repr, DecidableEq
+
+/-- Only the compiler's LLVM intrinsic dispatch has no ordinary FnAbi. -/
+inductive CallAbiEvidence where
+  | normal (id : FunctionAbiId)
+  | llvmIntrinsic
   deriving Repr, DecidableEq
 
 structure CallResolutionEvidence where
@@ -698,7 +725,7 @@ structure CallResolutionEvidence where
   instanceId : Option InstanceId
   functionType : Option TypeId
   dispatchSlot : Option Nat
-  fnAbiId : FunctionAbiId
+  abi : CallAbiEvidence
 
 structure InlinedScope where
   instanceId : InstanceId

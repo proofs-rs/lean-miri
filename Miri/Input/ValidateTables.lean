@@ -443,6 +443,10 @@ private def validateRequiredExecution (document : ImportDocument) : Except Strin
 /-- Validate forward table references and graph relationships after row-local
 invariants, including dense instance IDs, have been established by the parsers. -/
 def validateParsedTables (document : ImportDocument) : Except String Unit := do
+  for row in document.queries.instanceAbis do
+    if let some node := document.instances[row.instanceId]? then
+      if let .LlvmIntrinsic _ := node.instanceKind then
+        throw "$.compiler_instance_abis: LLVM intrinsic has no ordinary FnAbi query"
   let b : ReferenceBounds := {
     types := document.types.size
     allocations := document.allocations.size
@@ -521,10 +525,53 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
       if let some inlined := scope.inlined then
         checkId b.instances inlined.instanceId path "instance"
         checkId b.spans inlined.callsiteSpanId path "span"
-    for evidence in value.callEvidence do
+    for (evidence, blockIndex) in value.callEvidence.toList.zipIdx do
       if let some resolution := evidence then
-        checkId b.abis resolution.fnAbiId path "function ABI"
         if let some id := resolution.instanceId then checkId b.instances id path "instance"
+        let isLlvm := match resolution.instanceId.bind (document.instances[·]?) with
+          | some node => match node.instanceKind with | .LlvmIntrinsic _ => true | _ => false
+          | none => false
+        match resolution.abi with
+        | .normal id =>
+          unless resolution.kind != .llvmIntrinsic && !isLlvm do
+            throw s!"{path}: LLVM intrinsic cannot carry an ordinary ABI"
+          checkId b.abis id path "function ABI"
+        | .llvmIntrinsic =>
+          unless resolution.kind == .llvmIntrinsic && isLlvm && resolution.dispatchSlot.isNone do
+            throw s!"{path}: no-ABI call must resolve to an exact LLVM intrinsic"
+          let some llvmInstance := resolution.instanceId.bind (document.instances[·]?) |
+            throw s!"{path}: missing LLVM intrinsic identity"
+          let .LlvmIntrinsic definition := llvmInstance.instanceKind |
+            throw s!"{path}: invalid LLVM intrinsic identity"
+          let some functionType := resolution.functionType |
+            throw s!"{path}: missing LLVM source function type"
+          let some sourceType := document.types[functionType]? |
+            throw s!"{path}: missing LLVM function type definition"
+          let .functionDefinition sourceDefinition sourceArgs _ _ := sourceType.shape |
+            throw s!"{path}: LLVM source function type is not FnDef"
+          unless sourceDefinition == definition && sourceArgs == llvmInstance.genericArgs do
+            throw s!"{path}: LLVM function type differs from its canonical instance"
+          let some block := value.mir.basicBlocks[blockIndex]? |
+            throw s!"{path}: LLVM evidence has no source block"
+          let operand ← match block.terminator.kind with
+            | .Call operand .. | .TailCall operand .. => pure operand
+            | _ => throw s!"{path}: LLVM evidence does not belong to a call"
+          let operandType ← match operand with
+            | .Constant constant =>
+              let .Val _ ty := constant.value
+              pure ty
+            | .Copy place | .Move place => do
+              let some facts := (value.nodeFacts[blockIndex]?).bind (·.back?) |
+                throw s!"{path}: LLVM callee place has no terminator facts"
+              let matching := facts.places.filter (·.place == place)
+              let some first := matching[0]? |
+                throw s!"{path}: LLVM callee place has no compiler type"
+              unless matching.all (·.typeId == first.typeId) do
+                throw s!"{path}: conflicting LLVM callee place types"
+              pure first.typeId
+            | .RuntimeChecks _ => throw s!"{path}: invalid LLVM callee operand"
+          unless operandType == functionType do
+            throw s!"{path}: LLVM evidence function type differs from MIR operand type"
     for facts in value.nodeFacts do
       for node in facts do
         for tls in node.threadLocals do

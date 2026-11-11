@@ -21,8 +21,8 @@ def decode_mir_document(document: Any) -> dict[str, Any]:
         raise MirJSONError("MIR document root must be an object")
     if document.get("schema") != "lean-miri-rustc-mir":
         raise MirJSONError("document is not a lean-miri-rustc-mir export")
-    if type(document.get("schema_version")) is not int or document["schema_version"] != 8:
-        raise MirJSONError("MIR root schema_version must be 8")
+    if type(document.get("schema_version")) is not int or document["schema_version"] not in (8, 9):
+        raise MirJSONError("MIR root schema_version must be 8 or 9")
     for name in sorted(POOL_NAMES):
         if not isinstance(document.get(name), list):
             raise MirJSONError(f"{name} must be a pool array")
@@ -34,6 +34,14 @@ def decode_mir_document(document: Any) -> dict[str, Any]:
     images = document.get("byte_images")
     if not isinstance(images, list) or any(not isinstance(image, str) for image in images):
         raise MirJSONError("byte_images must be a string array")
+    if document["schema_version"] == 8:
+        if any(isinstance(row.get("field_offsets_bytes"), dict) for row in document["layouts"]):
+            raise MirJSONError("compact array field offsets require schema 9")
+        for body in document["bodies"]:
+            for block in body.get("basic_blocks", []):
+                resolution = block.get("terminator", {}).get("kind", {}).get("resolution", {})
+                if resolution.get("kind") == "llvm_intrinsic":
+                    raise MirJSONError("LLVM no-ABI call evidence requires schema 9")
     return document
 
 

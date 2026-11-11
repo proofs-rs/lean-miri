@@ -56,9 +56,22 @@ class MirJSONTests(unittest.TestCase):
                     decode_mir_document(document(**{name: value}))
 
     def test_requires_current_schema_version(self):
-        for version in (4, 6, 7, True, "8", 8.0):
-            with self.subTest(version=version), self.assertRaisesRegex(MirJSONError, "schema_version must be 8"):
+        for version in (4, 6, 7, 10, True, "8", 8.0, 9.0):
+            with self.subTest(version=version), self.assertRaisesRegex(MirJSONError, "schema_version must be 8 or 9"):
                 decode_mir_document(document(schema_version=version))
+
+    def test_schema8_retains_legacy_but_rejects_schema9_forms(self):
+        for version in (8, 9):
+            legacy = document(schema_version=version, layouts=[{"field_offsets_bytes": [0, 4]}])
+            self.assertIs(decode_mir_document(legacy), legacy)
+        formula = {"field_offsets_bytes": {"kind": "array", "stride_bytes": 4, "field_count": 2}}
+        call = {"basic_blocks": [{"terminator": {"kind": {"resolution": {
+            "kind": "llvm_intrinsic", "function_type": 0, "instance_id": 0}}}}]}
+        for fields in ({"layouts": [formula]}, {"bodies": [call]}):
+            with self.assertRaisesRegex(MirJSONError, "requires? schema 9"):
+                decode_mir_document(document(**fields))
+            modern = document(schema_version=9, **fields)
+            self.assertIs(decode_mir_document(modern), modern)
 
     def test_filename_ids_stay_shared_and_unexpanded(self):
         encoded = document(files=["src/a.rs", "src/b.rs"],

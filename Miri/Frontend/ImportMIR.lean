@@ -143,6 +143,7 @@ deriving instance ToExpr for Input.LayoutVariant
 deriving instance ToExpr for Input.TagEncodingKind
 deriving instance ToExpr for Input.TagEncoding
 deriving instance ToExpr for Input.VariantsLayout
+deriving instance ToExpr for Input.LayoutFieldOffsets
 deriving instance ToExpr for Input.Layout
 deriving instance ToExpr for Input.ArmCallKind
 deriving instance ToExpr for Input.InterruptCallKind
@@ -203,6 +204,7 @@ deriving instance ToExpr for Input.SourceAllocIdSaltResult
 deriving instance ToExpr for Input.SourceAllocIdDedupRow
 deriving instance ToExpr for Input.CompilerAllocIdWorld
 deriving instance ToExpr for Input.CallResolutionKind
+deriving instance ToExpr for Input.CallAbiEvidence
 deriving instance ToExpr for Input.CallResolutionEvidence
 deriving instance ToExpr for Input.InlinedScope
 deriving instance ToExpr for Input.SourceScope
