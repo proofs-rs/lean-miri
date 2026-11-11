@@ -31,3 +31,7 @@ help: the protected tag <26> later transitioned to Unique due to a child write a
            1: miri_start
                at /workspace/file-pool/tests/connected/fixtures/192-active-protector-typed-ub.rs:8:14: 8:51
    = note: this error originates in the macro `core::ptr::addr_of_mut` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: aborting due to 1 previous error
+
+lean-miri-mir-exporter: pinned rustc driver reported compilation errors

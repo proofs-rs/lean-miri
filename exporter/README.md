@@ -51,8 +51,11 @@ exact arguments cannot be fingerprinted.
 
 ## Input contract
 
-The root schema is `lean-miri-rustc-mir` version 5. Compiler values have separate
-tables with document-local, dense, zero-based IDs:
+The root schema is `lean-miri-rustc-mir` version 6. Evaluated integer scalars carry
+`bits_unsigned` and the compiler layout's `size_bytes`, so consumers can construct
+the machine scalar before reading the type and layout tables. Zero-sized and
+pointer constants retain their separate representations. Compiler values have
+separate tables with document-local, dense, zero-based IDs:
 
 | Table | Interning key |
 | --- | --- |

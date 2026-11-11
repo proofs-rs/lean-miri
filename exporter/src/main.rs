@@ -77,7 +77,7 @@ fn export_failure<T>(context: &str, details: impl std::fmt::Display) -> Result<T
 
 const EXPECTED_RUSTC_COMMIT: &str = "8144389c895da997dbdecaa635e41d6a50be6ffd";
 const MIRI_COMMIT: &str = "7fa591d7d4dd9af8154becbc8332f8096f8323b1";
-const ROOT_SCHEMA_VERSION: u64 = 5;
+const ROOT_SCHEMA_VERSION: u64 = 6;
 
 struct Options {
     output: PathBuf,
@@ -5116,7 +5116,7 @@ fn const_value_json<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,ty:t
             // Preserve Scalar::Ptr independently of the enclosing type: niche
             // ADTs can carry provenance and must not be converted to integer bits.
             if matches!(*ty.kind(),ty::RawPtr(..)|ty::Ref(..)|ty::FnPtr(..)) || scalar.try_to_scalar_int().is_err() {scalar_pointer_json(context,tcx,ty,scalar)?}
-            else {let layout=tcx.layout_of(ty::TypingEnv::fully_monomorphized().as_query_input(ty)).map_err(|_|"main::const_value_json: scalar_layout_unavailable".to_owned())?;let bits=scalar.to_bits(layout.size).report_err().map_err(|e|format!("main::const_value_json: scalar_with_provenance_or_invalid_bits; {e:?}"))?;O::Scalar {ty:type_json(context,tcx,ty)?,bits_unsigned:bits.to_string()}}
+            else {let layout=tcx.layout_of(ty::TypingEnv::fully_monomorphized().as_query_input(ty)).map_err(|_|"main::const_value_json: scalar_layout_unavailable".to_owned())?;let bits=scalar.to_bits(layout.size).report_err().map_err(|e|format!("main::const_value_json: scalar_with_provenance_or_invalid_bits; {e:?}"))?;O::Scalar {ty:type_json(context,tcx,ty)?,bits_unsigned:bits.to_string(),size_bytes:layout.size.bytes()}}
         },
         C::Slice {alloc_id,meta}=>{let allocation=allocation_ref(context,tcx,alloc_id)?; O::SliceAllocation {ty:type_json(context,tcx,ty)?,allocation,metadata_length:meta}},
         C::Indirect {alloc_id,offset}=>{let allocation=allocation_ref(context,tcx,alloc_id)?; O::IndirectAllocation {ty:type_json(context,tcx,ty)?,allocation,offset_bytes:offset.bytes()}},

@@ -808,29 +808,12 @@ def vtableQuery : Parser (VtableQuery) := do
   return {
     queryId, inputType, inputPredicates, outputType, outputPredicates, outputTypeMonomorphic, outputPredicatesMonomorphic, vtableAllocation, metadata }
 
-structure DraftNamedConstant where
-  name : String
-  path : Array String
-  instanceId : Nat
-  typeId : Nat
-  value : DecodeMIR.DraftConstValue
-
-structure DraftTypeName where
-  inputType : Nat
-  resultType : Nat
-  value : DecodeMIR.DraftConstValue
-
-structure DraftCallerLocation where
-  span : Nat
-  resultType : Nat
-  value : DecodeMIR.DraftConstValue
-
 private structure namedConstantQueryFields where
   instanceId : Option (Nat) := none
   typeId : Option (Nat) := none
-  value : Option (DecodeMIR.DraftConstValue) := none
+  value : Option (MIR.ConstValue) := none
 
-private def namedConstantQuery : Parser (Nat × Nat × DecodeMIR.DraftConstValue) := do
+private def namedConstantQuery : Parser (Nat × Nat × MIR.ConstValue) := do
   let fields ← object ({} : namedConstantQueryFields) fun fields key => do
     match key with
     | "instance_id" => return { fields with instanceId := some (← natural) }
@@ -846,9 +829,9 @@ private structure namedConstantFields where
   _environment : Option (String) := none
   name : Option (String) := none
   path : Option (Array (String)) := none
-  query : Option (Nat × Nat × DecodeMIR.DraftConstValue) := none
+  query : Option (Nat × Nat × MIR.ConstValue) := none
 
-def namedConstant : Parser (DraftNamedConstant) := do
+def namedConstant : Parser (NamedConstant) := do
   let fields ← object ({} : namedConstantFields) fun fields key => do
     match key with
     | "typing_env" => return { fields with _environment := some (← expectedString "fully_monomorphized") }
@@ -869,7 +852,7 @@ private structure typeNameFields where
   inputType : Option (Nat) := none
   resultType : Option (Nat) := none
 
-def typeName : Parser DraftTypeName := do
+def typeName : Parser TypeName := do
   let fields ← object ({} : typeNameFields) fun fields key => do
     match key with
     | "input_type" => return { fields with inputType := some (← natural) }
@@ -888,7 +871,7 @@ private structure callerLocationFields where
   span : Option (Nat) := none
   resultType : Option (Option Nat) := none
 
-def callerLocation : Parser DraftCallerLocation := do
+def callerLocation : Parser CallerLocation := do
   let fields ← object ({} : callerLocationFields) fun fields key => do
     match key with
     | "span" => return { fields with span := some (← natural) }
@@ -899,22 +882,22 @@ def callerLocation : Parser DraftCallerLocation := do
   let resultType ← need resultType "non-null result_type"
   let value ← DecodeMIR.finishConstValueFields fields.value
   return {
-    span, resultType, value }
+    span, resultType := some resultType, value }
 
-structure DraftQueries where
+structure QueryFields where
   session : Option (Session) := none
   runtime : Option (Runtime) := none
   frameMetadata : Option (FrameMetadata) := none
   instanceAbis : Option (Array InstanceAbi) := none
   functionFacts : Option (FunctionFacts) := none
   casts : Option (Array CastQuery) := none
-  typeNames : Option (Array DraftTypeName) := none
+  typeNames : Option (Array TypeName) := none
   panic : Option (Array PanicQuery) := none
   nativeSignatures : Option (Array NativeSignature) := none
   retag : Option (Array RetagQuery) := none
   covariance : Option (Array CovarianceQuery) := none
   globalBytes : Option (GlobalBytes) := none
-  callerLocations : Option (Array DraftCallerLocation) := none
+  callerLocations : Option (Array CallerLocation) := none
   main : Option (Main) := none
   primitives : Option (Primitives) := none
   vtables : Option (Array VtableQuery) := none
@@ -923,35 +906,10 @@ structure DraftQueries where
   namedShimAbis : Option (Option (Array NamedShimAbi)) := none
   libcTypeLayouts : Option (Option (TypeLayouts)) := none
   windowsTypeLayouts : Option (Option (TypeLayouts)) := none
-  namedConstants : Option (Option (Array DraftNamedConstant)) := none
+  namedConstants : Option (Option (Array NamedConstant)) := none
   namedStatics : Option (Option (Array NamedStatic)) := none
 
-structure UnresolvedQueries where
-  session : Session
-  runtime : Runtime
-  frameMetadata : FrameMetadata
-  instanceAbis : Array InstanceAbi
-  functionFacts : FunctionFacts
-  casts : Array CastQuery
-  typeNames : Array DraftTypeName
-  panic : Array PanicQuery
-  nativeSignatures : Array NativeSignature
-  retag : Array RetagQuery
-  covariance : Array CovarianceQuery
-  globalBytes : GlobalBytes
-  callerLocations : Array DraftCallerLocation
-  main : Main
-  primitives : Primitives
-  vtables : Array VtableQuery
-  namedTypes : Option (Array (String × Nat))
-  shimAbis : Option (Array ShimAbi)
-  namedShimAbis : Option (Array NamedShimAbi)
-  libcTypeLayouts : Option (TypeLayouts)
-  windowsTypeLayouts : Option (TypeLayouts)
-  namedConstants : Option (Array DraftNamedConstant)
-  namedStatics : Option (Array NamedStatic)
-
-def parseField (fields : DraftQueries) (key : String) : Parser (Option DraftQueries) := do
+def parseField (fields : QueryFields) (key : String) : Parser (Option QueryFields) := do
   match key with
   | "compiler_session_queries" => return some { fields with session := some (← session) }
   | "compiler_runtime_queries" => return some { fields with runtime := some (← runtime) }
@@ -978,7 +936,7 @@ def parseField (fields : DraftQueries) (key : String) : Parser (Option DraftQuer
   | "compiler_named_statics" => return some { fields with namedStatics := some (← nullable (array namedStatic)) }
   | _ => pure none
 
-def finish (fields : DraftQueries) : Parser UnresolvedQueries := do
+def finish (fields : QueryFields) : Parser Queries := do
   return {
     session := ← need fields.session "compiler_session_queries"
     runtime := ← need fields.runtime "compiler_runtime_queries"
@@ -1005,43 +963,14 @@ def finish (fields : DraftQueries) : Parser UnresolvedQueries := do
     namedStatics := fields.namedStatics.join
   }
 
-def resolveQueries (ctx : DecodeMIR.Context) (draft : UnresolvedQueries) : Except String Queries := do
-  let typeNames ← draft.typeNames.mapM fun row => do
-    pure {
-      inputType := row.inputType, resultType := row.resultType,
-      value := ← DecodeMIR.resolveConstValue ctx row.resultType row.value : TypeName }
-  let callerLocations ← draft.callerLocations.mapM fun row => do
-    pure {
-      span := row.span, resultType := some row.resultType,
-      value := ← DecodeMIR.resolveConstValue ctx row.resultType row.value : CallerLocation }
-  let namedConstants ← draft.namedConstants.mapM fun rows => rows.mapM fun row => do
-    pure {
-      name := row.name, path := row.path, instanceId := row.instanceId, typeId := row.typeId,
-      value := ← DecodeMIR.resolveConstValue ctx row.typeId row.value : NamedConstant }
-  return {
-    session := draft.session
-    runtime := draft.runtime
-    frameMetadata := draft.frameMetadata
-    instanceAbis := draft.instanceAbis
-    functionFacts := draft.functionFacts
-    casts := draft.casts
-    typeNames := typeNames
-    panic := draft.panic
-    nativeSignatures := draft.nativeSignatures
-    retag := draft.retag
-    covariance := draft.covariance
-    globalBytes := draft.globalBytes
-    callerLocations := callerLocations
-    main := draft.main
-    primitives := draft.primitives
-    vtables := draft.vtables
-    namedTypes := draft.namedTypes
-    shimAbis := draft.shimAbis
-    namedShimAbis := draft.namedShimAbis
-    libcTypeLayouts := draft.libcTypeLayouts
-    windowsTypeLayouts := draft.windowsTypeLayouts
-    namedConstants := namedConstants
-    namedStatics := draft.namedStatics
-  }
+def validateQueries (ctx : DecodeMIR.Context) (queries : Queries) : Except String Unit := do
+  for row in queries.typeNames do
+    let _ ← DecodeMIR.resolveConstValue ctx row.resultType row.value
+  for row in queries.callerLocations do
+    let some resultType := row.resultType | throw "missing caller-location result type"
+    let _ ← DecodeMIR.resolveConstValue ctx resultType row.value
+  for rows in queries.namedConstants do
+    for row in rows do
+      let _ ← DecodeMIR.resolveConstValue ctx row.typeId row.value
 
 end Miri.Input.CatalogDecoder

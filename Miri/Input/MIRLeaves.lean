@@ -1,4 +1,5 @@
-import Miri.Input.DraftMIR
+import Miri.Input.Model.Catalogs
+import Miri.MIR.Syntax
 import Miri.Input.JsonReader
 import Miri.Input.GenericArgsCodec
 
@@ -160,12 +161,20 @@ def projection : Parser (MIR.ProjectionElem × Nat) := do
     | _ => fail "unknown projection")
   return (value, (← required v.resulting_type "resulting_type"))
 
+/-- Local metadata is consumed as soon as its containing MIR node is built. -/
+structure ParsedPlace where
+  value : MIR.Place
+  typeId : Nat
+  projectionTypes : Array Nat
+
+instance : Coe ParsedPlace MIR.Place := ⟨(·.value)⟩
+
 private structure PlaceFields where
   «local» : Option (Nat) := none
   type : Option (Nat) := none
   projection : Option (Array (MIR.ProjectionElem × Nat)) := none
 
-def place : Parser (Draft.Place) := do
+def place : Parser (ParsedPlace) := do
   let v ← object ({} : PlaceFields) fun v key => do
     match key with
     | "local" => return { v with «local» := some (← natural) }
@@ -631,14 +640,20 @@ private structure BacktraceFields where
   collapsed_lo : Option (Nat) := none
   source_position : Option (CompilerSourcePosition) := none
 
-def backtrace : Parser (BacktraceSpan) := do
+def backtrace (path : String) : Parser (BacktraceSpan) := do
   let v ← object ({} : BacktraceFields) fun v key => do
     match key with
     | "span" => return { v with span := some (← natural) }
     | "collapsed_lo" => return { v with collapsed_lo := some (← natural) }
     | "source_position" => return { v with source_position := some (← backtracePosition) }
     | _ => skipValue; pure v
-  return { spanId := (← required v.span "span"), collapsedLo := (← required v.collapsed_lo "collapsed_lo"), position := (← required v.source_position "source_position") }
+  let spanId ← required v.span "span"
+  let collapsedLo ← required v.collapsed_lo "collapsed_lo"
+  let position ← required v.source_position "source_position"
+  unless position.bytePosition < 2^32 do fail s!"{path}: compiler BytePos exceeds u32"
+  unless collapsedLo == position.bytePosition do
+    fail s!"{path}: collapsed hygiene BytePos/source-map position mismatch"
+  return { spanId, collapsedLo, position }
 
 private structure CallEvidenceFields where
   kind : Option (String) := none

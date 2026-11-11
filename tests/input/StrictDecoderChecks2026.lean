@@ -40,6 +40,17 @@ def main : IO Unit := do
     throw (IO.userError "typed table definitions were discarded")
   let types ← must (array (← must (get fixture "types")))
   let some firstType := types[0]? | throw (IO.userError "fixture has no type")
+  let oversizedArray := object [("kind",string "array"),("element","0"),("length","0"),
+    ("constructor_identity",object [("count",toString (2^64 : Nat)),("canonical_value_constructor","true")])]
+  -- These complete rows must fail at the parser, before any table-wide join.
+  rejects (JsonReader.run parseTypeNode (← must (set firstType "shape" oversizedArray))) "row-local array count"
+  rejects (JsonReader.run parseTagEncoding
+    r#"{"kind":"niche","untagged_variant":0,"niche_variants":{"start":2,"end":1},"niche_start":"0"}"#)
+    "row-local reversed niche range"
+  let instances ← must (array (← must (get fixture "instances")))
+  let some firstInstance := instances[0]? | throw (IO.userError "fixture has no instance")
+  rejects (JsonReader.run (parseInstance "$instance") (← must (set firstInstance "def_id" "99999")))
+    "row-local instance definition identity"
   let badType ← must (set firstType "layout" "99999")
   rejects (decodeJson (← must (set fixture "types" (arr (types.set! 0 badType))))) "out of bounds layout"
   let invalidScope := object [("kind",string "future_scope"),

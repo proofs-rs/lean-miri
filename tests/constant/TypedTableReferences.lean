@@ -27,6 +27,7 @@ def main (args : List String) : IO Unit := do
     { document with types := document.types.set! 0 { firstType with shape } }
   reject "tuple element" (withShape (.tuple #[document.types.size]))
   reject "array length" (withShape (.array 0 document.typeConstants.size ⟨0, true⟩))
+  reject "array constructor width" (withShape (.array 0 0 ⟨2^64, true⟩))
   reject "pattern endpoint" (withShape (.patternType 0 (.range document.typeConstants.size document.typeConstants.size)))
   reject "owned type argument" (withShape (.closure 0 #[.Type document.types.size] 0))
   reject "owned constant argument" (withShape (.closure 0 #[.Const document.typeConstants.size] 0))

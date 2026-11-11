@@ -517,9 +517,11 @@ def parseAllocation (path : String) : Parser (AllocationNode) := do
       pure (some value, some (AllocationData.memory value))
     | .function => pure (none, some (.function ⟨← required instance_id "instance_id"⟩))
     | .static => do
+      let definitionPath ← required def_path "def_path"
+      if definitionPath.isEmpty then fail s!"{path}.def_path: static allocation is missing its definition path"
       unless (global_info.map (·.foreignItem)).getD false || initializer.isSome do
         fail s!"{path}.initializer: non-foreign static is missing its initializer image"
-      pure (none, some (.static ⟨global_info, ← required def_id "def_id", ← required def_path "def_path", ← required thread_local "thread_local", initializer⟩))
+      pure (none, some (.static ⟨global_info, ← required def_id "def_id", definitionPath, ← required thread_local "thread_local", initializer⟩))
     | .vtable => pure (none, some (.vtable ⟨principal_predicate, ← required type "type", size_bytes, align_bytes,
         ← required predicates "predicates", ← required entries "entries"⟩))
     | .typeId => pure (none, some (.typeId (← required type "type")))
@@ -827,12 +829,14 @@ def parseInstance (path : String) : Parser (InstanceNode) := do
     | "virtual_dispatch_target" => pure .virtualDispatchTarget
     | "identity_only" => pure .identityOnly
     | other => fail s!"{path}.kind: unrecognized instance kind `{other}`"
-  return {
+  let node : InstanceNode := {
     instanceKind := instance_kind, genericArgs := generic_args, id := instance_id, kind := kind,
     defPath := def_path, definitionId := def_id,
     bodyId := body, promotedBodies := promoted_bodies, dispatchSlot := dispatch_slot,
     bodyStatus := body_status, virtualIdentity := virtual_identity, foreignItem := foreign_item,
     symbolName := symbol_name, fallbackInstance := fallback_instance}
+  liftExcept (LocalValidation.validateInstance node)
+  pure node
 
 private structure ParseArgumentExtensionFields where
   kind : Option (String) := none

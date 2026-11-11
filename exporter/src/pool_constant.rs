@@ -11,6 +11,8 @@ pub(crate) enum Value {
         #[serde(rename = "type")]
         ty: u64,
         bits_unsigned: String,
+        // The exact layout size passed to rustc Scalar::to_bits.
+        size_bytes: u64,
     },
     SliceAllocation {
         #[serde(rename = "type")]
@@ -61,6 +63,19 @@ pub(crate) struct Operand {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn scalar_serialization_keeps_compiler_byte_width() {
+        let value = Value::Scalar {
+            ty: 7,
+            bits_unsigned: u128::MAX.to_string(),
+            size_bytes: 16,
+        };
+        assert_eq!(
+            serde_json::to_value(value).unwrap(),
+            json!({"kind":"scalar","type":7,"bits_unsigned":"340282366920938463463374607431768211455","size_bytes":16})
+        );
+    }
 
     #[test]
     fn pointer_scalar_serialization_preserves_provenance_and_flags() {

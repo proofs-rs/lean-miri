@@ -31,7 +31,7 @@ The large TB case checks the final write to a Frozen tag after a parent read.
 Saved gzip files contain the exact bytes of genuine compiler exports. They are
 retained as fixed test inputs depending on raw IDs, prepared query order and
 same-TyCtxt references. The separately maintained eval_core unit fixtures are
-also genuine schema-5 exports regenerated from their adjacent Rust sources.
+also genuine schema-6 exports regenerated from their adjacent Rust sources.
 `SHA256SUMS` and sidecar length/FNV check integrity. Old absolute paths in sidecars
 and snapshots are provenance strings from reference generation; execution does
 not read files at those locations. Each Rust input is adjacent with the same

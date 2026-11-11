@@ -59,6 +59,22 @@ def arrayIndexed (parser : Nat → Parser α) : Parser (Array α) := do
   skipChar '['; ws
   if (← peek!) == ']' then skip; pure #[] else indexedItems parser #[]
 
+/-- Parse an array with an accumulator local to that array, for checks such as
+identity uniqueness against earlier rows. The accumulator is discarded at its end. -/
+private partial def stateItems (step : σ → Nat → Parser (α × σ))
+    (state : σ) (values : Array α) : Parser (Array α × σ) := do
+  let (value, state) ← step state values.size
+  ws
+  match ← any with
+  | ']' => pure (values.push value, state)
+  | ',' => ws; stateItems step state (values.push value)
+  | _ => fail "expected ',' or ']'"
+
+def arrayWithState (initial : σ) (step : σ → Nat → Parser (α × σ)) : Parser (Array α) := do
+  skipChar '['; ws
+  if (← peek!) == ']' then skip; pure #[]
+  else return (← stateItems step initial #[]).1
+
 def array (parser : Parser α) : Parser (Array α) := do
   skipChar '['; ws
   if (← peek!) == ']' then skip; pure #[] else arrayItems parser #[]
