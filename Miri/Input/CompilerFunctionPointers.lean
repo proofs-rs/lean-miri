@@ -6,10 +6,6 @@ import Miri.Interpreter.FunctionPointers
 identity bridge. Exported compiler function reservations use CTFE_ALLOC_SALT=0. -/
 namespace Miri.Input.CompilerFunctionPointers
 open Lean Miri.Memory Miri.Interpreter
-structure Prepared where
-  calls : CompilerCallPipeline.Prepared
-  inlineAttributes : Array (CallInstance × Bool)
-
 private abbrev FunctionKeyIndex := Std.HashMap (Nat × Nat) (Array Nat)
 private abbrev AllocIdIndex := Std.HashMap UInt64 Bool
 abbrev InlineIndex := Std.HashMap Nat (Array (CallInstance × Bool))
@@ -43,13 +39,10 @@ structure InlineLookup where
   private mk ::
   private index : InlineIndex
 
-def InlineLookup.prepare (prepared : Prepared) : InlineLookup := Id.run do
-  let rows := prepared.inlineAttributes
-  let mut index : InlineIndex := {}
-  for entry in rows do
-    let key := entry.1
-    index := index.insert key ((index[key]?).getD #[] |>.push entry)
-  return ⟨index⟩
+/-- Compilation-local metadata, shared by every execution configuration. -/
+structure Prepared where
+  calls : CompilerCallPipeline.Prepared
+  inlineLookup : InlineLookup
 
 def inlineNeverUsing (lookup : InlineLookup) (callee : CallInstance) :
     Option Bool := Id.run do
@@ -60,7 +53,6 @@ def inlineNeverUsing (lookup : InlineLookup) (callee : CallInstance) :
 def prepare (calls : CompilerCallPipeline.Prepared) : Except String Prepared := do
   let records := calls.calls.program.input.queries.runtime.instances
   let ctx := LowerContext.ofDocument calls.calls.program.input
-  let mut entries := #[]
   let mut indexed : InlineIndex := {}
   for record in records do
     let callee := record.instanceId
@@ -71,9 +63,10 @@ def prepare (calls : CompilerCallPipeline.Prepared) : Except String Prepared := 
     if let some (_,old) := bucket.find? (fun e : CallInstance × Bool => e.1 == callee) then
       unless old == never do throw "conflicting exact full-instance inline attribute"
     else
-      entries := entries.push (callee,never)
       indexed := indexed.insert key (bucket.push (callee,never))
-  return ⟨calls,entries⟩
+  -- Retain the index constructed while validating the rows. Hook assembly only
+  -- captures this immutable value; it never traverses the compiler catalog.
+  return ⟨calls,⟨indexed⟩⟩
 
 private def lift (result : Except String A) : MachineHooks.M K User A :=
   match result with
@@ -82,12 +75,11 @@ private def lift (result : Except String A) : MachineHooks.M K User A :=
 
 def hooks (p : Prepared) (image : AllocationImage.Imported)
     (base : FunctionPointers.Hooks K User Other) : FunctionPointers.Hooks K User Other :=
-  let inlineLookup := InlineLookup.prepare p
   {base with
     instanceArgs := fun inst => lift (CompilerInstance.argsOf
       p.calls.calls.program.input.instances inst)
     inlineNever := fun callee => lift do
-      let some never := inlineNeverUsing inlineLookup callee
+      let some never := inlineNeverUsing p.inlineLookup callee
         | throw "exact full-instance inline attribute absent"
       pure never
     importedFunction := fun id => do

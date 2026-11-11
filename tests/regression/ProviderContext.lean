@@ -46,6 +46,48 @@ private def checkRuntime (runtime : RuntimeMetadata) (program : LoweredProgram) 
     check (node.id == source.id && node.layoutId == source.layoutId && node.shapeKind == source.shapeKind)
       "runtime type lookup differs from its program's compiler type definition"
 
+private def checkInlineLookup (prepared : CompilerProviders.Prepared) : IO Unit := do
+  let pointers := prepared.pointers
+  let records := pointers.calls.calls.program.input.queries.runtime.instances
+  for row in records do
+    check (CompilerFunctionPointers.inlineNeverUsing pointers.inlineLookup row.instanceId ==
+      some row.inlineNever) "prepared inline lookup differs from source row"
+  let missing := pointers.calls.calls.program.input.instances.size
+  check (CompilerFunctionPointers.inlineNeverUsing pointers.inlineLookup missing == none)
+    "prepared inline lookup accepts absent instance"
+  let some row := records[0]?
+    | throw (IO.userError "inline lookup fixture lacks runtime instances")
+  do
+    let replaceRecords := fun rows =>
+      let program := pointers.calls.calls.program
+      let input := program.input
+      let input := {input with queries := {input.queries with runtime :=
+        {input.queries.runtime with instances := rows}}}
+      {pointers.calls with calls := {pointers.calls.calls with program := {program with input}}}
+    let empty ← must (CompilerFunctionPointers.prepare (replaceRecords #[]))
+    check (CompilerFunctionPointers.inlineNeverUsing empty.inlineLookup row.instanceId == none)
+      "inline lookup invents missing metadata for a valid instance"
+    for value in [false, true] do
+      let isolated ← must (CompilerFunctionPointers.prepare
+        (replaceRecords #[{row with inlineNever := value}]))
+      check (CompilerFunctionPointers.inlineNeverUsing isolated.inlineLookup row.instanceId == some value)
+        "inline lookup reused metadata from another preparation"
+      check (CompilerFunctionPointers.inlineNeverUsing pointers.inlineLookup row.instanceId ==
+        some row.inlineNever) "independent inline preparation mutated original lookup"
+    let duplicate ← must (CompilerFunctionPointers.prepare (replaceRecords (records.push row)))
+    check (CompilerFunctionPointers.inlineNeverUsing duplicate.inlineLookup row.instanceId ==
+      some row.inlineNever) "equal duplicate inline attribute changed lookup"
+    match CompilerFunctionPointers.prepare
+        (replaceRecords (records.push {row with inlineNever := !row.inlineNever})) with
+    | .error reason =>
+      check (reason == "conflicting exact full-instance inline attribute")
+        "conflicting inline attribute changed error"
+    | .ok _ => throw (IO.userError "conflicting inline attribute accepted")
+    let absent := {row with instanceId := missing}
+    match CompilerFunctionPointers.prepare (replaceRecords (records.push absent)) with
+    | .error _ => pure ()
+    | .ok _ => throw (IO.userError "inline attribute for absent source instance accepted")
+
 def main (args : List String) : IO Unit := do
   let [firstPath, secondPath] := args
     | throw (IO.userError "usage: ProviderContextTests <root-u32> <control-flow>")
@@ -55,6 +97,8 @@ def main (args : List String) : IO Unit := do
   let secondProgram ← must (lowerProgram second.document)
   let prepared ← must (CompilerProviders.prepare firstProgram)
   let secondPrepared ← must (CompilerProviders.prepare secondProgram)
+  checkInlineLookup prepared
+  checkInlineLookup secondPrepared
   checkPools firstProgram prepared
   checkPools secondProgram secondPrepared
   checkContext prepared.loweringContext prepared.program

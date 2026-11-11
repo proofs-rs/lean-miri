@@ -23,7 +23,6 @@ def functions (p : CompilerProviders.Prepared) (image : AllocationImage.Imported
     (pointers : PointerMachine.Hooks MiriMemoryKind
       (ValidityMachine.Control (Stored Os R P H D O Aff B Host))) :
     FunctionPointers.Hooks MiriMemoryKind (User Os R P H D O Aff B Host) O := Id.run do
-  let inlineLookup := CompilerFunctionPointers.InlineLookup.prepare p.pointers
   return {
     registry := fun user => user.payload.payload.user.functions
     putRegistry := fun user functions => {user with payload := {user.payload with payload :=
@@ -31,7 +30,7 @@ def functions (p : CompilerProviders.Prepared) (image : AllocationImage.Imported
     instanceArgs := fun inst => lift (CompilerInstance.argsOf p.loweringContext.instances inst)
     crossCrateInlineAlways := crossCrateInlineAlways
     inlineNever := fun callee => lift do
-      let some never := CompilerFunctionPointers.inlineNeverUsing inlineLookup callee
+      let some never := CompilerFunctionPointers.inlineNeverUsing p.pointers.inlineLookup callee
         | throw "exact full-instance inline attribute absent"
       pure never
     chooseSalt := do
