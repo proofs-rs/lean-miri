@@ -57,7 +57,7 @@ flags. Arbitrary initialization and pointer provenance are imported independentl
 no pointer-containing byte range is silently cleared or normalized. -/
 def decode (target : RuntimeTargetDataLayout) (memory : MemoryState P E K)
     (source : AllocationMemory) : Result (Allocation CtfeProvenance Unit) := do
-  let raw ← bytes source.bytesHex
+  let raw ← source.bytesHex.checkedBytes
   unless raw.size == source.sizeBytes do throw "allocation byte size mismatch"
   let alignment ← checked (RuntimeMetadata.alignment source.alignBytes) toString
   let finalMutability ← mutability source.mutability

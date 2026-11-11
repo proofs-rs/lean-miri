@@ -20,7 +20,8 @@ def main (args : List String) : IO Unit := do
   let prov ← must ((CtfeProvenance.fromAllocId id).mapError reprStr)
   let encoded := if target.base.endian == .little then "0600000000000000" else "0000000000000006"
   let relocation : Relocation := ⟨0, 77, encoded, true, true, prov.asImmutable⟩
-  let source : AllocationMemory := ⟨8, 8, .immutable, encoded, #[⟨false, 0, 8⟩], #[relocation]⟩
+  let encodedBytes : Array UInt8 := if target.base.endian == .little then #[6,0,0,0,0,0,0,0] else #[0,0,0,0,0,0,0,6]
+  let source : AllocationMemory := ⟨8, 8, .immutable, .image encodedBytes, #[⟨false, 0, 8⟩], #[relocation]⟩
   let allocation ← must (AllocationImage.decode target registered.memory source)
   check (allocation.mutability == .Not && allocation.provenanceMap.ptrs.size == 1) "raw import normalized immutable/uninitialized pointer state"
   let initialized ← must ((allocation.initializationMask.get .ZERO).mapError toString)

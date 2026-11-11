@@ -100,6 +100,94 @@ private def parseFiles : JsonReader.Parser (Array String) :=
     if seen.contains value then JsonReader.fail s!"$.files[{index}]: duplicate filename identity"
     pure (value, seen.insert value)
 
+private def parseByteImages : JsonReader.Parser (Array (AllocationBytes × String)) :=
+  JsonReader.arrayWithState ({} : Std.HashSet String) fun seen index => do
+    let hex ← JsonReader.string
+    unless canonicalLowerHex hex do JsonReader.fail s!"$.byte_images[{index}]: expected canonical lowercase hexadecimal"
+    if seen.contains hex then JsonReader.fail s!"$.byte_images[{index}]: duplicate exact byte image"
+    let bytes ← JsonReader.liftExcept (decodeAllocationHex hex)
+    pure ((.image bytes, hex), seen.insert hex)
+
+private def finishAllocations (images : Array AllocationBytes) (groups : Array (Array AllocationNode))
+    (pendingNodes : Array AllocationNode) :
+    Except String (Array AllocationNode) := do
+  let mut nodes := pendingNodes
+  let mut sources : Std.HashSet UInt64 := {}
+  let mut functions : Std.HashSet InstanceId := {}
+  for group in groups do
+    let some first := group[0]? | throw "$.allocations: empty allocation group"
+    if let some (.function value) := first.data then
+      if functions.contains value.instanceId then throw "$.allocations: duplicate exact function Instance group"
+      functions := functions.insert value.instanceId
+  let mut finalized := #[]
+  for node in nodes do
+    let path := s!"$.allocations[graph_id={node.id}]"
+    let some source := node.sourceAllocId | throw s!"{path}: missing source AllocId"
+    if source == 0 || sources.contains source then throw s!"{path}: invalid or duplicate source AllocId"
+    sources := sources.insert source
+    let node ← match node.data with
+    | some (.memory memory) =>
+      let memory ← resolveAllocationMemory images path memory
+      pure { node with memory := some memory, data := some (.memory memory) }
+    | some (.static value) =>
+      let initializer ← value.initializer.mapM (resolveAllocationMemory images (path ++ ".initializer"))
+      pure { node with data := some (.static { value with initializer }) }
+    | _ => pure node
+    finalized := finalized.push node
+  nodes := finalized
+  for (node, index) in nodes.toList.zipIdx do
+    unless node.id == index do throw s!"$.allocations: expected graph ID {index}, got {node.id}"
+  pure nodes
+
+private def finishBodies (images : Array AllocationBytes) (bodies : Array Body) : Except String (Array Body) :=
+  bodies.mapM fun body => do
+    unless body.nodeFacts.any (fun block => block.any (fun facts => !facts.threadLocals.isEmpty)) do
+      return body
+    let nodeFacts ← body.nodeFacts.mapM fun block => block.mapM fun facts => do
+      if facts.threadLocals.isEmpty then return facts
+      let threadLocals ← facts.threadLocals.mapM fun declaration => do
+        let initializer ← declaration.initializer.mapM (resolveAllocationMemory images "$thread_local.initializer")
+        pure { declaration with initializer }
+      pure { facts with threadLocals }
+    pure { body with nodeFacts }
+
+private def finishWorld (nodes : Array AllocationNode) (hexByGraph : Array (Option String))
+    (pending : PendingCompilerAllocIdWorld) : Except String CompilerAllocIdWorld := do
+  let mut bySource : Std.HashMap UInt64 AllocationNode := {}
+  for node in nodes do
+    let some source := node.sourceAllocId | throw "$.compiler_alloc_id_world: missing source identity"
+    bySource := bySource.insert source node
+  let mut rawPool := #[]
+  for (row, index) in pending.rawPool.toList.zipIdx do
+    let source := UInt64.ofNat (index + 1)
+    match row with
+    | some exception =>
+      if bySource.contains source then throw "$.compiler_alloc_id_world.raw_pool: exceptional row has a serialized source allocation"
+      rawPool := rawPool.push exception
+    | none =>
+      let some node := bySource[source]? | throw "$.compiler_alloc_id_world.raw_pool: null row has no serialized source allocation"
+      let kind := match node.kind with
+        | .memory => SourceAllocIdKind.memory
+        | .function => .function
+        | .static => .static
+        | .vtable => .vtable
+        | .typeId => .typeId
+      rawPool := rawPool.push { sourceAllocId := source, kind, status := .serialized, allocationId := some node.id }
+  let dedupCatalog ← pending.dedupCatalog.mapM fun row => do
+    let some key := nodes[row.keyAllocationId]? | throw "$.compiler_alloc_id_world.dedup_catalog: key allocation is absent"
+    let byteImageHex ← if row.keyKind == .bytes then do
+        let some (.memory _) := key.data | throw "$.compiler_alloc_id_world.dedup_catalog: byte key is not memory"
+        let some hex := (hexByGraph[row.keyAllocationId]?).bind id | throw "$.compiler_alloc_id_world.dedup_catalog: byte key lacks exact pooled image"
+        pure (some hex)
+      else pure none
+    let salts ← row.salts.mapIdxM fun salt graph => do
+      let some node := nodes[graph]? | throw "$.compiler_alloc_id_world.dedup_catalog.salts: allocation is absent"
+      let some source := node.sourceAllocId | throw "$.compiler_alloc_id_world.dedup_catalog.salts: source identity is absent"
+      pure (⟨salt, graph, source⟩ : SourceAllocIdSaltResult)
+    pure (⟨row.keyKind, row.keyAllocationId, byteImageHex, salts⟩ : SourceAllocIdDedupRow)
+  pure ⟨pending.lastReservedSourceAllocId, pending.nextSourceAllocId, pending.finalSentinelSourceAllocId,
+    rawPool, dedupCatalog, pending.completeKeyFamilies, pending.nonExhaustiveKeyFamilies⟩
+
 private structure DocumentFields where
   schema : Option (String) := none
   schemaVersion : Option (Nat) := none
@@ -113,13 +201,14 @@ private structure DocumentFields where
   layouts : Option (Array Layout) := none
   functionAbis : Option (Array FunctionAbi) := none
   types : Option (Array TypeNode) := none
-  allocations : Option (Array AllocationNode) := none
+  byteImages : Option (Array (AllocationBytes × String)) := none
+  allocations : Option (Array (Array AllocationNode)) := none
   instances : Option (Array InstanceNode) := none
   compilerAbiLayoutSchema : Option (String) := none
   bodies : Option (Array Body) := none
   bodyReferences : Array DecodeMIR.References := #[]
   bodyRoots : Option (Array BodyRoot) := none
-  compilerAllocIdWorld : Option CompilerAllocIdWorld := none
+  compilerAllocIdWorld : Option PendingCompilerAllocIdWorld := none
   selectedScope : Option SelectedScope := none
   runtimeTargetDataLayout : Option TargetDataLayoutEvidence := none
   queries : CatalogDecoder.QueryFields := {}
@@ -139,7 +228,8 @@ private def parseDocumentFields : JsonReader.Parser ParsedDocument := do
     | "layouts" => return {d with layouts := some (← JsonReader.arrayIndexed (fun index => parseLayout s!"$.layouts[{index}]"))}
     | "fn_abis" => return {d with functionAbis := some (← JsonReader.arrayIndexed (fun index => parseFunctionAbi s!"$.fn_abis[{index}]"))}
     | "types" => return {d with types := some (← JsonReader.arrayIndexed (fun index => denseRow "type IDs" index (·.id) (parseTypeNode s!"$.types[{index}]")))}
-    | "allocations" => return {d with allocations := some (← JsonReader.arrayIndexed (fun index => denseRow "allocation IDs" index (·.id) (parseAllocation s!"$.allocations[{index}]")))}
+    | "byte_images" => return {d with byteImages := some (← parseByteImages)}
+    | "allocations" => return {d with allocations := some (← JsonReader.arrayIndexed (fun index => parseAllocation s!"$.allocations[{index}]"))}
     | "instances" => return {d with instances := some (← parseInstances)}
     | "compiler_abi_layout_schema" => return {d with compilerAbiLayoutSchema := some (← JsonReader.string)}
     | "bodies" =>
@@ -157,6 +247,22 @@ private def parseDocumentFields : JsonReader.Parser ParsedDocument := do
   let schemaVersion ← JsonReader.required d.schemaVersion "schema_version"
   let (producer, producerSettings) ← JsonReader.required d.producer "producer"
   let compilerAbiLayoutSchema ← JsonReader.required d.compilerAbiLayoutSchema "compiler_abi_layout_schema"
+  let byteImages ← JsonReader.required d.byteImages "byte_images"
+  let groups ← JsonReader.required d.allocations "allocations"
+  let pendingNodes := groups.flatten.qsort (fun a b => a.id < b.id)
+  let hexByGraph ← pendingNodes.mapM fun node => do
+    match node.data with
+    | some (.memory memory) =>
+      match memory.bytesHex with
+      | .reference id =>
+        let some (_, hex) := byteImages[id]? | JsonReader.fail s!"$.allocations.byte_image_id: out of bounds byte image {id}"
+        pure (some hex)
+      | _ => JsonReader.fail "$.allocations: expected pooled bytes"
+    | _ => pure none
+  let images := byteImages.map (·.1)
+  let allocations ← JsonReader.liftExcept (finishAllocations images groups pendingNodes)
+  let bodies ← JsonReader.liftExcept (finishBodies images (← JsonReader.required d.bodies "bodies"))
+  let compilerAllocIdWorld ← JsonReader.liftExcept (d.compilerAllocIdWorld.mapM (finishWorld allocations hexByGraph))
   let value : ImportDocument := {
     producer, producerSettings
     predicates := ← JsonReader.required d.predicates "predicates"
@@ -168,12 +274,12 @@ private def parseDocumentFields : JsonReader.Parser ParsedDocument := do
     layouts := ← JsonReader.required d.layouts "layouts"
     functionAbis := ← JsonReader.required d.functionAbis "fn_abis"
     types := ← JsonReader.required d.types "types"
-    allocations := ← JsonReader.required d.allocations "allocations"
+    allocations := allocations
     instances := ← JsonReader.required d.instances "instances"
     compilerAbiLayoutSchema := some compilerAbiLayoutSchema
-    bodies := ← JsonReader.required d.bodies "bodies"
+    bodies := bodies
     bodyRoots := ← JsonReader.required d.bodyRoots "body_roots"
-    compilerAllocIdWorld := d.compilerAllocIdWorld
+    compilerAllocIdWorld := compilerAllocIdWorld
     selectedScope := d.selectedScope
     runtimeTargetDataLayout := d.runtimeTargetDataLayout
     queries := ← CatalogDecoder.finish d.queries
@@ -256,7 +362,10 @@ def decodeFile (path : System.FilePath) : IO (Except String ExecutionInput) := d
     pure (decodeJson (← IO.FS.readFile path))
   catch error => pure (.error s!"could not read {path}: {error}")
 
-def decodeAllocationMemoryEvidence (text : String) : Except String AllocationMemory :=
-  JsonReader.run (parseAllocationMemory "$allocation") text
+def decodeAllocationMemoryEvidence (text : String) (images : Array String) : Except String AllocationMemory := do
+  let images ← images.mapM fun hex => do
+    unless canonicalLowerHex hex do throw "allocation byte image is not canonical lowercase hexadecimal"
+    pure (AllocationBytes.image (← decodeAllocationHex hex))
+  resolveAllocationMemory images "$allocation" (← JsonReader.run (parseAllocationMemory "$allocation") text)
 
 end Miri.Input

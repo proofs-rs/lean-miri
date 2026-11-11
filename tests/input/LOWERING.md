@@ -13,6 +13,7 @@ It requires the pinned Miri sysroot; generated exports use temporary files.
 | Test | Input and coverage |
 | --- | --- |
 | `LowerMIRTests.lean` | Compiler `add_one` export: arithmetic/assertions, source metadata and rejection of malformed fields or references |
+| `CompactAllocationTests.lean` | Document-local byte sharing with distinct runtime identities, cyclic provenance, noncontiguous source salt results, TLS image bounds and malformed allocation-world evidence |
 | `LowerMIRConstructorsTests.lean` | Wire fixtures decoded directly to all top-level MIR constructors and assembly operand forms; identity, generic constants and recursive call references |
 | `LowerProgramTests.lean` | `mir_features.rs` and `mir_lowering.rs` exports: roots, instances, promoted bodies, shared tables and compiler metadata |
 | `DefinitionLookup2026.lean` | Kernel theorem equating indexed lookup with list lookup, including duplicate and missing identities |

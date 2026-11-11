@@ -50,12 +50,14 @@ def main : IO Unit := do
   let allocations ← must ((source.getObjVal? "allocations").bind Json.getArr?)
   let badReference ← must (Json.parse "{\"storage_offset_bytes\":0,\"target\":99999,\"target_offset_encoded_bytes\":\"0000000000000000\",\"immutable\":false,\"shared_ref\":false}")
   let withRelocation ← must (set allocations[0]! "size_bytes" (toJson (8 : Nat)))
-  let withRelocation ← must (set withRelocation "bytes_hex" (.str "0000000000000000"))
+  let withRelocation ← must (set withRelocation "byte_image_id" (toJson (1 : Nat)))
+  let relocationSource ← must (set source "byte_images" (.arr #[.str "00", .str "0000000000000000"]))
   let initialized ← must (Json.parse "{\"start_bytes\":0,\"end_bytes_exclusive\":8,\"state\":\"initialized\"}")
   let withRelocation ← must (set withRelocation "initialization_ranges" (.arr #[initialized]))
   let withRelocation ← must (set withRelocation "relocations" (.arr #[badReference]))
-  reject (← must (set source "allocations" (.arr (allocations.set! 0 withRelocation)))) "out of bounds allocation ID"
+  reject (← must (set relocationSource "allocations" (.arr (allocations.set! 0 withRelocation)))) "out of bounds allocation ID"
   let second ← must (set allocations[0]! "allocation_id" (toJson (1 : Nat)))
+  let second ← must (set second "source_alloc_id" (toJson (2 : Nat)))
   let duplicated ← must (set source "allocations" (.arr (allocations.push second)))
   let imported ← must (decodeJson duplicated.compress)
   let some secondAllocation := imported.document.allocations[1]? | throw (IO.userError "missing second allocation")

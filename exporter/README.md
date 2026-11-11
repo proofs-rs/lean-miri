@@ -51,7 +51,7 @@ exact arguments cannot be fingerprinted.
 
 ## Input contract
 
-The root schema is `lean-miri-rustc-mir` version 6. Evaluated integer scalars carry
+The root schema is `lean-miri-rustc-mir` version 7. Evaluated integer scalars carry
 `bits_unsigned` and the compiler layout's `size_bytes`, so consumers can construct
 the machine scalar before reading the type and layout tables. Zero-sized and
 pointer constants retain their separate representations. Compiler values have
@@ -66,17 +66,30 @@ separate tables with document-local, dense, zero-based IDs:
 | `allocations` | Compiler `AllocId`, independently of memory contents |
 | `spans` | Compiler `Span`, including its hygiene context |
 | `files` | Exact filename spelling (string values, shared across spans and backtraces) |
+| `byte_images` | Exact immutable byte vector (shared storage, independent allocation identities) |
 | `definitions` | Compiler `DefId` (crate and definition index) |
 | `type_constants` | Compiler `Const`, including its type and constructor |
 | `predicates` | Full bound existential predicate; comparison rank is separate |
 | `bodies` | Instance, promoted index and source/query mode |
 
-The Rust collector uses one `Pool<K, D>` implementation for the ten compiler identity tables. The additional `files` table interns strings.
+The Rust collector uses one `Pool<K, D>` implementation for the ten compiler identity tables. The additional `files` and `byte_images` tables intern exact strings and byte vectors.
 Each compiler key `K` owns its reserved index and a single concrete semantic
 value `D`, such as `pool_layout::Layout`, `pool_type::Type` or `pool_body::Body`.
 Nested fields are Rust records, enums, optional values and typed references;
 collection does not store JSON trees in these pools. Serialization converts the
 completed values to JSON when assembling the output document.
+
+The allocation wire array groups function allocations with the same Instance into
+one payload and an `identities` array of `[graph_id, source_alloc_id]` pairs.
+Other allocation kinds retain their individual identities. Every memory payload,
+including static and thread-local initializers, stores a `byte_image_id`; size,
+alignment, initialization, relocations and provenance flags remain independent.
+Prepared-world `raw_pool` positions imply source ID `index + 1`: null slots join
+their unique serialized allocation, while opaque and dangling globals retain
+explicit exceptional rows. Dedup salt arrays carry graph IDs in salt order;
+source IDs and byte keys come from those allocations. All 32 outcomes remain
+required for function, vtable and byte keys. Earlier wire versions require fresh
+export rather than compatibility conversion.
 
 Discovery retains compiler query results until the reachable graph closes.
 Append-only request domains have consumer cursors; pair consumers visit new sites

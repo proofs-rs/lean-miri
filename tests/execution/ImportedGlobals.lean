@@ -762,7 +762,7 @@ def main (args : List String) : IO Unit := do
     | some (.static source) => { node with data := some (.static { source with
         initializer := match source.initializer with
           | none => none
-          | some initializer => some { initializer with bytesHex := "ff" } }) }
+          | some initializer => some { initializer with bytesHex := .image #[255] } }) }
     | _ => node }
   check (!(initialState invalidData root 0).isOk) "invalid initializer bytes accepted"
   let uninitialized := { p with lowered.input.allocations := p.lowered.input.allocations.map fun node =>

@@ -75,12 +75,6 @@ def Fits {budget : Nat} : Plan budget → Tape → Prop
 structure Environment {budget : Nat} (plan : Plan budget) (tape : Tape) : Prop where
   fits : Fits plan tape
 
-/-- Remaining supplied inputs and generated quota contribute additively. -/
-def remaining (tape : Tape) : Nat := tape.inputs.size-tape.cursor +
-  match tape.policy with
-  | .strict => 0
-  | .boundedDiagnostic maximum _ | .boundedSeededDiagnostic maximum _ _ => maximum-tape.generatedChoices
-
 structure AccessLaws {S : Type} (access : Access S) : Prop where
   get_put : ∀ state tape, access.get (access.put state tape) = tape
   put_put : ∀ state first second, access.put (access.put state first) second = access.put state second

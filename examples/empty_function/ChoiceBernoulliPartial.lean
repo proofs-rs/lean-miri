@@ -16,7 +16,7 @@ private theorem demand_bernoulli_eq {S : Type} (access : Access S) (site : BoolS
       if tape.cursor > tape.inputs.size then
         match tape.policy with
         | .strict => pure ()
-        | .boundedDiagnostic _ _ | .boundedSeededDiagnostic _ _ _ =>
+        | .boundedDiagnostic _ _ | .boundedSeededDiagnostic _ _ _ | .diagnostic | .seededDiagnostic _ =>
           throw (.invalidProgram "diagnostic choice cursor exceeds supplied input prefix")
       if let some value := tape.inputs[tape.cursor]? then return value
       match tape.policy with
@@ -33,6 +33,19 @@ private theorem demand_bernoulli_eq {S : Type} (access : Access S) (site : BoolS
         if tape.generatedChoices >= maxChoices then
           throw (.resourceExhaustion "bounded seeded diagnostic choice count exhausted")
         let (value,nextState) ← seededDiagnosticInputSource (.bernoulli site bits) maxByteLength seed
+          tape.diagnosticRngState (tape.generatedChoices == 0)
+        modify fun state =>
+          let current := access.get state
+          access.put state {current with inputs := current.inputs.push value, generatedChoices := current.generatedChoices+1, diagnosticRngState := nextState}
+        return value
+      | .diagnostic => do
+        let value ← diagnosticInputSource (.bernoulli site bits) 0
+        modify fun state =>
+          let current := access.get state
+          access.put state {current with inputs := current.inputs.push value, generatedChoices := current.generatedChoices+1}
+        return value
+      | .seededDiagnostic seed => do
+        let (value,nextState) ← seededDiagnosticInputSource (.bernoulli site bits) 0 seed
           tape.diagnosticRngState (tape.generatedChoices == 0)
         modify fun state =>
           let current := access.get state
@@ -160,6 +173,45 @@ theorem demand_bernoulli {S : Type} (access : Access S) (state : S)
         by_cases past : (access.get state).cursor > (access.get state).inputs.size <;>
         by_cases full : (access.get state).generatedChoices ≥ quota <;>
         simp [demand_bernoulli_eq,policy,lookup,past,full,outcome,DemandPost,
+          get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,
+          throw,throwThe,MonadExceptOf.throw,EStateM.throw,modify,modifyGet,MonadStateOf.modifyGet,EStateM.modifyGet,
+          AddressErrorClass.invariant,AddressErrorClass.resource] <;> exact Or.inr ⟨_,rfl⟩
+  | diagnostic =>
+    have raw := diagnostic state site bits 0
+    cases outcome : diagnosticInputSource (.bernoulli site bits) 0 state with
+    | error error failed =>
+      simp only [outcome,RawPost] at raw
+      cases lookup : (access.get state).inputs[(access.get state).cursor]? <;>
+        by_cases past : (access.get state).cursor > (access.get state).inputs.size <;>
+        simp [demand_bernoulli_eq,policy,lookup,past,outcome,DemandPost,
+          get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,
+          throw,throwThe,MonadExceptOf.throw,EStateM.throw,AddressErrorClass.invariant,AddressErrorClass.resource,raw]
+    | ok input middle =>
+      simp only [outcome,RawPost] at raw
+      subst middle
+      cases lookup : (access.get state).inputs[(access.get state).cursor]? <;>
+        by_cases past : (access.get state).cursor > (access.get state).inputs.size <;>
+        simp [demand_bernoulli_eq,policy,lookup,past,outcome,DemandPost,
+          get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,
+          throw,throwThe,MonadExceptOf.throw,EStateM.throw,modify,modifyGet,MonadStateOf.modifyGet,EStateM.modifyGet,
+          AddressErrorClass.invariant,AddressErrorClass.resource] <;> exact Or.inr ⟨_,rfl⟩
+  | seededDiagnostic seed =>
+    have raw := seeded state site bits 0 seed (access.get state).diagnosticRngState ((access.get state).generatedChoices == 0)
+    cases outcome : seededDiagnosticInputSource (.bernoulli site bits) 0 seed
+        (access.get state).diagnosticRngState ((access.get state).generatedChoices == 0) state with
+    | error error failed =>
+      simp only [outcome,RawPost] at raw
+      cases lookup : (access.get state).inputs[(access.get state).cursor]? <;>
+        by_cases past : (access.get state).cursor > (access.get state).inputs.size <;>
+        simp [demand_bernoulli_eq,policy,lookup,past,outcome,DemandPost,
+          get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,
+          throw,throwThe,MonadExceptOf.throw,EStateM.throw,AddressErrorClass.invariant,AddressErrorClass.resource,raw]
+    | ok input middle =>
+      simp only [outcome,RawPost] at raw
+      subst middle
+      cases lookup : (access.get state).inputs[(access.get state).cursor]? <;>
+        by_cases past : (access.get state).cursor > (access.get state).inputs.size <;>
+        simp [demand_bernoulli_eq,policy,lookup,past,outcome,DemandPost,
           get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,
           throw,throwThe,MonadExceptOf.throw,EStateM.throw,modify,modifyGet,MonadStateOf.modifyGet,EStateM.modifyGet,
           AddressErrorClass.invariant,AddressErrorClass.resource] <;> exact Or.inr ⟨_,rfl⟩

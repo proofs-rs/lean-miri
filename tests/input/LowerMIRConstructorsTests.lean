@@ -24,7 +24,7 @@ private def tlsGlobalInfo : String := obj [
   ("is_foreign_item", b false), ("thread_local", b true)]
 private def tlsInitializer : String := obj [("allocation", obj [
   ("size_bytes", n 0), ("align_bytes", n 1), ("mutability", s "immutable"),
-  ("bytes_hex", s ""), ("initialization_ranges", arr []), ("relocations", arr [])])]
+  ("byte_image_id", n 0), ("initialization_ranges", arr []), ("relocations", arr [])])]
 private def constant (ty span : Nat) : String := obj [
   ("type", n ty), ("user_type_annotation", nil), ("span", n span),
   ("constant", tagged "evaluated_const" [("value", tagged "scalar" [("bits_unsigned", s "1"), ("size_bytes", n 1)])])]

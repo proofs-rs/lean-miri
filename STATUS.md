@@ -52,8 +52,12 @@ unimplemented and now stop export. This boundary does not establish compiler
 query closure or interpreter correspondence.
 
 Fifteen fixed connected inputs with their same-TyCtxt reference observations
-and three eval-core inputs are regenerated under the schema-6 resolved-body
-typed-pool contract. Span and backtrace filenames remain validated numeric IDs
+and three eval-core inputs are regenerated under the schema-7 resolved-body
+typed-pool contract. Allocation byte vectors share a document-local exact byte
+image pool; function payloads group identities by Instance. Graph IDs, raw source
+IDs, initialization and provenance remain independent. Prepared raw-pool slots
+and indexed salt results derive serialized facts from those allocation nodes.
+Span and backtrace filenames remain validated numeric IDs
 in a shared exact-string file table until diagnostics or backtrace APIs present
 them. Runtime-metadata checks export their
 Rust inputs afresh. Performance checks now obtain
@@ -63,8 +67,12 @@ flags and reviewed guest configuration; fixed assertions and choice tapes are
 preserved. This adds pinned toolchain/sysroot build cost and replaces saved
 allocation-history replay for those two cases. Their historical archives are
 not CI inputs.
-The 17-case Lean connected replay passes with freshly exported inputs and
-unchanged expected outcomes, including the DST and large Tree Borrows cases.
+The 17-case Lean connected replay passes under schema 7 with unchanged expected
+outcomes, including fresh same-TyCtxt references for the DST and large Tree
+Borrows cases. Decoder controls reject missing byte images, repeated identities,
+unmatched raw slots, incomplete salt arrays and unchecked foreign TLS
+initializers. A decoded shared-byte cyclic graph retains distinct runtime IDs,
+mutability, initialization and CTFE provenance flags.
 The full CI matrix remains unexecuted. These finite executions do not establish
 compiler query closure, interpreter correspondence or whole-machine safety.
 

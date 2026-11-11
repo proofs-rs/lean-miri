@@ -77,7 +77,7 @@ fn export_failure<T>(context: &str, details: impl std::fmt::Display) -> Result<T
 
 const EXPECTED_RUSTC_COMMIT: &str = "8144389c895da997dbdecaa635e41d6a50be6ffd";
 const MIRI_COMMIT: &str = "7fa591d7d4dd9af8154becbc8332f8096f8323b1";
-const ROOT_SCHEMA_VERSION: u64 = 6;
+const ROOT_SCHEMA_VERSION: u64 = 7;
 
 struct Options {
     output: PathBuf,
@@ -176,7 +176,8 @@ struct ExportDocument {
     fn_abis: Vec<pool_layout::FnAbi>,
     instances: Vec<pool_instance::Instance>,
     types: Vec<pool_type::Type>,
-    allocations: Vec<allocation_values::Allocation>,
+    byte_images: Vec<String>,
+    allocations: Vec<allocation_values::Entry>,
     predicates: Vec<allocation_values::Predicate>,
     #[serde(skip_serializing_if = "Option::is_none")]
     compiler_alloc_id_world: Option<allocator_world::World>,
@@ -272,6 +273,7 @@ struct ExportContext<'tcx> {
     runtime_type_query_demands: OrderedSet<rustc_middle::ty::Ty<'tcx>>,
     runtime_type_query_suppression: usize,
     type_nodes_in_progress: HashSet<rustc_middle::ty::Ty<'tcx>>,
+    byte_images: allocation_values::ByteImages,
     allocation_ids: Pool<AllocId, allocation_values::Allocation>,
     allocations_in_progress: HashSet<AllocId>,
     instance_ids: Pool<ty::Instance<'tcx>, pool_instance::Instance>,
@@ -1624,7 +1626,7 @@ impl ExportCallbacks {
             Some(allocator_world::capture(
                 tcx,
                 &mut export_context,
-                &selected_alloc_id_keys,
+                selected_alloc_id_keys,
             )?)
         } else {
             None
@@ -1686,7 +1688,8 @@ impl ExportCallbacks {
             fn_abis: export_context.fn_abis.finish("fn_abi_id")?,
             instances: export_context.instance_ids.finish("instance_id")?,
             types: export_context.type_ids.finish("type_id")?,
-            allocations: export_context.allocation_ids.finish("allocation_id")?,
+            byte_images: export_context.byte_images.finish(),
+            allocations: allocation_values::compact(export_context.allocation_ids.finish("allocation_id")?),
             predicates: export_context.predicate_ids.finish("predicate_id")?,
             compiler_alloc_id_world: allocator_world,
             selected_scope,
@@ -5433,7 +5436,7 @@ fn allocation_memory_payload<'tcx>(
     };
     Ok(allocation_values::Memory {
         size_bytes: allocation.size().bytes(), align_bytes: allocation.align.bytes(), mutability,
-        bytes_hex: bytes_hex(bytes), initialization_ranges: initialized_ranges, relocations,
+        byte_image_id: context.byte_images.intern(bytes), initialization_ranges: initialized_ranges, relocations,
     })
 }
 

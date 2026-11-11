@@ -16,7 +16,7 @@ private theorem demand_index_eq {S : Type} (access : Access S) (site : IndexSite
       if tape.cursor > tape.inputs.size then
         match tape.policy with
         | .strict => pure ()
-        | .boundedDiagnostic _ _ | .boundedSeededDiagnostic _ _ _ =>
+        | .boundedDiagnostic _ _ | .boundedSeededDiagnostic _ _ _ | .diagnostic | .seededDiagnostic _ =>
           throw (.invalidProgram "diagnostic choice cursor exceeds supplied input prefix")
       if let some value := tape.inputs[tape.cursor]? then return value
       match tape.policy with
@@ -33,6 +33,19 @@ private theorem demand_index_eq {S : Type} (access : Access S) (site : IndexSite
         if tape.generatedChoices >= maxChoices then
           throw (.resourceExhaustion "bounded seeded diagnostic choice count exhausted")
         let (value,nextState) ← seededDiagnosticInputSource (.index site count) maxByteLength seed
+          tape.diagnosticRngState (tape.generatedChoices == 0)
+        modify fun state =>
+          let current := access.get state
+          access.put state {current with inputs := current.inputs.push value, generatedChoices := current.generatedChoices+1, diagnosticRngState := nextState}
+        return value
+      | .diagnostic => do
+        let value ← diagnosticInputSource (.index site count) 0
+        modify fun state =>
+          let current := access.get state
+          access.put state {current with inputs := current.inputs.push value, generatedChoices := current.generatedChoices+1}
+        return value
+      | .seededDiagnostic seed => do
+        let (value,nextState) ← seededDiagnosticInputSource (.index site count) 0 seed
           tape.diagnosticRngState (tape.generatedChoices == 0)
         modify fun state =>
           let current := access.get state
