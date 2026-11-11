@@ -12,7 +12,7 @@ private def lift (value : Except String A) : EStateM StepError S A :=
 def make (p : CompilerCallPipeline.Prepared) : VirtualCalls.CompilerHooks S C :=
   let facts := p.symbols.facts
   CompilerVirtualFacts.scopeHooks p.scopes {
-    instanceArgs := fun inst => lift (CompilerInstance.argsOf facts.context.loweringContext facts.context.program.compilerTables inst)
+    instanceArgs := fun inst => lift (CompilerInstance.argsOf facts.context.loweringContext.instances inst)
     classifyReceiver := fun ty => lift (CompilerVirtualFacts.receiverKind facts.context ty)
     fieldLayout := fun layout index => lift ((facts.context.runtime.field layout index).mapError toString)
     structTailForCodegen := fun ty => lift (CompilerFacts.requiredType facts.context ty "metadata_tail")

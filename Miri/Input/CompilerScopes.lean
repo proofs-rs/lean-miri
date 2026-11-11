@@ -17,7 +17,7 @@ private def decodeEntry (ctx : LowerContext) (tables : CompilerTables) (scope : 
   match scope.inlined with
   | none => pure (⟨⟨none,scope.inlinedParent⟩,none⟩,tables)
   | some inlined =>
-    let _ ← CompilerInstance.source ctx inlined.instanceId
+    let _ ← CompilerInstance.source ctx.instances inlined.instanceId
     unless inlined.callsiteSpanId < tables.spans.size do throw "inline callsite span ID out of bounds"
     let span : MIR.SpanRef := ⟨inlined.callsiteSpanId⟩
     pure (⟨⟨some (inlined.instanceId,span),scope.inlinedParent⟩,some inlined.requiresCallerLocation⟩,tables)

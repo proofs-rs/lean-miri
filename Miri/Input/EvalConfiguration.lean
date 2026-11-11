@@ -28,7 +28,7 @@ def functions (p : CompilerProviders.Prepared) (image : AllocationImage.Imported
     registry := fun user => user.payload.payload.user.functions
     putRegistry := fun user functions => {user with payload := {user.payload with payload :=
       {user.payload.payload with user := {user.payload.payload.user with functions}}}}
-    instanceArgs := fun inst => lift (CompilerInstance.argsOf p.loweringContext p.program.compilerTables inst)
+    instanceArgs := fun inst => lift (CompilerInstance.argsOf p.loweringContext.instances inst)
     crossCrateInlineAlways := crossCrateInlineAlways
     inlineNever := fun callee => lift do
       let some never := CompilerFunctionPointers.inlineNeverUsing inlineLookup callee

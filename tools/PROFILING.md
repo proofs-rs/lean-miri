@@ -90,6 +90,22 @@ Unscoped exports also emit generic closure templates as independent roots and
 can fail readiness. Use one unchanged export across every paired trial; a fresh
 export of the same Rust source need not match a historical artifact's bytes.
 
+A smaller completed collection workload is
+`tests/repro/execution/vector-sort.rs`: it allocates 16 integers, sorts them,
+and checks an iterator-based weighted checksum:
+
+```bash
+LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1 bash tools/export-mir.sh \
+  --output scratch/vector-sort.json --root main -- \
+  tests/repro/execution/vector-sort.rs --crate-name vector_sort
+bash tools/run.sh scratch/vector-sort.json --profile
+```
+
+Use the same exported file for both binaries; source paths and compiler allocation
+identities can differ between fresh exports. Its successful outcome is
+`finalized_exit code=0`. Increasing the vector length can exceed the native
+harness's fixed 100,000 outer-iteration bound; `pending` remains an incomplete run.
+
 For hotspot attribution, `--profile` additionally reports complete scheduler
 iterations taking at least 10ms as `execution.iteration_N.*`. The label records
 the starting canonical body index as well as definition ID and MIR/unwind

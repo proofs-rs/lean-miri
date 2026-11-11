@@ -34,7 +34,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except Stri
   let mut buckets : Std.HashMap Nat (Array Nat) := {}
   for record in records do
     let callee := record.instanceId
-    let _ ← CompilerInstance.source ctx callee
+    let _ ← CompilerInstance.source ctx.instances callee
     let extra := record.extraArgumentTypes
     for id in extra do
       unless ctx.containsTypeId id do throw "extra ABI argument references missing compiler type"

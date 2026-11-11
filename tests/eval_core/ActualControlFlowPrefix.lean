@@ -163,8 +163,7 @@ private def runWithConfig (prepared : Input.CompilerProviders.Prepared)
 private def runPrepared (prepared : Input.CompilerProviders.Prepared) : Except String String := do
   let dummy ← Input.CompilerContextSpan.rootSpan prepared.program
   let definition ← prepared.program.rootDefinitionId 0
-  let rootInstance ← Input.CompilerInstance.item prepared.loweringContext
-    prepared.program.compilerTables definition #[]
+  let rootInstance ← Input.CompilerInstance.item prepared.loweringContext.instances definition #[]
   let body ← Input.CallResolution.loadedBodyOfInstance prepared.lifecycle.calls.calls rootInstance
   let imported := Input.CompilerGlobals.importGraph prepared.runtime.target prepared.program
     (MemoryState.empty : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind)

@@ -45,7 +45,7 @@ theorem target_features {p options config} (fields : Fields p options config)
 
 theorem not_closure {p options config} (fields : Fields p options config)
     (limits : ExecutionMachine.Limits) (fn : CallInstance) (definition : DefId) (abi : FnAbi TyId)
-    (kind : CompilerInstance.kindOf p.loweringContext p.program.compilerTables fn = .ok (.Item definition))
+    (kind : CompilerInstance.kindOf p.loweringContext.instances fn = .ok (.Item definition))
     (query : CompilerCallFacts.isClosureLike p.intrinsics fn = .ok false) :
     (ExecutionMachine.callHooks config limits).nonCapturingClosure () fn abi = pure false := by
   change ExecutionCallLeaves.nonCapturingClosure config.calls.compiler fn abi = _

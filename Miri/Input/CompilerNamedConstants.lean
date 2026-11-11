@@ -27,7 +27,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except Stri
     let name := record.name
     unless !(entries.any (·.name == name)) do throw "duplicate compiler named constant query"
     let sourceInstance := record.instanceId
-    let _ ← CompilerInstance.source ctx sourceInstance
+    let _ ← CompilerInstance.source ctx.instances sourceInstance
     let ty := record.typeId
     unless ctx.containsTypeId ty do throw "named constant references missing compiler type"
     let result : Value := ⟨sourceInstance, ty, record.value⟩

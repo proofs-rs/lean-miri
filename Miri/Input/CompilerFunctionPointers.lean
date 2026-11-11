@@ -64,7 +64,7 @@ def prepare (calls : CompilerCallPipeline.Prepared) : Except String Prepared := 
   let mut indexed : InlineIndex := {}
   for record in records do
     let callee := record.instanceId
-    let _ ← CompilerInstance.source ctx callee
+    let _ ← CompilerInstance.source ctx.instances callee
     let never := record.inlineNever
     let key := callee
     let bucket := (indexed[key]?).getD #[]
@@ -85,7 +85,7 @@ def hooks (p : Prepared) (image : AllocationImage.Imported)
   let inlineLookup := InlineLookup.prepare p
   {base with
     instanceArgs := fun inst => lift (CompilerInstance.argsOf
-      (LowerContext.ofDocument p.calls.calls.program.input) p.calls.calls.program.compilerTables inst)
+      p.calls.calls.program.input.instances inst)
     inlineNever := fun callee => lift do
       let some never := inlineNeverUsing inlineLookup callee
         | throw "exact full-instance inline attribute absent"
