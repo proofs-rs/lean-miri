@@ -93,7 +93,7 @@ Additional structural regressions are checked with
 `bash tools/check-structural-regressions.sh` (typechecking, kernel examples,
 #eval and executable assertions with pinned unit fixtures or no input). This is
 distinct from running supplemental guest harnesses that need fresh exports. The structural
-checker copies pinned schema-7 unit fixtures without changing their bytes and passes them to
+checker copies pinned schema-8 unit fixtures without changing their bytes and passes them to
 `LowerContext`, `ProviderContext` and `PrimitiveRebinding`, including their runtime
 source/cache and error-order assertions. These are not fresh producer comparisons.
 `tools/prepare-source-audit.py`
@@ -210,8 +210,8 @@ final `ImportDocument`; its completion bookkeeping is private and discarded.
 Pool IDs remain numeric and local to the input, with runtime bounds checks.
 Neither JSON ranges nor a generic value tree nor a second MIR spine is retained.
 
-Schema 7 stores allocation byte vectors once in the document-local `byte_images`
-array. Memory payloads retain independent size, alignment, mutability,
+Since schema 7, allocation byte vectors are stored once in the document-local
+`byte_images` array. Memory payloads retain independent size, alignment, mutability,
 initialization and relocation metadata and reference an exact byte image by ID.
 Function payloads group one Instance with ordered graph/source identity pairs;
 expansion preserves both identity namespaces. Prepared allocator-world raw slots

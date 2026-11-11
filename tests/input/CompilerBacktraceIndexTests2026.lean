@@ -57,14 +57,28 @@ def main (args : List String) : IO Unit := do
   | .error error => check (error == "conflicting exact source-map query") "cross-body conflict diagnostic changed"
   | .ok _ => throw (IO.userError "cross-body source-map conflict accepted")
 
-  let bad := {firstRow with collapsedLo := firstRow.collapsedLo + 1}
+  let bad := {firstRow with position := {firstRow.position with bytePosition := 2^32}}
   let failed ← must (replaceSpans cleared firstIndex #[firstRow, bad])
   let recovered ← must (replaceSpans failed nextIndex #[firstRow])
   let recovery ← must (CompilerBacktraceSource.prepare recovered)
-  let some (.error error) := recovery.bodySpans[firstIndex]? | throw (IO.userError "invalid collapsed position accepted")
-  check (error == "collapsed hygiene BytePos/source-map position mismatch") "collapsed position diagnostic changed"
+  let some (.error error) := recovery.bodySpans[firstIndex]? | throw (IO.userError "invalid BytePos accepted")
+  check (error == "compiler BytePos exceeds u32") "BytePos diagnostic changed"
   let some (.ok next) := recovery.bodySpans[nextIndex]? | throw (IO.userError "later body was not prepared")
   check (next.size == 1) "later body lost its exact source row"
+
+  -- One global span can collapse differently in distinct inlined body contexts.
+  let otherPosition := {firstRow with position :=
+    {firstRow.position with bytePosition := firstRow.position.bytePosition + 1}}
+  let distinct ← must (replaceSpans firstOnly nextIndex #[otherPosition])
+  let distinctPrepared ← must (CompilerBacktraceSource.prepare distinct)
+  let some (.ok firstEntries) := distinctPrepared.bodySpans[firstIndex]?
+    | throw (IO.userError "first body collapsed source missing")
+  let some (.ok nextEntries) := distinctPrepared.bodySpans[nextIndex]?
+    | throw (IO.userError "second body collapsed source missing")
+  check ((firstEntries[0]?).map (·.position.bytePosition) == some (UInt32.ofNat firstRow.position.bytePosition))
+    "first body lost its collapsed BytePos"
+  check ((nextEntries[0]?).map (·.position.bytePosition) == some (UInt32.ofNat otherPosition.position.bytePosition))
+    "second body reused a global span position"
 
   let runtime := program.input.queries.runtime
   let some instanceRow := runtime.instances[0]? | throw (IO.userError "fixture needs a runtime instance")

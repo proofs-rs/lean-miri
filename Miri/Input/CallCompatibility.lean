@@ -13,7 +13,6 @@ private def invalid (path message : String) : RuntimeMetadataError := .invalid p
 def attributes (source : AbiAttributes) : Result ArgAttributes := do
   if source.regularBits >= 2^16 then throw (invalid "regular attributes" "u16 overflow")
   let regular := UInt16.ofNat source.regularBits
-  if source.inRegister != (regular &&& 64 == 64) then throw (invalid "InReg" "redundant attribute mismatch")
   let extension := match source.argExtension with
     | .none => ArgExtension.None
     | .zeroExtend => .Zext

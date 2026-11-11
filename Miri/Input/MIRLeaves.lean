@@ -637,23 +637,18 @@ def backtracePosition : Parser (CompilerSourcePosition) := do
 
 private structure BacktraceFields where
   span : Option (Nat) := none
-  collapsed_lo : Option (Nat) := none
   source_position : Option (CompilerSourcePosition) := none
 
 def backtrace (path : String) : Parser (BacktraceSpan) := do
   let v ← object ({} : BacktraceFields) fun v key => do
     match key with
     | "span" => return { v with span := some (← natural) }
-    | "collapsed_lo" => return { v with collapsed_lo := some (← natural) }
     | "source_position" => return { v with source_position := some (← backtracePosition) }
     | _ => skipValue; pure v
   let spanId ← required v.span "span"
-  let collapsedLo ← required v.collapsed_lo "collapsed_lo"
   let position ← required v.source_position "source_position"
   unless position.bytePosition < 2^32 do fail s!"{path}: compiler BytePos exceeds u32"
-  unless collapsedLo == position.bytePosition do
-    fail s!"{path}: collapsed hygiene BytePos/source-map position mismatch"
-  return { spanId, collapsedLo, position }
+  return { spanId, position }
 
 private structure CallEvidenceFields where
   kind : Option (String) := none

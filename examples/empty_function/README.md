@@ -54,7 +54,7 @@ final target's caller premises are unchanged.
 
 Miri source additions expose proof-only APIs; the interpreter implementation
 is unchanged by this example. The fixed Rust/MIR hashes are recorded in
-`SHA256SUMS`. The schema-7 input retains canonical instance, body, type, layout
+`SHA256SUMS`. The schema-8 input retains canonical instance, body, type, layout
 and span IDs. Each concrete instance has one resolved body with evaluated
 constants; metadata premises refer to checked table lookups and span bounds. The proof-only reflected MIR block is `noncomputable` to avoid
 a Lean native-code-generation boxing panic; no native executable validation
