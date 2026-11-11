@@ -1,4 +1,4 @@
-import Miri.Interpreter.MachineHooks
+import Miri.Interpreter.TypedRetag
 open Miri Miri.ABI Miri.Memory Miri.Interpreter
 open Miri.Concurrency
 open Miri.TreeBorrows
@@ -93,6 +93,86 @@ def hooks : MachineHooks.Hooks Unit (List String) := {
     let state ← get
     unless state.machine.memory.live.any (fun e => e.1 == id) do throw (.invalidProgram "missing extra") }
 
+/-- Only the simple Freeze path is used; unexpected compiler queries fail. -/
+def typedHooks (parent : BorTag) : TypedRetag.Hooks Unit (List String) := {
+  typeShape := fun _ => blocked "unused type shape"
+  builtinDeref := fun _ => blocked "unused deref"
+  referencePointee := fun _ => blocked "unused pointee"
+  isUnpin := fun _ => blocked "unused Unpin"
+  isUnsafeUnpin := fun _ => blocked "unused UnsafeUnpin"
+  typeIsFreeze := fun _ => pure true
+  implicitWrites := blocked "unused implicit writes"
+  instanceDefinition := fun _ => blocked "unused definition"
+  rustcNoWritable := fun _ => blocked "unused attribute"
+  preciseInteriorMut := pure false
+  immPtrToMPlace := fun _ => blocked "unused immediate"
+  sizeAndAlign := fun _ => pure (some (Size.ofBytes 1, Align.ONE))
+  checkPtrAccess := fun _ _ => pure ()
+  resolveAllocation := fun _ => pure (some ⟨allocId, Size.ZERO, .concrete parent⟩)
+  logCreation := fun _ _ _ _ _ => pure ()
+  freeze := {
+    target := ⟨Size.ofBytes 8⟩, debugAssertions := false
+    isUnsafeCell := fun _ => blocked "unused freeze traversal"
+    typeIsFreeze := fun _ => blocked "unused freeze traversal"
+    isDynamic := fun _ => blocked "unused freeze traversal"
+    isBox := fun _ => blocked "unused freeze traversal"
+    isTooGeneric := fun _ => blocked "unused freeze traversal"
+    sizeAndAlign := fun _ => blocked "unused freeze traversal"
+    unpackDynTrait := fun _ => blocked "unused freeze traversal"
+    projectBox := fun _ => blocked "unused freeze traversal"
+    projectField := fun _ _ => blocked "unused freeze traversal"
+    arrayLength := fun _ => blocked "unused freeze traversal"
+    projectIndex := fun _ _ => blocked "unused freeze traversal" }
+  ensureTreeExtra := hooks.ensureTreeExtra
+  reconstruct := fun _ _ => blocked "unused reconstruction"
+  writeUninit }
+
+def checkReborrowDiagnostics (start : MachineHooks.State Unit (List String)) : IO Unit := do
+  let child : BorTag := ⟨2, by decide⟩
+  let newTag : BorTag := ⟨3, by decide⟩
+  let some (_, entry) := start.machine.memory.live[0]? | throw (IO.userError "allocation")
+  let inserted := entry.allocation.extra.newChild Size.ZERO (.concrete rootTag) child
+    (Miri.DataStructures.DedupRangeMap.new (Size.ofBytes 1) (Tree.LocationState.newAccessed .Frozen .Read))
+    .Frozen false
+  check inserted.outcome.isOk "create reachable shared child"
+  let invalidated := inserted.tree.performBorrowAccessRange (.concrete rootTag) Size.ZERO
+    (Size.ofBytes 1) .Write {} .VisitChildrenOfAccessed
+  check (invalidated.status == .Completed) "root write invalidates shared child"
+  let .ok memory := start.machine.memory.setLiveAllocation allocId
+    (entry.allocation.setExtra invalidated.tree) | throw (IO.userError "install tree")
+  let some tracker := start.machine.borrowTracker | throw (IO.userError "tracker")
+  let failedStart := { start with machine := { start.machine with memory := memory, borrowTracker := some { tracker with global := { tracker.global with nextPointerTag := newTag } } } }
+  let failedPlace := { place with mplace := { place.mplace with
+    ptr := { place.mplace.ptr with provenance := some (.concrete allocId child) } } }
+  let failedRequest := { request with originalProvenance := failedPlace.mplace.ptr.provenance, hooks := { request.hooks with allocationResolution := some ⟨allocId, Size.ZERO, .concrete child⟩ } }
+  let failedHooks := { hooks with preparePlaceProtection := fun _ => pure failedRequest }
+  let expected := invalidated.tree.performBorrowAccessRange (.concrete child) Size.ZERO
+    (Size.ofBytes 1) .Read {} .VisitChildrenOfAccessed
+  for action in [MachineHooks.protectInPlaceFunctionArgument failedHooks failedPlace,
+      TypedRetag.protectInPlaceFunctionArgument (typedHooks child) 8 failedPlace] do
+    let (after, result) := MachineHooks.run action failedStart
+    let .error (.undefinedBehavior message) := result | throw (IO.userError "expected reborrow UB")
+    check (message.startsWith "Tree Borrows reborrow:" &&
+      (message.splitOn "ChildAccessForbidden").length == 2 &&
+      (message.splitOn "Disabled").length >= 2) "exact reborrow cause and typed permission failure"
+    let some tracker := after.machine.borrowTracker | throw (IO.userError "tracker")
+    let some (_, allocation) := after.machine.memory.live[0]? | throw (IO.userError "allocation")
+    check (tracker.global.nextPointerTag.value == 4 && tracker.global.protectedTags.size == 1 &&
+      (allocation.allocation.extra.indexOfTag newTag).isNone && after.machine.user.isEmpty)
+      "failed parent access preserves registration prefix and skips child/uninit"
+    check (reprStr allocation.allocation.extra == reprStr expected.tree &&
+      allocation.allocation.getBytesUnchecked (allocRange Size.ZERO (Size.ofBytes 1)) ==
+        entry.allocation.getBytesUnchecked (allocRange Size.ZERO (Size.ofBytes 1))) "failed parent access preserves exact core tree and bytes"
+  -- Later writes and unrelated hook failures must never acquire the reborrow label.
+  for error in [StepError.undefinedBehavior "Tree Borrows read access: sentinel",
+      .undefinedBehavior "Tree Borrows write access: sentinel", .unsupported "sentinel"] do
+    let pipeline := { hooks with writeUninit := fun _ => throw error }
+    let typed := { typedHooks rootTag with writeUninit := fun _ => throw error }
+    for action in [MachineHooks.protectInPlaceFunctionArgument pipeline place,
+        TypedRetag.protectInPlaceFunctionArgument typed 8 place] do
+      let (_, result) := MachineHooks.run action start
+      check (result == .error error) "unrelated callback error retains original cause"
+
 def main : IO Unit := do
   let start ← initial
   let (state, result) := MachineHooks.run (MachineHooks.storageLiveDyn storage 1 .none) start
@@ -180,6 +260,7 @@ def main : IO Unit := do
   let borrowOnly := { start with
     machine := { start.machine with dataRace := none }
     stack := ⟨#[{ frame with extra := { frame.extra with dataRace := none } }]⟩ }
+  checkReborrowDiagnostics borrowOnly
   let (state, result) := MachineHooks.run (MachineHooks.protectInPlaceFunctionArgument hooks place) borrowOnly
   check result.isOk "protected argument"
   let some tracker := state.machine.borrowTracker | throw (IO.userError "tracker")

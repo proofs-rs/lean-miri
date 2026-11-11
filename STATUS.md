@@ -240,7 +240,11 @@ hosted result. All local stages of `tools/check.sh` have now been exercised as
 described below; a successful hosted follow-up matrix remains outstanding.
 Selected finite checks do not close general proof or source-correspondence gaps.
 
-Local follow-up checks pass the concrete runtime Codegen ABI probe and 20
+The following local results belong to the schema-8 baseline merged in PR #44
+as `54749934`. Its new hosted checks were queued when last checked; the full
+hosted result for that revision is still pending.
+
+Local baseline checks pass the concrete runtime Codegen ABI probe and 20
 exporter boundary tests, including nested bound-region query views and the exact
 callee ABI needed before rejecting a variadic fixed-count mismatch. Five
 unchanged variadic guests, four focused diagnostic guests and four UB-kind
@@ -263,21 +267,38 @@ checks. The library axiom audit covers 74,171 declarations with only `propext`,
 `Quot.sound` and `Classical.choice`. SC seeds 0–11 and four malformed-log controls,
 and 16 selected genuine UI cases, pass their unchanged local assertions/oracles.
 
-All 66 `tools/check.sh` stages pass across resumed local runs: stages 1–57
-passed first, stage 58 passed after updating its tuple-classification test
+For that baseline, all 66 `tools/check.sh` stages pass across resumed local runs:
+stages 1–57 passed first, stage 58 passed after updating its tuple-classification test
 expectation, and stages 59–66 passed after five input harnesses installed the
 actual supplied allocation world through the canonical initialization path.
 These were test-only corrections; Miri sources, proof sources and fixed inputs
 remained unchanged. The reference exporter was restored to its recorded frozen
 binary hash after the default-exporter checks.
 
-All 268 empty-function proof roots pass on that integrated source. Its transitive
+All 268 empty-function proof roots pass on that baseline source. Its transitive
 axiom audit covers 76,837 declarations using only the same three allowed axioms;
 recorded Rust, input, library and proof hashes match before and after validation.
 These are completed local results, not a successful full hosted matrix or a
 whole-machine correspondence theorem. Hosted validation of the integrated
 follow-up is still required. The no-core, full-UI and performance gaps remain
 unresolved.
+
+A separate diagnostic follow-up on `54749934` retains the reborrow cause at
+the actual parent-access failure in both retag paths. A kernel-checked equality
+preserves the default protector-release classification and message. The UI
+oracle recognizes the exact existing `InvalidTag(outside valid range)` and
+`dereferencing a null box` diagnostics; unrelated UB, access directions,
+Unsupported outcomes and missing source sites remain rejected.
+
+This follow-up passes the 1,281-job common build, 46 runtime checks, structural
+regressions and the quick check with 111 Python tests. Six unchanged upstream
+guests pass strict reference/profile/UB-category/site checks, covering TB
+read/write/reborrow, destructor protection, enum tags and null boxes. Its library
+axiom audit covers 74,172 declarations; all 268 empty-function roots and their
+76,838-declaration transitive audit pass using only the same three permitted
+axioms. Recorded Rust, input, library and proof hashes match before and after
+validation. The 66-stage result remains specific to the baseline; this diagnostic
+revision still needs full hosted validation.
 
 The ordinary standard-library startup closure from
 `tests/repro/startup/empty-main.rs` now decodes directly into MIR. A fresh
