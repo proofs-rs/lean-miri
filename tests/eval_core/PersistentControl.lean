@@ -1,5 +1,6 @@
 import Miri.Input.CompilerProviders
 import Miri.Input.CompilerGlobals
+import Miri.Input.CompilerAllocIdWorld
 import Miri.Input.InitialMachine
 import Miri.Input.EvalTerminatorMachine
 
@@ -35,6 +36,9 @@ def main (args : List String) : IO Unit := do
   let imported := Input.CompilerGlobals.importGraph prepared.runtime.target prepared.program
     (MemoryState.empty : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind)
   let _ ← must imported.outcome
+  -- Install the supplied prepared source-ID world before runtime setup.
+  let memory ← must (Input.CompilerAllocIdWorld.install
+    prepared.program.input.compilerAllocIdWorld prepared.program.input.allocations imported.memory)
   let host : Host := {
     blocking := ⟨none,#[]⟩, clock := .virtual 0, deadlines := .empty,
     readiness := {}, futex := {}, sync := {}, io := {}, events := #[], virtualSockets := #[], tcpSockets := #[], nativeLibraries := #[], profiler := none
@@ -47,7 +51,7 @@ def main (args : List String) : IO Unit := do
         fixedScheduling := false, trackOutdatedLoads := false, weakMemory := true
         backend := .vclocks, trackedTags := some #[], validation := .Shallow
         alignment := .Int, affinity := none, muteOutput := true, hostUsizeBits := 64 }
-      imported.memory arrays { inputs := #[], cursor := 0 } host).mapError reprStr)
+      memory arrays { inputs := #[], cursor := 0 } host).mapError reprStr)
   let initial : S := ExecutionStateTransport.inward initial
   let first ← success (perform initial)
   let second ← success (perform first)

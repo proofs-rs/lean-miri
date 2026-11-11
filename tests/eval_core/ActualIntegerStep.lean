@@ -1,5 +1,6 @@
 import Miri.Input.EvalConfigurationCore
 import Miri.Input.CompilerGlobals
+import Miri.Input.CompilerAllocIdWorld
 import Miri.Input.CompilerFunctionPointers
 import Miri.Input.CompilerVTableMachine
 import Miri.Input.CompilerIntrinsicSymbols
@@ -85,6 +86,10 @@ private def runPrepared (prepared : Input.CompilerProviders.Prepared) : Except S
   let imported := Input.CompilerGlobals.importGraph prepared.runtime.target prepared.program
     (MemoryState.empty : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind)
   let image ← imported.outcome
+  -- Match canonical EvalPreparation: preserve the supplied raw-ID frontier
+  -- and crosswalk before any runtime allocation or byte-key attachment.
+  let memory ← Input.CompilerAllocIdWorld.install
+    prepared.program.input.compilerAllocIdWorld prepared.program.input.allocations imported.memory
   let arrays ← prepared.initialArrays
   let host : Host := {
     blocking := ⟨none, #[]⟩, clock := .virtual 0, deadlines := .empty
@@ -108,7 +113,7 @@ private def runPrepared (prepared : Input.CompilerProviders.Prepared) : Except S
   -- Any other source choice site or tape exhaustion remains an execution error.
   let initial ← (Input.InitialMachine.create (Os := Unit) (R := Unit) (P := Unit)
     (H := Unit) (D := Unit) (O := String) (Aff := Unit) (B := Unit)
-    machineConfig imported.memory arrays
+    machineConfig memory arrays
       { inputs := Array.replicate 128 (.index .addressSlack 0), cursor := 0 } host).mapError reprStr
   let initial : OuterState := initial
   let inner := ExecutionStateTransport.inward initial

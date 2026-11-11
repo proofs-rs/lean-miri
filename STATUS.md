@@ -187,9 +187,14 @@ proof passed, as did the fresh regression lane. Replay failed only at the stale
 SC-snapshot SHA; its build, reference-profile, canonical12, ordering and large-TB
 suites passed. Extended failed only at the stale detached-join file SHA. Both
 pins are corrected in this follow-up, with their original checks retained.
-The regression lane was still running and UI shards were queued when checked.
-These upstream results do not validate the integrated local follow-up; its
-completed local checks are recorded below and a new hosted result is required.
+The regression lane also failed: its constant-parser reference test added a
+legacy single-identity function allocation, which schema 8 correctly rejected
+before the intended dangling-instance mutation. The local fixture now uses the
+schema-8 identity group and a fresh graph/source identity; the full constant
+suite passes while still rejecting the legacy form and dangling instance IDs.
+UI shards were still queued when checked. These upstream results do not validate
+the integrated local follow-up; its completed local checks are recorded below
+and a new hosted result is required.
 
 At `6a76fcbd`, the successful hosted suites include timezone with Cargo-reported
 libc archive selection, fresh producer/decoder u128 boundaries, powi and all four vtable
@@ -231,9 +236,9 @@ counts. This establishes inventory coverage, not a successful UI sweep.
 The earlier `6aca6f0` failures in SC schedule validation, powi root lookup,
 vtable wrappers and JSON-natural u128 endpoints are covered by the successful
 `6a76fcbd` hosted suites above. Local follow-up checks do not establish a new
-hosted result. Full `tools/check.sh` and a successful complete CI matrix remain
-outstanding; selected finite checks do not close general proof or
-source-correspondence gaps.
+hosted result. All local stages of `tools/check.sh` have now been exercised as
+described below; a successful hosted follow-up matrix remains outstanding.
+Selected finite checks do not close general proof or source-correspondence gaps.
 
 Local follow-up checks pass the concrete runtime Codegen ABI probe and 20
 exporter boundary tests, including nested bound-region query views and the exact
@@ -257,6 +262,14 @@ unit tests, the direct runtime-ABI integration probe and the 20 producer boundar
 checks. The library axiom audit covers 74,171 declarations with only `propext`,
 `Quot.sound` and `Classical.choice`. SC seeds 0–11 and four malformed-log controls,
 and 16 selected genuine UI cases, pass their unchanged local assertions/oracles.
+
+All 66 `tools/check.sh` stages pass across resumed local runs: stages 1–57
+passed first, stage 58 passed after updating its tuple-classification test
+expectation, and stages 59–66 passed after five input harnesses installed the
+actual supplied allocation world through the canonical initialization path.
+These were test-only corrections; Miri sources, proof sources and fixed inputs
+remained unchanged. The reference exporter was restored to its recorded frozen
+binary hash after the default-exporter checks.
 
 All 268 empty-function proof roots pass on that integrated source. Its transitive
 axiom audit covers 76,837 declarations using only the same three allowed axioms;
