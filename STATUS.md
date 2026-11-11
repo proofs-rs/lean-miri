@@ -470,6 +470,24 @@ canonicality preservation across type extraction, metadata decoding and recursiv
 demand closure, or general nonreachability of nonidentity pairs. The TraitVPtr
 provider lies outside the selected local rustc source corpus.
 
+The exact generated-call ABI collector is locally validated on the schema-11
+`054990d8` baseline. It preserves source helper-signature keys before region
+normalization and includes demanded weak foreign-static symbols in named-shim
+queries and catalog invalidation. Rust units (46), the runtime-ABI probe,
+producer checks (29) and integration suites (9, including Python discovery)
+pass. Three minimal Result-main/getrandom/GNU TLS guests pass strict genuine
+comparisons; deleting the required queries or mismatching the startup argument
+type leaves four explicit Unsupported reader outcomes. The consumer is a
+separate schema-11 candidate containing Unix allocation-adapter changes, with
+matching ABI/protocol/main source modules; this is not a pure-main binary claim.
+Unchanged upstream `main_result`, `static_align` and `const-addrs` also pass.
+`float_extra_rounding_error@random` reached the unchanged 180-second local native
+wall limit after reference exit zero and is not counted safe. No-std weak-symbol
+probes can still fail on the eager OS catalog's missing `libc::pid_t` prerequisite;
+the successful weak-symbol controls use std. These finite checks do not establish
+a closed compiler-query domain or a new hosted sweep. This collector patch changes
+no Miri source, fixed example input, library binding or execution budget.
+
 ### Performance and optimization assurance
 
 Remaining performance work includes residual equality and validation work,
