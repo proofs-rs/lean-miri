@@ -183,7 +183,8 @@ for allocations subject to leak checking, including MIR inline scopes and exact 
 span fallback. UI profiles enable it unless leaks are explicitly ignored;
 ordinary runner defaults keep it disabled. Eight focused unchanged upstream
 sources pass the strict reference/profile/terminal oracles, including an actual
-UB stop with fourteen retained allocation backtraces. This does not establish
+UB stop with fourteen retained allocation backtraces. Native leak-report
+rendering remains Unsupported and needs implementation. This does not establish
 the full UI sweep: coroutine ABI layout remains unsupported, as do Stacked
 Borrows profiles, host-isolation/output-capture settings and compile-time or
 nonlocal-diagnostic oracles outside the runtime profile. Export errors,
