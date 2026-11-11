@@ -65,8 +65,9 @@ class ExternalConstantTests(unittest.TestCase):
         self.document = {'body_roots': [{'def_path': 'miri_start', 'body': 0}],
                          'bodies': [{'basic_blocks': [{'constant': {
                              'kind': 'evaluated_const', 'value': {
-                                 'kind': 'indirect_allocation', 'allocation': 0}}}]}],
-                         'allocations': [{'relocations': [{'target': 1}]}, {'kind': 'vtable'}]}
+                                 'kind': 'indirect_allocation', 'allocation': 10}}}]}],
+                         'allocations': [{'allocation_id': 10, 'relocations': [{'target': 20}]},
+                                         {'allocation_id': 20, 'kind': 'vtable'}]}
         self.mir = 'fn miri_start() {\n _1 = const dependency::OBJECT;\n}'
 
     def test_resolved_constant_with_independent_compiler_origin(self):
