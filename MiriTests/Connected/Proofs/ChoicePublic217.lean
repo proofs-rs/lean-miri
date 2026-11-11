@@ -125,6 +125,8 @@ theorem actual_strict_demand_spec (t : Tape) (request : ExecutionChoices.Request
       cases h : inputs[cursor]? with
       | some input => rfl
       | none => rfl
+    | diagnostic => simp at hpolicy
+    | seededDiagnostic seed => simp at hpolicy
     | boundedDiagnostic maxChoices maxByteLength => simp at hpolicy
     | boundedSeededDiagnostic maxChoices maxByteLength seed => simp at hpolicy
 
