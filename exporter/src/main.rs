@@ -4011,6 +4011,12 @@ fn rvalue_json<'tcx>(
             S::WrapUnsafeBinder { operand: operand_json(context, tcx, body, value)?, r#type: type_json(context, tcx, *ty)? }
         }
         R::Reborrow(ty, mutability, place) => {
+            // interpret/step.rs evaluates shared CoerceShared reborrows with
+            // copy_op_allow_transmute. That still queries mir_assign_valid_types;
+            // distinct same-layout ADTs can legitimately produce FALSE.
+            if mutability.is_not() {
+                record_covariance_transfer(context, place.ty(body, tcx).ty, *ty);
+            }
             S::Reborrow { r#type: type_json(context, tcx, *ty)?, mutability: mutability_json(*mutability), place: place_json(context, tcx, body, place)? }
         }
     })

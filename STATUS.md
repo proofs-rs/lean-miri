@@ -527,6 +527,18 @@ the successful weak-symbol controls use std. These finite checks do not establis
 a closed compiler-query domain or a new hosted sweep. This collector patch changes
 no Miri source, fixed example input, library binding or execution budget.
 
+Shared `CoerceShared` reborrows now add their exact source-place/target-type
+pair to the existing rustc covariance query collector, only on the shared
+`copy_op_allow_transmute` path. The compiler's FALSE answer for distinct
+same-layout ADTs is preserved; unknown evidence is not defaulted to FALSE.
+On the schema-11 `bbee5d19` baseline, 46 Rust units, the runtime-ABI probe,
+30 producer checks and nine integration suites pass. The unchanged upstream
+`reborrow-coerce-shared` passes its strict reference/Lean comparison, while
+missing, mismatched and conflicting query controls remain Unsupported.
+Primitive identity still yields TRUE and an unknown distinct pair remains an
+error. Miri sources, fixed inputs, proof assumptions and budgets are unchanged;
+these finite checks do not establish general covariance-query closure.
+
 ### Performance and optimization assurance
 
 Remaining performance work includes residual equality and validation work,

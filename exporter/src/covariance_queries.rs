@@ -1,6 +1,6 @@
 //! Exact util/compare_types.rs::relate_types(Covariant) query evidence.
 //! Canonical normalized identity chooses one finite request domain, not
-//! answers. Exact MIR transmute/subtype cast pairs and reached vtable receiver
+//! answers. Exact MIR transmute/subtype casts, shared reborrows and vtable receiver
 //! pairs add source-demanded requests outside that domain. Every recorded
 //! answer comes from the actual rustc relation query; no layout-based answer
 //! is fabricated.
@@ -30,7 +30,7 @@ pub(super) fn discover<'tcx>(
     let env = ty::TypingEnv::fully_monomorphized();
     let mut pairs = std::mem::take(&mut context.covariance_pairs);
     let pair_start = pairs.len();
-    // rustc's Transmute/Subtype/BoxDerefTransmute evaluator calls
+    // rustc's Transmute/Subtype/BoxDerefTransmute and shared Reborrow evaluators call
     // copy_op_allow_transmute, which still checks mir_assign_valid_types
     // (interpret/cast.rs, place.rs, eval_context.rs). Export the exact MIR
     // operand and cast-target pair even when normalization puts them in

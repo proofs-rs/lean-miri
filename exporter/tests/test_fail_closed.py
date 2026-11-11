@@ -152,6 +152,28 @@ class FailClosedExportTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertIs(rows[0]['value'], False)
 
+    def test_shared_reborrow_records_exact_false_covariance(self):
+        document = self.accepted("shared_reborrow")
+        reborrows = []
+        def visit(value):
+            if isinstance(value, dict):
+                if value.get("kind") == "Reborrow" and value["mutability"]["kind"] == "immutable":
+                    reborrows.append(value)
+                for child in value.values():
+                    visit(child)
+            elif isinstance(value, list):
+                for child in value:
+                    visit(child)
+        visit(document["bodies"])
+        self.assertTrue(reborrows, "fixture did not exercise shared Reborrow")
+        for value in reborrows:
+            source, target = value["place"]["type"], value["type"]
+            self.assertNotEqual(source, target)
+            rows = [row for row in document["compiler_covariance_queries"]
+                    if row["source_type"] == source and row["target_type"] == target]
+            self.assertEqual(len(rows), 1)
+            self.assertIs(rows[0]["value"], False, "same layout must not fabricate subtyping")
+
     def test_no_std_keeps_negative_and_optional_query_answers(self):
         document = self.accepted("no_std")
         self.assertNotIn("compiler_named_constants", document)
