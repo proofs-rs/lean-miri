@@ -73,7 +73,7 @@ For an already frozen native binary, pass
 For Lean `--run`, explicitly pass `--runner tools/Run.lean` and
 `--lean-path FROZEN_LIB`. These modes are mutually exclusive. The collector
 records execution mode, artifact hash and any build-log path. Both modes accept
-`--seed U64` and `--profile`; omitting the seed preserves the existing bounded
+`--seed U64` and `--profile`; omitting the seed selects the
 diagnostic zero policy. Explicit Lean runners require a prebuilt module closure.
 
 To regenerate the large catch-panic workload after Rust/sysroot setup, build the
@@ -103,8 +103,11 @@ bash tools/run.sh scratch/vector-sort.json --profile
 
 Use the same exported file for both binaries; source paths and compiler allocation
 identities can differ between fresh exports. Its successful outcome is
-`finalized_exit code=0`. Increasing the vector length can exceed the native
-harness's fixed 100,000 outer-iteration bound; `pending` remains an incomplete run.
+`finalized_exit code=0`. The native runner continues until a terminal/error
+outcome or process interruption (Ctrl-C); it has no scheduler-iteration or
+generated-choice cap. Diagnostic choices are generated on demand and retained
+for replay, so longer runs still require host memory. Explicitly bounded
+proof/test APIs retain `pending` for an incomplete prefix.
 
 For hotspot attribution, `--profile` additionally reports complete scheduler
 iterations taking at least 10ms as `execution.iteration_N.*`. The label records

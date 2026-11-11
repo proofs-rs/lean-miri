@@ -327,7 +327,7 @@ inductive RunResult (S : Type) where
   | unsupported (state : S) (error : StepError)
   | failed (state : S) (error : StepError)
   | pending (state : S) (cause : PendingCause)
-  deriving Repr
+  deriving Repr, Nonempty
 
 def classifyError (state : S) (error : StepError) : RunResult S :=
   if error == .callback "choice input unknown: tape exhausted" then
@@ -435,6 +435,29 @@ def runUntilTerminalProfiled
       return classifyError state error
     | .ok () => pure ()
   return .pending state (.outerChoicesExhausted iterations)
+
+/-- Native execution has no finite prefix boundary; each iteration uses the same
+source hooks and error classification as the bounded driver. -/
+partial def runUnboundedProfiled
+    [Nonempty (State Os R P H D O Aff B Poll Instant System Native Profiler)]
+    (profile : Lean.Options)
+    {Callback : Type}
+    (loop : RunLoopHooks (State Os R P H D O Aff B Poll Instant System Native Profiler)
+      C Callback)
+    (choice : C) (iteration : Nat := 0) :
+    State Os R P H D O Aff B Poll Instant System Native Profiler →
+      RunResult (State Os R P H D O Aff B Poll Instant System Native Profiler) := fun state =>
+  let state := observeProgress profile "before" iteration state
+  let (after, result) := iterationProfiled profile loop choice iteration state
+  let after := observeProgress profile "after" iteration after
+  match result with
+  | .error error =>
+    if error == .callback "choice input unknown: tape exhausted" then
+      .pending after (.choiceTapeExhausted (iteration + 1))
+    else if let .resourceExhaustion _ := error then
+      .pending after (.sourceResourceExhausted (iteration + 1) error)
+    else classifyError after error
+  | .ok () => runUnboundedProfiled profile loop choice (iteration + 1) after
 
 /-- Original API, with observation disabled. -/
 def runUntilTerminal

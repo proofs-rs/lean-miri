@@ -161,14 +161,15 @@ def runFromSourceAndFinalizeProfiled
     (reports : ReportEffects Os R EvalSyncPayload.Payload H D
       (EvalUnixSourceConstruction.Other Raw Listener TcpStream Error) CpuAffinity.Mask B
       Poll Instant System Native Profiler)
-    (stableChoice : Option (EvalSourceRunConstruction.StableChoice choice) := none) :
+    (stableChoice : Option (EvalSourceRunConstruction.StableChoice choice) := none)
+    (unbounded : Bool := false) :
     EStateM StepError External (Result
       (EvalRunConstruction.State Os R EvalSyncPayload.Payload H D
         (EvalUnixSourceConstruction.Other Raw Listener TcpStream Error) CpuAffinity.Mask B
         Poll Instant System Native Profiler)) := do
   let result ← EvalSourceRunConstruction.runFromSourceProfiled profile prepared image bytes options
     sourceLeaves choice initialConfiguration initialMemory runtimeTypes choiceTape hostRuntime
-    bootstrapConfiguration limits capacity iterationFuel outerChoices true stableChoice
+    bootstrapConfiguration limits capacity iterationFuel outerChoices true stableChoice unbounded
   let label := match result with
     | .exited _ code leakCheck => s!"finalization.raw_result.exited.code_{code}.leak_{leakCheck}"
     | .undefinedBehavior .. => "finalization.raw_result.undefined_behavior"

@@ -229,10 +229,11 @@ lookup. Caller-location still scans its catalog; optimization must retain
 source-order diagnostics, malformed-row handling and fresh Location allocations.
 Measure current immutable artifacts with the protocol in [AGENTS](AGENTS.md);
 old timings and shared-host samples do not establish a general speedup.
-The native harness retains a fixed 100,000 outer-iteration budget; larger
-supported guests can return `pending` before completion. The profiling guide
-includes a bounded vector-sort workload. The command-line runner does not
-yet expose this budget as an option.
+The native harness runs until a source terminal/error outcome or process
+interruption, with demand-driven diagnostic choices and no scheduler-iteration,
+generated-choice-count or generated-byte-length cap. Finite proof/test APIs
+retain their explicit bounds. Execution still depends on host memory and on
+the interpreter's demand-local capability and operation-resource checks.
 
 No full compiler-query/decoder equivalence proof exists. Component identities
 and finite guest comparisons do not imply whole-decoder equivalence or
