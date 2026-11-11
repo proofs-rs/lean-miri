@@ -539,6 +539,17 @@ Primitive identity still yields TRUE and an unknown distinct pair remains an
 error. Miri sources, fixed inputs, proof assumptions and budgets are unchanged;
 these finite checks do not establish general covariance-query closure.
 
+The UI oracle now recognizes the complete shim argument-ABI diagnostic only
+as an argument-type failure, separately from convention, return and count
+errors. Niched-variant writes have their own category and exact constructor,
+so an invalid-discriminant read cannot substitute. On main `c390bf41`, all
+117 quick Python checks and 20 UI units pass. The two original failing cases
+pass strict comparisons; the final tightened predicates also pass on those
+unchanged source/snapshot/sidecar/binary-bound records. No Rust/Lean semantics,
+fixed inputs, profiles, crate naming or budgets changed. Bare dangling-pointer
+null classification and the extern-static crate-name mismatch remain separate
+unrepaired diagnostic/harness issues; this does not establish a hosted sweep.
+
 ### Performance and optimization assurance
 
 Remaining performance work includes residual equality and validation work,

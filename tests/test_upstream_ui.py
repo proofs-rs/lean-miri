@@ -275,6 +275,45 @@ fn main() {
                     self.assertEqual(compare(case, terminal | {'detail': other}, category),
                                      'ub_kind_mismatch', other)
 
+    def test_shim_argument_and_niched_write_keep_specific_causes(self):
+        argument = 'calling a function whose parameter #2 has type i32 passing argument of type u8'
+        niche = 'trying to set discriminant of a Option<std::num::NonZero<i32>> to the niched variant, but the value does not match'
+        self.assertEqual(category_reference(argument), 'argument_type')
+        self.assertEqual(category_reference(niche), 'niched_variant_write')
+        self.assertEqual(category_reference('enum value has invalid tag'), 'invalid_discriminant')
+        for category, detail, negatives in (
+            ('argument_type', 'shim argument ABI mismatch',
+             ('shim calling convention mismatch', 'shim return ABI mismatch',
+              'shim argument count mismatch', 'shim variadic ABI mismatch', 'ABI mismatch',
+              'shim argument ABI mismatch extra', 'C math shim argument ABI mismatch',
+              '"shim argument ABI mismatch" trailing', '"shim argument ABI mismatch',
+              'shim argument ABI mismatch"')),
+            ('niched_variant_write', 'InvalidNichedEnumVariantWritten',
+             ('InvalidTag(outside valid range)', 'UninhabitedEnumVariantRead(1)',
+              'invalid discriminant', 'InvalidNichedEnumVariantWrittenExtra',
+              'InvalidNichedEnumVariantWritten extra', 'prefix InvalidNichedEnumVariantWritten',
+              'invalidnichedenumvariantwritten', '"InvalidNichedEnumVariantWritten" trailing',
+              '"InvalidNichedEnumVariantWritten', 'InvalidNichedEnumVariantWritten"')),
+        ):
+            case = Case('fail/test.rs', errors=[(3, 'expected UB')])
+            base = {'kind': 'ub', 'frames': [{'file': case.path, 'line': 3}]}
+            for exact in (detail, 'Miri.Interpreter.StepError.undefinedBehavior "' + detail + '"'):
+                actual = base | {'detail': exact}
+                self.assertEqual(compare(case, actual, category), 'passed')
+                self.assertEqual(compare(case, actual | {'frames': [{'file': case.path, 'line': 4}]}, category), 'ub_site_mismatch')
+                self.assertEqual(compare(case, actual | {'frames': [{'file': 'unrelated.rs', 'line': 3}]}, category), 'ub_site_mismatch')
+                for terminal in ('unsupported', 'failed', 'pending', 'exit'):
+                    self.assertNotEqual(compare(case, actual | {'kind': terminal}, category), 'passed')
+            for other in (*negatives, 'invalidBool 2', 'outOfBounds', 'undefined behavior'):
+                self.assertEqual(compare(case, base | {'detail': other}, category), 'ub_kind_mismatch', other)
+        case = Case('fail/test.rs', errors=[(3, 'expected enum read UB')])
+        self.assertEqual(compare(case, {'kind': 'ub', 'detail': 'InvalidNichedEnumVariantWritten',
+                                       'frames': [{'file': case.path, 'line': 3}]},
+                                 'invalid_discriminant'), 'ub_kind_mismatch')
+        self.assertEqual(compare(case, {'kind': 'ub', 'detail': 'shim argument ABI mismatch',
+                                       'frames': [{'file': case.path, 'line': 3}]},
+                                 'calling_convention'), 'ub_kind_mismatch')
+
     def test_generic_race_is_not_a_mixed_size_race(self):
         case = Case('fail/test.rs', errors=[(3, 'Race condition detected')])
         terminal = {'kind': 'ub', 'detail': 'MixedSizeRace', 'frames': [{'file': case.path, 'line': 3}]}

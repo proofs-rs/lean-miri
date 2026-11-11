@@ -238,7 +238,7 @@ CATEGORIES = [
     ('nonzero', r'expected something greater or equal', r'validRange|valid range|outside.*range|out.of.range'),
     ('mixed_size_race', r'Race condition detected between.*differently.sized|Race condition detected between.*atomic', r'MixedSize|mixed.size|RaceCondition'),
     ('read_only', r'writing to .*read-only|mutable reference pointing to read-only|atomic.*read-only memory', r'WriteToReadOnly|readOnly|read.only'),
-    ('argument_type', r'calling a function whose parameter', r'AbiMismatchArgument'),
+    ('argument_type', r'calling a function whose parameter', r'AbiMismatchArgument|(?:^shim argument ABI mismatch$|"shim argument ABI mismatch"$)'),
     ('return_type', r'calling a function with return type', r'AbiMismatchReturn'),
     ('extern_mutability', r'extern static.*backing static is', r'extern static declaration and backing mutability disagree'),
     ('symbol_not_static', r'exported symbol.*not defined as a static', r'exported symbol.*not defined as a static'),
@@ -267,6 +267,8 @@ CATEGORIES = [
     ('data_race', r'Data race', r'DataRace|data race'),
     ('division_zero', r'divis(?:ion|or).*zero|dividing by zero|remainder.*zero', r'divisionByZero|remainderByZero|division by zero|remainder.*zero'),
     ('overflow', r'overflow', r'overflow|Overflow'),
+    # A niched-variant write failure is distinct from an invalid enum read.
+    ('niched_variant_write', r'trying to set discriminant .* to the niched variant, but the value does not match', r'(?-i:^InvalidNichedEnumVariantWritten$|"InvalidNichedEnumVariantWritten"$)'),
     ('invalid_discriminant', r'discriminant|enum tag|enum value has invalid tag', r'discriminant|Discriminant|enumTag|\bInvalidTag\(outside valid range\)'),
     ('invalid_function', r'function pointer|not pointing to a function', r'functionPointer|function pointer|FunctionPointer'),
     ('unreachable', r'entering unreachable code|unreachable_unchecked', r'unreachable|Unreachable'),
