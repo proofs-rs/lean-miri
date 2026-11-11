@@ -9,8 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'scratch/regression-inputs'
 OUT.mkdir(parents=True, exist_ok=True)
 for name, source, expected in [
-    ('u32', 'source133-root-u32-001', 'd94a5daaf0ec5c780113a5a74fc751fca6da4d4510fd24f6765f135ae663529a'),
-    ('control-flow', 'source133-root-control-flow-001', 'f1590691685cabe1b0d6251f04e80aa1dc89d4ee18cf66b16525c85ee4c2d489')]:
+    ('u32', 'source133-root-u32-001', '1ef4f7fc734799b89e984a42f93ae2357f88f50a57a495af6cd8076f42b777d6'),
+    ('control-flow', 'source133-root-control-flow-001', '2b5c83a8c9ecfb7de63c61377cf78aa057a599846672521b8bc8ff04b423c175')]:
     raw = gzip.decompress((ROOT / 'tests/eval_core/fixtures' / f'{source}.json.gz').read_bytes())
     if hashlib.sha256(raw).hexdigest() != expected:
         raise SystemExit(f'{source}: pinned unit input hash mismatch')

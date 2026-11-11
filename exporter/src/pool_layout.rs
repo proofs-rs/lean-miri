@@ -404,7 +404,7 @@ pub(super) struct ArgAttributes {
     pointee_align_bytes: Option<u64>,
 }
 impl ArgAttributes {
-    fn new(a: rustc_target::callconv::ArgAttributes) -> Self {
+    pub(super) fn new(a: rustc_target::callconv::ArgAttributes) -> Self {
         use rustc_target::callconv::ArgExtension as E;
         Self {
             regular_bits: a.regular.bits(),
@@ -544,7 +544,7 @@ pub(super) struct ArgAbi {
     #[serde(rename = "type")]
     pub ty: u64,
     pub layout: usize,
-    mode: PassMode,
+    pub mode: PassMode,
 }
 #[derive(Serialize)]
 pub(super) struct FnAbi {
@@ -553,8 +553,8 @@ pub(super) struct FnAbi {
     fixed_count: u32,
     can_unwind: bool,
     #[serde(rename = "return")]
-    ret: ArgAbi,
-    arguments: Vec<ArgAbi>,
+    pub ret: super::shared_json::Shared<ArgAbi>,
+    pub arguments: Vec<super::shared_json::Shared<ArgAbi>>,
 }
 impl FnAbi {
     pub fn new<'tcx>(
@@ -566,14 +566,14 @@ impl FnAbi {
             context: &mut super::ExportContext<'tcx>,
             tcx: TyCtxt<'tcx>,
             a: &rustc_target::callconv::ArgAbi<'tcx, rustc_middle::ty::Ty<'tcx>>,
-        ) -> Result<ArgAbi, String> {
+        ) -> Result<super::shared_json::Shared<ArgAbi>, String> {
             let ty = super::type_json(context, tcx, a.layout.ty)?;
             let layout = super::layout_value_json(context, tcx, a.layout) as usize;
             Ok(ArgAbi {
                 ty,
                 layout,
                 mode: PassMode::new(&a.mode),
-            })
+            }.into())
         }
         Ok(Self {
             calling_convention: CanonAbi::new(abi.conv),

@@ -8,19 +8,6 @@ pub(crate) struct Definition {
     pub index: u32,
 }
 #[derive(Clone, Debug, Serialize)]
-pub(crate) struct DebugPayload {
-    pub status: &'static str,
-    pub rustc_debug: String,
-}
-impl DebugPayload {
-    pub fn new(value: &impl std::fmt::Debug) -> Self {
-        Self {
-            status: "debug_payload",
-            rustc_debug: format!("{value:?}"),
-        }
-    }
-}
-#[derive(Clone, Debug, Serialize)]
 pub(crate) struct Position {
     pub line: usize,
     pub column: usize,
@@ -30,7 +17,7 @@ pub(crate) struct Span {
     pub is_dummy: bool,
     pub lo: u32,
     pub hi: u32,
-    pub ctxt: DebugPayload,
+    pub ctxt: String,
     pub file: u64,
     pub start: Position,
     pub end: Position,

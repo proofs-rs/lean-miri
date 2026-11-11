@@ -46,8 +46,8 @@ def main(path):
                 f"{def_path} body belongs to another concrete instance")
         require(pool_entry(document, "definitions", body["source_def_id"]) == {"crate": crate, "index": index},
                 f"{def_path} loaded body has a different source DefId")
-        require(body["source_instance_kind"] == row["instance_kind"],
-                f"{def_path} loaded body has a different source instance kind")
+        require("source_instance_kind" not in body,
+                f"{def_path} loaded body contains an unused source instance kind")
         require(body["basic_blocks"], f"{def_path} loaded body has no basic blocks")
         for node in walk(body["basic_blocks"]):
             require(node.get("status") != "unsupported",

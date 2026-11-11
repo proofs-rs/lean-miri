@@ -341,8 +341,7 @@ class FailClosedExportTests(unittest.TestCase):
     def test_resolved_generic_has_one_body_and_no_source_constant_payload(self):
         document = self.accepted("resolved_generic", "root")
         bodies = document["bodies"]
-        self.assertEqual(len({(body["instance_id"], body.get("source_promoted"))
-                              for body in bodies}), len(bodies))
+        self.assertEqual(len({body["instance_id"] for body in bodies}), len(bodies))
         resolved = [row for row in document["instances"]
                     if row.get("def_path", "").endswith("resolved")]
         self.assertTrue(resolved)
@@ -364,6 +363,25 @@ class FailClosedExportTests(unittest.TestCase):
                     inspect(child)
 
         inspect(document)
+
+    def test_ignored_body_fields_are_not_serialized(self):
+        document = self.accepted("resolved_generic", "root")
+        removed = {"source_instance_kind", "source_promoted", "pass_count", "tainted_by_errors",
+                   "var_debug_info", "mentioned_items", "user_type_annotations", "coroutine_info"}
+        for body in document["bodies"]:
+            self.assertFalse(removed & body.keys())
+            self.assertIn("required_consts", body)
+            for local in body["locals"]:
+                self.assertFalse({"local_info", "mutability", "layout"} & local.keys())
+            for scope in body["source_scopes"]:
+                self.assertNotIn("local_data", scope)
+
+    def test_typecheck_errors_abort_without_export_output(self):
+        result = self.export("typeck_error")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("mismatched types", result.stderr)
+        self.assertIn("pinned rustc driver reported compilation errors", result.stderr)
+        self.assertFalse(self.output.exists())
 
     def test_unused_required_constant_failure_aborts_without_output(self):
         result = self.export("unused_required_const", "root")

@@ -31,9 +31,22 @@ def main():
                         '-Zmir-enable-passes=-ReferencePropagation,-GVN', '-Zdeduplicate-diagnostics=no'],
                        cwd=ROOT, env=env, check=True)
         document = json.loads(snapshot.read_text())
-        keys = [(body['instance_id'], body['source_promoted']) for body in document['bodies']]
-        if len(keys) != len(set(keys)):
-            raise SystemExit('duplicate concrete instance/promoted body')
+        owners = {}
+        def record(body_id, owner):
+            if owner in owners and owners[owner] != body_id:
+                raise SystemExit('duplicate concrete instance/promoted body')
+            owners[owner] = body_id
+        for root in document['body_roots']:
+            record(root['body'], (root['entry_instance'], None))
+            for promoted in root['promoted_bodies']:
+                record(promoted['body'], (root['entry_instance'], promoted['promoted_index']))
+        for instance in document['instances']:
+            if instance['kind'] == 'instance_mir':
+                record(instance['body'], (instance['instance_id'], None))
+                for promoted in instance['promoted_bodies']:
+                    record(promoted['body'], (instance['instance_id'], promoted['promoted_index']))
+        if set(owners.values()) != set(range(len(document['bodies']))):
+            raise SystemExit('body pool contains an unowned concrete body')
         if any('constant_query_context' in body for body in document['bodies']):
             raise SystemExit('obsolete body normalization context')
         result = subprocess.run([str(args.runner.resolve()), str(snapshot)], cwd=ROOT, env=env,

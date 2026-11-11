@@ -51,7 +51,7 @@ exact arguments cannot be fingerprinted.
 
 ## Input contract
 
-The root schema is `lean-miri-rustc-mir` version 10. Evaluated integer scalars carry
+The root schema is `lean-miri-rustc-mir` version 11. Evaluated integer scalars carry
 `bits_unsigned` and the compiler layout's `size_bytes`, so consumers can construct
 the machine scalar before reading the type and layout tables. Zero-sized and
 pointer constants retain their separate representations. Compiler values have
@@ -72,6 +72,10 @@ separate tables with document-local, dense, zero-based IDs:
 | `predicates` | Full bound existential predicate; comparison rank is separate |
 | `bodies` | Instance, promoted index and source/query mode |
 
+ABI rows store `return` and each `arguments` entry as an index into
+`abi_arguments`. Each payload contains the complete type, layout and passing mode;
+sharing requires equality of all three, including all mode attributes.
+
 The Rust collector uses one `Pool<K, D>` implementation for the ten compiler identity tables. The additional `files` and `byte_images` tables intern exact strings and byte vectors.
 Each compiler key `K` owns its reserved index and a single concrete semantic
 value `D`, such as `pool_layout::Layout`, `pool_type::Type` or `pool_body::Body`.
@@ -90,7 +94,7 @@ explicit exceptional rows. Dedup salt arrays carry graph IDs in salt order;
 source IDs and byte keys come from those allocations. All 32 outcomes remain
 required for function, vtable and byte keys. The runtime reader accepts only the current wire version.
 
-Schema 10 adds exact-equality payload pools without changing compiler identity.
+Schema 11 uses exact-equality payload pools without changing compiler identity.
 `layouts` is an array of indices into `layout_values`: a type's `layout` still
 indexes `layouts`, so equal physical payloads retain separate `LayoutId`s.
 Type `boolean_queries` fields index root `boolean_queries`, and non-null
@@ -104,9 +108,13 @@ false values, null values and empty arrays. Lean resolves forward references
 independently of root field order and checks contextual bounds at each use.
 
 Maintained historical fixtures were mechanically projected from schema 8 with
-`tools/shared_json_pools.py`; the inverse projection preserves every original
-JSON value. `tests/fixtures/shared-pools-projection.json` pins both file hashes
-and canonical expanded hashes. Connected reference sidecars preserve the
+`tools/shared_json_pools.py`; the inverse projection preserves every retained
+JSON value. Schema 11 removes body diagnostics unused by Lean, local debug info,
+mutability and redundant layouts, and source-scope local data. `required_consts`
+remains present. The exporter rejects tainted MIR before collecting any body,
+including promoted bodies. Span `ctxt` contains its original rustc debug text as
+a string. `tests/fixtures/shared-pools-projection.json` pins both file hashes
+and the original and retained canonical expanded hashes. Connected reference sidecars preserve the
 original reference snapshot binding under `wire_projection`; this transformation
 does not constitute a new compiler export or Miri execution.
 
@@ -140,7 +148,7 @@ of those values. Type compiler facts use the owning `type_id` and optional
 This preserves a distinct region-erased query input when one exists.
 Backtrace `source_position.byte_position` is the body-specific collapsed position;
 it can differ from the global span's position for an inlined body.
-The reader accepts only schema 10. Explicit array offsets retain their count,
+The reader accepts only schema 11. Explicit array offsets retain their count,
 width and per-field equality checks. The producer stores array offsets as an
 exact stride/count formula, and represents a resolved LLVM intrinsic call with
 `kind: "llvm_intrinsic"`, `function_type` and `instance_id`, without `fn_abi`.

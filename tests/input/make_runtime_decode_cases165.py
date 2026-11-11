@@ -27,7 +27,7 @@ def replace_first_span(value):
 def replace_first_debug(value):
     if isinstance(value, dict):
         for key, child in value.items():
-            if key == "ctxt" and isinstance(child, dict) and child.get("status") == "debug_payload":
+            if key == "ctxt" and isinstance(child, str):
                 value[key] = {"kind": "invalid_source_context"}
                 return True
             if replace_first_debug(child):
@@ -76,7 +76,7 @@ def main(source: str, output: str) -> None:
 
     value = copy.deepcopy(base)
     if not replace_first_debug(value):
-        raise SystemExit("base input has no debug payload")
+        raise SystemExit("base input has no source context string")
     cases["bad-debug-payload"] = value
 
     value = copy.deepcopy(base)

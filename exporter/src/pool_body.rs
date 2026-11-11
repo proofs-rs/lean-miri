@@ -31,7 +31,6 @@ pub(super) struct SourceInfo {
     pub scope: u32,
 }
 
-pub(super) use crate::pool_values::DebugPayload;
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct SourcePosition {
@@ -61,24 +60,13 @@ pub(super) struct SourceScope {
     pub span: u64,
     pub inlined: Option<InlinedScope>,
     pub inlined_parent_scope: Option<u32>,
-    pub local_data: DebugPayload,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct Local {
     pub local: u32,
-    pub mutability: Mutability,
     pub r#type: u64,
-    pub layout: u64,
     pub source_info: Shared<SourceInfo>,
-    pub local_info: DebugPayload,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub(super) enum Mutability {
-    Mutable,
-    Immutable,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -777,30 +765,19 @@ pub(super) struct BasicBlock<Q = VtableQueryKey, C = crate::resolution_values::P
 #[derive(Serialize)]
 pub(super) struct Body<Q = VtableQueryKey, C = crate::resolution_values::PendingCandidates> {
     pub instance_id: u64,
-    pub source_instance_kind: crate::pool_instance::InstanceKind,
     pub preamble_def_span: u64,
     pub backtrace_spans: Shared<Vec<BacktraceSpan>>,
     pub source_def_id: u64,
-    pub source_promoted: Option<u32>,
     pub phase: Phase,
-    pub pass_count: usize,
     pub injection_phase: Option<Phase>,
-    pub tainted_by_errors: Option<crate::pool_values::DebugPayload>,
     pub arg_count: usize,
     pub spread_arg: Option<u32>,
     pub span: u64,
     pub locals: Vec<Local>,
     pub basic_blocks: Vec<BasicBlock<Q, C>>,
     pub source_scopes: Vec<SourceScope>,
-    pub var_debug_info: Vec<crate::pool_values::DebugPayload>,
-    pub mentioned_items: Option<crate::pool_values::DebugPayload>,
     pub required_consts: Vec<crate::pool_constant::Operand>,
-    pub user_type_annotations: crate::pool_values::DebugPayload,
-    pub coroutine_info: Option<CoroutineInfo>,
 }
-// Coroutine bodies fail export before a Body is constructed.
-#[derive(Serialize)]
-pub(super) enum CoroutineInfo {}
 
 #[cfg(test)]
 mod tests {
@@ -1195,38 +1172,26 @@ impl Body<VtableQueryKey, crate::resolution_values::PendingCandidates> {
         Ok({
             let Self {
                 instance_id,
-                source_instance_kind,
                 preamble_def_span,
                 backtrace_spans,
                 source_def_id,
-                source_promoted,
                 phase,
-                pass_count,
                 injection_phase,
-                tainted_by_errors,
                 arg_count,
                 spread_arg,
                 span,
                 locals,
                 basic_blocks,
                 source_scopes,
-                var_debug_info,
-                mentioned_items,
                 required_consts,
-                user_type_annotations,
-                coroutine_info,
             } = self;
             Body {
                 instance_id,
-                source_instance_kind: source_instance_kind,
                 preamble_def_span: preamble_def_span,
                 backtrace_spans: backtrace_spans,
                 source_def_id: source_def_id,
-                source_promoted: source_promoted,
                 phase: phase,
-                pass_count: pass_count,
                 injection_phase: injection_phase,
-                tainted_by_errors: tainted_by_errors,
                 arg_count: arg_count,
                 spread_arg: spread_arg,
                 span: span,
@@ -1236,11 +1201,7 @@ impl Body<VtableQueryKey, crate::resolution_values::PendingCandidates> {
                     .map(|item| item.finish(ids, candidates))
                     .collect::<Result<_, String>>()?,
                 source_scopes: source_scopes,
-                var_debug_info: var_debug_info,
-                mentioned_items: mentioned_items,
                 required_consts: required_consts,
-                user_type_annotations: user_type_annotations,
-                coroutine_info: coroutine_info,
             }
         })
     }

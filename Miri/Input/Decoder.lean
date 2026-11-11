@@ -56,6 +56,7 @@ private structure ParsedDocument where
   schema : String
   schemaVersion : Nat
   bodyReferences : Array DecodeMIR.References
+  abiArguments : Array AbiArgument
 
 private def denseRow (what : String) (index : Nat) (getId : α → Nat)
     (parser : JsonReader.Parser α) : JsonReader.Parser α := do
@@ -232,7 +233,7 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
         let some value := pools.layouts[id]? | JsonReader.fail s!"$.layouts[{index}]: unresolved layout value {id}"
         pure value
       return {d with layouts := some values}
-    | "fn_abis" => return {d with functionAbis := some (← JsonReader.arrayIndexed (fun index => parseFunctionAbi s!"$.fn_abis[{index}]"))}
+    | "fn_abis" => return {d with functionAbis := some (← JsonReader.arrayIndexed (fun index => parseFunctionAbi s!"$.fn_abis[{index}]" (some pools.abiArguments)))}
     | "types" => return {d with types := some (← JsonReader.arrayIndexed (fun index => denseRow "type IDs" index (·.id) (parseTypeNode s!"$.types[{index}]" pools.booleans pools.discriminants)))}
     | "byte_images" => return {d with byteImages := some (← parseByteImages)}
     | "allocations" => return {d with allocations := some (← JsonReader.arrayIndexed (fun index => parseAllocation s!"$.allocations[{index}]" pools.mir.initializationRanges pools.mir.relocations))}
@@ -290,7 +291,7 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
     runtimeTargetDataLayout := d.runtimeTargetDataLayout
     queries := ← CatalogDecoder.finish d.queries
   }
-  return ⟨value, schema, schemaVersion, d.bodyReferences⟩
+  return ⟨value, schema, schemaVersion, d.bodyReferences, pools.abiArguments⟩
 
 private def validateParsedDocument (parsed : ParsedDocument) (profile : Options) : Except String ImportDocument := do
   let d := parsed.value
@@ -349,6 +350,11 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
     CatalogDecoder.validateQueries bodyContext d.queries
   let core := d
   profileit "decoder.validate_cross_table_references" profile fun _ => validateParsedTables core
+  for (argument, index) in parsed.abiArguments.toList.zipIdx do
+    unless argument.typeId < types.size do
+      throw s!"$.abi_arguments[{index}].type: dangling type reference {argument.typeId}"
+    unless argument.layoutId < layouts.size do
+      throw s!"$.abi_arguments[{index}].layout: dangling layout reference {argument.layoutId}"
   pure core
 
 /-- Parse complete input, including all forward-reference and graph checks,

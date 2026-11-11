@@ -246,7 +246,7 @@ def parseAllocationMemory (path : String)
     (sharedArray initPool (path ++ ".initialization_ranges"))
     (sharedArray relocationPool (path ++ ".relocations"))
 
-/-- Constructor-level evidence parsing, separate from the schema10 document format. -/
+/-- Constructor-level evidence parsing, separate from the schema11 document format. -/
 def parseAllocationMemoryInline (path : String) : Parser AllocationMemory :=
   parseAllocationMemoryWith path
     (array (parseInitRange (path ++ ".initialization_ranges")))
@@ -1103,11 +1103,18 @@ private structure ParseFunctionAbiFields where
   c_variadic : Option (Bool) := none
   fixed_count : Option (Nat) := none
 
-def parseFunctionAbi (path : String) : Parser (FunctionAbi) := do
+def parseFunctionAbi (path : String) (argumentPool : Option (Array AbiArgument) := none) : Parser (FunctionAbi) := do
+  let argument (path : String) : Parser AbiArgument := do
+    match argumentPool with
+    | none => parseAbiArgument path
+    | some pool =>
+      let id ← natural
+      let some value := pool[id]? | fail s!"{path}: unresolved ABI argument {id}"
+      pure value
   let s ← object (ParseFunctionAbiFields.mk none none none none none none) fun s key => do
     match key with
-    | "arguments" => return { s with arguments := some (← array (parseAbiArgument (path ++ ".arguments"))) }
-    | "return" => return { s with returnValue := some (← parseAbiArgument (path ++ ".return")) }
+    | "arguments" => return { s with arguments := some (← arrayIndexed (fun i => argument s!"{path}.arguments[{i}]")) }
+    | "return" => return { s with returnValue := some (← argument (path ++ ".return")) }
     | "calling_convention" => return { s with calling_convention := some (← parseCanonicalAbi (path ++ ".calling_convention")) }
     | "can_unwind" => return { s with can_unwind := some (← boolean) }
     | "c_variadic" => return { s with c_variadic := some (← boolean) }

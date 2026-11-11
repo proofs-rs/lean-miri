@@ -69,6 +69,7 @@ impl<T: Serialize> Payloads<T> {
 #[derive(Default, Serialize)]
 pub(super) struct Values {
     layout_values: Payloads<crate::pool_layout::Layout>,
+    abi_arguments: Payloads<crate::pool_layout::ArgAbi>,
     boolean_queries: Payloads<crate::pool_type::BooleanQueries>,
     discriminants: Payloads<crate::pool_type::Discriminants>,
     initialization_ranges: Payloads<Vec<crate::allocation_values::InitializationRange>>,
@@ -91,6 +92,12 @@ pub(super) fn freeze(document: &mut crate::ExportDocument) -> Result<(), String>
     let pools = &mut document.shared_values;
     for layout in &mut document.layouts {
         pools.layout_values.share(layout)?;
+    }
+    for abi in &mut document.fn_abis {
+        pools.abi_arguments.share(&mut abi.ret)?;
+        for argument in &mut abi.arguments {
+            pools.abi_arguments.share(argument)?;
+        }
     }
     for ty in &mut document.types {
         pools
@@ -297,10 +304,39 @@ mod semantic_tests {
     }
 
     #[test]
+    fn abi_argument_sharing_requires_complete_type_layout_and_mode_equality() {
+        use crate::pool_layout::{ArgAbi, PassMode};
+        let argument = |ty, layout, mode| Shared::from(ArgAbi { ty, layout, mode });
+        let attributes = |size| {
+            let mut value = rustc_target::callconv::ArgAttributes::new();
+            value.pointee_size = rustc_abi::Size::from_bytes(size);
+            crate::pool_layout::ArgAttributes::new(value)
+        };
+        let mut arguments = vec![
+            argument(3, 5, PassMode::Ignore),
+            argument(3, 5, PassMode::Ignore),
+            argument(4, 5, PassMode::Ignore),
+            argument(3, 6, PassMode::Ignore),
+            argument(3, 5, PassMode::Pair {
+                first: attributes(0),
+                second: attributes(0),
+            }),
+            argument(3, 5, PassMode::Pair { first: attributes(0), second: attributes(8) }),
+        ];
+        let mut pool = Payloads::default();
+        for argument in &mut arguments {
+            pool.share(argument).unwrap();
+        }
+        assert_eq!(serde_json::to_string(&arguments).unwrap(), "[0,0,1,2,3,4]");
+        assert_eq!(pool.values.len(), 5);
+    }
+
+    #[test]
     fn empty_document_still_emits_every_payload_pool() {
         let serialized = serde_json::to_value(Values::default()).unwrap();
         for field in [
             "layout_values",
+            "abi_arguments",
             "boolean_queries",
             "discriminants",
             "initialization_ranges",

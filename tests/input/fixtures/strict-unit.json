@@ -1,6 +1,6 @@
 {
   "schema": "lean-miri-rustc-mir",
-  "schema_version": 10,
+  "schema_version": 11,
   "producer": {
     "miri_commit": "7fa591d7d4dd9af8154becbc8332f8096f8323b1",
     "rustc_commit": "8144389c895da997dbdecaa635e41d6a50be6ffd",
@@ -1014,5 +1014,6 @@
       "span": 0,
       "scope": 0
     }
-  ]
+  ],
+  "abi_arguments": []
 }

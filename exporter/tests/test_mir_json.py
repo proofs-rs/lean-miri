@@ -11,7 +11,7 @@ from mir_json import MirJSONError, POOL_NAMES, decode_mir_document, load_mir_doc
 
 
 def document(**fields):
-    return {"schema": "lean-miri-rustc-mir", "schema_version": 10,
+    return {"schema": "lean-miri-rustc-mir", "schema_version": 11,
             **{name: [] for name in POOL_NAMES}, **{name: [] for name in SHARED_POOLS}, "layouts": [], "files": [], "byte_images": [], **fields}
 
 
@@ -57,8 +57,8 @@ class MirJSONTests(unittest.TestCase):
                     decode_mir_document(document(**{name: value}))
 
     def test_requires_current_schema_version(self):
-        for version in (4, 6, 7, 8, 9, True, "10", 10.0):
-            with self.subTest(version=version), self.assertRaisesRegex(MirJSONError, "schema_version must be 10"):
+        for version in (4, 6, 7, 8, 9, 10, True, "11", 11.0):
+            with self.subTest(version=version), self.assertRaisesRegex(MirJSONError, "schema_version must be 11"):
                 decode_mir_document(document(schema_version=version))
 
     def test_current_schema_preserves_compact_layout_and_llvm_evidence(self):
@@ -68,8 +68,8 @@ class MirJSONTests(unittest.TestCase):
         current = document(layouts=[0], layout_values=[formula], bodies=[call])
         self.assertIs(decode_mir_document(current), current)
         self.assertEqual(pool_entry(current, "layouts", 0), formula)
-        for version in (8, 9):
-            with self.assertRaisesRegex(MirJSONError, "schema_version must be 10"):
+        for version in (8, 9, 10):
+            with self.assertRaisesRegex(MirJSONError, "schema_version must be 11"):
                 decode_mir_document(document(schema_version=version, layouts=[0], layout_values=[formula], bodies=[call]))
 
     def test_filename_ids_stay_shared_and_unexpanded(self):

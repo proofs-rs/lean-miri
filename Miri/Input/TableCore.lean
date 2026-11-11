@@ -15,7 +15,7 @@ open Lean
 def expectedMiriCommit : String := "7fa591d7d4dd9af8154becbc8332f8096f8323b1"
 def expectedRustcCommit : String := "8144389c895da997dbdecaa635e41d6a50be6ffd"
 def expectedSchema : String := "lean-miri-rustc-mir"
-def expectedSchemaVersion : Nat := 10
+def expectedSchemaVersion : Nat := 11
 def expectedCompilerAbiLayoutSchema : String := "physical_ty_and_layout_v1"
 
 def escapePathKey (key : String) : String :=
@@ -144,22 +144,6 @@ def parseSourcePosition (_path : String := "$parseSourcePosition") : Parser (Sou
     | _ => skipValue; pure s
   return ⟨(← required s.«line» "line"), (← required s.«column» "column")⟩
 
-private structure debugPayloadFields where
-  «status» : Option (String) := none
-  «rustc_debug» : Option (String) := none
-
-private def debugPayload  : Parser (String) := do
-  let s ← object (debugPayloadFields.mk none none) fun s key => do
-    match key with
-    | "status" => return { s with «status» := some (← string) }
-    | "rustc_debug" => return { s with «rustc_debug» := some (← string) }
-    | _ => skipValue; pure s
-  unless (← required s.«status» "status") == "debug_payload" do fail "expected diagnostic debug payload"
-  return (← required s.«rustc_debug» "rustc_debug")
-
-def sourceDebugString : Parser String := do
-  if (← Std.Internal.Parsec.peek!) == '"' then string else debugPayload
-
 private structure parseSourceSpanFields where
   «is_dummy» : Option (Bool) := none
   «lo» : Option (Nat) := none
@@ -177,7 +161,7 @@ def parseSourceSpan (_path : String := "$parseSourceSpan") : Parser (SourceSpanD
     | "hi" => return { s with «hi» := some (← natural) }
     | "start" => return { s with «start» := some (← parseSourcePosition) }
     | "end" => return { s with «end» := some (← parseSourcePosition) }
-    | "ctxt" => return { s with «ctxt» := some (← sourceDebugString) }
+    | "ctxt" => return { s with «ctxt» := some (← string) }
     | "file" => return { s with «file» := some (← natural) }
     | _ => skipValue; pure s
   return {
