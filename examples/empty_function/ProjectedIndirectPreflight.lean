@@ -76,7 +76,7 @@ theorem operand (s : Static) (metadata : Metadata s) (profile : Profile s) (capa
         (LocalCachedPush.cachedState s p tracker destination older bound) := by
   have dictionaries := MetadataBinding.fields s metadata capacity
   obtain ⟨remaining,capacityEq⟩ : ∃ n : Nat, s.capacity = n+1 := ⟨s.capacity-1,by omega⟩
-  have places := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have places := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     (Configuration.leaves s.prepared s.options.place.debugAssertions) remaining metadata.construction s.cfg
     (by simpa only [Configuration.rootConfig,capacityEq] using s.built)
   have computed : s.cfg.compiler.layout () destination.localId

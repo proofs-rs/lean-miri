@@ -86,7 +86,7 @@ theorem reborrow (s : WholeCall.Static) (p : WholeCall.Packet) (budget : Nat)
     reserved fence id source selected absent noFunction noVaList descriptor ordinary
   let allocation := converted.mapExtra (fun _ => BorrowTree.new root source.byteSize)
   let adjusted := MemoryExtras.putAllocation (CanonicalLatentMemory.extras s)
-    {middle with borrowTracker := some {afterTracker with global}} id ⟨none,#[]⟩
+    {middle with borrowTracker := some {afterTracker with global}} id {weakMemory := none}
   let installed := LatentInstallPost.installed adjusted id .global allocation
   let entry : InputDraft.Entry := ⟨.machine .global,allocation⟩
   have entryTree : entry.allocation.extra = BorrowTree.new root source.byteSize := rfl

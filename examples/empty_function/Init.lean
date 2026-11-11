@@ -30,8 +30,8 @@ theorem push_raw (h : CallMachine.Lifecycle K U C) (before : MachineHooks.State 
     (compiler : h.compiler = CompilerFrameMetadata.hooks metadata relevant)
     (preamble : h.preambleSpan = CompilerLifecycle.preambleSpan lifecycle)
     (required : h.requiredConstants = CompilerLifecycle.requiredConstants lifecycle)
-    (inline : CompilerVirtualFacts.inlineAttribute metadata.calls.scopes fnInstance = .ok none ∨
-      CompilerVirtualFacts.inlineAttribute metadata.calls.scopes fnInstance = .ok (some false))
+    (inline : CompilerVirtualFacts.inlineAttribute metadata.calls.scopes fnInstance = none ∨
+      CompilerVirtualFacts.inlineAttribute metadata.calls.scopes fnInstance = (some false))
     (track : CompilerRuntimeQueries.requiresCallerLocation metadata.calls.runtime fnInstance = .ok false)
     (definitionResolved : CompilerInstance.definitionOf metadata.calls.calls.program.input.instances fnInstance = .ok definitionIndex)
     (definitionAt : metadata.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition)

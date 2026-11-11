@@ -36,16 +36,16 @@ class FailClosedExportTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.output = Path(self.directory.name) / "output.json"
 
-    def export(self, fixture, root="identity", environment=None):
+    def export(self, fixture, root="identity", environment=None, crate_type="lib"):
         return subprocess.run(
             [str(self.exporter), "--output", str(self.output), "--root", root, "--",
              str(ROOT / "exporter/fixtures/fail_closed" / f"{fixture}.rs"),
-             "--crate-type=lib", "--crate-name=fail_closed_fixture"],
+             "--crate-type=" + crate_type, "--crate-name=fail_closed_fixture"],
             cwd=ROOT, env=environment or self.environment, capture_output=True, text=True,
         )
 
-    def accepted(self, fixture, root="identity"):
-        result = self.export(fixture, root)
+    def accepted(self, fixture, root="identity", crate_type="lib"):
+        result = self.export(fixture, root, crate_type=crate_type)
         self.assertEqual(result.returncode, 0, result.stderr)
         document = load_mir_document(self.output)
         self.assertNotIn("completeness", document)
@@ -68,6 +68,21 @@ class FailClosedExportTests(unittest.TestCase):
 
         check(document)
         return document
+
+    def test_nested_foreign_block_is_not_an_ambiguous_mir_root(self):
+        self.accepted("nested_foreign_root")
+        result = self.export("nested_foreign_root", "missing")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('did not resolve to a local MIR body', result.stderr)
+
+    def test_foreign_repr_c_transfer_records_exact_false_covariance(self):
+        document = self.accepted("foreign_repr_c_transfer", crate_type="bin")
+        types = {row['display']: row['type_id'] for row in document['types']}
+        source, target = types['CallerType'], types['implementation::CalleeType']
+        rows = [row for row in document['compiler_covariance_queries']
+                if row['source_type'] == source and row['target_type'] == target]
+        self.assertEqual(len(rows), 1)
+        self.assertIs(rows[0]['value'], False)
 
     def test_no_std_keeps_negative_and_optional_query_answers(self):
         document = self.accepted("no_std")

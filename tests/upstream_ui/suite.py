@@ -286,14 +286,28 @@ def category_lean(text, category):
                for name, _, lean in CATEGORIES)
 
 
+def profile_differences(expected, observed):
+    """Retain missing fields separately from observed nulls in diagnostics."""
+    return {key: {'expected': value, 'actual': observed.get(key),
+                  'missing': key not in observed}
+            for key, value in expected.items() if observed.get(key) != value}
+
+
+def reference_profile_differences(case, sidecar):
+    ref = sidecar.get('reference', sidecar)
+    config = ref.get('config', {})
+    differences = profile_differences(runtime_profile(case.runtime_flags), config)
+    # same_tcx requires an actual boolean, as in the acceptance oracle.
+    if config.get('same_tcx') is not True:
+        differences['same_tcx'] = {'expected': True, 'actual': config.get('same_tcx'),
+                                   'missing': 'same_tcx' not in config}
+    return differences
+
+
 def reference_oracle(case, sidecar, diagnostic):
     """Require a real same-TyCtxt reference and its original ERROR/site oracle."""
     ref = sidecar.get('reference', sidecar)
-    config = ref.get('config', {})
-    if config.get('same_tcx') is not True:
-        return 'reference_profile_mismatch', None
-    expected_profile = runtime_profile(case.runtime_flags)
-    if any(config.get(key) != value for key, value in expected_profile.items()):
+    if reference_profile_differences(case, sidecar):
         return 'reference_profile_mismatch', None
     kind = ref.get('outcome', {}).get('kind')
     if not case.fail:

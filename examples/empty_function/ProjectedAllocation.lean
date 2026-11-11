@@ -1,5 +1,6 @@
 import empty_function.ConcreteProtection
 import empty_function.RootTagPost
+import empty_function.AllocationInitialization
 
 namespace EmptyFunction.ProjectedAllocation
 open Miri Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter Miri.Input Miri.TreeBorrows
@@ -56,7 +57,7 @@ def allocation (s : Static) (maximum : Size) : PlaceMachine.AllocationConfig Mir
     (noRace : machine.dataRace = none)
     (vacant : machine.user.payload.payload.user.runtime.extras.allocations.any (fun row => row.1 == id) = false) :
     s.cfg.allocation.allocationTail id size align machine =
-      .ok () (MemoryExtras.putAllocation (extras s) machine id ⟨none,#[]⟩) := by
+      .ok () (MemoryExtras.putAllocation (extras s) machine id {weakMemory := none}) := by
   have absent : ¬ ∃ (index : Nat) (valid : index < machine.user.payload.payload.user.runtime.extras.allocations.size),
       (machine.user.payload.payload.user.runtime.extras.allocations[index]'valid).1 = id := by
     rintro ⟨index,valid,equal⟩
@@ -91,7 +92,7 @@ def allocation (s : Static) (maximum : Size) : PlaceMachine.AllocationConfig Mir
     ∃ global tag, tracker.global.rootPointerTag id = .ok (global,tag) ∧
       PlaceMachine.initStackExtra s.cfg.allocation.allocationTail id size align machine =
         .ok (BorrowTree.new tag size)
-          (MemoryExtras.putAllocation (extras s) {machine with borrowTracker := some {tracker with global}} id ⟨none,#[]⟩) ∧
+          (MemoryExtras.putAllocation (extras s) {machine with borrowTracker := some {tracker with global}} id {weakMemory := none}) ∧
       global.rootTag? id = some tag ∧ global.protectedTags = tracker.global.protectedTags ∧
       (∀ other old, tracker.global.rootTag? other = some old → global.rootTag? other = some old) := by
   obtain ⟨global,tag,rootEq⟩ := root_ready tracker.global id room
@@ -144,6 +145,22 @@ def allocation (s : Static) (maximum : Size) : PlaceMachine.AllocationConfig Mir
   rw [source s metadata capacity]
   rfl
 
+/-- The example's fixed diagnostic-off profile retains the original stack
+initialization action and all of its failed-state effects. -/
+theorem initialize_stack (s : Static) (metadata : Metadata s) (capacity : 0 < s.capacity)
+    (state : WholeCall.State) (id : AllocId) (size : Size) (align : Align) :
+    PlaceMachine.initializeAllocation s.cfg.allocation id .stack size align state =
+      match PlaceMachine.initStackExtra s.cfg.allocation.allocationTail id size align state.machine with
+      | .ok tree machine => .ok tree {state with machine}
+      | .error error machine => .error error {state with machine} := by
+  rw [AllocationInitialization.initialize_none s.cfg.allocation id .stack size align
+    (by rw [source s metadata capacity]; rfl)
+    (by rw [source s metadata capacity]; rfl)]
+  unfold AllocationInitialization.oldInitialize
+  rw [diagnostic s metadata capacity]
+  simp only [bind, Bind.bind, EStateM.bind, pure, Pure.pure, EStateM.pure]
+  cases outcome : PlaceMachine.initStackExtra s.cfg.allocation.allocationTail id size align state.machine <;> rfl
+
 /-- Internal operation composition through registration. The storage,
 reservation and root equations are derived from current raw resources before
 this is used by a client theorem. Address assignment remains the actual call. -/
@@ -175,8 +192,8 @@ this is used by a client theorem. Address assignment remains the actual call. -/
   simp only [tryCatch,tryCatchThe,MonadExceptOf.tryCatch,EStateM.tryCatch]
   simp only [noOverflow,↓reduceIte,get,getThe,MonadStateOf.get,EStateM.get,set,MonadStateOf.set,EStateM.set,
     bind,Bind.bind,EStateM.bind,pure,Pure.pure,EStateM.pure,reserve]
-  rw [diagnostic s metadata capacity]
-  simp only [bind,Bind.bind,EStateM.bind,pure,Pure.pure,EStateM.pure,root]
+  rw [initialize_stack s metadata capacity]
+  simp only [root,bind,Bind.bind,EStateM.bind,pure,Pure.pure,EStateM.pure]
   simp only [modify,modifyGet,MonadStateOf.modifyGet,EStateM.modifyGet,bind,Bind.bind,EStateM.bind,
     pure,Pure.pure,EStateM.pure,enabled,tagged,get,getThe,MonadStateOf.get,EStateM.get,
     set,MonadStateOf.set,EStateM.set,EarlyReturnT.return,EarlyReturn.runK,

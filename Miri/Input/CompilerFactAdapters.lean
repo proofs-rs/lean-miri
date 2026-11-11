@@ -40,7 +40,9 @@ private partial def lowerPattern (ctx : LowerContext) (tables : CompilerTables)
 structure Prepared where
   context : CompilerFacts.Context
   patterns : Array PatternIdentity
-  castTypes : Array (TypeId × Result CastTypeInfo)
+  /-- Decoder-validated canonical type IDs equal row positions; both successful
+  classifications and deferred errors retain that dense indexing. -/
+  castTypes : Array (Result CastTypeInfo)
   obligations : Array Obligation
 
 private def source (context : CompilerFacts.Context) (id : TypeId) : Result TypeNode :=
@@ -91,14 +93,14 @@ def prepare (context : CompilerFacts.Context) : Result Prepared := do
       | .error error => obligations := obligations.push ⟨s!"types[{node.id}].pattern",error⟩
   for node in context.runtime.source.types do
     match castType context tables patternIds node.id with
-    | .ok (kind,next) => casts := casts.push (node.id,.ok kind); tables := next
+    | .ok (kind,next) => casts := casts.push (.ok kind); tables := next
     | .error error =>
-      casts := casts.push (node.id,.error error)
+      casts := casts.push (.error error)
       obligations := obligations.push ⟨s!"types[{node.id}].cast",error⟩
   pure ⟨context.withProgram (context.program.withCompilerTables tables),patterns,casts,obligations⟩
 
 def castTypeInfo (prepared : Prepared) (id : TypeId) : Result CastTypeInfo := do
-  let some (_,result) := prepared.castTypes.find? (·.1 == id) | throw "compiler cast type identity missing"
+  let some result := prepared.castTypes[id]? | throw "compiler cast type identity missing"
   result
 private def dynamicPredicates (prepared : Prepared) (id : TypeId) : Result PredicateList := do
   let .dynamicTraitObject ids .. := (← source prepared.context id).shape | throw "dynamic predicate query on non-dynamic type"

@@ -18,12 +18,12 @@ theorem registered (s : Static) (state : State)
     post.machine.user.payload.payload.user.backend = .none ∧ post.machine.dataRace = none ∧
     post.machine.user.payload.ghost = false ∧ post.machine.user.payload.validation = .Shallow ∧
     post.machine.memory.live = reserved.live.push (id,⟨.stack,bytes.withExtra (BorrowTree.new tag size)⟩) ∧
-    post.machine.user.payload.payload.user.runtime.extras.allocations.find? (fun row => row.1 == id) = some (id,⟨none,#[]⟩) ∧
+    post.machine.user.payload.payload.user.runtime.extras.allocations.find? (fun row => row.1 == id) = some (id,{weakMemory := none}) ∧
     post.machine.borrowTracker = some {tracker with global} := by
   dsimp only
   refine ⟨backend,noRace,ghost,shallow,rfl,?_,rfl⟩
   change ((state.machine.user.payload.payload.user.runtime.extras.allocations.filter (fun row => row.1 != id)).push
-    (id,⟨none,#[]⟩)).find? (fun row => row.1 == id) = some (id,⟨none,#[]⟩)
+    (id,{weakMemory := none})).find? (fun row => row.1 == id) = some (id,{weakMemory := none})
   have missing : (state.machine.user.payload.payload.user.runtime.extras.allocations.filter (fun row => row.1 != id)).find?
       (fun row => row.1 == id) = none := by
     apply Array.find?_eq_none.mpr

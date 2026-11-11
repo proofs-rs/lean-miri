@@ -44,7 +44,7 @@ set_option linter.unusedSimpArgs false
   have bounded := metadata.compilerLocalSourceSpans body member decl declMember
   let index := decl.spanId
   obtain ⟨remaining,eq⟩ : ∃ n : Nat, s.capacity = n+1 := ⟨s.capacity-1,by omega⟩
-  have source := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have source := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     (Configuration.leaves s.prepared s.options.place.debugAssertions) remaining metadata.construction s.cfg
     (by simpa only [Configuration.rootConfig,eq] using s.built)
   refine ⟨⟨index⟩,?_⟩

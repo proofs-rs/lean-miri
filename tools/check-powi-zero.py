@@ -13,7 +13,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
-from mir_json import decode_mir_document
+from mir_json import decode_mir_document, pool_entry
 
 
 def main():
@@ -66,9 +66,10 @@ def main():
                   for record in records
                   if record.get('intrinsic_metadata') is not None}
     retained = set()
-    for body in snapshot['bodies']:
-        if body.get('def_path') != 'miri_start':
+    for root in snapshot['body_roots']:
+        if root.get('def_path') != 'miri_start':
             continue
+        body = pool_entry(snapshot, 'bodies', root['body'])
         for block in body['basic_blocks']:
             call = block.get('terminator', {}).get('kind', {})
             name = intrinsics.get(call.get('resolution', {}).get('instance_id'))

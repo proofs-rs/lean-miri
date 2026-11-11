@@ -65,12 +65,26 @@ def exampleOptions (limits : ExecutionMachine.Limits)
   panicUnwinds := true
   retag }
 
-/-- Canonical builder with explicit compiler products. Caller metadata may
-extend the fixed empty_function body; no whole-document equality is imposed. -/
+/-- The fixed proof profile predates optional allocation-backtrace diagnostics.
+Preserve every existing caller option while keeping that new diagnostic off.
+The proof does not cover the opt-in collector; raw options with that flag set
+are interpreted through this explicit legacy-profile projection. -/
+abbrev proofOptions (options : EvalConfigurationCore.Options) : EvalConfigurationCore.Options :=
+  {options with collectLeakBacktraces := false}
+
+/-- Every diagnostic-off option record embeds unchanged in the proof profile. -/
+theorem proofOptions_of_disabled (options : EvalConfigurationCore.Options)
+    (disabled : options.collectLeakBacktraces = false) : proofOptions options = options := by
+  cases options
+  simp_all [proofOptions]
+
+/-- Canonical builder with explicit compiler products and the diagnostic-off
+proof profile. Caller metadata may extend the fixed empty_function body; no
+whole-document equality is imposed. All pre-existing options remain arbitrary. -/
 def rootConfig (prepared : EvalPreparation.Prepared)
     (bytes : CompilerGlobalBytes.Prepared)
     (options : EvalConfigurationCore.Options) (choice : Unit) (capacity : Nat) :=
-  EvalConfigurationCore.make prepared.compiler prepared.image bytes options
+  EvalConfigurationCore.make prepared.compiler prepared.image bytes (proofOptions options)
     (leaves prepared options.place.debugAssertions) choice capacity
 
 

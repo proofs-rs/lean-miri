@@ -34,6 +34,7 @@ original = SOURCE_LOG.read_text()
 variants = {
     "truncate-terminal": original.rsplit("sc_ordering_control_fixture=PASS", 1)[0],
     "invalid-index": invalid_index(original),
+    "unknown-frame-instance": re.sub(r"(frame=some \()\d+(,)", r"\g<1>1000000000000000000000000000000\2", original),
     "missing-step-end": re.sub(r"^sc264_core_step_end choice_cursor=\d+\n", "", original, count=1, flags=re.M),
 }
 records = []

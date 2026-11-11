@@ -679,12 +679,14 @@ pub(super) fn discover<'tcx>(
         let Some(id) = row.instance_id else {
             continue;
         };
-        if let Some((instance, _)) = context
+        let selected_instance = context
             .instance_ids
             .iter()
             .find(|(_, candidate_id)| **candidate_id == id)
-        {
-            promote.push(*instance);
+            .map(|(instance, _)| *instance);
+        if let Some(instance) = selected_instance {
+            register_selected_foreign_call_transfers(context, tcx, &row.symbol, instance)?;
+            promote.push(instance);
         }
     }
     promote.sort_by_key(|instance| context.instance_ids[instance]);

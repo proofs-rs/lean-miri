@@ -9,7 +9,10 @@ set_option linter.unusedSimpArgs false
 private def unknownSource {S A : Type} (message : String) : EStateM StepError S A :=
   throw (.callback s!"choice input unknown: {message}")
 
-/-- Definitionally exact source equations with public source wrappers. -/
+/-- Definitionally exact source equations with public source wrappers.
+Index/Bernoulli draws never inspect the byte-length limit, so the bounded draw
+wrapper with limit zero is also definitionally the uncapped draw here. No
+choice-count or support constraint is added to the uncapped policy branches. -/
 private theorem demand_index_eq {S : Type} (access : Access S) (site : IndexSite) (count : Nat) :
     demandSource access (.index site count) = (do
       let tape := access.get (← get)

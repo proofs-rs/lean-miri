@@ -18,7 +18,8 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tests/upstream_ui'))
-from suite import SOURCES, compare, discover, reference_oracle, source_fingerprint
+from suite import (SOURCES, compare, discover, profile_differences, reference_oracle,
+                   reference_profile_differences, runtime_profile, source_fingerprint)
 from run_guarded import run as guarded_run
 
 
@@ -54,9 +55,9 @@ def run_case(case, args, env, output):
         command.extend(['--cfg', case.revision])
     record['command'] = command
     started = time.monotonic()
-    # Main's exporter has no UI flag adapter. Do not silently treat this setting
-    # as implemented: reference_oracle checks the recorded profile below.
-    export_code = invoke(command, env, directory / 'export.log', args.export_timeout, args.memory_limit)
+    case_env = env | {'LEAN_MIRI_REFERENCE_EMPTY_ENV': '1',
+                      'LEAN_MIRI_REFERENCE_UI_FLAGS_JSON': json.dumps(case.runtime_flags)}
+    export_code = invoke(command, case_env, directory / 'export.log', args.export_timeout, args.memory_limit)
     record['export_exit'] = export_code
     record['export_seconds'] = time.monotonic() - started
     sidecar_path = Path(str(snapshot) + '.miri-reference.json')
@@ -87,6 +88,7 @@ def run_case(case, args, env, output):
             raise ValueError('reference snapshot FNV/length mismatch')
 
         record['reference'] = sidecar
+        record['reference_profile_differences'] = reference_profile_differences(case, sidecar)
         status, category = reference_oracle(case, sidecar, (directory / 'export.log').read_text(errors='replace'))
         record['category'] = category
         # This exporter's main returns 2 for a rustc diagnostic, including
@@ -98,7 +100,8 @@ def run_case(case, args, env, output):
         # Run the current interpreter even when the reference profile differs.
         # Both failures and observations remain visible; neither becomes a pass.
         started = time.monotonic()
-        lean_command = [str(args.runner), str(snapshot)]
+        lean_command = [str(args.runner), str(snapshot), '--ui-source', str(source),
+                        '--ui-flags', json.dumps(case.runtime_flags)]
         record['lean_command'] = lean_command
         code = invoke(lean_command, env, directory / 'lean.log', args.timeout, args.memory_limit)
         record['lean_exit'] = code
@@ -118,6 +121,8 @@ def run_case(case, args, env, output):
             if len(profiles) == 1:
                 record['lean_profile'] = json.loads(profiles[0])
             record['lean_outcome_status'] = lean_status
+            record['lean_profile_differences'] = runner_profile_differences(
+                case, source, record.get('lean_profile', {}))
             if not runner_profile_matches(case, source, record.get('lean_profile', {})):
                 lean_status = 'lean_profile_mismatch'
         record['lean_status'] = lean_status
@@ -137,11 +142,13 @@ def run_case(case, args, env, output):
 
 def runner_profile_matches(case, source, profile):
     """Only accept a matching observed profile, never infer it from a zero exit."""
-    from suite import runtime_profile
-    expected = runtime_profile(case.runtime_flags)
-    return (all(profile.get(key) == value for key, value in expected.items()) and
-            profile.get('argv0') == str(source) and
-            profile.get('choice_policy') == 'seeded-generated-0')
+    return not runner_profile_differences(case, source, profile)
+
+
+def runner_profile_differences(case, source, profile):
+    expected = runtime_profile(case.runtime_flags) | {
+        'argv0': str(source), 'choice_policy': 'seeded-generated-0'}
+    return profile_differences(expected, profile)
 
 
 def main():
@@ -209,7 +216,7 @@ def main():
         'source_lock_sha256': sha256(ROOT / 'upstream/source-lock.json'),
         'exporter_sha256': exporter_hash, 'runner_sha256': runner_hash,
         'timeout': args.timeout, 'memory_limit': args.memory_limit, 'export_timeout': args.export_timeout,
-        'profile': 'PR #9 UI contract; current-main profile differences fail visibly',
+        'profile': 'empty environment; seed-0 diagnostic choices; per-case UI runtime flags',
         'claim': 'finite executions only; no whole-machine safety proof',
     }, indent=2) + '\n')
     records = [c.record() | {'status': 'profile_unsupported'} for c in cases if c.reasons]

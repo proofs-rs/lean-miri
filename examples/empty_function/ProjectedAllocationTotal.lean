@@ -22,7 +22,7 @@ theorem init_extra_of_root (s : Static) (metadata : Metadata s) (capacity : 0 < 
     PlaceMachine.initStackExtra s.cfg.allocation.allocationTail id size align machine =
       .ok (BorrowTree.new tag size)
         (MemoryExtras.putAllocation (ProjectedAllocation.extras s)
-          {machine with borrowTracker := some {tracker with global}} id ⟨none,#[]⟩) := by
+          {machine with borrowTracker := some {tracker with global}} id {weakMemory := none}) := by
   have done := ProjectedAllocation.tail s metadata capacity {machine with borrowTracker := some {tracker with global}}
     id size align backend noRace vacant
   simp only [noRace] at done
@@ -85,7 +85,7 @@ theorem init_error (s : Static) (metadata : Metadata s) (capacity : 0 < s.capaci
   simp only [tryCatch,tryCatchThe,MonadExceptOf.tryCatch,EStateM.tryCatch]
   simp only [noOverflow,↓reduceIte,get,getThe,MonadStateOf.get,EStateM.get,set,MonadStateOf.set,EStateM.set,
     bind,Bind.bind,EStateM.bind,pure,Pure.pure,EStateM.pure,reserve]
-  rw [ProjectedAllocation.diagnostic s metadata capacity]
+  rw [ProjectedAllocation.initialize_stack s metadata capacity]
   simp [root,notNative,get,getThe,MonadStateOf.get,EStateM.get,set,MonadStateOf.set,EStateM.set,
     bind,Bind.bind,EStateM.bind,pure,Pure.pure,EStateM.pure,
     throw,throwThe,MonadExceptOf.throw,EStateM.throw,EStateM.nonBacktrackable,EStateM.dummySave,EStateM.dummyRestore]
@@ -173,7 +173,7 @@ theorem allocate (s : Static) (metadata : Metadata s) (capacity : 0 < s.capacity
       have initializedEq := init_extra_of_root s metadata capacity {state.machine with memory := reserved} input.tracker tracked
         id destination.baseLayout.layout.size destination.baseLayout.layout.align.abi global tag rootEq backend noRace vacant
       let initial := MemoryExtras.putAllocation (ProjectedAllocation.extras s)
-        {{state.machine with memory := reserved} with borrowTracker := some {input.tracker with global}} id ⟨none,#[]⟩
+        {{state.machine with memory := reserved} with borrowTracker := some {input.tracker with global}} id {weakMemory := none}
       let liveState := ProjectedCreate.registered s state reserved input.tracker global id bytes tag destination.baseLayout.layout.size
       have registeredLive : liveState.machine.memory.live.find? (fun row => row.1 == id) =
           some (id,⟨.stack,bytes.withExtra (BorrowTree.new tag destination.baseLayout.layout.size)⟩) := by

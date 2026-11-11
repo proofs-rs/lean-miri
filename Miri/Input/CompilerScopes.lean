@@ -12,6 +12,7 @@ structure Entry where
 structure Prepared where
   program : LoweredProgram
   scopes : Array (Array (Except String Entry))
+  inlineAttributes : Std.HashMap CallInstance Bool
 private def decodeEntry (ctx : LowerContext) (tables : CompilerTables) (scope : SourceScope) :
     Except String (Entry × CompilerTables) := do
   match scope.inlined with
@@ -22,10 +23,11 @@ private def decodeEntry (ctx : LowerContext) (tables : CompilerTables) (scope : 
     let span : MIR.SpanRef := ⟨inlined.callsiteSpanId⟩
     pure (⟨⟨some (inlined.instanceId,span),scope.inlinedParent⟩,some inlined.requiresCallerLocation⟩,tables)
 
-def prepare (program : LoweredProgram) : Prepared := Id.run do
+def prepare (program : LoweredProgram) : Except String Prepared := do
   let ctx := LowerContext.ofDocument program.input
   let mut tables := program.compilerTables
   let mut all := #[]
+  let mut inlineAttributes : Std.HashMap CallInstance Bool := {}
   for body in program.bundle.bodies do
     let mut entries := #[]
     let scopes := body.input.sourceScopes
@@ -37,10 +39,15 @@ def prepare (program : LoweredProgram) : Prepared := Id.run do
       match result with
       | .error e => entries := entries.push (.error e)
       | .ok (entry,next) =>
+        if let some (callee,_) := entry.scope.inlined then
+          let some value := entry.trackCaller | throw "inlinecallee attribute evidence missing"
+          if let some previous := inlineAttributes[callee]? then
+            unless previous == value do throw "conflicting full-instance inlinecallee attributes"
+          inlineAttributes := inlineAttributes.insert callee value
         tables := next
         entries := entries.push (.ok entry)
     all := all.push entries
-  return ⟨program.withCompilerTables tables,all⟩
+  return ⟨program.withCompilerTables tables,all,inlineAttributes⟩
 
 /-- The caller supplies the canonical body index from its frame identity map.
 No fallback chooses a root, promoted body, or template by structural equality. -/
@@ -53,16 +60,7 @@ def sourceScope (prepared : Prepared) (bodyIndex scopeIndex : Nat) :
 /-- Full inlinecallee instances are the keys, including every generic argument. -/
 def inlineRequiresCallerLocation (prepared : Prepared) (fnInstance : CallInstance) :
     Except String Bool := do
-  let mut found := none
-  for scopes in prepared.scopes do
-    for entry in scopes do
-      if let .ok entry := entry then
-        if let some (callee,_) := entry.scope.inlined then
-          if callee == fnInstance then
-            let some track := entry.trackCaller | throw "missing inlinecallee track_caller query"
-            if let some prior := found then
-              unless prior == track do throw "conflicting inlinecallee track_caller query"
-            found := some track
-  let some result := found | throw "missing full-fnInstance requires_caller_location query"
+  let some result := prepared.inlineAttributes[fnInstance]?
+    | throw "missing full-fnInstance requires_caller_location query"
   pure result
 end Miri.Input.CompilerScopes

@@ -24,16 +24,16 @@ set_option linter.unusedSimpArgs false
       (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) =
       .ok () (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       ((remaining+1)+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig, capacity, Nat.add_assoc] using s.built
   have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes
-    s.options leaves (remaining+1) metadata.construction s.cfg outer
+    (EmptyFunction.Configuration.proofOptions s.options) leaves (remaining+1) metadata.construction s.cfg outer
   obtain ⟨inner, innerBuilt, _⟩ := CanonicalDictionaries.make_fields s.prepared.compiler s.prepared.image
-    s.bytes s.options leaves remaining metadata.construction
+    s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves remaining metadata.construction
   obtain ⟨node, nodeFound⟩ := metadata.unitNode
   have budget : s.options.limits.validation = (s.options.limits.validation-1)+1 := by omega
-  have valid := BodyCanonicalValidation.unit s.prepared.compiler s.prepared.image s.bytes s.options
+  have valid := BodyCanonicalValidation.unit s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves remaining metadata.construction inner innerBuilt frames frame machine s.abi.ret.layout
     (s.options.limits.validation-1) profile.debug metadata.unitSized noClocks noGhost
     metadata.unitKind node nodeFound metadata.unitInhabited metadata.unitFields metadata.unitVariants
@@ -61,13 +61,13 @@ set_option linter.unusedSimpArgs false
       (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) =
       .ok () (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       ((remaining+1)+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig, capacity, Nat.add_assoc] using s.built
   have source := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes
-    s.options leaves (remaining+1) metadata.construction s.cfg outer
+    (EmptyFunction.Configuration.proofOptions s.options) leaves (remaining+1) metadata.construction s.cfg outer
   have dictionaries := CanonicalDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes
-    s.options leaves (remaining+1) metadata.construction s.cfg outer
+    (EmptyFunction.Configuration.proofOptions s.options) leaves (remaining+1) metadata.construction s.cfg outer
   have compatible : s.cfg.copy.compatible s.abi.ret.layout s.abi.ret.layout = .ok true := by
     rw [source.compatible]
     simp [CompilerCovariance.compatible, CompilerCovariance.relation, CompilerCovariance.relationWithIndex,

@@ -91,10 +91,10 @@ theorem canonical (s : Static) (metadata : Metadata s) (profile : Profile s) (ca
           destination.baseLayout bound) p.before.machine) := by
   have dictionaries := MetadataBinding.fields s metadata capacity
   obtain ⟨remaining,capacityEq⟩ : ∃ n : Nat, s.capacity = n+1 := ⟨s.capacity-1,by omega⟩
-  have built : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options
+  have built : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
       (Configuration.leaves s.prepared s.options.place.debugAssertions) () (remaining+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig,capacityEq] using s.built
-  have places := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have places := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     (Configuration.leaves s.prepared s.options.place.debugAssertions) remaining metadata.construction s.cfg built
   have computed : s.cfg.compiler.layout () destination.localId
       (LocalUnit.current older destination.caller p.before.machine) =
@@ -108,7 +108,7 @@ theorem canonical (s : Static) (metadata : Metadata s) (profile : Profile s) (ca
     rfl
   let cached := LocalUnit.current older (LocalImmediate.cached destination.caller destination.localId
     destination.slot destination.baseLayout bound) p.before.machine
-  have contextEq := FactoryProjectionExact.projection s.prepared.compiler s.prepared.image s.bytes s.options
+  have contextEq := FactoryProjectionExact.projection s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     (Configuration.leaves s.prepared s.options.place.debugAssertions) remaining metadata.construction s.cfg built cached
   have projectedBound : offset.bytes.toNat ≤ destination.baseLayout.layout.size.bytes.toNat := by
     cases destination

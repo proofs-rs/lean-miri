@@ -75,6 +75,16 @@ def Fits {budget : Nat} : Plan budget → Tape → Prop
 structure Environment {budget : Nat} (plan : Plan budget) (tape : Tape) : Prop where
   fits : Fits plan tape
 
+/-- Remaining supplied inputs and generated quota contribute additively for
+finite policies. Uncapped diagnostic policies have no finite quota (`none`).
+This bookkeeping does not assert that a requested draw is supported. -/
+def remaining (tape : Tape) : Option Nat :=
+  match tape.policy with
+  | .strict => some (tape.inputs.size-tape.cursor)
+  | .boundedDiagnostic maximum _ | .boundedSeededDiagnostic maximum _ _ =>
+    some (tape.inputs.size-tape.cursor + (maximum-tape.generatedChoices))
+  | .diagnostic | .seededDiagnostic _ => none
+
 structure AccessLaws {S : Type} (access : Access S) : Prop where
   get_put : ∀ state tape, access.get (access.put state tape) = tape
   put_put : ∀ state first second, access.put (access.put state first) second = access.put state second

@@ -7,7 +7,8 @@ import json
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'upstream_ui'))
-from suite import Case, compare, discover, reference_oracle, runtime_profile
+from suite import (Case, compare, discover, reference_oracle,
+                   reference_profile_differences, runtime_profile)
 
 
 def sidecar(kind='miri_evaluation_error', status='failed'):
@@ -108,6 +109,24 @@ fn main() {
                                          '-Zmiri-tree-borrows'])['tree_borrows']['implicit_writes'], False)
         with self.assertRaises(ValueError):
             runtime_profile(['-Zmiri-disable-stacked-borrows', '-Zmiri-tree-borrows-implicit-writes'])
+
+    def test_reference_profile_diagnostics_preserve_observed_and_missing_values(self):
+        case = Case('pass/test.rs')
+        ref = sidecar('exit_zero', 'completed')
+        config = ref['reference']['config']
+        config['environment_policy'] = 'host snapshot'
+        config['rng_seed'] = None
+        del config['num_cpus']
+        self.assertEqual(reference_profile_differences(case, ref), {
+            'environment_policy': {'expected': 'empty', 'actual': 'host snapshot', 'missing': False},
+            'rng_seed': {'expected': 0, 'actual': None, 'missing': False},
+            'num_cpus': {'expected': 1, 'actual': None, 'missing': True},
+        })
+        self.assertEqual(reference_oracle(case, ref, '')[0], 'reference_profile_mismatch')
+        config.update(runtime_profile([]))
+        config['same_tcx'] = 1
+        self.assertIn('same_tcx', reference_profile_differences(case, ref))
+        self.assertEqual(reference_oracle(case, ref, '')[0], 'reference_profile_mismatch')
 
     def test_expected_ub_rejects_unrelated_stop_kind_and_site(self):
         case = Case('fail/test.rs', errors=[(3, 'expected a boolean')])

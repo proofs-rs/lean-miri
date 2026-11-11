@@ -23,7 +23,7 @@ theorem write (s : Static) (metadata : Metadata s) (capacity : 0 < s.capacity)
     (fresh : older.find? (fun row => row.1 == id) = none)
     (cached : state.machine.user.addresses.baseAddr.find? (fun row => row.allocId == id) = some ⟨id,base⟩)
     (backend : state.machine.user.payload.payload.user.backend = .none) (noClocks : state.machine.dataRace = none)
-    (extra : state.machine.user.payload.payload.user.runtime.extras.allocations.find? (fun row => row.1 == id) = some (id,⟨none,#[]⟩))
+    (extra : state.machine.user.payload.payload.user.runtime.extras.allocations.find? (fun row => row.1 == id) = some (id,{weakMemory := none}))
     (ghost : state.machine.user.payload.ghost = false) (shallow : state.machine.user.payload.validation = .Shallow) :
     ∃ after,
       (ValidityMachine.placeHooks s.cfg.access s.cfg.allocation s.cfg.compiler).writeMemoryNoValidate () value

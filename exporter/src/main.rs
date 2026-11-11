@@ -27,6 +27,8 @@ mod panic_queries;
 mod producer;
 #[cfg(feature = "miri-reference")]
 mod reference_values;
+#[cfg(feature = "miri-reference")]
+mod reference_ui;
 mod projection_queries;
 mod retag_queries;
 mod shim_abi;
@@ -331,6 +333,11 @@ struct ExportContext<'tcx> {
     /// types, but only these source casts add their result as a candidate.
     fn_pointer_cast_inputs: OrderedSet<ty::Ty<'tcx>>,
     fn_pointer_call_transfers: Vec<CallTransferRequest<'tcx>>,
+    /// Reached foreign calls can delegate to an exact exported-symbol winner.
+    /// Keep their actual operands until symbol discovery selects that body.
+    foreign_call_transfers: Vec<(ty::Instance<'tcx>, CallTransferRequest<'tcx>, bool)>,
+    foreign_call_transfer_keys: HashSet<(ty::Instance<'tcx>, CallTransferRequest<'tcx>, bool)>,
+    processed_foreign_transfers: HashSet<(usize, ty::Instance<'tcx>)>,
     runtime_callback_transfers: Vec<RuntimeCallbackTransferRequest<'tcx>>,
     runtime_callback_transfer_keys: HashSet<(String, ty::Ty<'tcx>, Vec<ty::Ty<'tcx>>, ty::Ty<'tcx>)>,
     processed_runtime_callback_transfers: incremental::PairFrontier,
@@ -345,7 +352,7 @@ struct ExportContext<'tcx> {
     processed_virtual_transfers: HashSet<(usize, ty::Instance<'tcx>)>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct CallTransferRequest<'tcx> {
     function_ty: ty::Ty<'tcx>,
     caller_env: ty::TypingEnv<'tcx>,
@@ -690,7 +697,10 @@ fn run_prepared_miri_reference_entry(
             implicit_writes: false,
         },
     ));
-    config.env = env::vars_os().collect();
+    let empty_environment = match reference_ui::configure(&mut config) {
+        Ok(empty) => empty,
+        Err(reason) => return R::InvalidProfile { status: S::Failed, reason, outcome: O::InvalidUiProfile },
+    };
     let file_name = tcx.sess.io.input.file_name(tcx.sess);
     let mut args = vec![file_name.prefer_local_unconditionally().to_string()];
     args.extend_from_slice(extra_args);
@@ -699,10 +709,16 @@ fn run_prepared_miri_reference_entry(
         .into_local_path()
         .and_then(|path| path.canonicalize().ok());
 
+    let (borrow_tracker, tree_borrows) = match &config.borrow_tracker {
+        Some(miri::BorrowTrackerMethod::TreeBorrows(params)) => ("tree_borrows", Some(TreeBorrows {
+            precise_interior_mut: params.precise_interior_mut, implicit_writes: params.implicit_writes })),
+        None => ("none", None),
+        Some(_) => ("unsupported", None),
+    };
     let config_description = Config {
         same_tcx: true,
-        borrow_tracker: "tree_borrows",
-        tree_borrows: TreeBorrows { precise_interior_mut: true, implicit_writes: false },
+        borrow_tracker,
+        tree_borrows,
         validation: format!("{:?}",config.validation),
         alignment_check: format!("{:?}",config.check_alignment),
         isolated_op: format!("{:?}",config.isolated_op),
@@ -726,7 +742,7 @@ fn run_prepared_miri_reference_entry(
         float_rounding_error_mode: format!("{:?}",config.float_rounding_error),
         short_fd_operations: config.short_fd_operations,
         collect_leak_backtraces: config.collect_leak_backtraces,
-        environment_policy: "host snapshot used; variable names and values are not serialized",
+        environment_policy: if empty_environment { "empty" } else { "host snapshot used; variable names and values are not serialized" },
         args: args,
     };
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -843,14 +859,25 @@ fn select_roots<'tcx>(
 ) -> Result<Vec<LocalDefId>, String> {
     let mut selected = Vec::new();
     for requested in requested_paths {
-        let matches = local_definitions
+        let mut matches = local_definitions
             .iter()
             .copied()
             .filter(|def_id| tcx.def_path_str(def_id.to_def_id()) == *requested)
             .collect::<Vec<_>>();
+        let had_path_match = !matches.is_empty();
+        // Pinned rustc_mir_transform::is_mir_available uses mir_keys: body
+        // owners (plus generated bodies/constructors), not every HIR item.
+        // Path-transparent foreign blocks inside a function can print the
+        // same def-path as that function, but cannot be exported as MIR roots.
+        matches.retain(|def_id| tcx.is_mir_available(def_id.to_def_id()) &&
+            !is_required_trait_method(tcx, def_id.to_def_id()));
         let [def_id] = matches.as_slice() else {
             return Err(if matches.is_empty() {
-                format!("--root {requested:?} did not resolve to a local MIR body")
+                if had_path_match {
+                    format!("--root {requested:?} has no available MIR body")
+                } else {
+                    format!("--root {requested:?} did not resolve to a local MIR body")
+                }
             } else {
                 format!("--root {requested:?} is ambiguous; pass a fully qualified rustc def-path")
             });
@@ -1439,6 +1466,8 @@ impl ExportCallbacks {
                 export_context.runtime_mir_frame_instances.len(),
                 export_context.fn_pointer_cast_inputs.len(),
                 export_context.fn_pointer_call_transfers.len(),
+                export_context.foreign_call_transfers.len(),
+                export_context.processed_foreign_transfers.len(),
                 export_context.runtime_callback_transfers.len(),
                 export_context.runtime_callback_transfer_keys.len(),
                 export_context.processed_runtime_callback_transfers.len(),
@@ -1512,6 +1541,8 @@ impl ExportCallbacks {
                 export_context.runtime_mir_frame_instances.len(),
                 export_context.fn_pointer_cast_inputs.len(),
                 export_context.fn_pointer_call_transfers.len(),
+                export_context.foreign_call_transfers.len(),
+                export_context.processed_foreign_transfers.len(),
                 export_context.runtime_callback_transfers.len(),
                 export_context.runtime_callback_transfer_keys.len(),
                 export_context.processed_runtime_callback_transfers.len(),
@@ -4267,6 +4298,13 @@ fn register_call_transfer_for_target<'tcx>(
     virtual_receiver: Option<ty::Ty<'tcx>>,
     indirect_function_pointer: bool,
 ) -> Result<(), String> {
+    if matches!(instance.def, ty::InstanceKind::Item(_)) && tcx.is_foreign_item(instance.def_id()) {
+        let key = (instance, request.clone(), indirect_function_pointer);
+        if context.foreign_call_transfer_keys.insert(key) {
+            context.foreign_call_transfers.push((instance, request.clone(), indirect_function_pointer));
+        }
+        return Ok(());
+    }
     if !closed_covariance_ty(request.function_ty)
         || !closed_covariance_ty(request.return_destination)
         || request
@@ -4597,6 +4635,25 @@ fn register_backtrace_frame_pointer_demands<'tcx>(
             context.runtime_mir_frame_instances.suffix(context.backtrace_frame_cursor).iter().copied());
         context.backtrace_frame_cursor = context.runtime_mir_frame_instances.len();
     }
+}
+
+/// The winner comes from foreign_symbols' exact weak/duplicate/non-function
+/// selection, not an ABI-compatible candidate search. Reuse ordinary call
+/// transfer discovery; each answer is still evaluated by rustc's Covariant
+/// relation, including false answers used by copy_op_allow_transmute.
+fn register_selected_foreign_call_transfers<'tcx>(
+    context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, symbol: &str,
+    target: ty::Instance<'tcx>,
+) -> Result<(), String> {
+    for site in 0..context.foreign_call_transfers.len() {
+        let (declaration, request, indirect) = context.foreign_call_transfers[site].clone();
+        if tcx.symbol_name(declaration).name != symbol ||
+            !context.processed_foreign_transfers.insert((site, target)) {
+            continue;
+        }
+        register_call_transfer_for_target(context, tcx, &request, target, None, indirect)?;
+    }
+    Ok(())
 }
 
 fn register_fn_pointer_call_transfers<'tcx>(

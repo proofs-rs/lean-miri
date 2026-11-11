@@ -9,7 +9,10 @@ import empty_function.MetadataQueries
 /-! Concrete candidate instantiation of the whole-call goal. These definitions
 are reviewable proposals, not a safety theorem or an ordinary-input coverage
 certificate. In particular resource sufficiency and arbitrary latent descriptor
-conversion adequacy are still open. -/
+conversion adequacy are still open. `Configuration.rootConfig` keeps the newly
+optional allocation-backtrace diagnostic disabled through `proofOptions`;
+all pre-existing option fields and caller-domain premises remain unchanged.
+Opt-in diagnostic collection is outside this fixed proof profile. -/
 namespace EmptyFunction.Specification
 open Miri Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter Miri.Input
 open WholeCall
@@ -38,9 +41,9 @@ structure Metadata (s : Static) where
   itemDefinition : DefId
   itemKind : CompilerInstance.kindOf s.prepared.compiler.loweringContext.instances s.functionInstance = .ok (.Item itemDefinition)
   inlineAttribute : CompilerVirtualFacts.inlineAttribute
-    s.prepared.compiler.lifecycle.calls.scopes s.functionInstance = .ok none ∨
+    s.prepared.compiler.lifecycle.calls.scopes s.functionInstance = none ∨
     CompilerVirtualFacts.inlineAttribute
-      s.prepared.compiler.lifecycle.calls.scopes s.functionInstance = .ok (some false)
+      s.prepared.compiler.lifecycle.calls.scopes s.functionInstance = (some false)
   trackCaller : CompilerRuntimeQueries.requiresCallerLocation
     s.prepared.compiler.lifecycle.calls.runtime s.functionInstance = .ok false
   targetFeatures : CompilerTargetFeatures.required
@@ -61,9 +64,9 @@ structure Metadata (s : Static) where
   unitStorageSized : CompilerStorage.veryTriviallySized
     s.prepared.compiler.runtime s.abi.ret.layout.ty = .ok true
   frameInlineAttribute : CompilerVirtualFacts.inlineAttribute
-    s.prepared.compiler.lifecycle.frames.calls.scopes s.functionInstance = .ok none ∨
+    s.prepared.compiler.lifecycle.frames.calls.scopes s.functionInstance = none ∨
     CompilerVirtualFacts.inlineAttribute
-      s.prepared.compiler.lifecycle.frames.calls.scopes s.functionInstance = .ok (some false)
+      s.prepared.compiler.lifecycle.frames.calls.scopes s.functionInstance = (some false)
   frameTrackCaller : CompilerRuntimeQueries.requiresCallerLocation
     s.prepared.compiler.lifecycle.frames.calls.runtime s.functionInstance = .ok false
   frameDefinition : ∃ definitionIndex definition,

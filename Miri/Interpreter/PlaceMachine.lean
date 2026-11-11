@@ -177,9 +177,36 @@ structure AllocationConfig (K User : Type) where
   nativeDrop : Option (Allocation Provenance Unit → M K User Unit) := none
   diagnostic : AllocId → Size → Align → MachineM K User Unit
   allocationTail : AllocId → Size → Align → MachineM K User Unit
+  /-- Source allocation backtraces need the actual active stack at allocation
+  time. Disabled configurations do not inspect or retain that stack. -/
+  allocationBacktrace : Option (AllocId → MemoryKind K → M K User Unit) := none
+  /-- Per-kind source allocation spans are saved after backtrace collection. -/
+  allocationSpan : AllocId → Size → Align → MachineM K User Unit := fun _ _ _ => pure ()
+  /-- Roll back side indices only when initialization failed before insertion. -/
+  discardUninserted : AllocId → MachineM K User Unit := fun _ => pure ()
   /-- Actual address-map allocation with the existing root tag. This must not
   replace the tag or derive an absolute address from allocation identity. -/
   adjustRootAddress : AllocId → BorTag → M K User (Pointer Provenance)
+
+private def allocationMachine (action : MachineM K User A) : M K User A := fun state =>
+  match action state.machine with
+  | .ok value machine => .ok value {state with machine}
+  | .error error machine => .error error {state with machine}
+
+/-- Source init_allocation order: diagnostics, tree/race/weak extras, optional
+allocation-time stack capture, then per-kind allocation span. Every callback
+sees the same reserved ID before it is published as live memory. -/
+def initializeAllocation (config : AllocationConfig K User) (id : AllocId)
+    (kind : MemoryKind K) (size : Size) (align : Align) : M K User BorrowTree := do
+  allocationMachine (config.diagnostic id size align)
+  let tree ← allocationMachine (initStackExtra config.allocationTail id size align)
+  try
+    if let some capture := config.allocationBacktrace then capture id kind
+    allocationMachine (config.allocationSpan id size align)
+    return tree
+  catch error =>
+    allocationMachine (config.discardUninserted id)
+    throw error
 
 /-- Actual uninitialized stack allocation, with root/tree/clock effects
 retained when a later root-address adjustment fails. -/
@@ -200,17 +227,7 @@ def allocateStackRaw [DecidableEq K] (config : AllocationConfig K User) (size : 
     let id ← match reserved with
       | .ok id => pure id
       | .error e => throw (.resourceExhaustion s!"stack allocation ID: {repr e}")
-    let initialized : MachineM K User BorrowTree := do
-      config.diagnostic id size align
-      initStackExtra config.allocationTail id size align
-    let state ← get
-    let tree ← match initialized state.machine with
-      | .ok tree machine =>
-        set {state with machine}
-        pure tree
-      | .error error machine =>
-        set {state with machine}
-        throw error
+    let tree ← initializeAllocation config id .stack size align
     modify fun state => {state with machine := {state.machine with memory :=
       {state.machine.memory with live := state.machine.memory.live.push (id, ⟨.stack, allocation.withExtra tree⟩)}}}
     let state ← get

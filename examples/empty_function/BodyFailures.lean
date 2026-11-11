@@ -16,15 +16,15 @@ theorem validate_capacity_one (s : Static) (metadata : Metadata s)
     s.cfg.projection.place.validate choice place state =
       .error (.resourceExhaustion "execution callback construction capacity") state := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       (0+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig,capacity] using s.built
   have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes
-    s.options leaves 0 metadata.construction s.cfg outer
+    (EmptyFunction.Configuration.proofOptions s.options) leaves 0 metadata.construction s.cfg outer
   rw [fields.projection]
   simp only [ValidityMachine.placeHooks,ValidityMachine.compilerPolicy,PlaceMachine.placeHooks]
   rw [fields.validate]
-  have zero : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves () 0 =
+  have zero : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves () 0 =
       .error (.resourceExhaustion "execution callback construction capacity") := by
     rw [EvalConfigurationCore.make_eq_context,EvalConfigurationCore.makeWithForeignContext]
     rfl
@@ -95,15 +95,15 @@ theorem validate_capacity_one (s : Static) (metadata : Metadata s)
       .error (.resourceExhaustion "validity traversal fuel")
         (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       ((remaining+1)+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig,capacity,Nat.add_assoc] using s.built
   have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes
-    s.options leaves (remaining+1) metadata.construction s.cfg outer
+    (EmptyFunction.Configuration.proofOptions s.options) leaves (remaining+1) metadata.construction s.cfg outer
   obtain ⟨inner,innerBuilt,_⟩ := CanonicalDictionaries.make_fields s.prepared.compiler s.prepared.image
-    s.bytes s.options leaves remaining metadata.construction
+    s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves remaining metadata.construction
   obtain ⟨node,nodeFound⟩ := metadata.unitNode
-  have valid := canonical_validation_zero s.prepared.compiler s.prepared.image s.bytes s.options
+  have valid := canonical_validation_zero s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves remaining metadata.construction inner innerBuilt frames frame machine s.abi.ret.layout
     profile.debug metadata.unitSized noClocks noGhost node nodeFound
   rw [fields.projection]
@@ -131,11 +131,11 @@ theorem validate_capacity_one (s : Static) (metadata : Metadata s)
       .ok ⟨.immediate .uninit,s.abi.ret.layout⟩
         (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       (remaining+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig, capacity, Nat.add_assoc] using s.built
   have source := BodyConstantDictionary.fields_of_make s.prepared.compiler s.prepared.image s.bytes
-    s.options leaves remaining metadata.construction s.cfg outer
+    (EmptyFunction.Configuration.proofOptions s.options) leaves remaining metadata.construction s.cfg outer
   obtain ⟨functions, arithmetic, external, callback⟩ := source.constants
   have literal := Literal.eval_unit s.prepared.compiler.runtime functions arithmetic external
     MemoryErrors.constant metadata.literal s.abi.ret.layout
@@ -181,13 +181,13 @@ private theorem bound_copy_eq (s : Static) (layout : LocalLayout)
       (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) =
       .error error (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       (remaining+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig, capacity, Nat.add_assoc] using s.built
   have source := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes
-    s.options leaves remaining metadata.construction s.cfg outer
+    (EmptyFunction.Configuration.proofOptions s.options) leaves remaining metadata.construction s.cfg outer
   have dictionaries := CanonicalDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes
-    s.options leaves remaining metadata.construction s.cfg outer
+    (EmptyFunction.Configuration.proofOptions s.options) leaves remaining metadata.construction s.cfg outer
   have compatible : s.cfg.copy.compatible s.abi.ret.layout s.abi.ret.layout = .ok true := by
     rw [source.compatible]
     simp [CompilerCovariance.compatible, CompilerCovariance.relation, CompilerCovariance.relationWithIndex,
@@ -267,13 +267,13 @@ private theorem bound_copy_eq (s : Static) (layout : LocalLayout)
       (BodyStep.current frames (BodyStep.withUnit frame .uninit none) machine) =
       .error error (BodyStep.current frames (BodyStep.withUnit frame .uninit (some s.abi.ret.layout)) machine) := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       (remaining+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig, capacity, Nat.add_assoc] using s.built
   have source := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes
-    s.options leaves remaining metadata.construction s.cfg outer
+    (EmptyFunction.Configuration.proofOptions s.options) leaves remaining metadata.construction s.cfg outer
   have dictionaries := CanonicalDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes
-    s.options leaves remaining metadata.construction s.cfg outer
+    (EmptyFunction.Configuration.proofOptions s.options) leaves remaining metadata.construction s.cfg outer
   have compatible : s.cfg.copy.compatible s.abi.ret.layout s.abi.ret.layout = .ok true := by
     rw [source.compatible]
     simp [CompilerCovariance.compatible, CompilerCovariance.relation, CompilerCovariance.relationWithIndex,

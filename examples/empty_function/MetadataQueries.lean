@@ -11,8 +11,8 @@ set_option maxHeartbeats 8000000
 
 theorem caller_location {p options config} (fields : Fields p options config)
     (limits : ExecutionMachine.Limits) (fn : CallInstance)
-    (inline : CompilerVirtualFacts.inlineAttribute p.lifecycle.calls.scopes fn = .ok none ∨
-      CompilerVirtualFacts.inlineAttribute p.lifecycle.calls.scopes fn = .ok (some false))
+    (inline : CompilerVirtualFacts.inlineAttribute p.lifecycle.calls.scopes fn = none ∨
+      CompilerVirtualFacts.inlineAttribute p.lifecycle.calls.scopes fn = (some false))
     (query : CompilerRuntimeQueries.requiresCallerLocation p.lifecycle.calls.runtime fn = .ok false) :
     (ExecutionMachine.callHooks config limits).requiresCallerLocation fn = pure false := by
   change config.virtual.compiler.requiresCallerLocation fn = _
@@ -20,8 +20,7 @@ theorem caller_location {p options config} (fields : Fields p options config)
   simp only [CompilerVirtualLeaves.make, CompilerVirtualFacts.scopeHooks]
   rcases inline with inline | inline
   all_goals
-    simp only [inline, query]
-    with_unfolding_all rfl
+    simp only [inline, query] <;> with_unfolding_all rfl
 
 theorem instance_abi {p options config} (fields : Fields p options config)
     (limits : ExecutionMachine.Limits) (fn : CallInstance) (abi : FnAbi TyId)

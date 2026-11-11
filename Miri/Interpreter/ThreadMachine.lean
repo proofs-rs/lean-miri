@@ -65,8 +65,7 @@ def allocateReturn [DecidableEq K] (h : Hooks K U C O X F A Aff) (layout : Local
   let id ← match result with
     | .ok id => pure id
     | .error error => throw (.resourceExhaustion s!"thread return allocation id: {reprStr error}")
-  machineAction (config.diagnostic id size align)
-  let tree ← machineAction (PlaceMachine.initStackExtra config.allocationTail id size align)
+  let tree ← PlaceMachine.initializeAllocation config id (.machine h.machineMemoryKind) size align
   modify fun state => {state with machine := {state.machine with memory := {state.machine.memory with
     live := state.machine.memory.live.push (id,⟨.machine h.machineMemoryKind,allocation.withExtra tree⟩)}}}
   let tag ← match (← get).machine.borrowTracker with

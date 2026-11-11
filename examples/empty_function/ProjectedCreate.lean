@@ -14,7 +14,7 @@ def registered (s : Static) (state : State) (reserved : MemoryState Provenance B
     (tracker : MachineHooks.BorrowState) (global : GlobalState) (id : AllocId)
     (bytes : Allocation Provenance Unit) (tag : BorTag) (size : Size) : State :=
   let initialized := MemoryExtras.putAllocation (ProjectedAllocation.extras s)
-    {state.machine with memory := reserved,borrowTracker := some {tracker with global}} id ⟨none,#[]⟩
+    {state.machine with memory := reserved,borrowTracker := some {tracker with global}} id {weakMemory := none}
   {state with machine := {initialized with memory :=
     {initialized.memory with live := initialized.memory.live.push (id,⟨.stack,bytes.withExtra (BorrowTree.new tag size)⟩)}}}
 
@@ -60,7 +60,7 @@ def registered (s : Static) (state : State) (reserved : MemoryState Provenance B
       id destination.baseLayout.layout.size destination.baseLayout.layout.align.abi
       (ProjectedAllocation.tag_room s p input resources) backend noRace vacantCurrent
   let initial := MemoryExtras.putAllocation (ProjectedAllocation.extras s)
-    {{state.machine with memory := reserved} with borrowTracker := some {input.tracker with global}} id ⟨none,#[]⟩
+    {{state.machine with memory := reserved} with borrowTracker := some {input.tracker with global}} id {weakMemory := none}
   let liveState := registered s state reserved input.tracker global id bytes tag destination.baseLayout.layout.size
   have reserveView := ProjectedAllocation.reserve_registry state.machine.memory
   have sameLive : reserved.live = p.before.machine.memory.live := by

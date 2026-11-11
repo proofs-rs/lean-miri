@@ -22,7 +22,7 @@ theorem initExtra_tagged [DecidableEq K]
     (vacant : (extras.get machine.user).allocations.any (fun row => row.1 == id) = false) :
     GlobalAllocationMachine.initExtra extras (fun _ _ _ => pure ()) id size align machine =
       .ok (BorrowTree.new root size)
-        (MemoryExtras.putAllocation extras {machine with borrowTracker := some {tracker with global}} id ⟨none,#[]⟩) := by
+        (MemoryExtras.putAllocation extras {machine with borrowTracker := some {tracker with global}} id {weakMemory := none}) := by
   have noentry : ¬ ∃ (i : Nat) (h : i < (extras.get machine.user).allocations.size),
       (extras.get machine.user).allocations[i].1=id := by
     simpa only [Array.any_eq_false,beq_iff_eq,not_exists] using vacant
@@ -48,9 +48,9 @@ theorem initExtra [DecidableEq K]
       tracker.global.rootPointerTag id = .ok (global,root) ∧
       GlobalAllocationMachine.initExtra extras (fun _ _ _ => pure ()) id size align machine =
         .ok (BorrowTree.new root size)
-          (MemoryExtras.putAllocation extras {machine with borrowTracker := some {tracker with global}} id ⟨none,#[]⟩) ∧
+          (MemoryExtras.putAllocation extras {machine with borrowTracker := some {tracker with global}} id {weakMemory := none}) ∧
       TreeRuntimeInput.World
-        (MemoryExtras.putAllocation extras {machine with borrowTracker := some {tracker with global}} id ⟨none,#[]⟩)
+        (MemoryExtras.putAllocation extras {machine with borrowTracker := some {tracker with global}} id {weakMemory := none})
         {tracker with global} ∧
       global.nextPointerTag.value.toNat ≤ tracker.global.nextPointerTag.value.toNat+1 := by
   obtain ⟨global,root,tagged,_protected,_tracked⟩ := RelocationRoot.root_tag_room tracker.global id tagRoom
@@ -82,9 +82,9 @@ theorem adjust [DecidableEq K]
       tracker.global.rootPointerTag id = .ok (global,root) ∧
       GlobalAllocationMachine.adjust target extras leaves id source before =
         .ok (.owned (converted.mapExtra (fun _ => BorrowTree.new root source.byteSize)))
-          (MemoryExtras.putAllocation extras {middle with borrowTracker := some {tracker with global}} id ⟨none,#[]⟩) ∧
+          (MemoryExtras.putAllocation extras {middle with borrowTracker := some {tracker with global}} id {weakMemory := none}) ∧
       TreeRuntimeInput.World
-        (MemoryExtras.putAllocation extras {middle with borrowTracker := some {tracker with global}} id ⟨none,#[]⟩)
+        (MemoryExtras.putAllocation extras {middle with borrowTracker := some {tracker with global}} id {weakMemory := none})
         {tracker with global} ∧
       global.nextPointerTag.value.toNat ≤ tracker.global.nextPointerTag.value.toNat+1 := by
   obtain ⟨global,root,tagged,initialized,postWorld,cost⟩ := initExtra extras middle id source.byteSize source.align tracker

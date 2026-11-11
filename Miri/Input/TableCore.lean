@@ -262,9 +262,12 @@ def parsePrimitiveLayout (path : String := "$parsePrimitiveLayout") : Parser (Pr
     signed := s.signed.join, addressSpace := s.address_space.join }
 
 def parseU128Natural (path : String := "$u128") : Parser Nat := do
-  let text ← string
-  unless !text.isEmpty && text.toList.all Char.isDigit do fail s!"{path}: expected exact unsigned decimal string"
-  let some value := text.toNat? | fail s!"{path}: invalid unsigned decimal"
+  let value ← if (← Std.Internal.Parsec.peek!) == '"' then do
+    let text ← string
+    unless !text.isEmpty && text.toList.all Char.isDigit do fail s!"{path}: expected exact unsigned decimal string"
+    let some value := text.toNat? | fail s!"{path}: invalid unsigned decimal"
+    pure value
+  else natural
   unless value < 2^128 do fail s!"{path}: u128 overflow"
   pure value
 
