@@ -415,6 +415,46 @@ of a relevant execution improvement. Original-case completion and full hosted
 UI validation remain unresolved. The older 600-second timeout and deliberately
 stopped 1,800-second probe remain separate schema-9 observations.
 
+### Unsigned x86 pack saturation: local validation
+
+The hosted AVX512 input reached an interpreter failure for the valid unsigned
+value 255. `IntrinsicX86.pack` clamped unsigned results correctly but constructed
+them through the signed `Scalar.fromInt` path, rejecting an 8-bit result above
+127 (and analogously a 16-bit result above 32767). The unsigned branch now uses
+checked `Scalar.fromUInt`, matching pinned `packuswb`/`packusdw`. Signed
+construction, input reads, saturation bounds, chunk/lane order, layout and ISA
+checks are unchanged.
+
+Fresh reference/guest comparisons pass the minimal 255 case, a signed 127
+control, and twelve explicit signed/unsigned vectors through the real
+128/256/512-bit dispatchers. These cover negative-to-zero unsigned saturation,
+upper bounds and out-of-range inputs, signed extrema, and distinct 128-bit chunk
+markers. The 128-bit i32 fixture covers the low side; u16 upper boundaries are
+covered at 256/512 bits. The original unchanged
+`pass/shims/x86/intrinsics-x86-avx512.rs` also passes its strict official driver
+with the original CPU flags/profile and CI-default 600-second budgets. Source,
+prepared-reference FNV/length, profiles and executable identities match.
+
+On the combined Unix-allocation base `bbee5d19`, the 1,283-target common build,
+46 runtime checks and structural regressions pass. The library audit checks
+74,397 declarations; all 268 fixed empty-function roots pass with a transitive
+audit of 77,063 declarations. Both audits permit only `propext`, `Quot.sound`
+and `Classical.choice`. Fixed inputs, proof claims and caller assumptions are
+unchanged. An earlier pre-Unix proof run was stopped after 224 module starts;
+it is incomplete and is not included in these results.
+
+After the exporter-only rebase onto `c390bf41`, every recorded library source,
+all 268 frozen proof sources and the fixed-input manifest remain identical.
+The refreshed reference-enabled producer (SHA256
+`0325af2577967180f1aae3ee76483aca265d7c2fae90ae5ba8e533c1bc0f8811`)
+and hash-matched native runner (SHA256
+`45acc1b882004f65fa4492032e279df026b8c4fea2711383a74a39d32efebd08`)
+pass all three fresh pack fixtures and the original AVX512 file again. This also
+exercises the assertion harness's reference arguments after the covariance
+metadata update. Hosted validation of this pack follow-up remains pending.
+These finite comparisons do not establish general x86 equivalence or all-prefix
+safety for other guests.
+
 ### Schema-9 metadata follow-up: local validation
 
 On the follow-up rebased onto `7cc6b6cc`, the full 1,281-job library/test/native

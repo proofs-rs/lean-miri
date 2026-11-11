@@ -298,6 +298,7 @@ when changing it.
 | --- | --- |
 | `python3 tests/intrinsic_float/source_compare.py` | Finite intrinsic helper comparison against pinned APFloat: FMA, rounding, min/max and NaN handling. Requires its Rust oracle dependencies. |
 | `python3 tests/aes/source_compare.py` | Compare pinned AES fixslice bodies; requires offline vendor configuration at `scratch/cargo-vendor.toml` and matching crates. |
+| `flock /tmp/lean-miri-ci-guest.lock python3 tests/x86_pack/check.py --output scratch/x86-pack-new` | Fresh pinned-reference/guest comparisons for 128/256/512-bit signed and unsigned saturation boundaries and 128-bit chunk/lane order; requires a reference-feature exporter and matching native runner. Unsupported and timeouts fail the check. |
 | `python3 tests/random_memory/source_compare.py` | Extracted gen_random outer-body ordering and failure propagation; RNG/host/write leaves are fixtures. |
 | `python3 tests/producer/primitive_ranges.py` | Genuine u128/niche metadata and Lean decoder boundaries; requires built debug exporter and MIR sysroot. |
 | `cargo +miri-exporter-8144389c895d test --manifest-path exporter/Cargo.toml --locked --offline` | Rust/Python exporter tests, four fixture scripts and four producer checks; included in `check.sh`. Requires pinned toolchain, MIR sysroot and offline dependencies. |
