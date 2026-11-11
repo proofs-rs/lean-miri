@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Any
 import zlib
 
-POOL_NAMES = frozenset({"types", "allocations", "instances", "layouts", "fn_abis", "spans",
+try:  # Support package imports and direct scripts under tools/.
+    from .shared_json_pools import SHARED_POOLS, expand_document
+except ImportError:
+    from shared_json_pools import SHARED_POOLS, expand_document
+
+POOL_NAMES = frozenset({"types", "allocations", "instances", "fn_abis", "spans",
                         "definitions", "type_constants", "bodies", "predicates"})
 
 
@@ -21,32 +26,38 @@ def decode_mir_document(document: Any) -> dict[str, Any]:
         raise MirJSONError("MIR document root must be an object")
     if document.get("schema") != "lean-miri-rustc-mir":
         raise MirJSONError("document is not a lean-miri-rustc-mir export")
-    if type(document.get("schema_version")) is not int or document["schema_version"] not in (8, 9):
-        raise MirJSONError("MIR root schema_version must be 8 or 9")
+    if type(document.get("schema_version")) is not int or document["schema_version"] != 10:
+        raise MirJSONError("MIR root schema_version must be 10")
     for name in sorted(POOL_NAMES):
         if not isinstance(document.get(name), list):
             raise MirJSONError(f"{name} must be a pool array")
         if any(not isinstance(row, dict) for row in document[name]):
             raise MirJSONError(f"{name} definitions must be objects")
+    layouts = document.get("layouts")
+    if not isinstance(layouts, list) or any(type(index) is not int or index < 0 for index in layouts):
+        raise MirJSONError("layouts must be a nonnegative reference array")
+    for name, row_type in SHARED_POOLS.items():
+        rows = document.get(name)
+        if not isinstance(rows, list) or any(not isinstance(row, row_type) for row in rows):
+            raise MirJSONError(f"{name} must be a pool of {row_type.__name__} values")
     files = document.get("files")
     if not isinstance(files, list) or any(not isinstance(name, str) for name in files):
         raise MirJSONError("files must be a string array")
     images = document.get("byte_images")
     if not isinstance(images, list) or any(not isinstance(image, str) for image in images):
         raise MirJSONError("byte_images must be a string array")
-    if document["schema_version"] == 8:
-        if any(isinstance(row.get("field_offsets_bytes"), dict) for row in document["layouts"]):
-            raise MirJSONError("compact array field offsets require schema 9")
-        for body in document["bodies"]:
-            for block in body.get("basic_blocks", []):
-                resolution = block.get("terminator", {}).get("kind", {}).get("resolution", {})
-                if resolution.get("kind") == "llvm_intrinsic":
-                    raise MirJSONError("LLVM no-ABI call evidence requires schema 9")
     return document
 
 
-def pool_entry(document: dict[str, Any], pool: str, index: Any) -> dict[str, Any]:
-    if pool not in POOL_NAMES:
+def pool_entry(document: dict[str, Any], pool: str, index: Any) -> Any:
+    if pool == "layouts":
+        references = document.get("layouts", [])
+        if type(index) is not int or index < 0 or index >= len(references):
+            raise MirJSONError(f"layouts reference {index!r} is out of range")
+        if isinstance(references[index], dict):
+            return references[index]  # Explicit semantic inspection view.
+        return pool_entry(document, "layout_values", references[index])
+    if pool not in POOL_NAMES and pool not in SHARED_POOLS:
         raise MirJSONError(f"unknown MIR pool {pool!r}")
     rows = document.get(pool)
     if not isinstance(rows, list):
@@ -71,7 +82,8 @@ def pool_entry(document: dict[str, Any], pool: str, index: Any) -> dict[str, Any
     if type(index) is not int or index < 0 or index >= len(rows):
         raise MirJSONError(f"{pool} reference {index!r} is out of range")
     row = rows[index]
-    if not isinstance(row, dict):
+    row_type = SHARED_POOLS.get(pool, dict)
+    if not isinstance(row, row_type):
         raise MirJSONError(f"{pool}[{index}] must be an object")
     return row
 
@@ -87,3 +99,16 @@ def load_mir_document(path: str | Path) -> dict[str, Any]:
     except (OSError, EOFError, UnicodeError, json.JSONDecodeError, zlib.error) as exc:
         raise MirJSONError(f"cannot read MIR JSON {path}: {exc}") from exc
     return decode_mir_document(document)
+
+
+def inspection_document(document: dict[str, Any]) -> dict[str, Any]:
+    """Resolve payloads for analysis while retaining graph/type/layout identity IDs."""
+    try:
+        return expand_document(document)
+    except ValueError as exc:
+        raise MirJSONError(str(exc)) from exc
+
+
+def load_mir_inspection_document(path: str | Path) -> dict[str, Any]:
+    """Load a schema-10 document and explicitly resolve shared inspection payloads."""
+    return inspection_document(load_mir_document(path))

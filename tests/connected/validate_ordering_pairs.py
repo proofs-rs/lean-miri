@@ -9,7 +9,7 @@ import hashlib,json,re,sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'tools'))
-from mir_json import load_mir_document, pool_entry
+from mir_json import load_mir_inspection_document as load_mir_document, pool_entry
 ORIGINAL_SOURCES={'fence-acqrel': ['/workspace/lean-miri/docs/verification/sc-ordering-controls264/inputs/259-fence-acqrel-yield-control.rs'], 'fence-sc': ['/workspace/lean-miri/docs/verification/sc-ordering-controls264/inputs/259-fence-sc-yield.rs'], 'rmw-relaxed': ['/workspace/lean-miri/docs/verification/sc-ordering-controls264/inputs/259-rmw-relaxed-yield-control.rs'], 'rmw-sc': ['/workspace/lean-miri/docs/verification/sc-ordering-controls264/inputs/259-rmw-sc-yield.rs']}
 SOURCE_HASHES={'fence-acqrel': '2c6645e8da4e849ea7e13e3a1bcc5c1293a8965e7ab53605997a18d412048c26', 'fence-sc': 'e55a059e733243d97e9a4ef5aa7e3ff9a264dcfbdcd07b74c04fc79fffc76905', 'rmw-relaxed': '31042ff16963a0730d1d5d6f511bf240bc293d3a3e46880b8ab8ba7cea90975e', 'rmw-sc': '059cb871809b85b579e70e0ae372203681be184c82df093d2032dccd38a00be0'}
 def need(ok,msg):

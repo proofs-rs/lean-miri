@@ -31,8 +31,9 @@ def main (args : List String) : IO Unit := do
   let _ ← must (decodeJson legacyText)
   let calls := decoded.document.bodies.flatMap (·.callEvidence.filterMap id)
   check (calls.any (·.abi == .llvmIntrinsic)) "fixture has no LLVM call evidence"
-  rejects (decodeJson (set raw "schema_version" (toJson (8 : Nat))).compress)
-    "schema 8 accepted new LLVM evidence"
+  for version in #[(8 : Nat), 9] do
+    rejects (decodeJson (set raw "schema_version" (toJson version)).compress)
+      s!"obsolete schema {version} accepted current LLVM evidence"
   rejects (decodeJson (mutateCalls raw (fun j => set j "fn_abi" (toJson (0 : Nat)))).compress)
     "LLVM call accepted ordinary ABI"
   rejects (decodeJson (mutateCalls raw (fun j => set j "kind" (.str "resolved_instance"))).compress)
@@ -88,4 +89,4 @@ def main (args : List String) : IO Unit := do
   check (wrongItemCalls.entries.any fun entry => match entry.outcome with
     | .error message => message == "LLVM call tag/canonical instance mismatch"
     | .ok _ => false) "direct call preparation accepted LLVM no-ABI tag for Item"
-  IO.println "LLVM no-ABI decoder controls passed; fixed schema-8 input accepted"
+  IO.println "LLVM no-ABI decoder controls passed; current pooled input accepted; obsolete schema versions rejected"

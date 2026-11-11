@@ -1,15 +1,17 @@
 # Compact array layout checks
 
-Schema 9 emits array `field_offsets_bytes` as
+Schema 10 emits array `field_offsets_bytes` as
 `{"kind":"array","stride_bytes":S,"field_count":N}`. The typed reader checks
 that this formula matches the field shape, that both values fit u64, and that
 every in-bounds offset fits u64. It does not enumerate the fields. Runtime
 offset lookup remains the existing checked `FieldsShape.Array.offset` operation.
 Zero-length arrays and arbitrarily large zero-stride arrays are retained.
 
-Schemas 8 and 9 both accept explicit offset arrays with the original count,
-width and per-field equality checks. Schema 8 rejects compact formulas; the
-fixed empty-function input is used without rewriting its bytes.
+Schema 10 also accepts explicit offset arrays with the original count, width
+and per-field equality checks. Physical payloads live in `layout_values`;
+`layouts` retains each original LayoutId as a payload reference. Earlier root
+versions are rejected. The fixed empty-function input uses the same lossless
+payload projection and preserves its original semantic data.
 
 After building the library, run the component assertions and all-index proofs:
 
@@ -18,7 +20,7 @@ lake env lean --run tests/input/CompactArrayOffsets.lean
 ```
 
 `tools/check-structural-regressions.sh` includes this check. The document/version
-control takes the unchanged schema-8 input and a genuine schema-9 export:
+control takes the current pooled dense-offset input and a fresh schema-10 export:
 
 ```bash
 lake env lean --run tests/input/CompactArrayDocument.lean \

@@ -1,6 +1,7 @@
 //! Semantic type graph stored while collecting compiler facts.
 use crate::pool_values::{BoundVariable, GenericArgument, Region};
 use serde::Serialize;
+use crate::shared_json::Shared;
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct Type {
     pub type_id: u64,
@@ -190,12 +191,12 @@ pub(super) enum ScalableElement {
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct CompilerFacts {
     pub typing_env: &'static str,
-    pub boolean_queries: BooleanQueries,
+    pub boolean_queries: Shared<BooleanQueries>,
     pub type_queries: TypeQueries,
     pub adt: Option<AdtFacts>,
     pub capture_names: Option<Vec<Option<String>>>,
     pub simd_size_and_type: Option<Simd>,
-    pub discriminants: Discriminants,
+    pub discriminants: Shared<Discriminants>,
     pub projection_queries: Option<ProjectionQueries>,
     pub definition: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -38,16 +38,16 @@ restore_input() {
 }
 
 restore_input source133-root-u32-001 \
-  179572ae9a309f66541c427c400a6d4eb73a511a00dd319306e0e350ce38f25b \
-  a378e092a758433f0239fbb4c689d8cddf710e6e282577f055dcd445ec3dd74a
+  f2fa16bf1e13da75ede24085397e9d18f40c94a515aee1d68717138feeea7047 \
+  d94a5daaf0ec5c780113a5a74fc751fca6da4d4510fd24f6765f135ae663529a
 restore_input source133-root-control-flow-001 \
-  6b3a90bfa0ed2cdf91522ff9506818388946bedbbe6d6401b3b8e7baab75d73b \
-  22784c04742db6b5903ea41354a6ff7edfe29ee2e131390aa0aece68206d6d7c
+  c514a5ebfe80d7ba52ddd635caa87260cd6038ad8dc77d0f0d8e913493b7f46e \
+  f1590691685cabe1b0d6251f04e80aa1dc89d4ee18cf66b16525c85ee4c2d489
 restore_input source133-nostd-startup-001 \
-  ce70d19a48d48835d68cd83ed3e039778daa4e051c4c68cb5fadf5fee782f99e \
-  49561ca5c13b1275c3efcce35e8d61d365f04b19c68a727c433aec83b648626a
+  ee823b66ae8bc3a1e79fc1c9b3faf3d47e8c2f0cd50b75a50b41f37f433a30f1 \
+  89f3252f7f38f3cb7e719df04ee7ab5789676708cea73be7a4803b12a26747f7
 
-# Preserve the fresh schema-8 compiler exports byte for byte after
+# Preserve the schema-10 pooled compiler fixtures byte for byte after
 # verifying each archive and decompressed input hash above.
 copy_checked_input() {
   local name="$1"

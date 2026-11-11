@@ -51,7 +51,7 @@ exact arguments cannot be fingerprinted.
 
 ## Input contract
 
-The root schema is `lean-miri-rustc-mir` version 9. Evaluated integer scalars carry
+The root schema is `lean-miri-rustc-mir` version 10. Evaluated integer scalars carry
 `bits_unsigned` and the compiler layout's `size_bytes`, so consumers can construct
 the machine scalar before reading the type and layout tables. Zero-sized and
 pointer constants retain their separate representations. Compiler values have
@@ -88,8 +88,27 @@ Prepared-world `raw_pool` positions imply source ID `index + 1`: null slots join
 their unique serialized allocation, while opaque and dangling globals retain
 explicit exceptional rows. Dedup salt arrays carry graph IDs in salt order;
 source IDs and byte keys come from those allocations. All 32 outcomes remain
-required for function, vtable and byte keys. Earlier wire versions require fresh
-export rather than compatibility conversion.
+required for function, vtable and byte keys. The runtime reader accepts only the current wire version.
+
+Schema 10 adds exact-equality payload pools without changing compiler identity.
+`layouts` is an array of indices into `layout_values`: a type's `layout` still
+indexes `layouts`, so equal physical payloads retain separate `LayoutId`s.
+Type `boolean_queries` fields index root `boolean_queries`, and non-null
+`discriminants` fields index root `discriminants`; null remains explicit.
+Every memory payload's `initialization_ranges` and `relocations` fields index
+root arrays of arrays with those names. Bodies index root `backtrace_spans`;
+statement `kind` fields index `statement_kinds`; MIR `source_info` fields index
+`source_infos`. Source information remains separate from statement kinds so
+sharing a statement does not merge its use sites. Pool payloads retain all
+false values, null values and empty arrays. Lean resolves forward references
+independently of root field order and checks contextual bounds at each use.
+
+Maintained historical fixtures were mechanically projected from schema 8 with
+`tools/shared_json_pools.py`; the inverse projection preserves every original
+JSON value. `tests/fixtures/shared-pools-projection.json` pins both file hashes
+and canonical expanded hashes. Connected reference sidecars preserve the
+original reference snapshot binding under `wire_projection`; this transformation
+does not constitute a new compiler export or Miri execution.
 
 Discovery retains compiler query results until the reachable graph closes.
 Append-only request domains have consumer cursors; pair consumers visit new sites
@@ -121,8 +140,8 @@ of those values. Type compiler facts use the owning `type_id` and optional
 This preserves a distinct region-erased query input when one exists.
 Backtrace `source_position.byte_position` is the body-specific collapsed position;
 it can differ from the global span's position for an inlined body.
-The reader also accepts schema 8 with its original dense array offsets and
-ordinary ABI call evidence. Schema 9 additionally stores array offsets as an
+The reader accepts only schema 10. Explicit array offsets retain their count,
+width and per-field equality checks. The producer stores array offsets as an
 exact stride/count formula, and represents a resolved LLVM intrinsic call with
 `kind: "llvm_intrinsic"`, `function_type` and `instance_id`, without `fn_abi`.
 Only an exact `LlvmIntrinsic` compiler identity may use that form. Normal,
@@ -132,9 +151,8 @@ remain Unsupported. LLVM-ABI function-pointer signatures and layouts are retaine
 as metadata, but have no ordinary ABI row. Synthetic LLVM-ABI helper candidates
 are omitted while their valid Rust-ABI candidates remain. An actual LLVM-ABI
 function-pointer call fails export explicitly before the compiler's undefined
-ABI query; ordinary function-pointer queries remain required. These new call
-and compact-layout forms are rejected under schema 8. Schemas older
-than 8 must be regenerated with the current producer.
+ABI query; ordinary function-pointer queries remain required. Older wire
+versions must be regenerated with the current producer.
 
 Generic arguments remain in their owning records, with type and type-constant
 references into the corresponding tables. `body_roots` records root metadata and
@@ -209,7 +227,8 @@ features, argument count, symbol clashes, invalid vector layouts and unknown
 intrinsics. The latter rejection/Unsupported controls are never counted as safe
 guest execution. `tests/input/LlvmCallEvidence.lean` takes a fresh export of
 `exporter/fixtures/fail_closed/llvm_no_abi.rs` (`--root identity`) and checks strict
-ABI evidence validation and unchanged schema-8 input acceptance.
+ABI evidence validation, current pooled-fixture acceptance, and rejection of
+older root schema versions.
 
 This runs the Rust unit tests, Python unittest discovery under `exporter/tests/`,
 all four `test-*.sh` fixture scripts, and four producer checks, using Cargo's

@@ -84,6 +84,7 @@ private def checkPlaceFactsOrder (fixture : String) : IO Unit := do
   let terminator := obj #[("source_info", info), ("kind", obj #[("variant", Json.renderString "Return")])]
   let block := obj #[("block", "0"), ("is_cleanup", "false"),
     ("statements", arr #[statement]), ("terminator", terminator)]
+  let original ← must (set original "backtrace_spans" "[]")
   let source ← must (set (← must (set original "locals" (arr #[declaration 0, declaration 1])))
     "basic_blocks" (arr #[block]))
   let context : DecodeMIR.Context := {
@@ -143,9 +144,9 @@ def main : IO Unit := do
   reject (← must (set fixture "schema_version" "-1")) "negative table integer"
   reject (← must (replaceBody fixture fun body => set body "def_id" "999999")) "dangling definition"
   reject (← must (replaceBody fixture fun body => set body "locals"
-    "[{\"local\":0,\"type\":-1,\"source_info\":{\"scope\":0,\"span\":0}}]")) "negative reference"
+    "[{\"local\":0,\"type\":-1,\"source_info\":0}]")) "negative reference"
   reject (← must (replaceBody fixture fun body => set body "locals"
-    "[{\"local\":0,\"local\":0,\"type\":0,\"source_info\":{\"scope\":0,\"span\":0}}]")) "nested duplicate"
+    "[{\"local\":0,\"local\":0,\"type\":0,\"source_info\":0}]")) "nested duplicate"
   let fs ← must (fields fixture)
   reject (obj (#[("schema", "\"lean-miri-rustc-mir\"")] ++ fs)) "root duplicate"
   let unknown ← must (set reordered "future_metadata" "{\"rows\":[null,true,-2.5e3,{\"escaped\":\"\\uD83D\\uDE03\"}]}")

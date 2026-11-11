@@ -15,7 +15,7 @@ open Lean
 def expectedMiriCommit : String := "7fa591d7d4dd9af8154becbc8332f8096f8323b1"
 def expectedRustcCommit : String := "8144389c895da997dbdecaa635e41d6a50be6ffd"
 def expectedSchema : String := "lean-miri-rustc-mir"
-def expectedSchemaVersion : Nat := 9
+def expectedSchemaVersion : Nat := 10
 def expectedCompilerAbiLayoutSchema : String := "physical_ty_and_layout_v1"
 
 def escapePathKey (key : String) : String :=
@@ -739,7 +739,7 @@ private structure parseDiscriminantsFields where
   «adt_variant_count» : Option (Option (Nat)) := none
   «values» : Option (Array (DiscriminantValue)) := none
 
-private def parseDiscriminants (_path : String := "$parseDiscriminants") : Parser (DiscriminantInfo) := do
+def parseDiscriminants (_path : String := "$parseDiscriminants") : Parser (DiscriminantInfo) := do
   let s ← object (parseDiscriminantsFields.mk none none none) fun s key => do
     match key with
     | "has_discriminants" => return { s with «has_discriminants» := some (← boolean) }
@@ -778,7 +778,7 @@ private def simdShape  : Parser (Nat × TypeId) := do
   unless count < 2^64 do fail "SIMD lane count exceeds u64"
   return (count, (← required s.«element» "element"))
 
-private def booleanQueries : Parser (Array (String × Bool)) :=
+def booleanQueries : Parser (Array (String × Bool)) :=
   object #[] fun out key => do return out.push (key, ← boolean)
 
 private def typeQueries : Parser (Array (String × Option Nat)) :=
@@ -796,17 +796,27 @@ private structure decodeTypeCompilerFactsFields where
   «type_id_hash» : Option (String) := none
   «definition» : Option (Option (Nat)) := none
 
-def decodeTypeCompilerFacts (path : String := "$decodeTypeCompilerFacts") : Parser (TypeCompilerFacts) := do
+def decodeTypeCompilerFacts (path : String := "$decodeTypeCompilerFacts")
+    (booleanPool : Array (Array (String × Bool)) := #[])
+    (discriminantPool : Array DiscriminantInfo := #[]) : Parser TypeCompilerFacts := do
   let s ← object (decodeTypeCompilerFactsFields.mk none none none none none none none none none none) fun s key => do
     match key with
     | "typing_env" => return { s with «typing_env» := some (← string) }
-    | "boolean_queries" => return { s with «boolean_queries» := some (← booleanQueries) }
+    | "boolean_queries" =>
+      let id ← natural
+      let some value := booleanPool[id]? | fail s!"{path}.boolean_queries: out of bounds shared boolean query set {id}"
+      return { s with «boolean_queries» := some value }
     | "type_queries" => return { s with «type_queries» := some (← typeQueries) }
     | "capture_names" => return { s with «capture_names» := some (← nullable (array (nullable string))) }
     | "adt" => return { s with «adt» := some (← nullable (adtFacts)) }
     | "projection_queries" => return { s with «projection_queries» := some (← nullable (parseProjectionQueries)) }
     | "simd_size_and_type" => return { s with «simd_size_and_type» := some (← nullable (simdShape)) }
-    | "discriminants" => return { s with «discriminants» := some (← nullable (parseDiscriminants)) }
+    | "discriminants" =>
+      let id ← nullable natural
+      let value ← id.mapM fun id => do
+        let some value := discriminantPool[id]? | fail s!"{path}.discriminants: out of bounds shared discriminants {id}"
+        pure value
+      return { s with «discriminants» := some value }
     | "type_id_hash" => return { s with «type_id_hash» := some (← string) }
     | "definition" => return { s with «definition» := some (← nullable (natural)) }
     | _ => skipValue; pure s
@@ -1090,11 +1100,13 @@ private structure parseTypeNodeFields where
   «shape» : Option (TypeShape) := none
   «layout» : Option (Nat) := none
 
-def parseTypeNode (_path : String := "$parseTypeNode") : Parser (TypeNode) := do
+def parseTypeNode (path : String := "$parseTypeNode")
+    (booleanPool : Array (Array (String × Bool)) := #[])
+    (discriminantPool : Array DiscriminantInfo := #[]) : Parser TypeNode := do
   let s ← object (parseTypeNodeFields.mk none none none none none none) fun s key => do
     match key with
     | "layout_query_input_type" => return { s with «layout_query_input_type» := some (← nullable (natural)) }
-    | "compiler_facts" => return { s with «compiler_facts» := some (← decodeTypeCompilerFacts) }
+    | "compiler_facts" => return { s with «compiler_facts» := some (← decodeTypeCompilerFacts (path ++ ".compiler_facts") booleanPool discriminantPool) }
     | "type_id" => return { s with «type_id» := some (← natural) }
     | "display" => return { s with «display» := some (← string) }
     | "shape" => return { s with «shape» := some (← parseTypeShape) }

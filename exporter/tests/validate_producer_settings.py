@@ -6,7 +6,7 @@ import hashlib,json,os,re,subprocess,tempfile
 import sys
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'tools'))
-from mir_json import load_mir_document
+from mir_json import load_mir_inspection_document as load_mir_document
 lock=json.loads((ROOT/'upstream/source-lock.json').read_text())
 path='upstream/miri-source/src/lib.rs'
 entry=next(x for x in lock['files'] if x['path']==path)

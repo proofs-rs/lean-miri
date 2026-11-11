@@ -169,8 +169,8 @@ preparation and selected allocator-world metadata. The frontend check imports
 fresh JSON into Lean constants. Runtime-metadata checks connect fresh compiler
 queries to Lean providers. Execution checks compare selected arithmetic, calls
 and globals with pinned Miri. Eval-core's six checks use three hash-checked
-genuine schema-8 exports regenerated with the current producer. The preparation helper preserves their
-decompressed bytes exactly; it does not adapt an old wire format.
+compiler exports mechanically projected to schema 10 with an exact inverse check. The preparation helper preserves their current
+decompressed bytes exactly; the projection manifest pins the original expanded data.
 
 The script uses `set -euo pipefail`: a failure stops it and later phases remain
 unexecuted. A timeout is not a pass. Python discovery does not recursively run
@@ -194,7 +194,9 @@ None of these top-level commands is called by `tools/check.sh`:
 | `python3 tools/check-connected.py --large-tb` | Fresh larger Rust export; assert the expected Frozen-tag write UB. |
 | `python3 tests/connected/compare_selector.py` | Finite comparison of choice selection with extracted upstream code; does not execute the whole Miri interpreter. |
 
-Fifteen cases use stored same-TyCtxt reference observations and genuine schema-8 bytes.
+Fifteen cases use stored same-TyCtxt reference observations and schema-10 payload
+projections of the original compiler data. Sidecars retain the original byte binding
+under `wire_projection`; no new Miri execution is claimed for that transformation.
 The DST and large Tree Borrows cases generate fresh exports and same-TyCtxt
 Miri references in CI from tracked Rust sources, unchanged flags and exactly
 reviewed guest configuration/argv0. Their Lean assertions and choice tapes

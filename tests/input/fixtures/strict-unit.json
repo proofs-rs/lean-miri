@@ -1,6 +1,6 @@
 {
   "schema": "lean-miri-rustc-mir",
-  "schema_version": 8,
+  "schema_version": 10,
   "producer": {
     "miri_commit": "7fa591d7d4dd9af8154becbc8332f8096f8323b1",
     "rustc_commit": "8144389c895da997dbdecaa635e41d6a50be6ffd",
@@ -250,8 +250,8 @@
       "size_bytes": 0,
       "align_bytes": 1,
       "mutability": "immutable",
-      "initialization_ranges": [],
-      "relocations": [],
+      "initialization_ranges": 0,
+      "relocations": 0,
       "byte_image_id": 0,
       "source_alloc_id": 1
     }
@@ -280,10 +280,7 @@
         {
           "local": 0,
           "type": 0,
-          "source_info": {
-            "span": 0,
-            "scope": 0
-          }
+          "source_info": 0
         }
       ],
       "basic_blocks": [
@@ -291,10 +288,7 @@
           "block": 0,
           "statements": [],
           "terminator": {
-            "source_info": {
-              "span": 0,
-              "scope": 0
-            },
+            "source_info": 0,
             "kind": {
               "variant": "Return"
             }
@@ -305,7 +299,7 @@
       "def_id": 0,
       "span": 0,
       "preamble_def_span": 0,
-      "backtrace_spans": [],
+      "backtrace_spans": 0,
       "source_scopes": [
         {
           "scope": 0,
@@ -320,6 +314,159 @@
     }
   ],
   "layouts": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    4,
+    9,
+    12,
+    12,
+    12,
+    12,
+    13,
+    14
+  ],
+  "spans": [
+    {
+      "lo": 0,
+      "hi": 0,
+      "start": {
+        "line": 1,
+        "column": 0
+      },
+      "end": {
+        "line": 1,
+        "column": 0
+      },
+      "ctxt": "root",
+      "file": 0,
+      "is_dummy": false
+    }
+  ],
+  "fn_abis": [],
+  "definitions": [
+    {
+      "crate": 1,
+      "index": 1
+    }
+  ],
+  "type_constants": [],
+  "body_roots": [
+    {
+      "body": 0,
+      "entry_instance": 0,
+      "def_id": 0,
+      "def_path": "strict::empty",
+      "is_static": false,
+      "thread_local_static": false,
+      "promoted_bodies": []
+    }
+  ],
+  "predicates": [],
+  "compiler_abi_layout_schema": "physical_ty_and_layout_v1",
+  "compiler_predicate_queries": [],
+  "compiler_session_queries": {
+    "internal_target_features": [],
+    "is_like_wasm": false,
+    "target_arch": "x86_64",
+    "root_span": 0,
+    "runtime_checks": []
+  },
+  "compiler_runtime_queries": {
+    "types": [],
+    "virtual": [],
+    "instances": [],
+    "foreign_symbols": {
+      "target": {
+        "os": "linux",
+        "env": "gnu",
+        "binary_format": "elf",
+        "families": [
+          "unix"
+        ]
+      },
+      "no_alloc_shim_symbol": "__rust_no_alloc_shim_is_unstable",
+      "allocator_shims": [],
+      "exported_candidates": []
+    }
+  },
+  "compiler_frame_metadata": {
+    "local_crate": 0,
+    "crates": [
+      {
+        "crate": 0,
+        "name": "strict"
+      }
+    ]
+  },
+  "compiler_function_facts": {
+    "types": [],
+    "pointer_abis": [],
+    "helper_signatures": []
+  },
+  "compiler_instance_abis": [],
+  "compiler_cast_queries": [],
+  "compiler_type_name_constants": [],
+  "compiler_panic_queries": [],
+  "compiler_native_signature_queries": [],
+  "compiler_retag_queries": [],
+  "compiler_covariance_queries": [],
+  "compiler_caller_location_constants": [],
+  "compiler_vtable_queries": [],
+  "compiler_global_byte_queries": {
+    "salt_count": 32,
+    "str_type": 18,
+    "covered_allocation_ids": [],
+    "candidates": []
+  },
+  "compiler_main_queries": {
+    "typing_env": "fully_monomorphized",
+    "start_lang_item": null,
+    "compiler_entry": null,
+    "compiler_entry_type": null,
+    "entries": [],
+    "link_sections": []
+  },
+  "compiler_runtime_primitives": {
+    "u8": 1,
+    "u16": 2,
+    "u32": 3,
+    "u64": 4,
+    "u128": 5,
+    "i8": 6,
+    "i16": 7,
+    "i32": 8,
+    "i64": 9,
+    "i128": 10,
+    "bool": 11,
+    "usize": 12,
+    "isize": 13,
+    "pointer_tag_integer": 4,
+    "unit": 0,
+    "unit_pointer_const": 14,
+    "unit_pointer_mut": 15,
+    "imm_u8_pointer": 16,
+    "imm_u8_pointer_pointer": 17,
+    "type_name_result_type": 19,
+    "caller_location_type": null,
+    "ordering_enum": null
+  },
+  "files": [
+    "strict.rs"
+  ],
+  "byte_images": [
+    ""
+  ],
+  "layout_values": [
     {
       "kind": "layout",
       "size_bytes": 0,
@@ -759,183 +906,6 @@
         "scalar": {
           "kind": "initialized",
           "primitive": {
-            "kind": "integer",
-            "size_bytes": 8,
-            "integer_kind": "u64",
-            "signed": false
-          },
-          "valid_range": {
-            "start": "0",
-            "end": "18446744073709551615"
-          }
-        }
-      },
-      "max_repr_align_bytes": null,
-      "repr_c": false,
-      "uninhabited": false,
-      "largest_niche": null,
-      "randomization_seed": 0
-    },
-    {
-      "kind": "layout",
-      "size_bytes": 8,
-      "abi_align_bytes": 8,
-      "unadjusted_abi_align_bytes": 8,
-      "field_offsets_bytes": [],
-      "fields": {
-        "kind": "primitive",
-        "field_count": 0
-      },
-      "variants": {
-        "kind": "single",
-        "variant_index": 0
-      },
-      "backend_repr": {
-        "kind": "scalar",
-        "scalar": {
-          "kind": "initialized",
-          "primitive": {
-            "kind": "integer",
-            "size_bytes": 8,
-            "integer_kind": "i64",
-            "signed": true
-          },
-          "valid_range": {
-            "start": "0",
-            "end": "18446744073709551615"
-          }
-        }
-      },
-      "max_repr_align_bytes": null,
-      "repr_c": false,
-      "uninhabited": false,
-      "largest_niche": null,
-      "randomization_seed": 0
-    },
-    {
-      "kind": "layout",
-      "size_bytes": 8,
-      "abi_align_bytes": 8,
-      "unadjusted_abi_align_bytes": 8,
-      "field_offsets_bytes": [],
-      "fields": {
-        "kind": "primitive",
-        "field_count": 0
-      },
-      "variants": {
-        "kind": "single",
-        "variant_index": 0
-      },
-      "backend_repr": {
-        "kind": "scalar",
-        "scalar": {
-          "kind": "initialized",
-          "primitive": {
-            "kind": "pointer",
-            "size_bytes": 8,
-            "address_space": 0
-          },
-          "valid_range": {
-            "start": "0",
-            "end": "18446744073709551615"
-          }
-        }
-      },
-      "max_repr_align_bytes": null,
-      "repr_c": false,
-      "uninhabited": false,
-      "largest_niche": null,
-      "randomization_seed": 0
-    },
-    {
-      "kind": "layout",
-      "size_bytes": 8,
-      "abi_align_bytes": 8,
-      "unadjusted_abi_align_bytes": 8,
-      "field_offsets_bytes": [],
-      "fields": {
-        "kind": "primitive",
-        "field_count": 0
-      },
-      "variants": {
-        "kind": "single",
-        "variant_index": 0
-      },
-      "backend_repr": {
-        "kind": "scalar",
-        "scalar": {
-          "kind": "initialized",
-          "primitive": {
-            "kind": "pointer",
-            "size_bytes": 8,
-            "address_space": 0
-          },
-          "valid_range": {
-            "start": "0",
-            "end": "18446744073709551615"
-          }
-        }
-      },
-      "max_repr_align_bytes": null,
-      "repr_c": false,
-      "uninhabited": false,
-      "largest_niche": null,
-      "randomization_seed": 0
-    },
-    {
-      "kind": "layout",
-      "size_bytes": 8,
-      "abi_align_bytes": 8,
-      "unadjusted_abi_align_bytes": 8,
-      "field_offsets_bytes": [],
-      "fields": {
-        "kind": "primitive",
-        "field_count": 0
-      },
-      "variants": {
-        "kind": "single",
-        "variant_index": 0
-      },
-      "backend_repr": {
-        "kind": "scalar",
-        "scalar": {
-          "kind": "initialized",
-          "primitive": {
-            "kind": "pointer",
-            "size_bytes": 8,
-            "address_space": 0
-          },
-          "valid_range": {
-            "start": "0",
-            "end": "18446744073709551615"
-          }
-        }
-      },
-      "max_repr_align_bytes": null,
-      "repr_c": false,
-      "uninhabited": false,
-      "largest_niche": null,
-      "randomization_seed": 0
-    },
-    {
-      "kind": "layout",
-      "size_bytes": 8,
-      "abi_align_bytes": 8,
-      "unadjusted_abi_align_bytes": 8,
-      "field_offsets_bytes": [],
-      "fields": {
-        "kind": "primitive",
-        "field_count": 0
-      },
-      "variants": {
-        "kind": "single",
-        "variant_index": 0
-      },
-      "backend_repr": {
-        "kind": "scalar",
-        "scalar": {
-          "kind": "initialized",
-          "primitive": {
             "kind": "pointer",
             "size_bytes": 8,
             "address_space": 0
@@ -1027,135 +997,22 @@
       "randomization_seed": 0
     }
   ],
-  "spans": [
+  "boolean_queries": [],
+  "discriminants": [],
+  "initialization_ranges": [
+    []
+  ],
+  "relocations": [
+    []
+  ],
+  "backtrace_spans": [
+    []
+  ],
+  "statement_kinds": [],
+  "source_infos": [
     {
-      "lo": 0,
-      "hi": 0,
-      "start": {
-        "line": 1,
-        "column": 0
-      },
-      "end": {
-        "line": 1,
-        "column": 0
-      },
-      "ctxt": "root",
-      "file": 0,
-      "is_dummy": false
+      "span": 0,
+      "scope": 0
     }
-  ],
-  "fn_abis": [],
-  "definitions": [
-    {
-      "crate": 1,
-      "index": 1
-    }
-  ],
-  "type_constants": [],
-  "body_roots": [
-    {
-      "body": 0,
-      "entry_instance": 0,
-      "def_id": 0,
-      "def_path": "strict::empty",
-      "is_static": false,
-      "thread_local_static": false,
-      "promoted_bodies": []
-    }
-  ],
-  "predicates": [],
-  "compiler_abi_layout_schema": "physical_ty_and_layout_v1",
-  "compiler_predicate_queries": [],
-  "compiler_session_queries": {
-    "internal_target_features": [],
-    "is_like_wasm": false,
-    "target_arch": "x86_64",
-    "root_span": 0,
-    "runtime_checks": []
-  },
-  "compiler_runtime_queries": {
-    "types": [],
-    "virtual": [],
-    "instances": [],
-    "foreign_symbols": {
-      "target": {
-        "os": "linux",
-        "env": "gnu",
-        "binary_format": "elf",
-        "families": [
-          "unix"
-        ]
-      },
-      "no_alloc_shim_symbol": "__rust_no_alloc_shim_is_unstable",
-      "allocator_shims": [],
-      "exported_candidates": []
-    }
-  },
-  "compiler_frame_metadata": {
-    "local_crate": 0,
-    "crates": [
-      {
-        "crate": 0,
-        "name": "strict"
-      }
-    ]
-  },
-  "compiler_function_facts": {
-    "types": [],
-    "pointer_abis": [],
-    "helper_signatures": []
-  },
-  "compiler_instance_abis": [],
-  "compiler_cast_queries": [],
-  "compiler_type_name_constants": [],
-  "compiler_panic_queries": [],
-  "compiler_native_signature_queries": [],
-  "compiler_retag_queries": [],
-  "compiler_covariance_queries": [],
-  "compiler_caller_location_constants": [],
-  "compiler_vtable_queries": [],
-  "compiler_global_byte_queries": {
-    "salt_count": 32,
-    "str_type": 18,
-    "covered_allocation_ids": [],
-    "candidates": []
-  },
-  "compiler_main_queries": {
-    "typing_env": "fully_monomorphized",
-    "start_lang_item": null,
-    "compiler_entry": null,
-    "compiler_entry_type": null,
-    "entries": [],
-    "link_sections": []
-  },
-  "compiler_runtime_primitives": {
-    "u8": 1,
-    "u16": 2,
-    "u32": 3,
-    "u64": 4,
-    "u128": 5,
-    "i8": 6,
-    "i16": 7,
-    "i32": 8,
-    "i64": 9,
-    "i128": 10,
-    "bool": 11,
-    "usize": 12,
-    "isize": 13,
-    "pointer_tag_integer": 4,
-    "unit": 0,
-    "unit_pointer_const": 14,
-    "unit_pointer_mut": 15,
-    "imm_u8_pointer": 16,
-    "imm_u8_pointer_pointer": 17,
-    "type_name_result_type": 19,
-    "caller_location_type": null,
-    "ordering_enum": null
-  },
-  "files": [
-    "strict.rs"
-  ],
-  "byte_images": [
-    ""
   ]
 }

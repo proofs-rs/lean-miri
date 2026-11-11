@@ -6,7 +6,7 @@ private def must (result : Except String α) : IO α :=
   match result with | .ok value => pure value | .error error => throw (IO.userError error)
 
 def main (args : List String) : IO Unit := do
-  let [legacyPath, compactPath] := args | throw (IO.userError "expected unchanged schema-8 and fresh schema-9 inputs")
+  let [legacyPath, compactPath] := args | throw (IO.userError "expected current dense-offset and compact-offset pooled inputs")
   let legacyText ← IO.FS.readFile legacyPath
   let legacy ← must (decodeJson legacyText)
   for layout in legacy.document.layouts do
@@ -19,9 +19,14 @@ def main (args : List String) : IO Unit := do
       | .arrayFormula _ _ => true | _ => false) do
     throw (IO.userError "fresh fixture has no compact array layout")
   let json ← must (Json.parse compactText)
-  match decodeJson (json.setObjVal! "schema_version" (toJson (8 : Nat))).compress with
-  | .error error =>
-    unless (error.splitOn "compact array field offsets require schema 9").length > 1 do
-      throw (IO.userError s!"wrong legacy-version rejection: {error}")
-  | .ok _ => throw (IO.userError "schema 8 accepted new array encoding")
-  IO.println "PASS unchanged schema-8 input and schema-9 compact input; schema-8 compact rejection"
+  let references ← must (json.getObjValAs? (Array Nat) "layouts")
+  let payloads ← must (json.getObjValAs? (Array Json) "layout_values")
+  unless references.size == compact.document.layouts.size && references.all (· < payloads.size) do
+    throw (IO.userError "compact layout payload pool changed LayoutId identities")
+  for version in #[8, 9] do
+    match decodeJson (json.setObjVal! "schema_version" (toJson version)).compress with
+    | .error error =>
+      unless (error.splitOn "unsupported schema version").length > 1 do
+        throw (IO.userError s!"wrong obsolete-version rejection: {error}")
+    | .ok _ => throw (IO.userError s!"obsolete schema {version} accepted current array encoding")
+  IO.println "PASS current dense and compact pooled inputs; schemas 8 and 9 rejected"

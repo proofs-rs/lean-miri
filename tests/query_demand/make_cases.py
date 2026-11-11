@@ -66,18 +66,18 @@ if a.tls_base:
             for child in value:
                 yield from collect(child)
 
-    nodes = list(collect(tls['bodies']))
+    nodes = list(collect(tls['statement_kinds']))
     if not nodes or not any('initializer' in node for node in nodes):
         raise ValueError('TLS baseline lacks an inline ThreadLocalRef initializer')
     definition = next(node['def_id'] for node in nodes if 'initializer' in node)
     add('tls-control', tls, True, 'tls', baseline='tls-plain.json', definition=definition)
     doc = copy.deepcopy(tls)
-    for node in collect(doc['bodies']):
+    for node in collect(doc['statement_kinds']):
         if node['def_id'] == definition:
             node['initializer'] = {}
     add('tls-initializer-shape', doc, False, baseline='tls-plain.json')
     doc = copy.deepcopy(tls)
-    next(node for node in collect(doc['bodies']) if node['def_id'] == definition)['def_id'] = len(tls['definitions'])
+    next(node for node in collect(doc['statement_kinds']) if node['def_id'] == definition)['def_id'] = len(tls['definitions'])
     add('tls-definition-bounds', doc, False, baseline='tls-plain.json')
     extra = copy.deepcopy(tls)
     extra['ignored_extension'] = {'kind': 'ThreadLocalRef', 'def_id': 10**30,

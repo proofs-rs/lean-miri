@@ -185,7 +185,11 @@ structure TlsInitializerFields where
 
 def tlsInitializerField (s : TlsInitializerFields) (key : String) : MIRParser.Parser (TlsInitializerFields) := do
   match key with
-  | "allocation" => return {s with allocation := some (← DecoderValues.parseAllocationMemory "$thread_local.initializer.allocation")}
+  | "allocation" =>
+    let allocation ← match (← get).pools with
+      | none => DecoderValues.parseAllocationMemoryInline "$thread_local.initializer.allocation"
+      | some pools => DecoderValues.parseAllocationMemory "$thread_local.initializer.allocation" pools.initializationRanges pools.relocations
+    return {s with allocation := some allocation}
   | _ => skipValue; pure s
 def finishTlsInitializerFields (s : TlsInitializerFields) : MIRParser.Parser (Option AllocationMemory) := do
   pure s.allocation
@@ -444,14 +448,56 @@ def finishStatementKindFields (s : StatementKindFields) : MIRParser.Parser (MIR.
   | _ => reject "unknown statement"
 def statementKind : MIRParser.Parser (MIR.StatementKind) := do
   finishStatementKindFields (← MIRParser.object {} statementKindField)
+private def sharedSource : MIRParser.Parser MIR.SourceInfo := do
+  match (← get).pools with
+  | none => source
+  | some pools =>
+    let id ← natural
+    let some value := pools.sources[id]? | reject s!"source_infos: unresolved source info {id}"
+    pure ⟨⟨value.spanId⟩, value.scope⟩
+
+private def sharedSourceInfo : MIRParser.Parser Input.SourceInfo := do
+  let value ← sharedSource
+  pure ⟨value.span.id, value.scope⟩
+
+private def mergeBound (a b : Option Nat) : Option Nat :=
+  match a, b with
+  | none, b => b
+  | a, none => a
+  | some a, some b => some (max a b)
+
+private def sharedStatement : MIRParser.Parser MIR.StatementKind := do
+  match (← get).pools with
+  | none => statementKind
+  | some pools =>
+    let id ← natural
+    let some entry := pools.statements[id]? | reject s!"statement_kinds: unresolved statement kind {id}"
+    modify fun state => {state with
+      references := {
+        types := mergeBound state.references.types entry.references.types
+        allocations := mergeBound state.references.allocations entry.references.allocations
+        definitions := mergeBound state.references.definitions entry.references.definitions
+        typeConstants := mergeBound state.references.typeConstants entry.references.typeConstants
+        spans := mergeBound state.references.spans entry.references.spans
+        scalarWidths := state.references.scalarWidths ++ entry.references.scalarWidths }
+      facts := {
+        places := state.facts.places ++ entry.facts.places
+        constantAllocations := state.facts.constantAllocations ++ entry.facts.constantAllocations
+        threadLocals := state.facts.threadLocals ++ entry.facts.threadLocals
+        dynamicUpcasts := state.facts.dynamicUpcasts ++ entry.facts.dynamicUpcasts }
+      locals := mergeBound state.locals entry.locals
+      blocks := mergeBound state.blocks entry.blocks
+      scopes := mergeBound state.scopes entry.scopes }
+    pure entry.value
+
 structure StatementFields where
   source_info : Option (MIR.SourceInfo) := none
   kind : Option (MIR.StatementKind) := none
 
 def statementField (s : StatementFields) (key : String) : MIRParser.Parser (StatementFields) := do
   match key with
-  | "source_info" => return {s with source_info := some (← source)}
-  | "kind" => return {s with kind := some (← statementKind)}
+  | "source_info" => return {s with source_info := some (← sharedSource)}
+  | "kind" => return {s with kind := some (← sharedStatement)}
   | _ => skipValue; pure s
 def finishStatementFields (s : StatementFields) : MIRParser.Parser (MIR.Statement) := do
   let source ← required s.source_info "source_info"
@@ -837,7 +883,7 @@ structure TerminatorFields where
 
 def terminatorField (s : TerminatorFields) (key : String) : MIRParser.Parser (TerminatorFields) := do
   match key with
-  | "source_info" => return {s with source_info := some (← source)}
+  | "source_info" => return {s with source_info := some (← sharedSource)}
   | "kind" => return {s with kind := some (← terminatorKind)}
   | _ => skipValue; pure s
 def finishTerminatorFields (s : TerminatorFields) : MIRParser.Parser (MIR.Terminator × Option CallResolutionEvidence) := do
@@ -880,7 +926,7 @@ def localDeclField (s : LocalDeclFields) (key : String) : MIRParser.Parser (Loca
   match key with
   | "local" => return {s with «local» := some (← (do let id ← natural; recordLocal id; pure id))}
   | "type" => return {s with type := some (← (do let id ← natural; recordType id; pure id))}
-  | "source_info" => return {s with source_info := some (← sourceInfo)}
+  | "source_info" => return {s with source_info := some (← sharedSourceInfo)}
   | _ => skipValue; pure s
 def finishLocalDeclFields (s : LocalDeclFields) : MIRParser.Parser (LocalDecl) := do
   return ⟨(← required s.«local» "local"), (← required s.type "type"), (← required s.source_info "source_info")⟩
@@ -936,7 +982,14 @@ def parseBodyField (sourcePath : String) (s : ParseBodyFields) (key : String) : 
   | "injection_phase" => return {s with injection_phase := some (← MIRParser.nullable phase)}
   | "instance_id" => return {s with instance_id := some (← natural)}
   | "source_scopes" => return {s with source_scopes := some (← MIRParser.array scope)}
-  | "backtrace_spans" => return {s with backtrace_spans := some (← JsonReader.arrayIndexed (fun index => backtrace s!"{sourcePath}.backtrace_spans[{index}]"))}
+  | "backtrace_spans" =>
+    let value ← match (← get).pools with
+      | none => JsonReader.arrayIndexed (fun index => backtrace s!"{sourcePath}.backtrace_spans[{index}]")
+      | some pools => do
+        let id ← natural
+        let some value := pools.backtraces[id]? | reject s!"{sourcePath}.backtrace_spans: unresolved backtrace {id}"
+        pure value
+    return {s with backtrace_spans := some value}
   | "required_consts" => return {s with required_consts := some (← MIRParser.array parseConstOperand)}
   | "promoted_bodies" => return {s with promoted_bodies := some (← MIRParser.array (promotedBody s!"{sourcePath}.promoted_bodies"))}
   | _ => skipValue; pure s
@@ -983,8 +1036,14 @@ def finishParseBodyFields (sourcePath : String) (s : ParseBodyFields) : MIRParse
 def parseBodyRaw (sourcePath : String) : MIRParser.Parser Body := do
   finishParseBodyFields sourcePath (← MIRParser.object {} (parseBodyField sourcePath))
 
-def parseBody (sourcePath : String) : JsonReader.Parser ParsedBody := do
-  let (body, state) ← (parseBodyRaw sourcePath).run {}
+def parseSharedStatement (pools : MIRParser.SharedPools) : JsonReader.Parser MIRParser.SharedStatement := do
+  let (value, state) ← statementKind.run {pools := some pools}
+  pure ⟨value, state.references, state.facts, state.locals, state.blocks, state.scopes⟩
+
+/-- Parse one constructor tree. Document decoding supplies schema pools;
+standalone constructor tests may supply inline leaves without a document. -/
+def parseBody (sourcePath : String) (pools : Option MIRParser.SharedPools := none) : JsonReader.Parser ParsedBody := do
+  let (body, state) ← (parseBodyRaw sourcePath).run {pools}
   pure ⟨body, state.references⟩
 
 end Miri.Input.DecodeMIR

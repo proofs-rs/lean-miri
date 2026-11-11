@@ -9,7 +9,7 @@ import json
 import pathlib
 import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from mir_json import load_mir_document, pool_entry
+from mir_json import load_mir_inspection_document as load_mir_document, pool_entry
 
 
 def canonical_bodies(document):

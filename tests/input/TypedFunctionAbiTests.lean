@@ -28,7 +28,8 @@ def main (args : List String) : IO Unit := do
   let decoded ← must (decodeJson text)
   let source ← must (JsonFixtures.parse text)
   let rawAbis ← must ((← must (source.field "fn_abis")).array)
-  let rawLayouts ← must ((← must (source.field "layouts")).array)
+  let layoutIds ← must ((← must (source.field "layouts")).array)
+  let rawLayouts ← must ((← must (source.field "layout_values")).array)
   let runtime ← must ((RuntimeMetadata.ofDocument decoded.document).mapError toString)
   check (!runtime.source.functionAbis.isEmpty) "fixture contains no function ABI definitions"
   for (abi, id) in runtime.source.functionAbis.toList.zipIdx do
@@ -64,7 +65,9 @@ def main (args : List String) : IO Unit := do
   let layoutRuntime := { runtime with source := { runtime.source with
     functionAbis := #[{ sample with returnValue := invalidLayout }] } }
   rejects (CallResolution.functionAbiId layoutRuntime 0) "out of bounds physical layout accepted"
-  let some rawLayout := rawLayouts[layoutId]? | throw (IO.userError "missing raw return layout")
+  let some rawId := layoutIds[layoutId]? | throw (IO.userError "missing raw layout reference")
+  let payloadId ← must rawId.natural
+  let some rawLayout := rawLayouts[payloadId]? | throw (IO.userError "missing raw return layout")
   let malformedLayout ← must (set rawLayout "field_offsets_bytes" "\"not-an-array\"")
   rejects (JsonReader.run DecoderValues.decodeCompilerLayout malformedLayout.text) "malformed layout definition accepted"
   let some rawSample := rawAbis[0]? | throw (IO.userError "missing raw ABI sample")

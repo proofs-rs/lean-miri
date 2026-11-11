@@ -15,6 +15,7 @@ mod named_constants;
 mod named_statics;
 mod native_signature_queries;
 mod typed_pool;
+mod shared_json;
 mod pool_type;
 mod pool_layout;
 mod pool_instance;
@@ -79,7 +80,7 @@ fn export_failure<T>(context: &str, details: impl std::fmt::Display) -> Result<T
 
 const EXPECTED_RUSTC_COMMIT: &str = "8144389c895da997dbdecaa635e41d6a50be6ffd";
 const MIRI_COMMIT: &str = "7fa591d7d4dd9af8154becbc8332f8096f8323b1";
-const ROOT_SCHEMA_VERSION: u64 = 9;
+const ROOT_SCHEMA_VERSION: u64 = 10;
 
 struct Options {
     output: PathBuf,
@@ -174,7 +175,9 @@ struct ExportDocument {
     type_constants: Vec<pool_values::TypeConstant>,
     files: Vec<String>,
     spans: Vec<pool_values::Span>,
-    layouts: Vec<pool_layout::Layout>,
+    layouts: Vec<shared_json::Shared<pool_layout::Layout>>,
+    #[serde(flatten)]
+    shared_values: shared_json::Values,
     fn_abis: Vec<pool_layout::FnAbi>,
     instances: Vec<pool_instance::Instance>,
     types: Vec<pool_type::Type>,
@@ -1686,7 +1689,7 @@ impl ExportCallbacks {
             .into_iter()
             .map(|body| body.finish(&vtable_query_ids, &candidates))
             .collect::<Result<Vec<_>, _>>()?;
-        let document = ExportDocument {
+        let mut document = ExportDocument {
             schema: "lean-miri-rustc-mir",
             schema_version: ROOT_SCHEMA_VERSION,
             mir_query: "TyCtxt::instance_mir(InstanceKind::Item(def_id)); ordinary runtime function bodies use optimized_mir",
@@ -1717,7 +1720,8 @@ impl ExportCallbacks {
             type_constants: export_context.type_constants.finish("type_constant")?,
             files: export_context.files.finish(),
             spans: export_context.spans.finish("span_id")?,
-            layouts: export_context.layouts.finish("layout_id")?,
+            layouts: export_context.layouts.finish("layout_id")?.into_iter().map(Into::into).collect(),
+            shared_values: shared_json::Values::default(),
             fn_abis: export_context.fn_abis.finish("fn_abi_id")?,
             instances: export_context.instance_ids.finish("instance_id")?,
             types: export_context.type_ids.finish("type_id")?,
@@ -1728,6 +1732,7 @@ impl ExportCallbacks {
             selected_scope,
             invocation: self.invocation.take(),
         };
+        shared_json::freeze(&mut document)?;
         #[cfg(feature = "miri-reference")]
         let miri_reference_frontier = document
             .compiler_alloc_id_world
@@ -2500,7 +2505,7 @@ fn mir_body_json<'tcx>(
         instance_id: context.register_metadata_instance(instance),
         source_instance_kind: instance_kind_json(context, tcx, body.source.instance)?,
         preamble_def_span: span_json(context, tcx, tcx.def_span(body.source.def_id())),
-        backtrace_spans: backtrace_spans_json(context, tcx, body),
+        backtrace_spans: backtrace_spans_json(context, tcx, body).into(),
         source_def_id: def_json(context, body.source.def_id()),
         source_promoted: body.source.promoted.map(|value| value.as_u32()),
         phase: mir_phase_json(body.phase),
@@ -2515,18 +2520,18 @@ fn mir_body_json<'tcx>(
             mutability: match decl.mutability { rustc_ast::Mutability::Mut => pool_body::Mutability::Mutable, rustc_ast::Mutability::Not => pool_body::Mutability::Immutable },
             r#type: type_json(context, tcx, decl.ty)?,
             layout: layout_json(context, tcx, decl.ty)?,
-            source_info: source_info_json(context, tcx, decl.source_info),
+            source_info: source_info_json(context, tcx, decl.source_info).into(),
             local_info: pool_body::DebugPayload::new(&decl.local_info),
         })).collect::<Result<Vec<_>, String>>()?,
         basic_blocks: body.basic_blocks.iter_enumerated().map(|(bb, data)| Ok(pool_body::BasicBlock {
             block: bb.as_u32(),
             is_cleanup: data.is_cleanup,
             statements: data.statements.iter().map(|statement| Ok(pool_body::Statement {
-                source_info: source_info_json(context, tcx, statement.source_info),
-                kind: statement_json(context, tcx, body, &statement.kind)?,
+                source_info: source_info_json(context, tcx, statement.source_info).into(),
+                kind: statement_json(context, tcx, body, &statement.kind)?.into(),
             })).collect::<Result<Vec<_>, String>>()?,
             terminator: data.terminator.as_ref().map(|term| Ok::<_, String>(pool_body::Terminator {
-                source_info: source_info_json(context, tcx, term.source_info),
+                source_info: source_info_json(context, tcx, term.source_info).into(),
                 kind: terminator_json(context, tcx, body, &term.kind)?,
             })).transpose()?,
         })).collect::<Result<Vec<_>, String>>()?,
@@ -2858,12 +2863,12 @@ fn type_compiler_facts_json<'tcx>(
     }
     Ok(CompilerFacts {
         typing_env: "fully_monomorphized",
-        boolean_queries,
+        boolean_queries: boolean_queries.into(),
         type_queries,
         adt,
         capture_names,
         simd_size_and_type,
-        discriminants: discriminant_facts_json(context, tcx, normalized)?,
+        discriminants: discriminant_facts_json(context, tcx, normalized)?.into(),
         projection_queries: projection_queries::export(tcx, context, input)?,
         definition: match input.kind() {
             ty::Adt(def, _) => Some(def_json(context, def.did())),
@@ -5504,7 +5509,7 @@ fn allocation_memory_payload<'tcx>(
     };
     Ok(allocation_values::Memory {
         size_bytes: allocation.size().bytes(), align_bytes: allocation.align.bytes(), mutability,
-        byte_image_id: context.byte_images.intern(bytes), initialization_ranges: initialized_ranges, relocations,
+        byte_image_id: context.byte_images.intern(bytes), initialization_ranges: initialized_ranges.into(), relocations: relocations.into(),
     })
 }
 

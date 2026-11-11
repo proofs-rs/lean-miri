@@ -13,7 +13,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
-from mir_json import decode_mir_document, pool_entry
+from mir_json import decode_mir_document, inspection_document, pool_entry
 
 
 def main():
@@ -60,7 +60,7 @@ def main():
         raise SystemExit('reference did not establish same-TyCtxt exit_zero for these exact bytes')
     # Check that the fresh compiler output retained both real intrinsic calls.
     # A source-level powi spelling alone is insufficient coverage evidence.
-    snapshot = decode_mir_document(json.loads(raw))
+    snapshot = inspection_document(decode_mir_document(json.loads(raw)))
     records = snapshot['compiler_runtime_queries']['instances']
     intrinsics = {record['instance_id']: record.get('item_name')
                   for record in records

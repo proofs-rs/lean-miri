@@ -1,5 +1,6 @@
 //! Semantic MIR body metadata. References are exporter-local pool indices.
 use serde::Serialize;
+use crate::shared_json::Shared;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -69,7 +70,7 @@ pub(super) struct Local {
     pub mutability: Mutability,
     pub r#type: u64,
     pub layout: u64,
-    pub source_info: SourceInfo,
+    pub source_info: Shared<SourceInfo>,
     pub local_info: DebugPayload,
 }
 
@@ -758,12 +759,12 @@ pub(super) struct AsmOptions {
 
 #[derive(Serialize)]
 pub(super) struct Statement<Q = VtableQueryKey> {
-    pub source_info: SourceInfo,
-    pub kind: StatementKind<Q>,
+    pub source_info: Shared<SourceInfo>,
+    pub kind: Shared<StatementKind<Q>>,
 }
 #[derive(Serialize)]
 pub(super) struct Terminator<C = crate::resolution_values::PendingCandidates> {
-    pub source_info: SourceInfo,
+    pub source_info: Shared<SourceInfo>,
     pub kind: TerminatorKind<C>,
 }
 #[derive(Serialize)]
@@ -778,7 +779,7 @@ pub(super) struct Body<Q = VtableQueryKey, C = crate::resolution_values::Pending
     pub instance_id: u64,
     pub source_instance_kind: crate::pool_instance::InstanceKind,
     pub preamble_def_span: u64,
-    pub backtrace_spans: Vec<BacktraceSpan>,
+    pub backtrace_spans: Shared<Vec<BacktraceSpan>>,
     pub source_def_id: u64,
     pub source_promoted: Option<u32>,
     pub phase: Phase,
@@ -1006,7 +1007,7 @@ impl Statement<VtableQueryKey> {
             let Self { source_info, kind } = self;
             Statement {
                 source_info: source_info,
-                kind: kind.finish(ids, candidates)?,
+                kind: kind.try_map(|kind| kind.finish(ids, candidates))?,
             }
         })
     }

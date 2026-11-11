@@ -28,7 +28,9 @@ private def replaceBodyNode (fixture : String) (kind : String) (terminator : Boo
   let some block := blocks[0]? | throw "fixture has no block"
   let term ← get block "terminator"
   let info ← get term "source_info"
-  let node := object [("source_info",info),("kind",kind)]
+  let statementKinds ← array (← get fixture "statement_kinds")
+  let fixture ← if terminator then pure fixture else set fixture "statement_kinds" (arr (statementKinds.push kind))
+  let node := object [("source_info",info),("kind",if terminator then kind else toString statementKinds.size)]
   let block ← if terminator then set block "terminator" node else set block "statements" (arr #[node])
   let body ← set body "basic_blocks" (arr (blocks.set! 0 block))
   set fixture "bodies" (arr (bodies.set! 0 body))

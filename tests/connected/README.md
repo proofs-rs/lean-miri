@@ -28,10 +28,12 @@ Even for expected UB, the harness itself exits 0 when its assertions hold.
 Unsupported, failure and fuel exhaustion cannot replace expected UB.
 The large TB case checks the final write to a Frozen tag after a parent read.
 
-Saved gzip files contain the exact bytes of genuine compiler exports. They are
-retained as fixed test inputs depending on raw IDs, prepared query order and
-same-TyCtxt references. The separately maintained eval_core unit fixtures are
-also genuine schema-8 exports regenerated from their adjacent Rust sources.
+Saved gzip files contain schema-10 payload projections of genuine compiler exports.
+An exact inverse check preserves all compiler data, raw IDs and prepared query
+order. The projection manifest pins original canonical payloads and current files;
+reference sidecars retain their original byte binding under `wire_projection`.
+The transformation does not claim a new Miri execution. The separately maintained
+eval_core unit fixtures use the same lossless projection from their original exports.
 `SHA256SUMS` and sidecar length/FNV check integrity. Old absolute paths in sidecars
 and snapshots are provenance strings from reference generation; execution does
 not read files at those locations. Each Rust input is adjacent with the same

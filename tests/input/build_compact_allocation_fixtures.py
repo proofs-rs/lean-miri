@@ -2,14 +2,18 @@
 """Construct decoder-only allocation identity and byte-sharing controls."""
 import copy
 import json
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+from shared_json_pools import expand_document, pool_document
+
 OUT = ROOT / "scratch/compact-allocation-inputs"
 
 
 def base():
-    return json.loads((ROOT / "tests/input/fixtures/strict-unit.json").read_text())
+    return expand_document(json.loads((ROOT / "tests/input/fixtures/strict-unit.json").read_text()), schema_version=8)
 
 
 def memory(graph, source, *, initialized=True, mutability="mutable", relocations=None):
@@ -69,6 +73,12 @@ def body_tls(declaration):
 
 
 def write(name, doc):
+    if isinstance(doc, dict) and doc.get("schema") == "lean-miri-rustc-mir":
+        version = doc["schema_version"]
+        doc["schema_version"] = 8
+        doc = pool_document(doc)
+        if version != 8:
+            doc["schema_version"] = version
     (OUT / f"{name}.json").write_text(json.dumps(doc, separators=(",", ":")) + "\n")
 
 

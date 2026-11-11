@@ -70,7 +70,25 @@ def resolveBody (ctx : Context) (body : ParsedBody) : Result Body := do
   pure body.value
 
 namespace MIRParser
+/-- A pooled statement carries both its constructor and the checks/facts produced
+while parsing it. Those effects are replayed in every body's local context. -/
+structure SharedStatement where
+  value : MIR.StatementKind
+  references : References
+  facts : NodeFacts
+  locals : Option Nat
+  blocks : Option Nat
+  scopes : Option Nat
+
+structure SharedPools where
+  statements : Array SharedStatement := #[]
+  sources : Array Input.SourceInfo := #[]
+  backtraces : Array (Array BacktraceSpan) := #[]
+  initializationRanges : Array (Array InitRange) := #[]
+  relocations : Array (Array Relocation) := #[]
+
 structure State where
+  pools : Option SharedPools := none
   references : References := {}
   facts : NodeFacts := {}
   locals : Option Nat := none
