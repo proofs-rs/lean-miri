@@ -8,7 +8,10 @@ from pathlib import Path
 from typing import Any
 import zlib
 
-from shared_json_pools import SHARED_POOLS, expand_document
+try:  # Support package imports and direct scripts under tools/.
+    from .shared_json_pools import SHARED_POOLS, expand_document
+except ImportError:
+    from shared_json_pools import SHARED_POOLS, expand_document
 
 POOL_NAMES = frozenset({"types", "allocations", "instances", "fn_abis", "spans",
                         "definitions", "type_constants", "bodies", "predicates"})
