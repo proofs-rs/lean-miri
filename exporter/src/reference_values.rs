@@ -17,7 +17,7 @@ pub(super) struct TreeBorrows {
 pub(super) struct Config {
     pub same_tcx: bool,
     pub borrow_tracker: &'static str,
-    pub tree_borrows: TreeBorrows,
+    pub tree_borrows: Option<TreeBorrows>,
     pub validation: String,
     pub alignment_check: String,
     pub isolated_op: String,
@@ -51,6 +51,7 @@ pub(super) enum Outcome {
     MiriEvaluationError { exit_code: i32 },
     GuestNonzeroExit { exit_code: i32 },
     MiriPanicked,
+    InvalidUiProfile,
 }
 #[derive(Serialize)]
 #[serde(untagged)]
@@ -65,11 +66,17 @@ pub(super) enum Result {
         reason: &'static str,
         same_tcx: bool,
     },
+    InvalidProfile {
+        status: Status,
+        reason: String,
+        outcome: Outcome,
+    },
 }
 impl Result {
     pub fn status(&self) -> Status {
         match self {
-            Self::Executed { status, .. } | Self::Skipped { status, .. } => *status,
+            Self::Executed { status, .. } | Self::Skipped { status, .. } |
+                Self::InvalidProfile { status, .. } => *status,
         }
     }
     pub fn skipped() -> Self {

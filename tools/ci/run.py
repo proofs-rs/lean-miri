@@ -77,9 +77,9 @@ def suites(lane):
         Suite('timezone', ('bash', 'tools/ci/fresh.sh', 'timezone')),
     ]
     for name, extra in [
-        ('hrtb', ('--require-predicate-contrast',)),
+        ('hrtb', ('--require-predicate-contrast', '--require-lockstep')),
         ('static', ()),
-        ('hrtb-upcast', ('--require-predicate-contrast', '--require-trait-vptr')),
+        ('hrtb-upcast', ('--require-predicate-contrast', '--require-trait-vptr', '--require-lockstep')),
     ]:
         result.append(Suite('vtable-' + name, (
             'python3', 'tools/check-vtable-erasure.py', f'tests/repro/vtable/{name}-erasure-control.rs',

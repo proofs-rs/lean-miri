@@ -27,7 +27,8 @@ private def checkMemoryAlias (runtime : CompilerVTableRuntime.Prepared)
   let targets := rows.toList.zipIdx.filter fun (row, _) => row.vtableAllocation == some allocation
   check (targets.length >= 2) "control lost its shared memory-backed vtable allocation"
   let some (target, index) := targets.head? | throw (IO.userError "missing target query")
-  let alias := {parent with vtableAllocation := some allocation,
+  let alias := {parent with
+    vtableAllocation := some allocation
     metadata := {parent.metadata with entries := target.metadata.entries}}
   let conflict := "conflicting compiler vtable rows for exact allocation identity"
   rejects (CompilerVTableRuntime.queryTargetPrincipal facts (rows.push alias) ty allocation) conflict

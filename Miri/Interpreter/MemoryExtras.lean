@@ -20,6 +20,9 @@ structure Entry (Payload : Type) where
 structure AllocationExtra (Payload : Type) where
   weakMemory : Option (StoreBufferAlloc (Scalar Provenance))
   sync : Array (Size × Entry Payload) := #[]
+  /-- Immutable source FrameInfo sequence captured at allocation, top frame
+  first, including MIR inline scopes. It contains no guest provenance roots. -/
+  backtrace : Option (Array (CallInstance × Miri.MIR.SpanRef)) := none
 
 structure Registry (Payload : Type) where
   allocations : Array (AllocId × AllocationExtra Payload) := #[]
@@ -66,6 +69,15 @@ def putAllocation (h : Hooks K User Payload) (machine : Machine K User)
 private def liftResult (result : Except StepError A) : M K User A :=
   match result with | .ok value => pure value | .error error => throw error
 
+/-- Store only a trace collected for this allocation's actual reserved ID.
+No later diagnostic reconstructs an allocation origin from the current stack. -/
+def recordBacktrace (h : Hooks K User Payload) (id : AllocId)
+    (trace : Array (CallInstance × Miri.MIR.SpanRef)) : M K User Unit := do
+  let machine ← get
+  let extra ← liftResult (lookup h machine id)
+  if extra.backtrace.isSome then throw (.invalidProgram "allocation backtrace initialized twice")
+  set (putAllocation h machine id {extra with backtrace := some trace})
+
 /-- Called in the allocation tail after the actual race allocation was installed. -/
 def initAllocation [DecidableEq K] (h : Hooks K User Payload) (id : AllocId) (weak : Bool) : M K User Unit := do
   let initial ← get
@@ -78,7 +90,7 @@ def initAllocation [DecidableEq K] (h : Hooks K User Payload) (id : AllocId) (we
       if machine.dataRace.isNone then throw (.invalidProgram "weak memory requires vector clocks")
       unless machine.raceAllocations.any (fun entry => entry.1 == id) do
         throw (.invalidProgram "weak memory requires allocation race clocks")
-    set (putAllocation h machine id ⟨if weak then some StoreBufferAlloc.newAllocation else none, #[]⟩)
+    set (putAllocation h machine id {weakMemory := if weak then some StoreBufferAlloc.newAllocation else none})
   catch error =>
     unless alreadyHadExtras do
       modify (fun machine => discardUninserted h id machine false true true)
@@ -187,13 +199,15 @@ def bindAtomic (h : Hooks K User Payload)
 other compiler/machine tail effects execute after extras are installed. -/
 def bindAllocation [DecidableEq K] (h : Hooks K User Payload) (weak : Bool)
     (base : PlaceMachine.AllocationConfig K User) : PlaceMachine.AllocationConfig K User :=
-  {base with allocationTail := fun id size align => do
-    initAllocation h id weak
-    try
-      base.allocationTail id size align
-    catch error =>
-      modify (discardUninserted h id)
-      throw error}
+  {base with
+    discardUninserted := fun id => modify (fun machine => discardUninserted h id machine)
+    allocationTail := fun id size align => do
+      initAllocation h id weak
+      try
+        base.allocationTail id size align
+      catch error =>
+        modify (discardUninserted h id)
+        throw error}
 
 /-- All retained store-buffer values, including old modification-order entries,
 are roots. Consumers inspect scalar provenance using the canonical scalar API. -/

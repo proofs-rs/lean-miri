@@ -56,9 +56,8 @@ private def allocateWithRoot [DecidableEq K] (h : CreationHooks K U Payload) (si
       | .ok id => pure id
       | .error error => throw (.resourceExhaustion s!"allocation identity: {reprStr error}")
     if h.globalKind == some kind then throw (.invalidProgram "dynamically allocating global memory kind")
-    machineAction (h.allocation.diagnostic id size align)
     let config := MemoryExtras.bindAllocation h.extras h.weakMemory h.allocation
-    let tree ← machineAction (PlaceMachine.initStackExtra config.allocationTail id size align)
+    let tree ← PlaceMachine.initializeAllocation config id kind size align
     modify fun state => {state with machine := {state.machine with memory :=
       {state.machine.memory with live := state.machine.memory.live.push (id,⟨kind,allocation.withExtra tree⟩)}}}
     let tag ← match (← get).machine.borrowTracker with
@@ -114,8 +113,7 @@ def allocateConfigured [DecidableEq K] (config : PlaceMachine.AllocationConfig K
     let id ← match reserved with
       | .ok id => pure id
       | .error error => throw (.resourceExhaustion s!"allocation identity: {reprStr error}")
-    machineAction (config.diagnostic id size align)
-    let tree ← machineAction (PlaceMachine.initStackExtra config.allocationTail id size align)
+    let tree ← PlaceMachine.initializeAllocation config id kind size align
     modify fun state => {state with machine := {state.machine with memory :=
       {state.machine.memory with live := state.machine.memory.live.push (id,⟨kind,allocation.withExtra tree⟩)}}}
     let tag ← match (← get).machine.borrowTracker with

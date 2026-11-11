@@ -1,6 +1,7 @@
 import Miri.Input.EvalConfiguration
 import Miri.Interpreter.NativeAllocationLifecycle
 import Miri.Interpreter.MemoryErrors
+import Miri.Interpreter.LeakCheck
 import Miri.Interpreter.ConcurrencyErrors
 import Miri.Input.EvalAccessMachine
 import Miri.Input.EvalPointerSource
@@ -24,6 +25,7 @@ import Miri.Input.CompilerSignatureAbi
 import Miri.Interpreter.ConstantMachine
 import Miri.Input.CompilerIntrinsicSymbols
 import Miri.Input.CompilerBodySpan
+import Miri.Input.CompilerAllocationBacktrace
 import Miri.Input.CompilerCoreIntrinsic
 import Miri.Input.CompilerValueConstants
 import Miri.Input.EvalCallerLocationConstruction
@@ -78,6 +80,9 @@ structure Options where
   /-- Bound host write-all retries independently of guest string scans or ABI
   work. Exhaustion is an explicit resource outcome, never successful output. -/
   miriWriteRetryBudget : Nat := 65536
+  /-- Optional source allocation-time FrameInfo capture. Ordinary diagnostic
+  configurations retain their existing collection policy unless enabled. -/
+  collectLeakBacktraces : Bool := false
 
 /-- Genuine residual effects and compiler queries. Physical reads/writes,
 local storage, retagging, calls/returns and every ordinary MIR operation are
@@ -428,6 +433,16 @@ def makeWithForeignContext {Assembly : Type}
     let allocation := EvalConfiguration.allocation maximum leaves.storage
       (fun _ _ _ => pure ()) pointers extra
     let allocation := {allocation with
+      allocationBacktrace := if options.collectLeakBacktraces then some (fun id kind => do
+        unless LeakCheck.mayLeak kind do
+          let trace ← match CompilerAllocationBacktrace.collect p (← get).stack.frames with
+            | .ok trace => pure trace
+            | .error reason => throw (.unsupported s!"compiler allocation backtrace: {reason}")
+          let state ← get
+          match MemoryExtras.recordBacktrace extra id trace state.machine with
+          | .ok () machine => set {state with machine}
+          | .error error machine => set {state with machine}; throw error)
+        else none
       nativeStorage := some (fun size align init => do
         let state : State Os R P H D O Aff B Host ← get
         if (leaves.pointerSource.nativeLibraryPaths state.machine.user.payload.payload.user.host).isEmpty then

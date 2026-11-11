@@ -59,8 +59,8 @@ def allocationForKind (h : Hooks U C Host Payload) (allocationKind : MiriMemoryK
     M U (ReallocationDriver.Hooks MiriMemoryKind U Payload) := do
   let context ← get
   let config := h.allocation.allocation
-  let tail := fun id size align => do
-    config.allocationTail id size align
+  let spanTail := fun id size align => do
+    config.allocationSpan id size align
     if allocationKind.shouldSaveAllocationSpan then
       let machine ← get
       let span ← match AllocationDriver.currentUserRelevantSpan h.allocation.driver.spans {context with machine} with
@@ -68,7 +68,7 @@ def allocationForKind (h : Hooks U C Host Payload) (allocationKind : MiriMemoryK
         | .error error state => set state.machine; throw error
       modify fun machine => {machine with allocationSpans :=
         (machine.allocationSpans.filter fun entry => entry.1 != id).push (id,span,none)}
-  return {h.allocation with allocation := {config with allocationTail := tail}, driver := driver h}
+  return {h.allocation with allocation := {config with allocationSpan := spanTail}, driver := driver h}
 
 def writeScalar (h : Hooks U C Host Payload) (choice : C) (value : Scalar Provenance)
     (dest : MPlaceTy Provenance) : M U Unit :=

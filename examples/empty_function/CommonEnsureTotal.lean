@@ -83,7 +83,7 @@ theorem from_conversion (s : Static) (metadata : Specification.Metadata s)
       (post.race.trans noRace) middleVacant with
       ⟨global,root,tagged,adjusted,world⟩ | ⟨error,failed,adjusted,nonUB⟩
     · let allocation := converted.mapExtra (fun _ => BorrowTree.new root sourceBytes.byteSize)
-      let registered := MemoryExtras.putAllocation (extras s) {middle with borrowTracker := some {post.tracker with global}} id ⟨none,#[]⟩
+      let registered := MemoryExtras.putAllocation (extras s) {middle with borrowTracker := some {post.tracker with global}} id {weakMemory := none}
       let installed := GlobalErrorAware.installed registered id .global allocation
       have tree := RootTreePost.root_operation post.tracker.global global id root sourceBytes.byteSize post.world.globals tagged
       have formed := MaterializationPreservation.installed_world registered {post.tracker with global} id .global allocation world tree

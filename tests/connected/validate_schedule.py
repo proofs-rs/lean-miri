@@ -4,7 +4,7 @@
 Usage: validate_orders.py SNAPSHOT RUN_LOG OUTPUT_JSON
 
 The replay is expected to come from the verification-only SC264 trace wrapper,
-run against the unchanged schema-3 198-sc-base snapshot. This checker reads
+run against the pinned schema-6 198-sc-base snapshot. This checker reads
 only those artifacts; it never executes Lean or changes a guest input.
 """
 import hashlib
@@ -16,7 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
-from mir_json import load_mir_document
+from mir_json import load_mir_document, pool_entry
 
 
 def need(ok, message):
@@ -28,12 +28,11 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-BASE198_SHA256 = "4d706432e0423d3acf43e6f54b8b9cf1151c1a0e2ae9f203e88267fd6d94a8ec"
+BASE198_SHA256 = "aaeae9720a062f4b68e54878db881574ec5f033417cd6e11146198716923e325"
 
 STEP = re.compile(
     r"sc264_core_step thread=\{ value := (\d+) \}; choice_cursor=(\d+); "
-    r"frame=some \(\{ kind := Miri\.Interpreter\.CallInstanceKind\.Item "
-    r"(\d+),\s*args := #\[(?:.*?)\] \},\s*"
+    r"frame=some \((\d+),\s*"
     r"Miri\.Interpreter\.FrameLocation\.mir \{ block := (\d+), "
     r"statementIndex := (\d+)", re.S
 )
@@ -97,53 +96,37 @@ def parse_events(log, terminal_cursor):
 
 def source_sites(snapshot):
     document = load_mir_document(snapshot)
+    # A frame carries its concrete instance ID. Bodies and resolved callees
+    # are typed pool references; definition IDs do not identify instantiations.
     bodies = []
-
-    def add_body(body, name):
-        bodies.append((body, name))
-        for promoted in body.get("promoted_bodies", []) or []:
-            if promoted.get("body") is not None:
-                add_body(promoted["body"], name + "::promoted")
-
-    for body in document["bodies"]:
-        add_body(body, body.get("def_path", "root"))
-    for instance in document["instances"]:
-        if instance.get("body") is not None:
-            add_body(instance["body"], instance["def_path"])
-
-    definitions = []
-
-    def identity(body):
-        return body.get("def_id", body.get("source_def_id"))
-
-    for body, _ in bodies:
-        definition = identity(body)
-        if definition is not None and definition not in definitions:
-            definitions.append(definition)
-    for instance in document["instances"]:
-        definition = instance.get("def_id")
-        if definition is not None and definition not in definitions:
-            definitions.append(definition)
+    for instance_id, instance in enumerate(document["instances"]):
+        if instance.get("body") is None:
+            continue
+        body = pool_entry(document, "bodies", instance["body"])
+        need(body["instance_id"] == instance_id,
+             "snapshot instance/body ownership mismatch")
+        bodies.append((body, instance["def_path"], instance_id))
 
     intrinsic_sites = {}
     workers = {}
     worker_frames = {}
-    for body, name in bodies:
-        dense = definitions.index(identity(body))
+    for body, name, instance_id in bodies:
         if name in ("child_a", "child_b"):
-            workers[name] = dense
-            worker_frames[dense] = name
+            workers[name] = instance_id
+            worker_frames[instance_id] = name
         for block in body["basic_blocks"]:
             terminator = block["terminator"]["kind"]
             if terminator.get("variant") != "Call":
                 continue
-            callee = terminator.get("resolution", {}).get("instance_def_path")
+            callee_id = terminator.get("resolution", {}).get("instance_id")
+            callee = (None if callee_id is None else
+                      pool_entry(document, "instances", callee_id)["def_path"])
             if not callee:
                 continue
             if name.startswith("core::sync::atomic::atomic_store") and callee.endswith("core::intrinsics::atomic_store"):
-                intrinsic_sites[(dense, block["block"], len(block["statements"]))] = "store"
+                intrinsic_sites[(instance_id, block["block"], len(block["statements"]))] = "store"
             elif name.startswith("core::sync::atomic::atomic_load") and callee.endswith("core::intrinsics::atomic_load"):
-                intrinsic_sites[(dense, block["block"], len(block["statements"]))] = "load"
+                intrinsic_sites[(instance_id, block["block"], len(block["statements"]))] = "load"
     need(set(workers) == {"child_a", "child_b"},
          f"snapshot worker definitions differ: {workers}")
     need(intrinsic_sites, "snapshot exposes no atomic intrinsic wrapper call sites")
@@ -267,7 +250,7 @@ def check(snapshot, run_log):
         "run_log_sha256": sha(run_log),
         "choice_event_count": len(events),
         "choice_inputs_all_within_recorded_support": True,
-        "worker_definitions": workers,
+        "worker_instances": workers,
         "atomic_intrinsic_order": order,
         "atomic_intrinsic_events": events_seen,
         "reported_seed": seed,

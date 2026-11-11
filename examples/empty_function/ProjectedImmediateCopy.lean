@@ -65,7 +65,7 @@ theorem from_write (s : Static) (metadata : Metadata s) (profile : Profile s)
   have nextCache : nextSlot.layout = some baseLayout := cache
   have valid := ProjectedValidate.concrete s metadata profile remaining capacity positive frames updated movedMachine
     id nextSlot baseLayout parent allocation tag offset atNext rfl nextCache noClocks noGhost shallow rfl foot within signed
-  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     (Configuration.leaves s.prepared s.options.place.debugAssertions) (remaining+1) metadata.construction s.cfg
     (by simpa only [Configuration.rootConfig,capacity,Nat.add_assoc] using s.built)
   rw [←fields.projection] at forcedEq

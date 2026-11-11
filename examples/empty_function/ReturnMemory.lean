@@ -95,7 +95,7 @@ structure Fields (config : WholeCall.Config) : Prop where
 
  theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s)
     (remaining : Nat) (config : WholeCall.Config)
-    (built : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options
+    (built : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
       (Configuration.leaves s.prepared s.options.place.debugAssertions) () (remaining+1) = .ok config)
     (state : WholeCall.State) (place : MPlaceTy Provenance)
     (layout : place.layout = s.abi.ret.layout) (noGhost : state.machine.user.payload.ghost = false)
@@ -103,11 +103,11 @@ structure Fields (config : WholeCall.Config) : Prop where
     ValidityVisitor.validatePlace config.validity () (fuel+1) ⟨.memory place.mplace,place.layout⟩ false true state =
       .ok () state := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have methods := BodyDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have methods := BodyDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves remaining metadata.construction config built
-  have memory := fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have memory := fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves remaining metadata.construction config built
-  have dictionaries := CanonicalDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have dictionaries := CanonicalDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves remaining metadata.construction config built
   have classifyEq : config.validity.classify =
       (CompilerFactAdapters.validityHooks s.prepared.compiler.lifecycle.calls.symbols.facts config.validity).classify :=
@@ -153,13 +153,13 @@ structure Fields (config : WholeCall.Config) : Prop where
     (shallow : state.machine.user.payload.validation = .Shallow) :
     s.cfg.projection.place.validate () ⟨.memory place.mplace,place.layout⟩ state = .ok () state := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       ((remaining+1)+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig,capacity,Nat.add_assoc] using s.built
-  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves (remaining+1) metadata.construction s.cfg outer
   obtain ⟨inner,innerBuilt,_⟩ := CanonicalDictionaries.make_fields s.prepared.compiler s.prepared.image
-    s.bytes s.options leaves remaining metadata.construction
+    s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves remaining metadata.construction
   have valid := canonical_unit s metadata profile remaining inner innerBuilt state place layout noGhost
     (s.options.limits.validation-1)
   have budget : s.options.limits.validation = (s.options.limits.validation-1)+1 := by omega
@@ -182,12 +182,12 @@ structure Fields (config : WholeCall.Config) : Prop where
     writePlaceImmediateNoValidate s.cfg.projection.place () .uninit ⟨.memory place.mplace,place.layout⟩ state =
       .ok () state := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       ((remaining+1)+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig,capacity,Nat.add_assoc] using s.built
-  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves (remaining+1) metadata.construction s.cfg outer
-  have dictionaries := CanonicalDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have dictionaries := CanonicalDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves (remaining+1) metadata.construction s.cfg outer
   have sized : place.layout.layout.isSized = true := by rw [layout]; exact metadata.unitSized
   have unitLayout : localMemoryLayout place.layout =
@@ -224,10 +224,10 @@ structure Fields (config : WholeCall.Config) : Prop where
     copyRuntimePlace s.cfg.projection.place s.cfg.copy () ⟨.immediate .uninit,s.abi.ret.layout⟩
       ⟨.memory place.mplace,place.layout⟩ true state = .ok () state := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       ((remaining+1)+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig,capacity,Nat.add_assoc] using s.built
-  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves (remaining+1) metadata.construction s.cfg outer
   have compatible : s.cfg.copy.compatible s.abi.ret.layout s.abi.ret.layout = .ok true := by
     rw [fields.compatible]

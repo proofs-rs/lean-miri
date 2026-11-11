@@ -193,7 +193,7 @@ theorem shallow_indirect
 
 theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s)
     (remaining : Nat) (config : WholeCall.Config)
-    (built : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options
+    (built : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
       (Configuration.leaves s.prepared s.options.place.debugAssertions) () (remaining+1) = .ok config)
     (frames : Array F) (frame : F) (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (id : MIR.LocalId) (slot : LocalState Provenance LocalLayout) (place : MPlaceTy Provenance)
@@ -205,11 +205,11 @@ theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s
       .ok () (LocalUnit.current frames frame machine) := by
   let state := LocalUnit.current frames frame machine
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have methods := BodyDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have methods := BodyDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves remaining metadata.construction config built
-  have memory := ReturnMemory.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have memory := ReturnMemory.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves remaining metadata.construction config built
-  have dictionaries := CanonicalDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have dictionaries := CanonicalDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves remaining metadata.construction config built
   have classifyEq : config.validity.classify =
       (CompilerFactAdapters.validityHooks s.prepared.compiler.lifecycle.calls.symbols.facts config.validity).classify :=
@@ -230,12 +230,12 @@ theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s
   apply shallow_indirect config.validity fuel state (destination frames frame id place.layout).ref place node.display noGhost ghostEq
   · rw [nameEq,layout]
     exact BodyQueries.adapter_name _ _ () _ _ node nodeFound
-  · have read := read_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  · have read := read_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
       leaves remaining metadata.construction config built frames frame
       {machine with user := {machine.user with payload := {machine.user.payload with ghost := true}}}
       place.layout id slot place.mplace atSlot live cache profile.debug sized noClocks
     simpa only [state,BodyValidation.active,LocalUnit.current,destination] using read
-  · have forced := force_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  · have forced := force_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
       leaves remaining metadata.construction config built frames frame
       {machine with user := {machine.user with payload := {machine.user.payload with ghost := true}}}
       place.layout id slot place.mplace atSlot live cache profile.debug sized noClocks
@@ -270,13 +270,13 @@ theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s
       (LocalUnit.current frames frame machine) =
       .ok () (LocalUnit.current frames frame machine) := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       ((remaining+1)+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig, capacity, Nat.add_assoc] using s.built
   have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes
-    s.options leaves (remaining+1) metadata.construction s.cfg outer
+    (EmptyFunction.Configuration.proofOptions s.options) leaves (remaining+1) metadata.construction s.cfg outer
   obtain ⟨inner, innerBuilt, _⟩ := CanonicalDictionaries.make_fields s.prepared.compiler s.prepared.image
-    s.bytes s.options leaves remaining metadata.construction
+    s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves remaining metadata.construction
   obtain ⟨node, nodeFound⟩ := metadata.unitNode
   have budget : s.options.limits.validation = (s.options.limits.validation-1)+1 := by omega
   have valid := canonical_unit s metadata profile remaining inner innerBuilt frames frame machine id slot ⟨memory,s.abi.ret.layout⟩ atSlot live cache noClocks rfl noGhost
@@ -301,10 +301,10 @@ theorem write (s : Static) (metadata : Metadata s) (profile : Profile s)
     writePlaceImmediateNoValidate s.cfg.projection.place () .uninit (destination frames frame id s.abi.ret.layout)
       (LocalUnit.current frames frame machine) = .ok () (LocalUnit.current frames frame machine) := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       ((remaining+1)+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig,capacity,Nat.add_assoc] using s.built
-  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves (remaining+1) metadata.construction s.cfg outer
   have dictionaries := MetadataBinding.fields s metadata (by omega)
   have physical := ReturnMemory.write s metadata profile remaining capacity (LocalUnit.current frames frame machine)
@@ -326,10 +326,10 @@ theorem unit (s : Static) (metadata : Metadata s) (profile : Profile s)
       (destination frames frame id s.abi.ret.layout) true (LocalUnit.current frames frame machine) =
       .ok () (LocalUnit.current frames frame machine) := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       ((remaining+1)+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig,capacity,Nat.add_assoc] using s.built
-  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves (remaining+1) metadata.construction s.cfg outer
   have compatible : s.cfg.copy.compatible s.abi.ret.layout s.abi.ret.layout = .ok true := by
     rw [fields.compatible]

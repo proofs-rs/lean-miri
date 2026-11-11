@@ -43,6 +43,15 @@ shallow validation, and the specified debug, retag, and control configuration.
 The observer ends after returning to the caller; arbitrary scheduler
 interleavings and later caller execution are outside this theorem.
 
+The fixed configuration keeps allocation-backtrace diagnostics disabled.
+`Configuration.proofOptions` overrides only the new `collectLeakBacktraces`
+field; every pre-existing option remains a caller input with its existing
+profile constraints. Every diagnostic-off option record embeds unchanged
+(`proofOptions_of_disabled`). Raw option records requesting diagnostic collection
+are normalized to this explicit profile; the theorem does not establish safety
+or normal completion for the opt-in collector. Fixed Rust/MIR inputs and the
+final target's caller premises are unchanged.
+
 Miri source additions expose proof-only APIs; the interpreter implementation
 is unchanged by this example. The fixed Rust/MIR hashes are recorded in
 `SHA256SUMS`. The schema-6 input retains canonical instance, body, type, layout

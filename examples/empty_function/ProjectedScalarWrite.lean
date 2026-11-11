@@ -187,7 +187,7 @@ private theorem filter_absent (older : Array (AllocId × InputDraft.Entry)) (id 
     (cached : state.machine.user.addresses.baseAddr.find? (fun row => row.allocId == id) = some ⟨id,base⟩)
     (backend : state.machine.user.payload.payload.user.backend = .none) (noClocks : state.machine.dataRace = none)
     (extra : state.machine.user.payload.payload.user.runtime.extras.allocations.find? (fun row => row.1 == id) =
-      some (id,⟨none,#[]⟩)) :
+      some (id,{weakMemory := none})) :
     ∃ after,
       PlaceMachine.writeMemory {s.cfg.access with ghostMode := false} (fun _ => true) (.scalar value)
         ⟨⟨Pointer.new (some (.concrete id tag)) (Size.ofBytes base),.none,none⟩,layout⟩ state =
@@ -251,7 +251,7 @@ theorem write_pair (s : Static) (metadata : Metadata s) (capacity : 0 < s.capaci
     (cached : state.machine.user.addresses.baseAddr.find? (fun row => row.allocId == id) = some ⟨id,base⟩)
     (backend : state.machine.user.payload.payload.user.backend = .none) (noClocks : state.machine.dataRace = none)
     (extra : state.machine.user.payload.payload.user.runtime.extras.allocations.find? (fun row => row.1 == id) =
-      some (id,⟨none,#[]⟩)) :
+      some (id,{weakMemory := none})) :
     ∃ after,
       PlaceMachine.writeMemory {s.cfg.access with ghostMode := false} (fun _ => true) (.scalarPair first second)
         ⟨⟨Pointer.new (some (.concrete id tag)) (Size.ofBytes base),.none,none⟩,layout⟩ state =

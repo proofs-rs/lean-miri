@@ -137,7 +137,7 @@ theorem push_actual (s : Static) (metadata : Metadata s) (profile : Profile s)
       (LocalUnit.current frames frame machine) =
       .ok metadata.localSpan (LocalUnit.current frames frame machine) := by
   obtain ⟨remaining,eq⟩ : ∃ n : Nat, s.capacity = n+1 := ⟨s.capacity-1,by omega⟩
-  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     (Configuration.leaves s.prepared s.options.place.debugAssertions) remaining metadata.construction s.cfg
     (by simpa only [Configuration.rootConfig,eq] using s.built)
   obtain ⟨decl,declaration,indexed⟩ := metadata.localSourceSpan

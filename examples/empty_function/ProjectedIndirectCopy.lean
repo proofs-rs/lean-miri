@@ -19,9 +19,9 @@ theorem forced (s : Static) (metadata : Metadata s) (profile : Profile s)
       (LocalUnit.current frames frame machine) =
       .ok ⟨ProjectedIndirectPreflight.shifted memory amount,s.abi.ret.layout⟩ (LocalUnit.current frames frame machine) := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have built : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have built : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       ((remaining+1)+1) = .ok s.cfg := by simpa only [Configuration.rootConfig,capacity,Nat.add_assoc] using s.built
-  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves (remaining+1) metadata.construction s.cfg built
   have debug := (MetadataBinding.fields s metadata (by omega)).debug.trans profile.debug
   have got := LocalIndirectRead.get_operand frame id slot atSlot memory live

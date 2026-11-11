@@ -45,11 +45,11 @@ and compare each one with the same-TyCtxt Miri reference and connected interpret
 
 ```bash
 python3 tools/check-vtable-erasure.py tests/repro/vtable/hrtb-erasure-control.rs \
-  scratch/vtable-hrtb.json --expect identity --require-predicate-contrast
+  scratch/vtable-hrtb.json --expect identity --require-predicate-contrast --require-lockstep
 python3 tools/check-vtable-erasure.py tests/repro/vtable/static-erasure-control.rs \
   scratch/vtable-static.json --expect identity
 python3 tools/check-vtable-erasure.py tests/repro/vtable/hrtb-upcast-erasure-control.rs \
-  scratch/vtable-upcast.json --expect identity --require-predicate-contrast --require-trait-vptr
+  scratch/vtable-upcast.json --expect identity --require-predicate-contrast --require-trait-vptr --require-lockstep
 ```
 
 These controls test named higher-ranked binders and a borrowed global's vtable.
@@ -105,8 +105,12 @@ python3 tools/check-vtable-erasure.py tests/repro/vtable/metadata-consumer.rs \
   --require-external-constant vtable_metadata_producer::OBJECT
 ```
 
-The additional assertion requires the root's evaluated external constant to
-refer to an allocation with a symbolic-vtable relocation. It does not accept
+The additional assertion independently dumps MIR with the pinned compiler and
+identical Rust flags/dependencies, requiring the named external constant in
+`miri_start` and excluding a local unsize coercion. It then requires the exported
+root's evaluated constant to refer to an allocation with a symbolic-vtable
+relocation. Resolved exports do not retain unevaluated constant definition IDs;
+this fixture-specific join is not a general compiler-correspondence proof. It does not accept
 the prepared catalog's probe allocations alone as evidence of this path.
 The fresh comparison checks one identity query and all 32 salts. Omitting
 `--expect identity` must reject this control as a nonidentity witness. This

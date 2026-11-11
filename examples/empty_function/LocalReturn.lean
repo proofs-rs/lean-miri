@@ -31,7 +31,7 @@ private theorem bound_copy (s : Static) (layout : LocalLayout) (dest : RuntimePl
     (ReturnStep.control s).copyReturn () ⟨.immediate .uninit,s.abi.ret.layout⟩
       (.frameLocal older.size id none s.abi.ret.layout caller.localsIdentity)
       (LocalUnit.current older caller machine) = (LocalUnit.current older caller machine,.ok ()) := by
-  have source := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have source := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     (Configuration.leaves s.prepared s.options.place.debugAssertions) (remaining+1) metadata.construction s.cfg
     (by simpa only [Configuration.rootConfig,capacity,Nat.add_assoc] using s.built)
   have compatible : s.cfg.copy.compatible s.abi.ret.layout s.abi.ret.layout = .ok true := by

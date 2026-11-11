@@ -40,7 +40,9 @@ including argv0. Their Lean assertions and choice tapes remain fixed. This
 adds pinned Rust/sysroot and reference-exporter build costs to replay; these two
 cases no longer compare against immutable saved allocation histories. Fresh checks build the pinned Miri reference and matching
 MIR-enabled standard library, then compare new exports/guest outcomes. Vtable
-controls explicitly expect identity, not a nonidentity witness. Native math's
+controls explicitly expect identity, not a nonidentity witness. The HRTB and
+HRTB-upcast controls additionally require lockstep answers and reject obsolete
+wrapped answers; the static control requires that no such answers exist. Native math's
 capability check deliberately distinguishes expected Unsupported from success.
 These are finite regressions against repository-pinned source, not a general
 equivalence proof or a comparison with the latest upstream Miri. See

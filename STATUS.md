@@ -40,13 +40,16 @@ caller-location constants are lowered from their direct compiler payloads. A gen
 function-pointer target has `resolution_kind: none` and no instance identity;
 `resolution_kind: instance` carries a canonical instance ID. This preserves
 the optional answer when exact query-key fields are attached.
-The vtable-erasure reader now uses typed predicate/type references, including
-TraitVPtr child joins. Remaining wrapper coverage expectations still need
-reconciliation: the cross-crate metadata fixture does not produce the required
-lockstep cast rows, and the HRTB fixture has only identity query answers despite
-its nonidentity expectation. Baseline and current exports agree on these inputs;
-direct catalog joins and canonical source-run checks pass separately. A successful
-full wrapper run remains unverified.
+The vtable-erasure reader uses typed predicate/type references, including
+TraitVPtr child joins. Only the HRTB upcast controls require lockstep query rows;
+static and cross-crate controls require direct decoding without those rows.
+Resolved constants no longer retain their unevaluated definition identity, so
+the cross-crate fixture checks its external constant in independently emitted
+compiler MIR and checks the exported root allocation’s symbolic-vtable relocation.
+This is a fixture-specific provenance check, not a general translation proof.
+Local fresh wrapper checks pass for static, cross-crate, HRTB and HRTB-upcast
+controls, including same-TyCtxt references, exact catalog joins over 32 salts,
+and canonical Lean guest exit zero. A successful hosted rerun remains required.
 Coroutine frame layout serialization and foreign TLS initializers remain
 unimplemented and now stop export. This boundary does not establish compiler
 query closure or interpreter correspondence.
@@ -84,6 +87,12 @@ coherence is guarded by active raw runtime and enabled-source counters, rather
 than excluding zero/wrapped counters, exhaustion flags or the final MAX ID.
 The exact race-off/shallow/fixed-scheduling profile is in `Specification`;
 other scheduler interleavings and caller execution after return are outside scope.
+
+The example adapter disables the new allocation-backtrace diagnostic option
+through `Configuration.proofOptions`, preserving every pre-existing option.
+The proof covers this legacy diagnostic-off profile; collection-enabled UI
+executions are separate finite comparisons. Fixed Rust/MIR inputs and the
+target theorem are unchanged.
 
 ## Remaining general proofs (not acceptance conditions for current finite QA)
 
@@ -163,11 +172,30 @@ extension fields and include the optional TLS-provider branch; hosted validation
 of these updated checks remains required. Saved replay cannot validate changed
 producers.
 
-The upstream UI workflow ports PR #9’s test harness without its compiler/runtime
-fixes. Main’s reference environment and Lean choice/argv/CPU/float/CAS/I/O profile
-differ from that harness’s strict contract; profile mismatches remain failures,
-with attempted Lean outcomes retained. Full hosted sweep and aggregate coverage
-remain unvalidated.
+The upstream UI workflow applies the requested reference and Lean settings
+through explicit opt-in adapters: empty guest environment, seed zero, source
+argv0, one CPU, and ordered supported runtime flags. Ordinary runner defaults
+are unchanged. The uncapped seeded diagnostic policy uses SplitMix64; it does
+not claim the same random stream as Miri. Strict profile and terminal oracles
+retain per-field expected, observed and missing values.
+The optional allocation-time collector retains full-instance/span frame traces
+for allocations subject to leak checking, including MIR inline scopes and exact dummy
+span fallback. UI profiles enable it unless leaks are explicitly ignored;
+ordinary runner defaults keep it disabled. Eight focused unchanged upstream
+sources pass the strict reference/profile/terminal oracles, including an actual
+UB stop with fourteen retained allocation backtraces. This does not establish
+the full UI sweep: coroutine ABI layout remains unsupported, as do Stacked
+Borrows profiles, host-isolation/output-capture settings and compile-time or
+nonlocal-diagnostic oracles outside the runtime profile. Export errors,
+Unsupported outcomes and other interpreter mismatches remain failures. A full
+successful hosted sweep and aggregate coverage remain unvalidated.
+
+The 6aca6f0 regression run also exposed stale schema assumptions in SC schedule
+validation, powi root lookup and vtable wrapper checks, and a decoder rejection
+of exact JSON-natural u128 range endpoints. Local checks pass for the repaired
+range boundaries, powi guest, all four vtable wrappers, and SC seeds 0–11 with
+four rejected malformed logs. These finite checks require a successful hosted
+rerun and do not establish whole-machine safety.
 Selected finite checks do not close general proof or source-correspondence gaps.
 
 The two-pass typed input revision passes the local library/frontend/native

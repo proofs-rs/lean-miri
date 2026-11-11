@@ -83,8 +83,8 @@ private def forKind (config : PlaceMachine.AllocationConfig MiriMemoryKind (Poin
     (spans : AllocationDriver.SpanHooks) (kind : MiriMemoryKind) :
     PointerMachine.M MiriMemoryKind U (PlaceMachine.AllocationConfig MiriMemoryKind (PointerMachine.User U)) := do
   let context ← get
-  let tail := fun id size align => do
-    config.allocationTail id size align
+  let spanTail := fun id size align => do
+    config.allocationSpan id size align
     if kind.shouldSaveAllocationSpan then
       let machine ← get
       let span ← match AllocationDriver.currentUserRelevantSpan spans {context with machine} with
@@ -92,7 +92,7 @@ private def forKind (config : PlaceMachine.AllocationConfig MiriMemoryKind (Poin
         | .error error state => set state.machine; throw error
       modify fun machine => {machine with allocationSpans :=
         (machine.allocationSpans.filter (·.1 != id)).push (id,span,none)}
-  pure {config with allocationTail := tail}
+  pure {config with allocationSpan := spanTail}
 
 /-- The common interpreter is assembled from the same source allocation,
 place, ABI and pointer dictionaries as MIR execution. `callFunction`

@@ -22,7 +22,7 @@ theorem initExtra_cached_root [DecidableEq K]
     (vacant : (extras.get machine.user).allocations.any (fun row=>row.1==id)=false) :
     GlobalAllocationMachine.initExtra extras (fun _ _ _ => pure ()) id size align machine =
       .ok (BorrowTree.new root size)
-        (MemoryExtras.putAllocation extras machine id ⟨none,#[]⟩) := by
+        (MemoryExtras.putAllocation extras machine id {weakMemory := none}) := by
   have noentry : ¬ ∃ (i : Nat) (h : i < (extras.get machine.user).allocations.size),
       (extras.get machine.user).allocations[i].1=id := by
     simpa only [Array.any_eq_false, beq_iff_eq, not_exists] using vacant
@@ -56,11 +56,11 @@ theorem ensure_live [DecidableEq K]
 current threads. Root-tag state is handled independently above. -/
 theorem registered_memory (extras : MemoryExtras.Hooks K U P)
     (machine : MachineHooks.MachineState K U) (id : AllocId) :
-    (MemoryExtras.putAllocation extras machine id ⟨none,#[]⟩).memory=machine.memory := rfl
+    (MemoryExtras.putAllocation extras machine id {weakMemory := none}).memory=machine.memory := rfl
 
 theorem registered_threads (extras : MemoryExtras.Hooks K U P)
     (machine : MachineHooks.MachineState K U) (id : AllocId) :
-    (MemoryExtras.putAllocation extras machine id ⟨none,#[]⟩).threads=machine.threads := rfl
+    (MemoryExtras.putAllocation extras machine id {weakMemory := none}).threads=machine.threads := rfl
 
 /-- Raw snapshot used only to state byte preservation. -/
 def snapshot {Prov Extra : Type} (allocation : Allocation Prov Extra) : Array UInt8 :=
@@ -143,7 +143,7 @@ theorem adjust_data_only {K U P : Type} [DecidableEq K]
       DataOnlyFacts source converted ∧
       GlobalAllocationMachine.adjust target extras (managedLeaves pointer) id source before =
         .ok (.owned (converted.mapExtra (fun _ => BorrowTree.new root source.byteSize)))
-          (MemoryExtras.putAllocation extras before id ⟨none,#[]⟩) := by
+          (MemoryExtras.putAllocation extras before id {weakMemory := none}) := by
   obtain ⟨converted,conversion,facts⟩ := convert_data_only source target pointer before empty
   refine ⟨converted,facts,?_⟩
   have inspect : source.inspectWithUninitAndPtrOutsideInterpreter 0 source.len =
@@ -170,7 +170,7 @@ set_option backward.dsimp.instances true
 def cached {K U P : Type} (extras : MemoryExtras.Hooks K U P)
     (before : MachineHooks.MachineState K U) (id : AllocId) (kind : K)
     (allocation : Allocation Provenance BorrowTree) : MachineHooks.MachineState K U :=
-  let after := MemoryExtras.putAllocation extras before id ⟨none,#[]⟩
+  let after := MemoryExtras.putAllocation extras before id {weakMemory := none}
   {after with memory := {before.memory with live :=
     (before.memory.live.filter fun old => old.1 != id).push (id,⟨.machine kind,allocation⟩)}}
 

@@ -9,7 +9,10 @@ import empty_function.MetadataQueries
 /-! Concrete candidate instantiation of the whole-call goal. These definitions
 are reviewable proposals, not a safety theorem or an ordinary-input coverage
 certificate. In particular resource sufficiency and arbitrary latent descriptor
-conversion adequacy are still open. -/
+conversion adequacy are still open. `Configuration.rootConfig` keeps the newly
+optional allocation-backtrace diagnostic disabled through `proofOptions`;
+all pre-existing option fields and caller-domain premises remain unchanged.
+Opt-in diagnostic collection is outside this fixed proof profile. -/
 namespace EmptyFunction.Specification
 open Miri Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter Miri.Input
 open WholeCall

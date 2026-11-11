@@ -62,10 +62,10 @@ theorem copy_error_from_force (s : EmptyFunction.WholeCall.Static)
       (.frameLocal index id (some offset) s.abi.ret.layout identity) state =
       (failed,.error error) := by
   let leaves := EmptyFunction.Configuration.leaves s.prepared s.options.place.debugAssertions
-  have built : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have built : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       ((remaining+1)+1) = .ok s.cfg := by
     simpa only [EmptyFunction.Configuration.rootConfig,capacity,Nat.add_assoc] using s.built
-  have fields := EmptyFunction.BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have fields := EmptyFunction.BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves (remaining+1) metadata.construction s.cfg built
   have compatible : s.cfg.copy.compatible s.abi.ret.layout s.abi.ret.layout = .ok true := by
     rw [fields.compatible]
