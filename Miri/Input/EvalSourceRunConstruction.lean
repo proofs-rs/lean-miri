@@ -465,7 +465,8 @@ def runFromInitialProfiled
     (initial : EvalRunConstruction.State Os R EvalSyncPayload.Payload H D
       (EvalUnixSourceConstruction.Other Raw Listener TcpStream Error) CpuAffinity.Mask B
       Poll Instant System Native Profiler)
-    (stableChoice : Option (StableChoice choice) := none) :
+    (stableChoice : Option (StableChoice choice) := none)
+    (unbounded : Bool := false) :
     Except StepError
       (EvalRunConstruction.RunResult
         (EvalRunConstruction.State Os R EvalSyncPayload.Payload H D
@@ -572,7 +573,10 @@ def runFromInitialProfiled
                   choiceAccess clock durationSince process
                 let loopReady := Lean.profileit "startup.bootstrap_ready" profile
                   (fun _ => afterCallbacks)
-                return .ok (EvalRunConstruction.runUntilTerminalProfiled profile loop
+                letI : Nonempty _ := ⟨loopReady⟩
+                return .ok (if unbounded then
+                  EvalRunConstruction.runUnboundedProfiled profile loop choice 0 loopReady
+                else EvalRunConstruction.runUntilTerminalProfiled profile loop
                   iterationFuel outerChoices loopReady)
 
 /-- Compatibility entry with the original positional API. Runtime profiling is
@@ -673,7 +677,8 @@ def runFromSourceProfiled
     (capacity iterationFuel : Nat)
     (outerChoices : List C)
     (useBuiltinChronoTz : Bool := true)
-    (stableChoice : Option (StableChoice choice) := none) :
+    (stableChoice : Option (StableChoice choice) := none)
+    (unbounded : Bool := false) :
     EStateM StepError External
       (EvalRunConstruction.RunResult
         (EvalRunConstruction.State Os R EvalSyncPayload.Payload H D
@@ -710,7 +715,7 @@ def runFromSourceProfiled
     initialConfiguration initialMemory runtimeTypes choiceTape
   match runFromInitialProfiled profile prepared image bytes options sourceLeaves choice initialConfiguration
       bootstrapConfiguration limits capacity iterationFuel outerChoices initial
-      stableChoice with
+      stableChoice unbounded with
   | .ok result => pure result
   | .error error => throw error
 

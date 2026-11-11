@@ -33,4 +33,13 @@ def seededDiagnosticTape (maxGeneratedChoices maxByteLength : Nat) (seed : UInt6
     policy := .boundedSeededDiagnostic maxGeneratedChoices maxByteLength seed,
     diagnosticRngState := seed }
 
+/-- Demand-driven diagnostic choices without a generated-count or byte-length cap.
+The resulting tape records one trace for replay, not exhaustive exploration. -/
+def unboundedDiagnosticTape (inputs : Array ExecutionChoices.Input := #[]) : ExecutionChoices.Tape :=
+  { inputs, policy := .diagnostic }
+
+def unboundedSeededDiagnosticTape (seed : UInt64)
+    (inputs : Array ExecutionChoices.Input := #[]) : ExecutionChoices.Tape :=
+  { inputs, policy := .seededDiagnostic seed, diagnosticRngState := seed }
+
 end Miri.Input.ExecutionChoicePolicy

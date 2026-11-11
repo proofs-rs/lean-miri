@@ -34,9 +34,9 @@ def make (p : CompilerProviders.Prepared) (compatibilityBudget : Nat) :
   functionSignature := fun _ layout => lift do
     let (count,sourceAbi) ← CompilerFunctionFacts.signature p.functions layout.ty
     pure (count, sourceAbi)
-  instanceKind := fun inst => lift (CompilerInstance.kindOf p.loweringContext p.program.compilerTables inst)
-  instanceArgs := fun inst => lift (CompilerInstance.argsOf p.loweringContext p.program.compilerTables inst)
-  itemInstance := fun definition args => lift (CompilerInstance.item p.loweringContext p.program.compilerTables definition args)
+  instanceKind := fun inst => lift (CompilerInstance.kindOf p.loweringContext.instances inst)
+  instanceArgs := fun inst => lift (CompilerInstance.argsOf p.loweringContext.instances inst)
+  itemInstance := fun definition args => lift (CompilerInstance.item p.loweringContext.instances definition args)
   functionKind := fun ty => lift (CompilerFunctionFacts.kind p.functions ty)
   resolve := fun _ definition args => CompilerProviders.resolveCurrent p definition args
   fnAbiOfFnPtr := fun _ layout extra => lift (CompilerFunctionFacts.pointerAbi p.functions layout.ty extra)

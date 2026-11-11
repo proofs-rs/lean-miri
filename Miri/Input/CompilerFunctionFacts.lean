@@ -32,7 +32,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except Stri
     let ty ← knownType ctx record.typeId
     if functions.any (fun f => f.ty == ty) then throw "duplicate compiler function type query"
     let inst ← record.instanceId.mapM fun id => do
-      let _ ← CompilerInstance.source ctx id
+      let _ ← CompilerInstance.source ctx.instances id
       pure id
     let signature := do
       for input in record.signature.inputs do
@@ -58,11 +58,10 @@ def kind (prepared : Prepared) (ty : MIR.TyId) : Except String CallFunctionKind 
   match entry.instanceId with
   | none => pure .FnPtr
   | some inst =>
-    let ctx := LowerContext.ofDocument prepared.program.input
-    let tables := prepared.program.compilerTables
-    let kind ← CompilerInstance.kindOf ctx tables inst
+    let instances := prepared.program.input.instances
+    let kind ← CompilerInstance.kindOf instances inst
     match kind with
-    | .Item definition => return .FnDef definition (← CompilerInstance.argsOf ctx tables inst)
+    | .Item definition => return .FnDef definition (← CompilerInstance.argsOf instances inst)
     | _ => throw "FnDef compiler type did not contain its exact Item definition"
 
 def pointerAbi (prepared : Prepared) (ty : MIR.TyId) (extra : Array MIR.TyId) : Except String (FnAbi MIR.TyId) := do

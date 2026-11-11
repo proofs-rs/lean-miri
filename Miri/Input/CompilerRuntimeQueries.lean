@@ -36,13 +36,13 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
     let reference ← typeId ctx entry.mutReferenceType
     let drop : Except String CallInstance := match entry.dropGlue with
       | none => .error "drop glue compiler instance absent"
-      | some id => (CompilerInstance.source ctx id).map fun _ => id
+      | some id => (CompilerInstance.source ctx.instances id).map fun _ => id
     unless !(types.any (·.typeId == id)) do throw "duplicate compiler runtime type query"
     types := types.push ⟨id, pointer, reference, drop⟩
   let mut callers := #[]
   for entry in raw.instances do
     let callee := entry.instanceId
-    let _ ← CompilerInstance.source ctx callee
+    let _ ← CompilerInstance.source ctx.instances callee
     let track := entry.requiresCallerLocation
     if let some (_,prior) := callers.find? (·.1 == callee) then
       unless prior == track do throw "conflicting full-instance caller-location query"
@@ -50,11 +50,11 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
   let mut virtualQueries := #[]
   for query in raw.virtualQueries do
     let original := query.originalInstance
-    let _ ← CompilerInstance.source ctx original
+    let _ ← CompilerInstance.source ctx.instances original
     unless query.methodDefinition < tables.definitions.size && query.parentTrait < tables.definitions.size do
       throw "compiler definition ID out of bounds"
     let concrete ← typeId ctx query.concreteType
-    let resolved := (CompilerInstance.source ctx query.resolved).map fun _ => query.resolved
+    let resolved := (CompilerInstance.source ctx.instances query.resolved).map fun _ => query.resolved
     virtualQueries := virtualQueries.push ⟨original, query.methodDefinition, query.parentTrait,
       concrete, query.rebasedArgs, resolved⟩
   pure ⟨program, types, callers, virtualQueries⟩
@@ -84,12 +84,11 @@ def parentTrait (prepared : Prepared) (method : MIR.DefId) : Except String MIR.D
 
 def rebaseVirtualArgs (prepared : Prepared) (args : Array MIR.GenericArg)
     (parent : MIR.DefId) (concrete : Nat) : Except String (Array MIR.GenericArg) := do
-  let ctx := LowerContext.ofDocument prepared.program.input
-  let tables := prepared.program.compilerTables
+  let instances := prepared.program.input.instances
   let mut matching := #[]
   for entry in prepared.virtualQueries do
     if entry.parentTrait == parent && entry.concreteType == concrete then
-      if (← CompilerInstance.argsOf ctx tables entry.original) == args then
+      if (← CompilerInstance.argsOf instances entry.original) == args then
         matching := matching.push entry
   let some first := matching[0]? | throw "missing complete-key virtual rebase query"
   unless matching.all (·.rebasedArgs == first.rebasedArgs) do throw "conflicting virtual rebase queries"
@@ -113,7 +112,7 @@ def hooks (prepared : Prepared) (base : VirtualCalls.CompilerHooks S C) :
     VirtualCalls.CompilerHooks S C :=
   { base with
     instanceArgs := fun inst => lift (CompilerInstance.argsOf
-      (LowerContext.ofDocument prepared.program.input) prepared.program.compilerTables inst)
+      prepared.program.input.instances inst)
     mutPointerType := fun ty => lift (mutPointerType prepared ty)
     mutReferenceType := fun ty => lift (mutReferenceType prepared ty)
     resolveDropGlue := fun ty => lift (resolveDropGlue prepared ty)

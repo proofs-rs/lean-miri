@@ -70,7 +70,7 @@ def panic (p : CompilerProviders.Prepared) (queries : PanicQueries K U C)
   toImmediatePointer := fun _ => toImmediatePointer p target
   langItem := queries.langItem
   genericParameters := queries.genericParameters
-  itemInstance := fun _ definition args => query (CompilerInstance.item p.loweringContext p.program.compilerTables definition args)
+  itemInstance := fun _ definition args => query (CompilerInstance.item p.loweringContext.instances definition args)
   evalOperand := fun c op => OperandMachine.evalOperand operands c op none
 
 end Miri.Input.EvalCallRuntime

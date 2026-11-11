@@ -52,6 +52,8 @@ inductive Policy where
   /-- Deterministic seeded diagnostic draws. This is a replay aid for exploring
   one trace, not rand/Miri PRNG equivalence or exhaustive exploration. -/
   | boundedSeededDiagnostic (maxGeneratedChoices maxByteLength : Nat) (seed : UInt64)
+  | diagnostic
+  | seededDiagnostic (seed : UInt64)
   deriving DecidableEq, Repr
 
 structure Tape where
@@ -79,7 +81,7 @@ private def nextDiagnosticWord (state : UInt64) : UInt64 × UInt64 :=
   let output := secondMix ^^^ (secondMix >>> 31)
   (UInt64.ofNat output.toNat, UInt64.ofNat nextBits.toNat)
 
-private def seededDiagnosticInput (request : Request) (maxByteLength : Nat)
+private def seededDiagnosticInput (request : Request) (maxByteLength : Option Nat)
     (seed : UInt64) (state : UInt64) (firstGenerated : Bool) : M S (Input × UInt64) := do
   let state := if firstGenerated then seed else state
   match request with
@@ -115,7 +117,7 @@ private def seededDiagnosticInput (request : Request) (maxByteLength : Nat)
     let count := (upper - lower + 1).toNat
     return (.integer site (lower + Int.ofNat (word.toNat % count)), next)
   | .bytes site length =>
-    if length > maxByteLength then
+    if maxByteLength.any (length > ·) then
       throw (.resourceExhaustion "diagnostic random-byte choice exceeds byte budget")
     let mut current := state
     let mut bytes := #[]
@@ -126,7 +128,7 @@ private def seededDiagnosticInput (request : Request) (maxByteLength : Nat)
     return (.bytes site bytes, current)
 
 /-- Preserve the original deterministic zero-value policy for existing callers. -/
-private def diagnosticInput (request : Request) (maxByteLength : Nat) : M S Input := do
+private def diagnosticInput (request : Request) (maxByteLength : Option Nat) : M S Input := do
   match request with
   | .index site count =>
     if count == 0 then throw (.resourceExhaustion "diagnostic choice has empty index support")
@@ -146,7 +148,7 @@ private def diagnosticInput (request : Request) (maxByteLength : Nat) : M S Inpu
     if lower > upper then throw (.resourceExhaustion "diagnostic choice has empty integer support")
     return .integer site lower
   | .bytes site length =>
-    if length > maxByteLength then
+    if maxByteLength.any (length > ·) then
       throw (.resourceExhaustion "diagnostic random-byte choice exceeds byte budget")
     return .bytes site (Array.replicate length 0)
 
@@ -157,7 +159,7 @@ private def demand (access : Access S) (request : Request) : M S Input := do
   if tape.cursor > tape.inputs.size then
     match tape.policy with
     | .strict => pure ()
-    | .boundedDiagnostic _ _ | .boundedSeededDiagnostic _ _ _ =>
+    | .boundedDiagnostic _ _ | .boundedSeededDiagnostic _ _ _ | .diagnostic | .seededDiagnostic _ =>
       throw (.invalidProgram "diagnostic choice cursor exceeds supplied input prefix")
   if let some value := tape.inputs[tape.cursor]? then return value
   match tape.policy with
@@ -165,7 +167,7 @@ private def demand (access : Access S) (request : Request) : M S Input := do
   | .boundedDiagnostic maxChoices maxByteLength => do
     if tape.generatedChoices >= maxChoices then
       throw (.resourceExhaustion "bounded diagnostic choice count exhausted")
-    let value ← diagnosticInput request maxByteLength
+    let value ← diagnosticInput request (some maxByteLength)
     modify fun state =>
       let current := access.get state
       access.put state {current with inputs := current.inputs.push value, generatedChoices := current.generatedChoices + 1}
@@ -173,7 +175,20 @@ private def demand (access : Access S) (request : Request) : M S Input := do
   | .boundedSeededDiagnostic maxChoices maxByteLength seed => do
     if tape.generatedChoices >= maxChoices then
       throw (.resourceExhaustion "bounded seeded diagnostic choice count exhausted")
-    let (value, nextState) ← seededDiagnosticInput request maxByteLength seed
+    let (value, nextState) ← seededDiagnosticInput request (some maxByteLength) seed
+      tape.diagnosticRngState (tape.generatedChoices == 0)
+    modify fun state =>
+      let current := access.get state
+      access.put state {current with inputs := current.inputs.push value, generatedChoices := current.generatedChoices + 1, diagnosticRngState := nextState}
+    return value
+  | .diagnostic => do
+    let value ← diagnosticInput request none
+    modify fun state =>
+      let current := access.get state
+      access.put state {current with inputs := current.inputs.push value, generatedChoices := current.generatedChoices + 1}
+    return value
+  | .seededDiagnostic seed => do
+    let (value, nextState) ← seededDiagnosticInput request none seed
       tape.diagnosticRngState (tape.generatedChoices == 0)
     modify fun state =>
       let current := access.get state
@@ -288,11 +303,11 @@ theorem bernoulli_supplied (access : Access S) (state : S) (tape : Tape)
 def nextDiagnosticWordSource (state : UInt64) : UInt64 × UInt64 := nextDiagnosticWord state
 
 def diagnosticInputSource (request : Request) (maxByteLength : Nat) : M S Input :=
-  diagnosticInput request maxByteLength
+  diagnosticInput request (some maxByteLength)
 
 def seededDiagnosticInputSource (request : Request) (maxByteLength : Nat)
     (seed state : UInt64) (firstGenerated : Bool) : M S (Input × UInt64) :=
-  seededDiagnosticInput request maxByteLength seed state firstGenerated
+  seededDiagnosticInput request (some maxByteLength) seed state firstGenerated
 
 /-- A supported supplied head bypasses policy generation under every policy.
 The raw head also rules out the diagnostic cursor-before-prefix error. -/
@@ -379,7 +394,7 @@ theorem demandSource_eq (access : Access S) (request : Request) :
   if tape.cursor > tape.inputs.size then
     match tape.policy with
     | .strict => pure ()
-    | .boundedDiagnostic _ _ | .boundedSeededDiagnostic _ _ _ =>
+    | .boundedDiagnostic _ _ | .boundedSeededDiagnostic _ _ _ | .diagnostic | .seededDiagnostic _ =>
       throw (.invalidProgram "diagnostic choice cursor exceeds supplied input prefix")
   if let some value := tape.inputs[tape.cursor]? then return value
   match tape.policy with
@@ -396,6 +411,19 @@ theorem demandSource_eq (access : Access S) (request : Request) :
     if tape.generatedChoices >= maxChoices then
       throw (.resourceExhaustion "bounded seeded diagnostic choice count exhausted")
     let (value, nextState) ← seededDiagnosticInputSource request maxByteLength seed
+      tape.diagnosticRngState (tape.generatedChoices == 0)
+    modify fun state =>
+      let current := access.get state
+      access.put state {current with inputs := current.inputs.push value, generatedChoices := current.generatedChoices + 1, diagnosticRngState := nextState}
+    return value
+  | .diagnostic => do
+    let value ← diagnosticInput request none
+    modify fun state =>
+      let current := access.get state
+      access.put state {current with inputs := current.inputs.push value, generatedChoices := current.generatedChoices + 1}
+    return value
+  | .seededDiagnostic seed => do
+    let (value, nextState) ← seededDiagnosticInput request none seed
       tape.diagnosticRngState (tape.generatedChoices == 0)
     modify fun state =>
       let current := access.get state

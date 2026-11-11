@@ -29,8 +29,7 @@ def main (args : List String) : IO Unit := do
   let prepared ← must (Input.CompilerProviders.prepare program)
   let dummySpan ← must (Input.CompilerContextSpan.rootSpan prepared.program)
   let definition ← must (prepared.program.rootDefinitionId 0)
-  let rootInstance ← must (Input.CompilerInstance.item prepared.loweringContext
-    prepared.program.compilerTables definition #[])
+  let rootInstance ← must (Input.CompilerInstance.item prepared.loweringContext.instances definition #[])
   let _ ← must (Input.CallResolution.loadedBodyOfInstance prepared.lifecycle.calls.calls rootInstance)
   let arrays ← must prepared.initialArrays
   let imported := Input.CompilerGlobals.importGraph prepared.runtime.target prepared.program

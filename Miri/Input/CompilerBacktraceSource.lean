@@ -63,7 +63,7 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
   let mut namesByDefinition : Std.HashMap Nat (Array Nat) := {}
   for record in records do
     let callee := record.instanceId
-    let _ ← CompilerInstance.source ctx callee
+    let _ ← CompilerInstance.source ctx.instances callee
     let name := record.display
     let candidates := namesByDefinition.getD callee #[]
     if let some index := candidates.find? fun index =>

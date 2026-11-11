@@ -36,8 +36,7 @@ structure Metadata (s : Static) where
   target : s.prepared.compiler.runtime.target.base.pointerWidth = .w64
   /-- The selected callable is the ordinary item represented by the exported body. -/
   itemDefinition : DefId
-  itemKind : CompilerInstance.kindOf s.prepared.compiler.loweringContext
-    s.prepared.compiler.program.compilerTables s.functionInstance = .ok (.Item itemDefinition)
+  itemKind : CompilerInstance.kindOf s.prepared.compiler.loweringContext.instances s.functionInstance = .ok (.Item itemDefinition)
   inlineAttribute : CompilerVirtualFacts.inlineAttribute
     s.prepared.compiler.lifecycle.calls.scopes s.functionInstance = .ok none ∨
     CompilerVirtualFacts.inlineAttribute
@@ -69,8 +68,7 @@ structure Metadata (s : Static) where
     s.prepared.compiler.lifecycle.frames.calls.runtime s.functionInstance = .ok false
   frameDefinition : ∃ definitionIndex definition,
     CompilerInstance.definitionOf
-      (LowerContext.ofDocument s.prepared.compiler.lifecycle.frames.calls.calls.program.input)
-      s.prepared.compiler.lifecycle.frames.calls.calls.program.compilerTables s.functionInstance = .ok definitionIndex ∧
+      s.prepared.compiler.lifecycle.frames.calls.calls.program.input.instances s.functionInstance = .ok definitionIndex ∧
     s.prepared.compiler.lifecycle.frames.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition
   /-- Resolved local types depend on the current frame's body/instance key;
   local values, memory, thread state and caches are unconstrained by this fact. -/

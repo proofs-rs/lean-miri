@@ -73,7 +73,7 @@ For an already frozen native binary, pass
 For Lean `--run`, explicitly pass `--runner tools/Run.lean` and
 `--lean-path FROZEN_LIB`. These modes are mutually exclusive. The collector
 records execution mode, artifact hash and any build-log path. Both modes accept
-`--seed U64` and `--profile`; omitting the seed preserves the existing bounded
+`--seed U64` and `--profile`; omitting the seed selects the
 diagnostic zero policy. Explicit Lean runners require a prebuilt module closure.
 
 To regenerate the large catch-panic workload after Rust/sysroot setup, build the
@@ -89,6 +89,25 @@ LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1 bash tools/export-mir.sh \
 Unscoped exports also emit generic closure templates as independent roots and
 can fail readiness. Use one unchanged export across every paired trial; a fresh
 export of the same Rust source need not match a historical artifact's bytes.
+
+A smaller completed collection workload is
+`tests/repro/execution/vector-sort.rs`: it allocates 16 integers, sorts them,
+and checks an iterator-based weighted checksum:
+
+```bash
+LEAN_MIRI_PREPARED_ALLOC_ID_WORLD=1 bash tools/export-mir.sh \
+  --output scratch/vector-sort.json --root main -- \
+  tests/repro/execution/vector-sort.rs --crate-name vector_sort
+bash tools/run.sh scratch/vector-sort.json --profile
+```
+
+Use the same exported file for both binaries; source paths and compiler allocation
+identities can differ between fresh exports. Its successful outcome is
+`finalized_exit code=0`. The native runner continues until a terminal/error
+outcome or process interruption (Ctrl-C); it has no scheduler-iteration or
+generated-choice cap. Diagnostic choices are generated on demand and retained
+for replay, so longer runs still require host memory. Explicitly bounded
+proof/test APIs retain `pending` for an incomplete prefix.
 
 For hotspot attribution, `--profile` additionally reports complete scheduler
 iterations taking at least 10ms as `execution.iteration_N.*`. The label records

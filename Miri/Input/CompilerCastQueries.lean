@@ -38,14 +38,14 @@ def resolveFunction (p : CompilerProviders.Prepared) (definition : DefId)
   let .resolveFnPtr _ _ result ← resolutionRecord p false definition args
     | throw "function resolution query kind mismatch"
   if let some id := result then
-    let _ ← CompilerInstance.source p.loweringContext id
+    let _ ← CompilerInstance.source p.loweringContext.instances id
   pure result
 
 def resolveClosureFnOnce (p : CompilerProviders.Prepared) (definition : DefId)
     (args : Array GenericArg) : Result CallInstance := do
   let .resolveClosureFnOnce _ _ result ← resolutionRecord p true definition args
     | throw "closure resolution query kind mismatch"
-  let _ ← CompilerInstance.source p.loweringContext result
+  let _ ← CompilerInstance.source p.loweringContext.instances result
   pure result
 
 def noBoundVars (p : CompilerProviders.Prepared) (args : Array GenericArg) : Result Bool := do

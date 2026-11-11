@@ -30,3 +30,13 @@ scheduler continuation from an exit produced by the termination hook.
 These tests validate orchestration with supplied operations. They do not
 validate TLS destruction, full thread termination, host I/O, scheduling policy,
 or the complete official Miri semantics, and do not establish Rust safety.
+
+After building `Miri.Input.ExecutionChoicePolicy`, run:
+
+```bash
+lake env lean --run tests/run_loop/NativeChoicePolicy.lean
+```
+
+This executes more than 65,536 generated choices and an 8,192-byte draw under
+both native diagnostic policies. It also checks that explicitly bounded
+policies retain count/byte exhaustion and supplied malformed inputs fail.

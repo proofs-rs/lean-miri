@@ -26,8 +26,7 @@ private def lift (result : Except String A) : MachineHooks.M K User A :=
   | .error error => throw (.unsupported s!"compiler frame metadata: {error}")
 
 private def definitionCrate (p : Prepared) (callee : CallInstance) : Except String Nat := do
-  let id ← CompilerInstance.definitionOf (LowerContext.ofDocument p.calls.calls.program.input)
-    p.calls.calls.program.compilerTables callee
+  let id ← CompilerInstance.definitionOf p.calls.calls.program.input.instances callee
   let some definition := p.calls.calls.program.compilerTables.definitions[id]?
     | throw "frame full-instance definition absent from shared compiler table"
   return definition.crateIndex
@@ -64,8 +63,7 @@ def resolvedRank (localCrate definitionCrate : Nat) (relevant : Array Nat) : UIn
     (inline : CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = .ok none ∨
       CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = .ok (some false))
     (track : CompilerRuntimeQueries.requiresCallerLocation p.calls.runtime frame.functionInstance = .ok false)
-    (resolved : CompilerInstance.definitionOf (LowerContext.ofDocument p.calls.calls.program.input)
-      p.calls.calls.program.compilerTables frame.functionInstance = .ok definitionIndex)
+    (resolved : CompilerInstance.definitionOf p.calls.calls.program.input.instances frame.functionInstance = .ok definitionIndex)
     (found : p.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition) :
     (FrameMetadata.userRelevance (hooks p relevant) frame : MachineHooks.M K U UInt8) =
       pure (resolvedRank p.localCrate definition.crateIndex relevant) := by
@@ -80,8 +78,7 @@ def resolvedRank (localCrate definitionCrate : Nat) (relevant : Array Nat) : UIn
     (inline : CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = .ok none ∨
       CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = .ok (some false))
     (track : CompilerRuntimeQueries.requiresCallerLocation p.calls.runtime frame.functionInstance = .ok false)
-    (resolved : CompilerInstance.definitionOf (LowerContext.ofDocument p.calls.calls.program.input)
-      p.calls.calls.program.compilerTables frame.functionInstance = .ok definitionIndex)
+    (resolved : CompilerInstance.definitionOf p.calls.calls.program.input.instances frame.functionInstance = .ok definitionIndex)
     (found : p.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition)
     (state : MachineHooks.State K U) :
     ∃ fresh,
@@ -118,8 +115,7 @@ def resolvedRank (localCrate definitionCrate : Nat) (relevant : Array Nat) : UIn
     (inline : CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = .ok none ∨
       CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = .ok (some false))
     (track : CompilerRuntimeQueries.requiresCallerLocation p.calls.runtime frame.functionInstance = .ok false)
-    (resolved : CompilerInstance.definitionOf (LowerContext.ofDocument p.calls.calls.program.input)
-      p.calls.calls.program.compilerTables frame.functionInstance = .ok definitionIndex)
+    (resolved : CompilerInstance.definitionOf p.calls.calls.program.input.instances frame.functionInstance = .ok definitionIndex)
     (found : p.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition)
     (state : MachineHooks.State K U) :
     MachineHooks.initFrame (FrameMetadata.userRelevance (hooks p relevant)) frame state =

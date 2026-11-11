@@ -84,12 +84,12 @@ structure Prepared where
   obligations : Array Obligation
   indirect : Array Indirect := #[]
 
-private def decodeResolution (ctx : LowerContext) (tables : CompilerTables)
+private def decodeResolution (instances : Array InstanceNode)
     (function : MIR.Operand) (source : CallResolutionEvidence) : Result Resolution := do
   let virtual := source.kind == .virtualDispatch
   unless source.kind == .direct || virtual do throw "callee is not a compiler instance dispatch"
   let callee ← require source.instanceId "missing compiler call instance ID"
-  match ← CompilerInstance.kindOf ctx tables callee with
+  match ← CompilerInstance.kindOf instances callee with
   | .Virtual _ slot =>
     unless virtual do throw "virtual instance lacks virtual-dispatch query tag"
     unless source.dispatchSlot == some slot do throw "virtual dispatch slot/instance mismatch"
@@ -100,12 +100,12 @@ private def decodeResolution (ctx : LowerContext) (tables : CompilerTables)
 Query failures are retained per call site, without deleting the imported MIR. -/
 private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgram) (runtime : RuntimeMetadata) :
     Result Prepared := do
-  let ctx := LowerContext.ofDocument program.input
+  let instances := program.input.instances
   let tables := program.compilerTables
   let mut bodies := #[]
   let mut obligations := #[]
   for (sourceId,index) in program.instances do
-    match CompilerInstance.source ctx sourceId with
+    match CompilerInstance.source instances sourceId with
     | .error message => obligations := obligations.push ⟨s!"instance[{sourceId}]",message⟩
     | .ok _ => bodies := bodies.push ⟨sourceId,sourceId,index⟩
   let mut entries := #[]
@@ -129,7 +129,7 @@ private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgr
             entries := entries.push ⟨⟨index,blockIndex⟩,.error message⟩
           | .ok (ty,abi) => indirect := indirect.push ⟨⟨index,blockIndex⟩,function,ty,abi,sourceResolution⟩
           continue
-        let outcome := decodeResolution ctx tables function sourceResolution
+        let outcome := decodeResolution instances function sourceResolution
         if let .error message := outcome then
           obligations := obligations.push ⟨s!"body[{index}].block[{blockIndex}].resolution",message⟩
         entries := entries.push ⟨⟨index,blockIndex⟩,outcome⟩
@@ -217,11 +217,11 @@ def bindAbi (prepared : Prepared) (compatibility : CallCompatibility.Evidence S)
     CallHooks P S C E Other Extern (FnAbi TypeId) (ArgAbi TypeId) := {
   base with
   instanceKind := fun inst => lift (CompilerInstance.kindOf
-    (LowerContext.ofDocument prepared.program.input) prepared.program.compilerTables inst)
+    prepared.program.input.instances inst)
   instanceArgs := fun inst => lift (CompilerInstance.argsOf
-    (LowerContext.ofDocument prepared.program.input) prepared.program.compilerTables inst)
+    prepared.program.input.instances inst)
   itemInstance := fun definition args => lift (CompilerInstance.item
-    (LowerContext.ofDocument prepared.program.input) prepared.program.compilerTables definition args)
+    prepared.program.input.instances definition args)
   fnAbiOfInstance := fun _ fnInstance extra => lift (abiOfInstance prepared fnInstance extra)
   abiCanUnwind := FnAbi.canUnwind
   abiVariadic := FnAbi.cVariadic

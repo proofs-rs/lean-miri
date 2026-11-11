@@ -17,7 +17,7 @@ second identity table or semantic instance graph. -/
 def prepare (facts : CompilerFactAdapters.Prepared) : Prepared := ⟨facts,#[]⟩
 
 def functionInstance (prepared : Prepared) (id : InstanceId) : Result CallInstance := do
-  let _ ← CompilerInstance.source prepared.facts.context.loweringContext id
+  let _ ← CompilerInstance.source prepared.facts.context.loweringContext.instances id
   pure id
 
 /-- None means a known non-symbolic-function/vtable allocation. Missing image

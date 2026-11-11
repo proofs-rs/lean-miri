@@ -101,6 +101,6 @@ def unwindTerminate (program : LoweredProgram) (reason : MIR.UnwindTerminateReas
     | .lifetime => args := args.push (.Lifetime .Erased)
     | .typeParameter | .constParameter =>
       throw (.invalidProgram "Instance::mono called on type/const generic unwind termination item")
-  CompilerInstance.item (LowerContext.ofDocument program.input) program.compilerTables definition args
+  CompilerInstance.item program.input.instances definition args
     |>.mapError StepError.unsupported
 end Miri.Input.CompilerPanicFacts

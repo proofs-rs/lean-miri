@@ -49,13 +49,13 @@ private def options : CoreOptions := {
 
 private def choiceTape (seed : Option UInt64) (inputs : Array ExecutionChoices.Input) :=
   match seed with
-  | none => Input.ExecutionChoicePolicy.diagnosticTape 65536 4096 inputs
-  | some value => Input.ExecutionChoicePolicy.seededDiagnosticTape 65536 4096 value inputs
+  | none => Input.ExecutionChoicePolicy.unboundedDiagnosticTape inputs
+  | some value => Input.ExecutionChoicePolicy.unboundedSeededDiagnosticTape value inputs
 
 private def choiceMode (seed : Option UInt64) : String :=
   match seed with
-  | none => "bounded-diagnostic-zero"
-  | some value => s!"bounded-seeded-diagnostic seed={value.toNat} algorithm=SplitMix64-v1"
+  | none => "diagnostic-zero"
+  | some value => s!"seeded-diagnostic seed={value.toNat} algorithm=SplitMix64-v1"
 
 private def linuxOs : Input.EvalHostRuntimeConstruction.OsHostEffects Os := {
   hostWindows := false, hostUnix := true, targetWindows := false
@@ -360,9 +360,9 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
         (Input.EvalSourceRunFinalization.Result OuterState) :=
       Input.EvalSourceRunFinalization.runFromSourceAndFinalizeProfiled
       profile prepared prepared.image bytes options sourceLeaves () machineConfig initialMemory arrays
-      (choiceTape diagnosticSeed inputs) rawInitHooks bootstrap options.limits 256 100000
-      (List.replicate 100000 ()) false reports
-      (some ⟨fun selected => by cases selected; rfl⟩) ({} : InitTrace)
+      (choiceTape diagnosticSeed inputs) rawInitHooks bootstrap options.limits 256 0
+      [] false reports
+      (some ⟨fun selected => by cases selected; rfl⟩) true ({} : InitTrace)
     match finalized with
     | .ok result trace => if trace.cursor == 2 then .ok result else .error (.invalidProgram "raw init trace not consumed")
     | .error error _ => .error error,
@@ -372,7 +372,7 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
       let mismatchedConfiguration := {machineConfig with validation := .No}
       let result := Input.EvalSourceRunConstruction.runFromInitial
         prepared prepared.image bytes options sourceLeaves () mismatchedConfiguration bootstrap
-        options.limits 256 100000 (List.replicate 100000 ()) initial
+        options.limits 256 0 [] initial
       let runResult ← result.mapError fun error => s!"runFromInitial returned outer error: {reprStr error}"
       let state ← match runResult with
         | .failed state (.invalidProgram message) =>
@@ -462,7 +462,7 @@ def main (args : List String) : IO Unit := do
       if value >= 2^64 then throw (IO.userError "--seed is outside the u64 range")
       pure (some (UInt64.ofNat value))
     | _ => throw (IO.userError "usage: NativeRunner <untouched-export.json|/dev/stdin> [--seed <u64>] [--profile] (gzip streamed externally)")
-  boundary s!"choice_mode={choiceMode diagnosticSeed}; generated_budget=65536; byte_budget=4096; supplied_prefix=preserved"
+  boundary s!"choice_mode={choiceMode diagnosticSeed}; generated_choices=unbounded; byte_length=uncapped; supplied_prefix=preserved"
   boundary "raw_host_poll: finite source initialization replay; no live poll capability"
   boundary "decode: start"
   let input ← readJson path
