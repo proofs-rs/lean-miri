@@ -9,7 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
-from mir_json import load_mir_document, pool_entry
+from mir_json import load_mir_inspection_document as load_mir_document, pool_entry
 
 
 class FailClosedExportTests(unittest.TestCase):

@@ -51,7 +51,7 @@ exact arguments cannot be fingerprinted.
 
 ## Input contract
 
-The root schema is `lean-miri-rustc-mir` version 8. Evaluated integer scalars carry
+The root schema is `lean-miri-rustc-mir` version 9. Evaluated integer scalars carry
 `bits_unsigned` and the compiler layout's `size_bytes`, so consumers can construct
 the machine scalar before reading the type and layout tables. Zero-sized and
 pointer constants retain their separate representations. Compiler values have
@@ -88,8 +88,27 @@ Prepared-world `raw_pool` positions imply source ID `index + 1`: null slots join
 their unique serialized allocation, while opaque and dangling globals retain
 explicit exceptional rows. Dedup salt arrays carry graph IDs in salt order;
 source IDs and byte keys come from those allocations. All 32 outcomes remain
-required for function, vtable and byte keys. Earlier wire versions require fresh
-export rather than compatibility conversion.
+required for function, vtable and byte keys. The runtime reader accepts only the current wire version.
+
+Schema 9 adds exact-equality payload pools without changing compiler identity.
+`layouts` is an array of indices into `layout_values`: a type's `layout` still
+indexes `layouts`, so equal physical payloads retain separate `LayoutId`s.
+Type `boolean_queries` fields index root `boolean_queries`, and non-null
+`discriminants` fields index root `discriminants`; null remains explicit.
+Every memory payload's `initialization_ranges` and `relocations` fields index
+root arrays of arrays with those names. Bodies index root `backtrace_spans`;
+statement `kind` fields index `statement_kinds`; MIR `source_info` fields index
+`source_infos`. Source information remains separate from statement kinds so
+sharing a statement does not merge its use sites. Pool payloads retain all
+false values, null values and empty arrays. Lean resolves forward references
+independently of root field order and checks contextual bounds at each use.
+
+Maintained historical fixtures were mechanically projected from schema 8 with
+`tools/shared_json_pools.py`; the inverse projection preserves every original
+JSON value. `tests/fixtures/shared-pools-projection.json` pins both file hashes
+and canonical expanded hashes. Connected reference sidecars preserve the
+original reference snapshot binding under `wire_projection`; this transformation
+does not constitute a new compiler export or Miri execution.
 
 Discovery retains compiler query results until the reachable graph closes.
 Append-only request domains have consumer cursors; pair consumers visit new sites

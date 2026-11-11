@@ -8,6 +8,8 @@ lake env lean --run tests/input/DirectMIRDecoder.lean
 lake env lean --run tests/input/LowerMIRConstructorsTests.lean
 lake env lean --run tests/input/StrictDecoderChecks2026.lean
 lake env lean --run tests/input/TwoPassDecoder.lean
+lake env lean --run tests/input/SharedMIRPoolTests.lean
+lake env lean --run tests/input/SharedJSONPoolTests.lean
 lake env lean --run tests/input/CatalogForwardChecks.lean
 lake env lean --run tests/input/ValueFailFastChecks2026.lean
 lake env lean --run tests/input/CastQueryRecordChecks2026.lean

@@ -207,6 +207,11 @@ def resolveAllocationMemory (images : Array AllocationBytes) (path : String)
     | _ => throw s!"{path}.byte_image_id: expected pooled allocation bytes"
   checkedMemory path memory.sizeBytes memory.alignBytes memory.mutability bytes memory.initializationRanges memory.relocations
 
+private def sharedArray {α : Type} (pool : Array (Array α)) (path : String) : Parser (Array α) := do
+  let id ← natural
+  let some value := pool[id]? | fail s!"{path}: out of bounds shared array {id}"
+  pure value
+
 private structure ParseAllocationMemoryFields where
   size_bytes : Option Nat := none
   align_bytes : Option Nat := none
@@ -215,15 +220,16 @@ private structure ParseAllocationMemoryFields where
   initialization_ranges : Option (Array InitRange) := none
   relocations : Option (Array Relocation) := none
 
-def parseAllocationMemory (path : String) : Parser AllocationMemory := do
+private def parseAllocationMemoryWith (path : String)
+    (ranges : Parser (Array InitRange)) (relocations : Parser (Array Relocation)) : Parser AllocationMemory := do
   let s ← object ({} : ParseAllocationMemoryFields) fun s key => do
     match key with
     | "size_bytes" => return { s with size_bytes := some (← natural) }
     | "align_bytes" => return { s with align_bytes := some (← natural) }
     | "mutability" => return { s with mutability := some (← memoryMutability) }
     | "byte_image_id" => return { s with byte_image_id := some (← natural) }
-    | "initialization_ranges" => return { s with initialization_ranges := some (← array (parseInitRange (path ++ ".initialization_ranges"))) }
-    | "relocations" => return { s with relocations := some (← array (parseRelocation (path ++ ".relocations"))) }
+    | "initialization_ranges" => return { s with initialization_ranges := some (← ranges) }
+    | "relocations" => return { s with relocations := some (← relocations) }
     | "bytes_hex" => fail s!"{path}: inline allocation bytes are not supported"
     | _ => skipValue; pure s
   liftExcept (checkedMemory path (← required s.size_bytes (path ++ ".size_bytes"))
@@ -232,6 +238,19 @@ def parseAllocationMemory (path : String) : Parser AllocationMemory := do
     (.reference (← required s.byte_image_id (path ++ ".byte_image_id")))
     (← required s.initialization_ranges (path ++ ".initialization_ranges"))
     (← required s.relocations (path ++ ".relocations")))
+
+def parseAllocationMemory (path : String)
+    (initPool : Array (Array InitRange) := #[])
+    (relocationPool : Array (Array Relocation) := #[]) : Parser AllocationMemory :=
+  parseAllocationMemoryWith path
+    (sharedArray initPool (path ++ ".initialization_ranges"))
+    (sharedArray relocationPool (path ++ ".relocations"))
+
+/-- Constructor-level evidence parsing, separate from the schema9 document format. -/
+def parseAllocationMemoryInline (path : String) : Parser AllocationMemory :=
+  parseAllocationMemoryWith path
+    (array (parseInitRange (path ++ ".initialization_ranges")))
+    (array (parseRelocation (path ++ ".relocations")))
 
 private structure ParseDefinitionIdFields where
   crate : Option (Nat) := none
@@ -402,10 +421,11 @@ def decodeStaticGlobalInfo (path : String := "$static_global_info") : Parser (St
 private structure ParseTlsInitializerFields where
   allocation : Option (Option AllocationMemory) := none
 
-private def parseTlsInitializer (path : String) : Parser (Option AllocationMemory) := do
+private def parseTlsInitializer (path : String)
+    (initPool : Array (Array InitRange)) (relocationPool : Array (Array Relocation)) : Parser (Option AllocationMemory) := do
   let s ← object (ParseTlsInitializerFields.mk none) fun s key => do
     match key with
-    | "allocation" => return { s with allocation := some (← nullable (parseAllocationMemory (path ++ ".allocation"))) }
+    | "allocation" => return { s with allocation := some (← nullable (parseAllocationMemory (path ++ ".allocation") initPool relocationPool)) }
     | _ => skipValue; pure s
   let allocation ← pure (s.allocation.getD none)
   pure allocation
@@ -415,12 +435,14 @@ private structure ParseThreadLocalFields where
   global_info : Option (StaticGlobalInfo) := none
   initializer : Option (Option AllocationMemory) := none
 
-def parseThreadLocal (path : String := "$thread_local") : Parser (Catalog.ThreadLocal) := do
+def parseThreadLocal (path : String := "$thread_local")
+    (initPool : Array (Array InitRange) := #[])
+    (relocationPool : Array (Array Relocation) := #[]) : Parser (Catalog.ThreadLocal) := do
   let s ← object (ParseThreadLocalFields.mk none none none) fun s key => do
     match key with
     | "def_id" => return { s with def_id := some (← natural) }
     | "global_info" => return { s with global_info := some (← decodeStaticGlobalInfo (path ++ ".global_info")) }
-    | "initializer" => return { s with initializer := some (← parseTlsInitializer (path ++ ".initializer")) }
+    | "initializer" => return { s with initializer := some (← parseTlsInitializer (path ++ ".initializer") initPool relocationPool) }
     | _ => skipValue; pure s
   let def_id ← required s.def_id (path ++ ".def_id")
   let global_info ← required s.global_info (path ++ ".global_info")
@@ -460,7 +482,9 @@ private def parseAllocationIdentity (path : String) : Parser (Nat × UInt64) := 
   unless source > 0 && source < 2^64 do fail s!"{path}: expected nonzero source u64"
   pure (graph, UInt64.ofNat source)
 
-def parseAllocation (path : String) : Parser (Array AllocationNode) := do
+def parseAllocation (path : String)
+    (initPool : Array (Array InitRange) := #[])
+    (relocationPool : Array (Array Relocation) := #[]) : Parser (Array AllocationNode) := do
   let s ← object ({} : ParseAllocationFields) fun s key => do
     match key with
     | "identities" => return { s with identities := some (← array (parseAllocationIdentity (path ++ ".identities"))) }
@@ -472,11 +496,11 @@ def parseAllocation (path : String) : Parser (Array AllocationNode) := do
     | "mutability" => return { s with mutability := some (← nullable (memoryMutability)) }
     | "byte_image_id" => return { s with byte_image_id := some (← nullable natural) }
     | "bytes_hex" => fail s!"{path}: inline allocation bytes are not supported"
-    | "initialization_ranges" => return { s with initialization_ranges := some (← nullable (array (parseInitRange (path ++ ".initialization_ranges")))) }
-    | "relocations" => return { s with relocations := some (← nullable (array (parseRelocation (path ++ ".relocations")))) }
+    | "initialization_ranges" => return { s with initialization_ranges := some (← nullable (sharedArray initPool (path ++ ".initialization_ranges"))) }
+    | "relocations" => return { s with relocations := some (← nullable (sharedArray relocationPool (path ++ ".relocations"))) }
     | "instance_id" => return { s with instance_id := some (← nullable natural) }
     | "global_info" => return { s with global_info := some (← nullable (decodeStaticGlobalInfo (path ++ ".global_info"))) }
-    | "initializer" => return { s with initializer := some (← nullable (parseAllocationMemory (path ++ ".initializer"))) }
+    | "initializer" => return { s with initializer := some (← nullable (parseAllocationMemory (path ++ ".initializer") initPool relocationPool)) }
     | "def_id" => return { s with def_id := some (← nullable natural) }
     | "def_path" => return { s with def_path := some (← nullable string) }
     | "thread_local" => return { s with thread_local := some (← nullable boolean) }

@@ -198,13 +198,15 @@ def main (args : List String) : IO UInt32 := do
   | some index =>
     let badTagEncoding ← must <| do
       let layouts ← array (← getField original "layouts")
-      let layout ← getAt layouts index
+      let layoutId ← (← getAt layouts index).getNat?
+      let payloads ← array (← getField original "layout_values")
+      let layout ← getAt payloads layoutId
       let variants ← getField layout "variants"
       let encoding ← getField variants "tag_encoding"
       let corrupt ← setField encoding "niche_start" (string "not-a-number")
       let variants ← setField variants "tag_encoding" corrupt
       let layout ← setField layout "variants" variants
-      setField original "layouts" (encodeArray (← updateAt layouts index layout))
+      setField original "layout_values" (encodeArray (← updateAt payloads layoutId layout))
     check (malformedResult badTagEncoding) "malformed u128 niche encoding was accepted"
   | none => fail "fixture did not exercise a structured tag encoding"
 
@@ -231,11 +233,12 @@ def main (args : List String) : IO UInt32 := do
       node.memory.any fun memory => !memory.relocations.isEmpty)
       | throw "fixture contains no relocation target"
     let allocation ← getAt allocations index
-    let relocations ← array (← getField allocation "relocations")
+    let relocationId ← (← getField allocation "relocations").getNat?
+    let pools ← array (← getField original "relocations")
+    let relocations ← array (← getAt pools relocationId)
     let first ← getAt relocations 0
     let first ← setField first "target" (number 999999)
-    let allocation ← setField allocation "relocations" (encodeArray (← updateAt relocations 0 first))
-    setField original "allocations" (encodeArray (← updateAt allocations index allocation))
+    setField original "relocations" (encodeArray (← updateAt pools relocationId (encodeArray (← updateAt relocations 0 first))))
   check (malformedResult danglingAlloc) "dangling allocation reference was accepted"
 
   let typesJson ← must (getField original "types")

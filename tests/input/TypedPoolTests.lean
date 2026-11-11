@@ -53,8 +53,10 @@ def main : IO Unit := do
   let withRelocation ← must (set withRelocation "byte_image_id" (toJson (1 : Nat)))
   let relocationSource ← must (set source "byte_images" (.arr #[.str "00", .str "0000000000000000"]))
   let initialized ← must (Json.parse "{\"start_bytes\":0,\"end_bytes_exclusive\":8,\"state\":\"initialized\"}")
-  let withRelocation ← must (set withRelocation "initialization_ranges" (.arr #[initialized]))
-  let withRelocation ← must (set withRelocation "relocations" (.arr #[badReference]))
+  let withRelocation ← must (set withRelocation "initialization_ranges" (toJson (0 : Nat)))
+  let withRelocation ← must (set withRelocation "relocations" (toJson (0 : Nat)))
+  let relocationSource ← must (set relocationSource "initialization_ranges" (.arr #[.arr #[initialized]]))
+  let relocationSource ← must (set relocationSource "relocations" (.arr #[.arr #[badReference]]))
   reject (← must (set relocationSource "allocations" (.arr (allocations.set! 0 withRelocation)))) "out of bounds allocation ID"
   let second ← must (set allocations[0]! "allocation_id" (toJson (1 : Nat)))
   let second ← must (set second "source_alloc_id" (toJson (2 : Nat)))
@@ -87,8 +89,9 @@ def main : IO Unit := do
   reject (← must (set source "files" (.arr #[.str "strict.rs", .str "strict.rs"]))) "duplicate exact filename identities"
   let bodies ← must ((source.getObjVal? "bodies").bind Json.getArr?)
   let backtrace ← must (Json.parse "{\"span\":0,\"source_position\":{\"byte_position\":0,\"line\":1,\"zero_based_char_column\":0,\"filename\":0}}")
-  let validBody ← must (set bodies[0]! "backtrace_spans" (.arr #[backtrace]))
+  let validBody ← must (set bodies[0]! "backtrace_spans" (toJson (0 : Nat)))
   let validBacktrace ← must (set source "bodies" (.arr (bodies.set! 0 validBody)))
+  let validBacktrace ← must (set validBacktrace "backtrace_spans" (.arr #[.arr #[backtrace]]))
   let validBacktrace ← must (decodeJson validBacktrace.compress)
   let some validBody := validBacktrace.document.bodies[0]? | throw (IO.userError "missing decoded body")
   let some validRow := validBody.backtraceSpans[0]? | throw (IO.userError "missing decoded backtrace")
@@ -97,7 +100,6 @@ def main : IO Unit := do
   let position ← must (backtrace.getObjVal? "source_position")
   let position ← must (set position "filename" (toJson (1 : Nat)))
   let badBacktrace ← must (set backtrace "source_position" position)
-  let badBody ← must (set bodies[0]! "backtrace_spans" (.arr #[badBacktrace]))
-  reject (← must (set source "bodies" (.arr (bodies.set! 0 badBody)))) "out of bounds backtrace filename ID"
+  reject (← must (set source "backtrace_spans" (.arr #[.arr #[badBacktrace]]))) "out of bounds backtrace filename ID"
   reject (← must (set source "schema_version" (toJson (4 : Nat)))) "obsolete root schema"
   IO.println "typed pools preserve ID spaces and allocation identity; all definitions and references are checked"

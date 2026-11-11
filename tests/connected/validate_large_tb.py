@@ -5,14 +5,14 @@ from pathlib import Path
 import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools'))
-from mir_json import decode_mir_document, pool_entry
+from mir_json import decode_mir_document, inspection_document, pool_entry
 from connected_large_inputs import validate_reference
 
 
 def validate(snapshot, log):
     raw = Path(snapshot).read_bytes()
     validate_reference('large-tb', snapshot)
-    doc = decode_mir_document(json.loads(raw))
+    doc = inspection_document(decode_mir_document(json.loads(raw)))
     roots = [root for root in doc['body_roots'] if root['def_path'] == 'miri_start']
     assert len(roots) == 1
     root = roots[0]

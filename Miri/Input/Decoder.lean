@@ -4,6 +4,7 @@ import Miri.Input.ValidateTables
 import Miri.Input.TypeConstCodec
 import Miri.Input.DecodeMIR
 import Miri.Input.CatalogDecoder
+import Miri.Input.SharedPools
 
 namespace Miri.Input
 open Lean DecoderValues
@@ -213,7 +214,7 @@ private structure DocumentFields where
   runtimeTargetDataLayout : Option TargetDataLayoutEvidence := none
   queries : CatalogDecoder.QueryFields := {}
 
-private def parseDocumentFields : JsonReader.Parser ParsedDocument := do
+private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser ParsedDocument := do
   let d ← JsonReader.object ({} : DocumentFields) fun d key => do
     match key with
     | "schema" => return {d with schema := some (← JsonReader.string)}
@@ -225,15 +226,20 @@ private def parseDocumentFields : JsonReader.Parser ParsedDocument := do
     | "type_constants" => return {d with typeConstants := some (← parseConstants)}
     | "files" => return {d with files := some (← parseFiles)}
     | "spans" => return {d with spans := some (← JsonReader.arrayIndexed (fun index => parseSourceSpan s!"$.spans[{index}]"))}
-    | "layouts" => return {d with layouts := some (← JsonReader.arrayIndexed (fun index => parseLayout s!"$.layouts[{index}]"))}
+    | "layouts" =>
+      let values ← JsonReader.arrayIndexed fun index => do
+        let id ← JsonReader.natural
+        let some value := pools.layouts[id]? | JsonReader.fail s!"$.layouts[{index}]: unresolved layout value {id}"
+        pure value
+      return {d with layouts := some values}
     | "fn_abis" => return {d with functionAbis := some (← JsonReader.arrayIndexed (fun index => parseFunctionAbi s!"$.fn_abis[{index}]"))}
-    | "types" => return {d with types := some (← JsonReader.arrayIndexed (fun index => denseRow "type IDs" index (·.id) (parseTypeNode s!"$.types[{index}]")))}
+    | "types" => return {d with types := some (← JsonReader.arrayIndexed (fun index => denseRow "type IDs" index (·.id) (parseTypeNode s!"$.types[{index}]" pools.booleans pools.discriminants)))}
     | "byte_images" => return {d with byteImages := some (← parseByteImages)}
-    | "allocations" => return {d with allocations := some (← JsonReader.arrayIndexed (fun index => parseAllocation s!"$.allocations[{index}]"))}
+    | "allocations" => return {d with allocations := some (← JsonReader.arrayIndexed (fun index => parseAllocation s!"$.allocations[{index}]" pools.mir.initializationRanges pools.mir.relocations))}
     | "instances" => return {d with instances := some (← parseInstances)}
     | "compiler_abi_layout_schema" => return {d with compilerAbiLayoutSchema := some (← JsonReader.string)}
     | "bodies" =>
-      let bodies ← JsonReader.arrayIndexed (fun index => DecodeMIR.parseBody s!"$.bodies[{index}]")
+      let bodies ← JsonReader.arrayIndexed (fun index => DecodeMIR.parseBody s!"$.bodies[{index}]" (some pools.mir))
       return {d with bodies := some (bodies.map (·.value)), bodyReferences := bodies.map (·.references)}
     | "body_roots" => return {d with bodyRoots := some (← JsonReader.arrayIndexed (fun index => parseBodyRoot s!"$.body_roots[{index}]"))}
     | "compiler_alloc_id_world" => return {d with compilerAllocIdWorld := ← JsonReader.nullable (parseCompilerAllocIdWorld)}
@@ -347,7 +353,8 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
 /-- Parse complete input, including all forward-reference and graph checks,
 before returning the final import. Completion bookkeeping stays internal. -/
 def parseDocument (profile : Options := {}) : JsonReader.Parser ImportDocument := do
-  let parsed ← parseDocumentFields
+  let pools ← readSharedPools
+  let parsed ← parseDocumentFields pools
   JsonReader.liftExcept (profileit "decoder.validate_forward_references" profile fun _ =>
     validateParsedDocument parsed profile)
 
@@ -366,6 +373,6 @@ def decodeAllocationMemoryEvidence (text : String) (images : Array String) : Exc
   let images ← images.mapM fun hex => do
     unless canonicalLowerHex hex do throw "allocation byte image is not canonical lowercase hexadecimal"
     pure (AllocationBytes.image (← decodeAllocationHex hex))
-  resolveAllocationMemory images "$allocation" (← JsonReader.run (parseAllocationMemory "$allocation") text)
+  resolveAllocationMemory images "$allocation" (← JsonReader.run (parseAllocationMemoryInline "$allocation") text)
 
 end Miri.Input

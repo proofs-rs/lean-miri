@@ -5,7 +5,7 @@ import json
 import sys
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'tools'))
-from mir_json import load_mir_document, pool_entry
+from mir_json import load_mir_inspection_document as load_mir_document, pool_entry
 
 output=Path(sys.argv[1])
 document=load_mir_document(output);lock=json.loads((ROOT/'upstream/source-lock.json').read_text())

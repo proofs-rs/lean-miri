@@ -16,7 +16,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
-from mir_json import pool_entry
+from mir_json import pool_entry, decode_mir_document, inspection_document
 
 
 def require_external_constant(document, name, compiler_mir):
@@ -202,7 +202,7 @@ def main():
         rustc_cmd = [str(toolchain / 'bin/rustc'), *cmd[cmd.index('--') + 1:],
                      '--emit=mir', '-o', str(mir_path)]
         subprocess.run(rustc_cmd, cwd=ROOT, env=env, check=True, timeout=args.timeout)
-        require_external_constant(json.loads(raw), args.require_external_constant, mir_path.read_text())
+        require_external_constant(inspection_document(decode_mir_document(json.loads(raw))), args.require_external_constant, mir_path.read_text())
     query_args = [args.expect] + (['predicate-contrast'] if args.require_predicate_contrast else [])
     if args.require_trait_vptr:
         query_args.append('trait-vptr')

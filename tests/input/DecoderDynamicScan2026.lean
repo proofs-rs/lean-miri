@@ -46,8 +46,11 @@ def main (args : List String) : IO Unit := do
     ("source", toJson ("as_cast" : String))]))
   let cast ← must (set cast "operand" (Json.mkObj [("kind", toJson ("Copy" : String)), ("place", place)]))
   let cast ← must (set cast "target_type" ty)
-  let statement := Json.mkObj [("source_info", sourceInfo), ("kind", Json.mkObj [
-    ("variant", toJson ("Assign" : String)), ("place", place), ("rvalue", cast)])]
+  let kinds ← must ((← must (base.getObjVal? "statement_kinds")).getArr?)
+  let kind := Json.mkObj [
+    ("variant", toJson ("Assign" : String)), ("place", place), ("rvalue", cast)]
+  let base ← must (set base "statement_kinds" (.arr (kinds.push kind)))
+  let statement := Json.mkObj [("source_info", sourceInfo), ("kind", toJson kinds.size)]
   let block ← must (set block "statements" (toJson #[statement]))
   let body ← must (set body "basic_blocks" (toJson (blocks.set! 0 block)))
   let input ← must (set base "bodies" (toJson (bodies.set! 0 body)))

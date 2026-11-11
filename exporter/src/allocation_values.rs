@@ -1,5 +1,6 @@
 //! Semantic allocation graph data. Source allocation identity is independent of graph IDs.
 use serde::Serialize;
+use crate::shared_json::Shared;
 
 #[derive(Clone, Serialize)]
 pub(super) struct Memory {
@@ -7,8 +8,8 @@ pub(super) struct Memory {
     pub align_bytes: u64,
     pub mutability: &'static str,
     pub byte_image_id: u64,
-    pub initialization_ranges: Vec<InitializationRange>,
-    pub relocations: Vec<Relocation>,
+    pub initialization_ranges: Shared<Vec<InitializationRange>>,
+    pub relocations: Shared<Vec<Relocation>>,
 }
 #[derive(Clone, Serialize)]
 pub(super) struct InitializationRange {
@@ -258,8 +259,8 @@ mod tests {
                         state: "initialized",
                         start_bytes: 0,
                         end_bytes_exclusive: 3,
-                    }],
-                    relocations: Vec::new(),
+                    }].into(),
+                    relocations: Vec::new().into(),
                 },
             },
         };

@@ -4,14 +4,24 @@
 The synthetic unit fixture is a decoder-only input, not a Rust/Miri execution.
 """
 import json
+import sys
 import pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+from shared_json_pools import expand_document, pool_document
+
 OUT = ROOT / "scratch/decoder-id-inputs"
 EXPORTS = ROOT / "tests/input/fixtures"
 
 
 def write(name, value):
+    if isinstance(value, dict) and value.get("schema") == "lean-miri-rustc-mir":
+        version = value["schema_version"]
+        value["schema_version"] = 8
+        value = pool_document(value)
+        if version != 8:
+            value["schema_version"] = version
     (OUT / f"{name}.json").write_text(json.dumps(value, separators=(",", ":")) + "\n")
 
 
@@ -41,7 +51,7 @@ def set_table_empty(doc, key):
 
 
 def base():
-    return json.loads((EXPORTS / "strict-unit.json").read_text())
+    return expand_document(json.loads((EXPORTS / "strict-unit.json").read_text()), schema_version=8)
 
 
 def main():

@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-from mir_json import load_mir_document, pool_entry
+from mir_json import load_mir_inspection_document as load_mir_document, pool_entry
 
 root = Path(sys.argv[1])
 documents = {}
