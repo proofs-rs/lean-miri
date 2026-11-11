@@ -217,6 +217,46 @@ class FailClosedExportTests(unittest.TestCase):
             self.assertEqual(boxed["shape"]["kind"], "adt")
             self.assertIn("Box", boxed["shape"]["def_path"])
 
+    def test_result_main_has_exact_bootstrap_caller_signature(self):
+        document = self.accepted("start_result", "main", "bin")
+        main = next(row for row in document["compiler_main_queries"]["entries"]
+                    if row["signature_query"]["compiler_selected_entry"])
+        primitive = document["compiler_runtime_primitives"]
+        types = document["types"]
+        def const_pointer_to(ty):
+            return next(row["type_id"] for row in types
+                        if row["shape"]["kind"] == "raw_pointer"
+                        and row["shape"]["mutability"]["kind"] == "immutable"
+                        and row["shape"]["pointee"] == ty)
+        argv = const_pointer_to(const_pointer_to(primitive["u8"]))
+        expected = [main["signature_query"]["function_pointer_type"],
+                    primitive["isize"], argv, primitive["u8"]]
+        rows = document["compiler_function_facts"]["helper_signatures"]
+        exact = [row for row in rows if row["signature"]["inputs"] == expected
+                 and row["signature"]["output"] == primitive["isize"]
+                 and row["signature"]["abi"]["kind"] == "rust"
+                 and row["signature"]["safety"]["kind"] == "safe"
+                 and not row["signature"]["c_variadic"]]
+        self.assertTrue(exact, "source call_main dummy signature was not queried")
+        self.assertTrue(all(isinstance(row["abi_query"], int) for row in exact))
+
+    def test_weak_static_function_demands_retain_exact_named_queries(self):
+        for fixture, name, args, ret in [
+            ("weak_getrandom", "getrandom", ["pointer", "usize", "u32"], "isize"),
+            ("weak_cxa", "__cxa_thread_atexit_impl", ["pointer"] * 3, "i32"),
+        ]:
+            with self.subTest(fixture=fixture):
+                document = self.accepted(fixture)
+                row = next(row for row in document["compiler_named_shim_abis"] if row["name"] == name)
+                self.assertEqual(row["recipe"]["signature"]["arguments"], args)
+                self.assertEqual(row["recipe"]["signature"]["return"], ret)
+                self.assertIsInstance(row["recipe"]["query"]["abi_query"], int)
+
+    def test_unknown_weak_static_does_not_synthesize_named_shim(self):
+        document = self.accepted("weak_unknown")
+        self.assertNotIn("lean_miri_unknown_weak", {
+            row["name"] for row in document.get("compiler_named_shim_abis", [])})
+
     def test_dynamic_lookup_closes_over_source_allowed_targets(self):
         document = self.accepted("dynamic_symbols")
         names = {row["name"] for row in document["compiler_named_shim_abis"]}

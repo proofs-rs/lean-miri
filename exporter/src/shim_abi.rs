@@ -419,16 +419,42 @@ fn is_dynamic_symbol(target: &rustc_target::spec::Target, name: &str) -> bool {
     }
 }
 
+/// Demands can originate from a foreign FnDef, or from a weak static
+/// function pointer installed by extern_static.rs::weak_fn_symbols. Keep this
+/// same set as the runtime-catalog invalidation key: static allocations can be
+/// discovered after the first function-only catalog wave.
+pub(super) fn demanded_symbols<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    context: &ExportContext<'tcx>,
+) -> HashSet<String> {
+    let mut names = context.pending_instances.iter()
+        .filter(|instance| tcx.is_foreign_item(instance.def_id()))
+        .map(|instance| tcx.symbol_name(*instance).name.to_owned())
+        .collect::<HashSet<_>>();
+    for allocation in context.allocation_ids.keys() {
+        if let Some(rustc_middle::mir::interpret::GlobalAlloc::Static(def)) =
+            tcx.try_get_global_alloc(*allocation)
+        {
+            if tcx.is_foreign_item(def)
+                && tcx.codegen_fn_attrs(def).import_linkage ==
+                    Some(rustc_attr_ir::Linkage::ExternalWeak)
+            {
+                names.insert(tcx.symbol_name(ty::Instance::mono(tcx, def)).name.to_owned());
+            }
+        }
+    }
+    names
+}
+
+fn linux_gnu_tls_signature_required(target: &rustc_target::spec::Target) -> bool {
+    target.os == rustc_target::spec::Os::Linux && target.env == rustc_target::spec::Env::Gnu
+}
+
 pub(super) fn named_signatures<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
 ) -> Result<Vec<NamedSignature>, String> {
-    let names = context
-        .pending_instances
-        .iter()
-        .filter(|instance| tcx.is_foreign_item(instance.def_id()))
-        .map(|instance| tcx.symbol_name(*instance).name.to_owned())
-        .collect::<HashSet<_>>();
+    let names = demanded_symbols(tcx, context);
     let dynamic_lookup = names.contains("dlsym") || names.contains("GetProcAddress");
     let required = |name: &str| {
         names.contains(name) || (dynamic_lookup && is_dynamic_symbol(&tcx.sess.target, name))
@@ -725,9 +751,7 @@ pub(super) fn named_signatures<'tcx>(
     // shims/unix/linux/foreign_items.rs. Preserve the source's three wildcard
     // pointer arguments and int result, and emit the record only for the GNU
     // environment where Miri accepts this symbol.
-    if tcx.sess.target.os == rustc_target::spec::Os::Linux
-        && tcx.sess.target.env == rustc_target::spec::Env::Gnu
-    {
+    if linux_gnu_tls_signature_required(&tcx.sess.target) {
         if required("__cxa_thread_atexit_impl") {
             result.push(NamedSignature::new(
                 "__cxa_thread_atexit_impl",
@@ -1202,6 +1226,16 @@ mod tests {
     use rustc_target::spec::Os;
     #[test]
     fn source_os_guards_select_foreign_signatures() {
+        assert!(unix_signature_required(&Os::Linux, "getrandom"));
+        assert!(!unix_signature_required(&Os::MacOs, "getrandom"));
+        let mut target = rustc_target::spec::Target::expect_builtin(
+            &rustc_target::spec::TargetTuple::from_tuple("x86_64-unknown-linux-gnu"));
+        assert!(linux_gnu_tls_signature_required(&target));
+        target.env = rustc_target::spec::Env::Musl;
+        assert!(!linux_gnu_tls_signature_required(&target));
+        target.env = rustc_target::spec::Env::Gnu;
+        target.os = Os::FreeBsd;
+        assert!(!linux_gnu_tls_signature_required(&target));
         assert!(unix_signature_required(&Os::Linux, "pread64"));
         assert!(!unix_signature_required(&Os::MacOs, "pread64"));
         assert!(unix_signature_required(&Os::MacOs, "dispatch_time"));
