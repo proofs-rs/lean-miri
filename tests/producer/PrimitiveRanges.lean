@@ -10,12 +10,20 @@ private def replace (j : Json) (key : String) (value : Json) : Except String Jso
   match j with
   | .obj fields => .ok (Json.mkObj ((key, value) :: fields.toList.filter (·.1 != key)))
   | _ => .error "expected object"
+-- Schema 10 keeps logical layout IDs in `layouts` and shares their payloads.
+-- Mutate the payload referenced by the exact logical layout, not its ID slot.
+private def layoutPayload (root : Json) (layoutId : Nat) : Except String (Array Json × Nat × Json) := do
+  let layouts ← (← field root "layouts").getArr?
+  let some reference := layouts[layoutId]? | throw "physical layout reference missing"
+  let payloadId ← reference.getNat?
+  let payloads ← (← field root "layout_values").getArr?
+  let some payload := payloads[payloadId]? | throw "physical layout payload missing"
+  pure (payloads, payloadId, payload)
 private def changeEnd (root : Json) (id : Nat) (last : Json) : Except String Json := do
   let types ← (← field root "types").getArr?
   let some ty := types[id]? | throw "source u128 type missing"
   let layoutId ← (← field ty "layout").getNat?
-  let layouts ← (← field root "layouts").getArr?
-  let some layout := layouts[layoutId]? | throw "physical layout missing"
+  let (payloads, payloadId, layout) ← layoutPayload root layoutId
   let backend ← field layout "backend_repr"
   let scalar ← field backend "scalar"
   let range ← field scalar "valid_range"
@@ -23,7 +31,7 @@ private def changeEnd (root : Json) (id : Nat) (last : Json) : Except String Jso
   let scalar ← replace scalar "valid_range" range
   let backend ← replace backend "scalar" scalar
   let layout ← replace layout "backend_repr" backend
-  replace root "layouts" (.arr (layouts.set! layoutId layout))
+  replace root "layout_values" (.arr (payloads.set! payloadId layout))
 private def rangeOf (document : ImportDocument) (id : Nat) : Except String (Nat × Nat) := do
   let some ty := document.types.find? (·.id == id) | throw "source u128 type missing"
   let some layout := document.layouts[ty.layoutId]? | throw "physical layout missing"
@@ -59,8 +67,7 @@ def main (args : List String) : IO Unit := do
   let some nicheIndex := decoded.document.layouts.toList.findIdx? (fun layout =>
     layout.largestNiche.any fun niche => niche.validRange.2 == 2^128-1)
     | throw (IO.userError "actual NonZeroU128 niche missing")
-  let layouts ← must ((← must (field original "layouts")).getArr?)
-  let some nicheLayout := layouts[nicheIndex]? | throw (IO.userError "niche layout definition absent")
+  let (payloads, nichePayloadId, nicheLayout) ← must (layoutPayload original nicheIndex)
   let invalid : List Json := [Json.str "", .str "-1", .str "+1", .str "1_0", .str "0xFF", .str "1.0",
     .str (toString (2^128 : Nat)), toJson (2^128 : Nat), toJson (-1 : Int), .bool true, .null]
   for encoded in invalid do
@@ -71,7 +78,7 @@ def main (args : List String) : IO Unit := do
     let range ← must (replace range "end" encoded)
     let niche ← must (replace niche "valid_range" range)
     let payload ← must (replace nicheLayout "largest_niche" niche)
-    let edited ← must (replace original "layouts" (.arr (layouts.set! nicheIndex payload)))
+    let edited ← must (replace original "layout_values" (.arr (payloads.set! nichePayloadId payload)))
     check (!(decodeJson edited.compress).isOk)
       s!"invalid niche endpoint accepted: {encoded.compress}"
   IO.println "actual u128 compiler/runtime range exact; 6 decimal/numeric cases preserved and 11 malformed/overflow scalar and niche cases rejected"

@@ -198,7 +198,7 @@ def main (args : List String) : IO UInt32 := do
   | some index =>
     let badTagEncoding ← must <| do
       let layouts ← array (← getField original "layouts")
-      let layoutId ← (← getAt layouts index).getNat?
+      let layoutId ← (← JsonFixtures.parse (← getAt layouts index)).natural
       let payloads ← array (← getField original "layout_values")
       let layout ← getAt payloads layoutId
       let variants ← getField layout "variants"
@@ -233,7 +233,7 @@ def main (args : List String) : IO UInt32 := do
       node.memory.any fun memory => !memory.relocations.isEmpty)
       | throw "fixture contains no relocation target"
     let allocation ← getAt allocations index
-    let relocationId ← (← getField allocation "relocations").getNat?
+    let relocationId ← (← JsonFixtures.parse (← getField allocation "relocations")).natural
     let pools ← array (← getField original "relocations")
     let relocations ← array (← getAt pools relocationId)
     let first ← getAt relocations 0
