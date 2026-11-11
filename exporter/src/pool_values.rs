@@ -30,7 +30,7 @@ pub(crate) struct Span {
     pub is_dummy: bool,
     pub lo: u32,
     pub hi: u32,
-    pub ctxt: DebugPayload,
+    pub ctxt: String,
     pub file: u64,
     pub start: Position,
     pub end: Position,

@@ -2568,7 +2568,7 @@ fn span_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, span: r
     let (id, fresh) = context.spans.reserve(span);
     if fresh {
         let map=tcx.sess.source_map(); let start=map.lookup_char_pos(span.lo()); let end=map.lookup_char_pos(span.hi());
-        context.spans.define(id,pool_values::Span { is_dummy:span.is_dummy(),lo:span.lo().0,hi:span.hi().0,ctxt:pool_values::DebugPayload::new(&span.ctxt()),file:context.files.intern(format!("{:?}", start.file.name)),start:pool_values::Position {line:start.line,column:start.col.to_usize()},end:pool_values::Position {line:end.line,column:end.col.to_usize()} });
+        context.spans.define(id,pool_values::Span { is_dummy:span.is_dummy(),lo:span.lo().0,hi:span.hi().0,ctxt:format!("{:?}", span.ctxt()),file:context.files.intern(format!("{:?}", start.file.name)),start:pool_values::Position {line:start.line,column:start.col.to_usize()},end:pool_values::Position {line:end.line,column:end.col.to_usize()} });
     }
     id as u64
 }
