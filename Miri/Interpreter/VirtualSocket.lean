@@ -37,6 +37,21 @@ structure Hooks (S F E : Type) where
   writeInt : Int → MPlaceTy Provenance → M S Unit
   readIoctlArgument : M S (OpTy Provenance)
   wakeBudget : Nat
+/-- VirtualSocket::drop needs no host, memory, clock or I/O capability. -/
+structure DropHooks (S F : Type) where
+  upgrade : Files.WeakRef → M S (Option F)
+  dropFd : F → M S Unit
+  get : F → M S State
+  put : F → State → M S Unit
+  addDelayed : F → M S Unit
+
+def Hooks.dropHooks (h : Hooks S F E) : DropHooks S F where
+  upgrade := h.readiness.upgrade
+  dropFd := h.readiness.dropFd
+  get := h.get
+  put := h.put
+  addDelayed := Readiness.addDelayed h.readiness
+
 private def onError (action : M S A) (cleanup : M S Unit) : M S A := fun state =>
   match action state with
   | .ok value state => .ok value state
@@ -96,14 +111,18 @@ def readiness (h : Hooks S F E) (socket : F) : M S Files.Readiness := do
     ) (h.readiness.dropFd other)
 
 /-- Called by actual last-FD drop before dropping its ReadinessWatched field. -/
-def dropSocket (h : Hooks S F E) (value : State) : M S Unit := do
-  if let some other ← h.readiness.upgrade (← peer value) then
+def dropSocketWith (h : DropHooks S F) (value : State) : M S Unit := do
+  if let some other ← h.upgrade (← peer value) then
     onError (do
       if value.readbuf.any (fun buffer => !buffer.bytes.isEmpty) then
         let current ← h.get other
         h.put other { current with peerLostData := true }
-    ) (h.readiness.dropFd other)
-    Readiness.addDelayed h.readiness other
+    ) (h.dropFd other)
+    h.addDelayed other
+
+/-- Compatibility wrapper for the original full protocol dictionary. -/
+def dropSocket (h : Hooks S F E) (value : State) : M S Unit :=
+  dropSocketWith h.dropHooks value
 
 def getFlags (h : Hooks S F E) (socket : F) : M S Int32 := do
   let value ← h.get socket

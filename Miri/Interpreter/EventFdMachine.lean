@@ -32,16 +32,21 @@ private def putEvent (store : Store U O) (ref : Ref H D O) (event : EventFd.Even
   let _ ← getEvent store ref
   modify fun state => {state with machine := {state.machine with user := store.put ((store.get state.machine.user).map fun (old,value) => (old,if old == id then event else value)) state.machine.user}}
 
+/-- EventFd has only its source watched-field destructor and store removal. -/
+def dropEventWith (store : Store U O)
+    (destroyWatched : Ref H D O → MachineHooks.M K U Unit)
+    (ref : Ref H D O) : MachineHooks.M K U Unit := do
+  let id ← lift (eventId store ref)
+  destroyWatched ref
+  modify fun state => {state with machine := {state.machine with user := store.put ((store.get state.machine.user).filter (·.1 != id)) state.machine.user}}
+
 /-- Install this last-drop action in the shared readiness machine; a plain
 FileMachine.dropReference would skip source watched-field destruction. -/
 def withDestructor (store : Store U O) (machine : ReadinessMachine.Hooks K U H D O)
     (ready : Readiness.Hooks (MachineHooks.State K U) (Ref H D O)) : ReadinessMachine.Hooks K U H D O :=
   {machine with onLastDrop := fun ref => do
     if !isEvent store ref then machine.onLastDrop ref
-    else
-      let id ← lift (eventId store ref)
-      ReadinessMachine.destroyWatched machine ready ref
-      modify fun state => {state with machine := {state.machine with user := store.put ((store.get state.machine.user).filter (·.1 != id)) state.machine.user}}}
+    else dropEventWith store (ReadinessMachine.destroyWatched machine ready) ref}
 
 def physical [DecidableEq K] (store : Store U O) (machine : ReadinessMachine.Hooks K U H D O)
     (ready : Readiness.Hooks (MachineHooks.State K U) (Ref H D O))
