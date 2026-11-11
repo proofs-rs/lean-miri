@@ -112,7 +112,13 @@ assert bodies["STATIC_DATA"]["is_static"] and not bodies["STATIC_DATA"]["thread_
 assert bodies["TLS_WORD"]["is_static"] and bodies["TLS_WORD"]["thread_local_static"]
 
 exercise = pool_entry(doc, "bodies", bodies["exercise"]["body"])
-assert exercise["locals"] and all("type" in local and "layout" in local for local in exercise["locals"])
+assert exercise["locals"]
+for local in exercise["locals"]:
+    # Schema 11 pool_body::Local retains the type ID, not a redundant layout.
+    assert set(local) == {"local", "type", "source_info"}
+    layout_id = type_nodes[local["type"]]["layout"]
+    assert type(layout_id) is int
+    assert isinstance(pool_entry(doc, "layouts", layout_id), dict)
 assert "status" not in exercise["phase"]
 assert exercise["phase"]["kind"] in ("built", "analysis", "runtime")
 terminators = [bb["terminator"]["kind"] for bb in exercise["basic_blocks"] if bb["terminator"]]

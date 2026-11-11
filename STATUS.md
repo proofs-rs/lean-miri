@@ -323,6 +323,25 @@ and regression) pass. The UI sweep remains unfinished; its shard-9 AVX2
 export failure used the old producer and is covered by the local repair below. These results
 belong to that main revision; schema 9 has not yet received hosted validation.
 
+### Schema-11 shared-layout test corrections
+
+On main `62129c87`, the test-only follow-up resolves logical layout IDs through
+`layouts` into `layout_values` before mutating the exact scalar/niche payload.
+Decoder mutation helpers parse JSON natural values instead of calling a JSON
+accessor on raw strings. The MIR fixture validator checks schema-11 locals'
+exact three fields and resolves their physical layout through the type graph,
+rather than requiring the removed redundant local layout field.
+
+All 26 producer boundary tests, nine Rust integration suites and the complete
+`tests/input/run.sh` pass locally. Primitive compiler/runtime ranges remain
+exact: all six decimal/numeric endpoint cases pass, and all eleven malformed or
+overflowing inputs remain rejected for both scalar and niche endpoints. The
+schema-10 input suite also passed before rebasing. Interpreter/decoder source,
+fixed Rust/MIR inputs, checksums and proof assumptions are unchanged; no release
+exporter feature toggle was needed. These results repair test compatibility,
+not interpreter semantics, and do not establish a new hosted result or close
+the remaining gaps.
+
 ### Schema-10 UI oracle follow-up: local validation
 
 The oracle-only follow-up on main `17330f08` changes two test/harness files.
