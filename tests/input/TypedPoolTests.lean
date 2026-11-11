@@ -86,7 +86,7 @@ def main : IO Unit := do
   reject (← must (set source "files" (.arr #[]))) "absent referenced filename"
   reject (← must (set source "files" (.arr #[.str "strict.rs", .str "strict.rs"]))) "duplicate exact filename identities"
   let bodies ← must ((source.getObjVal? "bodies").bind Json.getArr?)
-  let backtrace ← must (Json.parse "{\"span\":0,\"collapsed_lo\":0,\"source_position\":{\"byte_position\":0,\"line\":1,\"zero_based_char_column\":0,\"filename\":0}}")
+  let backtrace ← must (Json.parse "{\"span\":0,\"source_position\":{\"byte_position\":0,\"line\":1,\"zero_based_char_column\":0,\"filename\":0}}")
   let validBody ← must (set bodies[0]! "backtrace_spans" (.arr #[backtrace]))
   let validBacktrace ← must (set source "bodies" (.arr (bodies.set! 0 validBody)))
   let validBacktrace ← must (decodeJson validBacktrace.compress)

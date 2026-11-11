@@ -111,6 +111,18 @@ guest backtrace filename query. Layouts retain
 exact compiler `TyAndLayout` keys, including field and variant layouts. Allocation
 IDs retain compiler allocation identity even when bytes are equal. IDs are local
 to the document; exported `source_alloc_id` records the separate raw Miri AllocId.
+Schema 7 stores ABI argument attributes only as `regular_bits`, argument extension,
+and pointee size/alignment. Boolean attributes and capture mode are derived from
+those bits. External ABIs retain their structured `kind` and `unwind`; their
+canonical source spelling is not stored. ADT representation stores `flags_bits`,
+integer, alignment, packing and scalable-element data, rather than boolean views
+of those values. Type compiler facts use the owning `type_id` and optional
+`layout_query_input_type`; an absent layout-query input means the owning type.
+This preserves a distinct region-erased query input when one exists.
+Backtrace `source_position.byte_position` is the body-specific collapsed position;
+it can differ from the global span's position for an inlined body.
+Earlier schemas must be regenerated with the current producer.
+
 Generic arguments remain in their owning records, with type and type-constant
 references into the corresponding tables. `body_roots` records root metadata and
 body IDs. Each concrete instance and promoted index identifies one executable

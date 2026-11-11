@@ -11,8 +11,8 @@ open Lean Miri.ABI Miri.Interpreter
 private def data (context : CompilerFacts.Context) (id : TypeId) : Except String DiscriminantInfo := do
   let source ← context.runtime.node id |>.mapError toString
   let some facts := source.compilerFacts | throw "missing discriminant compiler facts"
-  unless facts.inputTypeId == id && facts.typingEnvironment == "fully_monomorphized" do
-    throw "discriminant compiler environment/type key mismatch"
+  unless facts.typingEnvironment == "fully_monomorphized" do
+    throw "discriminant compiler environment mismatch"
   let some query := facts.discriminants | throw "missing discriminant compiler query"
   pure query
 

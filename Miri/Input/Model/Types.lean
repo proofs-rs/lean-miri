@@ -265,21 +265,29 @@ structure ReprOptions where
   integer : Option ReprInteger
   alignBytes : Option Nat
   packBytes : Option Nat
-  simd : Bool
-  c : Bool
-  rust : Bool
-  packed : Bool
-  transparent : Bool
-  linear : Bool
-  scalable : Bool
   flagsBits : Nat
   scalableElement : Option ScalableElement
-  canRandomizeTypeLayout : Bool
-  inhibitEnumLayoutOptimization : Bool
-  inhibitStructFieldReordering : Bool
-  inhibitNewtypeAbiOptimization : Bool
   fieldShuffleSeed : Nat
   deriving Repr, DecidableEq
+
+namespace ReprOptions
+
+-- Pinned rustc_abi::ReprOptions keeps these properties in flags, int and pack.
+def c (repr : ReprOptions) : Bool := repr.flagsBits &&& 1 != 0
+def simd (repr : ReprOptions) : Bool := repr.flagsBits &&& 2 != 0
+def transparent (repr : ReprOptions) : Bool := repr.flagsBits &&& 4 != 0
+def linear (repr : ReprOptions) : Bool := repr.flagsBits &&& 8 != 0
+def scalable (repr : ReprOptions) : Bool := repr.flagsBits &&& 64 != 0
+def rust (repr : ReprOptions) : Bool := !repr.c && !repr.simd && !repr.scalable && !repr.transparent
+def packed (repr : ReprOptions) : Bool := repr.packBytes.isSome
+def inhibitEnumLayoutOptimization (repr : ReprOptions) : Bool := repr.c || repr.integer.isSome
+def inhibitNewtypeAbiOptimization (repr : ReprOptions) : Bool := repr.c || repr.simd
+def inhibitStructFieldReordering (repr : ReprOptions) : Bool :=
+  repr.c || repr.simd || repr.scalable || repr.linear || repr.integer.isSome
+def canRandomizeTypeLayout (repr : ReprOptions) : Bool :=
+  !repr.inhibitStructFieldReordering && repr.flagsBits &&& 16 != 0
+
+end ReprOptions
 
 structure AdtField where
   index : Nat
@@ -394,8 +402,6 @@ structure DiscriminantInfo where
 
 structure TypeCompilerFacts where
   typingEnvironment : String
-  inputTypeId : TypeId
-  queryInputTypeId : TypeId := 0
   booleanQueries : Array (String × Bool)
   typeQueries : Array (String × Option TypeId)
   adt : Option AdtCompilerFacts := none
@@ -492,18 +498,10 @@ inductive IndirectModeKind where
   deriving Repr, DecidableEq
 
 structure AbiAttributes where
-  noAlias : Bool
-  noFree : Bool
-  noUndef : Bool
-  nonNull : Bool
-  readOnly : Bool
-  writable : Bool
-  inRegister : Bool
   regularBits : Nat
   pointeeSizeBytes : Nat
   pointeeAlignBytes : Option Nat
   argExtension : ArgumentExtensionKind
-  captures : ArgumentCaptureKind
   deriving BEq
 
 inductive AbiRegisterKind where
@@ -723,9 +721,9 @@ structure CompilerSourcePosition where
   filename : Nat
   deriving Repr, DecidableEq
 
+-- Hygiene collapse depends on the executable body, so this position is not the global span lo.
 structure BacktraceSpan where
   spanId : SpanId
-  collapsedLo : Nat
   position : CompilerSourcePosition
   deriving Repr, DecidableEq
 

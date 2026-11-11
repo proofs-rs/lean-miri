@@ -4,7 +4,7 @@
 Usage: validate_orders.py SNAPSHOT RUN_LOG OUTPUT_JSON
 
 The replay is expected to come from the verification-only SC264 trace wrapper,
-run against the pinned schema-6 198-sc-base snapshot. This checker reads
+run against the pinned schema-7 198-sc-base snapshot. This checker reads
 only those artifacts; it never executes Lean or changes a guest input.
 """
 import hashlib

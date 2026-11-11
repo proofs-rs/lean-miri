@@ -769,8 +769,6 @@ private def typeQueries : Parser (Array (String × Option Nat)) :=
   object #[] fun out key => do return out.push (key, ← nullable natural)
 
 private structure decodeTypeCompilerFactsFields where
-  «input_type» : Option (Nat) := none
-  «query_input_type» : Option (Nat) := none
   «typing_env» : Option (String) := none
   «boolean_queries» : Option (Array (String × Bool)) := none
   «type_queries» : Option (Array (String × Option Nat)) := none
@@ -783,10 +781,8 @@ private structure decodeTypeCompilerFactsFields where
   «definition» : Option (Option (Nat)) := none
 
 def decodeTypeCompilerFacts (path : String := "$decodeTypeCompilerFacts") : Parser (TypeCompilerFacts) := do
-  let s ← object (decodeTypeCompilerFactsFields.mk none none none none none none none none none none none none) fun s key => do
+  let s ← object (decodeTypeCompilerFactsFields.mk none none none none none none none none none none) fun s key => do
     match key with
-    | "input_type" => return { s with «input_type» := some (← natural) }
-    | "query_input_type" => return { s with «query_input_type» := some (← natural) }
     | "typing_env" => return { s with «typing_env» := some (← string) }
     | "boolean_queries" => return { s with «boolean_queries» := some (← booleanQueries) }
     | "type_queries" => return { s with «type_queries» := some (← typeQueries) }
@@ -803,7 +799,6 @@ def decodeTypeCompilerFacts (path : String := "$decodeTypeCompilerFacts") : Pars
     unless bits < 2^128 do fail s!"{path}: compiler TypeId hash exceeds u128"
     pure bits
   return {
-    inputTypeId := (← required s.«input_type» "input_type"), queryInputTypeId := (← required s.«query_input_type» "query_input_type"),
     typingEnvironment := (← required s.«typing_env» "typing_env"), booleanQueries := (← required s.«boolean_queries» "boolean_queries"), typeQueries := (← required s.«type_queries» "type_queries"),
     captureNames := s.capture_names.join, adt := (← required s.«adt» "adt"), projectionQueries := (← required s.«projection_queries» "projection_queries"),
     simdSizeAndType := (← required s.«simd_size_and_type» "simd_size_and_type"), discriminants := (← required s.«discriminants» "discriminants"),
@@ -853,50 +848,23 @@ private structure parseReprOptionsFields where
   «align_bytes» : Option (Option (Nat)) := none
   «pack_bytes» : Option (Option (Nat)) := none
   «scalable_element» : Option (Option (ScalableElement)) := none
-  «simd» : Option (Bool) := none
-  «c» : Option (Bool) := none
-  «rust» : Option (Bool) := none
-  «packed» : Option (Bool) := none
-  «transparent» : Option (Bool) := none
-  «linear» : Option (Bool) := none
-  «scalable» : Option (Bool) := none
-  «can_randomize_type_layout» : Option (Bool) := none
-  «inhibit_enum_layout_optimization» : Option (Bool) := none
-  «inhibit_struct_field_reordering» : Option (Bool) := none
-  «inhibit_newtype_abi_optimization» : Option (Bool) := none
   «flags_bits» : Option (Nat) := none
   «field_shuffle_seed» : Option (Nat) := none
 
 private def parseReprOptions (_path : String := "$parseReprOptions") : Parser (ReprOptions) := do
-  let s ← object (parseReprOptionsFields.mk none none none none none none none none none none none none none none none none none) fun s key => do
+  let s ← object (parseReprOptionsFields.mk none none none none none none) fun s key => do
     match key with
     | "integer" => return { s with «integer» := some (← nullable (reprInteger)) }
     | "align_bytes" => return { s with «align_bytes» := some (← nullable (natural)) }
     | "pack_bytes" => return { s with «pack_bytes» := some (← nullable (natural)) }
     | "scalable_element" => return { s with «scalable_element» := some (← nullable (scalableElement)) }
-    | "simd" => return { s with «simd» := some (← boolean) }
-    | "c" => return { s with «c» := some (← boolean) }
-    | "rust" => return { s with «rust» := some (← boolean) }
-    | "packed" => return { s with «packed» := some (← boolean) }
-    | "transparent" => return { s with «transparent» := some (← boolean) }
-    | "linear" => return { s with «linear» := some (← boolean) }
-    | "scalable" => return { s with «scalable» := some (← boolean) }
-    | "can_randomize_type_layout" => return { s with «can_randomize_type_layout» := some (← boolean) }
-    | "inhibit_enum_layout_optimization" => return { s with «inhibit_enum_layout_optimization» := some (← boolean) }
-    | "inhibit_struct_field_reordering" => return { s with «inhibit_struct_field_reordering» := some (← boolean) }
-    | "inhibit_newtype_abi_optimization" => return { s with «inhibit_newtype_abi_optimization» := some (← boolean) }
     | "flags_bits" => return { s with «flags_bits» := some (← natural) }
     | "field_shuffle_seed" => return { s with «field_shuffle_seed» := some (← natural) }
     | _ => skipValue; pure s
   return {
     integer := (← required s.«integer» "integer"), alignBytes := (← required s.«align_bytes» "align_bytes"), packBytes := (← required s.«pack_bytes» "pack_bytes"),
-    simd := (← required s.«simd» "simd"), c := (← required s.«c» "c"), rust := (← required s.«rust» "rust"), packed := (← required s.«packed» "packed"), transparent := (← required s.«transparent» "transparent"),
-    linear := (← required s.«linear» "linear"), scalable := (← required s.«scalable» "scalable"), scalableElement := (← required s.«scalable_element» "scalable_element"),
-    flagsBits := (← required s.«flags_bits» "flags_bits"), fieldShuffleSeed := (← required s.«field_shuffle_seed» "field_shuffle_seed"),
-    canRandomizeTypeLayout := (← required s.«can_randomize_type_layout» "can_randomize_type_layout"),
-    inhibitEnumLayoutOptimization := (← required s.«inhibit_enum_layout_optimization» "inhibit_enum_layout_optimization"),
-    inhibitStructFieldReordering := (← required s.«inhibit_struct_field_reordering» "inhibit_struct_field_reordering"),
-    inhibitNewtypeAbiOptimization := (← required s.«inhibit_newtype_abi_optimization» "inhibit_newtype_abi_optimization") }
+    scalableElement := (← required s.«scalable_element» "scalable_element"),
+    flagsBits := (← required s.«flags_bits» "flags_bits"), fieldShuffleSeed := (← required s.«field_shuffle_seed» "field_shuffle_seed") }
 
 private structure adtFieldFields where
   «index» : Option (Nat) := none

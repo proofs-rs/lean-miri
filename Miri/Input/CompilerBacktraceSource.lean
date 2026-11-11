@@ -33,8 +33,6 @@ private def spans (files : Array String) (ctx : LowerContext) (tables : Compiler
     unless record.spanId < tables.spans.size do throw "backtrace span ID out of bounds"
     let span : MIR.SpanRef := ⟨record.spanId⟩
     let location ← position files record.position
-    unless record.collapsedLo == location.bytePosition.toNat do
-      throw "collapsed hygiene BytePos/source-map position mismatch"
     if let some old := entries.find? (fun entry : SpanEntry => entry.span == span) then
       unless old.position == location do throw "conflicting body/span hygiene query"
     else entries := entries.push ⟨span,location⟩

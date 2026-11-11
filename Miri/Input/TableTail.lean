@@ -832,22 +832,6 @@ def parseArgumentExtension (path : String) : Parser (ArgumentExtensionKind) := d
   | "sign_extend" => pure .signExtend
   | _ => fail s!"{path}: unknown ArgumentExtensionKind"
 
-private structure ParseArgumentCaptureFields where
-  kind : Option (String) := none
-
-def parseArgumentCapture (path : String) : Parser (ArgumentCaptureKind) := do
-  let s ← object (ParseArgumentCaptureFields.mk none) fun s key => do
-    match key with
-    | "kind" => return { s with kind := some (← string) }
-    | _ => skipValue; pure s
-  let kind ← required s.kind (path ++ ".kind")
-  match kind with
-  | "none" => pure .none
-  | "address" => pure .address
-  | "read_only" => pure .readOnly
-  | "unrestricted" => pure .unrestricted
-  | _ => fail s!"{path}: unknown ArgumentCaptureKind"
-
 private structure ParseIndirectModeFields where
   kind : Option (String) := none
 
@@ -864,48 +848,24 @@ def parseIndirectMode (path : String) : Parser (IndirectModeKind) := do
   | _ => fail s!"{path}: unknown IndirectModeKind"
 
 private structure ParseAbiAttributesFields where
-  no_alias : Option (Bool) := none
-  no_free : Option (Bool) := none
-  no_undef : Option (Bool) := none
-  non_null : Option (Bool) := none
-  read_only : Option (Bool) := none
-  writable : Option (Bool) := none
-  in_register : Option (Bool) := none
   regular_bits : Option (Nat) := none
   pointee_size_bytes : Option (Nat) := none
   pointee_align_bytes : Option (Option Nat) := none
   arg_extension : Option (ArgumentExtensionKind) := none
-  captures : Option (ArgumentCaptureKind) := none
 
 def parseAbiAttributes (path : String) : Parser (AbiAttributes) := do
-  let s ← object (ParseAbiAttributesFields.mk none none none none none none none none none none none none) fun s key => do
+  let s ← object (ParseAbiAttributesFields.mk none none none none) fun s key => do
     match key with
-    | "no_alias" => return { s with no_alias := some (← boolean) }
-    | "no_free" => return { s with no_free := some (← boolean) }
-    | "no_undef" => return { s with no_undef := some (← boolean) }
-    | "non_null" => return { s with non_null := some (← boolean) }
-    | "read_only" => return { s with read_only := some (← boolean) }
-    | "writable" => return { s with writable := some (← boolean) }
-    | "in_register" => return { s with in_register := some (← boolean) }
     | "regular_bits" => return { s with regular_bits := some (← natural) }
     | "pointee_size_bytes" => return { s with pointee_size_bytes := some (← natural) }
     | "pointee_align_bytes" => return { s with pointee_align_bytes := some (← nullable natural) }
     | "arg_extension" => return { s with arg_extension := some (← parseArgumentExtension (path ++ ".arg_extension")) }
-    | "captures" => return { s with captures := some (← parseArgumentCapture (path ++ ".captures")) }
     | _ => skipValue; pure s
-  let no_alias ← required s.no_alias (path ++ ".no_alias")
-  let no_free ← required s.no_free (path ++ ".no_free")
-  let no_undef ← required s.no_undef (path ++ ".no_undef")
-  let non_null ← required s.non_null (path ++ ".non_null")
-  let read_only ← required s.read_only (path ++ ".read_only")
-  let writable ← required s.writable (path ++ ".writable")
-  let in_register ← required s.in_register (path ++ ".in_register")
   let regular_bits ← required s.regular_bits (path ++ ".regular_bits")
   let pointee_size_bytes ← required s.pointee_size_bytes (path ++ ".pointee_size_bytes")
   let pointee_align_bytes ← pure (s.pointee_align_bytes.getD none)
   let arg_extension ← required s.arg_extension (path ++ ".arg_extension")
-  let captures ← required s.captures (path ++ ".captures")
-  return ⟨no_alias, no_free, no_undef, non_null, read_only, writable, in_register, regular_bits, pointee_size_bytes, pointee_align_bytes, arg_extension, captures⟩
+  return ⟨regular_bits, pointee_size_bytes, pointee_align_bytes, arg_extension⟩
 
 private structure ParseCanonicalAbiFields where
   kind : Option (String) := none

@@ -43,7 +43,6 @@ pub(super) struct SourcePosition {
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct BacktraceSpan {
     pub span: u64,
-    pub collapsed_lo: u32,
     pub source_position: SourcePosition,
 }
 

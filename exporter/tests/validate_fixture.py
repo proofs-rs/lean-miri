@@ -19,12 +19,25 @@ for span in doc["spans"]:
     assert type(span["file"]) is int and 0 <= span["file"] < len(doc["files"])
 for body in doc["bodies"]:
     for span in body["backtrace_spans"]:
+        assert "collapsed_lo" not in span
+        assert type(span["source_position"]["byte_position"]) is int
         filename = span["source_position"]["filename"]
         assert type(filename) is int and 0 <= filename < len(doc["files"])
 type_nodes = {node["type_id"]: node for node in doc["types"]}
 assert type_nodes, "compilation-scoped type graph missing"
 assert sorted(type_nodes) == list(range(len(type_nodes))), "type IDs must be session-local monotonic IDs"
 assert all("shape" in node and "layout" in node for node in type_nodes.values())
+for node in type_nodes.values():
+    assert "input_type" not in node["compiler_facts"]
+    assert "query_input_type" not in node["compiler_facts"]
+    query_input = node.get("layout_query_input_type")
+    assert query_input is None or (type(query_input) is int and query_input in type_nodes)
+    if node["shape"].get("kind") == "adt":
+        representation = node["shape"]["representation"]
+        assert type(representation["flags_bits"]) is int
+        assert not {"simd", "c", "rust", "packed", "transparent", "linear", "scalable",
+                    "can_randomize_type_layout", "inhibit_enum_layout_optimization",
+                    "inhibit_struct_field_reordering", "inhibit_newtype_abi_optimization"} & representation.keys()
 assert {node["shape"].get("adt_kind") for node in type_nodes.values() if node["shape"].get("kind") == "adt"} == {
     "struct", "union", "enum"
 }
@@ -231,6 +244,19 @@ assert "type_display" not in serialized, "ADT fields must carry structured type 
 assert '"field_shuffle_seed":' in json.dumps(type_nodes), "repr/layout randomization input missing"
 assert '"regular_bits":' in json.dumps(doc["fn_abis"]), "FnAbi attributes must be structurally represented"
 assert '"attributes_debug":' not in serialized, "FnAbi attributes must not rely on debug-only strings"
+def check_attribute_fields(value):
+    if isinstance(value, dict):
+        if "regular_bits" in value:
+            assert set(value) == {"regular_bits", "arg_extension", "pointee_size_bytes", "pointee_align_bytes"}
+        if "source_spelling" in value:
+            raise AssertionError("canonical ExternAbi spelling must be derived from kind/unwind")
+        for child in value.values():
+            check_attribute_fields(child)
+    elif isinstance(value, list):
+        for child in value:
+            check_attribute_fields(child)
+
+check_attribute_fields(doc)
 assert '"source_instance_kind"' in serialized, "body source instance kind must be structured"
 fn_signatures = [node["shape"]["signature"] for node in type_nodes.values() if "signature" in node["shape"]]
 assert fn_signatures and all(

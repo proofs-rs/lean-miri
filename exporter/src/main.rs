@@ -2685,7 +2685,6 @@ fn unpin_query_needs_no_lang_item(input: ty::Ty<'_>) -> bool {
 fn type_compiler_facts_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
-    source_input: ty::Ty<'tcx>,
     input: ty::Ty<'tcx>,
 ) -> Result<pool_type::CompilerFacts, String> {
     use pool_type::*;
@@ -2850,8 +2849,6 @@ fn type_compiler_facts_json<'tcx>(
     };
     Ok(CompilerFacts {
         typing_env: "fully_monomorphized",
-        input_type: type_json(context, tcx, source_input)?,
-        query_input_type: type_json(context, tcx, input)?,
         boolean_queries,
         type_queries,
         adt,
@@ -3101,7 +3098,7 @@ fn type_json_inner<'tcx>(
         } else {
             Some(query_generated_type_json(context, tcx, query_ty)?)
         },
-        compiler_facts: type_compiler_facts_json(context, tcx, input, query_ty)?,
+        compiler_facts: type_compiler_facts_json(context, tcx, query_ty)?,
     })
 }
 
@@ -3150,13 +3147,6 @@ fn repr_options_json(repr: &rustc_abi::ReprOptions) -> pool_type::Representation
         }),
         align_bytes: repr.align.map(|v| v.bytes()),
         pack_bytes: repr.pack.map(|v| v.bytes()),
-        simd: repr.simd(),
-        c: repr.c(),
-        rust: repr.rust(),
-        packed: repr.packed(),
-        transparent: repr.transparent(),
-        linear: repr.linear(),
-        scalable: repr.scalable(),
         flags_bits: repr.flags.bits(),
         scalable_element: repr.scalable.map(|v| match v {
             rustc_abi::ScalableElt::ElementCount(count) => ScalableElement::ElementCount {
@@ -3164,10 +3154,6 @@ fn repr_options_json(repr: &rustc_abi::ReprOptions) -> pool_type::Representation
             },
             rustc_abi::ScalableElt::Container => ScalableElement::Container,
         }),
-        can_randomize_type_layout: repr.can_randomize_type_layout(),
-        inhibit_enum_layout_optimization: repr.inhibit_enum_layout_opt(),
-        inhibit_struct_field_reordering: repr.inhibit_struct_field_reordering(),
-        inhibit_newtype_abi_optimization: repr.inhibit_newtype_abi_optimization(),
         field_shuffle_seed: repr.field_shuffle_seed.as_u64(),
     }
 }
@@ -4076,7 +4062,6 @@ fn extern_abi_json(abi: rustc_abi::ExternAbi) -> pool_type::ExternAbi {
     pool_type::ExternAbi {
         kind,
         unwind,
-        source_spelling: abi.as_str(),
     }
 }
 
@@ -6080,7 +6065,6 @@ fn backtrace_spans_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tc
             let position = tcx.sess.source_map().lookup_char_pos(collapsed.lo());
             pool_body::BacktraceSpan {
                 span: span_json(context, tcx, span),
-                collapsed_lo: collapsed.lo().0,
                 source_position: pool_body::SourcePosition {
                     byte_position: collapsed.lo().0, line: position.line,
                     zero_based_char_column: position.col.0,
@@ -6725,5 +6709,23 @@ mod snapshot_writer_tests {
         write_document(&path, &Finished { query_id: 7 }).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "{\"query_id\":7}");
         fs::remove_dir_all(directory).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod extern_abi_tests {
+    use super::*;
+
+    #[test]
+    fn kind_and_unwind_preserve_every_pinned_rustc_abi() {
+        let mut spellings = HashMap::new();
+        for abi in rustc_abi::ExternAbi::ALL_VARIANTS {
+            let wire = extern_abi_json(*abi);
+            assert_eq!(spellings.insert((wire.kind, wire.unwind), abi.as_str()), None);
+        }
+        assert_ne!(extern_abi_json(rustc_abi::ExternAbi::C { unwind: false }).kind,
+                   extern_abi_json(rustc_abi::ExternAbi::System { unwind: false }).kind);
+        assert_ne!(extern_abi_json(rustc_abi::ExternAbi::C { unwind: false }).unwind,
+                   extern_abi_json(rustc_abi::ExternAbi::C { unwind: true }).unwind);
     }
 }

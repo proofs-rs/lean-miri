@@ -192,7 +192,5 @@ def validateBody (body : Body) (path : String) : Except String Unit := do
   for (entry, index) in body.backtraceSpans.toList.zipIdx do
     unless entry.position.bytePosition < 2^32 do
       throw s!"{path}.backtrace_spans[{index}]: compiler BytePos exceeds u32"
-    unless entry.collapsedLo == entry.position.bytePosition do
-      throw s!"{path}.backtrace_spans[{index}]: collapsed hygiene BytePos/source-map position mismatch"
 
 end Miri.Input.LocalValidation

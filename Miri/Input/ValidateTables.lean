@@ -104,8 +104,6 @@ private def typeShape (b : ReferenceBounds) (path : String) : TypeShape → Exce
   | .bool | .char | .int _ | .uint _ | .float _ | .str | .never => pure ()
 
 private def compilerFacts (b : ReferenceBounds) (path : String) (value : TypeCompilerFacts) : Except String Unit := do
-  checkId b.types value.inputTypeId s!"{path}.input_type" "type"
-  checkId b.types value.queryInputTypeId s!"{path}.query_input_type" "type"
   for (name, id) in value.typeQueries do
     if let some id := id then checkId b.types id s!"{path}.type_queries.{name}" "type"
   if let some id := value.definitionId then checkId b.definitions id s!"{path}.definition" "definition"

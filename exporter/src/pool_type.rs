@@ -145,7 +145,6 @@ pub(super) enum Safety {
 pub(super) struct ExternAbi {
     pub kind: &'static str,
     pub unwind: Option<bool>,
-    pub source_spelling: &'static str,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct FunctionSignature {
@@ -166,19 +165,8 @@ pub(super) struct Representation {
     pub integer: Option<RepresentationInteger>,
     pub align_bytes: Option<u64>,
     pub pack_bytes: Option<u64>,
-    pub simd: bool,
-    pub c: bool,
-    pub rust: bool,
-    pub packed: bool,
-    pub transparent: bool,
-    pub linear: bool,
-    pub scalable: bool,
     pub flags_bits: u8,
     pub scalable_element: Option<ScalableElement>,
-    pub can_randomize_type_layout: bool,
-    pub inhibit_enum_layout_optimization: bool,
-    pub inhibit_struct_field_reordering: bool,
-    pub inhibit_newtype_abi_optimization: bool,
     pub field_shuffle_seed: u64,
 }
 #[derive(Clone, Debug, Serialize)]
@@ -202,8 +190,6 @@ pub(super) enum ScalableElement {
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct CompilerFacts {
     pub typing_env: &'static str,
-    pub input_type: u64,
-    pub query_input_type: u64,
     pub boolean_queries: BooleanQueries,
     pub type_queries: TypeQueries,
     pub adt: Option<AdtFacts>,

@@ -56,8 +56,9 @@ class MirJSONTests(unittest.TestCase):
                     decode_mir_document(document(**{name: value}))
 
     def test_requires_current_schema_version(self):
-        with self.assertRaisesRegex(MirJSONError, "schema_version must be 7"):
-            decode_mir_document(document(schema_version=4))
+        for version in (4, 6, True, "7", 7.0):
+            with self.subTest(version=version), self.assertRaisesRegex(MirJSONError, "schema_version must be 7"):
+                decode_mir_document(document(schema_version=version))
 
     def test_filename_ids_stay_shared_and_unexpanded(self):
         encoded = document(files=["src/a.rs", "src/b.rs"],

@@ -377,14 +377,6 @@ impl CanonAbi {
 }
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(super) enum Captures {
-    None,
-    Address,
-    ReadOnly,
-    Unrestricted,
-}
-#[derive(Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum ArgExtension {
     None,
     ZeroExtend,
@@ -393,40 +385,15 @@ pub(super) enum ArgExtension {
 #[derive(Serialize)]
 pub(super) struct ArgAttributes {
     regular_bits: u16,
-    captures: Captures,
-    no_alias: bool,
-    non_null: bool,
-    read_only: bool,
-    in_register: bool,
-    no_undef: bool,
-    writable: bool,
-    no_free: bool,
     arg_extension: ArgExtension,
     pointee_size_bytes: u64,
     pointee_align_bytes: Option<u64>,
 }
 impl ArgAttributes {
     fn new(a: rustc_target::callconv::ArgAttributes) -> Self {
-        use rustc_target::callconv::{ArgAttribute as A, ArgExtension as E};
-        let has = |x| a.regular.contains(x);
+        use rustc_target::callconv::ArgExtension as E;
         Self {
             regular_bits: a.regular.bits(),
-            captures: if has(A::CapturesNone) {
-                Captures::None
-            } else if has(A::CapturesAddress) {
-                Captures::Address
-            } else if has(A::CapturesReadOnly) {
-                Captures::ReadOnly
-            } else {
-                Captures::Unrestricted
-            },
-            no_alias: has(A::NoAlias),
-            non_null: has(A::NonNull),
-            read_only: has(A::ReadOnly),
-            in_register: has(A::InReg),
-            no_undef: has(A::NoUndef),
-            writable: has(A::Writable),
-            no_free: has(A::NoFree),
             arg_extension: match a.arg_ext {
                 E::None => ArgExtension::None,
                 E::Zext => ArgExtension::ZeroExtend,

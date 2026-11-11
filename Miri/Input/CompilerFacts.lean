@@ -53,8 +53,8 @@ private def node (context : Context) (id : TypeId) : Result TypeNode :=
 private def facts (context : Context) (id : TypeId) : Result TypeCompilerFacts := do
   let source ← node context id
   let some facts := source.compilerFacts | throw s!"missing compiler_facts for type {id}"
-  unless facts.inputTypeId == id && facts.typingEnvironment == "fully_monomorphized" do
-    throw "compiler query type/typing-environment key mismatch"
+  unless facts.typingEnvironment == "fully_monomorphized" do
+    throw "compiler query typing-environment mismatch"
   pure facts
 
 def boolean (context : Context) (id : TypeId) (query : String) : Result Bool := do
