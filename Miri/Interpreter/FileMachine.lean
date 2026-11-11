@@ -15,6 +15,9 @@ structure Hooks (K U H D O : Type) where
   hostUsizeBits : Nat
   referenceBudget : Nat
   onLastDrop : Description H D O → MachineHooks.M K U Unit
+  /-- Opt-in source destructor retaining the released identity and actual payload.
+  `none` keeps the historical description-only callback exactly. -/
+  onLastDropWithId : Option (Files.Ref (Description H D O) → MachineHooks.M K U Unit) := none
 private def lift (value : Except StepError A) : MachineHooks.M K U A :=
   match value with | .ok value => pure value | .error error => throw error
 
@@ -31,10 +34,16 @@ def cloneReference (h : Hooks K U H D O) (ref : Files.Ref (Description H D O)) :
   modify fun state => { state with machine := { state.machine with user := h.setOwnership ownership state.machine.user } }
   return ref
 
+def destroyReference (h : Hooks K U H D O)
+    (ref : Files.Ref (Description H D O)) : MachineHooks.M K U Unit :=
+  match h.onLastDropWithId with
+  | some destroy => destroy ref
+  | none => h.onLastDrop ref.value
+
 def dropReference (h : Hooks K U H D O) (ref : Files.Ref (Description H D O)) : MachineHooks.M K U Unit := do
   let (ownership,last) ← lift (FileOwnership.release (h.ownership (← get).machine.user) ref.id)
   modify fun state => { state with machine := { state.machine with user := h.setOwnership ownership state.machine.user } }
-  if let some value := last then h.onLastDrop value
+  if let some value := last then destroyReference h {ref with value}
 
 def upgradeWeak (h : Hooks K U H D O) (weak : Files.WeakRef) : MachineHooks.M K U (Option (Files.Ref (Description H D O))) := do
   let (ownership,ref) ← lift (FileOwnership.upgrade (h.ownership (← get).machine.user) weak h.referenceBudget)

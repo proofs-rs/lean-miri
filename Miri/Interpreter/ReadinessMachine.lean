@@ -59,8 +59,10 @@ updated first, so the destructor sees this description as closed. -/
 def dropFd (h : Hooks K U H D O) (ref : Files.Ref (Description H D O)) : MachineHooks.M K U Unit := do
   let (ownership,last) ← lift (FileOwnership.release (h.files.ownership (← get).machine.user) ref.id)
   modify fun state => { state with machine := { state.machine with user := h.files.setOwnership ownership state.machine.user } }
-  if last.isSome then
-    h.onLastDrop ref
+  if let some value := last then
+    -- The opt-in ID-aware route receives the actual released payload. Preserve
+    -- the old callback argument for legacy dictionaries without this capability.
+    h.onLastDrop (if h.files.onLastDropWithId.isSome then {ref with value} else ref)
     let state ← getRegistry h
     putRegistry h { state with watched := state.watched.filter (·.1 != ref.id) }
 
@@ -98,16 +100,47 @@ private def views (h : Hooks K U H D O)
     let state ← getRegistry h
     putRegistry h { state with delayed := delayed } }
 
-def dropWatcher (h : Hooks K U H D O)
-    (base : Readiness.Hooks (MachineHooks.State K U) (Files.Ref (Description H D O)))
+/-- Ownership/watch-only views for source destruction; no physical I/O leaves. -/
+def destructionViews (h : Hooks K U H D O)
+    (releaseFd : Files.Ref (Description H D O) → MachineHooks.M K U Unit)
+    (releaseWatcher : Nat → MachineHooks.M K U Unit) :
+    Readiness.DestructionHooks (MachineHooks.State K U) (Files.Ref (Description H D O)) where
+  getWatcher := fun id => do return (← lift (findWatcher (← getRegistry h) id)).value
+  putWatcher := fun id value => do
+    let state ← getRegistry h
+    let _ ← lift (findWatcher state id)
+    putRegistry h { state with watchers := state.watchers.map fun old => if old.id == id then {old with value} else old }
+  upgradeWatcher := upgradeWatcher h
+  dropWatcher := releaseWatcher
+  watcherAlive := fun id => do return (← getRegistry h).watchers.any (fun entry => entry.id == id && entry.strong > 0)
+  upgrade := FileMachine.upgradeWeak h.files
+  dropFd := releaseFd
+  isClosed := fun weak => do return FileOwnership.isClosed (h.files.ownership (← get).machine.user) weak
+  getWatched := fun ref => do
+    let matching := (← getRegistry h).watched.filter (·.1 == ref.id)
+    if matching.size != 1 then throw (.invalidProgram "missing/ambiguous watched FD metadata")
+    let some (_,value) := matching[0]? | throw (.invalidProgram "watched FD lookup failed")
+    return value
+  putWatched := fun ref value => do
+    let state ← getRegistry h
+    if !(state.watched.any (·.1 == ref.id)) then throw (.invalidProgram "missing watched FD metadata")
+    putRegistry h { state with watched := state.watched.map fun (id,old) => (id,if id == ref.id then value else old) }
+
+def dropWatcherWith (h : Hooks K U H D O)
+    (destruction : Readiness.DestructionHooks (MachineHooks.State K U) (Files.Ref (Description H D O)))
     (id : Nat) : MachineHooks.M K U Unit := do
   let state ← getRegistry h
   let entry ← lift (findWatcher state id)
   if entry.strong == 1 then
     putRegistry h { state with watchers := state.watchers.filter (·.id != id) }
-    Readiness.dropWatcherMetadata (views h base) entry.value
+    Readiness.dropWatcherMetadataWith destruction entry.value
   else
-    putRegistry h { state with watchers := state.watchers.map fun old => if old.id == id then { old with strong := old.strong - 1 } else old }
+    putRegistry h { state with watchers := state.watchers.map fun old => if old.id == id then {old with strong := old.strong - 1} else old }
+
+def dropWatcher (h : Hooks K U H D O)
+    (base : Readiness.Hooks (MachineHooks.State K U) (Files.Ref (Description H D O)))
+    (id : Nat) : MachineHooks.M K U Unit :=
+  dropWatcherWith h (views h base).destruction id
 
 def bind (h : Hooks K U H D O)
     (base : Readiness.Hooks (MachineHooks.State K U) (Files.Ref (Description H D O))) :
@@ -154,13 +187,18 @@ def bindScheduling (budget : Nat) (io : BlockingIo.Hooks (ThreadStacks.State K U
   anyThreadBlockedOnHost := BlockingIo.anyThreadBlockedOnHost io }
 /-- Call at the actual ReadinessWatched field-drop point of a description.
 The ID-aware outer release has already made weak FD upgrades fail. -/
-def destroyWatched (h : Hooks K U H D O)
-    (base : Readiness.Hooks (MachineHooks.State K U) (Files.Ref (Description H D O)))
+def destroyWatchedWith (h : Hooks K U H D O)
+    (destruction : Readiness.DestructionHooks (MachineHooks.State K U) (Files.Ref (Description H D O)))
     (ref : Files.Ref (Description H D O)) : MachineHooks.M K U Unit := do
   let entries := (← getRegistry h).watched.filter (·.1 == ref.id)
   if entries.size != 1 then throw (.invalidProgram "missing/ambiguous destroyed watched FD metadata")
   let some (_,watched) := entries[0]? | throw (.invalidProgram "destroyed watched FD lookup failed")
-  Readiness.dropWatchedMetadata (bind h base) watched
+  Readiness.dropWatchedMetadataWith destruction watched
+
+def destroyWatched (h : Hooks K U H D O)
+    (base : Readiness.Hooks (MachineHooks.State K U) (Files.Ref (Description H D O)))
+    (ref : Files.Ref (Description H D O)) : MachineHooks.M K U Unit :=
+  destroyWatchedWith h (bind h base).destruction ref
 
 def cloneWatcher (h : Hooks K U H D O) (id : Nat) : MachineHooks.M K U Unit := do
   if !(← upgradeWatcher h id) then throw (.invalidProgram "cloning closed readiness watcher")

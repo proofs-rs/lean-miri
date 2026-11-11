@@ -1,3 +1,4 @@
+import Miri.Input.EvalSourceOtherDestruction
 import Miri.Input.CompilerProviders
 import Miri.Input.CompilerFrameMetadata
 import Miri.Input.EvalCoreMachine
@@ -149,13 +150,13 @@ def filesFromSource
 
 /-- The descriptor registry is the one in EvalWorld runtime state. This helper
 keeps table, Rc ownership, and destructor callbacks on the FileMachine path. -/
-def fileRegistry
-    (hostUsizeBits referenceBudget : Nat)
+def sourceRegistry
+    (hostUsizeBits referenceBudget watcherReferenceBudget : Nat)
     (effects : FileResourceEffects
       (MachineHooks.State MiriMemoryKind
         (User Os R P H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error))
-      H D (Other Raw Listener TcpStream Error)) :=
-  EvalSocketStorage.files (Os := Os) (R := R) (P := P) (H := H) (D := D)
+      H D (Other Raw Listener TcpStream Error)) := Id.run do
+  let files := EvalSocketStorage.files (Os := Os) (R := R) (P := P) (H := H) (D := D)
     (Aff := Aff) (B := B) (Poll := Poll) (Instant := Instant) (System := System)
     (Native := Native) (Profiler := Profiler) (Raw := Raw) (Listener := Listener)
     (TcpStream := TcpStream) (Error := Error) hostUsizeBits referenceBudget fun description =>
@@ -164,6 +165,23 @@ def fileRegistry
       | .file handle _ _ => effects.dropFile handle
       | .directory handle => effects.dropDirectory handle
       | .other payload => effects.dropOther payload
+  let machine := EvalSocketStorage.readiness files watcherReferenceBudget
+    (FileMachine.destroyReference files)
+  return EvalSourceOtherDestruction.bind {
+    machine
+    sockets := EvalSocketStorage.sockets
+    events := EvalOwnedIoMachine.eventStore SourceOther.eventTag SourceOther.eventProject
+    resources := ⟨effects.dropFile,effects.dropDirectory,effects.dropOther⟩ }
+
+/-- Compatibility file-only API. Canonical source factories pass the selected
+watcher budget explicitly through `sourceRegistry` instead. -/
+def fileRegistry
+    (hostUsizeBits referenceBudget : Nat)
+    (effects : FileResourceEffects
+      (MachineHooks.State MiriMemoryKind
+        (User Os R P H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error))
+      H D (Other Raw Listener TcpStream Error)) :=
+  (sourceRegistry hostUsizeBits referenceBudget referenceBudget effects).files
 
 def fileOperationsFromSource
     (p : CompilerProviders.Prepared)

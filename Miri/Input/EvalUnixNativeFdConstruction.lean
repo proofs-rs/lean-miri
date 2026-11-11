@@ -237,18 +237,12 @@ def fromSourceWithLifecycle [DecidableEq MiriMemoryKind]
   unless communicate == (isolatedOp == .allow) do
     throw (.invalidProgram "Unix FD isolation policy disagrees with Miri configuration")
   let files ← EvalUnixIoConstruction.filesFromSource p memory.access memory.pointers hostFiles otherFiles
-  let fileRegistry := EvalUnixIoConstruction.fileRegistry
+  let readiness := EvalUnixIoConstruction.sourceRegistry
     (Os := Os) (R := R) (P := P) (H := H) (D := D) (Aff := Aff) (B := B)
     (Poll := Poll) (Instant := Instant) (System := System) (Native := Native)
     (Profiler := Profiler) (Raw := Raw) (Listener := Listener) (TcpStream := TcpStream)
-    (Error := Error) hostUsizeBits fileReferenceBudget resources
-  let dropDescription := fun (reference : FD H D (Other Raw Listener TcpStream Error)) => do
-    match reference.value with
-    | .stdin | .stdout | .stderr | .nullOutput => pure ()
-    | .file handle _ _ => resources.dropFile handle
-    | .directory handle => resources.dropDirectory handle
-    | .other payload => resources.dropOther payload
-  let readiness := EvalUnixFdConstruction.readiness fileRegistry watcherReferenceBudget dropDescription
+    (Error := Error) hostUsizeBits fileReferenceBudget watcherReferenceBudget resources
+  let fileRegistry := readiness.files
   let errors := environment.env.errors
   let fd ← EvalUnixIoConstruction.unixFdFromSource p communicate shortFdOperations hostIsizeBits
     readiness readinessRoute

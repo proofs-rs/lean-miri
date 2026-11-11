@@ -212,18 +212,12 @@ def registrySeed
       (State Os R P H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error)
       H D (Other Raw Listener TcpStream Error)) :
     RegistrySeed Os R P H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error := Id.run do
-  let files := EvalUnixIoConstruction.fileRegistry
+  let readiness := EvalUnixIoConstruction.sourceRegistry
     (Os := Os) (R := R) (P := P) (H := H) (D := D) (Aff := Aff) (B := B)
     (Poll := Poll) (Instant := Instant) (System := System) (Native := Native)
     (Profiler := Profiler) (Raw := Raw) (Listener := Listener) (TcpStream := TcpStream)
-    (Error := Error) hostUsizeBits fileReferenceBudget resources
-  let dropDescription := fun (reference : FD H D (Other Raw Listener TcpStream Error)) => do
-    match reference.value with
-    | .stdin | .stdout | .stderr | .nullOutput => pure ()
-    | .file handle _ _ => resources.dropFile handle
-    | .directory handle => resources.dropDirectory handle
-    | .other payload => resources.dropOther payload
-  let readiness := EvalUnixFdConstruction.readiness files watcherReferenceBudget dropDescription
+    (Error := Error) hostUsizeBits fileReferenceBudget watcherReferenceBudget resources
+  let files := readiness.files
   return ⟨files,readiness⟩
 
 end Miri.Input.EvalCallbackSocketConstruction
