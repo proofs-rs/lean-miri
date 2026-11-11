@@ -85,6 +85,41 @@ class FailClosedExportTests(unittest.TestCase):
         queries = document["compiler_instance_abis"]
         self.assertFalse(ids & {row["instance_id"] for row in queries})
 
+    def test_source_llvm_abi_keeps_signature_without_synthetic_normal_abi(self):
+        for fixture in ("llvm_source_abi", "llvm_stdarch_abi"):
+            with self.subTest(fixture=fixture):
+                document = self.accepted(fixture)
+                facts = document["compiler_function_facts"]
+                llvm = [row for row in facts["types"]
+                        if row["signature_query"]["abi"]["kind"] == "llvm_intrinsic"]
+                self.assertTrue(llvm, "fixture must use the actual stdarch LLVM ABI")
+                helpers = facts["helper_signatures"]
+                self.assertFalse(any(row["signature"]["abi"]["kind"] == "llvm_intrinsic" for row in helpers))
+                for row in llvm:
+                    signature = row["signature_query"]
+                    self.assertTrue(any(helper["signature"]["abi"]["kind"] == "rust"
+                                        and helper["signature"]["inputs"] == signature["inputs"]
+                                        and helper["signature"]["output"] == signature["output"]
+                                        for helper in helpers), "valid Rust helper candidate was dropped")
+
+    def test_uncalled_llvm_pointer_preserves_metadata_without_undefined_abi(self):
+        document = self.accepted("llvm_pointer_metadata")
+        facts = document["compiler_function_facts"]
+        pointers = {row["type_id"] for row in facts["types"]
+                    if row["function_kind"]["kind"] == "function_pointer"
+                    and row["signature_query"]["abi"]["kind"] == "llvm_intrinsic"}
+        self.assertTrue(pointers, "fixture must retain the LLVM ABI pointer type")
+        self.assertFalse(pointers & {row["type_id"] for row in facts["pointer_abis"]})
+        for ty in pointers:
+            self.assertIsInstance(document["types"][ty]["layout"], int)
+
+    def test_demanded_llvm_pointer_abi_fails_closed_without_panicking(self):
+        result = self.export("llvm_pointer_call")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("FnPtr ABI query is not defined for LLVM intrinsic signatures", result.stderr)
+        self.assertNotIn("panicked", result.stderr)
+        self.assertFalse(self.output.exists())
+
     def test_layout_query_types_keep_runtime_query_demands(self):
         source = ROOT / "upstream/miri-source/tests/pass/unops.rs"
         result = subprocess.run(

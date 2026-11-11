@@ -37,12 +37,14 @@ def main():
     errors = []
     for path, kind, detail in [
         ("pass/pause-arithmetic.rs", "exit", ""),
+        ("pass/source-llvm-abi.rs", "exit", ""),
+        ("pass/stdarch-aes.rs", "exit", ""),
         ("fail/argument-count.rs", "ub", "incorrect number of arguments"),
         ("unsupported/unknown.rs", "unsupported", "lean_miri_unknown"),
         ("invalid/layout.rs", "failed", "project_to_simd requires SIMD type"),
         ("clash/exported-symbol.rs", "failed", "symbol shim clashing"),
     ]:
-        case = Case(path)
+        case = Case(path, flags=["-C", "target-feature=+aes"] if path == "pass/stdarch-aes.rs" else [])
         record = driver.run_case(case, settings, env, args.output)
         records.append(record)
         try:

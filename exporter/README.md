@@ -128,7 +128,12 @@ exact stride/count formula, and represents a resolved LLVM intrinsic call with
 Only an exact `LlvmIntrinsic` compiler identity may use that form. Normal,
 virtual and indirect calls still require an ordinary ABI. LLVM dispatch retains
 its intrinsic signature, argument, feature and memory checks; unknown intrinsics
-remain Unsupported. These new forms are rejected under schema 8. Schemas older
+remain Unsupported. LLVM-ABI function-pointer signatures and layouts are retained
+as metadata, but have no ordinary ABI row. Synthetic LLVM-ABI helper candidates
+are omitted while their valid Rust-ABI candidates remain. An actual LLVM-ABI
+function-pointer call fails export explicitly before the compiler's undefined
+ABI query; ordinary function-pointer queries remain required. These new call
+and compact-layout forms are rejected under schema 8. Schemas older
 than 8 must be regenerated with the current producer.
 
 Generic arguments remain in their owning records, with type and type-constant
@@ -198,7 +203,8 @@ root with the same environment:
 The LLVM no-ABI producer fixture is part of that unittest discovery. After a
 reference-feature release exporter and `native_runner` build, run
 `flock /tmp/lean-miri-ci-guest.lock python3 tests/llvm_no_abi/check.py --output scratch/llvm-controls-new`
-for fresh reference/guest controls covering arithmetic, pause, missing target
+for fresh reference/guest controls covering arithmetic and pause through both
+C and the actual stdarch LLVM ABI, stdarch AES, missing target
 features, argument count, symbol clashes, invalid vector layouts and unknown
 intrinsics. The latter rejection/Unsupported controls are never counted as safe
 guest execution. `tests/input/LlvmCallEvidence.lean` takes a fresh export of

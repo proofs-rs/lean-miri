@@ -56,9 +56,25 @@ Coroutine frame layout serialization and foreign TLS initializers remain
 unimplemented and now stop export. This boundary does not establish compiler
 query closure or interpreter correspondence.
 
+The producer now emits schema 9; the reader strictly supports schemas 8 and 9.
+Schema 8 retains its existing dense-layout and call-evidence validation and
+rejects the new compact-array and LLVM no-ABI forms. Array offsets in schema 9
+use an explicit stride/count formula instead of an enumerated vector. The
+reader checks shape agreement, u64 bounds and the last offset without traversing
+all fields; runtime lookup retains the existing checked multiplication. Local
+theorems cover the exact offset value for every in-bounds index. Zero-length
+and zero-stride arrays remain supported.
+
+LLVM intrinsic calls carry explicit no-ABI evidence tied to the exact declared
+FnDef type, DefId, generic arguments and current MIR call operand. Ordinary
+calls still require genuine FnAbi evidence; no replacement ABI is fabricated.
+Signature checks use the canonical prepared symbol registry and pinned builtin
+exemptions, retaining missing, duplicate and weak-symbol behavior. The core call
+implementation is unchanged.
+
 Fifteen fixed connected inputs with their same-TyCtxt reference observations
-and three eval-core inputs are regenerated under the schema-8 resolved-body
-typed-pool contract. Allocation byte vectors share a document-local exact byte
+and three eval-core inputs retain the schema-8 resolved-body typed-pool
+contract. Allocation byte vectors share a document-local exact byte
 image pool; function payloads group identities by Instance. Graph IDs, raw source
 IDs, initialization and provenance remain independent. Prepared raw-pool slots
 and indexed salt results derive serialized facts from those allocation nodes.
@@ -79,7 +95,7 @@ unmatched raw slots, incomplete salt arrays and unchecked foreign TLS
 initializers. A decoded shared-byte cyclic graph retains distinct runtime IDs,
 mutability, initialization and CTFE provenance flags.
 The earlier hosted replay lane also passed at `6a76fcbd`. Neither result
-establishes validation of the newly integrated schema-8 follow-up source; the
+establishes validation of the schema-9 follow-up source; the
 broader hosted results and remaining failures are described below. These finite
 executions do not establish compiler query closure, interpreter correspondence
 or whole-machine safety.
@@ -299,6 +315,63 @@ axiom audit covers 74,172 declarations; all 268 empty-function roots and their
 axioms. Recorded Rust, input, library and proof hashes match before and after
 validation. The 66-stage result remains specific to the baseline; this diagnostic
 revision still needs full hosted validation.
+
+At subsequent merged schema-8 main `7cc6b6cc`, the hosted empty-function proof,
+documentation build/deploy and all four core lanes (fresh, replay, extended
+and regression) pass. The UI sweep remains unfinished; its shard-9 AVX2
+export failure used the old producer and is covered by the local repair below. These results
+belong to that main revision; schema 9 has not yet received hosted validation.
+
+### Schema-9 metadata follow-up: local validation
+
+On the follow-up rebased onto `7cc6b6cc`, the full 1,281-job library/test/native
+build, 46 runtime checks, structural regressions and decoder controls pass.
+The library audit covers 74,294 declarations using only `propext`, `Quot.sound`
+and `Classical.choice`. SC seeds 0–11 and four malformed-log controls pass with
+their source/artifact seals. All 268 empty-function roots also pass; their
+transitive audit covers 76,960 declarations with only the same allowed axioms.
+Fixed Rust/MIR input bytes, SHA records, final target and caller assumptions are
+unchanged, and the recorded library/proof bindings match before and after.
+
+All 66 `tools/check.sh` stages are covered across resumed local attempts:
+stages 1–50 passed before stage 51 encountered a missing vanilla-reference build
+manifest in the isolated checkout. Reuse of the existing pinned vanilla Miri
+build was verified against its compiler/Miri pins and binary SHA256, then stages
+51–66 passed. This is neither a single uninterrupted run nor a fresh reference
+toolchain setup. The reference-enabled exporter was restored to its recorded
+pre-run binary SHA256 after the suite's feature toggles. After the final
+Rust-only LLVM helper correction and affected checks, the reference exporter
+was restored to SHA256 `5073ff656c24aa107678d4dbf8750f465d14b2978406b8669335706c20ec9c37`.
+Miri sources and the fixed library/proof bindings remain unchanged.
+
+The Rust checks pass 37 unit tests, the independent runtime-ABI integration probe,
+24 producer boundary tests and nine reader checks; nine affected Rust suites
+also pass. Eight focused LLVM controls cover three successful executions and
+five negative outcomes with strict reference/profile/terminal checks. Unknown
+Unsupported and invalid-layout rejection are not counted as guest safety
+passes. Malformed identity, type, operand and ABI evidence retain rejection.
+Two ordinary function-pointer/exported-symbol comparison cases and the affected
+input, frontend, runtime-metadata and execution checks pass. A second route
+through the ABI-synthesizing helper is now excluded only for LLVM intrinsics;
+ordinary Rust helpers retain their ABI requirements and genuine query failures
+remain fail-closed. The former 1-PiB offset-vector abort in the
+unchanged upstream `pass/align_offset_symbolic.rs` is locally repaired: a fresh
+schema-9 export completes both same-TyCtxt Miri and Lean execution with exit zero
+and matching symbolic-alignment profiles, including a final fresh comparison
+with exporter `5073ff65` and native runner `09ccb6b0`. A separate guest retains 1-PiB byte
+and word array layouts plus `usize::MAX` zero-sized elements without allocating
+those arrays; its approximately 1-MB export and both executions pass with exact
+snapshot bindings under the earlier `6043755a` producer; its array implementation
+is unchanged by the final LLVM-only Rust correction. Compact/dense layout boundaries, overflow and version
+rejection controls pass while the fixed schema-8 example input remains intact.
+
+These are finite local results, not a green hosted UI sweep, general query
+closure proof or performance claim. All four original export-failure probes
+(`intrinsic_target_feature`, SSE2, AVX2 and AES/VAES) now export successfully.
+The unchanged target-feature case also passes its official strict comparison;
+execution of the three long SIMD files has not been measured. Export success
+does not establish their execution result. The no-core, coroutine-layout, native leak-report
+rendering and performance gaps above remain unresolved.
 
 The ordinary standard-library startup closure from
 `tests/repro/startup/empty-main.rs` now decodes directly into MIR. A fresh
