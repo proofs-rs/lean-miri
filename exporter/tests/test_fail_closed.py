@@ -69,6 +69,22 @@ class FailClosedExportTests(unittest.TestCase):
         check(document)
         return document
 
+    def test_llvm_intrinsics_have_typed_no_abi_evidence(self):
+        document = self.accepted("llvm_no_abi")
+        calls = [block["terminator"]["kind"]["resolution"]
+                 for body in document["bodies"] for block in body["basic_blocks"]
+                 if block["terminator"]["kind"].get("variant") == "Call"]
+        llvm = [call for call in calls if call["kind"] == "llvm_intrinsic"]
+        self.assertEqual(len(llvm), 2)
+        ids = {call["instance_id"] for call in llvm}
+        for call in llvm:
+            self.assertNotIn("fn_abi", call)
+            self.assertNotIn("dispatch_slot", call)
+            instance = document["instances"][call["instance_id"]]
+            self.assertEqual(instance["instance_kind"]["kind"], "llvm_intrinsic")
+        queries = document["compiler_instance_abis"]
+        self.assertFalse(ids & {row["instance_id"] for row in queries})
+
     def test_layout_query_types_keep_runtime_query_demands(self):
         source = ROOT / "upstream/miri-source/tests/pass/unops.rs"
         result = subprocess.run(

@@ -400,7 +400,8 @@ private def resolutionFor (p : Program) (fnInstance : CallInstance) : Except Ste
   throw (.unsupported "instance has no exported resolution query")
 private def getAbi (p : Program) (fnInstance : CallInstance) : Exec FnABI := do
   let (resolution,_) ← lift (resolutionFor p fnInstance)
-  let source ← lift (p.lowered.input.functionAbis[resolution.fnAbiId]?.toExcept (.unsupported "compiler FnABI"))
+  let .normal abiId := resolution.abi | throw (.unsupported "LLVM intrinsic has no ordinary compiler FnABI")
+  let source ← lift (p.lowered.input.functionAbis[abiId]?.toExcept (.unsupported "compiler FnABI"))
   if source.callingConvention.kind != .rust || source.cVariadic then
     block "unsupported calling convention or varargs"
   let arg (source : Input.AbiArgument) : Except StepError ArgABI := do

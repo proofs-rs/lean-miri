@@ -79,7 +79,7 @@ fn export_failure<T>(context: &str, details: impl std::fmt::Display) -> Result<T
 
 const EXPECTED_RUSTC_COMMIT: &str = "8144389c895da997dbdecaa635e41d6a50be6ffd";
 const MIRI_COMMIT: &str = "7fa591d7d4dd9af8154becbc8332f8096f8323b1";
-const ROOT_SCHEMA_VERSION: u64 = 8;
+const ROOT_SCHEMA_VERSION: u64 = 9;
 
 struct Options {
     output: PathBuf,
@@ -4993,6 +4993,13 @@ fn resolve_callee_json<'tcx>(
             match ty::Instance::try_resolve(tcx, body.typing_env(tcx), def, args.skip_binder()) {
                 Ok(Some(instance)) => {
                     let instance_id = context.register_instance(instance);
+                    // Pinned step.rs deliberately has no FnAbi for LLVM intrinsics.
+                    // Their source signature and exact identity are still serialized.
+                    if matches!(instance.def, ty::InstanceKind::LlvmIntrinsic(_)) {
+                        return Ok(Callee::LlvmIntrinsic {
+                            function_type: type_json(context, tcx, func_ty)?, instance_id,
+                        });
+                    }
                     // step.rs derives extra arguments from the normalized original
                     // function signature, not the callee's ABI argument count.
                     let signature = tcx.try_normalize_erasing_regions(
@@ -6007,7 +6014,7 @@ fn compiler_instance_abis_json<'tcx>(
         // `(instance, extra_args)` request above, which remains in `requests`.
         if matches!(
             instance.def,
-            ty::InstanceKind::Shim(ty::ShimKind::VTable(_))
+            ty::InstanceKind::Shim(ty::ShimKind::VTable(_)) | ty::InstanceKind::LlvmIntrinsic(_)
         ) {
             continue;
         }

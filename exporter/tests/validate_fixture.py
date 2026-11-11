@@ -9,7 +9,7 @@ from mir_json import load_mir_document, pool_entry
 
 doc = load_mir_document(sys.argv[1])
 assert doc["schema"] == "lean-miri-rustc-mir"
-assert doc["schema_version"] == 8
+assert doc["schema_version"] == 9
 assert doc["producer"]["rustc_commit"] == "8144389c895da997dbdecaa635e41d6a50be6ffd"
 assert doc["producer"]["miri_commit"] == "7fa591d7d4dd9af8154becbc8332f8096f8323b1"
 assert "completeness" not in doc
