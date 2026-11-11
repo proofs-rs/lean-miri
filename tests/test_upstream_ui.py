@@ -194,6 +194,28 @@ fn main() {
             self.assertEqual(compare(case, terminal | {'detail': unrelated}, 'variadic_exhausted'),
                              'ub_kind_mismatch')
 
+    def test_exact_tag_and_null_box_diagnostics_do_not_accept_generic_ub(self):
+        case = Case('fail/test.rs', errors=[(3, 'original reference annotation')])
+        terminal = {'kind': 'ub', 'frames': [{'file': case.path, 'line': 3}]}
+        observations = (
+            ('invalid_discriminant', 'InvalidTag(outside valid range)',
+             ('InvalidTag(unknown variant)', 'NotInvalidTag(outside valid range)',
+              'InvalidTag(outside valid ranges)', 'dereferencing a null box')),
+            ('null_pointer', 'dereferencing a null box',
+             ('null box', 'dereferencing a null boxish', 'InvalidTag(outside valid range)')),
+        )
+        for category, diagnostic, unrelated in observations:
+            with self.subTest(category=category):
+                detail = 'Miri.Interpreter.StepError.undefinedBehavior "' + diagnostic + '"'
+                self.assertEqual(compare(case, terminal | {'detail': detail}, category), 'passed')
+                self.assertEqual(compare(case, terminal | {'detail': detail, 'frames': []}, category),
+                                 'ub_site_mismatch')
+                self.assertNotEqual(compare(case, terminal | {'detail': detail, 'kind': 'unsupported'}, category),
+                                    'passed')
+                for other in (*unrelated, 'undefined behavior', 'invalid value', 'invalidBool 2', 'outOfBounds'):
+                    self.assertEqual(compare(case, terminal | {'detail': other}, category),
+                                     'ub_kind_mismatch', other)
+
     def test_generic_race_is_not_a_mixed_size_race(self):
         case = Case('fail/test.rs', errors=[(3, 'Race condition detected')])
         terminal = {'kind': 'ub', 'detail': 'MixedSizeRace', 'frames': [{'file': case.path, 'line': 3}]}

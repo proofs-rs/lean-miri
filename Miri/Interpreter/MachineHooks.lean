@@ -302,13 +302,30 @@ structure Hooks (K User : Type) where
   /-- Source get_alloc_extra may materialize a compiler global or fail (extern static). -/
   ensureTreeExtra : AllocId → M K User Unit
 
-private def borrowAccessError (status : Miri.TreeBorrows.BorrowTree.BorrowTreeAccessStatus) : StepError :=
+/-- Retain the source access cause only at its actual origin. The parent
+access in tb_reborrow uses AccessCause::Reborrow; protector-release failures
+keep their existing diagnostic instead of being relabelled as reborrows. -/
+private def borrowAccessError (status : Miri.TreeBorrows.BorrowTree.BorrowTreeAccessStatus)
+    (isReborrow : Bool := false) : StepError :=
   match status with
   | .AccessFailure _ (.TransitionError ..)
   | .WildcardFailure _ (.TransitionError ..)
   | .WildcardFailure _ (.NoValidExposedReferences ..) =>
-    .undefinedBehavior s!"Tree Borrows: {reprStr status}"
+    .undefinedBehavior s!"Tree Borrows{if isReborrow then " reborrow" else ""}: {reprStr status}"
   | _ => .invalidProgram s!"Tree Borrows invariant: {reprStr status}"
+
+/-- Protector release retains the entire preceding diagnostic classification,
+including its exact message and all invariant-error alternatives. -/
+private theorem borrowAccessError_release_unchanged
+    (status : Miri.TreeBorrows.BorrowTree.BorrowTreeAccessStatus) :
+    borrowAccessError status =
+      (match status with
+       | .AccessFailure _ (.TransitionError ..)
+       | .WildcardFailure _ (.TransitionError ..)
+       | .WildcardFailure _ (.NoValidExposedReferences ..) =>
+         .undefinedBehavior s!"Tree Borrows: {reprStr status}"
+       | _ => .invalidProgram s!"Tree Borrows invariant: {reprStr status}") := by
+  cases status <;> rfl
 
 private def applyRetag [DecidableEq K] (request : Miri.TreeBorrows.RetagPipeline.Request) :
     M K User (Option Provenance × Bool) := do
@@ -334,7 +351,7 @@ private def applyRetag [DecidableEq K] (request : Miri.TreeBorrows.RetagPipeline
   setCurrentFrame { frame with extra := { frame.extra with borrowTracker := some result.state.frame } }
   match result.outcome with
   | .error (.hook error) => throw error
-  | .error (.core (.treeAccess _ status)) => throw (borrowAccessError status)
+  | .error (.core (.treeAccess _ status)) => throw (borrowAccessError status true)
   | .error (.core (.writeToReadOnly _)) => throw .retagWriteToReadOnly
   | .error (.core error) => fail "Tree Borrows retag" error
   | .ok provenance => return (provenance, result.events.contains .retaggedValueReconstructed)

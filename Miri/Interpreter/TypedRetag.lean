@@ -89,12 +89,16 @@ private def getTree (allocId : AllocId) : M K User BorrowTree := do
     | throw (.invalidProgram "Tree Borrows allocation extra unavailable")
   return entry.2.allocation.extra
 
-private def accessError (status : BorrowTree.BorrowTreeAccessStatus) : StepError :=
+/-- These failures arise only from the parent access in tb_reborrow.
+Pinned tree_borrows/mod.rs passes AccessCause::Reborrow(access), whose primary
+diagnostic is `reborrow` even when its associated access is a read or write.
+Other hook errors and the later uninitialization write retain their own cause. -/
+private def reborrowAccessError (status : BorrowTree.BorrowTreeAccessStatus) : StepError :=
   match status with
   | .AccessFailure _ (.TransitionError ..)
   | .WildcardFailure _ (.TransitionError ..)
   | .WildcardFailure _ (.NoValidExposedReferences ..) =>
-    .undefinedBehavior s!"Tree Borrows: {reprStr status}"
+    .undefinedBehavior s!"Tree Borrows reborrow: {reprStr status}"
   | _ => .invalidProgram s!"Tree Borrows invariant: {reprStr status}"
 
 /-- Actual per-segment memory/TB/race transitions, including partially modified
@@ -142,7 +146,7 @@ def reborrow [DecidableEq K] (h : Hooks K User) (budget : Nat)
         let accessResult := tree.performBorrowAccessRange location.parentProvenance offset length access
           (← tracker).global.protectedTags .VisitChildrenOfAccessed
         updateTree location.allocId accessResult.tree
-        if accessResult.status != .Completed then throw (accessError accessResult.status)
+        if accessResult.status != .Completed then throw (reborrowAccessError accessResult.status)
         if length.bytes != 0 then
           match access with
           | .Read => MachineHooks.memoryRaceRead location.allocId (allocRange offset length) .Retag
