@@ -11,8 +11,8 @@ set_option maxHeartbeats 8000000
 
 theorem caller_location {p options config} (fields : Fields p options config)
     (limits : ExecutionMachine.Limits) (fn : CallInstance)
-    (inline : CompilerVirtualFacts.inlineAttribute p.lifecycle.calls.scopes fn = .ok none ∨
-      CompilerVirtualFacts.inlineAttribute p.lifecycle.calls.scopes fn = .ok (some false))
+    (inline : CompilerVirtualFacts.inlineAttribute p.lifecycle.calls.scopes fn = none ∨
+      CompilerVirtualFacts.inlineAttribute p.lifecycle.calls.scopes fn = (some false))
     (query : CompilerRuntimeQueries.requiresCallerLocation p.lifecycle.calls.runtime fn = .ok false) :
     (ExecutionMachine.callHooks config limits).requiresCallerLocation fn = pure false := by
   change config.virtual.compiler.requiresCallerLocation fn = _

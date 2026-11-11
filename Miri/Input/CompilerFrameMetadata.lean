@@ -33,7 +33,7 @@ private def definitionCrate (p : Prepared) (callee : CallInstance) : Except Stri
 
 def hooks (p : Prepared) (userRelevantCrates : Array Nat) : FrameMetadata.CompilerHooks K User := {
   requiresCallerLocation := fun callee => do
-    match ← lift (CompilerVirtualFacts.inlineAttribute p.calls.scopes callee) with
+    match CompilerVirtualFacts.inlineAttribute p.calls.scopes callee with
     | some value => pure value
     | none => lift (CompilerRuntimeQueries.requiresCallerLocation p.calls.runtime callee)
   isLocalDefinition := fun callee => return (← lift (definitionCrate p callee)) == p.localCrate
@@ -60,8 +60,8 @@ def resolvedRank (localCrate definitionCrate : Nat) (relevant : Array Nat) : UIn
   if definitionCrate == localCrate || relevant.contains definitionCrate then 255 else 1
  theorem userRelevance_resolved (p : Prepared) (relevant : Array Nat)
     (frame : Frame P LocalLayout Unit) (definition : DefinitionId) (definitionIndex : Nat)
-    (inline : CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = .ok none ∨
-      CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = .ok (some false))
+    (inline : CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = none ∨
+      CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = (some false))
     (track : CompilerRuntimeQueries.requiresCallerLocation p.calls.runtime frame.functionInstance = .ok false)
     (resolved : CompilerInstance.definitionOf p.calls.calls.program.input.instances frame.functionInstance = .ok definitionIndex)
     (found : p.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition) :
@@ -75,8 +75,8 @@ def resolvedRank (localCrate definitionCrate : Nat) (relevant : Array Nat) : UIn
 
  theorem initFrame_resolved (p : Prepared) (relevant : Array Nat)
     (frame : Frame Provenance LocalLayout Unit) (definition : DefinitionId) (definitionIndex : Nat)
-    (inline : CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = .ok none ∨
-      CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = .ok (some false))
+    (inline : CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = none ∨
+      CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = (some false))
     (track : CompilerRuntimeQueries.requiresCallerLocation p.calls.runtime frame.functionInstance = .ok false)
     (resolved : CompilerInstance.definitionOf p.calls.calls.program.input.instances frame.functionInstance = .ok definitionIndex)
     (found : p.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition)
@@ -112,8 +112,8 @@ def resolvedRank (localCrate definitionCrate : Nat) (relevant : Array Nat) : UIn
   location := frame.location }
  theorem initFrame_explicit (p : Prepared) (relevant : Array Nat)
     (frame : Frame Provenance LocalLayout Unit) (definition : DefinitionId) (definitionIndex : Nat)
-    (inline : CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = .ok none ∨
-      CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = .ok (some false))
+    (inline : CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = none ∨
+      CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = (some false))
     (track : CompilerRuntimeQueries.requiresCallerLocation p.calls.runtime frame.functionInstance = .ok false)
     (resolved : CompilerInstance.definitionOf p.calls.calls.program.input.instances frame.functionInstance = .ok definitionIndex)
     (found : p.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition)
