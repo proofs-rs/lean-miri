@@ -295,6 +295,9 @@ struct ExportContext<'tcx> {
     symbol_only_instances: HashSet<ty::Instance<'tcx>>,
     // Metadata references must not seed runtime compiler-query demands.
     metadata_only_instances: HashSet<ty::Instance<'tcx>>,
+    /// Exact helper constructors retain source operand identities before the
+    /// generic function-fact discovery erases regions during normalization.
+    helper_signature_requests: OrderedSet<ty::FnSig<'tcx>>,
     pending_instances: Vec<ty::Instance<'tcx>>,
     emitted_instances: HashSet<ty::Instance<'tcx>>,
     predicate_ids: Pool<ty::PolyExistentialPredicate<'tcx>, allocation_values::Predicate>,
@@ -1467,6 +1470,7 @@ impl ExportCallbacks {
                 export_context.covariance_query_requests.len(),
                 export_context.instance_abi_requests.len(),
                 export_context.fn_pointer_abi_requests.len(),
+                export_context.helper_signature_requests.len(),
                 export_context.fn_pointer_targets.len(),
                 export_context.runtime_mir_frame_instances.len(),
                 export_context.fn_pointer_cast_inputs.len(),
@@ -1488,12 +1492,7 @@ impl ExportCallbacks {
                 export_context.runtime_type_query_demands.len(),
                 processed_runtime_type_queries.len(),
             ];
-            let foreign_symbols = export_context
-                .pending_instances
-                .iter()
-                .filter(|instance| tcx.is_foreign_item(instance.def_id()))
-                .map(|instance| tcx.symbol_name(*instance).name.to_owned())
-                .collect::<HashSet<_>>();
+            let foreign_symbols = shim_abi::demanded_symbols(tcx, &export_context);
             if runtime_catalogs.is_none() || foreign_symbols != catalog_foreign_symbols {
                 runtime_catalogs = Some(runtime_catalogs_json(tcx, &mut export_context)?);
                 catalog_foreign_symbols = foreign_symbols;
@@ -1542,6 +1541,7 @@ impl ExportCallbacks {
                 export_context.covariance_query_requests.len(),
                 export_context.instance_abi_requests.len(),
                 export_context.fn_pointer_abi_requests.len(),
+                export_context.helper_signature_requests.len(),
                 export_context.fn_pointer_targets.len(),
                 export_context.runtime_mir_frame_instances.len(),
                 export_context.fn_pointer_cast_inputs.len(),
@@ -6481,6 +6481,7 @@ struct HelperSignature {
 struct FunctionDiscovery<'tcx> {
     type_cursor: usize,
     request_cursor: usize,
+    helper_cursor: usize,
     types: BTreeMap<u64, (Option<u64>, pool_type::FunctionSignature)>,
     completed_abis: HashSet<(ty::Ty<'tcx>, &'tcx ty::List<ty::Ty<'tcx>>)>,
     abis: Vec<(u64, Vec<u64>, u64)>,
@@ -6518,12 +6519,35 @@ fn require_normal_fn_pointer_abi(abi: rustc_abi::ExternAbi) -> Result<(), String
     Ok(())
 }
 
+/// Query the exact constructor before generic signature normalization. rustc
+/// still authors the ABI; the serialized key keeps the source operand types.
+fn record_helper_signature<'tcx>(
+    tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>,
+    state: &mut FunctionDiscovery<'tcx>, signature: ty::FnSig<'tcx>,
+) -> Result<(), String> {
+    if !state.helper_signatures.insert(signature) { return Ok(()); }
+    require_normal_fn_pointer_abi(signature.abi())?;
+    let abi = match tcx.fn_abi_of_fn_ptr(ty::TypingEnv::fully_monomorphized()
+        .as_query_input((ty::Binder::dummy(signature), ty::List::empty()))) {
+        Ok(abi) => fn_abi_json(context, tcx, abi)?,
+        Err(error) => export_failure("main::compiler_function_facts_json",
+            format!("helper dummy signature ABI query failed; {error:?}"))?,
+    };
+    state.helpers.push((fn_sig_json_inner(context, tcx, signature)?, abi));
+    Ok(())
+}
+
 fn compiler_function_facts_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
     state: &mut FunctionDiscovery<'tcx>,
 ) -> Result<(), String> {
     loop {
+        let exact_helpers = context.helper_signature_requests.suffix(state.helper_cursor).to_vec();
+        state.helper_cursor = context.helper_signature_requests.len();
+        for signature in exact_helpers {
+            record_helper_signature(tcx, context, state, signature)?;
+        }
         let mut requests = OrderedSet::default();
         requests.extend(context.fn_pointer_abi_requests.suffix(state.request_cursor).iter().copied());
         state.request_cursor = context.fn_pointer_abi_requests.len();
@@ -6676,6 +6700,7 @@ fn compiler_function_facts_json<'tcx>(
     }
         if state.type_cursor == context.type_ids.len()
             && state.request_cursor == context.fn_pointer_abi_requests.len()
+            && state.helper_cursor == context.helper_signature_requests.len()
         {
             break;
         }

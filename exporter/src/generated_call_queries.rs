@@ -52,6 +52,7 @@ pub(super) fn register_target_call<'tcx>(
                 .set_abi(caller_abi)
                 .set_safety(rustc_hir::Safety::Safe),
         );
+        context.helper_signature_requests.insert(signature);
         let function_ty = ty::Ty::new_fn_ptr(tcx, ty::Binder::dummy(signature));
         let _ = type_json(context, tcx, function_ty)?;
         if target.def.requires_caller_location(tcx) {
@@ -64,6 +65,7 @@ pub(super) fn register_target_call<'tcx>(
                     .set_abi(caller_abi)
                     .set_safety(rustc_hir::Safety::Safe),
             );
+            context.helper_signature_requests.insert(tracked_signature);
             let tracked_function_ty = ty::Ty::new_fn_ptr(tcx, ty::Binder::dummy(tracked_signature));
             let _ = type_json(context, tcx, tracked_function_ty)?;
         }
@@ -173,6 +175,7 @@ pub(super) fn register_runtime_callback_call_types<'tcx>(
                 .set_abi(caller_abi)
                 .set_safety(rustc_hir::Safety::Safe),
         );
+        context.helper_signature_requests.insert(signature);
         let function_ty = ty::Ty::new_fn_ptr(tcx, ty::Binder::dummy(signature));
         let _ = type_json(context, tcx, callback_operand_type)?;
         let _ = type_json(context, tcx, function_ty)?;

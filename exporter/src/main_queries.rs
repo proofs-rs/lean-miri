@@ -91,6 +91,18 @@ fn entry<'tcx>(
                 ) {
                     Ok(Some(instance)) => {
                         let id = context.register_instance(instance);
+                        // eval.rs::call_main uses these actual operand layouts,
+                        // not the normalized parameter types of lang_start.
+                        // In particular retain the original main FnPtr type for
+                        // non-unit Termination results before normalization.
+                        let argv = ty::Ty::new_imm_ptr(tcx,
+                            ty::Ty::new_imm_ptr(tcx, tcx.types.u8));
+                        generated_call_queries::register_target_call(
+                            context, tcx, instance,
+                            vec![fn_pointer, tcx.types.isize, argv, tcx.types.u8],
+                            tcx.types.isize, rustc_abi::ExternAbi::Rust,
+                            ty::TypingEnv::fully_monomorphized(),
+                        )?;
                         // eval.rs::call_main passes a function pointer, argc,
                         // argv, and sigpipe to this exact monomorphized start
                         // function through helpers.rs::call_function. Preserve
