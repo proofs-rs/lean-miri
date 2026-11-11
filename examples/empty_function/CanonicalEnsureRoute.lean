@@ -19,7 +19,7 @@ abbrev initializer (s : Static) :=
 
 theorem fields (s : Static) (metadata : Specification.Metadata s) :
     CanonicalDictionaries.GlobalFields s.prepared.compiler s.prepared.image (leaves s) s.cfg := by
-  apply CanonicalDictionaries.global_fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  apply CanonicalDictionaries.global_fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     (leaves s) (s.capacity-1) metadata.construction s.cfg
   rw [Nat.sub_add_cancel (show 1 ≤ s.capacity from InitializationPrefix.capacity_positive s)]
   exact s.built

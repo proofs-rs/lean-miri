@@ -60,5 +60,37 @@ class ConsumptionTests(unittest.TestCase):
             self.summarize(self.runtime)
 
 
+class ExternalConstantTests(unittest.TestCase):
+    def setUp(self):
+        self.document = {'body_roots': [{'def_path': 'miri_start', 'body': 0}],
+                         'bodies': [{'basic_blocks': [{'constant': {
+                             'kind': 'evaluated_const', 'value': {
+                                 'kind': 'indirect_allocation', 'allocation': 0}}}]}],
+                         'allocations': [{'relocations': [{'target': 1}]}, {'kind': 'vtable'}]}
+        self.mir = 'fn miri_start() {\n _1 = const dependency::OBJECT;\n}'
+
+    def test_resolved_constant_with_independent_compiler_origin(self):
+        MODULE.require_external_constant(self.document, 'dependency::OBJECT', self.mir)
+
+    def test_rejects_unrelated_external_constant(self):
+        with self.assertRaisesRegex(SystemExit, 'lacks external constant'):
+            MODULE.require_external_constant(self.document, 'dependency::OTHER', self.mir)
+
+    def test_rejects_ambiguous_external_origins(self):
+        with self.assertRaisesRegex(SystemExit, 'ambiguous external constant'):
+            MODULE.require_external_constant(self.document, 'dependency::OBJECT',
+                self.mir.replace('\n}', '\n _2 = const other::OBJECT;\n}'))
+
+    def test_rejects_local_unsize_control(self):
+        with self.assertRaisesRegex(SystemExit, 'local vtable'):
+            MODULE.require_external_constant(self.document, 'dependency::OBJECT',
+                                             self.mir.replace('\n}', '\n PointerCoercion(Unsize)\n}'))
+
+    def test_rejects_missing_symbolic_relocation(self):
+        self.document['allocations'][1]['kind'] = 'memory'
+        with self.assertRaisesRegex(SystemExit, 'missing external constant'):
+            MODULE.require_external_constant(self.document, 'dependency::OBJECT', self.mir)
+
+
 if __name__ == '__main__':
     unittest.main()

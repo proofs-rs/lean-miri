@@ -24,10 +24,10 @@ theorem from_force (s : Static) (metadata : Metadata s) (profile : Profile s)
     copyRuntimePlace s.cfg.projection.place s.cfg.copy () ⟨.immediate .uninit,s.abi.ret.layout⟩
       ⟨.local index id (some offset) identity,s.abi.ret.layout⟩ true state = .ok () after := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have built : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have built : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       ((remaining+1)+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig,capacity,Nat.add_assoc] using s.built
-  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves (remaining+1) metadata.construction s.cfg built
   have compatible : s.cfg.copy.compatible s.abi.ret.layout s.abi.ret.layout = .ok true := by
     rw [fields.compatible]
@@ -74,10 +74,10 @@ theorem control_from_force (s : Static) (metadata : Metadata s) (profile : Profi
   have copied := from_force s metadata profile remaining capacity state after index id offset identity place
     layout noMeta aligned forced shallow validated
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have built : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have built : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       ((remaining+1)+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig,capacity,Nat.add_assoc] using s.built
-  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves (remaining+1) metadata.construction s.cfg built
   have compatible : s.cfg.copy.compatible s.abi.ret.layout s.abi.ret.layout = .ok true := by
     rw [fields.compatible]

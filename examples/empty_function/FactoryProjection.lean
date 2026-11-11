@@ -54,7 +54,7 @@ theorem fields_of_make (p : CompilerProviders.Prepared) (image : AllocationImage
 theorem fields (s : Static) (metadata : Metadata s) (capacity : 0 < s.capacity) :
     Fields s.cfg (ConcreteProtection.source s).pointers := by
   obtain ⟨remaining,eq⟩ : ∃ n : Nat, s.capacity = n+1 := ⟨s.capacity-1,by omega⟩
-  exact fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  exact fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     (Configuration.leaves s.prepared s.options.place.debugAssertions) remaining metadata.construction s.cfg
     (by simpa only [Configuration.rootConfig,eq] using s.built)
 end EmptyFunction.FactoryProjection

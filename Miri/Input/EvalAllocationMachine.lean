@@ -31,6 +31,7 @@ def allocation
     (base : PlaceMachine.AllocationConfig MiriMemoryKind (User Os R P H D O Aff B Host)) :
     PlaceMachine.AllocationConfig MiriMemoryKind (User Os R P H D O Aff B Host) :=
   {base with
+    discardUninserted := fun id => modify (fun machine => MemoryExtras.discardUninserted extras id machine)
     allocationTail := fun id _ _ => do
       let selected ← match EvalBackendMachine.handler (← get) with
         | .ok selected => pure selected | .error error => throw error

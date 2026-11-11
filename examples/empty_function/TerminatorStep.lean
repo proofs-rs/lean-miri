@@ -77,11 +77,11 @@ def after (state : WholeCall.State) : WholeCall.State :=
     (unchecked : state.machine.user.payload.payload.user.host.control.checkedArithmetic = false) :
     (ExecutionMachine.stepHooks s.cfg s.limits).beforeTerminator () state = (after state,.ok ()) := by
   obtain ⟨remaining,eq⟩ : ∃ n : Nat, s.capacity = n+1 := ⟨s.capacity-1,by omega⟩
-  have source := source_of_make s.prepared s.bytes s.options remaining metadata.construction s.cfg
+  have source := source_of_make s.prepared s.bytes (EmptyFunction.Configuration.proofOptions s.options) remaining metadata.construction s.cfg
     (by simpa only [Configuration.rootConfig,eq] using s.built)
   change MachineHooks.run (TerminatorMachine.beforeTerminatorWithChoice s.cfg.terminators
     (s.cfg.preemptionChoice ())) state = _
   rw [source]
-  have result := before_fixed s.prepared s.options (s.cfg.preemptionChoice ()) state fixed gc unchecked
+  have result := before_fixed s.prepared (EmptyFunction.Configuration.proofOptions s.options) (s.cfg.preemptionChoice ()) state fixed gc unchecked
   simp only [MachineHooks.run,Call.run,result]
 end EmptyFunction.TerminatorStep

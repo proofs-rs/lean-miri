@@ -445,7 +445,10 @@ def castQuery : Parser (CastQuery) := do
     | "args_no_bound_vars" => return { fields with args := some (← boolean) }
     | "input_source" => return { fields with source := some (← natural) }
     | "input_target" => return { fields with target := some (← natural) }
-    | "value" => return { fields with value := some (← nullable natural) }
+    | "value" =>
+      if (← Std.Internal.Parsec.peek!) == '{' then
+        fail "obsolete wrapped compiler cast query value"
+      return { fields with value := some (← nullable natural) }
     | "source_tail" => return { fields with sourceTail := some (← natural) }
     | "target_tail" => return { fields with targetTail := some (← natural) }
     | "type" => return { fields with output := some (← natural) }

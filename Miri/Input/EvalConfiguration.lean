@@ -70,6 +70,7 @@ def allocation
   maximumObjectSize := maximumObjectSize
   zeroedStorage := storage
   diagnostic := diagnostic
+  discardUninserted := fun id => modify (fun machine => MemoryExtras.discardUninserted extras id machine)
   allocationTail := fun id _ _ => do
     let selected ← match EvalBackendMachine.handler (← get) with
       | .ok selected => pure selected | .error error => throw error

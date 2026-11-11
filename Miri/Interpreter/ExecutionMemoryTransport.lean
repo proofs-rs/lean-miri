@@ -56,6 +56,9 @@ def allocation (h : PlaceMachine.AllocationConfig K (Inner U)) : PlaceMachine.Al
   nativeDrop := h.nativeDrop.map fun drop allocation => action (drop allocation)
   diagnostic := fun id size align => machineAction (h.diagnostic id size align)
   allocationTail := fun id size align => machineAction (h.allocationTail id size align)
+  allocationBacktrace := h.allocationBacktrace.map fun capture id kind => action (capture id kind)
+  allocationSpan := fun id size align => machineAction (h.allocationSpan id size align)
+  discardUninserted := fun id => machineAction (h.discardUninserted id)
   adjustRootAddress := fun id tag => action (h.adjustRootAddress id tag)
 
 def extras (h : MemoryExtras.Hooks K (Inner U) P) : MemoryExtras.Hooks K (Outer U) P where

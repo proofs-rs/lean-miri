@@ -47,6 +47,74 @@ private def options : CoreOptions := {
   userRelevantCrates := #[], ignoreOptionalOverflowChecks := false, panicUnwinds := false
   retag := {implicitWrites := false, preciseInteriorMut := true} }
 
+/-- Explicit UI-comparison configuration; ordinary diagnostic runs retain their defaults. -/
+private structure UiSettings where
+  source : String
+  validation : ValidityMachine.ValidationMode := .Shallow
+  alignment : ValidityMachine.AlignmentCheck := .Int
+  provenance : Miri.Memory.AllocAddresses.ProvenanceMode := .default
+  treeBorrows : Bool := true
+  preciseInteriorMut : Bool := true
+  implicitWrites : Bool := false
+  dataRace : Bool := true
+  weakMemory : Bool := true
+  fixedScheduling : Bool := false
+  deterministicConcurrency : Bool := false
+  ignoreLeaks : Bool := false
+
+private def uiSettings (source flags : String) : Except String UiSettings := do
+  let values ← (← Json.parse flags).getArr?
+  let mut ui : UiSettings := {source}
+  for value in values do
+    let flag ← value.getStr?
+    ui ← match flag with
+      | "-Zmiri-tree-borrows" => pure {ui with treeBorrows := true, preciseInteriorMut := true, implicitWrites := false}
+      | "-Zmiri-disable-stacked-borrows" => pure {ui with treeBorrows := false}
+      | "-Zmiri-tree-borrows-implicit-writes" =>
+        unless ui.treeBorrows do throw "implicit writes requires Tree Borrows"
+        pure {ui with implicitWrites := true}
+      | "-Zmiri-tree-borrows-no-precise-interior-mut" =>
+        unless ui.treeBorrows do throw "precise interior mutability setting requires Tree Borrows"
+        pure {ui with preciseInteriorMut := false}
+      | "-Zmiri-disable-validation" => pure {ui with validation := .No}
+      | "-Zmiri-recursive-validation" => pure {ui with validation := .Deep}
+      | "-Zmiri-disable-alignment-check" => pure {ui with alignment := .None}
+      | "-Zmiri-symbolic-alignment-check" => pure {ui with alignment := .Symbolic}
+      | "-Zmiri-strict-provenance" => pure {ui with provenance := .strict}
+      | "-Zmiri-permissive-provenance" => pure {ui with provenance := .permissive}
+      | "-Zmiri-ignore-leaks" => pure {ui with ignoreLeaks := true}
+      | "-Zmiri-fixed-schedule" => pure {ui with fixedScheduling := true}
+      | "-Zmiri-disable-data-race-detector" => pure {ui with dataRace := false, weakMemory := false}
+      | "-Zmiri-deterministic-concurrency" => pure {ui with fixedScheduling := true, deterministicConcurrency := true, weakMemory := false}
+      | _ => throw s!"unsupported UI runtime setting: {flag}"
+  pure ui
+
+private def uiOptions (ui : UiSettings) : CoreOptions :=
+  { options with
+    place := {options.place with validation := ui.validation}
+    floatNondeterministic := true
+    collectLeakBacktraces := !ui.ignoreLeaks
+    weakFailureRate := if ui.deterministicConcurrency then 0 else 0x3fe999999999999a
+    retag := {implicitWrites := ui.implicitWrites, preciseInteriorMut := ui.preciseInteriorMut} }
+
+private def uiProfile (ui : UiSettings) : Json := Json.mkObj [
+  ("num_cpus", toJson (1 : Nat)), ("environment_policy", toJson ("empty" : String)),
+  ("argv0", toJson ui.source), ("rng_seed", toJson (0 : Nat)),
+  ("choice_policy", toJson ("seeded-generated-0" : String)),
+  ("borrow_tracker", toJson (if ui.treeBorrows then "tree_borrows" else "none" : String)),
+  ("tree_borrows", if ui.treeBorrows then Json.mkObj [
+    ("precise_interior_mut", toJson ui.preciseInteriorMut), ("implicit_writes", toJson ui.implicitWrites)] else .null),
+  ("validation", toJson (match ui.validation with | .No => "No" | .Shallow => "Shallow" | .Deep => "Deep")),
+  ("alignment_check", toJson (match ui.alignment with | .None => "None" | .Symbolic => "Symbolic" | .Int => "Int")),
+  ("provenance_mode", toJson (match ui.provenance with | .default => "Default" | .strict => "Strict" | .permissive => "Permissive")),
+  ("data_race_detector", toJson ui.dataRace), ("weak_memory_emulation", toJson ui.weakMemory),
+  ("fixed_scheduling", toJson ui.fixedScheduling), ("ignore_leaks", toJson ui.ignoreLeaks),
+  ("collect_leak_backtraces", toJson (uiOptions ui).collectLeakBacktraces),
+  ("genmc", toJson false), ("native_libraries", toJson (0 : Nat)),
+  ("short_fd_operations", toJson true), ("float_nondeterminism", toJson true),
+  ("cmpxchg_weak_failure_rate", toJson (if ui.deterministicConcurrency then (0.0 : _root_.Float) else 0.8)),
+  ("address_reuse_cross_thread_rate", toJson (if ui.deterministicConcurrency then (0.0 : _root_.Float) else 0.1))]
+
 private def choiceTape (seed : Option UInt64) (inputs : Array ExecutionChoices.Input) :=
   match seed with
   | none => Input.ExecutionChoicePolicy.unboundedDiagnosticTape inputs
@@ -91,7 +159,7 @@ private def unavailableIoError (os : String) : IoError.Hooks S Unit := {
   writeInt := fun _ _ => unavailable "sync errno memory write" }
 
 private def sourceLeaves (dummy : SpanRef) (geometry : Input.InitialMachine.Geometry)
-    (pageSize : UInt64) (numCpus hostPid : UInt32) : Input.EvalConfigurationCore.SourceLeaves
+    (pageSize : UInt64) (numCpus hostPid : UInt32) (uiMode : Bool) (alignment : ValidityMachine.AlignmentCheck) : Input.EvalConfigurationCore.SourceLeaves
     Os R Payload H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error
     Unit Unit ByteArray Miri.MIR.Place Unit Instant Payload Unit := {
   hostConfiguration := {
@@ -105,7 +173,7 @@ private def sourceLeaves (dummy : SpanRef) (geometry : Input.InitialMachine.Geom
   storage := fun size _ => some (Array.replicate size.bytes.toNat 0)
   spans := ⟨dummy, false⟩
   foreignSource := {
-    shortFdOperations := false
+    shortFdOperations := uiMode
     varArgsBudget := 256
     host := {
       hostOverflowChecks := true
@@ -206,7 +274,7 @@ private def sourceLeaves (dummy : SpanRef) (geometry : Input.InitialMachine.Geom
         interrupted := fun _ => false
         handleAbnormalTermination := id } }
     geometry
-    alignment := .Int
+    alignment
     stringScanBudget := 4096
     pollBudget := 128
     fileReferenceBudget := 4096
@@ -272,7 +340,7 @@ private def summarize (result : Input.EvalSourceRunFinalization.Result OuterStat
 /-- Diagnostics use the stopped frames' exact MIR source spans. This is separate
 from the allocation span hooks and does not change interpreter execution. -/
 private def terminalDiagnostic (prepared : Input.EvalPreparation.Prepared)
-    (result : Input.EvalSourceRunFinalization.Result OuterState) : Lean.Json := Id.run do
+    (result : Input.EvalSourceRunFinalization.Result OuterState) (allocationTraces : Bool := false) : Lean.Json := Id.run do
   let (kind, error, state) := match result with
     | .finished state code => ("exit", toString code, state)
     | .undefinedBehavior state error => ("ub", reprStr error, state)
@@ -296,16 +364,24 @@ private def terminalDiagnostic (prepared : Input.EvalPreparation.Prepared)
         ("file", toJson (prepared.compiler.program.input.files[source.file]?)), ("line", toJson source.start.line),
         ("end_line", toJson source.«end».line), ("column", toJson source.start.column),
         ("lo", toJson source.lo), ("hi", toJson source.hi)]
-  return Lean.Json.mkObj [("kind", toJson kind), ("detail", toJson error),
-    ("frames", .arr frames)]
+  let fields := [("kind", toJson kind), ("detail", toJson error), ("frames", .arr frames)]
+  if !allocationTraces then return Lean.Json.mkObj fields
+  let extras := state.machine.user.user.payload.payload.runtime.extras
+  let traces := extras.allocations.filterMap fun (id, extra) => do
+    let trace ← extra.backtrace
+    return Lean.Json.mkObj [("allocation_id", toJson id.value.toNat),
+      ("frames", .arr (trace.map fun (fnInstance, span) => Lean.Json.mkObj [
+        ("instance_id", toJson fnInstance), ("span_id", toJson span.id)]))]
+  return Lean.Json.mkObj (fields ++ [("allocation_backtraces", .arr traces)])
 
 private def prepareRun (prepared : Input.EvalPreparation.Prepared)
     (initialMemory : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind)
     (pageSize : UInt64) (numCpus hostPid : UInt32) (diagnosticSeed : Option UInt64)
-    (profile : Lean.Options) :
+    (profile : Lean.Options) (ui : Option UiSettings) :
     Except String ((Array ExecutionChoices.Input → Except StepError
       (Input.EvalSourceRunFinalization.Result OuterState)) ×
       (Array ExecutionChoices.Input → Except String String)) := do
+  let options := (ui.map uiOptions).getD options
   let compiler := prepared.compiler
   let dummy := prepared.dummySpan
   let selectedEntry ← (Input.CompilerMain.sourceCompilerEntry compiler.main).mapError toString
@@ -319,15 +395,18 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
       arch == "x86_64" && targetBits == 64 do
     throw s!"fixture requires x86_64-unknown-linux-gnu; got triple={compiler.program.input.producer.targetTriple}, arch={arch}, bits={targetBits}"
   let geometry ← (Input.InitialMachine.geometry targetBits arch false none).mapError reprStr
-  let sourceLeaves := sourceLeaves dummy geometry pageSize numCpus hostPid
+  let sourceLeaves := sourceLeaves dummy geometry pageSize numCpus hostPid ui.isSome ((ui.map (·.alignment)).getD .Int)
   let machineConfig : Input.InitialMachine.Configuration Aff B := {
-    geometry, dummySpan := dummy, provenance := .default, addressMode := .managed
-    addressStop := 18446744073709551615, addressReuse := ⟨0.5, 0.1⟩
-    fixedScheduling := false, trackOutdatedLoads := false, weakMemory := true
-    backend := .vclocks, trackedTags := some #[], validation := .Shallow
-    alignment := .Int, affinity := none, muteOutput := true, hostUsizeBits := 64 }
+    geometry, dummySpan := dummy, provenance := (ui.map (·.provenance)).getD .default, addressMode := .managed
+    addressStop := 18446744073709551615, addressReuse := ⟨0.5, if (ui.map (·.deterministicConcurrency)).getD false then 0 else 0.1⟩
+    fixedScheduling := (ui.map (·.fixedScheduling)).getD false, trackOutdatedLoads := false
+    weakMemory := (ui.map (·.weakMemory)).getD true
+    backend := if (ui.map (·.dataRace)).getD true then .vclocks else .none
+    trackedTags := if (ui.map (·.treeBorrows)).getD true then some #[] else none
+    validation := options.place.validation
+    alignment := (ui.map (·.alignment)).getD .Int, affinity := none, muteOutput := true, hostUsizeBits := 64 }
   let bootstrap : Input.EvalBootstrap.Configuration Os := {
-    arguments := #["/workspace/lean-miri/scratch/main31.rs"], entry := definition, entryType := .rustcMain sigpipe
+    arguments := #[(ui.map (·.source)).getD "/workspace/lean-miri/scratch/main31.rs"], entry := definition, entryType := .rustcMain sigpipe
     communicate := false, forwarded := #[], environment := #[], overrides := #[] }
   let targetFacts ← compiler.externStatics.targetFacts.mapError id
   let startupFacts ← (Input.EvalStartupRuntimeConstruction.prepare compiler).mapError id
@@ -353,7 +432,7 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
       Os R Input.EvalSyncPayload.Payload H D Other Aff B Poll Instant System Native Profiler := {
     reportThreadLeak := unavailable "thread-leak diagnostic reporting"
     reportLeaks := fun _ => unavailable "allocation-leak diagnostic reporting"
-    ignoreLeaksNote := unavailable "ignore-leaks diagnostic reporting"
+    ignoreLeaksNote := if ui.isSome then pure () else unavailable "ignore-leaks diagnostic reporting"
     failureCode := -1 }
   pure (fun inputs =>
     let finalized : EStateM.Result StepError InitTrace
@@ -361,7 +440,7 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
       Input.EvalSourceRunFinalization.runFromSourceAndFinalizeProfiled
       profile prepared prepared.image bytes options sourceLeaves () machineConfig initialMemory arrays
       (choiceTape diagnosticSeed inputs) rawInitHooks bootstrap options.limits 256 0
-      [] false reports
+      [] ((ui.map (·.ignoreLeaks)).getD false) reports
       (some ⟨fun selected => by cases selected; rfl⟩) true ({} : InitTrace)
     match finalized with
     | .ok result trace => if trace.cursor == 2 then .ok result else .error (.invalidProgram "raw init trace not consumed")
@@ -369,7 +448,8 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
     fun inputs => do
       let (initial, trace) ← makeInitial inputs
       let before := preflightSnapshot initial
-      let mismatchedConfiguration := {machineConfig with validation := .No}
+      let mismatchedConfiguration := {machineConfig with validation :=
+        if machineConfig.validation == .No then .Shallow else .No}
       let result := Input.EvalSourceRunConstruction.runFromInitial
         prepared prepared.image bytes options sourceLeaves () mismatchedConfiguration bootstrap
         options.limits 256 0 [] initial
@@ -454,14 +534,17 @@ def main (args : List String) : IO Unit := do
   let profile := if profileEnabled then
     (({} : Lean.Options).setBool `profiler true).set `profiler.threshold (0 : Nat)
     else ({} : Lean.Options)
-  let some path := args.head? | throw (IO.userError "usage: NativeRunner <untouched-export.json|/dev/stdin> [--seed <u64>] [--profile] (gzip streamed externally)")
-  let diagnosticSeed ← match args.drop 1 with
-    | [] => pure none
+  let some path := args.head? | throw (IO.userError "usage: NativeRunner <untouched-export.json|/dev/stdin> [--seed <u64> | --ui-source <source> --ui-flags <JSON-array>] [--profile] (gzip streamed externally)")
+  let (diagnosticSeed, ui) ← match args.drop 1 with
+    | [] => pure (none, none)
     | ["--seed", raw] => do
       let some value := raw.toNat? | throw (IO.userError "--seed expects an unsigned decimal u64")
       if value >= 2^64 then throw (IO.userError "--seed is outside the u64 range")
-      pure (some (UInt64.ofNat value))
-    | _ => throw (IO.userError "usage: NativeRunner <untouched-export.json|/dev/stdin> [--seed <u64>] [--profile] (gzip streamed externally)")
+      pure (some (UInt64.ofNat value), none)
+    | ["--ui-source", source, "--ui-flags", flags] =>
+      let ui ← must (uiSettings source flags)
+      pure (some 0, some ui)
+    | _ => throw (IO.userError "usage: NativeRunner <untouched-export.json|/dev/stdin> [--seed <u64> | --ui-source <source> --ui-flags <JSON-array>] [--profile] (gzip streamed externally)")
   boundary s!"choice_mode={choiceMode diagnosticSeed}; generated_choices=unbounded; byte_length=uncapped; supplied_prefix=preserved"
   boundary "raw_host_poll: finite source initialization replay; no live poll capability"
   boundary "decode: start"
@@ -484,19 +567,21 @@ def main (args : List String) : IO Unit := do
   let callRows := (prepared.compiler.lifecycle.calls.calls.bodies.filter (·.bodyIndex == bodyIndex)).map fun row =>
     s!"fnInstance={reprStr row.fnInstance}, sourceInstanceId={row.sourceInstanceId}, bodyIndex={row.bodyIndex}"
   boundary s!"canonical_body_1814: {reprStr bodySource}; source_rows={reprStr sourceRows}; call_rows={reprStr callRows}"
-  let (pageSize,numCpus) ← captureLinuxProfile
-  IO.println s!"upstream_profile: {(Lean.Json.mkObj [
-    ("num_cpus", toJson numCpus.toNat),
-    ("environment_policy", toJson ("empty" : String)),
-    ("argv0", toJson ("/workspace/lean-miri/scratch/main31.rs" : String)),
-    ("float_nondeterminism", toJson options.floatNondeterministic),
-    ("cmpxchg_weak_failure_rate_bits", toJson options.weakFailureRate.toNat),
-    ("short_fd_operations", toJson false),
-    ("choice_policy", toJson (choiceMode diagnosticSeed))]).compress}"
+  let (pageSize,hostCpus) ← captureLinuxProfile
+  let numCpus := if ui.isSome then 1 else hostCpus
+  let actualProfile := match ui with
+    | some ui => uiProfile ui
+    | none => Lean.Json.mkObj [
+      ("num_cpus", toJson numCpus.toNat), ("environment_policy", toJson ("empty" : String)),
+      ("argv0", toJson ("/workspace/lean-miri/scratch/main31.rs" : String)),
+      ("float_nondeterminism", toJson options.floatNondeterministic),
+      ("cmpxchg_weak_failure_rate_bits", toJson options.weakFailureRate.toNat),
+      ("short_fd_operations", toJson false), ("choice_policy", toJson (choiceMode diagnosticSeed))]
+  IO.println s!"upstream_profile: {actualProfile.compress}"
   let hostPid ← IO.Process.getPID
   boundary "run: start"
   let (execute, checkValidationMismatch) ← must
-    (prepareRun prepared attempt.memory pageSize numCpus hostPid diagnosticSeed profile)
+    (prepareRun prepared attempt.memory pageSize numCpus hostPid diagnosticSeed profile ui)
   let mismatch ← match checkValidationMismatch initialInputs with
     | .ok report => pure report
     | .error error => throw (IO.userError s!"validation preflight regression failed: {error}")
@@ -511,7 +596,7 @@ def main (args : List String) : IO Unit := do
       boundary s!"consumed_tape={reprStr state.machine.user.user.payload.payload.choices.inputs}"
       boundary s!"choice_events={reprStr state.machine.user.user.payload.payload.choices.events}"
       boundary s!"run: {summarize result}"
-      IO.println s!"upstream_result: {(terminalDiagnostic prepared result).compress}"
+      IO.println s!"upstream_result: {(terminalDiagnostic prepared result ui.isSome).compress}"
     match result with
     | .failed state (.callback message) =>
       let some repair := choiceRepair message | return ← finish state

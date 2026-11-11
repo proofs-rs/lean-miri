@@ -56,9 +56,9 @@ theorem convert (s : WholeCall.Static) (p : WholeCall.Packet)
       tracker.global.rootPointerTag id = .ok (global,root) ∧
       GlobalAllocationMachine.adjust s.prepared.compiler.runtime.target.base (extras s) (globalLeaves s) id source p.before.machine =
         .ok (.owned (converted.mapExtra (fun _ => BorrowTree.new root source.byteSize)))
-          (MemoryExtras.putAllocation (extras s) {middle with borrowTracker := some {tracker with global}} id ⟨none,#[]⟩) ∧
+          (MemoryExtras.putAllocation (extras s) {middle with borrowTracker := some {tracker with global}} id {weakMemory := none}) ∧
       TreeRuntimeInput.World
-        (MemoryExtras.putAllocation (extras s) {middle with borrowTracker := some {tracker with global}} id ⟨none,#[]⟩)
+        (MemoryExtras.putAllocation (extras s) {middle with borrowTracker := some {tracker with global}} id {weakMemory := none})
         {tracker with global} ∧ middle.memory = p.before.machine.memory ∧
       global.nextPointerTag.value.toNat ≤ tracker.global.nextPointerTag.value.toNat+1 := by
   have pointerWidth : (CanonicalLatentMemory.source s).address.arithmetic = ⟨Size.ofBytes 8⟩ := by

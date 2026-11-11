@@ -10,7 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 sys.path.insert(0, str(ROOT / 'tests/upstream_ui'))
-from suite import discover, runtime_profile
+from suite import Case, discover, runtime_profile
 
 
 def load(name, filename):
@@ -94,7 +94,9 @@ class CollectionTests(unittest.TestCase):
             native.write_text('#!/usr/bin/env python3\nimport sys, json\n' +
                               'if sys.argv[1] == "--fingerprint":\n    print(' +
                               repr('upstream_fingerprint: ' + json.dumps({'byte_length': 2, 'fnv1a64': hash_value})) +
-                              ')\nelse:\n    print(' + repr('upstream_result: ' + json.dumps(terminal)) + ')\n' +
+                              ')\nelse:\n    assert sys.argv[2:] == ' + repr([
+                                  '--ui-source', str(driver.SOURCES / case.path), '--ui-flags',
+                                  json.dumps(case.runtime_flags)]) + '\n    print(' + repr('upstream_result: ' + json.dumps(terminal)) + ')\n' +
                               '    print(' + repr('upstream_profile: ' + json.dumps(
                                   runtime_profile([]) | {'argv0': str(driver.SOURCES / case.path),
                                                         'choice_policy': 'seeded-generated-0'})) + ')\n')
@@ -106,13 +108,16 @@ class CollectionTests(unittest.TestCase):
             ):
                 exporter = root / f'exporter-{code}-{len(diagnostic)}'
                 exporter.write_text('''#!/usr/bin/env python3
-import json, pathlib, sys
+import json, os, pathlib, sys
+assert os.environ['LEAN_MIRI_REFERENCE_EMPTY_ENV'] == '1'
+assert json.loads(os.environ['LEAN_MIRI_REFERENCE_UI_FLAGS_JSON']) == EXPECTED_RUNTIME_FLAGS
 out = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])
 out.write_text('{}')
 pathlib.Path(str(out) + '.miri-reference.json').write_text(json.dumps(SIDECAR))
 print(DIAGNOSTIC)
 sys.exit(CODE)
-'''.replace('SIDECAR', repr(sidecar)).replace('DIAGNOSTIC', repr(diagnostic)).replace('CODE', str(code)))
+'''.replace('SIDECAR', repr(sidecar)).replace('DIAGNOSTIC', repr(diagnostic)).replace('CODE', str(code))
+                    .replace('EXPECTED_RUNTIME_FLAGS', repr(case.runtime_flags)))
                 exporter.chmod(0o700)
                 output = root / f'run-{code}-{len(diagnostic)}'
                 output.mkdir()
@@ -131,6 +136,31 @@ sys.exit(CODE)
         self.assertFalse(driver.runner_profile_matches(case, source, profile))
         profile['choice_policy'] = 'seeded-generated-0'
         self.assertTrue(driver.runner_profile_matches(case, source, profile))
+
+    def test_runner_profile_diagnostics_show_missing_fields_and_actual_choice_policy(self):
+        case = Case('pass/test.rs')
+        source = driver.SOURCES / case.path
+        observed = runtime_profile([]) | {'argv0': str(source),
+                                          'choice_policy': 'bounded-diagnostic-zero'}
+        del observed['short_fd_operations']
+        self.assertEqual(driver.runner_profile_differences(case, source, observed), {
+            'short_fd_operations': {'expected': True, 'actual': None, 'missing': True},
+            'choice_policy': {'expected': 'seeded-generated-0',
+                              'actual': 'bounded-diagnostic-zero', 'missing': False},
+        })
+        self.assertFalse(driver.runner_profile_matches(case, source, observed))
+
+    def test_missing_allocation_backtrace_collection_is_not_claimed_as_enabled(self):
+        case = Case('pass/test.rs')
+        source = driver.SOURCES / case.path
+        observed = runtime_profile([]) | {'argv0': str(source),
+            'choice_policy': 'seeded-generated-0', 'collect_leak_backtraces': False}
+        self.assertEqual(driver.runner_profile_differences(case, source, observed), {
+            'collect_leak_backtraces': {'expected': True, 'actual': False, 'missing': False}})
+        self.assertFalse(driver.runner_profile_matches(case, source, observed))
+        ignored = Case(case.path, runtime_flags=['-Zmiri-ignore-leaks'])
+        observed['ignore_leaks'] = True
+        self.assertTrue(driver.runner_profile_matches(ignored, source, observed))
 
 
 if __name__ == '__main__':

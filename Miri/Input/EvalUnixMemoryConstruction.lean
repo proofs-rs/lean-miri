@@ -36,8 +36,8 @@ private def allocationForKind
     M U (PlaceMachine.AllocationConfig MiriMemoryKind (PointerMachine.User U)) := do
   let context ← get
   let config := memory.allocation
-  let tail := fun id size align => do
-    config.allocationTail id size align
+  let spanTail := fun id size align => do
+    config.allocationSpan id size align
     if kind.shouldSaveAllocationSpan then
       let machine ← get
       let span ← match AllocationDriver.currentUserRelevantSpan spans {context with machine} with
@@ -45,7 +45,7 @@ private def allocationForKind
         | .error error state => set state.machine; throw error
       modify fun state => {state with allocationSpans :=
         (state.allocationSpans.filter fun entry => entry.1 != id).push (id,span,none)}
-  pure {config with allocationTail := tail}
+  pure {config with allocationSpan := spanTail}
 
 private def allocationCreation
     (memory : EvalHostRuntimeConstruction.EnvironmentMemory U C Payload)

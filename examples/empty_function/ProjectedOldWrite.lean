@@ -43,7 +43,7 @@ theorem diagnostic (s : Static) (maximum : Size) (machine : MachineHooks.Machine
  theorem weak_write (s : Static) (maximum : Size) (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (id : AllocId) (range : AllocRange)
     (extra : machine.user.payload.payload.user.runtime.extras.allocations.find? (fun entry => entry.1 == id) =
-      some (id,⟨none,#[]⟩)) :
+      some (id,{weakMemory := none})) :
     (access s maximum).weakMemoryWrite id range machine = .ok () machine := by
   simp [access,EvalAccessMachine.make,EvalBackendMachine.access,ProjectedAllocation.extras,EvalCoreMachine.extras,
     MemoryExtras.nonAtomicWrite,MemoryExtras.lookup,extra,
@@ -53,7 +53,7 @@ theorem diagnostic (s : Static) (maximum : Size) (machine : MachineHooks.Machine
  theorem sync_write (s : Static) (maximum : Size) (machine : MachineHooks.MachineState MiriMemoryKind RootUser)
     (id : AllocId) (range : AllocRange)
     (extra : machine.user.payload.payload.user.runtime.extras.allocations.find? (fun entry => entry.1 == id) =
-      some (id,⟨none,#[]⟩)) :
+      some (id,{weakMemory := none})) :
     (access s maximum).syncAccess true id range machine = .ok () machine := by
   simp [access,EvalAccessMachine.make,EvalBackendMachine.access,ProjectedAllocation.extras,EvalCoreMachine.extras,
     MemoryExtras.syncAccess,MemoryExtras.accessHooks,MemoryExtras.lookup,extra,Concurrency.SyncObject.onMemoryAccess,
@@ -65,7 +65,7 @@ theorem before_write (s : Static) (metadata : Metadata s) (capacity : 0 < s.capa
     (ghost : Bool) (backend : machine.user.payload.payload.user.backend = .none)
     (noClocks : machine.dataRace = none)
     (extra : machine.user.payload.payload.user.runtime.extras.allocations.find? (fun entry => entry.1 == id) =
-      some (id,⟨none,#[]⟩)) :
+      some (id,{weakMemory := none})) :
     PlaceMachine.memoryAccess {s.cfg.access with ghostMode := ghost} true ⟨machine,none⟩
       (BorrowTree.new tag size) id (.concrete tag) (allocRange Size.ZERO size) =
       ⟨⟨machine,none⟩,BorrowTree.new tag size,.ok ()⟩ := by
@@ -131,7 +131,7 @@ theorem allocation_access (s : Static) (metadata : Metadata s) (capacity : 0 < s
     (last : (machine.memory.live.filter (fun row => row.1 != id)).push (id,entry) = machine.memory.live)
     (backend : machine.user.payload.payload.user.backend = .none) (noClocks : machine.dataRace = none)
     (extra : machine.user.payload.payload.user.runtime.extras.allocations.find? (fun row => row.1 == id) =
-      some (id,⟨none,#[]⟩)) :
+      some (id,{weakMemory := none})) :
     AllocationAccess.getPtrAllocMut machine.memory (⟨machine,none⟩ : PlaceMachine.AccessState MiriMemoryKind RootUser)
       ⟨s.prepared.compiler.runtime.target.pointerSize⟩
       (Pointer.new (some (.concrete id tag)) (Size.ofBytes base)) size false s.cfg.access.globalKind
@@ -183,7 +183,7 @@ theorem get_place (s : Static) (metadata : Metadata s) (capacity : 0 < s.capacit
     (last : (machine.memory.live.filter (fun row => row.1 != id)).push (id,entry) = machine.memory.live)
     (backend : machine.user.payload.payload.user.backend = .none) (noClocks : machine.dataRace = none)
     (extra : machine.user.payload.payload.user.runtime.extras.allocations.find? (fun row => row.1 == id) =
-      some (id,⟨none,#[]⟩)) :
+      some (id,{weakMemory := none})) :
     getPlaceAllocMut machine.memory (⟨machine,none⟩ : PlaceMachine.AccessState MiriMemoryKind RootUser)
       ⟨⟨Pointer.new (some (.concrete id tag)) (Size.ofBytes base),.none,none⟩,localMemoryLayout layout⟩
       s.cfg.access.runtime false s.cfg.access.globalKind s.cfg.access.globalHooks

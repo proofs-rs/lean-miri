@@ -149,7 +149,7 @@ set_option linter.unusedSimpArgs false
 
 theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s)
     (remaining : Nat) (config : WholeCall.Config)
-    (built : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options
+    (built : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
       (Configuration.leaves s.prepared s.options.place.debugAssertions) () (remaining+1) = .ok config)
     (state : WholeCall.State) (reference : RuntimePlaceRef Provenance) (place : MPlaceTy Provenance)
     (readQuery : config.validity.toOp () ⟨reference,place.layout⟩ (BodyValidation.active state) =
@@ -161,11 +161,11 @@ theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s
     ValidityVisitor.validatePlace config.validity () (fuel+1) (⟨reference,place.layout⟩ : RuntimePlace Provenance) false true state =
       .ok () state := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have methods := BodyDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have methods := BodyDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves remaining metadata.construction config built
-  have memory := ReturnMemory.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have memory := ReturnMemory.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves remaining metadata.construction config built
-  have dictionaries := CanonicalDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have dictionaries := CanonicalDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves remaining metadata.construction config built
   have classifyEq : config.validity.classify =
       (CompilerFactAdapters.validityHooks s.prepared.compiler.lifecycle.calls.symbols.facts config.validity).classify :=
@@ -208,7 +208,7 @@ theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s
     (positive : 0 < s.options.limits.validation)
     (state : WholeCall.State) (reference : RuntimePlaceRef Provenance) (memory : MemPlace Provenance)
     (inner : WholeCall.Config)
-    (innerBuilt : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options
+    (innerBuilt : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
       (Configuration.leaves s.prepared s.options.place.debugAssertions) () (remaining+1) = .ok inner)
     (readQuery : inner.validity.toOp () ⟨reference,s.abi.ret.layout⟩ (BodyValidation.active state) =
       .ok ⟨.indirect memory,s.abi.ret.layout⟩ (BodyValidation.active state))
@@ -220,11 +220,11 @@ theorem canonical_unit (s : Static) (metadata : Metadata s) (profile : Profile s
       state =
       .ok () state := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       ((remaining+1)+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig, capacity, Nat.add_assoc] using s.built
   have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes
-    s.options leaves (remaining+1) metadata.construction s.cfg outer
+    (EmptyFunction.Configuration.proofOptions s.options) leaves (remaining+1) metadata.construction s.cfg outer
   obtain ⟨node, nodeFound⟩ := metadata.unitNode
   have budget : s.options.limits.validation = (s.options.limits.validation-1)+1 := by omega
   have valid := canonical_unit s metadata profile remaining inner innerBuilt state reference ⟨memory,s.abi.ret.layout⟩
@@ -259,12 +259,12 @@ theorem validate_projected (s : Static) (metadata : Metadata s) (profile : Profi
       (LocalUnit.current frames frame machine) = .ok () (LocalUnit.current frames frame machine) := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
   obtain ⟨inner,built,_⟩ := CanonicalDictionaries.make_fields s.prepared.compiler s.prepared.image
-    s.bytes s.options leaves remaining metadata.construction
+    s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves remaining metadata.construction
   let active := {machine with user := {machine.user with payload := {machine.user.payload with ghost := true}}}
-  have read := read_of_make s.prepared.compiler s.prepared.image s.bytes s.options leaves remaining metadata.construction
+  have read := read_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves remaining metadata.construction
     inner built frames frame active base s.abi.ret.layout amount id slot memory shifted atSlot live cache profile.debug
     metadata.unitSized noClocks inbounds
-  have forced := force_of_make s.prepared.compiler s.prepared.image s.bytes s.options leaves remaining metadata.construction
+  have forced := force_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves remaining metadata.construction
     inner built frames frame active s.abi.ret.layout amount id slot memory shifted atSlot live profile.debug
     metadata.unitSized noClocks wrapping
   exact validate_from_queries s metadata profile remaining capacity positive (LocalUnit.current frames frame machine)

@@ -32,12 +32,12 @@ def control (s : Static) : ControlHooks Provenance LocalLayout MachineHooks.Fram
     (control s).returnOperand () (BodyStep.current frames frame machine) =
       (BodyStep.current frames frame machine,.ok ⟨.immediate .uninit,s.abi.ret.layout⟩) := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       ((remaining+1)+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig,capacity,Nat.add_assoc] using s.built
-  have place := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have place := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves (remaining+1) metadata.construction s.cfg outer
-  have dictionaries := CanonicalDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have dictionaries := CanonicalDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves (remaining+1) metadata.construction s.cfg outer
   change MachineHooks.run (s.cfg.projection.place.localToOp () 0) _ = _
   rw [place.projection]
@@ -93,10 +93,10 @@ private theorem bound_copy (s : Static) (layout : LocalLayout) (place : MPlaceTy
     (shallow : state.machine.user.payload.validation = .Shallow) :
     (control s).copyReturn () ⟨.immediate .uninit,s.abi.ret.layout⟩ (.memory place) state = (state,.ok ()) := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       ((remaining+1)+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig,capacity,Nat.add_assoc] using s.built
-  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves (remaining+1) metadata.construction s.cfg outer
   have compatible : s.cfg.copy.compatible s.abi.ret.layout s.abi.ret.layout = .ok true := by
     rw [fields.compatible]
@@ -120,10 +120,10 @@ private theorem bound_copy (s : Static) (layout : LocalLayout) (place : MPlaceTy
     (varargs : frame.vaList = #[]) :
     (control s).cleanupFrame () false frame state = (state,.ok .normal) := by
   let leaves := Configuration.leaves s.prepared s.options.place.debugAssertions
-  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes s.options leaves ()
+  have outer : EvalConfigurationCore.make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options) leaves ()
       ((remaining+1)+1) = .ok s.cfg := by
     simpa only [Configuration.rootConfig,capacity,Nat.add_assoc] using s.built
-  have fields := ReturnMemory.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have fields := ReturnMemory.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     leaves (remaining+1) metadata.construction s.cfg outer
   change MachineHooks.run (CallMachine.cleanup s.cfg.lifecycle () false frame) state = _
   simp [MachineHooks.run,Call.run,CallMachine.cleanup,continuation,locals,varargs,fields.afterPop,

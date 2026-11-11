@@ -61,7 +61,7 @@ theorem stable (s : Static) (before middle : ChoiceExecution.S)
     (context : RelocationContext.view middle.user.payload = RelocationContext.view before.user.payload) :
     ProtectionOutcome.Stable before
       (GlobalErrorAware.installed
-        (MemoryExtras.putAllocation (extras s) {middle with borrowTracker := some {tracker with global}} id ⟨none,#[]⟩)
+        (MemoryExtras.putAllocation (extras s) {middle with borrowTracker := some {tracker with global}} id {weakMemory := none})
         id .global allocation) := by
   refine ⟨threads,race,?_,?_,?_⟩
   · exact congrArg (fun view => view.2.1) context
@@ -73,7 +73,7 @@ theorem addresses (s : Static) (middle : ChoiceExecution.S)
     (tracker : MachineHooks.BorrowState) (global : GlobalState) (id : AllocId)
     (allocation : Allocation Provenance BorrowTree) :
     (GlobalErrorAware.installed
-      (MemoryExtras.putAllocation (extras s) {middle with borrowTracker := some {tracker with global}} id ⟨none,#[]⟩)
+      (MemoryExtras.putAllocation (extras s) {middle with borrowTracker := some {tracker with global}} id {weakMemory := none})
       id .global allocation).user.addresses = middle.user.addresses := rfl
 
 /-- Ordinary owned source insertion preserves all current live tree witnesses. -/

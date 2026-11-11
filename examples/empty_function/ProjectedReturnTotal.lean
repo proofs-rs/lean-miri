@@ -44,7 +44,7 @@ theorem copy (s : Static) (metadata : Metadata s) (profile : Profile s)
     have forced := ProjectedForceTotal.allocation_error s.cfg.access s.cfg.allocation s.cfg.compiler () older frame machine
       destination.localId {destination.slot with layout := some destination.baseLayout} destination.baseLayout s.abi.ret.layout value
       atSlot live rfl destination.baseSized (dictionaries.debug.trans profile.debug) error failed allocationError (some offset) frame.localsIdentity
-    have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+    have fields := BodyPlaceDictionaries.fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
       (Configuration.leaves s.prepared s.options.place.debugAssertions) (remaining+1) metadata.construction s.cfg
       (by simpa only [Configuration.rootConfig,capacityEq,Nat.add_assoc] using s.built)
     rw [←fields.projection] at forced

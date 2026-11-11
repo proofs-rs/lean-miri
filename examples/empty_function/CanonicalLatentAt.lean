@@ -33,7 +33,7 @@ theorem ensure (s : WholeCall.Static) (p : WholeCall.Packet)
       (afterTracker : MachineHooks.BorrowState) (global : GlobalState) (root : BorTag),
       RelocationByteFold.Attributes source converted ∧
       let allocation := converted.mapExtra (fun _ => BorrowTree.new root source.byteSize)
-      let adjusted := MemoryExtras.putAllocation (extras s) {middle with borrowTracker := some {afterTracker with global}} id ⟨none,#[]⟩
+      let adjusted := MemoryExtras.putAllocation (extras s) {middle with borrowTracker := some {afterTracker with global}} id {weakMemory := none}
       let installed := LatentInstallPost.installed adjusted id .global allocation
       s.cfg.retag.ensureTreeExtra id current = .ok () {current with machine := installed} ∧
       installed.memory.live.find? (fun row => row.1 == id) = some (id,⟨.machine .global,allocation⟩) ∧
@@ -74,7 +74,7 @@ theorem ensure (s : WholeCall.Static) (p : WholeCall.Packet)
     (CanonicalDictionaries.global_bytes_prepare s.prepared.compiler s.prepared.image s.prepared s.options.place.debugAssertions
       id (RelocationBytePrimitives.snapshot source) source.align) rfl actualConversion attributes middleWorld tagOne middleRace middleVacant
   let allocation := converted.mapExtra (fun _ => BorrowTree.new root source.byteSize)
-  let after := MemoryExtras.putAllocation (extras s) {middle with borrowTracker := some {afterTracker with global}} id ⟨none,#[]⟩
+  let after := MemoryExtras.putAllocation (extras s) {middle with borrowTracker := some {afterTracker with global}} id {weakMemory := none}
   have actual := LatentInstallPost.ensure s.prepared.compiler.runtime.target.base (extras s) (globalLeaves s)
     (fun memory state definition =>
       let result := s.prepared.image.evaluateStaticInitializer {state with machine := {state.machine with memory}} definition
@@ -89,7 +89,7 @@ theorem ensure (s : WholeCall.Static) (p : WholeCall.Packet)
     have capacity := resources.capacity
     unfold Specification.work at reserve
     omega
-  have fields := CanonicalDictionaries.global_fields_of_make s.prepared.compiler s.prepared.image s.bytes s.options
+  have fields := CanonicalDictionaries.global_fields_of_make s.prepared.compiler s.prepared.image s.bytes (EmptyFunction.Configuration.proofOptions s.options)
     (leaves s) (s.capacity-1) metadata.construction s.cfg
       (by rw [Nat.sub_add_cancel capacityPositive]; exact s.built)
   have framePost := RootFramePost.trans tracker.global afterTracker.global global (middleFrame tracker world.enabled)
