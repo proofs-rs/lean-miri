@@ -61,7 +61,7 @@ structure Resolution where
   callee : CallInstance
   sourceInstanceId : InstanceId
   function : MIR.Operand
-  abi : Nat
+  abi : CallAbiEvidence
   source : CallResolutionEvidence
 structure Entry where
   site : Site
@@ -87,14 +87,23 @@ structure Prepared where
 private def decodeResolution (instances : Array InstanceNode)
     (function : MIR.Operand) (source : CallResolutionEvidence) : Result Resolution := do
   let virtual := source.kind == .virtualDispatch
-  unless source.kind == .direct || virtual do throw "callee is not a compiler instance dispatch"
+  unless source.kind == .direct || source.kind == .llvmIntrinsic || virtual do throw "callee is not a compiler instance dispatch"
   let callee ← require source.instanceId "missing compiler call instance ID"
-  match ← CompilerInstance.kindOf instances callee with
+  let calleeKind ← CompilerInstance.kindOf instances callee
+  let isLlvm := match calleeKind with | .LlvmIntrinsic _ => true | _ => false
+  unless (source.kind == .llvmIntrinsic) == isLlvm do
+    throw "LLVM call tag/canonical instance mismatch"
+  match calleeKind with
+  | .LlvmIntrinsic _ =>
+    unless source.kind == .llvmIntrinsic && source.abi == .llvmIntrinsic do
+      throw "LLVM intrinsic requires exact no-ABI evidence"
   | .Virtual _ slot =>
     unless virtual do throw "virtual instance lacks virtual-dispatch query tag"
     unless source.dispatchSlot == some slot do throw "virtual dispatch slot/instance mismatch"
   | _ => unless !virtual do throw "virtual dispatch query did not return a Virtual instance"
-  pure ⟨callee,callee,function,source.fnAbiId,source⟩
+  unless source.kind == .llvmIntrinsic do
+    let .normal _ := source.abi | throw "ordinary call lacks compiler ABI evidence"
+  pure ⟨callee,callee,function,source.abi,source⟩
 
 /-- Resolution reads decoded canonical identities; existing IDs never move.
 Query failures are retained per call site, without deleting the imported MIR. -/
@@ -122,7 +131,8 @@ private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgr
             let typeId ← require sourceResolution.functionType "indirect function type is missing"
             let sourceType ← require program.input.types[typeId]? "indirect function type is missing"
             unless sourceType.shapeKind == TypeShapeKind.functionPointer do throw "indirect dispatch metadata is not a function-pointer type"
-            pure (typeId,sourceResolution.fnAbiId)
+            let .normal abi := sourceResolution.abi | throw "indirect call is missing its ordinary ABI"
+            pure (typeId,abi)
           match result with
           | .error message =>
             obligations := obligations.push ⟨s!"body[{index}].block[{blockIndex}].indirect",message⟩
@@ -179,7 +189,8 @@ def abiOfInstance (prepared : Prepared) (fnInstance : CallInstance) (extraArgs :
   for entry in prepared.entries do
     if let .ok resolution := entry.outcome then
       if resolution.callee == fnInstance then
-        let abi ← functionAbiId prepared.runtime resolution.abi
+        let .normal id := resolution.abi | continue
+        let abi ← functionAbiId prepared.runtime id
         if let some old := found then
           if old != abi then throw "conflicting compiler FnAbi queries for one complete instance"
         found := some abi

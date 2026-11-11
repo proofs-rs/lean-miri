@@ -240,7 +240,7 @@ mod semantic_tests {
 
     #[test]
     fn complete_layout_equality_preserves_every_original_layout_slot() {
-        use crate::pool_layout::{BackendRepr, Fields, Layout, Variants};
+        use crate::pool_layout::{BackendRepr, FieldOffsets, Fields, Layout, Variants};
         let layout = |seed| {
             Shared::from(Layout {
                 size_bytes: 0,
@@ -250,7 +250,7 @@ mod semantic_tests {
                 repr_c: false,
                 uninhabited: false,
                 fields: Fields::Primitive { field_count: 0 },
-                field_offsets_bytes: vec![],
+                field_offsets_bytes: FieldOffsets::Explicit(vec![]),
                 variants: Variants::Single { variant_index: 0 },
                 backend_repr: BackendRepr::Memory { sized: true },
                 largest_niche: None,
@@ -268,6 +268,32 @@ mod semantic_tests {
         assert_eq!(payload[0]["max_repr_align_bytes"], serde_json::Value::Null);
         assert_eq!(payload[0]["repr_c"], false);
         assert_eq!(payload[0]["field_offsets_bytes"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn compact_array_formula_equality_includes_stride_and_count() {
+        use crate::pool_layout::FieldOffsets;
+        let formula = |stride, count| {
+            Shared::from(FieldOffsets::ArrayFormula {
+                kind: "array",
+                stride_bytes: stride,
+                field_count: count,
+            })
+        };
+        let mut slots = vec![
+            formula(4, 1_000_000),
+            formula(4, 1_000_000),
+            formula(8, 1_000_000),
+            formula(4, 999_999),
+        ];
+        let mut pool = Payloads::default();
+        for slot in &mut slots {
+            pool.share(slot).unwrap();
+        }
+        assert_eq!(serde_json::to_string(&slots).unwrap(), "[0,0,1,2]");
+        let payload = serde_json::to_string(&pool).unwrap();
+        assert!(payload.len() < 250);
+        assert_eq!(pool.values.len(), 3);
     }
 
     #[test]

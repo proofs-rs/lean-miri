@@ -11,7 +11,7 @@ for test in tests/regression/*.lean MiriTests/Regression/*.lean; do
   printf 'Checking %s\n' "$test"
   lake env lean "$test" || status=1
 done
-# Consume pinned schema-9 unit inputs copied byte for byte above. These are
+# Consume pinned schema-10 unit inputs copied byte for byte above. These are
 # retained unit inputs, not fresh producer/Miri comparisons.
 lake env lean --run tests/regression/LowerContext.lean \
   scratch/regression-inputs/u32.checked.json || status=1
@@ -27,7 +27,9 @@ done
 lake env lean --run MiriTests/DataRace/ThreadClockReuseReachability.lean || status=1
 lake env lean --run tests/input/AllocationBacktrace.lean || status=1
 lake env lean --run tests/memory_operand/WriteUninit.lean || status=1
+lake env lean --run tests/input/CompactArrayOffsets.lean || status=1
 for test in KeyedArray166QA MemoryState166QA; do
   lake env lean --run "MiriTests/Connected/Focused/$test.lean" || status=1
 done
+lake env lean --run tests/input/LlvmSymbolRegistry.lean || status=1
 exit "$status"

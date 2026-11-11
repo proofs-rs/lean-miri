@@ -312,7 +312,8 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
   let compilerAllocIdWorld := d.compilerAllocIdWorld
   let selectedScope := d.selectedScope
   if schema != expectedSchema then throw s!"$.schema: expected `{expectedSchema}`"
-  if schemaVersion != expectedSchemaVersion then throw "$.schema_version: unsupported schema version"
+  unless schemaVersion == expectedSchemaVersion do
+    throw "$.schema_version: unsupported schema version"
   if producer.miriCommit != expectedMiriCommit then throw "$.producer.miri_commit: input is from the wrong pinned Miri revision"
   if producer.rustcCommit != expectedRustcCommit then throw "$.producer.rustc_commit: input is from the wrong pinned rustc revision"
   unless compilerAbiLayoutSchema == some expectedCompilerAbiLayoutSchema do

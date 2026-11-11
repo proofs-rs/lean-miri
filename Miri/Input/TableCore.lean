@@ -15,7 +15,7 @@ open Lean
 def expectedMiriCommit : String := "7fa591d7d4dd9af8154becbc8332f8096f8323b1"
 def expectedRustcCommit : String := "8144389c895da997dbdecaa635e41d6a50be6ffd"
 def expectedSchema : String := "lean-miri-rustc-mir"
-def expectedSchemaVersion : Nat := 9
+def expectedSchemaVersion : Nat := 10
 def expectedCompilerAbiLayoutSchema : String := "physical_ty_and_layout_v1"
 
 def escapePathKey (key : String) : String :=
@@ -527,9 +527,25 @@ def parseVariantsLayout (path : String := "$parseVariantsLayout") : Parser (Vari
   return {
     kind, variantIndex, tag, tagEncoding, tagFieldIndex, variants }
 
+private structure ArrayOffsetFormulaFields where
+  kind : Option String := none
+  stride : Option Nat := none
+  count : Option Nat := none
+
+def parseLayoutFieldOffsets : Parser LayoutFieldOffsets := do
+  if (← Std.Internal.Parsec.peek!) == '[' then return .explicit (← array natural)
+  let fields ← object ({} : ArrayOffsetFormulaFields) fun fields key => do
+    match key with
+    | "kind" => return { fields with kind := some (← string) }
+    | "stride_bytes" => return { fields with stride := some (← natural) }
+    | "field_count" => return { fields with count := some (← natural) }
+    | _ => skipValue; pure fields
+  unless (← required fields.kind "kind") == "array" do fail "unknown field offset formula kind"
+  return .arrayFormula (← required fields.stride "stride_bytes") (← required fields.count "field_count")
+
 private structure parseLayoutFields where
   «kind» : Option (String) := none
-  «field_offsets_bytes» : Option (Array (Nat)) := none
+  «field_offsets_bytes» : Option LayoutFieldOffsets := none
   «fields» : Option (Option (FieldShape)) := none
   «variants» : Option (Option (VariantsLayout)) := none
   «backend_repr» : Option (Option (BackendRepr)) := none
@@ -546,7 +562,7 @@ def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
   let s ← object (parseLayoutFields.mk none none none none none none none none none none none none none) fun s key => do
     match key with
     | "kind" => return { s with «kind» := some (← string) }
-    | "field_offsets_bytes" => return { s with «field_offsets_bytes» := some (← array (natural)) }
+    | "field_offsets_bytes" => return { s with «field_offsets_bytes» := some (← parseLayoutFieldOffsets) }
     | "fields" => return { s with «fields» := some (← nullable (parseFieldShape)) }
     | "variants" => return { s with «variants» := some (← nullable (parseVariantsLayout)) }
     | "backend_repr" => return { s with «backend_repr» := some (← nullable (parseBackendRepr)) }
@@ -572,7 +588,7 @@ def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
   if fields.isNone || variantsLayout.isNone || backendRepresentation.isNone then
     fail s!"{path}: supported layout is missing field/variant/backend representation data"
   if let some shape := fields then
-    if shape.fieldCount != offsets.size then fail s!"{path}: field shape count does not match field_offsets_bytes"
+    liftExcept (offsets.validate shape)
   let variantsKind := variantsLayout.map (·.kind)
   let variants : Option TaggedNode := variantsKind.map fun k => ⟨match k with
     | .single => "single" | .multiple => "multiple" | .empty => "empty"⟩

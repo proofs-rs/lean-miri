@@ -80,7 +80,7 @@ fn export_failure<T>(context: &str, details: impl std::fmt::Display) -> Result<T
 
 const EXPECTED_RUSTC_COMMIT: &str = "8144389c895da997dbdecaa635e41d6a50be6ffd";
 const MIRI_COMMIT: &str = "7fa591d7d4dd9af8154becbc8332f8096f8323b1";
-const ROOT_SCHEMA_VERSION: u64 = 9;
+const ROOT_SCHEMA_VERSION: u64 = 10;
 
 struct Options {
     output: PathBuf,
@@ -4998,6 +4998,13 @@ fn resolve_callee_json<'tcx>(
             match ty::Instance::try_resolve(tcx, body.typing_env(tcx), def, args.skip_binder()) {
                 Ok(Some(instance)) => {
                     let instance_id = context.register_instance(instance);
+                    // Pinned step.rs deliberately has no FnAbi for LLVM intrinsics.
+                    // Their source signature and exact identity are still serialized.
+                    if matches!(instance.def, ty::InstanceKind::LlvmIntrinsic(_)) {
+                        return Ok(Callee::LlvmIntrinsic {
+                            function_type: type_json(context, tcx, func_ty)?, instance_id,
+                        });
+                    }
                     // step.rs derives extra arguments from the normalized original
                     // function signature, not the callee's ABI argument count.
                     let signature = tcx.try_normalize_erasing_regions(
@@ -5090,6 +5097,7 @@ fn resolve_callee_json<'tcx>(
             ) {
                 Ok(signature) => {
                     let signature = tcx.instantiate_bound_regions_with_erased(signature);
+                    require_normal_fn_pointer_abi(signature.abi())?;
                     match call_args.get(signature.inputs().len()..) {
                         Some(extra) => {
                             let extra = tcx.mk_type_list_from_iter(
@@ -6012,7 +6020,7 @@ fn compiler_instance_abis_json<'tcx>(
         // `(instance, extra_args)` request above, which remains in `requests`.
         if matches!(
             instance.def,
-            ty::InstanceKind::Shim(ty::ShimKind::VTable(_))
+            ty::InstanceKind::Shim(ty::ShimKind::VTable(_)) | ty::InstanceKind::LlvmIntrinsic(_)
         ) {
             continue;
         }
@@ -6484,6 +6492,17 @@ impl FunctionDiscovery<'_> {
         }
     }
 }
+// LLVM intrinsic signatures deliberately have no ordinary FnPtr ABI. Source
+// step.rs avoids that query for FnDef LLVM dispatch; an actual FnPtr request
+// must fail closed rather than entering rustc's assertion in abi.rs.
+fn require_normal_fn_pointer_abi(abi: rustc_abi::ExternAbi) -> Result<(), String> {
+    if abi == rustc_abi::ExternAbi::LlvmIntrinsic {
+        return export_failure("main::fn_pointer_abi_query",
+            "FnPtr ABI query is not defined for LLVM intrinsic signatures");
+    }
+    Ok(())
+}
+
 fn compiler_function_facts_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     context: &mut ExportContext<'tcx>,
@@ -6510,7 +6529,12 @@ fn compiler_function_facts_json<'tcx>(
         state.type_cursor = type_end;
         let helper_inputs = pending.clone();
         for (id, input) in pending {
-            if matches!(input.kind(), ty::FnPtr(..)) { requests.insert((input, ty::List::empty())); }
+            // Retain every signature as metadata. Only the undefined LLVM
+            // ABI is excluded from automatic empty-argument query discovery;
+            // explicit runtime requests above still reach the fail-closed guard.
+            if matches!(input.kind(), ty::FnPtr(..))
+                && input.fn_sig(tcx).skip_binder().abi() != rustc_abi::ExternAbi::LlvmIntrinsic
+            { requests.insert((input, ty::List::empty())); }
             let closed = !input.has_non_region_param()
                 && !input.has_escaping_bound_vars()
                 && !input.has_infer()
@@ -6554,7 +6578,8 @@ fn compiler_function_facts_json<'tcx>(
         let closed=!input.has_non_region_param() && !input.has_escaping_bound_vars() && !input.has_infer() && !input.has_placeholders()
             && !extra.has_non_region_param() && !extra.has_escaping_bound_vars() && !extra.has_infer() && !extra.has_placeholders();
         let abi=if !closed {unavailable_compiler_fact("FnPtr ABI requires a complete monomorphic function type and extra argument vector")?}
-        else{match tcx.fn_abi_of_fn_ptr(ty::TypingEnv::fully_monomorphized().as_query_input((input.fn_sig(tcx),extra))){
+        else{require_normal_fn_pointer_abi(input.fn_sig(tcx).skip_binder().abi())?;
+        match tcx.fn_abi_of_fn_ptr(ty::TypingEnv::fully_monomorphized().as_query_input((input.fn_sig(tcx),extra))){
             Ok(abi)=>compiler_fact(fn_abi_json(context,tcx,abi)?),
             Err(error)=>export_failure("main::compiler_function_facts_json", format!("{}; {}", "rustc fn_abi_of_fn_ptr failed", format!("{error:?}")))?,
         }};
@@ -6581,6 +6606,10 @@ fn compiler_function_facts_json<'tcx>(
         let original = tcx.instantiate_bound_regions_with_erased(bound);
         for output in [original.output(), tcx.types.unit] {
             for abi in [original.abi(), rustc_abi::ExternAbi::Rust] {
+                // This is only speculative helper-constructor discovery. The
+                // LLVM ABI has no ordinary FnAbi, while the Rust helper with
+                // the same types remains a valid independent candidate.
+                if abi == rustc_abi::ExternAbi::LlvmIntrinsic { continue; }
                 for caller_location in [false, true] {
                     if caller_location
                         && tcx

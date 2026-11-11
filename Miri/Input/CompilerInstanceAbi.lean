@@ -34,7 +34,8 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except Stri
   let mut buckets : Std.HashMap Nat (Array Nat) := {}
   for record in records do
     let callee := record.instanceId
-    let _ ← CompilerInstance.source ctx.instances callee
+    if let .LlvmIntrinsic _ := (← CompilerInstance.source ctx.instances callee).instanceKind then
+      throw "LLVM intrinsic has no ordinary FnAbi query"
     let extra := record.extraArgumentTypes
     for id in extra do
       unless ctx.containsTypeId id do throw "extra ABI argument references missing compiler type"

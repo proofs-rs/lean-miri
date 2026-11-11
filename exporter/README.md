@@ -51,7 +51,7 @@ exact arguments cannot be fingerprinted.
 
 ## Input contract
 
-The root schema is `lean-miri-rustc-mir` version 9. Evaluated integer scalars carry
+The root schema is `lean-miri-rustc-mir` version 10. Evaluated integer scalars carry
 `bits_unsigned` and the compiler layout's `size_bytes`, so consumers can construct
 the machine scalar before reading the type and layout tables. Zero-sized and
 pointer constants retain their separate representations. Compiler values have
@@ -90,7 +90,7 @@ explicit exceptional rows. Dedup salt arrays carry graph IDs in salt order;
 source IDs and byte keys come from those allocations. All 32 outcomes remain
 required for function, vtable and byte keys. The runtime reader accepts only the current wire version.
 
-Schema 9 adds exact-equality payload pools without changing compiler identity.
+Schema 10 adds exact-equality payload pools without changing compiler identity.
 `layouts` is an array of indices into `layout_values`: a type's `layout` still
 indexes `layouts`, so equal physical payloads retain separate `LayoutId`s.
 Type `boolean_queries` fields index root `boolean_queries`, and non-null
@@ -140,7 +140,19 @@ of those values. Type compiler facts use the owning `type_id` and optional
 This preserves a distinct region-erased query input when one exists.
 Backtrace `source_position.byte_position` is the body-specific collapsed position;
 it can differ from the global span's position for an inlined body.
-Earlier schemas must be regenerated with the current producer.
+The reader accepts only schema 10. Explicit array offsets retain their count,
+width and per-field equality checks. The producer stores array offsets as an
+exact stride/count formula, and represents a resolved LLVM intrinsic call with
+`kind: "llvm_intrinsic"`, `function_type` and `instance_id`, without `fn_abi`.
+Only an exact `LlvmIntrinsic` compiler identity may use that form. Normal,
+virtual and indirect calls still require an ordinary ABI. LLVM dispatch retains
+its intrinsic signature, argument, feature and memory checks; unknown intrinsics
+remain Unsupported. LLVM-ABI function-pointer signatures and layouts are retained
+as metadata, but have no ordinary ABI row. Synthetic LLVM-ABI helper candidates
+are omitted while their valid Rust-ABI candidates remain. An actual LLVM-ABI
+function-pointer call fails export explicitly before the compiler's undefined
+ABI query; ordinary function-pointer queries remain required. Older wire
+versions must be regenerated with the current producer.
 
 Generic arguments remain in their owning records, with type and type-constant
 references into the corresponding tables. `body_roots` records root metadata and
@@ -205,6 +217,18 @@ root with the same environment:
 ```bash
 "$CARGO_HOME/bin/cargo" +miri-exporter-8144389c895d test --locked --offline --manifest-path exporter/Cargo.toml
 ```
+
+The LLVM no-ABI producer fixture is part of that unittest discovery. After a
+reference-feature release exporter and `native_runner` build, run
+`flock /tmp/lean-miri-ci-guest.lock python3 tests/llvm_no_abi/check.py --output scratch/llvm-controls-new`
+for fresh reference/guest controls covering arithmetic and pause through both
+C and the actual stdarch LLVM ABI, stdarch AES, missing target
+features, argument count, symbol clashes, invalid vector layouts and unknown
+intrinsics. The latter rejection/Unsupported controls are never counted as safe
+guest execution. `tests/input/LlvmCallEvidence.lean` takes a fresh export of
+`exporter/fixtures/fail_closed/llvm_no_abi.rs` (`--root identity`) and checks strict
+ABI evidence validation, current pooled-fixture acceptance, and rejection of
+older root schema versions.
 
 This runs the Rust unit tests, Python unittest discovery under `exporter/tests/`,
 all four `test-*.sh` fixture scripts, and four producer checks, using Cargo's

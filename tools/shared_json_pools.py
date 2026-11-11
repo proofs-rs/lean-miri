@@ -36,7 +36,7 @@ def _walk(value, transform):
 
 
 def pool_document(document):
-    """Project schema 8 to 9, asserting exact inverse including null/false/[]."""
+    """Project schema 8 to 10, asserting exact inverse including null/false/[]."""
     if document.get("schema_version") != 8:
         raise ValueError("fixture pooling requires schema 8")
     pools = {name: [] for name in SHARED_POOLS}
@@ -54,12 +54,12 @@ def pool_document(document):
     result = _walk(copy.deepcopy(document), intern)
     result["layouts"] = [intern("layout_values", row) for row in result["layouts"]]
     result.update(pools)
-    result["schema_version"] = 9
+    result["schema_version"] = 10
     assert expand_document(result, schema_version=8) == document, "pool projection changed payloads"
     return result
 
 
-def expand_document(document, *, schema_version=9):
+def expand_document(document, *, schema_version=10):
     """Return an independent semantic inspection view with shared payloads resolved.
 
     Callers retaining wire identities should use the original document. Lean's

@@ -157,11 +157,15 @@ def variants (target : RuntimeTargetDataLayout) (source : VariantsLayout) : Resu
 def layout (target : RuntimeTargetDataLayout) (source : Input.Layout) : Result LayoutData := do
   let maxAlign ← source.maxReprAlignBytes.mapM alignment
   let fields ← fields (← require source.fields "layout.fields")
-  let duplicateOffsets ← source.fieldOffsetsBytes.mapM size
-  if fields.count != duplicateOffsets.size then throw (.invalid "field offsets" "count mismatch")
-  for index in List.range fields.count do
-    let offset ← fields.offset index |>.mapError (fun e => .invalid "field offset" (reprStr e))
-    if duplicateOffsets[index]? != some offset then throw (.invalid "field offsets" "mismatch")
+  source.fieldOffsetsBytes.validate (← require source.fields "layout.fields")
+    |>.mapError (fun message => .invalid "field offsets" message)
+  match source.fieldOffsetsBytes with
+  | .explicit offsets =>
+    let duplicateOffsets ← offsets.mapM size
+    for index in List.range fields.count do
+      let offset ← fields.offset index |>.mapError (fun e => .invalid "field offset" (reprStr e))
+      if duplicateOffsets[index]? != some offset then throw (.invalid "field offsets" "mismatch")
+  | .arrayFormula _ _ => pure ()
   let variants ← variants target (← require source.variantsLayout "layout.variants")
   let uninhabited := source.uninhabited
   if variants == .Empty && !uninhabited then throw (.invalid "empty variants" "inhabited layout")

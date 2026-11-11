@@ -990,7 +990,16 @@ def makeFromSourcePackage [DecidableEq Os]
         spans := sourceLeaves.spans
         foreign := none
         dynSymName := sourceLeaves.dynSymName
-        checkLlvmSymbolClash := sourceLeaves.checkLlvmSymbolClash
+        -- sig.rs::check_shim_symbol_clash uses the same compiler export
+        -- registry for LLVM intrinsics and ordinary foreign shims. This is
+        -- compiler evidence, independent of the fixture's host capabilities.
+        checkLlvmSymbolClash := fun symbol => do
+          let symbols ← match p.foreignSymbols with
+            | .ok value => pure value
+            | .error reason => throw (.unsupported s!"compiler foreign-symbol query: {reason}")
+          match CompilerForeignSymbols.checkSymbolClash symbols symbol with
+          | .ok () => pure ()
+          | .error error => throw error
         math := sourceLeaves.math
         mathError := sourceLeaves.mathError
         control := sourceLeaves.control

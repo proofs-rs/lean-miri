@@ -12,11 +12,27 @@ pub(super) struct Layout {
     pub repr_c: bool,
     pub uninhabited: bool,
     pub fields: Fields,
-    pub field_offsets_bytes: Vec<u64>,
+    pub field_offsets_bytes: FieldOffsets,
     pub variants: Variants,
     pub backend_repr: BackendRepr,
     pub largest_niche: Option<Niche>,
     pub randomization_seed: u64,
+}
+#[derive(Serialize)]
+#[serde(untagged)]
+pub(super) enum FieldOffsets {
+    Explicit(Vec<u64>),
+    ArrayFormula { kind: &'static str, stride_bytes: u64, field_count: u64 },
+}
+impl FieldOffsets {
+    fn from_rustc<I: Idx>(fields: &rustc_abi::FieldsShape<I>) -> Self {
+        match fields {
+            rustc_abi::FieldsShape::Array { stride, count } => Self::ArrayFormula {
+                kind: "array", stride_bytes: stride.bytes(), field_count: *count,
+            },
+            _ => Self::Explicit((0..fields.count()).map(|i| fields.offset(i).bytes()).collect()),
+        }
+    }
 }
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -307,9 +323,7 @@ impl Layout {
             repr_c: layout.repr_c,
             uninhabited: layout.uninhabited,
             fields: Fields::from_rustc(&layout.fields),
-            field_offsets_bytes: (0..layout.fields.count())
-                .map(|i| layout.fields.offset(i).bytes())
-                .collect(),
+            field_offsets_bytes: FieldOffsets::from_rustc(&layout.fields),
             variants,
             backend_repr: BackendRepr::new(tcx, layout.backend_repr),
             largest_niche: layout.largest_niche.map(|n| Niche::new(tcx, n)),
@@ -580,6 +594,24 @@ impl FnAbi {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn huge_array_offsets_are_constant_size_and_match_pinned_queries() {
+        for (stride, count) in [(1, 1u64 << 50), (4, 1u64 << 48), (0, u64::MAX), (8, 0), (8, 1)] {
+            let fields = rustc_abi::FieldsShape::<rustc_abi::FieldIdx>::Array {
+                stride: rustc_abi::Size::from_bytes(stride), count,
+            };
+            let wire = serde_json::to_string(&FieldOffsets::from_rustc(&fields)).unwrap();
+            assert!(wire.len() < 128);
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&wire).unwrap(),
+                json!({"kind":"array", "stride_bytes":stride, "field_count":count}));
+            if count != 0 {
+                for index in [0, count / 2, count - 1] {
+                    assert_eq!(fields.offset(usize::try_from(index).unwrap()).bytes(), stride * index);
+                }
+            }
+        }
+    }
 
     #[test]
     fn pointer_layout_and_register_hint_preserve_distinct_width_contracts() {
