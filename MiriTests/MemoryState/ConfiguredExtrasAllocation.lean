@@ -121,6 +121,131 @@ private def backtraceChecks : IO Unit := do
         stopped.machine.memory.live.map Prod.fst == #[firstId,secondId] do
       throw (IO.userError "failed initialization retained its trace or discarded another allocation")
 
+private def access : PlaceMachine.AccessConfig Unit Wrapped where
+  runtime := {RuntimeTargetDataLayout.default with base := ⟨.little,.w64⟩}
+  ghostMode := false
+  globalKind := none
+  globalHooks := {
+    synchronizeMemory := fun _ state => state
+    evaluateStaticInitializer := fun memory state _ => ⟨memory,state,.error "unexpected global"⟩
+    beforeAccessGlobal := fun memory state _ _ _ _ => ⟨memory,state,.error "unexpected global"⟩
+    adjustGlobalAllocation := fun memory state _ _ => ⟨memory,state,.error "unexpected global"⟩ }
+  dynamicLayout := fun memory state _ => ⟨memory,state,.ok none⟩
+  resolvePointer := fun _ pointer _ machine => match pointer.provenance with
+    | some (.concrete id tag) => .ok (.ok ⟨id,pointer.offset,.concrete tag⟩) machine
+    | _ => .ok (.error pointer.offset.bytes) machine
+  beforeAllocationAccess := fun _ => pure ()
+  diagnostic := fun write _ _ => event (if write then "write" else "read")
+  weakMemoryWrite := fun _ _ => pure ()
+  syncAccess := fun _ _ _ => pure ()
+  retainTouched := fun machine _ => machine
+  memoryError := fun error => .invalidProgram (reprStr error)
+
+private def allocationAt (state : State) (id : AllocId) : IO (Allocation Provenance BorrowTree) := do
+  let some (_,entry) := state.machine.memory.live.find? (·.1 == id)
+    | throw (IO.userError "expected allocation disappeared")
+  pure entry.allocation
+
+private def pointerId (pointer : Pointer Provenance) : IO AllocId := do
+  let some id := PointerProvenance.getAllocId pointer.provenance
+    | throw (IO.userError "configured pointer lacks allocation identity")
+  pure id
+
+/-- Real lifecycle removal, including its remove-before-hook failure prefix. -/
+private def destroy (fail : Bool) (pointer : Pointer (Option Provenance))
+    (layout : Option (Size × Align)) (kind : MemoryKind Unit) : PointerMachine.M Unit User Unit := do
+  let state ← get
+  let hooks : MemoryDeallocationHooks Provenance BorrowTree Unit
+      (MachineHooks.MachineState Unit Wrapped) ProvenanceExtra := {
+    synchronizeMemory := fun memory machine => {machine with memory}
+    resolvePointer := fun memory machine pointer _ => match pointer.provenance with
+      | some (.concrete id tag) => ⟨memory,machine,.ok ⟨id,pointer.offset,.concrete tag⟩⟩
+      | _ => ⟨memory,machine,.error pointer.offset.bytes⟩
+    beforeDeallocation := fun memory machine _ _ id _ _ _ _ =>
+      let machine := {machine with user := {machine.user with payload :=
+        {machine.user.payload with events := machine.user.payload.events.push "free"}}}
+      if fail then ⟨memory,machine,.error "free rejected"⟩
+      else match (MemoryExtras.removeAllocation extras id).run machine with
+        | .ok () machine => ⟨memory,machine,.ok ()⟩
+        | .error error machine => ⟨memory,machine,.error (reprStr error)⟩ }
+  let result := MemoryLifecycle.deallocatePtrWith state.machine.memory state.machine pointer layout kind hooks
+  set {state with machine := {result.hooks with memory := result.memory}}
+  match result.outcome with
+    | .ok () => pure ()
+    | .error error => throw (.invalidProgram (reprStr error))
+
+private def configuredReallocationChecks : IO Unit := do
+  let align : Align := ⟨3⟩
+  let setup := do
+    let source ← ReallocationDriver.allocateConfigured collecting (Size.ofBytes 16) align (.machine ()) .Uninit
+    let zero ← ReallocationDriver.allocateConfigured collecting (Size.ofBytes 8) align (.machine ()) .Zero
+    pure (source,zero)
+  let ((source,zero),state) ← match setup.run initial with
+    | .ok pointers state => pure (pointers,state)
+    | .error error _ => throw (IO.userError s!"aligned setup failed: {reprStr error}")
+  let sourceId ← pointerId source
+  let zeroId ← pointerId zero
+  let sourceAllocation ← allocationAt state sourceId
+  let zeroAllocation ← allocationAt state zeroId
+  unless sourceId != zeroId && sourceAllocation.align == align && zeroAllocation.align == align &&
+      sourceAllocation.initializationMask.get Size.ZERO == .ok false &&
+      zeroAllocation.initializationMask.isRangeInitialized (allocRange Size.ZERO (Size.ofBytes 8)) == .ok (.ok ()) &&
+      zeroAllocation.getBytesUnchecked (allocRange Size.ZERO (Size.ofBytes 8)) == .ok (Array.replicate 8 0) do
+    throw (IO.userError "aligned zero/uninitialized allocation contract changed")
+  match (MemoryExtras.initAllocation extras sourceId false).run state.machine with
+    | .ok _ _ => throw (IO.userError "already initialized identity was accepted")
+    | .error error stopped =>
+      unless error == .invalidProgram "allocation extras initialized twice" &&
+          stopped.user.payload.registry.allocations.map Prod.fst == #[sourceId,zeroId] do
+        throw (IO.userError "duplicate guard mutated ownership or changed error")
+  let scalar := Scalar.fromPointer access.runtime.base zero
+  let initialized ← match (Allocation.writeScalar access.runtime.base
+      (allocRange Size.ZERO (Size.ofBytes 8)) scalar).run sourceAllocation with
+    | .ok () allocation => pure allocation
+    | .error error _ => throw (IO.userError s!"source pointer setup failed: {reprStr error}")
+  let state := {state with machine := {state.machine with
+    memory := {state.machine.memory with live := state.machine.memory.live.map fun (id,entry) =>
+      (id,if id == sourceId then {entry with allocation := initialized} else entry)}
+    user := {state.machine.user with payload := {state.machine.user.payload with events := #[]}}}}
+  let runRealloc := fun access fail init =>
+    ReallocationDriver.reallocateConfiguredFrom access extras ⟨Size.ofBytes 8⟩ collecting (destroy fail)
+      source.withOptionalProvenance (some (Size.ofBytes 16,align)) (Size.ofBytes 24) align (.machine ()) init
+  for init in #[AllocInit.Uninit,AllocInit.Zero] do
+    let (dest,stopped) ← match (runRealloc access false init).run state with
+      | .ok pointer stopped => pure (pointer,stopped)
+      | .error error _ => throw (IO.userError s!"configured realloc failed: {reprStr error}")
+    let destId ← pointerId dest
+    let allocation ← allocationAt stopped destId
+    unless destId != sourceId && destId != zeroId && allocation.align == align &&
+        allocation.readScalar access.runtime.base (allocRange Size.ZERO (Size.ofBytes 8)) true == .ok scalar &&
+        allocation.initializationMask.get (Size.ofBytes 8) == .ok false &&
+        allocation.initializationMask.get (Size.ofBytes 16) == .ok (init == .Zero) &&
+        stopped.machine.memory.live.map Prod.fst == #[zeroId,destId] &&
+        stopped.machine.user.payload.registry.allocations.map Prod.fst == #[zeroId,destId] &&
+        stopped.machine.user.payload.events == #["diagnostic","extras","capture","span","read","write","free"] do
+      throw (IO.userError "realloc lost copy provenance/init mask/growth policy or allocate-copy-free ordering")
+  let failingAccess := {access with diagnostic := fun write _ _ => do
+    event (if write then "write" else "read")
+    if !write then throw (.unsupported "copy rejected")}
+  for (config,fail,expectedEvents) in #[(failingAccess,false,
+      #["diagnostic","extras","capture","span","read"]),
+      (access,true,#["diagnostic","extras","capture","span","read","write","free"])] do
+    match (runRealloc config fail .Zero).run state with
+    | .ok _ _ => throw (IO.userError "failing realloc unexpectedly succeeded")
+    | .error _ stopped =>
+      let ids := stopped.machine.user.payload.registry.allocations.map Prod.fst
+      unless ids.size == 3 && ids[0]? == some sourceId && ids[1]? == some zeroId &&
+          stopped.machine.memory.live.size == (if fail then 2 else 3) &&
+          stopped.machine.user.payload.events == expectedEvents do
+        throw (IO.userError "failed copy/free lost the new owner or source-ordered partial state")
+      let some destId := ids[2]? | throw (IO.userError "failed realloc lost destination identity")
+      let allocation ← allocationAt stopped destId
+      unless allocation.initializationMask.get (Size.ofBytes 16) == .ok true &&
+          (if fail then allocation.readScalar access.runtime.base
+            (allocRange Size.ZERO (Size.ofBytes 8)) true == .ok scalar
+           else allocation.getBytesUnchecked (allocRange Size.ZERO (Size.ofBytes 8)) == .ok (Array.replicate 8 0)) do
+        throw (IO.userError "failed realloc did not retain the actual copied/uncopied destination")
+
 def main : IO Unit := do
   let size := Size.ofBytes 4
   let old := (ReallocationDriver.allocateSourceFrom wrapped size Align.ONE (.machine ()) .Uninit).run initial
@@ -139,4 +264,5 @@ def main : IO Unit := do
         state.machine.user.payload.registry.allocations.map Prod.fst != #[id] then
       throw (IO.userError "configured allocation lost the single extras owner")
   backtraceChecks
-  IO.println "Configured allocation extras: one owner, allocation-time traces and cleanup verified"
+  configuredReallocationChecks
+  IO.println "Configured allocation extras: one owner, aligned initialization, provenance-preserving realloc, failure prefixes and traces verified"

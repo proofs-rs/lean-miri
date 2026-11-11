@@ -376,6 +376,45 @@ On hosted main `17330f08`, the proof, fresh lane and documentation build pass;
 other checks are still in progress when checked. These local six-case results
 do not establish a green hosted UI sweep.
 
+### Unix allocation ownership follow-up: local validation
+
+The follow-up on schema-11 main `62129c87` uses the existing configured
+allocation helpers for Unix allocation, ordinary reallocation and Linux
+`mremap`. The canonical configuration already owns extras initialization;
+wrapping it again caused the first aligned allocation in the unchanged upstream
+`heap_allocator.rs` guest to fail with `allocation extras initialized twice`.
+The duplicate-ID guard remains strict. Allocation identity, initialization,
+provenance-aware copying and late deallocation retain their existing ordering
+and failure effects; ordinary reallocation keeps uninitialized growth while
+`mremap` keeps zeroed growth.
+
+The 1,283-target common build, 46 runtime checks and structural regressions pass
+on this base. The library audit checks 74,397 declarations using only `propext`,
+`Quot.sound` and `Classical.choice`. Component assertions cover aligned
+Zero/Uninit allocation, fresh identities, duplicate initialization rejection,
+pointer-provenance and initialization-mask copying, both growth policies, and
+retained state after copy/free failures. A fresh Linux control passes strict
+same-TyCtxt Miri/native comparisons through C allocation/reallocation/free and
+mmap/mremap/munmap, including copied bytes, page alignment and zeroed growth.
+Source, snapshot, profiles and frozen executable identities match. All 268 proof
+roots pass on schema 11, with a transitive audit of 77,063 declarations using
+only the same three allowed axioms. Fixed Rust/input checksums and library/proof
+bindings match before and after. After rebasing onto main `3241cb6b`, all 1,012
+recorded library, runner, test, proof and fixed-input source hashes remain
+identical, so this proof result also applies to those unchanged sources.
+The exporter rebuilt from that latest base also passes the fresh strict
+three-route control with the hash-matched schema-11 native runner.
+
+The preceding schema-10 cohort passed all 268 roots and its 77,078-declaration
+transitive audit with only the three allowed axioms. Its original unchanged
+`heap_allocator.rs` guest nevertheless timed out at the CI-default 900 seconds:
+the reference exited zero and both profiles matched, but Lean produced no
+terminal outcome. Schema 11 trims input representation without changing the
+post-start interpreter, so this long probe was not repeated without evidence
+of a relevant execution improvement. Original-case completion and full hosted
+UI validation remain unresolved. The older 600-second timeout and deliberately
+stopped 1,800-second probe remain separate schema-9 observations.
+
 ### Schema-9 metadata follow-up: local validation
 
 On the follow-up rebased onto `7cc6b6cc`, the full 1,281-job library/test/native
