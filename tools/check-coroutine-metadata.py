@@ -24,6 +24,59 @@ driver = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(driver)
 
 
+def check_queries(control, output, env, settings):
+    code = run(["lake", "env", "lean", "--run", "tests/input/CoroutineNativeQueries.lean", str(control)],
+        cwd=ROOT, env=env, log=output / "native-query.log", timeout=180, memory_limit=settings.memory_limit)
+    assert code.returncode == 0, code
+    document = load_mir_document(control)
+    catalog = document["compiler_coroutine_coverage"]
+    mutations = []
+    def save(name, expected):
+        target = output / (name + ".json")
+        with target.open("w") as stream:
+            json.dump(document, stream, separators=(",", ":"))
+        mutations.append((target, expected))
+    old = catalog["coroutines"]
+    catalog["coroutines"] = old[1:]
+    save("missing-witness", "marked body has no witness")
+    catalog["coroutines"] = old
+    auxiliary = catalog["auxiliary_bodies"][0]
+    definition = auxiliary["source_kind"]["def_id"]
+    auxiliary["source_kind"]["def_id"] = (definition + 1) % len(document["definitions"])
+    assert auxiliary["source_kind"]["def_id"] != definition
+    save("source-definition", "auxiliary source kind differs from body definition")
+    auxiliary["source_kind"]["def_id"] = definition
+    selected = None
+    for row in catalog["coroutines"]:
+        node = document["types"][row["coroutine_type"]]
+        for parent in node["compiler_facts"]["projection_queries"]["parents"]:
+            if parent["variant"] is not None:
+                actual = pool_entry(document, "layouts", parent["layout"])
+                for index in range(len(document["layouts"])):
+                    other = pool_entry(document, "layouts", index)
+                    if other["fields"]["field_count"] == actual["fields"]["field_count"] and other["size_bytes"] != actual["size_bytes"]:
+                        selected = (parent, index)
+                        break
+            if selected:
+                break
+        if selected:
+            break
+    assert selected, "control must provide a bound-valid wrong physical variant layout"
+    parent, wrong_layout = selected
+    original_layout = parent["layout"]
+    parent["layout"] = wrong_layout
+    save("physical-variant", "selected query differs from exact physical variant")
+    parent["layout"] = original_layout
+    del document, catalog, old, auxiliary, selected, parent
+    gc.collect()
+    for snapshot, expected in mutations:
+        code = run(["lake", "env", "lean", "--run", "tests/input/CoroutineReject.lean", str(snapshot), expected],
+            cwd=ROOT, env=env, log=snapshot.with_suffix(".log"), timeout=180, memory_limit=settings.memory_limit)
+        assert code.returncode == 0, (snapshot, code)
+        print("PASS constructed decoder mutation", snapshot.stem, flush=True)
+    return [path.stem for path, _ in mutations]
+
+
 def main():
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument("--output", type=Path, required=True)
@@ -71,58 +124,10 @@ def main():
             records.append(record)
             print("PASS strict coroutine comparison", case.id, flush=True)
     assert control is not None
-    code = run(["lake", "env", "lean", "--run", "tests/input/CoroutineNativeQueries.lean", str(control)],
-        cwd=ROOT, env=env, log=args.output / "native-query.log", timeout=180, memory_limit=settings.memory_limit)
-    assert code == 0, code
-    document = load_mir_document(control)
-    catalog = document["compiler_coroutine_coverage"]
-    mutations = []
-    def save(name, expected):
-        target = args.output / (name + ".json")
-        with target.open("w") as stream:
-            json.dump(document, stream, separators=(",", ":"))
-        mutations.append((target, expected))
-    old = catalog["coroutines"]
-    catalog["coroutines"] = old[1:]
-    save("missing-witness", "marked body has no witness")
-    catalog["coroutines"] = old
-    auxiliary = catalog["auxiliary_bodies"][0]
-    definition = auxiliary["source_kind"]["def_id"]
-    auxiliary["source_kind"]["def_id"] = (definition + 1) % len(document["definitions"])
-    assert auxiliary["source_kind"]["def_id"] != definition
-    save("source-definition", "auxiliary source kind differs from body definition")
-    auxiliary["source_kind"]["def_id"] = definition
-    selected = None
-    for row in catalog["coroutines"]:
-        node = document["types"][row["coroutine_type"]]
-        for parent in node["compiler_facts"]["projection_queries"]["parents"]:
-            if parent["variant"] is not None:
-                actual = pool_entry(document, "layouts", parent["layout"])
-                for index in range(len(document["layouts"])):
-                    other = pool_entry(document, "layouts", index)
-                    if other["fields"]["field_count"] == actual["fields"]["field_count"] and other["size_bytes"] != actual["size_bytes"]:
-                        selected = (parent, index)
-                        break
-            if selected:
-                break
-        if selected:
-            break
-    assert selected, "control must provide a bound-valid wrong physical variant layout"
-    parent, wrong_layout = selected
-    original_layout = parent["layout"]
-    parent["layout"] = wrong_layout
-    save("physical-variant", "selected query differs from exact physical variant")
-    parent["layout"] = original_layout
-    del document, catalog, old, auxiliary, selected, parent
-    gc.collect()
-    for snapshot, expected in mutations:
-        code = run(["lake", "env", "lean", "--run", "tests/input/CoroutineReject.lean", str(snapshot), expected],
-            cwd=ROOT, env=env, log=snapshot.with_suffix(".log"), timeout=180, memory_limit=settings.memory_limit)
-        assert code == 0, (snapshot, code)
-        print("PASS constructed decoder mutation", snapshot.stem, flush=True)
+    mutations = check_queries(control, args.output, env, settings)
     assert hashes == [driver.sha256(settings.exporter), driver.sha256(settings.runner)]
     (args.output / "summary.json").write_text(json.dumps({"cases": records,
-        "binary_sha256": hashes, "decoder_mutations": [path.stem for path, _ in mutations]}, indent=2))
+        "binary_sha256": hashes, "decoder_mutations": mutations}, indent=2))
 
 
 if __name__ == "__main__":
