@@ -314,6 +314,32 @@ fn main() {
                                        'frames': [{'file': case.path, 'line': 3}]},
                                  'calling_convention'), 'ub_kind_mismatch')
 
+    def test_extern_static_layout_is_distinct_from_other_layout_causes(self):
+        template = 'extern static `FOO` has been declared as `wrong_size::main::FOO` with a size of {} bytes and alignment of {} bytes, but {} a size of {} bytes and alignment of {} bytes'
+        for declaration, backing in [((2,2),(1,1)), ((10,1),(8,8)), ((1,2),(1,1))]:
+            for source in ('the exported static with that name has', 'Miri emulates it via an extern static shim with'):
+                self.assertEqual(category_reference(template.format(*declaration,source,*backing)), 'extern_static_layout')
+        self.assertEqual(category_reference('accessing memory with alignment 1, but alignment 8 is required'), 'alignment')
+        self.assertEqual(category_reference('extern static `FOO`, but the backing static is mutable'), 'extern_mutability')
+        case = Case('fail/test.rs', errors=[(3, 'extern static layout')])
+        terminal = {'kind': 'ub', 'frames': [{'file': case.path, 'line': 3}]}
+        for symbol in ('FOO', 'environ'):
+            detail = 'extern static `' + symbol + '` declaration exceeds backing size or alignment'
+            for exact in (detail, 'Miri.Interpreter.StepError.undefinedBehavior "' + detail + '"'):
+                actual = terminal | {'detail': exact}
+                self.assertEqual(compare(case, actual, 'extern_static_layout'), 'passed')
+                self.assertEqual(compare(case, actual | {'frames': [{'file': case.path, 'line': 4}]}, 'extern_static_layout'), 'ub_site_mismatch')
+                for kind in ('unsupported', 'failed', 'pending', 'exit'):
+                    self.assertNotEqual(compare(case, actual | {'kind': kind}, 'extern_static_layout'), 'passed')
+            for other in ('AlignmentCheckFailed', 'pointerOutOfBounds', 'layoutMismatch',
+                          'extern static declaration and backing mutability disagree',
+                          'extern static `FOO` is not supported by Miri',
+                          detail + ' extra', '"' + detail + '" trailing', 'invalidBool 2',
+                          'unrelated read error: "' + detail + '"',
+                          'Miri.Interpreter.StepError.invalidProgram "' + detail + '"',
+                          '"' + detail + '"', 'prefix ' + detail):
+                self.assertEqual(compare(case, terminal | {'detail': other}, 'extern_static_layout'), 'ub_kind_mismatch')
+
     def test_generic_race_is_not_a_mixed_size_race(self):
         case = Case('fail/test.rs', errors=[(3, 'Race condition detected')])
         terminal = {'kind': 'ub', 'detail': 'MixedSizeRace', 'frames': [{'file': case.path, 'line': 3}]}

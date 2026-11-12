@@ -218,6 +218,8 @@ CATEGORIES = [
     ('use_after_free', r'has been freed|use.after.free|deallocated', r'PointerUseAfterFree|useAfterFree|alreadyDead|alreadyDeallocated|deadAllocation|deallocated|use.after.free'),
     ('bounds', r'out.of.bounds|outside.*allocation|bytes? from the (?:end|beginning)|beyond.*bounds|in.bounds|at or beyond the end|before the beginning', r'outOfBounds|out.of.bounds|pointerOutOfBounds|PointerOutOfBounds|bounds'),
     ('deallocation_layout', r'incorrect layout on deallocation:', r'deallocation: (?:Miri\.Memory\.)?MemoryLifecycleError\.layoutMismatch\b'),
+    # The pinned extern-static check rejects size OR alignment exceeding the backing.
+    ('extern_static_layout', r'extern static `[^`]+` has been declared as `[^`]+` with a size of [0-9]+ bytes and alignment of [0-9]+ bytes, but (?:the exported static with that name has|Miri emulates it via an extern static shim with) a size of [0-9]+ bytes and alignment of [0-9]+ bytes', r'(?-i:^(?:extern static `[^`]+` declaration exceeds backing size or alignment|Miri\.Interpreter\.StepError\.undefinedBehavior "extern static `[^`]+` declaration exceeds backing size or alignment")$)'),
     ('alignment', r'alignment|aligned', r'misaligned|alignment|Misaligned'),
     ('tb_write', r'write access through .* is forbidden', r'Tree Borrows write access:.*(?:ChildAccessForbidden|ProtectedDisabled|NoValidExposedReferences)'),
     ('tb_read', r'read access through .* is forbidden', r'Tree Borrows read access:.*(?:ChildAccessForbidden|ProtectedDisabled|NoValidExposedReferences)'),
