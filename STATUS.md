@@ -325,7 +325,7 @@ belong to that main revision; schema 9 has not yet received hosted validation.
 
 ### Source-owned descriptor cleanup: local validation
 
-The follow-up on main `d3d79e8e` connects virtual sockets, eventfd and epoll
+The follow-up on main `4fd7d0fe` connects virtual sockets, eventfd and epoll
 last-owner destruction to their canonical ownership/protocol/readiness stores.
 Narrow drop dictionaries reuse the pinned bodies without provisional I/O
 capabilities. Virtual close retains peer-loss notification and the owned delayed
@@ -340,17 +340,20 @@ still obtain numeric errno from compiler constants. Raw host conversion, host
 errno lookup and error display remain unavailable; unmapped kinds or missing
 target evidence do not become successful errno conversions.
 
-The coherent 1,285-job combined build and 74,519-declaration library axiom audit
-pass with only the three allowed axioms. All 46 runtime checks and structural
+The coherent 1,285-job combined build, final runner incremental build and
+74,519-declaration library axiom audit pass with only the three allowed axioms.
+The latest quick check passes all 119 Python tests. All 46 runtime checks and structural
 regressions pass, including the new descriptor and simple-kind controls. The
 unchanged `pass/shims/socket-unix.rs` passes a fresh same-TyCtxt reference/Lean
-comparison with strict profiles, source/snapshot bindings and frozen binaries.
-The earlier cleanup-only run reached EOF handling but stopped at the then
+comparison using rustc's default crate name, strict profiles, source/snapshot
+bindings and frozen binaries. The earlier cleanup-only run reached EOF handling but stopped at the then
 missing WouldBlock conversion; it is not counted as a successful execution.
 
 The fixed Rust/MIR inputs, checksums, proof targets and caller assumptions are
-unchanged. The complete 268-root proof check is still running for these library
-sources. These finite local results do not establish a green hosted UI sweep,
+unchanged. All 268 frozen proof roots pass; their transitive audit covers 77,185
+declarations with only the same three allowed axioms. Library/proof/input hashes
+match before and after. The final driver-only rebase retains identical library,
+runner and exporter sources. These finite local results do not establish a green hosted UI sweep,
 host socket support or closure of the other capability/performance gaps.
 
 ### Schema-11 shared-layout test corrections
