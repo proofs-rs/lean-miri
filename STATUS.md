@@ -741,6 +741,22 @@ library/example source freezes and fixed input hashes match after completion.
 Fixed Rust/MIR input bytes, SHA records, theorem claims and budgets are unchanged;
 these finite comparisons do not establish arbitrary coroutine or Rust safety.
 
+### Checked coroutine conflict access
+
+The post-merge regression workflow rejected an unchecked storage-conflict array
+access in the coroutine metadata validator. The validator now uses checked
+access and retains the existing invalid-index error; preceding size/index guards
+make the valid path identical, including asymmetric, empty and diagonal rows.
+Independent review confirmed that no validation or execution rule was relaxed.
+The complete quick entry point, semantic source lint and its three unit tests,
+focused coroutine controls, common 1,300-job build and 75,361-declaration axiom
+audit pass. All 66 regression stages pass: stages 1–50 completed first, 51–57
+after restoring a verified pinned reference binary/build record, and 58–66 after
+correcting the local toolchain environment. These two setup stops are not counted
+as test successes. A fresh 268-module fixed proof closure and 77,958-declaration
+transitive axiom audit pass with matching library/example source freezes and
+fixed input hashes. Rust/MIR bytes, SHA records, claims and budgets are unchanged.
+
 ### Performance and optimization assurance
 
 Remaining performance work includes residual equality and validation work,

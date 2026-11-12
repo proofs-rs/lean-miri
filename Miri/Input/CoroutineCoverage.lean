@@ -269,7 +269,9 @@ def validate (document : ImportDocument) (coverage : CoroutineCoverage) : Except
     -- sparse rows, including empty rows and diagonal entries.
     for (indices, index) in row.layout.storageConflicts.toList.zipIdx do
       for other in indices do
-        unless (row.layout.storageConflicts[other]!).contains index do
+        let some conflicts := row.layout.storageConflicts[other]? |
+          throw "coroutine coverage: invalid or duplicate saved field index"
+        unless conflicts.contains index do
           throw "coroutine coverage: asymmetric storage conflicts"
     let some projections := coroutineType.compilerFacts.bind (·.projectionQueries) |
       throw "coroutine coverage: absent exact coroutine projection queries"
