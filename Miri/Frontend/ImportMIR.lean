@@ -275,6 +275,12 @@ deriving instance ToExpr for Input.Catalog.TypeLayouts
 deriving instance ToExpr for Input.Catalog.NamedConstant
 deriving instance ToExpr for Input.Catalog.NamedStatic
 deriving instance ToExpr for Input.Catalog.Queries
+deriving instance ToExpr for Input.CoroutineAuxiliaryRole
+deriving instance ToExpr for Input.CoroutineSavedField
+deriving instance ToExpr for Input.CoroutineLayoutEvidence
+deriving instance ToExpr for Input.CoroutineEvidence
+deriving instance ToExpr for Input.CoroutineAuxiliaryBody
+deriving instance ToExpr for Input.CoroutineCoverage
 deriving instance ToExpr for Input.ImportDocument
 deriving instance ToExpr for Input.ExecutionInput
 
