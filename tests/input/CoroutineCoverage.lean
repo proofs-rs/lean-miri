@@ -180,5 +180,26 @@ def main : IO Unit := do
   rejected (← must (setField valid "compiler_coroutine_coverage" unknownSourceKind)) "unknown coroutine source-kind field"
   let unknownRow ← must (setField catalog "coroutines" "[{\"unknown_witness\":0}]")
   rejected (← must (setField valid "compiler_coroutine_coverage" unknownRow)) "unknown coroutine coverage field"
+  -- Parser-only control: pooling preserves exact saved-local source metadata.
+  -- Semantic acceptance is tested separately above and by componentChecks.
+  let pools ← must (JsonReader.run (do
+    let pools ← readSharedPools
+    JsonReader.skipValue
+    pure pools) legacy)
+  let layout := object [("field_tys", "[{\"type\":0,\"source_info\":0,\"ignore_for_traits\":false,\"debuginfo_name\":null}]"),
+    ("variant_fields", "[[],[],[]]"), ("variant_source_info", "[]"), ("storage_conflicts", "[[]]")]
+  let witness := object [("owner_body", "0"), ("coroutine_type", "0"),
+    ("coroutine_kind", "{\"kind\":\"coroutine\",\"movability\":\"movable\"}"),
+    ("yield_type", "null"), ("resume_type", "null"), ("layout", layout),
+    ("drop_sync", "null"), ("drop_async", "null"), ("drop_proxy_async", "null")]
+  let parserCatalog := object [("body_coroutines", "[true]"), ("coroutines", "[" ++ witness ++ "]"), ("auxiliary_bodies", "[]")]
+  let parsed ← must (JsonReader.run (CoroutineCoverageCodec.parse pools.mir) parserCatalog)
+  let some savedSource := (parsed.value.coroutines[0]?).bind fun row => row.layout.fields[0]?.map (·.sourceInfo) |
+    throw (IO.userError "pooled saved source disappeared")
+  check (some savedSource == pools.mir.sources[0]?) "saved source pool reference changed"
+  let badSavedSource ← must (setField layout "field_tys" "[{\"type\":0,\"source_info\":999999,\"ignore_for_traits\":false,\"debuginfo_name\":null}]")
+  let badWitness ← must (setField witness "layout" badSavedSource)
+  let badCatalog ← must (setField catalog "coroutines" ("[" ++ badWitness ++ "]"))
+  rejected (← must (setField valid "compiler_coroutine_coverage" badCatalog)) "dangling source-info pool reference"
   componentChecks decoded.document
   IO.println "PASS strict schema-11/12 coroutine coverage, retained evidence and malformed/missing/unknown guards"

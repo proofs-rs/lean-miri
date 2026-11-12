@@ -1,11 +1,12 @@
 //! Exact compiler-owned coroutine metadata; auxiliary bodies are never callable
 //! instance bodies. Pinned StateTransform: coroutine/{mod,drop}.rs at 8144389c895d.
 use super::*;
+use crate::shared_json::Shared;
 
 #[derive(serde::Serialize)]
 pub(super) struct SavedField {
     pub r#type: u64,
-    pub source_info: pool_body::SourceInfo,
+    pub source_info: Shared<pool_body::SourceInfo>,
     pub ignore_for_traits: bool,
     pub debuginfo_name: Option<String>,
 }
@@ -95,7 +96,7 @@ pub(super) fn capture<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>
     let source = info.coroutine_layout.as_ref().ok_or("coroutine coverage: transformed layout is absent")?;
     let field_tys = source.field_tys.iter().map(|field| Ok(SavedField {
         r#type: type_json(context, tcx, field.ty)?,
-        source_info: source_info_json(context, tcx, field.source_info),
+        source_info: source_info_json(context, tcx, field.source_info).into(),
         ignore_for_traits: field.ignore_for_traits,
         debuginfo_name: field.debuginfo_name.map(|name| name.to_string()),
     })).collect::<Result<Vec<_>, String>>()?;

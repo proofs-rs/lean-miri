@@ -90,17 +90,22 @@ private def sourceKind : Parser Miri.Interpreter.CallInstanceKind := do
     | _ => fail "unknown coroutine source shim"
   | _ => fail "unknown coroutine source kind"
 
+private def sharedSource (pools : DecodeMIR.MIRParser.SharedPools) : Parser SourceInfo := do
+  let reference ← natural
+  let some value := pools.sources[reference]? | fail "coroutine coverage: dangling source-info pool reference"
+  pure value
+
 private structure fieldFields where
   type : Option (Nat) := none
   source_info : Option (SourceInfo) := none
   ignore_for_traits : Option (Bool) := none
   debuginfo_name : Option (Option String) := none
 
-private def field : Parser CoroutineSavedField := do
+private def field (pools : DecodeMIR.MIRParser.SharedPools) : Parser CoroutineSavedField := do
   let v ← object ({} : fieldFields) fun v key => do
     match key with
     | "type" => return {v with type := some (← natural)}
-    | "source_info" => return {v with source_info := some (← sourceInfo)}
+    | "source_info" => return {v with source_info := some (← sharedSource pools)}
     | "ignore_for_traits" => return {v with ignore_for_traits := some (← boolean)}
     | "debuginfo_name" => return {v with debuginfo_name := some (← nullable string)}
     | _ => fail s!"unknown coroutine coverage field `{key}`"
@@ -112,10 +117,10 @@ private structure layoutFields where
   variant_source_info : Option (Array SourceInfo) := none
   storage_conflicts : Option (Array (Array Nat)) := none
 
-private def layout : Parser CoroutineLayoutEvidence := do
+private def layout (pools : DecodeMIR.MIRParser.SharedPools) : Parser CoroutineLayoutEvidence := do
   let v ← object ({} : layoutFields) fun v key => do
     match key with
-    | "field_tys" => return {v with field_tys := some (← array field)}
+    | "field_tys" => return {v with field_tys := some (← array (field pools))}
     | "variant_fields" => return {v with variant_fields := some (← array (array natural))}
     | "variant_source_info" => return {v with variant_source_info := some (← array sourceInfo)}
     | "storage_conflicts" => return {v with storage_conflicts := some (← array (array natural))}
@@ -133,7 +138,7 @@ private structure evidenceFields where
   drop_async : Option (Option Nat) := none
   drop_proxy_async : Option (Option Nat) := none
 
-private def evidence : Parser CoroutineEvidence := do
+private def evidence (pools : DecodeMIR.MIRParser.SharedPools) : Parser CoroutineEvidence := do
   let v ← object ({} : evidenceFields) fun v key => do
     match key with
     | "owner_body" => return {v with owner_body := some (← natural)}
@@ -141,7 +146,7 @@ private def evidence : Parser CoroutineEvidence := do
     | "coroutine_kind" => return {v with coroutine_kind := some (← kind)}
     | "yield_type" => return {v with yield_type := some (← nullable natural)}
     | "resume_type" => return {v with resume_type := some (← nullable natural)}
-    | "layout" => return {v with layout := some (← layout)}
+    | "layout" => return {v with layout := some (← layout pools)}
     | "drop_sync" => return {v with drop_sync := some (← nullable natural)}
     | "drop_async" => return {v with drop_async := some (← nullable natural)}
     | "drop_proxy_async" => return {v with drop_proxy_async := some (← nullable natural)}
@@ -179,7 +184,7 @@ def parse (pools : DecodeMIR.MIRParser.SharedPools) : Parser Parsed := do
   let v ← object ({} : CatalogFields) fun v key => do
     match key with
     | "body_coroutines" => return {v with markers := some (← array boolean)}
-    | "coroutines" => return {v with coroutines := some (← array evidence)}
+    | "coroutines" => return {v with coroutines := some (← array (evidence pools))}
     | "auxiliary_bodies" => return {v with auxiliary := some (← array (auxiliary pools))}
     | _ => fail s!"unknown coroutine catalog field `{key}`"
   let auxiliary ← required v.auxiliary "auxiliary_bodies"
