@@ -243,6 +243,7 @@ structure Layout where
   pointerDataType : Option TypeId := none
   enumTagType : Option TypeId := none
   structType : Option TypeId := none
+  enumType : Option TypeId := none
   unionType : Option TypeId := none
 
 inductive ArmCallKind where
@@ -565,6 +566,19 @@ structure AdtDropMaterial where
   destructor : Option DefinitionRef
   deriving Repr, DecidableEq
 
+inductive OptimizationLevel where
+  | no | less | more | aggressive | size | sizeMin
+  deriving Repr, DecidableEq
+
+/-- Raw session options and a definition attribute used by reference ABI rules.
+No pointee information or inferred ABI attributes are stored here. -/
+structure ReferenceAbiPolicy where
+  optimization : OptimizationLevel
+  llvmWritable : Bool
+  boxNoalias : Bool
+  rustcNoWritable : Bool
+  deriving Repr, DecidableEq
+
 /-- Definition codegen flags and compilation panic policy, before FnAbi construction. -/
 structure FunctionAbiMaterial where
   neverUnwind : Bool
@@ -572,6 +586,7 @@ structure FunctionAbiMaterial where
   dropGlue : Bool
   panicUnwinds : Bool
   panicInDropUnwinds : Bool
+  references : Option ReferenceAbiPolicy := none
   deriving Repr, DecidableEq
 
 structure DefinitionId where

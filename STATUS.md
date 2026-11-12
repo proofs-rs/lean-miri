@@ -37,8 +37,11 @@ use query-local fresh universes, typed inference, scoped normalization and a
 directional region-leak check in actual runtime selection. Eight complete rustc
 comparisons distinguish four proven and four definite-no-solution results,
 including static-only and repeated-region negatives. Missing-source, malformed
-owner and mutated-oracle controls reject. Quantified type/constant assumptions,
-bound aliases, inferred outlives, general builtin candidates, specialization and
+owner and mutated-oracle controls reject. Closed source type aliases now normalize
+inside the active quantified universe; seven genuine alias-bearing goals agree
+with rustc, including nested forall obligations. Raw RHS/own-clause placeholders,
+missing source and a mutated static-only oracle reject. Quantified type/constant
+assumptions, bound-dependent aliases, inferred outlives, general builtin candidates, specialization and
 coinductive quantified goals remain unresolved.
 
 Binder-free Item signatures can construct x86_64 Rust scalar/ZST FnAbi in the
@@ -46,17 +49,27 @@ same World from raw signatures and codegen/panic flags. Twenty complete compiler
 comparisons cover abort/unwind policies, including constructed instances with
 empty ABI catalogs. Covered direct-call, catalog and covariance collectors no
 longer acquire FnAbi answers: ten complete keys each lose four explicit calls.
-Unused unsupported generic arguments retain an exact residual domain. Broader
-reference/Box/aggregate/foreign/other-target ABI and eager enumeration remain
-unresolved. Thin raw-pointer and binder-free FnPtr scalars additionally pass
+Unused unsupported generic arguments retain an exact residual domain. Thin
+references additionally match forty complete rustc ABIs across optimization and
+panic settings; each covered key eliminates four explicit FnAbi acquisitions.
+Twenty additional complete ABIs exercise source-derived Freeze/Unpin branches
+for ADT, array and tuple pointees, with the same four-call elimination per key.
+An independent empty-catalog World constructs a novel array reference at both
+optimization settings. Raw reference-policy absence and unsupported fat
+references reject. Box/aggregate/foreign/other-target ABI and eager enumeration
+remain unresolved. Thin raw-pointer and binder-free FnPtr scalars additionally pass
 twenty complete rustc comparisons; all forty scalar/pointer comparisons also
 cover constructed instances without result catalogs. A separate base world
 constructs a new array, pointer and instance outside the source prefixes and
 matches the complete compiler ABI.
 Pattern Range, NotNull and signed Or layouts now
 use raw recipes; six complete compiler comparisons and malformed controls pass,
-with covered explicit canonical layout acquisition omitted. Non-Value pattern
-endpoints still require CTFE. Structural pointer/reference/tuple/array/slice
+with covered explicit canonical layout acquisition omitted. Raw single-variant
+and empty enum declarations now construct twelve complete compiler layouts,
+including a novel generic enum outside both type and constant prefixes. Five
+repr/multivariant/unsized cases remain exact residuals; malformed recipes and
+missing raw declarations reject. Tagged/niche/coroutine layouts remain unresolved.
+Non-Value pattern endpoints still require CTFE. Structural pointer/reference/tuple/array/slice
 covariance runs on World syntax: an independent 16-by-16 rustc matrix passes
 with an empty answer catalog. Nominal variance and richer relations remain.
 
@@ -82,8 +95,13 @@ and optional typed generic headers replace partial paths and default markers.
 Lean reconstructs DefPathHash; eighteen compiler comparisons include lifetime
 namespaces, with exact bidirectional crate-identity join controls. Foreign types,
 pointers and pairs match four typed compiler hashes, including novel identities
-without material type rows. ADT and other nominal hashes, full validity and
-allocation identity/dedup reconstruction remain unresolved. These comparisons do
+without material type rows. Raw ADT/variant/field identities, flags, representation,
+constructors, discriminant declarations and visibility now determine ADT stable
+hashes. Twenty-eight complete rustc type-hash comparisons cover nominal ADT and
+FnDef syntax, arrays and recursive Value constants, including empty-prefix
+reconstruction and malformed/missing-source controls. FnPtr/HRTB, dyn, aliases,
+closures/coroutines and non-Value constant hashes, full validity and allocation
+identity/dedup reconstruction remain unresolved. These comparisons do
 not establish whole-compiler equivalence, query closure or all-choice guest safety.
 
 Raw MIR constants distinguish Ty, Unevaluated and Val. Covered primitive
@@ -92,8 +110,12 @@ without exporter Const::eval/ValTree queries; five genuine compiler constants
 each eliminate two explicit calls and match complete evaluated values. Required
 TooGeneric constants fail before the first instruction and preserve the tested
 frame/local/allocation state. Closed, argument-free FnDef values have a separate
-ZST rule; generic/bound FnDef cases reject. Unevaluated, allocation-bearing
-ValTrees and general CTFE/interning remain unresolved; no successful no-op stands
+ZST rule; generic/bound FnDef cases reject. Raw aggregate ValTrees additionally
+evaluate six ZST and four uniquely scalar tuple/struct values in the same World,
+matching complete compiler values/types/instances and removing two explicit
+evaluation calls per value. Malformed roots, missing nodes/fields and fuel
+exhaustion reject; allocation-bearing pair/reprC values remain exact residuals.
+Unevaluated, allocation-bearing ValTrees and general CTFE/interning remain unresolved; no successful no-op stands
 in for their evaluation.
 
 The exact `DropGlue(_, None)` shim family now retains only instance identity and

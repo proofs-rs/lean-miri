@@ -73,6 +73,13 @@ def main (args : List String) : IO Unit := do
     let invalid := {world with metadata := {world.metadata with source := noPolicy, checkedMaterial := none}}
     if ((WorldInstanceAbi.construct callee #[]).run invalid).isOk then
       throw (IO.userError "missing raw panic/codegen policy was accepted")
+    if let some (Miri.MIR.GenericArg.Type argument) := key.arguments[0]? then
+      if (← must (world.arena.shapeKind argument)) == .reference then
+        let noReferences := {source with definitions := source.definitions.map (fun defn =>
+          {defn with functionAbiMaterial := defn.functionAbiMaterial.map (fun policy => {policy with references := none})})}
+        let invalid := {world with metadata := {world.metadata with source := noReferences, checkedMaterial := none}}
+        if ((WorldInstanceAbi.construct callee #[]).run invalid).isOk then
+          throw (IO.userError "reference ABI accepted missing raw reference configuration")
     checked := checked + 1
   unless checked == 10 do throw (IO.userError s!"only {checked} raw generic ABI cases compared")
   if migrated then

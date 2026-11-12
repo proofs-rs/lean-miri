@@ -1,7 +1,7 @@
 import Miri.Input.CompilerInstance
 import Miri.Interpreter.CallMachine
 import Miri.Input.RuntimeArrayQueries
-import Miri.Input.WorldMirConstant
+import Miri.Input.WorldValTree
 
 /-! The resolved body identifies its concrete callee and preamble span.
 Required constants are evaluated in the current compiler World after the callee
@@ -43,9 +43,7 @@ def requiredConstants (p : Prepared)
     throw (.invalidProgram "required-constant current frame identity/instance mismatch")
   for constant in actual.input.requiredConsts do
     let _ ← RuntimeArrayQueries.performCompiler types do
-      match WorldMirConstant.evaluate (← get).arena constant.span constant.value with
-      | .ok value => pure value
-      | .error error => throw s!"required MIR constant evaluation: {reprStr error}"
+      RuntimeArrayTypes.liftType (WorldValTree.evaluate (← get).metadata constant.span constant.value)
 
 def hooks (p : Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (base : CallMachine.Lifecycle K User C) : CallMachine.Lifecycle K User C :=

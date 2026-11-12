@@ -30,6 +30,14 @@ pub(crate) struct FunctionAbiMaterial {
     pub drop_glue: bool,
     pub panic_unwinds: bool,
     pub panic_in_drop_unwinds: bool,
+    pub references: ReferenceAbiPolicy,
+}
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct ReferenceAbiPolicy {
+    pub optimization: &'static str,
+    pub llvm_writable: bool,
+    pub box_noalias: bool,
+    pub rustc_no_writable: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct AdtDropMaterial {

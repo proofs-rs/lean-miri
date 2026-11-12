@@ -1,5 +1,6 @@
 import Miri.Input.AliasMaterial
 import Miri.Input.AliasNormalization
+import Miri.Input.GenericSyntax
 
 namespace Miri.Input.AliasMaterial
 open GenericSubstitution
@@ -10,6 +11,12 @@ def rule (declaration : Declaration) (template : Option DefinitionTemplate) :
     Except String AliasNormalization.Rule := do
   unless declaration.hasValue do throw "alias declaration has no source RHS"
   let some template := template | throw "alias source RHS template absent"
+  unless template.signatureExpression.isNone && template.fields.isEmpty do
+    throw "alias RHS template carries function or ADT declaration material"
+  GenericSyntax.validate {
+    parameters := template.parameters
+    erasedRegions := true
+    lateRegions := true} 16384 .type template.typeExpression
   pure ⟨declaration.definition, template⟩
 
 /-- Construct only the non-selected declaration index. Actual impl selection,

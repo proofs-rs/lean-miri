@@ -20,6 +20,7 @@ pub(super) enum Layout {
     TupleRecipe { tuple_type: u64 },
     UnionRecipe { union_type: u64 },
     StructRecipe { struct_type: u64 },
+    EnumRecipe { enum_type: u64 },
     SequenceRecipe { sequence_type: u64 },
     PatternRecipe { pattern_type: u64 },
     PointerRecipe { pointer_type: u64 },

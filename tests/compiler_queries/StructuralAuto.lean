@@ -34,11 +34,10 @@ private def source : StructuralAuto.SourceAdt := fun identity => do
       flagsBits := 0
       scalableElement := none
       fieldShuffleSeed := 0 }
-    kind := .structKind
+    flagsBits := 4
     langItem := if phantom then some "phantom_data" else none
-    variantCount := 1
-    variantNames := #["Component"]
-    fields := if phantom then #[] else #[⟨0,0,unsafeField,"component_field"⟩]
+    variants := #[⟨identity,none,"Component",.relative 0,if phantom then 0 else 1,0⟩]
+    fields := if phantom then #[] else #[⟨0,0,unsafeField,"component_field",⟨identity.crateIndex,identity.index + 1000⟩,none,none,none⟩]
     }
   pure (material,template)
 example : StructuralAuto.query source false 50 (nominal 1 u16) = .ok (some #[u16]) := by decide +kernel

@@ -275,33 +275,46 @@ end
 /-- Each request starts with fresh work accounting; no result is reused across
 executions. Ambiguity, unsupported providers and exhausted budgets are distinct
 from both a proof and a definite negative trait result. -/
+def solveInUniverseWithActive (program : Program) (hooks : Hooks) (environment : Environment)
+    (universeIndex depth work : Nat) (active : Array Goal) (goal : Goal) : Except String Outcome :=
+  (solveCore program hooks environment active.size universeIndex depth active goal
+    {remaining := work, lastUniverse := universeIndex}).map (·.1)
+
 def solveWithActive (program : Program) (hooks : Hooks) (environment : Environment)
     (depth work : Nat) (active : Array Goal) (goal : Goal) : Except String Outcome :=
-  (solveCore program hooks environment active.size 0 depth active goal {remaining := work}).map (·.1)
+  solveInUniverseWithActive program hooks environment 0 depth work active goal
 
 def solve (program : Program) (hooks : Hooks) (environment : Environment)
     (depth work : Nat) (goal : Goal) : Except String Outcome :=
   solveWithActive program hooks environment depth work #[] goal
 
-def fulfillWithActive (program : Program) (hooks : Hooks) (environment : Environment)
-    (depth work : Nat) (active : Array Goal) (clauses : Array Clause) : Except String Outcome := do
+def fulfillInUniverseWithActive (program : Program) (hooks : Hooks) (environment : Environment)
+    (universeIndex depth work : Nat) (active : Array Goal) (clauses : Array Clause) : Except String Outcome := do
   let (results, _) ← (do
     let mut results := #[]
-    for clause in clauses do results := results.push (← fulfillCore program hooks environment active.size 0 depth active clause)
-    pure results : Engine (Array Outcome)) {remaining := work}
+    for clause in clauses do results := results.push (← fulfillCore program hooks environment active.size universeIndex depth active clause)
+    pure results : Engine (Array Outcome)) {remaining := work, lastUniverse := universeIndex}
   pure (collect results)
+
+def fulfillWithActive (program : Program) (hooks : Hooks) (environment : Environment)
+    (depth work : Nat) (active : Array Goal) (clauses : Array Clause) : Except String Outcome :=
+  fulfillInUniverseWithActive program hooks environment 0 depth work active clauses
 
 def fulfill (program : Program) (hooks : Hooks) (environment : Environment)
     (depth work : Nat) (clauses : Array Clause) : Except String Outcome :=
   fulfillWithActive program hooks environment depth work #[] clauses
 
-def selectUniqueWithActive (program : Program) (hooks : Hooks) (environment : Environment)
-    (depth work : Nat) (active : Array Goal) (traitRef : TraitRef) : Except String ImplSelection := do
-  match ← solveWithActive program hooks environment depth work active ⟨.positive, traitRef⟩ with
+def selectUniqueInUniverseWithActive (program : Program) (hooks : Hooks) (environment : Environment)
+    (universeIndex depth work : Nat) (active : Array Goal) (traitRef : TraitRef) : Except String ImplSelection := do
+  match ← solveInUniverseWithActive program hooks environment universeIndex depth work active ⟨.positive, traitRef⟩ with
   | .proven (.implementation selection _) => pure selection
   | .proven _ => throw "trait proof does not identify a unique source impl"
   | .noSolution => throw "trait has no applicable source impl"
   | .ambiguous reason => throw s!"trait selection is ambiguous: {reason}"
+
+def selectUniqueWithActive (program : Program) (hooks : Hooks) (environment : Environment)
+    (depth work : Nat) (active : Array Goal) (traitRef : TraitRef) : Except String ImplSelection :=
+  selectUniqueInUniverseWithActive program hooks environment 0 depth work active traitRef
 
 def selectUnique (program : Program) (hooks : Hooks) (environment : Environment)
     (depth work : Nat) (traitRef : TraitRef) : Except String ImplSelection :=

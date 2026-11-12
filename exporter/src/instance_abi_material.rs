@@ -2,6 +2,24 @@
 //! declaration signature and raw codegen flags, never layout_of or FnAbi.
 use rustc_middle::ty::{self, TyCtxt, TypeVisitableExt};
 
+// Source grammar proof of a thin pointee. This never asks Sized/layout/traits;
+// aliases and unsized tails stay residual. Field recursion is bounded even for
+// malformed recursive declarations; pointers stop the traversal.
+fn sized_pointee<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>, fuel: usize) -> bool {
+    if fuel == 0 { return false; }
+    match input.kind() {
+        ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never |
+        ty::RawPtr(..) | ty::Ref(..) | ty::FnPtr(..) => true,
+        ty::Array(element, _) => sized_pointee(tcx, *element, fuel - 1),
+        ty::Tuple(fields) => fields.iter().all(|field| sized_pointee(tcx, field, fuel - 1)),
+        ty::Adt(definition, arguments) if definition.is_struct() &&
+            !definition.repr().simd() && !definition.repr().scalable() =>
+            definition.non_enum_variant().fields.iter().all(|field|
+                sized_pointee(tcx, field.ty(tcx, arguments).skip_norm_wip(), fuel - 1)),
+        _ => false,
+    }
+}
+
 pub(super) fn signature<'tcx>(tcx: TyCtxt<'tcx>, instance: ty::Instance<'tcx>,
     extra: &'tcx ty::List<ty::Ty<'tcx>>) -> Option<ty::FnSig<'tcx>> {
     use rustc_abi::ExternAbi as A;
@@ -28,16 +46,13 @@ pub(super) fn signature<'tcx>(tcx: TyCtxt<'tcx>, instance: ty::Instance<'tcx>,
     // Only a syntactically sized pointee is admitted here. This is source
     // grammar classification, not a layout/Sized query. Fat raw pointers and
     // references retain an explicit residual until their full ABI rules exist.
-    let sized_pointee = |ty: ty::Ty<'tcx>| matches!(ty.kind(),
-        ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never |
-        ty::RawPtr(..) | ty::Ref(..) | ty::FnPtr(..))
-        || matches!(ty.kind(), ty::Tuple(fields) if fields.is_empty());
     let simple = |ty: ty::Ty<'tcx>| {
         if !super::generic_mir::supported_arguments(tcx.mk_args(&[ty.into()])) { return false; }
         match ty.kind() {
             ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never => true,
             ty::Tuple(fields) => fields.is_empty(),
-            ty::RawPtr(pointee,_) => sized_pointee(*pointee),
+            ty::RawPtr(pointee,_) => sized_pointee(tcx, *pointee, 256),
+            ty::Ref(_,pointee,_) => sized_pointee(tcx, *pointee, 256),
             ty::FnPtr(types,header) => types.with(*header).bound_vars().is_empty(),
             _ => false,
         }

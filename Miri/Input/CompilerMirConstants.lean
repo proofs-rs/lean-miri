@@ -1,4 +1,4 @@
-import Miri.Input.WorldMirConstant
+import Miri.Input.WorldValTree
 import Miri.Input.RuntimeArrayQueries
 import Miri.Interpreter.ConstantMachine
 
@@ -17,9 +17,7 @@ def hook (runtime : RuntimeMetadata)
     (checkKnown : Option (LocalLayout → LocalLayout → MachineHooks.M K User Bool)) :
     MachineHooks.M K User (OpTy Provenance) := do
   let (ty,value) ← RuntimeArrayQueries.performCompiler types do
-    match WorldMirConstant.evaluate (← get).arena constant.span constant.value with
-    | .ok result => pure result
-    | .error error => throw s!"MIR constant evaluation: {reprStr error}"
+    RuntimeArrayTypes.liftType (WorldValTree.evaluate runtime constant.span constant.value)
   let layout ← match known with
     | none => RuntimeArrayQueries.layoutOf types ty
     | some expected => do

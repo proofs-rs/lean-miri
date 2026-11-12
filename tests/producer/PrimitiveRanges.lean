@@ -60,7 +60,7 @@ def main (args : List String) : IO Unit := do
   -- material, whose initialized scalar endpoints remain explicit inputs.
   let some mutableNode := decoded.document.types.find? (fun node =>
     let material := (decoded.document.layouts[node.layoutId]?).any fun source =>
-      source.primitiveRecipe.isNone && source.tupleType.isNone && source.unionType.isNone && source.structType.isNone
+      source.primitiveRecipe.isNone && source.tupleType.isNone && source.unionType.isNone && source.structType.isNone && source.enumType.isNone
     material && (metadata.lookup node.id).toOption.any fun value =>
       match value.layout.backendRepr with
       | .Scalar (.Initialized (value := .Int .I128 false)) => true

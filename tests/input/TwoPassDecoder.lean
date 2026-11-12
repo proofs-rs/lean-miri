@@ -143,7 +143,7 @@ def main : IO Unit := do
   else pure (fun id => do
     let node ← baseline.document.types[id]?
     let input ← baseline.document.layouts[node.layoutId]?
-    unless input.primitiveRecipe.isNone && input.tupleType.isNone && input.unionType.isNone && input.structType.isNone do none
+    unless input.primitiveRecipe.isNone && input.tupleType.isNone && input.unionType.isNone && input.structType.isNone && input.enumType.isNone do none
     input.sizeBytes)
   let asmContext : DecodeMIR.Context := {
     typeCount := baseline.document.types.size, allocationCount := baseline.document.allocations.size,

@@ -9,12 +9,13 @@ import Miri.Input.TraitSelection.Fulfill
 import Miri.Input.TraitSelection.StructuralCopyClone
 import Miri.Input.TraitSelection.StructuralAuto
 
-/-! Executable composition of source alias RHS reduction and the raw trait
-selection/fulfillment engine. The supported domain is a fully monomorphic,
-region-erasing, empty parameter environment. Region erasure occurs before and
-after normalization, as in rustc_traits/normalize_erasing_regions.rs. The current
-eraser explicitly rejects binders; this module makes no higher-ranked or opaque
-inference claim. No normalized type or selected-impl answer catalog is read. -/
+/-! Executable composition of source alias RHS reduction and raw trait
+selection/fulfillment. Ground queries use region erasure in an empty parameter
+environment. Region-quantified queries retain lexical owners and query-local
+placeholder universes; closed type aliases may reduce inside those scopes.
+Bound-dependent alias arguments and obligations, constant aliases and opaque
+hidden-type inference remain explicit unsupported domains. No normalized type
+or selected-impl answer catalog is read. -/
 namespace Miri.Input.AliasRuntime
 open GenericSubstitution
 
@@ -63,13 +64,21 @@ def sizedHooks (context : Context) (normalize : Nat → Term → Except String T
     pure (material.kind,template),
   normalizeAlias := normalize }
 
+/-- Validate raw lexical owners before any parameter is replaced by a live
+query placeholder. Parent traversal uses this same lookup at every level. -/
+private def sourceScope (context : Context) : SourceEnvironment.Lookup := fun definition => do
+  let material ← SourceEnvironmentRuntime.lookupDefinitions context.generic.definitions definition
+  for clause in material.ownPredicates do
+    TraitSelection.HigherRankedMatch.validateSourceClause material.parameters 16384 clause
+  pure material
+
 /-- One shared builtin/external-predicate dictionary for alias normalization and
 standalone raw trait queries. Normalization is a mandatory recursive dependency. -/
 def traitHooks (context : Context) (_depth : Nat)
     (normalize : Nat → Nat → Array TraitSelection.Goal → Term → Except String Term) :
     TraitSelection.Hooks := {
       implementationPredicates := fun implementation => do
-        let lookup := SourceEnvironmentRuntime.lookupDefinitions context.generic.definitions
+        let lookup := sourceScope context
         let material ← lookup implementation.definition
         unless material.parameters == implementation.parameters do
           throw "impl generic header differs from its canonical raw source scope"
@@ -117,32 +126,35 @@ def normalizeTermScoped (context : Context) (maximumUniverse work : Nat) :
     Nat → Array AliasNormalization.Key → Array TraitSelection.Goal → Term → Except String Term
   | 0, _, _, _ => .error "runtime alias/trait recursion exhausted"
   | fuel + 1, aliases, goals, input => do
-    if maximumUniverse != 0 || (← TraitSelection.Match.requiresQuantified (fuel + 1) input) then
-      return ← ScopedNormalization.normalize maximumUniverse (fuel + 1) input
-    let input ← MirTemplate.eraseFreeRegions (fuel + 1) input
-    MirTemplate.validateClosed (fuel + 1) input
+    let isScoped := maximumUniverse != 0 || (← TraitSelection.Match.requiresQuantified (fuel + 1) input)
+    let input ← if isScoped then ScopedNormalization.prepareAliases maximumUniverse (fuel + 1) input
+      else MirTemplate.eraseFreeRegions (fuel + 1) input
+    unless isScoped do MirTemplate.validateClosed (fuel + 1) input
+    for goal in goals do
+      for argument in goal.traitRef.arguments do
+        TraitSelection.HigherRankedMatch.requireScoped maximumUniverse (fuel + 1) argument
     let currentTraitHooks (activeAliases : Array AliasNormalization.Key) :=
       traitHooks context (fuel + 1)
         (fun universeIndex _ activeGoals term => normalizeTermScoped context universeIndex work fuel activeAliases activeGoals term)
     let environment : TraitSelection.Environment := {eraseRegions := true}
     let aliasHooks : AliasNormalization.Hooks := {
       ownPredicates := fun definition => do
-        let material ← SourceEnvironmentRuntime.lookupDefinitions context.generic.definitions definition
+        let material ← sourceScope context definition
         pure material.ownPredicates
       select := fun remaining activeAliases kind parent arguments => do
         unless kind == .projection do throw "inherent associated alias selection is not implemented"
-        let selection ← TraitSelection.selectUniqueWithActive context.traits (currentTraitHooks activeAliases)
-          environment (min remaining fuel) work goals ⟨parent,arguments⟩
+        let selection ← TraitSelection.selectUniqueInUniverseWithActive context.traits (currentTraitHooks activeAliases)
+          environment maximumUniverse (min remaining fuel) work goals ⟨parent,arguments⟩
         let implementations := context.traits.traits.flatMap (·.implementations)
           |>.filter (·.definition == selection.implementation)
         unless implementations.size == 1 do throw "selected raw impl declaration absent or duplicated"
         let some implementation := implementations[0]? | throw "selected raw impl declaration absent"
         AliasNormalization.fromTraitSelection implementation selection
       fulfill := fun remaining activeAliases predicates => do
-        requireProven (← TraitSelection.fulfillWithActive context.traits (currentTraitHooks activeAliases)
-          environment (min remaining fuel) work goals predicates) }
+        requireProven (← TraitSelection.fulfillInUniverseWithActive context.traits (currentTraitHooks activeAliases)
+          environment maximumUniverse (min remaining fuel) work goals predicates) }
     let result ← AliasNormalization.normalize context.aliases aliasHooks (fuel + 1) aliases input
-    if ← TraitSelection.Match.requiresQuantified (fuel + 1) result then
+    if isScoped || (← TraitSelection.Match.requiresQuantified (fuel + 1) result) then
       return ← ScopedNormalization.normalize maximumUniverse (fuel + 1) result
     let result ← MirTemplate.eraseFreeRegions (fuel + 1) result
     MirTemplate.validateClosed (fuel + 1) result

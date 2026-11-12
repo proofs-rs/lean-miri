@@ -2,6 +2,7 @@ import Miri.Input.InstanceSignature
 import Miri.Input.RawFunctionSignature
 import Miri.ABI.FnAbi
 import Miri.ABI.SignatureSeeds
+import Miri.Input.WorldReferenceAbi
 
 /-! Source FnAbi construction for ordinary Item instances. The current target
 classifier covers x86_64 Rust scalar, thin raw pointer, FnPtr and zero-sized
@@ -15,7 +16,8 @@ open Miri.ABI GenericSubstitution
 private def liftPure (result : Except String α) : RuntimeArrayTypes.CompilerM α :=
   match result with | .ok value => pure value | .error error => throw error
 
-private def classify (runtime : RuntimeMetadata) (id : TypeId) :
+private def classify (runtime : RuntimeMetadata) (policy : FunctionAbiMaterial)
+    (isReturn : Bool) (id : TypeId) :
     RuntimeArrayTypes.CompilerM (ArgAbi TypeId) := do
   let layout ← RuntimeArrayTypes.liftType (RuntimeMetadata.layoutInWorld runtime id)
   if layout.layout.isZst then return ArgAbi.initial layout
@@ -24,6 +26,9 @@ private def classify (runtime : RuntimeMetadata) (id : TypeId) :
     match ← arena.lookupType id with
     | .constructed constructor => pure (some constructor)
     | .material source => arena.materialKey source
+  if let some (.reference pointee mutability _) := constructor then
+    let some referencePolicy := policy.references | throw "raw reference ABI session options are absent"
+    return ← WorldReferenceAbi.classify referencePolicy isReturn layout pointee mutability
   if constructor.any (fun constructor => match constructor with
       | .rawPointer .. | .functionPointer .. => true | _ => false) then
     return ← liftPure (ArgAbi.conservativePointerScalar layout)
@@ -73,8 +78,8 @@ def construct (instanceId : InstanceId) (extra : Array TypeId) :
   let seed : SignatureSeed TypeId := ⟨inputs,output,signature.abi,signature.cVariadic⟩
   let planned ← liftPure (seed.plan extra none tupleFields)
   unless planned.fixedCount < 2^32 do throw "raw instance ABI fixed argument count exceeds u32"
-  let args ← planned.inputs.mapM (classify world.metadata)
-  let ret ← classify world.metadata planned.output
+  let args ← planned.inputs.mapM (classify world.metadata policy false)
+  let ret ← classify world.metadata policy true planned.output
   let unwind : UnwindSeed := ⟨signature.abi,
     some ⟨policy.neverUnwind,policy.foreignItem,policy.dropGlue⟩,
     policy.panicUnwinds,policy.panicInDropUnwinds⟩

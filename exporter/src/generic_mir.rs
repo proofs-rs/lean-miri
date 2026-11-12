@@ -105,7 +105,7 @@ impl<'tcx,F:FnMut(Span)->u64> Encoder<'tcx,F> {
 /// Constructor families supported by the production generic tree bridge.
 /// Eligibility is source-derived, never selected by comparing monomorphic MIR
 /// or layout results. Other families remain an explicit material-body category.
-fn supported_type(ty:ty::Ty<'_>)->bool {
+pub(super) fn supported_type(ty:ty::Ty<'_>)->bool {
     match ty.kind() {
         ty::Bool|ty::Char|ty::Int(_)|ty::Uint(_)|ty::Float(_)|ty::Never|ty::Str|ty::Param(_)|ty::Foreign(_)=>true,
         ty::Tuple(fields)=>fields.iter().all(supported_type),

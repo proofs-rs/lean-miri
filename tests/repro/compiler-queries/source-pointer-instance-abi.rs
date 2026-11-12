@@ -7,7 +7,7 @@ pub fn identity<T: Copy>(value: T) -> T { value }
 pub fn unused<T: ?Sized>() -> u8 { 7 }
 
 #[inline(never)]
-pub fn reference_residual(value: &'static u8) -> &'static u8 { value }
+pub fn reference_residual(value: &'static [u8]) -> &'static [u8] { value }
 
 type Safe = fn(u8) -> u16;
 type Unsafe = unsafe fn(u8) -> u16;
@@ -32,6 +32,6 @@ pub fn source_instance_abis(a: *const u8, b: *mut u8, c: *const u64, d: *mut (),
     core::hint::black_box(identity(h));
     core::hint::black_box(identity(i));
     core::hint::black_box(identity(j));
-    core::hint::black_box(reference_residual(&DATA));
+    core::hint::black_box(reference_residual(core::slice::from_ref(&DATA)));
     core::hint::black_box(unused::<dyn core::fmt::Debug>());
 }

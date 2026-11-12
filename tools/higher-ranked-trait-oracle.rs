@@ -22,6 +22,13 @@ fn reference<'tcx>(tcx:TyCtxt<'tcx>,value:ty::TraitRef<'tcx>)->String {
     format!("{{\"definition\":{},\"arguments\":[{}]}}",identity(value.def_id),arguments(tcx,value.args))
 }
 struct Oracle;
+#[cfg(not(higher_ranked_alias_oracle))]
+const CASES: &[(&str, &str)] = &[("all","All"),("static_only","StaticOnly"),
+    ("type_any","TypeAny"),("repeated","Repeated"),("distinct","Distinct"),
+    ("fn_for","FnFor"),("fn_static","FnStatic"),("fn_general_vs_static","FnGeneralVsStatic")];
+#[cfg(higher_ranked_alias_oracle)]
+const CASES: &[(&str, &str)] = &[("plain","All"),("checked","All"),("wrong","All"),
+    ("quantified_checked","All"),("nested","FnAll"),("nested_checked","FnAll"),("static_only","Static")];
 impl Callbacks for Oracle {
     fn after_analysis<'tcx>(&mut self,_:&rustc_interface::interface::Compiler,tcx:TyCtxt<'tcx>)->Compilation {
         tcx.dcx().abort_if_errors();
@@ -31,9 +38,7 @@ impl Callbacks for Oracle {
         let self_ty=tcx.type_of(find(DefKind::Struct,"S")).instantiate_identity().skip_norm_wip();
         let env=ty::TypingEnv::fully_monomorphized();
         let mut rows=Vec::new();
-        for (function,trait_name) in [("all","All"),("static_only","StaticOnly"),
-            ("type_any","TypeAny"),("repeated","Repeated"),("distinct","Distinct"),
-            ("fn_for","FnFor"),("fn_static","FnStatic"),("fn_general_vs_static","FnGeneralVsStatic")] {
+        for &(function,trait_name) in CASES {
             let trait_def=find(DefKind::Trait,trait_name);
             let predicates=tcx.explicit_clauses_of(find(DefKind::Fn,function)).instantiate(tcx,tcx.mk_args(&[self_ty.into()]));
             let clause=*predicates.clauses.iter().find(|predicate|

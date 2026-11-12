@@ -524,6 +524,15 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
       let some node := document.types[id]? | throw "struct recipe type ID invariant"
       let .adt data := node.shape | throw s!"$.layouts[{index}].struct_type: source type is not an ADT"
       unless data.kind == .structKind do throw s!"$.layouts[{index}].struct_type: source type is not a struct"
+    if let some id := value.enumType then
+      checkId b.types id s!"$.layouts[{index}].enum_type" "type"
+      let some node := document.types[id]? | throw "enum recipe type ID invariant"
+      let .adt data := node.shape | throw s!"$.layouts[{index}].enum_type: source type is not an ADT"
+      unless data.kind == .enumKind do throw s!"$.layouts[{index}].enum_type: source type is not an enum"
+      unless data.variants.size ≤ 1 do throw s!"$.layouts[{index}].enum_type: tagged/niche-filled enum recipe is not implemented"
+      unless data.representation.flagsBits &&& (1 + 2 + 64) == 0 &&
+          data.representation.integer.isNone && data.representation.packBytes.isNone do
+        throw s!"$.layouts[{index}].enum_type: unsupported enum representation"
     if let some id := value.unionType then
       checkId b.types id s!"$.layouts[{index}].union_type" "type"
       let some node := document.types[id]? | throw "union recipe type ID invariant"

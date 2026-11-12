@@ -91,6 +91,15 @@ private def containsBound : Nat → Term → Except String Bool
     | .node _ _ _ children | .definition _ _ _ children => children.anyM (containsBound fuel)
     | _ => pure false
 
+private def clauseTerms : TraitSelection.Predicate → Array Term
+  | .trait goal => goal.traitRef.arguments
+  | .hostEffect _ reference => reference.arguments
+  | .equal left right | .regionOutlives left right | .typeOutlives left right
+  | .constHasType left right => #[left,right]
+  | .projection _ _ arguments expected => arguments.push expected
+  | .constEvaluatable value | .wellFormed value => #[value]
+  | .unstableFeature _ => #[]
+
 structure Progress where
   value : Term
   obligations : Array Clause := #[]
@@ -168,8 +177,13 @@ private def fold (program : Program) (hooks : Hooks) :
       return ⟨.node sort tag payload children, obligations⟩
     | .binder variables body =>
       let result ← fold program hooks fuel active body
-      unless variables.isEmpty || result.obligations.isEmpty do
-        throw "bound alias obligations require placeholder conversion"
+      unless variables.isEmpty do
+        for obligation in result.obligations do
+          unless obligation.variables.isEmpty do
+            throw "bound alias obligations require placeholder conversion"
+          for argument in clauseTerms obligation.predicate do
+            if ← containsBound (fuel + 1) argument then
+              throw "bound alias obligations require placeholder conversion"
       return ⟨.binder variables result.value, result.obligations⟩
     | .inference .. => throw "alias normalization received unresolved inference material"
     | _ => pure ⟨value, #[]⟩

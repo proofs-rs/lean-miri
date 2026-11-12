@@ -536,6 +536,7 @@ private structure parseLayoutFields where
   pointerDataType : Option Nat := none
   enumTagType : Option Nat := none
   structType : Option Nat := none
+  enumType : Option Nat := none
   unionType : Option Nat := none
   tupleType : Option Nat := none
   primitiveRecipe : Option String := none
@@ -562,6 +563,7 @@ def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
     | "pointer_data_type" => return {s with pointerDataType := some (← natural)}
     | "pointer_type" => return {s with pointerType := some (← natural)}
     | "struct_type" => return {s with structType := some (← natural)}
+    | "enum_type" => return {s with enumType := some (← natural)}
     | "union_type" => return {s with unionType := some (← natural)}
     | "tuple_type" => return {s with tupleType := some (← natural)}
     | "primitive_recipe" => return {s with primitiveRecipe := some (← string)}
@@ -580,7 +582,7 @@ def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
     | "randomization_seed" => return { s with «randomization_seed» := some (← natural) }
     | _ => skipValue; pure s
   let constructors := #[s.primitiveRecipe.isSome, s.tupleType.isSome, s.unionType.isSome,
-    s.structType.isSome, s.patternType.isSome, s.sequenceType.isSome, s.pointerType.isSome, s.pointerDataType.isSome, s.enumTagType.isSome].filter (fun enabled => enabled)
+    s.structType.isSome, s.enumType.isSome, s.patternType.isSome, s.sequenceType.isSome, s.pointerType.isSome, s.pointerDataType.isSome, s.enumTagType.isSome].filter (fun enabled => enabled)
   if !constructors.isEmpty then
     unless constructors.size == 1 do fail s!"{path}: conflicting layout recipe constructors"
     unless s.kind.isNone && s.field_offsets_bytes.isNone && s.fields.isNone &&
@@ -595,7 +597,7 @@ def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
           "fn_pointer", "never"].contains recipe do
         fail s!"{path}: unknown primitive layout recipe"
     return {
-      primitiveRecipe := s.primitiveRecipe, tupleType := s.tupleType, unionType := s.unionType, structType := s.structType, patternType := s.patternType, sequenceType := s.sequenceType,
+      primitiveRecipe := s.primitiveRecipe, tupleType := s.tupleType, unionType := s.unionType, structType := s.structType, enumType := s.enumType, patternType := s.patternType, sequenceType := s.sequenceType,
       pointerType := s.pointerType, pointerDataType := s.pointerDataType, enumTagType := s.enumTagType, kind := .layout,
       maxReprAlignBytes := none, reprC := false, uninhabited := false,
       largestNiche := none, randomizationSeed := 0, sizeBytes := none,

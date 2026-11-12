@@ -14,6 +14,7 @@ import Miri.ABI.Layout
 import Miri.ABI.PrimitiveLayout
 import Miri.ABI.UnivariantLayout
 import Miri.ABI.StructLayout
+import Miri.ABI.UnivariantEnumLayout
 import Miri.Input.StructLayoutMaterial
 import Miri.ABI.UnionLayout
 import Miri.ABI.PatternLayout
@@ -173,7 +174,7 @@ def variants (target : RuntimeTargetDataLayout) (source : VariantsLayout) : Resu
       (← require source.tagFieldIndex "variants.tag_field_index") values
 
 def layout (target : RuntimeTargetDataLayout) (source : Input.Layout) : Result LayoutData := do
-  if source.tupleType.isSome || source.unionType.isSome || source.structType.isSome ||
+  if source.tupleType.isSome || source.unionType.isSome || source.structType.isSome || source.enumType.isSome ||
       source.patternType.isSome || source.sequenceType.isSome || source.pointerType.isSome || source.pointerDataType.isSome || source.enumTagType.isSome then
     throw (.missing "structural layout requires source type and layout pools")
   if let some recipe := source.primitiveRecipe then
@@ -628,25 +629,43 @@ mutual
         throw "universe SIMD/scalable ADT layout is not implemented"
       unless declaration.langItem != some "f16b" && declaration.langItem != some "ppcf128" do
         throw "universe special float ADT layout is not implemented"
+      let niches := if declaration.langItem == some "unsafe_cell" || declaration.langItem == some "unsafe_pinned"
+        then StructLayout.NicheOptimizations.disabled else .enabled
+      if declaration.kind == .enumKind then
+        unless declaration.variantCount ≤ 1 do throw "tagged/niche-filled universe enum layout is not implemented"
+        if declaration.variantCount == 0 then
+          return ← lift (UnivariantEnumLayout.compute target #[] repr niches)
+        let types ← match normalization with
+          | none => liftWorld (worldAdtFields none fuel id 0)
+          | some context => liftWorld do
+            let (_,_,identity,args,_) ← worldAdt id
+            let sourceFields := declaration.fields.filter (·.variantIndex == 0)
+            sourceFields.mapM fun field => do
+              let term ← lift (GenericInstantiationWorld.instantiateFieldTerm (← get) fuel identity args 0 field.fieldIndex)
+              WorldNormalization.resolveNormalizedTerm context (fuel * (fuel + 1)) fuel term
+        let fields ← types.mapM (worldLayoutType normalization target layouts fuel)
+        return ← lift (UnivariantEnumLayout.compute target #[fields] repr niches)
       let types ← liftWorld (worldAdtFields normalization fuel id 0)
       let fields ← types.mapM (worldLayoutType normalization target layouts fuel)
       if declaration.kind == .unionKind then return ← lift (UnionLayout.compute target fields repr)
       unless declaration.kind == .structKind do throw "universe enum layout is not implemented"
       let alwaysSized ← liftWorld (worldStructSized normalization fuel declaration template)
-      let niches := if declaration.langItem == some "unsafe_cell" || declaration.langItem == some "unsafe_pinned"
-        then StructLayout.NicheOptimizations.disabled else .enabled
       lift (StructLayout.compute target fields repr 0 false alwaysSized niches)
   private def worldLayoutSeed (normalization : Option AliasRuntime.Context) (target : RuntimeTargetDataLayout) (layouts : Array Input.Layout) :
       Nat → LayoutId → LayoutQuery LayoutData
     | 0, _ => throw "universe layout recipe recursion exhausted"
     | fuel + 1, id => do
       let some source := layouts[id]? | throw "universe layout seed absent"
-      let constructors := #[source.structType.isSome,source.unionType.isSome,source.tupleType.isSome,
+      let constructors := #[source.structType.isSome,source.enumType.isSome,source.unionType.isSome,source.tupleType.isSome,
         source.primitiveRecipe.isSome,source.patternType.isSome,source.sequenceType.isSome,source.pointerType.isSome,source.pointerDataType.isSome,source.enumTagType.isSome].filter (fun enabled => enabled)
       unless constructors.size <= 1 do throw "conflicting universe layout recipe constructors"
       if let some ty := source.structType then
         let (declaration,_,_,_,_) ← liftWorld (worldAdt ty)
         unless declaration.kind == .structKind do throw "struct recipe source is not a struct"
+        return ← worldAdtLayout normalization target layouts fuel ty
+      if let some ty := source.enumType then
+        let (declaration,_,_,_,_) ← liftWorld (worldAdt ty)
+        unless declaration.kind == .enumKind do throw "enum recipe source is not an enum"
         return ← worldAdtLayout normalization target layouts fuel ty
       if let some ty := source.unionType then
         let (declaration,_,_,_,_) ← liftWorld (worldAdt ty)
@@ -719,7 +738,7 @@ def resolveLayout (target : RuntimeTargetDataLayout) (types : Array TypeNode)
     (layouts : Array Input.Layout) (id : LayoutId) (definitions : Array DefinitionId)
     (constants : Array MIR.TypeConst) : Result LayoutData := do
   let source ← require layouts[id]? "compiler layout ID out of bounds"
-  if source.tupleType.isNone && source.unionType.isNone && source.structType.isNone &&
+  if source.tupleType.isNone && source.unionType.isNone && source.structType.isNone && source.enumType.isNone &&
       source.patternType.isNone && source.sequenceType.isNone && source.pointerType.isNone && source.pointerDataType.isNone && source.enumTagType.isNone then
     return ← layout target source
   let world ← (TypeArena.World.ofMaterial types constants definitions target.pointerSize.bytes.toNat)
@@ -733,7 +752,7 @@ def lookup (metadata : RuntimeMetadata) (id : TypeId) : Result (TyAndLayout Type
     throw (.unsupported "constructed type layout requires the execution-owned universe")
   let source ← metadata.node id
   let seed ← require metadata.source.layouts[source.layoutId]? "compiler layout seed"
-  if seed.tupleType.isNone && seed.unionType.isNone && seed.structType.isNone &&
+  if seed.tupleType.isNone && seed.unionType.isNone && seed.structType.isNone && seed.enumType.isNone &&
       seed.patternType.isNone && seed.sequenceType.isNone && seed.pointerType.isNone && seed.pointerDataType.isNone && seed.enumTagType.isNone then
     return ⟨id, ← layout metadata.target seed⟩
   let checked ← require metadata.checkedMaterial "checked source material prefix"

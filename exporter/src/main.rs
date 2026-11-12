@@ -1,6 +1,7 @@
 #![feature(rustc_private)]
 
 mod incremental;
+mod raw_valtree_material;
 mod cast_queries;
 mod allocator_world;
 mod covariance_queries;
@@ -1784,6 +1785,19 @@ impl ExportCallbacks {
                         drop_glue: tcx.is_lang_item(definition, rustc_attr_ir::lang_items::LangItem::DropGlue),
                         panic_unwinds: tcx.sess.panic_strategy().unwinds(),
                         panic_in_drop_unwinds: tcx.sess.opts.unstable_opts.panic_in_drop.unwinds(),
+                        references: pool_values::ReferenceAbiPolicy {
+                            optimization: match tcx.sess.opts.optimize {
+                                rustc_session::config::OptLevel::No => "no",
+                                rustc_session::config::OptLevel::Less => "less",
+                                rustc_session::config::OptLevel::More => "more",
+                                rustc_session::config::OptLevel::Aggressive => "aggressive",
+                                rustc_session::config::OptLevel::Size => "size",
+                                rustc_session::config::OptLevel::SizeMin => "size_min",
+                            },
+                            llvm_writable: tcx.sess.opts.unstable_opts.llvm_writable,
+                            box_noalias: tcx.sess.opts.unstable_opts.box_noalias,
+                            rustc_no_writable: rustc_attr_ir::find_attr!(tcx, definition, RustcNoWritable),
+                        },
                     });
                     body_track_caller.entry(definition_index).or_insert_with(||
                         tcx.body_codegen_attrs(definition).flags.contains(
@@ -3792,9 +3806,29 @@ fn structural_type_hash_eligible(input: ty::Ty<'_>) -> bool {
         ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never | ty::Str
         | ty::Foreign(_) => true,
         ty::Slice(child) | ty::RawPtr(child, _) => structural_type_hash_eligible(child),
+        ty::Array(child, length) => structural_type_hash_eligible(child) && structural_type_const_hash_eligible(length),
         ty::Ref(region, child, _) => !matches!(region.kind(), ty::ReBound(..)) && structural_type_hash_eligible(child),
         ty::Tuple(children) => children.iter().all(structural_type_hash_eligible),
+        ty::Adt(_, arguments) => arguments.iter().all(|argument| match argument.kind() {
+            ty::GenericArgKind::Type(child) => structural_type_hash_eligible(child),
+            ty::GenericArgKind::Lifetime(region) => !matches!(region.kind(), ty::ReBound(..)),
+            ty::GenericArgKind::Const(value) => structural_type_const_hash_eligible(value),
+        }),
+        ty::FnDef(_, arguments) if arguments.bound_vars().is_empty() =>
+            arguments.skip_binder().iter().all(|argument| match argument.kind() {
+                ty::GenericArgKind::Type(child) => structural_type_hash_eligible(child),
+                ty::GenericArgKind::Lifetime(region) => !matches!(region.kind(), ty::ReBound(..)),
+                ty::GenericArgKind::Const(value) => structural_type_const_hash_eligible(value),
+            }),
         _ => false,
+    }
+}
+
+fn structural_type_const_hash_eligible(input: ty::Const<'_>) -> bool {
+    let ty::ConstKind::Value(value) = input.kind() else { return false; };
+    structural_type_hash_eligible(value.ty) && match **value.valtree {
+        ty::ValTreeKind::Leaf(_) => true,
+        ty::ValTreeKind::Branch(children) => children.iter().all(structural_type_const_hash_eligible),
     }
 }
 
@@ -3812,6 +3846,7 @@ fn canonical_layout_recipe_eligible<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>
         },
         ty::Array(_,count) => count.try_to_target_usize(tcx).is_some(),
         ty::Adt(def,_) if def.is_union() => true,
+        ty::Adt(def,_) if def.is_enum() => univariant_enum_recipe_eligible(tcx,input,256),
         ty::RawPtr(pointee,_) | ty::Ref(_,pointee,_) => pointer_recipe_eligible(tcx,pointee),
         _ => struct_recipe_eligible(tcx,input),
     }
@@ -3834,10 +3869,39 @@ fn canonical_layout_recipe<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<
         ty::Pat(..) => pool_layout::Layout::PatternRecipe {pattern_type:id},
         ty::Tuple(_) => pool_layout::Layout::TupleRecipe {tuple_type:id},
         ty::Adt(def,_) if def.is_union() => pool_layout::Layout::UnionRecipe {union_type:id},
+        ty::Adt(def,_) if def.is_enum() => pool_layout::Layout::EnumRecipe {enum_type:id},
         ty::Str | ty::Slice(_) | ty::Array(..) => pool_layout::Layout::SequenceRecipe {sequence_type:id},
         ty::RawPtr(..) | ty::Ref(..) => pool_layout::Layout::PointerRecipe {pointer_type:id},
         _ => pool_layout::Layout::StructRecipe {struct_type:id},
     })
+}
+
+// Raw syntax capability only: do not let a material success become a raw
+// recipe whose field bridge or recursive calculator is unsupported. Pointer
+// branches need pointee metadata/reification, not the pointee's physical layout.
+fn univariant_enum_recipe_eligible<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>, fuel: usize) -> bool {
+    if fuel == 0 || !generic_mir::supported_type(input) { return false; }
+    match *input.kind() {
+        ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never
+            | ty::FnPtr(..) => true,
+        ty::RawPtr(pointee,_) | ty::Ref(_,pointee,_) => pointer_recipe_eligible(tcx,pointee),
+        ty::Tuple(fields) => fields.iter().all(|field| univariant_enum_recipe_eligible(tcx,field,fuel-1)),
+        ty::Array(element,count) => count.try_to_target_usize(tcx).is_some() &&
+            univariant_enum_recipe_eligible(tcx,element,fuel-1),
+        ty::Adt(def,args) => {
+            if def.repr().simd() || def.repr().scalable() || def.repr().pack.is_some() { return false; }
+            if def.is_enum() {
+                if def.variants().len() > 1 || def.repr().inhibit_enum_layout_opt() { return false; }
+            } else if def.is_struct() {
+                if !struct_recipe_eligible(tcx,input) { return false; }
+            } else if !def.is_union() { return false; }
+            if !generic_mir::supported_arguments(args) { return false; }
+            def.all_fields().all(|field|
+                generic_mir::supported_type(tcx.type_of(field.did).instantiate_identity().skip_norm_wip()) &&
+                univariant_enum_recipe_eligible(tcx,field.ty(tcx,args).skip_norm_wip(),fuel-1))
+        }
+        _ => false,
+    }
 }
 
 // Source-constructor eligibility only: this deliberately never calls is_sized.
@@ -5851,14 +5915,8 @@ fn store_fn_abi<'tcx>(
 // Source-only classification of the direct valtree_to_const_value branches.
 // The declared outer type equality is an admission boundary, not an evaluated
 // answer: other Ty constants retain their explicit CTFE result category.
-fn raw_type_constant_eligible(value: &rustc_middle::mir::Const<'_>) -> bool {
-    let rustc_middle::mir::Const::Ty(declared, constant) = value else { return false; };
-    let ty::ConstKind::Value(value) = constant.kind() else { return false; };
-    *declared == value.ty && match value.ty.kind() {
-        ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) => true,
-        ty::FnDef(_, args) => args.bound_vars().is_empty() && args.skip_binder().is_empty(),
-        _ => false,
-    }
+fn raw_type_constant_eligible<'tcx>(tcx: TyCtxt<'tcx>, value: &rustc_middle::mir::Const<'tcx>) -> bool {
+    raw_valtree_material::eligible(tcx, value)
 }
 
 fn trace_mir_constant(route: &str, queried: bool, value: &rustc_middle::mir::Const<'_>) {
@@ -5889,7 +5947,7 @@ fn const_operand_json<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,bo
         _ => return export_failure("MIR constant", "missing or invalid serialization role/phase"),
     };
     if matches!(context.constant_eval_role, Some(MirBodyRole::RuntimeExecutable))
-        && raw_type_constant_eligible(&operand.const_) {
+        && raw_type_constant_eligible(tcx, &operand.const_) {
         let rustc_middle::mir::Const::Ty(_, constant) = operand.const_ else {
             return export_failure("raw MIR type constant", "admission did not retain its Ty source constructor");
         };

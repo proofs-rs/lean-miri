@@ -51,14 +51,8 @@ private def requireAllocated (maximumUniverse : Nat) : Nat → Term → Except S
       pure ()
     | _ => pure ()
 
-def validateClause (maximumUniverse fuel : Nat) (eraseFreeRegions : Bool) (clause : Clause) :
-    Except String Unit := do
-  let policy : GenericSyntax.Policy := {
-    placeholders := maximumUniverse != 0
-    erasedRegions := eraseFreeRegions}
-  let check := fun role term => do
-    GenericSyntax.validateInBinders policy fuel #[clause.variables] role term
-    requireAllocated maximumUniverse fuel term
+private def validatePredicate (check : GenericSyntax.Role → Term → Except String Unit)
+    (clause : Clause) : Except String Unit := do
   let argument := fun term => do
     let role ← match term.sort with
       | .type => pure GenericSyntax.Role.type | .region => pure .region
@@ -89,6 +83,24 @@ def validateClause (maximumUniverse fuel : Nat) (eraseFreeRegions : Bool) (claus
     unless value.sort == .type || value.sort == .constant do throw "quantified well-formed sort mismatch"
     argument value
   | .unstableFeature _ => pure ()
+
+/-- Raw source clauses cannot own query-local placeholders or inference IDs.
+The source parameter header and the clause's lexical binder are checked before
+instantiation can replace parameters with live query terms. -/
+def validateSourceClause (parameters : Array ArgSort) (fuel : Nat) (clause : Clause) :
+    Except String Unit :=
+  validatePredicate (fun role term =>
+    GenericSyntax.validateInBinders
+      {parameters := parameters, erasedRegions := true, lateRegions := true}
+      fuel #[clause.variables] role term) clause
+
+def validateClause (maximumUniverse fuel : Nat) (eraseFreeRegions : Bool) (clause : Clause) :
+    Except String Unit :=
+  validatePredicate (fun role term => do
+    GenericSyntax.validateInBinders
+      {placeholders := maximumUniverse != 0, erasedRegions := eraseFreeRegions}
+      fuel #[clause.variables] role term
+    requireAllocated maximumUniverse fuel term) clause
 
 mutual
 private def equalTerms (eraseFreeRegions : Bool) : Nat → Terms → Terms → Inference.M Bool

@@ -27,7 +27,7 @@ manifest = shadow / 'Cargo.toml'
 manifest.write_text(manifest.read_text().replace('../upstream/miri-source', str(root / 'upstream/miri-source')))
 source = shadow / 'src/main.rs'
 text = source.read_text()
-admission = 'raw_type_constant_eligible(&operand.const_)'
+admission = 'raw_type_constant_eligible(tcx, &operand.const_)'
 assert text.count(admission) == 1
 source.write_text(text.replace(admission, 'false'))
 PY

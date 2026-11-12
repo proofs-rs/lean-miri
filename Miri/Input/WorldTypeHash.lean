@@ -1,12 +1,14 @@
 import Miri.Input.TypeArenaWorld
 import Miri.Input.StableSipHash
 import Miri.Input.DefinitionPathHash
+import Miri.Input.AdtStableHash
 
 /-! Pinned rustc 8144389c895da997dbdecaa635e41d6a50be6ffd
 `TyCtxt::type_id_hash`, `StableHash` for TyKind and RawList. The supported
-structural domain hashes constructor syntax after free-region erasure. Foreign
-types use reconstructed DefKey identities; ADT/FnDef composition, higher-ranked
-binders and const evaluation remain separate source operations. No query answer
+structural domain hashes constructor syntax after free-region erasure. Nominal
+types use reconstructed DefKeys and raw ADT declarations. Value constants
+retain their declared types and ValTree syntax; higher-ranked binders and
+unevaluated constants retain an explicit residual boundary. No query answer
 is retained in the execution World. -/
 namespace Miri.Input.WorldTypeHash
 open TypeArena
@@ -27,6 +29,7 @@ private def definitionBytes (world : World) (identity : GenericSubstitution.Defi
   let some path := source.rawPath | throw "type hash raw definition path is absent"
   pure (littleEndian 16 (← DefinitionPathHash.query path).toNat)
 
+mutual
 /-- Missing structural support is distinct from malformed source identity.
 An unsupported child never substitutes its final TypeId hash for raw syntax. -/
 def sourceBytes (world : World) : Nat → TypeId → Except String (Option ByteArray)
@@ -47,9 +50,51 @@ def sourceBytes (world : World) : Nat → TypeId → Except String (Option ByteA
         | .f16 => pure 0 | .f32 => pure 1 | .f64 => pure 2 | .f128 => pure 3
         | .f16b | .ppcf128 => return none
       pure (some (tag 4 ++ tag ordinal))
+    | .adt identity arguments | .functionDefinition identity arguments _ =>
+      let reference ← world.definitionRef identity
+      let some source := world.definitions[reference]? | throw "type hash nominal definition is absent"
+      let some template := source.genericTemplate | throw "type hash nominal declaration template is absent"
+      unless template.parameters.size == arguments.size do
+        throw "type hash nominal argument domain differs from its declaration"
+      for (sort,argument) in template.parameters.zip arguments do
+        let compatible := match sort,argument with
+          | .type,.Type _ | .region,.Lifetime _ | .constant,.Const _ => true
+          | _,_ => false
+        unless compatible do throw "type hash nominal argument sort differs from its declaration"
+      let mut argumentBytes := littleEndian 8 arguments.size
+      for argument in arguments do
+        match argument with
+        | .Type child =>
+          let some child ← sourceBytes world fuel child | return none
+          argumentBytes := argumentBytes ++ tag 1 ++ child
+        | .Lifetime region =>
+          if let .Bound .. := region then return none
+          argumentBytes := argumentBytes ++ tag 0 ++ tag 6
+        | .Const child =>
+          let some child ← constantBytes world fuel child | return none
+          argumentBytes := argumentBytes ++ tag 2 ++ child
+      let argumentsHash := littleEndian 16 (StableSipHash.hash argumentBytes).toNat
+      match constructor with
+      | .adt .. =>
+        let some declaration := source.adtDeclaration | throw "type hash ADT declaration is absent"
+        declaration.validate template
+        let declarationHash ← AdtStableHash.query (definitionBytes world) identity declaration
+        pure (some (tag 5 ++ littleEndian 16 declarationHash.toNat ++ argumentsHash))
+      | .functionDefinition _ _ variables =>
+        unless variables.isEmpty do return none
+        -- FnDef carries Binder<GenericArgs>; even an empty bound-variable
+        -- RawList contributes its independently hashed length prefix.
+        let variablesHash := StableSipHash.hash (littleEndian 8 0)
+        pure (some (tag 13 ++ (← definitionBytes world identity) ++ argumentsHash ++
+          littleEndian 16 variablesHash.toNat))
+      | _ => throw "type hash nominal source constructor changed"
     | .str => pure (some (tag 7))
     | .foreign identity => pure (some (tag 6 ++ (← definitionBytes world identity)))
     | .never => pure (some (tag 21))
+    | .array child length =>
+      let some child ← sourceBytes world fuel child | return none
+      let some length ← constantBytes world fuel length | return none
+      pure (some (tag 8 ++ child ++ length))
     | .slice child =>
       let some child ← sourceBytes world fuel child | return none
       pure (some (tag 10 ++ child))
@@ -69,6 +114,31 @@ def sourceBytes (world : World) : Nat → TypeId → Except String (Option ByteA
       let fingerprint := StableSipHash.hash bytes
       pure (some (tag 22 ++ littleEndian 16 fingerprint.toNat))
     | _ => pure none
+
+/-- ConstKind::Value hashes its declared type and the raw ValTree constructor.
+Branch children are constant IDs, and RawList contributes its own fingerprint. -/
+def constantBytes (world : World) : Nat → TypeConstantId → Except String (Option ByteArray)
+  | 0, _ => throw "type hash constant traversal exhausted"
+  | fuel + 1, id => do
+    let source ← world.lookupConstant id
+    let .Value ty tree := source | return none
+    let some ty ← sourceBytes world fuel ty | return none
+    unless tree.root == 0 && tree.nodes.size == 1 do
+      throw "type hash value tree is not a canonical raw source node"
+    let some root := tree.nodes[tree.root]? | throw "type hash value tree root is absent"
+    let value ← match root with
+      | .Leaf bits size =>
+        unless size > 0 && size ≤ 16 && bits < 2^(8*size) do
+          throw "type hash scalar value exceeds its source width"
+        pure (tag 0 ++ littleEndian 16 bits ++ tag size)
+      | .Branch children =>
+        let mut bytes := littleEndian 8 children.size
+        for child in children do
+          let some child ← constantBytes world fuel child | return none
+          bytes := bytes ++ child
+        pure (tag 1 ++ littleEndian 16 (StableSipHash.hash bytes).toNat)
+    pure (some (tag 5 ++ ty ++ value))
+end
 
 /-- Covered syntax is hashed on demand, including IDs outside the material
 prefix. Unported material constructors retain an explicit compiler boundary. -/
