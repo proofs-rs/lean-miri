@@ -277,8 +277,8 @@ sys.exit(CODE)
             original_invoke = driver.invoke
             stale_paths = []
             def stale_channel(command, *positional, **keywords):
-                if '--fingerprint' in command:
-                    stale_path = Path(command[1]).parent / 'runner-control.jsonl'
+                if '--output' in command:
+                    stale_path = Path(command[command.index('--output') + 1]).parent / 'runner-control.jsonl'
                     stale_path.write_bytes(b'stale untrusted control\n')
                     stale_paths.append(stale_path)
                 return original_invoke(command, *positional, **keywords)
