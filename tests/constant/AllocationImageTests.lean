@@ -75,7 +75,7 @@ def main (args : List String) : IO Unit := do
   let second := MemoryLifecycle.getAllocRaw first.memory first.hooks id (some ()) (globals image)
   let _ ← must (second.outcome.mapError (fun e => reprStr e))
   check (second.hooks == first.hooks) "cached owned global repeated initializer/hooks"
-  let some primitive := decoded.document.types.find? (fun ty => ty.shapeKind == .uint && ((decoded.document.layouts[ty.layoutId]?).bind (·.sizeBytes)) == some 4)
+  let some primitive := decoded.document.types.find? (fun ty => ty.shapeKind == .uint && (runtime.lookup ty.id).toOption.map (·.layout.size.bytes.toNat) == some 4)
     | throw (IO.userError "fixture lacks u32 layout")
   let state : ConstantState CtfeProvenance Unit Unit (Array String) :=
     ⟨imported.memory, #[]⟩

@@ -18,10 +18,7 @@ support. Missing material and fuel exhaustion remain errors. This module does
 not yet port unsafe-binder instantiation or unresolved aliases. -/
 namespace Miri.Input.StructuralNeedsDrop
 
-structure AdtMaterial where
-  manuallyDrop : Bool
-  destructor : Option DefinitionRef
-  deriving Repr, DecidableEq
+abbrev AdtMaterial := AdtDropMaterial
 
 /-- Combine independent components without treating an unresolved component as
 no drop. A known synchronous destructor makes the result true. -/

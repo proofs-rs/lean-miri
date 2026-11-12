@@ -1,3 +1,4 @@
+import Miri.Input.StructuralNeedsDrop
 import Miri.Input.StructuralAutoTraits
 import Miri.Input.CompilerGlobals
 import Miri.Input.CompilerPrimitiveFacts
@@ -125,6 +126,20 @@ def boolean (context : Context) (id : TypeId) (query : String) : Result Bool := 
     return (← node context id).shapeKind == .dynamicTraitObject
   if query == "is_too_generic" then
     return (← node context id).shapeKind == .alias
+  if query == "needs_drop" then
+    let normalizedShape (ty : TypeId) : Result TypeShape := do
+      pure (← node context (← normalize context ty)).shape
+    let adtMaterial (definition : DefinitionRef) : Result StructuralNeedsDrop.AdtMaterial := do
+      let some raw := context.program.input.definitions[definition]?
+        | throw "needs_drop ADT definition material absent"
+      let some material := raw.adtDrop
+        | throw "needs_drop raw ADT drop material absent"
+      if let some destructor := material.destructor then
+        unless destructor < context.program.input.definitions.size do
+          throw "needs_drop destructor definition identity out of bounds"
+      pure material
+    if let some answer ← StructuralNeedsDrop.query normalizedShape adtMaterial
+        (id + context.program.input.types.size + 1) id then return answer
   if id >= context.program.input.types.size then
     return ← lazyBoolean context query (id + context.program.input.types.size + 1) id
   let originalFacts ← facts context id

@@ -538,9 +538,12 @@ rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_target/src/spec/tar
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_target/src/spec/tuple.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_ty_utils/src/abi.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_ty_utils/src/layout.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_ty_utils/src/needs_drop.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/binder.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/const_kind.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/fold.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/inherent.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/predicate.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/region_kind.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/sty/consts.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/sty/mod.rs

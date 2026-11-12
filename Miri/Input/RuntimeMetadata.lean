@@ -2,6 +2,7 @@ import Miri.Input.Model
 import Miri.Input.TypeArena
 import Miri.ABI.Layout
 import Miri.ABI.PrimitiveLayout
+import Miri.ABI.UnivariantLayout
 
 /-! Internal compiler-metadata bridge, not the public import API. Successful
 conversion supplies records and queries; it does not establish execution
@@ -157,6 +158,8 @@ def variants (target : RuntimeTargetDataLayout) (source : VariantsLayout) : Resu
       (← require source.tagFieldIndex "variants.tag_field_index") values
 
 def layout (target : RuntimeTargetDataLayout) (source : Input.Layout) : Result LayoutData := do
+  if source.tupleType.isSome then
+    throw (.missing "tuple layout requires source type and layout pools")
   if let some recipe := source.primitiveRecipe then
     return ← PrimitiveLayout.compute target recipe
       |>.mapError (fun reason => .invalid "primitive layout recipe" reason)
@@ -228,6 +231,33 @@ def importTarget (source : TargetDataLayoutEvidence) : Result RuntimeTargetDataL
   result.validate.mapError (fun e => .invalid "target" (toString e))
   return result
 
+/-- Source-aware physical layout construction. Recursive tuple recipes follow
+raw source type edges; cyclic or malformed material never supplies a layout. -/
+def resolveLayoutWithFuel (target : RuntimeTargetDataLayout) (types : Array TypeNode)
+    (layouts : Array Input.Layout) : Nat → LayoutId → Result LayoutData
+  | 0, _ => .error (.unsupported "material layout recipe recursion exhausted")
+  | fuel + 1, id => do
+    let source ← require layouts[id]? s!"compiler layout ID {id} out of bounds"
+    if let some typeId := source.tupleType then
+      unless source.primitiveRecipe.isNone do
+        throw (.invalid "tuple layout recipe" "conflicting primitive constructor")
+      let node ← require types[typeId]? "tuple recipe type ID out of bounds"
+      unless node.id == typeId do throw (.invalid "tuple recipe type" "row/index mismatch")
+      let .tuple elements := node.shape
+        | throw (.invalid "tuple layout recipe" "source type is not a tuple")
+      let fields ← elements.mapM fun element => do
+        let node ← require types[element]? "tuple element type ID out of bounds"
+        unless node.id == element do throw (.invalid "tuple element type" "row/index mismatch")
+        resolveLayoutWithFuel target types layouts fuel node.layoutId
+      let kind := if elements.isEmpty then UnivariantLayout.Kind.alwaysSized else .maybeUnsized
+      return ← UnivariantLayout.compute target fields {} kind
+        |>.mapError (fun reason => .invalid "tuple layout recipe" reason)
+    layout target source
+
+def resolveLayout (target : RuntimeTargetDataLayout) (types : Array TypeNode)
+    (layouts : Array Input.Layout) (id : LayoutId) : Result LayoutData :=
+  resolveLayoutWithFuel target types layouts (types.size + layouts.size + 1) id
+
 end RuntimeMetadata
 
 /-- Immutable compiler tables and target semantics. ID lookup directly indexes
@@ -263,9 +293,8 @@ private def lookupWithFuel (metadata : RuntimeMetadata) : Nat → TypeId → Res
   | fuel + 1, id => do
     let sourceNode ← metadata.node id
     if id < metadata.source.types.size then
-      let sourceLayout ← require metadata.source.layouts[sourceNode.layoutId]?
-        s!"compiler layout ID {sourceNode.layoutId} out of bounds"
-      return ⟨id,← layout metadata.target sourceLayout⟩
+      return ⟨id,← resolveLayoutWithFuel metadata.target metadata.source.types
+        metadata.source.layouts (fuel + 1) sourceNode.layoutId⟩
     if let .array element _ constructor := sourceNode.shape then
       unless constructor.count < 2^(metadata.target.base.pointerWidth.bits.toNat) do
         throw (.unsupported "lazy array length overflows target usize")
@@ -362,8 +391,7 @@ private def projectionParents (metadata : RuntimeMetadata) (id : TypeId) : Resul
   pure queries.parents
 /-- Resolve a physical compiler layout only at the operation that needs it. -/
 def layoutById (metadata : RuntimeMetadata) (id : Nat) : Result LayoutData := do
-  let source ← require metadata.source.layouts[id]? s!"compiler layout ID {id} out of bounds"
-  layout metadata.target source
+  resolveLayout metadata.target metadata.source.types metadata.source.layouts id
 
 private def projectionLayout (metadata : RuntimeMetadata) (id : TypeId) (layoutId : LayoutId) :
     Result (TyAndLayout TypeId) := do

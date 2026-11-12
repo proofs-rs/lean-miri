@@ -18,6 +18,6 @@ cd "$ROOT"
 "$TEMP_DIR/oracle" --sysroot "$RUSTUP_HOME/toolchains/miri-exporter-${PIN:0:12}" \
   tests/repro/compiler-queries/generic-substitution.rs --crate-type=lib \
   --crate-name=generic_substitution > "$OUT/oracle.json"
-flock /tmp/lean-miri-lake-build.lock lake build Miri.Input.GenericSubstitution
+flock /tmp/lean-miri-lake-build.lock lake build Miri.Input.GenericMaterialCodec
 lake env lean --run tests/compiler_queries/GenericSubstitution.lean
 lake env lean --run tools/CompareGenericSubstitution.lean "$OUT/oracle.json"

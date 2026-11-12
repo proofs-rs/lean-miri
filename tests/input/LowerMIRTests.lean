@@ -1,6 +1,7 @@
 import MiriTests.Input.LegacyFixture
 import MiriTests.Input.JsonFixtures
 import Miri.Input.Decoder
+import Miri.Input.RuntimeMetadata
 import Miri.Input.LowerMIR
 
 open Miri Input
@@ -39,11 +40,12 @@ def main (args : List String) : IO Unit := do
   let some raw := bodies[selected.bodyId]?
     | throw (IO.userError "missing body source")
   let document := decoded.document
+  let runtime ← must ((RuntimeMetadata.ofDocument document).mapError toString)
   let ctx : DecodeMIR.Context := {
     typeCount := document.types.size, allocationCount := document.allocations.size,
     definitionCount := document.definitions.size, typeConstantCount := document.typeConstants.size,
-    spanCount := document.spans.size, scalarSize := fun id => (document.types[id]?).bind fun ty =>
-      (document.layouts[ty.layoutId]?).bind (·.sizeBytes) }
+    spanCount := document.spans.size,
+    scalarSize := fun id => (runtime.lookup id).toOption.map (·.layout.size.bytes.toNat) }
   check (((JsonReader.run (DecodeMIR.parseBody input.sourcePath) raw.text >>= DecodeMIR.resolveBody {ctx with typeCount := 0})).isOk == false) "unresolved type accepted"
   check (((JsonReader.run (DecodeMIR.parseBody input.sourcePath) raw.text >>= DecodeMIR.resolveBody {ctx with scalarSize := fun _ => none})).isOk == false) "missing scalar width accepted"
   let decodeMutation (name value : String) := do

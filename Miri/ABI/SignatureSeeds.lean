@@ -10,7 +10,7 @@ structure SignatureSeed (Ty : Type) where
   output : Ty
   abi : ExternAbi
   cVariadic : Bool
-  deriving Repr, DecidableEq
+  deriving BEq, Repr, DecidableEq
 
 structure PlannedSignature (Ty : Type) where
   inputs : Array Ty
@@ -18,7 +18,7 @@ structure PlannedSignature (Ty : Type) where
   fixedCount : Nat
   abi : ExternAbi
   cVariadic : Bool
-  deriving Repr, DecidableEq
+  deriving BEq, Repr, DecidableEq
 
 namespace SignatureSeed
 

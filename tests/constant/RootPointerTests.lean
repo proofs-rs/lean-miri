@@ -24,7 +24,7 @@ def main (args : List String) : IO Unit := do
   let doc ← must (decodeFixture (← IO.FS.readFile path))
   let runtime ← must ((RuntimeMetadata.ofDocument doc.document).mapError toString)
   let program ← must (lowerProgram doc.document)
-  let some ty := doc.document.types.find? (fun t => ((doc.document.layouts[t.layoutId]?).bind (·.sizeBytes)) == some 8 && (t.shapeKind == .reference || t.shapeKind == .rawPointer))
+  let some ty := doc.document.types.find? (fun t => (runtime.lookup t.id).toOption.map (·.layout.size.bytes.toNat) == some 8 && (t.shapeKind == .reference || t.shapeKind == .rawPointer))
     | throw (IO.userError "fixture lacks pointer layout")
   let makeState (tls foreign : Bool) : Except String (ConstantState CtfeProvenance Unit Unit (Array String)) := do
     let initial : MemoryState CtfeProvenance Unit Unit := { MemoryState.empty with nextAllocId := 100 }

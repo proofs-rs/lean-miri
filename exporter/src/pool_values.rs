@@ -8,6 +8,13 @@ pub(crate) struct Definition {
     pub index: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body_track_caller: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adt_drop: Option<AdtDropMaterial>,
+}
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct AdtDropMaterial {
+    pub manually_drop: bool,
+    pub destructor: Option<u64>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct Position {

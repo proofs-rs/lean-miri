@@ -219,7 +219,8 @@ pub(super) struct BooleanQueries {
     pub is_unpin: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_unsafe_unpin: Option<bool>,
-    pub needs_drop: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub needs_drop: Option<bool>,
     pub opsem_inhabited: bool,
     pub is_sized: bool,
 }

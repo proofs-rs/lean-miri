@@ -13,4 +13,5 @@ if ! lake env lean --run tests/abi/SignatureSeed.lean > "$tmpdir/lean.out"; then
   exit 1
 fi
 diff -u "$tmpdir/rust.out" "$tmpdir/lean.out"
+lake env lean --run tests/abi/SignatureSeedDecoder.lean
 echo "Signature planning matches pinned RustCall/variadic/caller-location construction (20 cases)."

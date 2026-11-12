@@ -6,9 +6,9 @@ import Lean.Data.Json.Printer
 schema 13. This does not rerun rustc and is not producer correspondence evidence.
 The source fixtures are immutable. Historical caller-location oracle rows supply
 only the definition attributes selected by the pinned InstanceKind rule; no
-missing attribute is guessed. Unwind and generic-prefix inputs use explicitly
+missing attribute is guessed. Unwind, drop-definition and generic-prefix inputs use explicitly
 hypothetical seed representatives preserving historical answers. They are not
-recovered rustc material and provide no new producer, ABI or generic-rebase
+recovered rustc material and provide no new producer, ABI, drop or generic-rebase
 correspondence evidence. Tests of actual raw materials require fresh exports.
 Production imports do not use this adapter. -/
 namespace Miri.Input
@@ -84,6 +84,39 @@ def adaptLegacyFixture (source : String) : Except String String := do
           return row.setObjVal! "parent_generic_count" (toJson (1 : Nat))
         value := value.setObjVal! "compiler_runtime_queries"
           (runtime.setObjVal! "virtual" (toJson rows))
+  if let .ok definitions := value.getObjVal? "definitions" >>= Json.getArr? then
+    if let .ok types := raw.getObjVal? "types" >>= Json.getArr? then
+      let booleanPool := (raw.getObjVal? "boolean_queries" >>= Json.getArr?).toOption.getD #[]
+      let mut answers : Array (Nat × Array Bool) := #[]
+      for sourceType in types do
+        let some shape := (sourceType.getObjVal? "shape").toOption | continue
+        unless (shape.getObjVal? "kind" >>= Json.getStr?).toOption == some "adt" do continue
+        let some definition := (shape.getObjVal? "def_id" >>= Json.getNat?).toOption | continue
+        let some facts := (sourceType.getObjVal? "compiler_facts").toOption | continue
+        let some booleans := (facts.getObjVal? "boolean_queries").toOption | continue
+        let booleans := match booleans.getNat?.toOption with
+          | some index => booleanPool[index]?.getD .null
+          | none => booleans
+        let some answer := (booleans.getObjVal? "needs_drop" >>= Json.getBool?).toOption | continue
+        if let some index := answers.findIdx? (·.1 == definition) then
+          let prior := answers[index]!
+          answers := answers.set! index (definition, prior.2.push answer)
+        else answers := answers.push (definition, #[answer])
+      let bodies := (raw.getObjVal? "bodies" >>= Json.getArr?).toOption.getD #[]
+      let representative := bodies.findSome? fun body =>
+        (body.getObjVal? "source_def_id" >>= Json.getNat?).toOption.bind fun id =>
+          if id < definitions.size then some id else none
+      let definitions := definitions.mapIdx fun id definition => Id.run do
+        if (definition.getObjVal? "adt_drop").isOk then return definition
+        let some (_, flags) := answers.find? (·.1 == id) | return definition
+        if !flags.contains false && representative.isNone then return definition
+        -- Explicit hypothetical representatives preserving historical answers.
+        -- A representative function identity is not the recovered Drop impl.
+        let material := Json.mkObj [
+          ("manually_drop", toJson (!flags.contains true)),
+          ("destructor", if !flags.contains false then toJson representative else .null)]
+        return definition.setObjVal! "adt_drop" material
+      value := value.setObjVal! "definitions" (toJson definitions)
   if let .ok abis := raw.getObjVal? "fn_abis" >>= Json.getArr? then
     let abis := abis.map fun abi => Id.run do
       let some flag := (abi.getObjVal? "can_unwind" >>= Json.getBool?).toOption

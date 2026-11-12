@@ -7,6 +7,7 @@ use serde::Serialize;
 #[serde(untagged)]
 pub(super) enum Layout {
     PrimitiveRecipe { primitive_recipe: &'static str },
+    TupleRecipe { tuple_type: u64 },
     Material(FullLayout),
 }
 #[derive(Serialize)]
@@ -624,10 +625,44 @@ impl UnwindSeed {
     }
 }
 #[derive(Serialize)]
+pub(super) struct SignatureSeed {
+    signature: super::pool_type::FunctionSignature,
+    extra_argument_types: Vec<u64>,
+    caller_location: Option<u64>,
+}
+impl SignatureSeed {
+    pub(super) fn new<'tcx>(context: &mut super::ExportContext<'tcx>, tcx: TyCtxt<'tcx>,
+        signature: rustc_middle::ty::FnSig<'tcx>,
+        extra: &'tcx rustc_middle::ty::List<rustc_middle::ty::Ty<'tcx>>,
+        caller: Option<rustc_middle::ty::Ty<'tcx>>) -> Result<Option<Self>, String> {
+        // Only raw, already concrete primitive/tuple signatures are admitted.
+        // Generic, bound-region and instance signature rewrites remain residual.
+        fn material(ty: rustc_middle::ty::Ty<'_>) -> bool {
+            use rustc_middle::ty;
+            match ty.kind() {
+                ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never => true,
+                ty::Tuple(fields) => fields.iter().all(material),
+                _ => false,
+            }
+        }
+        if !signature.inputs_and_output.iter().all(material) || !extra.iter().all(material) {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            signature: super::fn_sig_json_inner(context, tcx, signature)?,
+            extra_argument_types: extra.iter().map(|ty| super::type_json(context, tcx, ty)).collect::<Result<_,_>>()?,
+            caller_location: caller.map(|ty| super::type_json(context, tcx, ty)).transpose()?,
+        }))
+    }
+}
+#[derive(Serialize)]
 pub(super) struct FnAbi {
     calling_convention: CanonAbi,
     c_variadic: bool,
-    fixed_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fixed_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signature_seed: Option<SignatureSeed>,
     unwind_seed: UnwindSeed,
     #[serde(rename = "return")]
     pub ret: super::shared_json::Shared<ArgAbi>,
@@ -639,9 +674,18 @@ impl FnAbi {
         tcx: TyCtxt<'tcx>,
         abi: &rustc_target::callconv::FnAbi<'tcx, rustc_middle::ty::Ty<'tcx>>,
         unwind_seed: UnwindSeed,
+        signature_seed: Option<SignatureSeed>,
     ) -> Result<Self, String> {
         if unwind_seed.reference_can_unwind != abi.can_unwind {
             return Err("FnAbi unwind material source signature disagrees with rustc final ABI".into());
+        }
+        if let Some(seed) = &signature_seed {
+            let fixed = seed.signature.inputs.len().checked_sub(
+                usize::from(seed.signature.abi.kind == "rust_call"));
+            if fixed != Some(abi.fixed_count as usize)
+                || seed.signature.c_variadic != abi.c_variadic {
+                return Err("source signature construction disagrees with rustc fixed-count/variadic result".into());
+            }
         }
         fn arg<'tcx>(
             context: &mut super::ExportContext<'tcx>,
@@ -711,7 +755,8 @@ impl FnAbi {
         Ok(Self {
             calling_convention: CanonAbi::new(abi.conv),
             c_variadic: abi.c_variadic,
-            fixed_count: abi.fixed_count,
+            fixed_count: signature_seed.is_none().then_some(abi.fixed_count),
+            signature_seed,
             unwind_seed,
             ret: arg(context, tcx, &abi.ret, abi.conv, true)?,
             arguments: abi

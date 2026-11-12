@@ -20,9 +20,9 @@ Historical schema-11/12 inputs use explicit test-only adapters
 [`LegacyFixture.lean`](../MiriTests/Input/LegacyFixture.lean) and
 [`legacy_fixture_schema.py`](../tools/legacy_fixture_schema.py); production
 readers accept only schema 13. These adapters preserve retained fixture bytes on
-disk. Their unwind and generic-prefix seeds are hypothetical representatives
+disk. Their unwind, drop-definition and generic-prefix seeds are hypothetical representatives
 preserving historical answers, not recovered rustc material. Such replay is
-component regression evidence, with no new producer, ABI or generic-rebase
+component regression evidence, with no new producer, ABI, drop or generic-rebase
 correspondence claim. Tests asserting actual raw materials require fresh exports;
 the genuine differential drivers use category parsers or independently fresh
 baseline and candidate exports.

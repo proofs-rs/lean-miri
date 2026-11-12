@@ -48,7 +48,7 @@ def main (args : List String) : IO Unit := do
   let wrappedId ← must (JsonFixtures.parse "{\"fn_abi_id\":0}")
   rejects wrappedId.natural "object ABI reference accepted"
   let some sample := runtime.source.functionAbis[0]? | throw (IO.userError "missing first function ABI")
-  let invalidArity := { sample with fixedCount := sample.arguments.size + 1 }
+  let invalidArity := { sample with residualFixedCount := some (sample.arguments.size + 1), signatureSeed := none }
   let arityRuntime := { runtime with source := { runtime.source with functionAbis := #[invalidArity] } }
   match CallResolution.functionAbiId arityRuntime 0 with
   | .error message => check (message.contains "fixed_count exceeds actual arguments") "arity diagnostic changed"

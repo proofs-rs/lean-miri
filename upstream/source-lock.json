@@ -13,9 +13,9 @@
     "procedure": "upstream/fetch-sources.sh",
     "procedure_sha256": "a8ced1c1a19c47193465862bbe2486e25dcf91c544df5b62f9b2265ea12fb7d8",
     "rustc_selected_archive_paths": {
-      "count": 547,
+      "count": 550,
       "path": "upstream/rustc-selected-files.txt",
-      "sha256": "6e7768877b6ce8ff1e99b166f6a544b52986ef9f089aea83f4b71fc6fef71365"
+      "sha256": "f3ab5ab3750ca3ddd938baeac18b745261d08a4c56f3e7c930cd09f4219d103a"
     }
   },
   "coverage_expected_rust_modules": {
@@ -50,9 +50,12 @@
     "upstream/rustc-source/compiler/rustc_target/src/spec": 389,
     "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs": 1,
     "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs": 1,
+    "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/binder.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/const_kind.rs": 1,
+    "upstream/rustc-source/compiler/rustc_type_ir/src/fold.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/inherent.rs": 1,
+    "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/region_kind.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/sty/consts.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/sty/mod.rs": 1,
@@ -90,9 +93,12 @@
     "upstream/rustc-source/compiler/rustc_target/src/spec",
     "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
     "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+    "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/binder.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/const_kind.rs",
+    "upstream/rustc-source/compiler/rustc_type_ir/src/fold.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/inherent.rs",
+    "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/region_kind.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/sty/consts.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/sty/mod.rs",
@@ -4783,6 +4789,12 @@
     },
     {
       "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
+      "sha256": "1fa8d5b3b458f4eb8845d4ef136451d141db8722e8a31aba0090e162529373ce",
+      "git_blob": "094cf5aec0bd1e82063185eee6a201e1c4058288"
+    },
+    {
+      "component": "rustc",
       "git_blob": "d9b5ec7356e3e47d4e7f716aa3fcf157d04972af",
       "path": "upstream/rustc-source/compiler/rustc_type_ir/src/binder.rs",
       "sha256": "944788200ff781acc1b0b0cf733005bb2fa67beb5b8cb18124bf1c7f745f1944"
@@ -4795,9 +4807,21 @@
     },
     {
       "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/fold.rs",
+      "sha256": "09a768ac1be507ca603279527963f1348522e69b40117b061754e10db0303ad9",
+      "git_blob": "a1b749b62a5f095909a626e88ea9f1f106f2c1d5"
+    },
+    {
+      "component": "rustc",
       "git_blob": "4fd92194c5d811a673bd92caa47409bdecb63c3a",
       "path": "upstream/rustc-source/compiler/rustc_type_ir/src/inherent.rs",
       "sha256": "6714f34fd0528ee3c334c3a468d81de826f3dec2b8ee5d06991dc6a34d326819"
+    },
+    {
+      "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "git_blob": "0ce9d68d88b4d90c6979ab7f41fd270feca3cf0b"
     },
     {
       "component": "rustc",
@@ -4917,7 +4941,8 @@
     "AES 0.9.3 hazmat runtime dependency is pinned from Miri Cargo.lock. Full crate src inventory is retained; x86 Lean hazmat uses the portable fixslice32 circuit, while alternative hardware implementations remain inventoried and do not imply a complete dependency equivalence proof.",
     "GenMC is outside the port scope. The immutable Miri reference snapshot retains its optional GenMC bridge; no standalone GenMC source or Lean backend is included.",
     "The pinned rustc_ty_utils abi.rs and layout.rs source snapshots support material-seed algorithm comparisons. Their inclusion expands source inventory scope; it does not establish full ABI/layout provider correspondence or dependency-closure coverage.",
-    "Selected rand, rand_core and rand_xoshiro package sources support the pinned rustc layout shuffle port. Package checksums come from pinned rustc Cargo.lock. Selection and finite comparisons do not establish the complete dependency closure or all-target layout equivalence."
+    "Selected rand, rand_core and rand_xoshiro package sources support the pinned rustc layout shuffle port. Package checksums come from pinned rustc Cargo.lock. Selection and finite comparisons do not establish the complete dependency closure or all-target layout equivalence.",
+    "Additional selected rustc needs_drop, generic argument shifting and trait-predicate sources retain provenance for material-seed rule ports; inventory inclusion is not complete trait-solver or generic compiler correspondence."
   ],
   "supporting_files": [
     {

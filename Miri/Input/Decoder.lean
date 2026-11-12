@@ -334,6 +334,11 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
   if producer.rustcCommit != expectedRustcCommit then throw "$.producer.rustc_commit: input is from the wrong pinned rustc revision"
   unless compilerAbiLayoutSchema == some expectedCompilerAbiLayoutSchema do
     throw s!"$.compiler_abi_layout_schema: unsupported schema `{compilerAbiLayoutSchema}`"
+  for definition in definitions do
+    if let some material := definition.adtDrop then
+      if let some destructor := material.destructor then
+        unless destructor < definitions.size do
+          throw "$.definitions: ADT destructor definition identity out of bounds"
   if types.isEmpty then throw "$.types: input has no type graph; refusing an empty import"
   if bodies.isEmpty then throw "$.bodies: input has no MIR bodies; refusing an empty import"
   profileit "decoder.validate_predicate_queries" profile fun _ => do
@@ -352,17 +357,18 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
     if let some world := compilerAllocIdWorld then validateCompilerAllocIdWorld allocations world
   -- Scalar constants are validated against the same target-dependent layout
   -- constructor used at execution. Recipe rows intentionally omit eager sizes.
-  let target ← (do
+  let target : RuntimeMetadata.Result Miri.ABI.RuntimeTargetDataLayout := do
     let evidence ← RuntimeMetadata.require d.runtimeTargetDataLayout "runtime_target_data_layout"
-    RuntimeMetadata.importTarget evidence).mapError toString
+    RuntimeMetadata.importTarget evidence
   let scalarSize := fun id => do
     let ty ← types[id]?
     let source ← layouts[ty.layoutId]?
-    match source.primitiveRecipe with
-    | none => source.sizeBytes
-    | some recipe => match Miri.ABI.PrimitiveLayout.compute target recipe with
-      | .ok layout => some layout.size.bytes.toNat
+    if source.primitiveRecipe.isNone && source.tupleType.isNone then source.sizeBytes
+    else match target with
       | .error _ => none
+      | .ok target => match RuntimeMetadata.resolveLayout target types layouts ty.layoutId with
+        | .ok layout => some layout.size.bytes.toNat
+        | .error _ => none
   let bodyContext : DecodeMIR.Context := {
     typeCount := types.size, allocationCount := allocations.size,
     definitionCount := definitions.size, typeConstantCount := typeConstants.size,

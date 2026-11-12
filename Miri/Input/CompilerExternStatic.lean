@@ -58,8 +58,7 @@ private def decodeDeclaration (runtime : RuntimeMetadata) (ctx : LowerContext) (
   let definitionId ← definition tables raw.definition
   let result := do
     unless ctx.containsTypeId raw.typeId do throw "extern-static declaration references absent compiler type"
-    let some layout := ctx.layouts[raw.layoutId]? | throw "extern-static layout ID out of bounds"
-    let computed ← RuntimeMetadata.layout runtime.target layout |>.mapError toString
+    let computed ← runtime.layoutById raw.layoutId |>.mapError toString
     let size := computed.size
     let align := computed.align.abi
     let sourceMutability := raw.definitionMutability == MemoryMutability.mutable || !raw.typeIsFreeze

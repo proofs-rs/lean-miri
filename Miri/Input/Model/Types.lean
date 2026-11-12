@@ -3,6 +3,7 @@ import Miri.Memory.CtfeProvenance
 import Miri.MIR.Operators
 import Miri.ABI.ExternAbi
 import Miri.ABI.FnAbi
+import Miri.ABI.SignatureSeeds
 import Miri.Interpreter.Instance
 
 /-!
@@ -237,6 +238,7 @@ structure Layout where
   variants : Option TaggedNode
   backendRepr : Option TaggedNode
   primitiveRecipe : Option String := none
+  tupleType : Option TypeId := none
 
 inductive ArmCallKind where
   | aapcs | cmseNonSecureCall | cmseNonSecureEntry
@@ -571,19 +573,33 @@ structure AbiArgument where
   mode : AbiPassMode
   deriving BEq
 
+structure AbiSignatureSeed where
+  signature : Miri.ABI.SignatureSeed TypeId
+  extraArgumentTypes : Array TypeId
+  callerLocation : Option TypeId
+  deriving BEq, Repr, DecidableEq
+
 structure FunctionAbi where
   arguments : Array AbiArgument
   returnValue : AbiArgument
   callingConvention : CanonicalAbi
   unwindSeed : Miri.ABI.UnwindSeed
   cVariadic : Bool
-  fixedCount : Nat
+  residualFixedCount : Option Nat
+  signatureSeed : Option AbiSignatureSeed := none
   deriving BEq
+
+/-- Raw ADT definition identity/impl material for synchronous drop. -/
+structure AdtDropMaterial where
+  manuallyDrop : Bool
+  destructor : Option DefinitionRef
+  deriving Repr, DecidableEq
 
 structure DefinitionId where
   crateIndex : Nat
   index : Nat
   bodyTrackCaller : Option Bool := none
+  adtDrop : Option AdtDropMaterial := none
   deriving Repr, DecidableEq
 
 inductive VtableEntryKind where

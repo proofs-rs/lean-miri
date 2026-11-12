@@ -15,5 +15,6 @@ for seed in default 0 42 18446744073709551615; do
     bash tools/export-mir.sh --output "$OUT/baseline-$seed.json" \
     --root aggregate_layouts -- tests/compiler_queries/aggregate-layouts.rs \
     --crate-type=lib --crate-name=aggregate_layouts "${FLAGS[@]}"
-  lake env lean --run tests/compiler_queries/AggregateLayouts.lean "$OUT/baseline-$seed.json"
+  CARGO_TARGET_DIR="$ROOT/exporter/target"     bash tools/export-mir.sh --output "$OUT/candidate-$seed.json"     --root aggregate_layouts -- tests/compiler_queries/aggregate-layouts.rs     --crate-type=lib --crate-name=aggregate_layouts "${FLAGS[@]}"
+  lake env lean --run tests/compiler_queries/AggregateLayouts.lean     "$OUT/baseline-$seed.json" "$OUT/candidate-$seed.json"
 done

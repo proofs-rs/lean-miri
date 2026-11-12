@@ -21,9 +21,14 @@ definition attributes. A document-local algebraic type arena creates previously
 absent mutable pointer, erased mutable reference and value-length array nodes,
 layouts and usize constants; it shares identities with the existing array World.
 The exporter no longer seeds mutable pointer/reference result nodes.
-Primitive scalar/never layouts are reconstructed from TyKind recipes and the
-target. Initial ArgAbi construction, covered x86_64 nonpointer scalar passing
-modes and `fn_can_unwind` execute in Lean from explicit material recipes/seeds.
+Primitive scalar/never and tuple layouts are reconstructed from TyKind/raw tuple
+recipes and the target; the tuple resolver uses the pinned univariant layout
+algorithm. ADT needs-drop rules execute against raw definition-level destructor
+and ManuallyDrop identity material, with covered answers omitted by the exporter.
+Initial ArgAbi construction, covered x86_64 nonpointer scalar passing modes,
+`fn_can_unwind`, and covered source-signature argument ordering/fixed counts run
+in Lean from explicit material recipes/seeds. Rewritten or unsupported FnAbi
+signatures still carry explicit residual counts and physical ABI query results.
 
 Fresh finite comparisons with pinned rustc passed 3,559 structural/auto-trait
 queries across 541 types, 23 caller-location decisions (both outcomes), four
@@ -38,8 +43,42 @@ One fresh 844,898-byte no_std guest passed same-prepared-TyCtxt Miri exit-zero a
 Lean finalized exit-zero with choice cursor 348, including mutable references,
 raw-pointer reads, tuples, array-to-slice coercion and a tracked helper. Its
 nested novel type/array layout and identity checks also passed. A separate
-81,231,642-byte std guest has a same-TyCtxt Miri exit-zero reference, but its Lean
-execution has not yet been run. The new strict production input is schema 13.
+81,231,642-byte std guest also passed frozen checkpoint `67e70f76` Lean execution:
+finalized exit-zero, cursor 2038, no active frame, and completed leak checking,
+matching its same-prepared-TyCtxt Miri exit-zero reference. One CPU-2 trial with
+one Lean thread measured 5.182 s wall / 5.134 s child CPU, 540,640 KiB peak RSS,
+0.14 s same-CPU steal, zero cgroup throttling and unchanged memory-event counters.
+Frozen binary/input/source hashes remained unchanged. This single shared-host
+trial is not a speedup claim; raw manifests and profiles are in ignored
+`scratch/material-large-trial/`.
+A fresh 875,896-byte `expected_ub` control reached Tree Borrows forbidden-read UB
+at source line 18 in both same-TyCtxt Miri and the frozen Lean runner (cursor 69).
+The exporter returned failure because Miri reported the expected UB, while Lean's
+process exited zero with an explicit `undefined_behavior` terminal; neither is
+counted as safe execution. The new strict production input is schema 13.
+
+The tuple/needs-drop/signature integration passed a further full native and
+ImportMIR build (1,205 jobs). Fresh material and destructor guests matched
+same-TyCtxt Miri exit-zero with Lean exit-zero/cursors 348 and 418. The destructor
+control checks four observable destructor effects plus ManuallyDrop, MaybeUninit
+and zero-length suppression. Its `mem::needs_drop` values can fold at compile
+time and are not counted as runtime query-hook evidence. Independent fresh
+query comparisons passed 417 needs-drop answers (13 true/404 false, no residual
+answers in that fixture), with all 188 candidate type rows omitting the covered
+eager field; missing raw material and invalid destructor IDs were rejected.
+Eight tuple layouts matched complete rustc layouts in ordinary and three
+randomized-layout configurations. Signature planning validated 72 fresh ABI rows
+(14 seeded/58 residual), ten malformed requests and two explicit residual-domain
+controls. A material-only decoder fixture retains exact raw widths without
+inventing a default target; recipes require actual target data. Five updated
+input/constant harnesses and the primitive-range/metadata-pool regressions pass.
+
+Generic substitution/template codecs, general univariant/shuffle, union layout,
+structural Sized and pointer-metadata algorithms also have independent component
+implementations/tests. Some remain unconnected to production queries; their
+presence does not eliminate the corresponding residual catalogs. Full trait
+selection, alias/projection normalization and generic MIR construction are being
+implemented separately and are not yet available as complete runtime providers.
 
 The remaining migration includes general generic template export/substitution,
 alias/projection normalization, trait selection and fulfillment (including negative,

@@ -1,6 +1,7 @@
 import Miri.Input.CompilerInstance
 import Miri.Input.CallCompatibility
 import Miri.ABI.FnAbi
+import Miri.Input.StructuralNormalization
 import Miri.Interpreter.Call
 
 /-! Internal reuse of actual rustc instance-resolution and FnAbi query results.
@@ -38,13 +39,36 @@ def convention (source : CanonicalAbi) : Result CanonAbi := do
 def functionAbi (runtime : RuntimeMetadata) (source : FunctionAbi) : Result (FnAbi TypeId) := do
   let args ← source.arguments.mapM fun argument => (CallCompatibility.argument runtime argument).mapError toString
   let ret ← (CallCompatibility.argument runtime source.returnValue).mapError toString
-  if source.fixedCount >= 2^32 then throw "FnAbi.fixed_count exceeds u32"
-  if source.fixedCount > args.size then throw "FnAbi.fixed_count exceeds actual arguments"
+  let fixedCount ← match source.signatureSeed with
+    | none => match source.residualFixedCount with
+      | some count => pure count
+      | none => throw "FnAbi argument construction is absent"
+    | some material => do
+      let normalize (id : Nat) : Result Nat := do
+        let node ← (runtime.node id).mapError toString
+        if ← StructuralNormalization.identityReady runtime.source.types
+            (runtime.source.types.size + 1) id then return id
+        let some facts := node.compilerFacts | throw "signature normalization material absent"
+        let some (_, some normalized) := facts.typeQueries.find? (·.1 == "normalized")
+          | throw "signature normalization query remains unresolved"
+        pure normalized
+      let tupleFields (id : Nat) :=
+        match (runtime.node id).toOption with
+        | some node => match node.shape with | .tuple fields => some fields | _ => none
+        | none => none
+      let planned ← material.signature.plan material.extraArgumentTypes material.callerLocation tupleFields
+      let expected ← planned.inputs.mapM normalize
+      unless expected == args.map (·.layout.ty) && (← normalize planned.output) == ret.layout.ty do
+        throw "source signature construction disagrees with physical FnAbi argument order/types"
+      unless source.cVariadic == planned.cVariadic do throw "signature seed variadic flag mismatch"
+      pure planned.fixedCount
+  if fixedCount >= 2^32 then throw "FnAbi.fixed_count exceeds u32"
+  if fixedCount > args.size then throw "FnAbi.fixed_count exceeds actual arguments"
   -- rustc's physical `FnAbi.args` can include the compiler-injected caller
   -- location while `fixed_count` counts only explicit source arguments.
   -- Preserve both exact facts here; demanded call initialization validates
   -- their relationship against the exact `requires_caller_location` query.
-  return ⟨args,ret,source.cVariadic,UInt32.ofNat source.fixedCount,← convention source.callingConvention,source.unwindSeed.canUnwind⟩
+  return ⟨args,ret,source.cVariadic,UInt32.ofNat fixedCount,← convention source.callingConvention,source.unwindSeed.canUnwind⟩
 
 /-- The input carries only an ABI table reference. Conversion to the semantic
 ABI happens when an operation requests it; input graphs are never expanded. -/

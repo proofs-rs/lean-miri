@@ -93,6 +93,14 @@ these materials. The old `can_unwind` result field is rejected. Coroutine,
 closure and thread-local shim signatures follow the source instance signature
 rules; per-row producer checks compare the material's source decision with the
 queried rustc ABI. This seed does not replace the remaining FnAbi query.
+Already concrete primitive/tuple signatures for ordinary item instances and
+function pointers carry `signature_seed` with original input/output types,
+ordered variadic extras and optional caller-location type. Such rows omit
+`fixed_count`: Lean plans argument construction and derives that count, then
+checks the physical argument vector. Signature type normalization remains an
+explicit dependency (structural identity or a residual normalization leaf).
+Rows requiring other instance signature rewrites retain a residual `fixed_count`;
+exactly one construction representation is required.
 Each payload contains the complete type and layout;
 sharing requires equality of all three, including all mode attributes.
 

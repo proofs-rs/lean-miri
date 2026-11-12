@@ -256,10 +256,20 @@ def parseAllocationMemoryInline (path : String) : Parser AllocationMemory :=
     (array (parseInitRange (path ++ ".initialization_ranges")))
     (array (parseRelocation (path ++ ".relocations")))
 
+private def parseAdtDropMaterial (path : String) : Parser AdtDropMaterial := do
+  let (manuallyDrop, destructor) ← object (none, none) fun (manual, dtor) key => do
+    match key with
+    | "manually_drop" => pure (some (← boolean), dtor)
+    | "destructor" => pure (manual, some (← nullable natural))
+    | _ => fail s!"{path}: unknown ADT drop material field `{key}`"
+  return ⟨← required manuallyDrop (path ++ ".manually_drop"),
+    ← required destructor (path ++ ".destructor")⟩
+
 private structure ParseDefinitionIdFields where
   crate : Option (Nat) := none
   index : Option (Nat) := none
   bodyTrackCaller : Option Bool := none
+  adtDrop : Option AdtDropMaterial := none
 
 def parseDefinitionId (path : String) : Parser (DefinitionId) := do
   let s ← object ({} : ParseDefinitionIdFields) fun s key => do
@@ -267,10 +277,11 @@ def parseDefinitionId (path : String) : Parser (DefinitionId) := do
     | "crate" => return { s with crate := some (← natural) }
     | "index" => return { s with index := some (← natural) }
     | "body_track_caller" => return { s with bodyTrackCaller := some (← boolean) }
+    | "adt_drop" => return { s with adtDrop := some (← parseAdtDropMaterial (path ++ ".adt_drop")) }
     | _ => skipValue; pure s
   let crate ← required s.crate (path ++ ".crate")
   let index ← required s.index (path ++ ".index")
-  return ⟨crate, index, s.bodyTrackCaller⟩
+  return ⟨crate, index, s.bodyTrackCaller, s.adtDrop⟩
 
 def parseDefinitionRef (_path : String) : Parser DefinitionRef := natural
 
@@ -1123,6 +1134,17 @@ private def parseUnwindSeed (path : String) : Parser Miri.ABI.UnwindSeed := do
   return ⟨← required abi (path ++ ".abi"), ← required definition (path ++ ".definition"),
     ← required panic (path ++ ".panic_unwinds"), ← required drop (path ++ ".panic_in_drop_unwinds")⟩
 
+private def parseAbiSignatureSeed (path : String) : Parser AbiSignatureSeed := do
+  let (signature, extra, caller) ← object (none, none, none) fun (signature, extra, caller) key => do
+    match key with
+    | "signature" => pure (some (← parseFunctionSignature (path ++ ".signature")), extra, caller)
+    | "extra_argument_types" => pure (signature, some (← JsonReader.array natural), caller)
+    | "caller_location" => pure (signature, extra, some (← nullable natural))
+    | _ => fail s!"{path}: unknown signature seed field `{key}`"
+  let signature ← required signature (path ++ ".signature")
+  return ⟨⟨signature.inputs,signature.output,signature.abi,signature.cVariadic⟩,
+    ← required extra (path ++ ".extra_argument_types"), ← required caller (path ++ ".caller_location")⟩
+
 private structure ParseFunctionAbiFields where
   arguments : Option (Array AbiArgument) := none
   returnValue : Option (AbiArgument) := none
@@ -1130,6 +1152,7 @@ private structure ParseFunctionAbiFields where
   unwind_seed : Option (Miri.ABI.UnwindSeed) := none
   c_variadic : Option (Bool) := none
   fixed_count : Option (Nat) := none
+  signature_seed : Option AbiSignatureSeed := none
 
 def parseFunctionAbi (path : String) (argumentPool : Option (Array AbiArgument) := none) : Parser (FunctionAbi) := do
   let argument (path : String) : Parser AbiArgument := do
@@ -1139,7 +1162,7 @@ def parseFunctionAbi (path : String) (argumentPool : Option (Array AbiArgument) 
       let id ← natural
       let some value := pool[id]? | fail s!"{path}: unresolved ABI argument {id}"
       pure value
-  let s ← object (ParseFunctionAbiFields.mk none none none none none none) fun s key => do
+  let s ← object (ParseFunctionAbiFields.mk none none none none none none none) fun s key => do
     match key with
     | "arguments" => return { s with arguments := some (← arrayIndexed (fun i => argument s!"{path}.arguments[{i}]")) }
     | "return" => return { s with returnValue := some (← argument (path ++ ".return")) }
@@ -1148,14 +1171,16 @@ def parseFunctionAbi (path : String) (argumentPool : Option (Array AbiArgument) 
     | "can_unwind" => fail s!"{path}: eager unwind result is not a material seed"
     | "c_variadic" => return { s with c_variadic := some (← boolean) }
     | "fixed_count" => return { s with fixed_count := some (← natural) }
+    | "signature_seed" => return { s with signature_seed := some (← parseAbiSignatureSeed (path ++ ".signature_seed")) }
     | _ => skipValue; pure s
   let arguments ← required s.arguments (path ++ ".arguments")
   let returnValue ← required s.returnValue (path ++ ".returnValue")
   let calling_convention ← required s.calling_convention (path ++ ".calling_convention")
   let unwind_seed ← required s.unwind_seed (path ++ ".unwind_seed")
   let c_variadic ← required s.c_variadic (path ++ ".c_variadic")
-  let fixed_count ← required s.fixed_count (path ++ ".fixed_count")
-  return ⟨arguments, returnValue, calling_convention, unwind_seed, c_variadic, fixed_count⟩
+  unless s.signature_seed.isSome != s.fixed_count.isSome do
+    fail s!"{path}: expected exactly one signature seed or residual fixed_count"
+  return ⟨arguments, returnValue, calling_convention, unwind_seed, c_variadic, s.fixed_count, s.signature_seed⟩
 
 def decodeCompilerLayout : Parser Layout := parseLayout "$.compiler_projection_layout"
 def decodeCompilerFunctionAbi : Parser FunctionAbi := parseFunctionAbi "$.compiler_fn_abi"

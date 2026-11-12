@@ -11,13 +11,14 @@ flock /tmp/lean-miri-lake-build.lock lake build \
   Miri.Input.CallResolution Miri.Input.Decoder \
   MiriTests.Input.StructuralDeref MiriTests.Input.StructuralTail \
   MiriTests.Input.GenericRebase
-for source in TypeConstructors TypeArena Normalization StructuralAutoTraits InstanceCallerLocation; do
+for source in TypeConstructors TypeArena Normalization StructuralAutoTraits StructuralNeedsDrop InstanceCallerLocation; do
   lake env lean "tests/compiler_queries/$source.lean"
 done
 bash tests/abi/run_initial_arg_abi.sh
 bash tests/abi/run_unwind_seed.sh
 bash tools/check-structural-type-queries.sh "$BASELINE"
 bash tools/check-generic-rebase.sh "$BASELINE"
+bash tools/check-needs-drop.sh "$BASELINE"
 for version in baseline candidate; do
   checkout="$ROOT"
   if [[ "$version" == baseline ]]; then checkout="$BASELINE"; fi

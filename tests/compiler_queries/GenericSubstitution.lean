@@ -3,11 +3,11 @@ import Miri.Input.GenericSubstitution
 open Miri.Input.GenericSubstitution
 
 private def parameter : Term := .parameter .type 0
-private def region (depth : Nat) : Term := .bound .region (.Bound depth) 0 "a"
+private def region (depth : Nat) : Term := .bound .region (.Bound depth) 0 (.namedForPrinting "a")
 private def reference (lifetime : Term) : Term :=
   .node .type "reference" "immutable" #[lifetime, .atom .type "u32" ""]
 private def function (argument : Term) : Term :=
-  .node .type "fn_ptr" "Rust" #[.binder #[] (.node .aggregate "signature" "" #[argument])]
+  .node .type "fn_ptr" "Rust" #[Term.binder #[] (.node .aggregate "signature" "" #[argument])]
 
 private def matchesResult (result : Except String Term) (expected : Term) : Bool :=
   match result with | .ok value => value == expected | .error _ => false
@@ -24,10 +24,10 @@ def main : IO Unit := do
       (function (reference (region 3))) do
     throw (IO.userError "escaping replacement region was not shifted")
 
-example : shift 20 2 0 (.bound .type .Canonical 0 "T") =
-    .ok (.bound .type .Canonical 0 "T") := by rfl
-example : instantiate 20 #[.placeholder .type 1 3 "T"] parameter =
-    .ok (.placeholder .type 1 3 "T") := by rfl
+example : shift 20 2 0 (.bound .type .Canonical 0 (.namedForPrinting "T")) =
+    .ok (.bound .type .Canonical 0 (.namedForPrinting "T")) := by rfl
+example : instantiate 20 #[.placeholder .type 1 3 (.namedForPrinting "T")] parameter =
+    .ok (.placeholder .type 1 3 (.namedForPrinting "T")) := by rfl
 example : instantiate 20 #[.atom .constant "value" "3"] parameter =
     .error "generic parameter argument sort mismatch" := by rfl
 example : instantiate 20 #[] parameter =

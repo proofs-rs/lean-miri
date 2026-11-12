@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check actual compiler u128/niche metadata without invoking Lean."""
+"""Check source u128 constructor and exact niche material without invoking Lean."""
 from pathlib import Path
 import json
 import sys
@@ -12,6 +12,7 @@ document=load_mir_document(output);lock=json.loads((ROOT/'upstream/source-lock.j
 for source in ['rustc','miri']:assert document['producer'][source+'_commit']==lock['pins'][source]['commit']
 type_id=document['compiler_runtime_primitives']['u128']
 node=next(t for t in document['types'] if t['type_id']==type_id)
-assert pool_entry(document, 'layouts', node['layout'])['backend_repr']['scalar']['valid_range']=={'start':'0','end':str(2**128-1)}
+assert node['shape'] == {'kind': 'uint', 'unsigned_kind': 'u128'}
+assert pool_entry(document, 'layouts', node['layout']) == {'primitive_recipe': 'u128'}
 assert any(layout.get('largest_niche', {}).get('valid_range', {}).get('end') == str(2**128-1) for layout in document['layouts'] if layout.get('largest_niche'))
-print('validated exact compiler u128 range and niche metadata')
+print('validated u128 material constructor and exact compiler niche range; Lean checks the computed primitive range')

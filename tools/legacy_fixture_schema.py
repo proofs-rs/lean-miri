@@ -1,9 +1,9 @@
 """Test-only schema projection for immutable historical MIR fixtures.
 
 No rustc invocation occurs. These adaptations provide local regression inputs,
-not new producer or reference-execution evidence. Unwind and generic-prefix
+not new producer or reference-execution evidence. Unwind, drop-definition and generic-prefix
 seeds are hypothetical representatives preserving historical answers, not
-recovered rustc material or new ABI/generic-rebase correspondence evidence.
+recovered rustc material or new ABI/drop/generic-rebase correspondence evidence.
 Tests asserting actual raw materials must use fresh exports. Production mir_json
 is strict.
 """
@@ -58,6 +58,33 @@ def adapt_legacy_fixture(document):
         if args and args[0].get("kind") == "type" and expected == [
                 {"kind": "type", "value": concrete}, *args[1:]]:
             row["parent_generic_count"] = 1
+    # Explicit hypothetical definition seeds for historical component replay.
+    # Uniform false/true oracle groups admit manually-drop/destructor
+    # representatives; mixed generic instantiations retain field recursion.
+    # These identities are not recovered compiler/drop-impl material.
+    drop_answers = {}
+    boolean_pool = result.get("boolean_queries", [])
+    for node in result.get("types", []):
+        if not isinstance(node, dict) or node.get("shape", {}).get("kind") != "adt":
+            continue
+        definition = node["shape"].get("def_id")
+        facts = node.get("compiler_facts", {})
+        booleans = facts.get("boolean_queries", {})
+        if type(booleans) is int and 0 <= booleans < len(boolean_pool):
+            booleans = boolean_pool[booleans]
+        answer = booleans.get("needs_drop") if isinstance(booleans, dict) else None
+        if type(definition) is int and 0 <= definition < len(definitions) and type(answer) is bool:
+            drop_answers.setdefault(definition, set()).add(answer)
+    representative_function = next((body.get("source_def_id") for body in result.get("bodies", [])
+                                    if isinstance(body, dict) and type(body.get("source_def_id")) is int
+                                    and 0 <= body["source_def_id"] < len(definitions)), None)
+    for definition, answers in drop_answers.items():
+        if answers == {True} and representative_function is None:
+            continue  # Missing identities remain missing material, never false.
+        if "adt_drop" not in definitions[definition]:
+            definitions[definition]["adt_drop"] = {
+                "manually_drop": answers == {False},
+                "destructor": representative_function if answers == {True} else None}
     for abi in result.get("fn_abis", []):
         if isinstance(abi, dict) and type(abi.get("can_unwind")) is bool:
             # Synthetic equivalent result for component replays, not recovered

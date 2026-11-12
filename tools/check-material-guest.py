@@ -33,6 +33,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output', type=Path, help='new directory under scratch/')
     parser.add_argument('--timeout', type=float, default=600)
+    parser.add_argument('--source', type=Path, default=Path('tests/compiler_queries/material-guest.rs'))
+    parser.add_argument('--crate-name', default='material_guest')
     args = parser.parse_args()
     output = args.output.resolve()
     if not output.is_relative_to(ROOT / 'scratch') or output.exists():
@@ -44,8 +46,8 @@ def main():
                LEAN_NUM_THREADS='1')
     with (output / 'export.log').open('x') as log:
         subprocess.run(['bash', 'tools/export-mir.sh', '--output', str(document),
-                        '--root', 'miri_start', '--', 'tests/compiler_queries/material-guest.rs',
-                        '--crate-name=material_guest', '--edition=2024', '-Cpanic=abort',
+                        '--root', 'miri_start', '--', str(args.source),
+                        '--crate-name=' + args.crate_name, '--edition=2024', '-Cpanic=abort',
                         '-Zmir-opt-level=0', '--cfg=miri'], cwd=ROOT, env=env,
                        stdout=log, stderr=subprocess.STDOUT, check=True, timeout=args.timeout)
     raw = document.read_bytes()
@@ -67,7 +69,7 @@ def main():
     start = time.monotonic()
     with (output / 'lean.log').open('x') as log:
         result = subprocess.run(['taskset', '-c', str(cpu), str(binary), str(document),
-                                 '--ui-source', 'tests/compiler_queries/material-guest.rs',
+                                 '--ui-source', str(args.source),
                                  '--ui-flags', '[]', '--profile'], cwd=ROOT, env=env,
                                 stdout=log, stderr=subprocess.STDOUT, timeout=args.timeout)
     elapsed = time.monotonic() - start
@@ -75,7 +77,7 @@ def main():
     cpu_after = resource.getrusage(resource.RUSAGE_CHILDREN)
     text = (output / 'lean.log').read_text()
     success = result.returncode == 0 and 'run: finalized_exit code=0;' in text
-    manifest = dict(input_sha256=hashlib.sha256(raw).hexdigest(), input_bytes=len(raw),
+    manifest = dict(source=str(args.source), input_sha256=hashlib.sha256(raw).hexdigest(), input_bytes=len(raw),
                     binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
                     cpu=cpu, lean_threads=1, wall_seconds=elapsed, before=before, after=after,
                     user_cpu_seconds=cpu_after.ru_utime-cpu_before.ru_utime,

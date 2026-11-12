@@ -186,7 +186,10 @@ deriving instance ToExpr for Input.AbiPassMode
 deriving instance ToExpr for Input.AbiArgument
 deriving instance ToExpr for ABI.UnwindDefinition
 deriving instance ToExpr for ABI.UnwindSeed
+deriving instance ToExpr for ABI.SignatureSeed
+deriving instance ToExpr for Input.AbiSignatureSeed
 deriving instance ToExpr for Input.FunctionAbi
+deriving instance ToExpr for Input.AdtDropMaterial
 deriving instance ToExpr for Input.DefinitionId
 deriving instance ToExpr for Input.VtableEntryKind
 deriving instance ToExpr for Input.VtablePredicateKind

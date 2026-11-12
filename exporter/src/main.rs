@@ -1683,6 +1683,22 @@ impl ExportCallbacks {
                 .or_insert_with(|| tcx.body_codegen_attrs(definition).flags.contains(
                     rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags::TRACK_CALLER));
         }
+        // Drop semantics consume raw definition identity and destructor impl
+        // material. Capture it before the prepared AllocId-world boundary.
+        let mut adts = export_context.type_ids.keys().filter_map(|input| match input.kind() {
+            ty::Adt(definition, _) => Some(*definition), _ => None,
+        }).collect::<Vec<_>>();
+        adts.sort_by_key(|definition| export_context.definitions[&definition.did()]);
+        adts.dedup();
+        let mut adt_drop_material = HashMap::new();
+        for definition in adts {
+            let destructor = definition.destructor(tcx)
+                .map(|destructor| def_json(&mut export_context, destructor.did));
+            let id = def_json(&mut export_context, definition.did());
+            adt_drop_material.insert(id as usize, pool_values::AdtDropMaterial {
+                manually_drop: definition.is_manually_drop(), destructor,
+            });
+        }
         let body_roots = bodies;
         let allocator_world = if self.prepared_allocator_world {
             Some(allocator_world::capture(
@@ -1751,6 +1767,7 @@ impl ExportCallbacks {
             definitions: export_context.definitions.finish("definition")?.into_iter().enumerate()
                 .map(|(id, mut definition)| {
                     definition.body_track_caller = body_track_caller.get(&id).copied();
+                    definition.adt_drop = adt_drop_material.get(&id).cloned();
                     definition
                 }).collect(),
             type_constants: export_context.type_constants.finish("type_constant")?,
@@ -2342,7 +2359,7 @@ fn export_reachable_instances<'tcx>(
             let fn_abi = match tcx.fn_abi_of_instance(
                 ty::TypingEnv::fully_monomorphized().as_query_input((instance, ty::List::empty())),
             ) {
-                Ok(abi) => fn_abi_json(context, tcx, abi, pool_layout::UnwindSeed::for_instance(tcx, instance)?)?,
+                Ok(abi) => instance_fn_abi_json(context, tcx, abi, instance, ty::List::empty())?,
                 Err(error) => export_failure(
                     "main::export_reachable_instances",
                     format!(
@@ -2769,6 +2786,42 @@ fn structural_identity_normalization(input: ty::Ty<'_>, fuel: usize) -> bool {
     }
 }
 
+// Coverage recognizer only: actual needs_drop results for this domain are
+// computed by Lean from material. No compiler needs_drop query is performed.
+fn structural_needs_drop_supported<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>, fuel: usize) -> bool {
+    fn visit<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>, fuel: usize,
+        memo: &mut HashMap<(ty::Ty<'tcx>, usize), bool>) -> bool {
+        if fuel == 0 { return false; }
+        let env = ty::TypingEnv::fully_monomorphized();
+        let Ok(input) = tcx.try_normalize_erasing_regions(env, ty::Unnormalized::new_wip(input)) else { return false; };
+        let key = (input, fuel);
+        if let Some(result) = memo.get(&key) { return *result; }
+        let mut recurse = |child| visit(tcx, child, fuel - 1, memo);
+        let result = match input.kind() {
+            ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Str | ty::Never
+            | ty::Ref(..) | ty::RawPtr(..) | ty::FnDef(..) | ty::FnPtr(..) | ty::Foreign(_)
+            | ty::Dynamic(..) | ty::Coroutine(..) => true,
+            ty::Tuple(fields) => fields.iter().all(recurse),
+            ty::Pat(inner, _) | ty::Slice(inner) => recurse(*inner),
+            ty::Array(inner, count) => match count.try_to_target_usize(tcx) {
+                Some(0) => true, Some(_) => recurse(*inner), None => false,
+            },
+            ty::Adt(definition, args) => definition.is_manually_drop()
+                || definition.destructor(tcx).is_some() || definition.is_union()
+                || definition.all_fields().all(|field| recurse(
+                    tcx.type_of(field.did).instantiate(tcx, args).skip_norm_wip())),
+            ty::Closure(_, args) => args.as_closure().upvar_tys().iter().all(recurse),
+            ty::CoroutineClosure(_, args) => args.as_coroutine_closure().upvar_tys().iter().all(recurse),
+            _ => false,
+        };
+        memo.insert(key, result);
+        result
+    }
+    // Query-local coverage cache only; no compiler result or state survives
+    // this call, and shared type DAGs are never recursively expanded as trees.
+    visit(tcx, input, fuel, &mut HashMap::new())
+}
+
 fn type_compiler_facts_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
@@ -2826,7 +2879,8 @@ fn type_compiler_facts_json<'tcx>(
         is_freeze,
         is_unpin,
         is_unsafe_unpin,
-        needs_drop: normalized.needs_drop(tcx, env),
+        needs_drop: if structural_needs_drop_supported(tcx, normalized, 256) { None }
+            else { Some(normalized.needs_drop(tcx, env)) },
         opsem_inhabited: normalized.is_opsem_inhabited(tcx, env),
         is_sized: normalized.is_sized(tcx, env),
     };
@@ -3377,7 +3431,14 @@ fn layout_value_json<'tcx>(
     if !fresh {
         return id as u64;
     }
-    let value = pool_layout::Layout::new(tcx, layout);
+    let value = if matches!(layout.ty.kind(), ty::Tuple(_)) {
+        // Raw canonical Ty identity: element types already live in its material
+        // shape. Lean computes field ordering, offsets, niches and ABI lazily.
+        // Reserve before traversal; type export finishes this node normally.
+        pool_layout::Layout::TupleRecipe { tuple_type: context.type_id(layout.ty) }
+    } else {
+        pool_layout::Layout::new(tcx, layout)
+    };
     context.layouts.define(id, value);
     id as u64
 }
@@ -4261,7 +4322,7 @@ fn unwind_json(unwind: rustc_middle::mir::UnwindAction) -> pool_body::Unwind {
 
 fn def_json(context: &mut ExportContext<'_>, def: rustc_hir::def_id::DefId) -> u64 {
     let (id,fresh)=context.definitions.reserve(def);
-    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32(),body_track_caller:None }); }
+    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32(),body_track_caller:None,adt_drop:None }); }
     id as u64
 }
 
@@ -5103,7 +5164,7 @@ fn resolve_callee_json<'tcx>(
                             } else { None };
                             let dispatch_slot = virtual_resolution.as_ref().map(|resolution| resolution.dispatch_slot);
                             let function_type = type_json(context,tcx,func_ty)?;
-                            let fn_abi = fn_abi_json(context,tcx,abi, pool_layout::UnwindSeed::for_instance(tcx, instance)?)?;
+                            let fn_abi = instance_fn_abi_json(context,tcx,abi, instance, ty::List::empty())?;
                             if virtual_resolution.is_some() {
                                 Callee::VirtualDispatch { function_type, instance_id, dispatch_slot, fn_abi, virtual_resolution }
                             } else {
@@ -5181,7 +5242,7 @@ fn resolve_callee_json<'tcx>(
                                     Callee::IndirectFunctionPointer {
                                         function_type:type_json(context,tcx,func_ty)?, signature:fn_sig_json_inner(context,tcx,signature)?,
                                         extra_argument_types:extra.iter().map(|ty|type_json(context,tcx,ty)).collect::<Result<Vec<_>,String>>()?,
-                                        fn_abi:fn_abi_json(context,tcx,abi, pool_layout::UnwindSeed::new(tcx, signature.abi(), None))?,
+                                        fn_abi:pointer_fn_abi_json(context,tcx,abi, signature, extra)?,
                                     }
                                 }
                                 Err(error) => export_failure(
@@ -5213,17 +5274,37 @@ fn resolve_callee_json<'tcx>(
     })
 }
 
-fn fn_abi_json<'tcx>(
+fn instance_fn_abi_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>,
+    abi: &rustc_target::callconv::FnAbi<'tcx, ty::Ty<'tcx>>, instance: ty::Instance<'tcx>,
+    extra: &'tcx ty::List<ty::Ty<'tcx>>) -> Result<u64, String> {
+    let seed = if matches!(instance.def, ty::InstanceKind::Item(_)) {
+        let ty = instance.ty(tcx, ty::TypingEnv::fully_monomorphized());
+        if matches!(ty.kind(), ty::FnDef(..)) {
+            pool_layout::SignatureSeed::new(context, tcx, ty.fn_sig(tcx).skip_binder(), extra,
+                instance.def.requires_caller_location(tcx).then(|| tcx.caller_location_ty()))?
+        } else { None }
+    } else { None };
+    store_fn_abi(context, tcx, abi, pool_layout::UnwindSeed::for_instance(tcx, instance)?, seed)
+}
+fn pointer_fn_abi_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>,
+    abi: &rustc_target::callconv::FnAbi<'tcx, ty::Ty<'tcx>>, signature: ty::FnSig<'tcx>,
+    extra: &'tcx ty::List<ty::Ty<'tcx>>) -> Result<u64, String> {
+    let seed = pool_layout::SignatureSeed::new(context, tcx, signature, extra, None)?;
+    store_fn_abi(context, tcx, abi, pool_layout::UnwindSeed::new(tcx, signature.abi(), None), seed)
+}
+
+fn store_fn_abi<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     abi: &rustc_target::callconv::FnAbi<'tcx, rustc_middle::ty::Ty<'tcx>>,
     unwind_seed: pool_layout::UnwindSeed,
+    signature_seed: Option<pool_layout::SignatureSeed>,
 ) -> Result<u64, String> {
     let (id, fresh) = context.fn_abis.reserve(abi.clone());
     if !fresh {
         return Ok(id as u64);
     }
-    let value = pool_layout::FnAbi::new(context, tcx, abi, unwind_seed)?;
+    let value = pool_layout::FnAbi::new(context, tcx, abi, unwind_seed, signature_seed)?;
     context.fn_abis.define(id, value);
     Ok(id as u64)
 }
@@ -6119,7 +6200,7 @@ fn compiler_instance_abis_json<'tcx>(
         }else if !closed || !function {
             unavailable_compiler_fact("FnAbi instance query requires a complete monomorphic function instance and extra argument vector")?
         }else{match tcx.fn_abi_of_instance(ty::TypingEnv::fully_monomorphized().as_query_input((instance,extra))){
-                Ok(abi)=>compiler_fact(fn_abi_json(context,tcx,abi, pool_layout::UnwindSeed::for_instance(tcx, instance)?)?),
+                Ok(abi)=>compiler_fact(instance_fn_abi_json(context,tcx,abi, instance, extra)?),
             Err(error)=>export_failure("main::compiler_instance_abis_json", format!("{}; {}", "rustc fn_abi_of_instance failed", format!("{error:?}")))?,
         }};
         let record=InstanceAbiFact { instance_id:context.register_metadata_instance(instance), extra_argument_types:extra.iter().map(|ty| type_json(context,tcx,ty)).collect::<Result<Vec<_>, String>>()?, abi_query:abi };
@@ -6573,7 +6654,7 @@ fn record_helper_signature<'tcx>(
     require_normal_fn_pointer_abi(signature.abi())?;
     let abi = match tcx.fn_abi_of_fn_ptr(ty::TypingEnv::fully_monomorphized()
         .as_query_input((ty::Binder::dummy(signature), ty::List::empty()))) {
-        Ok(abi) => fn_abi_json(context, tcx, abi, pool_layout::UnwindSeed::new(tcx, signature.abi(), None))?,
+        Ok(abi) => pointer_fn_abi_json(context, tcx, abi, signature, ty::List::empty())?,
         Err(error) => export_failure("main::compiler_function_facts_json",
             format!("helper dummy signature ABI query failed; {error:?}"))?,
     };
@@ -6663,7 +6744,7 @@ fn compiler_function_facts_json<'tcx>(
         let abi=if !closed {unavailable_compiler_fact("FnPtr ABI requires a complete monomorphic function type and extra argument vector")?}
         else{require_normal_fn_pointer_abi(input.fn_sig(tcx).skip_binder().abi())?;
         match tcx.fn_abi_of_fn_ptr(ty::TypingEnv::fully_monomorphized().as_query_input((input.fn_sig(tcx),extra))){
-            Ok(abi)=>compiler_fact(fn_abi_json(context,tcx,abi, pool_layout::UnwindSeed::new(tcx, input.fn_sig(tcx).skip_binder().abi(), None))?),
+            Ok(abi)=>compiler_fact(pointer_fn_abi_json(context,tcx,abi, input.fn_sig(tcx).skip_binder(), extra)?),
             Err(error)=>export_failure("main::compiler_function_facts_json", format!("{}; {}", "rustc fn_abi_of_fn_ptr failed", format!("{error:?}")))?,
         }};
         Ok::<_, String>((context.type_id(input), extra.iter().map(|ty| type_json(context,tcx,ty)).collect::<Result<Vec<_>, String>>()?, abi))
@@ -6727,7 +6808,7 @@ fn compiler_function_facts_json<'tcx>(
                         ty::TypingEnv::fully_monomorphized()
                             .as_query_input((ty::Binder::dummy(signature), ty::List::empty())),
                     ) {
-                        Ok(abi) => compiler_fact(fn_abi_json(context, tcx, abi, pool_layout::UnwindSeed::new(tcx, signature.abi(), None))?),
+                        Ok(abi) => compiler_fact(pointer_fn_abi_json(context, tcx, abi, signature, ty::List::empty())?),
                         Err(error) => export_failure(
                             "main::compiler_function_facts_json",
                             format!(

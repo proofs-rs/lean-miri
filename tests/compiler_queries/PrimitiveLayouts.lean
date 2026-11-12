@@ -38,15 +38,17 @@ private def readFixture (path : String) (version : Nat) : IO Fixture := do
 
 private def Fixture.lookup (fixture : Fixture) (id : Nat) : IO Miri.ABI.LayoutData := do
   let some node := fixture.types.find? (·.id == id) | throw (IO.userError "type absent")
-  let some layout := fixture.layouts[node.layoutId]? | throw (IO.userError "layout absent")
-  must ((RuntimeMetadata.layout fixture.target layout).mapError toString)
+  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId).mapError toString)
 
 /-- Compare complete computed layouts to rustc's eager layouts from a separate
 baseline export of exactly the same fixture/compiler/flags. -/
 def main (args : List String) : IO Unit := do
   for invalid in ["{\"primitive_recipe\":\"imaginary\"}",
       "{\"primitive_recipe\":\"bool\",\"size_bytes\":1}",
-      "{\"primitive_recipe\":\"bool\",\"backend_repr\":null}"] do
+      "{\"primitive_recipe\":\"bool\",\"backend_repr\":null}",
+      "{\"tuple_type\":0,\"primitive_recipe\":\"bool\"}",
+      "{\"tuple_type\":0,\"size_bytes\":0}",
+      "{\"tuple_type\":-1}"] do
     check (match JsonReader.run DecoderValues.parseLayout invalid with
       | .error _ => true | .ok _ => false)
       s!"accepted malformed primitive layout recipe {invalid}"
@@ -55,6 +57,27 @@ def main (args : List String) : IO Unit := do
   let baseline ← readFixture baselinePath 12
   let candidate ← readFixture candidatePath 13
   check (baseline.target == candidate.target) "comparison target layouts differ"
+  let some tupleNode := candidate.types.find? (fun node => node.shapeKind == .tuple)
+    | throw (IO.userError "tuple recipe fixture absent")
+  let some tupleLayout := candidate.layouts[tupleNode.layoutId]?
+    | throw (IO.userError "tuple recipe layout absent")
+  check (tupleLayout.tupleType.isSome && tupleLayout.fields.isNone &&
+    tupleLayout.backendRepresentation.isNone && tupleLayout.sizeBytes.isNone)
+    "tuple layout retained eager algorithm results"
+  let some nonTuple := candidate.types.find? (fun node => node.shapeKind == .bool)
+    | throw (IO.userError "non-tuple recipe control absent")
+  let invalidKind := candidate.layouts.set! tupleNode.layoutId
+    {tupleLayout with tupleType := some nonTuple.id}
+  check (!(RuntimeMetadata.resolveLayout candidate.target candidate.types invalidKind
+    tupleNode.layoutId).isOk) "tuple recipe accepted non-tuple source material"
+  let invalidId := candidate.layouts.set! tupleNode.layoutId
+    {tupleLayout with tupleType := some candidate.types.size}
+  check (!(RuntimeMetadata.resolveLayout candidate.target candidate.types invalidId
+    tupleNode.layoutId).isOk) "tuple recipe accepted absent source material"
+  let cyclicTypes := candidate.types.set! tupleNode.id
+    {tupleNode with shape := .tuple #[tupleNode.id]}
+  check (!(RuntimeMetadata.resolveLayout candidate.target cyclicTypes candidate.layouts
+    tupleNode.layoutId).isOk) "cyclic tuple material supplied a successful layout"
   let mut count := 0
   for node in candidate.types do
     let some input := candidate.layouts[node.layoutId]?

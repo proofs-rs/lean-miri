@@ -34,12 +34,11 @@ private def changeEnd (root : Json) (id : Nat) (last : Json) : Except String Jso
   let layout ← replace layout "backend_repr" backend
   replace root "layout_values" (.arr (payloads.set! payloadId layout))
 private def rangeOf (document : ImportDocument) (id : Nat) : Except String (Nat × Nat) := do
-  let some ty := document.types.find? (·.id == id) | throw "source u128 type missing"
-  let some layout := document.layouts[ty.layoutId]? | throw "physical layout missing"
-  let some backend := layout.backendRepresentation | throw "scalar backend missing"
-  let some scalar := backend.scalar | throw "scalar missing"
-  let some range := scalar.validRange | throw "range missing"
-  pure range
+  let runtime ← RuntimeMetadata.ofDocument document |>.mapError toString
+  let value ← runtime.lookup id |>.mapError toString
+  let .Scalar (.Initialized (validRange := range)) := value.layout.backendRepr
+    | throw "source type does not have initialized scalar layout"
+  pure (range.start.toNat, range.end.toNat)
 
 def main (args : List String) : IO Unit := do
   let path::_ := args | throw (IO.userError "missing exported JSON")
@@ -56,11 +55,22 @@ def main (args : List String) : IO Unit := do
   | .Scalar (.Initialized (value := .Int .I128 false) (validRange := range)) =>
     check (range.start.toNat == 0 && range.end.toNat == 2^128-1) "runtime u128 range changed"
   | _ => throw (IO.userError "runtime u128 scalar shape changed")
+  -- Primitive recipes fix their valid range algorithmically. Exercise decimal
+  -- wire range parsing on the independently exported NonZeroU128 ADT scalar
+  -- material, whose initialized scalar endpoints remain explicit inputs.
+  let some mutableNode := decoded.document.types.find? (fun node =>
+    let material := (decoded.document.layouts[node.layoutId]?).any fun source =>
+      source.primitiveRecipe.isNone && source.tupleType.isNone
+    material && (metadata.lookup node.id).toOption.any fun value =>
+      match value.layout.backendRepr with
+      | .Scalar (.Initialized (value := .Int .I128 false)) => true
+      | _ => false)
+    | throw (IO.userError "actual material u128 scalar ADT missing")
   for value in [0,2^64,2^128-1] do
     for encoded in [Json.str (toString value), toJson value] do
-      let edited ← must (changeEnd original id encoded)
+      let edited ← must (changeEnd original mutableNode.id encoded)
       let decoded ← must (decodeFixture edited.compress)
-      check ((← must (rangeOf decoded.document id)).2 == value) "decimal/numeric natural changed"
+      check ((← must (rangeOf decoded.document mutableNode.id)).2 == value) "decimal/numeric natural changed"
   check (metadata.source.types.any fun node =>
     (metadata.lookup node.id).toOption.any fun value => value.layout.largestNiche.any fun niche =>
       niche.value == .Int .I128 false && niche.validRange.start.toNat == 1 &&
@@ -72,7 +82,7 @@ def main (args : List String) : IO Unit := do
   let invalid : List Json := [Json.str "", .str "-1", .str "+1", .str "1_0", .str "0xFF", .str "1.0",
     .str (toString (2^128 : Nat)), toJson (2^128 : Nat), toJson (-1 : Int), .bool true, .null]
   for encoded in invalid do
-    let edited ← must (changeEnd original id encoded)
+    let edited ← must (changeEnd original mutableNode.id encoded)
     check (!(decodeFixture edited.compress).isOk) s!"invalid u128 range accepted: {encoded.compress}"
     let niche ← must (field nicheLayout "largest_niche")
     let range ← must (field niche "valid_range")

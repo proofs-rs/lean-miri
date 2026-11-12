@@ -325,6 +325,7 @@ private structure ArgABI where
   layout : LocalLayout
 private structure FnABI where
   source : Input.FunctionAbi
+  fixedCount : Nat
   args : Array ArgABI
   ret : ArgABI
 private structure Program where
@@ -413,7 +414,8 @@ private def getAbi (p : Program) (fnInstance : CallInstance) : Exec FnABI := do
     if node.shapeKind != .uint || node.shapeMetadata.unsignedKind != some (.known .u32) then
       throw (.unsupported "non-u32 call ABI")
     return ⟨source, layout⟩
-  return ⟨source, ← lift (source.arguments.mapM arg), ← lift (arg source.returnValue)⟩
+  let semantic ← lift ((Input.CallResolution.functionAbi p.metadata source).mapError StepError.invalidProgram)
+  return ⟨source, semantic.fixedCount.toNat, ← lift (source.arguments.mapM arg), ← lift (arg source.returnValue)⟩
 
 private def alwaysLive (body : MIR.Body) : Array MIR.LocalId := Id.run do
   let scheduled := body.basicBlocks.foldl (fun locals block =>
@@ -562,7 +564,7 @@ private def callHooks (p : Program) : CallHooks CtfeProvenance State Unit Nat Un
   callerLocation := block "implicit caller location"
   abiCanUnwind := fun abi => abi.source.unwindSeed.canUnwind
   abiVariadic := fun abi => abi.source.cVariadic
-  abiFixedCount := fun abi => abi.source.fixedCount
+  abiFixedCount := FnABI.fixedCount
   abiArgs := FnABI.args
   abiReturn := FnABI.ret
   sameConvention := fun a b => a.source.callingConvention == b.source.callingConvention

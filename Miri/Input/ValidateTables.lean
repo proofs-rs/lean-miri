@@ -471,6 +471,11 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
       checkId b.types id s!"{path}.layout_query_input_type" "type"
     typeShape b s!"{path}.shape" node.shape
     if let some facts := node.compilerFacts then compilerFacts b s!"{path}.compiler_facts" facts
+  for (value, index) in document.layouts.toList.zipIdx do
+    if let some id := value.tupleType then
+      checkId b.types id s!"$.layouts[{index}].tuple_type" "type"
+      let some node := document.types[id]? | throw "tuple recipe type ID invariant"
+      unless node.shapeKind == .tuple do throw s!"$.layouts[{index}].tuple_type: source type is not a tuple"
   for (value, index) in document.typeConstants.toList.zipIdx do
     typeConstant b s!"$.type_constants[{index}]" value
   for (value, index) in document.predicates.toList.zipIdx do

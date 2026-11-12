@@ -1,6 +1,7 @@
 import MiriTests.Input.LegacyFixture
 import MiriTests.Input.JsonFixtures
 import Miri.Input.Decoder
+import Miri.Input.RuntimeMetadata
 
 open Lean Miri.Input
 
@@ -123,12 +124,21 @@ def main : IO Unit := do
   | .Val (.Scalar (.Int bits width)) ty =>
     check (bits == 255 && width == 1 && ty == 1) "explicit scalar width changed across forward tables"
   | _ => throw (IO.userError "wrong resolved scalar constant")
+  -- This synthetic raw-layout parser fixture intentionally has no target.
+  -- Recipes require real target material; never invent it for this adapter.
+  let scalarSize : Nat → Option Nat ← if baseline.document.runtimeTargetDataLayout.isSome then do
+    let runtime ← must ((RuntimeMetadata.ofDocument baseline.document).mapError toString)
+    pure (fun id => (runtime.lookup id).toOption.map (·.layout.size.bytes.toNat))
+  else pure (fun id => do
+    let node ← baseline.document.types[id]?
+    let input ← baseline.document.layouts[node.layoutId]?
+    unless input.primitiveRecipe.isNone && input.tupleType.isNone do none
+    input.sizeBytes)
   let asmContext : DecodeMIR.Context := {
     typeCount := baseline.document.types.size, allocationCount := baseline.document.allocations.size,
     definitionCount := baseline.document.definitions.size, typeConstantCount := baseline.document.typeConstants.size,
     spanCount := baseline.document.spans.size,
-    scalarSize := fun id => (baseline.document.types[id]?).bind fun ty =>
-      (baseline.document.layouts[ty.layoutId]?).bind (·.sizeBytes) }
+    scalarSize }
   let asmRegister := "{\"name\":\"reg\",\"arch\":\"X86_64\",\"kind\":\"register_class\"}"
   let asmInput := obj #[("value", obj #[("constant", constant "255"), ("kind", "\"Constant\"")]),
     ("register", asmRegister), ("kind", "\"in\"")]

@@ -39,11 +39,10 @@ private def readFixture (path : String) (version : Nat) : IO Fixture := do
 
 private def Fixture.lookup (fixture : Fixture) (id : Nat) : IO Miri.ABI.LayoutData := do
   let some node := fixture.types.find? (·.id == id) | throw (IO.userError "type absent")
-  let some layout := fixture.layouts[node.layoutId]? | throw (IO.userError "layout absent")
-  must ((RuntimeMetadata.layout fixture.target layout).mapError toString)
+  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId).mapError toString)
 
 def main (args : List String) : IO Unit := do
-  let [path] := args | throw (IO.userError "expected pinned baseline export")
+  let path::candidatePaths := args | throw (IO.userError "expected pinned baseline export [candidate export]")
   let source ← readFixture path 12
   let mut count := 0
   for node in source.types do
@@ -78,3 +77,26 @@ def main (args : List String) : IO Unit := do
   check (count >= 1) "no tuple source oracle"
   IO.println s!"PASS {structs} complete struct layouts equal pinned rustc (C, packed, aligned, transparent, reordered, scalar pair, empty)"
   IO.println s!"PASS {count} complete tuple layouts equal pinned rustc"
+  if let candidatePath::_ := candidatePaths then
+    let candidate ← readFixture candidatePath 13
+    check (candidate.target == source.target) "candidate aggregate target differs"
+    let mut comparisons := 0
+    for node in candidate.types do
+      unless node.shapeKind == .tuple do continue
+      let some recipe := candidate.layouts[node.layoutId]?
+        | throw (IO.userError "candidate tuple layout absent")
+      check (recipe.tupleType.isSome && recipe.fields.isNone &&
+        recipe.backendRepresentation.isNone && recipe.sizeBytes.isNone)
+        "candidate tuple retained eager layout results"
+      -- This finite fixture has stable, unambiguous type spellings. They select
+      -- corresponding oracle rows only; interpreter algorithms never use them.
+      let matching := source.types.filter (fun prior =>
+        prior.shapeKind == .tuple && prior.display == node.display)
+      check (!matching.isEmpty) s!"candidate tuple lacks source fixture oracle: {node.display}"
+      let actual ← candidate.lookup node.id
+      for prior in matching do
+        let expected ← source.lookup prior.id
+        check (actual == expected) s!"tuple recipe differs from pinned rustc: {node.display}\nexpected={repr expected}\nactual={repr actual}"
+      comparisons := comparisons + 1
+    check (comparisons >= 8) s!"tuple recipe fixture coverage incomplete: {comparisons}"
+    IO.println s!"PASS {comparisons} source tuple recipes equal complete pinned rustc layouts"
