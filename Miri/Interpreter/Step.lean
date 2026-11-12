@@ -1,5 +1,6 @@
 import Miri.Interpreter.Stack
 import Miri.Concurrency.Termination
+import Miri.Interpreter.HostStdioRequest
 
 /-! Small-step driver port of pinned rustc `interpret/step.rs:41-154`.
 Callbacks are mandatory semantic obligations, including their mutations on failure. -/
@@ -24,6 +25,9 @@ inductive StepError where
   | resourceExhaustion (reason : String)
   | machineStop (reason : String)
   | callback (message : String)
+  /-- Runner suspension, never a successful guest operation. The persistent
+  first-request latch must also be inspected after error cleanup unwinds. -/
+  | hostStdioRequest (pending : HostStdio.Pending)
   deriving Repr, DecidableEq
 
 abbrev StepResult (S A : Type) := S × Except StepError A

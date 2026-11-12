@@ -323,6 +323,23 @@ and regression) pass. The UI sweep remains unfinished; its shard-9 AVX2
 export failure used the old producer and is covered by the local repair below. These results
 belong to that main revision; schema 9 has not yet received hosted validation.
 
+### Standard-stream effects: pending native connection
+
+The native runner still reports Unsupported when Tree Borrows diagnostics or
+explicit Miri output shims require an actual host stdout/stderr write. The pure
+typed transcript component does not attach a host IO capability. Its disabled
+callback is definitionally the previous callback; the new World slot defaults
+to `none`. Exact stream/byte requests, response kinds/count bounds, retained
+first-pending requests, poisoned mismatches and binding to the outer immutable
+journal are checked separately from any native implementation.
+
+Remaining work is the isolated control channel, a real one-write native backend,
+all-outcome replay integration and fresh genuine comparisons. Replay must begin
+from a new machine with identical supplied choices, seed and policy; an unwound
+attempt is not resumable. Raw host errno must be retained, and unavailable host
+errno conversion remains Unsupported. No general stdio error support, crash
+recovery guarantee or whole-machine proof follows from these pure checks.
+
 ### Source-owned descriptor cleanup: local validation
 
 The follow-up on main `4fd7d0fe` connects virtual sockets, eventfd and epoll
