@@ -722,7 +722,7 @@ inductive CallResolutionKind where
 /-- Only the compiler's LLVM intrinsic dispatch has no ordinary FnAbi. -/
 inductive CallAbiEvidence where
   | normal (id : FunctionAbiId)
-  /-- Runtime raw-signature path; never a serialized ABI table index. -/
+  /-- Raw-signature demand, independent of any physical ABI table index. -/
   | sourceSignature
   | llvmIntrinsic
   deriving Repr, DecidableEq
@@ -851,25 +851,36 @@ structure NoopDropRef where
   instanceId : InstanceId
   sourceSpan : BacktraceSpan
 
+/-- Raw source method location and physical lang-item identities used by
+FnPtr conversion shim construction. No local type or executable body is stored. -/
+structure FnPointerShimRef where
+  instanceId : InstanceId
+  sourceSpan : BacktraceSpan
+  nonNullDefinition : DefinitionRef
+  codeDefinition : DefinitionRef
+  deriving Repr, DecidableEq
+
 /-- A selected source category has no monomorphic fallback. -/
 inductive BodySeed where
   | material (body : Body)
   | copyTemplate (reference : CopyTemplateRef)
   | noopDrop (reference : NoopDropRef)
+  | fnPointerShim (reference : FnPointerShimRef)
 
 def BodySeed.instanceId : BodySeed → InstanceId
   | .material body => body.instanceId
   | .copyTemplate reference => reference.instanceId
   | .noopDrop reference => reference.instanceId
+  | .fnPointerShim reference => reference.instanceId
 
 def BodySeed.promotedBodies : BodySeed → Array PromotedBody
   | .material body => body.promotedBodies
   | .copyTemplate reference => reference.promotedBodies
-  | .noopDrop _ => #[]
+  | .noopDrop _ | .fnPointerShim _ => #[]
 
 def BodySeed.materialBody? : BodySeed → Option Body
   | .material body => some body
-  | .copyTemplate _ | .noopDrop _ => none
+  | .copyTemplate _ | .noopDrop _ | .fnPointerShim _ => none
 
 structure BodyRoot where
   bodyId : BodyId

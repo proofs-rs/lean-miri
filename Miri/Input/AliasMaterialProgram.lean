@@ -10,7 +10,7 @@ def rule (declaration : Declaration) (template : Option DefinitionTemplate) :
     Except String AliasNormalization.Rule := do
   unless declaration.hasValue do throw "alias declaration has no source RHS"
   let some template := template | throw "alias source RHS template absent"
-  pure ⟨declaration.definition, template, declaration.ownPredicates⟩
+  pure ⟨declaration.definition, template⟩
 
 /-- Construct only the non-selected declaration index. Actual impl selection,
 default inheritance and argument translation stay in the trait engine. -/
@@ -29,7 +29,7 @@ def program (source : Array (Declaration × Option DefinitionTemplate)) :
     | .free true => freeRules := freeRules.push (← rule declaration template)
     | .free false => pure ()
     | .associated .trait parent count _ =>
-      associatedDeclarations := associatedDeclarations.push ⟨declaration.definition,parent,count,declaration.ownPredicates⟩
+      associatedDeclarations := associatedDeclarations.push ⟨declaration.definition,parent,count⟩
     | .associated (.traitImpl _) .. | .associated .inherentImpl .. => pure ()
   pure ⟨freeRules, associatedDeclarations⟩
 

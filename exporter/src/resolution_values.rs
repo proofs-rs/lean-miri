@@ -4,6 +4,7 @@ use serde::Serialize;
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum Callee<C = PendingCandidates> {
     LlvmIntrinsic { function_type: u64, instance_id: u64 },
+    SourceInstance { function_type: u64, instance_id: u64 },
     ResolvedInstance {
         function_type: u64,
         instance_id: u64,
@@ -56,6 +57,7 @@ impl Callee<PendingCandidates> {
     pub fn finish(self, candidates: &std::collections::HashMap<u64, Vec<u64>>) -> Callee<Vec<u64>> {
         match self {
             Self::LlvmIntrinsic { function_type, instance_id } => Callee::LlvmIntrinsic { function_type, instance_id },
+            Self::SourceInstance { function_type, instance_id } => Callee::SourceInstance { function_type, instance_id },
             Self::ResolvedInstance {
                 function_type,
                 instance_id,

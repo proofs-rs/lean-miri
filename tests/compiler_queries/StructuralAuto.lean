@@ -39,7 +39,7 @@ private def source : StructuralAuto.SourceAdt := fun identity => do
     variantCount := 1
     variantNames := #["Component"]
     fields := if phantom then #[] else #[⟨0,0,unsafeField,"component_field"⟩]
-    ownPredicates := #[] }
+    }
   pure (material,template)
 example : StructuralAuto.query source false 50 (nominal 1 u16) = .ok (some #[u16]) := by decide +kernel
 example : StructuralAuto.query source true 50 (nominal 3 u16) = .ok none := by decide +kernel

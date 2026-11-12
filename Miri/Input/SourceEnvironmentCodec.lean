@@ -20,6 +20,7 @@ private def readParent (rawParent : Json) : Except String (Option Parent) := do
 def read (value : Json) : Except String Material := do
   keys value ["parameters", "predicate_parent", "generic_parent", "is_trait", "own_predicates"]
   let parameters ← (← (← value.getObjVal? "parameters").getArr?).mapM GenericMaterialCodec.readSort
+  unless parameters.all (· != .aggregate) do throw "aggregate is not a source generic parameter sort"
   let parent ← readParent (← value.getObjVal? "predicate_parent")
   let genericParent ← readParent (← value.getObjVal? "generic_parent")
   if let some genericParent := genericParent then

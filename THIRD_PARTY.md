@@ -36,3 +36,10 @@ Selected original sources and their MIT and Apache-2.0 license texts are retaine
 under `upstream/crates/`; exact package checksums and VCS revisions are recorded
 in `upstream/source-lock.json`. These are reference dependencies for the port,
 not an assertion that the complete crates or compiler layout algorithm are ported.
+
+The TypeId hash port translates the SipHash128-1-3 implementation from
+[rustc-stable-hash](https://github.com/rust-lang/rustc-stable-hash)0.1.2,
+selected by the pinned rustc Cargo.lock. Credit belongs to its contributors.
+Selected sources and the MIT and Apache-2.0 license texts are retained under
+`upstream/crates/rustc-stable-hash-0.1.2`; exact archive and source hashes
+and the VCS revision are recorded in `upstream/source-lock.json`.

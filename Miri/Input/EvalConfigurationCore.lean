@@ -590,7 +590,7 @@ def makeWithForeignContext {Assembly : Type}
       ExecutionChoices.boolean EvalCoreMachine.tape .floatFuse
     let varArgs := IntrinsicSymbolsMachine.varArgs (CompilerVarArgsLeaves.make p options.compatibilityBudget)
       EvalConfiguration.symbols access pointers.arithmetic functions operands copy
-    let typeId := IntrinsicSymbolsMachine.typeId (CompilerIntrinsicSymbols.typeIdLeaves p image)
+    let typeId := IntrinsicSymbolsMachine.typeId (CompilerIntrinsicSymbols.typeIdLeaves p image EvalProjectionMachine.arrays)
       EvalConfiguration.symbols access functions operands copy
     let intrinsics := fun callee =>
       let atomic := ExecutionIntrinsic.Atomic.dispatcher atomics

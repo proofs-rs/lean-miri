@@ -127,7 +127,12 @@ private def decodeResolution (instances : Array InstanceNode)
     unless source.dispatchSlot == some slot do throw "virtual dispatch slot/instance mismatch"
   | _ => unless !virtual do throw "virtual dispatch query did not return a Virtual instance"
   unless source.kind == .llvmIntrinsic do
-    let .normal _ := source.abi | throw "ordinary call lacks compiler ABI evidence"
+    match source.abi with
+    | .normal _ => pure ()
+    | .sourceSignature =>
+      unless source.kind == .direct do throw "raw source ABI requires a direct call"
+      let .Item _ := calleeKind | throw "raw source ABI requires an Item instance"
+    | .llvmIntrinsic => throw "ordinary call lacks ABI evidence"
   pure ⟨callee,callee,function,source.abi,source⟩
 
 /-- Resolution reads decoded canonical identities; existing IDs never move.
@@ -229,6 +234,8 @@ def atSite (prepared : Prepared) (site : Site) : RuntimeArrayTypes.CompilerM Res
     let entry ← liftWorld (require matching[0]? "missing compiler call site")
     let resolution ← liftWorld entry.outcome
     liftWorld (sourcePrefixInstance prepared.program.input (← get) resolution.callee)
+    if resolution.abi == .sourceSignature then
+      let _ ← WorldInstanceAbi.construct resolution.callee #[]
     return resolution
   let some source ← SourceMirCall.sourceIdentity (.ofCanonicalIndex site.bodyIndex) site.block
     | throw "missing or ambiguous compiler call site"
@@ -283,14 +290,31 @@ def loadedBodyOfInstance (prepared : Prepared) (fnInstance : CallInstance) : Run
       unless source.kind == .instanceMir do throw "compiler body is not a substituted executable instance"
       pure candidate.bodyIndex
     | .constructed key => do
-      let .Item _ := key.kind | throw "constructed shim body is unsupported"
-      let mut found := none
-      for (source,index) in prepared.program.input.mirTemplates.zipIdx do
-        if source.sourcePromoted.isNone && (← liftWorld (world.arena.identity source.definitionId)) == key.definition then
-          unless found.isNone do throw "ambiguous raw MIR source for constructed instance"
-          found := some index
-      let index ← liftWorld (require found "raw MIR source for constructed instance is absent")
-      RuntimeArrayTypes.internBody index fnInstance none
+      match key.kind with
+      | .Item _ =>
+        let mut found := none
+        for (source,index) in prepared.program.input.mirTemplates.zipIdx do
+          if source.sourcePromoted.isNone && (← liftWorld (world.arena.identity source.definitionId)) == key.definition then
+            unless found.isNone do throw "ambiguous raw MIR source for constructed instance"
+            found := some index
+        let index ← liftWorld (require found "raw MIR source for constructed instance is absent")
+        RuntimeArrayTypes.internBody index fnInstance none
+      | .Shim (.FnPtrAsPtr ..) | .Shim (.FnPtrFromPtr ..) =>
+        let mut found : Option FnPointerShimRef := none
+        for seed in prepared.program.input.bodies do
+          let .fnPointerShim source := seed | continue
+          let candidate := BodyArena.ShimKey.create world.arena world.instances prepared.program.input.instances source fnInstance
+          match candidate with
+          | .error _ => pure ()
+          | .ok _ =>
+            if let some previous := found then
+              unless previous.sourceSpan == source.sourceSpan &&
+                  previous.nonNullDefinition == source.nonNullDefinition && previous.codeDefinition == source.codeDefinition do
+                throw "conflicting raw FnPtr shim declaration sources"
+            else found := some source
+        let source ← liftWorld (require found "raw FnPtr shim declaration source is absent")
+        RuntimeArrayTypes.internFnPointerShim source fnInstance
+      | _ => throw "constructed shim body is unsupported"
   let identity := BodyIdentity.ofCanonicalIndex bodyIndex
   let body ← prepared.program.resolveBodyIdentity identity
   unless body.input.instanceId == fnInstance do throw "instance/body identity mismatch"

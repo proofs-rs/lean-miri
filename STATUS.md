@@ -17,23 +17,33 @@ Runtime body providers now resolve exact identities through the execution-owned
 BodyArena. Constructed Item instances select a unique ordinary raw MIR template
 by physical definition and complete arguments; local layouts, frames, source
 scopes and backtraces consume that identity. The obsolete lifecycle, scope and
-backtrace result indexes are removed. Promoted bodies and general compiler shim
-construction remain unresolved. Novel-body controls exercise actual provider
-demand, dense identity reuse and missing/ambiguous-source rejection.
+backtrace result indexes are removed. Binder-free FnPtr AsPtr/FromPtr shims now
+retain raw signatures, lang-item identities and source spans only; Lean constructs
+their MIR, including for novel type/instance/body identities. Eight complete
+pass-after rustc bodies and production corruption controls agree. HRTB FnPtr,
+promoted bodies, general compiler shims and constructed shim ABI remain unresolved.
+Novel-body controls exercise actual provider demand, dense identity reuse and
+missing/ambiguous-source rejection.
 
 Raw source environments retain explicit clauses, physical generic/predicate
 parents, parameter sorts and trait identity. Lean assembles inherited obligations
 after matching an impl head and for selected associated values; fully monomorphized
 queries retain the empty ParamEnv. ADT Sized declaration entailment uses these
-scopes. Fresh selection controls consume the source scope while rejecting its
-absence and ignoring poisoned legacy copies. Inferred outlives, universe-aware
-HRTB, general builtin candidates and specialization remain unresolved.
+scopes. Legacy copied predicates are removed from producer, codecs and material
+models. Fresh selection controls consume the canonical source scope and reject
+its absence or the obsolete wire fields. Checked-alias, projection-bound and GAT
+controls match independent rustc results. Inferred outlives, universe-aware HRTB,
+general builtin candidates and specialization remain unresolved. Binder/universe
+and directional region-leak components are present but not runtime providers.
 
 Binder-free Item signatures can construct x86_64 Rust scalar/ZST FnAbi in the
 same World from raw signatures and codegen/panic flags. Twenty complete compiler
 comparisons cover abort/unwind policies, including constructed instances with
-empty ABI catalogs. Pointer/aggregate/foreign/other-target ABI and producer ABI
-enumeration remain unresolved. Pattern Range, NotNull and signed Or layouts now
+empty ABI catalogs. Covered direct-call, catalog and covariance collectors no
+longer acquire FnAbi answers: ten complete keys each lose four explicit calls.
+Unused unsupported generic arguments retain an exact residual domain. Broader
+pointer/aggregate/foreign/other-target ABI and eager enumeration remain unresolved.
+Pattern Range, NotNull and signed Or layouts now
 use raw recipes; six complete compiler comparisons and malformed controls pass,
 with covered explicit canonical layout acquisition omitted. Non-Value pattern
 endpoints still require CTFE. Structural pointer/reference/tuple/array/slice
@@ -41,11 +51,19 @@ covariance runs on World syntax: an independent 16-by-16 rustc matrix passes
 with an empty answer catalog. Nominal variance and richer relations remain.
 
 Scalar const-generic names and complete binder-free FnPtr syntax now enter the
-runtime constructor and printer paths. Pinned comparisons cover 72 integer
-strings, nine const-generic types and six FnPtr signatures. Material display
-fallbacks, bound names, default-argument elision and external-path reconstruction
-remain unresolved. These component comparisons do not establish whole-compiler
-equivalence, query closure or all-choice guest safety.
+runtime constructor, layout, normalization and printer paths. Nine fresh material
+FnPtr identities normalize without result rows and agree with complete compiler
+layouts. Raw default expressions drive trailing-default elision; five novel
+default cases and missing-material controls pass. Backtrace names for local Items
+use execution-owned keys, including three novel instances checked against rustc.
+Bound names, implementation/external paths and material display fallbacks remain.
+
+Structural type hashes now use the pinned StableHasher protocol over World
+syntax, with covered eager hash acquisition omitted. Independent comparisons
+cover 265 hasher vectors, 28 types and novel constructed types; missing-ID, fuel
+and missing-residual controls reject. Nominal hashes, full validity and allocation
+identity/dedup reconstruction remain unresolved. These component comparisons do
+not establish whole-compiler equivalence, query closure or all-choice guest safety.
 
 The exact `DropGlue(_, None)` shim family now retains only instance identity and
 raw source position; its raw declaration signature supplies types. Lean builds

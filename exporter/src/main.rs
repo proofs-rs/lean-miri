@@ -22,11 +22,13 @@ mod generic_material;
 mod definition_path;
 mod generic_mir;
 mod noop_drop;
+mod fn_pointer_shim;
 mod generic_mir_call;
 mod alias_rules;
 mod adt_material;
 mod trait_material;
 mod source_environment;
+mod instance_abi_material;
 mod pool_layout;
 mod pool_instance;
 mod pool_values;
@@ -1793,8 +1795,7 @@ impl ExportCallbacks {
                         .map(|destructor| def_json(&mut export_context, destructor.did));
                     adt_drop_material.entry(definition_index).or_insert(
                         pool_values::AdtDropMaterial { manually_drop: adt.is_manually_drop(), destructor });
-                    let declaration = adt_material::declaration(tcx, definition,
-                        |clause| trait_material::clause(tcx, clause))?
+                    let declaration = adt_material::declaration(tcx, definition)?
                         .ok_or_else(|| "source ADT declaration classification changed".to_owned())?;
                     let mut references = Vec::new();
                     generic_definition_references(&declaration, &mut references)?;
@@ -1806,8 +1807,7 @@ impl ExportCallbacks {
                 }
                 generic_templates.insert(definition_index, material);
             }
-            if let Some(declaration) = alias_rules::declaration(tcx, definition,
-                |clause| trait_material::clause(tcx, clause))
+            if let Some(declaration) = alias_rules::declaration(tcx, definition)
                 .map_err(|error| format!("source alias declaration for {}: {error}", tcx.def_path_str(definition)))?
             {
                 let mut references = Vec::new();
@@ -2570,6 +2570,17 @@ fn export_reachable_instances<'tcx>(
                 data:pool_instance::InstanceData::InstanceMir {body,promoted_bodies:Vec::new()}});
             continue;
         }
+        if fn_pointer_shim::eligible(tcx,instance) {
+            context.runtime_mir_frame_instances.insert(instance);
+            let body=source_fn_pointer_shim_json(tcx,instance,context)?;
+            let instance_kind=instance_kind_json(context,tcx,instance.def)?;
+            let definition=def_json(context,def_id);
+            let def_path=tcx.def_path_str(def_id);
+            let generic_args=generic_args_json(context,tcx,instance.args)?;
+            records.push(InstanceFact {instance_id,instance_kind,def_id:definition,def_path,generic_args,
+                data:pool_instance::InstanceData::InstanceMir {body,promoted_bodies:Vec::new()}});
+            continue;
+        }
         let template = checked_instance_mir(tcx, instance.def)?;
         if callable_runtime_instance(tcx, instance) {
             context.runtime_mir_frame_instances.insert(instance);
@@ -2681,12 +2692,45 @@ fn source_noop_drop_json<'tcx>(tcx:TyCtxt<'tcx>,instance:ty::Instance<'tcx>,
     }
     let (id,fresh)=context.bodies.reserve(BodyKey {instance,promoted:None});
     if !fresh {return Ok(id as u64)}
+    // These exact source-generated shim families cannot own coroutine state.
+    // Record the raw body's marker even when it is the final body in the pool.
+    if context.coroutine_coverage.body_coroutines.len() <= id {
+        context.coroutine_coverage.body_coroutines.resize(id + 1,false);
+    }
     let definition=instance.def.def_id();
     def_json(context,definition); // raw generic signature declaration demand
     let span=tcx.def_span(definition);
     let source_span=backtrace_span_json(context,tcx,span,span);
     let instance_id=context.register_metadata_instance(instance);
     context.bodies.define(id,pool_body::BodySeed::NoopDrop{instance_id,source_span});
+    Ok(id as u64)
+}
+
+// Raw identities/signature/location only. The Lean provider builds executable
+// cast statements on demand in the current execution's constructor universe.
+fn source_fn_pointer_shim_json<'tcx>(tcx:TyCtxt<'tcx>,instance:ty::Instance<'tcx>,
+    context:&mut ExportContext<'tcx>)->Result<u64,String> {
+    if !fn_pointer_shim::eligible(tcx,instance) {
+        return export_failure("FnPtr conversion source","outside selected shim category");
+    }
+    let (id,fresh)=context.bodies.reserve(BodyKey {instance,promoted:None});
+    if !fresh {return Ok(id as u64)}
+    // These exact source-generated shim families cannot own coroutine state.
+    // Record the raw body's marker even when it is the final body in the pool.
+    if context.coroutine_coverage.body_coroutines.len() <= id {
+        context.coroutine_coverage.body_coroutines.resize(id + 1,false);
+    }
+    let definition=instance.def.def_id();
+    def_json(context,definition);
+    let non_null=tcx.require_lang_item(rustc_attr_ir::lang_items::LangItem::NonNull,rustc_span::DUMMY_SP);
+    let code=tcx.require_lang_item(rustc_attr_ir::lang_items::LangItem::Code,rustc_span::DUMMY_SP);
+    let non_null_definition=def_json(context,non_null);
+    let code_definition=def_json(context,code);
+    let span=tcx.def_span(definition);
+    let source_span=backtrace_span_json(context,tcx,span,span);
+    let instance_id=context.register_metadata_instance(instance);
+    context.bodies.define(id,pool_body::BodySeed::FnPointerShim {
+        instance_id,source_span,non_null_definition,code_definition });
     Ok(id as u64)
 }
 
@@ -3274,7 +3318,7 @@ fn type_compiler_facts_json<'tcx>(
             | ty::Coroutine(d, _) => Some(def_json(context, *d)),
             _ => None,
         },
-        type_id_hash: if input.has_erasable_regions() {
+        type_id_hash: if input.has_erasable_regions() || structural_type_hash_eligible(input) {
             None
         } else {
             Some(tcx.type_id_hash(input).as_u128().to_string())
@@ -3738,6 +3782,18 @@ fn layout_json<'tcx>(
 fn layout_query_trace(route: &str, input: ty::Ty<'_>, queried: bool) {
     if std::env::var_os("LEAN_MIRI_LAYOUT_QUERY_TRACE").is_some() {
         eprintln!("lean_miri_layout_call route={route} queried={queried} type={input:?}");
+    }
+}
+
+// Exact raw constructor domain handled by Lean WorldTypeHash. This tests no
+// compiler query answer and never replaces child syntax with its final hash.
+fn structural_type_hash_eligible(input: ty::Ty<'_>) -> bool {
+    match *input.kind() {
+        ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never | ty::Str => true,
+        ty::Slice(child) | ty::RawPtr(child, _) => structural_type_hash_eligible(child),
+        ty::Ref(region, child, _) => !matches!(region.kind(), ty::ReBound(..)) && structural_type_hash_eligible(child),
+        ty::Tuple(children) => children.iter().all(structural_type_hash_eligible),
+        _ => false,
     }
 }
 
@@ -4854,6 +4910,16 @@ fn register_call_transfer_for_target<'tcx>(
     virtual_receiver: Option<ty::Ty<'tcx>>,
     indirect_function_pointer: bool,
 ) -> Result<(), String> {
+    if let Some(signature) = instance_abi_material::signature(tcx, instance, request.extra_types) {
+        instance_abi_material::trace("transfer-source", false, instance);
+        // Additional candidates do not assert that a transfer takes place.
+        // Miri's count, convention and layout checks still run in Lean first.
+        for (source, target) in request.caller_args.iter().copied().zip(signature.inputs().iter().copied()) {
+            record_covariance_transfer(context, source, target);
+        }
+        record_covariance_transfer(context, signature.output(), request.return_destination);
+        return Ok(());
+    }
     // This is only covariance-evidence discovery, not runtime target
     // selection. A non-callable data winner has no FnAbi/MIR transfer; runtime
     // symbol/allocation validation still rejects calling it as a function.
@@ -4992,6 +5058,9 @@ fn register_call_transfer_for_target<'tcx>(
     let (callee_arg_count,callee_spread_arg,callee_argument_types,callee_return_type) =
         if noop_drop::eligible(tcx,instance) {
             let interface=noop_drop::interface(tcx,instance)?;
+            (interface.argument_count,interface.spread_argument,interface.arguments,interface.return_type)
+        } else if fn_pointer_shim::eligible(tcx,instance) {
+            let interface=fn_pointer_shim::interface(tcx,instance)?;
             (interface.argument_count,interface.spread_argument,interface.arguments,interface.return_type)
         } else {
         let template = checked_instance_mir(tcx, instance.def)?;
@@ -5132,6 +5201,7 @@ fn instance_fn_abi_with_extras<'tcx>(
     extra_types: &'tcx ty::List<ty::Ty<'tcx>>,
 ) -> Result<Option<&'tcx rustc_target::callconv::FnAbi<'tcx, ty::Ty<'tcx>>>, String> {
     let empty = ty::List::empty();
+    instance_abi_material::trace("transfer-residual", true, instance);
     let baseline = tcx
         .fn_abi_of_instance(env.as_query_input((instance, empty)))
         .map_err(|error| format!("baseline ABI query failed: {error:?}"))?;
@@ -5591,6 +5661,17 @@ fn resolve_callee_json<'tcx>(
                             context.instance_abi_requests.insert((instance, extra));
                         }
                     }
+                    if instance_abi_material::signature(tcx, instance, ty::List::empty()).is_some() {
+                        instance_abi_material::trace("direct-source", false, instance);
+                        register_runtime_callback_call(context, tcx, body, instance, call_args)?;
+                        register_catch_unwind_intrinsic(context, tcx, instance, body, call_args)?;
+                        register_call_transfer_covariance(context, tcx, body, func_ty, call_args,
+                            instance, return_destination)?;
+                        return Ok(Callee::SourceInstance {
+                            function_type: type_json(context, tcx, func_ty)?, instance_id,
+                        });
+                    }
+                    instance_abi_material::trace("direct-residual", true, instance);
                     // Runtime ABI queries use the interpreter's Codegen
                     // environment (eval.rs::create_ecx), not the template
                     // body's PostAnalysis environment used for normalization.
@@ -6646,7 +6727,12 @@ fn compiler_instance_abis_json<'tcx>(
     }
     state.events = event_end;
     let requests = requests.into_iter().filter(|key| state.completed.insert(*key)).collect::<Vec<_>>();
-    let records=requests.into_iter().map(|(instance,extra)|{ {
+    let requests = requests.into_iter().filter(|(instance,extra)| {
+        let covered = instance_abi_material::signature(tcx, *instance, *extra).is_some();
+        instance_abi_material::trace(if covered { "catalog-source" } else { "catalog-residual" }, !covered, *instance);
+        !covered
+    });
+    let records=requests.map(|(instance,extra)|{ {
         let closed=!instance.args.has_non_region_param() && !instance.args.has_escaping_bound_vars()
             && !instance.args.has_infer() && !instance.args.has_placeholders()
             && !extra.has_non_region_param() && !extra.has_escaping_bound_vars()

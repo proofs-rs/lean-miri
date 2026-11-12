@@ -1048,6 +1048,8 @@ private structure BodySeedFields where
   genericArgs : Option (Array Miri.MIR.GenericArg) := none
   materialFields : Bool := false
   noopSpan : Option BacktraceSpan := none
+  nonNullDefinition : Option Nat := none
+  codeDefinition : Option Nat := none
 
 private def parseBodySeedRaw (path : String) : MIRParser.Parser BodySeed := do
   let fields ← MIRParser.object ({} : BodySeedFields) fun fields key => do
@@ -1055,6 +1057,14 @@ private def parseBodySeedRaw (path : String) : MIRParser.Parser BodySeed := do
     | "body_kind" => pure { fields with kind := some (← string) }
     | "template_id" => pure { fields with templateId := some (← natural) }
     | "source_span" => pure {fields with noopSpan := some (← backtrace s!"{path}.source_span")}
+    | "non_null_definition" =>
+      let id ← natural
+      recordDef id
+      pure {fields with nonNullDefinition := some id}
+    | "code_definition" =>
+      let id ← natural
+      recordDef id
+      pure {fields with codeDefinition := some id}
     | "generic_args" =>
       let args ← GenericArgsCodec.decode
       recordArgs args
@@ -1064,17 +1074,25 @@ private def parseBodySeedRaw (path : String) : MIRParser.Parser BodySeed := do
     | _ => pure { fields with material := ← parseBodyField path fields.material key, materialFields := true }
   match ← required fields.kind "body_kind" with
   | "material" =>
-    unless fields.templateId.isNone && fields.genericArgs.isNone && fields.noopSpan.isNone do
+    unless fields.templateId.isNone && fields.genericArgs.isNone && fields.noopSpan.isNone &&
+        fields.nonNullDefinition.isNone && fields.codeDefinition.isNone do
       reject "material body cannot carry a generic template reference"
     return .material (← finishParseBodyFields path fields.material)
   | "noop_drop" =>
     unless !fields.materialFields && fields.templateId.isNone && fields.genericArgs.isNone &&
-        fields.material.promoted_bodies.isNone do
+        fields.material.promoted_bodies.isNone && fields.nonNullDefinition.isNone && fields.codeDefinition.isNone do
       reject "no-op drop source cannot carry a monomorphic body or template reference"
     return .noopDrop ⟨← required fields.material.instance_id "instance_id",
       ← required fields.noopSpan "source_span"⟩
+  | "fn_pointer_shim" =>
+    unless !fields.materialFields && fields.templateId.isNone && fields.genericArgs.isNone &&
+        fields.material.promoted_bodies.isNone do
+      reject "FnPtr shim source cannot carry a monomorphic body or template reference"
+    return .fnPointerShim ⟨← required fields.material.instance_id "instance_id",
+      ← required fields.noopSpan "source_span",← required fields.nonNullDefinition "non_null_definition",
+      ← required fields.codeDefinition "code_definition"⟩
   | "copy_template" =>
-    unless fields.noopSpan.isNone do reject "generic template cannot carry a no-op drop source span"
+    unless fields.noopSpan.isNone && fields.nonNullDefinition.isNone && fields.codeDefinition.isNone do reject "generic template cannot carry a no-op drop source span"
     unless !fields.materialFields do reject "generic template reference cannot carry a monomorphic body fallback"
     return .copyTemplate ⟨← required fields.templateId "template_id",
       ← required fields.material.instance_id "instance_id",← required fields.genericArgs "generic_args",

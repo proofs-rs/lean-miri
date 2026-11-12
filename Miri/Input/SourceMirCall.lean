@@ -39,7 +39,8 @@ def sourceIdentity (identity : Miri.Interpreter.BodyIdentity) (blockIndex : Nat)
   | .material index =>
     match source world.metadata.source index blockIndex with
     | .ok value => pure value | .error error => throw error
-  | .constructed key =>
+  | .constructed (.fnPointerShim _) => pure none
+  | .constructed (.template key) =>
     let _ ← SourceMir.metadataIdentity identity
     let some template := world.metadata.source.mirTemplates[key.templateId]?
       | throw "generic MIR source template is absent"

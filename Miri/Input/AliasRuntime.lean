@@ -25,15 +25,12 @@ structure Context where
 def Context.ofDocument (source : ImportDocument) :
     Except String Context := do
   let generic ← GenericInstantiation.Context.ofDocument source
-  let sourceScope := SourceEnvironmentRuntime.lookup source
-  let sourcePredicates := SourceEnvironment.predicates sourceScope 16384
   let mut declarations := #[]
   for definition in source.definitions do
     if let some declaration := definition.aliasDeclaration then
       unless declaration.definition == (⟨definition.crateIndex,definition.index⟩ : DefinitionIdentity) do
         throw "runtime alias source identity mismatch"
-      let ownPredicates ← sourcePredicates declaration.definition
-      declarations := declarations.push ({declaration with ownPredicates},definition.genericTemplate)
+      declarations := declarations.push (declaration,definition.genericTemplate)
   let aliases ← AliasMaterial.program declarations
   pure ⟨generic,aliases,source.traitProgram⟩
 
@@ -70,9 +67,12 @@ standalone raw trait queries. Normalization is a mandatory recursive dependency.
 def traitHooks (context : Context) (_depth : Nat)
     (normalize : Nat → Array TraitSelection.Goal → Term → Except String Term) :
     TraitSelection.Hooks := {
-      implementationPredicates := fun implementation =>
-        SourceEnvironment.predicates
-          (SourceEnvironmentRuntime.lookupDefinitions context.generic.definitions) 16384 implementation.definition
+      implementationPredicates := fun implementation => do
+        let lookup := SourceEnvironmentRuntime.lookupDefinitions context.generic.definitions
+        let material ← lookup implementation.definition
+        unless material.parameters == implementation.parameters do
+          throw "impl generic header differs from its canonical raw source scope"
+        SourceEnvironment.predicates lookup 16384 implementation.definition
       normalize := normalize
       builtin := fun remaining activeGoals declaration goal => do
         unless goal.traitRef.arguments.size == 1 do throw "structural builtin requires exactly Self"
@@ -123,6 +123,9 @@ def normalizeTerm (context : Context) (work : Nat) :
         (fun _ activeGoals term => normalizeTerm context work fuel activeAliases activeGoals term)
     let environment : TraitSelection.Environment := {eraseRegions := true}
     let aliasHooks : AliasNormalization.Hooks := {
+      ownPredicates := fun definition => do
+        let material ← SourceEnvironmentRuntime.lookupDefinitions context.generic.definitions definition
+        pure material.ownPredicates
       select := fun remaining activeAliases kind parent arguments => do
         unless kind == .projection do throw "inherent associated alias selection is not implemented"
         let selection ← TraitSelection.selectUniqueWithActive context.traits (currentTraitHooks activeAliases)
@@ -131,13 +134,7 @@ def normalizeTerm (context : Context) (work : Nat) :
           |>.filter (·.definition == selection.implementation)
         unless implementations.size == 1 do throw "selected raw impl declaration absent or duplicated"
         let some implementation := implementations[0]? | throw "selected raw impl declaration absent"
-        let associatedValues ← implementation.associatedValues.mapM fun value => do
-          if !value.materialRetained then return value
-          let ownPredicates ← SourceEnvironment.predicates
-            (SourceEnvironmentRuntime.lookupDefinitions context.generic.definitions)
-            (fuel + 1) value.implementationDefinition
-          pure {value with ownPredicates}
-        AliasNormalization.fromTraitSelection {implementation with associatedValues} selection
+        AliasNormalization.fromTraitSelection implementation selection
       fulfill := fun remaining activeAliases predicates => do
         requireProven (← TraitSelection.fulfillWithActive context.traits (currentTraitHooks activeAliases)
           environment (min remaining fuel) work goals predicates) }

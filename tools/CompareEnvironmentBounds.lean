@@ -1,3 +1,4 @@
+import Miri.Input.SourceEnvironmentRuntime
 import Miri.Input.Decoder
 import Miri.Input.TraitSelection.EnvironmentEntailment
 
@@ -26,12 +27,14 @@ def main (args : List String) : IO Unit := do
     unless definitions.size == 1 do throw (IO.userError "source ADT declaration missing or ambiguous")
     let some definition := definitions[0]? | throw (IO.userError "source ADT declaration absent")
     let some template := definition.genericTemplate | throw (IO.userError "source ADT template absent")
-    let some material := definition.adtDeclaration | throw (IO.userError "source ADT metadata absent")
+    let _ ← require (match definition.adtDeclaration with
+      | some _ => .ok () | none => .error "source ADT metadata absent")
+    let assumptions ← require (SourceEnvironment.predicates (SourceEnvironmentRuntime.lookup source) 256 identity)
     let parameter ← require (GenericMaterialCodec.readTerm 4096 (← require (row.getObjVal? "parameter")))
     let expected ← require ((← require (row.getObjVal? "sized")).getBool?)
     let goal : Clause := ⟨#[],.trait ⟨.positive,⟨sized.definition,#[parameter]⟩⟩⟩
     let proof ← require (EnvironmentEntailment.entails source.traitProgram template.parameters
-      material.ownPredicates 256 goal)
+      assumptions 256 goal)
     if expected then
       unless proof.isSome do throw (IO.userError "source-bound positive entailment differs from rustc")
       match proof with
@@ -39,7 +42,7 @@ def main (args : List String) : IO Unit := do
         let withoutSupers := { source.traitProgram with
           traits := source.traitProgram.traits.map fun trait => { trait with superPredicates := #[] } }
         let missing ← require (EnvironmentEntailment.entails withoutSupers template.parameters
-          material.ownPredicates 256 goal)
+          assumptions 256 goal)
         unless missing.isNone do throw (IO.userError "removing raw superclauses retained derived proof")
       | _ => pure ()
       positive := positive + 1

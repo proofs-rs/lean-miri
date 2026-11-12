@@ -1,4 +1,5 @@
 import Miri.Input.Decoder
+import Miri.Input.WorldNormalization
 import Miri.Input.WorldTypeName
 import Miri.Input.WorldIntrinsicTypeName
 
@@ -20,6 +21,16 @@ def main (args : List String) : IO Unit := do
   let (roundtrip,next) ← must ((GenericInstantiationWorld.resolveType 512 reified).run world)
   unless roundtrip == id do throw (IO.userError "FnPtr reify/resolve did not preserve identity")
   world := next
+  let (normalized,next) ← must ((WorldNormalization.normalizeType metadata.normalizationContext 10000 512 id).run world)
+  unless normalized == id do throw (IO.userError "closed FnPtr normalization changed identity")
+  world := next
+  let (layout,next) ← must ((RuntimeMetadata.layoutInWorld metadata id).run world)
+  world := next
+  let target ← match metadata.source.runtimeTargetDataLayout with
+    | some target => pure target | none => throw (IO.userError "raw target absent")
+  let target ← must ((RuntimeMetadata.importTarget target).mapError toString)
+  let expectedLayout ← must (Miri.ABI.PrimitiveLayout.compute target "fn_pointer")
+  unless layout.layout == expectedLayout do throw (IO.userError "complete FnPtr layout differs from pinned instruction-pointer algorithm")
   let (actual,next) ← must ((WorldTypeName.query metadata 512 id).run world)
   world := next
   let expected ← must ((← must (row.getObjVal? "display")).getStr?)

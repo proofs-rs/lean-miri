@@ -145,17 +145,15 @@ The wire record contains declaration references, never a duplicated instantiated
 private def readAssociatedValue (template : DefinitionIdentity → Except String (Option DefinitionTemplate))
     (value : Json) : Except String AssociatedValue := do
   keys value ["trait_associated_definition", "implementation_definition", "has_value",
-    "requires_hidden_type_inference", "material_retained", "own_predicates"]
+    "requires_hidden_type_inference", "material_retained"]
   let traitAssociatedDefinition ← GenericMaterialCodec.readDefinition (← value.getObjVal? "trait_associated_definition")
   let implementationDefinition ← GenericMaterialCodec.readDefinition (← value.getObjVal? "implementation_definition")
   let hasValue ← (← value.getObjVal? "has_value").getBool?
   let requiresHiddenTypeInference ← (← value.getObjVal? "requires_hidden_type_inference").getBool?
   let materialRetained ← (← value.getObjVal? "material_retained").getBool?
-  let ownPredicates ← readClauses (← value.getObjVal? "own_predicates")
   let expression ← if materialRetained && hasValue && !requiresHiddenTypeInference then do
       let some expression ← template implementationDefinition
         | throw "source associated RHS template reference absent"
-      validateClauses expression.parameters ownPredicates
       pure (some expression)
     else pure none
   pure {
@@ -164,13 +162,12 @@ private def readAssociatedValue (template : DefinitionIdentity → Except String
     expression := expression
     requiresHiddenTypeInference := requiresHiddenTypeInference
     hasValue := hasValue
-    materialRetained := materialRetained
-    ownPredicates := ownPredicates }
+    materialRetained := materialRetained }
 
 private def readImplementation (template : DefinitionIdentity → Except String (Option DefinitionTemplate))
     (value : Json) : Except String Impl := do
   keys value ["definition", "parameters", "trait_ref", "polarity", "is_default",
-    "predicates", "associated_values", "methods", "constants"]
+    "associated_values", "methods", "constants"]
   let definition ← GenericMaterialCodec.readDefinition (← value.getObjVal? "definition")
   let parameters ← parameterSorts (← value.getObjVal? "parameters")
   let traitRef ← readTraitRef (← value.getObjVal? "trait_ref")
@@ -178,8 +175,6 @@ private def readImplementation (template : DefinitionIdentity → Except String 
     GenericMaterialCodec.validateParameters parameters 4096 argument
   let polarity ← readPolarity (← value.getObjVal? "polarity")
   let isDefault ← (← value.getObjVal? "is_default").getBool?
-  let predicates ← readClauses (← value.getObjVal? "predicates")
-  validateClauses parameters predicates
   let associatedValues ← (← (← value.getObjVal? "associated_values").getArr?).mapM (readAssociatedValue template)
   let methods ← (← (← value.getObjVal? "methods").getArr?).mapM readAssociatedMethod
   let constants ← (← (← value.getObjVal? "constants").getArr?).mapM readAssociatedMethod
@@ -187,7 +182,7 @@ private def readImplementation (template : DefinitionIdentity → Except String 
   for item in associatedValues do
     if seen.contains item.traitAssociatedDefinition then throw "duplicate impl associated type declaration"
     seen := seen.push item.traitAssociatedDefinition
-  pure {definition, parameters, traitRef, polarity, isDefault, predicates, associatedValues, methods, constants}
+  pure {definition, parameters, traitRef, polarity, isDefault, associatedValues, methods, constants}
 
 private def readMember (value : Json) : Except String TraitMember := do
   keys value ["definition", "kind", "has_value", "is_final"]

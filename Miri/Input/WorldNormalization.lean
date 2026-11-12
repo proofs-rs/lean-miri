@@ -15,6 +15,7 @@ private def structuralMaterial : TypeShape → Bool
   | .bool | .char | .int _ | .uint _ | .float _ | .str | .never | .foreign _
   | .rawPointer .. | .reference .. | .slice _ | .tuple _
   | .alias .free false .. | .alias .projection false .. => true
+  | .functionPointer signature variables => variables.isEmpty && signature.rawSplatted.isSome
   | _ => false
 
 private def residual (world : World) (source : TypeNode) : Except String TypeId := do

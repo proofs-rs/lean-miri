@@ -18,7 +18,7 @@ private def u64 : Term := .atom .type "uint" "u64"
 private def pair (a b : Term) : Term := .node .type "tuple" "" (.ofArray #[a,b])
 private def declaration (parameters : Array ArgSort) (arguments : Array Term) : Impl := {
   definition := ⟨1, 20⟩, parameters, traitRef := ⟨traitId, arguments⟩,
-  polarity := .positive, isDefault := false, predicates := #[], associatedValues := #[] }
+  polarity := .positive, isDefault := false, associatedValues := #[] }
 private def repeated : Impl := declaration #[.type] #[pair (.parameter .type 0) (.parameter .type 0)]
 
 example : Match.head 30 repeated ⟨traitId, #[pair u32 u32]⟩ = .ok (some #[some u32]) := by decide +kernel

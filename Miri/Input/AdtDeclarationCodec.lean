@@ -18,7 +18,7 @@ private def field (value : Lean.Json) : Except String FieldSafety := do
     fieldName := ← (← value.getObjVal? "field_name").getStr? }
 
 def read (template : DefinitionTemplate) (value : Lean.Json) : Except String Material := do
-  keys value ["kind", "lang_item", "variant_count", "variant_names", "fields", "own_predicates", "representation"]
+  keys value ["kind", "lang_item", "variant_count", "variant_names", "fields", "representation"]
   let kind ← match ← (← value.getObjVal? "kind").getStr? with
     | "struct" => pure AdtKind.structKind
     | "enum" => pure .enumKind
@@ -26,13 +26,10 @@ def read (template : DefinitionTemplate) (value : Lean.Json) : Except String Mat
     | _ => throw "unknown raw ADT declaration kind"
   let rawLang ← value.getObjVal? "lang_item"
   let langItem ← if rawLang == .null then pure none else pure (some (← rawLang.getStr?))
-  let ownPredicates ← TraitSelection.Codec.readClauses (← value.getObjVal? "own_predicates")
-  TraitSelection.Codec.validateClauses template.parameters ownPredicates
   let material : Material := {
     representation := ← ReprMaterialCodec.read (← value.getObjVal? "representation")
     kind
     langItem
-    ownPredicates
     variantCount := ← (← value.getObjVal? "variant_count").getNat?
     variantNames := ← (← (← value.getObjVal? "variant_names").getArr?).mapM (·.getStr?)
     fields := ← (← (← value.getObjVal? "fields").getArr?).mapM field }

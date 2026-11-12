@@ -93,12 +93,17 @@ pub(super) fn discover<'tcx>(
                 continue;
             };
             let source = ty::Ty::new_mut_ptr(tcx, input);
-            let query = (instance, ty::List::empty());
-            let abi = tcx
-                .fn_abi_of_instance(env.as_query_input(query))
-                .map_err(|error| format!("vtable receiver ABI query failed: {error:?}"))?;
-            if let Some(receiver) = abi.args.first() {
-                let target = receiver.layout.ty;
+            let target = if let Some(signature) = super::instance_abi_material::signature(tcx, instance, ty::List::empty()) {
+                super::instance_abi_material::trace("vtable-receiver-source", false, instance);
+                signature.inputs().first().copied()
+            } else {
+                super::instance_abi_material::trace("vtable-receiver-residual", true, instance);
+                let query = (instance, ty::List::empty());
+                let abi = tcx.fn_abi_of_instance(env.as_query_input(query))
+                    .map_err(|error| format!("vtable receiver ABI query failed: {error:?}"))?;
+                abi.args.first().map(|receiver| receiver.layout.ty)
+            };
+            if let Some(target) = target {
                 if closed(target) && source != target {
                     pairs.insert((source, target));
                 }

@@ -274,6 +274,7 @@ deriving instance ToExpr for Input.Body
 deriving instance ToExpr for Input.CopyTemplateSource
 deriving instance ToExpr for Input.CopyTemplateRef
 deriving instance ToExpr for Input.NoopDropRef
+deriving instance ToExpr for Input.FnPointerShimRef
 deriving instance ToExpr for Input.BodySeed
 deriving instance ToExpr for Input.BodyRoot
 deriving instance ToExpr for Input.InstanceNode

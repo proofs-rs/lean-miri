@@ -77,6 +77,16 @@ def internBody (templateId instanceId : Nat) (promoted : Option Nat) : CompilerM
   set {world with bodies}
   pure id
 
+def internFnPointerShim (source : FnPointerShimRef) (instanceId : InstanceId) : CompilerM BodyId := do
+  let world ← get
+  let result := do
+    let key ← BodyArena.ShimKey.create world.arena world.instances world.metadata.source.instances source instanceId
+    world.bodies.internShim world.arena world.instances world.metadata.source.instances world.metadata.source.bodies key
+  let (id,bodies) ← match result with
+    | .ok value => pure value | .error error => throw error
+  set {world with bodies}
+  pure id
+
 def performCompiler (world : World) (action : CompilerM α) : Except Error (α × World) :=
   lift (action.run world)
 

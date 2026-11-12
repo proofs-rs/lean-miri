@@ -24,14 +24,13 @@ private def wrapper (arg : Term) : Term := .definition .type "adt" ⟨0,100⟩ (
 private def obligation (traitDefinition : DefinitionIdentity) (self : Term) : Clause :=
   ⟨#[], .trait ⟨.positive, ⟨traitDefinition, #[self]⟩⟩⟩
 private def implementation (id : Nat) (traitDefinition : DefinitionIdentity)
-    (parameters : Array ArgSort) (self : Term) (predicates : Array Clause := #[])
+    (parameters : Array ArgSort) (self : Term)
     (polarity : Polarity := .positive) (isDefault : Bool := false) : Impl := {
   definition := ⟨0,id⟩
   parameters := parameters
   traitRef := ⟨traitDefinition, #[self]⟩
   polarity := polarity
   isDefault := isDefault
-  predicates := predicates
   associatedValues := #[] }
 private def declaration (identity : DefinitionIdentity) (implementations : Array Impl) : TraitDeclaration := {
   definition := identity
@@ -45,11 +44,16 @@ private def declaration (identity : DefinitionIdentity) (implementations : Array
   superPredicates := #[]
   implementations := implementations }
 private def genericGate : Impl := implementation 20 gate #[.type] (wrapper (.parameter .type 0))
-  #[obligation aux (.parameter .type 0)]
 private def program : Program := {traits := #[
   declaration gate #[genericGate],
-  declaration aux #[implementation 21 aux #[] u32, implementation 22 aux #[] u64 #[] .negative]]}
+  declaration aux #[implementation 21 aux #[] u32, implementation 22 aux #[] u64 .negative]]}
 private def hooks : Hooks where
+  implementationPredicates := fun implementation =>
+    if implementation.definition == (⟨0,20⟩ : DefinitionIdentity) then
+      .ok #[obligation aux (.parameter .type 0)]
+    else if implementation.definition == (⟨0,30⟩ : DefinitionIdentity) then
+      .ok #[obligation loopTrait (.parameter .type 0)]
+    else .ok #[]
   normalize := fun fuel _ term => do Match.requireGround fuel term; pure term
   builtin := fun _ _ _ _ => .error "builtin provider not implemented"
   external := fun _ _ _ _ => .error "external predicate not implemented"
@@ -72,7 +76,7 @@ example : resultClass (solve program hooks {} 100 100 ⟨.negative, ⟨aux, #[u6
 example : resultClass (solve {traits := #[declaration gate #[genericGate,
     implementation 23 gate #[] (wrapper u32)], declaration aux #[implementation 21 aux #[] u32]]}
     hooks {} 100 100 ⟨.positive, ⟨gate, #[wrapper u32]⟩⟩) = .ok "ambiguous" := by decide +kernel
-example : selectUnique {traits := #[declaration gate #[implementation 20 gate #[] u32 #[] .positive true]]}
+example : selectUnique {traits := #[declaration gate #[implementation 20 gate #[] u32 .positive true]]}
     hooks {} 100 100 ⟨gate, #[u32]⟩ =
     .error "default impl selection requires specialization semantics" := by decide +kernel
 example : resultClass (solve program hooks {} 100 100 ⟨.positive, ⟨⟨99,99⟩, #[u32]⟩⟩) =
@@ -95,7 +99,7 @@ example : resultClass (solve program hooks ⟨#[obligation gate u64], false⟩ 1
 example : selectUnique program hooks ⟨#[obligation gate u64], false⟩ 100 100 ⟨gate, #[u64]⟩ =
     .error "trait proof does not identify a unique source impl" := by decide +kernel
 example : resultClass (solve {traits := #[declaration loopTrait #[implementation 30 loopTrait #[.type]
-    (.parameter .type 0) #[obligation loopTrait (.parameter .type 0)]]]} hooks {} 100 100
+    (.parameter .type 0)]]} hooks {} 100 100
     ⟨.positive, ⟨loopTrait, #[u32]⟩⟩) = .ok "ambiguous" := by decide +kernel
 example : resultClass (solve program hooks ⟨#[obligation gate u64], false⟩ 100 100
     ⟨.positive, ⟨aux, #[wrapper u32]⟩⟩) = .ok "ambiguous" := by decide +kernel
@@ -113,7 +117,7 @@ example : resultClass (solve {program with constructorScope := some #[⟨0,100�
 
 private def autoProgram : Program := {traits := #[
   { (declaration gate #[genericGate]) with isAuto := true, isCoinductive := true },
-  declaration aux #[implementation 21 aux #[] u32, implementation 22 aux #[] u64 #[] .negative]]}
+  declaration aux #[implementation 21 aux #[] u32, implementation 22 aux #[] u64 .negative]]}
 -- A possible impl suppresses the structural auto candidate before testing its
 -- where clauses. The mandatory unknown builtin hook must not be invoked.
 example : selectUnique autoProgram hooks {} 100 100 ⟨gate, #[wrapper u32]⟩ =
@@ -123,7 +127,7 @@ example : resultClass (solve autoProgram hooks {} 100 100 ⟨.positive, ⟨gate,
 example : resultClass (solve autoProgram hooks {} 100 100 ⟨.positive, ⟨gate, #[u32]⟩⟩) =
     .error "builtin provider not implemented" := by decide +kernel
 example : resultClass (solve {traits := #[
-    { (declaration gate #[implementation 50 gate #[] u32 #[] .negative]) with isAuto := true }]}
+    { (declaration gate #[implementation 50 gate #[] u32 .negative]) with isAuto := true }]}
     hooks {} 100 100 ⟨.positive, ⟨gate, #[u32]⟩⟩) = .ok "no_solution" := by decide +kernel
 private def dynamicAux : Term := .node .type "dynamic" "" (Terms.ofArray #[
   .binder #[] (.definition .aggregate "trait" aux .nil), .atom .region "erased" ""])

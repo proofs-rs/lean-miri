@@ -17,7 +17,7 @@ example : classify (StructuralCycle.certify {traits := #[source]} {} 30 #[] goal
 example : classify (StructuralCycle.certify {traits := #[source]} {} 30 #[{goal with polarity := .negative}] {goal with polarity := .negative}) = "unknown" := by decide +kernel
 private def negativeImpl : Impl := {
   definition := ⟨0,3⟩, parameters := #[], traitRef := goal.traitRef,
-  polarity := .negative, isDefault := false, predicates := #[], associatedValues := #[] }
+  polarity := .negative, isDefault := false, associatedValues := #[] }
 example : classify (StructuralCycle.certify {traits := #[{source with implementations := #[negativeImpl]}]} {} 30 #[goal] goal) = "unknown" := by decide +kernel
 
 example : classify (StructuralCycle.certify {traits := #[source]} {} 30 #[goal] goal 1) = "unknown" := by decide +kernel

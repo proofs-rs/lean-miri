@@ -16,7 +16,6 @@ private def material (kind : AdtKind) (variants : Nat) (fields : Array FieldSafe
     variantNames := Array.replicate variants "ComponentVariant"
     fields := fields
     langItem := lang
-    ownPredicates := #[]
     representation := {
       integer := none
       alignBytes := none

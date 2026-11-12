@@ -240,7 +240,7 @@ assert all(
     for call in calls
 )
 resolutions = [term["resolution"] for term in calls]
-assert any(r.get("kind") == "resolved_instance" and pool_entry(doc, "instances", r["instance_id"]).get("def_path") == "id" for r in resolutions), "generic id::<u32> instance missing"
+assert any(r.get("kind") == "source_instance" and "fn_abi" not in r and pool_entry(doc, "instances", r["instance_id"]).get("def_path") == "id" for r in resolutions), "generic id::<u32> instance missing"
 atomic = [r for r in resolutions if r.get("kind") == "resolved_instance" and "fetch_add" in pool_entry(doc, "instances", r["instance_id"]).get("def_path", "")]
 assert atomic and pool_entry(doc, "fn_abis", atomic[0]["fn_abi"])["arguments"], "atomic call and FnAbi missing"
 assert pool_entry(doc, "fn_abis", atomic[0]["fn_abi"])["calling_convention"] == {"kind": "rust"}
@@ -250,7 +250,7 @@ for argument in [pool_entry(doc, "fn_abis", atomic[0]["fn_abi"])["return"], *poo
         assert "status" not in mode["attributes"]["arg_extension"]
 instances = {instance["instance_id"]: instance for instance in doc["instances"]}
 assert len(instances) == len(doc["instances"]), "instance IDs must be unique"
-assert all(r.get("instance_id") in instances for r in resolutions if r.get("kind") == "resolved_instance")
+assert all(r.get("instance_id") in instances for r in resolutions if r.get("kind") in ("resolved_instance", "source_instance"))
 id_instance = next(
     instance
     for instance in instances.values()

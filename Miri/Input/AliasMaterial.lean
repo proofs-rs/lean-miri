@@ -21,7 +21,6 @@ structure Declaration where
   definition : DefinitionIdentity
   kind : Kind
   hasValue : Bool
-  ownPredicates : Array Clause
   deriving Repr, DecidableEq
 
 end Miri.Input.AliasMaterial

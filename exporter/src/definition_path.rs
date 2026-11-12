@@ -29,6 +29,12 @@ pub(crate) fn material(tcx:TyCtxt<'_>, definition:DefId)->Option<Value> {
         ty::GenericParamDefKind::Type{has_default,..}=>has_default,
         ty::GenericParamDefKind::Const{has_default,..}=>has_default,
     }).collect::<Vec<_>>();
+    let default_expressions = generics.own_params.iter().map(|parameter| {
+        parameter.default_value(tcx).map(|default| {
+            crate::generic_material::argument(tcx, default.skip_binder())
+                .and_then(|tree| serde_json::from_str::<Value>(&tree).map_err(|error|error.to_string()))
+        }).transpose()
+    }).collect::<Result<Vec<_>,String>>().ok()?;
     let function_header_safety = definition.as_local().and_then(|local| {
         if !matches!(tcx.def_kind(definition),DefKind::Fn|DefKind::AssocFn) {return None;}
         tcx.hir_node_by_def_id(local).fn_sig().map(|signature| match signature.header.safety {
@@ -37,5 +43,5 @@ pub(crate) fn material(tcx:TyCtxt<'_>, definition:DefId)->Option<Value> {
             rustc_hir::HeaderSafety::SafeTargetFeatures=>"safe_target_features",
         })
     });
-    Some(json!({"function_header_safety":function_header_safety,"components":components,"parent_parameter_count":generics.parent_count,"parameter_defaults":defaults}))
+    Some(json!({"function_header_safety":function_header_safety,"components":components,"parent_parameter_count":generics.parent_count,"parameter_defaults":defaults,"parameter_default_expressions":default_expressions}))
 }

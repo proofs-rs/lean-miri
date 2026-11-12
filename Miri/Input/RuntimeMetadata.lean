@@ -569,6 +569,7 @@ mutual
       | .bool => lift (PrimitiveLayout.compute target "bool")
       | .char => lift (PrimitiveLayout.compute target "char")
       | .never => lift (PrimitiveLayout.compute target "never")
+      | .functionPointer _ => lift (PrimitiveLayout.compute target "fn_pointer")
       | .integer signed kind => do
         unless signed == kind.signed do throw "universe integer signedness disagrees with constructor"
         lift (PrimitiveLayout.compute target (worldIntegerName kind))

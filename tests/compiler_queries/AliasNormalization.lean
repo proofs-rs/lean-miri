@@ -8,10 +8,9 @@ private def unsigned : Term := .atom .type "uint" "u32"
 private def alias (kind : String) (id : Nat) (args : Array Term := #[]) : Term :=
   .definition .type kind (ident id) (Terms.ofArray args)
 private def rule (id : Nat) (parameters : Array ArgSort) (body : Term)
-    (predicates : Array Clause := #[]) : Rule :=
+    : Rule :=
   {definition := ident id,
-   template := {parameters, typeExpression := body, signatureExpression := none, fields := #[]},
-   ownPredicates := predicates}
+   template := {parameters, typeExpression := body, signatureExpression := none, fields := #[]}}
 private def rules : Array Rule := #[
   rule 1 #[.type] (.node .type "slice" "" (.cons (.parameter .type 0) .nil)),
   rule 2 #[.type] boolean,
@@ -22,7 +21,7 @@ private def associated : AssociatedValue := {
   traitDefinition := ident 10, rule := some associatedRule, requiresHiddenTypeInference := false, materialRetained := true }
 private def program : Program := {
   freeRules := rules,
-  associatedDeclarations := #[⟨ident 10, ident 100, 1, #[]⟩] }
+  associatedDeclarations := #[⟨ident 10, ident 100, 1⟩] }
 private def isUnsigned : Term → Bool
   | .atom .type "uint" "u32" => true
   | _ => false
@@ -31,6 +30,7 @@ private def isRequirement (value : Clause) : Bool :=
     | .wellFormed (.atom .type "uint" "u32") => true
     | _ => false
 private def hooks : Hooks := {
+  ownPredicates := fun _ => .ok #[],
   select := fun _ _ kind parent args =>
     if kind == .projection && parent == ident 100 && args.size == 1 && args[0]?.any isUnsigned then
       .ok ⟨ident 200, #[unsigned], #[associated]⟩
@@ -63,10 +63,11 @@ example : normalize program hooks 20 #[] (alias "alias_free_not_rigid" 1 #[.atom
     .error "generic template argument sort mismatch" := by cbv
 private def requirement : Clause := ⟨#[], .wellFormed unsigned⟩
 private def ownProgram : Program := {
-  program with freeRules := #[rule 1 #[] boolean #[requirement]] }
-example : normalize ownProgram hooks 20 #[] (alias "alias_free_not_rigid" 1) =
+  program with freeRules := #[rule 1 #[] boolean] }
+private def ownHooks : Hooks := {hooks with ownPredicates := fun _ => .ok #[requirement]}
+example : normalize ownProgram ownHooks 20 #[] (alias "alias_free_not_rigid" 1) =
     .error "unproved own clauses" := by cbv
-example : normalize ownProgram {hooks with fulfill := fun _ _ predicates =>
+example : normalize ownProgram {ownHooks with fulfill := fun _ _ predicates =>
     if predicates.size == 1 && predicates[0]?.any isRequirement then .ok () else .error "wrong clauses"}
     20 #[] (alias "alias_free_not_rigid" 1) = .ok boolean := by cbv
 example : normalize program hooks 20 #[] (.inference .type 0) =
@@ -75,11 +76,10 @@ example : normalize program hooks 20 #[] (.inference .type 0) =
 private def sourceImpl : Miri.Input.TraitSelection.Impl := {
   definition := ident 200, parameters := #[.type],
   traitRef := ⟨ident 100, #[.parameter .type 0]⟩,
-  polarity := .positive, isDefault := false, predicates := #[],
+  polarity := .positive, isDefault := false,
   associatedValues := #[{
     traitAssociatedDefinition := ident 10, implementationDefinition := ident 11,
-    expression := some associatedRule.template, requiresHiddenTypeInference := false, materialRetained := true,
-    ownPredicates := #[]}] }
+    expression := some associatedRule.template, requiresHiddenTypeInference := false, materialRetained := true}] }
 example : (fromTraitSelection sourceImpl ⟨ident 200, #[unsigned]⟩).map
     (fun selected => selected.associatedValues.size) = .ok 1 := by cbv
 example : (fromTraitSelection sourceImpl ⟨ident 201, #[unsigned]⟩).map
@@ -103,12 +103,12 @@ example : normalize program {hooks with select := fun _ _ _ _ _ => .ok hiddenSel
 
 private def sliceUnsigned : Term := .node .type "slice" "" (.cons unsigned .nil)
 private def projectionClauses : Program := {
-  program with associatedDeclarations := #[⟨ident 10, ident 100, 1,
-    #[⟨#[], .wellFormed (.parameter .type 0)⟩]⟩] }
+  program with associatedDeclarations := #[⟨ident 10, ident 100, 1⟩] }
 private def isSliceUnsigned : Term → Bool
   | .node .type "slice" "" (.cons (.atom .type "uint" "u32") .nil) => true
   | _ => false
 private def projectionHooks : Hooks := {
+  ownPredicates := fun _ => .ok #[⟨#[], .wellFormed (.parameter .type 0)⟩],
   select := fun _ _ _ parent args =>
     if parent == ident 100 && args.size == 1 && args[0]?.any isSliceUnsigned then
       .ok ⟨ident 200, #[unsigned], #[associated]⟩
@@ -125,7 +125,7 @@ example : normalize projectionClauses projectionHooks 30 #[]
 
 -- A zero-variable metadata Binder does not require placeholder conversion;
 -- source own-clause obligations still reach the query-boundary fulfiller.
-example : normalize ownProgram {hooks with fulfill := fun _ _ predicates =>
+example : normalize ownProgram {ownHooks with fulfill := fun _ _ predicates =>
     if predicates.size == 1 && predicates[0]?.any isRequirement then .ok () else .error "wrong clauses"}
     20 #[] (.binder #[] (alias "alias_free_not_rigid" 1)) =
     .ok (.binder #[] boolean) := by cbv

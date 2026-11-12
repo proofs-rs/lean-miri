@@ -2,8 +2,8 @@ import Miri.Input.TraitSelection.Substitution
 
 /-! Declaration-template alias reduction. Sources: pinned rustc
 `traits/normalize.rs::{normalize_free_alias,fold_ty}` and
-`traits/project.rs::confirm_impl_candidate`. Definitions carry original RHS and
-own predicate templates, never normalized answers keyed by a runtime goal.
+`traits/project.rs::confirm_impl_candidate`. Definitions carry original RHS syntax; own obligations are obtained from
+the canonical source scope when requested, never copied into reduction rules.
 Associated selection and predicate fulfillment are mandatory callbacks to the
 trait engine. This module does not implement that engine, specialization argument
 translation, opaque hidden-type inference, const evaluation or the new solver's
@@ -24,12 +24,10 @@ structure Key where
 structure Rule where
   definition : DefinitionIdentity
   template : DefinitionTemplate
-  ownPredicates : Array Clause
 structure AssociatedDeclaration where
   definition : DefinitionIdentity
   parent : DefinitionIdentity
   parentParameterCount : Nat
-  ownPredicates : Array Clause
 structure AssociatedValue where
   traitDefinition : DefinitionIdentity
   rule : Option Rule
@@ -55,7 +53,7 @@ def fromTraitSelection (source : TraitSelection.Impl) (selection : TraitSelectio
       traitDefinition := value.traitAssociatedDefinition,
       rule := value.expression.map fun expression => {
         definition := value.implementationDefinition,
-        template := expression, ownPredicates := value.ownPredicates},
+        template := expression},
       requiresHiddenTypeInference := value.requiresHiddenTypeInference,
       materialRetained := value.materialRetained} : AssociatedValue)
   pure ⟨source.definition, selection.substitution, values⟩
@@ -64,6 +62,8 @@ structure Program where
   freeRules : Array Rule
   associatedDeclarations : Array AssociatedDeclaration
 structure Hooks where
+  /-- Pinned own-obligation query, from the canonical raw declaration scope. -/
+  ownPredicates : DefinitionIdentity → Except String (Array Clause)
   /-- Select from complete raw impl declarations. Overlap, ambiguity, absent
   predicates and unsupported specialization may not return a guessed winner. -/
   select : Nat → Array Key → Kind → DefinitionIdentity → Array Term → Except String SelectedImpl
@@ -120,7 +120,7 @@ private def fold (program : Program) (hooks : Hooks) :
         let rules := program.freeRules.filter (·.definition == definition)
         unless rules.size == 1 do throw "free alias declaration RHS absent or duplicated"
         let some rule := rules[0]? | throw "free alias declaration RHS absent"
-        pure (rule,arguments,rule.ownPredicates,arguments)
+        pure (rule,arguments,← hooks.ownPredicates rule.definition,arguments)
       else do
         for argument in arguments do
           if ← containsBound (fuel + 1) argument then
@@ -144,7 +144,7 @@ private def fold (program : Program) (hooks : Hooks) :
           declaration.parentParameterCount arguments.size
         -- project.rs::assoc_term_own_obligations uses the trait item's own
         -- clauses with projection args, not impl-RHS clauses with impl args.
-        pure (rule,substitutions,declaration.ownPredicates,arguments)
+        pure (rule,substitutions,← hooks.ownPredicates declaration.definition,arguments)
       rule.template.checkArguments substitutions
       let predicates ← TraitSelection.Substitution.clauses (fuel + 1) predicateArguments predicateSource
       if !predicates.isEmpty then

@@ -1,3 +1,4 @@
+import Miri.Input.WorldNamedArguments
 import Miri.Input.FunctionTypePrinter
 import Miri.Input.WorldConstantName
 import Miri.Input.RuntimeMetadata
@@ -46,8 +47,7 @@ private def visit (metadata : RuntimeMetadata) : Nat → TypeId → PrintM Strin
       let some path := definition.rawPath | throw "intrinsic named type requires raw definition path"
       unless path.parentParameterCount == 0 do throw "intrinsic nested generic path printing is not implemented"
       unless path.parameterDefaults.size == arguments.size do throw "intrinsic generic argument domain mismatch"
-      if path.parameterDefaults.any (fun value => value) then
-        throw "intrinsic generic default elision is not implemented"
+      let arguments ← lift (WorldNamedArguments.own world fuel path arguments)
       let mut result ← emit (← lift (sourcePath path))
       if !arguments.isEmpty then
         result := result ++ (← emit "<")

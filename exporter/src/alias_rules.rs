@@ -1,7 +1,6 @@
-//! Source declaration RHS and own-clause material for alias normalization.
+//! Source alias identities, declaration attributes and shared RHS links.
 //! No instantiated projection result, impl selection or specialization graph is
-//! captured here. The caller supplies the shared raw Clause encoder, preserving
-//! binders and predicate variants instead of dropping unsupported conditions.
+//! captured here. Clauses live exclusively in the canonical source environment.
 use rustc_hir::def::{DefKind};
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::{self, TyCtxt};
@@ -17,7 +16,6 @@ fn identity(definition: DefId) -> Value {
 pub(super) fn declaration<'tcx>(
     tcx: TyCtxt<'tcx>,
     definition: DefId,
-    mut encode_clause: impl FnMut(ty::Clause<'tcx>) -> Result<Value, String>,
 ) -> Result<Option<Value>, String> {
     let kind = tcx.def_kind(definition);
     if !matches!(kind, DefKind::TyAlias | DefKind::AssocTy) {
@@ -58,9 +56,5 @@ pub(super) fn declaration<'tcx>(
     // The RHS is shared through Definition.generic_template, captured once by
     // generic_material::definition_template under the same has_value guard.
     // Do not duplicate instantiated or source RHS trees in per-alias records.
-    let clauses = tcx.explicit_clauses_of(definition).clauses.iter()
-        .map(|(clause, _span)| encode_clause(*clause))
-        .collect::<Result<Vec<_>, _>>()?;
-    source.insert("own_predicates".into(), json!(clauses));
     Ok(Some(Value::Object(source)))
 }

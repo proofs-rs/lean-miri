@@ -5,14 +5,12 @@ import Miri.Input.TraitSelection.Codec
 namespace Miri.Input.AliasMaterialCodec
 open Lean GenericSubstitution AliasMaterial
 
-/-- The shared trait codec is mandatory: no source predicates may be dropped or
-replaced by successful placeholder obligations while reading alias material. -/
-def readDeclarationWith (readClause : Json → Except String TraitSelection.Clause)
-    (value : Json) : Except String Declaration := do
+/-- Clauses are decoded solely through the canonical source environment. -/
+def readDeclaration (value : Json) : Except String Declaration := do
   let sourceKind ← (← value.getObjVal? "kind").getStr?
   let allowed := if sourceKind == "free" then
-      ["definition", "kind", "has_value", "own_predicates", "is_checked"]
-    else ["definition", "kind", "has_value", "own_predicates", "parent",
+      ["definition", "kind", "has_value", "is_checked"]
+    else ["definition", "kind", "has_value", "parent",
       "parent_parameter_count", "is_final", "container", "trait_item"]
   for (key, _) in (← value.getObj?).toArray do
     unless allowed.contains key do throw s!"unknown source alias declaration field {key}"
@@ -35,11 +33,7 @@ def readDeclarationWith (readClause : Json → Except String TraitSelection.Clau
         | _ => throw "unknown associated type container"
       pure (.associated container parent count isFinal)
     | _ => throw "unknown source alias declaration kind"
-  let ownPredicates ← (← (← value.getObjVal? "own_predicates").getArr?).mapM readClause
-  pure ⟨definition, kind, hasValue, ownPredicates⟩
-
-def readDeclaration (value : Json) : Except String Declaration :=
-  readDeclarationWith TraitSelection.Codec.readClause value
+  pure ⟨definition, kind, hasValue⟩
 
 def decodeDeclaration : JsonReader.Parser Declaration := do
   JsonReader.liftExcept (readDeclaration (← Lean.Json.Parser.anyCore))

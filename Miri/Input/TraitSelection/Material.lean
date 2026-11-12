@@ -54,7 +54,6 @@ structure AssociatedValue where
   hasValue : Bool := true
   /-- Source RHS was retained by declaration dependency slicing; absence is Unsupported. -/
   materialRetained : Bool := true
-  ownPredicates : Array Clause
   deriving Repr, DecidableEq
 
 structure AssociatedMethod where
@@ -76,7 +75,6 @@ structure Impl where
   traitRef : TraitRef
   polarity : Polarity
   isDefault : Bool
-  predicates : Array Clause
   associatedValues : Array AssociatedValue
   methods : Array AssociatedMethod := #[]
   constants : Array AssociatedMethod := #[]

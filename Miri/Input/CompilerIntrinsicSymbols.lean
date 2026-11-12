@@ -1,6 +1,9 @@
 import Lean.Util.Profile
 import Miri.Input.CompilerProviders
 import Miri.Input.Decoder
+import Miri.Input.WorldTypeHash
+import Miri.Input.WorldTypeFlags
+import Miri.Input.RuntimeArrayQueries
 import Miri.Interpreter.IntrinsicSymbolsMachine
 
 /-! Imported rustc GlobalAlloc::TypeId nodes seed the actual intrinsic symbol
@@ -12,12 +15,8 @@ open Lean Miri.ABI Miri.Memory Miri.Interpreter
 private def lift (value : Except String A) : MachineHooks.M K U A :=
   match value with | .ok value => pure value | .error reason => throw (.unsupported reason)
 
-def typeHash (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except String U128 := do
-  let source ← p.runtime.node ty |>.mapError toString
-  let some facts := source.compilerFacts | throw "compiler TypeId hash evidence missing"
-  let some value := facts.typeIdHash | throw "compiler TypeId hash evidence missing"
-  unless value < 2^128 do throw "compiler TypeId hash exceeds u128"
-  pure (BitVec.ofNat 128 value)
+def typeHash (world : RuntimeArrayTypes.World) (ty : MIR.TyId) : Except String U128 :=
+  WorldTypeHash.query world.arena (max 256 (world.arena.typeCount + 1)) ty
 
 def importedTypeId (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
     (memory : MemoryState P E K) (id : AllocId) : Except String (Option MIR.TyId) := do
@@ -94,11 +93,14 @@ theorem attach_profile_identity {K U : Type} (p : CompilerProviders.Prepared) (i
 
 /-- Missing hash/region compiler metadata remains a source query failure. The
 registry preparation above must execute before the first dynamic reservation. -/
-def typeIdLeaves (p : CompilerProviders.Prepared) (image : AllocationImage.Imported) :
+def typeIdLeaves (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
+    (access : RuntimeArrayQueries.Access (MachineHooks.State K U)) :
     IntrinsicSymbolsMachine.TypeIdLeaves K U C :=
   { hasErasableRegions := fun _ ty =>
-      lift (CompilerFacts.boolean p.lifecycle.calls.symbols.facts.context ty "has_erasable_regions")
-    typeHash := fun _ ty => lift (typeHash p ty)
+      do
+        let world := access.get (← get)
+        lift (WorldTypeFlags.query world.arena "has_erasable_regions" (max 256 (world.arena.typeCount + world.arena.constantCount + 1)) ty)
+    typeHash := fun _ ty => do lift (typeHash (access.get (← get)) ty)
     u128Layout := fun _ => lift (p.primitiveLayout "u128")
     unitLayout := fun _ => lift (p.primitiveLayout "unit")
     importedTypeId := fun id => do lift (importedTypeId p image (← get).machine.memory id) }

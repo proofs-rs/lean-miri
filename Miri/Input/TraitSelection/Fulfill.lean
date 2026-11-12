@@ -39,7 +39,7 @@ inductive Outcome where
 
 structure Hooks where
   /-- Resolve source inherited obligations only after an impl head matches. -/
-  implementationPredicates : Impl → Except String (Array Clause) := fun source => .ok source.predicates
+  implementationPredicates : Impl → Except String (Array Clause)
   /-- Normalize actual generic trees using raw alias/impl declarations. -/
   normalize : Nat → Array Goal → Term → Except String Term
   /-- Return source-derived nested obligations for a real builtin candidate.

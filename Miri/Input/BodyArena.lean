@@ -33,16 +33,46 @@ def Key.create (types : TypeArena.World) (instances : InstanceArena.Store)
     unless parameter == sort do throw "raw body source generic argument sort mismatch"
   pure ⟨templateId,instanceId,key,promoted⟩
 
+/-- A raw shim declaration source and complete current instance. The source
+record supplies only immutable method/lang-item identities and source position. -/
+structure ShimKey where
+  source : FnPointerShimRef
+  instanceId : InstanceId
+  instanceKey : InstanceArena.Key
+  deriving Repr, DecidableEq
+
+def ShimKey.create (types : TypeArena.World) (instances : InstanceArena.Store)
+    (sources : Array InstanceNode) (source : FnPointerShimRef) (instanceId : InstanceId) :
+    Except String ShimKey := do
+  let key ← lookupInstanceKey instances instanceId
+  let some original := sources[source.instanceId]? | throw "raw shim source instance is absent"
+  let original ← InstanceArena.Key.ofSource types original.instanceKind original.genericArgs
+  unless original.definition == key.definition do throw "raw shim source definition differs from current instance"
+  let selfType ← match original.kind,key.kind with
+    | .Shim (.FnPtrAsPtr _ _), .Shim (.FnPtrAsPtr _ selfType)
+    | .Shim (.FnPtrFromPtr _ _), .Shim (.FnPtrFromPtr _ selfType) => pure selfType
+    | _,_ => throw "raw shim source family differs from current instance"
+  unless key.arguments == #[.Type selfType] do throw "raw shim current arguments differ from Self"
+  unless (← types.shapeKind selfType) == .functionPointer do throw "raw shim current Self is not a function pointer"
+  let _ ← types.identity source.nonNullDefinition
+  let _ ← types.identity source.codeDefinition
+  pure ⟨source,instanceId,key⟩
+
+inductive Constructed where
+  | template (key : Key)
+  | fnPointerShim (key : ShimKey)
+  deriving Repr, DecidableEq
+
 structure Store where
   private mk ::
   /-- Source namespace extent; raw body seeds remain in the immutable World metadata. -/
   materialCount : Nat
-  constructed : Array Key := #[]
+  constructed : Array Constructed := #[]
   deriving Repr, DecidableEq
 
 inductive View where
   | material (index : Nat)
-  | constructed (key : Key)
+  | constructed (key : Constructed)
 
 def Store.ofSource (bodies : Array BodySeed) : Store := ⟨bodies.size,#[]⟩
 def Store.count (store : Store) : Nat := store.materialCount + store.constructed.size
@@ -52,7 +82,7 @@ def Store.lookup (store : Store) (id : BodyId) : Except String View :=
   else match store.constructed[id - store.materialCount]? with
     | some key => .ok (.constructed key) | none => .error "constructed body identity is absent"
 
-private def Store.append (store : Store) (key : Key) : BodyId × Store :=
+private def Store.append (store : Store) (key : Constructed) : BodyId × Store :=
   (store.count,{store with constructed := store.constructed.push key})
 
 def Store.intern (types : TypeArena.World) (instances : InstanceArena.Store)
@@ -72,19 +102,40 @@ def Store.intern (types : TypeArena.World) (instances : InstanceArena.Store)
     if candidate == key then
       unless found.isNone do throw "ambiguous canonical material body identity"
       found := some index
-  for (candidate,index) in store.constructed.zipIdx do
+  for (entry,index) in store.constructed.zipIdx do
+    let .template candidate := entry | continue
     if candidate == key then
       unless found.isNone do throw "duplicate canonical constructed body identity"
       found := some (store.materialCount + index)
-  if let some id := found then pure (id,store) else pure (store.append key)
+  if let some id := found then pure (id,store) else pure (store.append (.template key))
 
-theorem Store.append_dense (store : Store) (key : Key) :
+def Store.internShim (types : TypeArena.World) (instances : InstanceArena.Store)
+    (sourceInstances : Array InstanceNode) (sourceBodies : Array BodySeed) (store : Store) (key : ShimKey) :
+    Except String (BodyId × Store) := do
+  let verified ← ShimKey.create types instances sourceInstances key.source key.instanceId
+  unless verified == key do throw "raw shim body key contradicts the current instance universe"
+  unless store.materialCount <= sourceBodies.size do throw "material body namespace exceeds source prefix"
+  let mut found := none
+  for index in [:store.materialCount] do
+    let some (.fnPointerShim source) := sourceBodies[index]? | continue
+    let candidate ← ShimKey.create types instances sourceInstances source source.instanceId
+    if candidate == key then
+      unless found.isNone do throw "ambiguous canonical material shim body identity"
+      found := some index
+  for (entry,index) in store.constructed.zipIdx do
+    let .fnPointerShim candidate := entry | continue
+    if candidate == key then
+      unless found.isNone do throw "duplicate canonical constructed shim body identity"
+      found := some (store.materialCount + index)
+  if let some id := found then pure (id,store) else pure (store.append (.fnPointerShim key))
+
+theorem Store.append_dense (store : Store) (key : Constructed) :
     (store.append key).1 = store.materialCount + store.constructed.size := rfl
 
-theorem Store.append_material_preserved (store : Store) (key : Key) :
+theorem Store.append_material_preserved (store : Store) (key : Constructed) :
     (store.append key).2.materialCount = store.materialCount := rfl
 
-theorem Store.append_lookup (store : Store) (key : Key) :
+theorem Store.append_lookup (store : Store) (key : Constructed) :
     (store.append key).2.lookup (store.append key).1 = .ok (.constructed key) := by
   simp [Store.append, Store.lookup, Store.count,
     Nat.not_lt.mpr (Nat.le_add_right store.materialCount store.constructed.size)]

@@ -8,14 +8,15 @@
       "rustc_apfloat": "upstream/.pins/rustc_apfloat.commit",
       "rustc_rand": "upstream/.pins/rustc_rand.commit",
       "rustc_rand_core": "upstream/.pins/rustc_rand_core.commit",
-      "rustc_rand_xoshiro": "upstream/.pins/rustc_rand_xoshiro.commit"
+      "rustc_rand_xoshiro": "upstream/.pins/rustc_rand_xoshiro.commit",
+      "rustc_stable_hash": "upstream/.pins/rustc_stable_hash.commit"
     },
     "procedure": "upstream/fetch-sources.sh",
-    "procedure_sha256": "a8ced1c1a19c47193465862bbe2486e25dcf91c544df5b62f9b2265ea12fb7d8",
+    "procedure_sha256": "8d7faa885809f055e80e55f50a8432d7b77528319fa2b8bd2fda72ab9821ec61",
     "rustc_selected_archive_paths": {
-      "count": 568,
+      "count": 577,
       "path": "upstream/rustc-selected-files.txt",
-      "sha256": "13efe8be23f1d70ee71026ee3292f3baa057c831d79dd6b71824a88cca748612"
+      "sha256": "ba81fab2f45ba0504c3ad02f00e28cb1e75bd45670209fc0991b3a2dbbae44f8"
     }
   },
   "coverage_expected_rust_modules": {
@@ -77,7 +78,22 @@
     "upstream/rustc-source/compiler/rustc_type_ir/src/sty/mod.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/ty_kind.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs": 1,
-    "upstream/rustc-source/library/core/src/any.rs": 1
+    "upstream/rustc-source/library/core/src/any.rs": 1,
+    "upstream/crates/rustc-stable-hash-0.1.2/src/int_overflow.rs": 1,
+    "upstream/crates/rustc-stable-hash-0.1.2/src/lib.rs": 1,
+    "upstream/crates/rustc-stable-hash-0.1.2/src/sip128.rs": 1,
+    "upstream/crates/rustc-stable-hash-0.1.2/src/sip128/tests.rs": 1,
+    "upstream/crates/rustc-stable-hash-0.1.2/src/stable_hasher.rs": 1,
+    "upstream/crates/rustc-stable-hash-0.1.2/src/stable_hasher/tests.rs": 1,
+    "upstream/rustc-source/compiler/rustc_data_structures/src/intern.rs": 1,
+    "upstream/rustc-source/compiler/rustc_data_structures/src/stable_hash.rs": 1,
+    "upstream/rustc-source/compiler/rustc_hashes/src/lib.rs": 1,
+    "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/constraints.rs": 1,
+    "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/mod.rs": 1,
+    "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/solve.rs": 1,
+    "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/terms.rs": 1,
+    "upstream/rustc-source/compiler/rustc_macros/src/stable_hash.rs": 1,
+    "upstream/rustc-source/compiler/rustc_type_ir/src/ty_info.rs": 1
   },
   "coverage_roots": [
     "upstream/crates/aes-0.9.3/src",
@@ -138,7 +154,22 @@
     "upstream/rustc-source/compiler/rustc_type_ir/src/sty/mod.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/ty_kind.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs",
-    "upstream/rustc-source/library/core/src/any.rs"
+    "upstream/rustc-source/library/core/src/any.rs",
+    "upstream/crates/rustc-stable-hash-0.1.2/src/lib.rs",
+    "upstream/crates/rustc-stable-hash-0.1.2/src/int_overflow.rs",
+    "upstream/crates/rustc-stable-hash-0.1.2/src/sip128.rs",
+    "upstream/crates/rustc-stable-hash-0.1.2/src/stable_hasher.rs",
+    "upstream/crates/rustc-stable-hash-0.1.2/src/sip128/tests.rs",
+    "upstream/crates/rustc-stable-hash-0.1.2/src/stable_hasher/tests.rs",
+    "upstream/rustc-source/compiler/rustc_data_structures/src/stable_hash.rs",
+    "upstream/rustc-source/compiler/rustc_data_structures/src/intern.rs",
+    "upstream/rustc-source/compiler/rustc_hashes/src/lib.rs",
+    "upstream/rustc-source/compiler/rustc_macros/src/stable_hash.rs",
+    "upstream/rustc-source/compiler/rustc_type_ir/src/ty_info.rs",
+    "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/mod.rs",
+    "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/terms.rs",
+    "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/constraints.rs",
+    "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/solve.rs"
   ],
   "external_dependencies": {
     "cargo_packages": [
@@ -4990,6 +5021,96 @@
       "path": "upstream/rustc-source/library/core/src/any.rs",
       "sha256": "949842fb7fccf848f9b402f1da4b83d2218d3a5bdf4c3ed1c4375a8691ec905b",
       "git_blob": "c6cb5b0f50c5646e9767322957274540aa1747c0"
+    },
+    {
+      "component": "rustc_stable_hash",
+      "git_blob": "e68d2d1055cda7fccbb32c90158fdcce33487287",
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/lib.rs",
+      "sha256": "732f294d3218247ec05d4c97faebbe8216e0c79fb7c713fc795db40ebedbc5c2"
+    },
+    {
+      "component": "rustc_stable_hash",
+      "git_blob": "716942f5d5d6db97834e49441b34a0949f7fff59",
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/int_overflow.rs",
+      "sha256": "3a5e3ff4de386defc281622a3f59d3236d38fb42345392e94170dbfb7b226fc9"
+    },
+    {
+      "component": "rustc_stable_hash",
+      "git_blob": "6b5d79ba86c6e88d8806e98ca02ef6d618bf47a3",
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/sip128.rs",
+      "sha256": "bb161847ce20d12f259f5e8a1be984cb4ddd4010c89836b928a4ab8708cf4e43"
+    },
+    {
+      "component": "rustc_stable_hash",
+      "git_blob": "bc5f9d9d6a9366eb226bc03eef98cb36576d54b7",
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/stable_hasher.rs",
+      "sha256": "9de0f4d669362dcc2b77d38b45760b285d3db8ed091d3e6a2d4a98cdfc1756b7"
+    },
+    {
+      "component": "rustc_stable_hash",
+      "git_blob": "6be4b122a78c19ccb3696ee35afaa96152fc7d0d",
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/sip128/tests.rs",
+      "sha256": "78bbe4215a0017cd83ccb83af636b93c9893a51a88da839eacfc2da2a06dcd0b"
+    },
+    {
+      "component": "rustc_stable_hash",
+      "git_blob": "b2f29460688c1ec4d41c2ac8e967f673133a473a",
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/stable_hasher/tests.rs",
+      "sha256": "2a169b419aff453a34b0a3bab43a3aa792beb91c19bc07dd741abe5557df5376"
+    },
+    {
+      "component": "rustc",
+      "git_blob": "8e7ca5a75d8619e61bb7dc0958b90677f68950f9",
+      "path": "upstream/rustc-source/compiler/rustc_data_structures/src/stable_hash.rs",
+      "sha256": "094b4610cccb81bcb873c3025d1fa755242eb0192b717a8ecc9dcfe095569cbb"
+    },
+    {
+      "component": "rustc",
+      "git_blob": "382c921f198e05743b9cd49de0f1be75264183af",
+      "path": "upstream/rustc-source/compiler/rustc_data_structures/src/intern.rs",
+      "sha256": "66c882b4a1b8f39d55175898bbfbe5f23a671f7881798c5bdaa7db8dfdee0061"
+    },
+    {
+      "component": "rustc",
+      "git_blob": "c8f3057dac5fc26da8c243f95d8a978ee8cc00b7",
+      "path": "upstream/rustc-source/compiler/rustc_hashes/src/lib.rs",
+      "sha256": "ecb7777ffca8e89ad7056cc864771983a3eb4384049d739fbd5b562ed2d53850"
+    },
+    {
+      "component": "rustc",
+      "git_blob": "07c5a271d10877b10748ac18943c12706e4cab8b",
+      "path": "upstream/rustc-source/compiler/rustc_macros/src/stable_hash.rs",
+      "sha256": "666da3ff44064c374a9d33c71f2c8b97334b934501205e941312c649cebc56e2"
+    },
+    {
+      "component": "rustc",
+      "git_blob": "1a0975c657e9b63593fa993e2b95816e8c3fdd4d",
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/ty_info.rs",
+      "sha256": "2e413c6f942950af8a1562c0a5ccf1d1851190bad78e5f1fb6860136f4afe12e"
+    },
+    {
+      "component": "rustc",
+      "git_blob": "dd5b602241d234012df48edbd9ef3f929d0b7b78",
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/mod.rs",
+      "sha256": "5a9fe3fb38938d03cb7758dac1c338ac818b2807c20e5310e5fae0e00aa06abb"
+    },
+    {
+      "component": "rustc",
+      "git_blob": "d22eb01467ebe9659ee68ad0d6650de49a152c9b",
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/terms.rs",
+      "sha256": "413cf63d1d9563e20b598f6e2e6d67518eacdb9513e8a250db2d89a988115d25"
+    },
+    {
+      "component": "rustc",
+      "git_blob": "cfab2ed340910fe697de5a50d8062e6d2c3e6e5f",
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/constraints.rs",
+      "sha256": "a2e76421f2acbd0b61276eff8548a180f7fe5bed4b9539be288cdbcf9bb1e0dd"
+    },
+    {
+      "component": "rustc",
+      "git_blob": "06e8bc84e447476cd0b6c04a40e6d7454f07a7cd",
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/solve.rs",
+      "sha256": "551dc2a887be981d1d635ea132a5d7b1fed3720f0a75eafb74df71c8c02407ad"
     }
   ],
   "pins": {
@@ -5067,6 +5188,16 @@
       "archive_sha256": "f703f4665700daf5512dcca5f43afa6af89f09db47fb56be587f80636bda2d41",
       "extracted_root": "upstream/crates/rand_xoshiro-0.7.0",
       "checksum_source": "upstream/rustc-source/Cargo.lock"
+    },
+    "rustc_stable_hash": {
+      "archive_path": "upstream/rustc-stable-hash-0.1.2.crate",
+      "archive_sha256": "781442f29170c5c93b7185ad559492601acdc71d5bb0706f5868094f45cfcd08",
+      "archive_url": "https://static.crates.io/crates/rustc-stable-hash/rustc-stable-hash-0.1.2.crate",
+      "checksum_source": "upstream/rustc-source/Cargo.lock",
+      "commit": "bda19e8681a381715fc3f32ee95aa5fda0a7f5d0",
+      "extracted_root": "upstream/crates/rustc-stable-hash-0.1.2",
+      "package_version": "0.1.2",
+      "repository": "https://github.com/rust-lang/rustc-stable-hash"
     }
   },
   "schema_version": 1,
@@ -5086,7 +5217,8 @@
     "GenMC is outside the port scope. The immutable Miri reference snapshot retains its optional GenMC bridge; no standalone GenMC source or Lean backend is included.",
     "The pinned rustc_ty_utils abi.rs and layout.rs source snapshots support material-seed algorithm comparisons. Their inclusion expands source inventory scope; it does not establish full ABI/layout provider correspondence or dependency-closure coverage.",
     "Selected rand, rand_core and rand_xoshiro package sources support the pinned rustc layout shuffle port. Package checksums come from pinned rustc Cargo.lock. Selection and finite comparisons do not establish the complete dependency closure or all-target layout equivalence.",
-    "Additional selected rustc needs_drop, generic argument shifting and trait-predicate sources retain provenance for material-seed rule ports; inventory inclusion is not complete trait-solver or generic compiler correspondence."
+    "Additional selected rustc needs_drop, generic argument shifting and trait-predicate sources retain provenance for material-seed rule ports; inventory inclusion is not complete trait-solver or generic compiler correspondence.",
+    "Selected rustc-stable-hash0.1.2 source and rustc StableHash protocol files support the on-demand TypeId hash port; inclusion and finite comparisons do not establish general nominal or higher-ranked type-hash correspondence."
   ],
   "supporting_files": [
     {
@@ -5233,6 +5365,30 @@
       "git_blob": "634e81eaf80b4ae1d2bb3673133f7ae049b7bf9f",
       "path": "upstream/rustc-source/Cargo.lock",
       "sha256": "ba8a4170f1791a3862a1aa6fe3271b9bf24fd728d5e28f9af4be8310d55d9a98"
+    },
+    {
+      "component": "rustc_stable_hash",
+      "git_blob": "824675647afb3181b68f83baed790a7b7149e95f",
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/Cargo.toml",
+      "sha256": "1fc92d17c00c9ac3bc650ab1ff2db21cfb615a059b259e10df183adb2330207b"
+    },
+    {
+      "component": "rustc_stable_hash",
+      "git_blob": "d480d0cf2df144aa5778c7489f1d4eea5e92e90f",
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/.cargo_vcs_info.json",
+      "sha256": "a8f5d93aa91ceb8f07c05ac7e73dbd4137a0025ac5f4c9295e1e9fc1c92ea4ef"
+    },
+    {
+      "component": "rustc_stable_hash",
+      "git_blob": "31aa79387f27e730e33d871925e152e35e428031",
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/LICENSE-MIT",
+      "sha256": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+    },
+    {
+      "component": "rustc_stable_hash",
+      "git_blob": "1b5ec8b78e237b5c3b3d812a7c0a6589d0f7161d",
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/LICENSE-APACHE",
+      "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
     }
   ]
 }

@@ -104,7 +104,7 @@ def LoweredProgram.resolveBody (program : LoweredProgram) (index : Nat) :
     typeConstants := program.bundle.typeConstants, typeIds := #[]}
   let ctx ← match program.input.bodies[index]? with
     | some (.material _) => pure ctx
-    | some (.copyTemplate _) | some (.noopDrop _) => do
+    | some (.copyTemplate _) | some (.noopDrop _) | some (.fnPointerShim _) => do
       let ctx := ctx.withWorld (← get)
       for ty in source.mir.locals do
         unless ctx.containsTypeId ty do throw "instantiated MIR local type is absent from its runtime type universe"

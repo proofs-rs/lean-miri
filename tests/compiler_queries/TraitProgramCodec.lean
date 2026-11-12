@@ -9,8 +9,7 @@ private def object := Json.mkObj
 private def identity (n : Nat) := object [("crate", toJson (0 : Nat)), ("index", toJson n)]
 private def associated (retained : Option Bool) : Json := object <|
   [("trait_associated_definition", identity 3), ("implementation_definition", identity 4),
-   ("has_value", .bool true), ("requires_hidden_type_inference", .bool false),
-   ("own_predicates", toJson (#[] : Array Json))] ++
+   ("has_value", .bool true), ("requires_hidden_type_inference", .bool false)] ++
   (retained.toList.map fun value => ("material_retained", .bool value))
 private def catalog (retained : Option Bool) : Json :=
   let implementation := object [
@@ -18,7 +17,7 @@ private def catalog (retained : Option Bool) : Json :=
     ("trait_ref", object [("definition", identity 1), ("arguments", toJson #[object [
       ("kind", .str "atom"), ("sort", .str "type"), ("tag", .str "uint"), ("payload", .str "u8")]])]),
     ("polarity", .str "positive"), ("is_default", .bool false),
-    ("predicates", toJson (#[] : Array Json)), ("associated_values", toJson #[associated retained]),
+    ("associated_values", toJson #[associated retained]),
     ("methods", toJson (#[] : Array Json)), ("constants", toJson (#[] : Array Json))]
   let declaration := object [
     ("definition", identity 1), ("parameters", toJson #[Json.str "type"]),

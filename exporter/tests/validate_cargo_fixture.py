@@ -49,7 +49,8 @@ assert "u32" in material_local_displays(wrap), "external generic wrapper MIR los
 wrap_body = pool_entry(app, "bodies", wrap["body"])
 wrap_calls = [block["terminator"]["kind"] for block in wrap_body["basic_blocks"]
               if block["terminator"]["kind"]["variant"] == "Call"]
-assert len(wrap_calls) == 1 and wrap_calls[0]["resolution"]["kind"] == "resolved_instance"
+assert len(wrap_calls) == 1 and wrap_calls[0]["resolution"]["kind"] == "source_instance"
+assert "fn_abi" not in wrap_calls[0]["resolution"]
 assert wrap_calls[0]["resolution"]["instance_id"] == identity["instance_id"], "wrapper must call the exact identity::<u32> instance"
 
 # The transitive identity callee is compiler-owned source syntax. Validate its

@@ -1,3 +1,4 @@
+import Miri.Input.GenericMaterialCodec
 import Lean
 import Miri.Input.JsonReader
 
@@ -17,11 +18,12 @@ structure Material where
   parentParameterCount : Nat
   parameterDefaults : Array Bool
   functionHeaderSafety : Option HeaderSafety := none
+  parameterDefaultExpressions : Option (Array (Option GenericSubstitution.Term)) := none
   deriving Repr, DecidableEq
 
 def read (value : Lean.Json) : Except String Material := do
   for (key,_) in (← value.getObj?).toArray do
-    unless ["components", "parent_parameter_count", "parameter_defaults", "function_header_safety"].contains key do
+    unless ["components", "parent_parameter_count", "parameter_defaults", "function_header_safety", "parameter_default_expressions"].contains key do
       throw s!"unknown raw definition path field {key}"
   let components ← (← (← value.getObjVal? "components").getArr?).mapM fun value => do
     for (key,_) in (← value.getObj?).toArray do
@@ -36,6 +38,17 @@ def read (value : Lean.Json) : Except String Material := do
       throw "named DefPathData component has no source symbol"
     pure (⟨kind,name,← (← value.getObjVal? "disambiguator").getNat?⟩ : Component)
   let defaults ← (← (← value.getObjVal? "parameter_defaults").getArr?).mapM Lean.Json.getBool?
+  let expressions ← match value.getObjVal? "parameter_default_expressions" with
+    | .error _ => pure none
+    | .ok values => do
+      let values ← values.getArr?
+      unless values.size == defaults.size do throw "generic default expression/header count mismatch"
+      let values ← values.mapM fun value => do
+        if value == .null then pure none
+        else some <$> GenericMaterialCodec.readTerm 16384 value
+      for (hasDefault,expression) in defaults.zip values do
+        unless hasDefault == expression.isSome do throw "generic default marker contradicts raw expression"
+      pure (some values)
   let safetyValue ← value.getObjVal? "function_header_safety"
   let safety ← if safetyValue == .null then pure none else do
     let safety ← match ← safetyValue.getStr? with
@@ -44,7 +57,7 @@ def read (value : Lean.Json) : Except String Material := do
       | "safe_target_features" => pure HeaderSafety.safeTargetFeatures
       | _ => throw "unknown raw function HeaderSafety"
     pure (some safety)
-  pure ⟨components,← (← value.getObjVal? "parent_parameter_count").getNat?,defaults,safety⟩
+  pure ⟨components,← (← value.getObjVal? "parent_parameter_count").getNat?,defaults,safety,expressions⟩
 def decode : JsonReader.Parser Material :=
   do JsonReader.liftExcept (read (← Lean.Json.Parser.anyCore))
 end Miri.Input.DefinitionPath

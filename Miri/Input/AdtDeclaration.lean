@@ -24,7 +24,6 @@ structure Material where
   variantCount : Nat
   variantNames : Array String
   fields : Array FieldSafety
-  ownPredicates : Array TraitSelection.Clause
   deriving Repr, DecidableEq
 
 def Material.isPhantomData (material : Material) : Bool := material.langItem == some "phantom_data"

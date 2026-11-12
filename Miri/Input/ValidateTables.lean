@@ -465,6 +465,11 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
     if let .noopDrop reference := seed then
       checkId b.instances reference.instanceId s!"$.bodies[{index}]" "instance"
       let _ ← SourceMir.metadata document index
+    if let .fnPointerShim reference := seed then
+      checkId b.instances reference.instanceId s!"$.bodies[{index}]" "instance"
+      checkId b.definitions reference.nonNullDefinition s!"$.bodies[{index}]" "NonNull definition"
+      checkId b.definitions reference.codeDefinition s!"$.bodies[{index}]" "Code definition"
+      let _ ← SourceMir.metadata document index
     if let .copyTemplate reference := seed then
       let path := s!"$.bodies[{index}]"
       checkId b.instances reference.instanceId path "instance"
@@ -591,7 +596,18 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
           | some node => match node.instanceKind with | .LlvmIntrinsic _ => true | _ => false
           | none => false
         match resolution.abi with
-        | .sourceSignature => throw s!"{path}: runtime source-signature evidence cannot occur in imported MIR"
+        | .sourceSignature =>
+          unless resolution.kind == .direct && resolution.dispatchSlot.isNone do
+            throw s!"{path}: raw source ABI requires an ordinary direct instance"
+          let some instanceNode := resolution.instanceId.bind (document.instances[·]?)
+            | throw s!"{path}: raw source ABI instance is absent"
+          let .Item definition := instanceNode.instanceKind
+            | throw s!"{path}: raw source ABI requires an Item instance"
+          let some source := document.definitions[definition]?
+            | throw s!"{path}: raw source ABI definition is absent"
+          unless source.genericTemplate.isSome && source.functionAbiMaterial.isSome &&
+              source.bodyTrackCaller == some false do
+            throw s!"{path}: raw source ABI declaration material is incomplete"
         | .normal id =>
           unless resolution.kind != .llvmIntrinsic && !isLlvm do
             throw s!"{path}: LLVM intrinsic cannot carry an ordinary ABI"

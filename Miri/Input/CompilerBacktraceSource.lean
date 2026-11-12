@@ -1,3 +1,4 @@
+import Miri.Input.WorldInstanceName
 import Miri.Input.CompilerInstance
 import Miri.Input.RuntimeArrayQueries
 import Miri.Input.LowerMIR
@@ -105,6 +106,19 @@ def collapsedSpan (p : Prepared) (types : RuntimeArrayQueries.Access S)
     let some entry := entries.find? (·.span == span) | throw "exact body/span hygiene query absent"
     pure entry.position.bytePosition
 
+private def renderInstance (p : Prepared) (types : RuntimeArrayQueries.Access S)
+    (callee : CallInstance) : EStateM StepError S String := do
+  RuntimeArrayQueries.performCompiler types do
+    let world ← get
+    let key ← match ← world.instances.lookup callee with
+      | .material key | .constructed key => pure key
+    if WorldInstanceName.supports world key then
+      WorldInstanceName.query 16384 key
+    else
+      let some (_,name) := p.names.find? (·.1 == callee)
+        | throw "exact residual full-instance rendering absent"
+      pure name
+
 /-- Compiler-source construction with only runtime global/pointer queries.
 Every hygiene/source-map/name result is selected by its exact exported key. -/
 def source (p : Prepared) (types : RuntimeArrayQueries.Access S) (hostUsizeMax : Nat)
@@ -122,9 +136,7 @@ def source (p : Prepared) (types : RuntimeArrayQueries.Access S) (hostUsizeMax :
     return location
   line := Position.line
   column := Position.column
-  renderInstance := fun callee => lift do
-    let some (_,name) := p.names.find? (·.1 == callee) | throw "exact full-instance rendering absent"
-    return name
+  renderInstance := renderInstance p types
   remappedFilename := fun location => lift do
     let some filename := p.program.input.files[location.filename]?
       | throw "backtrace filename ID out of bounds"
@@ -140,9 +152,7 @@ def hooks (p : Prepared) (types : RuntimeArrayQueries.Access S) (base : Backtrac
       return location
     line := Position.line
     column := Position.column
-    renderInstance := fun callee => lift do
-      let some (_,name) := p.names.find? (·.1 == callee) | throw "exact full-instance rendering absent"
-      return name
+    renderInstance := renderInstance p types
     remappedFilename := fun location => lift do
       let some filename := p.program.input.files[location.filename]?
         | throw "backtrace filename ID out of bounds"

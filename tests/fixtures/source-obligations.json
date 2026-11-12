@@ -9,7 +9,7 @@
     "Native C/C++ sources are not scanned by these Rust patterns.",
     "No absence/completeness or semantic equivalence claim."
   ],
-  "scanned_files": 737,
+  "scanned_files": 754,
   "candidates": [
     {
       "path": "upstream/crates/aes-0.9.3/src/backends/aarch64_aes.rs",
@@ -601,6 +601,118 @@
       "category": "state_declaration",
       "source_sha256": "32a53c2311a064fa60aad5f1e74909296dfd1fc3fac5740ce8476cbb15eb1784",
       "text": "pub struct Xoshiro128StarStar {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/sip128/tests.rs",
+      "line": 6,
+      "category": "state_declaration",
+      "source_sha256": "78bbe4215a0017cd83ccb83af636b93c9893a51a88da839eacfc2da2a06dcd0b",
+      "text": "struct Bytes<'a>(&'a [u8]);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/sip128.rs",
+      "line": 46,
+      "category": "state_declaration",
+      "source_sha256": "bb161847ce20d12f259f5e8a1be984cb4ddd4010c89836b928a4ab8708cf4e43",
+      "text": "pub struct SipHasher128Hash(pub [u64; 2]);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/sip128.rs",
+      "line": 50,
+      "category": "state_declaration",
+      "source_sha256": "bb161847ce20d12f259f5e8a1be984cb4ddd4010c89836b928a4ab8708cf4e43",
+      "text": "pub struct SipHasher128 {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/sip128.rs",
+      "line": 64,
+      "category": "state_declaration",
+      "source_sha256": "bb161847ce20d12f259f5e8a1be984cb4ddd4010c89836b928a4ab8708cf4e43",
+      "text": "struct State {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/sip128.rs",
+      "line": 537,
+      "category": "state_declaration",
+      "source_sha256": "bb161847ce20d12f259f5e8a1be984cb4ddd4010c89836b928a4ab8708cf4e43",
+      "text": "struct Sip13Rounds;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/stable_hasher/tests.rs",
+      "line": 14,
+      "category": "state_declaration",
+      "source_sha256": "2a169b419aff453a34b0a3bab43a3aa792beb91c19bc07dd741abe5557df5376",
+      "text": "struct TestHash([u64; 2]);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/stable_hasher.rs",
+      "line": 19,
+      "category": "external_dependency",
+      "source_sha256": "9de0f4d669362dcc2b77d38b45760b285d3db8ed091d3e6a2d4a98cdfc1756b7",
+      "text": "/// use rustc_stable_hash::ExtendedHasher;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/stable_hasher.rs",
+      "line": 21,
+      "category": "state_declaration",
+      "source_sha256": "9de0f4d669362dcc2b77d38b45760b285d3db8ed091d3e6a2d4a98cdfc1756b7",
+      "text": "/// struct BogusHasher(u128);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/stable_hasher.rs",
+      "line": 72,
+      "category": "external_dependency",
+      "source_sha256": "9de0f4d669362dcc2b77d38b45760b285d3db8ed091d3e6a2d4a98cdfc1756b7",
+      "text": "/// use rustc_stable_hash::hashers::{StableSipHasher128, SipHasher128Hash};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/stable_hasher.rs",
+      "line": 73,
+      "category": "external_dependency",
+      "source_sha256": "9de0f4d669362dcc2b77d38b45760b285d3db8ed091d3e6a2d4a98cdfc1756b7",
+      "text": "/// use rustc_stable_hash::{StableHasher, FromStableHash};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/stable_hasher.rs",
+      "line": 76,
+      "category": "state_declaration",
+      "source_sha256": "9de0f4d669362dcc2b77d38b45760b285d3db8ed091d3e6a2d4a98cdfc1756b7",
+      "text": "/// struct Hash128([u64; 2]);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/stable_hasher.rs",
+      "line": 92,
+      "category": "state_declaration",
+      "source_sha256": "9de0f4d669362dcc2b77d38b45760b285d3db8ed091d3e6a2d4a98cdfc1756b7",
+      "text": "pub struct StableHasher<H: ExtendedHasher> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/stable_hasher.rs",
+      "line": 101,
+      "category": "external_dependency",
+      "source_sha256": "9de0f4d669362dcc2b77d38b45760b285d3db8ed091d3e6a2d4a98cdfc1756b7",
+      "text": "/// use rustc_stable_hash::{StableHasher, FromStableHash};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rustc-stable-hash-0.1.2/src/stable_hasher.rs",
+      "line": 103,
+      "category": "state_declaration",
+      "source_sha256": "9de0f4d669362dcc2b77d38b45760b285d3db8ed091d3e6a2d4a98cdfc1756b7",
+      "text": "/// struct Hash128(u128);",
       "review": "pending"
     },
     {
@@ -18052,6 +18164,22 @@
       "review": "pending"
     },
     {
+      "path": "upstream/rustc-source/compiler/rustc_data_structures/src/intern.rs",
+      "line": 10,
+      "category": "state_declaration",
+      "source_sha256": "66c882b4a1b8f39d55175898bbfbe5f23a671f7881798c5bdaa7db8dfdee0061",
+      "text": "pub struct PrivateZst;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_data_structures/src/intern.rs",
+      "line": 36,
+      "category": "state_declaration",
+      "source_sha256": "66c882b4a1b8f39d55175898bbfbe5f23a671f7881798c5bdaa7db8dfdee0061",
+      "text": "pub struct Interned<'a, T>(pub &'a T, pub private::PrivateZst);",
+      "review": "pending"
+    },
+    {
       "path": "upstream/rustc-source/compiler/rustc_data_structures/src/sorted_map.rs",
       "line": 8,
       "category": "external_dependency",
@@ -18065,6 +18193,86 @@
       "category": "state_declaration",
       "source_sha256": "72e25398c0a46a7021364bce66e8ca01aa88d90505e201468103d41d13608549",
       "text": "pub struct SortedMap<K, V> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_data_structures/src/stable_hash.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "094b4610cccb81bcb873c3025d1fa755242eb0192b717a8ecc9dcfe095569cbb",
+      "text": "use rustc_index::bit_set::{self, DenseBitSet};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_data_structures/src/stable_hash.rs",
+      "line": 7,
+      "category": "external_dependency",
+      "source_sha256": "094b4610cccb81bcb873c3025d1fa755242eb0192b717a8ecc9dcfe095569cbb",
+      "text": "use rustc_index::{Idx, IndexSlice, IndexVec};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_data_structures/src/stable_hash.rs",
+      "line": 16,
+      "category": "external_dependency",
+      "source_sha256": "094b4610cccb81bcb873c3025d1fa755242eb0192b717a8ecc9dcfe095569cbb",
+      "text": "use rustc_hashes::{Hash64, Hash128};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_data_structures/src/stable_hash.rs",
+      "line": 17,
+      "category": "external_dependency",
+      "source_sha256": "094b4610cccb81bcb873c3025d1fa755242eb0192b717a8ecc9dcfe095569cbb",
+      "text": "pub use rustc_stable_hash::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_data_structures/src/stable_hash.rs",
+      "line": 42,
+      "category": "state_declaration",
+      "source_sha256": "094b4610cccb81bcb873c3025d1fa755242eb0192b717a8ecc9dcfe095569cbb",
+      "text": "pub struct RawSpan(pub u64);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_data_structures/src/stable_hash.rs",
+      "line": 46,
+      "category": "state_declaration",
+      "source_sha256": "094b4610cccb81bcb873c3025d1fa755242eb0192b717a8ecc9dcfe095569cbb",
+      "text": "pub struct RawDefId(pub u32, pub u32);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_data_structures/src/stable_hash.rs",
+      "line": 620,
+      "category": "state_declaration",
+      "source_sha256": "094b4610cccb81bcb873c3025d1fa755242eb0192b717a8ecc9dcfe095569cbb",
+      "text": "pub struct StableHashControls {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hashes/src/lib.rs",
+      "line": 19,
+      "category": "external_dependency",
+      "source_sha256": "ecb7777ffca8e89ad7056cc864771983a3eb4384049d739fbd5b562ed2d53850",
+      "text": "use rustc_stable_hash::{FromStableHash, SipHasher128Hash as StableHasherHash};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hashes/src/lib.rs",
+      "line": 23,
+      "category": "state_declaration",
+      "source_sha256": "ecb7777ffca8e89ad7056cc864771983a3eb4384049d739fbd5b562ed2d53850",
+      "text": "pub struct Hash64 {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hashes/src/lib.rs",
+      "line": 76,
+      "category": "state_declaration",
+      "source_sha256": "ecb7777ffca8e89ad7056cc864771983a3eb4384049d739fbd5b562ed2d53850",
+      "text": "pub struct Hash128 {",
       "review": "pending"
     },
     {
@@ -20052,6 +20260,158 @@
       "review": "pending"
     },
     {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 4,
+      "category": "external_dependency",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "use rustc_errors::{Diag, DiagCtxtHandle, Diagnostic, Level};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 5,
+      "category": "external_dependency",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "use rustc_hir::def::DefKind;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "use rustc_hir::def_id::LocalDefId;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 7,
+      "category": "external_dependency",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "use rustc_hir::intravisit::{self, Visitor};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 8,
+      "category": "external_dependency",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "use rustc_hir::{self as hir, AmbigArg, GenericParamKind, HirId, Node};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 9,
+      "category": "external_dependency",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "use rustc_lint_defs::builtin::INVALID_TYPE_PARAM_DEFAULT;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 10,
+      "category": "external_dependency",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "use rustc_middle::ty::{self, TyCtxt};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 11,
+      "category": "external_dependency",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "use rustc_span::{Span, kw, span_bug, sym};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 18,
+      "category": "external_dependency",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "use rustc_hir::*;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 20,
+      "category": "state_declaration",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "struct GenericParametersForbiddenHere {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 124,
+      "category": "state_declaration",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "// struct Foo<const N: usize = { .. }>;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 140,
+      "category": "state_declaration",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "// For the following struct def we want `args: [N#0]` when generics_of is called on",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 142,
+      "category": "state_declaration",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "// struct Foo<const N: usize, const M: usize = { N + 1 }>;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 156,
+      "category": "state_declaration",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "// dont end up with args: [N, M, N] for the const default on a struct like this:",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 157,
+      "category": "state_declaration",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "// struct Foo<const N: usize, const M: usize = { ... }>;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 414,
+      "category": "state_declaration",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "enum ParamDefaultPolicy {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 422,
+      "category": "external_dependency",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "use rustc_hir::*;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 456,
+      "category": "state_declaration",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "struct LateBoundRegionsDetector<'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "line": 529,
+      "category": "state_declaration",
+      "source_sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "text": "struct AnonConstInParamTyDetector {",
+      "review": "pending"
+    },
+    {
       "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
       "line": 26,
       "category": "external_dependency",
@@ -20569,6 +20929,262 @@
       "category": "machine_hook",
       "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
       "text": "fn validate_late_bound_regions<'cx>(",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/constraints.rs",
+      "line": 7,
+      "category": "external_dependency",
+      "source_sha256": "a2e76421f2acbd0b61276eff8548a180f7fe5bed4b9539be288cdbcf9bb1e0dd",
+      "text": "use rustc_hir as hir;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/constraints.rs",
+      "line": 8,
+      "category": "external_dependency",
+      "source_sha256": "a2e76421f2acbd0b61276eff8548a180f7fe5bed4b9539be288cdbcf9bb1e0dd",
+      "text": "use rustc_hir::def::DefKind;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/constraints.rs",
+      "line": 9,
+      "category": "external_dependency",
+      "source_sha256": "a2e76421f2acbd0b61276eff8548a180f7fe5bed4b9539be288cdbcf9bb1e0dd",
+      "text": "use rustc_middle::ty::{self, GenericArgKind, GenericArgsRef, Ty, TyCtxt};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/constraints.rs",
+      "line": 10,
+      "category": "external_dependency",
+      "source_sha256": "a2e76421f2acbd0b61276eff8548a180f7fe5bed4b9539be288cdbcf9bb1e0dd",
+      "text": "use rustc_span::{bug, span_bug};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/constraints.rs",
+      "line": 16,
+      "category": "state_declaration",
+      "source_sha256": "a2e76421f2acbd0b61276eff8548a180f7fe5bed4b9539be288cdbcf9bb1e0dd",
+      "text": "pub(crate) struct ConstraintContext<'a, 'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/constraints.rs",
+      "line": 31,
+      "category": "state_declaration",
+      "source_sha256": "a2e76421f2acbd0b61276eff8548a180f7fe5bed4b9539be288cdbcf9bb1e0dd",
+      "text": "pub(crate) struct Constraint<'a> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/constraints.rs",
+      "line": 39,
+      "category": "state_declaration",
+      "source_sha256": "a2e76421f2acbd0b61276eff8548a180f7fe5bed4b9539be288cdbcf9bb1e0dd",
+      "text": "/// struct Foo<T> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/constraints.rs",
+      "line": 45,
+      "category": "state_declaration",
+      "source_sha256": "a2e76421f2acbd0b61276eff8548a180f7fe5bed4b9539be288cdbcf9bb1e0dd",
+      "text": "struct CurrentItem {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/mod.rs",
+      "line": 7,
+      "category": "external_dependency",
+      "source_sha256": "5a9fe3fb38938d03cb7758dac1c338ac818b2807c20e5310e5fae0e00aa06abb",
+      "text": "use rustc_arena::DroplessArena;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/mod.rs",
+      "line": 8,
+      "category": "external_dependency",
+      "source_sha256": "5a9fe3fb38938d03cb7758dac1c338ac818b2807c20e5310e5fae0e00aa06abb",
+      "text": "use rustc_hir as hir;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/mod.rs",
+      "line": 9,
+      "category": "external_dependency",
+      "source_sha256": "5a9fe3fb38938d03cb7758dac1c338ac818b2807c20e5310e5fae0e00aa06abb",
+      "text": "use rustc_hir::def::DefKind;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/mod.rs",
+      "line": 10,
+      "category": "external_dependency",
+      "source_sha256": "5a9fe3fb38938d03cb7758dac1c338ac818b2807c20e5310e5fae0e00aa06abb",
+      "text": "use rustc_hir::def_id::{DefId, LocalDefId};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/mod.rs",
+      "line": 11,
+      "category": "external_dependency",
+      "source_sha256": "5a9fe3fb38938d03cb7758dac1c338ac818b2807c20e5310e5fae0e00aa06abb",
+      "text": "use rustc_middle::ty::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/mod.rs",
+      "line": 15,
+      "category": "external_dependency",
+      "source_sha256": "5a9fe3fb38938d03cb7758dac1c338ac818b2807c20e5310e5fae0e00aa06abb",
+      "text": "use rustc_span::span_bug;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/mod.rs",
+      "line": 91,
+      "category": "state_declaration",
+      "source_sha256": "5a9fe3fb38938d03cb7758dac1c338ac818b2807c20e5310e5fae0e00aa06abb",
+      "text": "enum ForceCaptureTraitArgs {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/mod.rs",
+      "line": 109,
+      "category": "state_declaration",
+      "source_sha256": "5a9fe3fb38938d03cb7758dac1c338ac818b2807c20e5310e5fae0e00aa06abb",
+      "text": "struct OpaqueTypeLifetimeCollector<'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/solve.rs",
+      "line": 8,
+      "category": "external_dependency",
+      "source_sha256": "551dc2a887be981d1d635ea132a5d7b1fed3720f0a75eafb74df71c8c02407ad",
+      "text": "use rustc_data_structures::fx::FxHashSet;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/solve.rs",
+      "line": 9,
+      "category": "external_dependency",
+      "source_sha256": "551dc2a887be981d1d635ea132a5d7b1fed3720f0a75eafb74df71c8c02407ad",
+      "text": "use rustc_hir::def_id::DefIdMap;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/solve.rs",
+      "line": 10,
+      "category": "external_dependency",
+      "source_sha256": "551dc2a887be981d1d635ea132a5d7b1fed3720f0a75eafb74df71c8c02407ad",
+      "text": "use rustc_middle::ty;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/solve.rs",
+      "line": 36,
+      "category": "state_declaration",
+      "source_sha256": "551dc2a887be981d1d635ea132a5d7b1fed3720f0a75eafb74df71c8c02407ad",
+      "text": "struct SolveContext<'a, 'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/solve.rs",
+      "line": 105,
+      "category": "machine_hook",
+      "source_sha256": "551dc2a887be981d1d635ea132a5d7b1fed3720f0a75eafb74df71c8c02407ad",
+      "text": "fn enforce_const_invariance(&self, generics: &ty::Generics, variances: &mut [ty::Variance]) {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/terms.rs",
+      "line": 14,
+      "category": "external_dependency",
+      "source_sha256": "413cf63d1d9563e20b598f6e2e6d67518eacdb9513e8a250db2d89a988115d25",
+      "text": "use rustc_arena::DroplessArena;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/terms.rs",
+      "line": 15,
+      "category": "external_dependency",
+      "source_sha256": "413cf63d1d9563e20b598f6e2e6d67518eacdb9513e8a250db2d89a988115d25",
+      "text": "use rustc_hir::def::DefKind;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/terms.rs",
+      "line": 16,
+      "category": "external_dependency",
+      "source_sha256": "413cf63d1d9563e20b598f6e2e6d67518eacdb9513e8a250db2d89a988115d25",
+      "text": "use rustc_hir::def_id::{LocalDefId, LocalDefIdMap};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/terms.rs",
+      "line": 17,
+      "category": "external_dependency",
+      "source_sha256": "413cf63d1d9563e20b598f6e2e6d67518eacdb9513e8a250db2d89a988115d25",
+      "text": "use rustc_middle::ty::{self, TyCtxt};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/terms.rs",
+      "line": 25,
+      "category": "state_declaration",
+      "source_sha256": "413cf63d1d9563e20b598f6e2e6d67518eacdb9513e8a250db2d89a988115d25",
+      "text": "pub(crate) struct InferredIndex(pub usize);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/terms.rs",
+      "line": 28,
+      "category": "state_declaration",
+      "source_sha256": "413cf63d1d9563e20b598f6e2e6d67518eacdb9513e8a250db2d89a988115d25",
+      "text": "pub(crate) enum VarianceTerm<'a> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/variance/terms.rs",
+      "line": 49,
+      "category": "state_declaration",
+      "source_sha256": "413cf63d1d9563e20b598f6e2e6d67518eacdb9513e8a250db2d89a988115d25",
+      "text": "pub(crate) struct TermsContext<'a, 'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_macros/src/stable_hash.rs",
+      "line": 4,
+      "category": "state_declaration",
+      "source_sha256": "666da3ff44064c374a9d33c71f2c8b97334b934501205e941312c649cebc56e2",
+      "text": "struct Attributes {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_macros/src/stable_hash.rs",
+      "line": 50,
+      "category": "state_declaration",
+      "source_sha256": "666da3ff44064c374a9d33c71f2c8b97334b934501205e941312c649cebc56e2",
+      "text": "enum StableHashMode {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_macros/src/stable_hash.rs",
+      "line": 52,
+      "category": "state_declaration",
+      "source_sha256": "666da3ff44064c374a9d33c71f2c8b97334b934501205e941312c649cebc56e2",
+      "text": "// For example, in `struct Abc<T, U>(T, U)` the added bounds are `T: StableHash` and",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_macros/src/stable_hash.rs",
+      "line": 57,
+      "category": "state_declaration",
+      "source_sha256": "666da3ff44064c374a9d33c71f2c8b97334b934501205e941312c649cebc56e2",
+      "text": "// `StableHash` bound. For example, in `struct Def<T, U>(T, U::Assoc)` the added bounds are",
       "review": "pending"
     },
     {
@@ -34244,6 +34860,30 @@
       "review": "pending"
     },
     {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/ty_info.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "2e413c6f942950af8a1562c0a5ccf1d1851190bad78e5f1fb6860136f4afe12e",
+      "text": "use rustc_data_structures::stable_hash::{StableHash, StableHashCtxt, StableHasher};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/ty_info.rs",
+      "line": 7,
+      "category": "external_dependency",
+      "source_sha256": "2e413c6f942950af8a1562c0a5ccf1d1851190bad78e5f1fb6860136f4afe12e",
+      "text": "use rustc_type_ir_macros::GenericTypeVisitable;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/ty_info.rs",
+      "line": 15,
+      "category": "state_declaration",
+      "source_sha256": "2e413c6f942950af8a1562c0a5ccf1d1851190bad78e5f1fb6860136f4afe12e",
+      "text": "pub struct WithCachedTypeInfo<T> {",
+      "review": "pending"
+    },
+    {
       "path": "upstream/rustc-source/compiler/rustc_type_ir/src/ty_kind.rs",
       "line": 6,
       "category": "external_dependency",
@@ -34505,6 +35145,54 @@
       "category": "state_declaration",
       "source_sha256": "7105f9eef232ace6a3f16e7c9869581580b338e4d744eb4d8bbf5a05b125b79e",
       "text": "struct HasErrorVisitor;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/library/core/src/any.rs",
+      "line": 683,
+      "category": "state_declaration",
+      "source_sha256": "949842fb7fccf848f9b402f1da4b83d2218d3a5bdf4c3ed1c4375a8691ec905b",
+      "text": "///     pub struct Unique<TypeAsId: 'static>(",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/library/core/src/any.rs",
+      "line": 725,
+      "category": "state_declaration",
+      "source_sha256": "949842fb7fccf848f9b402f1da4b83d2218d3a5bdf4c3ed1c4375a8691ec905b",
+      "text": "pub struct TypeId {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/library/core/src/any.rs",
+      "line": 1006,
+      "category": "state_declaration",
+      "source_sha256": "949842fb7fccf848f9b402f1da4b83d2218d3a5bdf4c3ed1c4375a8691ec905b",
+      "text": "/// # struct Type<'b, U>(&'b U);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/library/core/src/any.rs",
+      "line": 1014,
+      "category": "state_declaration",
+      "source_sha256": "949842fb7fccf848f9b402f1da4b83d2218d3a5bdf4c3ed1c4375a8691ec905b",
+      "text": "/// # struct Type<'b, U>(&'b U);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/library/core/src/any.rs",
+      "line": 1034,
+      "category": "state_declaration",
+      "source_sha256": "949842fb7fccf848f9b402f1da4b83d2218d3a5bdf4c3ed1c4375a8691ec905b",
+      "text": "/// # struct Type<'b, U>(&'b U);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/library/core/src/any.rs",
+      "line": 1141,
+      "category": "state_declaration",
+      "source_sha256": "949842fb7fccf848f9b402f1da4b83d2218d3a5bdf4c3ed1c4375a8691ec905b",
+      "text": "/// struct NoDebug;",
       "review": "pending"
     }
   ]

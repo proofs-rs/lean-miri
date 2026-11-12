@@ -102,17 +102,24 @@ def main (args : List String) : IO Unit := do
         s!"negative alias query did not reach a definite trait no-solution: {error}"
   else
     let mut changed := 0
-    let rules := independent.aliases.freeRules.map fun rule =>
-      {rule with ownPredicates := rule.ownPredicates.map fun clause =>
-        match clause.predicate with
-        | .projection .projectionType definition arguments _ =>
-          {clause with predicate := (.projection .projectionType definition arguments (.atom .type "uint" "u16"))}
-        | _ => clause}
-    for rule in independent.aliases.freeRules do
-      for clause in rule.ownPredicates do
-        if let .projection .projectionType .. := clause.predicate then changed := changed + 1
+    let .alias .free false definitionId _ := selectedNode.shape
+      | throw (IO.userError "checked alias source invariant")
+    let identity ← must (GenericInstantiation.identity independent.generic definitionId)
+    let definitions := independent.generic.definitions.map fun definition =>
+      if (⟨definition.crateIndex,definition.index⟩ : GenericSubstitution.DefinitionIdentity) != identity then definition
+      else {definition with sourceEnvironment := definition.sourceEnvironment.map fun material =>
+        {material with ownPredicates := material.ownPredicates.map fun clause =>
+          match clause.predicate with
+          | .projection .projectionType definition arguments _ =>
+            {clause with predicate := (.projection .projectionType definition arguments (.atom .type "uint" "u16"))}
+          | _ => clause}}
+    for definition in independent.generic.definitions do
+      unless (⟨definition.crateIndex,definition.index⟩ : GenericSubstitution.DefinitionIdentity) == identity do continue
+      if let some material := definition.sourceEnvironment then
+        for clause in material.ownPredicates do
+          if let .projection .projectionType .. := clause.predicate then changed := changed + 1
     check (changed == 1) "projection-bound control requires exactly one raw projection clause"
-    let mismatched := {independent with aliases := {independent.aliases with freeRules := rules}}
+    let mismatched := {independent with generic := {independent.generic with definitions}}
     match AliasRuntime.normalizeType mismatched 256 10000 selectedNode.id with
     | .ok _ => throw (IO.userError "mismatched associated type equality bound was ignored")
     | .error error =>

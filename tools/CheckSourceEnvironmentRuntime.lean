@@ -2,8 +2,8 @@ import Miri.Input.Decoder
 import Miri.Input.AliasRuntime
 
 /-! Fresh producer/consumer control for execution-local source impl obligations.
-The fixture is tests/repro/compiler-queries/source-environment.rs. Poisoning the
-legacy impl predicate copy must not affect source-driven selection; removing the
+The fixture is tests/repro/compiler-queries/source-environment.rs. Removed
+legacy predicate fields must reject at the wire boundary; removing the
 actual declaration scope must reject the same matched candidate. -/
 open Miri.Input Miri.Input.GenericSubstitution Miri.Input.TraitSelection
 private def require (value : Except String α) : IO α :=
@@ -33,14 +33,20 @@ def main (args : List String) : IO Unit := do
   let goal : TraitRef := ⟨family,#[.definition .type "adt" wrapper (.ofArray #[u8]),u8]⟩
   let context ← require (AliasRuntime.Context.ofDocument document)
   let selection ← require (AliasRuntime.selectGoal context 256 100000 goal)
-  let poisoned := {document with traitProgram := {document.traitProgram with
-    traits := document.traitProgram.traits.map fun declaration => {declaration with
-      implementations := declaration.implementations.map fun implementation => {implementation with
-        predicates := #[⟨#[],.unstableFeature "must-not-be-read"⟩]}}}}
-  let context ← require (AliasRuntime.Context.ofDocument poisoned)
-  let actual ← require (AliasRuntime.selectGoal context 256 100000 goal)
-  unless actual == selection do throw (IO.userError "selection read copied impl obligations")
-  let absent := {poisoned with definitions := poisoned.definitions.map fun definition =>
+  let raw ← require (Lean.Json.parse (← IO.FS.readFile path))
+  let program ← require (raw.getObjVal? "compiler_trait_program")
+  let traits ← require ((← require (program.getObjVal? "traits")).getArr?)
+  let poisonedTraits ← traits.mapM fun declaration => do
+    let implementations ← require ((← require (declaration.getObjVal? "implementations")).getArr?)
+    pure (declaration.setObjVal! "implementations" (.arr (implementations.map fun implementation =>
+      implementation.setObjVal! "predicates" (.arr #[]))))
+  let poisoned := raw.setObjVal! "compiler_trait_program" (program.setObjVal! "traits" (.arr poisonedTraits))
+  match decodeJson poisoned.compress with
+  | .ok _ => throw (IO.userError "removed copied predicate field was accepted")
+  | .error error =>
+    unless error.endsWith "unknown raw trait material field predicates" do
+      throw (IO.userError s!"unexpected legacy predicate rejection: {error}")
+  let absent := {document with definitions := document.definitions.map fun definition =>
     if (⟨definition.crateIndex,definition.index⟩ : DefinitionIdentity) == selection.implementation
     then {definition with sourceEnvironment := none} else definition}
   let context ← require (AliasRuntime.Context.ofDocument absent)
@@ -49,4 +55,4 @@ def main (args : List String) : IO Unit := do
   | .error error =>
     unless error == "raw source environment declaration is absent" do
       throw (IO.userError s!"unexpected missing-scope failure: {error}")
-  IO.println "source environment runtime selection PASS: source obligations consumed, copied answers ignored, missing source rejected"
+  IO.println "source environment runtime selection PASS: source obligations consumed, removed copied fields rejected, missing source rejected"

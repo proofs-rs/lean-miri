@@ -335,6 +335,9 @@ def parseDefinitionId (path : String) : Parser (DefinitionId) := do
         fail s!"{path}: raw ADT source identity mismatch"
       pure (some (← liftExcept (AdtDeclarationCodec.read template raw)))
   if let some template := s.genericTemplate then
+    if let some environment := s.sourceEnvironment then
+      unless environment.parameters == template.parameters do
+        fail s!"{path}: source environment and declaration template parameter scopes disagree"
     if let .definition .type "adt" identity _ := template.typeExpression then
       if identity == (⟨crate,index⟩ : GenericSubstitution.DefinitionIdentity) && adtDeclaration.isNone then
         fail s!"{path}: nominal ADT source template requires raw declaration attributes"

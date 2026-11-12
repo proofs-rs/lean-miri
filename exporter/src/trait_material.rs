@@ -81,10 +81,6 @@ fn parameters(tcx: TyCtxt<'_>, definition: DefId) -> Vec<&'static str> {
         ty::GenericParamDefKind::Const { .. } => "constant",
     }).collect()
 }
-fn clauses(tcx: TyCtxt<'_>, definition: DefId) -> Result<Vec<Value>, String> {
-    tcx.explicit_clauses_of(definition).clauses.iter()
-        .map(|(value, _)| clause(tcx, *value)).collect()
-}
 fn implementation(tcx: TyCtxt<'_>, definition: DefId) -> Result<Value, String> {
     let head = tcx.impl_trait_ref(definition).skip_binder();
     let mut values = Vec::new();
@@ -101,9 +97,6 @@ fn implementation(tcx: TyCtxt<'_>, definition: DefId) -> Result<Value, String> {
                 "implementation_definition":identity(item.def_id),
                 "has_value":item.defaultness(tcx).has_value(),
                 "requires_hidden_type_inference":item.is_impl_trait_in_trait(),
-                // Deferred with RHS material: unused catalog headers must not
-                // pull unrelated associated-item bounds into the source closure.
-                "own_predicates":[],
             })),
             ty::AssocKind::Fn { .. } => methods.push(json!({
                 "trait_associated_definition":identity(trait_item),
@@ -121,7 +114,7 @@ fn implementation(tcx: TyCtxt<'_>, definition: DefId) -> Result<Value, String> {
     Ok(json!({"definition":identity(definition),"parameters":parameters(tcx,definition),
         "trait_ref":trait_ref(tcx,head)?,"polarity":polarity,
         "is_default":!tcx.defaultness(definition).is_final(),
-        "predicates":clauses(tcx,definition)?,"associated_values":values,
+        "associated_values":values,
         "methods":methods,"constants":constants}))
 }
 fn declaration(tcx: TyCtxt<'_>, definition: DefId, constructors: &std::collections::HashSet<DefId>) -> Result<Value, String> {
@@ -244,7 +237,6 @@ impl State {
             super::generic_definition_references(&source["super_predicates"], &mut result)?;
             for implementation in source["implementations"].as_array().into_iter().flatten() {
                 super::generic_definition_references(&implementation["trait_ref"], &mut result)?;
-                super::generic_definition_references(&implementation["predicates"], &mut result)?;
                 let definition = read_identity(&implementation["definition"])?;
                 // Scope declarations carry obligations, not method signatures.
                 scopes.push(definition);
@@ -258,7 +250,7 @@ impl State {
         }
         Ok(result)
     }
-    pub(super) fn finish(self, tcx: TyCtxt<'_>, demanded: &std::collections::HashSet<DefId>) -> Result<Value, String> {
+    pub(super) fn finish(self, _tcx: TyCtxt<'_>, demanded: &std::collections::HashSet<DefId>) -> Result<Value, String> {
         let mut constructors = self.constructors.into_iter().collect::<Vec<_>>();
         constructors.sort_by_key(|id| (id.krate.as_u32(), id.index.as_u32()));
         let mut traits = self.emitted.into_values().collect::<Vec<_>>();
@@ -267,9 +259,6 @@ impl State {
                 for value in implementation["associated_values"].as_array_mut().into_iter().flatten() {
                     let retained = demanded.contains(&read_identity(&value["implementation_definition"])?);
                     value["material_retained"] = json!(retained);
-                    if retained {
-                        value["own_predicates"] = json!(clauses(tcx, read_identity(&value["implementation_definition"])?)?);
-                    }
                 }
             }
         }

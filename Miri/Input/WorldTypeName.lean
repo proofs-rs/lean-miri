@@ -1,3 +1,4 @@
+import Miri.Input.WorldNamedArguments
 import Miri.Input.WorldConstantName
 import Miri.Input.RuntimeMetadata
 import Miri.Input.FunctionTypePrinter
@@ -105,8 +106,7 @@ private def visit (metadata : RuntimeMetadata) (options : Catalog.PrintOptions) 
         | throw "FnDef printing requires raw local HIR header safety"
       unless path.parentParameterCount == 0 do throw "FnDef inherited generic paths are not implemented"
       unless path.parameterDefaults.size == arguments.size do throw "FnDef argument/header domain mismatch"
-      if path.parameterDefaults.any (fun value => value) then
-        throw "FnDef default argument elision is not implemented"
+      let visibleArguments ← lift (WorldNamedArguments.own world fuel path arguments)
       let some template := definition.genericTemplate | throw "FnDef source signature template absent"
       let argumentsTerm ← lift (GenericInstantiationWorld.ofArguments world fuel arguments)
       let signature ← lift (template.instantiateSignature fuel argumentsTerm)
@@ -119,11 +119,11 @@ private def visit (metadata : RuntimeMetadata) (options : Catalog.PrintOptions) 
       result := result ++ (← emit " {")
       result := result ++ (← emit (← lift (DefinitionPath.localNamedPath path options.verboseInternals
         options.trimDiagnosticPaths options.trimmedDefPaths)))
-      if !arguments.isEmpty then
+      if !visibleArguments.isEmpty then
         result := result ++ (← emit "::<")
-        for index in [:arguments.size] do
+        for index in [:visibleArguments.size] do
           if index > 0 then result := result ++ (← emit ", ")
-          let some argument := arguments[index]? | throw "FnDef argument absent"
+          let some argument := visibleArguments[index]? | throw "FnDef argument absent"
           let text ← match argument with
             | .Type id => child id
             | .Lifetime .Static => emit "'static"
@@ -150,8 +150,7 @@ private def visit (metadata : RuntimeMetadata) (options : Catalog.PrintOptions) 
         throw "nested generic definition-path printing is not implemented"
       unless path.parameterDefaults.size == arguments.size do
         throw "named ADT argument domain differs from declaration generic header"
-      if path.parameterDefaults.any (fun value => value) then
-        throw "definition-path default argument elision is not implemented"
+      let arguments ← lift (WorldNamedArguments.own world fuel path arguments)
       let name ← lift (DefinitionPath.localNamedPath path options.verboseInternals
         options.trimDiagnosticPaths options.trimmedDefPaths)
       let mut result ← emit name
