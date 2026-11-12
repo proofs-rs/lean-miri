@@ -20,6 +20,8 @@ private def baselineMaterial (path : String) :
   let target ← must ((RuntimeMetadata.importTarget targetInput).mapError toString)
   let rows ← must ((← must (raw.getObjVal? "types")).getArr?)
   let types ← rows.mapM fun row => do
+    check ((← must ((← must ((← must (row.getObjVal? "shape")).getObjVal? "kind")).getStr?)) != "alias")
+      "use the dedicated pointer fixture: schema12 does not retain alias rigidity"
     let fields ← must row.getObj?
     let core := Json.mkObj (fields.toList.filter (fun field => field.1 != "compiler_facts"))
     let node ← must (JsonReader.run DecoderValues.parseTypeNode core.compress)

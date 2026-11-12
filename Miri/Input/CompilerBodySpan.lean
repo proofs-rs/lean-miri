@@ -9,8 +9,9 @@ open Miri.Interpreter
 
 def get (p : CompilerProviders.Prepared) (frame : Frame P L E) :
     Except StepError MIR.SpanRef := do
-  let some body := p.program.bundle.bodies[frame.bodyIdentity.index]?
-    | throw (.invalidProgram "unwind body identity absent from canonical compilation")
+  unless frame.bodyIdentity.index < p.program.bodyCount do
+    throw (.invalidProgram "unwind body identity absent from canonical compilation")
+  let body ← p.program.resolveBody frame.bodyIdentity.index |>.mapError StepError.unsupported
   unless body.body == frame.body do
     throw (.invalidProgram "unwind body identity/content mismatch")
   unless body.input.spanId < p.program.compilerTables.spans.size do

@@ -111,6 +111,22 @@ deriving instance ToExpr for MIR.Statement
 deriving instance ToExpr for MIR.Terminator
 deriving instance ToExpr for MIR.BasicBlock
 deriving instance ToExpr for MIR.Body
+deriving instance ToExpr for Input.GenericSubstitution.ArgSort
+deriving instance ToExpr for Input.GenericSubstitution.DefinitionIdentity
+deriving instance ToExpr for Input.GenericSubstitution.BoundIdentity
+deriving instance ToExpr for Input.GenericSubstitution.BoundVariable
+deriving instance ToExpr for Input.GenericSubstitution.Term, Input.GenericSubstitution.Terms
+deriving instance ToExpr for Input.MirTemplate.TypeSlot
+deriving instance ToExpr for Input.MirTemplate.Operand
+deriving instance ToExpr for Input.MirTemplate.Rvalue
+deriving instance ToExpr for Input.MirTemplate.StatementKind
+deriving instance ToExpr for Input.MirTemplate.Statement
+deriving instance ToExpr for Input.MirTemplate.TerminatorKind
+deriving instance ToExpr for Input.MirTemplate.Terminator
+deriving instance ToExpr for Input.MirTemplate.Block
+deriving instance ToExpr for Input.MirTemplate.Skeleton
+deriving instance ToExpr for Input.MirTemplate.Template
+
 deriving instance ToExpr for Interpreter.CallReifyReason
 deriving instance ToExpr for Interpreter.CallShimKind
 deriving instance ToExpr for Interpreter.CallInstanceKind
@@ -197,6 +213,21 @@ deriving instance ToExpr for Input.GenericSubstitution.BoundVariable
 deriving instance ToExpr for Input.GenericSubstitution.Term, Input.GenericSubstitution.Terms
 deriving instance ToExpr for Input.GenericSubstitution.FieldTemplate
 deriving instance ToExpr for Input.GenericSubstitution.DefinitionTemplate
+deriving instance ToExpr for Input.TraitSelection.Polarity
+deriving instance ToExpr for Input.TraitSelection.TraitRef
+deriving instance ToExpr for Input.TraitSelection.Goal
+deriving instance ToExpr for Input.TraitSelection.AliasTermKind
+deriving instance ToExpr for Input.TraitSelection.Predicate
+deriving instance ToExpr for Input.TraitSelection.Clause
+deriving instance ToExpr for Input.TraitSelection.AssociatedValue
+deriving instance ToExpr for Input.TraitSelection.AssociatedMethod
+deriving instance ToExpr for Input.TraitSelection.TraitMember
+deriving instance ToExpr for Input.TraitSelection.Impl
+deriving instance ToExpr for Input.TraitSelection.TraitDeclaration
+deriving instance ToExpr for Input.TraitSelection.Program
+deriving instance ToExpr for Input.AliasMaterial.Container
+deriving instance ToExpr for Input.AliasMaterial.Kind
+deriving instance ToExpr for Input.AliasMaterial.Declaration
 deriving instance ToExpr for Input.DefinitionId
 deriving instance ToExpr for Input.VtableEntryKind
 deriving instance ToExpr for Input.VtablePredicateKind
@@ -227,9 +258,13 @@ deriving instance ToExpr for Input.ThreadLocalEvidence
 deriving instance ToExpr for Input.PlaceFact
 deriving instance ToExpr for Input.DynamicUpcastEvidence
 deriving instance ToExpr for Input.NodeFacts
+deriving instance ToExpr for Input.BodyMetadata
 deriving instance ToExpr for Input.BodyCore
 deriving instance ToExpr for Input.PromotedBody
 deriving instance ToExpr for Input.Body
+deriving instance ToExpr for Input.CopyTemplateSource
+deriving instance ToExpr for Input.CopyTemplateRef
+deriving instance ToExpr for Input.BodySeed
 deriving instance ToExpr for Input.BodyRoot
 deriving instance ToExpr for Input.InstanceNode
 deriving instance ToExpr for Input.ScopeRoot

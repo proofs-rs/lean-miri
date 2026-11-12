@@ -11,7 +11,7 @@ def readDeclarationWith (readClause : Json → Except String TraitSelection.Clau
     (value : Json) : Except String Declaration := do
   let sourceKind ← (← value.getObjVal? "kind").getStr?
   let allowed := if sourceKind == "free" then
-      ["definition", "kind", "has_value", "own_predicates"]
+      ["definition", "kind", "has_value", "own_predicates", "is_checked"]
     else ["definition", "kind", "has_value", "own_predicates", "parent",
       "parent_parameter_count", "is_final", "container", "trait_item"]
   for (key, _) in (← value.getObj?).toArray do
@@ -19,7 +19,9 @@ def readDeclarationWith (readClause : Json → Except String TraitSelection.Clau
   let definition ← GenericMaterialCodec.readDefinition (← value.getObjVal? "definition")
   let hasValue ← (← value.getObjVal? "has_value").getBool?
   let kind ← match sourceKind with
-    | "free" => pure Kind.free
+    | "free" => do
+      let checked ← (← value.getObjVal? "is_checked").getBool?
+      pure (Kind.free checked)
     | "associated" => do
       let parent ← GenericMaterialCodec.readDefinition (← value.getObjVal? "parent")
       let count ← (← value.getObjVal? "parent_parameter_count").getNat?

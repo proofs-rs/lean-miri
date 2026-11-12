@@ -23,12 +23,13 @@ def main (args : List String) : IO Unit := do
       throw (IO.userError "root body ID was rewritten")
   let expectedInstances := doc.instances.filter (·.bodyId.isSome)
   unless program.instances.size == expectedInstances.size do throw (IO.userError "instance body lost")
-  unless program.bundle.bodies.size == doc.bodies.size do
+  unless program.bodyCount == doc.bodies.size do
     throw (IO.userError "body pool definitions were duplicated or discarded")
   for inst in expectedInstances do
     unless program.instances.contains (inst.id, inst.bodyId.getD 0) do
       throw (IO.userError "instance body ID was rewritten")
-  for body in program.bundle.bodies do
+  for index in [:program.bodyCount] do
+    let body ← must (program.resolveBody index)
     if let some sourceId := body.input.definitionId then
       let dense ← must body.ownDefinitionId
       unless dense == sourceId && program.bundle.definitions[dense]? == doc.definitions[sourceId]? do
@@ -39,15 +40,15 @@ def main (args : List String) : IO Unit := do
     inst.defPath.any (·.endsWith "array_len") && inst.bodyId.isSome)
   if let some inst := knownGeneric then
     let some bodyId := inst.bodyId | throw (IO.userError "generic instance lost its body ID")
-    let some generic := program.bundle.bodies[bodyId]? | throw (IO.userError "generic instance body is absent")
+    let generic ← must (program.resolveBody bodyId)
     unless generic.input.instanceId == inst.id && generic.obligations.isEmpty do
       throw (IO.userError "concrete generic instantiation retained unresolved parameters")
   let knownTLS := doc.bodyRoots.find? (fun root => root.defPath.endsWith "read_tls")
   if let some root := knownTLS then
-    let some tls := program.bundle.bodies[root.bodyId]? | throw (IO.userError "TLS root body is absent")
+    let tls ← must (program.resolveBody root.bodyId)
     unless tls.body.basicBlocks.any (fun block => block.statements.any fun statement =>
         match statement.kind with
         | .Assign _ (.ThreadLocalRef _) => true
         | _ => false) do
       throw (IO.userError "concrete TLS reference disappeared from lowered MIR")
-  IO.println s!"program syntax lowered: {program.bundle.bodies.size} bodies, {program.roots.size} roots, {program.instances.size} instances, {program.promoted.size} promoted; global compiler tables and target evidence retained"
+  IO.println s!"program syntax lowered: {program.bodyCount} bodies, {program.roots.size} roots, {program.instances.size} instances, {program.promoted.size} promoted; global compiler tables and target evidence retained"

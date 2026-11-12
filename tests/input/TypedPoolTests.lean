@@ -94,7 +94,7 @@ def main : IO Unit := do
   let validBacktrace ← must (set source "bodies" (.arr (bodies.set! 0 validBody)))
   let validBacktrace ← must (set validBacktrace "backtrace_spans" (.arr #[.arr #[backtrace]]))
   let validBacktrace ← must (decodeFixture validBacktrace.compress)
-  let some validBody := validBacktrace.document.bodies[0]? | throw (IO.userError "missing decoded body")
+  let validBody ← must (SourceMir.metadata validBacktrace.document 0)
   let some validRow := validBody.backtraceSpans[0]? | throw (IO.userError "missing decoded backtrace")
   check (validRow.position.filename == 0)
     "backtrace filename reference was eagerly expanded"

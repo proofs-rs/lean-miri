@@ -125,7 +125,10 @@ pub(super) fn freeze(document: &mut crate::ExportDocument) -> Result<(), String>
             pools.source_infos.share(&mut field.source_info)?;
         }
     }
-    for body in document.bodies.iter_mut().chain(document.compiler_coroutine_coverage.auxiliary_bodies.iter_mut().map(|row| &mut row.body)) {
+    for body in document.bodies.iter_mut().filter_map(|seed|match seed {
+        crate::pool_body::BodySeed::Material{body}=>Some(body),
+        crate::pool_body::BodySeed::CopyTemplate{..}=>None,
+    }).chain(document.compiler_coroutine_coverage.auxiliary_bodies.iter_mut().map(|row| &mut row.body)) {
         pools.backtrace_spans.share(&mut body.backtrace_spans)?;
         for local in &mut body.locals {
             pools.source_infos.share(&mut local.source_info)?;

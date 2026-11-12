@@ -26,9 +26,10 @@ def program (source : Array (Declaration × Option DefinitionTemplate)) :
       let _ ← rule declaration template
     else unless template.isNone do throw "abstract alias declaration unexpectedly has RHS template"
     match declaration.kind with
-    | .free => freeRules := freeRules.push (← rule declaration template)
+    | .free true => freeRules := freeRules.push (← rule declaration template)
+    | .free false => pure ()
     | .associated .trait parent count _ =>
-      associatedDeclarations := associatedDeclarations.push ⟨declaration.definition,parent,count⟩
+      associatedDeclarations := associatedDeclarations.push ⟨declaration.definition,parent,count,declaration.ownPredicates⟩
     | .associated (.traitImpl _) .. | .associated .inherentImpl .. => pure ()
   pure ⟨freeRules, associatedDeclarations⟩
 

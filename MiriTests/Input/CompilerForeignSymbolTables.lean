@@ -60,7 +60,9 @@ private def prepare (symbols : Catalog.ForeignSymbols) (definitions : Array Defi
     base with
     definitions, instances := #[instanceNode 0, instanceNode 1], files := #["test.rs"]
     spans := #[{ lo := 0, hi := 1, start := ⟨1,0⟩, «end» := ⟨1,1⟩, context := "root", file := 0 }] }
-  let program : LoweredProgram := ⟨⟨#[], #[], definitions, #[]⟩, #[], #[], #[], source⟩
+  let program : LoweredProgram := {
+    bundle := {spans := #[], definitions, typeConstants := #[]}
+    roots := #[], instances := #[], promoted := #[], input := source }
   let runtime : RuntimeMetadata := { source, target }
   let context : CompilerFacts.Context := { runtime, program }
   let facts : CompilerFactAdapters.Prepared := { context, patterns := #[], castTypes := #[], obligations := #[] }
@@ -103,7 +105,8 @@ private def callableCandidate (iteration definition : Nat) : Catalog.ForeignCand
   symbol := s!"callable{iteration}", explicitSymbol := true
   crateIndex := 1, crateName := "test", weak := false, compilerBuiltins := false }
 
-private def callableDefinitions : Array DefinitionId := #[⟨1,7⟩, ⟨1,8⟩]
+private def callableDefinitions : Array DefinitionId := #[
+  {crateIndex := 1, index := 7}, {crateIndex := 1, index := 8}]
 
 -- Two callable identities share the lowering context while retaining distinct
 -- dense definitions and the original finalized-table validation.

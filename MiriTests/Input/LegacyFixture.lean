@@ -33,8 +33,29 @@ def adaptLegacyFixture (source : String) : Except String String := do
   | .ok _ => pure ()
   let raw ← Json.parse source
   let version := (raw.getObjVal? "schema_version" >>= Json.getNat?).toOption
-  unless version == some 11 || version == some 12 do return source
+  let oldBodyEncoding := version == some 13 && !(raw.getObjVal? "mir_templates").isOk &&
+    ((raw.getObjVal? "bodies" >>= Json.getArr?).toOption.any fun bodies =>
+      !bodies.isEmpty && bodies.all (fun body => !(body.getObjVal? "body_kind").isOk))
+  unless version == some 11 || version == some 12 || oldBodyEncoding do return source
   let mut value := raw.setObjVal! "schema_version" (toJson (13 : Nat))
+  if !(raw.getObjVal? "mir_templates").isOk then
+    value := value.setObjVal! "mir_templates" (toJson (#[] : Array Json))
+  if !(raw.getObjVal? "compiler_trait_program").isOk then
+    value := value.setObjVal! "compiler_trait_program" (Json.mkObj [
+      ("traits", toJson (#[] : Array Json)),
+      ("constructor_scope", Json.mkObj [("kind", toJson "all_source_impls")])])
+  if let .ok bodies := raw.getObjVal? "bodies" >>= Json.getArr? then
+    value := value.setObjVal! "bodies" (toJson (bodies.map fun body =>
+      if (body.getObjVal? "body_kind").isOk then body
+      else body.setObjVal! "body_kind" (toJson "material")))
+  if let .ok types := raw.getObjVal? "types" >>= Json.getArr? then
+    value := value.setObjVal! "types" (toJson (types.map fun node => Id.run do
+      if let .ok shape := node.getObjVal? "shape" then
+        if (shape.getObjVal? "kind" >>= Json.getStr?) == .ok "alias" &&
+            !(shape.getObjVal? "rigid").isOk then
+          -- Hypothetical historical component input, not recovered rigidity.
+          return node.setObjVal! "shape" (shape.setObjVal! "rigid" (toJson false))
+      return node))
   if !(raw.getObjVal? "compiler_coroutine_coverage").isOk then
     if let .ok bodies := raw.getObjVal? "bodies" >>= Json.getArr? then
       value := value.setObjVal! "compiler_coroutine_coverage" (Json.mkObj [

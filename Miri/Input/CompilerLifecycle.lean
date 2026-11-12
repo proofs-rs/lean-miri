@@ -16,17 +16,20 @@ def prepare (program : LoweredProgram) : Prepared := Id.run do
   let ctx := LowerContext.ofDocument program.input
   let mut tables := program.compilerTables
   let mut entries := #[]
-  for body in program.bundle.bodies do
+  for index in [:program.bodyCount] do
+    let source := program.bodyMetadata index
     let preamble := do
-      lowerCompilerSpan tables ⟨body.input.preambleDefSpanId⟩
+      let metadata ← source
+      lowerCompilerSpan tables ⟨metadata.preambleDefSpanId⟩
     let preamble ← match preamble with
       | .error error => pure (.error error)
       | .ok (span,next) =>
         tables := next
         pure (.ok span)
     let decoded : Except String (CallInstance × CompilerTables) := do
-      unless body.input.instanceId < ctx.instances.size do throw "body instance ID out of bounds"
-      pure (body.input.instanceId,tables)
+      let metadata ← source
+      unless metadata.instanceId < ctx.instances.size do throw "body instance ID out of bounds"
+      pure (metadata.instanceId,tables)
     let callee ← match decoded with
       | .error error => pure (.error error)
       | .ok (callee,next) =>
@@ -40,7 +43,7 @@ private def lift (query : Except String A) : MachineHooks.M K User A :=
   | .ok value => pure value
   | .error error => throw (.unsupported s!"compiler lifecycle: {error}")
 private def entry (p : Prepared) (body : LoadedBody) : Except String Entry := do
-  let some actual := p.program.bundle.bodies[body.identity.index]? | throw "canonical body identity absent"
+  let actual ← p.program.resolveBody body.identity.index
   unless actual.body == body.body do throw "canonical body identity/content mismatch"
   let some entry := p.entries[body.identity.index]? | throw "body lifecycle evidence absent"
   return entry
@@ -66,7 +69,7 @@ set_option autoImplicit false
 variable {K U : Type}
 theorem preamble_known (p : Prepared) (body : LoadedBody) (actual : LoweredBody)
     (span : SpanRef) (fnInstance : CallInstance)
-    (row : p.program.bundle.bodies[body.identity.index]? = some actual)
+    (row : p.program.resolveBody body.identity.index = .ok actual)
     (contents : actual.body = body.body)
     (evidence : p.entries[body.identity.index]? = some ⟨.ok span,.ok fnInstance⟩) :
     (preambleSpan p body : MachineHooks.M K U SpanRef) = pure span := by
@@ -74,7 +77,7 @@ theorem preamble_known (p : Prepared) (body : LoadedBody) (actual : LoweredBody)
     bind, Except.bind, pure, Except.pure]
  theorem required_empty (p : Prepared) (body : LoadedBody) (actual : LoweredBody)
     (span : SpanRef) (fnInstance : CallInstance)
-    (row : p.program.bundle.bodies[body.identity.index]? = some actual)
+    (row : p.program.resolveBody body.identity.index = .ok actual)
     (contents : actual.body = body.body)
     (evidence : p.entries[body.identity.index]? = some ⟨.ok span,.ok fnInstance⟩)
     (frames : Array (Frame Provenance LocalLayout MachineHooks.FrameExtra))

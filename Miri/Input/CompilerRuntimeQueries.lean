@@ -100,8 +100,7 @@ def rebaseVirtualArgs (prepared : Prepared) (args : Array MIR.GenericArg)
   let some first := matching[0]? | throw "virtual trait generic definition material absent"
   unless matching.all (·.parentGenericCount == first.parentGenericCount) do
     throw "conflicting virtual trait generic definition material"
-  let some _ := prepared.program.input.types.find? (·.id == concrete)
-    | throw "virtual concrete type material absent"
+  let _ ← TypeArena.node prepared.program.input.types concrete
   GenericRebase.virtualSelf args first.parentGenericCount concrete
 
 def expectResolveForVTable (prepared : Prepared) (method : MIR.DefId)

@@ -15,13 +15,42 @@ structure Context where
   definitions : Array DefinitionId
   constants : Array MIR.TypeConst
   pointerBytes : Nat
+  /-- Input-bound validation evidence, never a compiler query result cache. -/
+  denseTypes : Option (PLift (TypeArena.isDense types = true)) := none
 
 def Context.ofDocument (source : ImportDocument) : Except String Context := do
   let some target := source.runtimeTargetDataLayout | throw "generic instantiation target material absent"
   let pointerBytes := target.defaultAddressSpacePointerSpec.pointerSizeBytes
   unless pointerBytes > 0 do throw "generic instantiation target pointer width is zero"
-  TypeArena.validateMaterial source.types
-  pure ⟨source.types, source.definitions, source.typeConstants, pointerBytes⟩
+  if dense : TypeArena.isDense source.types = true then
+    pure {
+      types := source.types, definitions := source.definitions,
+      constants := source.typeConstants, pointerBytes, denseTypes := some ⟨dense⟩ }
+  else throw "material type ID/index mismatch"
+
+def Context.node (context : Context) (id : TypeId) : Except String TypeNode :=
+  match context.denseTypes with
+  | some _ => TypeArena.nodeWithFuel context.types context.constants.size (id + 1) id
+  | none => TypeArena.node context.types id context.constants.size
+
+def Context.validateMaterial (context : Context) : Except String Unit :=
+  match context.denseTypes with
+  | some _ => pure ()
+  | none => TypeArena.validateMaterial context.types
+
+theorem Context.node_eq_checked (context : Context) (id : TypeId) :
+    context.node id = TypeArena.node context.types id context.constants.size := by
+  cases evidence : context.denseTypes with
+  | none => simp [Context.node, evidence]
+  | some certificate =>
+    simp [Context.node, evidence, TypeArena.node, TypeArena.validateMaterial, certificate.down]
+
+theorem Context.validateMaterial_eq (context : Context) :
+    context.validateMaterial = TypeArena.validateMaterial context.types := by
+  cases evidence : context.denseTypes with
+  | none => simp [Context.validateMaterial, evidence]
+  | some certificate =>
+    simp [Context.validateMaterial, evidence, TypeArena.validateMaterial, certificate.down]
 
 def identity (context : Context) (id : DefinitionRef) : Except String DefinitionIdentity := do
   let some source := context.definitions[id]? | throw "generic material definition absent"
@@ -71,7 +100,7 @@ mutual
 def ofType (context : Context) : Nat → TypeId → Except String Term
   | 0, _ => .error "runtime type to generic tree traversal exhausted"
   | fuel + 1, id => do
-    let source ← TypeArena.node context.types id context.constants.size
+    let source ← context.node id
     let child := ofType context fuel
     let args := ofArguments context fuel
     match source.shape with
@@ -115,6 +144,14 @@ def ofType (context : Context) : Nat → TypeId → Except String Term
     | .coroutine definition arguments => do
       let arguments ← args arguments
       return .definition .type "coroutine" (← identity context definition) (Terms.ofArray arguments)
+    | .alias kind rigid definition arguments => do
+      let kind := match kind with
+        | .projection => "projection" | .inherent => "inherent"
+        | .opaque => "opaque" | .free => "free"
+      let rigidity := if rigid then "rigid" else "not_rigid"
+      let arguments ← args arguments
+      return .definition .type ("alias_" ++ kind ++ "_" ++ rigidity)
+        (← identity context definition) (Terms.ofArray arguments)
     | _ => throw "runtime type lacks lossless generic tree reconstruction material"
 
 def ofArgument (context : Context) : Nat → MIR.GenericArg → Except String Term
@@ -146,16 +183,78 @@ def ofConstant (context : Context) : Nat → TypeConstantId → Except String Te
     | _ => throw "runtime generic constant constructor is not reconstructed"
 end
 
+/-- Semantic outer constructor only. Unknown trees remain candidates. -/
+def constructorOfTerm : Term → Option TypeShapeKind
+  | .atom .type "bool" _ => some .bool
+  | .atom .type "char" _ => some .char
+  | .atom .type "int" _ => some .int
+  | .atom .type "uint" _ => some .uint
+  | .atom .type "float" _ => some .float
+  | .atom .type "str" _ => some .str
+  | .atom .type "never" _ => some .never
+  | .node .type "raw_pointer" _ _ => some .rawPointer
+  | .node .type "reference" _ _ => some .reference
+  | .node .type "slice" _ _ => some .slice
+  | .node .type "tuple" _ _ => some .tuple
+  | .node .type "array" _ _ => some .array
+  | .definition .type "adt" _ _ => some .adt
+  | .definition .type "foreign" _ _ => some .foreign
+  | .definition .type "closure" _ _ => some .closure
+  | .definition .type "coroutine_closure" _ _ => some .coroutineClosure
+  | .definition .type "coroutine" _ _ => some .coroutine
+  | .definition .type tag _ _ =>
+    if ["alias_projection_rigid", "alias_projection_not_rigid",
+        "alias_inherent_rigid", "alias_inherent_not_rigid",
+        "alias_opaque_rigid", "alias_opaque_not_rigid",
+        "alias_free_rigid", "alias_free_not_rigid"].contains tag then some .alias else none
+  | _ => none
+
+private def definitionOfShape : TypeShape → Option DefinitionRef
+  | .adt data => some data.definition
+  | .foreign id | .closure id .. | .coroutineClosure id .. | .coroutine id ..
+  | .alias _ _ id _ => some id
+  | _ => none
+
+/-- A necessary structural test, never sufficient type identity. Failed identity
+material lookups remain candidates, so normal reconstruction retains its errors. -/
+def mayMatch (context : Context) (source : TypeNode) (term : Term) : Bool :=
+  let constructorMatches := match constructorOfTerm term with
+    | none => true
+    | some kind => kind == source.shape.kind
+  constructorMatches && match term, definitionOfShape source.shape with
+    | .definition .type _ wanted _, some id => match identity context id with
+      | .ok actual => actual == wanted
+      | .error _ => true
+    | _, _ => true
+
+set_option maxRecDepth 4096 in
+set_option maxHeartbeats 2000000 in
+/-- Every successful exact-source reconstruction survives the prefilter. In
+particular, duplicate semantic candidates cannot be hidden by this optimization. -/
+theorem mayMatch_ofType (context : Context) (source : TypeNode) (fuel : Nat)
+    (term : Term) (node : context.node source.id = .ok source)
+    (result : ofType context (fuel + 1) source.id = .ok term) :
+    mayMatch context source term = true := by
+  simp only [ofType, node, bind, Except.bind] at result
+  cases shape : source.shape <;>
+    simp [shape] at result
+  all_goals simp only [pure, Except.pure] at result
+  all_goals try { cases result; simp [mayMatch, constructorOfTerm, shape, TypeShape.kind] }
+  all_goals repeat' first | split at result | cases result
+  all_goals simp_all [mayMatch, constructorOfTerm, definitionOfShape, TypeShape.kind,
+    throw, BEq.beq, instBEqDefinitionIdentity.beq]
+
 def resolveType (context : Context) : Nat → Term → Except String TypeId
   | 0, _ => .error "generic tree to runtime type traversal exhausted"
   | fuel + 1, term => do
     unless term.sort == .type do throw "generic type resolver received a non-type term"
-    TypeArena.validateMaterial context.types
+    context.validateMaterial
     let mut matching := #[]
     for source in context.types do
-      match ofType context (fuel + 1) source.id with
-      | .ok actual => if actual == term then matching := matching.push source.id
-      | .error _ => pure () -- Other unsupported source families are not candidates.
+      if mayMatch context source term then
+        match ofType context (fuel + 1) source.id with
+        | .ok actual => if actual == term then matching := matching.push source.id
+        | .error _ => pure () -- Other unsupported source families are not candidates.
     if let some first := matching[0]? then
       unless matching.all (· == first) do throw "ambiguous canonical generic type identity"
       return first

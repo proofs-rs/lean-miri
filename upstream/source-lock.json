@@ -13,9 +13,9 @@
     "procedure": "upstream/fetch-sources.sh",
     "procedure_sha256": "a8ced1c1a19c47193465862bbe2486e25dcf91c544df5b62f9b2265ea12fb7d8",
     "rustc_selected_archive_paths": {
-      "count": 552,
+      "count": 556,
       "path": "upstream/rustc-selected-files.txt",
-      "sha256": "252ac391f19edcd5652d63c9e7ea13d1f08fb3c20815e37a49680f720207b7e6"
+      "sha256": "74d719f826b132f43585e2732a5ef48aba0aa81cce7f2eccd3d7da844139cbd0"
     }
   },
   "coverage_expected_rust_modules": {
@@ -42,14 +42,18 @@
     "upstream/rustc-source/compiler/rustc_data_structures/src/sorted_map.rs": 1,
     "upstream/rustc-source/compiler/rustc_hir/src/def.rs": 1,
     "upstream/rustc-source/compiler/rustc_hir/src/hir.rs": 1,
+    "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/clauses_of.rs": 1,
+    "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs": 1,
     "upstream/rustc-source/compiler/rustc_middle/src/middle/codegen_fn_attrs.rs": 1,
     "upstream/rustc-source/compiler/rustc_middle/src/mir": 23,
     "upstream/rustc-source/compiler/rustc_middle/src/ty": 50,
+    "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs": 1,
     "upstream/rustc-source/compiler/rustc_target/src/asm/mod.rs": 1,
     "upstream/rustc-source/compiler/rustc_target/src/callconv": 26,
     "upstream/rustc-source/compiler/rustc_target/src/spec": 389,
     "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/normalize.rs": 1,
     "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs": 1,
+    "upstream/rustc-source/compiler/rustc_traits/src/normalize_erasing_regions.rs": 1,
     "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs": 1,
     "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs": 1,
     "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs": 1,
@@ -87,14 +91,18 @@
     "upstream/rustc-source/compiler/rustc_data_structures/src/sorted_map.rs",
     "upstream/rustc-source/compiler/rustc_hir/src/def.rs",
     "upstream/rustc-source/compiler/rustc_hir/src/hir.rs",
+    "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/clauses_of.rs",
+    "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
     "upstream/rustc-source/compiler/rustc_middle/src/middle/codegen_fn_attrs.rs",
     "upstream/rustc-source/compiler/rustc_middle/src/mir",
     "upstream/rustc-source/compiler/rustc_middle/src/ty",
+    "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs",
     "upstream/rustc-source/compiler/rustc_target/src/asm/mod.rs",
     "upstream/rustc-source/compiler/rustc_target/src/callconv",
     "upstream/rustc-source/compiler/rustc_target/src/spec",
     "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/normalize.rs",
     "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+    "upstream/rustc-source/compiler/rustc_traits/src/normalize_erasing_regions.rs",
     "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
     "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
     "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
@@ -1840,6 +1848,18 @@
       "sha256": "6a8cf7543c393ae59ca6d8cb1250d97be8762cef5f28805b9c3788dc149514d8"
     },
     {
+      "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/clauses_of.rs",
+      "sha256": "465f5dd0f397f87716aedc65048a12dce7ec3af51d88e584ea5ad902b2251bf3",
+      "git_blob": "ae384a67ee6aa279a97782aa4a47fc7e5169e95d"
+    },
+    {
+      "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "git_blob": "65db947b4cf50a4f9914e3e8ecca2591ea5d0a92"
+    },
+    {
       "component": "rustc_middle_codegen_attrs",
       "git_blob": "fc5345b0b0b928d00e2877d4846f8506eccb6525",
       "path": "upstream/rustc-source/compiler/rustc_middle/src/middle/codegen_fn_attrs.rs",
@@ -2282,6 +2302,12 @@
       "git_blob": "fb56bda7d4562bb782e45dbd5690fa01be9745c8",
       "path": "upstream/rustc-source/compiler/rustc_middle/src/ty/vtable.rs",
       "sha256": "4d9d2f89cd70e9f1f4fa5a8c7f7fb584e6a89652bbca4f69ce711bab211368cc"
+    },
+    {
+      "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs",
+      "sha256": "462d2890e543275c8b37e55f31059a6fa0a1d31e5ede1032095ccf1976c8f15f",
+      "git_blob": "a7e02f07661c60fe0a1b177566a1a0810fb6f26f"
     },
     {
       "component": "rustc_target_asm",
@@ -4790,6 +4816,12 @@
       "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
       "sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
       "git_blob": "6cea4a93008244898226ba4df60c545ed6b62ed1"
+    },
+    {
+      "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_traits/src/normalize_erasing_regions.rs",
+      "sha256": "ee4a46776ccd32a10fd94cdc68324d2ced6894b3c08ef04d4589688695120bd5",
+      "git_blob": "5ee83ae6517136c2cdfef07b359af747518d3add"
     },
     {
       "component": "rustc",

@@ -12,6 +12,7 @@ private def check (json : Json) : Except String Nat := do
     let expected ← MirTemplateCodec.readTemplate (← field row "expected")
     let args ← (← (← field row "arguments").getArr?).mapM (GenericMaterialCodec.readTerm 16384)
     let resolve (term : GenericSubstitution.Term) : Except String Nat := do
+      let term ← MirTemplate.eraseFreeRegions 16384 term
       let some index := expected.types.findIdx? (· == term)
         | throw "instantiated generic MIR type absent from actual rustc oracle"
       pure index

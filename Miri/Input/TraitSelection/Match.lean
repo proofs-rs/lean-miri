@@ -10,6 +10,25 @@ operation. Unsupported higher-ranked relations remain errors. -/
 namespace Miri.Input.TraitSelection.Match
 open GenericSubstitution
 
+/-- Filtering a concrete root-Self constructor is complete only for queries
+whose full normalized type graph stays in the declared source constructor set. -/
+def requireConstructorScope (allowed : Array DefinitionIdentity) : Nat → Term → Except String Unit
+  | 0, _ => .error "trait constructor scope traversal exhausted"
+  | fuel + 1, term => do
+    match term with
+    | .definition sort tag definition children =>
+      if sort == .type && tag == "adt" && !allowed.contains definition then
+        throw "trait query ADT constructor outside closed source declaration scope"
+      let _ ← children.mapM fun child => do
+        requireConstructorScope allowed fuel child
+        pure child
+    | .node _ _ _ children =>
+      let _ ← children.mapM fun child => do
+        requireConstructorScope allowed fuel child
+        pure child
+    | .binder _ body => requireConstructorScope allowed fuel body
+    | _ => pure ()
+
 abbrev Bindings := Array (Option Term)
 
 private def closed : Nat → Nat → Term → Except String Bool
@@ -17,7 +36,9 @@ private def closed : Nat → Nat → Term → Except String Bool
   | fuel + 1, depth, term => do
     match term with
     | .parameter .. | .inference .. => pure false
-    | .node _ _ _ children =>
+    | .node sort tag _ children =>
+      if sort == .constant && tag != "value" then
+        throw "trait matching requires evaluated constants"
       return !(← children.anyM fun child => return !(← closed fuel depth child))
     | .definition _ tag _ children =>
       if tag.startsWith "alias_" then throw "trait matching requires normalized aliases"
@@ -67,6 +88,8 @@ private def term (parameters : Array ArgSort) (eraseRegions : Bool) : Nat → Te
         pure (if sort == otherSort && tag == otherTag && payload == otherPayload then some bindings else none)
       | _ => pure none
     | .node sort tag payload children =>
+      if sort == .constant && tag != "value" then
+        throw "impl const expression requires deferred evaluation"
       match goal with
       | .node otherSort otherTag otherPayload otherChildren =>
         if sort != otherSort || tag != otherTag || payload != otherPayload then return none
@@ -82,6 +105,10 @@ private def term (parameters : Array ArgSort) (eraseRegions : Bool) : Nat → Te
     | .binder .. | .bound .. | .placeholder .. =>
       throw "higher-ranked impl-head relation requires universe checking"
 end
+
+/-- Required before candidate enumeration, including an empty impl catalog. -/
+def requireGround (fuel : Nat) (value : Term) : Except String Unit := do
+  unless ← closed fuel 0 value do throw "trait matching requires a ground query"
 
 /-- A missing binding is not filled with an invented type. Region erasure may
 supply erased regions only when explicitly authorized by the query environment. -/

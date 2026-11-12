@@ -11,12 +11,20 @@ def main (args : List String) : IO Unit := do
   let path := args.headD "examples/empty_function/input.json"
   let input ← must (decodeFixture (← IO.FS.readFile path))
   let program ← must (lowerProgram input.document)
-  unless program.bundle.bodies.size == input.document.bodies.size &&
+  unless program.bodyCount == input.document.bodies.size &&
       program.bundle.spans == input.document.spans &&
       program.bundle.definitions == input.document.definitions &&
       program.bundle.typeConstants == input.document.typeConstants do
     throw (IO.userError "lowering changed compiler pool definitions or body IDs")
-  for (lowered, index) in program.bundle.bodies.toList.zipIdx do
-    unless lowered.input.sourcePath == s!"$.bodies[{index}]" do
+  for index in [:program.bodyCount] do
+    let metadata ← must (program.bodyMetadata index)
+    let expected ← match input.document.bodies[index]? with
+      | some (.material _) => pure s!"$.bodies[{index}]"
+      | some (.copyTemplate reference) =>
+        unless reference.templateId < input.document.mirTemplates.size do
+          throw (IO.userError "body path refers to an absent source template")
+        pure s!"$.mir_templates[{reference.templateId}]"
+      | none => throw (IO.userError "body path refers to an absent body seed")
+    unless metadata.sourcePath == expected do
       throw (IO.userError s!"body diagnostic path does not resolve to its source definition: {index}")
-  IO.println s!"source body paths and compiler pool IDs preserved for {program.bundle.bodies.size} definitions"
+  IO.println s!"source body paths and compiler pool IDs preserved for {program.bodyCount} definitions"

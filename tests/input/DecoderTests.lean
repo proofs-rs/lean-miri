@@ -59,6 +59,8 @@ private partial def replaceFirstField (source key replacement : String) : Except
 private def rewriteFirstBody (doc : String) (rewrite : String → Except String String) : Except String String := do
   let bodies ← array (← getField doc "bodies")
   let first ← getAt bodies 0
+  let _ ← getField first "basic_blocks"
+  let first ← setField first "body_kind" (string "material")
   setField doc "bodies" (encodeArray (← updateAt bodies 0 (← rewrite first)))
 
 private def rewriteFirstBlock (body : String) (rewrite : String → Except String String) : Except String String := do
@@ -80,10 +82,14 @@ private def must (result : Except String α) : IO α :=
   | .ok value => pure value
   | .error message => fail message
 
-private def rvalues (document : ImportDocument) : Array Miri.MIR.Rvalue :=
-  document.bodies.flatMap fun body => body.mir.basicBlocks.flatMap fun block =>
-    block.statements.filterMap fun statement => match statement.kind with
-      | .Assign _ value => some value | _ => none
+private def rvalues (document : ImportDocument) : Except String (Array Miri.MIR.Rvalue) := do
+  let mut values := #[]
+  for index in [:document.bodies.size] do
+    let body ← SourceMir.resolveBody document index
+    values := values ++ body.mir.basicBlocks.flatMap fun block =>
+      block.statements.filterMap fun statement => match statement.kind with
+        | .Assign _ value => some value | _ => none
+  pure values
 
 def main (args : List String) : IO UInt32 := do
   let path ← match args with
@@ -102,14 +108,15 @@ def main (args : List String) : IO UInt32 := do
   check (!document.bodies.isEmpty && !document.types.isEmpty) "typed body/type graph is empty"
   check (document.instances.any fun inst => inst.bodyId.isSome) "instance MIR body was not decoded into typed Body"
   check (document.instances.any fun inst => inst.kind == .instanceMir &&
-      inst.bodyId.any (fun id => (document.bodies[id]?).any (·.instanceId == inst.id)))
+      inst.bodyId.any (fun id => (SourceMir.metadata document id).toOption.any (·.instanceId == inst.id)))
     "resolved instance does not identify its executable body"
   check (document.bodyRoots.any fun body => body.promotedBodies.any fun promoted => promoted.bodyId.isSome)
     "promoted MIR bodies were not decoded into typed body cores"
-  check ((rvalues document).any fun value => match value with | .BinaryOp .Lt .. => true | _ => false) "binary operator did not use the canonical BinOp type"
-  check ((rvalues document).any fun value => match value with | .BinaryOp .AddWithOverflow .. => true | _ => false) "overflowing binary operator was not typed"
-  check ((rvalues document).any fun value => match value with | .UnaryOp .Not .. => true | _ => false) "unary operator did not use the canonical UnOp type"
-  check ((rvalues document).any fun value => match value with | .Ref .. => true | _ => false) "borrow kinds were not decoded into MIR"
+  let values ← must (rvalues document)
+  check (values.any fun value => match value with | .BinaryOp .Lt .. => true | _ => false) "binary operator did not use the canonical BinOp type"
+  check (values.any fun value => match value with | .BinaryOp .AddWithOverflow .. => true | _ => false) "overflowing binary operator was not typed"
+  check (values.any fun value => match value with | .UnaryOp .Not .. => true | _ => false) "unary operator did not use the canonical UnOp type"
+  check (values.any fun value => match value with | .Ref .. => true | _ => false) "borrow kinds were not decoded into MIR"
   check (document.types.any fun node => node.signature.any fun signature =>
     signature.safety == .Safe || signature.safety == .Unsafe) "function safety tags were not retained as typed values"
   check (document.allocations.any fun node => node.memory.isSome) "structured allocation memory was not decoded"

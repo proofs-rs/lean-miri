@@ -13,20 +13,22 @@ private def check (condition : Bool) (message : String) : IO Unit :=
 
 private def replaceSpans (program : LoweredProgram) (index : Nat)
     (rows : Array BacktraceSpan) : Except String LoweredProgram := do
-  let some body := program.bundle.bodies[index]? | throw "test body index absent"
-  let bodies := program.bundle.bodies.set! index {body with input := {body.input with backtraceSpans := rows}}
-  pure {program with bundle := {program.bundle with bodies}}
+  let body ← SourceMir.resolveBody program.input index
+  let some seed := program.input.bodies[index]? | throw "test body index absent"
+  let material : Body := {toBodyCore := {body with backtraceSpans := rows}, promotedBodies := seed.promotedBodies}
+  let bodies := program.input.bodies.set! index (.material material)
+  pure {program with input := {program.input with bodies}}
 
 def main (args : List String) : IO Unit := do
   let some path := args.head? | throw (IO.userError "producer export path required")
   let decoded ← must (decodeFixture (← IO.FS.readFile path))
   let program ← must (lowerProgram decoded.document)
   let baseline ← must (CompilerBacktraceSource.prepare program)
-  let some firstIndex := (List.range program.bundle.bodies.size).toArray.find? (fun index =>
-      ((program.bundle.bodies[index]?).map fun body => !body.input.backtraceSpans.isEmpty).getD false)
+  let some firstIndex := (List.range program.bodyCount).toArray.find? (fun index =>
+      ((program.bodyMetadata index).toOption.map fun body => !body.backtraceSpans.isEmpty).getD false)
     | throw (IO.userError "fixture has no executable body source-map rows")
-  let some firstBody := program.bundle.bodies[firstIndex]? | throw (IO.userError "body disappeared")
-  let some firstRow := firstBody.input.backtraceSpans[0]? | throw (IO.userError "source row disappeared")
+  let firstBody ← must (program.bodyMetadata firstIndex)
+  let some firstRow := firstBody.backtraceSpans[0]? | throw (IO.userError "source row disappeared")
   let some (.ok entries) := baseline.bodySpans[firstIndex]?
     | throw (IO.userError "baseline source rows failed")
   let some entry := entries[0]? | throw (IO.userError "baseline source row disappeared")
@@ -41,16 +43,16 @@ def main (args : List String) : IO Unit := do
   check (fileError == "backtrace filename ID out of bounds")
     "invalid prepared filename diagnostic changed"
   let changed := {firstRow with position := {firstRow.position with line := firstRow.position.line + 1}}
-  let conflicting ← must (replaceSpans program firstIndex (firstBody.input.backtraceSpans.push changed))
+  let conflicting ← must (replaceSpans program firstIndex (firstBody.backtraceSpans.push changed))
   let conflict ← must (CompilerBacktraceSource.prepare conflicting)
   let some (.error error) := conflict.bodySpans[firstIndex]? | throw (IO.userError "body conflict was accepted")
   check (error == "conflicting body/span hygiene query") "body conflict diagnostic changed"
   check (conflict.bodySpans.size == baseline.bodySpans.size) "body error stopped later body preparation"
 
-  let some nextIndex := (List.range program.bundle.bodies.size).toArray.find? (· > firstIndex)
+  let some nextIndex := (List.range program.bodyCount).toArray.find? (· > firstIndex)
     | throw (IO.userError "fixture needs a later executable body")
   let mut cleared := program
-  for index in (List.range program.bundle.bodies.size).toArray do
+  for index in (List.range program.bodyCount).toArray do
     cleared ← must (replaceSpans cleared index #[])
   let firstOnly ← must (replaceSpans cleared firstIndex #[firstRow])
   let crossConflict ← must (replaceSpans firstOnly nextIndex #[changed])

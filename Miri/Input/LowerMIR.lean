@@ -1,6 +1,7 @@
 import Miri.Input.Model
 import Miri.Input.DecodeMIR
 import Miri.Input.TypeArena
+import Miri.Input.SourceMir
 
 namespace Miri.Input
 
@@ -70,9 +71,14 @@ structure LoweredBodies where
 def lowerBodies (ctx : LowerContext) (inputs : Array BodyCore) : LowerResult LoweredBodies := do
   pure ⟨← inputs.mapM (lowerBody ctx), ctx.spans, ctx.definitions, ctx.typeConstants⟩
 
+structure CompilerTables where
+  spans : Array SourceSpanData
+  definitions : Array DefinitionId
+  typeConstants : Array MIR.TypeConst
+
 structure LoweredProgram where
-  bundle : LoweredBodies
-  /-- Root body indices into `bundle.bodies`, in the original document order. -/
+  bundle : CompilerTables
+  /-- Root body indices into the source body-seed table, in the original document order. -/
   roots : Array Nat
   /-- Instance graph identity to body index; the source graph is retained below. -/
   instances : Array (InstanceId × Nat)
@@ -80,15 +86,55 @@ structure LoweredProgram where
   promoted : Array (Nat × Nat × Nat)
   input : ImportDocument
 
+/-- Source body count; preparation never constructs an executable MIR vector. -/
+def LoweredProgram.bodyCount (program : LoweredProgram) : Nat := program.input.bodies.size
+
+def LoweredProgram.bodyMetadata (program : LoweredProgram) (index : Nat) :
+    LowerResult SourceMir.Metadata := SourceMir.metadata program.input index
+
+/-- Instantiate and lower only the actual body requested by a runtime operation.
+No instantiated result is cached in the immutable compilation input. -/
+def LoweredProgram.resolveBody (program : LoweredProgram) (index : Nat) :
+    LowerResult LoweredBody := do
+  let source ← SourceMir.resolveBody program.input index
+  -- Body wrapping needs only these immutable tables. Constructing the full
+  -- source reference indexes here would scan every type/allocation on each
+  -- runtime frame/debug lookup without contributing to lowerBody.
+  let ctx : LowerContext := {
+    spans := program.bundle.spans, definitions := program.bundle.definitions,
+    typeConstants := program.bundle.typeConstants, typeIds := #[]}
+  let ctx ← match program.input.bodies[index]? with
+    | some (.material _) => pure ctx
+    | some (.copyTemplate _) => do
+      let ctx := ctx.withLazyTypes program.input.types
+      for ty in source.mir.locals do
+        unless ctx.containsTypeId ty do throw "instantiated MIR local type is absent from its runtime type universe"
+      pure ctx
+    | none => throw "canonical body index is absent"
+  lowerBody ctx source
+
+/-- The minimal runtime body context preserves every field observed by
+lowerBody; source reference indexes are validated separately at import. -/
+theorem lowerBody_minimalContext (document : ImportDocument) (tables : CompilerTables)
+    (source : BodyCore) :
+    lowerBody {LowerContext.ofDocument document with
+      spans := tables.spans, definitions := tables.definitions,
+      typeConstants := tables.typeConstants} source =
+    lowerBody {
+      spans := tables.spans, definitions := tables.definitions,
+      typeConstants := tables.typeConstants, typeIds := #[]} source := by
+  rfl
+
 /-- Look up a document root's frame identity without assuming it was called
 or that source and runtime definition indices coincide. -/
 def LoweredProgram.rootDefinitionId (program : LoweredProgram) (rootIndex : Nat)
     : LowerResult MIR.DefId := do
   let some bodyIndex := program.roots[rootIndex]? | throw "root index is out of range"
-  let some body := program.bundle.bodies[bodyIndex]? | throw "root body index is out of range"
-  body.ownDefinitionId
+  let source ← program.bodyMetadata bodyIndex
+  let some definition := source.definitionId | throw "body is missing its source definition identity"
+  lookupDefinitionId program.bundle.definitions definition
 
-/-- Lower all present root, instance, and promoted bodies with global compiler
+/-- Retain raw body seeds and root, instance, and promoted identities with global compiler
 identity tables. Unavailable bodies remain explicit source graph obligations. -/
 def lowerProgram (input : ImportDocument) : LowerResult LoweredProgram := do
   let mut roots := #[]
@@ -109,29 +155,23 @@ def lowerProgram (input : ImportDocument) : LowerResult LoweredProgram := do
         if let some childId := child.bodyId then
           unless childId < input.bodies.size do throw s!"missing promoted body {childId}"
           promoted := promoted.push (bodyId, child.index, childId)
-  for (body, bodyId) in input.bodies.toList.zipIdx do
-    for child in body.promotedBodies do
+  for bodyId in [:input.bodies.size] do
+    let source ← SourceMir.metadata input bodyId
+    for child in source.promotedBodies do
       if let some childId := child.bodyId then
         unless childId < input.bodies.size do throw s!"missing promoted body {childId}"
         let entry := (bodyId, child.index, childId)
         unless promoted.contains entry do promoted := promoted.push entry
-  pure ⟨← lowerBodies (LowerContext.ofDocument input) (input.bodies.map Body.toBodyCore),
+  pure ⟨⟨input.spans,input.definitions,input.typeConstants⟩,
     roots, instances, promoted, input⟩
 
 
 
-structure CompilerTables where
-  spans : Array SourceSpanData
-  definitions : Array DefinitionId
-  typeConstants : Array MIR.TypeConst
-
 def LoweredProgram.compilerTables (program : LoweredProgram) : CompilerTables :=
-  ⟨program.bundle.spans, program.bundle.definitions, program.bundle.typeConstants⟩
+  program.bundle
 
 def LoweredProgram.withCompilerTables (program : LoweredProgram) (tables : CompilerTables) : LoweredProgram :=
-  let bodies := program.bundle.bodies.map fun body => { body with
-    spans := tables.spans, definitions := tables.definitions, typeConstants := tables.typeConstants }
-  { program with bundle := ⟨bodies, tables.spans, tables.definitions, tables.typeConstants⟩ }
+  {program with bundle := tables}
 
 def lowerCompilerSpan (tables : CompilerTables) (value : MIR.SpanRef) :
     LowerResult (MIR.SpanRef × CompilerTables) := do

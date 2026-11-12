@@ -422,7 +422,7 @@ private def terminalDiagnostic (prepared : Input.EvalPreparation.Prepared)
     let source? := span?.bind fun span => prepared.compiler.program.bundle.spans[span.id]?
     let collapsed? : Option Input.CompilerBacktraceSource.Position := do
       let span ← span?
-      let body ← prepared.compiler.program.bundle.bodies[frame.bodyIdentity.index]?
+      let body ← (prepared.compiler.program.resolveBody frame.bodyIdentity.index).toOption
       if body.body != frame.body || body.input.instanceId != frame.functionInstance then none
       else do
         let records ← prepared.compiler.lifecycle.backtrace.bodySpans[frame.bodyIdentity.index]?
@@ -713,8 +713,8 @@ private def runMain (args : List String) (control : Option ControlOutput) : IO U
   -- Keep the actual prepared identity tables visible at the body reported by
   -- the source105 terminal. This is diagnostic only; all lookups stay exact.
   let bodyIndex := 1814
-  let bodySource := prepared.compiler.program.bundle.bodies[bodyIndex]?.map fun body =>
-    s!"source_path={body.input.sourcePath}, def_path={body.input.defPath}, definition={reprStr body.input.definitionId}"
+  let bodySource := (prepared.compiler.program.bodyMetadata bodyIndex).toOption.map fun body =>
+    s!"source_path={body.sourcePath}, def_path={body.defPath}, definition={reprStr body.definitionId}"
   let sourceRows := prepared.compiler.program.instances.filter (·.2 == bodyIndex)
   let callRows := (prepared.compiler.lifecycle.calls.calls.bodies.filter (·.bodyIndex == bodyIndex)).map fun row =>
     s!"fnInstance={reprStr row.fnInstance}, sourceInstanceId={row.sourceInstanceId}, bodyIndex={row.bodyIndex}"

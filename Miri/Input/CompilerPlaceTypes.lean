@@ -9,6 +9,12 @@ open Lean Miri.ABI Miri.Interpreter Miri.Memory
 def expectedLayout (p : CompilerProviders.Prepared) (frame : CompilerFrameContext.ActualFrame)
     (requested : MIR.Place) : Except String LocalLayout := do
   let body ← CompilerFrameContext.bodyOfFrame p frame
+  -- rustc Place::ty begins with the source local declaration. No compiler
+  -- query-result row is needed for a place with no projection elements.
+  if requested.projection.isEmpty then
+    let some id := body.body.locals[requested.localId]?
+      | throw "place local is absent from its executable body"
+    return ← p.runtime.lookup id |>.mapError toString
   let mut ids := #[]
   for block in body.input.nodeFacts do
     for node in block do

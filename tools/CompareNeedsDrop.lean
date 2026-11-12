@@ -9,13 +9,40 @@ fresh candidate export. Definitions crosswalk by rustc crate/index identity,
 never diagnostic spelling. Unrelated ABI/MIR catalogs are not decoded. -/
 open Lean Miri.Input
 
-private def readTypes (value : Json) : Except String (Array TypeNode) := do
+private structure OracleTypes where
+  nodes : Array TypeNode
+  facts : Array (Nat × TypeCompilerFacts)
+  unknownAliasShapes : Array Nat
+  count : Nat
+
+private def readTypes (value : Json) (baseline : Bool := false) : Except String OracleTypes := do
   let booleans ← value.getObjVal? "boolean_queries"
   let discriminants ← value.getObjVal? "discriminants"
   let pool ← JsonReader.run (JsonReader.array DecoderValues.booleanQueries) booleans.compress
   let discriminants ← JsonReader.run (JsonReader.array DecoderValues.parseDiscriminants) discriminants.compress
-  let types ← value.getObjVal? "types"
-  JsonReader.run (JsonReader.array (DecoderValues.parseTypeNode "$needs_drop.types" pool discriminants)) types.compress
+  let types ← (← value.getObjVal? "types").getArr?
+  let mut nodes := #[]
+  let mut facts := #[]
+  let mut unknownAliasShapes := #[]
+  for raw in types do
+    let id ← (← raw.getObjVal? "type_id").getNat?
+    let shape ← raw.getObjVal? "shape"
+    let unknownAlias := baseline && (← (← shape.getObjVal? "kind").getStr?) == "alias" &&
+      (shape.getObjVal? "rigid").toOption.isNone
+    if unknownAlias then
+      -- Old compiler output does not contain this source flag. Preserve its
+      -- query oracle and normalization dependency, never invent a type shape.
+      let rawFacts ← raw.getObjVal? "compiler_facts"
+      let sourceFacts ← JsonReader.run
+        (DecoderValues.decodeTypeCompilerFacts "$needs_drop.compiler_facts" pool discriminants) rawFacts.compress
+      facts := facts.push (id, sourceFacts)
+      unknownAliasShapes := unknownAliasShapes.push id
+    else
+      let node ← JsonReader.run (DecoderValues.parseTypeNode "$needs_drop.types" pool discriminants) raw.compress
+      nodes := nodes.push node
+      if let some sourceFacts := node.compilerFacts then facts := facts.push (id, sourceFacts)
+      else if baseline then throw "baseline needs_drop oracle absent"
+  pure {nodes, facts, unknownAliasShapes, count := types.size}
 
 private def definitions (value : Json) : Except String (Array DefinitionId) := do
   let rows ← value.getObjVal? "definitions"
@@ -26,15 +53,17 @@ private def check (baseline candidate : Json) (richCoverage : Bool) : Except Str
     throw "expected canonical schema12 baseline"
   unless (← (← candidate.getObjVal? "schema_version").getNat?) == 13 do
     throw "expected current schema13 candidate"
-  let nodes ← readTypes baseline
+  let input ← readTypes baseline true
+  let nodes := input.nodes
   let baseDefinitions ← definitions baseline
   let candidateDefinitions ← definitions candidate
   let node (id : Nat) : Except String TypeNode := do
-    let some result := nodes[id]? | throw "baseline material type absent"
-    unless result.id == id do throw "baseline material type identity mismatch"
+    if input.unknownAliasShapes.contains id then
+      throw s!"needs_drop requires absent baseline alias rigidity for type {id}"
+    let some result := nodes.find? (·.id == id) | throw "baseline material type absent"
     pure result
   let shape (id : Nat) : Except String TypeShape := do
-    let some facts := (← node id).compilerFacts | throw "baseline normalization material absent"
+    let some (_, facts) := input.facts.find? (·.1 == id) | throw "baseline normalization material absent"
     let some (_, some normalized) := facts.typeQueries.find? (·.1 == "normalized")
       | throw "baseline normalization dependency absent"
     pure (← node normalized).shape
@@ -58,27 +87,27 @@ private def check (baseline candidate : Json) (richCoverage : Bool) : Except Str
   let mut zeroArrays := 0
   let mut nonzeroArrays := 0
   let mut closures := 0
-  for source in nodes do
-    let some facts := source.compilerFacts | throw "baseline needs_drop oracle absent"
+  for (id, facts) in input.facts do
     let some (_, expected) := facts.booleanQueries.find? (·.1 == "needs_drop")
       | throw "baseline needs_drop oracle missing"
-    let actual ← StructuralNeedsDrop.query shape adtMaterial (nodes.size + 1) source.id
+    let actual ← StructuralNeedsDrop.query shape adtMaterial (input.count + 1) id
     let some actual := actual | do
       residual := residual + 1
       continue
     unless actual == expected do
-      throw s!"type {source.id}: Lean needs_drop={actual}, rustc={expected}"
+      throw s!"type {id}: Lean needs_drop={actual}, rustc={expected}"
     compared := compared + 1
     if actual then positive := positive + 1 else negative := negative + 1
-    match source.shape with
-    | .adt data =>
+    let sourceShape : Option TypeShape := (nodes.find? (·.id == id)).map fun node => node.shape
+    match sourceShape with
+    | some (.adt data) =>
       let material ← adtMaterial data.definition
       if material.manuallyDrop then manual := manual + 1
       if material.destructor.isSome then destructors := destructors + 1
       if data.kind == .unionKind then unions := unions + 1
-    | .array _ _ constructor =>
+    | some (.array _ _ constructor) =>
       if constructor.count == 0 then zeroArrays := zeroArrays + 1 else nonzeroArrays := nonzeroArrays + 1
-    | .closure .. | .coroutineClosure .. => closures := closures + 1
+    | some (.closure ..) | some (.coroutineClosure ..) => closures := closures + 1
     | _ => pure ()
   if richCoverage then
     unless positive > 0 && negative > 0 && manual > 0 && destructors > 0 && unions > 0 &&
@@ -87,10 +116,11 @@ private def check (baseline candidate : Json) (richCoverage : Bool) : Except Str
   else
     unless positive == 0 && negative >= 29 && residual == 0 do
       throw "no-drop DAG comparison requires at least 29 resolved negative type queries"
-  let candidateNodes ← readTypes candidate
+  let candidateTypes ← readTypes candidate
+  let candidateNodes := candidateTypes.nodes
   let eager := candidateNodes.filter fun source => source.compilerFacts.any fun facts =>
     facts.booleanQueries.any (·.1 == "needs_drop")
-  pure s!"PASS {compared} rustc/Lean needs_drop comparisons; true={positive}, false={negative}, residual={residual}, manual={manual}, destructor={destructors}, union={unions}, zero_array={zeroArrays}, nonzero_array={nonzeroArrays}, closure={closures}; candidate eager rows={eager.size}/{candidateNodes.size}"
+  pure s!"PASS {compared} rustc/Lean needs_drop comparisons; true={positive}, false={negative}, residual={residual}, manual={manual}, destructor={destructors}, union={unions}, zero_array={zeroArrays}, nonzero_array={nonzeroArrays}, closure={closures}; baseline unknown alias shapes={input.unknownAliasShapes.size} (all oracle rows retained); candidate eager rows={eager.size}/{candidateNodes.size}"
 
 def main (args : List String) : IO Unit := do
   let (baselinePath, candidatePath, richCoverage) ← match args with

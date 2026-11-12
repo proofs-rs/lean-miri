@@ -10,7 +10,7 @@ namespace Miri.Input.TraitSelection
 open GenericSubstitution
 
 inductive Polarity where
-  | positive | negative | reservation
+  | positive | negative
   deriving Repr, DecidableEq, BEq
 
 structure TraitRef where
@@ -49,8 +49,25 @@ structure Clause where
 structure AssociatedValue where
   traitAssociatedDefinition : DefinitionIdentity
   implementationDefinition : DefinitionIdentity
-  expression : DefinitionTemplate
+  expression : Option DefinitionTemplate
+  requiresHiddenTypeInference : Bool
+  hasValue : Bool := true
+  /-- Source RHS was retained by declaration dependency slicing; absence is Unsupported. -/
+  materialRetained : Bool := true
   ownPredicates : Array Clause
+  deriving Repr, DecidableEq
+
+structure AssociatedMethod where
+  traitAssociatedDefinition : DefinitionIdentity
+  implementationDefinition : DefinitionIdentity
+  isFinal : Bool
+  deriving Repr, DecidableEq
+
+structure TraitMember where
+  definition : DefinitionIdentity
+  kind : String
+  hasValue : Bool
+  isFinal : Bool
   deriving Repr, DecidableEq
 
 structure Impl where
@@ -61,10 +78,12 @@ structure Impl where
   isDefault : Bool
   predicates : Array Clause
   associatedValues : Array AssociatedValue
+  methods : Array AssociatedMethod := #[]
+  constants : Array AssociatedMethod := #[]
   deriving Repr, DecidableEq
 
 inductive BuiltinTrait where
-  | sized | freeze | unpin | unsafeUnpin | copy | clone
+  | sized | metaSized | pointeeSized | freeze | unpin | unsafeUnpin | copy | clone
   | fn | fnMut | fnOnce | unsize | coerceUnsized | dispatchFromDyn
   deriving Repr, DecidableEq, BEq
 
@@ -72,16 +91,34 @@ structure TraitDeclaration where
   definition : DefinitionIdentity
   parameters : Array ArgSort
   isAuto : Bool
+  isAlias : Bool
   isUnsafe : Bool
   isCoinductive : Bool
   isMarker : Bool
-  builtin : Option BuiltinTrait
+  langItem : Option String
   superPredicates : Array Clause
   implementations : Array Impl
+  members : Array TraitMember := #[]
   deriving Repr, DecidableEq
+
+/-- Source LangItem symbols are semantic declaration identities, not type
+spelling. Unknown language traits still require an explicit builtin provider. -/
+def TraitDeclaration.builtin (value : TraitDeclaration) : Option BuiltinTrait :=
+  match value.langItem with
+  | some "sized" => some .sized | some "meta_sized" => some .metaSized
+  | some "pointee_sized" => some .pointeeSized | some "freeze" => some .freeze
+  | some "unpin" => some .unpin | some "unsafe_unpin" => some .unsafeUnpin
+  | some "copy" => some .copy | some "clone" => some .clone
+  | some "fn" => some .fn | some "fn_mut" => some .fnMut | some "fn_once" => some .fnOnce
+  | some "unsize" => some .unsize | some "coerce_unsized" => some .coerceUnsized
+  | some "dispatch_from_dyn" => some .dispatchFromDyn
+  | _ => none
 
 structure Program where
   traits : Array TraitDeclaration
+  /-- `none` retains all source impls. A closed scope filters only concrete
+  root-Self ADT impls and requires every query constructor to remain in scope. -/
+  constructorScope : Option (Array DefinitionIdentity) := none
   deriving Repr, DecidableEq
 
 structure Environment where

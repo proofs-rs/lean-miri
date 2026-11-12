@@ -43,10 +43,7 @@ def hooks (p : Prepared) (userRelevantCrates : Array Nat) : FrameMetadata.Compil
     let some (_,name) := p.crates.find? (·.1 == id) | throw "compiler crate name absent"
     return name
   sourceScope := fun identity _ body scope => do
-    let actual ← lift do
-      let some actual := p.calls.scopes.program.bundle.bodies[identity.index]?
-        | throw "canonical frame body identity absent"
-      return actual
+    let actual ← lift (p.calls.scopes.program.resolveBody identity.index)
     unless actual.body == body do throw (.invalidProgram "frame body identity/content mismatch")
     lift (CompilerScopes.sourceScope p.calls.scopes identity.index scope) }
 

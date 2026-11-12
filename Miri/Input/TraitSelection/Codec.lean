@@ -21,7 +21,6 @@ private def requireSort (value : Term) (sort : ArgSort) : Except String Unit := 
 def readPolarity (value : Json) : Except String Polarity := do
   match ← value.getStr? with
   | "positive" => pure .positive | "negative" => pure .negative
-  | "reservation" => pure .reservation
   | _ => throw "unknown raw trait polarity"
 
 def readTraitRef (value : Json) : Except String TraitRef := do
@@ -48,7 +47,6 @@ def readPredicate (value : Json) : Except String Predicate := do
   | "trait" => do
     keys value ["kind", "polarity", "trait_ref"]
     let polarity ← readPolarity (← field "polarity")
-    unless polarity != .reservation do throw "reservation is not a source clause polarity"
     return .trait ⟨polarity, ← readTraitRef (← field "trait_ref")⟩
   | "equal" => do
     keys value ["kind", "left", "right"]
@@ -114,5 +112,153 @@ def readClause (value : Json) : Except String Clause := do
 
 def readClauses (value : Json) : Except String (Array Clause) := do
   (← value.getArr?).mapM readClause
+
+
+private def parameterSorts (value : Json) : Except String (Array ArgSort) := do
+  let values ← (← value.getArr?).mapM GenericMaterialCodec.readSort
+  unless values.all (· != .aggregate) do throw "aggregate is not a generic parameter sort"
+  pure values
+
+private def predicateTerms : Predicate → Array Term
+  | .trait goal => goal.traitRef.arguments
+  | .equal left right | .regionOutlives left right | .typeOutlives left right
+  | .constHasType left right => #[left, right]
+  | .projection _ _ arguments expected => arguments.push expected
+  | .constEvaluatable value | .wellFormed value => #[value]
+  | .hostEffect _ traitRef => traitRef.arguments
+  | .unstableFeature _ => #[]
+
+private def validateClauses (parameters : Array ArgSort) (values : Array Clause) : Except String Unit := do
+  for clause in values do
+    for value in predicateTerms clause.predicate do
+      GenericMaterialCodec.validateParameters parameters 4096 value
+
+private def readAssociatedMethod (value : Json) : Except String AssociatedMethod := do
+  keys value ["trait_associated_definition", "implementation_definition", "is_final"]
+  return {
+    traitAssociatedDefinition := ← GenericMaterialCodec.readDefinition (← value.getObjVal? "trait_associated_definition")
+    implementationDefinition := ← GenericMaterialCodec.readDefinition (← value.getObjVal? "implementation_definition")
+    isFinal := ← (← value.getObjVal? "is_final").getBool? }
+
+/-- RHS templates are linked from the one canonical definition-material table.
+The wire record contains declaration references, never a duplicated instantiated RHS. -/
+private def readAssociatedValue (template : DefinitionIdentity → Except String (Option DefinitionTemplate))
+    (value : Json) : Except String AssociatedValue := do
+  keys value ["trait_associated_definition", "implementation_definition", "has_value",
+    "requires_hidden_type_inference", "material_retained", "own_predicates"]
+  let traitAssociatedDefinition ← GenericMaterialCodec.readDefinition (← value.getObjVal? "trait_associated_definition")
+  let implementationDefinition ← GenericMaterialCodec.readDefinition (← value.getObjVal? "implementation_definition")
+  let hasValue ← (← value.getObjVal? "has_value").getBool?
+  let requiresHiddenTypeInference ← (← value.getObjVal? "requires_hidden_type_inference").getBool?
+  let materialRetained ← (← value.getObjVal? "material_retained").getBool?
+  let ownPredicates ← readClauses (← value.getObjVal? "own_predicates")
+  let expression ← if materialRetained && hasValue && !requiresHiddenTypeInference then do
+      let some expression ← template implementationDefinition
+        | throw "source associated RHS template reference absent"
+      validateClauses expression.parameters ownPredicates
+      pure (some expression)
+    else pure none
+  pure {
+    traitAssociatedDefinition := traitAssociatedDefinition
+    implementationDefinition := implementationDefinition
+    expression := expression
+    requiresHiddenTypeInference := requiresHiddenTypeInference
+    hasValue := hasValue
+    materialRetained := materialRetained
+    ownPredicates := ownPredicates }
+
+private def readImplementation (template : DefinitionIdentity → Except String (Option DefinitionTemplate))
+    (value : Json) : Except String Impl := do
+  keys value ["definition", "parameters", "trait_ref", "polarity", "is_default",
+    "predicates", "associated_values", "methods", "constants"]
+  let definition ← GenericMaterialCodec.readDefinition (← value.getObjVal? "definition")
+  let parameters ← parameterSorts (← value.getObjVal? "parameters")
+  let traitRef ← readTraitRef (← value.getObjVal? "trait_ref")
+  for argument in traitRef.arguments do
+    GenericMaterialCodec.validateParameters parameters 4096 argument
+  let polarity ← readPolarity (← value.getObjVal? "polarity")
+  let isDefault ← (← value.getObjVal? "is_default").getBool?
+  let predicates ← readClauses (← value.getObjVal? "predicates")
+  validateClauses parameters predicates
+  let associatedValues ← (← (← value.getObjVal? "associated_values").getArr?).mapM (readAssociatedValue template)
+  let methods ← (← (← value.getObjVal? "methods").getArr?).mapM readAssociatedMethod
+  let constants ← (← (← value.getObjVal? "constants").getArr?).mapM readAssociatedMethod
+  let mut seen : Array DefinitionIdentity := #[]
+  for item in associatedValues do
+    if seen.contains item.traitAssociatedDefinition then throw "duplicate impl associated type declaration"
+    seen := seen.push item.traitAssociatedDefinition
+  pure {definition, parameters, traitRef, polarity, isDefault, predicates, associatedValues, methods, constants}
+
+private def readMember (value : Json) : Except String TraitMember := do
+  keys value ["definition", "kind", "has_value", "is_final"]
+  let kind ← (← value.getObjVal? "kind").getStr?
+  unless ["type", "function", "constant"].contains kind do throw "unknown source associated member kind"
+  return {
+    definition := ← GenericMaterialCodec.readDefinition (← value.getObjVal? "definition")
+    kind
+    hasValue := ← (← value.getObjVal? "has_value").getBool?
+    isFinal := ← (← value.getObjVal? "is_final").getBool? }
+
+private def readTraitDeclaration (template : DefinitionIdentity → Except String (Option DefinitionTemplate))
+    (value : Json) : Except String TraitDeclaration := do
+  keys value ["definition", "parameters", "is_alias", "is_auto", "is_unsafe",
+    "is_coinductive", "is_marker", "lang_item", "super_predicates", "implementations", "members"]
+  let definition ← GenericMaterialCodec.readDefinition (← value.getObjVal? "definition")
+  let parameters ← parameterSorts (← value.getObjVal? "parameters")
+  unless parameters[0]? == some .type do throw "source trait declaration lacks Self type parameter"
+  let isAlias ← (← value.getObjVal? "is_alias").getBool?
+  let isAuto ← (← value.getObjVal? "is_auto").getBool?
+  let isUnsafe ← (← value.getObjVal? "is_unsafe").getBool?
+  let isCoinductive ← (← value.getObjVal? "is_coinductive").getBool?
+  let isMarker ← (← value.getObjVal? "is_marker").getBool?
+  let rawLang ← value.getObjVal? "lang_item"
+  let langItem ← if rawLang == .null then pure none else pure (some (← rawLang.getStr?))
+  let superPredicates ← readClauses (← value.getObjVal? "super_predicates")
+  validateClauses parameters superPredicates
+  let implementations ← (← (← value.getObjVal? "implementations").getArr?).mapM (readImplementation template)
+  let members ← (← (← value.getObjVal? "members").getArr?).mapM readMember
+  if isAlias && (!implementations.isEmpty || isAuto) then throw "trait alias has invalid auto/impl material"
+  let mut seen : Array DefinitionIdentity := #[]
+  for implementation in implementations do
+    unless implementation.traitRef.definition == definition do throw "raw impl trait catalog mismatch"
+    if seen.contains implementation.definition then throw "duplicate raw impl definition"
+    seen := seen.push implementation.definition
+  pure {
+    definition := definition
+    parameters := parameters
+    isAlias := isAlias
+    isAuto := isAuto
+    isUnsafe := isUnsafe
+    isCoinductive := isCoinductive
+    isMarker := isMarker
+    langItem := langItem
+    superPredicates := superPredicates
+    implementations := implementations
+    members := members }
+
+def readProgram (template : DefinitionIdentity → Except String (Option DefinitionTemplate))
+    (value : Json) : Except String Program := do
+  keys value ["traits", "constructor_scope"]
+  let scope ← value.getObjVal? "constructor_scope"
+  let kind ← (← scope.getObjVal? "kind").getStr?
+  let constructorScope ← match kind with
+    | "all_source_impls" => do
+      keys scope ["kind"]
+      pure none
+    | "closed_source_constructors" => do
+      keys scope ["kind", "constructors"]
+      let constructors ← (← (← scope.getObjVal? "constructors").getArr?).mapM GenericMaterialCodec.readDefinition
+      let mut seen : Array DefinitionIdentity := #[]
+      for constructor in constructors do
+        if seen.contains constructor then throw "duplicate trait source constructor scope identity"
+        seen := seen.push constructor
+      pure (some constructors)
+    | _ => throw "unknown raw trait constructor scope"
+  let traits ← (← (← value.getObjVal? "traits").getArr?).mapM (readTraitDeclaration template)
+  let mut seen : Array DefinitionIdentity := #[]
+  for declaration in traits do
+    if seen.contains declaration.definition then throw "duplicate raw trait declaration"
+    seen := seen.push declaration.definition
+  pure {traits, constructorScope}
 
 end Miri.Input.TraitSelection.Codec

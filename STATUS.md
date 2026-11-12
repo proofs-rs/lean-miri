@@ -96,6 +96,65 @@ layouts and malformed/conflicting/missing material controls. Full Python
 132 tests and semantic-source lint passed after generating audit inventories;
 source-inventory review and full Lean/component regression remain unfinished.
 
+Source MIR now has a strict material/copy-template sum: selected generic bodies
+retain typed source skeletons and are instantiated on demand. Executable body
+metadata scans do not instantiate MIR. The selected family covers local generic
+substitution, references, arrays, tuples and control flow; unsupported calls,
+drops, constants, shims and binder families remain explicit material residuals.
+An independent source-MIR test constructs a nominal-element array type absent
+from the exported type seeds. Component tests pass for both a small source-only
+input and a full std input. A fresh 681,725-byte no_std executable also passes
+same-TyCtxt Miri and the latest Lean runner finalized exit-zero. Its source MIR
+creates an array absent from the material seeds. Shared source rules supply
+array/pointer/reference discriminant types and non-enum facts, rather than
+requiring a preexisting compiler-facts row for the new type.
+
+Raw trait program extraction is bounded by source constructor demand. Goals
+outside that declared constructor scope are Unsupported, never noSolution.
+For the unchanged generic-MIR fixture and invocation, scoped material reduced
+21,634,424 bytes to 111,874 bytes (95 to five traits, 7,608 to 19 impls), while
+runtime type/body/template counts stayed unchanged. This measures the seed
+closure repair, not final migration performance. Closed ordinary impl selection,
+where-clause fulfillment and selected free/projection alias reduction execute
+from declarations in Lean; specialization, universe/HRTB and other solver rules
+are incomplete. Production normalization routes every nonrigid free/projection
+alias through the source-rule engine and omits its eager normalized result;
+unsupported providers fail explicitly without an answer-catalog fallback.
+Five fresh canonical-main/current export pairs passed rebuilt Lean query checks:
+ordinary generic projection, GAT substitution/own clauses, checked free alias,
+checked alias with an associated-type equality clause, and an explicit unsupported
+specialization boundary. The four supported controls match independent rustc
+normalization, including actual `CompilerFacts` dispatch after all candidate
+normalization rows are removed. Missing `Gate<u32>`, missing GAT-own `Leaf<u32>`
+and a changed associated equality produce definite no-solution; the GAT-own
+negative also fails pinned rustc with E0277. The genuine specialization fixture
+normalizes successfully in rustc and is explicitly rejected by Lean as ambiguous;
+this boundary check is not solver equivalence. Candidate sizes are 113,448,
+113,211, 107,832, 112,841 and 112,079 bytes respectively. The run commands,
+scoped results and source/exporter/Lean artifact hashes are recorded in
+`scratch/projection-production/{results,source-manifest}.json`. These checks
+exercise production query providers, not a completed guest execution or the
+remaining rigid, opaque, inherent, binder and specialization families.
+
+A default-root exporter ICE also reproduced on canonical c8daa215: a static
+u32 body was incorrectly treated as a callable backtrace-frame candidate.
+Callable-definition guards preserve the static body while preventing the invalid
+fn ABI query. The corrected full fixture exports and its same-TyCtxt Miri run
+exits zero. Long earlier Lean runs were terminated and are INCOMPLETE/NOTPASS.
+The certified runtime subsequently completed the same 89,269,768-byte full
+fixture: Lean finalized exit-zero, cursor 1675, no active frame, matching its
+hash-bound same-TyCtxt Miri exit-zero reference. This is one finite guest pass;
+no performance ratio is claimed. The latest complete library/test build passes
+1,368 jobs including native runner, frontend and tests, and the axiom audit
+covers 78,993 declarations using only allowed axioms; all 132 Python tests and
+semantic-source lint pass. This does not imply
+that the full multi-stage regression entry point has passed.
+On-demand body lowering now uses a minimal context with a kernel equality proof;
+a document-local density certificate removes repeated full type-pool validation,
+with kernel parity proofs. A microprobe over 8,963 types resolves exact identities
+in 53–55 ms; its uncertified control exceeded ten seconds. This is a focused
+algorithm diagnostic, not a full guest pass or comparative architecture benchmark.
+
 The remaining migration includes general generic template export/substitution,
 alias/projection normalization, trait selection and fulfillment (including negative,
 coinductive and specialization rules), associated-item and instance resolution,
@@ -120,12 +179,14 @@ not cover it.
 
 ## Exported input coverage
 
-Each concrete instance and promoted index has one executable MIR body. The
-exporter substitutes generic arguments, normalizes types, and evaluates MIR
-constants, including unused required constants, before emitting that body.
-Runtime storage, pointer and layout queries use the resolved types. Unbound
-generic templates are rejected as executable roots; diagnostic spans and scopes
-remain attached to the resolved instructions.
+Each concrete instance and promoted index has one body seed. Covered generic
+bodies reference typed source MIR templates; Lean substitutes their local types
+on demand and can create previously absent pointer/reference/array identities.
+Other bodies remain explicit material MIR: the exporter still substitutes,
+normalizes and evaluates constants for these residual families. Raw templates
+cannot execute directly; resolution validates their closed instantiated form.
+Runtime storage, pointer and layout queries use the resolved types, and source
+spans/scopes remain attached to resolved instructions.
 The exporter aborts when requested semantic compiler data is unavailable; the
 Lean input API no longer retains failed exporter payloads as execution inputs.
 Successful values are serialized without success-status wrappers or a

@@ -1,3 +1,4 @@
+import Miri.Input.AliasMaterialCodec
 import Miri.Input.TableCore
 import Miri.Input.GenericMaterialCodec
 
@@ -272,6 +273,7 @@ private structure ParseDefinitionIdFields where
   bodyTrackCaller : Option Bool := none
   adtDrop : Option AdtDropMaterial := none
   genericTemplate : Option GenericSubstitution.DefinitionTemplate := none
+  aliasDeclaration : Option AliasMaterial.Declaration := none
 
 def parseDefinitionId (path : String) : Parser (DefinitionId) := do
   let s ← object ({} : ParseDefinitionIdFields) fun s key => do
@@ -281,10 +283,16 @@ def parseDefinitionId (path : String) : Parser (DefinitionId) := do
     | "body_track_caller" => return { s with bodyTrackCaller := some (← boolean) }
     | "adt_drop" => return { s with adtDrop := some (← parseAdtDropMaterial (path ++ ".adt_drop")) }
     | "generic_template" => return { s with genericTemplate := some (← GenericMaterialCodec.decodeTemplate) }
+    | "alias_declaration" => return { s with aliasDeclaration := some (← AliasMaterialCodec.decodeDeclaration) }
     | _ => skipValue; pure s
   let crate ← required s.crate (path ++ ".crate")
   let index ← required s.index (path ++ ".index")
-  return ⟨crate, index, s.bodyTrackCaller, s.adtDrop, s.genericTemplate⟩
+  if let some declaration := s.aliasDeclaration then
+    unless declaration.definition == (⟨crate,index⟩ : GenericSubstitution.DefinitionIdentity) do
+      fail s!"{path}: source alias declaration identity mismatch"
+    unless declaration.hasValue == s.genericTemplate.isSome do
+      fail s!"{path}: source alias RHS availability disagrees with shared template"
+  return ⟨crate, index, s.bodyTrackCaller, s.adtDrop, s.genericTemplate, s.aliasDeclaration⟩
 
 def parseDefinitionRef (_path : String) : Parser DefinitionRef := natural
 

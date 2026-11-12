@@ -23,9 +23,7 @@ def main (args : List String) : IO Unit := do
   let decoded ← must (decodeFixture source)
   let some selected := decoded.document.bodyRoots.find? (fun root => root.defPath.endsWith "add_one")
     | throw (IO.userError "missing add_one root")
-  let some body := decoded.document.bodies[selected.bodyId]?
-    | throw (IO.userError "missing add_one body")
-  let input := body.toBodyCore
+  let input ← must (SourceMir.resolveBody decoded.document selected.bodyId)
   let lowered ← must (lowerBody (LowerContext.ofDocument decoded.document) input)
   check (lowered.body == input.mir) "prepared body differs from directly decoded MIR"
   check (!lowered.spans.isEmpty) "actual source spans were not retained"

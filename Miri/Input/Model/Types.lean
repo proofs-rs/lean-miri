@@ -1,9 +1,11 @@
+import Miri.Input.AliasMaterial
 import Lean
 import Miri.Memory.CtfeProvenance
 import Miri.MIR.Operators
 import Miri.ABI.ExternAbi
 import Miri.ABI.FnAbi
 import Miri.ABI.SignatureSeeds
+import Miri.Input.MirTemplate
 import Miri.Interpreter.Instance
 import Miri.Input.GenericSubstitution
 
@@ -369,7 +371,7 @@ inductive TypeShape where
   | coroutine (definition : DefinitionRef) (args : Array Miri.MIR.GenericArg)
   | never
   | tuple (elements : Array TypeId)
-  | alias (kind : AliasTypeKind) (definition : DefinitionRef) (args : Array Miri.MIR.GenericArg)
+  | alias (kind : AliasTypeKind) (rigid : Bool) (definition : DefinitionRef) (args : Array Miri.MIR.GenericArg)
 
 namespace TypeShape
 
@@ -603,6 +605,7 @@ structure DefinitionId where
   bodyTrackCaller : Option Bool := none
   adtDrop : Option AdtDropMaterial := none
   genericTemplate : Option GenericSubstitution.DefinitionTemplate := none
+  aliasDeclaration : Option AliasMaterial.Declaration := none
   deriving Repr, DecidableEq
 
 inductive VtableEntryKind where
@@ -811,15 +814,13 @@ structure NodeFacts where
   threadLocals : Array ThreadLocalEvidence := #[]
   dynamicUpcasts : Array DynamicUpcastEvidence := #[]
 
-structure BodyCore where
-  mir : Miri.MIR.Body
+structure BodyMetadata where
   definitionId : Option DefinitionRef
   defPath : String
   sourcePath : String
   spanId : SpanId
   preambleDefSpanId : SpanId
   injectionPhase : Option Miri.MIR.MirPhase
-  instanceId : InstanceId
   localSources : Array SourceInfo
   sourceScopes : Array SourceScope
   backtraceSpans : Array BacktraceSpan
@@ -827,8 +828,15 @@ structure BodyCore where
   nodeFacts : Array (Array NodeFacts)
   requiredConsts : Array Miri.MIR.ConstOperand
 
-def BodyCore.threadLocals (body : BodyCore) : Array ThreadLocalEvidence :=
+structure BodyCore extends BodyMetadata where
+  mir : Miri.MIR.Body
+  instanceId : InstanceId
+
+def BodyMetadata.threadLocals (body : BodyMetadata) : Array ThreadLocalEvidence :=
   (body.nodeFacts.map fun block => (block.map (·.threadLocals)).flatten).flatten
+
+def BodyCore.threadLocals (body : BodyCore) : Array ThreadLocalEvidence :=
+  body.toBodyMetadata.threadLocals
 
 structure PromotedBody where
   index : Nat
@@ -836,6 +844,41 @@ structure PromotedBody where
 
 structure Body extends BodyCore where
   promotedBodies : Array PromotedBody
+
+/-- Generic source metadata contains no fabricated generic instance identity. -/
+structure CopyTemplateSource where
+  template : MirTemplate.Template
+  definitionId : DefinitionRef
+  defPath : String
+  spanId : SpanId
+  preambleDefSpanId : SpanId
+  injectionPhase : Option Miri.MIR.MirPhase
+  localSources : Array SourceInfo
+  sourceScopes : Array SourceScope
+  backtraceSpans : Array BacktraceSpan
+
+structure CopyTemplateRef where
+  templateId : Nat
+  instanceId : InstanceId
+  genericArgs : Array Miri.MIR.GenericArg
+  promotedBodies : Array PromotedBody
+
+/-- A selected template is never accompanied by a monomorphic fallback. -/
+inductive BodySeed where
+  | material (body : Body)
+  | copyTemplate (reference : CopyTemplateRef)
+
+def BodySeed.instanceId : BodySeed → InstanceId
+  | .material body => body.instanceId
+  | .copyTemplate reference => reference.instanceId
+
+def BodySeed.promotedBodies : BodySeed → Array PromotedBody
+  | .material body => body.promotedBodies
+  | .copyTemplate reference => reference.promotedBodies
+
+def BodySeed.materialBody? : BodySeed → Option Body
+  | .material body => some body
+  | .copyTemplate _ => none
 
 structure BodyRoot where
   bodyId : BodyId

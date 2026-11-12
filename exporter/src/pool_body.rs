@@ -779,6 +779,41 @@ pub(super) struct Body<Q = VtableQueryKey, C = crate::resolution_values::Pending
     pub required_consts: Vec<crate::pool_constant::Operand>,
 }
 
+#[derive(Serialize)]
+pub(super) struct CopyTemplateSource {
+    pub template: String,
+    pub source_def_id: u64,
+    pub def_path: String,
+    pub span: u64,
+    pub preamble_def_span: u64,
+    pub injection_phase: Option<Phase>,
+    pub local_sources: Vec<SourceInfo>,
+    pub source_scopes: Vec<SourceScope>,
+    pub backtrace_spans: Vec<BacktraceSpan>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "body_kind", rename_all = "snake_case")]
+pub(super) enum BodySeed<Q = VtableQueryKey, C = crate::resolution_values::PendingCandidates> {
+    Material { #[serde(flatten)] body: Body<Q,C> },
+    CopyTemplate {
+        template_id: u64,
+        instance_id: u64,
+        generic_args: Vec<super::pool_values::GenericArgument>,
+        promoted_bodies: Vec<super::pool_instance::PromotedBody>,
+    },
+}
+impl BodySeed<VtableQueryKey,crate::resolution_values::PendingCandidates> {
+    pub fn finish(self, ids:&std::collections::HashMap<(u64,Vec<u64>),u64>,
+        candidates:&std::collections::HashMap<u64,Vec<u64>>) -> Result<BodySeed<u64,Vec<u64>>,String> {
+        Ok(match self {
+            Self::Material{body}=>BodySeed::Material{body:body.finish(ids,candidates)?},
+            Self::CopyTemplate{template_id,instance_id,generic_args,promoted_bodies}=>
+                BodySeed::CopyTemplate{template_id,instance_id,generic_args,promoted_bodies},
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

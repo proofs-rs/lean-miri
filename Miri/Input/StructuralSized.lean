@@ -19,25 +19,35 @@ path, independent of their inner node. `none` denotes an unresolved alias,
 never an unsized result. Missing material/fuel exhaustion remain errors. -/
 namespace Miri.Input.StructuralSized
 
-def query (shape : TypeId → Except String TypeShape) :
+inductive TraitKind where
+  | sized | metaSized
+  deriving Repr, DecidableEq
+
+/-- Both sizedness traits share the source ADT/tuple tail constraint.
+Str/slice/dyn implement MetaSized; extern tails implement neither trait. -/
+def queryKind (kind : TraitKind) (shape : TypeId → Except String TypeShape) :
     Nat → TypeId → Except String (Option Bool)
   | 0, _ => .error "structural Sized recursion exhausted"
   | fuel + 1, ty => do
     match ← shape ty with
-    | .str | .slice _ | .dynamicTraitObject .. | .foreign _ => pure (some false)
+    | .str | .slice _ | .dynamicTraitObject .. => pure (some (kind == .metaSized))
+    | .foreign _ => pure (some false)
     | .tuple elements =>
       match elements.back? with
       | none => pure (some true)
-      | some last => query shape fuel last
+      | some last => queryKind kind shape fuel last
     | .adt data =>
       if data.kind != .structKind then return some true
       unless data.variants.size == 1 do throw "Sized struct material requires one variant"
-      let some variant := data.variants[0]?
-        | throw "Sized struct variant material absent"
+      let some variant := data.variants[0]? | throw "Sized struct variant material absent"
       match variant.fields.back? with
       | none => pure (some true)
-      | some last => query shape fuel last.typeId
+      | some last => queryKind kind shape fuel last.typeId
     | .alias .. => pure none
     | _ => pure (some true)
+
+def query (shape : TypeId → Except String TypeShape) :
+    Nat → TypeId → Except String (Option Bool) :=
+  queryKind .sized shape
 
 end Miri.Input.StructuralSized

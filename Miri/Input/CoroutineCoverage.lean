@@ -231,8 +231,9 @@ def validate (document : ImportDocument) (coverage : CoroutineCoverage) : Except
   let mut owners : Array Nat := #[]
   let mut auxiliary : Array Nat := #[]
   for row in coverage.coroutines do
-    let some owner := document.bodies[row.ownerBody]? |
+    let some seed := document.bodies[row.ownerBody]? |
       throw "coroutine coverage: dangling owner body"
+    let .material owner := seed | throw "coroutine coverage: generic copy template cannot be a coroutine owner"
     unless coverage.bodyCoroutines[row.ownerBody]? == some true && !owners.contains row.ownerBody do
       throw "coroutine coverage: missing marker or duplicate owner"
     owners := owners.push row.ownerBody

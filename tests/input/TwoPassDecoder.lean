@@ -37,6 +37,8 @@ private partial def permuted (value : Json) : String :=
 private def replaceBody (source : String) (change : String → Except String String) : Except String String := do
   let bodies ← items (← get source "bodies")
   let some body := bodies[0]? | throw "missing fixture body"
+  let _ ← get body "basic_blocks"
+  let body ← set body "body_kind" (Json.renderString "material")
   set source "bodies" (arr (bodies.set! 0 (← change body)))
 
 private def reject (source label : String) : IO Unit :=
@@ -115,9 +117,13 @@ def main : IO Unit := do
   let reordered ← must (forwardOrder (permuted (← must (Json.parse withConstant))))
   let decoded ← must (decodeFixture reordered)
   check (decoded.document.types.size == baseline.document.types.size) "field permutation changed type table"
-  check (decoded.document.bodies.map (·.mir) == expected.document.bodies.map (·.mir))
-    "recursive field permutation changed final MIR"
-  let some body := decoded.document.bodies[0]? | throw (IO.userError "missing decoded body")
+  check (decoded.document.bodies.size == expected.document.bodies.size)
+    "recursive field permutation changed body indexing"
+  for index in [:decoded.document.bodies.size] do
+    let actual ← must (SourceMir.resolveBody decoded.document index)
+    let reference ← must (SourceMir.resolveBody expected.document index)
+    check (actual.mir == reference.mir) "recursive field permutation changed final MIR"
+  let body ← must (SourceMir.metadata decoded.document 0)
   let cs := body.requiredConsts
   let some c := cs[0]? | throw (IO.userError "missing required constant")
   match c.value with

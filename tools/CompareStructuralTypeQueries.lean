@@ -7,12 +7,19 @@ import Miri.Input.StructuralSized
 
 /-! Differential adapter: input must be a fresh canonical baseline export from
 the pinned rustc. Old result rows are oracle data only; production queries do
-not read these rows. This driver compares every exported type, not just roots. -/
+not read these rows. This driver compares supported source-shape rows, not just roots. Old alias
+shapes without mandatory rigidity are explicitly excluded; their independent
+query facts remain available to normalization dependencies. -/
 open Miri.Input
 
 -- Decode only the category under comparison. Incompatible ABI and runtime
 -- catalogs are never read, rewritten or supplied with guessed material.
-private def readTypes (source : String) : Except String (Array TypeNode) := do
+private structure OracleInput where
+  nodes : Array TypeNode
+  facts : Array (Nat × TypeCompilerFacts)
+  skippedAliases : Array Nat
+
+private def readTypes (source : String) : Except String OracleInput := do
   let value ← Lean.Json.parse source
   unless (← (← value.getObjVal? "schema_version").getNat?) == 12 do
     throw "oracle reader requires canonical baseline schema 12"
@@ -20,15 +27,32 @@ private def readTypes (source : String) : Except String (Array TypeNode) := do
   let discriminants ← value.getObjVal? "discriminants"
   let pool ← JsonReader.run (JsonReader.array DecoderValues.booleanQueries) booleans.compress
   let discriminants ← JsonReader.run (JsonReader.array DecoderValues.parseDiscriminants) discriminants.compress
-  let types ← value.getObjVal? "types"
-  JsonReader.run (JsonReader.array (DecoderValues.parseTypeNode "$oracle.types" pool discriminants)) types.compress
+  let types ← (← value.getObjVal? "types").getArr?
+  let mut nodes := #[]
+  let mut facts := #[]
+  let mut skippedAliases := #[]
+  for raw in types do
+    let id ← (← raw.getObjVal? "type_id").getNat?
+    let sourceFacts ← raw.getObjVal? "compiler_facts"
+    let sourceFacts ← JsonReader.run
+      (DecoderValues.decodeTypeCompilerFacts "$oracle.compiler_facts" pool discriminants) sourceFacts.compress
+    facts := facts.push (id, sourceFacts)
+    let shape ← raw.getObjVal? "shape"
+    if (← (← shape.getObjVal? "kind").getStr?) == "alias" && (shape.getObjVal? "rigid").toOption.isNone then
+      skippedAliases := skippedAliases.push id
+    else
+      nodes := nodes.push (← JsonReader.run (DecoderValues.parseTypeNode "$oracle.types" pool discriminants) raw.compress)
+  pure {nodes, facts, skippedAliases}
 
-private def check (nodes : Array TypeNode) : Except String (Nat × Nat × Nat × Nat × Nat × Nat) := do
+private def check (input : OracleInput) : Except String (Nat × Nat × Nat × Nat × Nat × Nat) := do
+  let nodes := input.nodes
   let lookup (id : Nat) : Except String TypeNode := do
+    if input.skippedAliases.contains id then
+      throw s!"ported query requires absent baseline alias rigidity for type {id}"
     let some node := nodes.find? (·.id == id) | throw s!"absent type {id}"
     return node
   let oracle (id : Nat) (key : String) : Except String (Option Nat) := do
-    let some facts := (← lookup id).compilerFacts | throw "oracle facts absent"
+    let some (_, facts) := input.facts.find? (·.1 == id) | throw "oracle facts absent"
     let some (_, result) := facts.typeQueries.find? (·.1 == key)
       | throw s!"oracle query absent: {key}"
     return result
@@ -99,5 +123,5 @@ def main (args : List String) : IO UInt32 := do
     match check decoded with
     | .error error => throw (IO.userError s!"{path}: {error}")
     | .ok (count, boxes, pointers, tails, sizedPositive, sizedNegative) =>
-      IO.println s!"{path}: {count} rustc/Lean structural query comparisons passed; Box={boxes}, raw_pointer={pointers}, nontrivial_tail={tails}, sized={sizedPositive}, unsized={sizedNegative}"
+      IO.println s!"{path}: {count} rustc/Lean structural query comparisons passed; Box={boxes}, raw_pointer={pointers}, nontrivial_tail={tails}, sized={sizedPositive}, unsized={sizedNegative}; skipped_legacy_alias_shapes={decoded.skippedAliases.size}"
   return 0

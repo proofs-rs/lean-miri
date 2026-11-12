@@ -103,11 +103,26 @@ private def instantiateTerminator (source : Terminator) : Miri.MIR.Terminator :=
     | .unreachable => .Unreachable
   ⟨source.source,kind⟩
 
+private def validateParameters (parameters : Array ArgSort) : Nat → Term → Except String Unit
+  | 0, _ => .error "MIR template parameter validation traversal exhausted"
+  | fuel + 1, value => do
+    match value with
+    | .parameter sort index =>
+      unless parameters[index]? == some sort do throw "MIR template parameter index/sort is invalid"
+    | .binder _ value => validateParameters parameters fuel value
+    | .node _ _ _ children | .definition _ _ _ children =>
+      let _ ← children.mapM (fun child => do
+        validateParameters parameters fuel child
+        pure child)
+      pure ()
+    | _ => pure ()
+
 def validateStructure (template : Template) : Except String Unit := do
   for sort in template.parameters do
     unless sort != .aggregate do throw "MIR template has an aggregate generic parameter"
   for ty in template.types do
     unless ty.sort == .type do throw "MIR template type slot has wrong sort"
+    validateParameters template.parameters 16384 ty
   let body := template.skeleton
   unless body.argumentCount < body.locals.size do throw "MIR template argument/local count mismatch"
   unless !body.blocks.isEmpty do throw "MIR template has no basic blocks"
@@ -152,6 +167,42 @@ def validate (template : Template) (args : Array Term) : Except String Unit := d
   unless args.size == template.parameters.size do throw "MIR template generic argument count mismatch"
   for (arg, expected) in args.zip template.parameters do
     unless arg.sort == expected do throw "MIR template generic argument sort mismatch"
+
+/-- Free-region erasure for the binder-free constructor families admitted by
+copy-template classification. Pinned erase_regions.rs:65–74 retains bound
+regions and erases all others. Binder anonymization is a separate required
+operation, so binder-bearing type families explicitly reject here. -/
+def eraseFreeRegions : Nat → Term → Except String Term
+  | 0, _ => .error "MIR template region-erasure traversal exhausted"
+  | fuel + 1, value => do
+    match value with
+    | .binder .. => throw "MIR copy template normalization excludes binder constructors"
+    | .bound .region .. => pure value
+    | _ =>
+      if value.sort == .region then return .atom .region "erased" ""
+      match value with
+      | .node sort tag payload children =>
+        return .node sort tag payload (← children.mapM (eraseFreeRegions fuel))
+      | .definition sort tag definition children =>
+        return .definition sort tag definition (← children.mapM (eraseFreeRegions fuel))
+      | _ => pure value
+
+/-- The source exporter checks that instantiated MIR retains no parameters,
+escaping bounds, inference variables or placeholders. The selected family has
+no binders, so every surviving bound variable here is escaping. -/
+def validateClosed : Nat → Term → Except String Unit
+  | 0, _ => .error "MIR instantiated-type validation traversal exhausted"
+  | fuel + 1, value => do
+    match value with
+    | .parameter .. | .bound .. | .placeholder .. | .inference .. =>
+      throw "instantiated MIR retains unresolved generic variables"
+    | .binder .. => throw "MIR copy template normalization excludes binder constructors"
+    | .node _ _ _ children | .definition _ _ _ children =>
+      let _ ← children.mapM (fun child => do
+        validateClosed fuel child
+        pure child)
+      pure ()
+    | .atom .. => pure ()
 
 /-- Resolve only when the body is requested. Missing slots, normalization and
 interning failures propagate. No executable skeleton or global cache exists. -/

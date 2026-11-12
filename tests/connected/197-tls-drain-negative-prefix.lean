@@ -291,8 +291,7 @@ private def checkFailurePrefix (compiler : Input.CompilerProviders.Prepared)
     | throw "active callback stack has no compiler-resolved destructor_a frame"
   let .mir callbackLocation := callbackFrameLocation
     | throw "destructor_a callback frame is not at a MIR location"
-  let some callbackBody := compiler.program.bundle.bodies[callbackBodyIndex]?
-    | throw "canonical destructor_a body is absent"
+  let callbackBody ← compiler.program.resolveBody callbackBodyIndex
   let some callbackBlock := callbackBody.body.basicBlocks[callbackLocation.block]?
     | throw "destructor_a callback block is absent"
   unless callbackLocation.statementIndex == callbackBlock.statements.size do

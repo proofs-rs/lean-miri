@@ -1,3 +1,4 @@
+import Miri.Input.TraitSelection.Codec
 import Miri.Input.Model
 import Miri.Input.DecoderValues
 import Miri.Input.ValidateTables
@@ -7,11 +8,12 @@ import Miri.Input.CatalogDecoder
 import Miri.Input.SharedPools
 import Miri.Input.CoroutineCoverage
 import Miri.Input.RuntimeMetadata
+import Miri.Input.SourceMir
 
 namespace Miri.Input
 open Lean DecoderValues
 
-private def validateSelectedScope (scope : SelectedScope) (_bodies : Array Body)
+private def validateSelectedScope (scope : SelectedScope) (_bodies : Array BodySeed)
     (instances : Array InstanceNode) (bodyRoots : Array BodyRoot) : Except String Unit := do
   if scope.kind != "rooted_structural_closure" then
     throw ("$.selected_scope.kind" ++ ": " ++ s!"unrecognized selected-scope kind `{scope.kind}`")
@@ -193,6 +195,7 @@ private def finishWorld (nodes : Array AllocationNode) (hexByGraph : Array (Opti
     rawPool, dedupCatalog, pending.completeKeyFamilies, pending.nonExhaustiveKeyFamilies⟩
 
 private structure DocumentFields where
+  traitProgram : Option Json := none
   schema : Option (String) := none
   schemaVersion : Option (Nat) := none
   producer : Option (Producer × Catalog.ProducerSettings) := none
@@ -209,7 +212,8 @@ private structure DocumentFields where
   allocations : Option (Array (Array AllocationNode)) := none
   instances : Option (Array InstanceNode) := none
   compilerAbiLayoutSchema : Option (String) := none
-  bodies : Option (Array Body) := none
+  bodies : Option (Array BodySeed) := none
+  mirTemplates : Option (Array CopyTemplateSource) := none
   bodyReferences : Array DecodeMIR.References := #[]
   coroutineCoverage : Option CoroutineCoverageCodec.Parsed := none
   bodyRoots : Option (Array BodyRoot) := none
@@ -222,7 +226,15 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
   let d ← JsonReader.object ({} : DocumentFields) fun d key => do
     match key with
     | "schema" => return {d with schema := some (← JsonReader.string)}
-    | "schema_version" => return {d with schemaVersion := some (← JsonReader.natural)}
+    | "schema_version" => do
+      let version ← JsonReader.natural
+      -- Reject a known obsolete header before interpreting later body fields
+      -- under the BodySeed contract. Earlier malformed fields still take
+      -- precedence; valid current inputs retain arbitrary root-field order.
+      unless version == expectedSchemaVersion do
+        JsonReader.fail "$.schema_version: unsupported schema version"
+      return {d with schemaVersion := some version}
+    | "compiler_trait_program" => return {d with traitProgram := some (← Lean.Json.Parser.anyCore)}
     | "producer" => return {d with producer := some (← parseProducer)}
     | "predicates" => return {d with predicates := some (← parsePredicates)}
     | "compiler_predicate_queries" => return {d with compilerPredicates := some (← JsonReader.array decodeCompilerPredicateEvidence)}
@@ -243,8 +255,9 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
     | "instances" => return {d with instances := some (← parseInstances)}
     | "compiler_abi_layout_schema" => return {d with compilerAbiLayoutSchema := some (← JsonReader.string)}
     | "bodies" =>
-      let bodies ← JsonReader.arrayIndexed (fun index => DecodeMIR.parseBody s!"$.bodies[{index}]" (some pools.mir))
+      let bodies ← JsonReader.arrayIndexed (fun index => DecodeMIR.parseBodySeed s!"$.bodies[{index}]" (some pools.mir))
       return {d with bodies := some (bodies.map (·.value)), bodyReferences := bodies.map (·.references)}
+    | "mir_templates" => return {d with mirTemplates := some (← JsonReader.arrayIndexed (fun index => DecodeMIR.parseCopyTemplate s!"$.mir_templates[{index}]"))}
     | "compiler_coroutine_coverage" => return {d with coroutineCoverage := some (← CoroutineCoverageCodec.parse pools.mir)}
     | "body_roots" => return {d with bodyRoots := some (← JsonReader.arrayIndexed (fun index => parseBodyRoot s!"$.body_roots[{index}]"))}
     | "compiler_alloc_id_world" => return {d with compilerAllocIdWorld := ← JsonReader.nullable (parseCompilerAllocIdWorld)}
@@ -272,7 +285,14 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
     | _ => pure none
   let images := byteImages.map (·.1)
   let allocations ← JsonReader.liftExcept (finishAllocations images groups pendingNodes)
-  let bodies ← JsonReader.liftExcept (finishBodies images (← JsonReader.required d.bodies "bodies"))
+  let seeds ← JsonReader.required d.bodies "bodies"
+  let bodies ← seeds.mapM fun seed => do
+    match seed with
+    | .copyTemplate _ => pure seed
+    | .material body =>
+      let values ← JsonReader.liftExcept (finishBodies images #[body])
+      let some value := values[0]? | JsonReader.fail "material body disappeared during allocation resolution"
+      pure (BodySeed.material value)
   let compilerAllocIdWorld ← JsonReader.liftExcept (d.compilerAllocIdWorld.mapM (finishWorld allocations hexByGraph))
   let coroutineCoverage ← d.coroutineCoverage.mapM fun parsed => do
     let auxiliaryBodies ← parsed.value.auxiliaryBodies.mapM fun row => do
@@ -280,11 +300,25 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
       let some body := resolved[0]? | JsonReader.fail "coroutine auxiliary body disappeared during allocation resolution"
       pure {row with body}
     pure {parsed.value with auxiliaryBodies}
+  let definitions ← JsonReader.required d.definitions "definitions"
+  let rawTraitProgram ← JsonReader.required d.traitProgram "compiler_trait_program"
+  -- Invocation-local source identity index; catalog size must not multiply
+  -- canonical definition lookup work. This is never shared across executions.
+  let mut sourceTemplates : Std.HashMap (Nat × Nat) (Option GenericSubstitution.DefinitionTemplate) := {}
+  for definition in definitions do
+    let key := (definition.crateIndex, definition.index)
+    if sourceTemplates.contains key then
+      JsonReader.fail "trait RHS source definition reference ambiguous"
+    sourceTemplates := sourceTemplates.insert key definition.genericTemplate
+  let traitProgram ← JsonReader.liftExcept (TraitSelection.Codec.readProgram (fun identity => do
+    let some expression := sourceTemplates[(identity.crateIndex, identity.index)]?
+      | throw "trait RHS source definition reference missing"
+    pure expression) rawTraitProgram)
   let value : ImportDocument := {
-    producer, producerSettings
+    producer, producerSettings, traitProgram
     predicates := ← JsonReader.required d.predicates "predicates"
     compilerPredicates := ← JsonReader.required d.compilerPredicates "compiler_predicate_queries"
-    definitions := ← JsonReader.required d.definitions "definitions"
+    definitions := definitions
     typeConstants := ← JsonReader.required d.typeConstants "type_constants"
     files := ← JsonReader.required d.files "files"
     spans := ← JsonReader.required d.spans "spans"
@@ -295,6 +329,7 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
     instances := ← JsonReader.required d.instances "instances"
     compilerAbiLayoutSchema := some compilerAbiLayoutSchema
     bodies := bodies
+    mirTemplates := ← JsonReader.required d.mirTemplates "mir_templates"
     coroutineCoverage := coroutineCoverage
     bodyRoots := ← JsonReader.required d.bodyRoots "body_roots"
     compilerAllocIdWorld := compilerAllocIdWorld

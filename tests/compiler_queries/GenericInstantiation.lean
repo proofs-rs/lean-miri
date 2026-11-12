@@ -29,6 +29,9 @@ private def rejected (result : Except String α) : Bool :=
 
 def main : IO Unit := do
   let checked : Except String Unit := do
+    let context ← if dense : TypeArena.isDense context.types = true then
+      pure {context with denseTypes := some ⟨dense⟩}
+      else throw "test type universe is not dense"
     let field ← instantiateFieldType context 64 0 #[.Type 1] 0 0
     unless (← resolveType context 64 field) == 1 do throw "raw field substitution picked wrong identity"
     let raw ← ofType context 64 4
@@ -41,6 +44,11 @@ def main : IO Unit := do
       throw "unsupported immutable constructor was accepted"
     unless rejected (resolveType context 64 (.definition .type "adt" ⟨3, 10⟩ (.cons field .nil))) do
       throw "unrelated ADT with equal display/layout was accepted"
+    let duplicate : TypeNode := {id := context.types.size, display := "same", layoutId := 0, shape := .uint (.known .u32)}
+    let ambiguous := {context with types := context.types.push duplicate, denseTypes := none}
+    match resolveType ambiguous 64 field with
+    | .error "ambiguous canonical generic type identity" => pure ()
+    | _ => throw "duplicate semantic candidates did not retain ambiguity rejection"
     unless rejected (instantiateFieldType context 64 0 #[] 0 0) do
       throw "missing generic arguments were accepted"
   match checked with

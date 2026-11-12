@@ -1,3 +1,5 @@
+import Miri.Input.ConstructedDiscriminants
+import Miri.Input.StructuralConstructedFacts
 import Miri.Input.StructuralSized
 import Miri.Input.StructuralNeedsDrop
 import Miri.Input.StructuralAutoTraits
@@ -65,7 +67,7 @@ private def facts (context : Context) (id : TypeId) : Result TypeCompilerFacts :
   pure facts
 
 private def normalize (context : Context) (id : TypeId) : Result TypeId :=
-  StructuralNormalization.normalize (node context) context.program.input.types
+  StructuralNormalization.normalize (node context) context.program.input
     (id + context.program.input.types.size + 1) id
 
 private def lazyBoolean (context : Context) (query : String) : Nat → TypeId → Result Bool
@@ -122,14 +124,19 @@ def boolean (context : Context) (id : TypeId) (query : String) : Result Bool := 
     if let some answer ← StructuralNeedsDrop.query normalizedShape adtMaterial
         (id + context.program.input.types.size + 1) id then return answer
   if id >= context.program.input.types.size then
+    if query == "opsem_inhabited" || query == "is_monomorphic_enough" then
+      let material := fun ty key => do
+        let f ← facts context ty
+        let some (_,value) := f.booleanQueries.find? (·.1 == key)
+          | throw s!"missing material compiler boolean query {key}"
+        pure value
+      if let some value ← StructuralConstructedFacts.query
+          (fun ty => return (← node context ty).shape) material context.program.input.types.size
+          query (id + context.program.input.types.size + 1) id then return value
     return ← lazyBoolean context query (id + context.program.input.types.size + 1) id
   let originalFacts ← facts context id
   if query == "is_freeze" || query == "is_unpin" || query == "is_unsafe_unpin" then
-    let normalized ← if ← StructuralNormalization.identityReady context.program.input.types
-        (context.program.input.types.size + 1) id then pure id else do
-      let some (_, some target) := originalFacts.typeQueries.find? (·.1 == "normalized")
-        | throw "missing auto-trait normalization dependency"
-      pure target
+    let normalized ← normalize context id
     if ← StructuralAutoTraits.trivial (fun ty => return (← node context ty).shape)
         (context.program.input.types.size + 1) normalized then return true
   let facts := originalFacts
@@ -159,6 +166,9 @@ def optionalType (context : Context) (id : TypeId) (query : String) : Result (Op
       else StructuralDeref.builtinDeref source.shape isBox (query == "builtin_deref_explicit")
     else if query == "pointer_metadata_type" then
       pure (some (← context.runtime.pointerMetadataType id |>.mapError toString))
+    else if id >= context.program.input.types.size && query == "discriminant_type" &&
+        ConstructedDiscriminants.supported source.shape then
+      pure (some context.program.input.queries.primitives.u8)
     else if id >= context.program.input.types.size && query == "unsafe_binder_erased" then
       pure none
     else do

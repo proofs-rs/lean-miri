@@ -52,10 +52,10 @@ def main (args : List String) : IO Unit := do
   if let some path := args.head? then
     let .ok decoded := decodeFixture (← IO.FS.readFile path)
       | throw (IO.userError "input decode failed")
-    let some body := decoded.document.bodies[0]?
-      | throw (IO.userError "input has no body")
+    let .ok body := SourceMir.resolveBody decoded.document 0
+      | throw (IO.userError "input body resolution failed")
     let context := LowerContext.ofDocument decoded.document
-    let .ok prepared := lowerBody context body.toBodyCore
+    let .ok prepared := lowerBody context body
       | throw (IO.userError "body preparation failed")
     check (prepared.body == body.mir) "preparation changed decoded MIR"
     check (prepared.definitions == decoded.document.definitions)

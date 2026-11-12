@@ -15,8 +15,7 @@ private def lift (query : Except String A) : MachineHooks.M K User A :=
 Structural equality is an assertion, not a body-selection algorithm. -/
 def bodyOfFrame (p : CompilerProviders.Prepared) (frame : ActualFrame) :
     Except String LoweredBody := do
-  let some body := p.program.bundle.bodies[frame.bodyIdentity.index]?
-    | throw "canonical body identity is absent"
+  let body ← p.program.resolveBody frame.bodyIdentity.index
   unless body.body == frame.body do throw "canonical body/content mismatch"
   let loaded ← CallResolution.loadedBodyOfInstance p.lifecycle.calls.calls frame.functionInstance
   unless loaded.identity == frame.bodyIdentity do throw "full-instance/canonical body identity mismatch"
@@ -165,7 +164,7 @@ set_option autoImplicit false
 variable {K U : Type}
  theorem localSpan_known (p : CompilerProviders.Prepared) (body : LoadedBody) (actual : LoweredBody)
     (fnInstance : CallInstance) (decl : SourceInfo) (span : SpanRef)
-    (row : p.program.bundle.bodies[body.identity.index]? = some actual)
+    (row : p.program.resolveBody body.identity.index = .ok actual)
     (contents : actual.body = body.body)
     (loader : CallResolution.loadedBodyOfInstance p.lifecycle.calls.calls fnInstance = .ok body)
     (declaration : actual.input.localSources[0]? = some decl)

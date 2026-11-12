@@ -28,9 +28,10 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
   let mut tables := program.compilerTables
   let mut all := #[]
   let mut inlineAttributes : Std.HashMap CallInstance Bool := {}
-  for body in program.bundle.bodies do
+  for index in [:program.bodyCount] do
+    let metadata ← program.bodyMetadata index
     let mut entries := #[]
-    let scopes := body.input.sourceScopes
+    let scopes := metadata.sourceScopes
     for index in [:scopes.size] do
       let result := do
         let some scope := scopes[index]? | throw "source scope canonical index missing"

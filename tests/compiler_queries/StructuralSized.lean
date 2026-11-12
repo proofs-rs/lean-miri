@@ -28,7 +28,7 @@ private def shape (ty : Nat) : Except String TypeShape :=
   | 13 => .ok (.array 999 0 ⟨1, true⟩)
   | 14 => .ok (.rawPointer 1 .Mut)
   | 15 => .ok (adt .structKind #[15])
-  | 16 => .ok (.alias .opaque 0 #[])
+  | 16 => .ok (.alias .opaque false 0 #[])
   | _ => .error "absent Sized material"
 
 example : query shape 10 0 = .ok (some true) := by decide
@@ -50,3 +50,15 @@ example : query shape 10 14 = .ok (some true) := by decide
 example : query shape 3 15 = .error "structural Sized recursion exhausted" := by decide
 example : query shape 10 16 = .ok none := by decide
 example : query shape 10 999 = .error "absent Sized material" := by decide
+
+-- Exact MetaSized distinctions from pinned has_trivial_sizedness.
+example : StructuralSized.queryKind .metaSized (fun _ => .ok .str) 5 0 =
+    .ok (some true) := by cbv
+example : StructuralSized.queryKind .metaSized (fun _ => .ok (.slice 0)) 5 0 =
+    .ok (some true) := by cbv
+example : StructuralSized.queryKind .metaSized
+    (fun _ => .ok (.dynamicTraitObject #[] none .Erased)) 5 0 = .ok (some true) := by cbv
+example : StructuralSized.queryKind .metaSized (fun _ => .ok (.foreign 0)) 5 0 =
+    .ok (some false) := by cbv
+example : StructuralSized.queryKind .metaSized (fun _ => .ok (.alias .projection false 0 #[])) 5 0 =
+    .ok none := by cbv

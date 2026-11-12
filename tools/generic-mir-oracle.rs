@@ -27,7 +27,8 @@ impl Callbacks for Oracle {
             let body=tcx.instance_mir(ty::InstanceKind::Item(def.to_def_id()));
             let mut spans=std::collections::HashMap::new();
             let source=generic_mir::capture(tcx,body,|span|{let next=spans.len()as u64;*spans.entry(span).or_insert(next)}).unwrap();
-            for replacement in [tcx.types.u8,tcx.types.u64] {
+            for replacement in [tcx.types.u8,tcx.types.u64,
+                ty::Ty::new_imm_ref(tcx,tcx.lifetimes.re_static,tcx.types.u32)] {
                 let args=tcx.mk_args_from_iter(tcx.generics_of(def).own_params.iter().map(|p|->ty::GenericArg<'tcx>{match p.kind {
                     ty::GenericParamDefKind::Type{..}=>replacement.into(),
                     ty::GenericParamDefKind::Lifetime=>tcx.lifetimes.re_erased.into(),
@@ -41,7 +42,7 @@ impl Callbacks for Oracle {
                 rows.push(format!("{{\"source\":{source},\"arguments\":[{arguments}],\"expected\":{expected}}}"));
             }
         }
-        assert!(rows.len()>=8,"fixture must exercise at least four generic MIR bodies");
+        assert!(rows.len()>=12,"fixture must exercise at least four generic MIR bodies");
         assert!(residual>=4,"fixture must exercise four unsupported source category controls");
         println!("[{}]",rows.join(","));Compilation::Stop
     }

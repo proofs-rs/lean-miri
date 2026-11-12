@@ -323,6 +323,7 @@ private def readBool (m : Metadata) (operand : MIR.Operand) : Exec Bool := do
 private structure ArgABI where
   source : Input.AbiArgument
   layout : LocalLayout
+  mode : PassMode
 private structure FnABI where
   source : Input.FunctionAbi
   fixedCount : Nat
@@ -350,17 +351,18 @@ private def prepare (document : Input.ImportDocument) : Except StepError Program
   let spans := lowered.bundle.spans
   let mut bodySpans := #[]
   let mut localSpans := #[]
-  for body in lowered.bundle.bodies do
-    unless body.input.spanId < spans.size do throw (.invalidProgram "missing canonical body span")
-    bodySpans := bodySpans.push ⟨body.input.spanId⟩
+  for bodyIndex in List.range lowered.bodyCount do
+    let body ← (lowered.bodyMetadata bodyIndex).mapError StepError.invalidProgram
+    unless body.spanId < spans.size do throw (.invalidProgram "missing canonical body span")
+    bodySpans := bodySpans.push ⟨body.spanId⟩
     let mut localRefs := #[]
-    for source in body.input.localSources do
+    for source in body.localSources do
       unless source.spanId < spans.size do throw (.invalidProgram "missing canonical local span")
       localRefs := localRefs.push ⟨source.spanId⟩
     localSpans := localSpans.push localRefs
   return ⟨lowered, metadata, spans, bodySpans, localSpans, signature.abi, resolution⟩
 private def bodyAt (p : Program) (index : Nat) : Except StepError Input.LoweredBody :=
-  p.lowered.bundle.bodies[index]?.toExcept (.invalidProgram "body index")
+  (p.lowered.resolveBody index).mapError StepError.invalidProgram
 private def instanceNode (p : Program) (id : CallInstance) : Except StepError Input.InstanceNode := do
   let source ← p.lowered.input.instances[id]?.toExcept (.invalidProgram "missing canonical instance")
   unless source.id == id do throw (.invalidProgram "canonical instance position mismatch")
@@ -389,16 +391,13 @@ private def resolvedBody (p : Program) (instanceId : Input.InstanceId) : Except 
   let (_,index) ← (p.lowered.instances.find? (·.1 == instanceId)).toExcept (.unsupported "fnInstance body unavailable")
   return (index, ← bodyAt p index)
 private def resolutionFor (p : Program) (fnInstance : CallInstance) : Except StepError (Input.CallResolutionEvidence × Input.InstanceId) := do
-  for body in p.lowered.bundle.bodies do
-    for index in List.range body.body.basicBlocks.size do
-      let block ← body.body.basicBlocks[index]?.toExcept (.invalidProgram "block index")
-      match block.terminator.kind with
-      | .Call .. | .TailCall .. =>
-        let source ← body.input.callEvidence[index]?.toExcept (.invalidProgram "source block index")
-        let resolution ← source.toExcept (.invalidProgram "missing typed call resolution")
-        let (candidate,id) ← instanceFromResolution p resolution
-        if candidate == fnInstance then return (resolution,id)
-      | _ => pure ()
+  for bodyIndex in List.range p.lowered.bodyCount do
+    let body ← (p.lowered.bodyMetadata bodyIndex).mapError StepError.invalidProgram
+    for (index, _) in body.callSites do
+      let source ← body.callEvidence[index]?.toExcept (.invalidProgram "source block index")
+      let resolution ← source.toExcept (.invalidProgram "missing typed call resolution")
+      let (candidate,id) ← instanceFromResolution p resolution
+      if candidate == fnInstance then return (resolution,id)
   throw (.unsupported "instance has no exported resolution query")
 private def getAbi (p : Program) (fnInstance : CallInstance) : Exec FnABI := do
   let (resolution,_) ← lift (resolutionFor p fnInstance)
@@ -407,13 +406,17 @@ private def getAbi (p : Program) (fnInstance : CallInstance) : Exec FnABI := do
   if source.callingConvention.kind != .rust || source.cVariadic then
     block "unsupported calling convention or varargs"
   let arg (source : Input.AbiArgument) : Except StepError ArgABI := do
-    if source.mode.kind != .direct then throw (.unsupported "non-Direct u32 argument ABI")
+    let semantic ← (Input.CallCompatibility.argument p.metadata source).mapError
+      (StepError.invalidProgram ∘ toString)
+    match semantic.mode with
+    | .Direct _ => pure ()
+    | _ => throw (.unsupported "non-Direct u32 argument ABI")
     let physical ← compiler (p.metadata.layoutById source.layoutId)
     let layout := (⟨source.typeId,physical⟩ : TyAndLayout MIR.TyId)
     let node ← node p.metadata source.typeId
     if node.shapeKind != .uint || node.shapeMetadata.unsignedKind != some (.known .u32) then
       throw (.unsupported "non-u32 call ABI")
-    return ⟨source, layout⟩
+    return ⟨source, layout, semantic.mode⟩
   let semantic ← lift ((Input.CallResolution.functionAbi p.metadata source).mapError StepError.invalidProgram)
   return ⟨source, semantic.fixedCount.toNat, ← lift (source.arguments.mapM arg), ← lift (arg source.returnValue)⟩
 
@@ -571,14 +574,14 @@ private def callHooks (p : Program) : CallHooks CtfeProvenance State Unit Nat Un
   isRustCall := fun abi => abi == .RustCall
   rustAbi := p.rustAbi
   argLayout := ArgABI.layout
-  argIsIgnore := fun arg => arg.source.mode.kind == .ignore
+  argIsIgnore := fun arg => match arg.mode with | .Ignore => true | _ => false
   isOneZst := fun layout => layout.layout.is1zst
   checkArgumentCompat := fun _ a b => do
     event "argumentCompat"
     -- Restricted source layout_compat: identical u32 types, layout and eq_abi;
     -- ABI mode and every compiler attribute must also agree.
     pure (a.layout.ty == b.layout.ty && a.layout.layout == b.layout.layout &&
-      a.layout.layout.eqAbi b.layout.layout && a.source.mode == b.source.mode)
+      a.layout.layout.eqAbi b.layout.layout && a.mode == b.mode)
   checkTargetFeatures := fun _ fnInstance => do
     let (_,id) ← lift (resolutionFor p fnInstance)
     let node ← lift ((p.lowered.input.instances.find? (·.id == id)).toExcept (.unsupported "source fnInstance"))

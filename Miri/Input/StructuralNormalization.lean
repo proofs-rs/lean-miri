@@ -1,5 +1,6 @@
 import Miri.Input.Model
 import Miri.Input.TypeArena
+import Miri.Input.AliasRuntime
 
 namespace Miri.Input.StructuralNormalization
 
@@ -28,20 +29,34 @@ def identityReady (nodes : Array TypeNode) : Nat → TypeId → Except String Bo
 /-- Shared normalization dependency for structural compiler queries. Lazy
 constructors normalize children and re-intern exact identities; complex material
 forms still require an explicitly marked residual compiler normalization result.
-This function does not claim to solve alias/trait normalization. -/
-def normalize (lookup : TypeId → Except String TypeNode) (nodes : Array TypeNode) :
+Nonrigid free/projection aliases use the raw declaration/trait engine;
+other complex forms retain the explicitly marked residual compiler result. -/
+def normalize (lookup : TypeId → Except String TypeNode) (document : ImportDocument) :
     Nat → TypeId → Except String TypeId
   | 0, _ => .error "lazy normalization traversal exhausted"
   | fuel + 1, id => do
     let source ← lookup id
+    let nodes := document.types
+    -- Compiler-fact queries use the exporter's explicit instantiated view for
+    -- signature-bound nodes. Raw generic substitution keeps its source Binder.
+    if let some queryView := source.layoutQueryInputTypeId then
+      if queryView != id then return ← normalize lookup document fuel queryView
+    match source.shape with
+    | .alias .free false _ _ | .alias .projection false _ _ =>
+      -- Nonrigid declaration aliases use the actual source-rule engine.
+      -- Unsupported projection providers fail explicitly; they never read the
+      -- residual normalized-answer catalog after selection/fulfillment fails.
+      let context ← AliasRuntime.Context.ofDocument document
+      return ← AliasRuntime.normalizeType context (min (fuel + 1) 256) 10000 id
+    | _ => pure ()
     if id >= nodes.size then
       match source.shape with
       | .rawPointer child .Mut =>
-        TypeArena.intern nodes (← normalize lookup nodes fuel child) false
+        TypeArena.intern nodes (← normalize lookup document fuel child) false
       | .reference child .Mut .Erased =>
-        TypeArena.intern nodes (← normalize lookup nodes fuel child) true
+        TypeArena.intern nodes (← normalize lookup document fuel child) true
       | .array child _ constructor =>
-        TypeArena.internArray nodes (← normalize lookup nodes fuel child)
+        TypeArena.internArray nodes (← normalize lookup document fuel child)
           (UInt64.ofNat constructor.count)
       | _ => throw "unknown lazy normalization constructor"
     else if ← identityReady nodes (nodes.size + 1) id then pure id

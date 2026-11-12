@@ -41,7 +41,11 @@ class SharedFixtureProjectionTests(unittest.TestCase):
         self.assertEqual(len(pooled["abi_arguments"]), 4)
         self.assertEqual(pooled["fn_abis"][0]["return"], pooled["fn_abis"][0]["arguments"][0])
         expanded = expand_document(pooled, schema_version=8)
-        self.assertEqual(expanded, source)
+        # The historical fixture adapter supplies required empty source seeds;
+        # pooling must preserve every original ABI value exactly.
+        self.assertEqual(expanded, {**source, "mir_templates": [],
+                                   "compiler_trait_program": {"traits": [],
+                                       "constructor_scope": {"kind": "all_source_impls"}}})
 
     def test_unused_metadata_projection_retains_required_consts(self):
         source = {"schema_version": 8, "layouts": [], "spans": [

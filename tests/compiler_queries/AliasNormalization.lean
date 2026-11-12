@@ -16,13 +16,13 @@ private def rules : Array Rule := #[
   rule 1 #[.type] (.node .type "slice" "" (.cons (.parameter .type 0) .nil)),
   rule 2 #[.type] boolean,
   rule 3 #[] (alias "alias_free_not_rigid" 3)]
+private def associatedRule : Rule := rule 11 #[.type,.type] (.node .type "tuple" ""
+  (.cons (.parameter .type 0) (.cons (.parameter .type 1) .nil)))
 private def associated : AssociatedValue := {
-  traitDefinition := ident 10,
-  rule := rule 11 #[.type,.type] (.node .type "tuple" ""
-    (.cons (.parameter .type 0) (.cons (.parameter .type 1) .nil))) }
+  traitDefinition := ident 10, rule := some associatedRule, requiresHiddenTypeInference := false, materialRetained := true }
 private def program : Program := {
   freeRules := rules,
-  associatedDeclarations := #[⟨ident 10, ident 100, 1⟩] }
+  associatedDeclarations := #[⟨ident 10, ident 100, 1, #[]⟩] }
 private def isUnsigned : Term → Bool
   | .atom .type "uint" "u32" => true
   | _ => false
@@ -76,7 +76,10 @@ private def sourceImpl : Miri.Input.TraitSelection.Impl := {
   definition := ident 200, parameters := #[.type],
   traitRef := ⟨ident 100, #[.parameter .type 0]⟩,
   polarity := .positive, isDefault := false, predicates := #[],
-  associatedValues := #[⟨ident 10, ident 11, associated.rule.template, #[]⟩] }
+  associatedValues := #[{
+    traitAssociatedDefinition := ident 10, implementationDefinition := ident 11,
+    expression := some associatedRule.template, requiresHiddenTypeInference := false, materialRetained := true,
+    ownPredicates := #[]}] }
 example : (fromTraitSelection sourceImpl ⟨ident 200, #[unsigned]⟩).map
     (fun selected => selected.associatedValues.size) = .ok 1 := by cbv
 example : (fromTraitSelection sourceImpl ⟨ident 201, #[unsigned]⟩).map
@@ -91,3 +94,31 @@ example : (fromTraitSelection sourceImpl ⟨ident 200, #[]⟩).map
 example : (fromTraitSelection sourceImpl ⟨ident 200, #[.atom .region "erased" ""]⟩).map
     (fun selected => selected.associatedValues.size) =
     .error "associated selection substitution sort mismatch" := by cbv
+private def hiddenValue : AssociatedValue := {
+  traitDefinition := ident 10, rule := none, requiresHiddenTypeInference := true, materialRetained := true }
+private def hiddenSelection : SelectedImpl := ⟨ident 200, #[unsigned], #[hiddenValue]⟩
+example : normalize program {hooks with select := fun _ _ _ _ _ => .ok hiddenSelection}
+    20 #[] (alias "alias_projection_not_rigid" 10 #[unsigned,boolean]) =
+    .error "associated RHS requires hidden-type constraint inference" := by cbv
+
+private def sliceUnsigned : Term := .node .type "slice" "" (.cons unsigned .nil)
+private def projectionClauses : Program := {
+  program with associatedDeclarations := #[⟨ident 10, ident 100, 1,
+    #[⟨#[], .wellFormed (.parameter .type 0)⟩]⟩] }
+private def isSliceUnsigned : Term → Bool
+  | .node .type "slice" "" (.cons (.atom .type "uint" "u32") .nil) => true
+  | _ => false
+private def projectionHooks : Hooks := {
+  select := fun _ _ _ parent args =>
+    if parent == ident 100 && args.size == 1 && args[0]?.any isSliceUnsigned then
+      .ok ⟨ident 200, #[unsigned], #[associated]⟩
+    else .error "wrong trait arguments",
+  fulfill := fun _ _ predicates =>
+    if predicates.size == 1 && (predicates[0]?.any fun clause => match clause.predicate with
+      | .wellFormed value => isSliceUnsigned value | _ => false)
+    then .ok () else .error "trait own clauses used impl substitutions" }
+-- Trait Self=[T] differs from impl T. Own GAT clauses use the projection args;
+-- the selected RHS uses impl T plus GAT arguments. These are separate folds.
+example : normalize projectionClauses projectionHooks 30 #[]
+    (alias "alias_projection_not_rigid" 10 #[sliceUnsigned,boolean]) =
+    .ok (.node .type "tuple" "" (.cons unsigned (.cons boolean .nil))) := by cbv

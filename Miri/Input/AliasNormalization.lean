@@ -29,9 +29,12 @@ structure AssociatedDeclaration where
   definition : DefinitionIdentity
   parent : DefinitionIdentity
   parentParameterCount : Nat
+  ownPredicates : Array Clause
 structure AssociatedValue where
   traitDefinition : DefinitionIdentity
-  rule : Rule
+  rule : Option Rule
+  requiresHiddenTypeInference : Bool
+  materialRetained : Bool
 structure SelectedImpl where
   definition : DefinitionIdentity
   substitution : Array Term
@@ -50,9 +53,11 @@ def fromTraitSelection (source : TraitSelection.Impl) (selection : TraitSelectio
   let values := source.associatedValues.map fun value =>
     ({
       traitDefinition := value.traitAssociatedDefinition,
-      rule := {
+      rule := value.expression.map fun expression => {
         definition := value.implementationDefinition,
-        template := value.expression, ownPredicates := value.ownPredicates}} : AssociatedValue)
+        template := expression, ownPredicates := value.ownPredicates},
+      requiresHiddenTypeInference := value.requiresHiddenTypeInference,
+      materialRetained := value.materialRetained} : AssociatedValue)
   pure ⟨source.definition, selection.substitution, values⟩
 
 structure Program where
@@ -111,11 +116,11 @@ private def fold (program : Program) (hooks : Hooks) :
       let key : Key := ⟨kind,definition,arguments⟩
       if active.contains key then throw "alias normalization cycle"
       let active := active.push key
-      let (rule, substitutions) ← if kind == .free then do
+      let (rule, substitutions, predicateSource, predicateArguments) ← if kind == .free then do
         let rules := program.freeRules.filter (·.definition == definition)
         unless rules.size == 1 do throw "free alias declaration RHS absent or duplicated"
         let some rule := rules[0]? | throw "free alias declaration RHS absent"
-        pure (rule,arguments)
+        pure (rule,arguments,rule.ownPredicates,arguments)
       else do
         for argument in arguments do
           if ← containsBound (fuel + 1) argument then
@@ -131,13 +136,19 @@ private def fold (program : Program) (hooks : Hooks) :
         unless values.size == 1 do
           throw "associated impl RHS absent, inherited, or duplicated"
         let some selectedValue := values[0]? | throw "associated impl RHS absent"
+        if selectedValue.requiresHiddenTypeInference then
+          throw "associated RHS requires hidden-type constraint inference"
+        unless selectedValue.materialRetained do throw "associated RHS source material not retained"
+        let some rule := selectedValue.rule | throw "associated source RHS template absent"
         let substitutions := selected.substitution ++ arguments.extract
           declaration.parentParameterCount arguments.size
-        pure (selectedValue.rule,substitutions)
+        -- project.rs::assoc_term_own_obligations uses the trait item's own
+        -- clauses with projection args, not impl-RHS clauses with impl args.
+        pure (rule,substitutions,declaration.ownPredicates,arguments)
       rule.template.checkArguments substitutions
-      let predicates ← TraitSelection.Substitution.clauses (fuel + 1) substitutions rule.ownPredicates
+      let predicates ← TraitSelection.Substitution.clauses (fuel + 1) predicateArguments predicateSource
       if !predicates.isEmpty then
-        for argument in substitutions do
+        for argument in predicateArguments do
           if ← containsBound (fuel + 1) argument then
             throw "alias own clauses require bound-variable placeholder conversion"
       let rhs ← rule.template.instantiateType (fuel + 1) substitutions

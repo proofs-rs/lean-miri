@@ -1,4 +1,5 @@
 import MiriTests.Input.JsonFixtures
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 
 open Lean Miri.Input
@@ -13,6 +14,10 @@ private def setField (source key value : String) : Except String String := do
   let fields ← (← JsonFixtures.parse source).object
   let retained := fields.filterMap fun (name, child) => if name == key then none else some (name,child.text)
   pure (object ((key,value)::retained.toList))
+private def withoutField (source key : String) : Except String String := do
+  let fields ← (← JsonFixtures.parse source).object
+  pure (object (fields.toList.filterMap fun (name, child) =>
+    if name == key then none else some (name, child.text)))
 private def rejected (source : String) (fragment : String) : IO Unit :=
   match decodeJson source with
   | .ok _ => throw (IO.userError s!"malformed coroutine evidence accepted: {fragment}")
@@ -26,7 +31,9 @@ private def invalidCoverage (document : ImportDocument) (value : CoroutineCovera
 /-- Constructed metadata controls exercise validators; they are neither compiler
 exports nor evidence of safe coroutine execution. -/
 private def componentChecks (original : ImportDocument) : IO Unit := do
-  let some owner := original.bodies[0]? | throw (IO.userError "missing fixture body")
+  let ownerCore ← must (SourceMir.resolveBody original 0)
+  let some ownerSeed := original.bodies[0]? | throw (IO.userError "missing fixture body seed")
+  let owner : Body := {toBodyCore := ownerCore, promotedBodies := ownerSeed.promotedBodies}
   let some ownerInstance := original.instances[owner.instanceId]? | throw (IO.userError "missing fixture instance")
   let .Item definition := ownerInstance.instanceKind | throw (IO.userError "fixture owner is not Item")
   let some sourceType := original.types[0]? | throw (IO.userError "missing fixture type")
@@ -75,7 +82,8 @@ private def componentChecks (original : ImportDocument) : IO Unit := do
   let some block := owner.mir.basicBlocks[0]? | throw (IO.userError "missing fixture block")
   let residualBlock := {block with terminator := {block.terminator with kind := .CoroutineDrop}}
   let residual := {owner with mir := {owner.mir with basicBlocks := owner.mir.basicBlocks.set! 0 residualBlock}}
-  invalidCoverage {document with bodies := document.bodies.set! 0 residual} coverage "unlowered terminator"
+  let residualBody : Body := {toBodyCore := residual.toBodyCore, promotedBodies := ownerSeed.promotedBodies}
+  invalidCoverage {document with bodies := document.bodies.set! 0 (.material residualBody)} coverage "unlowered terminator"
   invalidCoverage document {coverage with auxiliaryBodies := #[{sync with body := {residual with mir := {residual.mir with phase := .Runtime .Initial}}}, proxy]} "unlowered terminator"
   invalidCoverage document {coverage with auxiliaryBodies := #[{sync with body := {sync.body with definitionId := none}}, proxy]} "auxiliary source kind differs from body definition"
   -- A constructed four-state physical layout: the first three states have no
@@ -153,11 +161,23 @@ def main : IO Unit := do
   let count := (← must ((← must (raw.field "bodies")).array)).size
   let markers := "[" ++ String.intercalate "," (List.replicate count "false") ++ "]"
   let catalog := object [("body_coroutines", markers), ("coroutines", "[]"), ("auxiliary_bodies", "[]")]
-  let newVersion ← must (setField legacy "schema_version" "13")
+  let adapted ← must (adaptLegacyFixture legacy)
+  let newVersion ← must (withoutField adapted "compiler_coroutine_coverage")
   let valid ← must (setField newVersion "compiler_coroutine_coverage" catalog)
   let newDecoded ← must (decodeJson valid)
   check newDecoded.document.coroutineCoverage.isSome "schema 13 failed to retain typed coverage"
-  rejected (← must (setField legacy "compiler_coroutine_coverage" catalog)) "unsupported schema version"
+  let current ← must (JsonFixtures.parse valid)
+  let bodies ← must ((← must (current.field "bodies")).array)
+  let some first := bodies[0]? | throw (IO.userError "current fixture body missing")
+  let missingKind ← must (withoutField first.text "body_kind")
+  let missingKindBodies := bodies.map (·.text) |>.set! 0 missingKind
+  let missingKindBodies := "[" ++ String.intercalate "," missingKindBodies.toList ++ "]"
+  rejected (← must (setField valid "bodies" missingKindBodies)) "body_kind"
+  rejected (← must (withoutField valid "mir_templates")) "mir_templates"
+  -- Fixture edits reorder root fields. Put the obsolete header first so this
+  -- control tests version rejection before interpreting obsolete body fields.
+  let legacyCatalog ← must (setField legacy "compiler_coroutine_coverage" catalog)
+  rejected (← must (setField legacyCatalog "schema_version" "11")) "unsupported schema version"
   rejected newVersion "schema 13 requires"
   rejected (← must (setField valid "schema_version" "12")) "unsupported schema version"
   rejected (← must (setField valid "compiler_coroutine_coverage" (object [("auxiliary_bodies", "[]"), ("coroutines", "[]")]))) "body_coroutines"

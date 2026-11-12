@@ -25,11 +25,11 @@ private def position (files : Array String) (source : CompilerSourcePosition) : 
   unless source.filename < files.size do throw "backtrace filename ID out of bounds"
   unless source.bytePosition < 2^32 do throw "compiler BytePos exceeds u32"
   pure ⟨UInt32.ofNat source.bytePosition,source.line,source.column,source.filename⟩
-private def spans (files : Array String) (ctx : LowerContext) (tables : CompilerTables) (body : BodyCore) :
+private def spans (files : Array String) (ctx : LowerContext) (tables : CompilerTables) (rows : Array BacktraceSpan) :
     Except String (Array SpanEntry × CompilerTables) := do
   let mut tables := tables
   let mut entries := #[]
-  for record in body.backtraceSpans do
+  for record in rows do
     unless record.spanId < tables.spans.size do throw "backtrace span ID out of bounds"
     let span : MIR.SpanRef := ⟨record.spanId⟩
     let location ← position files record.position
@@ -44,8 +44,11 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
   let mut bodySpans := #[]
   let mut positions := #[]
   let mut positionIndex : Std.HashMap UInt32 Position := {}
-  for body in program.bundle.bodies do
-    match spans program.input.files ctx tables body.input with
+  for index in [:program.bodyCount] do
+    let source := do
+      let metadata ← program.bodyMetadata index
+      spans program.input.files ctx tables metadata.backtraceSpans
+    match source with
     | .error error => bodySpans := bodySpans.push (.error error)
     | .ok (entries,next) =>
       tables := next

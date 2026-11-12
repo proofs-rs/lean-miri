@@ -19,6 +19,9 @@ mod typed_pool;
 mod shared_json;
 mod pool_type;
 mod generic_material;
+mod generic_mir;
+mod alias_rules;
+mod trait_material;
 mod pool_layout;
 mod pool_instance;
 mod pool_values;
@@ -179,10 +182,12 @@ struct ExportDocument {
     compiler_runtime_primitives: RuntimePrimitives,
     compiler_vtable_queries: Vec<query_values::VtableQuery>,
     compiler_predicate_queries: Vec<query_values::PredicateQuery>,
+    compiler_trait_program: serde_json::Value,
     #[serde(flatten)]
     runtime_catalogs: RuntimeCatalogs,
     body_roots: Vec<BodyRoot>,
-    bodies: Vec<pool_body::Body<u64, Vec<u64>>>,
+    mir_templates: Vec<pool_body::CopyTemplateSource>,
+    bodies: Vec<pool_body::BodySeed<u64, Vec<u64>>>,
     compiler_coroutine_coverage: coroutine_coverage::Catalog<pool_body::Body<u64, Vec<u64>>>,
     definitions: Vec<pool_values::Definition>,
     type_constants: Vec<pool_values::TypeConstant>,
@@ -278,7 +283,8 @@ struct ExportContext<'tcx> {
     vtable_state: incremental::Vtables,
     virtual_state: incremental::Virtuals<'tcx>,
     vtable_diagnostics: vtable_diagnostics::Trace<'tcx>,
-    bodies: Pool<BodyKey<'tcx>, pool_body::Body>,
+    mir_templates: Pool<(rustc_hir::def_id::DefId, Option<rustc_middle::mir::Promoted>), pool_body::CopyTemplateSource>,
+    bodies: Pool<BodyKey<'tcx>, pool_body::BodySeed>,
     coroutine_coverage: coroutine_coverage::Catalog,
     constant_eval_role: Option<MirBodyRole>,
     definitions: Pool<rustc_hir::def_id::DefId, pool_values::Definition>,
@@ -832,6 +838,22 @@ fn is_required_trait_method<'tcx>(tcx: TyCtxt<'tcx>, def_id: rustc_hir::def_id::
 /// constructor bodies and always-const function bodies in the CTFE MIR table;
 /// `instance_mir` routes those exact kinds to `mir_for_ctfe` instead of
 /// `optimized_mir`.
+/// Const/static roots have MIR for CTFE but are not callable runtime frames.
+/// Pinned fn_sig_for_fn_abi (rustc_ty_utils/abi.rs:36–225) accepts callable
+/// source types, not the scalar type_of a static initializer. Backtrace source
+/// keys must therefore exclude those roots without changing their MIR data.
+fn callable_runtime_instance(tcx: TyCtxt<'_>, instance: ty::Instance<'_>) -> bool {
+    match instance.def {
+        ty::InstanceKind::Item(def) => matches!(tcx.def_kind(def),
+            rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn |
+            rustc_hir::def::DefKind::Ctor(_, rustc_hir::def::CtorKind::Fn) |
+            rustc_hir::def::DefKind::Closure | rustc_hir::def::DefKind::SyntheticCoroutineBody),
+        // Compiler shims/intrinsics have their own source signature rules,
+        // including ThreadLocal, whose definition itself is a static item.
+        _ => true,
+    }
+}
+
 fn has_instance_mir_source<'tcx>(tcx: TyCtxt<'tcx>, def_id: rustc_hir::def_id::DefId) -> bool {
     if tcx.is_mir_available(def_id) {
         return true;
@@ -1332,7 +1354,7 @@ impl ExportCallbacks {
             .map(|def| def.to_def_id())
             .collect::<Vec<_>>();
         let bodies = local_definitions
-            .into_iter()
+            .iter().copied()
             .filter(|def_id| {
                 if is_scoped {
                     root_ids.contains(&def_id.to_def_id())
@@ -1706,10 +1728,25 @@ impl ExportCallbacks {
         // definition references: never instantiate a generic type to discover
         // a concrete query-result domain here.
         let mut generic_templates = HashMap::new();
+        let mut alias_declarations = HashMap::new();
+        let mut trait_material_state = trait_material::State::seed(tcx);
+        for definition in &local_definitions {
+            trait_material_state.register_definition(tcx, definition.to_def_id())?;
+        }
+        // Canonical identity references are not requests for method signatures.
+        // Only the original program and dependencies of retained source expressions
+        // demand templates. Trait catalog headers must never amplify this set.
+        let mut material_queue = export_context.definitions.keys().copied().collect::<Vec<_>>();
+        let mut material_demand = material_queue.iter().copied().collect::<HashSet<_>>();
         let mut generic_definition_cursor = 0;
-        while generic_definition_cursor < export_context.definitions.len() {
-            let definition = *export_context.definitions.key(generic_definition_cursor)
-                .ok_or_else(|| "generic definition material identity absent".to_owned())?;
+        while generic_definition_cursor < material_queue.len() {
+            let definition = material_queue[generic_definition_cursor];
+            let definition_index = def_json(&mut export_context, definition) as usize;
+            trait_material_state.update_constructors(tcx, &material_demand);
+            trait_material_state.register_definition(tcx, definition)?;
+            for reference in trait_material_state.discover(tcx)? {
+                def_json(&mut export_context, reference);
+            }
             if let Some(material) = generic_material::definition_template(tcx, definition)
                 .map_err(|error| format!("generic source material for {}: {error}", tcx.def_path_str(definition)))?
             {
@@ -1717,10 +1754,13 @@ impl ExportCallbacks {
                     .map_err(|error| format!("invalid internal generic material JSON: {error}"))?;
                 let mut references = Vec::new();
                 generic_definition_references(&material, &mut references)?;
-                for reference in references { def_json(&mut export_context, reference); }
+                for reference in references {
+                    def_json(&mut export_context, reference);
+                    if material_demand.insert(reference) { material_queue.push(reference); }
+                }
                 use rustc_hir::def::DefKind as D;
                 if matches!(tcx.def_kind(definition), D::Fn | D::AssocFn) {
-                    body_track_caller.entry(generic_definition_cursor).or_insert_with(||
+                    body_track_caller.entry(definition_index).or_insert_with(||
                         tcx.body_codegen_attrs(definition).flags.contains(
                             rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags::TRACK_CALLER));
                 }
@@ -1728,13 +1768,38 @@ impl ExportCallbacks {
                     let adt = tcx.adt_def(definition);
                     let destructor = adt.destructor(tcx)
                         .map(|destructor| def_json(&mut export_context, destructor.did));
-                    adt_drop_material.entry(generic_definition_cursor).or_insert(
+                    adt_drop_material.entry(definition_index).or_insert(
                         pool_values::AdtDropMaterial { manually_drop: adt.is_manually_drop(), destructor });
                 }
-                generic_templates.insert(generic_definition_cursor, material);
+                generic_templates.insert(definition_index, material);
+            }
+            if let Some(declaration) = alias_rules::declaration(tcx, definition,
+                |clause| trait_material::clause(tcx, clause))
+                .map_err(|error| format!("source alias declaration for {}: {error}", tcx.def_path_str(definition)))?
+            {
+                let mut references = Vec::new();
+                generic_definition_references(&declaration, &mut references)?;
+                // Parent and implemented trait-item identities are declaration
+                // links, not generic term nodes. Close those links explicitly.
+                for key in ["parent", "trait_item"] {
+                    if let Some(identity) = declaration.get(key) {
+                        generic_definition_references(
+                            &serde_json::json!({"definition":identity}), &mut references)?;
+                    }
+                }
+                for reference in references {
+                    def_json(&mut export_context, reference);
+                    if material_demand.insert(reference) { material_queue.push(reference); }
+                }
+                alias_declarations.insert(definition_index, declaration);
+            }
+            for reference in trait_material_state.rhs_demands(tcx, &material_demand)? {
+                def_json(&mut export_context, reference);
+                if material_demand.insert(reference) { material_queue.push(reference); }
             }
             generic_definition_cursor += 1;
         }
+        let compiler_trait_program = trait_material_state.finish(tcx, &material_demand)?;
         let body_roots = bodies;
         let allocator_world = if self.prepared_allocator_world {
             Some(allocator_world::capture(
@@ -1773,6 +1838,7 @@ impl ExportCallbacks {
             return export_failure("coroutine coverage", "body marker table is incomplete");
         }
         let mut document = ExportDocument {
+            mir_templates: export_context.mir_templates.finish("mir_template")?,
             schema: "lean-miri-rustc-mir",
             schema_version: ROOT_SCHEMA_VERSION,
             mir_query: "TyCtxt::instance_mir(InstanceKind::Item(def_id)); ordinary runtime function bodies use optimized_mir",
@@ -1796,6 +1862,7 @@ impl ExportCallbacks {
             compiler_runtime_primitives: runtime_primitives,
             compiler_vtable_queries: vtable_queries,
             compiler_predicate_queries: predicate_queries,
+            compiler_trait_program,
             runtime_catalogs: runtime_catalogs.unwrap_or_default().finish(),
             body_roots,
             bodies,
@@ -1805,6 +1872,7 @@ impl ExportCallbacks {
                     definition.body_track_caller = body_track_caller.get(&id).copied();
                     definition.adt_drop = adt_drop_material.get(&id).cloned();
                     definition.generic_template = generic_templates.remove(&id);
+                    definition.alias_declaration = alias_declarations.remove(&id);
                     definition
                 }).collect(),
             type_constants: export_context.type_constants.finish("type_constant")?,
@@ -2419,7 +2487,9 @@ fn export_reachable_instances<'tcx>(
             continue;
         }
         let template = checked_instance_mir(tcx, instance.def)?;
-        context.runtime_mir_frame_instances.insert(instance);
+        if callable_runtime_instance(tcx, instance) {
+            context.runtime_mir_frame_instances.insert(instance);
+        }
         let body_json = resolved_mir_body_json(tcx, template, instance, context)?;
         // Local HIR bodies own a promoted table even when empty. Imported or
         // compiler-generated MIR can lack that optional table; query it only
@@ -2542,6 +2612,42 @@ fn resolved_mir_body_json<'tcx>(
     if !fresh {
         return Ok(id as u64);
     }
+    if matches!(instance.def, ty::InstanceKind::Item(_))
+        && tcx.generics_of(template.source.def_id()).count() > 0
+        && generic_mir::eligible(template, instance.args)
+    {
+        // This source category is selected before any monomorphic-body query.
+        // Failures after selection propagate; no concrete body is retained.
+        let key = (template.source.def_id(), template.source.promoted);
+        let (template_id, fresh) = context.mir_templates.reserve(key);
+        if fresh {
+            let raw = generic_mir::capture(tcx, template, |span|span_json(context,tcx,span))?;
+            let source = pool_body::CopyTemplateSource {
+                template: raw,
+                source_def_id: def_json(context,template.source.def_id()),
+                def_path: tcx.def_path_str(template.source.def_id()),
+                span: span_json(context,tcx,template.span),
+                preamble_def_span: span_json(context,tcx,tcx.def_span(template.source.def_id())),
+                injection_phase: template.injection_phase.map(mir_phase_json),
+                local_sources: template.local_decls.iter().map(|local|
+                    source_info_json(context,tcx,local.source_info)).collect(),
+                source_scopes: template.source_scopes.iter_enumerated().map(|(scope,value)|pool_body::SourceScope {
+                    scope:scope.as_u32(),parent:value.parent_scope.map(|parent|parent.as_u32()),
+                    span:span_json(context,tcx,value.span),inlined:None,
+                    inlined_parent_scope:value.inlined_parent_scope.map(|parent|parent.as_u32()),
+                }).collect(),
+                backtrace_spans:backtrace_spans_json(context,tcx,template),
+            };
+            context.mir_templates.define(template_id,source);
+        }
+        coroutine_coverage::capture(tcx,context,template,instance,id as u64)?;
+        let instance_id=context.register_metadata_instance(instance);
+        let generic_args=generic_args_json(context,tcx,instance.args)?;
+        context.bodies.define(id,pool_body::BodySeed::CopyTemplate {
+            template_id:template_id as u64,instance_id,generic_args,promoted_bodies:Vec::new(),
+        });
+        return Ok(id as u64);
+    }
     let body = instance.try_instantiate_mir_and_normalize_erasing_regions(
         tcx, template.typing_env(tcx), ty::EarlyBinder::bind(tcx, template.clone()),
     ).map_err(|error| format!("resolved MIR: instantiation or normalization failed: {error:?}"))?;
@@ -2560,7 +2666,7 @@ fn resolved_mir_body_json<'tcx>(
                 format!("{:?}", body.source.instance).chars().take(1200).collect::<String>(), body.phase)
         } else { error }
     })?;
-    context.bodies.define(id, definition);
+    context.bodies.define(id, pool_body::BodySeed::Material {body:definition});
     Ok(id as u64)
 }
 
@@ -2583,7 +2689,9 @@ fn export_body<'tcx>(
         );
     }
     let instance = ty::Instance::mono(tcx, def_id);
-    context.runtime_mir_frame_instances.insert(instance);
+    if callable_runtime_instance(tcx, instance) {
+        context.runtime_mir_frame_instances.insert(instance);
+    }
     let entry_instance = context.register_instance(instance);
     let body_id = resolved_mir_body_json(tcx, body, instance, context)?;
     Ok(BodyRoot { body:body_id,
@@ -2942,7 +3050,6 @@ fn type_compiler_facts_json<'tcx>(
             else { Some(normalized.is_sized(tcx, env)) },
     };
     let discriminant_type = discriminant_type_fact_json(context, tcx, normalized)?;
-    let normalized_id = type_json(context, tcx, normalized)?;
     let unsafe_binder_erased = match input.kind() {
         ty::UnsafeBinder(b) => Some(type_json(
             context,
@@ -2974,7 +3081,11 @@ fn type_compiler_facts_json<'tcx>(
     };
     let type_queries = TypeQueries {
         discriminant_type,
-        normalized: if structural_identity_normalization(input, 1024) { None } else { Some(normalized_id) },
+        normalized: if structural_identity_normalization(input, 1024)
+            || matches!(input.kind(), ty::Alias(ty::IsRigid::No, alias)
+                if matches!(alias.kind, ty::AliasTyKind::Free { .. } | ty::AliasTyKind::Projection { .. })) {
+            None
+        } else { Some(type_json(context, tcx, normalized)?) },
         unsafe_binder_erased,
         pointer_metadata_type,
     };
@@ -3253,7 +3364,8 @@ fn type_json_inner<'tcx>(
                 .map(|t| type_json(context, tcx, t))
                 .collect::<Result<_, _>>()?,
         },
-        ty::Alias(_, alias) => Shape::Alias {
+        ty::Alias(rigidity, alias) => Shape::Alias {
+            rigid: rigidity == ty::IsRigid::Yes,
             alias_payload: alias_payload_json(context, tcx, alias.kind),
             def_id: alias_def_id_json(context, alias.kind),
             generic_args: generic_args_json_inner(context, tcx, alias.args)?,
@@ -4397,7 +4509,8 @@ fn unwind_json(unwind: rustc_middle::mir::UnwindAction) -> pool_body::Unwind {
 fn generic_definition_references(value: &Value, out: &mut Vec<DefId>) -> Result<(), String> {
     match value {
         Value::Object(fields) => {
-            if let Some(identity) = fields.get("definition") {
+            for key in ["definition", "associated", "trait_associated_definition", "implementation_definition"] {
+              if let Some(identity) = fields.get(key) {
                 let crate_index = identity.get("crate").and_then(Value::as_u64)
                     .and_then(|n| u32::try_from(n).ok())
                     .ok_or_else(|| "generic definition crate identity absent/invalid".to_owned())?;
@@ -4406,6 +4519,7 @@ fn generic_definition_references(value: &Value, out: &mut Vec<DefId>) -> Result<
                     .ok_or_else(|| "generic definition index identity absent/invalid".to_owned())?;
                 out.push(DefId { krate: rustc_hir::def_id::CrateNum::from_u32(crate_index),
                     index: rustc_hir::def_id::DefIndex::from_u32(index) });
+            }
             }
             for child in fields.values() { generic_definition_references(child, out)?; }
         }
@@ -4417,7 +4531,7 @@ fn generic_definition_references(value: &Value, out: &mut Vec<DefId>) -> Result<
 
 fn def_json(context: &mut ExportContext<'_>, def: rustc_hir::def_id::DefId) -> u64 {
     let (id,fresh)=context.definitions.reserve(def);
-    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32(),body_track_caller:None,adt_drop:None,generic_template:None }); }
+    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32(),body_track_caller:None,adt_drop:None,generic_template:None,alias_declaration:None }); }
     id as u64
 }
 
@@ -4504,6 +4618,10 @@ fn register_call_transfer_for_target<'tcx>(
     virtual_receiver: Option<ty::Ty<'tcx>>,
     indirect_function_pointer: bool,
 ) -> Result<(), String> {
+    // This is only covariance-evidence discovery, not runtime target
+    // selection. A non-callable data winner has no FnAbi/MIR transfer; runtime
+    // symbol/allocation validation still rejects calling it as a function.
+    if !callable_runtime_instance(tcx, instance) { return Ok(()); }
     if matches!(instance.def, ty::InstanceKind::Item(_)) && tcx.is_foreign_item(instance.def_id()) {
         let key = (instance, request.clone(), indirect_function_pointer);
         if context.foreign_call_transfer_keys.insert(key) {

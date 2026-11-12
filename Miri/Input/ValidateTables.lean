@@ -1,4 +1,5 @@
 import Miri.Input.LocalValidation
+import Miri.Input.SourceMir
 
 namespace Miri.Input
 
@@ -95,7 +96,7 @@ private def typeShape (b : ReferenceBounds) (path : String) : TypeShape → Exce
     if let some id := principal then checkId b.predicates id s!"{path}.principal_predicate" "predicate"
     region b s!"{path}.region" lifetime
   | .closure definition args _ | .coroutineClosure definition args
-  | .coroutine definition args | .alias _ definition args => do
+  | .coroutine definition args | .alias _ _ definition args => do
     checkId b.definitions definition s!"{path}.def_id" "definition"
     genericArgs b s!"{path}.generic_args" args
   | .tuple elements => do
@@ -400,7 +401,7 @@ private def validateRequiredExecution (document : ImportDocument) : Except Strin
       if visited.contains (kind,id) then continue
       visited := visited.insert (kind,id)
       if kind == 0 then
-        let some body := document.bodies[id]? | throw "required body is absent"
+        let body ← SourceMir.metadata document id
         for constant in body.requiredConsts do
           let .Val value _ := constant.value
           pending := pending ++ (valueAllocations value).map (2, ·)
@@ -460,7 +461,20 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
   for (value, index) in auxiliary.toList.zipIdx do
     LocalValidation.validateBody value.body s!"$.compiler_coroutine_coverage.auxiliary_bodies[{index}].body"
     instanceKind b s!"$.compiler_coroutine_coverage.auxiliary_bodies[{index}].source_kind" value.sourceKind
-  let bodyEntries := document.bodies.mapIdx (fun index value => (value, s!"$.bodies[{index}]")) ++
+  for source in document.mirTemplates do SourceMir.validateTemplate document source
+  for (seed,index) in document.bodies.zipIdx do
+    if let .copyTemplate reference := seed then
+      let path := s!"$.bodies[{index}]"
+      checkId b.instances reference.instanceId path "instance"
+      genericArgs b s!"{path}.generic_args" reference.genericArgs
+      let _ ← SourceMir.metadata document index
+      promoted b s!"{path}.promoted_bodies" reference.promotedBodies
+      for entry in reference.promotedBodies do
+        if let some childId := entry.bodyId then
+          let some child := document.bodies[childId]? | throw s!"{path}: promoted body is absent"
+          unless child.instanceId == reference.instanceId do throw s!"{path}: promoted body instance mismatch"
+  let bodyEntries := document.bodies.zipIdx.filterMap (fun (seed,index) =>
+    seed.materialBody?.map (fun body => (body,s!"$.bodies[{index}]"))) ++
     auxiliary.mapIdx (fun index value => (value.body, s!"$.compiler_coroutine_coverage.auxiliary_bodies[{index}].body"))
   for (span, index) in document.spans.toList.zipIdx do
     checkId document.files.size span.file s!"$.spans[{index}].file" "file"

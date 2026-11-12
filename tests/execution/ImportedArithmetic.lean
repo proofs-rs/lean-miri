@@ -325,7 +325,7 @@ def main (args : List String) : IO Unit := do
   let prepared ← must (Input.CallResolution.prepare program)
   let root ← must (need prepared.program.input.bodyRoots[0]? "canonical root instance")
   let loaded ← must (Input.CallResolution.loadedBodyOfInstance prepared root.entryInstance)
-  let lowered ← must (need prepared.program.bundle.bodies[loaded.identity.index]? "canonical root instance body")
+  let lowered ← must (prepared.program.resolveBody loaded.identity.index)
   let metadata := prepared.runtime
   check (metadata.source.types.all (fun ty => (metadata.lookup ty.id).isOk)) "fixture layout import obligations"
   check (metadata.target.base == TargetDataLayout.mk .little .w64) "exported target mismatch"

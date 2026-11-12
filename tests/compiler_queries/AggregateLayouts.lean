@@ -25,10 +25,20 @@ private def readFixture (path : String) (version : Nat) : IO Fixture := do
   let targetInput ← must (JsonReader.run CatalogDecoder.targetDataLayout targetJson.compress)
   let target ← must ((RuntimeMetadata.importTarget targetInput).mapError toString)
   let typeRows ← must ((← must (raw.getObjVal? "types")).getArr?)
-  let types ← typeRows.mapM fun row => do
+  let mut types := #[]
+  let mut skippedAliases := 0
+  for row in typeRows do
+    let shape ← must (row.getObjVal? "shape")
+    let kind ← must ((← must (shape.getObjVal? "kind")).getStr?)
+    -- The historical producer did not retain alias rigidity. This focused
+    -- oracle cannot infer it; omit that shape and fail if a dependency needs it.
+    if version == 12 && kind == "alias" then
+      skippedAliases := skippedAliases + 1
+      continue
     let fields ← must row.getObj?
     let row := Json.mkObj (fields.toList.filter (fun field => field.1 != "compiler_facts"))
-    must (JsonReader.run DecoderValues.parseTypeNode row.compress)
+    types := types.push (← must (JsonReader.run DecoderValues.parseTypeNode row.compress))
+  if skippedAliases != 0 then IO.println s!"oracle scope: skipped {skippedAliases} historical alias shapes without rigidity"
   let values ← must ((← must (raw.getObjVal? "layout_values")).getArr?)
   let refs ← must ((← must (raw.getObjVal? "layouts")).getArr?)
   let layouts ← refs.mapM fun row => do

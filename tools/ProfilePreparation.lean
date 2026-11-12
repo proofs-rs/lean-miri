@@ -25,10 +25,10 @@ def main (args : List String) : IO Unit := do
   boundary "lower: start"
   let program ← must (lowerProgram decoded.document)
   boundary "lower: complete"
-  boundary s!"input_shape: types={program.input.types.size} instances={program.input.instances.size} bodies={program.bundle.bodies.size} allocations={program.input.allocations.size}"
+  boundary s!"input_shape: types={program.input.types.size} instances={program.input.instances.size} bodies={program.bodyCount} allocations={program.input.allocations.size}"
   boundary "prepare: start"
   let prepared ← must (EvalPreparation.prepareProfiled profile program).outcome
   boundary "prepare: complete"
   let calls := prepared.compiler.lifecycle.calls.calls
   boundary s!"lookup_shape: call_sites={calls.entries.size} loaded_bodies={calls.bodies.size} function_facts={prepared.compiler.functions.functions.size} pointer_abis={prepared.compiler.functions.pointerAbis.size}"
-  boundary s!"preparation_only: complete bodies={prepared.compiler.program.bundle.bodies.size}; guest_execution=not_run; safety=not_evaluated"
+  boundary s!"preparation_only: complete bodies={prepared.compiler.program.bodyCount}; guest_execution=not_run; safety=not_evaluated"

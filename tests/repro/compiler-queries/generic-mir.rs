@@ -1,4 +1,5 @@
 #![no_std]
+#![feature(unboxed_closures, fn_traits)]
 #![allow(non_snake_case)]
 #[inline(never)] pub fn GenericMirIdentity<T: Copy>(value: T) -> T { value }
 #[inline(never)] pub fn GenericMirPair<T: Copy, U: Copy>(left: T, right: U) -> (T, U) { (left, right) }
@@ -9,3 +10,8 @@
 #[inline(never)] pub fn ResidualMirConstant<T: Copy>(value: T) -> (T, u32) { (value, 5) }
 #[inline(never)] pub fn ResidualMirDrop<T>(value: T) { core::mem::drop(value) }
 #[inline(never)] pub fn ResidualMirFnPtr<T: Copy>(value: fn(T) -> T) -> fn(T) -> T { value }
+#[inline(never)] pub fn GenericMirChoice<T: Copy>(condition: bool, left: T, right: T) -> T {
+    if condition { left } else { right }
+}
+
+#[inline(never)] pub extern "rust-call" fn GenericMirRustCall<T: Copy>(args: (T,)) -> (T,) { args }

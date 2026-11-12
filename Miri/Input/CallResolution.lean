@@ -45,13 +45,9 @@ def functionAbi (runtime : RuntimeMetadata) (source : FunctionAbi) : Result (FnA
       | none => throw "FnAbi argument construction is absent"
     | some material => do
       let normalize (id : Nat) : Result Nat := do
-        let node ← (runtime.node id).mapError toString
-        if ← StructuralNormalization.identityReady runtime.source.types
-            (runtime.source.types.size + 1) id then return id
-        let some facts := node.compilerFacts | throw "signature normalization material absent"
-        let some (_, some normalized) := facts.typeQueries.find? (·.1 == "normalized")
-          | throw "signature normalization query remains unresolved"
-        pure normalized
+        StructuralNormalization.normalize
+          (fun ty => (runtime.node ty).mapError toString) runtime.source
+          (runtime.source.types.size + id + 1) id
       let tupleFields (id : Nat) :=
         match (runtime.node id).toOption with
         | some node => match node.shape with | .tuple fields => some fields | _ => none
@@ -143,13 +139,10 @@ private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgr
     | .ok _ => bodies := bodies.push ⟨sourceId,sourceId,index⟩
   let mut entries := #[]
   let mut indirect := #[]
-  for (body,index) in program.bundle.bodies.toList.zipIdx do
-    for (block,blockIndex) in body.body.basicBlocks.toList.zipIdx do
-      let function ← match block.terminator.kind with
-        | .Call function .. | .TailCall function .. => pure (some function)
-        | _ => pure none
-      if let some function := function then
-        let sourceResolution ← require (body.input.callEvidence[blockIndex]?).join "missing compiler call resolution"
+  for index in [:program.bodyCount] do
+    let metadata ← program.bodyMetadata index
+    for (blockIndex,function) in metadata.callSites do
+        let sourceResolution ← require (metadata.callEvidence[blockIndex]?).join "missing compiler call resolution"
         if sourceResolution.kind == .indirect then
           let result : Result (TypeId × FunctionAbiId) := do
             let typeId ← require sourceResolution.functionType "indirect function type is missing"
@@ -230,7 +223,7 @@ def loadedBodyOfInstance (prepared : Prepared) (fnInstance : CallInstance) : Res
   let source ← require prepared.program.input.instances[candidate.sourceInstanceId]?
     "canonical source instance record is missing"
   unless source.kind == .instanceMir do throw "compiler body is not a substituted executable instance"
-  let body ← require prepared.program.bundle.bodies[candidate.bodyIndex]? "instance body index is absent"
+  let body ← prepared.program.resolveBody candidate.bodyIndex
   unless body.input.instanceId == candidate.sourceInstanceId do throw "instance/body identity mismatch"
   unless body.obligations.isEmpty do throw "lowered instance body has unresolved obligations"
   return ⟨.ofCanonicalIndex candidate.bodyIndex, body.body⟩

@@ -59,9 +59,7 @@ def scopeHooks (prepared : CompilerScopes.Prepared) (base : VirtualCalls.Compile
     VirtualCalls.CompilerHooks S C :=
   { base with
     sourceScope := fun identity _ body scope => do
-      let actual ← lift (match prepared.program.bundle.bodies[identity.index]? with
-        | some value => .ok value
-        | none => .error "canonical frame body identity is absent")
+      let actual ← lift (prepared.program.resolveBody identity.index)
       unless actual.body == body do throw (.invalidProgram "frame body identity/content mismatch")
       lift (CompilerScopes.sourceScope prepared identity.index scope)
     requiresCallerLocation := fun fnInstance => do

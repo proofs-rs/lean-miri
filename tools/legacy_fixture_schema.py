@@ -12,10 +12,28 @@ import copy
 
 
 def adapt_legacy_fixture(document):
-    if document.get("schema_version") not in (11, 12):
+    bodies = document.get("bodies")
+    old_13_body_encoding = (document.get("schema_version") == 13
+                           and "mir_templates" not in document
+                           and isinstance(bodies, list) and bool(bodies)
+                           and all(isinstance(body, dict) and "body_kind" not in body for body in bodies))
+    if document.get("schema_version") not in (11, 12) and not old_13_body_encoding:
         return copy.deepcopy(document)
     result = copy.deepcopy(document)
     result["schema_version"] = 13
+    # Historical executable bodies remain material. No source template or trait
+    # proof is reconstructed from a monomorphic execution fixture.
+    result.setdefault("mir_templates", [])
+    result.setdefault("compiler_trait_program", {"traits": [], "constructor_scope": {"kind": "all_source_impls"}})
+    for body in result.get("bodies", []):
+        if isinstance(body, dict):
+            body.setdefault("body_kind", "material")
+    for node in result.get("types", []):
+        shape = node.get("shape", {}) if isinstance(node, dict) else {}
+        if shape.get("kind") == "alias":
+            # Hypothetical old-component representative, never recovered alias
+            # rigidity and never used by genuine compiler correspondence tests.
+            shape.setdefault("rigid", False)
     if "compiler_coroutine_coverage" not in result and isinstance(result.get("bodies"), list):
         result["compiler_coroutine_coverage"] = {
             "body_coroutines": [False] * len(result["bodies"]),

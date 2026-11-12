@@ -51,13 +51,14 @@ pub(super) fn declaration<'tcx>(
         defaultness.has_value()
     } else {
         source.insert("kind".into(), json!("free"));
+        source.insert("is_checked".into(), json!(tcx.type_alias_is_checked(definition)));
         true
     };
     source.insert("has_value".into(), json!(has_value));
     // The RHS is shared through Definition.generic_template, captured once by
     // generic_material::definition_template under the same has_value guard.
     // Do not duplicate instantiated or source RHS trees in per-alias records.
-    let clauses = tcx.predicates_of(definition).predicates.iter()
+    let clauses = tcx.clauses_of(definition).clauses.iter()
         .map(|(clause, _span)| encode_clause(*clause))
         .collect::<Result<Vec<_>, _>>()?;
     source.insert("own_predicates".into(), json!(clauses));

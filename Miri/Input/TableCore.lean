@@ -1004,12 +1004,13 @@ private structure parseTypeShapeFields where
   «upvar_count» : Option (Nat) := none
   «elements» : Option (Array (Nat)) := none
   «alias_payload» : Option (Nat × AliasTypeKind) := none
+  rigid : Option Bool := none
   «adt_kind» : Option (String) := none
   «representation» : Option (ReprOptions) := none
   «variants» : Option (Array (AdtVariant)) := none
 
 private def parseTypeShape (path : String := "$parseTypeShape") : Parser (TypeShape) := do
-  let s ← object (parseTypeShapeFields.mk none none none none none none none none none none none none none none none none none none none none none none none none none none) fun s key => do
+  let s ← object ({} : parseTypeShapeFields) fun s key => do
     match key with
     | "kind" => return { s with «kind» := some (← string) }
     | "signed_kind" => return { s with «signed_kind» := some (← string) }
@@ -1034,11 +1035,13 @@ private def parseTypeShape (path : String := "$parseTypeShape") : Parser (TypeSh
     | "upvar_count" => return { s with «upvar_count» := some (← natural) }
     | "elements" => return { s with «elements» := some (← array (natural)) }
     | "alias_payload" => return { s with «alias_payload» := some (← aliasPayload) }
+    | "rigid" => return { s with rigid := some (← boolean) }
     | "adt_kind" => return { s with «adt_kind» := some (← string) }
     | "representation" => return { s with «representation» := some (← parseReprOptions) }
     | "variants" => return { s with «variants» := some (← array (adtVariant)) }
     | _ => skipValue; pure s
   let variant ← required s.«kind» "kind"
+  if s.rigid.isSome && variant != "alias" then fail "rigidity material on a non-alias type"
   if s.«signed_kind».isSome && !(variant == "int") then fail s!"incompatible field `signed_kind` for variant `{variant}`"
   if s.«unsigned_kind».isSome && !(variant == "uint") then fail s!"incompatible field `unsigned_kind` for variant `{variant}`"
   if s.«float_kind».isSome && !(variant == "float") then fail s!"incompatible field `float_kind` for variant `{variant}`"
@@ -1103,7 +1106,7 @@ private def parseTypeShape (path : String := "$parseTypeShape") : Parser (TypeSh
     let payload := (← required s.«alias_payload» "alias_payload")
     let definition := (← required s.«def_id» "def_id")
     unless payload.1 == definition do fail s!"{path}: alias definition mismatch"
-    return .alias payload.2 definition (← required s.«generic_args» "generic_args")
+    return .alias payload.2 (← required s.rigid "rigid") definition (← required s.«generic_args» "generic_args")
   | tag => fail s!"{path}: unrecognized type shape `{tag}`"
 
 private structure parseTypeNodeFields where

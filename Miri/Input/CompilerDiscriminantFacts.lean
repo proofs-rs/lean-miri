@@ -10,6 +10,8 @@ namespace Miri.Input.CompilerDiscriminantFacts
 open Lean Miri.ABI Miri.Interpreter
 private def data (context : CompilerFacts.Context) (id : TypeId) : Except String DiscriminantInfo := do
   let source ← context.runtime.node id |>.mapError toString
+  if id >= context.runtime.source.types.size then
+    if let some result := ConstructedDiscriminants.info source.shape then return result
   let some facts := source.compilerFacts | throw "missing discriminant compiler facts"
   unless facts.typingEnvironment == "fully_monomorphized" do
     throw "discriminant compiler environment mismatch"

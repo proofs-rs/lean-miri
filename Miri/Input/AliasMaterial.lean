@@ -13,7 +13,7 @@ inductive Container where
   | traitImpl (traitItem : DefinitionIdentity)
   deriving Repr, DecidableEq
 inductive Kind where
-  | free
+  | free (isChecked : Bool)
   | associated (container : Container) (parent : DefinitionIdentity)
       (parentParameterCount : Nat) (isFinal : Bool)
   deriving Repr, DecidableEq

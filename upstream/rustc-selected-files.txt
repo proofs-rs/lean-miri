@@ -46,6 +46,8 @@ rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_const_eval/src/util
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_data_structures/src/sorted_map.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_hir/src/def.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_hir/src/hir.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_hir_analysis/src/collect/clauses_of.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_middle/src/middle/codegen_fn_attrs.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_middle/src/mir/basic_blocks.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_middle/src/mir/consts.rs
@@ -120,6 +122,7 @@ rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_middle/src/ty/typet
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_middle/src/ty/util.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_middle/src/ty/visit.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_middle/src/ty/vtable.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_target/src/asm/mod.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_target/src/callconv/aarch64.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_target/src/callconv/amdgpu.rs
@@ -538,6 +541,7 @@ rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_target/src/spec/tar
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_target/src/spec/tuple.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_trait_selection/src/traits/normalize.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_trait_selection/src/traits/project.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_traits/src/normalize_erasing_regions.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_ty_utils/src/abi.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_ty_utils/src/layout.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_ty_utils/src/needs_drop.rs

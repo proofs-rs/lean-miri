@@ -30,7 +30,10 @@ def main (args : List String) : IO Unit := do
   let decoded ← must (decodeFixture text)
   let legacyText ← IO.FS.readFile "examples/empty_function/input.json"
   let _ ← must (decodeFixture legacyText)
-  let calls := decoded.document.bodies.flatMap (·.callEvidence.filterMap id)
+  let mut calls := #[]
+  for index in [:decoded.document.bodies.size] do
+    let body ← must (SourceMir.metadata decoded.document index)
+    calls := calls ++ body.callEvidence.filterMap id
   check (calls.any (·.abi == .llvmIntrinsic)) "fixture has no LLVM call evidence"
   for version in #[(8 : Nat), 9, 10] do
     rejects (decodeFixture (set raw "schema_version" (toJson version)).compress)
@@ -82,9 +85,17 @@ def main (args : List String) : IO Unit := do
   let originalProgram ← must (lowerProgram decoded.document)
   let originalCalls ← must (CallResolution.prepareWithRuntime runtime originalProgram)
   check (originalCalls.entries.all (·.outcome.isOk)) "valid LLVM direct preparation failed"
-  let wrongItemDocument := {decoded.document with bodies := decoded.document.bodies.map fun body =>
-    {body with callEvidence := body.callEvidence.map fun evidence => evidence.map fun call =>
-      if call.kind == .llvmIntrinsic then {call with instanceId := some item} else call}}
+  let mut wrongItemBodies := decoded.document.bodies
+  for index in [:decoded.document.bodies.size] do
+    let metadata ← must (SourceMir.metadata decoded.document index)
+    if metadata.callEvidence.any (fun row => row.any (·.kind == .llvmIntrinsic)) then
+      let body ← must (SourceMir.resolveBody decoded.document index)
+      let some seed := decoded.document.bodies[index]? | throw (IO.userError "LLVM body seed disappeared")
+      let body := {body with callEvidence := body.callEvidence.map fun evidence => evidence.map fun call =>
+        if call.kind == .llvmIntrinsic then {call with instanceId := some item} else call}
+      let material : Body := {toBodyCore := body, promotedBodies := seed.promotedBodies}
+      wrongItemBodies := wrongItemBodies.set! index (.material material)
+  let wrongItemDocument := {decoded.document with bodies := wrongItemBodies}
   let wrongItemProgram ← must (lowerProgram wrongItemDocument)
   let wrongItemCalls ← must (CallResolution.prepareWithRuntime runtime wrongItemProgram)
   check (wrongItemCalls.entries.any fun entry => match entry.outcome with

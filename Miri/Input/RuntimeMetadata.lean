@@ -319,7 +319,7 @@ tail; sized/extern/str/slice decisions do not inspect physical layout results. -
 def pointerMetadataType (metadata : RuntimeMetadata) (id : TypeId) : Result TypeId := do
   let lookup := fun ty => (metadata.node ty).mapError toString
   let fuel := id + metadata.source.types.size + 1
-  let normalize := StructuralNormalization.normalize lookup metadata.source.types fuel
+  let normalize := StructuralNormalization.normalize lookup metadata.source fuel
   let choice ← (StructuralPointerMetadata.query (fun ty => return (← lookup ty).shape)
     normalize fuel id).mapError (fun e => .unsupported s!"pointer metadata: {e}")
   let result ← match choice with

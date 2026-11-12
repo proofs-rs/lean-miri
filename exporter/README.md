@@ -30,7 +30,9 @@ and terminal-check examples are in [connected tests](../tests/connected/README.m
 `--root` specifies an exact nongeneric local def-path. Without it, closed local
 bodies are roots. Generic definitions enter the graph through their actual
 monomorphic instances; unsubstituted templates are not exported as executable
-bodies. Selecting a generic definition directly is an error.
+bodies. Covered generic instances instead reference shared typed source templates
+that Lean instantiates when the body is requested. Selecting a generic definition
+directly is an error.
 
 Every requested semantic query must succeed. Missing MIR, failed normalization,
 layout or ABI queries, unavailable initializers and incomplete producer evidence
@@ -71,6 +73,7 @@ separate tables with document-local, dense, zero-based IDs:
 | `type_constants` | Compiler `Const`, including its type and constructor |
 | `predicates` | Full bound existential predicate; comparison rank is separate |
 | `bodies` | Instance, promoted index and source/query mode |
+| `mir_templates` | Generic definition and promoted index, within the supported source-body category |
 
 ABI rows store `return` and each `arguments` entry as an index into
 `abi_arguments`. The explicit `Initial` passing-mode recipe reconstructs
@@ -196,7 +199,7 @@ of those values. Type compiler facts use the owning `type_id` and optional
 This preserves a distinct region-erased query input when one exists.
 Backtrace `source_position.byte_position` is the body-specific collapsed position;
 it can differ from the global span's position for an inlined body.
-The reader accepts only schema 13. Explicit array offsets retain their count,
+The reader accepts only the current producer schema. Explicit array offsets retain their count,
 width and per-field equality checks. The producer stores array offsets as an
 exact stride/count formula, and represents a resolved LLVM intrinsic call with
 `kind: "llvm_intrinsic"`, `function_type` and `instance_id`, without `fn_abi`.
@@ -212,15 +215,25 @@ versions must be regenerated with the current producer.
 
 Generic arguments remain in their owning records, with type and type-constant
 references into the corresponding tables. `body_roots` records root metadata and
-body IDs. Each concrete instance and promoted index identifies one executable
-body, with generic arguments substituted, types normalized and constants
-evaluated before export. Roots and instance records reference that same body.
-Generic templates are not executable inputs; normalization or constant-evaluation
-failures abort export, including unused required constants. Diagnostic spans and
-scopes remain attached to the resolved instructions.
-This is a breaking wire-format change: earlier source/normalization-body
-snapshots must be regenerated. The reader requires each body's concrete
-`instance_id` and evaluated constants; it does not support the earlier shape.
+body IDs. Each body row has an explicit `body_kind`. A `material` row contains
+the compiler's instantiated executable MIR and evaluated constants. A
+`copy_template` row contains only `template_id`, `instance_id`, generic arguments
+and promoted-body references. Its shared `mir_templates` source contains a typed
+instruction skeleton, local type-expression slots and diagnostic source metadata.
+It contains no monomorphic fallback body. Metadata preparation inspects these
+seeds without instantiating executable MIR; `SourceMir.resolveBody` substitutes
+arguments, erases free regions in its supported binder-free domain and resolves
+exact type identities on demand. Missing source capabilities fail that demand.
+The pure resolver keeps no body-answer cache across executions.
+
+The source-template category currently covers ordinary generic item bodies with
+unprojected local copy/move operations, tuple/array aggregates, storage markers,
+goto/switch/return/unreachable terminators and supported binder-free source type
+constructors. Calls, drops, constant operands, compiler shims and unsupported
+actual argument constructors retain the explicit `material` category. Category
+selection happens before instantiation; failure after selecting a template is
+an error. Diagnostic spans and scopes remain attached to resolved instructions.
+This is a breaking wire-format change: earlier snapshots must be regenerated.
 [Decoder](../Miri/Input/Decoder.lean) validates typed-table and query contracts.
 Successful query results are serialized directly: booleans remain booleans,
 optional results use JSON null, and structured results carry their semantic
@@ -229,9 +242,10 @@ required fields, semantic tags and references before returning an execution inpu
 An ID is reserved before its definition is traversed, so mutually recursive
 references do not require a table ordering. Export fails if a reserved definition
 is unfinished. Lean indexes source ranges, decodes compiler pools, and constructs interpreter
-MIR directly while reading bodies. It retains typed query records, checks
-reference bounds and keeps IDs through execution; it does not retain a generic
-JSON tree or an intermediate MIR value tree. Runtime lookups return checked errors.
+MIR directly while reading material bodies, and retains typed source templates
+for lazy body resolution. It retains typed query records, checks reference bounds
+and keeps IDs through execution; it does not retain a generic JSON tree.
+Runtime lookups return checked errors.
 Malformed table definitions are reported before downstream scope validation.
 
 Covariance collection has two phases. During source-demand closure, explicit

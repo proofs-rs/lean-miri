@@ -68,7 +68,7 @@ def readTerm : Nat → Json → Except String GenericSubstitution.Term
       return .binder (← variables.mapM readVariable) (← readTerm fuel (← value.getObjVal? "value"))
     | other => throw s!"unknown generic material node {other}"
 
-private def validateParameters (parameters : Array ArgSort) : Nat → GenericSubstitution.Term → Except String Unit
+def validateParameters (parameters : Array ArgSort) : Nat → GenericSubstitution.Term → Except String Unit
   | 0, _ => .error "generic template parameter validation exhausted"
   | fuel + 1, term => do
     match term with

@@ -16,7 +16,7 @@ private def shape : Nat → Except String TypeShape
   | 4 => .ok (.rawPointer 1 .Mut)
   | 5 => .ok (.tuple #[0, 1])
   | 6 => .ok (.dynamicTraitObject #[] none .Erased)
-  | 7 => .ok (.alias .projection 0 #[])
+  | 7 => .ok (.alias .projection false 0 #[])
   | 8 => .ok (.unsafeBinder 0 #[])
   | 9 => .ok (.patternType 2 .notNull)
   | 10 => .ok (adt .structKind #[])

@@ -100,6 +100,7 @@ pub(super) enum Shape {
         elements: Vec<u64>,
     },
     Alias {
+        rigid: bool,
         alias_payload: Alias,
         def_id: u64,
         generic_args: Vec<GenericArgument>,

@@ -155,7 +155,7 @@ def resolveCurrent (p : Prepared) (definition : MIR.DefId) (args : Array MIR.Gen
   let frame ← MachineHooks.currentFrame
   let .mir location := frame.location | throw (.invalidProgram "callee resolution outside a MIR source location")
   let body ← lift do
-    let some body := p.program.bundle.bodies[frame.bodyIdentity.index]? | throw "missing canonical source body"
+    let body ← p.program.resolveBody frame.bodyIdentity.index
     unless body.body == frame.body do throw "callee resolution canonical body/content mismatch"
     let loaded ← CallResolution.loadedBodyOfInstance p.lifecycle.calls.calls frame.functionInstance
     unless loaded.identity == frame.bodyIdentity do throw "callee resolution current full-instance/body mismatch"

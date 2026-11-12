@@ -18,7 +18,7 @@ def main (args : List String) : IO Unit := do
   check (!coverage.coroutines.isEmpty) "fixture has no coroutine body"
   let prepared ← must (CompilerProviders.prepare (← must (lowerProgram input.document)))
   for row in coverage.coroutines do
-    let some body := input.document.bodies[row.ownerBody]? | throw (IO.userError "missing owner")
+    let body ← must (SourceMir.metadata input.document row.ownerBody)
     let callee := body.instanceId
     check (!(input.document.queries.nativeSignatures.any (·.instanceId == callee)))
       "a coroutine acquired a fabricated native callback signature"

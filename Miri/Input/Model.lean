@@ -1,3 +1,4 @@
+import Miri.Input.TraitSelection.Material
 import Miri.Input.Model.Types
 import Miri.Input.Model.Catalogs
 import Miri.Input.Model.Coroutine
@@ -5,6 +6,7 @@ import Miri.Input.Model.Coroutine
 namespace Miri.Input
 
 structure ImportDocument where
+  traitProgram : TraitSelection.Program := {traits := #[]}
   compilerPredicates : Array CompilerPredicateEvidence := #[]
   /-- Version tag for source physical ArgAbi layouts in FnAbi evidence. -/
   compilerAbiLayoutSchema : Option String := none
@@ -24,7 +26,8 @@ structure ImportDocument where
   selectedScope : Option SelectedScope
   functionAbis : Array FunctionAbi
   bodyRoots : Array BodyRoot := #[]
-  bodies : Array Body
+  mirTemplates : Array CopyTemplateSource := #[]
+  bodies : Array BodySeed
   coroutineCoverage : Option CoroutineCoverage := none
   queries : Catalog.Queries
   producerSettings : Catalog.ProducerSettings
