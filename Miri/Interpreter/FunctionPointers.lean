@@ -3,6 +3,7 @@ import Miri.Interpreter.Unwind
 import Miri.Interpreter.PointerMachine
 import Miri.Interpreter.Backtrace
 import Miri.Interpreter.Cast
+import Miri.Interpreter.MemoryErrors
 
 /-! Source memory.rs fn_ptr/get_fn_alloc/get_ptr_fn and machine.rs salt/root
 provenance. Function identities are full instances, never numeric addresses. -/
@@ -123,8 +124,9 @@ integer happens to equal a function address. Wildcards use actual exposed lookup
 def allocation (h : Hooks K User Other) (pointer : Pointer (Option Provenance)) :
     M K User (AllocId × Size) := do
   let .ok pointer := pointer.intoPointerOrAddr
-    | throw (.undefinedBehavior "DanglingIntPointer")
-  let some result ← h.ptrGetAlloc pointer | throw (.undefinedBehavior "DanglingIntPointer")
+    | throw (MemoryErrors.access (.danglingIntegerPointer pointer.offset.bytes 0 (.dereferenceable "pointer")))
+  let some result ← h.ptrGetAlloc pointer
+    | throw (MemoryErrors.access (.danglingIntegerPointer pointer.offset.bytes 0 (.dereferenceable "pointer")))
   return result
 
 def globalFunction (h : Hooks K User Other) (id : AllocId) : M K User (Option CallInstance) := do
