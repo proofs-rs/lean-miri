@@ -640,6 +640,22 @@ reborrow checks (one genuine and three malformed-query controls), and the five
 LLVM controls pass with the new driver. These are finite local comparisons;
 Miri/exporter semantics, fixed inputs, proof assumptions and budgets are unchanged.
 
+Function-pointer allocation failures now retain the actual integer address,
+size zero and dereferenceable-pointer context through the existing typed
+memory-error converter, matching pinned `ptr_get_alloc_id`. Both missing
+provenance and failed exposed-address lookup retain the original UB branch,
+resolution order and partial state. Seven kernel-checked component lemmas cover
+arbitrary addresses/provenance and whole-state equality for failed/successful
+lookups, propagated errors and function-pointer success/offset/nonfunction
+classification. Null, nonzero and successful backtrace capture/resolve controls
+pass fresh strict comparisons; bare `DanglingIntPointer` is not a null alias.
+The common build, 74,541-declaration axiom audit, 119 Python checks and structural
+regressions and all 47 runtime checks pass. The fresh 268-module empty-function
+proof closure is pending.
+Three older backtrace API/invalid-flags UI cases remain excluded by the existing
+stdout-snapshot/expected-Unsupported profile guards and are not successful
+comparisons. Fixed inputs, proof assumptions and execution budgets are unchanged.
+
 ### Performance and optimization assurance
 
 Remaining performance work includes residual equality and validation work,

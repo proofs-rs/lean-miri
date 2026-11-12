@@ -1,3 +1,4 @@
+import MiriTests.FunctionPointers.AllocationDiagnostics
 import MiriTests.ABI.ABIPrimitives
 import MiriTests.ABI.RuntimeLayout
 import MiriTests.Cast.Typed
