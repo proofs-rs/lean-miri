@@ -29,7 +29,7 @@ pub(super) struct Coverage {
     pub drop_async: Option<usize>,
     pub drop_proxy_async: Option<usize>,
 }
-#[derive(Clone, Copy, serde::Serialize)]
+#[derive(Clone, Copy, Debug, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum Role { Sync, Async, ProxyAsync }
 #[derive(serde::Serialize)]
@@ -137,7 +137,13 @@ pub(super) fn capture<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>
             return export_failure("coroutine coverage", "auxiliary drop body retains coroutine info");
         }
         let source_kind = instance_kind_json(context, tcx, value.source.instance)?;
-        let definition = mir_body_json(tcx, value, instance, context, "coroutine_auxiliary")?;
+        let definition = mir_body_json(tcx, value, instance, context, MirBodyRole::CoroutineAuxiliary).map_err(|error| {
+            if error.contains("const_evaluation_error") {
+                format!("{error}; coroutine_auxiliary role={role:?} owner={} source={} phase={:?}",
+                    format!("{instance:?}").chars().take(1200).collect::<String>(),
+                    format!("{:?}", value.source.instance).chars().take(1200).collect::<String>(), value.phase)
+            } else { error }
+        })?;
         let id = context.coroutine_coverage.auxiliary_bodies.len();
         context.coroutine_coverage.auxiliary_bodies.push(Auxiliary { owner_body: owner, role, source_kind, body: definition });
         Ok(Some(id))

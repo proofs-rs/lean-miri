@@ -142,6 +142,14 @@ struct BodyRoot {
     thread_local_static: bool,
     promoted_bodies: Vec<PromotedRoot>,
 }
+#[derive(Clone, Copy, Debug)]
+enum MirBodyRole { RuntimeExecutable, CoroutineAuxiliary }
+impl MirBodyRole {
+    fn label(self) -> &'static str {
+        match self { Self::RuntimeExecutable => "resolved_body", Self::CoroutineAuxiliary => "coroutine_auxiliary" }
+    }
+}
+
 /// Owned, closed export graph. Pending reference types cannot inhabit this snapshot.
 #[derive(serde::Serialize)]
 struct ExportDocument {
@@ -269,6 +277,7 @@ struct ExportContext<'tcx> {
     vtable_diagnostics: vtable_diagnostics::Trace<'tcx>,
     bodies: Pool<BodyKey<'tcx>, pool_body::Body>,
     coroutine_coverage: coroutine_coverage::Catalog,
+    constant_eval_role: Option<MirBodyRole>,
     definitions: Pool<rustc_hir::def_id::DefId, pool_values::Definition>,
     type_constants: Pool<ty::Const<'tcx>, pool_values::TypeConstant>,
     files: pool_values::Files,
@@ -2472,7 +2481,13 @@ fn resolved_mir_body_json<'tcx>(
         return export_failure("resolved MIR", "body retains unresolved generic parameters");
     }
     coroutine_coverage::capture(tcx, context, &body, instance, id as u64)?;
-    let definition = mir_body_json(tcx, &body, instance, context, "resolved_body")?;
+    let definition = mir_body_json(tcx, &body, instance, context, MirBodyRole::RuntimeExecutable).map_err(|error| {
+        if error.contains("const_evaluation_error") {
+            format!("{error}; resolved_body owner={} source={} phase={:?}",
+                format!("{instance:?}").chars().take(1200).collect::<String>(),
+                format!("{:?}", body.source.instance).chars().take(1200).collect::<String>(), body.phase)
+        } else { error }
+    })?;
     context.bodies.define(id, definition);
     Ok(id as u64)
 }
@@ -2515,14 +2530,15 @@ fn mir_body_json<'tcx>(
     body: &rustc_middle::mir::Body<'tcx>,
     instance: ty::Instance<'tcx>,
     context: &mut ExportContext<'tcx>,
-    role: &'static str,
+    role: MirBodyRole,
 ) -> Result<pool_body::Body, String> {
+    let previous_constant_role = context.constant_eval_role.replace(role);
     let previous = if context.vtable_diagnostics.enabled() {
         context
             .vtable_diagnostics
             .body
             .replace(vtable_diagnostics::BodyOrigin {
-                role,
+                role: role.label(),
                 def_id: body.source.def_id(),
                 promoted: body.source.promoted.map(|p| p.as_u32()),
                 phase: format!("{:?}", body.phase),
@@ -2585,6 +2601,7 @@ fn mir_body_json<'tcx>(
             .collect::<Result<Vec<_>, String>>()?,
     };
     context.vtable_diagnostics.body = previous;
+    context.constant_eval_role = previous_constant_role;
     Ok::<_, String>(result)
 }
 
@@ -5214,7 +5231,21 @@ fn fn_abi_json<'tcx>(
 fn const_operand_json<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,body:&rustc_middle::mir::Body<'tcx>,operand:&rustc_middle::mir::ConstOperand<'tcx>)->Result<pool_constant::Operand,String>{
     use pool_constant::{Constant,Annotation,Operand};
     let ty=operand.const_.ty();
-    let evaluated=operand.const_.eval(tcx,body.typing_env(tcx),operand.span).map_err(|e|format!("main::const_operand_json: const_evaluation_error; {e:?}"))?;
+    if operand.const_.has_non_region_param() || operand.const_.has_escaping_bound_vars()
+        || operand.const_.has_infer() || operand.const_.has_placeholders() || operand.const_.references_error() {
+        return export_failure("MIR constant", "constant requires concrete type and const arguments");
+    }
+    // Match Miri's actual ECX (eval.rs:373; eval_context.rs:598) for executable
+    // resolved MIR. Raw compiler-owned auxiliary snapshots retain their own
+    // context and phase: they are not silently treated as canonical shims.
+    let env = match context.constant_eval_role {
+        Some(MirBodyRole::RuntimeExecutable) if matches!(body.phase, rustc_middle::mir::MirPhase::Runtime(_)) =>
+            ty::TypingEnv::fully_monomorphized(),
+        Some(MirBodyRole::CoroutineAuxiliary) => body.typing_env(tcx),
+        _ => return export_failure("MIR constant", "missing or invalid serialization role/phase"),
+    };
+    let evaluated=operand.const_.eval(tcx,env,operand.span).map_err(|e|format!("main::const_operand_json: const_evaluation_error; {e:?}; const={} env={:?}",
+        format!("{:?}", operand.const_).chars().take(1600).collect::<String>(), env))?;
     let value=const_value_json(context,tcx,ty,evaluated)?;
     Ok(Operand {ty:type_json(context,tcx,ty)?,user_type_annotation:operand.user_ty.map(|a|Annotation::AnnotationRef {index:a.as_u32()}),constant:Constant::EvaluatedConst {value},span:span_json(context,tcx,operand.span)})
 }

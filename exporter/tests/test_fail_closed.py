@@ -316,14 +316,60 @@ class FailClosedExportTests(unittest.TestCase):
         self.assertIn("foreign thread-local initializer is unavailable", result.stderr)
         self.assertFalse(self.output.exists())
 
-    def test_unimplemented_coroutine_metadata_aborts_without_output(self):
-        result = self.export("coroutine", "root")
+    def test_coroutine_metadata_retains_exact_coverage_and_runtime_abi(self):
+        document = self.accepted("coroutine", "root")
+        self.assertEqual(document["schema_version"], 12)
+        coverage = document["compiler_coroutine_coverage"]
+        self.assertTrue(coverage["coroutines"])
+        self.assertEqual(len(coverage["body_coroutines"]), len(document["bodies"]))
+        owners = {document["bodies"][row["owner_body"]]["instance_id"] for row in coverage["coroutines"]}
+        self.assertTrue(owners <= {row["instance_id"] for row in document["compiler_instance_abis"]})
+        self.assertFalse(owners & {row["instance_id"] for row in document["compiler_native_signature_queries"]})
+        for row in coverage["coroutines"]:
+            self.assertIsNone(row["yield_type"])
+            self.assertIsNone(row["resume_type"])
+            self.assertGreaterEqual(len(row["layout"]["variant_fields"]), 3)
+            for key, role in (("drop_sync", "sync"), ("drop_async", "async"), ("drop_proxy_async", "proxy_async")):
+                if row[key] is not None:
+                    auxiliary = coverage["auxiliary_bodies"][row[key]]
+                    self.assertEqual(auxiliary["owner_body"], row["owner_body"])
+                    self.assertEqual(auxiliary["role"], role)
+                    self.assertEqual(auxiliary["source_kind"]["def_id"], auxiliary["body"]["source_def_id"])
+
+    def test_concrete_coroutine_layout_constant_uses_runtime_ecx(self):
+        document = self.accepted("coroutine_box_layout", "root")
+        self.assertTrue(document["compiler_coroutine_coverage"]["coroutines"])
+        self.assertTrue(any(row["query"] == "instantiate_bound_regions_with_erased(closure_args.sig())"
+                            for row in document["compiler_native_signature_queries"]),
+                        "normal closure FnSig facts must survive the coroutine domain refinement")
+        boxes = [row for row in document["instances"] if row.get("def_path", "").endswith("::new") and "boxed" in row.get("def_path", "")]
+        self.assertTrue(boxes, "control must instantiate Box::new<Coroutine>")
+        layout_types = {row["type_id"] for row in document["types"]
+                        if row.get("shape", {}).get("kind") == "adt"
+                        and row["shape"].get("def_path") == "std::alloc::Layout"}
+        evaluated_layouts = []
+        def inspect(value):
+            if isinstance(value, dict):
+                constant = value.get("constant")
+                if type(value.get("type")) is int and value["type"] in layout_types and isinstance(constant, dict) and constant.get("kind") == "evaluated_const":
+                    evaluated_layouts.append(constant["value"])
+                for child in value.values():
+                    inspect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    inspect(child)
+        for instance in boxes:
+            body = document["bodies"][instance["body"]]
+            self.assertEqual(body["phase"]["kind"], "runtime")
+            inspect(body)
+        self.assertTrue(evaluated_layouts, "Box::new must retain its compiler-evaluated Layout operand")
+
+    def test_unknown_generic_runtime_constant_aborts_without_output(self):
+        result = self.export("generic_runtime_constant", "root")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("lean-miri-mir-exporter:", result.stderr)
-        self.assertIn("MIR: coroutine layout serialization is not implemented", result.stderr)
-        self.assertNotIn("TooGeneric", result.stderr)
-        self.assertNotIn("reported compilation errors", result.stderr)
         self.assertFalse(self.output.exists())
+        self.assertIn("generic", result.stderr.lower())
+        self.assertNotIn("panicked at", result.stderr)
 
     def test_concrete_async_return_abi_exports_before_polling_coroutine(self):
         document = self.accepted("runtime_async_abi", "root")
