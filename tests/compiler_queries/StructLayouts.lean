@@ -14,6 +14,7 @@ private structure Fixture where
   types : Array TypeNode
   layouts : Array Layout
   definitions : Array DefinitionId
+  constants : Array Miri.MIR.TypeConst
 
 /-- A focused source-derived adapter. It reads target/type/layout material
 only, ignoring unrelated FnAbi/catalog sections without inventing their seeds.
@@ -48,11 +49,13 @@ private def readFixture (path : String) (version : Nat) : IO Fixture := do
     must (JsonReader.run DecoderValues.parseLayout value.compress)
   let definitions ← (← must ((← must (raw.getObjVal? "definitions")).getArr?)).mapM fun row =>
     must (JsonReader.run (DecoderValues.parseDefinitionId "$.definitions") row.compress)
-  return ⟨target,types,layouts,definitions⟩
+  let constants ← (← must ((← must (raw.getObjVal? "type_constants")).getArr?)).mapM fun row =>
+    must (JsonReader.run (TypeConstCodec.decode "oracle.constant") row.compress)
+  return ⟨target,types,layouts,definitions,constants⟩
 
 private def Fixture.lookup (fixture : Fixture) (id : Nat) : IO Miri.ABI.LayoutData := do
   let some node := fixture.types.find? (·.id == id) | throw (IO.userError "type absent")
-  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions).mapError toString)
+  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions fixture.constants).mapError toString)
 
 def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected pinned struct baseline export")

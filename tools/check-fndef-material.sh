@@ -32,5 +32,5 @@ if lake env lean --run tools/CompareFnDefMaterial.lean "$OUT/input.json" "$OUT/w
   printf 'mutated physical FnDef oracle unexpectedly passed\n' >&2
   exit 1
 fi
-rg -q 'generic type constructor absent from material and lazy arena' "$OUT/wrong-definition.log"
+rg -q 'generic type constructor absent from source material' "$OUT/wrong-definition.log"
 printf 'FnDef wrong-physical-definition oracle rejected as expected\n'

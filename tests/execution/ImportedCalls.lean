@@ -27,6 +27,7 @@ private def findKind (m : Metadata) (kind : Input.TypeShapeKind) := (m.findKind 
 private def fieldType (m : Metadata) (parent : TyAndLayout MIR.TyId) (index : Nat) := (m.field parent index).mapError metadataError
 
 private structure Machine where
+  types : Input.TypeArena.World
   returnMemory : ReturnMemory.State
   returnPlace : MemoryOperandPlace AllocId
   localsSupply : LocalsIdentitySupply := ⟨0⟩
@@ -36,6 +37,11 @@ private abbrev State := StepState AllocId (TyAndLayout MIR.TyId) Nat Machine
 private abbrev Exec := RvalueM State
 private def lift (value : Except StepError A) : Exec A :=
   match value with | .ok value => pure value | .error e => throw e
+private def worldQuery (action : Input.TypeArena.WorldM A) : Exec A := do
+  let state ← get
+  let (value,world) ← lift ((action.run state.machine.types).mapError StepError.invalidProgram)
+  modify fun current => {current with machine.types := world}
+  pure value
 private def event (name : String) : Exec Unit :=
   modify fun s => { s with machine.trace := s.machine.trace ++ [name] }
 private def current : Exec (Frame AllocId (TyAndLayout MIR.TyId) Nat) := do
@@ -282,8 +288,8 @@ private def prepare (document : Input.ImportDocument) : Except StepError Program
       localRefs := localRefs.push ⟨source.spanId⟩
     localSpans := localSpans.push localRefs
   return ⟨lowered, metadata, spans, bodySpans, localSpans, signature.abi, resolution⟩
-private def bodyAt (p : Program) (index : Nat) : Except StepError Input.LoweredBody :=
-  (p.lowered.resolveBody index).mapError StepError.invalidProgram
+private def bodyAt (p : Program) (index : Nat) : Exec Input.LoweredBody :=
+  worldQuery (p.lowered.resolveBody index)
 private def instanceNode (p : Program) (id : CallInstance) : Except StepError Input.InstanceNode := do
   let source ← p.lowered.input.instances[id]?.toExcept (.invalidProgram "missing canonical instance")
   unless source.id == id do throw (.invalidProgram "canonical instance position mismatch")
@@ -291,12 +297,11 @@ private def instanceNode (p : Program) (id : CallInstance) : Except StepError In
 private def currentResolution (p : Program) : Exec Input.CallResolutionEvidence := do
   let frame ← current
   if frame.extra != frame.bodyIdentity.index then throw (.invalidProgram "frame source body key mismatch")
-  let body ← lift (bodyAt p frame.bodyIdentity.index)
+  let body ← bodyAt p frame.bodyIdentity.index
+  unless body.body == frame.body do throw (.invalidProgram "frame source body content mismatch")
   let .mir location := frame.location | block "call resolution outside MIR"
-  let source ← lift (body.input.callEvidence[location.block]?.toExcept (.invalidProgram "source block index"))
-  let result ← lift (source.toExcept (.invalidProgram "missing typed call resolution"))
-  if result.kind != .direct then block "unresolved compiler callee"
-  return result
+  pure (← worldQuery (Input.CallResolution.atSite p.resolution
+    ⟨frame.bodyIdentity.index,location.block⟩)).source
 private def instanceFromResolution (p : Program) (resolution : Input.CallResolutionEvidence) : Except StepError (CallInstance × Input.InstanceId) := do
   let id ← resolution.instanceId.toExcept (.invalidProgram "missing resolved canonical instance ID")
   let source ← instanceNode p id
@@ -308,21 +313,19 @@ private def instanceFromResolution (p : Program) (resolution : Input.CallResolut
   pure (id,id)
 private def currentInstance (p : Program) : Exec (CallInstance × Input.InstanceId) := do
   lift (instanceFromResolution p (← currentResolution p))
-private def resolvedBody (p : Program) (instanceId : Input.InstanceId) : Except StepError (Nat × Input.LoweredBody) := do
-  let (_,index) ← (p.lowered.instances.find? (·.1 == instanceId)).toExcept (.unsupported "fnInstance body unavailable")
+private def resolvedBody (p : Program) (instanceId : Input.InstanceId) : Exec (Nat × Input.LoweredBody) := do
+  let (_,index) ← lift ((p.lowered.instances.find? (·.1 == instanceId)).toExcept (.unsupported "fnInstance body unavailable"))
   return (index, ← bodyAt p index)
-private def resolutionFor (p : Program) (fnInstance : CallInstance) : Except StepError (Input.CallResolutionEvidence × Input.InstanceId) := do
-  for bodyIndex in List.range p.lowered.bodyCount do
-    let body ← (p.lowered.bodyMetadata bodyIndex).mapError StepError.invalidProgram
-    for (index, _) in body.callSites do
-      let source ← body.callEvidence[index]?.toExcept (.invalidProgram "source block index")
-      let resolution ← source.toExcept (.invalidProgram "missing typed call resolution")
-      let (candidate,id) ← instanceFromResolution p resolution
-      if candidate == fnInstance then return (resolution,id)
-  throw (.unsupported "instance has no exported resolution query")
+private def abiIdFor (p : Program) (fnInstance : CallInstance) : Except StepError Nat := do
+  let mut found := none
+  for record in p.lowered.input.queries.instanceAbis do
+    if record.instanceId == fnInstance && record.extraArgumentTypes.isEmpty then
+      if let some previous := found then
+        unless previous == record.abiId do throw (.invalidProgram "conflicting complete-instance ABI records")
+      found := some record.abiId
+  found.toExcept (.unsupported "missing complete-instance empty-extra ABI query")
 private def getAbi (p : Program) (fnInstance : CallInstance) : Exec FnABI := do
-  let (resolution,_) ← lift (resolutionFor p fnInstance)
-  let .normal abiId := resolution.abi | throw (.unsupported "LLVM intrinsic has no ordinary compiler FnABI")
+  let abiId ← lift (abiIdFor p fnInstance)
   let source ← lift (p.lowered.input.functionAbis[abiId]?.toExcept (.unsupported "compiler FnABI"))
   if source.callingConvention.kind != .rust || source.cVariadic then
     block "unsupported calling convention or varargs"
@@ -363,7 +366,7 @@ private def lifecycle (p : Program) (index : Nat) : StackLifecycleHooks AllocId 
     ⟨{ machine with trace := machine.trace ++ ["initFrame"] }, .ok { frame with extra := index }⟩
   requiredConstants := fun stack machine =>
     let result : Except StackError Unit := do
-      let _ ← (bodyAt p index).mapError (fun e => .machineHookFailure (reprStr e))
+      let _ ← (p.lowered.bodyMetadata index).mapError (fun e => .machineHookFailure (reprStr e))
       pure ()
     ⟨stack,machine,result⟩
   afterPush := fun stack machine => ⟨stack,{ machine with trace := machine.trace ++ ["afterPush"] },.ok ()⟩
@@ -373,7 +376,7 @@ private def lifecycle (p : Program) (index : Nat) : StackLifecycleHooks AllocId 
   deallocateVararg := fun machine _ => ⟨machine,.error (.deallocationFailure "vararg deallocation")⟩ }
 private def pushRaw (p : Program) (fnInstance : CallInstance) (body : LoadedBody) (destination : RuntimeStackPlace AllocId)
     (continuation : ReturnContinuation) : Exec Unit := do
-  let expected ← lift ((Input.CallResolution.loadedBodyOfInstance p.resolution fnInstance).mapError StepError.invalidProgram)
+  let expected ← worldQuery (Input.CallResolution.loadedBodyOfInstance p.resolution fnInstance)
   if expected != body then throw (.invalidProgram "pushed canonical body key does not match compiler instance")
   let index := body.identity.index
   let span ← lift (p.bodySpans[index]?.toExcept (.invalidProgram "preamble source span"))
@@ -481,8 +484,7 @@ private def callHooks (p : Program) : CallHooks AllocId State Unit Nat Unit ABI.
     pure source.id
   requiresCallerLocation := fun fnInstance => do
     let abi ← getAbi p fnInstance
-    let (_,id) ← lift (resolutionFor p fnInstance)
-    let (_,body) ← lift (resolvedBody p id)
+    let (_,body) ← resolvedBody p fnInstance
     if abi.args.size != body.body.argumentCount then block "implicit caller location or unsupported ABI args"
     pure false
   callerLocation := block "implicit caller location"
@@ -504,8 +506,7 @@ private def callHooks (p : Program) : CallHooks AllocId State Unit Nat Unit ABI.
     pure (a.layout.ty == b.layout.ty && a.layout.layout == b.layout.layout &&
       a.layout.layout.eqAbi b.layout.layout && a.mode == b.mode)
   checkTargetFeatures := fun _ fnInstance => do
-    let (_,id) ← lift (resolutionFor p fnInstance)
-    let node ← lift ((p.lowered.input.instances.find? (·.id == id)).toExcept (.unsupported "source fnInstance"))
+    let node ← lift ((p.lowered.input.instances.find? (·.id == fnInstance)).toExcept (.unsupported "source fnInstance"))
     let definition ← lift (node.definitionId.toExcept (.unsupported "fnInstance definition"))
     let sourceDefinition ← lift (p.lowered.input.definitions[definition]?.toExcept (.invalidProgram "definition ID missing"))
     let identity ← lift (instanceNode p fnInstance)
@@ -554,7 +555,7 @@ private def callHooks (p : Program) : CallHooks AllocId State Unit Nat Unit ABI.
   callIntrinsic := fun _ _ _ _ _ _ => block "intrinsic"
   callLlvmIntrinsic := fun _ _ _ _ _ => block "LLVM intrinsic"
   findMirOrEvalFn := fun _ fnInstance _ _ _ _ _ => do
-    let body ← lift ((Input.CallResolution.loadedBodyOfInstance p.resolution fnInstance).mapError StepError.invalidProgram)
+    let body ← worldQuery (Input.CallResolution.loadedBodyOfInstance p.resolution fnInstance)
     return some (body,fnInstance)
   resolveVirtual := fun _ _ _ _ _ _ => block "virtual resolution"
   isDynamic := fun _ => block "drop dynamic query"
@@ -564,7 +565,8 @@ private def callHooks (p : Program) : CallHooks AllocId State Unit Nat Unit ABI.
   fakeUnitReturn := fun _ => block "unit return" }
 
 private def controlHooks (p : Program) : TerminatorHooks AllocId LocalLayout Nat Machine Unit (OpTy AllocId) (RvalueImmTy AllocId) := {
-  bodySpan := fun frame => (p.bodySpans[frame.extra]?).toExcept (.invalidProgram "body source span")
+  bodySpan := fun frame state =>
+    (state,(p.bodySpans[frame.extra]?).toExcept (.invalidProgram "body source span"))
   returnOperand := fun _ state => runRvalue (evalPlaceOp p.metadata ⟨0,#[]⟩ none) state
   popFrame := fun _ state => runRvalue (popRaw p) state
   copyReturn := fun _ op dest state => runRvalue (copyToRuntime p.metadata op dest) state
@@ -607,9 +609,13 @@ private def initialState (p : Program) (root : Nat) (argument : Nat) : Except St
   let identity ← instanceNode p fnInstance
   unless identity.instanceKind == .Item definition && identity.genericArgs.isEmpty do
     throw (.invalidProgram "root instance identity mismatch")
-  let loaded ← (Input.CallResolution.loadedBodyOfInstance p.resolution fnInstance).mapError StepError.invalidProgram
+  -- One fresh universe per execution. Every subsequent call/body query uses
+  -- Machine.types and retains the returned state, including new identities.
+  let initialWorld ← (Input.TypeArena.World.ofDocument p.lowered.input).mapError StepError.invalidProgram
+  let (loaded,world) ← ((Input.CallResolution.loadedBodyOfInstance p.resolution fnInstance).run initialWorld)
+    |>.mapError StepError.invalidProgram
   let index := loaded.identity.index
-  let body ← bodyAt p index
+  let (body,world) ← ((p.lowered.resolveBody index).run world).mapError StepError.invalidProgram
   if (← body.ownDefinitionId.mapError StepError.invalidProgram) != definition then
     throw (.invalidProgram "canonical root instance definition mismatch")
   if body.body.argumentCount != 1 then throw (.unsupported "root argument count")
@@ -618,7 +624,7 @@ private def initialState (p : Program) (root : Nat) (argument : Nat) : Except St
   let retLayout ← lookup p.metadata retTy
   let argLayout ← lookup p.metadata argTy
   let (memory,output) ← ReturnMemory.create p.metadata.target.base retLayout
-  let machine : Machine := { returnMemory := memory, returnPlace := output }
+  let machine : Machine := { types := world, returnMemory := memory, returnPlace := output }
   let span ← p.bodySpans[index]?.toExcept (.invalidProgram "root source span")
   let pushed := Stack.empty.pushStackFrameRaw machine (lifecycle p index) loaded fnInstance (.stop true) (.memory ⟨output.mplace,retLayout⟩) span
   let _ ← pushed.outcome.mapError StepError.stack

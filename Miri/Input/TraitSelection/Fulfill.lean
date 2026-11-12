@@ -1,5 +1,6 @@
 import Miri.Input.TraitSelection.Match
 import Miri.Input.TraitSelection.Substitution
+import Miri.Input.TraitSelection.RelevantImpl
 
 /-! Selection and nested-obligation fulfillment over complete raw impl catalogs.
 Pinned rustc candidate assembly/confirmation first relates an impl head, then
@@ -94,6 +95,10 @@ private def solveCore (program : Program) (hooks : Hooks) (environment : Environ
     unless source.parameters.size == goal.traitRef.arguments.size do throw "trait query argument arity mismatch"
     for (parameter, argument) in source.parameters.zip goal.traitRef.arguments do
       unless parameter == argument.sort do throw "trait query argument sort mismatch"
+    let some self := goal.traitRef.arguments[0]? | throw "trait query Self absent"
+    if let .node .type "dynamic" _ _ := self then
+      unless source.builtin == some .sized || source.builtin == some .metaSized do
+        throw "dynamic trait goals require object candidate assembly"
     if active.any (fun prior => decide (prior = goal)) then
       return .ambiguous "trait cycle requires coinductive universe-aware evaluation"
     let active := active.push goal
@@ -114,6 +119,15 @@ private def solveCore (program : Program) (hooks : Hooks) (environment : Environ
     let mut candidates : Array Evidence := #[]
     let mut opposite := false
     let mut ambiguity : Option String := none
+    let mut disqualifyAuto := false
+    if source.isAuto then
+      if source.builtin == some .unpin then
+        if let .definition .type "coroutine" _ _ := self then
+          throw "coroutine Unpin requires source movability candidate assembly"
+      for implementation in source.implementations do
+        if ← liftM (RelevantImpl.possible (fuel + 1) implementation goal.traitRef) then
+          disqualifyAuto := true
+          break
     for implementation in source.implementations do
       let some bindings ← liftM (Match.head fuel implementation goal.traitRef environment.eraseRegions)
         | continue
@@ -132,7 +146,7 @@ private def solveCore (program : Program) (hooks : Hooks) (environment : Environ
           candidates := candidates.push (.implementation ⟨implementation.definition, substitution⟩ proofs)
         else opposite := true
       | .proven _ => throw "trait conjunction evidence invariant violated"
-    if goal.polarity == .positive && (source.isAuto || source.langItem.isSome) then
+    if goal.polarity == .positive && (source.isAuto || source.langItem.isSome) && !disqualifyAuto then
       if let some predicates ← liftM (hooks.builtin fuel active source goal) then
         let mut results := #[]
         for predicate in predicates do
@@ -179,6 +193,20 @@ private def fulfillCore (program : Program) (hooks : Hooks) (environment : Envir
       if !environment.assumptions.isEmpty then
         return .ambiguous "environment equality closure is required"
       return .noSolution
+    | .constHasType value expected =>
+      let value ← liftM (hooks.normalize fuel active value)
+      match value with
+      | .node .constant "value" _ (.cons actual (.cons _ .nil)) =>
+        unless actual.sort == .type do throw "evaluated constant source type is not a type"
+        let actual ← liftM (hooks.normalize fuel active actual)
+        let expected ← liftM (hooks.normalize fuel active expected)
+        liftM (Match.requireGround fuel actual)
+        liftM (Match.requireGround fuel expected)
+        if actual = expected then return .proven (.equality actual)
+        if !environment.assumptions.isEmpty then
+          return .ambiguous "environment const-type equality closure is required"
+        return .noSolution
+      | _ => liftM (hooks.external fuel active environment clause.predicate)
     | .regionOutlives longer shorter =>
       if environment.eraseRegions then return .proven .regionErasure
       if longer = shorter then return .proven (.equality longer)

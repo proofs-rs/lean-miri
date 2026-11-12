@@ -1,4 +1,6 @@
-import Miri.Input.CompilerFacts
+import Miri.Input.CompilerWorldFacts
+import Miri.Input.RuntimeArrayQueries
+import Miri.Input.WorldTypeName
 import Miri.Interpreter.Cast
 
 /-! Compiler shape/query adapters for Cast and ValidityVisitor. Definition and
@@ -137,6 +139,137 @@ def metadataTail (prepared : Prepared) (id : TypeId) : Result ValidityVisitor.Me
   | .slice | .str => pure .sliceOrStr
   | .foreign => pure .foreign
   | _ => throw "metadata validation requested for a sized or unsupported tail"
+
+private def worldLift [Monad m] [MonadExceptOf String m] (value : Except String A) : m A :=
+  match value with | .ok result => pure result | .error error => throw error
+private def worldConstructor (id : TypeId) : TypeArena.WorldM TypeArena.Constructor := do
+  let world ← get
+  match ← worldLift (world.lookupType id) with
+  | .constructed value => pure value
+  | .material source =>
+    let some value ← worldLift (world.materialKey source) | throw "cast source constructor unavailable"
+    pure value
+
+/-- Pattern constants are checked in the current type/constant universe, never
+against a freshly rebuilt compiler table. The returned syntax pool is explicit. -/
+def lowerPatternInWorld : Nat → Array PatternIdentity → CompilerPattern →
+    TypeArena.WorldM (Nat × Array PatternIdentity)
+  | 0, _, _ => throw "world pattern lowering exhausted"
+  | fuel + 1, nodes, pattern => do
+    let (value,nodes) ← match pattern with
+      | .range first last => do
+        let world ← get
+        let _ ← worldLift (world.lookupConstant first)
+        let _ ← worldLift (world.lookupConstant last)
+        pure (PatternIdentity.range first last,nodes)
+      | .notNull => pure (PatternIdentity.notNull,nodes)
+      | .or children => do
+        let mut nodes := nodes
+        let mut ids := #[]
+        for child in children do
+          let (id,next) ← lowerPatternInWorld fuel nodes child
+          nodes := next; ids := ids.push id
+        pure (PatternIdentity.or ids,nodes)
+    match nodes.toList.idxOf? value with
+    | some id => pure (id,nodes)
+    | none => pure (nodes.size,nodes.push value)
+
+def castTypeInfoInWorld (prepared : Prepared) (id : TypeId) : TypeArena.WorldM CastTypeInfo := do
+  let world ← get
+  let view ← worldLift (world.lookupType id)
+  let kind ← worldLift (world.shapeKind id)
+  if let .material source := view then
+    match source.shape with
+    | .functionPointer .. => return .fnPointer
+    | .dynamicTraitObject ids .. => return .dynamic ids
+    | .patternType base pattern =>
+      let (patternId,nodes) ← lowerPatternInWorld (max 256 world.typeCount) prepared.patterns pattern
+      unless nodes.size == prepared.patterns.size do
+        throw "new runtime pattern syntax requires an execution-owned pattern pool"
+      return .pattern base patternId
+    | _ => pure ()
+  match kind with
+  | .bool => return .boolean | .char => return .character
+  | _ => pure ()
+  match ← worldConstructor id with
+  | .integer _ integer => pure (.integer integer)
+  | .float floating =>
+    let format ← match floating with
+      | .f16 => pure FloatFormat.binary16 | .f32 => pure .binary32
+      | .f64 => pure .binary64 | .f128 => pure .binary128
+      | _ => throw "unsupported world float format"
+    pure (.floating format)
+  | .rawPointer child _ => pure (.rawPointer child)
+  | .reference child .. => pure (.reference child)
+  | .adt identity _ => pure (.adt (← worldLift (world.definitionRef identity)))
+  | .tuple children => pure (.tuple children)
+  | .array child _ => pure (.array child (← RuntimeMetadata.arrayCountInWorld prepared.context.runtime id))
+  | .slice child => pure (.slice child)
+  | .functionDefinition identity args _ => pure (.fnDefinition (← worldLift (world.definitionRef identity)) args)
+  | .closure identity args =>
+    unless args.size >= 3 do throw "world closure synthetic arguments absent"
+    let some (MIR.GenericArg.Type captures) := args.back? | throw "world closure capture tuple absent"
+    let captures ← match ← worldLift (world.lookupType captures) with
+      | .material source => match source.shape with
+        | .tuple fields => pure fields.size | _ => throw "material closure captures are not a tuple"
+      | .constructed (.tuple fields) => pure fields.size
+      | _ => throw "constructed closure captures are not a tuple"
+    pure (.closure (← worldLift (world.definitionRef identity)) args captures)
+  | _ => throw "world constructor is outside the cast operand domain"
+
+def validityKindInWorld (prepared : Prepared) (id : TypeId) : TypeArena.WorldM ValidityVisitor.TypeKind := do
+  let context := prepared.context
+  let world ← get
+  let view ← worldLift (world.lookupType id)
+  let kind ← worldLift (world.shapeKind id)
+  match kind with
+  | .bool => return .boolean | .char => return .character | .int | .uint => return .integer
+  | .float => return .float | .functionPointer => return .functionPointer | .never => return .never
+  | .foreign => return .foreign | .functionDefinition => return .functionDefinition | .str => return .string
+  | .rawPointer =>
+    let .rawPointer child _ ← worldConstructor id | throw "raw pointer world kind mismatch"
+    return .rawPointer child (← CompilerFacts.booleanInWorld context child "is_sized")
+  | .reference =>
+    let .reference _ mutable _ ← worldConstructor id | throw "reference world kind mismatch"
+    return .reference (mutable == .Mut)
+  | .array =>
+    let .array child _ ← worldConstructor id | throw "array world kind mismatch"
+    return .sequence child
+  | .slice =>
+    let .slice child ← worldConstructor id | throw "slice world kind mismatch"
+    return .sequence child
+  | .dynamicTraitObject =>
+    let .material source := view | throw "constructed dynamic predicates are not available"
+    let .dynamicTraitObject predicates .. := source.shape | throw "dynamic world kind mismatch"
+    return .dynamic predicates
+  | .patternType =>
+    let .material source := view | throw "constructed pattern source is not available"
+    let .patternType child _ := source.shape | throw "pattern world kind mismatch"
+    return .pattern child
+  | .unsafeBinder => return .unsafeBinder
+  | .adt | .tuple | .closure | .coroutine | .coroutineClosure =>
+    if ← CompilerFacts.booleanInWorld context id "is_box" then return .box
+    let enumKind ← if kind == .adt then do
+      pure ((← RuntimeMetadata.adtDeclarationInWorld context.runtime id).kind == .enumKind)
+      else pure false
+    return .aggregate (← CompilerFacts.booleanInWorld context id "is_like_maybe_dangling")
+      (← CompilerFacts.booleanInWorld context id "is_unsafe_cell") enumKind
+  | _ => throw "world validity requires a normalized supported type"
+
+def metadataTailInWorld (prepared : Prepared) (id : TypeId) : TypeArena.WorldM ValidityVisitor.MetadataTail := do
+  let tail ← CompilerFacts.requiredTypeInWorld prepared.context id "metadata_tail"
+  let world ← get
+  match ← worldLift (world.lookupType tail) with
+  | .material source => match source.shape with
+    | .dynamicTraitObject ids .. => pure (.dynamic ids)
+    | .str | .slice _ => pure .sliceOrStr | .foreign _ => pure .foreign
+    | _ => throw "metadata validity tail is sized or unsupported"
+  | .constructed value => match value with
+    | .str | .slice _ => pure .sliceOrStr | .foreign _ => pure .foreign
+    | _ => throw "constructed metadata validity tail is sized or unsupported"
+
+def typeNameInWorld (prepared : Prepared) (id : TypeId) : TypeArena.WorldM String := do
+  WorldTypeName.query prepared.context.runtime (max 256 (← get).typeCount) id
 
 private def lift (value : Result A) : EStateM StepError S A :=
   match value with | .ok value => pure value | .error error => throw (.invalidProgram error)

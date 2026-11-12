@@ -172,9 +172,10 @@ def validateFunctionAbi (abi : FunctionAbi) (path : String) : Except String Unit
     validateAbiPassMode arg.mode s!"{path}.arguments[{index}].mode"
 
 def validateLayout (layout : Layout) (path : String) : Except String Unit := do
-  if layout.tupleType.isSome || layout.unionType.isSome || layout.structType.isSome then
-    unless (layout.tupleType.isNone || layout.unionType.isNone) &&
-        (layout.structType.isNone || (layout.tupleType.isNone && layout.unionType.isNone)) &&
+  let constructors := #[layout.tupleType.isSome, layout.unionType.isSome,
+    layout.structType.isSome, layout.sequenceType.isSome, layout.pointerType.isSome, layout.pointerDataType.isSome, layout.enumTagType.isSome].filter (fun enabled => enabled)
+  if !constructors.isEmpty then
+    unless constructors.size == 1 &&
         layout.primitiveRecipe.isNone && layout.sizeBytes.isNone &&
         layout.abiAlignBytes.isNone && layout.unadjustedAbiAlignBytes.isNone &&
         layout.fields.isNone && layout.variantsLayout.isNone &&

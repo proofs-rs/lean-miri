@@ -41,12 +41,22 @@ structure ProducerSettings where
   qualification : String
   deriving Repr, DecidableEq
 
+/-- Raw compiler/session print configuration, not a per-type formatting result. -/
+structure PrintOptions where
+  typeLengthLimit : Nat
+  verboseInternals : Bool
+  identifyRegions : Bool
+  trimDiagnosticPaths : Bool := false
+  trimmedDefPaths : Bool := false
+  deriving Repr, DecidableEq
+
 structure Session where
   internalTargetFeatures : Array String
   isLikeWasm : Bool
   targetArch : String
   rootSpan : SpanId
   runtimeChecks : Array (Miri.MIR.RuntimeChecks × Bool)
+  printOptions : Option PrintOptions := none
   deriving Repr, DecidableEq
 
 structure IntrinsicMetadata where

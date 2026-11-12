@@ -85,11 +85,15 @@ def main (args : List String) : IO Unit := do
   let originalProgram ← must (lowerProgram decoded.document)
   let originalCalls ← must (CallResolution.prepareWithRuntime runtime originalProgram)
   check (originalCalls.entries.all (·.outcome.isOk)) "valid LLVM direct preparation failed"
+  let mut typeArena ← must (TypeArena.World.ofDocument decoded.document)
   let mut wrongItemBodies := decoded.document.bodies
   for index in [:decoded.document.bodies.size] do
     let metadata ← must (SourceMir.metadata decoded.document index)
     if metadata.callEvidence.any (fun row => row.any (·.kind == .llvmIntrinsic)) then
-      let body ← must (SourceMir.resolveBody decoded.document index)
+      let (body,nextArena) ← must ((SourceMir.resolveBody decoded.document index).run typeArena)
+      typeArena := nextArena
+      unless typeArena.constructedTypes.isEmpty && typeArena.constructedConstants.isEmpty do
+        throw (IO.userError "LLVM material mutation cannot discard execution-owned IDs")
       let some seed := decoded.document.bodies[index]? | throw (IO.userError "LLVM body seed disappeared")
       let body := {body with callEvidence := body.callEvidence.map fun evidence => evidence.map fun call =>
         if call.kind == .llvmIntrinsic then {call with instanceId := some item} else call}

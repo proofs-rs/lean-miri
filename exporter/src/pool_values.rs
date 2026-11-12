@@ -16,6 +16,8 @@ pub(crate) struct Definition {
     pub alias_declaration: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adt_declaration: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_path: Option<serde_json::Value>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct AdtDropMaterial {

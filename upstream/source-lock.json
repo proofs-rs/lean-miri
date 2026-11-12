@@ -13,9 +13,9 @@
     "procedure": "upstream/fetch-sources.sh",
     "procedure_sha256": "a8ced1c1a19c47193465862bbe2486e25dcf91c544df5b62f9b2265ea12fb7d8",
     "rustc_selected_archive_paths": {
-      "count": 557,
+      "count": 564,
       "path": "upstream/rustc-selected-files.txt",
-      "sha256": "9613cc0ec8a65267ef64dede2677d49b5435a74ea704c36d50cfa4e29025ac3a"
+      "sha256": "a6ca9cde465adf56e6b2c310796ac9379d7968069ec98e835f4019a067f15edf"
     }
   },
   "coverage_expected_rust_modules": {
@@ -47,7 +47,11 @@
     "upstream/rustc-source/compiler/rustc_middle/src/middle/codegen_fn_attrs.rs": 1,
     "upstream/rustc-source/compiler/rustc_middle/src/mir": 23,
     "upstream/rustc-source/compiler/rustc_middle/src/ty": 50,
+    "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs": 1,
     "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs": 1,
+    "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs": 1,
+    "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/search_graph.rs": 1,
+    "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/trait_goals.rs": 1,
     "upstream/rustc-source/compiler/rustc_target/src/asm/mod.rs": 1,
     "upstream/rustc-source/compiler/rustc_target/src/callconv": 26,
     "upstream/rustc-source/compiler/rustc_target/src/spec": 389,
@@ -60,13 +64,16 @@
     "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/binder.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/const_kind.rs": 1,
+    "upstream/rustc-source/compiler/rustc_type_ir/src/fast_reject.rs": 1,
+    "upstream/rustc-source/compiler/rustc_type_ir/src/flags.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/fold.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/inherent.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/region_kind.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/sty/consts.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/sty/mod.rs": 1,
-    "upstream/rustc-source/compiler/rustc_type_ir/src/ty_kind.rs": 1
+    "upstream/rustc-source/compiler/rustc_type_ir/src/ty_kind.rs": 1,
+    "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs": 1
   },
   "coverage_roots": [
     "upstream/crates/aes-0.9.3/src",
@@ -97,7 +104,11 @@
     "upstream/rustc-source/compiler/rustc_middle/src/middle/codegen_fn_attrs.rs",
     "upstream/rustc-source/compiler/rustc_middle/src/mir",
     "upstream/rustc-source/compiler/rustc_middle/src/ty",
+    "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
     "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs",
+    "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+    "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/search_graph.rs",
+    "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/trait_goals.rs",
     "upstream/rustc-source/compiler/rustc_target/src/asm/mod.rs",
     "upstream/rustc-source/compiler/rustc_target/src/callconv",
     "upstream/rustc-source/compiler/rustc_target/src/spec",
@@ -110,13 +121,16 @@
     "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/binder.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/const_kind.rs",
+    "upstream/rustc-source/compiler/rustc_type_ir/src/fast_reject.rs",
+    "upstream/rustc-source/compiler/rustc_type_ir/src/flags.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/fold.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/inherent.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/region_kind.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/sty/consts.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/sty/mod.rs",
-    "upstream/rustc-source/compiler/rustc_type_ir/src/ty_kind.rs"
+    "upstream/rustc-source/compiler/rustc_type_ir/src/ty_kind.rs",
+    "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs"
   ],
   "external_dependencies": {
     "cargo_packages": [
@@ -2307,9 +2321,33 @@
     },
     {
       "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "git_blob": "f1d85166653ff856c3cf81ea9256fea23d33b2bf"
+    },
+    {
+      "component": "rustc",
       "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs",
       "sha256": "462d2890e543275c8b37e55f31059a6fa0a1d31e5ede1032095ccf1976c8f15f",
       "git_blob": "a7e02f07661c60fe0a1b177566a1a0810fb6f26f"
+    },
+    {
+      "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+      "sha256": "091259a1d3bb3fdd742de11504aee9576ba0cf14403bc9d9e866d86e82f587d8",
+      "git_blob": "3b372876f574b82ebecaaad523bad6792682999f"
+    },
+    {
+      "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/search_graph.rs",
+      "sha256": "87ac523a95395e699aeec1ed4fa22cdb6045045df6769d1e166cdabaed5bbe8c",
+      "git_blob": "ecd175d694d7d982a0d7173e59dd1764254ef2e3"
+    },
+    {
+      "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/trait_goals.rs",
+      "sha256": "f6270af136a89973f0fce02531e38d0e6d06d7f396fc3d4b5e6946207ede0543",
+      "git_blob": "1d3008da399dcaf06177dcca17accd5ef7a7619d"
     },
     {
       "component": "rustc_target_asm",
@@ -4863,6 +4901,18 @@
     },
     {
       "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/fast_reject.rs",
+      "sha256": "bc0974832c3b25eba0b1dcef13d5ae9a31f010ef6785a8565db4ffef100990d6",
+      "git_blob": "398fddcd4a141de3de07a340f0f456377c91a531"
+    },
+    {
+      "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/flags.rs",
+      "sha256": "bdd39afc6d833f88a6da68586db030cf6a30712fa9578275c31e6f974dde48f3",
+      "git_blob": "4af4f1479ec82e842f1a0f9274c9a99910d657f0"
+    },
+    {
+      "component": "rustc",
       "path": "upstream/rustc-source/compiler/rustc_type_ir/src/fold.rs",
       "sha256": "09a768ac1be507ca603279527963f1348522e69b40117b061754e10db0303ad9",
       "git_blob": "a1b749b62a5f095909a626e88ea9f1f106f2c1d5"
@@ -4902,6 +4952,12 @@
       "git_blob": "35f8897afd4c46a57726736fe4f5e4d6bacbeade",
       "path": "upstream/rustc-source/compiler/rustc_type_ir/src/ty_kind.rs",
       "sha256": "6ca068ac98641176e99ba3357effbb1b79d5274680e597cf80a520b5423911e1"
+    },
+    {
+      "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs",
+      "sha256": "7105f9eef232ace6a3f16e7c9869581580b338e4d744eb4d8bbf5a05b125b79e",
+      "git_blob": "396c8c17a29520c3e93454da3f277da13b1a0924"
     }
   ],
   "pins": {

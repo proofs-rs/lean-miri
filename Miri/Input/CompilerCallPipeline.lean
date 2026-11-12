@@ -1,5 +1,6 @@
 import Miri.Input.CompilerVTableRuntime
 import Miri.Input.CallResolution
+import Miri.Input.RuntimeArrayQueries
 
 /-! Shared preparation and actual compiler-leaf wiring for virtual/drop/caller
 calls. All adapters retain one final compilation-local identity table; none
@@ -49,11 +50,12 @@ private def lift (result : Result A) : EStateM StepError S A :=
   | .ok value => pure value
   | .error error => throw (.unsupported s!"compiler call pipeline: {error}")
 
-def compilerHooks (prepared : Prepared) (base : VirtualCalls.CompilerHooks S C) :
+def compilerHooks (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
+    (base : VirtualCalls.CompilerHooks S C) :
     VirtualCalls.CompilerHooks S C :=
-  CompilerVirtualFacts.scopeHooks prepared.scopes
-    (CompilerRuntimeQueries.hooks prepared.runtime
-      (CompilerVirtualFacts.compilerHooks prepared.symbols.facts base))
+  CompilerVirtualFacts.scopeHooks prepared.scopes types
+    (CompilerRuntimeQueries.hooks prepared.runtime types
+      (CompilerVirtualFacts.compilerHooks prepared.symbols.facts types base))
 
 def vtableHooks (prepared : Prepared) (image : AllocationImage.Imported)
     (memory : S → MemoryState P E K) (base : VTableHooks P S C CallInstance (FnAbi MIR.TyId)) :
@@ -63,21 +65,23 @@ def vtableHooks (prepared : Prepared) (image : AllocationImage.Imported)
 
 /-- Runtime reads/projections/pointer alignment remain actual machine actions.
 Every replaced compiler/symbolic leaf uses the exact imported query evidence. -/
-def runtimeHooks (prepared : Prepared) (image : AllocationImage.Imported)
+def runtimeHooks (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
+    (image : AllocationImage.Imported)
     (memory : S → MemoryState P Extra K) (base : VirtualCalls.Hooks P S C E) :
     VirtualCalls.Hooks P S C E :=
   { base with
-    compiler := compilerHooks prepared base.compiler
+    compiler := compilerHooks prepared types base.compiler
     vtable := vtableHooks prepared image memory base.vtable }
 
 /-- Source load_mir returns the exact body-table key with executable MIR. Missing
 or ambiguous instance bodies, failed substitutions and templates are errors. -/
-def loadMir (prepared : Prepared) (fnInstance : CallInstance) : EStateM StepError S LoadedBody :=
-  lift (CallResolution.loadedBodyOfInstance prepared.calls fnInstance)
+def loadMir (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
+    (fnInstance : CallInstance) : EStateM StepError S LoadedBody :=
+  RuntimeArrayQueries.perform types (CallResolution.loadedBodyOfInstance prepared.calls fnInstance)
 
-def bindFunctionCalls (prepared : Prepared)
+def bindFunctionCalls (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
     (base : FunctionCalls.Hooks P S C E Other Extern FnABI ArgABI) :
     FunctionCalls.Hooks P S C E Other Extern FnABI ArgABI :=
-  { base with loadMir := fun _ fnInstance => loadMir prepared fnInstance }
+  { base with loadMir := fun _ fnInstance => loadMir prepared types fnInstance }
 
 end Miri.Input.CompilerCallPipeline

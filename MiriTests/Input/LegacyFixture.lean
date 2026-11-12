@@ -85,8 +85,6 @@ def adaptLegacyFixture (source : String) : Except String String := do
       !bodies.isEmpty && bodies.all (fun body => !(body.getObjVal? "body_kind").isOk))
   unless version == some 11 || version == some 12 || oldBodyEncoding do return source
   let mut value := raw.setObjVal! "schema_version" (toJson (13 : Nat))
-  if !(raw.getObjVal? "instance_abis").isOk then
-    value := value.setObjVal! "instance_abis" (toJson (#[] : Array Json))
   if !(raw.getObjVal? "mir_templates").isOk then
     value := value.setObjVal! "mir_templates" (toJson (#[] : Array Json))
   if !(raw.getObjVal? "compiler_trait_program").isOk then

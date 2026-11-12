@@ -51,3 +51,14 @@ example : Match.complete #[.region] false #[none] =
     .error "impl parameter remains unconstrained" := by decide +kernel
 example : Match.complete #[.region] true #[none] =
     .ok #[.atom .region "erased" ""] := by decide +kernel
+
+private def item (argument : Term) (variables : Array BoundVariable := #[]) : Term :=
+  .definition .type "function_definition" ⟨1,44⟩ (.ofArray #[
+    .binder variables (.node .aggregate "arguments" "" (.ofArray #[argument]))])
+example : Match.head 50 (declaration #[.type] #[item (.parameter .type 0)])
+    ⟨traitId, #[item u32]⟩ = .ok (some #[some u32]) := by decide +kernel
+example : Match.head 50 (declaration #[] #[item u32])
+    ⟨traitId, #[item u64]⟩ = .ok none := by decide +kernel
+example : Match.head 50 (declaration #[] #[item u32])
+    ⟨traitId, #[item u32 #[.region .anonymous]]⟩ =
+    .error "trait matching requires a ground query" := by decide +kernel

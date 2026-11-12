@@ -1,5 +1,5 @@
 import Miri.Input.Model
-import Miri.Input.GenericInstantiation
+import Miri.Input.GenericInstantiationWorld
 
 /-! Immutable body seeds. Metadata inspection never instantiates a template.
 Executable MIR is produced only by resolveBody, with errors propagated and no
@@ -96,25 +96,28 @@ def metadata (document : ImportDocument) (index : Nat) : Except String Metadata 
       localSources := source.localSources
       sourceScopes := source.sourceScopes
       backtraceSpans := source.backtraceSpans
-      -- The typed template category has no calls, constants, TLS, projected
-      -- places or dynamic casts. Local Place::ty is computed from declarations.
+      -- Symbolic calls are resolved from source type slots on demand rather
+      -- than prepared call answers. No TLS, projected places or dynamic casts
+      -- belong to this category; local Place::ty uses declarations.
       callEvidence := blocks.map (fun _ => none)
       nodeFacts := blocks.map (fun block => Array.replicate (block.statements.size + 1) {})
       requiredConsts := #[] }
     pure ⟨fields,reference.instanceId,reference.promotedBodies,#[]⟩
 
-def resolveBody (document : ImportDocument) (index : Nat) : Except String BodyCore := do
-  match ← bodySeed document index with
+private def lift (result : Except String α) : TypeArena.WorldM α :=
+  match result with | .ok value => pure value | .error error => throw error
+
+def resolveBody (document : ImportDocument) (index : Nat) : TypeArena.WorldM BodyCore := do
+  match ← lift (bodySeed document index) with
   | .material body => pure body.toBodyCore
   | .copyTemplate reference =>
-    let sourceMetadata ← metadata document index
-    let source ← templateSource document reference.templateId
-    let context ← GenericInstantiation.Context.ofDocument document
-    let arguments ← GenericInstantiation.ofArguments context 16384 reference.genericArgs
+    let sourceMetadata ← lift (metadata document index)
+    let source ← lift (templateSource document reference.templateId)
+    let arguments ← lift (GenericInstantiationWorld.ofArguments (← get) 16384 reference.genericArgs)
     let mir ← MirTemplate.instantiate source.template 16384 arguments fun expression => do
-      let expression ← MirTemplate.eraseFreeRegions 16384 expression
-      MirTemplate.validateClosed 16384 expression
-      GenericInstantiation.resolveType context 16384 expression
+      let expression ← lift (MirTemplate.eraseFreeRegions 16384 expression)
+      lift (MirTemplate.validateClosed 16384 expression)
+      GenericInstantiationWorld.resolveType 16384 expression
     pure { toBodyMetadata := sourceMetadata.toBodyMetadata,mir,instanceId := reference.instanceId }
 
 end Miri.Input.SourceMir

@@ -53,27 +53,29 @@ theorem prepareProfiled_eq_prepare (profile : Lean.Options)
 
 /-- Close all frame compiler leaves with actual exported query results. The
 remaining fields concern machine memory, ghost identity allocation and unwind. -/
-def lifecycleHooks (p : Prepared) (userRelevantCrates : Array Nat)
+def lifecycleHooks (p : Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (userRelevantCrates : Array Nat)
     (base : CallMachine.Lifecycle K User C) : CallMachine.Lifecycle K User C :=
-  CompilerLifecycle.hooks p.lifecycle {base with
-    compiler := CompilerFrameMetadata.hooks p.frames userRelevantCrates}
+  CompilerLifecycle.hooks p.lifecycle types {base with
+    compiler := CompilerFrameMetadata.hooks p.frames types userRelevantCrates}
 
 /-- Source query closure composes with BacktraceMachine's actual memory binding.
 Actual function allocation/address/provenance lookup remains the machine's job. -/
-def backtraceHooks (p : Prepared) (image : AllocationImage.Imported)
+def backtraceHooks (p : Prepared) (types : RuntimeArrayQueries.Access S) (image : AllocationImage.Imported)
     (memory : S → MemoryState P Extra K)
     (base : Backtrace.Hooks P S D MD B I E CompilerBacktraceSource.Position) :
     Backtrace.Hooks P S D MD B I E CompilerBacktraceSource.Position :=
   CompilerBacktraceSource.hooks p.backtrace
-    (CompilerBacktraceFacts.hooks p.calls p.shim image memory base)
+    (CompilerBacktraceFacts.hooks p.calls types p.shim image memory base)
 
 /-- Root/direct/virtual/drop calls share exact full-instance/extra-argument ABI
 queries and exact LoadedBody identities from this same final table. -/
 def functionHooks (p : Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K User))
     (base : FunctionCalls.Hooks Provenance (MachineHooks.State K User) C MachineHooks.FrameExtra
       Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId)) :
     FunctionCalls.Hooks Provenance (MachineHooks.State K User) C MachineHooks.FrameExtra
       Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId) :=
-  CompilerCallPipeline.bindFunctionCalls p.calls
+  CompilerCallPipeline.bindFunctionCalls p.calls types
     {base with call := CompilerInstanceAbi.hooks p.instances base.call}
 end Miri.Input.CompilerLifecyclePipeline

@@ -1,4 +1,5 @@
 import Miri.Input.AdtDeclaration
+import Miri.Input.ReprMaterialCodec
 import Miri.Input.TraitSelection.Codec
 
 namespace Miri.Input.AdtDeclarationCodec
@@ -9,14 +10,15 @@ private def keys (value : Lean.Json) (allowed : List String) : Except String Uni
     unless allowed.contains key do throw s!"unknown raw ADT declaration field {key}"
 
 private def field (value : Lean.Json) : Except String FieldSafety := do
-  keys value ["variant", "field", "unsafe"]
+  keys value ["variant", "field", "unsafe", "field_name"]
   pure {
     variantIndex := ← (← value.getObjVal? "variant").getNat?
     fieldIndex := ← (← value.getObjVal? "field").getNat?
-    isUnsafe := ← (← value.getObjVal? "unsafe").getBool? }
+    isUnsafe := ← (← value.getObjVal? "unsafe").getBool?
+    fieldName := ← (← value.getObjVal? "field_name").getStr? }
 
 def read (template : DefinitionTemplate) (value : Lean.Json) : Except String Material := do
-  keys value ["kind", "lang_item", "variant_count", "fields", "own_predicates"]
+  keys value ["kind", "lang_item", "variant_count", "variant_names", "fields", "own_predicates", "representation"]
   let kind ← match ← (← value.getObjVal? "kind").getStr? with
     | "struct" => pure AdtKind.structKind
     | "enum" => pure .enumKind
@@ -27,10 +29,12 @@ def read (template : DefinitionTemplate) (value : Lean.Json) : Except String Mat
   let ownPredicates ← TraitSelection.Codec.readClauses (← value.getObjVal? "own_predicates")
   TraitSelection.Codec.validateClauses template.parameters ownPredicates
   let material : Material := {
+    representation := ← ReprMaterialCodec.read (← value.getObjVal? "representation")
     kind
     langItem
     ownPredicates
     variantCount := ← (← value.getObjVal? "variant_count").getNat?
+    variantNames := ← (← (← value.getObjVal? "variant_names").getArr?).mapM (·.getStr?)
     fields := ← (← (← value.getObjVal? "fields").getArr?).mapM field }
   material.validate template
   pure material

@@ -1,28 +1,30 @@
-import Miri.Input.TypeArena
+import Miri.Input.TypeArenaWorld
 
-open Miri.Input
+open Miri.Input Miri.Input.TypeArena
 private def node (id : Nat) (shape : TypeShape) : TypeNode :=
-  { id, shape, display := "arena test", layoutId := 0 }
-private def material := #[node 0 .bool]
-private def arrayId := TypeArena.arrayId material.size 0 4
-private def pointerId := TypeArena.constructedId material.size arrayId false
-private def referenceId := TypeArena.constructedId material.size pointerId true
+  {id,shape,display := "arena test",layoutId := 0}
+private def must (result : Except String α) : IO α :=
+  match result with | .ok value => pure value | .error error => throw (IO.userError error)
 
-example : TypeArena.internArray material 0 4 = .ok arrayId := by cbv
-example : TypeArena.intern material arrayId false = .ok pointerId := by cbv
-example : TypeArena.intern material pointerId true = .ok referenceId := by cbv
-example : (TypeArena.node material arrayId 10).map (fun n => match n.shape with
-    | .array child length constructor => some (child, length, constructor.count)
-    | _ => none) = .ok (some (0, 14, 4)) := by cbv
-example : (TypeArena.node material pointerId).map (fun n => match n.shape with
-    | .rawPointer child .Mut => some child | _ => none) = .ok (some arrayId) := by cbv
-example : (TypeArena.node material referenceId).map (fun n => match n.shape with
-    | .reference child .Mut .Erased => some child | _ => none) = .ok (some pointerId) := by cbv
--- Pointer/reference and array constructors occupy disjoint tags.
-example : pointerId != arrayId := by cbv
-example : TypeArena.internArray material 0 4 = TypeArena.internArray material 0 4 := rfl
-example : (TypeArena.node #[node 1 .bool] 1).map (·.id) = .error "material type ID/index mismatch" := by cbv
-example : (TypeArena.node #[node 0 .bool, node 0 .bool] 2).map (·.id) =
-    .error "material type ID/index mismatch" := by cbv
-example : TypeArena.internArray material (TypeArena.constructedId 1 0 false) 3 =
-    .ok (TypeArena.arrayId 1 (TypeArena.constructedId 1 0 false) 3) := by cbv
+def main : IO Unit := do
+  let initial ← must (World.ofMaterial #[node 0 .bool,node 1 (.uint (.known .usize))] #[] #[] 8)
+  let (length,world) ← must ((World.internConstant (.Value 1 ⟨#[.Leaf 4 8],0⟩)).run initial)
+  let (array,world) ← must ((World.internType (.array 0 length)).run world)
+  let (pointer,world) ← must ((World.internType (.rawPointer array .Mut)).run world)
+  let (reference,world) ← must ((World.internType (.reference pointer .Mut .Erased)).run world)
+  unless array == 2 && pointer == 3 && reference == 4 do
+    throw (IO.userError "constructors did not receive disjoint dense appended IDs")
+  let .constructed (.array child constant) ← must (world.lookupType array)
+    | throw (IO.userError "array constructor was lost")
+  unless child == 0 && constant == length do throw (IO.userError "array child/constant identity changed")
+  let .constructed (.reference child .Mut .Erased) ← must (world.lookupType reference)
+    | throw (IO.userError "reference constructor was lost")
+  unless child == pointer do throw (IO.userError "nested child identity changed")
+  let (again,retained) ← must ((World.internType (.array 0 length)).run world)
+  unless again == array && retained.constructedTypes.size == 3 do
+    throw (IO.userError "repeat construction duplicated canonical syntax")
+  if (initial.lookupType array).isOk then throw (IO.userError "initial prefix leaked appended type")
+  if (World.ofMaterial #[node 1 .bool] #[] #[] 8).isOk then throw (IO.userError "bad dense prefix accepted")
+  if ((World.internType (.tuple #[world.typeCount])).run world).isOk then
+    throw (IO.userError "out-of-range ID was interpreted as an old implicit encoding")
+  IO.println "PASS dense persistent array/pointer/reference identities and strict source bounds"

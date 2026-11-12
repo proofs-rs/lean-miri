@@ -43,7 +43,7 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Attempt 
   let layouts ← match layoutsResult with
     | .ok value => pure value
     | .error error => return ⟨empty,.error error⟩
-  let types ← match profileit "preparation.eval.initial_arrays" profile fun _ => compiler.initialArrays with
+  let types ← match profileit "preparation.eval.initial_types" profile fun _ => compiler.initialTypes with
     | .ok value => pure value
     | .error error => return ⟨empty,.error error⟩
   let importNodes := match compiler.program.input.compilerAllocIdWorld with

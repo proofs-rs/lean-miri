@@ -1,4 +1,5 @@
 import Miri.Input.TraitSelection.Material
+import Miri.Input.ReprMaterial
 
 namespace Miri.Input
 
@@ -13,12 +14,15 @@ structure FieldSafety where
   variantIndex : Nat
   fieldIndex : Nat
   isUnsafe : Bool
+  fieldName : String
   deriving Repr, DecidableEq
 
 structure Material where
+  representation : ReprOptions
   kind : AdtKind
   langItem : Option String
   variantCount : Nat
+  variantNames : Array String
   fields : Array FieldSafety
   ownPredicates : Array TraitSelection.Clause
   deriving Repr, DecidableEq
@@ -30,6 +34,8 @@ def Material.hasUnsafeFields (material : Material) : Bool := material.fields.any
 have the same complete ordered field domain; neither table supplies query
 answers for instantiated ADTs. Empty variants are represented by variantCount. -/
 def Material.validate (material : Material) (template : DefinitionTemplate) : Except String Unit := do
+  unless material.variantNames.size == material.variantCount do
+    throw "ADT source variant name domain differs from variant count"
   unless material.kind == .enumKind || material.variantCount == 1 do
     throw "struct/union source declaration must have exactly one variant"
   if material.isPhantomData && material.kind != .structKind then

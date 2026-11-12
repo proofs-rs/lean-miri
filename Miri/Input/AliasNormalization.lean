@@ -168,9 +168,9 @@ private def fold (program : Program) (hooks : Hooks) :
       return ⟨.node sort tag payload children, obligations⟩
     | .binder variables body =>
       let result ← fold program hooks fuel active body
-      unless result.obligations.isEmpty do
+      unless variables.isEmpty || result.obligations.isEmpty do
         throw "bound alias obligations require placeholder conversion"
-      return ⟨.binder variables result.value, #[]⟩
+      return ⟨.binder variables result.value, result.obligations⟩
     | .inference .. => throw "alias normalization received unresolved inference material"
     | _ => pure ⟨value, #[]⟩
 

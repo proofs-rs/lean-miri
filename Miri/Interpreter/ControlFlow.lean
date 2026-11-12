@@ -7,7 +7,7 @@ namespace Miri.Interpreter
 open Miri.MIR
 
 structure ControlHooks (P L E M C Op : Type) where
-  bodySpan : Frame P L E → Except StepError SpanRef
+  bodySpan : Frame P L E → StepState P L E M → StepResult (StepState P L E M) SpanRef
   returnOperand : C → StepState P L E M → StepResult (StepState P L E M) Op
   popFrame : C → StepState P L E M →
     StepResult (StepState P L E M) (Frame P L E)
@@ -48,7 +48,8 @@ def unwindToBlock (hooks : Hooks) (choice : C) (target : UnwindAction)
   | .Continue | .Terminate _ =>
     let some frame := state.stack.currentFrame? |
       return (state, .error (.stack .emptyStack))
-    let span ← match hooks.bodySpan frame with
+    let (state,span) := hooks.bodySpan frame state
+    let span ← match span with
       | .error error => return (state, .error error)
       | .ok span => pure span
     let (state, result) := setLocation state (.unwinding span)

@@ -29,7 +29,8 @@ def closureUpvarCount (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except 
 
 /-- Exact source ExternAbi identity, canonical FnAbi records, shared DefIds/
 TypeConstIds and actual current BodyIdentity all belong to this same program. -/
-def make (p : CompilerProviders.Prepared) (compatibilityBudget : Nat) :
+def make (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (compatibilityBudget : Nat) :
     ExecutionCallLeaves.Compiler (MachineHooks.State K U) C ABI.ExternAbi := {
   functionSignature := fun _ layout => lift do
     let (count,sourceAbi) ← CompilerFunctionFacts.signature p.functions layout.ty
@@ -37,8 +38,8 @@ def make (p : CompilerProviders.Prepared) (compatibilityBudget : Nat) :
   instanceKind := fun inst => lift (CompilerInstance.kindOf p.loweringContext.instances inst)
   instanceArgs := fun inst => lift (CompilerInstance.argsOf p.loweringContext.instances inst)
   itemInstance := fun definition args => lift (CompilerInstance.item p.loweringContext.instances definition args)
-  functionKind := fun ty => lift (CompilerFunctionFacts.kind p.functions ty)
-  resolve := fun _ definition args => CompilerProviders.resolveCurrent p definition args
+  functionKind := fun ty => RuntimeArrayQueries.perform types (CompilerFunctionFacts.kindInWorld p.functions ty)
+  resolve := fun _ definition args => CompilerProviders.resolveCurrent p types definition args
   fnAbiOfFnPtr := fun _ layout extra => lift (CompilerFunctionFacts.pointerAbi p.functions layout.ty extra)
   fnAbiOfInstance := fun _ callee extra => lift (CompilerInstanceAbi.abiOfInstance p.lifecycle.instances callee extra)
   isRustCall := fun abi => abi == .RustCall

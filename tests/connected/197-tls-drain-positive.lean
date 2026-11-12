@@ -314,7 +314,7 @@ private def runTlsDrainPure (contents : String) (pageSize : UInt64)
     fixedScheduling := false, trackOutdatedLoads := false, weakMemory := true
     backend := .vclocks, trackedTags := some #[], validation := .Shallow
     alignment := .Int, affinity := none, muteOutput := true, hostUsizeBits := 64 }
-  let arrays ← must compiler.initialArrays
+  let arrays ← must compiler.initialTypes
   let tape := choiceTape none #[]
   let creation : EStateM.Result StepError InitTrace OuterState :=
     (Input.MachineConstruction.create rawInitHooks sourceLeaves.hostConfiguration

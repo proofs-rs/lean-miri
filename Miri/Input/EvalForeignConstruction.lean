@@ -127,9 +127,9 @@ def common (p : CompilerProviders.Prepared) (options : Options)
         match state.stack.currentFrame? with
         | none => (state,.error (.stack .emptyStack))
         | some frame =>
-          match CompilerBodySpan.get p frame with
-          | .error error => (state,.error error)
-          | .ok span => ControlFlow.setLocation state (.unwinding span)
+          match CompilerBodySpan.get p EvalProjectionMachine.arrays frame state with
+          | .error error after => (after,.error error)
+          | .ok span after => ControlFlow.setLocation after (.unwinding span)
     let (state,result) := source state
     match result with
     | .error error => .error error state
@@ -141,7 +141,7 @@ def common (p : CompilerProviders.Prepared) (options : Options)
   pure {
     options,maximumSize := allocation.maximumObjectSize.bytes,symbols,native := host
     expectedAbi := fun signature => query (CompilerShimAbi.expectedAbi abi signature)
-    argumentCompat := (CompilerCallConstruction.compiler p options.compatibilityBudget).checkArgumentCompat choice
+    argumentCompat := (CompilerCallConstruction.compiler p EvalProjectionMachine.arrays options.compatibilityBudget).checkArgumentCompat choice
     forceAllocation := fun dest => do
       let memory ← Miri.Interpreter.forceAllocation place choice dest
       pure ⟨.memory memory.mplace,memory.layout⟩

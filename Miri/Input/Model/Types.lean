@@ -1,4 +1,5 @@
 import Miri.Input.AliasMaterial
+import Miri.Input.DefinitionPath
 import Miri.Input.AdtDeclaration
 import Lean
 import Miri.Memory.CtfeProvenance
@@ -53,10 +54,6 @@ inductive BackendReprKind where
 
 inductive FieldShapeKind where
   | primitive | union | array | arbitrary
-  deriving Repr, DecidableEq
-
-inductive IntegerTypeTag where
-  | known (kind : Miri.MIR.IntegerKind)
   deriving Repr, DecidableEq
 
 inductive FloatTypeTag where
@@ -239,6 +236,10 @@ structure Layout where
   backendRepr : Option TaggedNode
   primitiveRecipe : Option String := none
   tupleType : Option TypeId := none
+  sequenceType : Option TypeId := none
+  pointerType : Option TypeId := none
+  pointerDataType : Option TypeId := none
+  enumTagType : Option TypeId := none
   structType : Option TypeId := none
   unionType : Option TypeId := none
 
@@ -278,44 +279,6 @@ inductive CompilerPattern where
   | range (start finish : TypeConstantId)
   | or (patterns : Array CompilerPattern)
   | notNull
-
-inductive ReprInteger where
-  | pointerSized (signed : Bool)
-  | fixed (kind : IntegerTypeTag) (sizeBits : Nat) (signed : Bool)
-  deriving Repr, DecidableEq
-
-inductive ScalableElement where
-  | elementCount (count : Nat)
-  | container
-  deriving Repr, DecidableEq
-
-structure ReprOptions where
-  integer : Option ReprInteger
-  alignBytes : Option Nat
-  packBytes : Option Nat
-  flagsBits : Nat
-  scalableElement : Option ScalableElement
-  fieldShuffleSeed : Nat
-  deriving Repr, DecidableEq
-
-namespace ReprOptions
-
--- Pinned rustc_abi::ReprOptions keeps these properties in flags, int and pack.
-def c (repr : ReprOptions) : Bool := repr.flagsBits &&& 1 != 0
-def simd (repr : ReprOptions) : Bool := repr.flagsBits &&& 2 != 0
-def transparent (repr : ReprOptions) : Bool := repr.flagsBits &&& 4 != 0
-def linear (repr : ReprOptions) : Bool := repr.flagsBits &&& 8 != 0
-def scalable (repr : ReprOptions) : Bool := repr.flagsBits &&& 64 != 0
-def rust (repr : ReprOptions) : Bool := !repr.c && !repr.simd && !repr.scalable && !repr.transparent
-def packed (repr : ReprOptions) : Bool := repr.packBytes.isSome
-def inhibitEnumLayoutOptimization (repr : ReprOptions) : Bool := repr.c || repr.integer.isSome
-def inhibitNewtypeAbiOptimization (repr : ReprOptions) : Bool := repr.c || repr.simd
-def inhibitStructFieldReordering (repr : ReprOptions) : Bool :=
-  repr.c || repr.simd || repr.scalable || repr.linear || repr.integer.isSome
-def canRandomizeTypeLayout (repr : ReprOptions) : Bool :=
-  !repr.inhibitStructFieldReordering && repr.flagsBits &&& 16 != 0
-
-end ReprOptions
 
 structure AdtField where
   index : Nat
@@ -606,6 +569,7 @@ structure DefinitionId where
   genericTemplate : Option GenericSubstitution.DefinitionTemplate := none
   aliasDeclaration : Option AliasMaterial.Declaration := none
   adtDeclaration : Option AdtDeclaration.Material := none
+  rawPath : Option DefinitionPath.Material := none
   deriving Repr, DecidableEq
 
 inductive VtableEntryKind where
@@ -888,13 +852,6 @@ structure BodyRoot where
   isStatic : Bool
   threadLocalStatic : Bool
   promotedBodies : Array PromotedBody
-
-/-- Explicit remaining target-ABI query leaf, keyed by complete canonical
-instance identity. This is not a compiler instance-resolution algorithm. -/
-structure InstanceAbiMaterial where
-  instanceId : InstanceId
-  abiId : FunctionAbiId
-  deriving Repr, DecidableEq
 
 structure InstanceNode where
   instanceKind : Miri.Interpreter.CallInstanceKind

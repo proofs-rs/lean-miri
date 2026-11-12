@@ -137,12 +137,33 @@ private def runtimeCheck : Parser (Miri.MIR.RuntimeChecks × Bool) := do
     | _ => fail "unknown compiler runtime-check kind"
   return (check, enabled)
 
+private structure printOptionsFields where
+  typeLengthLimit : Option Nat := none
+  verboseInternals : Option Bool := none
+  identifyRegions : Option Bool := none
+  trimDiagnosticPaths : Option Bool := none
+  trimmedDefPaths : Option Bool := none
+private def printOptions : Parser PrintOptions := do
+  let fields ← object ({} : printOptionsFields) fun fields key => do
+    match key with
+    | "type_length_limit" => pure {fields with typeLengthLimit := some (← natural)}
+    | "verbose_internals" => pure {fields with verboseInternals := some (← boolean)}
+    | "trim_diagnostic_paths" => pure {fields with trimDiagnosticPaths := some (← boolean)}
+    | "trimmed_def_paths" => pure {fields with trimmedDefPaths := some (← boolean)}
+    | "identify_regions" => pure {fields with identifyRegions := some (← boolean)}
+    | _ => fail s!"unknown compiler print option: {key}"
+  pure ⟨← need fields.typeLengthLimit "type_length_limit",
+    ← need fields.verboseInternals "verbose_internals", ← need fields.identifyRegions "identify_regions",
+    ← need fields.trimDiagnosticPaths "trim_diagnostic_paths",
+    ← need fields.trimmedDefPaths "trimmed_def_paths"⟩
+
 private structure sessionFields where
   internalTargetFeatures : Option (Array (String)) := none
   isLikeWasm : Option (Bool) := none
   targetArch : Option (String) := none
   rootSpan : Option (Nat) := none
   runtimeChecks : Option (Array (Miri.MIR.RuntimeChecks × Bool)) := none
+  printOptions : Option PrintOptions := none
 
 def session : Parser (Session) := do
   let fields ← object ({} : sessionFields) fun fields key => do
@@ -152,6 +173,7 @@ def session : Parser (Session) := do
     | "target_arch" => return { fields with targetArch := some (← string) }
     | "root_span" => return { fields with rootSpan := some (← natural) }
     | "runtime_checks" => return { fields with runtimeChecks := some (← array (runtimeCheck)) }
+    | "print_options" => return {fields with printOptions := some (← printOptions)}
     | _ => skipValue; pure fields
   let internalTargetFeatures ← need fields.internalTargetFeatures "internal_target_features"
   let isLikeWasm ← need fields.isLikeWasm "is_like_wasm"
@@ -163,7 +185,8 @@ def session : Parser (Session) := do
     if seen.contains kind then fail "duplicate compiler runtime-check query"
     seen := seen.push kind
   return {
-    internalTargetFeatures, isLikeWasm, targetArch, rootSpan, runtimeChecks }
+    internalTargetFeatures, isLikeWasm, targetArch, rootSpan, runtimeChecks,
+    printOptions := fields.printOptions }
 
 private structure intrinsicFields where
   mustOverride : Option (Bool) := none

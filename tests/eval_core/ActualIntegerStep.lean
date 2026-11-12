@@ -82,7 +82,9 @@ private def runPrepared (prepared : Input.CompilerProviders.Prepared) : Except S
   let dummy ← Input.CompilerContextSpan.rootSpan prepared.program
   let definition ← prepared.program.rootDefinitionId 0
   let rootInstance ← Input.CompilerInstance.item prepared.loweringContext.instances definition #[]
-  let body ← Input.CallResolution.loadedBodyOfInstance prepared.lifecycle.calls.calls rootInstance
+  let initialTypes ← prepared.initialTypes
+  let (body,arrays) ← (Input.RuntimeArrayTypes.perform initialTypes
+    (Input.CallResolution.loadedBodyOfInstance prepared.lifecycle.calls.calls rootInstance)).mapError reprStr
   let some returnTy := body.body.locals[0]? | throw "root has no return local"
   let imported := Input.CompilerGlobals.importGraph prepared.runtime.target prepared.program
     (MemoryState.empty : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind)
@@ -91,7 +93,6 @@ private def runPrepared (prepared : Input.CompilerProviders.Prepared) : Except S
   -- and crosswalk before any runtime allocation or byte-key attachment.
   let memory ← Input.CompilerAllocIdWorld.install
     prepared.program.input.compilerAllocIdWorld prepared.program.input.allocations imported.memory
-  let arrays ← prepared.initialArrays
   let host : Host := {
     blocking := ⟨none, #[]⟩, clock := .virtual 0, deadlines := .empty
     readiness := {}, futex := {}, sync := {}, io := {}, events := #[]

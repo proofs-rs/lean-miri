@@ -1,4 +1,4 @@
-import Miri.Input.ConstructedDiscriminants
+import Miri.Input.StructuralDiscriminantType
 import Miri.Input.StructuralConstructedFacts
 import Miri.Input.StructuralSized
 import Miri.Input.StructuralNeedsDrop
@@ -37,7 +37,12 @@ def Context.loweringContext (context : Context) : LowerContext :=
   let ctx := match context.lowering with
     | some prepared => prepared
     | none => LowerContext.ofDocument context.program.input
-  ctx.withLazyTypes context.program.input.types
+  ctx
+
+/-- Type-bearing lowering reads the current execution universe at the call
+site; instance-identity-only users can keep the material lowering context. -/
+def Context.loweringContextM (context : Context) : TypeArena.WorldM LowerContext := do
+  pure (context.loweringContext.withWorld (← get))
 
 def Context.primitiveLayout (context : Context) (key : String) :
     Except String (TyAndLayout TypeId) :=
@@ -147,6 +152,21 @@ def optionalType (context : Context) (id : TypeId) (query : String) : Result (Op
   let source ← node context id
   let entry ← if query == "normalized" then
       pure (some (← normalize context id))
+    else if query == "discriminant_type" then do
+      let root ← normalize context id
+      let hooks : StructuralDiscriminantType.Hooks := {
+        shape := fun ty => return (← node context ty).shape,
+        primitive := CompilerPrimitiveFacts.primitiveType context.runtime,
+        normalizeAlias := fun _ ty => normalize context ty,
+        -- Erasing arbitrary UnsafeBinder variables remains an explicit
+        -- residual dependency. No discriminant result row is consumed.
+        eraseUnsafeBinder := fun ty => do
+          let f ← facts context ty
+          let some (_,some inner) := f.typeQueries.find? (·.1 == "unsafe_binder_erased")
+            | throw "missing residual unsafe-binder erasure material"
+          pure inner }
+      pure (some (← StructuralDiscriminantType.query hooks
+        (id + context.program.input.types.size + 1) root))
     else if query == "metadata_tail" then do
       let root ← normalize context id
       let result ← StructuralTail.tail (fun ty => return (← node context ty).shape)
@@ -166,9 +186,6 @@ def optionalType (context : Context) (id : TypeId) (query : String) : Result (Op
       else StructuralDeref.builtinDeref source.shape isBox (query == "builtin_deref_explicit")
     else if query == "pointer_metadata_type" then
       pure (some (← context.runtime.pointerMetadataType id |>.mapError toString))
-    else if id >= context.program.input.types.size && query == "discriminant_type" &&
-        ConstructedDiscriminants.supported source.shape then
-      pure (some context.program.input.queries.primitives.u8)
     else if id >= context.program.input.types.size && query == "unsafe_binder_erased" then
       pure none
     else do

@@ -80,8 +80,16 @@ deriving instance DecidableEq for ImportDocument
 -- still compares every declaration, template, and body seed structurally.
 local instance {proposition : Prop} : DecidableEq (PLift proposition) :=
   fun _ _ => .isTrue (Subsingleton.elim _ _)
+deriving instance DecidableEq for GenericInstantiation.Context
+deriving instance DecidableEq for AliasNormalization.Rule
+deriving instance DecidableEq for AliasNormalization.AssociatedDeclaration
+deriving instance DecidableEq for AliasNormalization.Program
+deriving instance DecidableEq for AliasRuntime.Context
+-- ExactMap212 compares the complete definition-index representation, including
+-- bucket capacity and order. Only certificate proof fields are irrelevant.
+deriving instance DecidableEq for TypeArena.CheckedMaterial
+deriving instance DecidableEq for TypeArena.World
 deriving instance DecidableEq for RuntimeMetadata
-deriving instance DecidableEq for RuntimeArrayTypes.Entry
 deriving instance DecidableEq for RuntimeArrayTypes.World
 
 def documentDecidableEq : DecidableEq ImportDocument := inferInstance

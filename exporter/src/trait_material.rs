@@ -172,7 +172,8 @@ impl State {
     pub(super) fn seed(tcx: TyCtxt<'_>) -> Self {
         let mut state = Self::default();
         for language_item in [rustc_attr_ir::LangItem::Freeze,rustc_attr_ir::LangItem::Unpin,
-            rustc_attr_ir::LangItem::UnsafeUnpin,rustc_attr_ir::LangItem::Sized] {
+            rustc_attr_ir::LangItem::UnsafeUnpin,rustc_attr_ir::LangItem::Sized,
+            rustc_attr_ir::LangItem::Copy,rustc_attr_ir::LangItem::Clone] {
             if let Some(definition) = tcx.lang_items().get(language_item) { state.pending.insert((definition.krate.as_u32(),definition.index.as_u32()),definition); }
         }
         state

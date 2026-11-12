@@ -233,7 +233,7 @@ def fromSource [DecidableEq MiriMemoryKind] [DecidableEq Os]
   let sourceSymbols ← match p.foreignSymbols with
     | .ok value => pure value
     | .error reason => throw (.unsupported reason)
-  let symbols := CompilerForeignSymbols.hooks sourceSymbols p.lifecycle.calls
+  let symbols := CompilerForeignSymbols.hooks sourceSymbols p.lifecycle.calls EvalProjectionMachine.arrays
   let options : EvalForeignConstruction.Options := {
     family := .windows
     os := target.os
@@ -408,7 +408,7 @@ def connectWithTimeSync [DecidableEq MiriMemoryKind] [DecidableEq Os]
       let compiler : ExecutionCallLeaves.Compiler
           (CoreState Os R H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error)
           C ABI.ExternAbi :=
-        CompilerCallConstruction.compiler p assembly.sourceSeed.compatibilityBudget
+        CompilerCallConstruction.compiler p EvalProjectionMachine.arrays assembly.sourceSeed.compatibilityBudget
       compiler.checkArgumentCompat assembly.sourceSeed.choice caller callee
     checkSymbolClash := fun name =>
       ExecutionStateTransport.action (assembly.foreign.checkSymbolClash name)

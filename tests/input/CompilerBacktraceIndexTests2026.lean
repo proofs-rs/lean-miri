@@ -13,11 +13,20 @@ private def check (condition : Bool) (message : String) : IO Unit :=
 
 private def replaceSpans (program : LoweredProgram) (index : Nat)
     (rows : Array BacktraceSpan) : Except String LoweredProgram := do
-  let body ← SourceMir.resolveBody program.input index
   let some seed := program.input.bodies[index]? | throw "test body index absent"
-  let material : Body := {toBodyCore := {body with backtraceSpans := rows}, promotedBodies := seed.promotedBodies}
-  let bodies := program.input.bodies.set! index (.material material)
-  pure {program with input := {program.input with bodies}}
+  match seed with
+  | .material body =>
+    let bodies := program.input.bodies.set! index (.material {body with backtraceSpans := rows})
+    pure {program with input := {program.input with bodies}}
+  | .copyTemplate reference =>
+    let some source := program.input.mirTemplates[reference.templateId]?
+      | throw "test template source absent"
+    -- Clone this source metadata for the selected reference only. No executable
+    -- body or execution-owned type ID is embedded into immutable input.
+    let templateId := program.input.mirTemplates.size
+    let mirTemplates := program.input.mirTemplates.push {source with backtraceSpans := rows}
+    let bodies := program.input.bodies.set! index (.copyTemplate {reference with templateId})
+    pure {program with input := {program.input with bodies, mirTemplates}}
 
 def main (args : List String) : IO Unit := do
   let some path := args.head? | throw (IO.userError "producer export path required")

@@ -169,7 +169,9 @@ Attribute/object writes use canonical guest memory, timed waits use the source
 HostRuntime deadline registry, and each ABI signature comes from the exact
 compiler shim table. -/
 def fromSource [DecidableEq MiriMemoryKind]
-    (p : CompilerProviders.Prepared) (compatibilityBudget : Nat)
+    (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (ValidityMachine.State MiriMemoryKind U))
+    (compatibilityBudget : Nat)
     (leaves : Leaves MiriMemoryKind U C ErrorHost Instant System) :
     EStateM StepError (ValidityMachine.State MiriMemoryKind U)
       (PthreadDispatch.Hooks (ValidityMachine.State MiriMemoryKind U)
@@ -225,7 +227,7 @@ def fromSource [DecidableEq MiriMemoryKind]
       let target ← PointerPlaceMachine.withMetadata access pointer metadata layout false
       writePlaceImmediate place choice (.scalar scalar) ⟨.memory target.mplace,layout⟩ }
   let pthread := TimeShimMachine.bindPthread clock base
-  let compat := CompilerCallConstruction.compiler p compatibilityBudget
+  let compat := CompilerCallConstruction.compiler p types compatibilityBudget
   let dispatch : PthreadDispatch.Hooks (ValidityMachine.State MiriMemoryKind U)
       TypedSyncRuntime.Ref Clock.Duration := {
     pthread

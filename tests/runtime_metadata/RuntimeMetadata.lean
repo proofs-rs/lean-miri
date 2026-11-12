@@ -38,20 +38,22 @@ def main (args : List String) : IO Unit := do
   let some bodyIndex := (List.range decoded.document.bodies.size).find? (fun index =>
       (SourceMir.metadata decoded.document index).toOption.any (·.definitionId == some root.definitionId))
     | throw (IO.userError "canonical root body missing")
-  let body ← must (SourceMir.resolveBody decoded.document bodyIndex)
+  let initialTypes ← must (TypeArena.World.ofDocument decoded.document)
+  let (body,typeArena) ← must ((SourceMir.resolveBody decoded.document bodyIndex).run initialTypes)
   -- records(e, u, p, ...) has p in MIR local3, after return local0.
   let parameter ← must ((RuntimeMetadata.require body.mir.locals[3]? "records p parameter").mapError toString)
   let reference ← must ((metadata.lookup parameter).mapError toString)
   let pointee ← must ((metadata.pointee reference).mapError toString)
   let expected ← must ((metadata.integerLayout .u32).mapError toString)
   check (pointee.ty == expected.ty && pointee.ty != reference.ty) "source u32 pointee identity changed"
-  let pointerId ← must (TypeArena.intern decoded.document.types 0 false)
-  let pointer ← must ((metadata.lookup pointerId).mapError toString)
+  let (pointerId,typeArena) ← must ((TypeArena.World.internType (.rawPointer 0 .Mut)).run typeArena)
+  let (pointer,typeArena) ← must ((RuntimeMetadata.layoutInWorld metadata pointerId).run typeArena)
   check (pointer.ty == pointerId) "on-demand pointer lost its canonical constructor identity"
   let some originalType := decoded.document.types[0]? | throw (IO.userError "missing material type")
   let badTypes := decoded.document.types.set! 0 {originalType with id := decoded.document.types.size}
   let badMetadata : RuntimeMetadata := {
-    source := {decoded.document with types := badTypes}, target := metadata.target, denseTypes := none }
+    source := {decoded.document with types := badTypes}, target := metadata.target, materialLayoutFuel := metadata.materialLayoutFuel,
+    normalizationContext := metadata.normalizationContext, checkedMaterial := none, denseTypes := none }
   check (!(badMetadata.lookup 0).isOk) "inconsistent material type identity accepted"
   let missingTarget := { decoded.document with runtimeTargetDataLayout := none }
   check (!(RuntimeMetadata.ofDocument missingTarget).isOk) "missing target accepted"

@@ -22,7 +22,8 @@ private def memory (place : RuntimePlace Provenance) : MachineHooks.M K U (MPlac
   | .local .. => throw (.invalidProgram "freeze projection returned a local place")
 
 def hooks [DecidableEq K] (prepared : CompilerFactAdapters.Prepared)
-    (runtime : CompilerRuntimeQueries.Prepared) (leaves : Leaves K U)
+    (runtime : CompilerRuntimeQueries.Prepared)
+    (types : RuntimeArrayQueries.Access (ValidityMachine.State K U)) (leaves : Leaves K U)
     (access : ValidityMachine.Access K U)
     (projection : PlaceProjectionHooks Provenance (ValidityMachine.State K U) C MachineHooks.FrameExtra)
     (vtable : VTableHooks Provenance (ValidityMachine.State K U) C F A)
@@ -43,7 +44,7 @@ def hooks [DecidableEq K] (prepared : CompilerFactAdapters.Prepared)
     implicitWrites := leaves.implicitWrites
     rustcNoWritable := leaves.rustcNoWritable
     preciseInteriorMut := leaves.preciseInteriorMut
-    immPtrToMPlace := PointerPlaceMachine.fromImmediate access (CompilerExecutionProviders.pointerCompiler prepared) choice
+    immPtrToMPlace := PointerPlaceMachine.fromImmediate access (CompilerExecutionProviders.pointerCompiler prepared types) choice
     sizeAndAlign := size
     checkPtrAccess := ValidityMachine.checkPointerAccess access
     resolveAllocation := TypedValidityProviders.resolveAllocation pointers
@@ -72,7 +73,7 @@ def hooks [DecidableEq K] (prepared : CompilerFactAdapters.Prepared)
       projectIndex := fun place index => do
         memory (← PlaceDynamic.index projection choice ⟨.memory place.mplace,place.layout⟩ index)
       projectBox := fun place => do
-        let (pointer,allocator) ← CompilerExecutionProviders.projectBox context runtime projection choice
+        let (pointer,allocator) ← CompilerExecutionProviders.projectBox context runtime types projection choice
           ⟨.memory place.mplace,place.layout⟩
         pure (← memory pointer,← memory allocator)
       unpackDynTrait := fun place => do

@@ -36,12 +36,11 @@ def main : IO Unit := do
     unless (← resolveType context 64 field) == 1 do throw "raw field substitution picked wrong identity"
     let raw ← ofType context 64 4
     unless (← resolveType context 64 raw) == 4 do throw "ADT definition identity roundtrip failed"
+    -- This module intentionally tests the immutable source-only bridge.
+    -- Novel construction is covered by GenericInstantiationWorld.lean.
     let pointer := Term.node .type "raw_pointer" "mutable" (.cons field .nil)
-    let id ← resolveType context 64 pointer
-    unless id ≥ context.types.size do throw "novel pointer did not receive a new identity"
-    unless (← ofType context 64 id) == pointer do throw "novel pointer shape roundtrip failed"
-    unless rejected (resolveType context 64 (.node .type "raw_pointer" "immutable" (.cons field .nil))) do
-      throw "unsupported immutable constructor was accepted"
+    unless rejected (resolveType context 64 pointer) do
+      throw "source-only lookup invented a constructor outside its prefix"
     unless rejected (resolveType context 64 (.definition .type "adt" ⟨3, 10⟩ (.cons field .nil))) do
       throw "unrelated ADT with equal display/layout was accepted"
     let duplicate : TypeNode := {id := context.types.size, display := "same", layoutId := 0, shape := .uint (.known .u32)}

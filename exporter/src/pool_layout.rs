@@ -3,6 +3,15 @@ use rustc_index::Idx;
 use rustc_middle::ty::TyCtxt;
 use serde::Serialize;
 
+// Raw contextual query identities must never alias canonical requests merely
+// because rustc happened to produce equal physical layout values.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum LayoutKey<'tcx> {
+    Computed(rustc_abi::TyAndLayout<'tcx, rustc_middle::ty::Ty<'tcx>>),
+    PointerData(rustc_middle::ty::Ty<'tcx>),
+    EnumTag(rustc_middle::ty::Ty<'tcx>),
+}
+
 #[derive(Serialize)]
 #[serde(untagged)]
 pub(super) enum Layout {
@@ -10,6 +19,10 @@ pub(super) enum Layout {
     TupleRecipe { tuple_type: u64 },
     UnionRecipe { union_type: u64 },
     StructRecipe { struct_type: u64 },
+    SequenceRecipe { sequence_type: u64 },
+    PointerRecipe { pointer_type: u64 },
+    PointerDataRecipe { pointer_data_type: u64 },
+    EnumTagRecipe { enum_tag_type: u64 },
     Material(FullLayout),
 }
 #[derive(Serialize)]

@@ -28,6 +28,7 @@ private def fieldType (m : Metadata) (parent : TyAndLayout MIR.TyId) (index : Na
 private structure Machine where
   returnMemory : ReturnMemory.State
   returnPlace : MemoryOperandPlace AllocId
+  typeArena : Input.TypeArena.World
   returned : Bool := false
   trace : List String := []
 private abbrev State := StepState AllocId (TyAndLayout MIR.TyId) Unit Machine
@@ -228,7 +229,7 @@ private def readBool (m : Metadata) (operand : MIR.Operand) : Exec Bool := do
   lift (scalar.toBool.mapError ScalarOps.scalarError)
 
 private def controlHooks (m : Metadata) : TerminatorHooks AllocId (TyAndLayout MIR.TyId) Unit Machine Unit (OpTy AllocId) (RvalueImmTy AllocId) := {
-  bodySpan := fun _ => .error (.unsupported "unwind body span query")
+  bodySpan := fun _ state => (state,.error (.unsupported "unwind body span query"))
   returnOperand := fun _ state => runRvalue (evalPlaceOp m ⟨0, #[]⟩ none) state
   popFrame := fun _ state =>
     match state.stack.popFrame with
@@ -283,7 +284,7 @@ private def execute (m : Metadata) (fuel : Nat) (state : State) : State × Excep
     | .error e => (state, .error e)
     | .ok false => (state, .ok ())
     | .ok true => execute m fuel state
-private def initialState (m : Metadata) (lowered : Input.LoweredBody) (loaded : LoadedBody) (fnInstance : CallInstance) (argument : Nat) : Result State := do
+private def initialState (m : Metadata) (typeArena : Input.TypeArena.World) (lowered : Input.LoweredBody) (loaded : LoadedBody) (fnInstance : CallInstance) (argument : Nat) : Result State := do
   if lowered.body.argumentCount != 1 then throw "expected one argument"
   let retTy ← need lowered.body.locals[0]? "return type"
   let retLayout ← (lookup m retTy).mapError reprStr
@@ -309,7 +310,7 @@ private def initialState (m : Metadata) (lowered : Input.LoweredBody) (loaded : 
   let integer ← (ScalarInt.tryFromUInt (BitVec.ofNat 128 argument) argLayout.layout.size).mapError toString
   let integer ← need integer "argument fit"
   frame ← (frame.setLocalOperand 1 (.immediate (.scalar (.fromScalarInt integer)))).mapError toString
-  pure ⟨⟨#[frame]⟩, { returnMemory, returnPlace := output }⟩
+  pure ⟨⟨#[frame]⟩, { returnMemory, returnPlace := output, typeArena }⟩
 private def must (result : Except String A) : IO A :=
   match result with | .ok value => pure value | .error error => throw (IO.userError error)
 private def check (condition : Bool) (message : String) : IO Unit :=
@@ -324,12 +325,13 @@ def main (args : List String) : IO Unit := do
   let program ← must (Input.lowerProgram decoded.document)
   let prepared ← must (Input.CallResolution.prepare program)
   let root ← must (need prepared.program.input.bodyRoots[0]? "canonical root instance")
-  let loaded ← must (Input.CallResolution.loadedBodyOfInstance prepared root.entryInstance)
-  let lowered ← must (prepared.program.resolveBody loaded.identity.index)
+  let initialTypes ← must (Input.TypeArena.World.ofDocument prepared.program.input)
+  let (loaded,typeArena) ← must ((Input.CallResolution.loadedBodyOfInstance prepared root.entryInstance).run initialTypes)
+  let (lowered,typeArena) ← must ((prepared.program.resolveBody loaded.identity.index).run typeArena)
   let metadata := prepared.runtime
   check (metadata.source.types.all (fun ty => (metadata.lookup ty.id).isOk)) "fixture layout import obligations"
   check (metadata.target.base == TargetDataLayout.mk .little .w64) "exported target mismatch"
-  let initial ← must (initialState metadata lowered loaded root.entryInstance 41)
+  let initial ← must (initialState metadata typeArena lowered loaded root.entryInstance 41)
   let (_, beforeWrite) := ReturnMemory.read metadata.target.base initial.machine.returnMemory initial.machine.returnPlace
   check (!beforeWrite.isOk) "uninitialized return memory read succeeded"
   let (finished,outcome) := execute metadata 100 initial
@@ -348,7 +350,7 @@ def main (args : List String) : IO Unit := do
   check (finished.machine.trace.contains "scalarBinary" && finished.machine.trace.contains "project" &&
     finished.machine.trace.contains "writeLocal" && finished.machine.trace.contains "assertCondition" &&
     finished.machine.trace.contains "returnMemoryWrite") "integration path missing"
-  let overflowInitial ← must (initialState metadata lowered loaded root.entryInstance 4294967295)
+  let overflowInitial ← must (initialState metadata typeArena lowered loaded root.entryInstance 4294967295)
   let (panicked,overflow) := execute metadata 100 overflowInitial
   check (overflow == Except.error (StepError.machineStop "assertion panic")) "overflow failed to reach Assert panic"
   check (!panicked.machine.returned && panicked.machine.trace.contains "assertPanic") "overflow returned normally"

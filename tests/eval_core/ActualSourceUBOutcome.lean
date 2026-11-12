@@ -207,9 +207,10 @@ private def runPrepared (prepared : Input.EvalPreparation.Prepared)
   let dummy := prepared.dummySpan
   let definition ← compiler.program.rootDefinitionId 0
   let rootInstance ← Input.CompilerInstance.item compiler.loweringContext.instances definition #[]
-  let _body ← Input.CallResolution.loadedBodyOfInstance compiler.lifecycle.calls.calls rootInstance
+  let initialTypes ← compiler.initialTypes
+  let (_body,arrays) ← (Input.RuntimeArrayTypes.perform initialTypes
+    (Input.CallResolution.loadedBodyOfInstance compiler.lifecycle.calls.calls rootInstance)).mapError reprStr
   let image := prepared.image
-  let arrays ← compiler.initialArrays
   let host : Host := {
     blocking := ⟨none, #[]⟩, clock := .virtual 0, deadlines := .empty
     readiness := {}, futex := {}, sync := {}, io := {}, events := #[]

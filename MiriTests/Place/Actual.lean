@@ -108,7 +108,7 @@ private def memoryCopyHooks : MemoryCopyHooks AllocId Unit Unit (Array String) U
   beforeMemoryWrite := fun s memory _ _ _ _ _ => ⟨memory, s.push "copy-write", .ok ()⟩ }
 private def copyHooks : PlaceCopyHooks AllocId S Unit := {
   compatible := fun a b => .ok (a == b)
-  hasPadding := fun _ => .ok true
+  hasPadding := fun _ => pure true
   readRaw := fun _ op => placeReadRaw context S.memory S.events putMemory (fun s _ => s) op
   memoryCopy := fun _ src dest =>
     placeMemoryCopy true (Size.ofBytes 8)

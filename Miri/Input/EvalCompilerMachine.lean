@@ -61,7 +61,7 @@ def config
     (base : ExecutionMachine.Config MiriMemoryKind (User Os R P H D O Aff B Host) C O ABI.ExternAbi ClockHost) :
     ExecutionMachine.Config MiriMemoryKind (User Os R P H D O Aff B Host) C O ABI.ExternAbi ClockHost :=
   let functionEngine := functions pointers base.functions
-  let source := CompilerProviders.executionHooks prepared image
+  let source := CompilerProviders.executionHooks prepared EvalProjectionMachine.arrays image
     (vtables prepared image functionEngine) userRelevantCrates {base with functions := functionEngine}
   EvalCoreMachine.config prepared.lifecycle.calls.symbols.facts prepared.lifecycle.calls.runtime
     limits choice failureRate spans pointers sync weakError deallocation source

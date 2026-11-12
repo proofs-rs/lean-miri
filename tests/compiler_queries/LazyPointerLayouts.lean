@@ -7,101 +7,106 @@ private def must (value : Except String α) : IO α :=
 private def check (value : Bool) (message : String) : IO Unit :=
   unless value do throw (IO.userError message)
 
-/-- Source-derived comparison adapter: retain baseline rustc layouts and exact
-pointer-metadata dependency IDs. No candidate query result serves as oracle.
-Unrelated baseline catalogs are not decoded as candidate-schema data. -/
-private def baselineMaterial (path : String) :
-    IO (Miri.ABI.RuntimeTargetDataLayout × Array TypeNode × Array Layout) := do
+private structure Oracle where
+  target : Miri.ABI.RuntimeTargetDataLayout
+  rows : Array Json
+  layouts : Array Layout
+
+/-- Only pointer constructors and raw physical layouts are read from the old
+oracle. In particular, no missing alias rigidity or FnDef binder is guessed. -/
+private def baselineMaterial (path : String) : IO Oracle := do
   let raw ← must (Json.parse (← IO.FS.readFile path))
   check ((← must ((← must (raw.getObjVal? "schema_version")).getNat?)) == 12)
     "expected canonical-main schema12 baseline"
-  let targetJson ← must (raw.getObjVal? "runtime_target_data_layout")
-  let targetInput ← must (JsonReader.run CatalogDecoder.targetDataLayout targetJson.compress)
+  let targetInput ← must (JsonReader.run CatalogDecoder.targetDataLayout
+    (← must (raw.getObjVal? "runtime_target_data_layout")).compress)
   let target ← must ((RuntimeMetadata.importTarget targetInput).mapError toString)
   let rows ← must ((← must (raw.getObjVal? "types")).getArr?)
-  let types ← rows.mapM fun row => do
-    check ((← must ((← must ((← must (row.getObjVal? "shape")).getObjVal? "kind")).getStr?)) != "alias")
-      "use the dedicated pointer fixture: schema12 does not retain alias rigidity"
-    let fields ← must row.getObj?
-    let core := Json.mkObj (fields.toList.filter (fun field => field.1 != "compiler_facts"))
-    let node ← must (JsonReader.run DecoderValues.parseTypeNode core.compress)
-    let facts ← must (row.getObjVal? "compiler_facts")
-    let queryObject ← must ((← must (facts.getObjVal? "type_queries")).getObj?)
-    let queries ← queryObject.toList.toArray.mapM fun (key,value) => do
-      if value == Json.null then pure (key, none)
-      else pure (key, some (← must value.getNat?))
-    return {node with compilerFacts := some {
-      typingEnvironment := "fully_monomorphized", booleanQueries := #[], typeQueries := queries}}
   let values ← must ((← must (raw.getObjVal? "layout_values")).getArr?)
   let refs ← must ((← must (raw.getObjVal? "layouts")).getArr?)
   let layouts ← refs.mapM fun row => do
     let id ← must row.getNat?
     let some value := values[id]? | throw (IO.userError "baseline layout reference absent")
     must (JsonReader.run DecoderValues.parseLayout value.compress)
-  pure (target, types, layouts)
+  pure ⟨target,rows,layouts⟩
+
+private def Oracle.layout (oracle : Oracle) (id : Nat) : IO Miri.ABI.LayoutData := do
+  let some row := oracle.rows[id]? | throw (IO.userError "baseline type absent")
+  let layoutId ← must ((← must (row.getObjVal? "layout")).getNat?)
+  let some layout := oracle.layouts[layoutId]? | throw (IO.userError "baseline layout absent")
+  must ((RuntimeMetadata.layout oracle.target layout).mapError toString)
+
+private def pointerNode? (row : Json) : IO (Option TypeNode) := do
+  let shape ← must (row.getObjVal? "shape")
+  let kind ← must ((← must (shape.getObjVal? "kind")).getStr?)
+  unless ["raw_pointer","reference"].contains kind do return none
+  let fields ← must row.getObj?
+  let core := Json.mkObj (fields.toList.filter (·.1 != "compiler_facts"))
+  return some (← must (JsonReader.run DecoderValues.parseTypeNode core.compress))
+
+private def pointee (node : TypeNode) : IO (Nat × Bool) :=
+  match node.shape with
+  | .rawPointer child _ => pure (child,false)
+  | .reference child .. => pure (child,true)
+  | _ => throw (IO.userError "pointer constructor expected")
 
 def main (args : List String) : IO Unit := do
-  let [baselinePath, candidatePath] := args
-    | throw (IO.userError "expected baseline12.json candidate13.json")
-  let (target, types, layouts) ← baselineMaterial baselinePath
-  -- The direct source algorithm comparison runs independently of candidate
-  -- MIR decoding, followed below by the integrated synthetic-ID comparison.
-  let baselineLayout (id : Nat) : IO Miri.ABI.LayoutData := do
-    let some source := types[id]? | throw (IO.userError "baseline type absent")
-    let some input := layouts[source.layoutId]? | throw (IO.userError "baseline layout absent")
-    must ((RuntimeMetadata.layout target input).mapError toString)
+  let [baselinePath,candidatePath] := args | throw (IO.userError "expected baseline12.json candidate13.json")
+  let oracle ← baselineMaterial baselinePath
+  let mut baselinePointers : Array TypeNode := #[]
+  for row in oracle.rows do
+    if let some node ← pointerNode? row then baselinePointers := baselinePointers.push node
   let mut direct := 0
-  for original in types do
-    let constructor := match original.shape with
-      | .rawPointer child .Mut => some (child, false)
-      | .reference child .Mut .Erased => some (child, true)
-      | _ => none
-    let some (child, isReference) := constructor | continue
-    let childLayout ← baselineLayout child
-    let pointerMetadata ← if childLayout.isSized then pure none else do
-      let some childNode := types[child]? | throw (IO.userError "baseline pointee absent")
-      let some facts := childNode.compilerFacts | throw (IO.userError "baseline pointee facts absent")
-      let some (_,some id) := facts.typeQueries.find? (·.1 == "pointer_metadata_type")
-        | throw (IO.userError "baseline metadata type absent")
-      pure (some (← baselineLayout id))
-    let actual ← must (Miri.ABI.PrimitiveLayout.pointer target isReference pointerMetadata)
-    let expected ← baselineLayout original.id
-    check (actual == expected) s!"direct pointer source algorithm differs from rustc: {original.display}"
-    direct := direct + 1
-  IO.println s!"PASS {direct} direct complete pointer/reference layouts equal pinned rustc"
-  let decoded ← must (decodeJson (← IO.FS.readFile candidatePath))
-  -- Baseline type/layout material alone determines the comparison. Candidate
-  -- records supply unrelated required fields of the internal document structure.
-  let runtime ← must ((RuntimeMetadata.ofDocument
-    {decoded.document with types, layouts}).mapError toString)
-  check (runtime.target == target) "comparison target differs from baseline"
-  let mut count := 0
   let mut covered : Array (String × Bool) := #[]
-  for original in types do
-    let constructor := match original.shape with
-      | .rawPointer child .Mut => some (child, false)
-      | .reference child .Mut .Erased => some (child, true)
-      | _ => none
-    let some (pointee, isReference) := constructor | continue
-    let some source := types[pointee]? | throw (IO.userError "baseline pointee absent")
-    let some expectedInput := layouts[original.layoutId]?
-      | throw (IO.userError "baseline pointer layout absent")
-    let expected ← must ((RuntimeMetadata.layout target expectedInput).mapError toString)
-    -- Force a recipe ID even when an equivalent material constructor exists.
-    let forced := TypeArena.constructedId types.size pointee isReference
-    check (forced >= types.size) "synthetic namespace overlaps material"
-    let actual ← must ((runtime.lookup forced).mapError toString)
-    check (actual.layout == expected)
-      s!"lazy pointer layout differs from rustc: {original.display}\nexpected={repr expected}\nactual={repr actual.layout}"
-    let kind := match source.shape with
-      | .str => "str" | .slice _ => "slice" | .dynamicTraitObject .. => "dyn"
-      | _ => "other"
-    let pointeeLayout ← must ((runtime.lookup pointee).mapError toString)
-    let kind := if pointeeLayout.layout.isSized then "sized" else kind
+  -- This independently tests the physical pointer calculator using only rustc
+  -- metadata dependencies, including dynamic metadata. It does not claim that
+  -- the metadata-type query itself has been independently reconstructed here.
+  for original in baselinePointers do
+    let (child,isReference) ← pointee original
+    let childLayout ← oracle.layout child
+    let metadata ← if childLayout.isSized then pure none else do
+      let some source := oracle.rows[child]? | throw (IO.userError "baseline pointee absent")
+      let facts ← must (source.getObjVal? "compiler_facts")
+      let queries ← must (facts.getObjVal? "type_queries")
+      let id ← must ((← must (queries.getObjVal? "pointer_metadata_type")).getNat?)
+      pure (some (← oracle.layout id))
+    let actual ← must (Miri.ABI.PrimitiveLayout.pointer oracle.target isReference metadata)
+    check (actual == (← oracle.layout original.id)) s!"pointer calculator differs from pinned rustc: {original.display}"
+    let some source := oracle.rows[child]? | throw (IO.userError "baseline pointee absent")
+    let rawKind ← must ((← must ((← must (source.getObjVal? "shape")).getObjVal? "kind")).getStr?)
+    let kind := if childLayout.isSized then "sized" else match rawKind with
+      | "str" => "str" | "slice" => "slice" | "dynamic_trait_object" => "dyn" | _ => "other"
     let coverage := (kind,isReference)
     unless covered.contains coverage do covered := covered.push coverage
-    count := count + 1
-  for kind in ["sized", "str", "slice", "dyn"] do
-    for isReference in [false, true] do
-      check (covered.contains (kind,isReference)) s!"missing oracle coverage {kind}/ref={isReference}"
-  IO.println s!"PASS {count} forced-lazy pointer/reference complete layouts equal pinned rustc, including sized,str,slice,dyn pointees"
+    direct := direct + 1
+  for kind in ["sized","str","slice","dyn"] do
+    for reference in [false,true] do
+      check (covered.contains (kind,reference)) s!"missing independent pointer coverage {kind}/ref={reference}"
+  IO.println s!"PASS {direct} independent complete pointer/reference calculator layouts equal pinned rustc"
+  let decoded ← must (decodeJson (← IO.FS.readFile candidatePath))
+  let runtime ← must ((RuntimeMetadata.ofDocument decoded.document).mapError toString)
+  check (runtime.target == oracle.target) "comparison target differs from baseline"
+  let some checked := runtime.checkedMaterial | throw (IO.userError "checked material prefix absent")
+  let initial := TypeArena.World.ofCheckedMaterial checked
+  let mut reused := 0
+  for node in decoded.document.types do
+    unless [.rawPointer,.reference].contains node.shapeKind do continue
+    let some key ← must (initial.materialKey node) | throw (IO.userError "material pointer identity absent")
+    let (id,afterIntern) ← must ((TypeArena.World.internType key).run initial)
+    check (id == node.id && afterIntern.constructedTypes.isEmpty && afterIntern.constructedConstants.isEmpty)
+      "canonical source constructor was duplicated instead of reused"
+    let (actual,afterLayout) ← must ((runtime.layoutInWorld id).run afterIntern)
+    check (afterLayout.constructedTypes.isEmpty && afterLayout.constructedConstants.isEmpty)
+      "material pointer layout unexpectedly created execution syntax"
+    let mut matched := false
+    for prior in baselinePointers do
+      -- Fixed-fixture spellings select the independent oracle only; runtime
+      -- identities above are complete raw constructor keys, never spellings.
+      if prior.display == node.display && prior.shapeKind == node.shapeKind then
+        check (actual.layout == (← oracle.layout prior.id)) s!"source pointer layout differs from pinned rustc: {node.display}"
+        matched := true
+    check matched s!"source pointer lacks independent fixture correspondence: {node.display}"
+    reused := reused + 1
+  check (reused > 0) "no source pointer identities checked"
+  IO.println s!"PASS {reused} canonical material pointer identities reused without duplicate IDs; source layouts equal independent rustc"
+  IO.println "New absent-constructor algorithm evidence is separately checked by WorldLayouts.lean, including new ADT pointees and both wide-pointer fields."

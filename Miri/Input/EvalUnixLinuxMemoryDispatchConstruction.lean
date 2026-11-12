@@ -21,6 +21,7 @@ structure Components (S : Type) where
 
 def fromSource [DecidableEq MiriMemoryKind]
     (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (RuntimeState U))
     (userRelevantCrates : Array Nat)
     (environment : UnixEnvironmentDispatch.Hooks (RuntimeState U) Os E EnvVars.Kind)
     (access : PlaceMachine.AccessConfig MiriMemoryKind (PointerMachine.User U))
@@ -54,7 +55,7 @@ def fromSource [DecidableEq MiriMemoryKind]
         | .ok scalar => pure scalar
         | .error error => throw (ScalarOps.immediateError error)
       hostUsizeBits }
-  let linuxMemory ← EvalUnixMemoryConstruction.fromSource p userRelevantCrates environment
+  let linuxMemory ← EvalUnixMemoryConstruction.fromSource p types userRelevantCrates environment
     signatures memory extras spans place choice pageSize
   let target ← p.externStatics.targetFacts |>.mapError StepError.unsupported
   let signature := CompilerNamedShimAbi.query p.namedAbi

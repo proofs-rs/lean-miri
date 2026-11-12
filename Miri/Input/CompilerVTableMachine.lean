@@ -140,21 +140,24 @@ def vtableHooks (p : Prepared) (image : AllocationImage.Imported)
     (CompilerVTableQueries.hooks p.queries
       (CompilerCallPipeline.vtableHooks p.calls image (fun (state : MachineHooks.State K User) => state.machine.memory) base))
 
-def virtualHooks (p : Prepared) (image : AllocationImage.Imported)
+def virtualHooks (p : Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (image : AllocationImage.Imported)
     (h : VTableMachine.Hooks K User Other)
     (base : VirtualCalls.Hooks Provenance (MachineHooks.State K User) C MachineHooks.FrameExtra) :
     VirtualCalls.Hooks Provenance (MachineHooks.State K User) C MachineHooks.FrameExtra :=
-  {base with compiler := CompilerCallPipeline.compilerHooks p.calls base.compiler, vtable := vtableHooks p image h base.vtable}
+  {base with compiler := CompilerCallPipeline.compilerHooks p.calls types base.compiler, vtable := vtableHooks p image h base.vtable}
 
 /-- Production compiler/vtable leaves require no runtime-operation scaffold. -/
-def virtualLeaves (p : Prepared) (image : AllocationImage.Imported)
+def virtualLeaves (p : Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (image : AllocationImage.Imported)
     (h : VTableMachine.Hooks K User Other) (base : ExecutionCallLeaves.Virtual K User C) :
     ExecutionCallLeaves.Virtual K User C :=
-  {base with compiler := CompilerCallPipeline.compilerHooks p.calls base.compiler, vtable := vtableHooks p image h base.vtable}
+  {base with compiler := CompilerCallPipeline.compilerHooks p.calls types base.compiler, vtable := vtableHooks p image h base.vtable}
 
 /-- Close virtual receiver/type selection, dynamic drop, caller location and
 actual function-pointer resolution on the canonical call state. -/
-def callHooks (p : Prepared) (image : AllocationImage.Imported)
+def callHooks (p : Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (image : AllocationImage.Imported)
     (h : VTableMachine.Hooks K User Other)
     (virtual : VirtualCalls.Hooks Provenance (MachineHooks.State K User) C MachineHooks.FrameExtra)
     (budget : Nat)
@@ -162,7 +165,7 @@ def callHooks (p : Prepared) (image : AllocationImage.Imported)
       Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId)) :
     CallHooks Provenance (MachineHooks.State K User) C MachineHooks.FrameExtra
       Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId) :=
-  FunctionPointers.callHooks h.functions (VirtualCalls.bind (virtualHooks p image h virtual) budget base)
+  FunctionPointers.callHooks h.functions (VirtualCalls.bind (virtualHooks p types image h virtual) budget base)
 /-- Unsize/upcast casts create and inspect actual symbolic vtables and actual
 function pointers; compiler layout/type queries remain the source provider. -/
 def castHooks (p : Prepared) (image : AllocationImage.Imported)

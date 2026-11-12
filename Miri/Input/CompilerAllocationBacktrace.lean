@@ -7,6 +7,9 @@ Caller-location attributes and inlined_parent_scope are deliberately irrelevant.
 namespace Miri.Input.CompilerAllocationBacktrace
 open Miri.Interpreter
 
+private def lift (query : Except String α) : TypeArena.WorldM α :=
+  match query with | .ok value => pure value | .error error => throw error
+
 private def checkedSpan (spans : Array SourceSpanData) (span : MIR.SpanRef) :
     Except String SourceSpanData := do
   let some source := spans[span.id]? | throw "allocation backtrace span is absent"
@@ -64,19 +67,20 @@ Invalid compiler metadata is an error; neither a nearby span nor a different
 body with equal contents supplies missing evidence. -/
 def collect (p : CompilerProviders.Prepared)
     (frames : Array CompilerFrameContext.ActualFrame) :
-    Except String (Array (CallInstance × MIR.SpanRef)) := do
+    TypeArena.WorldM (Array (CallInstance × MIR.SpanRef)) := do
   let mut result := #[]
   for frame in frames.toList.reverse do
     let body ← CompilerFrameContext.bodyOfFrame p frame
     unless body.input.instanceId == frame.functionInstance do
       throw "allocation backtrace physical instance/body mismatch"
-    let sourceInstance ← CompilerInstance.source p.program.input.instances frame.functionInstance
+    let sourceInstance ← lift (CompilerInstance.source p.program.input.instances frame.functionInstance)
     let some definition := body.input.definitionId | throw "allocation backtrace body definition is absent"
     unless sourceInstance.instanceKind.defId == definition do
       throw "allocation backtrace def_span belongs to a different instance definition"
-    let trace ← frameTrace p.program.input.spans p.program.input.instances.size
+    let source ← lift (sourceOfFrame frame)
+    let trace ← lift (frameTrace p.program.input.spans p.program.input.instances.size
       body.input.sourceScopes frame.functionInstance ⟨body.input.preambleDefSpanId⟩
-      (← sourceOfFrame frame)
+      source)
     result := result ++ trace
   pure result
 end Miri.Input.CompilerAllocationBacktrace

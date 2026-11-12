@@ -7,11 +7,12 @@ compiler span; queries may not append isolated span identities at runtime. -/
 namespace Miri.Input.CompilerBodySpan
 open Miri.Interpreter
 
-def get (p : CompilerProviders.Prepared) (frame : Frame P L E) :
-    Except StepError MIR.SpanRef := do
+def get (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (frame : Frame P L E) :
+    MachineHooks.M K U MIR.SpanRef := do
   unless frame.bodyIdentity.index < p.program.bodyCount do
     throw (.invalidProgram "unwind body identity absent from canonical compilation")
-  let body ← p.program.resolveBody frame.bodyIdentity.index |>.mapError StepError.unsupported
+  let body ← p.resolveBody types frame.bodyIdentity.index
   unless body.body == frame.body do
     throw (.invalidProgram "unwind body identity/content mismatch")
   unless body.input.spanId < p.program.compilerTables.spans.size do

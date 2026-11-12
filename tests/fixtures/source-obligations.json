@@ -9,7 +9,7 @@
     "Native C/C++ sources are not scanned by these Rust patterns.",
     "No absence/completeness or semantic equivalence claim."
   ],
-  "scanned_files": 707,
+  "scanned_files": 735,
   "candidates": [
     {
       "path": "upstream/crates/aes-0.9.3/src/backends/aarch64_aes.rs",
@@ -89,6 +89,518 @@
       "category": "state_declaration",
       "source_sha256": "8d9d670054b394638ff989e502e1ea18b1fc212bb5bdb0a7fb1ab9332bf4ac1c",
       "text": "struct Token {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 71,
+      "category": "state_declaration",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "pub struct UniformInt<X> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 139,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "return rng.random();",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 144,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "let (hi, lo) = rng.random::<$sample_ty>().wmul(range);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 193,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "return Ok(rng.random());",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 197,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "let (mut result, lo_order) = rng.random::<$sample_ty>().wmul(range);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 202,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "let (new_hi_order, _) = (rng.random::<$sample_ty>()).wmul(range as $sample_ty);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 231,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "return Ok(rng.random());",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 234,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "let (mut result, mut lo) = rng.random::<$sample_ty>().wmul(range);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 238,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "let (new_hi, new_lo) = (rng.random::<$sample_ty>()).wmul(range);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 360,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "let mut v: Simd<$unsigned, LANES> = rng.random();",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 375,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "v = mask.select(v, rng.random());",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 415,
+      "category": "state_declaration",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "pub struct UniformUsize {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 510,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "return rng.random::<u32>() as usize;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 515,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "let (hi, lo) = rng.random::<u32>().wmul(range);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 524,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "return rng.random::<u64>() as usize;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 529,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "let (hi, lo) = rng.random::<u64>().wmul(range);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 604,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "assert_eq!(rng.sample(dist), 10);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 622,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "let v: $ty = rng.sample(my_uniform);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 628,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "let v: $ty = rng.sample(my_uniform);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 634,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "let v: $ty = rng.sample(my_uniform);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 640,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "let v: $ty = rng.sample(my_uniform);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 742,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "*x = rng.sample(&distr);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "line": 754,
+      "category": "nondeterministic_choice",
+      "source_sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880",
+      "text": "*x = rng.sample(&distr);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/increasing_uniform.rs",
+      "line": 13,
+      "category": "state_declaration",
+      "source_sha256": "73b1bf2b30c4e5972f2e902dbb30b90518006bae7eb2628d1ab2547eaeca8ea3",
+      "text": "pub(crate) struct IncreasingUniform<R: RngCore> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/increasing_uniform.rs",
+      "line": 53,
+      "category": "nondeterministic_choice",
+      "source_sha256": "73b1bf2b30c4e5972f2e902dbb30b90518006bae7eb2628d1ab2547eaeca8ea3",
+      "text": "self.chunk = self.rng.random_range(..bound);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 45,
+      "category": "external_dependency",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "/// use rand::seq::IndexedRandom;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 49,
+      "category": "nondeterministic_choice",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "/// println!(\"{:?}\", choices.choose(&mut rng));",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 50,
+      "category": "nondeterministic_choice",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "/// assert_eq!(choices[..0].choose(&mut rng), None);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 59,
+      "category": "nondeterministic_choice",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "Some(&self[rng.random_range(..self.len())])",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 75,
+      "category": "external_dependency",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "/// use rand::seq::IndexedRandom;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 103,
+      "category": "nondeterministic_choice",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "indices: index::sample(rng, self.len(), amount).into_iter(),",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 116,
+      "category": "external_dependency",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "/// use rand::seq::IndexedRandom;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 150,
+      "category": "external_dependency",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "/// use rand::prelude::*;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 175,
+      "category": "nondeterministic_choice",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "Ok(&self[distr.sample(rng)])",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 196,
+      "category": "external_dependency",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "/// use rand::prelude::*;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 257,
+      "category": "nondeterministic_choice",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "Some(&mut self[rng.random_range(..len)])",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 293,
+      "category": "nondeterministic_choice",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "let index = distr.sample(rng);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 304,
+      "category": "external_dependency",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "/// use rand::seq::SliceRandom;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 308,
+      "category": "nondeterministic_choice",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "/// bytes.shuffle(&mut rng);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 325,
+      "category": "external_dependency",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "/// use rand::seq::SliceRandom;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 330,
+      "category": "nondeterministic_choice",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "/// y.shuffle(&mut rng);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 407,
+      "category": "nondeterministic_choice",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "let index = rng.random_range(..i + 1);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 418,
+      "category": "state_declaration",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "/// This struct is created by",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 422,
+      "category": "state_declaration",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "pub struct SliceChooseIter<'a, S: ?Sized + 'a, T: 'a> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 467,
+      "category": "nondeterministic_choice",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "let picked = *chars.choose(&mut r).unwrap();",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 483,
+      "category": "nondeterministic_choice",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "assert_eq!(v.choose(&mut r), None);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 495,
+      "category": "nondeterministic_choice",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "assert_eq!(chars.choose(&mut r), Some(&'l'));",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 518,
+      "category": "nondeterministic_choice",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "nums.shuffle(&mut r);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 531,
+      "category": "nondeterministic_choice",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "empty.shuffle(&mut r);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 533,
+      "category": "nondeterministic_choice",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "one.shuffle(&mut r);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 538,
+      "category": "nondeterministic_choice",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "two.shuffle(&mut r);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "line": 552,
+      "category": "nondeterministic_choice",
+      "source_sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2",
+      "text": "arr.shuffle(&mut r);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand_core-0.9.3/src/lib.rs",
+      "line": 107,
+      "category": "state_declaration",
+      "source_sha256": "d72f3328eb8ddd4a289a38ec8dfe61ced7d59c4c1b65ffb61c251e42d9e165ef",
+      "text": "/// struct CountingRng(u64);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand_core-0.9.3/src/lib.rs",
+      "line": 298,
+      "category": "state_declaration",
+      "source_sha256": "d72f3328eb8ddd4a289a38ec8dfe61ced7d59c4c1b65ffb61c251e42d9e165ef",
+      "text": "pub struct UnwrapErr<R: TryRngCore>(pub R);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand_core-0.9.3/src/lib.rs",
+      "line": 322,
+      "category": "state_declaration",
+      "source_sha256": "d72f3328eb8ddd4a289a38ec8dfe61ced7d59c4c1b65ffb61c251e42d9e165ef",
+      "text": "pub struct UnwrapMut<'r, R: TryRngCore + ?Sized>(pub &'r mut R);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand_core-0.9.3/src/lib.rs",
+      "line": 393,
+      "category": "state_declaration",
+      "source_sha256": "d72f3328eb8ddd4a289a38ec8dfe61ced7d59c4c1b65ffb61c251e42d9e165ef",
+      "text": "/// pub struct MyRngSeed(pub [u8; N]);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand_core-0.9.3/src/lib.rs",
+      "line": 395,
+      "category": "state_declaration",
+      "source_sha256": "d72f3328eb8ddd4a289a38ec8dfe61ced7d59c4c1b65ffb61c251e42d9e165ef",
+      "text": "/// pub struct MyRng(MyRngSeed);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand_core-0.9.3/src/lib.rs",
+      "line": 591,
+      "category": "state_declaration",
+      "source_sha256": "d72f3328eb8ddd4a289a38ec8dfe61ced7d59c4c1b65ffb61c251e42d9e165ef",
+      "text": "pub struct RngReadAdapter<'a, R: TryRngCore + ?Sized> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand_core-0.9.3/src/lib.rs",
+      "line": 619,
+      "category": "state_declaration",
+      "source_sha256": "d72f3328eb8ddd4a289a38ec8dfe61ced7d59c4c1b65ffb61c251e42d9e165ef",
+      "text": "struct SeedableNum(u64);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand_core-0.9.3/src/lib.rs",
+      "line": 659,
+      "category": "state_declaration",
+      "source_sha256": "d72f3328eb8ddd4a289a38ec8dfe61ced7d59c4c1b65ffb61c251e42d9e165ef",
+      "text": "struct SomeRng;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand_core-0.9.3/src/lib.rs",
+      "line": 747,
+      "category": "state_declaration",
+      "source_sha256": "d72f3328eb8ddd4a289a38ec8dfe61ced7d59c4c1b65ffb61c251e42d9e165ef",
+      "text": "struct FourRng;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand_xoshiro-0.7.0/src/common.rs",
+      "line": 245,
+      "category": "state_declaration",
+      "source_sha256": "02964e50bc7e32b6c345910226ab1baa009cdbeb18248aee95662329cbdf0213",
+      "text": "pub struct Seed512(pub [u8; 64]);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand_xoshiro-0.7.0/src/splitmix64.rs",
+      "line": 27,
+      "category": "state_declaration",
+      "source_sha256": "5e14a6d56fb2815e6deecaa97b44644b3428b4b3607f446859b81abb86fa3f67",
+      "text": "pub struct SplitMix64 {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/crates/rand_xoshiro-0.7.0/src/xoshiro128starstar.rs",
+      "line": 25,
+      "category": "state_declaration",
+      "source_sha256": "32a53c2311a064fa60aad5f1e74909296dfd1fc3fac5740ce8476cbb15eb1784",
+      "text": "pub struct Xoshiro128StarStar {",
       "review": "pending"
     },
     {
@@ -19316,6 +19828,622 @@
       "review": "pending"
     },
     {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/clauses_of.rs",
+      "line": 4,
+      "category": "external_dependency",
+      "source_sha256": "465f5dd0f397f87716aedc65048a12dce7ec3af51d88e584ea5ad902b2251bf3",
+      "text": "use rustc_attr_ir::find_attr;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/clauses_of.rs",
+      "line": 5,
+      "category": "external_dependency",
+      "source_sha256": "465f5dd0f397f87716aedc65048a12dce7ec3af51d88e584ea5ad902b2251bf3",
+      "text": "use rustc_data_structures::fx::FxIndexSet;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/clauses_of.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "465f5dd0f397f87716aedc65048a12dce7ec3af51d88e584ea5ad902b2251bf3",
+      "text": "use rustc_hir as hir;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/clauses_of.rs",
+      "line": 7,
+      "category": "external_dependency",
+      "source_sha256": "465f5dd0f397f87716aedc65048a12dce7ec3af51d88e584ea5ad902b2251bf3",
+      "text": "use rustc_hir::def::DefKind;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/clauses_of.rs",
+      "line": 8,
+      "category": "external_dependency",
+      "source_sha256": "465f5dd0f397f87716aedc65048a12dce7ec3af51d88e584ea5ad902b2251bf3",
+      "text": "use rustc_hir::def_id::{DefId, LocalDefId};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/clauses_of.rs",
+      "line": 9,
+      "category": "external_dependency",
+      "source_sha256": "465f5dd0f397f87716aedc65048a12dce7ec3af51d88e584ea5ad902b2251bf3",
+      "text": "use rustc_middle::ty::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/clauses_of.rs",
+      "line": 12,
+      "category": "external_dependency",
+      "source_sha256": "465f5dd0f397f87716aedc65048a12dce7ec3af51d88e584ea5ad902b2251bf3",
+      "text": "use rustc_span::{DUMMY_SP, Ident, Span, bug, span_bug};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/clauses_of.rs",
+      "line": 83,
+      "category": "external_dependency",
+      "source_sha256": "465f5dd0f397f87716aedc65048a12dce7ec3af51d88e584ea5ad902b2251bf3",
+      "text": "use rustc_hir::*;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/clauses_of.rs",
+      "line": 417,
+      "category": "state_declaration",
+      "source_sha256": "465f5dd0f397f87716aedc65048a12dce7ec3af51d88e584ea5ad902b2251bf3",
+      "text": "struct ConstCollector<'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/clauses_of.rs",
+      "line": 447,
+      "category": "state_declaration",
+      "source_sha256": "465f5dd0f397f87716aedc65048a12dce7ec3af51d88e584ea5ad902b2251bf3",
+      "text": "//     struct Foo<const N: usize, const M: usize = { N + 1 }>;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/clauses_of.rs",
+      "line": 448,
+      "category": "state_declaration",
+      "source_sha256": "465f5dd0f397f87716aedc65048a12dce7ec3af51d88e584ea5ad902b2251bf3",
+      "text": "//     struct Bar<const N: usize>(Foo<N, 3>);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/clauses_of.rs",
+      "line": 571,
+      "category": "state_declaration",
+      "source_sha256": "465f5dd0f397f87716aedc65048a12dce7ec3af51d88e584ea5ad902b2251bf3",
+      "text": "// struct Foo<T, const N: usize = { <T as Trait>::ASSOC }>(T) where T: Trait;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 26,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_abi::FIRST_VARIANT;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 27,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_ast::LitKind;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 28,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_attr_ir::lang_items::LangItem;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 29,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_data_structures::fx::{FxHashSet, FxIndexMap, FxIndexSet};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 30,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_data_structures::sso::SsoHashSet;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 31,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_data_structures::thin_vec::ThinVec;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 32,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_errors::codes::*;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 33,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_errors::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 37,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_hir::def::{CtorKind, CtorOf, DefKind, Res};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 38,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_hir::def_id::{DefId, LocalDefId};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 39,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_hir::{self as hir, AnonConst, GenericArg, GenericArgs, HirId};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 40,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_infer::infer::{InferCtxt, TyCtxtInferExt};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 41,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_infer::traits::DynCompatibilityViolation;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 42,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_lint_defs::builtin::AMBIGUOUS_ASSOCIATED_ITEMS;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 43,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_macros::{TypeFoldable, TypeVisitable};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 44,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_middle::middle::stability::AllowUnstable;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 45,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_middle::ty::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 50,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_session::diagnostics::feature_err;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 51,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_span::def_id::{LocalModId, ModId};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 52,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_span::{DUMMY_SP, Ident, Span, bug, kw, span_bug, sym};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 53,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_trait_selection::infer::InferCtxtExt;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 54,
+      "category": "external_dependency",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "use rustc_trait_selection::traits::{self, FulfillmentError};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 69,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "pub(crate) enum ImpliedBoundsContext<'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 81,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "pub struct GenericPathSegment(pub DefId, pub usize);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 84,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "pub enum PredicateFilter {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 109,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "pub enum RegionInferReason<'a> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 122,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "pub struct InherentAssocCandidate {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 128,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "pub struct ResolvedStructPath<'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 223,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "/// This used to get the enum variants in scope of the type.",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 225,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "/// or to an enum variant depending on the result of this function.",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 253,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "enum AssocItemQSelf {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 270,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "enum LowerTypeRelativePathMode {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 301,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "/// Whether to permit a path to resolve to an enum variant.",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 303,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "pub enum PermitVariants {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 309,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "enum TypeRelativePath<'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 325,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "pub enum ExplicitLateBound {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 331,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "pub enum IsMethodCall {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 339,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "pub(crate) enum GenericArgPosition {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 348,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "pub(crate) enum OverlappingAsssocItemConstraints {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 356,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "pub struct GenericArgCountMismatch {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 365,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "pub struct GenericArgCountResult {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 393,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "enum ForbidParamContext {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 400,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "struct ForbidParamUsesFolder<'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 412,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "\"generic `Self` types are not permitted in enum discriminant values\"",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 415,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "\"generic parameters may not be used in enum discriminant values\"",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 527,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "// params (e.g. an enum discriminant). Walk up the def parent chain to find the",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 540,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "// positions (e.g. enum discriminants) generic parameters are not in scope.",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 554,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "/// in a non-generic anon const context (e.g. MCG or an enum discriminant).",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 724,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "struct GenericArgsCtxt<'a, 'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 1400,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "/// If the path refers to an enum variant and `permit_variants` holds,",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 1523,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "// Check if we have an enum variant or an inherent associated type.",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 2055,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "//        struct Foo<T>(...)",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 2059,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "// 2. Reference to a constructor of an enum variant:",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 2061,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "//        enum E<T> { Foo(...) }",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 2097,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "// Case 1. Reference to a struct constructor.",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 2102,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "// Variant and struct constructors use the",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 2157,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "// Variant and struct constructors use the",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 2229,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "// The resulting `Ty` is type of the variant's enum for now.",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 2396,
+      "category": "mir_dispatch",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "hir::UnOp::Neg,",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 2556,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "// Only an enum can host a tuple-variant constructor (`<Option<u32>>::Some(..)`).",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 2732,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "let e = tcx.dcx().span_err(span, \"struct expression with invalid base path\");",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 2826,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "\"struct expression with multiple initialisers for `{}`\",",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 2842,
+      "category": "state_declaration",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "\"struct expression with missing field initialiser for `{}`\",",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 3139,
+      "category": "mir_dispatch",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "hir::ExprKind::Unary(hir::UnOp::Neg, expr) => match expr.kind {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
+      "line": 3824,
+      "category": "machine_hook",
+      "source_sha256": "00bd5095d916f9f876d49a71339678d2ea7920baaa9f83df66b836ab75ab9ca0",
+      "text": "fn validate_late_bound_regions<'cx>(",
+      "review": "pending"
+    },
+    {
       "path": "upstream/rustc-source/compiler/rustc_middle/src/middle/codegen_fn_attrs.rs",
       "line": 3,
       "category": "external_dependency",
@@ -28988,6 +30116,878 @@
       "review": "pending"
     },
     {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 3,
+      "category": "external_dependency",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "use rustc_abi::{ExternAbi, FIRST_VARIANT, FieldIdx, VariantIdx};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 4,
+      "category": "external_dependency",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "use rustc_attr_ir::lang_items::LangItem;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 5,
+      "category": "external_dependency",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "use rustc_hir as hir;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "use rustc_hir::def_id::DefId;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 7,
+      "category": "external_dependency",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "use rustc_index::{Idx, IndexVec};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 8,
+      "category": "external_dependency",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "use rustc_middle::mir::visit::{MutVisitor, PlaceContext};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 9,
+      "category": "external_dependency",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "use rustc_middle::mir::*;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 10,
+      "category": "external_dependency",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "use rustc_middle::query::Providers;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 11,
+      "category": "external_dependency",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "use rustc_middle::ty::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 14,
+      "category": "external_dependency",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "use rustc_span::{DUMMY_SP, Span, Spanned, bug, dummy_spanned, span_bug};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 209,
+      "category": "state_declaration",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "enum DerefSource {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 219,
+      "category": "state_declaration",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "enum Adjustment {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 237,
+      "category": "state_declaration",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "enum CallKind<'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 285,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "block(&mut blocks, TerminatorKind::goto(return_block));",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 287,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "block(&mut blocks, TerminatorKind::Return);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 309,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "StatementKind::Assign(Box::new((",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 311,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "Rvalue::Cast(",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 312,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "CastKind::PointerCoercion(",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 323,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "kind: TerminatorKind::Call {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 401,
+      "category": "state_declaration",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "pub(super) struct DropShimElaborator<'a, 'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 484,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "StatementKind::Assign(Box::new((",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 486,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "Rvalue::ThreadLocalRef(def_id),",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 489,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "Some(Terminator { source_info, kind: TerminatorKind::Return }),",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 528,
+      "category": "state_declaration",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "struct CloneShimBuilder<'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 594,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "let ret_statement = self.make_statement(StatementKind::Assign(Box::new((",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 596,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "Rvalue::Use(Operand::Copy(rcvr), WithRetag::Yes),",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 598,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "self.block(vec![ret_statement], TerminatorKind::Return, false);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 632,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "let statement = self.make_statement(StatementKind::Assign(Box::new((",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 634,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "Rvalue::Ref(tcx.lifetimes.re_erased, BorrowKind::Shared, src),",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 640,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "TerminatorKind::Call {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 686,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "TerminatorKind::Drop {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 698,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "self.block(vec![], TerminatorKind::goto(target), false);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 706,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "self.block(vec![], TerminatorKind::goto(self.block_index_offset(3)), false);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 707,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "let unwind = self.block(vec![], TerminatorKind::UnwindResume, true);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 708,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "let target = self.block(vec![], TerminatorKind::Return, false);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 720,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "self.block(vec![], TerminatorKind::goto(self.block_index_offset(3)), false);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 721,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "let unwind = self.block(vec![], TerminatorKind::UnwindResume, true);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 723,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "let switch = self.block(vec![], TerminatorKind::Unreachable, false);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 725,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "let target = self.block(vec![], TerminatorKind::Return, false);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 726,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "let unreachable = self.block(vec![], TerminatorKind::Unreachable, false);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 734,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "vec![self.make_statement(StatementKind::SetDiscriminant {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 738,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "TerminatorKind::goto(clone_block),",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 746,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "let rvalue = Rvalue::Discriminant(src);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 747,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "let statement = self.make_statement(StatementKind::Assign(Box::new((temp, rvalue))));",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 751,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "*kind = TerminatorKind::SwitchInt {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 866,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "StatementKind::Assign(Box::new((",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 868,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "Rvalue::Ref(tcx.lifetimes.re_erased, borrow_kind, rcvr_place()),",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 931,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "TerminatorKind::Call {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 952,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "TerminatorKind::Drop {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 964,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "block(&mut blocks, stmts, TerminatorKind::Return, false);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 970,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "TerminatorKind::Drop {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 981,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "block(&mut blocks, vec![], TerminatorKind::UnwindResume, true);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 1035,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "StatementKind::Assign(Box::new((",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 1037,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "Rvalue::Aggregate(",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 1048,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "Some(Terminator { source_info, kind: TerminatorKind::Return }),",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 1115,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "Rvalue::Cast(CastKind::FnPtrToPtr, Operand::Move(Place::from(Local::arg(0))), raw_unit_ptr);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 1119,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "StatementKind::Assign(Box::new((raw_ptr, cast_to_raw_rvalue))),",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 1123,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "Rvalue::Cast(CastKind::Transmute, Operand::Move(Place::from(raw_ptr)), nonnull_ty);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 1126,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "StatementKind::Assign(Box::new((Place::return_place(), transmute_to_nonnull))),",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 1131,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "Some(Terminator { source_info, kind: TerminatorKind::Return }),",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 1158,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "Rvalue::Cast(CastKind::Transmute, Operand::Move(Place::from(Local::arg(0))), self_ty);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 1161,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "StatementKind::Assign(Box::new((Place::return_place(), transmute_to_self))),",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 1166,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "Some(Terminator { source_info, kind: TerminatorKind::Return }),",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 1253,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "let rvalue = Rvalue::Aggregate(",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 1259,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "StatementKind::Assign(Box::new((Place::return_place(), rvalue))),",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_mir_transform/src/shim.rs",
+      "line": 1264,
+      "category": "mir_dispatch",
+      "source_sha256": "36df13c2a4d72fb6f6fe58e1cf391dd428fe49725a0d89437ae44779e3b2dcb6",
+      "text": "Some(Terminator { source_info, kind: TerminatorKind::Return }),",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs",
+      "line": 5,
+      "category": "external_dependency",
+      "source_sha256": "462d2890e543275c8b37e55f31059a6fa0a1d31e5ede1032095ccf1976c8f15f",
+      "text": "use rustc_type_ir::data_structures::HashMap;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "462d2890e543275c8b37e55f31059a6fa0a1d31e5ede1032095ccf1976c8f15f",
+      "text": "use rustc_type_ir::inherent::*;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs",
+      "line": 7,
+      "category": "external_dependency",
+      "source_sha256": "462d2890e543275c8b37e55f31059a6fa0a1d31e5ede1032095ccf1976c8f15f",
+      "text": "use rustc_type_ir::lang_items::{SolverProjectionLangItem, SolverTraitLangItem};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs",
+      "line": 8,
+      "category": "external_dependency",
+      "source_sha256": "462d2890e543275c8b37e55f31059a6fa0a1d31e5ede1032095ccf1976c8f15f",
+      "text": "use rustc_type_ir::solve::SizedTraitKind;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs",
+      "line": 9,
+      "category": "external_dependency",
+      "source_sha256": "462d2890e543275c8b37e55f31059a6fa0a1d31e5ede1032095ccf1976c8f15f",
+      "text": "use rustc_type_ir::solve::inspect::ProbeKind;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs",
+      "line": 10,
+      "category": "external_dependency",
+      "source_sha256": "462d2890e543275c8b37e55f31059a6fa0a1d31e5ede1032095ccf1976c8f15f",
+      "text": "use rustc_type_ir::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs",
+      "line": 14,
+      "category": "external_dependency",
+      "source_sha256": "462d2890e543275c8b37e55f31059a6fa0a1d31e5ede1032095ccf1976c8f15f",
+      "text": "use rustc_type_ir_macros::{TypeFoldable_Generic, TypeVisitable_Generic};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs",
+      "line": 49,
+      "category": "state_declaration",
+      "source_sha256": "462d2890e543275c8b37e55f31059a6fa0a1d31e5ede1032095ccf1976c8f15f",
+      "text": "// Treat `str` like it's defined as `struct str([u8]);`",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs",
+      "line": 171,
+      "category": "state_declaration",
+      "source_sha256": "462d2890e543275c8b37e55f31059a6fa0a1d31e5ede1032095ccf1976c8f15f",
+      "text": "//   `{meta,pointee,}sized_constraint(Adt)` is the deepest struct trail that can be",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs",
+      "line": 420,
+      "category": "state_declaration",
+      "source_sha256": "462d2890e543275c8b37e55f31059a6fa0a1d31e5ede1032095ccf1976c8f15f",
+      "text": "pub(in crate::solve) struct AsyncCallableRelevantTypes<I: Interner> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs",
+      "line": 958,
+      "category": "state_declaration",
+      "source_sha256": "462d2890e543275c8b37e55f31059a6fa0a1d31e5ede1032095ccf1976c8f15f",
+      "text": "struct ReplaceProjectionWith<'a, 'b, I: Interner, D: SolverDelegate<Interner = I>> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs",
+      "line": 1043,
+      "category": "state_declaration",
+      "source_sha256": "462d2890e543275c8b37e55f31059a6fa0a1d31e5ede1032095ccf1976c8f15f",
+      "text": "pub(crate) enum AmbiguousOrRerunNonErased {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+      "line": 5,
+      "category": "external_dependency",
+      "source_sha256": "091259a1d3bb3fdd742de11504aee9576ba0cf14403bc9d9e866d86e82f587d8",
+      "text": "use rustc_macros::StableHash;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "091259a1d3bb3fdd742de11504aee9576ba0cf14403bc9d9e866d86e82f587d8",
+      "text": "use rustc_type_ir::data_structures::HashSet;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+      "line": 7,
+      "category": "external_dependency",
+      "source_sha256": "091259a1d3bb3fdd742de11504aee9576ba0cf14403bc9d9e866d86e82f587d8",
+      "text": "use rustc_type_ir::inherent::*;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+      "line": 8,
+      "category": "external_dependency",
+      "source_sha256": "091259a1d3bb3fdd742de11504aee9576ba0cf14403bc9d9e866d86e82f587d8",
+      "text": "use rustc_type_ir::region_constraint::RegionConstraint;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+      "line": 9,
+      "category": "external_dependency",
+      "source_sha256": "091259a1d3bb3fdd742de11504aee9576ba0cf14403bc9d9e866d86e82f587d8",
+      "text": "use rustc_type_ir::relate::Relate;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+      "line": 10,
+      "category": "external_dependency",
+      "source_sha256": "091259a1d3bb3fdd742de11504aee9576ba0cf14403bc9d9e866d86e82f587d8",
+      "text": "use rustc_type_ir::relate::solver_relating::RelateExt;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+      "line": 11,
+      "category": "external_dependency",
+      "source_sha256": "091259a1d3bb3fdd742de11504aee9576ba0cf14403bc9d9e866d86e82f587d8",
+      "text": "use rustc_type_ir::search_graph::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+      "line": 14,
+      "category": "external_dependency",
+      "source_sha256": "091259a1d3bb3fdd742de11504aee9576ba0cf14403bc9d9e866d86e82f587d8",
+      "text": "use rustc_type_ir::solve::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+      "line": 19,
+      "category": "external_dependency",
+      "source_sha256": "091259a1d3bb3fdd742de11504aee9576ba0cf14403bc9d9e866d86e82f587d8",
+      "text": "use rustc_type_ir::transmute::Answer;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+      "line": 20,
+      "category": "external_dependency",
+      "source_sha256": "091259a1d3bb3fdd742de11504aee9576ba0cf14403bc9d9e866d86e82f587d8",
+      "text": "use rustc_type_ir::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+      "line": 60,
+      "category": "state_declaration",
+      "source_sha256": "091259a1d3bb3fdd742de11504aee9576ba0cf14403bc9d9e866d86e82f587d8",
+      "text": "enum CurrentGoalKind {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+      "line": 104,
+      "category": "state_declaration",
+      "source_sha256": "091259a1d3bb3fdd742de11504aee9576ba0cf14403bc9d9e866d86e82f587d8",
+      "text": "pub struct EvalCtxt<'a, D, I = <D as SolverDelegate>::Interner>",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+      "line": 130,
+      "category": "state_declaration",
+      "source_sha256": "091259a1d3bb3fdd742de11504aee9576ba0cf14403bc9d9e866d86e82f587d8",
+      "text": "/// What kind of goal we're currently computing, see the enum definition",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+      "line": 172,
+      "category": "state_declaration",
+      "source_sha256": "091259a1d3bb3fdd742de11504aee9576ba0cf14403bc9d9e866d86e82f587d8",
+      "text": "pub enum GenerateProofTree {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+      "line": 1192,
+      "category": "state_declaration",
+      "source_sha256": "091259a1d3bb3fdd742de11504aee9576ba0cf14403bc9d9e866d86e82f587d8",
+      "text": "struct ContainsTermOrNotNameable<'a, D: SolverDelegate<Interner = I>, I: Interner> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+      "line": 1838,
+      "category": "state_declaration",
+      "source_sha256": "091259a1d3bb3fdd742de11504aee9576ba0cf14403bc9d9e866d86e82f587d8",
+      "text": "struct NonTrivialVars {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs",
+      "line": 1912,
+      "category": "state_declaration",
+      "source_sha256": "091259a1d3bb3fdd742de11504aee9576ba0cf14403bc9d9e866d86e82f587d8",
+      "text": "enum RerunDecision {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/search_graph.rs",
+      "line": 4,
+      "category": "external_dependency",
+      "source_sha256": "87ac523a95395e699aeec1ed4fa22cdb6045045df6769d1e166cdabaed5bbe8c",
+      "text": "use rustc_type_ir::Interner;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/search_graph.rs",
+      "line": 5,
+      "category": "external_dependency",
+      "source_sha256": "87ac523a95395e699aeec1ed4fa22cdb6045045df6769d1e166cdabaed5bbe8c",
+      "text": "use rustc_type_ir::search_graph::{self, PathKind};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/search_graph.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "87ac523a95395e699aeec1ed4fa22cdb6045045df6769d1e166cdabaed5bbe8c",
+      "text": "use rustc_type_ir::solve::{AccessedOpaques, Certainty, NoSolution, QueryResult, RerunResultExt};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/search_graph.rs",
+      "line": 16,
+      "category": "state_declaration",
+      "source_sha256": "87ac523a95395e699aeec1ed4fa22cdb6045045df6769d1e166cdabaed5bbe8c",
+      "text": "pub(super) struct SearchGraphDelegate<D: SolverDelegate> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/trait_goals.rs",
+      "line": 3,
+      "category": "external_dependency",
+      "source_sha256": "f6270af136a89973f0fce02531e38d0e6d06d7f396fc3d4b5e6946207ede0543",
+      "text": "use rustc_type_ir::data_structures::IndexSet;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/trait_goals.rs",
+      "line": 4,
+      "category": "external_dependency",
+      "source_sha256": "f6270af136a89973f0fce02531e38d0e6d06d7f396fc3d4b5e6946207ede0543",
+      "text": "use rustc_type_ir::fast_reject::DeepRejectCtxt;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/trait_goals.rs",
+      "line": 5,
+      "category": "external_dependency",
+      "source_sha256": "f6270af136a89973f0fce02531e38d0e6d06d7f396fc3d4b5e6946207ede0543",
+      "text": "use rustc_type_ir::inherent::*;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/trait_goals.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "f6270af136a89973f0fce02531e38d0e6d06d7f396fc3d4b5e6946207ede0543",
+      "text": "use rustc_type_ir::lang_items::SolverTraitLangItem;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/trait_goals.rs",
+      "line": 7,
+      "category": "external_dependency",
+      "source_sha256": "f6270af136a89973f0fce02531e38d0e6d06d7f396fc3d4b5e6946207ede0543",
+      "text": "use rustc_type_ir::solve::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/trait_goals.rs",
+      "line": 12,
+      "category": "external_dependency",
+      "source_sha256": "f6270af136a89973f0fce02531e38d0e6d06d7f396fc3d4b5e6946207ede0543",
+      "text": "use rustc_type_ir::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/trait_goals.rs",
+      "line": 662,
+      "category": "external_dependency",
+      "source_sha256": "f6270af136a89973f0fce02531e38d0e6d06d7f396fc3d4b5e6946207ede0543",
+      "text": "use rustc_type_ir::transmute::Answer;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/trait_goals.rs",
+      "line": 1251,
+      "category": "state_declaration",
+      "source_sha256": "f6270af136a89973f0fce02531e38d0e6d06d7f396fc3d4b5e6946207ede0543",
+      "text": "/// struct Foo<T, U: ?Sized> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/trait_goals.rs",
+      "line": 1273,
+      "category": "state_declaration",
+      "source_sha256": "f6270af136a89973f0fce02531e38d0e6d06d7f396fc3d4b5e6946207ede0543",
+      "text": "// that the struct has a tail field.",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_next_trait_solver/src/solve/trait_goals.rs",
+      "line": 1533,
+      "category": "state_declaration",
+      "source_sha256": "f6270af136a89973f0fce02531e38d0e6d06d7f396fc3d4b5e6946207ede0543",
+      "text": "pub(super) enum TraitGoalProvenVia {",
+      "review": "pending"
+    },
+    {
       "path": "upstream/rustc-source/compiler/rustc_target/src/asm/mod.rs",
       "line": 4,
       "category": "external_dependency",
@@ -30684,6 +32684,782 @@
       "review": "pending"
     },
     {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/normalize.rs",
+      "line": 3,
+      "category": "external_dependency",
+      "source_sha256": "415d68fad8f4954a6567e18f011f12b4b06b4acc3d1df999f67b9be11a2b94e0",
+      "text": "use rustc_errors::msg;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/normalize.rs",
+      "line": 4,
+      "category": "external_dependency",
+      "source_sha256": "415d68fad8f4954a6567e18f011f12b4b06b4acc3d1df999f67b9be11a2b94e0",
+      "text": "use rustc_infer::infer::at::At;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/normalize.rs",
+      "line": 5,
+      "category": "external_dependency",
+      "source_sha256": "415d68fad8f4954a6567e18f011f12b4b06b4acc3d1df999f67b9be11a2b94e0",
+      "text": "use rustc_infer::infer::{InferCtxt, InferOk};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/normalize.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "415d68fad8f4954a6567e18f011f12b4b06b4acc3d1df999f67b9be11a2b94e0",
+      "text": "use rustc_infer::traits::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/normalize.rs",
+      "line": 9,
+      "category": "external_dependency",
+      "source_sha256": "415d68fad8f4954a6567e18f011f12b4b06b4acc3d1df999f67b9be11a2b94e0",
+      "text": "use rustc_macros::extension;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/normalize.rs",
+      "line": 10,
+      "category": "external_dependency",
+      "source_sha256": "415d68fad8f4954a6567e18f011f12b4b06b4acc3d1df999f67b9be11a2b94e0",
+      "text": "use rustc_middle::traits::{ObligationCause, ObligationCauseCode};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/normalize.rs",
+      "line": 11,
+      "category": "external_dependency",
+      "source_sha256": "415d68fad8f4954a6567e18f011f12b4b06b4acc3d1df999f67b9be11a2b94e0",
+      "text": "use rustc_middle::ty::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/normalize.rs",
+      "line": 15,
+      "category": "external_dependency",
+      "source_sha256": "415d68fad8f4954a6567e18f011f12b4b06b4acc3d1df999f67b9be11a2b94e0",
+      "text": "use rustc_span::span_bug;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/normalize.rs",
+      "line": 154,
+      "category": "state_declaration",
+      "source_sha256": "415d68fad8f4954a6567e18f011f12b4b06b4acc3d1df999f67b9be11a2b94e0",
+      "text": "struct AssocTypeNormalizer<'a, 'b, 'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 5,
+      "category": "external_dependency",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "use rustc_attr_ir::lang_items::LangItem;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "use rustc_data_structures::sso::SsoHashSet;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 7,
+      "category": "external_dependency",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "use rustc_errors::ErrorGuaranteed;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 8,
+      "category": "external_dependency",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "use rustc_hir::def_id::DefId;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 9,
+      "category": "external_dependency",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "use rustc_infer::infer::DefineOpaqueTypes;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 10,
+      "category": "external_dependency",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "use rustc_infer::traits::{ObligationCauseCode, PredicateObligations};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 11,
+      "category": "external_dependency",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "use rustc_middle::traits::select::OverflowError;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 12,
+      "category": "external_dependency",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "use rustc_middle::traits::{BuiltinImplSource, ImplSource, ImplSourceUserDefinedData};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 13,
+      "category": "external_dependency",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "use rustc_middle::ty::fast_reject::DeepRejectCtxt;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 14,
+      "category": "external_dependency",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "use rustc_middle::ty::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 17,
+      "category": "external_dependency",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "use rustc_span::{bug, span_bug, sym};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 38,
+      "category": "state_declaration",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "pub(super) struct InProgress;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 42,
+      "category": "state_declaration",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "pub enum ProjectionError<'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 51,
+      "category": "state_declaration",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "enum ProjectionCandidate<'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 66,
+      "category": "state_declaration",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "enum ProjectionCandidateSet<'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 149,
+      "category": "state_declaration",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "pub(super) enum ProjectAndUnifyResult<'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 652,
+      "category": "state_declaration",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "enum Projected<'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 657,
+      "category": "state_declaration",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "struct Progress<'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "line": 1192,
+      "category": "state_declaration",
+      "source_sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "text": "// This happens if we reach the recursion limit when finding the struct tail.",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_traits/src/normalize_erasing_regions.rs",
+      "line": 1,
+      "category": "external_dependency",
+      "source_sha256": "ee4a46776ccd32a10fd94cdc68324d2ced6894b3c08ef04d4589688695120bd5",
+      "text": "use rustc_infer::infer::TyCtxtInferExt;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_traits/src/normalize_erasing_regions.rs",
+      "line": 2,
+      "category": "external_dependency",
+      "source_sha256": "ee4a46776ccd32a10fd94cdc68324d2ced6894b3c08ef04d4589688695120bd5",
+      "text": "use rustc_middle::query::Providers;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_traits/src/normalize_erasing_regions.rs",
+      "line": 3,
+      "category": "external_dependency",
+      "source_sha256": "ee4a46776ccd32a10fd94cdc68324d2ced6894b3c08ef04d4589688695120bd5",
+      "text": "use rustc_middle::traits::query::NoSolution;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_traits/src/normalize_erasing_regions.rs",
+      "line": 4,
+      "category": "external_dependency",
+      "source_sha256": "ee4a46776ccd32a10fd94cdc68324d2ced6894b3c08ef04d4589688695120bd5",
+      "text": "use rustc_middle::ty::{self, PseudoCanonicalInput, TyCtxt, TypeFoldable, TypeVisitableExt};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_traits/src/normalize_erasing_regions.rs",
+      "line": 5,
+      "category": "external_dependency",
+      "source_sha256": "ee4a46776ccd32a10fd94cdc68324d2ced6894b3c08ef04d4589688695120bd5",
+      "text": "use rustc_trait_selection::traits::query::normalize::QueryNormalizeExt;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_traits/src/normalize_erasing_regions.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "ee4a46776ccd32a10fd94cdc68324d2ced6894b3c08ef04d4589688695120bd5",
+      "text": "use rustc_trait_selection::traits::{Normalized, ObligationCause};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
+      "line": 3,
+      "category": "external_dependency",
+      "source_sha256": "1cebc01da4a128b9c7442c20aa299ee0156ef14facb4ecfb639ad3ed23ce1d75",
+      "text": "use rustc_abi::Primitive::Pointer;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
+      "line": 4,
+      "category": "external_dependency",
+      "source_sha256": "1cebc01da4a128b9c7442c20aa299ee0156ef14facb4ecfb639ad3ed23ce1d75",
+      "text": "use rustc_abi::{Align, BackendRepr, ExternAbi, PointerKind, Scalar, Size};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
+      "line": 5,
+      "category": "external_dependency",
+      "source_sha256": "1cebc01da4a128b9c7442c20aa299ee0156ef14facb4ecfb639ad3ed23ce1d75",
+      "text": "use rustc_attr_ir::find_attr;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "1cebc01da4a128b9c7442c20aa299ee0156ef14facb4ecfb639ad3ed23ce1d75",
+      "text": "use rustc_attr_ir::lang_items::LangItem;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
+      "line": 7,
+      "category": "external_dependency",
+      "source_sha256": "1cebc01da4a128b9c7442c20aa299ee0156ef14facb4ecfb639ad3ed23ce1d75",
+      "text": "use rustc_hir as hir;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
+      "line": 8,
+      "category": "external_dependency",
+      "source_sha256": "1cebc01da4a128b9c7442c20aa299ee0156ef14facb4ecfb639ad3ed23ce1d75",
+      "text": "use rustc_middle::middle::deduced_param_attrs::DeducedParamAttrs;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
+      "line": 9,
+      "category": "external_dependency",
+      "source_sha256": "1cebc01da4a128b9c7442c20aa299ee0156ef14facb4ecfb639ad3ed23ce1d75",
+      "text": "use rustc_middle::query::Providers;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
+      "line": 10,
+      "category": "external_dependency",
+      "source_sha256": "1cebc01da4a128b9c7442c20aa299ee0156ef14facb4ecfb639ad3ed23ce1d75",
+      "text": "use rustc_middle::ty::layout::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
+      "line": 13,
+      "category": "external_dependency",
+      "source_sha256": "1cebc01da4a128b9c7442c20aa299ee0156ef14facb4ecfb639ad3ed23ce1d75",
+      "text": "use rustc_middle::ty::{self, Instance, InstanceKind, ShimKind, Ty, TyCtxt, Unnormalized};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
+      "line": 14,
+      "category": "external_dependency",
+      "source_sha256": "1cebc01da4a128b9c7442c20aa299ee0156ef14facb4ecfb639ad3ed23ce1d75",
+      "text": "use rustc_span::def_id::DefId;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
+      "line": 15,
+      "category": "external_dependency",
+      "source_sha256": "1cebc01da4a128b9c7442c20aa299ee0156ef14facb4ecfb639ad3ed23ce1d75",
+      "text": "use rustc_span::{DUMMY_SP, bug};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
+      "line": 16,
+      "category": "external_dependency",
+      "source_sha256": "1cebc01da4a128b9c7442c20aa299ee0156ef14facb4ecfb639ad3ed23ce1d75",
+      "text": "use rustc_target::callconv::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
+      "line": 230,
+      "category": "state_declaration",
+      "source_sha256": "1cebc01da4a128b9c7442c20aa299ee0156ef14facb4ecfb639ad3ed23ce1d75",
+      "text": "struct FnAbiDesc<'tcx> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/instance.rs",
+      "line": 1,
+      "category": "external_dependency",
+      "source_sha256": "1201767c3a62a75cdcc8b473833ff547a5f7965e2abea4e7857bac13ca61c6bf",
+      "text": "use rustc_attr_ir::lang_items::LangItem;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/instance.rs",
+      "line": 2,
+      "category": "external_dependency",
+      "source_sha256": "1201767c3a62a75cdcc8b473833ff547a5f7965e2abea4e7857bac13ca61c6bf",
+      "text": "use rustc_errors::ErrorGuaranteed;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/instance.rs",
+      "line": 3,
+      "category": "external_dependency",
+      "source_sha256": "1201767c3a62a75cdcc8b473833ff547a5f7965e2abea4e7857bac13ca61c6bf",
+      "text": "use rustc_hir::def::DefKind;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/instance.rs",
+      "line": 4,
+      "category": "external_dependency",
+      "source_sha256": "1201767c3a62a75cdcc8b473833ff547a5f7965e2abea4e7857bac13ca61c6bf",
+      "text": "use rustc_hir::def_id::DefId;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/instance.rs",
+      "line": 5,
+      "category": "external_dependency",
+      "source_sha256": "1201767c3a62a75cdcc8b473833ff547a5f7965e2abea4e7857bac13ca61c6bf",
+      "text": "use rustc_infer::infer::TyCtxtInferExt;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/instance.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "1201767c3a62a75cdcc8b473833ff547a5f7965e2abea4e7857bac13ca61c6bf",
+      "text": "use rustc_middle::query::Providers;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/instance.rs",
+      "line": 7,
+      "category": "external_dependency",
+      "source_sha256": "1201767c3a62a75cdcc8b473833ff547a5f7965e2abea4e7857bac13ca61c6bf",
+      "text": "use rustc_middle::traits::{BuiltinImplSource, CodegenObligationError};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/instance.rs",
+      "line": 8,
+      "category": "external_dependency",
+      "source_sha256": "1201767c3a62a75cdcc8b473833ff547a5f7965e2abea4e7857bac13ca61c6bf",
+      "text": "use rustc_middle::ty::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/instance.rs",
+      "line": 12,
+      "category": "external_dependency",
+      "source_sha256": "1201767c3a62a75cdcc8b473833ff547a5f7965e2abea4e7857bac13ca61c6bf",
+      "text": "use rustc_span::{bug, sym};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/instance.rs",
+      "line": 13,
+      "category": "external_dependency",
+      "source_sha256": "1201767c3a62a75cdcc8b473833ff547a5f7965e2abea4e7857bac13ca61c6bf",
+      "text": "use rustc_trait_selection::traits;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/instance.rs",
+      "line": 323,
+      "category": "machine_hook",
+      "source_sha256": "1201767c3a62a75cdcc8b473833ff547a5f7965e2abea4e7857bac13ca61c6bf",
+      "text": "// `trait Fn { fn call_once(&self) { .. } }`. This is mostly for extension",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 3,
+      "category": "external_dependency",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "use rustc_abi as abi;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 4,
+      "category": "external_dependency",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "use rustc_abi::Integer::{I8, I32};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 5,
+      "category": "external_dependency",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "use rustc_abi::Primitive::{self, Float, Int, Pointer};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "use rustc_abi::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 11,
+      "category": "external_dependency",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "use rustc_attr_ir::find_attr;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 12,
+      "category": "external_dependency",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "use rustc_attr_ir::lang_items::LangItem;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 13,
+      "category": "external_dependency",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "use rustc_hashes::Hash64;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 14,
+      "category": "external_dependency",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "use rustc_hir::def_id::DefId;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 15,
+      "category": "external_dependency",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "use rustc_index::{Idx as _, IndexVec};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 16,
+      "category": "external_dependency",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "use rustc_middle::query::Providers;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 17,
+      "category": "external_dependency",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "use rustc_middle::traits::ObligationCause;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 18,
+      "category": "external_dependency",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "use rustc_middle::ty::layout::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 21,
+      "category": "external_dependency",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "use rustc_middle::ty::print::with_no_trimmed_paths;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 22,
+      "category": "external_dependency",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "use rustc_middle::ty::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 26,
+      "category": "external_dependency",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "use rustc_session::{DataTypeKind, FieldInfo, FieldKind, SizeKind, VariantInfo};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 27,
+      "category": "external_dependency",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "use rustc_span::{Symbol, bug, sym};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 28,
+      "category": "external_dependency",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "use rustc_structures::Limit;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 458,
+      "category": "state_declaration",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "// its struct tail cannot be normalized either, so try to get a",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 462,
+      "category": "state_declaration",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "// We use the raw struct tail function here to get the first tail",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 563,
+      "category": "external_dependency",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "use rustc_middle::ty::layout::PrimitiveExt as _;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 623,
+      "category": "state_declaration",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "// struct svuint32_t(u32);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 626,
+      "category": "state_declaration",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "// struct svuint32x2_t(svuint32_t, svuint32_t);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 650,
+      "category": "state_declaration",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "// * #[repr(simd)] struct S([T; 4])",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 770,
+      "category": "state_declaration",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "// If the struct tail is sized and can be unsized, check that unsizing doesn't move the fields around.",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 1045,
+      "category": "state_declaration",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "// The struct is as large as the last field's end",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "line": 1078,
+      "category": "state_declaration",
+      "source_sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3",
+      "text": "// size from the variant size if the struct is \"enum\"-like, so failing to account for it",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
+      "line": 3,
+      "category": "external_dependency",
+      "source_sha256": "1fa8d5b3b458f4eb8845d4ef136451d141db8722e8a31aba0090e162529373ce",
+      "text": "use rustc_attr_ir::find_attr;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
+      "line": 4,
+      "category": "external_dependency",
+      "source_sha256": "1fa8d5b3b458f4eb8845d4ef136451d141db8722e8a31aba0090e162529373ce",
+      "text": "use rustc_data_structures::fx::FxHashSet;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
+      "line": 5,
+      "category": "external_dependency",
+      "source_sha256": "1fa8d5b3b458f4eb8845d4ef136451d141db8722e8a31aba0090e162529373ce",
+      "text": "use rustc_hir::def_id::DefId;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "1fa8d5b3b458f4eb8845d4ef136451d141db8722e8a31aba0090e162529373ce",
+      "text": "use rustc_middle::query::Providers;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
+      "line": 7,
+      "category": "external_dependency",
+      "source_sha256": "1fa8d5b3b458f4eb8845d4ef136451d141db8722e8a31aba0090e162529373ce",
+      "text": "use rustc_middle::ty::util::{AlwaysRequiresDrop, needs_drop_components};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
+      "line": 8,
+      "category": "external_dependency",
+      "source_sha256": "1fa8d5b3b458f4eb8845d4ef136451d141db8722e8a31aba0090e162529373ce",
+      "text": "use rustc_middle::ty::{self, EarlyBinder, GenericArgsRef, Ty, TyCtxt, Unnormalized};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
+      "line": 9,
+      "category": "external_dependency",
+      "source_sha256": "1fa8d5b3b458f4eb8845d4ef136451d141db8722e8a31aba0090e162529373ce",
+      "text": "use rustc_span::bug;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
+      "line": 10,
+      "category": "external_dependency",
+      "source_sha256": "1fa8d5b3b458f4eb8845d4ef136451d141db8722e8a31aba0090e162529373ce",
+      "text": "use rustc_structures::Limit;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
+      "line": 112,
+      "category": "state_declaration",
+      "source_sha256": "1fa8d5b3b458f4eb8845d4ef136451d141db8722e8a31aba0090e162529373ce",
+      "text": "struct NeedsDropTypes<'tcx, F> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
+      "line": 259,
+      "category": "state_declaration",
+      "source_sha256": "1fa8d5b3b458f4eb8845d4ef136451d141db8722e8a31aba0090e162529373ce",
+      "text": "// `ManuallyDrop`. If it's a struct or enum without a `Drop`",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
+      "line": 324,
+      "category": "state_declaration",
+      "source_sha256": "1fa8d5b3b458f4eb8845d4ef136451d141db8722e8a31aba0090e162529373ce",
+      "text": "enum DtorType {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
+      "line": 335,
+      "category": "state_declaration",
+      "source_sha256": "1fa8d5b3b458f4eb8845d4ef136451d141db8722e8a31aba0090e162529373ce",
+      "text": "struct DropTysOptions {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
+      "line": 459,
+      "category": "state_declaration",
+      "source_sha256": "1fa8d5b3b458f4eb8845d4ef136451d141db8722e8a31aba0090e162529373ce",
+      "text": "// In some cases like `std::collections::HashMap` where the struct is a wrapper around",
+      "review": "pending"
+    },
+    {
       "path": "upstream/rustc-source/compiler/rustc_type_ir/src/binder.rs",
       "line": 8,
       "category": "external_dependency",
@@ -30932,6 +33708,126 @@
       "review": "pending"
     },
     {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/fast_reject.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "bc0974832c3b25eba0b1dcef13d5ae9a31f010ef6785a8565db4ffef100990d6",
+      "text": "use rustc_ast_ir::Mutability;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/fast_reject.rs",
+      "line": 8,
+      "category": "external_dependency",
+      "source_sha256": "bc0974832c3b25eba0b1dcef13d5ae9a31f010ef6785a8565db4ffef100990d6",
+      "text": "use rustc_macros::{Decodable_NoContext, Encodable_NoContext, StableHash};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/fast_reject.rs",
+      "line": 17,
+      "category": "state_declaration",
+      "source_sha256": "bc0974832c3b25eba0b1dcef13d5ae9a31f010ef6785a8565db4ffef100990d6",
+      "text": "pub enum SimplifiedType<DefId> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/fast_reject.rs",
+      "line": 58,
+      "category": "state_declaration",
+      "source_sha256": "bc0974832c3b25eba0b1dcef13d5ae9a31f010ef6785a8565db4ffef100990d6",
+      "text": "pub enum TreatParams {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/fast_reject.rs",
+      "line": 175,
+      "category": "state_declaration",
+      "source_sha256": "bc0974832c3b25eba0b1dcef13d5ae9a31f010ef6785a8565db4ffef100990d6",
+      "text": "pub struct DeepRejectCtxt<",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/flags.rs",
+      "line": 11,
+      "category": "state_declaration",
+      "source_sha256": "bdd39afc6d833f88a6da68586db030cf6a30712fa9578275c31e6f974dde48f3",
+      "text": "pub struct TypeFlags: u32 {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/flags.rs",
+      "line": 165,
+      "category": "state_declaration",
+      "source_sha256": "bdd39afc6d833f88a6da68586db030cf6a30712fa9578275c31e6f974dde48f3",
+      "text": "pub struct FlagComputation<I> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/fold.rs",
+      "line": 38,
+      "category": "state_declaration",
+      "source_sha256": "09a768ac1be507ca603279527963f1348522e69b40117b061754e10db0303ad9",
+      "text": "//! For example, if you have `struct S(Ty, U)` where `S: TypeFoldable` and `U:",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/fold.rs",
+      "line": 52,
+      "category": "external_dependency",
+      "source_sha256": "09a768ac1be507ca603279527963f1348522e69b40117b061754e10db0303ad9",
+      "text": "use rustc_index::{Idx, IndexVec};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/fold.rs",
+      "line": 413,
+      "category": "state_declaration",
+      "source_sha256": "09a768ac1be507ca603279527963f1348522e69b40117b061754e10db0303ad9",
+      "text": "struct Shifter<I: Interner> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/fold.rs",
+      "line": 519,
+      "category": "state_declaration",
+      "source_sha256": "09a768ac1be507ca603279527963f1348522e69b40117b061754e10db0303ad9",
+      "text": "pub struct FnMutDelegate<'a, I: Interner> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/fold.rs",
+      "line": 540,
+      "category": "state_declaration",
+      "source_sha256": "09a768ac1be507ca603279527963f1348522e69b40117b061754e10db0303ad9",
+      "text": "pub struct BoundVarReplacer<I: Interner, D> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/fold.rs",
+      "line": 700,
+      "category": "state_declaration",
+      "source_sha256": "09a768ac1be507ca603279527963f1348522e69b40117b061754e10db0303ad9",
+      "text": "pub struct RegionFolder<I, F> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/fold.rs",
+      "line": 822,
+      "category": "state_declaration",
+      "source_sha256": "09a768ac1be507ca603279527963f1348522e69b40117b061754e10db0303ad9",
+      "text": "enum RigidnessFoldMode {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/fold.rs",
+      "line": 844,
+      "category": "state_declaration",
+      "source_sha256": "09a768ac1be507ca603279527963f1348522e69b40117b061754e10db0303ad9",
+      "text": "struct RigidnessFolder<I: Interner> {",
+      "review": "pending"
+    },
+    {
       "path": "upstream/rustc-source/compiler/rustc_type_ir/src/inherent.rs",
       "line": 9,
       "category": "external_dependency",
@@ -30953,6 +33849,150 @@
       "category": "state_declaration",
       "source_sha256": "6714f34fd0528ee3c334c3a468d81de826f3dec2b8ee5d06991dc6a34d326819",
       "text": "/// Returns the type of the struct tail.",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "text": "use rustc_macros::{Decodable_NoContext, Encodable_NoContext, StableHash, StableHash_NoContext};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "line": 7,
+      "category": "external_dependency",
+      "source_sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "text": "use rustc_type_ir_macros::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "line": 24,
+      "category": "state_declaration",
+      "source_sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "text": "pub struct OutlivesClause<I: Interner, A>(pub A, pub Region<I>);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "line": 38,
+      "category": "state_declaration",
+      "source_sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "text": "pub struct RegionEqPredicate<I: Interner>(pub Region<I>, pub Region<I>);",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "line": 53,
+      "category": "state_declaration",
+      "source_sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "text": "pub enum RegionConstraint<I: Interner> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "line": 113,
+      "category": "state_declaration",
+      "source_sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "text": "pub struct TraitRef<I: Interner> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "line": 196,
+      "category": "state_declaration",
+      "source_sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "text": "pub struct TraitClause<I: Interner> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "line": 266,
+      "category": "state_declaration",
+      "source_sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "text": "pub enum ImplPolarity {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "line": 299,
+      "category": "state_declaration",
+      "source_sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "text": "pub enum ClausePolarity {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "line": 331,
+      "category": "state_declaration",
+      "source_sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "text": "pub enum ExistentialPredicate<I: Interner> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "line": 389,
+      "category": "state_declaration",
+      "source_sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "text": "pub struct ExistentialTraitRef<I: Interner> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "line": 455,
+      "category": "state_declaration",
+      "source_sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "text": "pub struct ExistentialProjection<I: Interner> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "line": 567,
+      "category": "state_declaration",
+      "source_sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "text": "pub struct ProjectionClause<I: Interner> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "line": 630,
+      "category": "state_declaration",
+      "source_sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "text": "pub struct NormalizesTo<I: Interner, K = ty::AliasTermKind<I>> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "line": 667,
+      "category": "state_declaration",
+      "source_sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "text": "pub struct HostEffectClause<I: Interner> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "line": 714,
+      "category": "state_declaration",
+      "source_sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "text": "pub struct SubtypePredicate<I: Interner> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "line": 730,
+      "category": "state_declaration",
+      "source_sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "text": "pub struct CoercePredicate<I: Interner> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
+      "line": 739,
+      "category": "state_declaration",
+      "source_sha256": "57254579576e200f781ecd2bdea332e9ec760bea7548cbe87dfe601b6efdff95",
+      "text": "pub enum BoundConstness {",
       "review": "pending"
     },
     {
@@ -31249,6 +34289,78 @@
       "category": "state_declaration",
       "source_sha256": "6ca068ac98641176e99ba3357effbb1b79d5274680e597cf80a520b5423911e1",
       "text": "pub struct CoroutineWitnessTypes<I: Interner> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs",
+      "line": 34,
+      "category": "state_declaration",
+      "source_sha256": "7105f9eef232ace6a3f16e7c9869581580b338e4d744eb4d8bbf5a05b125b79e",
+      "text": "//! For example, if you have `struct S(Ty, U)` where `S: TypeVisitable` and `U:",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs",
+      "line": 48,
+      "category": "external_dependency",
+      "source_sha256": "7105f9eef232ace6a3f16e7c9869581580b338e4d744eb4d8bbf5a05b125b79e",
+      "text": "pub use rustc_ast_ir::visit::VisitorResult;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs",
+      "line": 49,
+      "category": "external_dependency",
+      "source_sha256": "7105f9eef232ace6a3f16e7c9869581580b338e4d744eb4d8bbf5a05b125b79e",
+      "text": "pub use rustc_ast_ir::{try_visit, walk_visitable_list};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs",
+      "line": 50,
+      "category": "external_dependency",
+      "source_sha256": "7105f9eef232ace6a3f16e7c9869581580b338e4d744eb4d8bbf5a05b125b79e",
+      "text": "use rustc_index::{Idx, IndexVec};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs",
+      "line": 421,
+      "category": "state_declaration",
+      "source_sha256": "7105f9eef232ace6a3f16e7c9869581580b338e4d744eb4d8bbf5a05b125b79e",
+      "text": "struct FoundFlags;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs",
+      "line": 424,
+      "category": "state_declaration",
+      "source_sha256": "7105f9eef232ace6a3f16e7c9869581580b338e4d744eb4d8bbf5a05b125b79e",
+      "text": "struct HasTypeFlagsVisitor {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs",
+      "line": 519,
+      "category": "state_declaration",
+      "source_sha256": "7105f9eef232ace6a3f16e7c9869581580b338e4d744eb4d8bbf5a05b125b79e",
+      "text": "struct FoundEscapingVars;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs",
+      "line": 546,
+      "category": "state_declaration",
+      "source_sha256": "7105f9eef232ace6a3f16e7c9869581580b338e4d744eb4d8bbf5a05b125b79e",
+      "text": "struct HasEscapingVarsVisitor {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs",
+      "line": 619,
+      "category": "state_declaration",
+      "source_sha256": "7105f9eef232ace6a3f16e7c9869581580b338e4d744eb4d8bbf5a05b125b79e",
+      "text": "struct HasErrorVisitor;",
       "review": "pending"
     }
   ]

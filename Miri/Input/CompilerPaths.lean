@@ -53,6 +53,65 @@ def fieldPath (context : CompilerFacts.Context) (layout : TyAndLayout TypeId)
     return .dynDowncast (← node context childType).display
   | _ => throw "source invariant: aggregate field path on non-aggregate type"
 
+private def worldLift [Monad m] [MonadExceptOf String m] (value : Except String A) : m A :=
+  match value with | .ok result => pure result | .error error => throw error
+
+def fieldPathInWorld (context : CompilerFacts.Context) (layout : TyAndLayout TypeId)
+    (index : Nat) (child : TypeId) : TypeArena.WorldM PathElem := do
+  let world ← get
+  let kind ← worldLift (world.shapeKind layout.ty)
+  if let .Multiple _ _ tagField _ := layout.layout.variants then
+    if tagField == index then
+      if kind == .coroutine then return .coroutineTag
+      if kind == .adt && (← RuntimeMetadata.adtDeclarationInWorld context.runtime layout.ty).kind == .enumKind then
+        return .enumTag
+      throw "tag path requested for a non-variant world type"
+  if kind == .array || kind == .slice then return .arrayElem index
+  if kind == .tuple then return .tupleElem index
+  if kind == .adt then
+    let declaration ← RuntimeMetadata.adtDeclarationInWorld context.runtime layout.ty
+    let variant ← match layout.layout.variants with
+      | .Single variant => pure variant
+      | .Empty => throw "field path in empty world layout"
+      | .Multiple .. => throw "non-tag world field path requires variant selection"
+    let some field := declaration.fields.find? (fun field =>
+        field.variantIndex == variant && field.fieldIndex == index)
+      | throw "canonical raw field name absent for world projection"
+    return .field field.fieldName
+  if kind == .dynamicTraitObject then
+    unless index == 0 do throw "dynamic downcast path index is not zero"
+    let .material source ← worldLift (world.lookupType child)
+      | throw "constructed dynamic child name requires the source type printer"
+    return .dynDowncast source.display
+  match ← worldLift (world.lookupType layout.ty) with
+  | .material _ => worldLift (fieldPath context layout index child)
+  | .constructed _ => throw "constructed aggregate path requires canonical raw field names"
+
+def variantPathInWorld (context : CompilerFacts.Context) (layout : TyAndLayout TypeId)
+    (index : Nat) : TypeArena.WorldM PathElem := do
+  let world ← get
+  if (← worldLift (world.shapeKind layout.ty)) == .coroutine then return .coroutineState index
+  unless (← worldLift (world.shapeKind layout.ty)) == .adt do
+    throw "variant path requested for non-variant world type"
+  let declaration ← RuntimeMetadata.adtDeclarationInWorld context.runtime layout.ty
+  let some name := declaration.variantNames[index]?
+    | throw "canonical raw variant name absent for world projection"
+  pure (.variant name)
+
+def validityHooksInWorld (prepared : CompilerFactAdapters.Prepared)
+    (types : RuntimeArrayQueries.Access S) (machine : ValidityVisitor.Hooks P S C E Fn Abi Pad) :
+    ValidityVisitor.Hooks P S C E Fn Abi Pad :=
+  let run := fun {A} (action : TypeArena.WorldM A) => RuntimeArrayQueries.perform types action
+  {machine with
+    classify := fun _ ty => run (CompilerFactAdapters.validityKindInWorld prepared ty)
+    metadataTail := fun _ ty => run (CompilerFactAdapters.metadataTailInWorld prepared ty)
+    unitLayout := fun _ => run (CompilerFacts.unitLayoutInWorld prepared.context)
+    typeName := fun _ ty => run (CompilerFactAdapters.typeNameInWorld prepared ty)
+    opsemInhabited := fun _ ty => run (CompilerFacts.booleanInWorld prepared.context ty "opsem_inhabited")
+    isFreeze := fun _ ty => run (CompilerFacts.booleanInWorld prepared.context ty "is_freeze")
+    fieldPath := fun _ layout index child => run (fieldPathInWorld prepared.context layout index child)
+    variantPath := fun _ layout index => run (variantPathInWorld prepared.context layout index)}
+
 private def lift (value : Result A) : EStateM StepError S A :=
   match value with
   | .ok value => pure value

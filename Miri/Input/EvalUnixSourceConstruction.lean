@@ -337,7 +337,7 @@ def stdOnlyFromRuntime {MirBody : Type} [DecidableEq MiriMemoryKind]
       (State Os R P H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error)
       Place (MPlaceTy Provenance) MirBody I) := do
   let target ← p.externStatics.targetFacts |>.mapError StepError.unsupported
-  let frame := CompilerFrameMetadata.hooks p.lifecycle.frames userRelevantCrates
+  let frame := CompilerFrameMetadata.hooks p.lifecycle.frames EvalProjectionMachine.arrays userRelevantCrates
   let place := PlaceMachine.placeHooks accessConfig allocationConfig compilerConfig
   let writeScalar : Scalar Provenance → MPlaceTy Provenance →
       EStateM StepError

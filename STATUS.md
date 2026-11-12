@@ -13,14 +13,29 @@ the ability to verify arbitrary Rust are not claimed.
 
 ## Compiler material migration (in progress)
 
+Ordinary binder-free, type-only generic source calls now execute from shared raw
+MIR templates and resolve their symbolic callee in the same execution-owned
+World. A fresh `generic-mir-call-start.rs` guest has four selected body references
+to two templates (825,563 bytes); Lean finalized with exit 0 (choice cursor 320)
+and same-prepared-TyCtxt Miri also exited zero. Removing its leaf instance ABI
+row produces Unsupported at the actual call (cursor 54). The existing Item
+instance graph and complete ABI query catalog remain explicit residuals; novel
+instance/body/ABI graph construction is not implemented by this call slice.
+Evidence: `scratch/abi-port/generic-mir-call-start-world.manifest.json` and
+adjacent native/reference logs. These are finite examples, not a general proof.
+
 The exporter-to-Lean compiler migration is incomplete. Lean now implements
 structural `boxed_ty`, `builtin_deref`, `struct_tail_raw`, selected region-erased
 alias-free normalization, trivial Freeze/Unpin/UnsafeUnpin rules, virtual generic
 argument prefix rebasing, and the instance-kind caller-location rule from raw
-definition attributes. A document-local algebraic type arena creates previously
-absent mutable pointer, erased mutable reference and value-length array nodes,
-layouts and usize constants; it shares identities with the existing array World.
-The exporter no longer seeds mutable pointer/reference result nodes.
+definition attributes. The earlier algebraic ID scheme has been removed.
+Current runtime providers use one execution-owned type/constant World with dense
+appended IDs and structural constructor interning; generic MIR, field projection,
+arrays, pointer/reference construction and queries share that universe. It stores
+constructor syntax, not layouts or normalized query answers, and shares no cache
+with another execution. The exporter no longer seeds mutable pointer/reference
+result nodes. Current World integration passes the two novel-type native guests
+below; its full build/audit gate is still being rerun.
 Primitive scalar/never and tuple layouts are reconstructed from TyKind/raw tuple
 recipes and the target; the tuple resolver uses the pinned univariant layout
 algorithm. ADT needs-drop rules execute against raw definition-level destructor
@@ -151,6 +166,67 @@ rejected. The 177,871-byte input and source/exporter/Lean artifact hashes are in
 kernel component checks also pass. Binder/inference families remain explicitly
 unsupported; these query comparisons are not a generic guest-execution claim.
 
+The exporter no longer emits `discriminant_type` answers. Production derives
+ordinary types as u8, coroutine state types as u32, enum discriminant types from
+source representation options, and pattern/alias cases recursively. Six fresh
+enum cases match an independent canonical-main rustc oracle through the actual
+compiler provider after every candidate answer row is removed. This includes
+`repr(C)`'s public isize discriminant type, independently of its physical tag.
+All 42 type-facts rows in the 169,222-byte control omit the field (the canonical
+input is 192,706 bytes). A corrupted oracle and a mislabeled primitive identity
+anchor are rejected, and nine kernel recursion/error controls pass. Evidence
+and source/exporter/Lean hashes are in
+`scratch/discriminant-types/{candidate,manifest,results}.json`. UnsafeBinder
+still requires explicit residual binder-erasure material; enum/coroutine
+value enumerations remain separate residual compiler results. This is a
+completed query-type port, not a general discriminant constant evaluator.
+
+Current-artifact World component checks pass for a 64-level shared tuple DAG,
+region-parameter/static erasure flags, and a genuinely new nominal-element array:
+normalization, Sized, inhabitedness, needs-drop, public auto-trait queries and
+discriminant types all read the same universe. Query-local fold memos prevent
+repeated DAG visits and are discarded after the query. A second independent
+execution deliberately reuses type number 64 for different syntax and receives
+its own correct normalization result. Ten structural diagnostic type names match
+an independent pinned-rustc Display oracle, including nine newly constructed
+types. Raw session print limits and verbose/region flags are captured exactly;
+a real limit-zero/verbose/identify-regions compiler invocation confirms those
+configuration seeds. Missing print options, contextual truncation, unsupported
+verbose references and a corrupt name oracle fail explicitly. Structural printing
+supports scalar/pointer/reference/tuple/array/slice forms and local named ADTs
+from raw DefKey namespace/symbol chains. Twelve newly constructed named/structural
+types match independent rustc Display; missing raw paths fail closed. Raw session
+trimming flags are captured, with active trimming, external visible paths, generic
+default elision, const arguments, impl scopes and full FnDef signatures still
+explicitly unsupported. Intrinsic type_name uses a distinct source printer and
+has not yet been moved to this diagnostic printer. Canonical field/variant names now enter ADT declarations as source
+symbols. A second independent rustc oracle agrees on 36 Sized/needs-drop/inhabitedness
+answers across twelve genuinely novel types, including generic never fields,
+destructors, enum alternatives, unions, recursive references and zero-length
+array suppression; a corrupted inhabitedness answer is rejected. The permanent
+World component script passes; logs and artifact hashes
+are in `scratch/world-types-check.log` and `scratch/world-types/`. Current World native execution passes the novel-array and tuple/Wrapper no-std
+guests (approximately 701 KB inputs). The current full build passes 1,426 jobs,
+including ImportMIR and the native runner; the axiom audit covers 80,826 Miri
+declarations with the three permitted axioms only. All 133 Python tests pass.
+A fresh 91,860,263-byte std generic input passes same-prepared-TyCtxt Miri
+exit-zero, but current Lean execution stops Unsupported at cursor 158: the
+residual covariance table lacks the material ThreadId-to-u64 pair (1071 to 4).
+This is not a successful std execution or a new type-ID lookup failure. A source
+port of rigid-constructor mismatch and the general variance relation remain work;
+adding an enumerated answer does not complete that migration. Native component
+successes and earlier checkpoint std runs do not close this current boundary.
+
+Contextual layout operations preserve their source provenance separately from
+canonical type layouts. Wide-pointer data fields and enum tag fields have distinct
+operation keys even when their physical layout equals an ordinary type layout.
+Seventy-two complete field contexts agree with the independent pinned compiler,
+including signed wrapping tag ranges, niches, uninhabited variants, transparent
+wrappers and unions. Three runtime Access regressions preserve selected-variant
+u64/bool/u16 field layouts. Malformed parent, mixed recipe/eager payload and
+canonical/contextual identity-conflict controls are rejected. These finite checks
+do not port general enum/niche layout construction.
+
 A default-root exporter ICE also reproduced on canonical c8daa215: a static
 u32 body was incorrectly treated as a callable backtrace-frame candidate.
 Callable-definition guards preserve the static body while preventing the invalid
@@ -188,17 +264,19 @@ guest: same-TyCtxt Miri and Lean exit-zero, cursor 1675, no active frame. One
 CPU-pinned, single-thread diagnostic measured 6.678 s wall, 6.568 s child CPU,
 564,240 KiB peak RSS, 31 same-CPU steal ticks and zero cgroup throttling/memory
 event changes; binary/input/source hashes are fixed in its raw manifest. This
-is not a before/after performance comparison. The current build passes 1,378
+is not a before/after performance comparison. Checkpoint `28243a8c` passed 1,378
 jobs and the axiom audit covers 79,286 declarations with allowed axioms only;
 all 133 Python tests, 47 self-contained runtime checks and semantic-source lint
-pass. The full multi-stage regression entry point is still unfinished.
+pass. The full multi-stage regression entry point is still unfinished. These build and
+audit counts precede the current execution-owned World integration.
 
 The same minimal generic invocation remains bounded after raw ADT integration:
 111,335 bytes, 33 runtime types, 63 definitions, 38 templates, five traits,
 19 impls and one MIR template/two body seeds. Ordinary source-call substitution
 and effect-parametric identity resolution have actual compiler comparisons, but
-call-containing bodies remain explicitly material-selected until the runtime
-provider/ABI/instance dependencies are connected. Sequence layouts and general
+covered call-containing source bodies are now selected by the producer and their
+fresh same-TyCtxt Miri reference passes; current native execution is still being
+validated. The existing instance/body/ABI demand graph remains residual. Sequence layouts and general
 discriminant-type rules have independent components; their eager catalogs have
 not yet been removed. A comparison harness freezes binaries and records
 alternating CPU-pinned one-thread trials with exact child CPU/RSS and host
@@ -1050,3 +1128,18 @@ tracking modes are disabled tracking and the Miri vector-clock backend.
   do not resolve them. Existing finite comparisons use a separate reference
   TyCtxt with isolation disabled and a retained Linux host trace; unobserved
   host demands remain Unsupported.
+
+Alias rigidity remains a compiler syntax/state boundary: the exported boolean is
+read from TyKind::Alias(IsRigid,...) rather than a dedicated query. Pinned
+rustc_type_ir/ty_kind.rs documents that the new solver sets this state after
+normalization and that changes to typing mode/ParamEnv invalidate it. Removing
+this seed requires source alias provenance and Lean normalization/rigidification;
+classifying rigidity from the alias family alone would lose semantics.
+
+Prepared, not yet routed: FunctionTypePrinter is an independent source-signature
+formatter for the Rust ABI. Five direct runtime controls pass (safe/unsafe,
+unit output, variadic/splat syntax and unsupported ABI rejection). Its JSON
+signature parsing is not kernel-reducible; these are executable controls, not
+kernel proofs. New FnDef diagnostic printing remains unsupported until raw HIR
+header-safety material and the runtime path are connected. The helper is not
+included in the current query coverage or native execution claims.

@@ -426,7 +426,7 @@ def fromSource
   let sourceSymbols ← match p.foreignSymbols with
     | .ok symbols => pure symbols
     | .error reason => throw (.unsupported s!"compiler foreign-symbol query: {reason}")
-  let symbols := CompilerForeignSymbols.hooks sourceSymbols p.lifecycle.calls
+  let symbols := CompilerForeignSymbols.hooks sourceSymbols p.lifecycle.calls EvalProjectionMachine.arrays
   let options : EvalForeignConstruction.Options := {
     family := .unix
     os := target.os
@@ -524,7 +524,7 @@ def fromSeedEnvironment [DecidableEq MiriMemoryKind]
   let sourceSymbols ← match p.foreignSymbols with
     | .ok symbols => pure symbols
     | .error reason => throw (.unsupported s!"compiler foreign-symbol query: {reason}")
-  let symbols := CompilerForeignSymbols.hooks sourceSymbols p.lifecycle.calls
+  let symbols := CompilerForeignSymbols.hooks sourceSymbols p.lifecycle.calls EvalProjectionMachine.arrays
   let options : EvalForeignConstruction.Options := {
     family := .unix
     os := target.os
@@ -818,7 +818,7 @@ def fromSeedEnvironment [DecidableEq MiriMemoryKind]
     match operand.transmute projection target |>.mapError IntrinsicVectorMachine.projectionError with
     | .ok value => pure value
     | .error error => throw error
-  let callCompiler := CompilerCallConstruction.compiler p compatibilityBudget
+  let callCompiler := CompilerCallConstruction.compiler p EvalProjectionMachine.arrays compatibilityBudget
   let fdDispatch : UnixFdDispatch.Hooks
       (State Os R EvalSyncPayload.Payload H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error)
       H D (Other Raw Listener TcpStream Error) Error Meta Path := {

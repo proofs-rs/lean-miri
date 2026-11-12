@@ -1,5 +1,13 @@
 import Miri.Input.Model
 import Miri.Input.TypeArena
+import Miri.Input.TypeArenaWorld
+import Miri.Input.GenericInstantiationWorld
+import Miri.Input.TermSized
+import Miri.Input.TraitSelection.EnvironmentEntailment
+import Miri.Input.WorldNormalization
+import Miri.Input.WorldTypeMetadata
+import Miri.Input.SequenceLayoutMaterial
+import Miri.ABI.SequenceLayout
 import Miri.Input.StructuralNormalization
 import Miri.Input.StructuralPointerMetadata
 import Miri.ABI.Layout
@@ -163,7 +171,8 @@ def variants (target : RuntimeTargetDataLayout) (source : VariantsLayout) : Resu
       (← require source.tagFieldIndex "variants.tag_field_index") values
 
 def layout (target : RuntimeTargetDataLayout) (source : Input.Layout) : Result LayoutData := do
-  if source.tupleType.isSome || source.unionType.isSome || source.structType.isSome then
+  if source.tupleType.isSome || source.unionType.isSome || source.structType.isSome ||
+      source.sequenceType.isSome || source.pointerType.isSome || source.pointerDataType.isSome || source.enumTagType.isSome then
     throw (.missing "structural layout requires source type and layout pools")
   if let some recipe := source.primitiveRecipe then
     return ← PrimitiveLayout.compute target recipe
@@ -236,102 +245,26 @@ def importTarget (source : TargetDataLayoutEvidence) : Result RuntimeTargetDataL
   result.validate.mapError (fun e => .invalid "target" (toString e))
   return result
 
-/-- Source-aware physical layout construction. Recursive tuple recipes follow
-raw source type edges; cyclic or malformed material never supplies a layout. -/
-def resolveLayoutWithFuel (target : RuntimeTargetDataLayout) (types : Array TypeNode)
-    (layouts : Array Input.Layout) (definitions : Array DefinitionId) : Nat → LayoutId → Result LayoutData
-  | 0, _ => .error (.unsupported "material layout recipe recursion exhausted")
-  | fuel + 1, id => do
-    let source ← require layouts[id]? s!"compiler layout ID {id} out of bounds"
-    if let some typeId := source.structType then
-      unless source.primitiveRecipe.isNone && source.tupleType.isNone && source.unionType.isNone do
-        throw (.invalid "struct layout recipe" "conflicting layout constructor")
-      let node ← require types[typeId]? "struct recipe type ID out of bounds"
-      unless node.id == typeId do throw (.invalid "struct recipe type" "row/index mismatch")
-      let .adt data := node.shape
-        | throw (.invalid "struct layout recipe" "source type is not an ADT")
-      unless data.kind == .structKind && data.variants.size == 1 do
-        throw (.invalid "struct layout recipe" "source type is not a one-variant struct")
-      let definition ← require definitions[data.definition]? "struct declaration definition missing"
-      let declaration ← require definition.adtDeclaration "struct raw ADT declaration missing"
-      let template ← require definition.genericTemplate "struct raw field declaration missing"
-      declaration.validate template |>.mapError (fun e => .invalid "struct declaration" e)
-      unless declaration.kind == .structKind do
-        throw (.invalid "struct declaration" "source declaration is not a struct")
-      unless declaration.langItem != some "f16b" && declaration.langItem != some "ppcf128" do
-        throw (.unsupported "special floating-point struct layout recipe")
-      if let some tail := template.fields.back? then
-        unless StructLayoutMaterial.guaranteedSized (StructLayoutMaterial.termFuel tail.expression + 1) tail.expression do
-          throw (.unsupported "struct declaration tail requires ParamEnv sizedness solver")
-      let variant ← require data.variants[0]? "struct material variant missing"
-      unless variant.fields.size == template.fields.size do
-        throw (.invalid "struct declaration" "instantiated and declared field domains differ")
-      let fields ← variant.fields.mapM fun field => do
-        let node ← require types[field.typeId]? "struct field type ID out of bounds"
-        unless node.id == field.typeId do throw (.invalid "struct field type" "row/index mismatch")
-        resolveLayoutWithFuel target types layouts definitions fuel node.layoutId
-      let repr := data.representation
-      unless repr.flagsBits < 256 do throw (.invalid "struct representation" "flags overflow u8")
-      unless repr.flagsBits &&& (2 + 64) == 0 do
-        throw (.unsupported "SIMD/scalable struct layout recipe")
-      let representation : UnivariantLayout.Representation := {
-        flags := UInt8.ofNat repr.flagsBits, integerRepresentation := repr.integer.isSome,
-        align := ← repr.alignBytes.mapM alignment, pack := ← repr.packBytes.mapM alignment,
-        fieldShuffleSeed := ← u64 repr.fieldShuffleSeed "struct field shuffle seed" }
-      let niches := if declaration.langItem == some "unsafe_cell" ||
-          declaration.langItem == some "unsafe_pinned" then
-        StructLayout.NicheOptimizations.disabled else .enabled
-      return ← StructLayout.compute target fields representation 0 false true niches
-        |>.mapError (fun reason => .invalid "struct layout recipe" reason)
-    if let some typeId := source.unionType then
-      unless source.primitiveRecipe.isNone && source.tupleType.isNone do
-        throw (.invalid "union layout recipe" "conflicting layout constructor")
-      let node ← require types[typeId]? "union recipe type ID out of bounds"
-      unless node.id == typeId do throw (.invalid "union recipe type" "row/index mismatch")
-      let .adt data := node.shape
-        | throw (.invalid "union layout recipe" "source type is not an ADT")
-      unless data.kind == .unionKind && data.variants.size == 1 do
-        throw (.invalid "union layout recipe" "source type is not a one-variant union")
-      let variant ← require data.variants[0]? "union material variant missing"
-      let fields ← variant.fields.mapM fun field => do
-        let node ← require types[field.typeId]? "union field type ID out of bounds"
-        unless node.id == field.typeId do throw (.invalid "union field type" "row/index mismatch")
-        resolveLayoutWithFuel target types layouts definitions fuel node.layoutId
-      let repr := data.representation
-      unless repr.flagsBits < 256 do throw (.invalid "union representation" "flags overflow u8")
-      let representation : UnivariantLayout.Representation := {
-        flags := UInt8.ofNat repr.flagsBits, integerRepresentation := repr.integer.isSome,
-        align := ← repr.alignBytes.mapM alignment, pack := ← repr.packBytes.mapM alignment,
-        fieldShuffleSeed := ← u64 repr.fieldShuffleSeed "union field shuffle seed" }
-      return ← UnionLayout.compute target fields representation
-        |>.mapError (fun reason => .invalid "union layout recipe" reason)
-    if let some typeId := source.tupleType then
-      unless source.primitiveRecipe.isNone do
-        throw (.invalid "tuple layout recipe" "conflicting primitive constructor")
-      let node ← require types[typeId]? "tuple recipe type ID out of bounds"
-      unless node.id == typeId do throw (.invalid "tuple recipe type" "row/index mismatch")
-      let .tuple elements := node.shape
-        | throw (.invalid "tuple layout recipe" "source type is not a tuple")
-      let fields ← elements.mapM fun element => do
-        let node ← require types[element]? "tuple element type ID out of bounds"
-        unless node.id == element do throw (.invalid "tuple element type" "row/index mismatch")
-        resolveLayoutWithFuel target types layouts definitions fuel node.layoutId
-      let kind := if elements.isEmpty then UnivariantLayout.Kind.alwaysSized else .maybeUnsized
-      return ← UnivariantLayout.compute target fields {} kind
-        |>.mapError (fun reason => .invalid "tuple layout recipe" reason)
-    layout target source
-
-def resolveLayout (target : RuntimeTargetDataLayout) (types : Array TypeNode)
-    (layouts : Array Input.Layout) (id : LayoutId) (definitions : Array DefinitionId) : Result LayoutData :=
-  resolveLayoutWithFuel target types layouts definitions (types.size + layouts.size + 1) id
 
 end RuntimeMetadata
+
+private def rawLayoutBudget (types layouts : Nat) (definitions : Array DefinitionId) : Nat :=
+  types + layouts + definitions.foldl (fun total definition => total + match definition.genericTemplate with
+    | none => 1
+    | some template => 1 + StructLayoutMaterial.termFuel template.typeExpression +
+      template.fields.foldl (fun total field => total + StructLayoutMaterial.termFuel field.expression) 0) 1
 
 /-- Immutable compiler tables and target semantics. ID lookup directly indexes
 validated dense tables; semantic layouts are constructed only on demand. -/
 structure RuntimeMetadata where
   source : ImportDocument
   target : RuntimeTargetDataLayout
+  /-- Raw syntax traversal budget, computed once; contains no query answer. -/
+  materialLayoutFuel : Nat
+  normalizationContext : AliasRuntime.Context
+  /-- Immutable validation/index evidence tied to the exact raw source prefix. -/
+  checkedMaterial : Option (TypeArena.CheckedMaterial source.types source.typeConstants
+    source.definitions target.pointerSize.bytes.toNat) := none
   /-- Checked once at import. Dependence on the exact source prevents retaining
   this certificate when replacing its type table. It carries no runtime cache. -/
   denseTypes : Option (PLift (TypeArena.isDense source.types = true)) := none
@@ -345,15 +278,24 @@ def ofDocument (document : ImportDocument) : Result RuntimeMetadata := do
     if seen.contains node.id then throw (.duplicateType node.id)
     seen := seen.insert node.id
   if dense : TypeArena.isDense document.types = true then
-    return { source := document, target, denseTypes := some ⟨dense⟩ }
+    let checked ← (TypeArena.CheckedMaterial.create document.types document.typeConstants
+      document.definitions target.pointerSize.bytes.toNat).mapError (fun e => .invalid "material prefix" e)
+    let normalizationContext ← (AliasRuntime.Context.ofDocument document).mapError (fun e => .invalid "normalization material" e)
+    return {
+      source := document
+      target := target
+      normalizationContext := normalizationContext
+      checkedMaterial := some checked
+      materialLayoutFuel := rawLayoutBudget document.types.size document.layouts.size document.definitions,
+      denseTypes := some ⟨dense⟩ }
   else throw (.invalid "compiler type ID" "material type IDs are not dense row positions")
 
-def node (metadata : RuntimeMetadata) (id : TypeId) : Result TypeNode :=
-  let resolved := match metadata.denseTypes with
-    | some _ => TypeArena.nodeWithFuel metadata.source.types
-        metadata.source.typeConstants.size (id + 1) id
-    | none => TypeArena.node metadata.source.types id metadata.source.typeConstants.size
-  resolved.mapError (.invalid "type arena")
+def node (metadata : RuntimeMetadata) (id : TypeId) : Result TypeNode := do
+  if metadata.denseTypes.isNone then
+    (TypeArena.validateMaterial metadata.source.types).mapError (.invalid "type arena")
+  let value ← require metadata.source.types[id]? "source type; constructed types require execution universe"
+  unless value.id == id do throw (.invalid "type arena" "source type row/index mismatch")
+  pure value
 
 /-- Pinned pointer metadata selection from normalized type structure. Only the
 DynMetadata<Self> constructor remains residual material, keyed by the exact dyn
@@ -389,46 +331,342 @@ def pointerMetadataType (metadata : RuntimeMetadata) (id : TypeId) : Result Type
   let _ ← metadata.node result
   pure result
 
-private def lookupWithFuel (metadata : RuntimeMetadata) : Nat → TypeId → Result (TyAndLayout TypeId)
-  | 0, _ => .error (.unsupported "lazy type layout recursion exhausted")
+private def lift {m : Type → Type} [Monad m] [MonadExceptOf String m] (result : Except String α) : m α :=
+  match result with | .ok value => pure value | .error error => throw error
+
+private def worldIntegerName : MIR.IntegerKind → String
+  | .i8 => "i8" | .i16 => "i16" | .i32 => "i32" | .i64 => "i64"
+  | .i128 => "i128" | .isize => "isize" | .u8 => "u8" | .u16 => "u16"
+  | .u32 => "u32" | .u64 => "u64" | .u128 => "u128" | .usize => "usize"
+
+open TypeArena in
+private def worldAdt (id : TypeId) : WorldM (AdtDeclaration.Material × GenericSubstitution.DefinitionTemplate ×
+    GenericSubstitution.DefinitionIdentity × Array MIR.GenericArg × Option AdtShape) := do
+  let world ← get
+  let (identity, args, shape) ← match ← lift (world.lookupType id) with
+    | .material node => match node.shape with
+      | .adt data => do
+        let some definition := world.definitions[data.definition]? | throw "layout ADT definition absent"
+        pure (⟨definition.crateIndex,definition.index⟩,data.args,some data)
+      | _ => throw "layout source type is not an ADT"
+    | .constructed (.adt identity args) => pure (identity,args,none)
+    | _ => throw "layout constructed type is not an ADT"
+  let reference ← lift (world.definitionRef identity)
+  let some definition := world.definitions[reference]? | throw "layout ADT declaration absent"
+  let some declaration := definition.adtDeclaration | throw "layout raw ADT declaration absent"
+  let some template := definition.genericTemplate | throw "layout raw ADT field template absent"
+  lift (declaration.validate template)
+  if let some shape := shape then
+    unless shape.kind == declaration.kind && shape.representation == declaration.representation do
+      throw "layout ADT material differs from raw declaration attributes"
+  pure (declaration,template,identity,args,shape)
+
+open TypeArena in
+private def worldAdtFields (normalization : Option AliasRuntime.Context) (fuel : Nat) (id variant : Nat) : WorldM (Array TypeId) := do
+  let world ← get
+  if let .material node ← lift (world.lookupType id) then
+    let .adt shape := node.shape | throw "layout source type is not an ADT"
+    let some source := shape.variants.find? (·.index == variant) | throw "layout source ADT variant absent"
+    return source.fields.map (·.typeId)
+  let (declaration,template,identity,args,_) ← worldAdt id
+  unless variant < declaration.variantCount do throw "layout ADT variant index absent"
+  let fields := template.fields.filter (·.variantIndex == variant)
+  let some context := normalization | throw "constructed ADT field needs source normalization context"
+  fields.mapM fun field => do
+    let term ← lift (GenericInstantiationWorld.instantiateFieldTerm (← get) fuel identity args variant field.fieldIndex)
+    WorldNormalization.resolveNormalizedTerm context (fuel * (fuel + 1)) fuel term
+
+private def worldRepresentation (source : ReprOptions) : Except String UnivariantLayout.Representation := do
+  unless source.flagsBits < 256 do throw "layout representation flags overflow u8"
+  pure {
+    flags := UInt8.ofNat source.flagsBits, integerRepresentation := source.integer.isSome
+    align := ← source.alignBytes.mapM (fun value => (alignment value).mapError toString)
+    pack := ← source.packBytes.mapM (fun value => (alignment value).mapError toString)
+    fieldShuffleSeed := ← (u64 source.fieldShuffleSeed "layout field shuffle seed").mapError toString }
+
+open TypeArena in
+private def worldConstructor (id : TypeId) : WorldM Constructor := do
+  let world ← get
+  match ← lift (world.lookupType id) with
+  | .constructed key => pure key
+  | .material node =>
+    let some key ← lift (world.materialKey node) | throw "layout source constructor has no universe key"
+    pure key
+
+open TypeArena in
+private def worldSized (normalization : Option AliasRuntime.Context) : Nat → TypeId → WorldM Bool
+  | 0, _ => throw "layout source sizedness recursion exhausted"
   | fuel + 1, id => do
-    let sourceNode ← metadata.node id
-    if id < metadata.source.types.size then
-      return ⟨id,← resolveLayoutWithFuel metadata.target metadata.source.types
-        metadata.source.layouts metadata.source.definitions (fuel + 1) sourceNode.layoutId⟩
-    if let .array element _ constructor := sourceNode.shape then
-      unless constructor.count < 2^(metadata.target.base.pointerWidth.bits.toNat) do
-        throw (.unsupported "lazy array length overflows target usize")
-      let elementLayout ← lookupWithFuel metadata fuel element
-      unless elementLayout.layout.isSized do throw (.unsupported "lazy array element is unsized")
-      let arrayLayout ← (PrimitiveLayout.arrayLike metadata.target elementLayout.layout
-          (UInt64.ofNat constructor.count)).mapError (fun e => .unsupported e)
-      return ⟨id, arrayLayout⟩
-    let (pointee, isReference) ← match sourceNode.shape with
-      | .rawPointer pointee .Mut => pure (pointee, false)
-      | .reference pointee .Mut .Erased => pure (pointee, true)
-      | _ => throw (.invalid "lazy type arena" "unsupported constructor")
-    let metadataType ← metadata.pointerMetadataType pointee
-    let pointerMetadata := some (← lookupWithFuel metadata fuel metadataType).layout
-    let pointerLayout ← (PrimitiveLayout.pointer metadata.target isReference pointerMetadata)
-      |>.mapError (fun e => .unsupported s!"lazy pointer layout: {reprStr e}")
-    return ⟨id, pointerLayout⟩
+    let world ← get
+    match ← lift (world.lookupType id) with
+    | .material node => match node.shape with
+      | .str | .slice .. | .dynamicTraitObject .. | .foreign .. => pure false
+      | .tuple elements => match elements.back? with
+        | none => pure true | some tail => worldSized normalization fuel tail
+      | .adt data =>
+        if data.kind != .structKind then return true
+        let fields ← worldAdtFields normalization fuel id 0
+        match fields.back? with | none => pure true | some tail => worldSized normalization fuel tail
+      | .alias .. => throw "layout sizedness requires source alias normalization"
+      | _ => pure true
+    | .constructed key => match key with
+      | .str | .slice .. | .foreign .. => pure false
+      | .tuple elements => match elements.back? with
+        | none => pure true | some tail => worldSized normalization fuel tail
+      | .adt .. =>
+        let (declaration,_,_,_,_) ← worldAdt id
+        if declaration.kind != .structKind then return true
+        let fields ← worldAdtFields normalization fuel id 0
+        match fields.back? with | none => pure true | some tail => worldSized normalization fuel tail
+      | .alias .. => throw "layout sizedness requires source alias normalization"
+      | _ => pure true
 
-def lookup (metadata : RuntimeMetadata) (id : TypeId) : Result (TyAndLayout TypeId) :=
-  lookupWithFuel metadata (id + metadata.source.types.size + 1) id
+open TypeArena in
+private def worldMetadata (normalization : Option AliasRuntime.Context) (target : RuntimeTargetDataLayout) : Nat → TypeId → WorldM (Option LayoutData)
+  | 0, _ => throw "layout pointer metadata recursion exhausted"
+  | fuel + 1, id => do
+    if ← worldSized normalization (fuel + 1) id then return none
+    let world ← get
+    match ← lift (world.lookupType id) with
+    | .material node => match node.shape with
+      | .str | .slice .. => return some (← lift (PrimitiveLayout.compute target "usize"))
+      | .foreign .. => pure none
+      | .tuple elements =>
+        let some tail := elements.back? | throw "unsized tuple has no tail"
+        worldMetadata normalization target fuel tail
+      | .adt .. =>
+        let fields ← worldAdtFields normalization fuel id 0
+        let some tail := fields.back? | throw "unsized struct has no tail"
+        worldMetadata normalization target fuel tail
+      | .dynamicTraitObject .. => throw "layout dynamic metadata needs raw DynMetadata constructor"
+      | _ => throw "layout source pointer metadata constructor unsupported"
+    | .constructed key => match key with
+      | .str | .slice .. => return some (← lift (PrimitiveLayout.compute target "usize"))
+      | .foreign .. => pure none
+      | .tuple elements =>
+        let some tail := elements.back? | throw "unsized tuple has no tail"
+        worldMetadata normalization target fuel tail
+      | .adt .. =>
+        let fields ← worldAdtFields normalization fuel id 0
+        let some tail := fields.back? | throw "unsized struct has no tail"
+        worldMetadata normalization target fuel tail
+      | _ => throw "layout constructed pointer metadata constructor unsupported"
 
-/-- Synthetic array lengths inhabit a disjoint constant namespace and retain the
-exact target-usize ValTree representation. Imported generic constants stay intact. -/
-def typeConstant (metadata : RuntimeMetadata) (id : TypeConstantId) : Result MIR.TypeConst := do
-  if let some value := metadata.source.typeConstants[id]? then return value
-  let count := id - metadata.source.typeConstants.size
-  let bits := metadata.target.base.pointerWidth.bits.toNat
-  unless count < 2^bits do throw (.unsupported "lazy array length overflows target usize")
-  let usizeType := metadata.source.queries.primitives.usize
-  let value ← metadata.node usizeType
-  unless value.shapeMetadata.unsignedKind == some (.known .usize) do
-    throw (.invalid "lazy usize constant" "primitive is not usize")
-  return .Value usizeType ⟨#[.Leaf count (bits / 8)], 0⟩
+open TypeArena in
+private def worldStructSized (normalization : Option AliasRuntime.Context) (fuel : Nat)
+    (declaration : AdtDeclaration.Material) (template : GenericSubstitution.DefinitionTemplate) : WorldM Bool := do
+  let some tail := template.fields.back? | return true
+  if StructLayoutMaterial.guaranteedSized (StructLayoutMaterial.termFuel tail.expression + 1) tail.expression then
+    return true
+  if let some context := normalization then
+    let sized := context.traits.traits.filter (·.langItem == some "sized")
+    unless sized.size <= 1 do throw "layout declaration environment has ambiguous canonical Sized trait"
+    if let some sized := sized[0]? then
+      let goal : TraitSelection.Clause := ⟨#[],.trait ⟨.positive,⟨sized.definition,#[tail.expression]⟩⟩⟩
+      let proof ← lift (TraitSelection.EnvironmentEntailment.entails context.traits
+        template.parameters declaration.ownPredicates (fuel * (fuel + 1)) goal)
+      if proof.isSome then return true
+  -- A missing positive environment proof remains unknown. Only the separate
+  -- structural source algorithm below may establish its supported cases;
+  -- generic parameter tails remain explicit unsupported obligations.
+  let world ← get
+  lift (TermSized.query {
+    sourceAdt := fun identity => do
+      let reference ← world.definitionRef identity
+      let some definition := world.definitions[reference]? | throw "layout sizedness ADT definition absent"
+      let some declaration := definition.adtDeclaration | throw "layout sizedness raw ADT declaration absent"
+      let some template := definition.genericTemplate | throw "layout sizedness raw field template absent"
+      declaration.validate template
+      pure (declaration.kind,template),
+    normalizeAlias := fun remaining term => match normalization with
+      | none => throw "layout declaration sizedness requires ParamEnv alias normalization"
+      | some context => AliasRuntime.normalizeTerm context (remaining * (remaining + 1)) remaining #[] #[] term }
+    .sized fuel tail.expression)
+
+private def worldArrayCount (target : RuntimeTargetDataLayout) (length : TypeConstantId)
+      (identity : ArrayConstructor) : TypeArena.WorldM UInt64 := do
+    let world ← get
+    lift (SequenceLayoutMaterial.arrayCount
+      (fun id => do
+        match ← world.lookupType id with
+        | .material node => pure (node.shapeMetadata.unsignedKind == some (.known .usize))
+        | .constructed (.integer false .usize) => pure true
+        | _ => pure false)
+      world.lookupConstant target.pointerSize.bytes.toNat length identity)
+
+mutual
+  private def worldLayoutType (normalization : Option AliasRuntime.Context) (target : RuntimeTargetDataLayout) (layouts : Array Input.Layout) :
+      Nat → TypeId → TypeArena.WorldM LayoutData
+    | 0, _ => throw "universe layout recursion exhausted"
+    | fuel + 1, id => do
+      let world ← get
+      match ← lift (world.lookupType id) with
+      | .material node => worldLayoutSeed normalization target layouts fuel node.layoutId
+      | .constructed key => worldLayoutConstructor normalization target layouts fuel id key
+
+  private def worldLayoutConstructor (normalization : Option AliasRuntime.Context) (target : RuntimeTargetDataLayout) (layouts : Array Input.Layout) :
+      Nat → TypeId → TypeArena.Constructor → TypeArena.WorldM LayoutData
+    | 0, _, _ => throw "universe constructor layout recursion exhausted"
+    | fuel + 1, id, key => match key with
+      | .bool => lift (PrimitiveLayout.compute target "bool")
+      | .char => lift (PrimitiveLayout.compute target "char")
+      | .never => lift (PrimitiveLayout.compute target "never")
+      | .integer signed kind => do
+        unless signed == kind.signed do throw "universe integer signedness disagrees with constructor"
+        lift (PrimitiveLayout.compute target (worldIntegerName kind))
+      | .float kind => do
+        let value : Primitive := .Float (match kind with
+          | .f16 => .F16 | .f16b => .F16B | .f32 => .F32 | .f64 => .F64
+          | .f128 => .F128 | .ppcf128 => .PpcF128)
+        let size ← lift (value.size target |>.mapError toString)
+        let range ← lift (WrappingRange.full size |>.mapError reprStr)
+        lift (PrimitiveLayout.scalar target value range)
+      | .str => lift (SequenceLayout.str target)
+      | .slice element => do
+        let element ← worldLayoutType normalization target layouts fuel element
+        lift (SequenceLayout.slice target element)
+      | .array element length => do
+        let world ← get
+        let constant ← lift (world.lookupConstant length)
+        let .Value _ tree := constant | throw "universe array length requires constant evaluation"
+        let some (Miri.MIR.ValTreeNode.Leaf bits _) := tree.nodes[tree.root]?
+          | throw "universe array length is not a scalar"
+        let identity ← match ← lift (world.lookupType id) with
+          | .material node => match node.shape with
+            | .array _ _ identity => pure identity
+            | _ => throw "array layout constructor source mismatch"
+          | .constructed _ => pure ⟨bits,true⟩
+        let count ← worldArrayCount target length identity
+        let element ← worldLayoutType normalization target layouts fuel element
+        unless element.isSized do throw "universe array element is unsized"
+        lift (SequenceLayout.arrayLike target element (some count))
+      | .tuple elements => do
+        let fields ← elements.mapM (worldLayoutType normalization target layouts fuel)
+        lift (UnivariantLayout.compute target fields {} (if fields.isEmpty then .alwaysSized else .maybeUnsized))
+      | .rawPointer pointee _ => do
+        let metadata ← worldMetadata normalization target fuel pointee
+        lift (PrimitiveLayout.pointer target false metadata)
+      | .reference pointee .. => do
+        let metadata ← worldMetadata normalization target fuel pointee
+        lift (PrimitiveLayout.pointer target true metadata)
+      | .adt .. => worldAdtLayout normalization target layouts fuel id
+      | .functionDefinition .. | .foreign .. =>
+        pure {
+          fields := .Arbitrary #[] #[]
+          variants := .Single 0
+          backendRepr := .Memory (sized := match key with | .functionDefinition .. => true | _ => false),
+          largestNiche := none, uninhabited := false, align := .new target.i8Align,
+          size := Size.ZERO, maxReprAlign := none, unadjustedAbiAlign := target.i8Align,
+          reprC := false, randomizationSeed := 0 }
+      | _ => throw "universe layout constructor is not implemented"
+  private def worldAdtLayout (normalization : Option AliasRuntime.Context) (target : RuntimeTargetDataLayout) (layouts : Array Input.Layout)
+      : Nat → TypeId → TypeArena.WorldM LayoutData
+    | 0, _ => throw "universe ADT layout recursion exhausted"
+    | fuel + 1, id => do
+      let (declaration,template,_,_,_) ← worldAdt id
+      let repr ← lift (worldRepresentation declaration.representation)
+      unless declaration.representation.flagsBits &&& (2 + 64) == 0 do
+        throw "universe SIMD/scalable ADT layout is not implemented"
+      unless declaration.langItem != some "f16b" && declaration.langItem != some "ppcf128" do
+        throw "universe special float ADT layout is not implemented"
+      let types ← worldAdtFields normalization fuel id 0
+      let fields ← types.mapM (worldLayoutType normalization target layouts fuel)
+      if declaration.kind == .unionKind then return ← lift (UnionLayout.compute target fields repr)
+      unless declaration.kind == .structKind do throw "universe enum layout is not implemented"
+      let alwaysSized ← worldStructSized normalization fuel declaration template
+      let niches := if declaration.langItem == some "unsafe_cell" || declaration.langItem == some "unsafe_pinned"
+        then StructLayout.NicheOptimizations.disabled else .enabled
+      lift (StructLayout.compute target fields repr 0 false alwaysSized niches)
+  private def worldLayoutSeed (normalization : Option AliasRuntime.Context) (target : RuntimeTargetDataLayout) (layouts : Array Input.Layout) :
+      Nat → LayoutId → TypeArena.WorldM LayoutData
+    | 0, _ => throw "universe layout recipe recursion exhausted"
+    | fuel + 1, id => do
+      let some source := layouts[id]? | throw "universe layout seed absent"
+      let constructors := #[source.structType.isSome,source.unionType.isSome,source.tupleType.isSome,
+        source.primitiveRecipe.isSome,source.sequenceType.isSome,source.pointerType.isSome,source.pointerDataType.isSome,source.enumTagType.isSome].filter (fun enabled => enabled)
+      unless constructors.size <= 1 do throw "conflicting universe layout recipe constructors"
+      if let some ty := source.structType then
+        let (declaration,_,_,_,_) ← worldAdt ty
+        unless declaration.kind == .structKind do throw "struct recipe source is not a struct"
+        return ← worldAdtLayout normalization target layouts fuel ty
+      if let some ty := source.unionType then
+        let (declaration,_,_,_,_) ← worldAdt ty
+        unless declaration.kind == .unionKind do throw "union recipe source is not a union"
+        return ← worldAdtLayout normalization target layouts fuel ty
+      if let some ty := source.tupleType then
+        let key ← worldConstructor ty
+        let .tuple elements := key | throw "tuple layout recipe source is not a tuple"
+        return ← worldLayoutConstructor normalization target layouts fuel ty (.tuple elements)
+      if let some ty := source.sequenceType then
+        let key ← worldConstructor ty
+        unless (match key with | .array .. | .slice .. | .str => true | _ => false) do
+          throw "sequence recipe source is not a sequence"
+        return ← worldLayoutConstructor normalization target layouts fuel ty key
+      if let some ty := source.enumTagType then
+        let parent ← worldLayoutType normalization target layouts fuel ty
+        let .Multiple tag _ _ _ := parent.variants | throw "tag operation parent has no discriminant field"
+        let .Initialized (value := value) (validRange := range) := tag
+          | throw "tag operation requires initialized discriminant scalar"
+        return ← lift (PrimitiveLayout.scalar target value range)
+      if let some ty := source.pointerDataType then
+        let key ← worldConstructor ty
+        let isReference ← match key with
+          | .rawPointer .. => pure false | .reference .. => pure true
+          | _ => throw "pointer data recipe source is not a pointer"
+        let canonical ← worldLayoutType normalization target layouts fuel ty
+        unless canonical.fields.count > 0 do throw "thin pointer has no data projection field"
+        return ← lift (PrimitiveLayout.pointer target isReference none)
+      if let some ty := source.pointerType then
+        let key ← worldConstructor ty
+        unless (match key with | .rawPointer .. | .reference .. => true | _ => false) do
+          throw "pointer recipe source is not a pointer"
+        return ← worldLayoutConstructor normalization target layouts fuel ty key
+      lift ((layout target source).mapError toString)
+
+
+end
+
+/-- A layout demand runs in the caller's execution-owned type universe. Raw
+source rows and newly constructed types use the same recipe operations. -/
+def layoutInWorld (metadata : RuntimeMetadata) (id : TypeId) : TypeArena.WorldM (TyAndLayout TypeId) := do
+  let world ← get
+  let budget := metadata.materialLayoutFuel + world.constructedTypes.size + world.constructedConstants.size
+  pure ⟨id, ← worldLayoutType (some metadata.normalizationContext) metadata.target metadata.source.layouts budget id⟩
+
+/-- Physical source-only adapter. LayoutData contains no newly allocated type
+IDs; execution providers must use layoutInWorld and retain its updated World. -/
+def resolveLayout (target : RuntimeTargetDataLayout) (types : Array TypeNode)
+    (layouts : Array Input.Layout) (id : LayoutId) (definitions : Array DefinitionId)
+    (constants : Array MIR.TypeConst) : Result LayoutData := do
+  let source ← require layouts[id]? "compiler layout ID out of bounds"
+  if source.tupleType.isNone && source.unionType.isNone && source.structType.isNone &&
+      source.sequenceType.isNone && source.pointerType.isNone && source.pointerDataType.isNone && source.enumTagType.isNone then
+    return ← layout target source
+  let world ← (TypeArena.World.ofMaterial types constants definitions target.pointerSize.bytes.toNat)
+    |>.mapError (fun e => .invalid "layout material" e)
+  let result ← (worldLayoutSeed none target layouts (rawLayoutBudget types.size layouts.size definitions) id).run world
+    |>.mapError (fun e => .unsupported e)
+  pure result.1
+
+def lookup (metadata : RuntimeMetadata) (id : TypeId) : Result (TyAndLayout TypeId) := do
+  unless id < metadata.source.types.size do
+    throw (.unsupported "constructed type layout requires the execution-owned universe")
+  let source ← metadata.node id
+  let seed ← require metadata.source.layouts[source.layoutId]? "compiler layout seed"
+  if seed.tupleType.isNone && seed.unionType.isNone && seed.structType.isNone &&
+      seed.sequenceType.isNone && seed.pointerType.isNone && seed.pointerDataType.isNone && seed.enumTagType.isNone then
+    return ⟨id, ← layout metadata.target seed⟩
+  let checked ← require metadata.checkedMaterial "checked source material prefix"
+  let world := TypeArena.World.ofCheckedMaterial checked
+  let (result, final) ← (layoutInWorld metadata id).run world |>.mapError (fun e => .unsupported e)
+  unless final.constructedTypes.isEmpty && final.constructedConstants.isEmpty do
+    throw (.unsupported "source-only layout demand needs execution-owned type construction")
+  pure result
+
+/-- Pure source-constant access. Constructed constants belong to the execution
+universe and must be obtained through its checked lookup. -/
+def typeConstant (metadata : RuntimeMetadata) (id : TypeConstantId) : Result MIR.TypeConst :=
+  require metadata.source.typeConstants[id]? "source type constant; constructed constants require execution universe"
 
 /-- This is an explicit diagnostic inventory, not an execution-readiness test. -/
 def obligations (metadata : RuntimeMetadata) : Array (TypeId × RuntimeMetadataError) :=
@@ -485,7 +723,7 @@ private def projectionParents (metadata : RuntimeMetadata) (id : TypeId) : Resul
   pure queries.parents
 /-- Resolve a physical compiler layout only at the operation that needs it. -/
 def layoutById (metadata : RuntimeMetadata) (id : Nat) : Result LayoutData := do
-  resolveLayout metadata.target metadata.source.types metadata.source.layouts id metadata.source.definitions
+  resolveLayout metadata.target metadata.source.types metadata.source.layouts id metadata.source.definitions metadata.source.typeConstants
 
 private def projectionLayout (metadata : RuntimeMetadata) (id : TypeId) (layoutId : LayoutId) :
     Result (TyAndLayout TypeId) := do
@@ -566,6 +804,187 @@ def queries (metadata : RuntimeMetadata) : LayoutQueries TypeId := {
   field := fun parent index => (metadata.field parent index).mapError (fun _ => .missingField index)
   variant := fun parent index => (metadata.forVariant parent index).mapError (fun _ => .missingVariant index)
   pointee := fun parent => (metadata.pointee parent).mapError (fun _ => .missingPointee) }
+
+/-- Read-only constructor classification; this operation never interns a type. -/
+def shapeKindInWorld (_metadata : RuntimeMetadata) (id : TypeId) : TypeArena.WorldM TypeShapeKind := do
+  let world ← get
+  match ← lift (world.lookupType id) with
+  | .material node => pure node.shapeKind
+  | .constructed key => pure (match key with
+    | .bool => .bool | .char => .char | .str => .str | .never => .never
+    | .integer true _ => .int | .integer false _ => .uint | .float _ => .float
+    | .rawPointer .. => .rawPointer | .reference .. => .reference | .slice .. => .slice
+    | .tuple .. => .tuple | .array .. => .array | .adt .. => .adt | .foreign .. => .foreign
+    | .functionDefinition .. => .functionDefinition | .alias .. => .alias
+    | .closure .. => .closure | .coroutineClosure .. => .coroutineClosure | .coroutine .. => .coroutine)
+
+def packedAlignInWorld (_metadata : RuntimeMetadata) (id : TypeId) : TypeArena.WorldM (Option Align) := do
+  let world ← get
+  let packed ← match ← lift (world.lookupType id) with
+    | .material node => match node.shape with
+      | .adt data => pure data.representation.packBytes
+      | _ => pure none
+    | .constructed (.adt ..) => do
+      let (declaration,_,_,_,_) ← worldAdt id
+      pure declaration.representation.packBytes
+    | _ => pure none
+  lift (packed.mapM (fun value => (alignment value).mapError toString))
+
+/-- Constructor field selection may instantiate and intern raw ADT field types
+in the same execution universe. The requested variant is explicit. -/
+def fieldTypeInWorld (_metadata : RuntimeMetadata) (id variant index : Nat) : TypeArena.WorldM TypeId := do
+  let world ← get
+  let fuel := world.typeCount + world.definitions.size + 1
+  match ← lift (world.lookupType id) with
+  | .material node => match node.shape with
+    | .adt .. =>
+      let fields ← worldAdtFields (some _metadata.normalizationContext) fuel id variant
+      let some field := fields[index]? | throw "source ADT field index absent"
+      pure field
+    | .tuple elements =>
+      let some field := elements[index]? | throw "source tuple field index absent"
+      pure field
+    | .array element .. | .slice element => pure element
+    | .str => TypeArena.World.internType (.integer false .u8)
+    | .patternType base _ =>
+      unless index == 0 do throw "source pattern has only its base field"
+      pure base
+    | _ => throw "source type field constructor is not implemented"
+  | .constructed key => match key with
+    | .adt .. =>
+      let fields ← worldAdtFields (some _metadata.normalizationContext) fuel id variant
+      let some field := fields[index]? | throw "constructed ADT field index absent"
+      pure field
+    | .tuple elements =>
+      let some field := elements[index]? | throw "constructed tuple field index absent"
+      pure field
+    | .array element _ | .slice element => pure element
+    | .str => TypeArena.World.internType (.integer false .u8)
+    | _ => throw "constructed type field constructor is not implemented"
+
+def metadataTailInWorld (metadata : RuntimeMetadata) (id : TypeId) : TypeArena.WorldM TypeId := do
+  let world ← get
+  WorldTypeMetadata.metadataTail {
+    normalization := metadata.normalizationContext
+    unitType := metadata.source.queries.primitives.unit
+    usizeType := metadata.source.queries.primitives.usize
+    fieldType := fieldTypeInWorld metadata }
+    (metadata.materialLayoutFuel + world.constructedTypes.size + 1) id
+
+def pointerMetadataTypeInWorld (metadata : RuntimeMetadata) (id : TypeId) : TypeArena.WorldM TypeId := do
+  let world ← get
+  WorldTypeMetadata.pointerMetadataType {
+    normalization := metadata.normalizationContext
+    unitType := metadata.source.queries.primitives.unit
+    usizeType := metadata.source.queries.primitives.usize
+    fieldType := fieldTypeInWorld metadata }
+    (metadata.materialLayoutFuel + world.constructedTypes.size + 1) id
+
+private def worldProjection (metadata : RuntimeMetadata) (ty : TypeId) (layoutId : LayoutId) :
+    TypeArena.WorldM (TyAndLayout TypeId) := do
+  let world ← get
+  pure ⟨ty, ← worldLayoutSeed (some metadata.normalizationContext) metadata.target metadata.source.layouts
+    (world.typeCount + metadata.source.layouts.size + 1) layoutId⟩
+
+/-- Preserve the exact selected-parent field contract for material residual
+projection categories. Constructor fields use source substitution directly. -/
+def fieldLayoutForInWorld (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index : Nat) :
+    TypeArena.WorldM (TyAndLayout TypeId) := do
+  let world ← get
+  if let .material node ← lift (world.lookupType parent.ty) then
+    for record in ← lift ((projectionParents metadata parent.ty).mapError toString) do
+      let queried ← worldProjection metadata parent.ty record.layoutId
+      if queried == parent then
+        let sourceIndex := if node.shapeKind == .str then 0 else index
+        let some source := record.fields.find? (·.index == sourceIndex)
+          | throw "compiler projection field material absent"
+        let _ ← lift ((← get).lookupType source.typeId)
+        return ← worldProjection metadata source.typeId source.layoutId
+  let pointer ← match ← lift ((← get).lookupType parent.ty) with
+    | .material node => match node.shape with
+      | .rawPointer pointee _ => pure (some (pointee,false))
+      | .reference pointee .. => pure (some (pointee,true))
+      | _ => pure none
+    | .constructed (.rawPointer pointee _) => pure (some (pointee,false))
+    | .constructed (.reference pointee ..) => pure (some (pointee,true))
+    | _ => pure none
+  if let some (pointee,isReference) := pointer then
+    unless index < parent.layout.fields.count do throw "pointer projection field index out of bounds"
+    if index == 0 then
+      return ⟨parent.ty, ← lift (PrimitiveLayout.pointer metadata.target isReference none)⟩
+    let metadataType ← pointerMetadataTypeInWorld metadata pointee
+    if (← shapeKindInWorld metadata metadataType) == .adt then
+      throw "dynamic pointer metadata field requires exact vtable projection material"
+    return ← layoutInWorld metadata metadataType
+  let selected ← match parent.layout.variants with
+    | .Single selected => pure selected
+    | _ => throw "ADT field needs a selected variant"
+  let child ← fieldTypeInWorld metadata parent.ty selected index
+  layoutInWorld metadata child
+
+def fieldLayoutInWorld (metadata : RuntimeMetadata) (id index : Nat) :
+    TypeArena.WorldM (TyAndLayout TypeId) := do
+  let parent ← layoutInWorld metadata id
+  fieldLayoutForInWorld metadata parent index
+
+/-- Pinned for_variant transformation. Contextual uninhabited-variant material
+remains an explicit source projection category until that algorithm is ported. -/
+def variantLayoutInWorld (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index : Nat) :
+    TypeArena.WorldM (TyAndLayout TypeId) := do
+  let world ← get
+  if let .material _ ← lift (world.lookupType parent.ty) then
+    for record in ← lift ((projectionParents metadata parent.ty).mapError toString) do
+      if record.variant == some index then
+        let canonical ← layoutInWorld metadata parent.ty
+        unless canonical == parent do
+          match parent.layout.variants with
+          | .Single actual =>
+            if actual == index then return parent
+            throw "cannot apply for_variant twice to a selected parent"
+          | _ => throw "variant projection parent differs from source layout"
+        return ← worldProjection metadata parent.ty record.layoutId
+  match parent.layout.variants with
+  | .Single actual =>
+    if actual == index then return parent
+    throw "uninhabited variant layout requires source material"
+  | .Empty => throw "empty-enum variant layout requires source material"
+  | .Multiple _ _ _ variants =>
+    let some variant := variants[index]? | throw "variant index absent"
+    pure ⟨parent.ty, {parent.layout with
+      fields := .Arbitrary variant.fieldOffsets variant.fieldsInMemoryOrder
+      variants := .Single index, backendRepr := variant.backendRepr
+      largestNiche := variant.largestNiche, uninhabited := variant.uninhabited
+      size := variant.size, randomizationSeed := 0}⟩
+
+/-- Exact monomorphic Sized dispatch in the current universe after erasing
+regions and normalizing the requested source type. -/
+def sizedInWorld (metadata : RuntimeMetadata) (id : TypeId) : TypeArena.WorldM Bool := do
+  let world ← get
+  let fuel := metadata.materialLayoutFuel + world.constructedTypes.size + world.constructedConstants.size
+  let id ← WorldNormalization.normalizeType metadata.normalizationContext (fuel * (fuel + 1)) fuel id
+  worldSized (some metadata.normalizationContext) fuel id
+
+/-- Raw nominal attributes; no physical layout or fields are computed. -/
+def adtDeclarationInWorld (_metadata : RuntimeMetadata) (id : TypeId) :
+    TypeArena.WorldM AdtDeclaration.Material := do
+  let (declaration,_,_,_,_) ← worldAdt id
+  pure declaration
+
+/-- Canonical source Value extraction, never a summarized normalized answer. -/
+def arrayCountInWorld (metadata : RuntimeMetadata) (id : TypeId) : TypeArena.WorldM UInt64 := do
+  let world ← get
+  let (length, identity) ← match ← lift (world.lookupType id) with
+    | .material node => match node.shape with
+      | .array _ length identity => pure (length,identity)
+      | _ => throw "array count source is not an array"
+    | .constructed (.array _ length) =>
+      let value ← lift (world.lookupConstant length)
+      let .Value _ tree := value | throw "array length requires source constant evaluation"
+      let some (Miri.MIR.ValTreeNode.Leaf bits _) := tree.nodes[tree.root]?
+        | throw "array length source value is not a scalar"
+      pure (length,⟨bits,true⟩)
+    | _ => throw "array count constructor is not an array"
+  worldArrayCount metadata.target length identity
 
 end RuntimeMetadata
 end Miri.Input

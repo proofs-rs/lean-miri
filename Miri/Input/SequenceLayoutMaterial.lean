@@ -5,7 +5,7 @@ expressions require the source const evaluator; their normalized count summary
 cannot stand in for a raw value constructor. -/
 namespace Miri.Input.SequenceLayoutMaterial
 
-def arrayCount (node : TypeId → Except String TypeNode)
+def arrayCount (isUsize : TypeId → Except String Bool)
     (constant : TypeConstantId → Except String MIR.TypeConst)
     (pointerBytes : Nat) (length : TypeConstantId) (identity : ArrayConstructor) :
     Except String UInt64 := do
@@ -16,8 +16,7 @@ def arrayCount (node : TypeId → Except String TypeNode)
   let value ← constant length
   let .Value ty tree := value
     | throw "array canonical length is not a source value constant"
-  let ty ← node ty
-  unless ty.shapeMetadata.unsignedKind == some (.known .usize) do
+  unless ← isUsize ty do
     throw "array length source value type is not usize"
   unless tree.root == 0 && tree.nodes.size == 1 do
     throw "array length source value is not a canonical scalar valtree"

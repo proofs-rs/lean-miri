@@ -1,0 +1,248 @@
+import Miri.Input.Model
+import Miri.Input.TypeArenaCheckedMaterial
+
+/-! The execution-owned type and constant constructor universe. Nodes store
+one constructor plus existing child IDs; repeated children never duplicate a
+nested Nat encoding. No compiler query answers, layouts, bodies, or normalization results are stored.
+-/
+namespace Miri.Input.TypeArena
+open GenericSubstitution
+
+inductive Constructor where
+  | bool | char | str | never
+  | integer (signed : Bool) (kind : MIR.IntegerKind)
+  | float (kind : FloatTypeTag)
+  | rawPointer (pointee : TypeId) (mutability : MIR.Mutability)
+  | reference (pointee : TypeId) (mutability : MIR.Mutability) (region : MIR.Region)
+  | slice (element : TypeId)
+  | tuple (elements : Array TypeId)
+  | array (element : TypeId) (length : TypeConstantId)
+  | adt (definition : DefinitionIdentity) (arguments : Array MIR.GenericArg)
+  | foreign (definition : DefinitionIdentity)
+  | functionDefinition (definition : DefinitionIdentity) (arguments : Array MIR.GenericArg)
+      (variables : Array MIR.BoundVariableKind)
+  | closure (definition : DefinitionIdentity) (arguments : Array MIR.GenericArg)
+  | coroutineClosure (definition : DefinitionIdentity) (arguments : Array MIR.GenericArg)
+  | coroutine (definition : DefinitionIdentity) (arguments : Array MIR.GenericArg)
+  | alias (kind : AliasTypeKind) (rigid : Bool) (definition : DefinitionIdentity)
+      (arguments : Array MIR.GenericArg)
+  deriving Repr, DecidableEq
+
+/-- The two pools have separate dense namespaces. Material prefixes are never
+changed; append-only constructor syntax belongs to one execution. -/
+structure World where
+  private mk ::
+  materialTypes : Array TypeNode
+  materialConstants : Array MIR.TypeConst
+  definitions : Array DefinitionId
+  pointerBytes : Nat
+  checkedMaterial : CheckedMaterial materialTypes materialConstants definitions pointerBytes
+  constructedTypes : Array Constructor := #[]
+  constructedConstants : Array MIR.TypeConst := #[]
+
+inductive TypeView where
+  | material (node : TypeNode)
+  | constructed (constructor : Constructor)
+
+abbrev WorldM := StateT World (Except String)
+
+def World.typeCount (world : World) : Nat := world.materialTypes.size + world.constructedTypes.size
+def World.constantCount (world : World) : Nat := world.materialConstants.size + world.constructedConstants.size
+
+def World.ofCheckedMaterial {types constants definitions pointerBytes}
+    (checked : CheckedMaterial types constants definitions pointerBytes) : World := {
+  materialTypes := types, materialConstants := constants, definitions, pointerBytes,
+  checkedMaterial := checked }
+
+def World.ofMaterial (types : Array TypeNode) (constants : Array MIR.TypeConst)
+    (definitions : Array DefinitionId) (pointerBytes : Nat) : Except String World := do
+  pure (World.ofCheckedMaterial (← CheckedMaterial.create types constants definitions pointerBytes))
+
+def World.ofDocument (document : ImportDocument) : Except String World := do
+  let some target := document.runtimeTargetDataLayout
+    | throw "type universe target material absent"
+  World.ofMaterial document.types document.typeConstants document.definitions
+    target.defaultAddressSpacePointerSpec.pointerSizeBytes
+
+def World.lookupType (world : World) (id : TypeId) : Except String TypeView := do
+  if id < world.materialTypes.size then
+    let some node := world.materialTypes[id]? | throw "type universe material node absent"
+    unless node.id == id do throw "type universe material identity/index mismatch"
+    pure (.material node)
+  else
+    let some constructor := world.constructedTypes[id - world.materialTypes.size]?
+      | throw "type universe constructed node absent"
+    pure (.constructed constructor)
+
+def World.lookupConstant (world : World) (id : TypeConstantId) : Except String MIR.TypeConst :=
+  if id < world.materialConstants.size then
+    match world.materialConstants[id]? with
+    | some value => .ok value | none => .error "type universe material constant absent"
+  else match world.constructedConstants[id - world.materialConstants.size]? with
+    | some value => .ok value | none => .error "type universe constructed constant absent"
+
+def Constructor.shapeKind : Constructor → TypeShapeKind
+  | .bool => .bool | .char => .char | .str => .str | .never => .never
+  | .integer true _ => .int | .integer false _ => .uint | .float _ => .float
+  | .rawPointer .. => .rawPointer | .reference .. => .reference | .slice .. => .slice
+  | .tuple .. => .tuple | .array .. => .array | .adt .. => .adt | .foreign .. => .foreign
+  | .functionDefinition .. => .functionDefinition | .closure .. => .closure
+  | .coroutineClosure .. => .coroutineClosure | .coroutine .. => .coroutine | .alias .. => .alias
+
+def World.shapeKind (world : World) (id : TypeId) : Except String TypeShapeKind := do
+  match ← world.lookupType id with
+  | .material source => pure source.shapeKind
+  | .constructed constructor => pure constructor.shapeKind
+
+def World.identity (world : World) (id : DefinitionRef) : Except String DefinitionIdentity := do
+  let some source := world.definitions[id]? | throw "type universe definition reference absent"
+  pure ⟨source.crateIndex,source.index⟩
+
+def World.definitionRef (world : World) (wanted : DefinitionIdentity) : Except String DefinitionRef := do
+  world.checkedMaterial.definitionRef wanted
+
+/-- Unsupported material families have no reconstructable identity key here.
+FnPtr in particular needs its complete raw header before it can be constructed. -/
+def World.materialKey (world : World) (source : TypeNode) : Except String (Option Constructor) := do
+  match source.shape with
+  | .bool => pure (some .bool) | .char => pure (some .char)
+  | .str => pure (some .str) | .never => pure (some .never)
+  | .int (.known kind) => pure (some (.integer true kind))
+  | .uint (.known kind) => pure (some (.integer false kind))
+  | .float kind => pure (some (.float kind))
+  | .rawPointer child mutability => pure (some (.rawPointer child mutability))
+  | .reference child mutability region => pure (some (.reference child mutability region))
+  | .slice child => pure (some (.slice child))
+  | .tuple children => pure (some (.tuple children))
+  | .array child length _ => pure (some (.array child length))
+  | .adt data => return some (.adt (← world.identity data.definition) data.args)
+  | .foreign definition => return some (.foreign (← world.identity definition))
+  | .functionDefinition definition args _ _ variables =>
+    return some (.functionDefinition (← world.identity definition) args variables)
+  | .closure definition args _ => return some (.closure (← world.identity definition) args)
+  | .coroutineClosure definition args => return some (.coroutineClosure (← world.identity definition) args)
+  | .coroutine definition args => return some (.coroutine (← world.identity definition) args)
+  | .alias kind rigid definition args =>
+    return some (.alias kind rigid (← world.identity definition) args)
+  | _ => pure none
+
+private def Constructor.arguments : Constructor → Array MIR.GenericArg
+  | .adt _ args | .functionDefinition _ args _ | .alias _ _ _ args
+  | .closure _ args | .coroutineClosure _ args | .coroutine _ args => args
+  | _ => #[]
+
+def Constructor.typeChildren (constructor : Constructor) : Array TypeId :=
+  let direct := match constructor with
+    | .rawPointer child _ | .reference child .. | .slice child | .array child _ => #[child]
+    | .tuple children => children
+    | _ => #[]
+  direct ++ constructor.arguments.filterMap (fun argument => match argument with
+    | .Type id => some id | _ => none)
+
+def Constructor.constantChildren (constructor : Constructor) : Array TypeConstantId :=
+  let direct := match constructor with | .array _ length => #[length] | _ => #[]
+  direct ++ constructor.arguments.filterMap (fun argument => match argument with
+    | .Const id => some id | _ => none)
+
+private def Constructor.definition : Constructor → Option DefinitionIdentity
+  | .adt id _ | .foreign id | .functionDefinition id .. | .alias _ _ id _
+  | .closure id _ | .coroutineClosure id _ | .coroutine id _ => some id
+  | _ => none
+
+private def World.validateConstructor (world : World) (constructor : Constructor) : Except String Unit := do
+  for child in constructor.typeChildren do
+    unless child < world.typeCount do throw "new type constructor references an absent type"
+  for child in constructor.constantChildren do
+    unless child < world.constantCount do throw "new type constructor references an absent constant"
+  if let some identity := constructor.definition then
+    let _ ← world.definitionRef identity
+    pure ()
+
+private def World.appendType (world : World) (constructor : Constructor) : TypeId × World :=
+  (world.typeCount,{world with constructedTypes := world.constructedTypes.push constructor})
+
+/-- Canonical syntax interning. Material reuse compares complete identity keys;
+layouts, source spellings and diagnostic signatures never select a nominal type.
+All matching material candidates are checked, preserving ambiguity rejection. -/
+def World.internType (constructor : Constructor) : WorldM TypeId := do
+  let world ← get
+  world.validateConstructor constructor
+  let mut found : Option TypeId := none
+  for source in world.materialTypes do
+    if (← world.materialKey source) == some constructor then
+      unless found.isNone do throw "ambiguous canonical type universe material identity"
+      found := some source.id
+  for (source,index) in world.constructedTypes.zipIdx do
+    if source == constructor then
+      unless found.isNone do throw "duplicate canonical type universe constructor"
+      found := some (world.materialTypes.size + index)
+  if let some id := found then return id
+  let (id,next) := world.appendType constructor
+  set next
+  pure id
+
+/-- Constant interning retains raw typed constant syntax, not evaluation results.
+The caller must provide an already-constructed type/constant graph. -/
+def World.internConstant (constant : MIR.TypeConst) : WorldM TypeConstantId := do
+  let world ← get
+  let mut typeRefs := #[]
+  let mut constantRefs := #[]
+  let mut arguments := #[]
+  match constant with
+  | .Param _ _ declared => typeRefs := declared.toArray
+  | .Value ty tree =>
+    typeRefs := #[ty]
+    unless tree.root < tree.nodes.size do throw "new constant valtree root is absent"
+    for node in tree.nodes do
+      match node with
+      | .Leaf bits bytes =>
+        unless bytes > 0 && bytes ≤ 16 && bits < 2^(8 * bytes) do
+          throw "new constant scalar width is invalid"
+      | .Branch children => constantRefs := constantRefs ++ children
+  | .Alias _ _ definition args =>
+    unless definition < world.definitions.size do throw "new constant alias definition is absent"
+    arguments := args
+  | .Expr _ args => arguments := args
+  | .Error => throw "error constant cannot be interned"
+  | _ => pure ()
+  for argument in arguments do
+    match argument with
+    | .Type id => typeRefs := typeRefs.push id
+    | .Const id => constantRefs := constantRefs.push id
+    | .Lifetime _ => pure ()
+  for id in typeRefs do
+    unless id < world.typeCount do throw "new constant references an absent type"
+  for id in constantRefs do
+    unless id < world.constantCount do throw "new constant references an absent constant"
+  let mut found := none
+  for (value,index) in world.materialConstants.zipIdx do
+    if value == constant then
+      unless found.isNone do throw "ambiguous canonical type universe constant"
+      found := some index
+  for (value,index) in world.constructedConstants.zipIdx do
+    if value == constant then
+      unless found.isNone do throw "duplicate canonical type universe constant"
+      found := some (world.materialConstants.size + index)
+  if let some id := found then return id
+  let id := world.constantCount
+  set {world with constructedConstants := world.constructedConstants.push constant}
+  pure id
+
+theorem World.appendType_material_preserved (world : World) (constructor : Constructor) :
+    (world.appendType constructor).2.materialTypes = world.materialTypes := rfl
+
+theorem World.appendType_dense_id (world : World) (constructor : Constructor) :
+    (world.appendType constructor).1 = world.materialTypes.size + world.constructedTypes.size := rfl
+
+theorem World.appendType_count (world : World) (constructor : Constructor) :
+    (world.appendType constructor).2.typeCount = world.typeCount + 1 := by
+  simp [World.appendType, World.typeCount, Nat.add_assoc]
+
+theorem World.appendType_lookup (world : World) (constructor : Constructor) :
+    (world.appendType constructor).2.lookupType (world.appendType constructor).1 =
+      .ok (.constructed constructor) := by
+  simp [World.appendType, World.lookupType, World.typeCount,
+    Nat.not_lt.mpr (Nat.le_add_right world.materialTypes.size world.constructedTypes.size),
+    pure, Except.pure]
+
+end Miri.Input.TypeArena

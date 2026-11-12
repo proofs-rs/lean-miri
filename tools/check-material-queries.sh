@@ -11,12 +11,16 @@ flock /tmp/lean-miri-lake-build.lock lake build \
   Miri.Input.CallResolution Miri.Input.Decoder Miri.Input.TermSized \
   MiriTests.Input.StructuralDeref MiriTests.Input.StructuralTail \
   MiriTests.Input.GenericRebase
-for source in TypeConstructors TypeArena Normalization PointerMetadata ConstructedFacts TraitClauseSubstitution AliasNormalization TermSized StructuralAutoTraits StructuralNeedsDrop StructuralSized InstanceCallerLocation; do
+for source in TypeConstructors TypeArena Normalization PointerMetadata ConstructedFacts TraitClauseSubstitution AliasNormalization TermSized DiscriminantType StructuralAutoTraits StructuralNeedsDrop StructuralSized InstanceCallerLocation; do
   lake env lean "tests/compiler_queries/$source.lean"
 done
+lake env lean --run tests/compiler_queries/TypeConstructors.lean
+lake env lean --run tests/compiler_queries/TypeArena.lean
 lake env lean --run tests/compiler_queries/AliasMaterial.lean
 bash tools/check-alias-normalization.sh "$BASELINE"
 bash tools/check-term-sized.sh
+bash tools/check-discriminant-types.sh "$BASELINE"
+bash tools/check-world-types.sh
 bash tools/export-mir.sh --output "$OUT/novel-array.json" --root miri_start -- \
   tests/repro/compiler-queries/generic-mir-novel-array-start.rs \
   --crate-type=lib --crate-name=novel_array_facts -Cpanic=abort

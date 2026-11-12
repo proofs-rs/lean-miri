@@ -487,6 +487,27 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
     typeShape b s!"{path}.shape" node.shape
     if let some facts := node.compilerFacts then compilerFacts b s!"{path}.compiler_facts" facts
   for (value, index) in document.layouts.toList.zipIdx do
+    if let some id := value.sequenceType then
+      checkId b.types id s!"$.layouts[{index}].sequence_type" "type"
+      let some node := document.types[id]? | throw "sequence recipe type ID invariant"
+      unless [.array,.slice,.str].contains node.shapeKind do throw s!"$.layouts[{index}].sequence_type: source is not a sequence"
+    if let some id := value.enumTagType then
+      checkId b.types id s!"$.layouts[{index}].enum_tag_type" "type"
+      let some node := document.types[id]? | throw "tag recipe type ID invariant"
+      let isTagParent : Bool := match node.shape with
+        | .adt data => data.kind == .enumKind
+        | .coroutine .. => true
+        | _ => false
+      unless isTagParent do
+        throw s!"$.layouts[{index}].enum_tag_type: source is not an enum/coroutine"
+    if let some id := value.pointerDataType then
+      checkId b.types id s!"$.layouts[{index}].pointer_data_type" "type"
+      let some node := document.types[id]? | throw "pointer data recipe type ID invariant"
+      unless [.rawPointer,.reference].contains node.shapeKind do throw s!"$.layouts[{index}].pointer_data_type: source is not a pointer"
+    if let some id := value.pointerType then
+      checkId b.types id s!"$.layouts[{index}].pointer_type" "type"
+      let some node := document.types[id]? | throw "pointer recipe type ID invariant"
+      unless [.rawPointer,.reference].contains node.shapeKind do throw s!"$.layouts[{index}].pointer_type: source is not a pointer"
     if let some id := value.structType then
       checkId b.types id s!"$.layouts[{index}].struct_type" "type"
       let some node := document.types[id]? | throw "struct recipe type ID invariant"

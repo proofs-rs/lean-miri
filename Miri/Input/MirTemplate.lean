@@ -88,24 +88,25 @@ def Operand.instantiate : Operand → Miri.MIR.Operand
   | .copy localId => .Copy (localPlace localId)
   | .move localId => .Move (localPlace localId)
 
-private def instantiateRvalue (resolve : TypeSlot → Except String TyId) : Rvalue → Except String Miri.MIR.Rvalue
+private def instantiateRvalue {m : Type → Type} [Monad m]
+    (resolve : TypeSlot → m TyId) : Rvalue → m Miri.MIR.Rvalue
   | .use value retag => pure (.Use value.instantiate retag)
   | .tuple values => pure (.Aggregate .Tuple (values.map Operand.instantiate))
   | .array element values => return .Aggregate (.Array (← resolve element)) (values.map Operand.instantiate)
 
-private def instantiateStatement (resolve : TypeSlot → Except String TyId) (source : Statement) :
-    Except String Miri.MIR.Statement := do
+private def instantiateStatement {m : Type → Type} [Monad m]
+    (resolve : TypeSlot → m TyId) (source : Statement) : m Miri.MIR.Statement := do
   let kind : Miri.MIR.StatementKind ← match source.kind with
     | .assign destination value =>
-      (instantiateRvalue resolve value).map (fun value => .Assign (localPlace destination) value)
+      pure (Miri.MIR.StatementKind.Assign (localPlace destination) (← instantiateRvalue resolve value))
     | .storageLive localId => pure (.StorageLive localId)
     | .storageDead localId => pure (.StorageDead localId)
     | .placeMention localId => pure (.PlaceMention (localPlace localId))
     | .nop => pure .Nop
   pure ⟨source.source,kind⟩
 
-private def instantiateTerminator (resolve : TypeSlot → Except String TyId)
-    (source : Terminator) : Except String Miri.MIR.Terminator := do
+private def instantiateTerminator {m : Type → Type} [Monad m]
+    (resolve : TypeSlot → m TyId) (source : Terminator) : m Miri.MIR.Terminator := do
   let kind ← match source.kind with
     | .goto target => pure (.Goto target #[])
     | .switchInt value targets => pure (.SwitchInt value.instantiate targets)
@@ -193,7 +194,8 @@ def validate (template : Template) (args : Array Term) : Except String Unit := d
 /-- Free-region erasure for the binder-free constructor families admitted by
 copy-template classification. Pinned erase_regions.rs:65–74 retains bound
 regions and erases all others. Binder anonymization is a separate required
-operation, so binder-bearing type families explicitly reject here. -/
+operation, so nonempty binders explicitly reject here. Empty binders carry no
+variables to anonymize and are retained exactly for ordinary FnDef arguments. -/
 def eraseFreeRegions : Nat → Term → Except String Term
   | 0, _ => .error "MIR template region-erasure traversal exhausted"
   | fuel + 1, value => do
@@ -213,7 +215,7 @@ def eraseFreeRegions : Nat → Term → Except String Term
 
 /-- The source exporter checks that instantiated MIR retains no parameters,
 escaping bounds, inference variables or placeholders. The selected family has
-no binders, so every surviving bound variable here is escaping. -/
+no nonempty binders, so every surviving bound variable here is escaping. -/
 def validateClosed : Nat → Term → Except String Unit
   | 0, _ => .error "MIR instantiated-type validation traversal exhausted"
   | fuel + 1, value => do
@@ -230,14 +232,19 @@ def validateClosed : Nat → Term → Except String Unit
       pure ()
     | .atom .. => pure ()
 
+private def liftPure {m : Type → Type} [Monad m] [MonadExceptOf String m]
+    (result : Except String α) : m α :=
+  match result with | .ok value => pure value | .error message => throw message
+
 /-- Resolve only when the body is requested. Missing slots, normalization and
 interning failures propagate. No executable skeleton or global cache exists. -/
-def instantiate (template : Template) (fuel : Nat) (args : Array Term)
-    (resolveType : Term → Except String TyId) : Except String Miri.MIR.Body := do
-  validate template args
-  let resolve (slot : TypeSlot) : Except String TyId := do
+def instantiate {m : Type → Type} [Monad m] [MonadExceptOf String m]
+    (template : Template) (fuel : Nat) (args : Array Term)
+    (resolveType : Term → m TyId) : m Miri.MIR.Body := do
+  liftPure (validate template args)
+  let resolve (slot : TypeSlot) : m TyId := do
     let some expression := template.types[slot.index]? | throw "MIR template type slot is absent"
-    resolveType (← GenericSubstitution.instantiate fuel args expression)
+    resolveType (← liftPure (GenericSubstitution.instantiate fuel args expression))
   let locals ← template.skeleton.locals.mapM resolve
   let blocks ← template.skeleton.blocks.mapM fun block => do
     pure ⟨← block.statements.mapM (instantiateStatement resolve),

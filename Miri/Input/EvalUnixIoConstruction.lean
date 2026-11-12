@@ -359,7 +359,7 @@ def controlFromSource
     setFlags := fun _ _ => throw (.unsupported "source descriptor flag binding is unavailable")
     ioctl := fun _ _ _ => throw (.unsupported "source ioctl binding is unavailable")
     frameInStd := FrameMetadata.frameInStd
-      (CompilerFrameMetadata.hooks p.lifecycle.frames userRelevantCrates)
+      (CompilerFrameMetadata.hooks p.lifecycle.frames EvalProjectionMachine.arrays userRelevantCrates)
     rejectIsolation := fun name => do
       match isolatedOp with
       | .allow => pure false

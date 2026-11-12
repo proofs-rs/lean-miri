@@ -229,7 +229,6 @@ pub(super) struct BooleanQueries {
 }
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct TypeQueries {
-    pub discriminant_type: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub normalized: Option<u64>,
     pub unsafe_binder_erased: Option<u64>,

@@ -24,7 +24,11 @@ fn parent<'tcx>(
             Ok(pool_type::ProjectionField {
                 index,
                 ty: type_json(context, tcx, field.ty)?,
-                layout: layout_value_json(context, tcx, field),
+                layout: if index == 0 && matches!(layout.ty.kind(),ty::RawPtr(..)|ty::Ref(..)) {
+                    pointer_data_layout_value_json(context,field)
+                } else if matches!(&layout.variants,rustc_abi::Variants::Multiple { tag_field,.. } if tag_field.index() == index) {
+                    enum_tag_layout_value_json(context,layout)
+                } else { layout_value_json(context,tcx,field) },
             })
         })
         .collect::<Result<_, String>>()?;

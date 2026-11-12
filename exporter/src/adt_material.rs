@@ -10,9 +10,9 @@ pub(super) fn declaration<'tcx>(tcx:TyCtxt<'tcx>,definition:DefId,mut encode_cla
     let mut fields=Vec::new();
     for (variant_index,variant) in adt.variants().iter_enumerated() {
         for (field_index,field) in variant.fields.iter_enumerated() {
-            fields.push(json!({"variant":variant_index.as_usize(),"field":field_index.as_usize(),"unsafe":field.safety.is_unsafe()}));
+            fields.push(json!({"variant":variant_index.as_usize(),"field":field_index.as_usize(),"unsafe":field.safety.is_unsafe(),"field_name":field.name.to_string()}));
         }
     }
     let own_predicates=tcx.clauses_of(definition).clauses.iter().map(|(clause,_)|encode_clause(*clause)).collect::<Result<Vec<_>,_>>()?;
-    Ok(Some(json!({"kind":kind,"lang_item":tcx.as_lang_item(definition).map(|item|item.name().as_str().to_owned()),"variant_count":adt.variants().len(),"fields":fields,"own_predicates":own_predicates})))
+    Ok(Some(json!({"representation":super::repr_options_json(&adt.repr()),"kind":kind,"lang_item":tcx.as_lang_item(definition).map(|item|item.name().as_str().to_owned()),"variant_count":adt.variants().len(),"variant_names":adt.variants().iter().map(|variant|variant.name.to_string()).collect::<Vec<_>>(),"fields":fields,"own_predicates":own_predicates})))
 }

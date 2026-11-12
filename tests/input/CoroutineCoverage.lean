@@ -31,7 +31,10 @@ private def invalidCoverage (document : ImportDocument) (value : CoroutineCovera
 /-- Constructed metadata controls exercise validators; they are neither compiler
 exports nor evidence of safe coroutine execution. -/
 private def componentChecks (original : ImportDocument) : IO Unit := do
-  let ownerCore ← must (SourceMir.resolveBody original 0)
+  let initial ← must (TypeArena.World.ofDocument original)
+  let (ownerCore,arena) ← must ((SourceMir.resolveBody original 0).run initial)
+  unless arena.constructedTypes.isEmpty && arena.constructedConstants.isEmpty do
+    throw (IO.userError "component material mutation cannot discard constructed identities")
   let some ownerSeed := original.bodies[0]? | throw (IO.userError "missing fixture body seed")
   let owner : Body := {toBodyCore := ownerCore, promotedBodies := ownerSeed.promotedBodies}
   let some ownerInstance := original.instances[owner.instanceId]? | throw (IO.userError "missing fixture instance")
@@ -174,7 +177,7 @@ def main : IO Unit := do
   let missingKindBodies := "[" ++ String.intercalate "," missingKindBodies.toList ++ "]"
   rejected (← must (setField valid "bodies" missingKindBodies)) "body_kind"
   rejected (← must (withoutField valid "mir_templates")) "mir_templates"
-  rejected (← must (withoutField valid "instance_abis")) "instance_abis"
+  rejected (← must (withoutField valid "compiler_instance_abis")) "compiler_instance_abis"
   -- Fixture edits reorder root fields. Put the obsolete header first so this
   -- control tests version rejection before interpreting obsolete body fields.
   let legacyCatalog ← must (setField legacy "compiler_coroutine_coverage" catalog)

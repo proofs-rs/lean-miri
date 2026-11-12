@@ -282,8 +282,8 @@ private def environment
     StepError.unsupported s!"compiler target architecture for Unix environment shims: {reason}"
   let symbols ← p.foreignSymbols |>.mapError fun reason =>
     StepError.unsupported s!"compiler foreign-symbol table for Unix environment shims: {reason}"
-  let frame := CompilerFrameMetadata.hooks p.lifecycle.frames userRelevantCrates
-  let callCompiler := CompilerCallConstruction.compiler p compatibilityBudget
+  let frame := CompilerFrameMetadata.hooks p.lifecycle.frames EvalProjectionMachine.arrays userRelevantCrates
+  let callCompiler := CompilerCallConstruction.compiler p EvalProjectionMachine.arrays compatibilityBudget
   let u32Layout ← match p.primitiveLayout "u32" with
     | .ok value => pure ⟨value.ty,value.layout⟩
     | .error reason => throw (.unsupported s!"compiler u32 layout for errno: {reason}")

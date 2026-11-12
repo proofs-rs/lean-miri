@@ -43,7 +43,9 @@ private def closed : Nat → Nat → Term → Except String Bool
     | .definition _ tag _ children =>
       if tag.startsWith "alias_" then throw "trait matching requires normalized aliases"
       return !(← children.anyM fun child => return !(← closed fuel depth child))
-    | .binder .. => pure false
+    | .binder variables body =>
+      if variables.isEmpty && body.sort == .aggregate then closed fuel depth body
+      else pure false
     | .bound _ (.Bound index) _ _ => pure (index < depth)
     | .bound _ .Canonical _ _ | .placeholder .. => pure false
     | _ => pure true
@@ -102,7 +104,16 @@ private def term (parameters : Array ArgSort) (eraseRegions : Bool) : Nat → Te
         if sort != otherSort || tag != otherTag || identity != otherIdentity then return none
         terms parameters eraseRegions fuel children otherChildren bindings
       | _ => pure none
-    | .binder .. | .bound .. | .placeholder .. =>
+    | .binder variables body =>
+      unless variables.isEmpty && body.sort == .aggregate do
+        throw "higher-ranked impl-head relation requires universe checking"
+      match goal with
+      | .binder otherVariables otherBody =>
+        unless otherVariables.isEmpty && otherBody.sort == .aggregate do
+          throw "higher-ranked impl-head relation requires universe checking"
+        term parameters eraseRegions fuel body otherBody bindings
+      | _ => pure none
+    | .bound .. | .placeholder .. =>
       throw "higher-ranked impl-head relation requires universe checking"
 end
 

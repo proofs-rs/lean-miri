@@ -44,14 +44,19 @@ structure Prepared where
   covarianceIndex : CompilerQueryIndices.Covariance
   signatureAbiIndex : CompilerQueryIndices.SignatureAbi
   /-- Initial persistent interner. Runtime execution must thread its updated World. -/
-  initialArrays : Except String RuntimeArrayTypes.World
+  initialTypes : Except String RuntimeArrayTypes.World
   tls : Except String (Array CompilerThreadLocal.Entry)
+
+/-- Resolve executable MIR in the caller's persistent execution universe. -/
+def Prepared.resolveBody (p : Prepared) (types : RuntimeArrayQueries.Access S) (index : Nat) :
+    EStateM StepError S LoweredBody :=
+  RuntimeArrayQueries.perform types (p.program.resolveBody index)
 
 def Prepared.loweringContext (p : Prepared) : LowerContext :=
   let ctx := match p.lowering with
     | some prepared => prepared
     | none => LowerContext.ofDocument p.program.input
-  ctx.withLazyTypes p.program.input.types
+  ctx
 
 /-- Resolve the exact primitive reference at its operation. -/
 def Prepared.primitiveLayout (p : Prepared) (key : String) :
@@ -134,7 +139,7 @@ def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Except S
     foreignSymbols
     covarianceIndex
     signatureAbiIndex
-    initialArrays := arrays
+    initialTypes := arrays
     tls }
 
 def prepare (input : LoweredProgram) : Except String Prepared :=
@@ -150,62 +155,64 @@ private def lift (query : Except String A) : MachineHooks.M K User A :=
 terminator. Original request identity is distinct from the resolved method/shim
 identity; trait methods may resolve to an implementation with a different DefId.
 -/
-def resolveCurrent (p : Prepared) (definition : MIR.DefId) (args : Array MIR.GenericArg) :
-    MachineHooks.M K User CallInstance := do
+def resolveCurrent (p : Prepared) (types : RuntimeArrayQueries.Access (MachineHooks.State K User))
+    (definition : MIR.DefId) (args : Array MIR.GenericArg) : MachineHooks.M K User CallInstance := do
   let frame ← MachineHooks.currentFrame
   let .mir location := frame.location | throw (.invalidProgram "callee resolution outside a MIR source location")
-  let body ← lift do
-    let body ← p.program.resolveBody frame.bodyIdentity.index
-    unless body.body == frame.body do throw "callee resolution canonical body/content mismatch"
-    let loaded ← CallResolution.loadedBodyOfInstance p.lifecycle.calls.calls frame.functionInstance
-    unless loaded.identity == frame.bodyIdentity do throw "callee resolution current full-instance/body mismatch"
-    pure body
+  let body ← p.resolveBody types frame.bodyIdentity.index
+  unless body.body == frame.body do throw (.invalidProgram "callee resolution canonical body/content mismatch")
+  let loaded ← RuntimeArrayQueries.perform types
+    (CallResolution.loadedBodyOfInstance p.lifecycle.calls.calls frame.functionInstance)
+  unless loaded.identity == frame.bodyIdentity do throw (.invalidProgram "callee resolution current full-instance/body mismatch")
   let some block := body.body.basicBlocks[location.block]? | throw (.invalidProgram "callee resolution source block absent")
   unless location.statementIndex == block.statements.size do
     throw (.invalidProgram "callee resolution does not refer to a source terminator")
-  lift do
-    let resolution ← CallResolution.atSite p.lifecycle.calls.calls ⟨frame.bodyIdentity.index,location.block⟩
-    let some ty := resolution.source.functionType | throw "original call function type is absent"
-    match ← CompilerFunctionFacts.kind p.functions ty with
-    | .FnDef expected expectedArgs =>
-      unless definition == expected && args == expectedArgs do throw "original compiler FnDef request differs from current source call"
-    | _ => throw "static instance resolution requested for an indirect compiler call"
-    pure resolution.callee
+  let resolution ← RuntimeArrayQueries.perform types
+    (CallResolution.atSite p.lifecycle.calls.calls ⟨frame.bodyIdentity.index,location.block⟩)
+  let some ty := resolution.source.functionType | throw (.unsupported "original call function type is absent")
+  match ← RuntimeArrayQueries.perform types (CompilerFunctionFacts.kindInWorld p.functions ty) with
+  | .FnDef expected expectedArgs =>
+    unless definition == expected && args == expectedArgs do
+      throw (.unsupported "original compiler FnDef request differs from current source call")
+  | _ => throw (.unsupported "static instance resolution requested for an indirect compiler call")
+  pure resolution.callee
 
 /-- Concrete ExternAbi keeps source ABI/unwind identity separate from FnAbi's
 canonical target convention. All full-callee hooks use the final shared tables.
 The explicit base config retains physical memory/host/platform capabilities. -/
-def executionHooks (p : Prepared) (image : AllocationImage.Imported)
+def executionHooks (p : Prepared) (types : RuntimeArrayQueries.Access (MachineHooks.State K User))
+    (image : AllocationImage.Imported)
     (vtableEngine : VTableMachine.Hooks K User Other) (userRelevantCrates : Array Nat)
     (base : ExecutionMachine.Config K User C Other ABI.ExternAbi Host) :
     ExecutionMachine.Config K User C Other ABI.ExternAbi Host :=
   let functions := CompilerFunctionPointers.hooks p.pointers image base.functions
   let vtableEngine := {vtableEngine with functions}
   let callCompiler := {base.calls.compiler with
-    resolve := fun _ definition args => resolveCurrent p definition args
+    resolve := fun _ definition args => resolveCurrent p types definition args
     functionSignature := fun _ layout => lift do
       let (count,abi) ← CompilerFunctionFacts.signature p.functions layout.ty
       pure (count, abi)
-    functionKind := fun ty => lift (CompilerFunctionFacts.kind p.functions ty)
+    functionKind := fun ty => RuntimeArrayQueries.perform types (CompilerFunctionFacts.kindInWorld p.functions ty)
     fnAbiOfFnPtr := fun _ layout extra => lift (CompilerFunctionFacts.pointerAbi p.functions layout.ty extra)
     fnAbiOfInstance := fun _ callee extra =>
       match CompilerInstanceAbi.abiOfInstance p.lifecycle.instances callee extra with
       | .ok abi => pure abi
       | .error error => throw (.invalidProgram error)}
-  let dispatch := {base.calls.dispatch with loadMir := fun _ callee => CompilerCallPipeline.loadMir p.lifecycle.calls callee}
+  let dispatch := {base.calls.dispatch with loadMir := fun _ callee => CompilerCallPipeline.loadMir p.lifecycle.calls types callee}
   let calls := {base.calls with compiler := callCompiler, dispatch}
-  let helpers := {base.helpers with loadMir := fun _ callee => CompilerCallPipeline.loadMir p.lifecycle.calls callee}
+  let helpers := {base.helpers with loadMir := fun _ callee => CompilerCallPipeline.loadMir p.lifecycle.calls types callee}
   let facts := p.lifecycle.calls.symbols.facts.context
   CompilerExecutionFacts.hooks p.intrinsics {base with
     functions, calls, helpers
-    isRawPointer := fun _ ty => lift do
-      let node ← p.runtime.node ty |>.mapError toString
-      pure (node.shapeKind == .rawPointer)
+    isRawPointer := fun _ ty => RuntimeArrayQueries.perform types do
+      pure ((← RuntimeMetadata.shapeKindInWorld p.runtime ty) == .rawPointer)
     usizeLayout := fun _ => lift (p.primitiveLayout "usize")
-    pointeeLayout := fun _ ty => lift do
-      p.runtime.lookup (← CompilerFacts.requiredType facts ty "builtin_deref_explicit") |>.mapError toString
-    lifecycle := CompilerLifecyclePipeline.lifecycleHooks p.lifecycle userRelevantCrates base.lifecycle
-    virtual := CompilerVTableMachine.virtualLeaves p.vtables image vtableEngine base.virtual
+    pointeeLayout := fun _ ty => RuntimeArrayQueries.perform types do
+      let some pointee ← CompilerVirtualFacts.builtinDerefInWorld facts ty
+        | throw "compiler builtin_deref_explicit returned None"
+      RuntimeMetadata.layoutInWorld p.runtime pointee
+    lifecycle := CompilerLifecyclePipeline.lifecycleHooks p.lifecycle types userRelevantCrates base.lifecycle
+    virtual := CompilerVTableMachine.virtualLeaves p.vtables types image vtableEngine base.virtual
     casts := {base.casts with
       vtableType := VTable.getPtrVTableType (CompilerVTableMachine.vtableHooks p.vtables image vtableEngine base.virtual.vtable)
       vtablePointer := VTable.getPointer (CompilerVTableMachine.vtableHooks p.vtables image vtableEngine base.virtual.vtable)

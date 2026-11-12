@@ -52,9 +52,11 @@ def main (args : List String) : IO Unit := do
   if let some path := args.head? then
     let .ok decoded := decodeFixture (← IO.FS.readFile path)
       | throw (IO.userError "input decode failed")
-    let .ok body := SourceMir.resolveBody decoded.document 0
+    let .ok initial := TypeArena.World.ofDocument decoded.document
+      | throw (IO.userError "input type universe rejected")
+    let .ok (body,arena) := (SourceMir.resolveBody decoded.document 0).run initial
       | throw (IO.userError "input body resolution failed")
-    let context := LowerContext.ofDocument decoded.document
+    let context := (LowerContext.ofDocument decoded.document).withWorld arena
     let .ok prepared := lowerBody context body
       | throw (IO.userError "body preparation failed")
     check (prepared.body == body.mir) "preparation changed decoded MIR"

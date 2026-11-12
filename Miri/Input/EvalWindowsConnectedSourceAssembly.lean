@@ -106,7 +106,7 @@ private def timeDispatch
       let compiler : ExecutionCallLeaves.Compiler
           (CoreState Os R H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error)
           C ABI.ExternAbi :=
-        CompilerCallConstruction.compiler p assembly.compatibilityBudget
+        CompilerCallConstruction.compiler p EvalProjectionMachine.arrays assembly.compatibilityBudget
       compiler.checkArgumentCompat context.choice caller callee
     checkSymbolClash := fun name =>
       ExecutionStateTransport.action (assembly.foreign.checkSymbolClash name)

@@ -3,8 +3,9 @@ import Miri.Input.GenericInstantiation
 import Miri.Input.MirTemplate
 import Miri.Input.StructuralSized
 import Miri.Input.TermSized
-import Miri.Input.StructuralAutoTraits
 import Miri.Input.TraitSelection.Fulfill
+import Miri.Input.TraitSelection.StructuralCopyClone
+import Miri.Input.TraitSelection.StructuralAuto
 
 /-! Executable composition of source alias RHS reduction and the raw trait
 selection/fulfillment engine. The supported domain is a fully monomorphic,
@@ -41,31 +42,42 @@ private def requireProven (value : TraitSelection.Outcome) : Except String Unit 
 /-- Canonical declaration adapter shared by production trait queries and
 independent term-sizedness correspondence tests. No instantiated TypeId or
 compiler-computed Sized constraint is needed for a novel ADT expression. -/
+def sourceAdt (context : Context) (identity : DefinitionIdentity) :
+    Except String (AdtDeclaration.Material × DefinitionTemplate) := do
+  let reference ← GenericInstantiation.definitionRef context.generic identity
+  let some definition := context.generic.definitions[reference]?
+    | throw "term trait ADT definition absent"
+  let some material := definition.adtDeclaration
+    | throw "term Sized canonical ADT declaration absent"
+  let some template := definition.genericTemplate
+    | throw "term trait canonical ADT generic template absent"
+  material.validate template
+  pure (material,template)
+
 def sizedHooks (context : Context) (normalize : Nat → Term → Except String Term) :
     TermSized.Hooks := {
   sourceAdt := fun identity => do
-    let reference ← GenericInstantiation.definitionRef context.generic identity
-    let some definition := context.generic.definitions[reference]?
-      | throw "term Sized ADT definition absent"
-    let some material := definition.adtDeclaration
-      | throw "term Sized canonical ADT declaration absent"
-    let some template := definition.genericTemplate
-      | throw "term Sized canonical ADT generic template absent"
-    material.validate template
+    let (material,template) ← sourceAdt context identity
     pure (material.kind,template),
   normalizeAlias := normalize }
 
 /-- One shared builtin/external-predicate dictionary for alias normalization and
 standalone raw trait queries. Normalization is a mandatory recursive dependency. -/
-def traitHooks (context : Context) (depth : Nat)
+def traitHooks (context : Context) (_depth : Nat)
     (normalize : Nat → Array TraitSelection.Goal → Term → Except String Term) :
     TraitSelection.Hooks := {
 
       normalize := normalize
       builtin := fun remaining activeGoals declaration goal => do
-        let some kind := declaration.builtin | throw "unimplemented raw lang-item/auto-trait builtin"
         unless goal.traitRef.arguments.size == 1 do throw "structural builtin requires exactly Self"
         let some self := goal.traitRef.arguments[0]? | throw "structural builtin Self absent"
+        if declaration.isAuto then
+          let some constituents ← TraitSelection.StructuralAuto.query (sourceAdt context)
+              declaration.isUnsafe (remaining + 1) self
+            | return none
+          return some (constituents.map fun ty =>
+            ({variables := #[], predicate := (.trait ⟨.positive,⟨goal.traitRef.definition,#[ty]⟩⟩)} : TraitSelection.Clause))
+        let some kind := declaration.builtin | throw "unimplemented raw lang-item builtin"
         match kind with
         | .sized | .metaSized =>
           let kind := if kind == .sized then StructuralSized.TraitKind.sized else .metaSized
@@ -74,20 +86,13 @@ def traitHooks (context : Context) (depth : Nat)
             kind (remaining + 1) self
           return if answer then some #[] else none
         | _ => pure ()
-        let ty ← GenericInstantiation.resolveType context.generic depth self
-        let lookup := fun id => do
-          let source ← TypeArena.node context.generic.types id context.generic.constants.size
-          match source.shape with
-          | .alias .. =>
-            let term ← GenericInstantiation.ofType context.generic depth id
-            let normalized ← normalize remaining activeGoals term
-            let id ← GenericInstantiation.resolveType context.generic depth normalized
-            return (← TypeArena.node context.generic.types id context.generic.constants.size).shape
-          | _ => pure source.shape
         match kind with
-        | .freeze | .unpin | .unsafeUnpin =>
-          if ← StructuralAutoTraits.trivial lookup (remaining + 1) ty then return some #[]
-          throw "nontrivial auto-trait builtin requires complete structural candidate assembly"
+        | .copy | .clone =>
+          let some constituents ← TraitSelection.StructuralCopyClone.query (remaining + 1) self
+            | return none
+          return some (constituents.map fun ty =>
+            ({variables := #[], predicate := (.trait ⟨.positive,⟨goal.traitRef.definition,#[ty]⟩⟩)} : TraitSelection.Clause))
+        | .freeze | .unpin | .unsafeUnpin => return none
         | _ => throw "unimplemented structural trait builtin"
       external := fun remaining activeGoals _ predicate => do
         match predicate with
@@ -130,7 +135,7 @@ def normalizeTerm (context : Context) (work : Nat) :
     pure result
 
 def normalizeType (context : Context) (depth work : Nat) (id : TypeId) : Except String TypeId := do
-  let source ← TypeArena.node context.generic.types id context.generic.constants.size
+  let source ← TypeArena.node context.generic.types id
   let query := source.layoutQueryInputTypeId.getD id
   let input ← GenericInstantiation.ofType context.generic depth query
   let result ← normalizeTerm context work depth #[] #[] input

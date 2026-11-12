@@ -119,4 +119,9 @@ instance instDecidableEqHashMap {α : Type u} {β : Type v}
     [BEq α] [Hashable α] [DecidableEq α] [DecidableEq β] :
     DecidableEq (Std.HashMap α β) := hashMapDecEq
 
+-- Equal observable entries do not erase physical index storage differences.
+-- CheckedMaterial's exact state equality uses this same comparator.
+#guard !decide (((Std.HashMap.emptyWithCapacity 8 : Std.HashMap (Nat × Nat) Nat).insert (1, 7) 0) =
+  ((Std.HashMap.emptyWithCapacity 512 : Std.HashMap (Nat × Nat) Nat).insert (1, 7) 0))
+
 end Miri.Verification.ExactMap212

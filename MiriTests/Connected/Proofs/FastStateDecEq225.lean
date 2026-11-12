@@ -24,7 +24,7 @@ private def runtimeMetadataStructuralDecEq : DecidableEq Input.RuntimeMetadata :
 def runtimeMetadataPointerDecEq : DecidableEq Input.RuntimeMetadata :=
   fun left right => withPtrEqDecEq left right (fun _ => runtimeMetadataStructuralDecEq left right)
 
-attribute [-instance] Miri.Verification.RuntimeDocumentExact207.instDecidableEqWorld_miriTests
+attribute [-instance] Miri.Verification.RuntimeDocumentExact207.instDecidableEqWorld_miriTests_1
 local instance runtimeMetadataFast : DecidableEq Input.RuntimeMetadata := runtimeMetadataPointerDecEq
 deriving instance DecidableEq for Input.RuntimeArrayTypes.World
 private def runtimeArrayWorldStructuralDecEq : DecidableEq Input.RuntimeArrayTypes.World := inferInstance

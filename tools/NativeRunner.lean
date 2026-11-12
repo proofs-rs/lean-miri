@@ -422,7 +422,10 @@ private def terminalDiagnostic (prepared : Input.EvalPreparation.Prepared)
     let source? := span?.bind fun span => prepared.compiler.program.bundle.spans[span.id]?
     let collapsed? : Option Input.CompilerBacktraceSource.Position := do
       let span ← span?
-      let body ← (prepared.compiler.program.resolveBody frame.bodyIdentity.index).toOption
+      let arena := state.machine.user.user.payload.payload.types.arena
+      let (body,retained) ← ((prepared.compiler.program.resolveBody frame.bodyIdentity.index).run arena).toOption
+      if retained.constructedTypes.size != arena.constructedTypes.size ||
+          retained.constructedConstants.size != arena.constructedConstants.size then none else pure ()
       if body.body != frame.body || body.input.instanceId != frame.functionInstance then none
       else do
         let records ← prepared.compiler.lifecycle.backtrace.bodySpans[frame.bodyIdentity.index]?
@@ -476,7 +479,7 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
       unless ui.isSome do throw "compiler did not select an rustc_main entry"
       pure (← Input.CompilerMiriEntry.miriStart compiler, MainEntryType.miriStart)
   let bytes ← (Input.CompilerGlobalBytes.prepare compiler.program compiler.runtime initialMemory).mapError toString
-  let arrays ← compiler.initialArrays
+  let arrays ← compiler.initialTypes
   let targetBits := compiler.runtime.target.base.pointerWidth.bits.toNat
   let arch ← (Input.EvalArchitectureMachine.targetArch compiler.intrinsics).mapError toString
   unless compiler.program.input.producer.targetTriple == "x86_64-unknown-linux-gnu" &&

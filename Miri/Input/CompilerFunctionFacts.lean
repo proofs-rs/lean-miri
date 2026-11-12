@@ -7,6 +7,7 @@ The ExternAbi remains the exact compiler payload; its interpretation is explicit
 No indirect runtime target is converted into a fabricated static instance. -/
 namespace Miri.Input.CompilerFunctionFacts
 open Lean Miri.ABI Miri.Interpreter
+
 structure Function where
   ty : MIR.TyId
   instanceId : Option CallInstance
@@ -20,6 +21,24 @@ structure Prepared where
   program : LoweredProgram
   functions : Array Function
   pointerAbis : Array PointerAbi
+private def liftWorld (value : Except String A) : TypeArena.WorldM A :=
+  match value with | .ok result => pure result | .error message => throw message
+
+/-- `step.rs` distinguishes nominal FnDef identity from FnPtr directly from
+TyKind. Signature metadata and a prior instance-resolution answer are not keys. -/
+def kindInWorld (_prepared : Prepared) (ty : MIR.TyId) : TypeArena.WorldM CallFunctionKind := do
+  let world ← get
+  match ← liftWorld (world.lookupType ty) with
+  | .material node => match node.shape with
+    | .functionDefinition definition arguments _ _ variables =>
+      unless variables.isEmpty do throw "FnDef call arguments retain a nonempty binder"
+      pure (.FnDef definition arguments)
+    | .functionPointer .. => pure .FnPtr
+    | _ => throw "call function type is neither FnDef nor FnPtr"
+  | .constructed (.functionDefinition definition arguments variables) =>
+    unless variables.isEmpty do throw "FnDef call arguments retain a nonempty binder"
+    pure (.FnDef (← liftWorld (world.definitionRef definition)) arguments)
+  | .constructed _ => throw "call function type is neither FnDef nor FnPtr"
 private def knownType (ctx : LowerContext) (id : Nat) : Except String Nat := do
   unless ctx.containsTypeId id do throw "function query references missing compiler type"
   pure id

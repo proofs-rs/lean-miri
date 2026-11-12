@@ -122,7 +122,11 @@ rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_middle/src/ty/typet
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_middle/src/ty/util.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_middle/src/ty/visit.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_middle/src/ty/vtable.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_mir_transform/src/shim.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_next_trait_solver/src/solve/assembly/structural_traits.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_next_trait_solver/src/solve/eval_ctxt/mod.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_next_trait_solver/src/solve/search_graph.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_next_trait_solver/src/solve/trait_goals.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_target/src/asm/mod.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_target/src/callconv/aarch64.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_target/src/callconv/amdgpu.rs
@@ -548,6 +552,8 @@ rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_ty_utils/src/layout
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_ty_utils/src/needs_drop.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/binder.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/const_kind.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/fast_reject.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/flags.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/fold.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/inherent.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/predicate.rs
@@ -555,3 +561,4 @@ rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/region_
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/sty/consts.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/sty/mod.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/ty_kind.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/visit.rs

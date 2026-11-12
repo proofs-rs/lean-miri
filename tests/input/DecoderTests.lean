@@ -82,14 +82,16 @@ private def must (result : Except String α) : IO α :=
   | .ok value => pure value
   | .error message => fail message
 
-private def rvalues (document : ImportDocument) : Except String (Array Miri.MIR.Rvalue) := do
+private def rvalues (document : ImportDocument) : Except String (Array Miri.MIR.Rvalue × TypeArena.World) := do
   let mut values := #[]
+  let mut arena ← TypeArena.World.ofDocument document
   for index in [:document.bodies.size] do
-    let body ← SourceMir.resolveBody document index
+    let (body,next) ← (SourceMir.resolveBody document index).run arena
+    arena := next
     values := values ++ body.mir.basicBlocks.flatMap fun block =>
       block.statements.filterMap fun statement => match statement.kind with
         | .Assign _ value => some value | _ => none
-  pure values
+  pure (values,arena)
 
 def main (args : List String) : IO UInt32 := do
   let path ← match args with
@@ -112,7 +114,7 @@ def main (args : List String) : IO UInt32 := do
     "resolved instance does not identify its executable body"
   check (document.bodyRoots.any fun body => body.promotedBodies.any fun promoted => promoted.bodyId.isSome)
     "promoted MIR bodies were not decoded into typed body cores"
-  let values ← must (rvalues document)
+  let (values,typeArena) ← must (rvalues document)
   check (values.any fun value => match value with | .BinaryOp .Lt .. => true | _ => false) "binary operator did not use the canonical BinOp type"
   check (values.any fun value => match value with | .BinaryOp .AddWithOverflow .. => true | _ => false) "overflowing binary operator was not typed"
   check (values.any fun value => match value with | .UnaryOp .Not .. => true | _ => false) "unary operator did not use the canonical UnOp type"

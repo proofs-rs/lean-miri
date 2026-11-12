@@ -117,7 +117,7 @@ def fromSource [DecidableEq MiriMemoryKind]
     throw (.invalidProgram "Windows platform environment has a mismatched target family")
   let symbols ← p.foreignSymbols
     |>.mapError StepError.unsupported
-  let calls := CompilerCallConstruction.compiler p compatibilityBudget
+  let calls := CompilerCallConstruction.compiler p EvalProjectionMachine.outerArrays compatibilityBudget
   let access := main.access
   let readScalar := fun (operand : OpTy Provenance) => do
     let immediate ← PlaceMachine.readImmediate access operand

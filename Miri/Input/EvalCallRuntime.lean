@@ -48,11 +48,13 @@ def unwind
 /-- Canonical mplace_to_imm_ptr(None): reference reconstruction precedes
 Ty::new_mut_ptr, and its exact compiler layout is queried afterward. -/
 def toImmediatePointer (p : CompilerProviders.Prepared) (target : TargetDataLayout)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K U))
     (place : MPlaceTy Provenance) : MachineHooks.M K U (RvalueImmTy Provenance) := do
   let immediate ← lift (place.mplace.toRef target |>.mapError fun e =>
     StepError.invalidProgram s!"mplace_to_imm_ptr: {reprStr e}")
-  let ty ← query (CompilerRuntimeQueries.mutPointerType p.lifecycle.calls.runtime place.layout.ty)
-  let layout ← query (p.runtime.lookup ty |>.mapError toString)
+  let ty ← RuntimeArrayQueries.perform types
+    (TypeArena.World.internType (.rawPointer place.layout.ty .Mut))
+  let layout ← RuntimeArrayQueries.perform types (RuntimeMetadata.layoutInWorld p.runtime ty)
   pure ⟨immediate,layout⟩
 
 structure PanicQueries (K U C : Type) where
@@ -63,11 +65,12 @@ structure PanicQueries (K U C : Type) where
   genericParameters : C → DefId → MachineHooks.M K U (Array MainGenericParameter)
 
 def panic (p : CompilerProviders.Prepared) (queries : PanicQueries K U C)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K U))
     (target : TargetDataLayout) (driver : Unwind.Hooks K U C O)
     (operands : OperandMachine.Hooks K U C) : Panic.Hooks K U C O where
   driver := driver
   allocateStringDedup := queries.allocateStringDedup
-  toImmediatePointer := fun _ => toImmediatePointer p target
+  toImmediatePointer := fun _ => toImmediatePointer p target types
   langItem := queries.langItem
   genericParameters := queries.genericParameters
   itemInstance := fun _ definition args => query (CompilerInstance.item p.loweringContext.instances definition args)

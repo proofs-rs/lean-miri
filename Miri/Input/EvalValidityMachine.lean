@@ -12,6 +12,7 @@ provider wrapper installs exact compiler paths, source box projection, and
 choice-time typed retag preparation over the same state. -/
 def hooks [DecidableEq K]
     (prepared : CompilerFactAdapters.Prepared) (runtime : CompilerRuntimeQueries.Prepared)
+    (types : RuntimeArrayQueries.Access (ValidityMachine.State K U))
     (leaves : ExecutionValidity.Leaves (ValidityMachine.State K U) C)
     (access : ValidityMachine.Access K U)
     (allocation : PlaceMachine.AllocationConfig K (ValidityMachine.UserState U))
@@ -24,5 +25,5 @@ def hooks [DecidableEq K]
     ValidityVisitor.Hooks Provenance (ValidityMachine.State K U) C MachineHooks.FrameExtra
       (FnVal O) (FnAbi TyId) ValidityMemory.PaddingHandle :=
   let source := ExecutionValidity.hooks leaves access allocation compiler projection vtable discriminant retag retagBudget
-  TypedValidityProviders.visitor prepared runtime access allocation compiler pointers retag retagBudget source
+  TypedValidityProviders.visitor prepared runtime types access allocation compiler pointers retag retagBudget source
 end Miri.Input.EvalValidityMachine

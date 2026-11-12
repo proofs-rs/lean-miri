@@ -125,6 +125,7 @@ private def namedTargetPointerPlace [DecidableEq MiriMemoryKind]
 layouts/constants and FD lookups from the existing source descriptor table. -/
 def metadataFromSource [DecidableEq MiriMemoryKind]
     (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (ValidityMachine.State MiriMemoryKind U))
     (access : ValidityMachine.Access MiriMemoryKind U)
     (projection : PlaceProjectionHooks Provenance
       (MachineHooks.State MiriMemoryKind (ValidityMachine.UserState U)) C MachineHooks.FrameExtra)
@@ -145,7 +146,7 @@ def metadataFromSource [DecidableEq MiriMemoryKind]
     Except StepError (UnixFsMetadata.Hooks
       (MachineHooks.State MiriMemoryKind (ValidityMachine.UserState U))
       (Files.Ref (Files.Description H D O)) D Path HM Time E) := do
-  let pointerCompiler := CompilerExecutionProviders.pointerCompiler p.lifecycle.calls.symbols.facts
+  let pointerCompiler := CompilerExecutionProviders.pointerCompiler p.lifecycle.calls.symbols.facts types
   let errors := {errors with family := ForeignItems.Family.unix, os}
   let readScalar : OpTy Provenance → M
       (MachineHooks.State MiriMemoryKind (ValidityMachine.UserState U))

@@ -3,10 +3,10 @@ import Miri.Input.TypeArena
 import Miri.Input.GenericSubstitution
 import Lean.Data.Json.Parser
 
-/-! Bridge canonical generic trees to this execution's type universe. Exact
+/-! Reification and lookup restricted to the immutable source type prefix. Exact
 compiler identities and source structure establish equality. Layouts, names and
-representation compatibility never select a type. Unsupported reconstructions
-remain errors; the lazy arena supports only its actual constructor families. -/
+representation compatibility never select a type. Runtime construction uses
+GenericInstantiationWorld and its explicitly threaded execution universe. -/
 namespace Miri.Input.GenericInstantiation
 open GenericSubstitution
 
@@ -30,8 +30,8 @@ def Context.ofDocument (source : ImportDocument) : Except String Context := do
 
 def Context.node (context : Context) (id : TypeId) : Except String TypeNode :=
   match context.denseTypes with
-  | some _ => TypeArena.nodeWithFuel context.types context.constants.size (id + 1) id
-  | none => TypeArena.node context.types id context.constants.size
+  | some _ => TypeArena.materialNode context.types id
+  | none => TypeArena.node context.types id
 
 def Context.validateMaterial (context : Context) : Except String Unit :=
   match context.denseTypes with
@@ -39,7 +39,7 @@ def Context.validateMaterial (context : Context) : Except String Unit :=
   | none => TypeArena.validateMaterial context.types
 
 theorem Context.node_eq_checked (context : Context) (id : TypeId) :
-    context.node id = TypeArena.node context.types id context.constants.size := by
+    context.node id = TypeArena.node context.types id := by
   cases evidence : context.denseTypes with
   | none => simp [Context.node, evidence]
   | some certificate =>
@@ -124,12 +124,8 @@ def ofType (context : Context) : Nat → TypeId → Except String Term
       pure (.node .type "reference" (if mutability == .Mut then "mutable" else "immutable") (.cons region (.cons target .nil)))
     | .slice element => return .node .type "slice" "" (.cons (← child element) .nil)
     | .tuple elements => return .node .type "tuple" "" (Terms.ofArray (← elements.mapM child))
-    | .array element length constructor =>
-      let length ← if length < context.constants.size then ofConstant context fuel length else do
-        unless id ≥ context.types.size && constructor.canonicalValueConstructor do
-          throw "array length constant material absent"
-        pure (.node .constant "value" "" (.cons (.atom .type "uint" "usize")
-          (.cons (scalar constructor.count context.pointerBytes) .nil)))
+    | .array element length _ =>
+      let length ← ofConstant context fuel length
       return .node .type "array" "" (.cons (← child element) (.cons length .nil))
     | .adt data => do
       let arguments ← args data.args
@@ -270,9 +266,9 @@ def resolveType (context : Context) : Nat → Term → Except String TypeId
       return first
     match term with
     | .node .type "raw_pointer" "mutable" (.cons child .nil) =>
-      TypeArena.intern context.types (← resolveType context fuel child) false
+      TypeArena.findPointer context.types (← resolveType context fuel child) false
     | .node .type "reference" "mutable" (.cons (.atom .region "erased" "") (.cons child .nil)) =>
-      TypeArena.intern context.types (← resolveType context fuel child) true
+      TypeArena.findPointer context.types (← resolveType context fuel child) true
     | .node .type "array" "" (.cons child (.cons (.node .constant "value" ""
         (.cons (.atom .type "uint" "usize") (.cons (.atom .aggregate "scalar" payload) .nil))) .nil)) =>
       let raw ← Lean.Json.parse payload
@@ -280,8 +276,8 @@ def resolveType (context : Context) : Nat → Term → Except String TypeId
       let bits ← (← raw.getObjVal? "bits").getNat?
       unless bytes == context.pointerBytes && bits < 2^(8 * bytes) && bits < 2^64 do
         throw "generic array length is not a canonical target usize"
-      TypeArena.internArray context.types (← resolveType context fuel child) (UInt64.ofNat bits)
-    | _ => throw "generic type constructor absent from material and lazy arena"
+      TypeArena.findArray context.types (← resolveType context fuel child) (UInt64.ofNat bits)
+    | _ => throw "generic type constructor absent from source material"
 
 def definitionMaterial (context : Context) (id : DefinitionRef) : Except String DefinitionTemplate := do
   let some source := context.definitions[id]? | throw "generic definition material identity absent"

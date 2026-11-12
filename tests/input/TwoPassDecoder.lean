@@ -119,9 +119,14 @@ def main : IO Unit := do
   check (decoded.document.types.size == baseline.document.types.size) "field permutation changed type table"
   check (decoded.document.bodies.size == expected.document.bodies.size)
     "recursive field permutation changed body indexing"
+  -- This parser-only fixture deliberately has no target data layout. Its
+  -- material bodies are already typed MIR; comparing them needs no invented
+  -- execution target or temporary constructor universe.
   for index in [:decoded.document.bodies.size] do
-    let actual ← must (SourceMir.resolveBody decoded.document index)
-    let reference ← must (SourceMir.resolveBody expected.document index)
+    let some (.material actual) := decoded.document.bodies[index]?
+      | throw (IO.userError "minimal parser fixture unexpectedly contains a source template")
+    let some (.material reference) := expected.document.bodies[index]?
+      | throw (IO.userError "minimal parser reference unexpectedly contains a source template")
     check (actual.mir == reference.mir) "recursive field permutation changed final MIR"
   let body ← must (SourceMir.metadata decoded.document 0)
   let cs := body.requiredConsts

@@ -115,7 +115,7 @@ def fromSource [DecidableEq MiriMemoryKind] [DecidableEq Os]
       Instant System TZ Timestamp) := do
   let target ← p.externStatics.targetFacts |>.mapError StepError.unsupported
   let runtime := TypedSyncNat.runtime EvalTypedSyncMachine.views syncEffects
-  let pointerCompiler := CompilerExecutionProviders.pointerCompiler p.lifecycle.calls.symbols.facts
+  let pointerCompiler := CompilerExecutionProviders.pointerCompiler p.lifecycle.calls.symbols.facts EvalProjectionMachine.arrays
   let M := EStateM StepError (State Os R P H D O Aff B Poll Instant System Native Profiler)
   let readScalar : OpTy Provenance → M (Scalar Provenance) := fun operand => do
     let immediate ← ValidityMachine.readImmediate access operand

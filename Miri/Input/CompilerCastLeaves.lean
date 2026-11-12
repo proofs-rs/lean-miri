@@ -17,12 +17,7 @@ structure Required (S C : Type) where
   eraseSelfTraitRef : C → Nat → RvalueM S Nat
   normalizePrincipal : C → PredicateList → RvalueM S (Option Nat)
 
-private def lift (value : Except String A) : EStateM StepError S A :=
-  match value with
-  | .ok value => pure value
-  | .error reason => throw (.unsupported s!"cast compiler query: {reason}")
-
-def make (p : CompilerProviders.Prepared) (required : Required S C)
+def make (p : CompilerProviders.Prepared) (types : RuntimeArrayQueries.Access S) (required : Required S C)
     (vtable : VTableHooks Provenance S C CallInstance (FnAbi TyId))
     (expose : C → Provenance → RvalueM S Unit)
     (fromExposed : C → UInt64 → RvalueM S (Pointer (Option Provenance)))
@@ -30,21 +25,23 @@ def make (p : CompilerProviders.Prepared) (required : Required S C)
     ExecutionCast.Leaves S C :=
   let facts := p.lifecycle.calls.symbols.facts
   let context := facts.context
-  { typeInfo := fun _ ty => lift (CompilerFactAdapters.castTypeInfo facts ty)
-    layoutOf := fun _ ty => lift (CompilerFacts.layoutOf context ty)
+  let run := fun {A} (action : TypeArena.WorldM A) => RuntimeArrayQueries.perform types action
+  { typeInfo := fun _ ty => run (CompilerFactAdapters.castTypeInfoInWorld facts ty)
+    layoutOf := fun _ ty => run (CompilerFacts.layoutOfInWorld context ty)
     exposeProvenance := expose
     pointerFromExposedAddress := fromExposed
-    usizeLayout := fun _ => lift (context.primitiveLayout "usize")
+    usizeLayout := fun _ => run do
+      CompilerFacts.layoutOfInWorld context (← CompilerFacts.primitiveTypeInWorld context "usize")
     ensureMonomorphic := fun _ ty => do
-      unless ← lift (CompilerFacts.boolean context ty "is_monomorphic_enough") do
+      unless ← run (CompilerFacts.booleanInWorld context ty "is_monomorphic_enough") do
         throw (.invalidProgram "compiler type still requires instantiation")
     requireNoBoundVars := required.requireNoBoundVars
     resolveFunction := required.resolveFunction
     resolveClosureFnOnce := required.resolveClosureFnOnce
-    builtinDeref := fun _ ty explicit => lift (CompilerFacts.builtinDeref context ty explicit)
+    builtinDeref := fun _ ty explicit => run (CompilerFacts.builtinDerefInWorld context ty explicit)
     boxLayout := required.boxLayout
     validateImmediateABI := validateABI
-    fieldLayout := fun _ parent index => lift (context.runtime.field parent index |>.mapError toString)
+    fieldLayout := fun _ parent index => run (RuntimeMetadata.fieldLayoutForInWorld context.runtime parent index)
     lockstepTails := required.lockstepTails
     vtableType := VTable.getPtrVTableType vtable
     vtablePointer := VTable.getPointer vtable

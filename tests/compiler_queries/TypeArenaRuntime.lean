@@ -16,41 +16,39 @@ def main (args : List String) : IO Unit := do
   let runtime ← metadata (RuntimeMetadata.ofDocument decoded.document)
   let world ← must ((RuntimeArrayTypes.create runtime).mapError reprStr)
   let u8 := runtime.source.queries.primitives.u8
-  let array ← must (TypeArena.internArray runtime.source.types u8 7)
-  let pointer ← must (TypeArena.intern runtime.source.types array false)
-  let reference ← must (TypeArena.intern runtime.source.types pointer true)
-  let arrayOfPointers ← must (TypeArena.internArray runtime.source.types pointer 3)
+  let (arrayLayout,world) ← must ((RuntimeArrayTypes.internElement world u8 7).mapError reprStr)
+  let array := arrayLayout.ty
+  let (pointer,world) ← must ((RuntimeArrayTypes.perform world (TypeArena.World.internType (.rawPointer array .Mut))).mapError reprStr)
+  let (reference,world) ← must ((RuntimeArrayTypes.perform world (TypeArena.World.internType (.reference pointer .Mut .Erased))).mapError reprStr)
+  let (nestedLayout,world) ← must ((RuntimeArrayTypes.internElement world pointer 3).mapError reprStr)
   check (array >= runtime.source.types.size && pointer >= runtime.source.types.size &&
-    reference >= runtime.source.types.size && arrayOfPointers >= runtime.source.types.size)
+    reference >= runtime.source.types.size && nestedLayout.ty >= runtime.source.types.size)
     "runtime constructor control accidentally reused material nodes"
-  let arrayLayout ← metadata (runtime.lookup array)
-  let pointerLayout ← metadata (runtime.lookup pointer)
-  let referenceLayout ← metadata (runtime.lookup reference)
-  let nestedLayout ← metadata (runtime.lookup arrayOfPointers)
+  let (pointerLayout,world) ← must ((RuntimeArrayTypes.lookup world pointer).mapError reprStr)
+  let (referenceLayout,world) ← must ((RuntimeArrayTypes.lookup world reference).mapError reprStr)
   check (arrayLayout.layout.size.bytes == 7) "new byte array layout"
   check (pointerLayout.layout.size == runtime.target.pointerSize) "new pointer to array layout"
   check (referenceLayout.layout.size == pointerLayout.layout.size) "new nested reference layout"
   check (nestedLayout.layout.size.bytes == pointerLayout.layout.size.bytes * 3) "array of new pointers layout"
-  let child ← metadata (runtime.pointee referenceLayout)
-  check (child.ty == pointer) "new reference pointee identity"
-  let element ← metadata (runtime.field nestedLayout 2)
+  let .constructed (.reference child .Mut .Erased) ← must (world.arena.lookupType reference)
+    | throw (IO.userError "new reference constructor absent")
+  check (child == pointer) "new reference pointee identity"
+  let (element,world) ← must ((RuntimeArrayTypes.fieldLayout world nestedLayout.ty 2).mapError reprStr)
   check (element.ty == pointer && element.layout == pointerLayout.layout) "new array field layout"
-  let (interned, world) ← must ((RuntimeArrayTypes.internElement world u8 7).mapError reprStr)
-  let (repeated, _) ← must ((RuntimeArrayTypes.internElement world u8 7).mapError reprStr)
-  check (interned.ty == array && repeated.ty == array) "world and lazy arena disagree on canonical identity"
-  let source ← metadata (runtime.node array)
-  let .array _ constantId _ := source.shape | throw (IO.userError "new array node shape")
-  let constant ← metadata (runtime.typeConstant constantId)
+  let (repeated,world) ← must ((RuntimeArrayTypes.internElement world u8 7).mapError reprStr)
+  check (repeated.ty == array) "persistent interner changed canonical identity"
+  let .constructed (.array _ constantId) ← must (world.arena.lookupType array)
+    | throw (IO.userError "new array constructor absent")
+  let constant ← must (world.arena.lookupConstant constantId)
   check (match constant with
     | .Value ty tree => ty == runtime.source.queries.primitives.usize &&
         tree.nodes == #[.Leaf 7 runtime.target.pointerSize.bytes.toNat]
     | _ => false) "new array exact usize constant"
+  check (!(runtime.lookup array).isOk) "source-only metadata accepted an execution-owned ID"
   for source in runtime.source.types do
     if source.shapeKind == .str then
-      let invalid := TypeArena.arrayId runtime.source.types.size source.id 2
-      check (!(runtime.lookup invalid).isOk) "array of unsized str accepted"
+      check (!(RuntimeArrayTypes.internElement world source.id 2).isOk) "array of unsized str accepted"
   if runtime.target.base.pointerWidth.bits.toNat < 64 then
     let tooLong := UInt64.ofNat (2^runtime.target.base.pointerWidth.bits.toNat)
-    check (!(runtime.lookup (TypeArena.arrayId runtime.source.types.size u8 tooLong)).isOk)
-      "array target-usize overflow accepted"
-  IO.println "lazy type arena nested constructors/layouts/identity/constants passed"
+    check (!(RuntimeArrayTypes.internElement world u8 tooLong).isOk) "array target-usize overflow accepted"
+  IO.println "persistent type universe nested constructors/layouts/identity/constants passed"

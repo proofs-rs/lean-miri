@@ -303,7 +303,7 @@ private def runTraitUpcastPure (contents : String) (pageSize : UInt64)
     fixedScheduling := true, trackOutdatedLoads := false, weakMemory := true
     backend := .vclocks, trackedTags := some #[], validation := .Shallow
     alignment := .Int, affinity := none, muteOutput := true, hostUsizeBits := 64 }
-  let arrays ← compiler.initialArrays
+  let arrays ← compiler.initialTypes
   let tape : ExecutionChoices.Tape := { inputs := #[], policy := .boundedDiagnostic 10000 4096 }
   let creation : EStateM.Result StepError InitTrace (Input.EvalWorld.State Os R Payload H D Other Aff B Host) :=
     (Input.MachineConstruction.create rawInitHooks sourceLeaves.hostConfiguration

@@ -122,3 +122,10 @@ private def projectionHooks : Hooks := {
 example : normalize projectionClauses projectionHooks 30 #[]
     (alias "alias_projection_not_rigid" 10 #[sliceUnsigned,boolean]) =
     .ok (.node .type "tuple" "" (.cons unsigned (.cons boolean .nil))) := by cbv
+
+-- A zero-variable metadata Binder does not require placeholder conversion;
+-- source own-clause obligations still reach the query-boundary fulfiller.
+example : normalize ownProgram {hooks with fulfill := fun _ _ predicates =>
+    if predicates.size == 1 && predicates[0]?.any isRequirement then .ok () else .error "wrong clauses"}
+    20 #[] (.binder #[] (alias "alias_free_not_rigid" 1)) =
+    .ok (.binder #[] boolean) := by cbv

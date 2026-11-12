@@ -90,7 +90,8 @@ def main (args : List String) : IO Unit := do
     | _ => throw (IO.userError "indirect constant became immediate")
   let some staticRefRoot := program.input.bodyRoots.find? (fun body => body.defPath == "STATIC_REF")
     | throw (IO.userError "missing actual STATIC_REF root")
-  let staticRefBody ← must (program.resolveBody staticRefRoot.bodyId)
+  let initialTypes ← must (TypeArena.World.ofDocument program.input)
+  let (staticRefBody,typeArena) ← must ((program.resolveBody staticRefRoot.bodyId).run initialTypes)
   let actualConstant := staticRefBody.body.basicBlocks.foldl (fun found block =>
     block.statements.foldl (fun found statement => match found, statement.kind with
       | some value, _ => some value

@@ -36,7 +36,8 @@ def main (args : List String) : IO Unit := do
   let scopes ← must (CompilerScopes.prepare program)
   let lifecycle := CompilerLifecycle.prepare scopes.program
   let _ ← must (CompilerBacktraceSource.prepare lifecycle.program)
-  match program.resolveBody index with
+  let initial ← must (TypeArena.World.ofDocument blockedDocument)
+  match (program.resolveBody index).run initial with
   | .ok _ => throw (IO.userError "unresolved template unexpectedly supplied executable MIR")
   | .error _ => pure ()
   IO.println "PASS source body metadata stays lazy; unresolved actual-body demand rejects"

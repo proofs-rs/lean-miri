@@ -91,7 +91,7 @@ def fromSource
       files.paths.files.os == target.os && files.paths.files.communicate ==
         environment.env.process.communicate do
     throw (.invalidProgram "Windows source families disagree on compiler target or communication policy")
-  let frames := CompilerFrameMetadata.hooks p.lifecycle.frames userRelevantCrates
+  let frames := CompilerFrameMetadata.hooks p.lifecycle.frames EvalProjectionMachine.outerArrays userRelevantCrates
   pure ⟨environment,files,thread,FrameMetadata.frameInStd frames⟩
 
 /-- Demand-local assembly for a partially constructed Windows source closure.

@@ -17,7 +17,10 @@ private def tables (program : LoweredProgram) :=
   (program.bundle.spans, program.bundle.definitions, program.bundle.typeConstants)
 
 private def materialBody (program : LoweredProgram) (index : Nat) : Except String Body := do
-  let source ← SourceMir.resolveBody program.input index
+  let initial ← TypeArena.World.ofDocument program.input
+  let (source,arena) ← (SourceMir.resolveBody program.input index).run initial
+  unless arena.constructedTypes.isEmpty && arena.constructedConstants.isEmpty do
+    throw "test material mutation cannot discard execution-owned constructor identities"
   let some seed := program.input.bodies[index]? | throw "test body seed absent"
   pure {toBodyCore := source, promotedBodies := seed.promotedBodies}
 
@@ -109,8 +112,10 @@ def main (args : List String) : IO Unit := do
   check (classifiedCases > 0 && deferredCases > 0) "cast fixture must exercise classification and deferred errors"
   -- Constructor IDs can now extend material data; use the actual interner so
   -- existing canonical constructors retain their source IDs.
-  let pointerId ← must (TypeArena.intern input.document.types 0 false)
-  check (CompilerFactAdapters.castTypeInfo casts pointerId == .ok (.rawPointer 0))
+  let initialTypes ← must (TypeArena.World.ofDocument input.document)
+  let (pointerId,typeArena) ← must ((TypeArena.World.internType (.rawPointer 0 .Mut)).run initialTypes)
+  let (pointerInfo,retained) ← must ((CompilerFactAdapters.castTypeInfoInWorld casts pointerId).run typeArena)
+  check (pointerInfo == .rawPointer 0 && retained.typeCount == typeArena.typeCount)
     "lazy cast type constructor was treated as a missing material identity"
   let missingMaterialEntry := {casts with castTypes := #[]}
   check (CompilerFactAdapters.castTypeInfo missingMaterialEntry 0 ==

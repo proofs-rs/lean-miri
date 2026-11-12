@@ -110,3 +110,29 @@ example : resultClass (solve {program with constructorScope := some #[⟨0,100�
 example : resultClass (solve {program with constructorScope := some #[⟨0,100⟩]} hooks {} 100 100
     ⟨.positive, ⟨aux, #[wrapper (.definition .type "adt" ⟨0,101⟩ .nil)]⟩⟩) =
     .error "trait query ADT constructor outside closed source declaration scope" := by decide +kernel
+
+private def autoProgram : Program := {traits := #[
+  { (declaration gate #[genericGate]) with isAuto := true, isCoinductive := true },
+  declaration aux #[implementation 21 aux #[] u32, implementation 22 aux #[] u64 #[] .negative]]}
+-- A possible impl suppresses the structural auto candidate before testing its
+-- where clauses. The mandatory unknown builtin hook must not be invoked.
+example : selectUnique autoProgram hooks {} 100 100 ⟨gate, #[wrapper u32]⟩ =
+    .ok ⟨⟨0,20⟩, #[u32]⟩ := by decide +kernel
+example : resultClass (solve autoProgram hooks {} 100 100 ⟨.positive, ⟨gate, #[wrapper u64]⟩⟩) =
+    .ok "no_solution" := by decide +kernel
+example : resultClass (solve autoProgram hooks {} 100 100 ⟨.positive, ⟨gate, #[u32]⟩⟩) =
+    .error "builtin provider not implemented" := by decide +kernel
+example : resultClass (solve {traits := #[
+    { (declaration gate #[implementation 50 gate #[] u32 #[] .negative]) with isAuto := true }]}
+    hooks {} 100 100 ⟨.positive, ⟨gate, #[u32]⟩⟩) = .ok "no_solution" := by decide +kernel
+private def dynamicAux : Term := .node .type "dynamic" "" (Terms.ofArray #[
+  .binder #[] (.definition .aggregate "trait" aux .nil), .atom .region "erased" ""])
+example : resultClass (solve program hooks {} 100 100 ⟨.positive, ⟨aux, #[dynamicAux]⟩⟩) =
+    .error "dynamic trait goals require object candidate assembly" := by decide +kernel
+
+private def evaluated (ty : Term) : Term := .node .constant "value" "" (.ofArray #[ty,.atom .aggregate "scalar" "{\"bytes\":4,\"bits\":3}"])
+example : resultClass (fulfill program hooks {} 100 100 #[⟨#[],.constHasType (evaluated u32) u32⟩]) = .ok "proven" := by decide +kernel
+example : resultClass (fulfill program hooks {} 100 100 #[⟨#[],.constHasType (evaluated u32) u64⟩]) = .ok "no_solution" := by decide +kernel
+example : resultClass (fulfill program hooks {} 100 100 #[⟨#[],.constHasType (.parameter .constant 0) u32⟩]) = .error "trait matching requires a ground query" := by decide +kernel
+example : resultClass (fulfill program hooks {assumptions := #[obligation gate u32]} 100 100
+    #[⟨#[],.constHasType (evaluated u32) u64⟩]) = .ok "ambiguous" := by decide +kernel

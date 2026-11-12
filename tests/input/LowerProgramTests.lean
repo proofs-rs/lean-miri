@@ -28,8 +28,10 @@ def main (args : List String) : IO Unit := do
   for inst in expectedInstances do
     unless program.instances.contains (inst.id, inst.bodyId.getD 0) do
       throw (IO.userError "instance body ID was rewritten")
+  let mut arena ← must (TypeArena.World.ofDocument doc)
   for index in [:program.bodyCount] do
-    let body ← must (program.resolveBody index)
+    let (body,next) ← must ((program.resolveBody index).run arena)
+    arena := next
     if let some sourceId := body.input.definitionId then
       let dense ← must body.ownDefinitionId
       unless dense == sourceId && program.bundle.definitions[dense]? == doc.definitions[sourceId]? do
@@ -40,12 +42,14 @@ def main (args : List String) : IO Unit := do
     inst.defPath.any (·.endsWith "array_len") && inst.bodyId.isSome)
   if let some inst := knownGeneric then
     let some bodyId := inst.bodyId | throw (IO.userError "generic instance lost its body ID")
-    let generic ← must (program.resolveBody bodyId)
+    let (generic,next) ← must ((program.resolveBody bodyId).run arena)
+    arena := next
     unless generic.input.instanceId == inst.id && generic.obligations.isEmpty do
       throw (IO.userError "concrete generic instantiation retained unresolved parameters")
   let knownTLS := doc.bodyRoots.find? (fun root => root.defPath.endsWith "read_tls")
   if let some root := knownTLS then
-    let tls ← must (program.resolveBody root.bodyId)
+    let (tls,next) ← must ((program.resolveBody root.bodyId).run arena)
+    arena := next
     unless tls.body.basicBlocks.any (fun block => block.statements.any fun statement =>
         match statement.kind with
         | .Assign _ (.ThreadLocalRef _) => true

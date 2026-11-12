@@ -131,7 +131,7 @@ def bindPoll
       (FD H D (Other Raw Listener TcpStream Error)) Iter) := do
   let facts ← sourceFacts p
   let symbols ← p.foreignSymbols |>.mapError lift
-  let callCompiler := CompilerCallConstruction.compiler p compatibilityBudget
+  let callCompiler := CompilerCallConstruction.compiler p EvalProjectionMachine.arrays compatibilityBudget
   let poll := {base.epoll.poll with
     readiness := ReadinessMachine.bind registry base.epoll.poll.readiness
     hasRdHup := facts.target.os == "linux" || facts.target.os == "android" ||
@@ -498,7 +498,7 @@ def dispatch
       (FD H D (Other Raw Listener TcpStream Error)) ArrayCursor) := do
   let facts ← sourceFacts p
   let symbols ← p.foreignSymbols |>.mapError lift
-  let callCompiler := CompilerCallConstruction.compiler p compatibilityBudget
+  let callCompiler := CompilerCallConstruction.compiler p EvalProjectionMachine.arrays compatibilityBudget
   let projection := place.projection choice
   pure {
     epoll := epollHooks

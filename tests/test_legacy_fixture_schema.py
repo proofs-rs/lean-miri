@@ -21,13 +21,12 @@ class LegacyFixtureSchemaTests(unittest.TestCase):
             self.assertEqual(abi["return"], 2)
             self.assertEqual(abi["unwind_seed"]["panic_unwinds"], answer)
             self.assertNotIn("can_unwind", abi)
-            self.assertEqual(projected["instance_abis"], [])
 
-    def test_current_body_schema_missing_abi_material_is_not_adapted(self):
+    def test_current_body_schema_missing_required_catalog_is_not_adapted(self):
         source = {"schema_version": 13, "mir_templates": [],
                   "bodies": [{"body_kind": "material"}]}
         self.assertEqual(adapt_legacy_fixture(source), source)
-        self.assertNotIn("instance_abis", adapt_legacy_fixture(source))
+        self.assertNotIn("compiler_instance_abis", adapt_legacy_fixture(source))
 
     def test_conflicting_instance_oracles_fail(self):
         source = {"schema_version": 11, "definitions": [{}], "instances": [

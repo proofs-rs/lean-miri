@@ -132,7 +132,7 @@ pub fn supported_arguments(args:ty::GenericArgsRef<'_>)->bool {
 
 /// Classify the exact ported category before serialization. Once true, any
 /// capture/instantiation failure is an error, never a monomorphic-body fallback.
-pub fn eligible<'tcx>(_tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>, args:ty::GenericArgsRef<'tcx>)->bool {
+pub fn eligible<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>, args:ty::GenericArgsRef<'tcx>)->bool {
     fn place(value:mir::Place<'_>)->bool {value.projection.is_empty()}
     fn operand(value:&mir::Operand<'_>)->bool {match value {
         mir::Operand::Copy(value)|mir::Operand::Move(value)=>place(*value), _=>false,
@@ -159,9 +159,14 @@ pub fn eligible<'tcx>(_tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>, args:ty::Generic
             mir::TerminatorKind::Return|mir::TerminatorKind::Unreachable=>true,
             mir::TerminatorKind::Goto{loop_hint_attrs,..}=>loop_hint_attrs.is_empty(),
             mir::TerminatorKind::SwitchInt{discr,..}=>operand(discr),
-            // Raw Call capture is available for differential component tests;
-            // runtime selection awaits the lazy instance/ABI provider bridge.
-            mir::TerminatorKind::Call{..}=>false,
+            // Source callee identity and type arguments are reconstructed on
+            // demand; the existing instance/ABI graph remains explicit residual.
+            mir::TerminatorKind::Call{func,args,destination,unwind,call_source,..}=>
+                super::generic_mir_call::callee(tcx,func).is_ok()
+                && args.iter().all(|argument|operand(&argument.node))
+                && place(*destination)
+                && matches!(unwind,mir::UnwindAction::Unreachable)
+                && matches!(call_source,mir::CallSource::Normal),
             _=>false,
         }
     })
@@ -191,10 +196,31 @@ pub fn capture<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>,
         let terminator=e.terminator(block.terminator())?;
         blocks.push(format!("{{\"statements\":{statements},\"terminator\":{terminator},\"cleanup\":{}}}",block.is_cleanup));
     }
-    if !e.types.iter().copied().all(|ty|supported_type(ty) || super::generic_mir_call::function_type(tcx,ty).is_ok()) {
+    if !e.types.iter().copied().all(|ty|supported_type(ty) || super::generic_mir_call::function_type_material(tcx,ty).is_ok()) {
         return Err("copy template source type family requires residual compiler instantiation".into());
     }
     let types=array(e.types.iter().map(|&ty|super::generic_material::type_tree(e.tcx,ty)).collect::<Result<Vec<_>,_>>()?);
     let spread=body.spread_arg.map(|id|id.as_u32().to_string()).unwrap_or_else(||"null".into());
     Ok(format!("{{\"parameters\":{parameters},\"types\":{types},\"skeleton\":{{\"phase\":\"runtime_optimized\",\"argument_count\":{},\"spread_argument\":{spread},\"locals\":{locals},\"blocks\":{}}}}}",body.arg_count,array(blocks)))
+}
+
+/// Argument/return type dependencies for the remaining covariance leaf. Never
+/// reconstruct an executable body merely to discover its interface types.
+pub struct Interface<'tcx> {
+    pub argument_count:usize,
+    pub spread_argument:Option<mir::Local>,
+    pub arguments:Vec<(mir::Local,ty::Ty<'tcx>)>,
+    pub return_type:ty::Ty<'tcx>,
+}
+
+pub fn interface<'tcx>(tcx:TyCtxt<'tcx>,body:&mir::Body<'tcx>,
+    args:ty::GenericArgsRef<'tcx>)->Result<Interface<'tcx>,String> {
+    if !supported_arguments(args) || !body.local_decls.iter().all(|local|supported_type(local.ty)) {
+        return Err("source MIR interface requires the exact selected constructor family".into());
+    }
+    let instantiate=|ty|tcx.erase_and_anonymize_regions(
+        ty::EarlyBinder::bind(tcx,ty).instantiate(tcx,args).skip_normalization());
+    let arguments=body.args_iter().map(|local|(local,instantiate(body.local_decls[local].ty))).collect();
+    Ok(Interface {argument_count:body.arg_count,spread_argument:body.spread_arg,
+        arguments,return_type:instantiate(body.local_decls[mir::RETURN_PLACE].ty)})
 }

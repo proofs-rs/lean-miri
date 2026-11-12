@@ -6,7 +6,8 @@ export CARGO_HOME="${CARGO_HOME:-$ROOT/.cargo}"
 export MIRI_SYSROOT="${MIRI_SYSROOT:-$ROOT/scratch/miri-sysroot}"
 PIN=8144389c895da997dbdecaa635e41d6a50be6ffd
 RUSTC="$RUSTUP_HOME/toolchains/miri-exporter-${PIN:0:12}/bin/rustc"
-"$RUSTC" -vV | rg -q "^commit-hash: $PIN$"
+compiler_version_info="$("$RUSTC" -vV)"
+rg -q "^commit-hash: $PIN$" <<< "$compiler_version_info"
 OUT="${TRAIT_SELECTION_OUT:-$ROOT/scratch/trait-selection}"
 mkdir -p "$OUT"
 TEMP_DIR="$(mktemp -d /tmp/lean-miri-trait-selection.XXXXXXXX)"
@@ -14,7 +15,7 @@ trap 'rm -rf -- "$TEMP_DIR"' EXIT
 export LD_LIBRARY_PATH="$RUSTUP_HOME/toolchains/miri-exporter-${PIN:0:12}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 cd "$ROOT"
 bash tools/export-mir.sh --output "$OUT/candidate.json" --root trait_program_root -- \
-  tests/repro/compiler-queries/trait-program.rs --crate-type=lib --crate-name=trait_program -Zmir-opt-level=0
+  "${TRAIT_SELECTION_SOURCE:-tests/repro/compiler-queries/trait-program.rs}" --crate-type=lib --crate-name=trait_program -Zmir-opt-level=0
 "$RUSTC" --edition=2024 tools/trait-selection-oracle.rs -o "$TEMP_DIR/oracle"
 # Execute the independent query oracle with the exact effective compiler args
 # recorded by this fresh producer, including sysroot/cfg/encoding settings.

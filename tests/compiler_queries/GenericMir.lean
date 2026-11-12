@@ -21,7 +21,8 @@ private def check (json : Json) : Except String Nat := do
     unless actual == reference do throw "generic MIR instantiation differs from pinned rustc"
     let missingArgs := MirTemplate.instantiate template 16384 args.pop resolve
     unless missingArgs.toOption.isNone do throw "generic MIR accepted absent generic argument"
-    let failed := MirTemplate.instantiate template 16384 args (fun _ => .error "normalization unavailable")
+    let failed : Except String Miri.MIR.Body :=
+      MirTemplate.instantiate template 16384 args (fun _ => .error "normalization unavailable")
     match failed with
     | .error "normalization unavailable" => pure ()
     | _ => throw "MIR normalization failure did not propagate"

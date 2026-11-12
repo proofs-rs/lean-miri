@@ -68,7 +68,6 @@ def adapt_legacy_fixture(document):
         return copy.deepcopy(document)
     result = copy.deepcopy(document)
     result["schema_version"] = 13
-    result.setdefault("instance_abis", [])
     # Historical executable bodies remain material. No source template or trait
     # proof is reconstructed from a monomorphic execution fixture.
     result.setdefault("mir_templates", [])

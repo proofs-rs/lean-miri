@@ -8,7 +8,7 @@ private def count (value : Miri.MIR.TypeConst) (id : Nat) : Except String Miri.M
   if id == 0 then .ok value else .error "absent source constant"
 private def leaf (bits bytes : Nat) : Miri.MIR.TypeConst := .Value 0 ⟨#[.Leaf bits bytes],0⟩
 private def run (value : Miri.MIR.TypeConst) (expected : Nat) (canonical := true)
-    (bytes := 8) := SequenceLayoutMaterial.arrayCount node (count value) bytes 0 ⟨expected,canonical⟩
+    (bytes := 8) := SequenceLayoutMaterial.arrayCount (fun id => return (← node id).shapeMetadata.unsignedKind == some (.known .usize)) (count value) bytes 0 ⟨expected,canonical⟩
 private def check (value : Bool) (reason : String) : IO Unit :=
   unless value do throw (IO.userError reason)
 

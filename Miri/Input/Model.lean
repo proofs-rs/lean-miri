@@ -23,7 +23,6 @@ structure ImportDocument where
   allocations : Array AllocationNode
   compilerAllocIdWorld : Option CompilerAllocIdWorld := none
   instances : Array InstanceNode
-  instanceAbis : Array InstanceAbiMaterial := #[]
   selectedScope : Option SelectedScope
   functionAbis : Array FunctionAbi
   bodyRoots : Array BodyRoot := #[]

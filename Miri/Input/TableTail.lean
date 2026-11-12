@@ -276,6 +276,7 @@ private structure ParseDefinitionIdFields where
   genericTemplate : Option GenericSubstitution.DefinitionTemplate := none
   aliasDeclaration : Option AliasMaterial.Declaration := none
   adtDeclaration : Option Lean.Json := none
+  rawPath : Option DefinitionPath.Material := none
 
 def parseDefinitionId (path : String) : Parser (DefinitionId) := do
   let s ← object ({} : ParseDefinitionIdFields) fun s key => do
@@ -284,6 +285,7 @@ def parseDefinitionId (path : String) : Parser (DefinitionId) := do
     | "index" => return { s with index := some (← natural) }
     | "body_track_caller" => return { s with bodyTrackCaller := some (← boolean) }
     | "adt_drop" => return { s with adtDrop := some (← parseAdtDropMaterial (path ++ ".adt_drop")) }
+    | "raw_path" => return { s with rawPath := some (← DefinitionPath.decode) }
     | "generic_template" => return { s with genericTemplate := some (← GenericMaterialCodec.decodeTemplate) }
     | "alias_declaration" => return { s with aliasDeclaration := some (← AliasMaterialCodec.decodeDeclaration) }
     | "adt_declaration" => return { s with adtDeclaration := some (← Lean.Json.Parser.anyCore) }
@@ -316,7 +318,8 @@ def parseDefinitionId (path : String) : Parser (DefinitionId) := do
     adtDrop := s.adtDrop
     genericTemplate := s.genericTemplate
     aliasDeclaration := s.aliasDeclaration
-    adtDeclaration := adtDeclaration }
+    adtDeclaration := adtDeclaration
+    rawPath := s.rawPath }
 
 def parseDefinitionRef (_path : String) : Parser DefinitionRef := natural
 

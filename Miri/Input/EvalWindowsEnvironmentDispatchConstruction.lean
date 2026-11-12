@@ -14,6 +14,7 @@ set_option autoImplicit false in
 private def dispatchFromEnvironment
     {Os Error Kind U C : Type}
     (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State MiriMemoryKind U))
     (environment : WindowsEnvironment.Hooks
       (MachineHooks.State MiriMemoryKind U) Os Error Kind)
     (targetLayout : TargetDataLayout)
@@ -25,7 +26,7 @@ private def dispatchFromEnvironment
       (MachineHooks.State MiriMemoryKind U) Os Error Kind) := do
   let symbols ← p.foreignSymbols
     |>.mapError StepError.unsupported
-  let calls := CompilerCallConstruction.compiler p compatibilityBudget
+  let calls := CompilerCallConstruction.compiler p types compatibilityBudget
   let writeScalar := fun (value : Scalar Provenance)
       (destination : MPlaceTy Provenance) =>
     writePlaceImmediate place choice (.scalar value)
@@ -97,7 +98,7 @@ def fromSource [DecidableEq MiriMemoryKind] [DecidableEq Os]
       Os Error EnvVars.Kind) := do
   let environment ← EvalWindowsEnvironmentConstruction.fromSource
     p host hostEffects memory place errors hostConfig
-  dispatchFromEnvironment p environment memory.access.runtime.base place choice
+  dispatchFromEnvironment p EvalProjectionMachine.outerArrays environment memory.access.runtime.base place choice
     compatibilityBudget
 
 end Miri.Input.EvalWindowsEnvironmentDispatchConstruction

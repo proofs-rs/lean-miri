@@ -103,7 +103,7 @@ def hooks
     allocation := core.allocation
     compiler := core.compiler
     pointers := pointers
-    pointerCompiler := CompilerExecutionProviders.pointerCompiler prepared
+    pointerCompiler := CompilerExecutionProviders.pointerCompiler prepared EvalProjectionMachine.arrays
     dynamic := core.projection.dynamic
     vtable := core.validity.vtable
     dynamicFuel := core.projection.dynamicFuel

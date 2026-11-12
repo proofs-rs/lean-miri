@@ -23,6 +23,6 @@ structure Operand (S C : Type) where
   runtimeChecks : C → MIR.RuntimeChecks → RvalueM S Bool
   boolLayout : C → RvalueM S LocalLayout
   constant : C → MIR.ConstOperand → Option LocalLayout → RvalueM S (OpTy Provenance)
-structure Control (P L E : Type) where
-  bodySpan : Frame P L E → Except StepError MIR.SpanRef
+structure Control (S P L E : Type) where
+  bodySpan : Frame P L E → EStateM StepError S MIR.SpanRef
 end Miri.Interpreter.ExecutionLeaves

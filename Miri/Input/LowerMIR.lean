@@ -1,6 +1,6 @@
 import Miri.Input.Model
 import Miri.Input.DecodeMIR
-import Miri.Input.TypeArena
+import Miri.Input.TypeArenaWorld
 import Miri.Input.SourceMir
 
 namespace Miri.Input
@@ -14,22 +14,21 @@ structure LowerContext where
   instances : Array InstanceNode := #[]
   typeConstants : Array MIR.TypeConst := #[]
   typeIds : Array TypeId
-  lazyTypeNodes : Option (Array TypeNode) := none
+  typeUniverse : Option TypeArena.World := none
   allocationIds : Array AllocationId := #[]
   obligations : Array Obligation := #[]
 
 def LowerContext.containsTypeId (ctx : LowerContext) (id : TypeId) : Bool :=
-  ctx.typeIds.contains id || match ctx.lazyTypeNodes with
-    | some nodes => (TypeArena.node nodes id).isOk
+  ctx.typeIds.contains id || match ctx.typeUniverse with
+    | some world => (world.lookupType id).isOk
     | none => false
 
 def LowerContext.containsAllocationId (ctx : LowerContext) (id : AllocationId) : Bool := ctx.allocationIds.contains id
 
-def LowerContext.withTypeIds (ctx : LowerContext) (ids : Array TypeId) : LowerContext := {ctx with typeIds := ids, lazyTypeNodes := none}
-/-- Enable lazy constructor identities only in runtime compiler contexts.
-Source MIR lowering retains strict material-pool bounds. -/
-def LowerContext.withLazyTypes (ctx : LowerContext) (nodes : Array TypeNode) : LowerContext :=
-  {ctx with lazyTypeNodes := some nodes}
+def LowerContext.withTypeIds (ctx : LowerContext) (ids : Array TypeId) : LowerContext := {ctx with typeIds := ids, typeUniverse := none}
+/-- Bind lowering to the actual execution's persistent constructor universe. -/
+def LowerContext.withWorld (ctx : LowerContext) (world : TypeArena.World) : LowerContext :=
+  {ctx with typeUniverse := some world}
 def LowerContext.withAllocationIds (ctx : LowerContext) (ids : Array AllocationId) : LowerContext := {ctx with allocationIds := ids}
 def LowerContext.ofTypes (types : Array TypeNode) : LowerContext :=
   {typeIds := types.map (·.id)}
@@ -95,7 +94,7 @@ def LoweredProgram.bodyMetadata (program : LoweredProgram) (index : Nat) :
 /-- Instantiate and lower only the actual body requested by a runtime operation.
 No instantiated result is cached in the immutable compilation input. -/
 def LoweredProgram.resolveBody (program : LoweredProgram) (index : Nat) :
-    LowerResult LoweredBody := do
+    TypeArena.WorldM LoweredBody := do
   let source ← SourceMir.resolveBody program.input index
   -- Body wrapping needs only these immutable tables. Constructing the full
   -- source reference indexes here would scan every type/allocation on each
@@ -106,12 +105,14 @@ def LoweredProgram.resolveBody (program : LoweredProgram) (index : Nat) :
   let ctx ← match program.input.bodies[index]? with
     | some (.material _) => pure ctx
     | some (.copyTemplate _) => do
-      let ctx := ctx.withLazyTypes program.input.types
+      let ctx := ctx.withWorld (← get)
       for ty in source.mir.locals do
         unless ctx.containsTypeId ty do throw "instantiated MIR local type is absent from its runtime type universe"
       pure ctx
     | none => throw "canonical body index is absent"
-  lowerBody ctx source
+  match lowerBody ctx source with
+  | .ok body => pure body
+  | .error error => throw error
 
 /-- The minimal runtime body context preserves every field observed by
 lowerBody; source reference indexes are validated separately at import. -/

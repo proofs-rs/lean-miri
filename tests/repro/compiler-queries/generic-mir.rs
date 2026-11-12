@@ -8,7 +8,7 @@
 
 #[inline(never)] pub fn ResidualMirProjected<T: Copy>(value: (T, T)) -> T { value.0 }
 #[inline(never)] pub fn ResidualMirConstant<T: Copy>(value: T) -> (T, u32) { (value, 5) }
-#[inline(never)] pub fn ResidualMirDrop<T>(value: T) { core::mem::drop(value) }
+#[inline(never)] pub fn ResidualMirDrop<T>(value: T) { let _retained = value; }
 #[inline(never)] pub fn ResidualMirFnPtr<T: Copy>(value: fn(T) -> T) -> fn(T) -> T { value }
 #[inline(never)] pub fn GenericMirChoice<T: Copy>(condition: bool, left: T, right: T) -> T {
     if condition { left } else { right }

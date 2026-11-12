@@ -1,3 +1,4 @@
+import Miri.Input.RuntimeArrayQueries
 import Miri.Input.CompilerScopes
 import Miri.Input.TypeArena
 import Miri.Input.GenericRebase
@@ -58,16 +59,19 @@ private def entry (prepared : Prepared) (id : Nat) : Except String TypeEntry := 
 /-- Port of rustc_middle/ty/sty.rs mutable pointer/reference constructors.
 Material identities are reused; absent constructor nodes are interned in the
 input-relative lazy arena and receive genuinely new type identities. -/
-def internConstructor := TypeArena.intern
+private def liftWorld (result : Except String A) : TypeArena.WorldM A :=
+  match result with | .ok value => pure value | .error message => throw message
 
-def mutPointerType (prepared : Prepared) (id : Nat) : Except String Nat :=
-  TypeArena.intern prepared.program.input.types id false
+def mutPointerType (_prepared : Prepared) (id : Nat) : TypeArena.WorldM Nat :=
+  TypeArena.World.internType (.rawPointer id .Mut)
 
-def mutReferenceType (prepared : Prepared) (id : Nat) : Except String Nat :=
-  TypeArena.intern prepared.program.input.types id true
+def mutReferenceType (_prepared : Prepared) (id : Nat) : TypeArena.WorldM Nat :=
+  TypeArena.World.internType (.reference id .Mut .Erased)
 
-def resolveDropGlue (prepared : Prepared) (id : Nat) : Except String CallInstance := do
-  (← entry prepared id).dropGlue
+def resolveDropGlue (prepared : Prepared) (id : Nat) : TypeArena.WorldM CallInstance := do
+  let _ ← liftWorld ((← get).lookupType id)
+  let source ← liftWorld (entry prepared id)
+  liftWorld source.dropGlue
 
 /-- Pinned rustc ty/instance.rs::InstanceKind::requires_caller_location.
 Only Item, Virtual and VTable consult the definition's body codegen attributes;
@@ -95,13 +99,13 @@ def parentTrait (prepared : Prepared) (method : MIR.DefId) : Except String MIR.D
   pure first.parentTrait
 
 def rebaseVirtualArgs (prepared : Prepared) (args : Array MIR.GenericArg)
-    (parent : MIR.DefId) (concrete : Nat) : Except String (Array MIR.GenericArg) := do
+    (parent : MIR.DefId) (concrete : Nat) : TypeArena.WorldM (Array MIR.GenericArg) := do
   let matching := prepared.virtualQueries.filter (·.parentTrait == parent)
   let some first := matching[0]? | throw "virtual trait generic definition material absent"
   unless matching.all (·.parentGenericCount == first.parentGenericCount) do
     throw "conflicting virtual trait generic definition material"
-  let _ ← TypeArena.node prepared.program.input.types concrete
-  GenericRebase.virtualSelf args first.parentGenericCount concrete
+  let _ ← liftWorld ((← get).lookupType concrete)
+  liftWorld (GenericRebase.virtualSelf args first.parentGenericCount concrete)
 
 def expectResolveForVTable (prepared : Prepared) (method : MIR.DefId)
     (args : Array MIR.GenericArg) : Except String CallInstance := do
@@ -117,16 +121,17 @@ private def lift (result : Except String A) : EStateM StepError S A :=
   | .ok result => pure result
   | .error error => throw (.invalidProgram error)
 
-def hooks (prepared : Prepared) (base : VirtualCalls.CompilerHooks S C) :
+def hooks (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
+    (base : VirtualCalls.CompilerHooks S C) :
     VirtualCalls.CompilerHooks S C :=
   { base with
     instanceArgs := fun inst => lift (CompilerInstance.argsOf
       prepared.program.input.instances inst)
-    mutPointerType := fun ty => lift (mutPointerType prepared ty)
-    mutReferenceType := fun ty => lift (mutReferenceType prepared ty)
-    resolveDropGlue := fun ty => lift (resolveDropGlue prepared ty)
+    mutPointerType := fun ty => RuntimeArrayQueries.perform types (mutPointerType prepared ty)
+    mutReferenceType := fun ty => RuntimeArrayQueries.perform types (mutReferenceType prepared ty)
+    resolveDropGlue := fun ty => RuntimeArrayQueries.perform types (resolveDropGlue prepared ty)
     requiresCallerLocation := fun callee => lift (requiresCallerLocation prepared callee)
     parentTrait := fun method => lift (parentTrait prepared method)
-    rebaseVirtualArgs := fun args parent concrete => lift (rebaseVirtualArgs prepared args parent concrete)
+    rebaseVirtualArgs := fun args parent concrete => RuntimeArrayQueries.perform types (rebaseVirtualArgs prepared args parent concrete)
     expectResolveForVTable := fun _ method args => lift (expectResolveForVTable prepared method args) }
 end Miri.Input.CompilerRuntimeQueries

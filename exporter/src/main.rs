@@ -19,6 +19,7 @@ mod typed_pool;
 mod shared_json;
 mod pool_type;
 mod generic_material;
+mod definition_path;
 mod generic_mir;
 mod generic_mir_call;
 mod alias_rules;
@@ -106,12 +107,21 @@ struct Producer {
     input_settings: producer::Evidence,
 }
 #[derive(serde::Serialize)]
+struct TypePrintOptions {
+    type_length_limit: usize,
+    verbose_internals: bool,
+    identify_regions: bool,
+    trim_diagnostic_paths: bool,
+    trimmed_def_paths: bool,
+}
+#[derive(serde::Serialize)]
 struct SessionQueries {
     internal_target_features: Vec<String>,
     is_like_wasm: bool,
     target_arch: String,
     root_span: u64,
     runtime_checks: [pool_body::RuntimeCheck; 3],
+    print_options: TypePrintOptions,
 }
 #[derive(serde::Serialize)]
 struct RuntimeQueries {
@@ -158,17 +168,9 @@ impl MirBodyRole {
     }
 }
 
-/// Remaining target-classifier ABI leaf keyed by complete instance identity.
-#[derive(serde::Serialize)]
-struct InstanceAbiMaterial {
-    instance_id: u64,
-    fn_abi: u64,
-}
-
 /// Owned, closed export graph. Pending reference types cannot inhabit this snapshot.
 #[derive(serde::Serialize)]
 struct ExportDocument {
-    instance_abis: Vec<InstanceAbiMaterial>,
     schema: &'static str,
     schema_version: u64,
     mir_query: &'static str,
@@ -301,7 +303,7 @@ struct ExportContext<'tcx> {
     type_constants: Pool<ty::Const<'tcx>, pool_values::TypeConstant>,
     files: pool_values::Files,
     spans: Pool<rustc_span::Span, pool_values::Span>,
-    layouts: Pool<rustc_abi::TyAndLayout<'tcx, ty::Ty<'tcx>>, pool_layout::Layout>,
+    layouts: Pool<pool_layout::LayoutKey<'tcx>, pool_layout::Layout>,
     fn_abis: Pool<rustc_target::callconv::FnAbi<'tcx, ty::Ty<'tcx>>, pool_layout::FnAbi>,
     type_ids: Pool<rustc_middle::ty::Ty<'tcx>, pool_type::Type>,
     /// Types demanded by serialized source MIR/signatures/metadata. Compiler
@@ -1679,6 +1681,13 @@ impl ExportCallbacks {
             runtime_check_json(tcx, rustc_middle::mir::RuntimeChecks::OverflowChecks),
         ];
         let session_queries = SessionQueries {
+            print_options: TypePrintOptions {
+                type_length_limit: tcx.type_length_limit().0,
+                verbose_internals: tcx.sess.verbose_internals(),
+                identify_regions: tcx.sess.opts.unstable_opts.identify_regions,
+                trim_diagnostic_paths: tcx.sess.opts.unstable_opts.trim_diagnostic_paths,
+                trimmed_def_paths: tcx.sess.opts.trimmed_def_paths,
+            },
             internal_target_features,
             is_like_wasm: tcx.sess.target.is_like_wasm,
             target_arch: tcx.sess.target.arch.to_string(),
@@ -1859,7 +1868,6 @@ impl ExportCallbacks {
             return export_failure("coroutine coverage", "body marker table is incomplete");
         }
         let mut document = ExportDocument {
-            instance_abis: Vec::new(),
             mir_templates: export_context.mir_templates.finish("mir_template")?,
             schema: "lean-miri-rustc-mir",
             schema_version: ROOT_SCHEMA_VERSION,
@@ -1891,6 +1899,9 @@ impl ExportCallbacks {
             compiler_coroutine_coverage,
             definitions: export_context.definitions.finish("definition")?.into_iter().enumerate()
                 .map(|(id, mut definition)| {
+                    definition.raw_path = definition_path::material(tcx, DefId {
+                        krate: rustc_hir::def_id::CrateNum::from_u32(definition.crate_index),
+                        index: rustc_hir::def_id::DefIndex::from_u32(definition.index) });
                     definition.body_track_caller = body_track_caller.get(&id).copied();
                     definition.adt_drop = adt_drop_material.get(&id).cloned();
                     definition.generic_template = generic_templates.remove(&id);
@@ -2612,6 +2623,13 @@ fn checked_instance_mir<'tcx>(
     Ok(body)
 }
 
+fn has_source_mir_template<'tcx>(tcx:TyCtxt<'tcx>,
+    body:&rustc_middle::mir::Body<'tcx>,instance:ty::Instance<'tcx>)->bool {
+    matches!(instance.def,ty::InstanceKind::Item(_))
+        && tcx.generics_of(body.source.def_id()).count()>0
+        && generic_mir::eligible(tcx,body,instance.args)
+}
+
 // Each concrete instance owns one executable body. Normalize only its template:
 // rebinding a substituted body can capture caller parameters incorrectly.
 fn resolved_mir_body_json<'tcx>(
@@ -2635,16 +2653,28 @@ fn resolved_mir_body_json<'tcx>(
     if !fresh {
         return Ok(id as u64);
     }
-    if matches!(instance.def, ty::InstanceKind::Item(_))
-        && tcx.generics_of(template.source.def_id()).count() > 0
-        && generic_mir::eligible(tcx, template, instance.args)
-    {
+    if has_source_mir_template(tcx,template,instance) {
+        // Retain only the remaining complete-instance/type/ABI dependencies.
+        // No enclosing/target executable MIR is instantiated for source calls.
+        for dependency in generic_mir_call::dependencies(tcx,template,instance.args)? {
+            context.register_instance(dependency.instance);
+            type_json(context,tcx,dependency.function_type)?;
+            context.instance_abi_requests.insert((dependency.instance,ty::List::empty()));
+        }
         // This source category is selected before any monomorphic-body query.
         // Failures after selection propagate; no concrete body is retained.
         let key = (template.source.def_id(), template.source.promoted);
         let (template_id, fresh) = context.mir_templates.reserve(key);
         if fresh {
             let raw = generic_mir::capture(tcx, template, |span|span_json(context,tcx,span))?;
+            // Nominal types can occur only in a source local, without any
+            // concrete caller type seeding their definitions. Capture their
+            // declaration closure, never an instantiated type/body answer.
+            let source_material:Value=serde_json::from_str(&raw)
+                .map_err(|error|format!("source MIR material decoding failed: {error}"))?;
+            let mut references=Vec::new();
+            generic_definition_references(&source_material,&mut references)?;
+            for definition in references { def_json(context,definition); }
             let source = pool_body::CopyTemplateSource {
                 template: raw,
                 source_def_id: def_json(context,template.source.def_id()),
@@ -3072,7 +3102,6 @@ fn type_compiler_facts_json<'tcx>(
         is_sized: if structural_sized_supported(tcx, normalized, 256) { None }
             else { Some(normalized.is_sized(tcx, env)) },
     };
-    let discriminant_type = discriminant_type_fact_json(context, tcx, normalized)?;
     let unsafe_binder_erased = match input.kind() {
         ty::UnsafeBinder(b) => Some(type_json(
             context,
@@ -3103,7 +3132,6 @@ fn type_compiler_facts_json<'tcx>(
         None
     };
     let type_queries = TypeQueries {
-        discriminant_type,
         normalized: if structural_identity_normalization(input, 1024)
             || matches!(input.kind(), ty::Alias(ty::IsRigid::No, alias)
                 if matches!(alias.kind, ty::AliasTyKind::Free { .. } | ty::AliasTyKind::Projection { .. })) {
@@ -3648,6 +3676,46 @@ fn struct_recipe_eligible<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> bool {
         guaranteed_sized(tcx.type_of(field.did).instantiate_identity().skip_norm_wip()))
 }
 
+// Structural source eligibility only. Dyn tails and unresolved aliases remain
+// explicit material residuals until their raw metadata constructor is supported.
+fn pointer_recipe_eligible<'tcx>(tcx: TyCtxt<'tcx>, pointee: ty::Ty<'tcx>) -> bool {
+    match *pointee.kind() {
+        ty::Alias(..) | ty::Param(..) | ty::Bound(..) | ty::Placeholder(..)
+        | ty::Infer(..) | ty::Dynamic(..) | ty::Error(..) => false,
+        ty::Tuple(elements) => elements.last().is_none_or(|tail| pointer_recipe_eligible(tcx,*tail)),
+        ty::Adt(def,args) if def.is_struct() => def.non_enum_variant().fields.iter().last()
+            .is_none_or(|field| pointer_recipe_eligible(tcx,field.ty(tcx,args).skip_norm_wip())),
+        _ => true,
+    }
+}
+
+// rustc_middle::ty::layout::TyAbiInterface::field index zero of a wide
+// pointer preserves its original Ty identity while returning a THIN layout.
+// The source operation is a seed; do not replace it with layout_of(field.ty).
+fn pointer_data_layout_value_json<'tcx>(
+    context: &mut ExportContext<'tcx>,
+    layout: rustc_abi::TyAndLayout<'tcx, ty::Ty<'tcx>>,
+) -> u64 {
+    let (id,fresh) = context.layouts.reserve(pool_layout::LayoutKey::PointerData(layout.ty));
+    if fresh {
+        let pointer_data_type = context.type_id(layout.ty);
+        context.layouts.define(id,pool_layout::Layout::PointerDataRecipe { pointer_data_type });
+    }
+    id as u64
+}
+
+fn enum_tag_layout_value_json<'tcx>(
+    context: &mut ExportContext<'tcx>,
+    parent: rustc_abi::TyAndLayout<'tcx, ty::Ty<'tcx>>,
+) -> u64 {
+    let (id,fresh) = context.layouts.reserve(pool_layout::LayoutKey::EnumTag(parent.ty));
+    if fresh {
+        let enum_tag_type = context.type_id(parent.ty);
+        context.layouts.define(id,pool_layout::Layout::EnumTagRecipe { enum_tag_type });
+    }
+    id as u64
+}
+
 // Preserve queried TyAndLayout, including field-specific and uninhabited
 // variant layouts which cannot be replaced by layout_of(result.ty).
 fn layout_value_json<'tcx>(
@@ -3655,7 +3723,7 @@ fn layout_value_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     layout: rustc_abi::TyAndLayout<'tcx, ty::Ty<'tcx>>,
 ) -> u64 {
-    let (id, fresh) = context.layouts.reserve(layout);
+    let (id, fresh) = context.layouts.reserve(pool_layout::LayoutKey::Computed(layout));
     if !fresh {
         return id as u64;
     }
@@ -3668,6 +3736,11 @@ fn layout_value_json<'tcx>(
         // Union repr options and instantiated field types are material ADT
         // shape data; Lean computes their shared ABI, size and alignment.
         pool_layout::Layout::UnionRecipe { union_type: context.type_id(layout.ty) }
+    } else if matches!(layout.ty.kind(), ty::Str | ty::Slice(_))
+        || matches!(*layout.ty.kind(), ty::Array(_,count) if count.try_to_target_usize(tcx).is_some()) {
+        pool_layout::Layout::SequenceRecipe { sequence_type: context.type_id(layout.ty) }
+    } else if matches!(*layout.ty.kind(), ty::RawPtr(pointee,_) | ty::Ref(_,pointee,_) if pointer_recipe_eligible(tcx,pointee)) {
+        pool_layout::Layout::PointerRecipe { pointer_type: context.type_id(layout.ty) }
     } else if struct_recipe_eligible(tcx, layout.ty) {
         pool_layout::Layout::StructRecipe { struct_type: context.type_id(layout.ty) }
     } else {
@@ -4581,7 +4654,7 @@ fn generic_definition_references(value: &Value, out: &mut Vec<DefId>) -> Result<
 
 fn def_json(context: &mut ExportContext<'_>, def: rustc_hir::def_id::DefId) -> u64 {
     let (id,fresh)=context.definitions.reserve(def);
-    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32(),body_track_caller:None,adt_drop:None,generic_template:None,alias_declaration:None,adt_declaration:None }); }
+    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32(),body_track_caller:None,adt_drop:None,generic_template:None,alias_declaration:None,adt_declaration:None,raw_path:None }); }
     id as u64
 }
 
@@ -4804,14 +4877,19 @@ fn register_call_transfer_for_target<'tcx>(
     // argument types are validation metadata; the actual copy destination is
     // the instantiated MIR local (or spread tuple field).
     let template = checked_instance_mir(tcx, instance.def)?;
-    let callee_body = match instance.try_instantiate_mir_and_normalize_erasing_regions(
-        tcx,
-        template.typing_env(tcx),
-        ty::EarlyBinder::bind(tcx, template.clone()),
-    ) {
-        Ok(body) => body,
-        Err(error) => return Err(format!("callee MIR instantiation failed: {error:?}")),
-    };
+    let (callee_arg_count,callee_spread_arg,callee_argument_types,callee_return_type) =
+        if has_source_mir_template(tcx,template,instance) {
+            // Only interface type dependencies are needed by this residual
+            // covariance catalog. Never instantiate a selected executable body.
+            let interface=generic_mir::interface(tcx,template,instance.args)?;
+            (interface.argument_count,interface.spread_argument,interface.arguments,interface.return_type)
+        } else {
+            let body=instance.try_instantiate_mir_and_normalize_erasing_regions(
+                tcx,template.typing_env(tcx),ty::EarlyBinder::bind(tcx,template.clone()))
+                .map_err(|error|format!("callee MIR instantiation failed: {error:?}"))?;
+            let arguments=body.args_iter().map(|local|(local,body.local_decls[local].ty)).collect();
+            (body.arg_count,body.spread_arg,arguments,body.local_decls[rustc_middle::mir::RETURN_PLACE].ty)
+        };
     let caller_args = if caller_location {
         caller_abi
             .args
@@ -4852,20 +4930,19 @@ fn register_call_transfer_for_target<'tcx>(
     let caller_has_closure_receiver =
         closure_receiver && caller_abi.args.len() == callee_abi.args.len();
     let mut target_local_types = Vec::new();
-    for local in callee_body.args_iter() {
-        let local_ty = callee_body.local_decls[local].ty;
+    for (local,local_ty) in callee_argument_types {
         if closure_receiver && local == rustc_middle::mir::Local::arg(0) {
             continue;
         }
         if callee_abi.c_variadic
-            && local == rustc_middle::mir::Local::from_usize(callee_body.arg_count)
+            && local == rustc_middle::mir::Local::from_usize(callee_arg_count)
         {
             // Miri packages extras into this synthetic VaList. They are
             // checked/initialized by allocate_varargs, not copied into this
             // local through copy_op_allow_transmute.
             break;
         }
-        if Some(local) == callee_body.spread_arg {
+        if Some(local) == callee_spread_arg {
             let ty::Tuple(fields) = local_ty.kind() else {
                 return Ok(());
             };
@@ -4919,7 +4996,7 @@ fn register_call_transfer_for_target<'tcx>(
     Ok::<_, String>(if caller_abi.ret.eq_abi(&callee_abi.ret) {
         record_covariance_transfer(
             context,
-            callee_body.local_decls[rustc_middle::mir::RETURN_PLACE].ty,
+            callee_return_type,
             request.return_destination,
         );
     })
@@ -6565,27 +6642,6 @@ fn discriminant_facts_json<'tcx>(
                 })
             })
             .collect::<Result<_, String>>()?,
-    })
-}
-
-fn discriminant_type_fact_json<'tcx>(
-    context: &mut ExportContext<'tcx>,
-    tcx: TyCtxt<'tcx>,
-    input: ty::Ty<'tcx>,
-) -> Result<u64, String> {
-    Ok::<_, String>(match input.kind() {
-        ty::UnsafeBinder(bound) => {
-            let inner = tcx.instantiate_bound_regions_with_erased((*bound).into());
-            if inner.has_escaping_bound_vars() || inner.has_non_region_param() {
-                return export_failure(
-                    "discriminant type",
-                    "unsafe-binder discriminant query retains bound type/const variables",
-                );
-            }
-            discriminant_type_fact_json(context, tcx, inner)?
-        }
-        ty::Pat(base, _) => discriminant_type_fact_json(context, tcx, *base)?,
-        _ => type_json(context, tcx, input.discriminant_ty(tcx))?,
     })
 }
 

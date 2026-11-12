@@ -1,0 +1,64 @@
+import Miri.Input.SourceMir
+import Miri.Input.SourceCall
+import Miri.Input.GenericInstantiationWorld
+
+/-! Symbolic source-call sites. Reading a seed never instantiates a MIR body or
+looks up an ABI. Resolution takes effectful callbacks belonging to the current
+execution's one type/instance universe. -/
+namespace Miri.Input.SourceMirCall
+open GenericSubstitution
+
+structure Seed where
+  expression : Term
+  arguments : Array Miri.MIR.GenericArg
+  constantSpan : Miri.MIR.SpanRef
+  deriving Repr
+
+/-- Source-only accessor; material call sites use their existing provider. -/
+def source (document : ImportDocument) (bodyIndex blockIndex : Nat) : Except String (Option Seed) := do
+  let some body := document.bodies[bodyIndex]? | throw "canonical body index is absent"
+  let .copyTemplate reference := body | return none
+  let _ ← SourceMir.metadata document bodyIndex
+  let some source := document.mirTemplates[reference.templateId]?
+    | throw "generic MIR source template is absent"
+  let some block := source.template.skeleton.blocks[blockIndex]?
+    | throw "source call block is absent"
+  let .call functionType constantSpan .. := block.terminator.kind | return none
+  let some expression := source.template.types[functionType.index]?
+    | throw "source call function type slot is absent"
+  pure (some ⟨expression,reference.genericArgs,constantSpan⟩)
+
+private def liftPure {m : Type → Type} [Monad m] [MonadExceptOf String m]
+    (result : Except String α) : m α :=
+  match result with | .ok value => pure value | .error message => throw message
+
+/-- No query-answer cache or private arena is created here. Both argument and
+FnDef interning effects flow through the caller's same monad. -/
+def resolveWith {m : Type → Type} [Monad m] [MonadExceptOf String m]
+    (ofArguments : Array Miri.MIR.GenericArg → m (Array Term))
+    (resolveDefinition : DefinitionIdentity → m DefinitionRef)
+    (resolveType : Term → m TypeId)
+    (resolveInstance : DefinitionRef → Array Miri.MIR.GenericArg → m InstanceId)
+    (seed : Seed) : m (SourceCall.Resolution × Miri.MIR.Operand) := do
+  let arguments ← ofArguments seed.arguments
+  let expression ← liftPure (GenericSubstitution.instantiate 16384 arguments seed.expression)
+  let expression ← liftPure (MirTemplate.eraseFreeRegions 16384 expression)
+  liftPure (MirTemplate.validateClosed 16384 expression)
+  let callee ← liftPure (SourceCall.calleeOfFunctionTerm expression)
+  let resolution ← SourceCall.resolveCalleeWith resolveDefinition resolveType resolveInstance callee
+  let function := Miri.MIR.Operand.Constant {
+    span := seed.constantSpan, userType := none,
+    value := .Val .ZeroSized resolution.functionType }
+  pure (resolution,function)
+
+/-- Resolve in the current execution's universe. The material instance graph
+is still an explicit residual capability; no fresh universe is created. -/
+def resolveInWorld (document : ImportDocument) (seed : Seed) :
+    TypeArena.WorldM (SourceCall.Resolution × Miri.MIR.Operand) :=
+  resolveWith
+    (fun arguments => do liftPure (GenericInstantiationWorld.ofArguments (← get) 16384 arguments))
+    (fun definition => do liftPure ((← get).definitionRef definition))
+    (GenericInstantiationWorld.resolveType 16384)
+    (fun definition arguments => liftPure (SourceCall.materialItem document definition arguments)) seed
+
+end Miri.Input.SourceMirCall

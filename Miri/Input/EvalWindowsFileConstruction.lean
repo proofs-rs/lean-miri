@@ -272,7 +272,7 @@ def fromSource [DecidableEq MiriMemoryKind]
     otherMetadata prepareDirectory paths
   let symbols ← p.foreignSymbols
     |>.mapError StepError.unsupported
-  let calls := CompilerCallConstruction.compiler p compatibilityBudget
+  let calls := CompilerCallConstruction.compiler p EvalProjectionMachine.outerArrays compatibilityBudget
   pure {
     paths
     systemConvention := do return (← CompilerNamedShimAbi.query p.namedAbi "CreateFileW").conv

@@ -1,3 +1,4 @@
+import Miri.Input.SourceMirCall
 import Miri.Input.CompilerInstance
 import Miri.Input.CallCompatibility
 import Miri.ABI.FnAbi
@@ -186,14 +187,38 @@ def prepare (program : LoweredProgram) : Result Prepared := do
   let runtime ← (RuntimeMetadata.ofDocument program.input).mapError toString
   prepareUsingRuntime {} program runtime
 
-def atSite (prepared : Prepared) (site : Site) : Result Resolution := do
+private def liftWorld (result : Result A) : TypeArena.WorldM A :=
+  match result with | .ok value => pure value | .error message => throw message
+
+/-- ABI remains an explicit fully-monomorphized complete-instance query leaf.
+The existing catalog owns the key, including its ordered extra-argument vector. -/
+private def sourceInstanceAbi (document : ImportDocument) (callee : CallInstance) : Result Nat := do
+  let mut found := none
+  for record in document.queries.instanceAbis do
+    if record.instanceId == callee && record.extraArgumentTypes.isEmpty then
+      if let some previous := found then
+        unless previous == record.abiId do throw "conflicting exact instance ABI evidence"
+      found := some record.abiId
+  require found "missing exact full-instance/extra-argument FnAbi query"
+
+def atSite (prepared : Prepared) (site : Site) : TypeArena.WorldM Resolution := do
   let matching := prepared.entries.filter (·.site == site)
-  if matching.size != 1 then throw "missing or ambiguous compiler call site"
-  (← require matching[0]? "missing compiler call site").outcome
+  if !matching.isEmpty then
+    unless matching.size == 1 do throw "missing or ambiguous compiler call site"
+    let entry ← liftWorld (require matching[0]? "missing compiler call site")
+    return ← liftWorld entry.outcome
+  let some source ← liftWorld (SourceMirCall.source prepared.program.input site.bodyIndex site.block)
+    | throw "missing or ambiguous compiler call site"
+  let (resolved,function) ← SourceMirCall.resolveInWorld prepared.program.input source
+  let abi ← liftWorld (sourceInstanceAbi prepared.program.input resolved.instanceId)
+  let evidence : CallResolutionEvidence := {
+    kind := .direct,instanceId := some resolved.instanceId,
+    functionType := some resolved.functionType,dispatchSlot := none,abi := .normal abi }
+  pure ⟨resolved.instanceId,resolved.instanceId,function,.normal abi,evidence⟩
 
 /-- Function operand identity is checked in addition to body and block.
 Source sites are compiler-table indices, never diagnostic span matches. -/
-def resolveAt (prepared : Prepared) (site : Site) (function : MIR.Operand) : Result CallInstance := do
+def resolveAt (prepared : Prepared) (site : Site) (function : MIR.Operand) : TypeArena.WorldM CallInstance := do
   let found ← atSite prepared site
   if found.function != function then throw "call-site function operand mismatch"
   return found.callee
@@ -215,13 +240,13 @@ def abiOfInstance (prepared : Prepared) (fnInstance : CallInstance) (extraArgs :
 
 /-- A loaded body carries the exact source table key. Equal MIR syntax does
 not make distinct root/template/promoted/instance body identities interchangeable. -/
-def loadedBodyOfInstance (prepared : Prepared) (fnInstance : CallInstance) : Result LoadedBody := do
+def loadedBodyOfInstance (prepared : Prepared) (fnInstance : CallInstance) : TypeArena.WorldM LoadedBody := do
   let matching := prepared.bodies.filter (·.fnInstance == fnInstance)
   unless matching.size == 1 do
     throw s!"missing or ambiguous canonical instance body identity: requested={reprStr fnInstance}, matches={matching.size}"
   let some candidate := matching[0]? | throw "compiler instance body is unavailable"
-  let source ← require prepared.program.input.instances[candidate.sourceInstanceId]?
-    "canonical source instance record is missing"
+  let source ← liftWorld (require prepared.program.input.instances[candidate.sourceInstanceId]?
+    "canonical source instance record is missing")
   unless source.kind == .instanceMir do throw "compiler body is not a substituted executable instance"
   let body ← prepared.program.resolveBody candidate.bodyIndex
   unless body.input.instanceId == candidate.sourceInstanceId do throw "instance/body identity mismatch"
@@ -230,7 +255,7 @@ def loadedBodyOfInstance (prepared : Prepared) (fnInstance : CallInstance) : Res
 
 /-- Compatibility syntax-only view of the exact loaded body. It retains the
 same unique-key and body ownership checks; equal bodies are not merged. -/
-def bodyOfInstance (prepared : Prepared) (fnInstance : CallInstance) : Result MIR.Body := do
+def bodyOfInstance (prepared : Prepared) (fnInstance : CallInstance) : TypeArena.WorldM MIR.Body := do
   return (← loadedBodyOfInstance prepared fnInstance).body
 
 private def lift (result : Result A) : CallM S A :=

@@ -105,7 +105,7 @@ def localAccessAfterRead (frame : Frame Provenance LocalLayout FrameExtra)
 /-- Required layout and stack-memory leaves. Whole-state storage operations
 below preserve FrameExtra changes made by afterLocalWrite and allocation. -/
 structure StorageHooks (K User : Type) where
-  veryTriviallySized : TyId → Except StepError Bool
+  veryTriviallySized : TyId → M K User Bool
   layout : LocalId → M K User LocalLayout
   allocateDyn : LocalLayout → MemPlaceMeta Provenance → M K User (MemPlace Provenance)
   deallocateStack : Pointer (Option Provenance) → M K User Unit
@@ -138,9 +138,7 @@ def storageLiveDyn (hooks : StorageHooks K User) (localId : LocalId)
   let ty ← match frame.body.locals[localId]? with
     | none => throw (.stack (.missingLocalType localId))
     | some ty => pure ty
-  let trivial ← match hooks.veryTriviallySized ty with
-    | .error error => throw error
-    | .ok value => pure value
+  let trivial ← hooks.veryTriviallySized ty
   let unsizedLayout ← if trivial then pure none else do
     let frame ← currentFrame
     let cached ← fromStack (frame.getLocalLayout localId)
