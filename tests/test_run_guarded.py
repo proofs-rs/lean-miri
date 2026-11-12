@@ -1,5 +1,6 @@
 """Optional host guards never turn a killed child into successful execution."""
 import pathlib
+import os
 import sys
 import tempfile
 import unittest
@@ -28,6 +29,45 @@ class OptionalGuards(unittest.TestCase):
             self.skipTest('no cgroup memory counter')
         with self.assertRaisesRegex(RuntimeError, 'NOT RUN'):
             self.invoke('pass', timeout=None, memory_limit=1)
+
+    def test_only_explicit_pass_fds_are_inherited_and_parent_retains_ownership(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            kept = os.open(root / 'kept', os.O_CREAT | os.O_RDWR, 0o600)
+            hidden = os.open(root / 'hidden', os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                os.set_inheritable(hidden, True)
+                script = (f'import os; os.write({kept}, b"control"); '
+                          f'\ntry: os.fstat({hidden})'
+                          '\nexcept OSError: pass'
+                          '\nelse: raise SystemExit("unrelated FD leaked")')
+                result = run([sys.executable, '-c', script], cwd=root, env=None,
+                             log=root / 'run.log', timeout=5, memory_limit=None,
+                             pass_fds=(kept,))
+                self.assertEqual(result.returncode, 0)
+                self.assertFalse(os.get_inheritable(kept))
+                os.lseek(kept, 0, os.SEEK_SET)
+                self.assertEqual(os.read(kept, 100), b'control')
+                os.fstat(kept)
+            finally:
+                os.close(kept)
+                os.close(hidden)
+
+    def test_default_does_not_inherit_even_an_inheritable_fd(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            descriptor = os.open(root / 'private', os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                os.set_inheritable(descriptor, True)
+                script = (f'import os\ntry: os.fstat({descriptor})'
+                          '\nexcept OSError: pass'
+                          '\nelse: raise SystemExit("default FD leaked")')
+                result = run([sys.executable, '-c', script], cwd=root, env=None,
+                             log=root / 'run.log', timeout=5, memory_limit=None)
+                self.assertEqual(result.returncode, 0)
+                os.fstat(descriptor)
+            finally:
+                os.close(descriptor)
 
 
 if __name__ == '__main__':

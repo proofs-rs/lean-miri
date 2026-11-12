@@ -49,6 +49,14 @@ private def check : IO Unit := do
   match hooks.hostFromRaw 11 () with
   | .error (.unsupported "raw host conversion remains unsupported") _ => pure ()
   | _ => throw (IO.userError "raw host conversion became available")
+  -- A transcript error with raw errno is not a simple-kind error. Even when
+  -- its kind has an available target sentinel, an absent real host errno
+  -- table must stop conversion before falling back to that sentinel. The
+  -- number here is synthetic input data, not a claimed host errno constant.
+  let observed : HostStdio.Error := ⟨.WouldBlock, some 11⟩
+  match IoError.hostErrorToErrnum hooks observed.toHost () with
+  | .error (.unsupported "host errno must not be queried for a simple-kind error") _ => pure ()
+  | _ => throw (IO.userError "raw transcript errno was dropped or guessed from its kind")
   IO.println "simple ErrorKind preserves kind/raw-none/unit; target lookup and unsupported boundaries passed"
 
 #eval check

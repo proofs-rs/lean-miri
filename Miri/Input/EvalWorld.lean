@@ -6,6 +6,7 @@ import Miri.Interpreter.IntrinsicSymbolsMachine
 import Miri.Interpreter.ExecutionChoices
 import Miri.Interpreter.ExecutionSafety
 import Miri.Interpreter.ValidityMachine
+import Miri.Interpreter.HostStdioReplay
 
 /-! Single persistent storage composition for the canonical interpreter. No
 address/type/function/callback table is mirrored for compiler or GC adapters. -/
@@ -23,12 +24,27 @@ structure World (Os R Payload H D O Aff B Host : Type) where
   /-- The source machine's persistent tracked allocation set. This is shared
   by Miri tracking shims; it is not an allocation identity conversion table. -/
   trackedAllocations : Array AllocId := #[]
+  /-- Disabled unless a caller installs the typed standard-stream replay
+  capability. Neither choices nor PRNG state are used for host observations. -/
+  stdioReplay : Option HostStdio.Replay := none
   backend : RaceMode.Selection B
   host : Host
 abbrev User (Os R Payload H D O Aff B Host : Type) :=
   ThreadStacks.Storage (PointerMachine.User (ValidityMachine.Control (World Os R Payload H D O Aff B Host)))
 abbrev State (Os R Payload H D O Aff B Host : Type) :=
   MachineHooks.State MiriMemoryKind (User Os R Payload H D O Aff B Host)
+
+def stdioReplayAccess : HostStdio.Access (World Os R Payload H D O Aff B Host) :=
+  ⟨(·.stdioReplay), fun world replay => {world with stdioReplay := replay}⟩
+
+theorem stdioReplayAccess_get_put (world : World Os R Payload H D O Aff B Host) (replay) :
+    stdioReplayAccess.get (stdioReplayAccess.put world replay) = replay := rfl
+
+theorem stdioReplayAccess_put_get (world : World Os R Payload H D O Aff B Host) :
+    stdioReplayAccess.put world (stdioReplayAccess.get world) = world := rfl
+
+theorem stdioReplayAccess_preserves_choices (world : World Os R Payload H D O Aff B Host) (replay) :
+    (stdioReplayAccess.put world replay).choices = world.choices := rfl
 
 def addresses : FunctionPointers.AddressLens (User Os R Payload H D O Aff B Host)
     (ValidityMachine.Control (World Os R Payload H D O Aff B Host)) where
