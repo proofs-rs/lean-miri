@@ -115,4 +115,9 @@ def eraseAndAnonymizeScoped (fuel : Nat) (term : Term) : Except String Term := d
   validateWith true #[] fuel result
   pure result
 
+/-- TypeId hashing accepts open compiler subterms. Local binders validate and
+anonymize their owned regions; escaping regions retain their raw identities.
+This operation does not establish closedness for normalization or solver use. -/
+def eraseAndAnonymizeOpen (fuel : Nat) (term : Term) : Except String Term := erase false fuel term
+
 end Miri.Input.BinderRegions

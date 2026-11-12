@@ -199,7 +199,7 @@ pub(super) struct CompilerFacts {
     pub adt: Option<AdtFacts>,
     pub capture_names: Option<Vec<Option<String>>>,
     pub simd_size_and_type: Option<Simd>,
-    pub discriminants: Shared<Discriminants>,
+    pub discriminants: Option<Shared<Discriminants>>,
     pub projection_queries: Option<ProjectionQueries>,
     pub definition: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]

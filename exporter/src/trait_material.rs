@@ -141,7 +141,8 @@ fn declaration(tcx: TyCtxt<'_>, definition: DefId, constructors: &std::collectio
         for item in tcx.associated_items(definition).in_definition_order() {
             let kind = match item.kind {ty::AssocKind::Type{..}=>"type",ty::AssocKind::Fn{..}=>"function",ty::AssocKind::Const{..}=>"constant"};
             members.push(json!({"definition":identity(item.def_id),"kind":kind,
-                "has_value":item.defaultness(tcx).has_value(),"is_final":item.defaultness(tcx).is_final()}));
+                "has_value":item.defaultness(tcx).has_value(),"is_final":item.defaultness(tcx).is_final(),
+                "is_method":item.is_method(),"is_impl_trait_in_trait":item.is_impl_trait_in_trait()}));
         }
     }
     let super_predicates = tcx.explicit_super_clauses_of(definition).skip_binder().iter()
@@ -166,7 +167,8 @@ impl State {
         let mut state = Self::default();
         for language_item in [rustc_attr_ir::LangItem::Freeze,rustc_attr_ir::LangItem::Unpin,
             rustc_attr_ir::LangItem::UnsafeUnpin,rustc_attr_ir::LangItem::Sized,
-            rustc_attr_ir::LangItem::Copy,rustc_attr_ir::LangItem::Clone] {
+            rustc_attr_ir::LangItem::MetaSized,rustc_attr_ir::LangItem::Unsize,
+            rustc_attr_ir::LangItem::DispatchFromDyn,rustc_attr_ir::LangItem::Copy,rustc_attr_ir::LangItem::Clone] {
             if let Some(definition) = tcx.lang_items().get(language_item) { state.pending.insert((definition.krate.as_u32(),definition.index.as_u32()),definition); }
         }
         state
@@ -227,11 +229,22 @@ impl State {
         }
         Ok(references)
     }
-    /// Demand raw RHS expressions only for associated declarations occurring in
-    /// retained source expressions. Headers alone never demand member signatures.
+    /// Demand raw source signatures and predicate scopes for retained trait
+    /// methods. These declarations drive dyn eligibility, not selected-method
+    /// or compiler-computed vtable-entry answers. Associated RHS demand remains
+    /// tied to associated declarations occurring in source expressions.
     pub(super) fn rhs_demands(&self, tcx: TyCtxt<'_>, demanded: &std::collections::HashSet<DefId>, scopes: &mut Vec<DefId>) -> Result<Vec<DefId>, String> {
         let mut result = Vec::new();
         for source in self.emitted.values() {
+            let trait_definition = read_identity(&source["definition"])?;
+            if !source["is_alias"].as_bool().unwrap_or(false) {
+                for item in tcx.associated_items(trait_definition).in_definition_order() {
+                    if item.is_fn() && !item.defaultness(tcx).is_final() {
+                        result.push(item.def_id);
+                        scopes.push(item.def_id);
+                    }
+                }
+            }
             // These are the retained source expressions needed for matching
             // and obligations. Member header identities are deliberately absent.
             super::generic_definition_references(&source["super_predicates"], &mut result)?;

@@ -118,6 +118,9 @@ private def normalizeCached (context : AliasRuntime.Context) (work : Nat) :
           let inputs ← signature.inputs.mapM (normalizeCached context work fuel)
           let output ← normalizeCached context work fuel signature.output
           pure (.functionPointer {signature with inputs, output})
+        | .patternType base pattern => do
+          let pattern ← liftM (pattern.mapConstants (normalizeConstant context (fuel + 1) work) (fuel + 1))
+          pure (.patternType (← normalizeCached context work fuel base) pattern)
         | .slice child => pure (.slice (← normalizeCached context work fuel child))
         | .tuple children => pure (.tuple (← children.mapM (normalizeCached context work fuel)))
         | .array child length => pure (.array (← normalizeCached context work fuel child)

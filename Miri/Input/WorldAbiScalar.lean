@@ -1,4 +1,5 @@
 import Miri.Input.WorldReferenceAbi
+import Miri.Input.WorldBoxAbi
 
 namespace Miri.Input.WorldAbiScalar
 open Miri.ABI GenericSubstitution
@@ -15,6 +16,10 @@ def classify (runtime : RuntimeMetadata) (session : AbiSessionMaterial) (definit
     match ← arena.lookupType id with
     | .constructed constructor => pure (some constructor)
     | .material source => arena.materialKey source
+  if let some (.adt _ arguments) := constructor then
+    let declaration ← RuntimeArrayTypes.liftType (RuntimeMetadata.adtDeclarationInWorld runtime id)
+    if declaration.langItem == some "owned_box" then
+      return ← WorldBoxAbi.classify session isReturn layout arguments
   if let some (.reference pointee mutability _) := constructor then
     return ← WorldReferenceAbi.classify session definition isReturn layout pointee mutability
   if constructor.any (fun constructor => match constructor with

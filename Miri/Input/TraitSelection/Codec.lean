@@ -185,12 +185,18 @@ private def readImplementation (template : DefinitionIdentity → Except String 
   pure {definition, parameters, traitRef, polarity, isDefault, associatedValues, methods, constants}
 
 private def readMember (value : Json) : Except String TraitMember := do
-  keys value ["definition", "kind", "has_value", "is_final"]
+  keys value ["definition", "kind", "has_value", "is_final", "is_method", "is_impl_trait_in_trait"]
   let kind ← (← value.getObjVal? "kind").getStr?
   unless ["type", "function", "constant"].contains kind do throw "unknown source associated member kind"
+  let isMethod ← (← value.getObjVal? "is_method").getBool?
+  let isImplTraitInTrait ← (← value.getObjVal? "is_impl_trait_in_trait").getBool?
+  unless kind == "function" || !isMethod do throw "nonfunction source member claims a receiver"
+  unless kind == "type" || !isImplTraitInTrait do throw "nontype source member claims RPITIT origin"
   return {
     definition := ← GenericMaterialCodec.readDefinition (← value.getObjVal? "definition")
     kind
+    isMethod
+    isImplTraitInTrait
     hasValue := ← (← value.getObjVal? "has_value").getBool?
     isFinal := ← (← value.getObjVal? "is_final").getBool? }
 

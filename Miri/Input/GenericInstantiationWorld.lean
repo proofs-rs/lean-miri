@@ -142,6 +142,9 @@ def reifyType (world : World) : Nat → TypeId → ReifyM Term
         pure (.node .type "reference"
           (if mutability == .Mut then "mutable" else "immutable")
           (.cons (← liftReify (ofRegion world region)) (.cons (← child pointee) .nil)))
+      | .patternType base pattern => do
+        pure (.node .type "pattern" "" (.cons (← child base)
+          (.cons (← pattern.write (reifyConstant world fuel) fuel) .nil)))
       | .slice element => do
         pure (.node .type "slice" "" (.cons (← child element) .nil))
       | .tuple elements => do
@@ -274,6 +277,8 @@ def constructType : Nat → Term → ConstructM TypeId
       | .node .type "reference" mutTag (.cons region (.cons child .nil)) => do
         let region ← lift (resolveRegion (← getThe World) region)
         pure (.reference (← constructType fuel child) (← lift (mutability mutTag)) region)
+      | .node .type "pattern" "" (.cons base (.cons pattern .nil)) => do
+        pure (.patternType (← constructType fuel base) (← CompilerPattern.read (constructConstant fuel) fuel pattern))
       | .node .type "slice" "" (.cons child .nil) => do
         pure (.slice (← constructType fuel child))
       | .node .type "tuple" "" children => do

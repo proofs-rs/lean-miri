@@ -3333,7 +3333,7 @@ fn type_compiler_facts_json<'tcx>(
         adt,
         capture_names,
         simd_size_and_type,
-        discriminants: discriminant_facts_json(context, tcx, normalized)?.into(),
+        discriminants: discriminant_facts_json(context, tcx, normalized, true)?.map(Into::into),
         projection_queries: projection_queries::export(tcx, context, input)?,
         definition: match input.kind() {
             ty::Adt(def, _) => Some(def_json(context, def.did())),
@@ -6895,11 +6895,26 @@ fn discriminant_facts_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     input: ty::Ty<'tcx>,
-) -> Result<pool_type::Discriminants, String> {
+    allow_raw_default_enum: bool,
+) -> Result<Option<pool_type::Discriminants>, String> {
     use rustc_middle::ty::CoroutineArgsExt;
+    // Raw default declarations suffice even when their physical layout remains
+    // residual. Never acquire/copy a computed discriminant catalog for them.
+    if let ty::Adt(def, _) = input.kind() {
+        if allow_raw_default_enum && def.is_enum() && def.variants().iter().all(|variant|
+            matches!(variant.discr, ty::VariantDiscr::Relative(_))) {
+            if std::env::var_os("LEAN_MIRI_DISCRIMINANT_QUERY_TRACE").is_some() {
+                eprintln!("lean_miri_discriminant_call queried=false type={input:?}");
+            }
+            return Ok(None);
+        }
+    }
     let (values, count) = match input.kind() {
         ty::Adt(def, _) => {
             let values = if def.is_enum() {
+                if std::env::var_os("LEAN_MIRI_DISCRIMINANT_QUERY_TRACE").is_some() {
+                    eprintln!("lean_miri_discriminant_call queried=true type={input:?}");
+                }
                 Some(def.discriminants(tcx).collect::<Vec<_>>())
             } else {
                 None
@@ -6927,11 +6942,12 @@ fn discriminant_facts_json<'tcx>(
                 context,
                 tcx,
                 tcx.instantiate_bound_regions_with_erased((*bound).into()),
+                false, // Binder erasure remains an explicit material residual.
             );
         }
         _ => (None, None),
     };
-    Ok(pool_type::Discriminants {
+    Ok(Some(pool_type::Discriminants {
         has_discriminants: values.is_some(),
         adt_variant_count: count,
         values: values
@@ -6945,7 +6961,7 @@ fn discriminant_facts_json<'tcx>(
                 })
             })
             .collect::<Result<_, String>>()?,
-    })
+    }))
 }
 
 // interpret/traits.rs::get_vtable_ptr, before source salt/reservation effects.

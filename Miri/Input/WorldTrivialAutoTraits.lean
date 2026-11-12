@@ -20,7 +20,7 @@ private def visit (world : World) : Nat → TypeId → QueryM Bool
           | .integer .. | .float _ | .bool | .char | .str | .never
           | .reference .. | .rawPointer .. | .functionDefinition .. | .functionPointer .. => return true
           | .tuple children => pure (some children)
-          | .slice child | .array child _ => pure (some #[child])
+          | .patternType child _ | .slice child | .array child _ => pure (some #[child])
           | _ => pure none
       let some children := children | return false
       for child in children do unless ← visit world fuel child do return false

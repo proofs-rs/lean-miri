@@ -8,6 +8,7 @@ import re
 parser = argparse.ArgumentParser()
 parser.add_argument("oracle")
 parser.add_argument("candidate")
+parser.add_argument("--unsupported-name", default="unused")
 args = parser.parse_args()
 pattern = re.compile(r"^lean_miri_instance_abi_call route=(\S+) queried=(true|false) instance=(.*)$")
 
@@ -37,10 +38,10 @@ for identity in sorted(identities):
     if not old or new or not raw:
         raise SystemExit(f"ABI query elimination failed: before={old}, after={new}, raw={raw}: {identity}")
     print(f"PASS complete identity ABI key: explicit calls {old}->0; raw requests {raw}: {identity}")
-if not any(queried and "::unused)" in identity for _, queried, identity in candidate):
-    raise SystemExit("missing unsupported generic-argument residual ABI control")
-if any(not queried and "::unused)" in identity for _, queried, identity in candidate):
-    raise SystemExit("unsupported generic argument escaped the raw signature reification boundary")
-print("PASS unused dynamic generic argument keeps its explicit ABI query")
+if not any(queried and f"::{args.unsupported_name})" in identity for _, queried, identity in candidate):
+    raise SystemExit("missing unsupported residual ABI control")
+if any(not queried and f"::{args.unsupported_name})" in identity for _, queried, identity in candidate):
+    raise SystemExit("unsupported signature escaped the raw ABI capability boundary")
+print(f"PASS unsupported {args.unsupported_name} signature keeps its explicit ABI query")
 for label, rows in [("oracle", oracle), ("candidate", candidate)]:
     print(label, dict(Counter((route, queried) for route, queried, _ in rows)))

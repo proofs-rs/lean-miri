@@ -20,7 +20,7 @@ sha256sum "$ORACLE" "$CANDIDATE" > "$OUT/binaries.sha256"
 for version in oracle candidate; do
   binary="$CANDIDATE"
   [[ "$version" != oracle ]] || binary="$ORACLE"
-  LEAN_MIRI_LAYOUT_QUERY_TRACE=1 "$binary" --output "$OUT/$version.json" \
+  LEAN_MIRI_LAYOUT_QUERY_TRACE=1 LEAN_MIRI_DISCRIMINANT_QUERY_TRACE=1 "$binary" --output "$OUT/$version.json" \
     --root enum_layouts -- tests/repro/compiler-queries/enum-layouts.rs \
     --crate-type=lib --crate-name=enum_layouts -Zmir-opt-level=0 \
     > "$OUT/$version.stdout" 2> "$OUT/$version.trace"
@@ -30,9 +30,12 @@ done
   --crate-name=enum_layouts -Zmir-opt-level=0 \
   > "$OUT/base.stdout" 2> "$OUT/base.trace"
 if [[ "${ENUM_LAYOUT_SKIP_BUILD:-0}" != 1 ]]; then
-  flock /tmp/lean-miri-lake-build.lock lake build Miri.Input.Decoder Miri.Input.RuntimeMetadata
+  flock /tmp/lean-miri-lake-build.lock lake build Miri.Input.Decoder Miri.Input.RuntimeMetadata Miri.Input.CompilerDiscriminantFacts
 fi
 lake env lean --run tests/compiler_queries/EnumLayoutCalculator.lean "$OUT/oracle.json"
+lake env lean tests/compiler_queries/RelativeDiscriminants.lean
+lake env lean --run tools/CompareRelativeDiscriminants.lean "$OUT/candidate.json" "$OUT/oracle.json"
+lake env lean --run tools/CheckWorldPrimitives.lean "$OUT/candidate.json"
 lake env lean --run tests/compiler_queries/EnumLayouts.lean \
   "$OUT/oracle.json" "$OUT/candidate.json" "$OUT/base.json"
 python3 - "$OUT" <<'PY'
@@ -49,5 +52,12 @@ for recipe in recipes:
     # the Lean layout oracle compares complete typed physical identities.
     expected='lean_miri_layout_call route=canonical queried=false type='+node['display']
     assert expected in trace, ('raw enum called material layout query',node['display'])
+covered=[node for node in candidate['types']
+         if node.get('compiler_facts',{}).get('discriminants','absent') is None]
+assert len(covered)>=20, 'raw relative enum discriminant catalogs were copied'
+for node in covered:
+    expected='lean_miri_discriminant_call queried=false type='+node['display']
+    assert expected in trace, ('covered discriminant call was not suppressed',node['display'])
+print('raw relative discriminant query/copy suppression PASS',len(covered))
 print('raw enum explicit layout-query suppression PASS',len(recipes))
 PY

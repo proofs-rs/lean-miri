@@ -49,6 +49,23 @@ alias arguments still require binder opening and reabstraction. Quantified
 type/constant assumptions, inferred outlives, general builtin candidates,
 specialization and coinductive quantified goals remain unresolved.
 
+Source providers now derive covered vtable own-method eligibility from raw
+associated-item flags, signatures and canonical predicate scopes. Ten actual
+compiler declarations distinguish five entries and five exclusions, including
+indirect Self:Sized, auto-trait and outlives cases. Receiver dispatch is proved
+from raw DispatchFromDyn implementations and scoped caller bounds; five kernel
+controls check scoped entailment and malformed source ownership. Ordered raw
+supertraits and these own methods feed World segment traversal: 32 complete
+compiler arrangements cover both explicit no-trait-vptr policies and distinct
+generic supertrait instances. Both query consumers remove compiler predicate
+normalization and vtable answer rows before execution. Missing signatures,
+scopes, receiver impl material and lang items, source placeholders, required
+member flags and mismatched oracle/policy controls reject. Real runtime vtable
+allocation/upcasting and method-instance/shim resolution remain separate work.
+Generic receiver alias normalization, abstract-constant expansion and raw crate
+feature/session policy material remain unresolved; unavailable semantics error
+instead of silently omitting entries.
+
 Binder-free Item signatures can construct x86_64 Rust scalar/ZST FnAbi in the
 same World from raw signatures and codegen/panic flags. Twenty complete compiler
 comparisons cover abort/unwind policies, including constructed instances with
@@ -61,8 +78,16 @@ Twenty additional complete ABIs exercise source-derived Freeze/Unpin branches
 for ADT, array and tuple pointees, with the same four-call elimination per key.
 An independent empty-catalog World constructs a novel array reference at both
 optimization settings. Raw ABI session absence and unsupported fat
-references reject. Box/aggregate/foreign/other-target ABI and eager enumeration
-remain unresolved. Thin raw-pointer and binder-free FnPtr scalars additionally pass
+references reject. Thin Box ABI additionally derives pointee/allocator attributes
+from raw owned-box/global-allocator identities and source Unpin/UnsafeUnpin
+proofs. Forty complete compiler comparisons cover optimization and box-noalias
+settings, global/custom allocators and pinned/interior-mutable pointees. An
+independent source base constructs a novel array, Box and instance with no ABI
+answer catalogs; both allocator cases agree. Ten covered keys eliminate four
+explicit calls each. Source boolean controls distinguish eight global from three
+custom allocator cases. Fat Boxes and nonempty/overaligned allocators remain
+exact residuals; constructed collisions and wrong targets reject. Aggregate,
+foreign/other-target ABI and eager enumeration remain unresolved. Thin raw-pointer and binder-free FnPtr scalars additionally pass
 twenty complete rustc comparisons; all forty scalar/pointer comparisons also
 cover constructed instances without result catalogs. A separate base world
 constructs a new array, pointer and instance outside the source prefixes and
@@ -77,8 +102,15 @@ Covered dummy-signature helper ABI also runs on demand: 264 complete comparisons
 agree, all sixty-six observed helper keys eliminate their one explicit call,
 and eighteen pointer keys eliminate one or two calls. The old hundred complete
 Item/scalar/reference comparisons still pass. Foreign pointer ABI remains an
-exact material residual; constructed/colliding identities reject. General Box,
-aggregate, foreign/variadic and other-target ABI remain unresolved.
+exact material residual; constructed/colliding identities reject. General fat/nontrivial-allocator Box, aggregate, foreign/variadic and other-target
+ABI remain unresolved.
+
+The execution World now interns complete Pattern base/Range/Or/NotNull syntax
+and retains endpoint constant identities. Novel/material roundtrip, ambiguity,
+collision, missing-constant, flags and malformed/fuel controls pass. Runtime
+layout uses the same checked source algorithm for material and constructed
+patterns. Constructed Pattern hash/name printing remains explicitly unsupported;
+non-Value endpoints still require CTFE.
 
 Pattern Range, NotNull and signed Or layouts now
 use raw recipes; six complete compiler comparisons and malformed controls pass,
@@ -133,10 +165,11 @@ FnDef syntax, arrays and recursive Value constants, including empty-prefix
 reconstruction and malformed/missing-source controls. Twelve closed FnPtr and
 region-only bound FnDef compiler hashes additionally match whole-root
 anonymization and empty-prefix reconstruction, with malformed binders/headers
-and mutated-oracle controls. Two escaping open FnPtr subterms remain explicitly
-Unsupported: the independent raw eligibility check excludes them, while the
-separate erasable-regions omission still leaves no fallback hash. General open
-bound hashing and alignment of those omission conditions remain unresolved.
+and mutated-oracle controls. Seven complete escaping-region compiler hashes cover
+two open FnPtr subterms, Anon, physical Named, UTF-8 NamedForPrinting, ClosureEnv
+and Canonical identities in material and empty-prefix Worlds. The producer raw
+eligibility predicate covers this domain; local binders still validate their
+owned variables and closed normalization still rejects escaping regions.
 Dyn, type/constant binders, aliases,
 closures/coroutines and non-Value constant hashes, full validity and allocation
 identity/dedup reconstruction remain unresolved. These comparisons do

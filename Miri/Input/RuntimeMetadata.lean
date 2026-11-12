@@ -6,6 +6,7 @@ import Miri.Input.TermSized
 import Miri.Input.TraitSelection.EnvironmentEntailment
 import Miri.Input.WorldNormalization
 import Miri.Input.WorldTypeMetadata
+import Miri.Input.RelativeDiscriminants
 import Miri.Input.SequenceLayoutMaterial
 import Miri.ABI.SequenceLayout
 import Miri.Input.StructuralNormalization
@@ -623,6 +624,10 @@ mutual
       | .reference pointee .. => do
         let metadata ← liftWorld (worldMetadata normalization target fuel pointee)
         lift (PrimitiveLayout.pointer target true metadata)
+      | .patternType base pattern => do
+        let baseLayout ← worldLayoutType normalization target layouts fuel base
+        let world ← liftWorld get
+        lift (PatternLayoutMaterial.compute world.lookupConstant target base baseLayout pattern)
       | .adt .. => worldAdtLayout normalization target layouts fuel id
       | .functionDefinition .. | .foreign .. =>
         pure {
@@ -657,13 +662,10 @@ mutual
                 WorldNormalization.resolveNormalizedTerm context (fuel * (fuel + 1)) fuel term
           types.mapM (worldLayoutType normalization target layouts fuel)
         let integerRepr ← lift (declaration.representation.integer.mapM worldEnumInteger)
-        let values := declaration.variants.map fun variant => match variant.discriminant with
-          | .relative distance => some (BitVec.ofNat 128 distance)
-          | .explicit _ => none
-        -- Explicit discriminants remain a CTFE obligation. The optimized
-        -- empty/single-present branch does not inspect their values.
-        let discriminants := if values.all Option.isSome then values.filterMap (fun value => value) else #[]
-        return ← lift (EnumLayout.compute target variants repr integerRepr discriminants niches)
+        -- Explicit expressions remain a CTFE obligation; optimized empty/single
+        -- branches do not inspect their values.
+        let discriminants ← lift (RelativeDiscriminants.values (target.pointerSize.bytes.toNat * 8) declaration)
+        return ← lift (EnumLayout.compute target variants repr integerRepr (discriminants.getD #[]) niches)
       let types ← liftWorld (worldAdtFields normalization fuel id 0)
       let fields ← types.mapM (worldLayoutType normalization target layouts fuel)
       if declaration.kind == .unionKind then return ← lift (UnionLayout.compute target fields repr)
@@ -701,20 +703,7 @@ mutual
         let .patternType base pattern := node.shape
           | throw "pattern recipe source is not a pattern"
         let baseLayout ← worldLayoutType normalization target layouts fuel base
-        match pattern with
-        | .notNull => return ← lift (PatternLayout.notNull target baseLayout)
-        | .range start finish =>
-          let start ← lift (PatternLayoutMaterial.endpoint world.lookupConstant base baseLayout.size.bytes.toNat start)
-          let finish ← lift (PatternLayoutMaterial.endpoint world.lookupConstant base baseLayout.size.bytes.toNat finish)
-          return ← lift (PatternLayout.range target baseLayout start finish)
-        | .or patterns =>
-          let ranges ← patterns.mapM fun pattern => do
-            let .range start finish := pattern
-              | throw "Or pattern contains a non-range source pattern"
-            let start ← lift (PatternLayoutMaterial.endpoint world.lookupConstant base baseLayout.size.bytes.toNat start)
-            let finish ← lift (PatternLayoutMaterial.endpoint world.lookupConstant base baseLayout.size.bytes.toNat finish)
-            pure (start,finish)
-          return ← lift (PatternLayout.orRanges target baseLayout ranges)
+        return ← lift (PatternLayoutMaterial.compute world.lookupConstant target base baseLayout pattern)
       if let some ty := source.sequenceType then
         let key ← liftWorld (worldConstructor ty)
         unless (match key with | .array .. | .slice .. | .str => true | _ => false) do
@@ -925,17 +914,7 @@ def queries (metadata : RuntimeMetadata) : LayoutQueries TypeId := {
 
 /-- Read-only constructor classification; this operation never interns a type. -/
 def shapeKindInWorld (_metadata : RuntimeMetadata) (id : TypeId) : TypeArena.WorldM TypeShapeKind := do
-  let world ← get
-  match ← lift (world.lookupType id) with
-  | .material node => pure node.shapeKind
-  | .constructed key => pure (match key with
-    | .bool => .bool | .char => .char | .str => .str | .never => .never
-    | .integer true _ => .int | .integer false _ => .uint | .float _ => .float
-    | .rawPointer .. => .rawPointer | .reference .. => .reference | .slice .. => .slice
-    | .tuple .. => .tuple | .array .. => .array | .adt .. => .adt | .foreign .. => .foreign
-    | .functionDefinition .. => .functionDefinition | .functionPointer .. => .functionPointer
-    | .alias .. => .alias
-    | .closure .. => .closure | .coroutineClosure .. => .coroutineClosure | .coroutine .. => .coroutine)
+  lift ((← get).shapeKind id)
 
 def packedAlignInWorld (_metadata : RuntimeMetadata) (id : TypeId) : TypeArena.WorldM (Option Align) := do
   let world ← get
@@ -975,6 +954,9 @@ def fieldTypeInWorld (_metadata : RuntimeMetadata) (id variant index : Nat) : Ty
       pure field
     | .array element _ | .slice element => pure element
     | .str => TypeArena.World.internType (.integer false .u8)
+    | .patternType base _ =>
+      unless index == 0 do throw "constructed pattern has only its base field"
+      pure base
     | _ => throw "constructed type field constructor is not implemented"
 
 def metadataTailInWorld (metadata : RuntimeMetadata) (id : TypeId) : TypeArena.WorldM TypeId := do

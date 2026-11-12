@@ -67,6 +67,8 @@ structure TraitMember where
   kind : String
   hasValue : Bool
   isFinal : Bool
+  isMethod : Bool
+  isImplTraitInTrait : Bool
   deriving Repr, DecidableEq
 
 structure Impl where

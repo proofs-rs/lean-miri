@@ -2,6 +2,7 @@ import Miri.ABI.PackedExternAbi
 import Miri.Input.Model
 import Miri.Input.TypeArenaCheckedMaterial
 import Miri.Input.RawFunctionSignature
+import Miri.Input.PatternSyntax
 
 /-! The execution-owned type and constant constructor universe. Nodes store
 one constructor plus existing child IDs; repeated children never duplicate a
@@ -27,6 +28,7 @@ inductive Constructor where
   | float (kind : FloatTypeTag)
   | rawPointer (pointee : TypeId) (mutability : MIR.Mutability)
   | reference (pointee : TypeId) (mutability : MIR.Mutability) (region : MIR.Region)
+  | patternType (base : TypeId) (pattern : CompilerPattern)
   | slice (element : TypeId)
   | tuple (elements : Array TypeId)
   | array (element : TypeId) (length : TypeConstantId)
@@ -99,6 +101,7 @@ def Constructor.shapeKind : Constructor → TypeShapeKind
   | .bool => .bool | .char => .char | .str => .str | .never => .never
   | .integer true _ => .int | .integer false _ => .uint | .float _ => .float
   | .rawPointer .. => .rawPointer | .reference .. => .reference | .slice .. => .slice
+  | .patternType .. => .patternType
   | .tuple .. => .tuple | .array .. => .array | .adt .. => .adt | .foreign .. => .foreign
   | .functionDefinition .. => .functionDefinition | .functionPointer .. => .functionPointer
   | .closure .. => .closure
@@ -128,6 +131,7 @@ def World.materialKey (world : World) (source : TypeNode) : Except String (Optio
   | .rawPointer child mutability => pure (some (.rawPointer child mutability))
   | .reference child mutability region => pure (some (.reference child mutability region))
   | .slice child => pure (some (.slice child))
+  | .patternType base pattern => pure (some (.patternType base pattern))
   | .tuple children => pure (some (.tuple children))
   | .array child length _ => pure (some (.array child length))
   | .adt data => return some (.adt (← world.identity data.definition) data.args)
@@ -166,6 +170,7 @@ private def Constructor.arguments : Constructor → Array MIR.GenericArg
 def Constructor.typeChildren (constructor : Constructor) : Array TypeId :=
   let direct := match constructor with
     | .rawPointer child _ | .reference child .. | .slice child | .array child _ => #[child]
+    | .patternType base _ => #[base]
     | .tuple children => children
     | .functionPointer signature => signature.inputs.push signature.output
     | _ => #[]
@@ -173,7 +178,10 @@ def Constructor.typeChildren (constructor : Constructor) : Array TypeId :=
     | .Type id => some id | _ => none)
 
 def Constructor.constantChildren (constructor : Constructor) : Array TypeConstantId :=
-  let direct := match constructor with | .array _ length => #[length] | _ => #[]
+  let direct := match constructor with
+    | .array _ length => #[length]
+    | .patternType _ pattern => pattern.constantChildren
+    | _ => #[]
   direct ++ constructor.arguments.filterMap (fun argument => match argument with
     | .Const id => some id | _ => none)
 

@@ -103,9 +103,9 @@ pub(super) fn freeze(document: &mut crate::ExportDocument) -> Result<(), String>
         pools
             .boolean_queries
             .share(&mut ty.compiler_facts.boolean_queries)?;
-        pools
-            .discriminants
-            .share(&mut ty.compiler_facts.discriminants)?;
+        if let Some(discriminants) = &mut ty.compiler_facts.discriminants {
+            pools.discriminants.share(discriminants)?;
+        }
     }
     for entry in &mut document.allocations {
         if let crate::allocation_values::Entry::Single(allocation) = entry {

@@ -48,6 +48,8 @@ private def trivialInWorld (world : TypeArena.World) : Nat → TyId → Except S
       | .rawPointer .. | .char | .reference .. | .coroutine .. | .array ..
       | .closure .. | .coroutineClosure .. | .never => pure true
     | .constructed constructor => match constructor with
+      -- Pinned stack.rs TyKind::Pat follows the original base type.
+      | .patternType base _ => trivialInWorld world fuel base
       | .tuple elements =>
         match elements.back? with
         | none => pure true

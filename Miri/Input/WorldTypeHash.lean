@@ -11,8 +11,8 @@ import Miri.Input.FunctionPointerStableHash
 structural domain hashes constructor syntax after free-region erasure. Nominal
 types use reconstructed DefKeys and raw ADT declarations. Value constants
 retain their declared types and ValTree syntax. Function-pointer headers and
-closed region binders are hashed from raw syntax. Unevaluated constants, open
-bound regions and non-region binders retain an explicit residual boundary. No
+region binders and escaping bound regions are hashed from raw syntax.
+Unevaluated constants and non-region binders retain an explicit residual boundary. No
 query answer is retained in the execution World. -/
 namespace Miri.Input.WorldTypeHash
 open TypeArena
@@ -26,20 +26,29 @@ private def integerTag : MIR.IntegerKind → Nat
 private def mutabilityTag : MIR.Mutability → Nat
   | .Not => 0 | .Mut => 1
 
-private def regionBytes (region : MIR.Region) : Except String (Option ByteArray) := do
-  match region with
-  | .Bound (.Bound depth) variableIndex .Anon =>
-    unless depth < 2^32 && variableIndex < 2^32 do throw "bound region index exceeds u32"
-    pure (some (tag 1 ++ tag 0 ++ littleEndian 4 depth ++ littleEndian 4 variableIndex ++ tag 0))
-  | .Bound .. => pure none
-  | _ => pure (some (tag 6))
-
 private def definitionBytes (world : World) (identity : GenericSubstitution.DefinitionIdentity) :
     Except String ByteArray := do
   let reference ← world.definitionRef identity
   let some source := world.definitions[reference]? | throw "type hash physical definition is absent"
   let some path := source.rawPath | throw "type hash raw definition path is absent"
   pure (littleEndian 16 (← DefinitionPathHash.query path).toNat)
+
+private def regionBytes (world : World) (region : MIR.Region) : Except String (Option ByteArray) := do
+  match region with
+  | .Bound indexKind variableIndex kind =>
+    unless variableIndex < 2^32 do throw "bound region variable exceeds u32"
+    let index ← match indexKind with
+      | .Bound depth =>
+        unless depth < 2^32 do throw "bound region depth exceeds u32"
+        pure (tag 0 ++ littleEndian 4 depth)
+      | .Canonical => pure (tag 1)
+    let kind ← match kind with
+      | .Anon => pure (tag 0)
+      | .NamedForPrinting name => pure (tag 1 ++ littleEndian 8 name.toUTF8.size ++ name.toUTF8)
+      | .Named reference => pure (tag 2 ++ (← definitionBytes world (← world.identity reference)))
+      | .ClosureEnv => pure (tag 3)
+    pure (some (tag 1 ++ index ++ littleEndian 4 variableIndex ++ kind))
+  | _ => pure (some (tag 6))
 
 mutual
 /-- Missing structural support is distinct from malformed source identity.
@@ -80,8 +89,7 @@ private def rawSourceBytes (world : World) (normalized : Bool) : Nat → TypeId 
           let some child ← rawSourceBytes world normalized fuel child | return none
           argumentBytes := argumentBytes ++ tag 1 ++ child
         | .Lifetime region =>
-          if let .Bound .. := region then unless normalized do return none
-          let some bytes ← regionBytes region | return none
+          let some bytes ← regionBytes world region | return none
           argumentBytes := argumentBytes ++ tag 0 ++ bytes
         | .Const child =>
           let some child ← constantBytes world normalized fuel child | return none
@@ -134,8 +142,7 @@ private def rawSourceBytes (world : World) (normalized : Bool) : Nat → TypeId 
       let some child ← rawSourceBytes world normalized fuel child | return none
       pure (some (tag 11 ++ child ++ tag (mutabilityTag mutability)))
     | .reference child mutability region =>
-      if let .Bound .. := region then unless normalized do return none
-      let some region ← regionBytes region | return none
+      let some region ← regionBytes world region | return none
       let some child ← rawSourceBytes world normalized fuel child | return none
       pure (some (tag 12 ++ region ++ child ++ tag (mutabilityTag mutability)))
     | .tuple children =>
@@ -216,19 +223,6 @@ private def constantNormalizationDomain (world : World) : Nat → TypeConstantId
     pure (true,needed)
 end
 
-/-- A compiler type may be an open subterm of a larger binder. Its enclosing
-binder is not available to this operation's region anonymizer yet. -/
-private def hasEscapingRegions : Nat → Nat → GenericSubstitution.Term → Except String Bool
-  | 0,_,_ => throw "type hash bound-region scope traversal exhausted"
-  | fuel + 1,depth,term => do
-    match term with
-    | .bound .region (.Bound index) .. => pure (index ≥ depth)
-    | .bound .region .Canonical .. => pure true
-    | .binder _ body => hasEscapingRegions fuel (depth + 1) body
-    | .node _ _ _ children | .definition _ _ _ children =>
-      children.anyM (hasEscapingRegions fuel depth)
-    | _ => pure false
-
 /-- Covered non-binder syntax hashes directly. Region binders are anonymized
 on the complete root in a query-local World; no normalized result is retained. -/
 def sourceBytes (world : World) (fuel : Nat) (id : TypeId) : Except String (Option ByteArray) := do
@@ -236,8 +230,7 @@ def sourceBytes (world : World) (fuel : Nat) (id : TypeId) : Except String (Opti
   let (supported,needed) ← normalizationDomain world fuel id
   unless supported && needed do return none
   let term ← GenericInstantiationWorld.ofType world fuel id
-  if ← hasEscapingRegions fuel 0 term then return none
-  let term ← BinderRegions.eraseAndAnonymize fuel term
+  let term ← BinderRegions.eraseAndAnonymizeOpen fuel term
   let (id,world) ← (GenericInstantiationWorld.resolveType fuel term).run world
   rawSourceBytes world true fuel id
 

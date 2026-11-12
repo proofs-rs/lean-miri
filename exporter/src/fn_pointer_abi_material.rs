@@ -61,6 +61,7 @@ pub(super) fn signature<'tcx>(tcx:TyCtxt<'tcx>, signature:ty::PolyFnSig<'tcx>,
         ty::Tuple(fields)=>fields.is_empty(),
         ty::RawPtr(child,_)|ty::Ref(_,child,_)=>super::instance_abi_material::sized_pointee(tcx,*child,256),
         ty::FnPtr(..)=>true,
+        ty::Adt(..)=>super::instance_abi_material::thin_box(tcx,input),
         _=>false,
     }).then_some(signature)
 }

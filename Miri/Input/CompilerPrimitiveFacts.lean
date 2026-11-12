@@ -10,7 +10,9 @@ private def referencedLayout (runtime : RuntimeMetadata) (id : TypeId) :
     Except String (TyAndLayout TypeId) :=
   runtime.lookup id |>.mapError toString
 
-/-- Read one exact compiler primitive query key; no type-name search occurs. -/
+/-- Read-only source-prefix adapter. Execution-owned queries construct these
+identities through WorldPrimitiveConstructor; this adapter retains legacy source
+layout consumers and never supplies synthetic-world identities. -/
 def primitiveType (runtime : RuntimeMetadata) (key : String) : Except String TypeId := do
   let p := runtime.source.queries.primitives
   let id ← match key with

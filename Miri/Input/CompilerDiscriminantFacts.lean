@@ -5,20 +5,26 @@ import Miri.Interpreter.Discriminant
 
 /-! Discriminant queries use the execution-owned type universe. Ordinary
 constructors and struct/union counts follow pinned ty/sty.rs and raw ADT
-metadata. Enum/coroutine value enumeration remains explicit material evidence;
-constructing an identity does not manufacture those unported CTFE results. -/
+metadata. Default enum values follow raw relative declarations in the active world.
+Explicit expressions and coroutine enumeration retain residual compiler evidence. -/
 namespace Miri.Input.CompilerDiscriminantFacts
 open Lean Miri.ABI Miri.Interpreter TypeArena
 private def lift [Monad m] [MonadExceptOf String m] (value : Except String α) : m α :=
   match value with | .ok value => pure value | .error error => throw error
 
-private def data (_context : CompilerFacts.Context) (id : TypeId) : WorldM DiscriminantInfo := do
+private def data (context : CompilerFacts.Context) (id : TypeId) : WorldM DiscriminantInfo := do
+  let id ← if (← lift ((← get).shapeKind id)) == .alias then
+      CompilerFacts.normalizeInWorld context id else pure id
   let world ← get
   let kind ← lift (world.shapeKind id)
+  if kind == .alias then throw "discriminant alias remained unresolved"
   if kind == .adt then
     let declaration ← WorldTypeMetadata.adtDeclaration id
     if declaration.kind != .enumKind then
       return ⟨false,some declaration.variantCount,#[]⟩
+    if let some values ← lift (RelativeDiscriminants.values (context.runtime.target.pointerSize.bytes.toNat * 8) declaration) then
+      let ty ← CompilerFacts.requiredTypeInWorld context id "discriminant_type"
+      return ⟨true,some declaration.variantCount,values.zipIdx.map fun (bits,index) => ⟨index,ty,bits.toNat⟩⟩
   else if kind != .coroutine && kind != .unsafeBinder then
     return ⟨false,none,#[]⟩
   match ← lift (world.lookupType id) with
@@ -27,6 +33,20 @@ private def data (_context : CompilerFacts.Context) (id : TypeId) : WorldM Discr
     unless facts.typingEnvironment == "fully_monomorphized" do
       throw "discriminant compiler environment mismatch"
     let some query := facts.discriminants | throw "missing discriminant compiler query"
+    if kind == .adt || kind == .coroutine then
+      unless query.hasDiscriminants do throw "enum/coroutine residual has no discriminants"
+      let count ← if kind == .adt then do
+          let declaration ← WorldTypeMetadata.adtDeclaration id
+          unless query.adtVariantCount == some declaration.variantCount do
+            throw "enum residual variant count differs from raw declaration"
+          pure declaration.variantCount
+        else do
+          unless query.adtVariantCount.isNone do throw "coroutine residual has an ADT variant count"
+          pure query.values.size
+      unless query.values.map (·.variant) == Array.range count do
+        throw "residual discriminant variant domain differs from raw source"
+      let ty ← CompilerFacts.requiredTypeInWorld context id "discriminant_type"
+      unless query.values.all (·.typeId == ty) do throw "residual discriminant type differs from raw representation"
     pure query
   | .constructed (.adt _ _) =>
     throw "constructed enum discriminant values require unported raw CTFE material"

@@ -5,6 +5,7 @@ import Miri.Input.WorldInhabitedness
 import Miri.Input.WorldNeedsDrop
 import Miri.Input.WorldTrivialAutoTraits
 import Miri.Input.WorldDiscriminantType
+import Miri.Input.WorldPrimitiveConstructor
 
 /-! Execution compiler queries. Every constructor/layout action runs in the
 caller's one WorldM; source-only query functions are never synthetic-ID fallbacks. -/
@@ -34,9 +35,7 @@ def normalizeInWorld (context : Context) (id : TypeId) : WorldM TypeId := do
   WorldNormalization.normalizeType context.runtime.normalizationContext 10000 (← queryFuel) id
 
 def primitiveTypeInWorld (context : Context) (key : String) : WorldM TypeId := do
-  let id ← worldLift (CompilerPrimitiveFacts.primitiveType context.runtime key)
-  let _ ← worldLift ((← get).lookupType id)
-  pure id
+  WorldPrimitiveConstructor.query context.runtime.target key
 
 def layoutOfInWorld (context : Context) (id : TypeId) : WorldM (TyAndLayout TypeId) :=
   RuntimeMetadata.layoutInWorld context.runtime id
@@ -90,7 +89,7 @@ def booleanInWorld (context : Context) (id : TypeId) (key : String) : WorldM Boo
     let some allocator := args[1]? | return true
     let .Type allocator := allocator | throw "Box allocator argument is not a type"
     unless (← worldLift ((← get).shapeKind allocator)) == .adt do return false
-    return (← RuntimeMetadata.adtDeclarationInWorld context.runtime allocator).langItem == some "global_alloc"
+    return (← RuntimeMetadata.adtDeclarationInWorld context.runtime allocator).langItem == some "global_alloc_ty"
   throw s!"unsupported compiler world boolean query: {key}"
 
 private def queryView (id : TypeId) : WorldM TypeId := do
@@ -113,10 +112,9 @@ def optionalTypeInWorld (context : Context) (id : TypeId) (key : String) : World
   let result ← if key == "normalized" then
       pure (some (← normalizeInWorld context id))
     else if key == "discriminant_type" then do
-      let root ← normalizeInWorld context id
       pure (some (← WorldDiscriminantType.query {
         primitive := primitiveTypeInWorld context,
-        normalize := fun _ ty => normalizeInWorld context ty } (← queryFuel) root))
+        normalize := fun _ ty => normalizeInWorld context ty } (← queryFuel) id))
     else if key == "metadata_tail" then
       pure (some (← RuntimeMetadata.metadataTailInWorld context.runtime id))
     else if key == "pointer_metadata_type" then

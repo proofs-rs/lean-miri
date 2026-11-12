@@ -3,6 +3,7 @@ import Miri.Input.TraitSelection.Substitution
 import Miri.Input.TraitSelection.RelevantImpl
 import Miri.Input.TraitSelection.StructuralCycle
 import Miri.Input.TraitSelection.EnvironmentEntailment
+import Miri.Input.TraitSelection.ScopedEnvironmentEntailment
 
 /-! Selection and nested-obligation fulfillment over complete raw impl catalogs.
 Pinned rustc candidate assembly/confirmation first relates an impl head, then
@@ -122,8 +123,10 @@ private def solveCore (program : Program) (hooks : Hooks) (environment : Environ
       unless source.builtin == some .sized || source.builtin == some .metaSized do
         throw "dynamic trait goals require object candidate assembly"
     if goal.polarity == .positive && !environment.assumptions.isEmpty then
-      let proof ← liftM (EnvironmentEntailment.entails program #[] environment.assumptions (fuel + 1)
-        ⟨#[],.trait goal⟩)
+      let proof ← liftM (if universeIndex == 0 then
+        EnvironmentEntailment.entails program #[] environment.assumptions (fuel + 1) ⟨#[],.trait goal⟩
+        else ScopedEnvironmentEntailment.entails program universeIndex environment.assumptions (fuel + 1)
+          ⟨#[],.trait goal⟩ environment.eraseRegions)
       if let some proof := proof then return .proven (.sourceEnvironment proof)
     if active.any (fun prior => decide (prior = goal)) then
       if universeIndex != 0 then
