@@ -287,19 +287,12 @@ def fromRuntime [DecidableEq MiriMemoryKind]
     throw (.invalidProgram "Unix environment and poll communication policies disagree")
   let files ← EvalUnixIoConstruction.filesFromSource p memory.access memory.pointers
     hostFiles otherFiles
-  let registry := EvalUnixIoConstruction.fileRegistry
+  let readinessRegistry := EvalUnixIoConstruction.sourceRegistry
     (Os := Os) (R := R) (P := P) (H := H) (D := D) (Aff := Aff) (B := B)
     (Poll := Poll) (Instant := Instant) (System := System) (Native := Native)
     (Profiler := Profiler) (Raw := Raw) (Listener := Listener) (TcpStream := TcpStream)
-    (Error := Error) hostUsizeBits fileReferenceBudget resources
-  let dropDescription := fun (reference : FD H D (Other Raw Listener TcpStream Error)) => do
-    match reference.value with
-    | .stdin | .stdout | .stderr | .nullOutput => pure ()
-    | .file handle _ _ => resources.dropFile handle
-    | .directory handle => resources.dropDirectory handle
-    | .other payload => resources.dropOther payload
-  let readinessRegistry := EvalUnixFdConstruction.readiness registry
-    watcherReferenceBudget dropDescription
+    (Error := Error) hostUsizeBits fileReferenceBudget watcherReferenceBudget resources
+  let registry := readinessRegistry.files
   let poll ← EvalUnixFdConstruction.pollDispatch p compatibilityBudget memory.choice
     memory.projection.place memory.projection memory.access unitLayout readinessRegistry files
     readinessRoute deadline descriptor environment.env.errors communicate

@@ -31,11 +31,16 @@ def insertEpoll (h : ReadinessMachine.Hooks K U H D O) (descriptor : DescriptorH
   modify fun state => { state with machine := { state.machine with user := h.files.setTable table state.machine.user } }
   return number
 
+/-- Epoll owns a watcher reference, not a ReadinessWatched field. -/
+def dropEpollWith (dropWatcher : Nat → MachineHooks.M K U Unit)
+    (epoll : Epoll) : MachineHooks.M K U Unit :=
+  dropWatcher epoll.watcher
+
 /-- Call at actual Epoll watcher-field drop, after strong FD count reaches zero. -/
 def dropEpoll (h : ReadinessMachine.Hooks K U H D O)
     (base : Readiness.Hooks (MachineHooks.State K U) (Files.Ref (Description H D O)))
     (epoll : Epoll) : MachineHooks.M K U Unit :=
-  (ReadinessMachine.bind h base).dropWatcher epoll.watcher
+  dropEpollWith (ReadinessMachine.bind h base).dropWatcher epoll
 
 def bind (h : ReadinessMachine.Hooks K U H D O) (descriptor : DescriptorHooks O)
     (deadline : DeadlineMachine.Hooks K U Host System)

@@ -58,6 +58,33 @@ structure Hooks (S F : Type) where
   /-- Must enable/swap the full target thread view, execute its typed callback,
   and restore only on success. No callback token acknowledgment is accepted. -/
   unblock : ThreadId → BlockReason → M S Unit
+/-- The source drop bodies need only ownership and watch metadata, not I/O,
+thread scheduling or readiness evaluation. This breaks construction cycles
+without inventing capabilities for those unrelated operations. -/
+structure DestructionHooks (S F : Type) where
+  getWatcher : Nat → M S Watcher
+  putWatcher : Nat → Watcher → M S Unit
+  upgradeWatcher : Nat → M S Bool
+  dropWatcher : Nat → M S Unit
+  watcherAlive : Nat → M S Bool
+  upgrade : Files.WeakRef → M S (Option F)
+  dropFd : F → M S Unit
+  isClosed : Files.WeakRef → M S Bool
+  getWatched : F → M S Watched
+  putWatched : F → Watched → M S Unit
+
+def Hooks.destruction (h : Hooks S F) : DestructionHooks S F where
+  getWatcher := h.getWatcher
+  putWatcher := h.putWatcher
+  upgradeWatcher := h.upgradeWatcher
+  dropWatcher := h.dropWatcher
+  watcherAlive := h.watcherAlive
+  upgrade := h.upgrade
+  dropFd := h.dropFd
+  isClosed := h.isClosed
+  getWatched := h.getWatched
+  putWatched := h.putWatched
+
 private def onError (action : M S A) (cleanup : M S Unit) : M S A := fun state =>
   match action state with
   | .ok value state => .ok value state
@@ -262,7 +289,7 @@ def removeFileNumInterests (h : Hooks S F) (fd : F) (number : Int32) : M S Unit 
 
 /-- Called after the watcher loses its last strong reference. Payload remains
 available to this destructor, while watcherAlive must already report false. -/
-def dropWatcherMetadata (h : Hooks S F) (state : Watcher) : M S Unit := do
+def dropWatcherMetadataWith (h : DestructionHooks S F) (state : Watcher) : M S Unit := do
   let mut previous : Option FdId := none
   for (key,interest) in state.interests.qsort (fun a b => keyLt a.1 b.1) do
     if previous != some key.id then
@@ -277,7 +304,7 @@ def dropWatcherMetadata (h : Hooks S F) (state : Watcher) : M S Unit := do
 
 /-- Last FD description drop removes all dead FD interests from live watchers,
 not merely the descriptor number that happened to close last. -/
-def dropWatchedMetadata (h : Hooks S F) (watched : Watched) : M S Unit := do
+def dropWatchedMetadataWith (h : DestructionHooks S F) (watched : Watched) : M S Unit := do
   for watcher in watched.watchers do
     if ← h.upgradeWatcher watcher then
       Files.withDrop (do
@@ -288,4 +315,11 @@ def dropWatchedMetadata (h : Hooks S F) (watched : Watched) : M S Unit := do
             h.putWatcher watcher { state with
               interests := state.interests.filter (·.1 != key)
               ready := state.ready.filter (· != key) }) (h.dropWatcher watcher)
+/-- Compatibility entry points retain the original full dictionary API. -/
+def dropWatcherMetadata (h : Hooks S F) (state : Watcher) : M S Unit :=
+  dropWatcherMetadataWith h.destruction state
+
+def dropWatchedMetadata (h : Hooks S F) (watched : Watched) : M S Unit :=
+  dropWatchedMetadataWith h.destruction watched
+
 end Miri.Interpreter.Readiness
