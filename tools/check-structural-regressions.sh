@@ -28,6 +28,7 @@ lake env lean --run MiriTests/DataRace/ThreadClockReuseReachability.lean || stat
 lake env lean --run tests/input/AllocationBacktrace.lean || status=1
 lake env lean --run tests/memory_operand/WriteUninit.lean || status=1
 lake env lean --run tests/input/CompactArrayOffsets.lean || status=1
+lake env lean --run tests/input/CoroutineCoverage.lean || status=1
 for test in KeyedArray166QA MemoryState166QA; do
   lake env lean --run "MiriTests/Connected/Focused/$test.lean" || status=1
 done

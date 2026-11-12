@@ -10,8 +10,10 @@ import zlib
 
 try:  # Support package imports and direct scripts under tools/.
     from .shared_json_pools import SHARED_POOLS, expand_document
+    from .coroutine_json import validate_catalog
 except ImportError:
     from shared_json_pools import SHARED_POOLS, expand_document
+    from coroutine_json import validate_catalog
 
 POOL_NAMES = frozenset({"types", "allocations", "instances", "fn_abis", "spans",
                         "definitions", "type_constants", "bodies", "predicates"})
@@ -26,8 +28,8 @@ def decode_mir_document(document: Any) -> dict[str, Any]:
         raise MirJSONError("MIR document root must be an object")
     if document.get("schema") != "lean-miri-rustc-mir":
         raise MirJSONError("document is not a lean-miri-rustc-mir export")
-    if type(document.get("schema_version")) is not int or document["schema_version"] != 11:
-        raise MirJSONError("MIR root schema_version must be 11")
+    if type(document.get("schema_version")) is not int or document["schema_version"] not in (11, 12):
+        raise MirJSONError("MIR root schema_version must be 11 or 12")
     for name in sorted(POOL_NAMES):
         if not isinstance(document.get(name), list):
             raise MirJSONError(f"{name} must be a pool array")
@@ -46,6 +48,14 @@ def decode_mir_document(document: Any) -> dict[str, Any]:
     images = document.get("byte_images")
     if not isinstance(images, list) or any(not isinstance(image, str) for image in images):
         raise MirJSONError("byte_images must be a string array")
+    if document["schema_version"] == 11:
+        if "compiler_coroutine_coverage" in document:
+            raise MirJSONError("schema 11 forbids compiler_coroutine_coverage")
+    else:
+        try:
+            validate_catalog(document)
+        except (ValueError, KeyError, TypeError) as exc:
+            raise MirJSONError(f"invalid compiler_coroutine_coverage: {exc}") from exc
     return document
 
 
@@ -110,5 +120,5 @@ def inspection_document(document: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_mir_inspection_document(path: str | Path) -> dict[str, Any]:
-    """Load a schema-11 document and explicitly resolve shared inspection payloads."""
+    """Load a schema-11/12 document and explicitly resolve shared inspection payloads."""
     return inspection_document(load_mir_document(path))

@@ -1,3 +1,4 @@
+import copy
 import gzip
 import json
 from pathlib import Path
@@ -58,8 +59,58 @@ class MirJSONTests(unittest.TestCase):
 
     def test_requires_current_schema_version(self):
         for version in (4, 6, 7, 8, 9, 10, True, "11", 11.0):
-            with self.subTest(version=version), self.assertRaisesRegex(MirJSONError, "schema_version must be 11"):
+            with self.subTest(version=version), self.assertRaisesRegex(MirJSONError, "schema_version must be 11 or 12"):
                 decode_mir_document(document(schema_version=version))
+
+    def test_schema_12_requires_exact_coroutine_catalog_and_preserves_version(self):
+        catalog = {"body_coroutines": [], "coroutines": [], "auxiliary_bodies": []}
+        current = document(schema_version=12, compiler_coroutine_coverage=catalog)
+        self.assertIs(decode_mir_document(current), current)
+        self.assertEqual(expand_document(current)["schema_version"], 12)
+        with self.assertRaisesRegex(MirJSONError, "forbids"):
+            decode_mir_document(document(compiler_coroutine_coverage=catalog))
+        for invalid in (None, {}, {**catalog, "unknown_witness": True},
+                        {**catalog, "body_coroutines": [False]},
+                        {**catalog, "body_coroutines": [0]}):
+            with self.subTest(catalog=invalid), self.assertRaises(MirJSONError):
+                decode_mir_document(document(schema_version=12, compiler_coroutine_coverage=invalid))
+        with self.assertRaises(MirJSONError):
+            decode_mir_document(document(schema_version=12))
+
+    def test_coroutine_auxiliary_roles_and_source_pool_round_trip(self):
+        body = {"instance_id": 0, "source_def_id": 0,
+                "phase": {"kind": "runtime", "phase": "optimized"}, "source_scopes": [{}]}
+        auxiliary = {"owner_body": 0, "role": "async", "source_kind": {"kind": "item", "def_id": 0},
+                     "body": {**body, "phase": {"kind": "analysis", "phase": "post_cleanup"}}}
+        witness = {"owner_body": 0, "coroutine_type": 0,
+                   "coroutine_kind": {"kind": "coroutine", "movability": "movable"},
+                   "yield_type": None, "resume_type": None,
+                   "layout": {"field_tys": [{"type": 0, "source_info": 0,
+                                             "ignore_for_traits": False, "debuginfo_name": None}],
+                              "variant_fields": [[], [], []],
+                              "variant_source_info": [{"span": 0, "scope": 0}] * 3,
+                              "storage_conflicts": [[]]},
+                   "drop_sync": None, "drop_async": 0, "drop_proxy_async": None}
+        catalog = {"body_coroutines": [True], "coroutines": [witness], "auxiliary_bodies": [auxiliary]}
+        current = document(schema_version=12, bodies=[body], types=[{}], instances=[{}], definitions=[{}], spans=[{}],
+                           source_infos=[{"span": 0, "scope": 0}], compiler_coroutine_coverage=catalog)
+        self.assertIs(decode_mir_document(current), current)
+        expanded = expand_document(current)
+        self.assertEqual(expanded["compiler_coroutine_coverage"]["coroutines"][0]["layout"]["field_tys"][0]["source_info"],
+                         {"span": 0, "scope": 0})
+        self.assertEqual(current["compiler_coroutine_coverage"]["coroutines"][0]["layout"]["field_tys"][0]["source_info"], 0)
+        mutations = [
+            lambda d: d["compiler_coroutine_coverage"]["coroutines"][0]["coroutine_kind"].update(unknown_witness=True),
+            lambda d: d["compiler_coroutine_coverage"]["auxiliary_bodies"][0].update(role="callable"),
+            lambda d: d["compiler_coroutine_coverage"]["auxiliary_bodies"][0]["source_kind"].update(unknown_witness=True),
+            lambda d: d["compiler_coroutine_coverage"]["coroutines"][0]["layout"]["field_tys"][0].update(source_info=True),
+            lambda d: d["compiler_coroutine_coverage"]["coroutines"][0].update(drop_async=True),
+        ]
+        for mutate in mutations:
+            invalid = copy.deepcopy(current)
+            mutate(invalid)
+            with self.assertRaises(MirJSONError):
+                decode_mir_document(invalid)
 
     def test_current_schema_preserves_compact_layout_and_llvm_evidence(self):
         formula = {"field_offsets_bytes": {"kind": "array", "stride_bytes": 4, "field_count": 2}}
@@ -69,7 +120,7 @@ class MirJSONTests(unittest.TestCase):
         self.assertIs(decode_mir_document(current), current)
         self.assertEqual(pool_entry(current, "layouts", 0), formula)
         for version in (8, 9, 10):
-            with self.assertRaisesRegex(MirJSONError, "schema_version must be 11"):
+            with self.assertRaisesRegex(MirJSONError, "schema_version must be 11 or 12"):
                 decode_mir_document(document(schema_version=version, layouts=[0], layout_values=[formula], bodies=[call]))
 
     def test_filename_ids_stay_shared_and_unexpanded(self):

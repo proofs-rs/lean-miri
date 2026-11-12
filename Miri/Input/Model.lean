@@ -1,5 +1,6 @@
 import Miri.Input.Model.Types
 import Miri.Input.Model.Catalogs
+import Miri.Input.Model.Coroutine
 
 namespace Miri.Input
 
@@ -24,6 +25,7 @@ structure ImportDocument where
   functionAbis : Array FunctionAbi
   bodyRoots : Array BodyRoot := #[]
   bodies : Array Body
+  coroutineCoverage : Option CoroutineCoverage := none
   queries : Catalog.Queries
   producerSettings : Catalog.ProducerSettings
 

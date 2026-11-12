@@ -51,7 +51,7 @@ exact arguments cannot be fingerprinted.
 
 ## Input contract
 
-The root schema is `lean-miri-rustc-mir` version 11. Evaluated integer scalars carry
+The producer writes `lean-miri-rustc-mir` version 12. Evaluated integer scalars carry
 `bits_unsigned` and the compiler layout's `size_bytes`, so consumers can construct
 the machine scalar before reading the type and layout tables. Zero-sized and
 pointer constants retain their separate representations. Compiler values have
@@ -92,7 +92,27 @@ Prepared-world `raw_pool` positions imply source ID `index + 1`: null slots join
 their unique serialized allocation, while opaque and dangling globals retain
 explicit exceptional rows. Dedup salt arrays carry graph IDs in salt order;
 source IDs and byte keys come from those allocations. All 32 outcomes remain
-required for function, vtable and byte keys. The runtime reader accepts only the current wire version.
+required for function, vtable and byte keys. The reader accepts strict schema 11 and schema 12 inputs.
+
+Schema 12 requires `compiler_coroutine_coverage`, including an explicit Boolean
+marker for every executable body. A marked body owns one complete, normalized
+coroutine witness: kind, erased yield/resume fields, saved-local types and source
+information, state-to-field mappings, variant sources and storage conflicts.
+The saved-local `source_info` uses the existing source-info pool. Missing or
+unknown witnesses and unlowered executable terminators fail closed. Schema 11
+forbids the new table; its maintained input bytes remain unchanged.
+
+Coroutine auxiliary MIR uses a separate owner/role table, retaining the compiler's
+actual source kind and snapshot phase. It never becomes a callable body merely
+because an async/proxy snapshot shares the resume function's source identity.
+Callable drop shims still come from the exact `instance_mir` query. The reader
+checks owner/source/role/phase links, full selected physical variant layouts and
+saved-state field types/layouts. Root tag queries retain their compiler-produced
+narrowed scalar layout. These rules follow the pinned compiler's
+[StateTransform](https://github.com/rust-lang/rust/blob/8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_mir_transform/src/coroutine/mod.rs),
+[drop snapshots](https://github.com/rust-lang/rust/blob/8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_mir_transform/src/coroutine/drop.rs)
+and [canonical shim construction](https://github.com/rust-lang/rust/blob/8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_mir_transform/src/shim.rs).
+This metadata coverage does not establish general coroutine execution support.
 
 Schema 11 uses exact-equality payload pools without changing compiler identity.
 `layouts` is an array of indices into `layout_values`: a type's `layout` still
@@ -148,7 +168,7 @@ of those values. Type compiler facts use the owning `type_id` and optional
 This preserves a distinct region-erased query input when one exists.
 Backtrace `source_position.byte_position` is the body-specific collapsed position;
 it can differ from the global span's position for an inlined body.
-The reader accepts only schema 11. Explicit array offsets retain their count,
+The reader accepts schemas 11 and 12. Explicit array offsets retain their count,
 width and per-field equality checks. The producer stores array offsets as an
 exact stride/count formula, and represents a resolved LLVM intrinsic call with
 `kind: "llvm_intrinsic"`, `function_type` and `instance_id`, without `fn_abi`.

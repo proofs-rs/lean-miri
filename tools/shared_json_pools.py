@@ -87,7 +87,7 @@ def pool_document(document):
     return result
 
 
-def expand_document(document, *, schema_version=11):
+def expand_document(document, *, schema_version=None):
     """Return an independent semantic inspection view with shared payloads resolved.
 
     Callers retaining wire identities should use the original document. Lean's
@@ -102,5 +102,5 @@ def expand_document(document, *, schema_version=11):
     result = _walk({key: copy.deepcopy(value) for key, value in document.items()
                     if key not in SHARED_POOLS}, resolve)
     result["layouts"] = [resolve("layout_values", index) for index in result["layouts"]]
-    result["schema_version"] = schema_version
+    result["schema_version"] = document["schema_version"] if schema_version is None else schema_version
     return result

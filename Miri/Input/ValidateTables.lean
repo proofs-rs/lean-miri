@@ -458,6 +458,12 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
     constants := document.typeConstants.size
     bodies := document.bodies.size
     predicates := document.predicates.size }
+  let auxiliary := (document.coroutineCoverage.map (·.auxiliaryBodies)).getD #[]
+  for (value, index) in auxiliary.toList.zipIdx do
+    LocalValidation.validateBody value.body s!"$.compiler_coroutine_coverage.auxiliary_bodies[{index}].body"
+    instanceKind b s!"$.compiler_coroutine_coverage.auxiliary_bodies[{index}].source_kind" value.sourceKind
+  let bodyEntries := document.bodies.mapIdx (fun index value => (value, s!"$.bodies[{index}]")) ++
+    auxiliary.mapIdx (fun index value => (value.body, s!"$.compiler_coroutine_coverage.auxiliary_bodies[{index}].body"))
   for (span, index) in document.spans.toList.zipIdx do
     checkId document.files.size span.file s!"$.spans[{index}].file" "file"
   for (node, index) in document.types.toList.zipIdx do
@@ -515,8 +521,7 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
           if let some id := entry.instanceId then checkId b.instances id s!"{path}.entries[{ei}].instance_id" "instance"
           if let some id := entry.allocationId then checkId b.allocations id s!"{path}.entries[{ei}].allocation" "allocation"
           if let some id := entry.traitDefinitionId then checkId b.definitions id s!"{path}.entries[{ei}].trait_def_id" "definition"
-  for (value, index) in document.bodies.toList.zipIdx do
-    let path := s!"$.bodies[{index}]"
+  for (value, path) in bodyEntries do
     for (entry, ei) in value.backtraceSpans.toList.zipIdx do
       checkId document.files.size entry.position.filename
         s!"{path}.backtrace_spans[{ei}].source_position.filename" "file"
@@ -609,7 +614,7 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
       unless matching.size == 1 && matching[0]?.map (·.abiId) == some abi do
         throw s!"$.instances[{node.id}].virtual_identity.fn_abi: virtual identity must match one exact full-instance FnAbi query"
     if let some id := node.fallbackInstance then checkId b.instances id s!"$.instances[{node.id}].fallback_instance" "instance"
-  for body in document.bodies do
+  for (body, _) in bodyEntries do
     for block in body.nodeFacts do
       for node in block do
         for upcast in node.dynamicUpcasts do validateUpcast document body.sourcePath upcast

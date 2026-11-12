@@ -236,7 +236,8 @@ ordinary runner defaults keep it disabled. Eight focused unchanged upstream
 sources pass the strict reference/profile/terminal oracles, including an actual
 UB stop with fourteen retained allocation backtraces. Native leak-report
 rendering remains Unsupported and needs implementation. This does not establish
-the full UI sweep: coroutine frame-layout serialization remains unsupported, as do Stacked
+the full UI sweep: coroutine coverage was still unsupported in that cohort; see
+the schema-12 follow-up below. Remaining gaps include Stacked
 Borrows profiles, host-isolation/output-capture settings and compile-time or
 nonlocal-diagnostic oracles outside the runtime profile. Export errors,
 Unsupported outcomes and other interpreter mismatches remain failures.
@@ -267,7 +268,8 @@ callee ABI needed before rejecting a variadic fixed-count mismatch. Five
 unchanged variadic guests, four focused diagnostic guests and four UB-kind
 controls pass their strict local reference/profile/terminal oracles. This does
 not provide a new hosted result. Coroutine runtime ABI queries succeed in the
-probe; coroutine frame-layout serialization remains unsupported.
+probe; coroutine coverage at that revision remained unsupported; see the
+schema-12 follow-up below.
 
 The shared compiler-owned `miri_start` selector passes two focused no-main
 guests, but `pass/no_core.rs` still fails with `compiler named types absent`
@@ -700,6 +702,44 @@ allowed-axiom audit for its existing explicit input/profile domain.
 Three older backtrace API/invalid-flags UI cases remain excluded by the existing
 stdout-snapshot/expected-Unsupported profile guards and are not successful
 comparisons. Fixed inputs, proof assumptions and execution budgets are unchanged.
+
+### Schema-12 coroutine metadata follow-up
+
+The producer now captures compiler-owned coroutine layout/source metadata and
+role-qualified auxiliary drop bodies. The strict reader retains this evidence,
+validates state/field/projection identities and full physical variant layouts,
+and keeps auxiliary snapshots outside callable body identities. Canonical drop
+shims still use compiler `instance_mir`; no resume/yield execution mechanism or
+profile exclusion was added. Schema 11 remains accepted byte for byte and
+forbids the new table; schema 12 requires complete explicit body markers.
+Native-callback FnSig collection distinguishes normal closures from coroutine
+instance types, without substituting runtime FnAbi for a missing signature.
+Resolved runtime constants use the actual Miri Codegen environment; raw auxiliary
+snapshots retain their compiler context and phase. Generic or unavailable facts
+still fail closed.
+
+On merged-stdio main `4287d180`, the common build and 75,361-declaration axiom
+audit pass, as do 47 runtime checks, structural regressions, SC seeds 0–11 and
+four malformed-log controls. Fresh strict comparisons pass the four original
+future/generator profiles and two suspend/drop/completion controls; the stdio
+binary-output/control-isolation comparison also passes with the new schema pair.
+Provider checks preserve exact coroutine runtime ABIs while rejecting missing
+native callback signatures, and three mutations fail with their expected
+coroutine witness/source-definition/physical-layout decoder diagnostics. An
+initial QA wrapper compared a process object with an integer after six successful
+comparisons; only the wrapper/provider/mutation portion was corrected and resumed
+on unchanged source/snapshot/binary-bound records, not counted as six new runs.
+Exporter Rust units (44), Python checks (45) and the combined quick check (128)
+pass. The complete input suite and all 20 maintained schema-11 inputs also pass
+(15 connected, three eval-core, fixed empty-function and strict unit); two older
+schema-3 archives remain outside that contract and reject missing initialization
+metadata. Archive/input hashes and reader source/OLean seals are unchanged. All
+nine Rust integration suites and the runtime ABI probe pass. The final fresh
+268-module proof closure also passes; its transitive audit covers 77,958 imported
+EmptyFunction/Miri declarations with only the three allowed axioms, and the
+library/example source freezes and fixed input hashes match after completion.
+Fixed Rust/MIR input bytes, SHA records, theorem claims and budgets are unchanged;
+these finite comparisons do not establish arbitrary coroutine or Rust safety.
 
 ### Performance and optimization assurance
 

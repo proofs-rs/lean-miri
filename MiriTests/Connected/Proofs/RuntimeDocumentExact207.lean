@@ -64,6 +64,11 @@ deriving instance DecidableEq for CompilerPredicateEvidence
 deriving instance DecidableEq for Catalog.VtableQuery
 deriving instance DecidableEq for Catalog.ThreadLocal
 deriving instance DecidableEq for Catalog.Queries
+deriving instance DecidableEq for CoroutineSavedField
+deriving instance DecidableEq for CoroutineLayoutEvidence
+deriving instance DecidableEq for CoroutineEvidence
+deriving instance DecidableEq for CoroutineAuxiliaryBody
+deriving instance DecidableEq for CoroutineCoverage
 deriving instance DecidableEq for ImportDocument
 deriving instance DecidableEq for RuntimeMetadata
 deriving instance DecidableEq for RuntimeArrayTypes.Entry

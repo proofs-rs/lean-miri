@@ -39,7 +39,7 @@ pub(super) fn discover<'tcx>(
         let (signature,query)=if !closed || !callable {
             (export_failure("native FnSig", format!("requires closed callable instance: {instance:?} (closed={closed}, callable={callable})"))?,
                 "instantiate_bound_regions_with_erased(fn_sig(instance.def_id()).instantiate(instance.args))")
-        } else if def_kind==rustc_hir::def::DefKind::Closure {
+        } else if matches!(def_kind, rustc_hir::def::DefKind::Closure | rustc_hir::def::DefKind::SyntheticCoroutineBody) {
             // Closure DefIds do not have a standalone `fn_sig` metadata entry.
             // Their exact call signature is encoded in the closure generic args.
             let closure_ty=instance.ty(tcx,ty::TypingEnv::fully_monomorphized());
@@ -49,6 +49,12 @@ pub(super) fn discover<'tcx>(
                     (compiler_fact(fn_sig_json_inner(context,tcx,sig)?),
                         "instantiate_bound_regions_with_erased(closure_args.sig())")
                 }
+                // Coroutine bodies have their adjusted resume/poll signature
+                // only in fn_sig_for_fn_abi. That is not this native callback
+                // query (alloc_addresses/mod.rs:167–174); never substitute ABI
+                // lowering for a compiler FnSig. A real native callback demand
+                // for an absent row remains fail-closed in the consumer.
+                ty::Coroutine(..) | ty::CoroutineClosure(..) => return Ok(None),
                 _=>(unavailable_compiler_fact("closure instance type does not carry a normal closure FnSig")?,
                     "closure_args.sig() unavailable for non-closure instance type")
             }
@@ -58,9 +64,9 @@ pub(super) fn discover<'tcx>(
             (compiler_fact(fn_sig_json_inner(context,tcx,sig)?),
                 "instantiate_bound_regions_with_erased(fn_sig(instance.def_id()).instantiate(instance.args))")
         };
-        Ok::<_, String>(SignatureFact { instance_id: id, query, signature })
+        Ok::<_, String>(Some(SignatureFact { instance_id: id, query, signature }))
     } }).collect::<Result<Vec<_>, String>>()?;
-    for fact in facts { state.facts.insert(fact.instance_id, fact); }
+    for fact in facts.into_iter().flatten() { state.facts.insert(fact.instance_id, fact); }
     Ok(())
 }
 

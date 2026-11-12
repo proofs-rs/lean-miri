@@ -120,7 +120,12 @@ pub(super) fn freeze(document: &mut crate::ExportDocument) -> Result<(), String>
             }
         }
     }
-    for body in &mut document.bodies {
+    for row in &mut document.compiler_coroutine_coverage.coroutines {
+        for field in &mut row.layout.field_tys {
+            pools.source_infos.share(&mut field.source_info)?;
+        }
+    }
+    for body in document.bodies.iter_mut().chain(document.compiler_coroutine_coverage.auxiliary_bodies.iter_mut().map(|row| &mut row.body)) {
         pools.backtrace_spans.share(&mut body.backtrace_spans)?;
         for local in &mut body.locals {
             pools.source_infos.share(&mut local.source_info)?;
