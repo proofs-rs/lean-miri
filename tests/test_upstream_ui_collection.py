@@ -270,6 +270,24 @@ sys.exit(CODE)
                     raw_log = (Path(record['directory']) / 'lean.log').read_bytes()
                     self.assertIn(b'upstream_result:', raw_log)
                     self.assertIn(b'guest-stderr\x00\xff', raw_log)
+            # A stale channel from another attempt is never opened or truncated.
+            args.timeout = 10
+            output = root / 'control-stale'
+            output.mkdir()
+            original_invoke = driver.invoke
+            stale_paths = []
+            def stale_channel(command, *positional, **keywords):
+                if '--fingerprint' in command:
+                    stale_path = Path(command[1]).parent / 'runner-control.jsonl'
+                    stale_path.write_bytes(b'stale untrusted control\n')
+                    stale_paths.append(stale_path)
+                return original_invoke(command, *positional, **keywords)
+            with patch.object(driver, 'invoke', side_effect=stale_channel):
+                record = driver.run_case(case, args, __import__('os').environ.copy(), output)
+            self.assertEqual(record['status'], 'passed')
+            self.assertEqual(len(stale_paths), 1)
+            self.assertNotEqual(Path(record['control_path']), stale_paths[0])
+            self.assertEqual(stale_paths[0].read_bytes(), b'stale untrusted control\n')
             # A failure before Popen still closes the private parent descriptor.
             output = root / 'control-launch-error'
             output.mkdir()

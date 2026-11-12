@@ -102,8 +102,8 @@ def run_case(case, args, env, output):
         # Run the current interpreter even when the reference profile differs.
         # Both failures and observations remain visible; neither becomes a pass.
         started = time.monotonic()
-        control_path = directory / 'runner-control.jsonl'
         run_id = uuid.uuid4().hex
+        control_path = directory / f'runner-control-{run_id}.jsonl'
         binding = {'run_id': run_id,
                    'snapshot_fnv1a64': int(sidecar['snapshot_fnv1a64'], 16),
                    'snapshot_byte_length': snapshot.stat().st_size,
