@@ -4,10 +4,10 @@
 pub fn identity<T: Copy>(value: T) -> T { value }
 
 // A primitive result alone does not establish that raw generic arguments can
-// be reified. This unused HRTB function-pointer argument keeps an explicit ABI
-// residual until the instance-signature provider supports that source syntax.
+// be reified. This unused dyn argument keeps an exact material ABI residual
+// while dynamic constructor reification remains outside the raw provider.
 #[inline(never)]
-pub fn unused<T>() -> u8 { 7 }
+pub fn unused<T: ?Sized>() -> u8 { 7 }
 
 #[unsafe(no_mangle)]
 pub fn source_instance_abis() {
@@ -21,5 +21,5 @@ pub fn source_instance_abis() {
     core::hint::black_box(identity(1.5_f32));
     core::hint::black_box(identity(2.5_f64));
     core::hint::black_box(identity(()));
-    core::hint::black_box(unused::<for<'a> fn(&'a u8) -> &'a u8>());
+    core::hint::black_box(unused::<dyn core::fmt::Debug>());
 }

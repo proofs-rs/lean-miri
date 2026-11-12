@@ -18,4 +18,9 @@ def main : IO Unit := do
   unless render true false 0 none #[b] unit == some "extern \"C\" fn(bool)" do throw (IO.userError "C ABI spelling differs")
   unless render false false 1 none #[] unit == some "unsafe extern \"C-unwind\" fn()" do throw (IO.userError "C-unwind ABI spelling differs")
   unless render true false 40 none #[b] unit == none do throw (IO.userError "invalid packed ABI unexpectedly printed")
-  IO.println "PASS seven source-signature printer runtime controls (not kernel proofs)"
+  unless render true false 2 (some 1) #[b] unit == none do throw (IO.userError "out-of-range splatted index printed")
+  unless render true false 2 (some 255) (Array.replicate 256 b) unit == none do
+    throw (IO.userError "absent sentinel printed as a splatted argument index")
+  unless (render true false 2 (some 254) (Array.replicate 255 b) unit).isSome do
+    throw (IO.userError "largest valid packed splatted index was rejected")
+  IO.println "PASS ten source-signature printer runtime controls (not kernel proofs)"

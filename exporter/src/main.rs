@@ -3789,7 +3789,8 @@ fn layout_query_trace(route: &str, input: ty::Ty<'_>, queried: bool) {
 // compiler query answer and never replaces child syntax with its final hash.
 fn structural_type_hash_eligible(input: ty::Ty<'_>) -> bool {
     match *input.kind() {
-        ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never | ty::Str => true,
+        ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never | ty::Str
+        | ty::Foreign(_) => true,
         ty::Slice(child) | ty::RawPtr(child, _) => structural_type_hash_eligible(child),
         ty::Ref(region, child, _) => !matches!(region.kind(), ty::ReBound(..)) && structural_type_hash_eligible(child),
         ty::Tuple(children) => children.iter().all(structural_type_hash_eligible),
@@ -5847,6 +5848,30 @@ fn store_fn_abi<'tcx>(
     Ok(id as u64)
 }
 
+// Source-only classification of the direct valtree_to_const_value branches.
+// The declared outer type equality is an admission boundary, not an evaluated
+// answer: other Ty constants retain their explicit CTFE result category.
+fn raw_type_constant_eligible(value: &rustc_middle::mir::Const<'_>) -> bool {
+    let rustc_middle::mir::Const::Ty(declared, constant) = value else { return false; };
+    let ty::ConstKind::Value(value) = constant.kind() else { return false; };
+    *declared == value.ty && match value.ty.kind() {
+        ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) => true,
+        ty::FnDef(_, args) => args.bound_vars().is_empty() && args.skip_binder().is_empty(),
+        _ => false,
+    }
+}
+
+fn trace_mir_constant(route: &str, queried: bool, value: &rustc_middle::mir::Const<'_>) {
+    if std::env::var_os("LEAN_MIRI_TRACE_CONST_EVAL").is_some() {
+        let category = match value {
+            rustc_middle::mir::Const::Ty(..) => "ty",
+            rustc_middle::mir::Const::Unevaluated(..) => "unevaluated",
+            rustc_middle::mir::Const::Val(..) => "val",
+        };
+        eprintln!("lean_miri_const_call route={route} queried={queried} category={category} value={value:?}");
+    }
+}
+
 fn const_operand_json<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,body:&rustc_middle::mir::Body<'tcx>,operand:&rustc_middle::mir::ConstOperand<'tcx>)->Result<pool_constant::Operand,String>{
     use pool_constant::{Constant,Annotation,Operand};
     let ty=operand.const_.ty();
@@ -5863,6 +5888,25 @@ fn const_operand_json<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,bo
         Some(MirBodyRole::CoroutineAuxiliary) => body.typing_env(tcx),
         _ => return export_failure("MIR constant", "missing or invalid serialization role/phase"),
     };
+    if matches!(context.constant_eval_role, Some(MirBodyRole::RuntimeExecutable))
+        && raw_type_constant_eligible(&operand.const_) {
+        let rustc_middle::mir::Const::Ty(_, constant) = operand.const_ else {
+            return export_failure("raw MIR type constant", "admission did not retain its Ty source constructor");
+        };
+        trace_mir_constant("raw_type", false, &operand.const_);
+        return Ok(Operand {ty:type_json(context,tcx,ty)?,
+            user_type_annotation:operand.user_ty.map(|a|Annotation::AnnotationRef {index:a.as_u32()}),
+            constant:Constant::TypeConstant {type_constant:const_type_json(context,tcx,constant)?},
+            span:span_json(context,tcx,operand.span)});
+    }
+    if let rustc_middle::mir::Const::Val(value, _) = operand.const_ {
+        trace_mir_constant("literal", false, &operand.const_);
+        return Ok(Operand {ty:type_json(context,tcx,ty)?,
+            user_type_annotation:operand.user_ty.map(|a|Annotation::AnnotationRef {index:a.as_u32()}),
+            constant:Constant::LiteralConst {value:const_value_json(context,tcx,ty,value)?},
+            span:span_json(context,tcx,operand.span)});
+    }
+    trace_mir_constant("mir_eval", true, &operand.const_);
     let evaluated=operand.const_.eval(tcx,env,operand.span).map_err(|e|format!("main::const_operand_json: const_evaluation_error; {e:?}; const={} env={:?}",
         format!("{:?}", operand.const_).chars().take(1600).collect::<String>(), env))?;
     let value=const_value_json(context,tcx,ty,evaluated)?;
@@ -5876,7 +5920,7 @@ fn const_value_json<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,ty:t
             // Preserve Scalar::Ptr independently of the enclosing type: niche
             // ADTs can carry provenance and must not be converted to integer bits.
             if matches!(*ty.kind(),ty::RawPtr(..)|ty::Ref(..)|ty::FnPtr(..)) || scalar.try_to_scalar_int().is_err() {scalar_pointer_json(context,tcx,ty,scalar)?}
-            else {let layout=tcx.layout_of(ty::TypingEnv::fully_monomorphized().as_query_input(ty)).map_err(|_|"main::const_value_json: scalar_layout_unavailable".to_owned())?;let bits=scalar.to_bits(layout.size).report_err().map_err(|e|format!("main::const_value_json: scalar_with_provenance_or_invalid_bits; {e:?}"))?;O::Scalar {ty:type_json(context,tcx,ty)?,bits_unsigned:bits.to_string(),size_bytes:layout.size.bytes()}}
+            else {let integer=scalar.try_to_scalar_int().map_err(|e|format!("main::const_value_json: scalar_with_provenance_or_invalid_bits; {e:?}"))?;O::Scalar {ty:type_json(context,tcx,ty)?,bits_unsigned:integer.to_bits_unchecked().to_string(),size_bytes:integer.size().bytes()}}
         },
         C::Slice {alloc_id,meta}=>{let allocation=allocation_ref(context,tcx,alloc_id)?; O::SliceAllocation {ty:type_json(context,tcx,ty)?,allocation,metadata_length:meta}},
         C::Indirect {alloc_id,offset}=>{let allocation=allocation_ref(context,tcx,alloc_id)?; O::IndirectAllocation {ty:type_json(context,tcx,ty)?,allocation,offset_bytes:offset.bytes()}},

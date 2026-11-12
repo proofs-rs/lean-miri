@@ -402,8 +402,9 @@ private def validateRequiredExecution (document : ImportDocument) : Except Strin
       if kind == 0 then
         let body ← SourceMir.metadata document id
         for constant in body.requiredConsts do
-          let .Val value _ := constant.value
-          pending := pending ++ (valueAllocations value).map (2, ·)
+          match constant.value with
+          | .Val value _ => pending := pending ++ (valueAllocations value).map (2, ·)
+          | .Ty .. | .Unevaluated .. => pure ()
         for call in body.callEvidence do
           if let some call := call then
             if let some inst := call.instanceId then pending := pending.push (1, inst)
@@ -634,8 +635,7 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
             | _ => throw s!"{path}: LLVM evidence does not belong to a call"
           let operandType ← match operand with
             | .Constant constant =>
-              let .Val _ ty := constant.value
-              pure ty
+              pure constant.value.declaredType
             | .Copy place | .Move place => do
               let some facts := (value.nodeFacts[blockIndex]?).bind (·.back?) |
                 throw s!"{path}: LLVM callee place has no terminator facts"

@@ -19,6 +19,7 @@ import Miri.Input.EvalArchitectureMachine
 import Miri.Input.CompilerCastQueries
 import Miri.Input.CompilerScalarLeaves
 import Miri.Input.CompilerPlaceTypes
+import Miri.Input.CompilerMirConstants
 import Miri.Input.CompilerValidityLeaves
 import Miri.Input.CompilerVTableLeaves
 import Miri.Input.CompilerSignatureAbi
@@ -476,7 +477,7 @@ def makeWithForeignContext {Assembly : Type}
       runtimeChecks := CompilerScalarLeaves.runtimeChecks p
       boolLayout := CompilerScalarLeaves.boolLayout p
       constant := fun _ constant known =>
-        ConstantMachine.evalOperandWithLayout p.runtime functions pointers.arithmetic
+        CompilerMirConstants.hook p.runtime EvalProjectionMachine.arrays functions pointers.arithmetic
           externStatic MemoryErrors.constant constant known
           (if options.place.debugAssertions then some (fun computed expected => physical (compatibility computed expected)) else none) }
     let callBackend : CallDispatchMachine.Backend (State Os R P H D O Aff B Host) := {

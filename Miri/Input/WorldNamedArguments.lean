@@ -8,15 +8,16 @@ open TypeArena
 
 def own (world : World) (fuel : Nat) (path : DefinitionPath.Material)
     (arguments : Array MIR.GenericArg) : Except String (Array MIR.GenericArg) := do
-  unless path.parentParameterCount == 0 do
+  let header ← DefinitionPath.requireGenerics path
+  unless header.parentParameterCount == 0 do
     throw "inherited generic definition-path arguments are not implemented"
-  unless path.parameterDefaults.size == arguments.size do
+  unless header.parameters.size == arguments.size do
     throw "definition-path argument count differs from raw generic header"
-  unless path.parameterDefaults.any (fun value => value) do return arguments
-  let some defaults := path.parameterDefaultExpressions
-    | throw "generic default elision requires raw declaration default expressions"
+  let defaults := header.defaultExpressions
   unless defaults.size == arguments.size do throw "generic default expression count mismatch"
   let terms ← GenericInstantiationWorld.ofArguments world fuel arguments
+  for (term,sort) in terms.zip header.parameters do
+    unless term.sort == sort do throw "generic actual argument sort differs from raw declaration header"
   let mut count := arguments.size
   for index in (List.range arguments.size).reverse do
     let some expression := defaults[index]? | throw "generic default expression absent"

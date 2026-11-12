@@ -16,6 +16,13 @@ structure Signature where
   splatted : Option Nat
   deriving Repr, DecidableEq
 
+/-- Pinned FnSigKind::set_splatted: 255 denotes None in the packed header;
+an actual argument index is a smaller u8 and must name an input. -/
+def validateSplatted (inputCount : Nat) (splatted : Option Nat) : Except String Unit := do
+  if let some index := splatted then
+    unless index < 255 do throw "raw function signature splatted index uses the absent sentinel or exceeds u8"
+    unless index < inputCount do throw "raw function signature splatted index is outside its input domain"
+
 private def termsToArray (result : Array Term) : Terms → Array Term
   | .nil => result
   | .cons head tail => termsToArray (result.push head) tail
@@ -36,6 +43,7 @@ def read : Term → Except String Signature
     let cVariadic ← (← header.getObjVal? "c_variadic").getBool?
     let splattedValue ← header.getObjVal? "splatted"
     let splatted ← if splattedValue == .null then pure none else some <$> splattedValue.getNat?
+    validateSplatted values.pop.size splatted
     pure ⟨variables,values.pop,output,abi,safety,cVariadic,splatted⟩
   | _ => .error "raw function signature requires its exact source binder and header"
 end Miri.Input.RawFunctionSignature

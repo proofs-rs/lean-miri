@@ -1,11 +1,13 @@
 import Miri.Input.TypeArenaWorld
 import Miri.Input.StableSipHash
+import Miri.Input.DefinitionPathHash
 
 /-! Pinned rustc 8144389c895da997dbdecaa635e41d6a50be6ffd
 `TyCtxt::type_id_hash`, `StableHash` for TyKind and RawList. The supported
-structural domain hashes constructor syntax after free-region erasure. Nominal
-identity, higher-ranked binders and const evaluation remain separate source
-operations. No query answer is retained in the execution World. -/
+structural domain hashes constructor syntax after free-region erasure. Foreign
+types use reconstructed DefKey identities; ADT/FnDef composition, higher-ranked
+binders and const evaluation remain separate source operations. No query answer
+is retained in the execution World. -/
 namespace Miri.Input.WorldTypeHash
 open TypeArena
 
@@ -17,6 +19,13 @@ private def integerTag : MIR.IntegerKind → Nat
   | .i32 | .u32 => 3 | .i64 | .u64 => 4 | .i128 | .u128 => 5
 private def mutabilityTag : MIR.Mutability → Nat
   | .Not => 0 | .Mut => 1
+
+private def definitionBytes (world : World) (identity : GenericSubstitution.DefinitionIdentity) :
+    Except String ByteArray := do
+  let reference ← world.definitionRef identity
+  let some source := world.definitions[reference]? | throw "type hash physical definition is absent"
+  let some path := source.rawPath | throw "type hash raw definition path is absent"
+  pure (littleEndian 16 (← DefinitionPathHash.query path).toNat)
 
 /-- Missing structural support is distinct from malformed source identity.
 An unsupported child never substitutes its final TypeId hash for raw syntax. -/
@@ -39,6 +48,7 @@ def sourceBytes (world : World) : Nat → TypeId → Except String (Option ByteA
         | .f16b | .ppcf128 => return none
       pure (some (tag 4 ++ tag ordinal))
     | .str => pure (some (tag 7))
+    | .foreign identity => pure (some (tag 6 ++ (← definitionBytes world identity)))
     | .never => pure (some (tag 21))
     | .slice child =>
       let some child ← sourceBytes world fuel child | return none

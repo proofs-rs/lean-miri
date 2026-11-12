@@ -1,5 +1,6 @@
 import Miri.Input.GenericInstantiationWorld
 import Miri.Input.AliasRuntime
+import Miri.Input.BinderRegions
 
 /-! Normalization in the single execution-owned type universe. Newly constructed
 syntax is normalized and re-interned in that same World. Existing material
@@ -15,7 +16,9 @@ private def structuralMaterial : TypeShape → Bool
   | .bool | .char | .int _ | .uint _ | .float _ | .str | .never | .foreign _
   | .rawPointer .. | .reference .. | .slice _ | .tuple _
   | .alias .free false .. | .alias .projection false .. => true
-  | .functionPointer signature variables => variables.isEmpty && signature.rawSplatted.isSome
+  | .functionPointer signature variables =>
+    variables.all (fun value => match value with | .Region _ => true | _ => false) &&
+      signature.rawSplatted.isSome
   | _ => false
 
 private def residual (world : World) (source : TypeNode) : Except String TypeId := do
@@ -84,6 +87,22 @@ private def normalizeCached (context : AliasRuntime.Context) (work : Nat) :
         let term ← lift (GenericInstantiationWorld.ofType (← liftM (get : WorldM World)) (fuel + 1) id)
         let result ← lift (AliasRuntime.normalizeTerm context work (fuel + 1) #[] #[] term)
         return ← liftM (GenericInstantiationWorld.resolveType (fuel + 1) result)
+      if let .functionPointer signature := constructor then
+        unless signature.variables.isEmpty do
+          -- Bound children are open in isolation. Normalize the whole binder.
+          unless ← lift (GenericInstantiationWorld.supportsTypeReification world (fuel + 1) id) do
+            match view with
+            | .material source => return ← lift (residual world source)
+            | .constructed _ => throw "constructed binder contains an unsupported raw constructor family"
+          let raw ← lift (GenericInstantiationWorld.ofType world (fuel + 1) id)
+          match BinderRegions.requireAliasFree (fuel + 1) raw with
+          | .error error =>
+            match view with
+            | .material source => return ← lift (residual world source)
+            | .constructed _ => throw error
+          | .ok () => pure ()
+          let normalized ← lift (BinderRegions.eraseAndAnonymize (fuel + 1) raw)
+          return ← liftM (GenericInstantiationWorld.resolveType (fuel + 1) normalized)
       let argument := fun arg => do
         match arg with
         | .Type child => return MIR.GenericArg.Type (← normalizeCached context work fuel child)

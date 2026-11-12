@@ -1,9 +1,11 @@
 import Miri.Input.CompilerInstance
 import Miri.Interpreter.CallMachine
 import Miri.Input.RuntimeArrayQueries
+import Miri.Input.WorldMirConstant
 
 /-! The resolved body identifies its concrete callee and preamble span.
-Required constants are evaluated before export; frame identity remains checked at entry. -/
+Required constants are evaluated in the current compiler World after the callee
+frame is installed, before its first instruction. -/
 namespace Miri.Input.CompilerLifecycle
 open Lean Miri.Interpreter
 structure Entry where
@@ -39,7 +41,11 @@ def requiredConstants (p : Prepared)
   let frame ← MachineHooks.currentFrame
   unless frame.bodyIdentity == body.identity && frame.functionInstance == callee do
     throw (.invalidProgram "required-constant current frame identity/instance mismatch")
-  pure ()
+  for constant in actual.input.requiredConsts do
+    let _ ← RuntimeArrayQueries.performCompiler types do
+      match WorldMirConstant.evaluate (← get).arena constant.span constant.value with
+      | .ok value => pure value
+      | .error error => throw s!"required MIR constant evaluation: {reprStr error}"
 
 def hooks (p : Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (base : CallMachine.Lifecycle K User C) : CallMachine.Lifecycle K User C :=
@@ -72,6 +78,7 @@ theorem preamble_known (p : Prepared)
     (bounded : actual.input.preambleDefSpanId < p.program.compilerTables.spans.size)
     (spanId : actual.input.preambleDefSpanId = span.id)
     (callee : actual.input.instanceId = fnInstance)
+    (empty : actual.input.requiredConsts = #[])
     (frames : Array (Frame Provenance LocalLayout MachineHooks.FrameExtra))
     (frame : Frame Provenance LocalLayout MachineHooks.FrameExtra)
     (machine : MachineHooks.MachineState K U)
@@ -81,7 +88,7 @@ theorem preamble_known (p : Prepared)
       .ok () ⟨⟨frames.push frame⟩,machine⟩ := by
   have boundedSpan : span.id < p.program.compilerTables.spans.size := spanId ▸ bounded
   cases span
-  simp [requiredConstants, bodyEntry, lift, row, contents, boundedSpan, spanId, callee,
+  simp [requiredConstants, bodyEntry, lift, row, contents, boundedSpan, spanId, callee, empty,
     MachineHooks.currentFrame, Stack.currentFrame?, identity, function,
     get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,
     Except.bind,Except.pure]

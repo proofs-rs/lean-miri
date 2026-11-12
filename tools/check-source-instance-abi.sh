@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 OUT="${SOURCE_INSTANCE_ABI_OUT:-$ROOT/scratch/source-instance-abi}"
+FIXTURE="${SOURCE_INSTANCE_ABI_FIXTURE:-tests/repro/compiler-queries/source-instance-abi.rs}"
 export CARGO_HOME="${CARGO_HOME:-$ROOT/.cargo}"
 export RUSTUP_HOME="${RUSTUP_HOME:-$ROOT/.rustup}"
 export PATH="$CARGO_HOME/bin:$PATH"
@@ -47,7 +48,7 @@ for panic in abort unwind; do
     if [[ "$version" == oracle ]]; then target="$OUT/oracle-target"; fi
     LEAN_MIRI_TRACE_ABI_CALLS=1 CARGO_TARGET_DIR="$target" \
       bash tools/export-mir.sh --output "$OUT/$version-$panic.json" --root source_instance_abis -- \
-      tests/repro/compiler-queries/source-instance-abi.rs --crate-type=lib \
+      "$FIXTURE" --crate-type=lib \
       --crate-name=source_instance_abi "-Cpanic=$panic" \
       > "$OUT/$version-$panic.stdout" 2> "$OUT/$version-$panic.trace"
   done

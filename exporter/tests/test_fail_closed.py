@@ -473,7 +473,7 @@ class FailClosedExportTests(unittest.TestCase):
             self.assertEqual(len(caller_signature["inputs"]), 0)
             self.assertEqual(len(callee_signature["inputs"]), 1)
 
-    def test_resolved_generic_has_one_body_and_no_source_constant_payload(self):
+    def test_resolved_generic_has_one_body_and_typed_constant_categories(self):
         document = self.accepted("resolved_generic", "root")
         bodies = document["bodies"]
         self.assertEqual(len({body["instance_id"] for body in bodies}), len(bodies))
@@ -489,8 +489,13 @@ class FailClosedExportTests(unittest.TestCase):
             if isinstance(value, dict):
                 self.assertNotIn("constant_query_context", value)
                 self.assertNotIn("source_body_is_polymorphic", value)
-                if value.get("kind") == "evaluated_const":
+                if value.get("kind") in ("evaluated_const", "literal_const"):
                     self.assertEqual(set(value), {"kind", "value"})
+                elif value.get("kind") == "type_constant":
+                    self.assertEqual(set(value), {"kind", "type_constant"})
+                    self.assertIs(type(value["type_constant"]), int)
+                    source = pool_entry(document, "type_constants", value["type_constant"])
+                    self.assertEqual(source["kind"], "value")
                 for child in value.values():
                     inspect(child)
             elif isinstance(value, list):

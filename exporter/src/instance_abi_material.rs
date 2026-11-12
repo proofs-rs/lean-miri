@@ -25,9 +25,23 @@ pub(super) fn signature<'tcx>(tcx: TyCtxt<'tcx>, instance: ty::Instance<'tcx>,
         A::Rust | A::RustCold | A::RustPreserveNone | A::RustTail) {
         return None;
     }
-    let simple = |ty: ty::Ty<'tcx>| matches!(ty.kind(),
-        ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never)
+    // Only a syntactically sized pointee is admitted here. This is source
+    // grammar classification, not a layout/Sized query. Fat raw pointers and
+    // references retain an explicit residual until their full ABI rules exist.
+    let sized_pointee = |ty: ty::Ty<'tcx>| matches!(ty.kind(),
+        ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never |
+        ty::RawPtr(..) | ty::Ref(..) | ty::FnPtr(..))
         || matches!(ty.kind(), ty::Tuple(fields) if fields.is_empty());
+    let simple = |ty: ty::Ty<'tcx>| {
+        if !super::generic_mir::supported_arguments(tcx.mk_args(&[ty.into()])) { return false; }
+        match ty.kind() {
+            ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never => true,
+            ty::Tuple(fields) => fields.is_empty(),
+            ty::RawPtr(pointee,_) => sized_pointee(*pointee),
+            ty::FnPtr(types,header) => types.with(*header).bound_vars().is_empty(),
+            _ => false,
+        }
+    };
     signature.inputs_and_output.iter().all(simple).then_some(signature)
 }
 

@@ -112,6 +112,11 @@ fn supported_type(ty:ty::Ty<'_>)->bool {
         ty::RawPtr(inner,_)|ty::Ref(_,inner,_)|ty::Slice(inner)=>supported_type(*inner),
         ty::Array(inner,count)=>supported_type(*inner)&&supported_constant(*count),
         ty::Adt(_,args)=>supported_arguments(args),
+        ty::FnPtr(types,header)=>{
+            let signature=types.with(*header);
+            signature.bound_vars().is_empty() &&
+                signature.skip_binder().inputs_and_output.iter().all(supported_type)
+        }
         _=>false,
     }
 }

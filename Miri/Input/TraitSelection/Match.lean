@@ -1,4 +1,5 @@
 import Miri.Input.TraitSelection.Material
+import Miri.Input.TraitSelection.HigherRankedMatch
 
 /-! Impl-head matching for ground trait queries. Pinned rustc
 8144389c895da997dbdecaa635e41d6a50be6ffd, impl candidate matching creates fresh
@@ -30,6 +31,16 @@ def requireConstructorScope (allowed : Array DefinitionIdentity) : Nat → Term 
     | _ => pure ()
 
 abbrev Bindings := Array (Option Term)
+
+def requiresQuantified : Nat → Term → Except String Bool
+  | 0, _ => throw "quantified trait syntax inspection exhausted"
+  | fuel + 1, term => do
+    match term with
+    | .placeholder .. => pure true
+    | .binder variables body =>
+      if !variables.isEmpty then pure true else requiresQuantified fuel body
+    | .node _ _ _ children | .definition _ _ _ children => children.anyM (requiresQuantified fuel)
+    | _ => pure false
 
 private def closed : Nat → Nat → Term → Except String Bool
   | 0, _, _ => .error "trait matching variable traversal exhausted"
@@ -119,6 +130,8 @@ end
 
 /-- Required before candidate enumeration, including an empty impl catalog. -/
 def requireGround (fuel : Nat) (value : Term) : Except String Unit := do
+  if ← requiresQuantified fuel value then
+    return ← HigherRankedMatch.requireScoped 0 fuel value
   unless ← closed fuel 0 value do throw "trait matching requires a ground query"
 
 /-- A missing binding is not filled with an invented type. Region erasure may
@@ -139,9 +152,16 @@ def complete (parameters : Array ArgSort) (eraseRegions : Bool) (bindings : Bind
     arguments := arguments.push argument
   pure arguments
 
-def head (fuel : Nat) (implementation : Impl) (goal : TraitRef) (eraseRegions : Bool := false) :
+def head (fuel : Nat) (implementation : Impl) (goal : TraitRef) (eraseRegions : Bool := false)
+    (maximumUniverse : Nat := 0) :
     Except String (Option Bindings) := do
   if implementation.traitRef.definition != goal.definition then return none
+  let mut quantified := maximumUniverse != 0
+  for term in implementation.traitRef.arguments ++ goal.arguments do
+    if ← requiresQuantified fuel term then quantified := true
+  if quantified then
+    let result ← HigherRankedMatch.headScoped maximumUniverse fuel implementation goal eraseRegions
+    return result.map fun arguments => arguments.map some
   terms implementation.parameters eraseRegions fuel
     (Terms.ofArray implementation.traitRef.arguments) (Terms.ofArray goal.arguments)
     (Array.replicate implementation.parameters.size none)

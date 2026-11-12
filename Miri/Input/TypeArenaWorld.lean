@@ -1,6 +1,7 @@
 import Miri.ABI.PackedExternAbi
 import Miri.Input.Model
 import Miri.Input.TypeArenaCheckedMaterial
+import Miri.Input.RawFunctionSignature
 
 /-! The execution-owned type and constant constructor universe. Nodes store
 one constructor plus existing child IDs; repeated children never duplicate a
@@ -11,6 +12,7 @@ open GenericSubstitution
 
 /-- Raw FnPtr header plus child identities; no ABI query result is stored. -/
 structure FunctionPointer where
+  variables : Array GenericSubstitution.BoundVariable := #[]
   abiPacked : Nat
   safe : Bool
   cVariadic : Bool
@@ -131,9 +133,19 @@ def World.materialKey (world : World) (source : TypeNode) : Except String (Optio
   | .adt data => return some (.adt (← world.identity data.definition) data.args)
   | .foreign definition => return some (.foreign (← world.identity definition))
   | .functionPointer signature variables => do
-    unless variables.isEmpty do return none
+    let mut boundVariables := #[]
+    for variableKind in variables do
+      let .Region kind := variableKind | return none
+      let identity ← match kind with
+        | .Anon => pure GenericSubstitution.BoundIdentity.anonymous
+        | .ClosureEnv => pure .closureEnvironment
+        | .NamedForPrinting name => pure (.namedForPrinting name)
+        | .Named id => pure (.named (← world.identity id))
+      boundVariables := boundVariables.push (.region identity)
     let some splatted := signature.rawSplatted | return none
+    RawFunctionSignature.validateSplatted signature.inputs.size splatted
     pure (some (.functionPointer {
+      variables := boundVariables
       abiPacked := Miri.ABI.ExternAbi.asPacked signature.abi
       safe := signature.safety == .Safe, cVariadic := signature.cVariadic, splatted,
       inputs := signature.inputs, output := signature.output }))
@@ -171,6 +183,9 @@ private def Constructor.definition : Constructor → Option DefinitionIdentity
   | _ => none
 
 private def World.validateConstructor (world : World) (constructor : Constructor) : Except String Unit := do
+  if let .functionPointer signature := constructor then
+    let _ ← Miri.ABI.ExternAbi.ofPacked signature.abiPacked
+    RawFunctionSignature.validateSplatted signature.inputs.size signature.splatted
   for child in constructor.typeChildren do
     unless child < world.typeCount do throw "new type constructor references an absent type"
   for child in constructor.constantChildren do

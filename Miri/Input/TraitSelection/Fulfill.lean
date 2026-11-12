@@ -28,6 +28,8 @@ inductive Evidence where
   | structuralBackedge (goal : Goal) (start : Nat)
   | equality (value : Term)
   | regionErasure
+  | staticOutlives (region : Term)
+  | quantified (universeIndex : Nat) (variables : Array BoundVariable) (proof : Evidence)
   | conjunction (obligations : Array Evidence)
   deriving Repr
 
@@ -41,19 +43,29 @@ structure Hooks where
   /-- Resolve source inherited obligations only after an impl head matches. -/
   implementationPredicates : Impl → Except String (Array Clause)
   /-- Normalize actual generic trees using raw alias/impl declarations. -/
-  normalize : Nat → Array Goal → Term → Except String Term
+  normalize : Nat → Nat → Array Goal → Term → Except String Term
   /-- Return source-derived nested obligations for a real builtin candidate.
   An unimplemented builtin must error, not claim that no candidate exists. -/
-  builtin : Nat → Array Goal → TraitDeclaration → Goal → Except String (Option (Array Clause))
+  builtin : Nat → Nat → Array Goal → TraitDeclaration → Goal → Except String (Option (Array Clause))
   /-- Remaining predicate categories require a real implementation. -/
-  external : Nat → Array Goal → Environment → Predicate → Except String Outcome
+  external : Nat → Nat → Array Goal → Environment → Predicate → Except String Outcome
 
-private abbrev Engine := StateT Nat (Except String)
+private structure QueryState where
+  remaining : Nat
+  lastUniverse : Nat := 0
+
+private abbrev Engine := StateT QueryState (Except String)
 
 private def step : Engine Unit := do
-  let remaining ← get
-  if remaining == 0 then throw "trait fulfillment total work exhausted"
-  set (remaining - 1)
+  let state ← get
+  if state.remaining == 0 then throw "trait fulfillment total work exhausted"
+  set {state with remaining := state.remaining - 1}
+
+private def enterForall : Engine Universes.Scope := do
+  let state ← get
+  let scope := Universes.enter state.lastUniverse
+  set {state with lastUniverse := scope.current}
+  pure scope
 
 private def declaration (program : Program) (definition : DefinitionIdentity) :
     Except String TraitDeclaration := do
@@ -69,11 +81,14 @@ private def declaration (program : Program) (definition : DefinitionIdentity) :
     seen := seen.push implementation.definition
   pure value
 
-private def normalizedGoal (hooks : Hooks) (fuel : Nat) (active : Array Goal) (goal : Goal) :
+private def normalizedGoal (hooks : Hooks) (universeIndex : Nat) (fuel : Nat) (active : Array Goal) (goal : Goal) :
     Except String Goal := do
   let arguments ← goal.traitRef.arguments.mapM fun arg => do
-    let result ← hooks.normalize fuel active arg
-    Match.requireGround fuel result
+    if universeIndex > 0 then
+      HigherRankedMatch.requireScoped universeIndex fuel arg
+    let result ← hooks.normalize universeIndex fuel active arg
+    if universeIndex > 0 then HigherRankedMatch.requireScoped universeIndex fuel result
+    else Match.requireGround fuel result
     pure result
   pure {goal with traitRef := {goal.traitRef with arguments}}
 
@@ -89,12 +104,12 @@ private def collect (values : Array Outcome) : Outcome := Id.run do
   return .proven (.conjunction proofs)
 
 mutual
-private def solveCore (program : Program) (hooks : Hooks) (environment : Environment) (entryBoundary : Nat) :
+private def solveCore (program : Program) (hooks : Hooks) (environment : Environment) (entryBoundary universeIndex : Nat) :
     Nat → Array Goal → Goal → Engine Outcome
   | 0, _, _ => throw "trait selection recursion exhausted"
   | fuel + 1, active, original => do
     step
-    let goal ← liftM (normalizedGoal hooks (fuel + 1) active original)
+    let goal ← liftM (normalizedGoal hooks universeIndex (fuel + 1) active original)
     if let some allowed := program.constructorScope then
       for argument in goal.traitRef.arguments do
         liftM (Match.requireConstructorScope allowed (fuel + 1) argument)
@@ -111,6 +126,8 @@ private def solveCore (program : Program) (hooks : Hooks) (environment : Environ
         ⟨#[],.trait goal⟩)
       if let some proof := proof then return .proven (.sourceEnvironment proof)
     if active.any (fun prior => decide (prior = goal)) then
+      if universeIndex != 0 then
+        return .ambiguous "higher-ranked trait cycle requires scoped coinductive evaluation"
       if let some start ← liftM (StructuralCycle.certify program environment (fuel + 1) active goal entryBoundary) then
         return .proven (.structuralBackedge goal start)
       return .ambiguous "trait cycle requires coinductive universe-aware evaluation"
@@ -120,14 +137,14 @@ private def solveCore (program : Program) (hooks : Hooks) (environment : Environ
       if let .trait assumed := clause.predicate then
         if assumed.traitRef.definition == goal.traitRef.definition then
           unless clause.variables.isEmpty do throw "higher-ranked environment requires universe instantiation"
-          let assumed ← liftM (normalizedGoal hooks fuel active assumed)
+          let assumed ← liftM (normalizedGoal hooks universeIndex fuel active assumed)
           if assumed = goal then return .proven (.assumption index)
     if source.isAlias then
       unless goal.polarity == .positive do throw "negative trait-alias evaluation is not implemented"
       let predicates ← liftM (Substitution.clauses fuel goal.traitRef.arguments source.superPredicates)
       let mut results := #[]
       for predicate in predicates do
-        results := results.push (← fulfillCore program hooks environment entryBoundary fuel active predicate)
+        results := results.push (← fulfillCore program hooks environment entryBoundary universeIndex fuel active predicate)
       return collect results
     let mut candidates : Array Evidence := #[]
     let mut opposite := false
@@ -142,7 +159,7 @@ private def solveCore (program : Program) (hooks : Hooks) (environment : Environ
           disqualifyAuto := true
           break
     for implementation in source.implementations do
-      let some bindings ← liftM (Match.head fuel implementation goal.traitRef environment.eraseRegions)
+      let some bindings ← liftM (Match.head fuel implementation goal.traitRef environment.eraseRegions universeIndex)
         | continue
       if implementation.isDefault then
         throw "default impl selection requires specialization semantics"
@@ -151,7 +168,7 @@ private def solveCore (program : Program) (hooks : Hooks) (environment : Environ
       let predicates ← liftM (Substitution.clauses fuel substitution predicateSource)
       let mut results := #[]
       for predicate in predicates do
-        results := results.push (← fulfillCore program hooks environment entryBoundary fuel active predicate)
+        results := results.push (← fulfillCore program hooks environment entryBoundary universeIndex fuel active predicate)
       match collect results with
       | .noSolution => pure ()
       | .ambiguous reason => ambiguity := some reason
@@ -161,10 +178,10 @@ private def solveCore (program : Program) (hooks : Hooks) (environment : Environ
         else opposite := true
       | .proven _ => throw "trait conjunction evidence invariant violated"
     if goal.polarity == .positive && (source.isAuto || source.langItem.isSome) && !disqualifyAuto then
-      if let some predicates ← liftM (hooks.builtin fuel active source goal) then
+      if let some predicates ← liftM (hooks.builtin universeIndex fuel active source goal) then
         let mut results := #[]
         for predicate in predicates do
-          results := results.push (← fulfillCore program hooks environment entryBoundary fuel active predicate)
+          results := results.push (← fulfillCore program hooks environment entryBoundary universeIndex fuel active predicate)
         match collect results with
         | .noSolution => pure ()
         | .ambiguous reason => ambiguity := some reason
@@ -186,49 +203,73 @@ private def solveCore (program : Program) (hooks : Hooks) (environment : Environ
       return .proven evidence
     | _ => return .ambiguous "multiple applicable impl candidates require specialization"
 
-private def fulfillCore (program : Program) (hooks : Hooks) (environment : Environment) (entryBoundary : Nat) :
+private def fulfillCore (program : Program) (hooks : Hooks) (environment : Environment) (entryBoundary universeIndex : Nat) :
     Nat → Array Goal → Clause → Engine Outcome
   | 0, _, _ => throw "trait fulfillment recursion exhausted"
   | fuel + 1, active, clause => do
     step
-    unless clause.variables.isEmpty do throw "higher-ranked fulfillment requires universe instantiation"
+    if !clause.variables.isEmpty || universeIndex > 0 then
+      liftM (HigherRankedMatch.validateClause universeIndex (fuel + 1) environment.eraseRegions clause)
+    unless clause.variables.isEmpty do
+      unless clause.variables.all (fun value => match value with | .region _ => true | _ => false) do
+        throw "quantified type/constant clauses require their bound assumptions and candidate semantics"
+      let scope ← enterForall
+      let opened ← liftM (Universes.openClause scope (fuel + 1) clause)
+      let result ← fulfillCore program hooks environment
+        entryBoundary scope.current fuel active opened
+      return match result with
+        | .proven proof => .proven (.quantified scope.current clause.variables proof)
+        | other => other
     for index in [:environment.assumptions.size] do
       let some assumed := environment.assumptions[index]? | throw "environment clause index absent"
       if assumed.variables.isEmpty && decide (assumed.predicate = clause.predicate) then
         return .proven (.assumption index)
     match clause.predicate with
-    | .trait goal => solveCore program hooks environment entryBoundary fuel active goal
+    | .trait goal => solveCore program hooks environment entryBoundary universeIndex fuel active goal
     | .equal left right =>
-      let left ← liftM (hooks.normalize fuel active left)
-      let right ← liftM (hooks.normalize fuel active right)
-      liftM (Match.requireGround fuel left)
-      liftM (Match.requireGround fuel right)
+      let left ← liftM (hooks.normalize universeIndex fuel active left)
+      let right ← liftM (hooks.normalize universeIndex fuel active right)
+      if universeIndex > 0 then
+        liftM (HigherRankedMatch.requireScoped universeIndex fuel left)
+        liftM (HigherRankedMatch.requireScoped universeIndex fuel right)
+      else
+        liftM (Match.requireGround fuel left)
+        liftM (Match.requireGround fuel right)
       if left = right then return .proven (.equality left)
       if !environment.assumptions.isEmpty then
         return .ambiguous "environment equality closure is required"
       return .noSolution
     | .constHasType value expected =>
-      let value ← liftM (hooks.normalize fuel active value)
+      let value ← liftM (hooks.normalize universeIndex fuel active value)
       match value with
       | .node .constant "value" _ (.cons actual (.cons _ .nil)) =>
         unless actual.sort == .type do throw "evaluated constant source type is not a type"
-        let actual ← liftM (hooks.normalize fuel active actual)
-        let expected ← liftM (hooks.normalize fuel active expected)
-        liftM (Match.requireGround fuel actual)
-        liftM (Match.requireGround fuel expected)
+        let actual ← liftM (hooks.normalize universeIndex fuel active actual)
+        let expected ← liftM (hooks.normalize universeIndex fuel active expected)
+        if universeIndex > 0 then
+          liftM (HigherRankedMatch.requireScoped universeIndex fuel actual)
+          liftM (HigherRankedMatch.requireScoped universeIndex fuel expected)
+        else
+          liftM (Match.requireGround fuel actual)
+          liftM (Match.requireGround fuel expected)
         if actual = expected then return .proven (.equality actual)
         if !environment.assumptions.isEmpty then
           return .ambiguous "environment const-type equality closure is required"
         return .noSolution
-      | _ => liftM (hooks.external fuel active environment clause.predicate)
+      | _ => liftM (hooks.external universeIndex fuel active environment clause.predicate)
     | .regionOutlives longer shorter =>
-      if environment.eraseRegions then return .proven .regionErasure
       if longer = shorter then return .proven (.equality longer)
-      liftM (hooks.external fuel active environment clause.predicate)
-    | .typeOutlives .. =>
+      if universeIndex > 0 then
+        liftM (HigherRankedMatch.requireScoped universeIndex fuel longer)
+        liftM (HigherRankedMatch.requireScoped universeIndex fuel shorter)
+        if longer == .atom .region "static" "" then return .proven (.staticOutlives shorter)
+        return ← liftM (hooks.external universeIndex fuel active environment clause.predicate)
       if environment.eraseRegions then return .proven .regionErasure
-      liftM (hooks.external fuel active environment clause.predicate)
-    | _ => liftM (hooks.external fuel active environment clause.predicate)
+      liftM (hooks.external universeIndex fuel active environment clause.predicate)
+    | .typeOutlives .. =>
+      if environment.eraseRegions && universeIndex == 0 then return .proven .regionErasure
+      liftM (hooks.external universeIndex fuel active environment clause.predicate)
+    | _ => liftM (hooks.external universeIndex fuel active environment clause.predicate)
 end
 
 /-- Each request starts with fresh work accounting; no result is reused across
@@ -236,7 +277,7 @@ executions. Ambiguity, unsupported providers and exhausted budgets are distinct
 from both a proof and a definite negative trait result. -/
 def solveWithActive (program : Program) (hooks : Hooks) (environment : Environment)
     (depth work : Nat) (active : Array Goal) (goal : Goal) : Except String Outcome :=
-  (solveCore program hooks environment active.size depth active goal work).map (·.1)
+  (solveCore program hooks environment active.size 0 depth active goal {remaining := work}).map (·.1)
 
 def solve (program : Program) (hooks : Hooks) (environment : Environment)
     (depth work : Nat) (goal : Goal) : Except String Outcome :=
@@ -246,8 +287,8 @@ def fulfillWithActive (program : Program) (hooks : Hooks) (environment : Environ
     (depth work : Nat) (active : Array Goal) (clauses : Array Clause) : Except String Outcome := do
   let (results, _) ← (do
     let mut results := #[]
-    for clause in clauses do results := results.push (← fulfillCore program hooks environment active.size depth active clause)
-    pure results : Engine (Array Outcome)) work
+    for clause in clauses do results := results.push (← fulfillCore program hooks environment active.size 0 depth active clause)
+    pure results : Engine (Array Outcome)) {remaining := work}
   pure (collect results)
 
 def fulfill (program : Program) (hooks : Hooks) (environment : Environment)

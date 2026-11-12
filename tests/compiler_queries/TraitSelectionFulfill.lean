@@ -54,9 +54,9 @@ private def hooks : Hooks where
     else if implementation.definition == (⟨0,30⟩ : DefinitionIdentity) then
       .ok #[obligation loopTrait (.parameter .type 0)]
     else .ok #[]
-  normalize := fun fuel _ term => do Match.requireGround fuel term; pure term
-  builtin := fun _ _ _ _ => .error "builtin provider not implemented"
-  external := fun _ _ _ _ => .error "external predicate not implemented"
+  normalize := fun _ fuel _ term => do Match.requireGround fuel term; pure term
+  builtin := fun _ _ _ _ _ => .error "builtin provider not implemented"
+  external := fun _ _ _ _ _ => .error "external predicate not implemented"
 private def resultClass : Except String Outcome → Except String String
   | .error error => .error error
   | .ok (.proven _) => .ok "proven"
@@ -93,15 +93,15 @@ example : resultClass (fulfill program hooks {} 100 100 #[⟨#[], .wellFormed u3
     .error "external predicate not implemented" := by decide +kernel
 example : resultClass (fulfill program hooks {} 100 100 #[
     ⟨#[.region .anonymous], .trait ⟨.positive, ⟨aux, #[u32]⟩⟩⟩]) =
-    .error "higher-ranked fulfillment requires universe instantiation" := by decide +kernel
-example : resultClass (solve program hooks ⟨#[obligation gate u64], false⟩ 100 100
+    .ok "proven" := by decide +kernel
+example : resultClass (solve program hooks {assumptions := #[obligation gate u64],eraseRegions := false} 100 100
     ⟨.positive, ⟨gate, #[u64]⟩⟩) = .ok "proven" := by decide +kernel
-example : selectUnique program hooks ⟨#[obligation gate u64], false⟩ 100 100 ⟨gate, #[u64]⟩ =
+example : selectUnique program hooks {assumptions := #[obligation gate u64],eraseRegions := false} 100 100 ⟨gate, #[u64]⟩ =
     .error "trait proof does not identify a unique source impl" := by decide +kernel
 example : resultClass (solve {traits := #[declaration loopTrait #[implementation 30 loopTrait #[.type]
     (.parameter .type 0)]]} hooks {} 100 100
     ⟨.positive, ⟨loopTrait, #[u32]⟩⟩) = .ok "ambiguous" := by decide +kernel
-example : resultClass (solve program hooks ⟨#[obligation gate u64], false⟩ 100 100
+example : resultClass (solve program hooks {assumptions := #[obligation gate u64],eraseRegions := false} 100 100
     ⟨.positive, ⟨aux, #[wrapper u32]⟩⟩) = .ok "ambiguous" := by decide +kernel
 
 -- A catalog filtered by source constructor scope must never turn an outside
@@ -143,10 +143,10 @@ example : resultClass (fulfill program hooks {assumptions := #[obligation gate u
 
 private def structuralProgram : Program := {traits := #[
   {(declaration gate #[]) with isAuto := true, isCoinductive := true}, declaration aux #[]]}
-private def structuralHooks : Hooks := { hooks with builtin := fun _ _ _ goal => .ok (some #[⟨#[],.trait goal⟩]) }
+private def structuralHooks : Hooks := { hooks with builtin := fun _ _ _ _ goal => .ok (some #[⟨#[],.trait goal⟩]) }
 example : resultClass (solve structuralProgram structuralHooks {} 100 100
     ⟨.positive,⟨gate,#[u32]⟩⟩) = .ok "proven" := by decide +kernel
-private def negativeSiblingHooks : Hooks := {hooks with builtin := fun _ _ _ goal => .ok (some #[⟨#[],.trait goal⟩,obligation aux u32])}
+private def negativeSiblingHooks : Hooks := {hooks with builtin := fun _ _ _ _ goal => .ok (some #[⟨#[],.trait goal⟩,obligation aux u32])}
 example : resultClass (solve structuralProgram negativeSiblingHooks {} 100 100
     ⟨.positive,⟨gate,#[u32]⟩⟩) = .ok "no_solution" := by decide +kernel
 example : resultClass (solveWithActive structuralProgram structuralHooks {} 100 100

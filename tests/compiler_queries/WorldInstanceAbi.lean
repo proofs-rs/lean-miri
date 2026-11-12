@@ -36,6 +36,7 @@ def main (args : List String) : IO Unit := do
   let initial ← must ((RuntimeArrayTypes.create runtime).mapError reprStr)
   let oracleWorld ← must ((RuntimeArrayTypes.create oracleRuntime).mapError reprStr)
   let mut checked := 0
+  let mut pointerCases := 0
   for row in oracle.queries.instanceAbis do
     let some node := oracle.instances[row.instanceId]? | throw (IO.userError "missing oracle instance")
     let .Item definition := node.instanceKind | continue
@@ -43,6 +44,9 @@ def main (args : List String) : IO Unit := do
     let some rawPath := source.rawPath | continue
     unless rawPath.components.back?.bind (·.name) == some "identity" do continue
     let key ← must (InstanceArena.Key.ofSource oracleWorld.arena node.instanceKind node.genericArgs)
+    if let some (Miri.MIR.GenericArg.Type argument) := key.arguments[0]? then
+      let kind ← must (oracleWorld.arena.shapeKind argument)
+      if kind == .rawPointer || kind == .functionPointer then pointerCases := pointerCases + 1
     let arguments ← must (GenericInstantiationWorld.ofArguments oracleWorld.arena 16384 key.arguments)
     let matching ← must (document.instances.filterM fun source => do
       let candidate ← InstanceArena.Key.ofSource initial.arena source.instanceKind source.genericArgs
@@ -70,29 +74,33 @@ def main (args : List String) : IO Unit := do
     if ((WorldInstanceAbi.construct callee #[]).run invalid).isOk then
       throw (IO.userError "missing raw panic/codegen policy was accepted")
     checked := checked + 1
-  unless checked == 10 do throw (IO.userError s!"only {checked} raw generic scalar ABI cases compared")
+  unless checked == 10 do throw (IO.userError s!"only {checked} raw generic ABI cases compared")
   if migrated then
-    let residuals := document.instances.filter fun entry =>
-      match entry.instanceKind with
-      | .Item definition =>
-        ((document.definitions[definition]?).bind (·.rawPath) |>.bind
-          (fun path => path.components.back?.bind (·.name))) == some "unused"
-      | _ => false
-    let #[residual] := residuals
-      | throw (IO.userError "missing unique unused HRTB-argument residual instance")
-    if ((WorldInstanceAbi.construct residual.id #[]).run initial).isOk then
-      throw (IO.userError "unsupported HRTB argument escaped raw signature reification boundary")
-    let rows := document.queries.instanceAbis.filter
-      (fun row => row.instanceId == residual.id && row.extraArgumentTypes.isEmpty)
-    let #[row] := rows | throw (IO.userError "unused HRTB argument lost its exact residual ABI")
-    let expected ← must (CallResolution.functionAbiId runtime row.abiId)
-    let prepared ← must (CompilerInstanceAbi.prepare runtime (← must (lowerProgram document)))
-    let (actual,retained) ← must ((CompilerInstanceAbi.abiOfInstanceInWorld prepared residual.id #[]).run initial)
-    unless ← must (sameAbi retained.arena initial.arena actual expected) do
-      throw (IO.userError "material residual ABI lookup differs from its exact compiler query")
-    let empty ← must (InstanceArena.Store.ofSource initial.arena #[])
-    let key ← must (InstanceArena.Key.ofSource initial.arena residual.instanceKind residual.genericArgs)
-    let (id,instances) ← must (empty.intern initial.arena key)
-    if ((CompilerInstanceAbi.abiOfInstanceInWorld prepared id #[]).run {initial with instances}).isOk then
-      throw (IO.userError "constructed HRTB argument borrowed an unrelated material-prefix ABI")
+    for residualName in ["unused", "reference_residual"] do
+      let residuals := document.instances.filter fun entry =>
+        match entry.instanceKind with
+        | .Item definition =>
+          ((document.definitions[definition]?).bind (·.rawPath) |>.bind
+            (fun path => path.components.back?.bind (·.name))) == some residualName
+        | _ => false
+      if residualName == "reference_residual" && residuals.isEmpty then
+        unless pointerCases == 0 do throw (IO.userError "pointer ABI fixture lost reference residual control")
+        continue
+      let #[residual] := residuals
+        | throw (IO.userError "missing unique unsupported residual instance")
+      if ((WorldInstanceAbi.construct residual.id #[]).run initial).isOk then
+        throw (IO.userError "unsupported source signature escaped raw ABI capability boundary")
+      let rows := document.queries.instanceAbis.filter
+        (fun row => row.instanceId == residual.id && row.extraArgumentTypes.isEmpty)
+      let #[row] := rows | throw (IO.userError "unsupported source signature lost its exact residual ABI")
+      let expected ← must (CallResolution.functionAbiId runtime row.abiId)
+      let prepared ← must (CompilerInstanceAbi.prepare runtime (← must (lowerProgram document)))
+      let (actual,retained) ← must ((CompilerInstanceAbi.abiOfInstanceInWorld prepared residual.id #[]).run initial)
+      unless ← must (sameAbi retained.arena initial.arena actual expected) do
+        throw (IO.userError "material residual ABI lookup differs from its exact compiler query")
+      let empty ← must (InstanceArena.Store.ofSource initial.arena #[])
+      let key ← must (InstanceArena.Key.ofSource initial.arena residual.instanceKind residual.genericArgs)
+      let (id,instances) ← must (empty.intern initial.arena key)
+      if ((CompilerInstanceAbi.abiOfInstanceInWorld prepared id #[]).run {initial with instances}).isOk then
+        throw (IO.userError "constructed unsupported argument borrowed an unrelated material-prefix ABI")
   IO.println s!"PASS {checked} complete pinned-rustc ABI comparisons, constructed keys without result catalogs, missing policy rejection"

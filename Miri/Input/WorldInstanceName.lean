@@ -19,7 +19,7 @@ def supports (world : RuntimeArrayTypes.World) (key : InstanceArena.Key) : Bool 
     | none => false
     | some definition => match definition.rawPath with
       | none => false
-      | some path => path.parentParameterCount == 0 && path.components.all fun component =>
+      | some path => (path.genericHeader.any (fun header => header.parentParameterCount == 0)) && path.components.all fun component =>
         ["crate_root","type","value"].contains component.kind
 
 def query (fuel : Nat) (key : InstanceArena.Key) : RuntimeArrayTypes.CompilerM String := do

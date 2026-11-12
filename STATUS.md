@@ -32,9 +32,14 @@ queries retain the empty ParamEnv. ADT Sized declaration entailment uses these
 scopes. Legacy copied predicates are removed from producer, codecs and material
 models. Fresh selection controls consume the canonical source scope and reject
 its absence or the obsolete wire fields. Checked-alias, projection-bound and GAT
-controls match independent rustc results. Inferred outlives, universe-aware HRTB,
-general builtin candidates and specialization remain unresolved. Binder/universe
-and directional region-leak components are present but not runtime providers.
+controls match independent rustc results. Region-only quantified obligations now
+use query-local fresh universes, typed inference, scoped normalization and a
+directional region-leak check in actual runtime selection. Eight complete rustc
+comparisons distinguish four proven and four definite-no-solution results,
+including static-only and repeated-region negatives. Missing-source, malformed
+owner and mutated-oracle controls reject. Quantified type/constant assumptions,
+bound aliases, inferred outlives, general builtin candidates, specialization and
+coinductive quantified goals remain unresolved.
 
 Binder-free Item signatures can construct x86_64 Rust scalar/ZST FnAbi in the
 same World from raw signatures and codegen/panic flags. Twenty complete compiler
@@ -42,7 +47,12 @@ comparisons cover abort/unwind policies, including constructed instances with
 empty ABI catalogs. Covered direct-call, catalog and covariance collectors no
 longer acquire FnAbi answers: ten complete keys each lose four explicit calls.
 Unused unsupported generic arguments retain an exact residual domain. Broader
-pointer/aggregate/foreign/other-target ABI and eager enumeration remain unresolved.
+reference/Box/aggregate/foreign/other-target ABI and eager enumeration remain
+unresolved. Thin raw-pointer and binder-free FnPtr scalars additionally pass
+twenty complete rustc comparisons; all forty scalar/pointer comparisons also
+cover constructed instances without result catalogs. A separate base world
+constructs a new array, pointer and instance outside the source prefixes and
+matches the complete compiler ABI.
 Pattern Range, NotNull and signed Or layouts now
 use raw recipes; six complete compiler comparisons and malformed controls pass,
 with covered explicit canonical layout acquisition omitted. Non-Value pattern
@@ -56,14 +66,35 @@ FnPtr identities normalize without result rows and agree with complete compiler
 layouts. Raw default expressions drive trailing-default elision; five novel
 default cases and missing-material controls pass. Backtrace names for local Items
 use execution-owned keys, including three novel instances checked against rustc.
-Bound names, implementation/external paths and material display fallbacks remain.
+Region-only higher-ranked FnPtr construction now preserves whole binders through
+normalization, flag traversal and printing. Nine novel types match 27 compiler
+flags, 36 raw/normalized strings and complete pointer layouts. Eight actual
+splatted-index boundary cases validate all header entry points. Unsupported
+material child families retain their exact residual rows; constructed instances
+cannot borrow a numerically colliding row. Type/constant binders, bound aliases,
+verbose bound names, implementation/external paths and display fallbacks remain.
 
 Structural type hashes now use the pinned StableHasher protocol over World
 syntax, with covered eager hash acquisition omitted. Independent comparisons
 cover 265 hasher vectors, 28 types and novel constructed types; missing-ID, fuel
-and missing-residual controls reject. Nominal hashes, full validity and allocation
-identity/dedup reconstruction remain unresolved. These component comparisons do
+and missing-residual controls reject. Full raw DefPathData, atomic StableCrateId
+and optional typed generic headers replace partial paths and default markers.
+Lean reconstructs DefPathHash; eighteen compiler comparisons include lifetime
+namespaces, with exact bidirectional crate-identity join controls. Foreign types,
+pointers and pairs match four typed compiler hashes, including novel identities
+without material type rows. ADT and other nominal hashes, full validity and
+allocation identity/dedup reconstruction remain unresolved. These comparisons do
 not establish whole-compiler equivalence, query closure or all-choice guest safety.
+
+Raw MIR constants distinguish Ty, Unevaluated and Val. Covered primitive
+Ty(Value) operands and required constants are evaluated in the execution World
+without exporter Const::eval/ValTree queries; five genuine compiler constants
+each eliminate two explicit calls and match complete evaluated values. Required
+TooGeneric constants fail before the first instruction and preserve the tested
+frame/local/allocation state. Closed, argument-free FnDef values have a separate
+ZST rule; generic/bound FnDef cases reject. Unevaluated, allocation-bearing
+ValTrees and general CTFE/interning remain unresolved; no successful no-op stands
+in for their evaluation.
 
 The exact `DropGlue(_, None)` shim family now retains only instance identity and
 raw source position; its raw declaration signature supplies types. Lean builds

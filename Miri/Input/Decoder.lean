@@ -369,7 +369,18 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
   if producer.rustcCommit != expectedRustcCommit then throw "$.producer.rustc_commit: input is from the wrong pinned rustc revision"
   unless compilerAbiLayoutSchema == some expectedCompilerAbiLayoutSchema do
     throw s!"$.compiler_abi_layout_schema: unsupported schema `{compilerAbiLayoutSchema}`"
+  let mut crateIdentities : Std.HashMap Nat UInt64 := {}
+  let mut identityCrates : Std.HashMap Nat Nat := {}
   for definition in definitions do
+    if let some path := definition.rawPath then
+      if let some previous := crateIdentities[definition.crateIndex]? then
+        unless previous == path.stableCrateId do
+          throw "$.definitions: physical crate has conflicting stable crate identities"
+      if let some previous := identityCrates[path.stableCrateId.toNat]? then
+        unless previous == definition.crateIndex do
+          throw "$.definitions: stable crate identity belongs to multiple physical crates"
+      crateIdentities := crateIdentities.insert definition.crateIndex path.stableCrateId
+      identityCrates := identityCrates.insert path.stableCrateId.toNat definition.crateIndex
     if let some material := definition.adtDrop then
       if let some destructor := material.destructor then
         unless destructor < definitions.size do
@@ -408,7 +419,12 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
     typeCount := types.size, allocationCount := allocations.size,
     definitionCount := definitions.size, typeConstantCount := typeConstants.size,
     spanCount := spans.size,
-    scalarSize }
+    scalarSize
+    typeConstantType := fun id => do
+      match ← typeConstants[id]? with
+      | .Value ty _ => some ty
+      | .Param _ _ ty => ty
+      | _ => none }
   profileit "decoder.validate_body_references" profile fun _ =>
     parsed.bodyReferences.forM (DecodeMIR.validateReferences bodyContext)
   match selectedScope with

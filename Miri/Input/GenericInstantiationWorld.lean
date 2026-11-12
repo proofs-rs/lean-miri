@@ -50,6 +50,57 @@ def ofRegion (world : World) : MIR.Region → Except String Term
     pure (.definition .region "late_parameter" (← world.identity scope) (.cons child .nil))
   | .Error => .error "error region in generic type universeIndex"
 
+private abbrev ReifyDomainM := StateT (Std.HashMap (Bool × Nat) Bool) (Except String)
+
+mutual
+private def canReifyType (world : World) : Nat → TypeId → ReifyDomainM Bool
+  | 0, _ => throw "type reification domain traversal exhausted"
+  | fuel + 1, id => do
+    if let some result := (← get)[(false,id)]? then return result
+    let result ← do
+      let value ← match ← liftM (world.lookupType id) with
+        | .constructed value => pure (some value)
+        | .material source => liftM (world.materialKey source)
+      let some constructor := value | return false
+      let supported := match constructor with
+        | .functionDefinition _ _ variables => variables.isEmpty
+        | .functionPointer signature =>
+          signature.variables.all (fun value => match value with | .region _ => true | _ => false)
+        | _ => true
+      unless supported do return false
+      for child in constructor.typeChildren do
+        unless ← canReifyType world fuel child do return false
+      for child in constructor.constantChildren do
+        unless ← canReifyConstant world fuel child do return false
+      pure true
+    modify fun memo => memo.insert (false,id) result
+    pure result
+private def canReifyConstant (world : World) : Nat → TypeConstantId → ReifyDomainM Bool
+  | 0, _ => throw "constant reification domain traversal exhausted"
+  | fuel + 1, id => do
+    if let some result := (← get)[(true,id)]? then return result
+    let result ← do
+      match ← liftM (world.lookupConstant id) with
+      | .Param .. | .Bound .. | .Placeholder .. => pure true
+      | .Value ty tree =>
+        unless ← canReifyType world fuel ty do return false
+        let some root := tree.nodes[tree.root]? | throw "reification domain constant root is absent"
+        match root with
+        | .Leaf .. => pure true
+        | .Branch children =>
+          for child in children do
+            unless ← canReifyConstant world fuel child do return false
+          pure true
+      | _ => pure false
+    modify fun memo => memo.insert (true,id) result
+    pure result
+end
+
+/-- Syntax-only admission for the current lossless bridge. An unsupported family
+returns false; malformed/missing identities and exhausted work remain errors. -/
+def supportsTypeReification (world : World) (fuel : Nat) (id : TypeId) : Except String Bool := do
+  pure (← (canReifyType world fuel id).run {}).1
+
 private def scalar (bits bytes : Nat) : Term :=
   .atom .aggregate "scalar" ("{\"bytes\":" ++ toString bytes ++ ",\"bits\":" ++ toString bits ++ "}")
 
@@ -111,7 +162,7 @@ def reifyType (world : World) : Nat → TypeId → ReifyM Term
           ("c_variadic", Lean.toJson signature.cVariadic), ("splatted", Lean.toJson signature.splatted)])
         let types ← (signature.inputs.push signature.output).mapM child
         pure (.node .type "function_pointer" ""
-          (.cons (.binder #[] (.node .aggregate "signature" header (Terms.ofArray types))) .nil))
+          (.cons (.binder signature.variables (.node .aggregate "signature" header (Terms.ofArray types))) .nil))
       | .closure definition arguments => do
         pure (.definition .type "closure" definition (Terms.ofArray (← args arguments)))
       | .coroutineClosure definition arguments => do
@@ -228,20 +279,20 @@ def constructType : Nat → Term → ConstructM TypeId
         pure (.array (← constructType fuel child) (← constructConstant fuel length))
       | .node .type "function_pointer" ""
           (.cons (.binder variables (.node .aggregate "signature" payload children)) .nil) => do
-        unless variables.isEmpty do throw "function-pointer bound type construction is not implemented"
-        let header ← lift (Lean.Json.parse payload)
-        for (key,_) in (← lift header.getObj?).toArray do
-          unless ["abi_packed", "safe", "c_variadic", "splatted"].contains key do
-            throw "function-pointer signature header has unknown field"
-        let abiPacked ← lift ((← lift (header.getObjVal? "abi_packed")).getNat?)
-        let _ ← lift (Miri.ABI.ExternAbi.ofPacked abiPacked)
-        let safe ← lift ((← lift (header.getObjVal? "safe")).getBool?)
-        let cVariadic ← lift ((← lift (header.getObjVal? "c_variadic")).getBool?)
-        let rawSplatted ← lift (header.getObjVal? "splatted")
-        let splatted ← if rawSplatted == .null then pure none else some <$> lift rawSplatted.getNat?
-        let types ← (arrayOfTerms #[] children).mapM (constructType fuel)
-        let some output := types.back? | throw "function-pointer output absent"
-        pure (.functionPointer {abiPacked, safe, cVariadic, splatted, inputs := types.pop, output})
+        unless variables.all (fun value => match value with | .region _ => true | _ => false) do
+          throw "function-pointer type/constant binders are not implemented"
+        let source ← lift (RawFunctionSignature.read
+          (.binder variables (.node .aggregate "signature" payload children)))
+        let inputs ← source.inputs.mapM (constructType fuel)
+        let output ← constructType fuel source.output
+        pure (.functionPointer {
+          variables := variables
+          abiPacked := Miri.ABI.ExternAbi.asPacked source.abi
+          safe := source.safety == .Safe
+          cVariadic := source.cVariadic
+          splatted := source.splatted
+          inputs := inputs
+          output := output})
       | .definition .type "adt" identity arguments => do
         pure (.adt identity (← constructArguments fuel (arrayOfTerms #[] arguments)))
       | .definition .type "foreign" identity .nil => pure (.foreign identity)

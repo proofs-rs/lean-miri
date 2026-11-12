@@ -85,27 +85,58 @@ def parseEvaluatedField (s : ParseEvaluatedFields) (key : String) : JsonReader.P
   | "value" => return {s with value := some (← parseConstValue)}
   | _ => skipValue; pure s
 def finishParseEvaluatedFields (s : ParseEvaluatedFields) : JsonReader.Parser (MIR.ConstValue) := do
-  unless (← required s.kind "kind") == "evaluated_const" do reject "unknown constant evaluation record"
+  unless ["evaluated_const", "literal_const"].contains (← required s.kind "kind") do
+    reject "unknown constant value record"
   required s.value "value"
 def parseEvaluated : JsonReader.Parser (MIR.ConstValue) := do
   finishParseEvaluatedFields (← object {} parseEvaluatedField)
 open MIRParser
 
+inductive SourceConstant where
+  | value (value : MIR.ConstValue)
+  | typeConstant (id : Nat)
+
+private structure SourceConstantFields where
+  kind : Option String := none
+  value : Option MIR.ConstValue := none
+  typeConstant : Option Nat := none
+
+private def sourceConstant : JsonReader.Parser SourceConstant := do
+  let s ← object ({} : SourceConstantFields) fun s key => do
+    match key with
+    | "kind" => return {s with kind := some (← string)}
+    | "value" => return {s with value := some (← parseConstValue)}
+    | "type_constant" => return {s with typeConstant := some (← natural)}
+    | _ => skipValue; pure s
+  match ← required s.kind "kind" with
+  | "evaluated_const" | "literal_const" =>
+    unless s.typeConstant.isNone do reject "evaluated MIR constant contains raw type material"
+    return .value (← required s.value "value")
+  | "type_constant" =>
+    unless s.value.isNone do reject "raw MIR type constant contains evaluated fallback"
+    return .typeConstant (← required s.typeConstant "type_constant")
+  | _ => reject "unknown MIR constant source category"
+
+private def makeSourceConstant (ty : Nat) (span : MIR.SpanRef) (userType : Option Nat) :
+    SourceConstant → MIRParser.Parser MIR.ConstOperand
+  | .value value => makeConstant ty span userType value
+  | .typeConstant id => makeTypeConstant ty span userType id
+
 structure ParseConstOperandFields where
   type : Option (Nat) := none
   span : Option (Nat) := none
   user_type_annotation : Option (Option Nat) := none
-  constant : Option (MIR.ConstValue) := none
+  constant : Option SourceConstant := none
 
 def parseConstOperandField (s : ParseConstOperandFields) (key : String) : MIRParser.Parser (ParseConstOperandFields) := do
   match key with
   | "type" => return {s with type := some (← (do let id ← natural; recordType id; pure id))}
   | "span" => return {s with span := some (← (do let id ← natural; recordSpan id; pure id))}
   | "user_type_annotation" => return {s with user_type_annotation := some (← MIRParser.nullable annotation)}
-  | "constant" => return {s with constant := some (← parseEvaluated)}
+  | "constant" => return {s with constant := some (← sourceConstant)}
   | _ => skipValue; pure s
 def finishParseConstOperandFields (s : ParseConstOperandFields) : MIRParser.Parser MIR.ConstOperand := do
-  makeConstant (← required s.type "type") ⟨(← required s.span "span")⟩
+  makeSourceConstant (← required s.type "type") ⟨(← required s.span "span")⟩
     (← required s.user_type_annotation "user_type_annotation") (← required s.constant "constant")
 def parseConstOperand : MIRParser.Parser MIR.ConstOperand := do
   finishParseConstOperandFields (← MIRParser.object {} parseConstOperandField)
@@ -480,7 +511,8 @@ private def sharedStatement : MIRParser.Parser MIR.StatementKind := do
         definitions := mergeBound state.references.definitions entry.references.definitions
         typeConstants := mergeBound state.references.typeConstants entry.references.typeConstants
         spans := mergeBound state.references.spans entry.references.spans
-        scalarWidths := state.references.scalarWidths ++ entry.references.scalarWidths }
+        scalarWidths := state.references.scalarWidths ++ entry.references.scalarWidths
+        mirTypeConstants := state.references.mirTypeConstants ++ entry.references.mirTypeConstants }
       facts := {
         places := state.facts.places ++ entry.facts.places
         constantAllocations := state.facts.constantAllocations ++ entry.facts.constantAllocations
@@ -588,7 +620,7 @@ private structure AsmConstantFields where
   type : Option Nat := none
   span : Option Nat := none
   user_type_annotation : Option (Option Nat) := none
-  constant : Option (MIR.ConstValue) := none
+  constant : Option SourceConstant := none
 
 private def asmConstant : MIRParser.Parser ((Sum (MIR.ConstValue) MIR.ConstOperand)) := do
   let s ← MIRParser.object ({} : AsmConstantFields) fun s key => do
@@ -598,14 +630,14 @@ private def asmConstant : MIRParser.Parser ((Sum (MIR.ConstValue) MIR.ConstOpera
     | "type" => return {s with type := some (← (do let id ← natural; recordType id; pure id))}
     | "span" => return {s with span := some (← (do let id ← natural; recordSpan id; pure id))}
     | "user_type_annotation" => return {s with user_type_annotation := some (← MIRParser.nullable annotation)}
-    | "constant" => return {s with constant := some (← parseEvaluated)}
+    | "constant" => return {s with constant := some (← sourceConstant)}
     | _ => skipValue; pure s
   match s.kind with
-  | some "evaluated_const" =>
+  | some "evaluated_const" | some "literal_const" =>
     return .inl (← required s.value "value")
   | none =>
     let c ← required s.constant "constant"
-    return .inr (← makeConstant (← required s.type "type") ⟨(← required s.span "span")⟩
+    return .inr (← makeSourceConstant (← required s.type "type") ⟨(← required s.span "span")⟩
       (← required s.user_type_annotation "user_type_annotation") c)
   | _ => reject "unknown assembly constant record"
 

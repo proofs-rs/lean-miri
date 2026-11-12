@@ -4,8 +4,8 @@ import Miri.ABI.FnAbi
 import Miri.ABI.SignatureSeeds
 
 /-! Source FnAbi construction for ordinary Item instances. The current target
-classifier covers x86_64 Rust scalar and zero-sized arguments. Other target,
-pointer, aggregate, higher-ranked and caller-location cases retain explicit
+classifier covers x86_64 Rust scalar, thin raw pointer, FnPtr and zero-sized
+arguments. Other target, reference/aggregate, higher-ranked and caller-location cases retain explicit
 capability errors. No imported ABI row supplies a constructed instance answer.
 The rules are pinned rustc_ty_utils/src/abi.rs::fn_abi_new_uncached,
 arg_attrs_for_rust_scalar and rustc_target::callconv::adjust_for_rust_abi. -/
@@ -19,6 +19,14 @@ private def classify (runtime : RuntimeMetadata) (id : TypeId) :
     RuntimeArrayTypes.CompilerM (ArgAbi TypeId) := do
   let layout ← RuntimeArrayTypes.liftType (RuntimeMetadata.layoutInWorld runtime id)
   if layout.layout.isZst then return ArgAbi.initial layout
+  let arena := (← get).arena
+  let constructor ← liftPure do
+    match ← arena.lookupType id with
+    | .constructed constructor => pure (some constructor)
+    | .material source => arena.materialKey source
+  if constructor.any (fun constructor => match constructor with
+      | .rawPointer .. | .functionPointer .. => true | _ => false) then
+    return ← liftPure (ArgAbi.conservativePointerScalar layout)
   liftPure (ArgAbi.nonPointerScalar layout 0)
 
 /-- A source signature is instantiated and normalized in the execution World;

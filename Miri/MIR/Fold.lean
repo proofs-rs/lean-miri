@@ -30,8 +30,12 @@ def place (h : Hooks) (source : Place) : Except String Place :=
   return { source with projection := ← source.projection.mapM (projection h) }
 
 def constantOperand (h : Hooks) (source : ConstOperand) : Except String ConstOperand := do
-  let .Val value ty := source.value
-  return { source with value := .Val (← h.value value) (← h.ty ty) }
+  let value : MirConst ← match source.value with
+    | .Ty ty constant => pure (MirConst.Ty (← h.ty ty) (← h.constant constant))
+    | .Unevaluated key ty =>
+      pure (MirConst.Unevaluated {key with arguments := ← key.arguments.mapM (genericArg h)} (← h.ty ty))
+    | .Val value ty => pure (MirConst.Val (← h.value value) (← h.ty ty))
+  return {source with value}
 
 def operand (h : Hooks) : Operand → Except String Operand
   | .Copy source => return .Copy (← place h source)

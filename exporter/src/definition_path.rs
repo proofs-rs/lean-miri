@@ -3,9 +3,6 @@ use rustc_hir::{def::DefKind, definitions::DefPathData, def_id::DefId};
 use rustc_middle::ty::{self, TyCtxt};
 use serde_json::{json,Value};
 pub(crate) fn material(tcx:TyCtxt<'_>, definition:DefId)->Option<Value> {
-    if !matches!(tcx.def_kind(definition),DefKind::Struct|DefKind::Enum|DefKind::Union|DefKind::Fn|DefKind::AssocFn) {
-        return None;
-    }
     let mut current=definition;
     let mut components=Vec::new();
     loop {
@@ -17,24 +14,44 @@ pub(crate) fn material(tcx:TyCtxt<'_>, definition:DefId)->Option<Value> {
             DefPathData::Impl=>("impl",None),
             DefPathData::ForeignMod=>("foreign_module",None),
             DefPathData::Ctor=>("constructor",None),
-            _=>("unsupported",None),
+            DefPathData::Use=>("use",None),
+            DefPathData::GlobalAsm=>("global_asm",None),
+            DefPathData::MacroNs(name)=>("macro",Some(name.to_string())),
+            DefPathData::LifetimeNs(name)=>("lifetime",Some(name.to_string())),
+            DefPathData::Closure=>("closure",None),
+            DefPathData::TestBinderConstraints=>("test_binder_constraints",None),
+            DefPathData::AnonConst=>("anonymous_constant",None),
+            DefPathData::OpaqueTy=>("opaque_type",None),
+            DefPathData::OpaqueLifetime(name)=>("opaque_lifetime",Some(name.to_string())),
+            DefPathData::AnonAssocTy(name)=>("anonymous_associated_type",Some(name.to_string())),
+            DefPathData::SyntheticCoroutineBody=>("synthetic_coroutine_body",None),
+            DefPathData::NestedStatic=>("nested_static",None),
         };
         components.push(json!({"kind":kind,"name":name,"disambiguator":key.disambiguated_data.disambiguator}));
         match key.parent {Some(index)=>current=DefId{krate:current.krate,index},None=>break}
     }
     components.reverse();
-    let generics=tcx.generics_of(definition);
-    let defaults=generics.own_params.iter().map(|parameter| match parameter.kind {
-        ty::GenericParamDefKind::Lifetime=>false,
-        ty::GenericParamDefKind::Type{has_default,..}=>has_default,
-        ty::GenericParamDefKind::Const{has_default,..}=>has_default,
-    }).collect::<Vec<_>>();
-    let default_expressions = generics.own_params.iter().map(|parameter| {
-        parameter.default_value(tcx).map(|default| {
-            crate::generic_material::argument(tcx, default.skip_binder())
-                .and_then(|tree| serde_json::from_str::<Value>(&tree).map_err(|error|error.to_string()))
-        }).transpose()
-    }).collect::<Result<Vec<_>,String>>().ok()?;
+    // A path is raw metadata for every definition, including lifetime and
+    // type parameters. Only `has_generics` definitions admit this query.
+    // Unsupported raw defaults leave the declaration header unavailable;
+    // they never erase the physical path or masquerade as absent defaults.
+    let generic_header = tcx.def_kind(definition).has_generics().then(|| {
+        let generics = tcx.generics_of(definition);
+        let parameters = (0..generics.count()).map(|index|
+            match generics.param_at(index,tcx).kind {
+                ty::GenericParamDefKind::Lifetime => "region",
+                ty::GenericParamDefKind::Type { .. } => "type",
+                ty::GenericParamDefKind::Const { .. } => "constant",
+            }).collect::<Vec<_>>();
+        let defaults = generics.own_params.iter().map(|parameter| {
+            parameter.default_value(tcx).map(|default| {
+                crate::generic_material::argument(tcx, default.skip_binder())
+                    .and_then(|tree| serde_json::from_str::<Value>(&tree).map_err(|error|error.to_string()))
+            }).transpose()
+        }).collect::<Result<Vec<_>,String>>()?;
+        Ok::<_,String>(json!({"parent_parameter_count":generics.parent_count,
+            "parameters":parameters,"default_expressions":defaults}))
+    }).and_then(Result::ok);
     let function_header_safety = definition.as_local().and_then(|local| {
         if !matches!(tcx.def_kind(definition),DefKind::Fn|DefKind::AssocFn) {return None;}
         tcx.hir_node_by_def_id(local).fn_sig().map(|signature| match signature.header.safety {
@@ -43,5 +60,7 @@ pub(crate) fn material(tcx:TyCtxt<'_>, definition:DefId)->Option<Value> {
             rustc_hir::HeaderSafety::SafeTargetFeatures=>"safe_target_features",
         })
     });
-    Some(json!({"function_header_safety":function_header_safety,"components":components,"parent_parameter_count":generics.parent_count,"parameter_defaults":defaults,"parameter_default_expressions":default_expressions}))
+    Some(json!({"stable_crate_id":tcx.stable_crate_id(definition.krate).as_u64(),
+        "function_header_safety":function_header_safety,"components":components,
+        "generic_header":generic_header}))
 }

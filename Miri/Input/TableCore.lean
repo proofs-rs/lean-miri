@@ -7,6 +7,7 @@ import Miri.Input.JsonReader
 import Miri.Input.CompilerExternAbi
 import Miri.Input.InstanceKindCodec
 import Miri.Input.GenericArgsCodec
+import Miri.Input.RawFunctionSignature
 
 namespace Miri.Input.DecoderValues
 open JsonReader
@@ -652,8 +653,13 @@ def parseFunctionSignature (path : String := "$parseFunctionSignature") : Parser
     | "safe" => pure Miri.MIR.Safety.Safe
     | "unsafe" => pure .Unsafe
     | _ => fail s!"{path}: unknown function signature safety"
+  let inputs ← required s.«inputs» "inputs"
+  if let some splatted := s.splatted then
+    match RawFunctionSignature.validateSplatted inputs.size splatted with
+    | .ok () => pure ()
+    | .error error => fail s!"{path}: {error}"
   return {
-    inputs := (← required s.«inputs» "inputs"), output := (← required s.«output» "output"), safety, abi := (← required s.«abi» "abi"), cVariadic := (← required s.«c_variadic» "c_variadic"), rawSplatted := s.splatted }
+    inputs, output := (← required s.«output» "output"), safety, abi := (← required s.«abi» "abi"), cVariadic := (← required s.«c_variadic» "c_variadic"), rawSplatted := s.splatted }
 
 private structure decodeCompilerPredicateEvidenceFields where
   «predicate_id» : Option (Nat) := none

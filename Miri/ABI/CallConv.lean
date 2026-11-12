@@ -124,6 +124,17 @@ def nonPointerScalar (layout : TyAndLayout Ty) (extensionBits : UInt64) :
     { ArgAttributes.new with regular := if scalar.isUninitValid then 0 else 128 }
   pure (extendIntegerWidthTo result extensionBits)
 
+/-- Pinned `arg_attrs_for_rust_scalar` for a top-level raw pointer or FnPtr.
+`pointee_info_at` at offset zero returns safe=None, size=0, align=1 for these
+two source constructors (rustc_middle/ty/layout.rs:1062). Their type identity
+must be checked by the caller; references and pointer-containing ADTs cannot
+use this rule merely because they share a scalar physical layout. -/
+def conservativePointerScalar (layout : TyAndLayout Ty) : Except String (ArgAbi Ty) := do
+  let .Scalar (.Initialized (value := .Pointer _) (validRange := range)) := layout.layout.backendRepr
+    | throw "raw/FnPtr ABI requires an initialized scalar pointer layout"
+  pure (new layout fun _ _ =>
+    { ArgAttributes.new with regular := 128 ||| (if range.contains 0 then 0 else 16) })
+
 /-- Initial ABI with empty scalar attributes. A transport recipe may use this
 only when rustc's final adjusted argument equals this entire initial argument. -/
 def initial (layout : TyAndLayout Ty) : ArgAbi Ty :=

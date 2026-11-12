@@ -40,7 +40,7 @@ for identity in sorted(identities):
 if not any(queried and "::unused)" in identity for _, queried, identity in candidate):
     raise SystemExit("missing unsupported generic-argument residual ABI control")
 if any(not queried and "::unused)" in identity for _, queried, identity in candidate):
-    raise SystemExit("HRTB generic argument escaped the raw signature reification boundary")
-print("PASS unused HRTB function-pointer generic argument keeps its explicit ABI query")
+    raise SystemExit("unsupported generic argument escaped the raw signature reification boundary")
+print("PASS unused dynamic generic argument keeps its explicit ABI query")
 for label, rows in [("oracle", oracle), ("candidate", candidate)]:
     print(label, dict(Counter((route, queried) for route, queried, _ in rows)))

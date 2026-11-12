@@ -2,6 +2,7 @@ import Miri.Input.WorldNamedArguments
 import Miri.Input.WorldConstantName
 import Miri.Input.RuntimeMetadata
 import Miri.Input.FunctionTypePrinter
+import Miri.Input.BinderRegionNames
 
 /-! Pinned diagnostic type printer. Structural constructors and local named
 ADTs/FnDefs are printed from canonical raw definition paths and source templates.
@@ -12,6 +13,9 @@ open TypeArena
 private structure PrinterState where
   printedTypes : Nat := 0
   emittedBytes : Nat := 0
+  binderDepth : Nat := 0
+  regionIndex : Nat := 0
+  usedRegionNames : Array String := #[]
 private abbrev PrintM := StateT PrinterState WorldM
 private def lift [Monad m] [MonadExceptOf String m] (value : Except String A) : m A :=
   match value with | .ok result => pure result | .error error => throw error
@@ -30,6 +34,39 @@ private def integerName : MIR.IntegerKind → String
   | .i8 => "i8" | .i16 => "i16" | .i32 => "i32" | .i64 => "i64"
   | .i128 => "i128" | .isize => "isize" | .u8 => "u8" | .u16 => "u16"
   | .u32 => "u32" | .u64 => "u64" | .u128 => "u128" | .usize => "usize"
+
+private def rawRegionName (world : World) (identity : GenericSubstitution.DefinitionIdentity) :
+    Except String String := do
+  let id ← world.definitionRef identity
+  let some source := world.definitions[id]? | throw "named bound-region definition is absent"
+  let some path := source.rawPath | throw "named bound-region raw path is absent"
+  let some component := path.components.back? | throw "named bound-region path is empty"
+  unless component.kind == "lifetime" do throw "named bound-region definition is not a lifetime"
+  let some name := component.name | throw "named bound-region source symbol is absent"
+  pure name
+
+private def renderSignature (world : World) (options : Catalog.PrintOptions) (fuel : Nat)
+    (printType : GenericSubstitution.Term → PrintM String)
+    (signature : GenericSubstitution.Term) (forceSafe : Bool := false) : PrintM String := do
+  let state ← get
+  if options.verboseInternals then
+    let .binder variables _ := signature | throw "function source binder absent"
+    unless variables.isEmpty do throw "verbose bound-variable printing is not implemented"
+  let used ← if state.binderDepth == 0 then
+    lift (BinderRegionNames.collect (rawRegionName world) fuel signature)
+    else pure state.usedRegionNames
+  let named ← lift (BinderRegionNames.name (rawRegionName world) fuel state.regionIndex used signature)
+  set {state with
+    binderDepth := state.binderDepth + 1
+    regionIndex := named.nextIndex
+    usedRegionNames := used}
+  let leadingText ← emit named.leadingText
+  let text ← FunctionTypePrinter.render emit printType named.body forceSafe
+  modify fun current => {current with
+    binderDepth := state.binderDepth
+    regionIndex := state.regionIndex
+    usedRegionNames := state.usedRegionNames}
+  pure (leadingText ++ text)
 
 private def visit (metadata : RuntimeMetadata) (options : Catalog.PrintOptions) :
     Nat → TypeId → PrintM String
@@ -64,7 +101,7 @@ private def visit (metadata : RuntimeMetadata) (options : Catalog.PrintOptions) 
       let printTerm := fun term => do
         let id ← liftM (GenericInstantiationWorld.resolveType fuel term)
         child id
-      FunctionTypePrinter.render emit printTerm signature
+      renderSignature world options (fuel + 1) printTerm signature
     | .rawPointer pointee mutability =>
       enter options true
       let leadingText ← emit (if mutability == .Mut then "*mut " else "*const ")
@@ -74,6 +111,9 @@ private def visit (metadata : RuntimeMetadata) (options : Catalog.PrintOptions) 
       if options.verboseInternals then throw "verbose reference type printing is not implemented"
       let lifetime ← match region with
         | .Erased => pure "" | .Static => pure "'static "
+        | .Bound (.Bound index) _ (.NamedForPrinting name) => do
+          unless index < (← get).binderDepth do throw "diagnostic type contains an escaping bound region"
+          pure (name ++ " ")
         | _ => throw "constructed reference type printing requires its named-region source printer"
       let leadingText ← emit ("&" ++ lifetime ++ if mutability == .Mut then "mut " else "")
       pure (leadingText ++ (← child pointee))
@@ -104,8 +144,6 @@ private def visit (metadata : RuntimeMetadata) (options : Catalog.PrintOptions) 
       let some path := definition.rawPath | throw "FnDef printing requires raw definition path"
       let some safety := path.functionHeaderSafety
         | throw "FnDef printing requires raw local HIR header safety"
-      unless path.parentParameterCount == 0 do throw "FnDef inherited generic paths are not implemented"
-      unless path.parameterDefaults.size == arguments.size do throw "FnDef argument/header domain mismatch"
       let visibleArguments ← lift (WorldNamedArguments.own world fuel path arguments)
       let some template := definition.genericTemplate | throw "FnDef source signature template absent"
       let argumentsTerm ← lift (GenericInstantiationWorld.ofArguments world fuel arguments)
@@ -115,7 +153,7 @@ private def visit (metadata : RuntimeMetadata) (options : Catalog.PrintOptions) 
       let printTerm := fun term => do
         let id ← liftM (GenericInstantiationWorld.resolveType fuel term)
         child id
-      result := result ++ (← FunctionTypePrinter.render emit printTerm signature forceSafe)
+      result := result ++ (← renderSignature world options (fuel + 1) printTerm signature forceSafe)
       result := result ++ (← emit " {")
       result := result ++ (← emit (← lift (DefinitionPath.localNamedPath path options.verboseInternals
         options.trimDiagnosticPaths options.trimmedDefPaths)))
@@ -146,10 +184,6 @@ private def visit (metadata : RuntimeMetadata) (options : Catalog.PrintOptions) 
         throw "field-representing ADT printing is not implemented"
       let some path := definition.rawPath
         | throw "named ADT printing requires raw definition path"
-      unless path.parentParameterCount == 0 do
-        throw "nested generic definition-path printing is not implemented"
-      unless path.parameterDefaults.size == arguments.size do
-        throw "named ADT argument domain differs from declaration generic header"
       let arguments ← lift (WorldNamedArguments.own world fuel path arguments)
       let name ← lift (DefinitionPath.localNamedPath path options.verboseInternals
         options.trimDiagnosticPaths options.trimmedDefPaths)

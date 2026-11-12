@@ -7,13 +7,16 @@ import Miri.Input.RuntimeMetadata
 session budget, visible-parent paths, trimming or verbose settings. -/
 namespace Miri.Input.WorldIntrinsicTypeName
 open TypeArena
-private abbrev PrintM := StateT Nat WorldM
+private structure PrinterState where
+  emittedBytes : Nat := 0
+  binderDepth : Nat := 0
+private abbrev PrintM := StateT PrinterState WorldM
 private def lift [Monad m] [MonadExceptOf String m] (value : Except String A) : m A :=
   match value with | .ok result => pure result | .error error => throw error
 private def emit (text : String) : PrintM String := do
-  let count ← get
-  unless count + text.utf8ByteSize <= 100000 do throw "intrinsic type-name output exceeds supported budget"
-  set (count + text.utf8ByteSize)
+  let state ← get
+  unless state.emittedBytes + text.utf8ByteSize <= 100000 do throw "intrinsic type-name output exceeds supported budget"
+  set {state with emittedBytes := state.emittedBytes + text.utf8ByteSize}
   pure text
 private def integerName : MIR.IntegerKind → String
   | .i8 => "i8" | .i16 => "i16" | .i32 => "i32" | .i64 => "i64"
@@ -45,8 +48,6 @@ private def visit (metadata : RuntimeMetadata) : Nat → TypeId → PrintM Strin
       let reference ← lift (world.definitionRef identity)
       let some definition := world.definitions[reference]? | throw "intrinsic named definition absent"
       let some path := definition.rawPath | throw "intrinsic named type requires raw definition path"
-      unless path.parentParameterCount == 0 do throw "intrinsic nested generic path printing is not implemented"
-      unless path.parameterDefaults.size == arguments.size do throw "intrinsic generic argument domain mismatch"
       let arguments ← lift (WorldNamedArguments.own world fuel path arguments)
       let mut result ← emit (← lift (sourcePath path))
       if !arguments.isEmpty then
@@ -76,18 +77,28 @@ private def visit (metadata : RuntimeMetadata) : Nat → TypeId → PrintM Strin
       let term ← lift (GenericInstantiationWorld.ofType world (fuel + 1) id)
       let .node .type "function_pointer" "" (.cons signature .nil) := term
         | throw "function-pointer source signature absent"
+      let .binder variables body := signature | throw "function-pointer source binder absent"
+      unless variables.all (fun value => match value with | .region _ => true | _ => false) do
+        throw "intrinsic type/constant binder printing is not implemented"
+      let depth := (← get).binderDepth
+      modify fun state => {state with binderDepth := depth + 1}
       let printTerm := fun term => do
         let id ← liftM (GenericInstantiationWorld.resolveType fuel term)
         child id
-      FunctionTypePrinter.render emit printTerm signature
+      let result ← FunctionTypePrinter.render emit printTerm body
+      modify fun state => {state with binderDepth := depth}
+      pure result
     | .rawPointer pointee mutability =>
       let start ← emit (if mutability == .Mut then "*mut " else "*const ")
       pure (start ++ (← child pointee))
     | .reference pointee mutability region =>
-      match region with
-      | .Erased | .Static | .EarlyParameter .. => pure ()
-      | _ => throw "intrinsic optional bound-region printing is not implemented"
-      let start ← emit (if mutability == .Mut then "&mut " else "&")
+      let lifetime ← match region with
+        | .Erased | .Static | .EarlyParameter .. => pure ""
+        | .Bound (.Bound index) .. => do
+          unless index < (← get).binderDepth do throw "intrinsic type contains an escaping bound region"
+          pure "'_ "
+        | _ => throw "intrinsic optional bound-region printing is not implemented"
+      let start ← emit ("&" ++ lifetime ++ if mutability == .Mut then "mut " else "")
       pure (start ++ (← child pointee))
     | .tuple elements =>
       let mut result ← emit "("
@@ -108,6 +119,6 @@ private def visit (metadata : RuntimeMetadata) : Nat → TypeId → PrintM Strin
       pure (start ++ inner ++ (← emit "]"))
     | _ => throw "intrinsic type-name source family is not implemented"
 def query (metadata : RuntimeMetadata) (fuel : Nat) (id : TypeId) : WorldM String := do
-  let (result,_) ← (visit metadata fuel id).run 0
+  let (result,_) ← (visit metadata fuel id).run {}
   pure result
 end Miri.Input.WorldIntrinsicTypeName

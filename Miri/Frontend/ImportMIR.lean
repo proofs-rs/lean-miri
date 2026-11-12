@@ -85,6 +85,7 @@ deriving instance ToExpr for MIR.GenericArg
 deriving instance ToExpr for MIR.ValTreeNode
 deriving instance ToExpr for MIR.ValTree
 deriving instance ToExpr for MIR.TypeConst
+deriving instance ToExpr for MIR.UnevaluatedConst
 deriving instance ToExpr for MIR.MirConst
 deriving instance ToExpr for MIR.ConstOperand
 deriving instance ToExpr for MIR.ProjectionElem
@@ -233,6 +234,7 @@ deriving instance ToExpr for Input.AdtDeclaration.FieldSafety
 deriving instance ToExpr for Input.AdtDeclaration.Material
 deriving instance ToExpr for Input.DefinitionPath.HeaderSafety
 deriving instance ToExpr for Input.DefinitionPath.Component
+deriving instance ToExpr for Input.DefinitionPath.GenericHeader
 deriving instance ToExpr for Input.DefinitionPath.Material
 deriving instance ToExpr for Input.FunctionAbiMaterial
 deriving instance ToExpr for Input.SourceEnvironment.Parent

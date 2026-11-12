@@ -1,8 +1,8 @@
 import Miri.Input.AllocationImage
 import Miri.Interpreter.Projection
 
-/-! Pinned operand.rs::const_val_to_op for resolved executable MIR.
-Compiler normalization and evaluation happen before import. Global conversion
+/-! Pinned operand.rs::const_val_to_op for executable MIR values.
+Compiler normalization/evaluation belongs to the execution's source providers. Global conversion
 retains memory.rs classification and its TLS/extern distinction; machine hooks
 remain stateful and fallible because root adjustment allocates runtime provenance.
 -/

@@ -11,6 +11,7 @@ structure Context where
   typeConstantCount : Nat
   spanCount : Nat
   scalarSize : Nat → Option Nat := fun _ => none
+  typeConstantType : Nat → Option Nat := fun _ => none
   localCount : Nat := 0
   blockCount : Nat := 0
   scopeCount : Nat := 0
@@ -24,6 +25,7 @@ structure References where
   typeConstants : Option Nat := none
   spans : Option Nat := none
   scalarWidths : Array (Nat × Nat) := #[]
+  mirTypeConstants : Array (Nat × Nat) := #[]
 
 structure ParsedBody where
   value : Body
@@ -64,6 +66,9 @@ def validateReferences (ctx : Context) (refs : References) : Result Unit := do
   for (ty, size) in refs.scalarWidths do
     let some expected := ctx.scalarSize ty | throw s!"missing scalar byte width for type {ty}"
     unless size == expected do throw s!"scalar byte width disagrees with type {ty}"
+  for (ty,id) in refs.mirTypeConstants do
+    let some actual := ctx.typeConstantType id | throw s!"MIR type constant {id} has no concrete source type"
+    unless actual == ty do throw s!"MIR type constant {id} type disagrees with its raw source value"
 
 def resolveBody (ctx : Context) (body : ParsedBody) : Result Body := do
   validateReferences ctx body.references
@@ -199,9 +204,19 @@ def makeConstant (ty : Nat) (span : MIR.SpanRef) (userType : Option Nat)
   | _ => pure ()
   pure ⟨span, userType, .Val value ty⟩
 
+/-- Compact source/value join retained until the type-constant table is known.
+No ValTree is evaluated while parsing executable MIR. -/
+def makeTypeConstant (ty : Nat) (span : MIR.SpanRef) (userType : Option Nat)
+    (constant : Nat) : Parser MIR.ConstOperand := do
+  recordType ty
+  recordSpan span.id
+  recordTypeConstant constant
+  modify fun state => {state with references.mirTypeConstants :=
+    state.references.mirTypeConstants.push (ty,constant)}
+  pure ⟨span,userType,.Ty ty constant⟩
+
 def constantType (constant : MIR.ConstOperand) : Option Nat :=
-  match constant.value with
-  | .Val _ ty => some ty
+  some constant.value.declaredType
 
 private def unwindTargets : MIR.UnwindAction → Array Nat
   | .Cleanup target => #[target]

@@ -11,9 +11,9 @@ private def require (value : Except String α) : IO α :=
   match value with | .ok result => pure result | .error error => throw (IO.userError error)
 private def rejectingHooks : Hooks := {
   implementationPredicates := fun _ => .error "no raw impl scope supplied",
-  normalize := fun _ _ value => .ok value,
-  builtin := fun _ _ _ _ => .error "no external builtin supplied",
-  external := fun _ _ _ _ => .error "no external predicate supplied" }
+  normalize := fun _ _ _ value => .ok value,
+  builtin := fun _ _ _ _ _ => .error "no external builtin supplied",
+  external := fun _ _ _ _ _ => .error "no external predicate supplied" }
 def main (args : List String) : IO Unit := do
   let [candidatePath, oraclePath] := args
     | throw (IO.userError "usage: CompareEnvironmentBounds candidate.json oracle.json")

@@ -47,16 +47,4 @@ def evalValueWithLayout (runtime : Input.RuntimeMetadata)
       {result.hooks.state.machine with memory := result.memory}}
   | .error error result => .error (result.hooks.pendingError.getD (classifyConstantError error))
       {result.hooks.state with machine := {result.hooks.state.machine with memory := result.memory}}
-/-- Resolved MIR operands carry the compiler's final value and type. -/
-def evalOperandWithLayout (runtime : Input.RuntimeMetadata)
-    (functions : FunctionPointers.Hooks K User Other) (arithmetic : PointerArithmetic)
-    (externStatic : DefId → MachineHooks.M K User (Pointer Provenance))
-    (classifyConstantError : ConstantError → StepError)
-    (constant : ConstOperand) (known : Option LocalLayout)
-    (checkKnown : Option (LocalLayout → LocalLayout → MachineHooks.M K User Bool)) :
-    MachineHooks.M K User (OpTy Provenance) := do
-  match constant.value with
-  | .Val value ty =>
-    evalValueWithLayout runtime functions arithmetic externStatic classifyConstantError value ty known checkKnown
-
 end Miri.Interpreter.ConstantMachine

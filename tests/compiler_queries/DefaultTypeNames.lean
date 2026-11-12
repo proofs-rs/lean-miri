@@ -15,7 +15,7 @@ def main (args : List String) : IO Unit := do
   let term ← must (GenericMaterialCodec.readTerm 4096 (← must (row.getObjVal? "type")))
   let missingDefaults := {document with definitions := document.definitions.map fun definition =>
     {definition with rawPath := definition.rawPath.map fun path =>
-      {path with parameterDefaultExpressions := none}} }
+      {path with genericHeader := none}} }
   let badWorld ← must (World.ofDocument missingDefaults)
   let (badId,badWorld) ← must ((GenericInstantiationWorld.resolveType 512 term).run badWorld)
   match (WorldTypeName.query metadata 512 badId).run badWorld with

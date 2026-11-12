@@ -1,4 +1,5 @@
 import Miri.Input.SourceEnvironmentRuntime
+import Miri.Input.ScopedNormalization
 import Miri.Input.AliasMaterialProgram
 import Miri.Input.GenericInstantiation
 import Miri.Input.MirTemplate
@@ -65,7 +66,7 @@ def sizedHooks (context : Context) (normalize : Nat → Term → Except String T
 /-- One shared builtin/external-predicate dictionary for alias normalization and
 standalone raw trait queries. Normalization is a mandatory recursive dependency. -/
 def traitHooks (context : Context) (_depth : Nat)
-    (normalize : Nat → Array TraitSelection.Goal → Term → Except String Term) :
+    (normalize : Nat → Nat → Array TraitSelection.Goal → Term → Except String Term) :
     TraitSelection.Hooks := {
       implementationPredicates := fun implementation => do
         let lookup := SourceEnvironmentRuntime.lookupDefinitions context.generic.definitions
@@ -74,7 +75,7 @@ def traitHooks (context : Context) (_depth : Nat)
           throw "impl generic header differs from its canonical raw source scope"
         SourceEnvironment.predicates lookup 16384 implementation.definition
       normalize := normalize
-      builtin := fun remaining activeGoals declaration goal => do
+      builtin := fun universeIndex remaining activeGoals declaration goal => do
         unless goal.traitRef.arguments.size == 1 do throw "structural builtin requires exactly Self"
         let some self := goal.traitRef.arguments[0]? | throw "structural builtin Self absent"
         if declaration.isAuto then
@@ -88,7 +89,7 @@ def traitHooks (context : Context) (_depth : Nat)
         | .sized | .metaSized =>
           let kind := if kind == .sized then StructuralSized.TraitKind.sized else .metaSized
           let answer ← TermSized.query
-            (sizedHooks context (fun fuel term => normalize fuel activeGoals term))
+            (sizedHooks context (fun fuel term => normalize universeIndex fuel activeGoals term))
             kind (remaining + 1) self
           return if answer then some #[] else none
         | _ => pure ()
@@ -100,27 +101,29 @@ def traitHooks (context : Context) (_depth : Nat)
             ({variables := #[], predicate := (.trait ⟨.positive,⟨goal.traitRef.definition,#[ty]⟩⟩)} : TraitSelection.Clause))
         | .freeze | .unpin | .unsafeUnpin => return none
         | _ => throw "unimplemented structural trait builtin"
-      external := fun remaining activeGoals _ predicate => do
+      external := fun universeIndex remaining activeGoals _environment predicate => do
         match predicate with
         | .projection .projectionType definition arguments expected =>
           let projection := Term.definition .type "alias_projection_not_rigid" definition (Terms.ofArray arguments)
-          let actual ← normalize remaining activeGoals projection
-          let expected ← normalize remaining activeGoals expected
+          let actual ← normalize universeIndex remaining activeGoals projection
+          let expected ← normalize universeIndex remaining activeGoals expected
           if actual = expected then pure (.proven (.equality actual)) else pure .noSolution
         | _ => throw "unimplemented alias normalization predicate semantics"  }
 
 /-- Recursive alias/trait composition shares both active stacks and decreases an
 outer depth bound through callback re-entry. Trait calls also retain the engine's
 explicit work bound. Unknown builtins/predicates fail instead of gaining evidence. -/
-def normalizeTerm (context : Context) (work : Nat) :
+def normalizeTermScoped (context : Context) (maximumUniverse work : Nat) :
     Nat → Array AliasNormalization.Key → Array TraitSelection.Goal → Term → Except String Term
   | 0, _, _, _ => .error "runtime alias/trait recursion exhausted"
   | fuel + 1, aliases, goals, input => do
+    if maximumUniverse != 0 || (← TraitSelection.Match.requiresQuantified (fuel + 1) input) then
+      return ← ScopedNormalization.normalize maximumUniverse (fuel + 1) input
     let input ← MirTemplate.eraseFreeRegions (fuel + 1) input
     MirTemplate.validateClosed (fuel + 1) input
     let currentTraitHooks (activeAliases : Array AliasNormalization.Key) :=
       traitHooks context (fuel + 1)
-        (fun _ activeGoals term => normalizeTerm context work fuel activeAliases activeGoals term)
+        (fun universeIndex _ activeGoals term => normalizeTermScoped context universeIndex work fuel activeAliases activeGoals term)
     let environment : TraitSelection.Environment := {eraseRegions := true}
     let aliasHooks : AliasNormalization.Hooks := {
       ownPredicates := fun definition => do
@@ -139,9 +142,17 @@ def normalizeTerm (context : Context) (work : Nat) :
         requireProven (← TraitSelection.fulfillWithActive context.traits (currentTraitHooks activeAliases)
           environment (min remaining fuel) work goals predicates) }
     let result ← AliasNormalization.normalize context.aliases aliasHooks (fuel + 1) aliases input
+    if ← TraitSelection.Match.requiresQuantified (fuel + 1) result then
+      return ← ScopedNormalization.normalize maximumUniverse (fuel + 1) result
     let result ← MirTemplate.eraseFreeRegions (fuel + 1) result
     MirTemplate.validateClosed (fuel + 1) result
     pure result
+
+/-- Runtime entry points begin outside any quantified query scope. -/
+def normalizeTerm (context : Context) (work depth : Nat)
+    (aliases : Array AliasNormalization.Key) (goals : Array TraitSelection.Goal)
+    (input : Term) : Except String Term :=
+  normalizeTermScoped context 0 work depth aliases goals input
 
 def normalizeType (context : Context) (depth work : Nat) (id : TypeId) : Except String TypeId := do
   let source ← TypeArena.node context.generic.types id
@@ -153,15 +164,15 @@ def normalizeType (context : Context) (depth work : Nat) (id : TypeId) : Except 
 def solveGoal (context : Context) (depth work : Nat) (goal : TraitSelection.Goal) :
     Except String TraitSelection.Outcome :=
   TraitSelection.solve context.traits
-    (traitHooks context depth (fun remaining goals term =>
-      normalizeTerm context work remaining #[] goals term))
+    (traitHooks context depth (fun universeIndex remaining goals term =>
+      normalizeTermScoped context universeIndex work remaining #[] goals term))
     {eraseRegions := true} depth work goal
 
 def selectGoal (context : Context) (depth work : Nat) (goal : TraitSelection.TraitRef) :
     Except String TraitSelection.ImplSelection :=
   TraitSelection.selectUnique context.traits
-    (traitHooks context depth (fun remaining goals term =>
-      normalizeTerm context work remaining #[] goals term))
+    (traitHooks context depth (fun universeIndex remaining goals term =>
+      normalizeTermScoped context universeIndex work remaining #[] goals term))
     {eraseRegions := true} depth work goal
 
 end Miri.Input.AliasRuntime
