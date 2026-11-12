@@ -730,9 +730,12 @@ initial QA wrapper compared a process object with an integer after six successfu
 comparisons; only the wrapper/provider/mutation portion was corrected and resumed
 on unchanged source/snapshot/binary-bound records, not counted as six new runs.
 Exporter Rust units (44), Python checks (45) and the combined quick check (128)
-pass. The full input suite, nine Rust integration suites, the runtime ABI probe,
-maintained-fixture compatibility checks and final fresh 268-module proof closure
-on this combined revision are pending.
+pass. The complete input suite and all 20 maintained schema-11 inputs also pass
+(15 connected, three eval-core, fixed empty-function and strict unit); two older
+schema-3 archives remain outside that contract and reject missing initialization
+metadata. Archive/input hashes and reader source/OLean seals are unchanged. Nine
+Rust integration suites, the runtime ABI probe and final fresh 268-module proof
+closure on this combined revision are pending.
 Fixed Rust/MIR input bytes, SHA records, theorem claims and budgets are unchanged;
 these finite comparisons do not establish arbitrary coroutine or Rust safety.
 
