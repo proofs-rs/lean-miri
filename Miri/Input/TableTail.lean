@@ -1,4 +1,5 @@
 import Miri.Input.AliasMaterialCodec
+import Miri.Input.AdtDeclarationCodec
 import Miri.Input.TableCore
 import Miri.Input.GenericMaterialCodec
 
@@ -274,6 +275,7 @@ private structure ParseDefinitionIdFields where
   adtDrop : Option AdtDropMaterial := none
   genericTemplate : Option GenericSubstitution.DefinitionTemplate := none
   aliasDeclaration : Option AliasMaterial.Declaration := none
+  adtDeclaration : Option Lean.Json := none
 
 def parseDefinitionId (path : String) : Parser (DefinitionId) := do
   let s ← object ({} : ParseDefinitionIdFields) fun s key => do
@@ -284,6 +286,7 @@ def parseDefinitionId (path : String) : Parser (DefinitionId) := do
     | "adt_drop" => return { s with adtDrop := some (← parseAdtDropMaterial (path ++ ".adt_drop")) }
     | "generic_template" => return { s with genericTemplate := some (← GenericMaterialCodec.decodeTemplate) }
     | "alias_declaration" => return { s with aliasDeclaration := some (← AliasMaterialCodec.decodeDeclaration) }
+    | "adt_declaration" => return { s with adtDeclaration := some (← Lean.Json.Parser.anyCore) }
     | _ => skipValue; pure s
   let crate ← required s.crate (path ++ ".crate")
   let index ← required s.index (path ++ ".index")
@@ -292,7 +295,28 @@ def parseDefinitionId (path : String) : Parser (DefinitionId) := do
       fail s!"{path}: source alias declaration identity mismatch"
     unless declaration.hasValue == s.genericTemplate.isSome do
       fail s!"{path}: source alias RHS availability disagrees with shared template"
-  return ⟨crate, index, s.bodyTrackCaller, s.adtDrop, s.genericTemplate, s.aliasDeclaration⟩
+  let adtDeclaration ← match s.adtDeclaration with
+    | none => pure none
+    | some raw => do
+      let some template := s.genericTemplate
+        | fail s!"{path}: raw ADT declaration requires its source template"
+      let .definition .type "adt" identity _ := template.typeExpression
+        | fail s!"{path}: raw ADT declaration has no nominal source type"
+      unless identity == (⟨crate,index⟩ : GenericSubstitution.DefinitionIdentity) do
+        fail s!"{path}: raw ADT source identity mismatch"
+      pure (some (← liftExcept (AdtDeclarationCodec.read template raw)))
+  if let some template := s.genericTemplate then
+    if let .definition .type "adt" identity _ := template.typeExpression then
+      if identity == (⟨crate,index⟩ : GenericSubstitution.DefinitionIdentity) && adtDeclaration.isNone then
+        fail s!"{path}: nominal ADT source template requires raw declaration attributes"
+  return {
+    crateIndex := crate
+    index := index
+    bodyTrackCaller := s.bodyTrackCaller
+    adtDrop := s.adtDrop
+    genericTemplate := s.genericTemplate
+    aliasDeclaration := s.aliasDeclaration
+    adtDeclaration := adtDeclaration }
 
 def parseDefinitionRef (_path : String) : Parser DefinitionRef := natural
 

@@ -23,6 +23,53 @@ private def fixtureDefinition (kind : Json) : Option Nat := do
     if shim == "vtable" then (kind.getObjVal? "def_id" >>= Json.getNat?).toOption else none
   else none
 
+/-- Conservative test-only reachability check. It follows raw type/constant
+references, refuses bound references and unsupported dynamic predicate graphs,
+and never identifies the lost original FnDef binder (including unused vars). -/
+private def fixtureBoundFreeArguments (types constants : Array Json) (args : Json) : Bool := Id.run do
+  let mut pending := #[args]
+  let mut seenTypes : Array Nat := #[]
+  let mut seenConstants : Array Nat := #[]
+  for _ in [:1000000] do
+    let some value := pending.back? | return true
+    pending := pending.pop
+    match value with
+    | .arr children => pending := pending ++ children
+    | .obj fields =>
+      let kind := (value.getObjVal? "kind" >>= Json.getStr?).toOption.getD ""
+      if kind == "bound" || kind == "dynamic_trait_object" then return false
+      let mut typeRefs : Array Nat := #[]
+      let mut constantRefs : Array Nat := #[]
+      if kind == "type" || kind == "const" then
+        if let .ok id := value.getObjVal? "value" >>= Json.getNat? then
+          if kind == "type" then typeRefs := typeRefs.push id
+          else constantRefs := constantRefs.push id
+      for (key, child) in fields.toArray do
+        pending := pending.push child
+        if ["pointee", "element", "base", "inner", "output", "type"].contains key then
+          if let .ok id := child.getNat? then typeRefs := typeRefs.push id
+        if ["length", "start", "end"].contains key then
+          if let .ok id := child.getNat? then constantRefs := constantRefs.push id
+        if key == "inputs" || key == "elements" then
+          if let .ok children := child.getArr? then
+            for child in children do
+              if let .ok id := child.getNat? then
+                if kind == "branch" then constantRefs := constantRefs.push id
+                else typeRefs := typeRefs.push id
+      for id in typeRefs do
+        unless seenTypes.contains id do
+          let some node := types[id]? | return false
+          let .ok shape := node.getObjVal? "shape" | return false
+          seenTypes := seenTypes.push id
+          pending := pending.push shape
+      for id in constantRefs do
+        unless seenConstants.contains id do
+          let some constant := constants[id]? | return false
+          seenConstants := seenConstants.push id
+          pending := pending.push constant
+    | _ => pure ()
+  return false
+
 /-- Adapt known old fixtures only. Invalid and current versions pass unchanged
 so production decoder guards remain the subject of negative tests. -/
 def adaptLegacyFixture (source : String) : Except String String := do
@@ -38,6 +85,8 @@ def adaptLegacyFixture (source : String) : Except String String := do
       !bodies.isEmpty && bodies.all (fun body => !(body.getObjVal? "body_kind").isOk))
   unless version == some 11 || version == some 12 || oldBodyEncoding do return source
   let mut value := raw.setObjVal! "schema_version" (toJson (13 : Nat))
+  if !(raw.getObjVal? "instance_abis").isOk then
+    value := value.setObjVal! "instance_abis" (toJson (#[] : Array Json))
   if !(raw.getObjVal? "mir_templates").isOk then
     value := value.setObjVal! "mir_templates" (toJson (#[] : Array Json))
   if !(raw.getObjVal? "compiler_trait_program").isOk then
@@ -49,12 +98,21 @@ def adaptLegacyFixture (source : String) : Except String String := do
       if (body.getObjVal? "body_kind").isOk then body
       else body.setObjVal! "body_kind" (toJson "material")))
   if let .ok types := raw.getObjVal? "types" >>= Json.getArr? then
+    let constants := (raw.getObjVal? "type_constants" >>= Json.getArr?).toOption.getD #[]
     value := value.setObjVal! "types" (toJson (types.map fun node => Id.run do
       if let .ok shape := node.getObjVal? "shape" then
         if (shape.getObjVal? "kind" >>= Json.getStr?) == .ok "alias" &&
             !(shape.getObjVal? "rigid").isOk then
           -- Hypothetical historical component input, not recovered rigidity.
           return node.setObjVal! "shape" (shape.setObjVal! "rigid" (toJson false))
+        if (shape.getObjVal? "kind" >>= Json.getStr?) == .ok "function_definition" &&
+            !(shape.getObjVal? "generic_args_bound_variables").isOk then
+          if let .ok arguments := shape.getObjVal? "generic_args" then
+            if fixtureBoundFreeArguments types constants arguments then
+              -- Explicitly hypothetical historical component representative.
+              -- The original binder, including unused variables, is unrecoverable.
+              return node.setObjVal! "shape"
+                (shape.setObjVal! "generic_args_bound_variables" (toJson (#[] : Array Json)))
       return node))
   if !(raw.getObjVal? "compiler_coroutine_coverage").isOk then
     if let .ok bodies := raw.getObjVal? "bodies" >>= Json.getArr? then

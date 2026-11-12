@@ -20,6 +20,15 @@ namespace Miri.Input.StructuralNeedsDrop
 
 abbrev AdtMaterial := AdtDropMaterial
 
+/-- Pinned util.rs::needs_drop_components_with_async returns no components
+for these kinds, independently of generic/signature binders and pointees.
+No absent binder metadata is reconstructed by this category projection. -/
+def knownKindResult : TypeShapeKind → Option Bool
+  | .int | .uint | .float | .bool | .char | .str | .never
+  | .reference | .rawPointer | .functionDefinition | .functionPointer
+  | .foreign => some false
+  | _ => none
+
 /-- Combine independent components without treating an unresolved component as
 no drop. A known synchronous destructor makes the result true. -/
 def combine (left right : Option Bool) : Option Bool :=
@@ -49,10 +58,8 @@ private def visit (shape : TypeId → Except String TypeShape)
     if let some (_, result) := (← get).find? (·.1 == ty) then return result
     let result ← do
       let source ← liftM (shape ty)
+      if let some result := knownKindResult source.kind then return some result
       match source with
-      | .int _ | .uint _ | .float _ | .bool | .char | .str | .never
-      | .reference .. | .rawPointer .. | .functionDefinition .. | .functionPointer ..
-      | .foreign _ => pure (some false)
       | .dynamicTraitObject .. | .coroutine .. => pure (some true)
       | .closure _ args _ | .coroutineClosure _ args => do
         let isCoroutineClosure := source.kind == .coroutineClosure

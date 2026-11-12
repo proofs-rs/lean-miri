@@ -51,6 +51,10 @@ def validateTemplate (document : ImportDocument) (source : CopyTemplateSource) :
   for block in source.template.skeleton.blocks do
     for statement in block.statements do info statement.source
     info block.terminator.source
+    if let .call _ constantSpan arguments _ _ _ _ functionSpan := block.terminator.kind then
+      span constantSpan.id
+      span functionSpan.id
+      for argument in arguments do span argument.span.id
 
 private def materialCallSites (body : MIR.Body) : Array (Nat × MIR.Operand) := Id.run do
   let mut result := #[]

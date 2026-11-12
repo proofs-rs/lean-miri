@@ -528,6 +528,7 @@ def parseLayoutFieldOffsets : Parser LayoutFieldOffsets := do
   return .arrayFormula (← required fields.stride "stride_bytes") (← required fields.count "field_count")
 
 private structure parseLayoutFields where
+  structType : Option Nat := none
   unionType : Option Nat := none
   tupleType : Option Nat := none
   primitiveRecipe : Option String := none
@@ -546,8 +547,9 @@ private structure parseLayoutFields where
   «randomization_seed» : Option (Nat) := none
 
 def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
-  let s ← object (parseLayoutFields.mk none none none none none none none none none none none none none none none none) fun s key => do
+  let s ← object (parseLayoutFields.mk none none none none none none none none none none none none none none none none none) fun s key => do
     match key with
+    | "struct_type" => return {s with structType := some (← natural)}
     | "union_type" => return {s with unionType := some (← natural)}
     | "tuple_type" => return {s with tupleType := some (← natural)}
     | "primitive_recipe" => return {s with primitiveRecipe := some (← string)}
@@ -565,7 +567,9 @@ def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
     | "largest_niche" => return { s with «largest_niche» := some (← parseNicheLayout) }
     | "randomization_seed" => return { s with «randomization_seed» := some (← natural) }
     | _ => skipValue; pure s
-  if s.primitiveRecipe.isSome || s.tupleType.isSome || s.unionType.isSome then
+  if s.primitiveRecipe.isSome || s.tupleType.isSome || s.unionType.isSome || s.structType.isSome then
+    unless s.structType.isNone || (s.primitiveRecipe.isNone && s.tupleType.isNone && s.unionType.isNone) do
+      fail s!"{path}: conflicting struct layout recipe constructors"
     unless (s.primitiveRecipe.isNone || s.tupleType.isNone) &&
         (s.primitiveRecipe.isNone || s.unionType.isNone) &&
         (s.tupleType.isNone || s.unionType.isNone) do
@@ -582,7 +586,7 @@ def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
           "fn_pointer", "never"].contains recipe do
         fail s!"{path}: unknown primitive layout recipe"
     return {
-      primitiveRecipe := s.primitiveRecipe, tupleType := s.tupleType, unionType := s.unionType, kind := .layout,
+      primitiveRecipe := s.primitiveRecipe, tupleType := s.tupleType, unionType := s.unionType, structType := s.structType, kind := .layout,
       maxReprAlignBytes := none, reprC := false, uninhabited := false,
       largestNiche := none, randomizationSeed := 0, sizeBytes := none,
       abiAlignBytes := none, unadjustedAbiAlignBytes := none,
@@ -989,6 +993,7 @@ private structure parseTypeShapeFields where
   «generic_args» : Option (Array Miri.MIR.GenericArg) := none
   «signature» : Option (FunctionSignature) := none
   «signature_bound_variables» : Option (Array (Miri.MIR.BoundVariableKind)) := none
+  «generic_args_bound_variables» : Option (Array Miri.MIR.BoundVariableKind) := none
   «region» : Option (Miri.MIR.Region) := none
   «mutability» : Option (Miri.MIR.Mutability) := none
   «element» : Option (Nat) := none
@@ -1020,6 +1025,7 @@ private def parseTypeShape (path : String := "$parseTypeShape") : Parser (TypeSh
     | "generic_args" => return { s with «generic_args» := some (← GenericArgsCodec.decode) }
     | "signature" => return { s with «signature» := some (← parseFunctionSignature) }
     | "signature_bound_variables" => return { s with «signature_bound_variables» := some (← array (GenericArgsCodec.boundVariable)) }
+    | "generic_args_bound_variables" => return {s with «generic_args_bound_variables» := some (← array GenericArgsCodec.boundVariable)}
     | "region" => return { s with «region» := some (← GenericArgsCodec.region) }
     | "mutability" => return { s with «mutability» := some (← parseShapeMutability) }
     | "element" => return { s with «element» := some (← natural) }
@@ -1049,6 +1055,7 @@ private def parseTypeShape (path : String := "$parseTypeShape") : Parser (TypeSh
   if s.«generic_args».isSome && !(variant == "adt" || variant == "function_definition" || variant == "closure" || variant == "coroutine_closure" || variant == "coroutine" || variant == "alias") then fail s!"incompatible field `generic_args` for variant `{variant}`"
   if s.«signature».isSome && !(variant == "function_definition" || variant == "function_pointer") then fail s!"incompatible field `signature` for variant `{variant}`"
   if s.«signature_bound_variables».isSome && !(variant == "function_definition" || variant == "function_pointer") then fail s!"incompatible field `signature_bound_variables` for variant `{variant}`"
+  if s.«generic_args_bound_variables».isSome && variant != "function_definition" then fail "generic argument binder on a non-function-definition type"
   if s.«region».isSome && !(variant == "reference" || variant == "dynamic_trait_object") then fail s!"incompatible field `region` for variant `{variant}`"
   if s.«mutability».isSome && !(variant == "reference" || variant == "raw_pointer") then fail s!"incompatible field `mutability` for variant `{variant}`"
   if s.«element».isSome && !(variant == "array" || variant == "slice") then fail s!"incompatible field `element` for variant `{variant}`"
@@ -1093,7 +1100,7 @@ private def parseTypeShape (path : String := "$parseTypeShape") : Parser (TypeSh
   | "slice" => return .slice (← required s.«element» "element")
   | "raw_pointer" => return .rawPointer (← required s.«pointee» "pointee") (← required s.«mutability» "mutability")
   | "reference" => return .reference (← required s.«pointee» "pointee") (← required s.«mutability» "mutability") (← required s.«region» "region")
-  | "function_definition" => return .functionDefinition (← required s.«def_id» "def_id") (← required s.«generic_args» "generic_args") (← required s.«signature» "signature") (← required s.«signature_bound_variables» "signature_bound_variables")
+  | "function_definition" => return .functionDefinition (← required s.«def_id» "def_id") (← required s.«generic_args» "generic_args") (← required s.«signature» "signature") (← required s.«signature_bound_variables» "signature_bound_variables") (← required s.«generic_args_bound_variables» "generic_args_bound_variables")
   | "function_pointer" => return .functionPointer (← required s.«signature» "signature") (← required s.«signature_bound_variables» "signature_bound_variables")
   | "unsafe_binder" => return .unsafeBinder (← required s.«inner» "inner") (← required s.«bound_variables» "bound_variables")
   | "dynamic_trait_object" => return .dynamicTraitObject (← required s.«predicates» "predicates") (← required s.«principal_predicate» "principal_predicate") (← required s.«region» "region")

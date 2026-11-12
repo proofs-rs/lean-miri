@@ -9,7 +9,11 @@ pub fn callee<'tcx>(tcx:TyCtxt<'tcx>, operand:&mir::Operand<'tcx>)->Result<Strin
     if operand.user_ty.is_some() {
         return Err("direct source call requires absent user type annotation".into());
     }
-    let ty::FnDef(def,args)=operand.const_.ty().kind() else {
+    function_type(tcx,operand.const_.ty())
+}
+
+pub fn function_type<'tcx>(tcx:TyCtxt<'tcx>, function_type:ty::Ty<'tcx>)->Result<String,String> {
+    let ty::FnDef(def,args)=function_type.kind() else {
         return Err("direct source call excludes function pointers and virtual receivers".into());
     };
     if tcx.def_kind(*def)!=rustc_hir::def::DefKind::Fn || !args.bound_vars().is_empty() {

@@ -16,6 +16,7 @@ for source in TypeConstructors TypeArena Normalization PointerMetadata Construct
 done
 lake env lean --run tests/compiler_queries/AliasMaterial.lean
 bash tools/check-alias-normalization.sh "$BASELINE"
+bash tools/check-term-sized.sh
 bash tools/export-mir.sh --output "$OUT/novel-array.json" --root miri_start -- \
   tests/repro/compiler-queries/generic-mir-novel-array-start.rs \
   --crate-type=lib --crate-name=novel_array_facts -Cpanic=abort

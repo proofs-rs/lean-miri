@@ -13,6 +13,7 @@ private structure Fixture where
   target : Miri.ABI.RuntimeTargetDataLayout
   types : Array TypeNode
   layouts : Array Layout
+  definitions : Array DefinitionId
 
 /-- A focused source-derived adapter. It reads target/type/layout material
 only, ignoring unrelated FnAbi/catalog sections without inventing their seeds.
@@ -45,14 +46,20 @@ private def readFixture (path : String) (version : Nat) : IO Fixture := do
     let id ← must row.getNat?
     let some value := values[id]? | throw (IO.userError "layout value reference absent")
     must (JsonReader.run DecoderValues.parseLayout value.compress)
-  return ⟨target,types,layouts⟩
+  let definitions ← (← must ((← must (raw.getObjVal? "definitions")).getArr?)).mapM fun row =>
+    must (JsonReader.run (DecoderValues.parseDefinitionId "$.definitions") row.compress)
+  return ⟨target,types,layouts,definitions⟩
 
 private def Fixture.lookup (fixture : Fixture) (id : Nat) : IO Miri.ABI.LayoutData := do
   let some node := fixture.types.find? (·.id == id) | throw (IO.userError "type absent")
-  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId).mapError toString)
+  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions).mapError toString)
 
 def main (args : List String) : IO Unit := do
   let path::candidatePaths := args | throw (IO.userError "expected pinned baseline export [candidate export]")
+  check (!(JsonReader.run DecoderValues.parseLayout "{\"struct_type\":0,\"tuple_type\":0}").isOk)
+    "struct decoder accepted conflicting recipe constructors"
+  check (!(JsonReader.run DecoderValues.parseLayout "{\"struct_type\":0,\"size_bytes\":0}").isOk)
+    "struct decoder accepted an eager size beside raw material"
   let source ← readFixture path 12
   let mut count := 0
   for node in source.types do
@@ -110,3 +117,24 @@ def main (args : List String) : IO Unit := do
       comparisons := comparisons + 1
     check (comparisons >= 8) s!"tuple recipe fixture coverage incomplete: {comparisons}"
     IO.println s!"PASS {comparisons} source tuple recipes equal complete pinned rustc layouts"
+    let mut structRecipes := 0
+    for node in candidate.types do
+      let some recipe := candidate.layouts[node.layoutId]?
+        | throw (IO.userError "candidate struct layout absent")
+      if recipe.structType.isNone then continue
+      check (recipe.structType.isSome && recipe.fields.isNone &&
+        recipe.backendRepresentation.isNone && recipe.sizeBytes.isNone)
+        "candidate struct retained eager layout results"
+      let matching := source.types.filter (fun prior => prior.display == node.display)
+      check (!matching.isEmpty) "struct recipe oracle absent"
+      let actual ← candidate.lookup node.id
+      for prior in matching do
+        check (actual == (← source.lookup prior.id)) s!"struct recipe differs from pinned rustc: {node.display}"
+      check (!(RuntimeMetadata.resolveLayout candidate.target candidate.types candidate.layouts
+        node.layoutId #[]).isOk) "struct recipe accepted absent source declarations"
+      let wrong := candidate.layouts.set! node.layoutId {recipe with structType := some candidate.types.size}
+      check (!(RuntimeMetadata.resolveLayout candidate.target candidate.types wrong
+        node.layoutId candidate.definitions).isOk) "struct recipe accepted absent raw type"
+      structRecipes := structRecipes + 1
+    check (structRecipes >= 7) s!"production struct recipe coverage incomplete: {structRecipes}"
+    IO.println s!"PASS {structRecipes} source struct recipes equal complete pinned rustc layouts; missing declarations/types rejected"

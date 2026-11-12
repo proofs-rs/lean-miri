@@ -100,6 +100,18 @@ private def parseInstances : JsonReader.Parser (Array InstanceNode) :=
       JsonReader.fail s!"$.instances[{index}]: duplicate compiler instance identity"
     pure (value, seen.insert definition (previous.push value))
 
+private def parseInstanceAbis : JsonReader.Parser (Array InstanceAbiMaterial) :=
+  JsonReader.arrayWithState ({} : Std.HashSet Nat) fun seen index => do
+    let fields ← JsonReader.object ((none,none) : Option Nat × Option Nat) fun fields key => do
+      match key with
+      | "instance_id" => return (some (← JsonReader.natural),fields.2)
+      | "fn_abi" => return (fields.1,some (← JsonReader.natural))
+      | _ => JsonReader.fail s!"$.instance_abis[{index}]: unknown residual ABI field"
+    let instanceId ← JsonReader.required fields.1 "instance_id"
+    let abiId ← JsonReader.required fields.2 "fn_abi"
+    if seen.contains instanceId then JsonReader.fail "duplicate instance ABI material identity"
+    pure (⟨instanceId,abiId⟩,seen.insert instanceId)
+
 private def parseFiles : JsonReader.Parser (Array String) :=
   JsonReader.arrayWithState ({} : Std.HashSet String) fun seen index => do
     let value ← JsonReader.string
@@ -211,6 +223,7 @@ private structure DocumentFields where
   byteImages : Option (Array (AllocationBytes × String)) := none
   allocations : Option (Array (Array AllocationNode)) := none
   instances : Option (Array InstanceNode) := none
+  instanceAbis : Option (Array InstanceAbiMaterial) := none
   compilerAbiLayoutSchema : Option (String) := none
   bodies : Option (Array BodySeed) := none
   mirTemplates : Option (Array CopyTemplateSource) := none
@@ -253,6 +266,7 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
     | "byte_images" => return {d with byteImages := some (← parseByteImages)}
     | "allocations" => return {d with allocations := some (← JsonReader.arrayIndexed (fun index => parseAllocation s!"$.allocations[{index}]" pools.mir.initializationRanges pools.mir.relocations))}
     | "instances" => return {d with instances := some (← parseInstances)}
+    | "instance_abis" => return {d with instanceAbis := some (← parseInstanceAbis)}
     | "compiler_abi_layout_schema" => return {d with compilerAbiLayoutSchema := some (← JsonReader.string)}
     | "bodies" =>
       let bodies ← JsonReader.arrayIndexed (fun index => DecodeMIR.parseBodySeed s!"$.bodies[{index}]" (some pools.mir))
@@ -327,6 +341,7 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
     types := ← JsonReader.required d.types "types"
     allocations := allocations
     instances := ← JsonReader.required d.instances "instances"
+    instanceAbis := ← JsonReader.required d.instanceAbis "instance_abis"
     compilerAbiLayoutSchema := some compilerAbiLayoutSchema
     bodies := bodies
     mirTemplates := ← JsonReader.required d.mirTemplates "mir_templates"
@@ -354,6 +369,9 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
   let types := d.types
   let allocations := d.allocations
   let instances := d.instances
+  for material in d.instanceAbis do
+    unless material.instanceId < instances.size && material.abiId < d.functionAbis.size do
+      throw "$.instance_abis: residual ABI key/reference out of bounds"
   let compilerAbiLayoutSchema := d.compilerAbiLayoutSchema
   let bodies := d.bodies
   let bodyRoots := d.bodyRoots
@@ -398,10 +416,10 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
   let scalarSize := fun id => do
     let ty ← types[id]?
     let source ← layouts[ty.layoutId]?
-    if source.primitiveRecipe.isNone && source.tupleType.isNone && source.unionType.isNone then source.sizeBytes
+    if source.primitiveRecipe.isNone && source.tupleType.isNone && source.unionType.isNone && source.structType.isNone then source.sizeBytes
     else match target with
       | .error _ => none
-      | .ok target => match RuntimeMetadata.resolveLayout target types layouts ty.layoutId with
+      | .ok target => match RuntimeMetadata.resolveLayout target types layouts ty.layoutId definitions with
         | .ok layout => some layout.size.bytes.toNat
         | .error _ => none
   let bodyContext : DecodeMIR.Context := {

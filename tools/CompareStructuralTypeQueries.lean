@@ -9,7 +9,8 @@ import Miri.Input.StructuralSized
 the pinned rustc. Old result rows are oracle data only; production queries do
 not read these rows. This driver compares supported source-shape rows, not just roots. Old alias
 shapes without mandatory rigidity are explicitly excluded; their independent
-query facts remain available to normalization dependencies. -/
+query facts remain available to normalization dependencies. Historical FnDef
+shapes also lack their distinct argument binder and are excluded explicitly. -/
 open Miri.Input
 
 -- Decode only the category under comparison. Incompatible ABI and runtime
@@ -18,6 +19,7 @@ private structure OracleInput where
   nodes : Array TypeNode
   facts : Array (Nat × TypeCompilerFacts)
   skippedAliases : Array Nat
+  skippedFnDefs : Array Nat
 
 private def readTypes (source : String) : Except String OracleInput := do
   let value ← Lean.Json.parse source
@@ -31,6 +33,7 @@ private def readTypes (source : String) : Except String OracleInput := do
   let mut nodes := #[]
   let mut facts := #[]
   let mut skippedAliases := #[]
+  let mut skippedFnDefs := #[]
   for raw in types do
     let id ← (← raw.getObjVal? "type_id").getNat?
     let sourceFacts ← raw.getObjVal? "compiler_facts"
@@ -40,15 +43,20 @@ private def readTypes (source : String) : Except String OracleInput := do
     let shape ← raw.getObjVal? "shape"
     if (← (← shape.getObjVal? "kind").getStr?) == "alias" && (shape.getObjVal? "rigid").toOption.isNone then
       skippedAliases := skippedAliases.push id
+    else if (← (← shape.getObjVal? "kind").getStr?) == "function_definition" &&
+        (shape.getObjVal? "generic_args_bound_variables").toOption.isNone then
+      skippedFnDefs := skippedFnDefs.push id
     else
       nodes := nodes.push (← JsonReader.run (DecoderValues.parseTypeNode "$oracle.types" pool discriminants) raw.compress)
-  pure {nodes, facts, skippedAliases}
+  pure {nodes, facts, skippedAliases, skippedFnDefs}
 
 private def check (input : OracleInput) : Except String (Nat × Nat × Nat × Nat × Nat × Nat) := do
   let nodes := input.nodes
   let lookup (id : Nat) : Except String TypeNode := do
     if input.skippedAliases.contains id then
       throw s!"ported query requires absent baseline alias rigidity for type {id}"
+    if input.skippedFnDefs.contains id then
+      throw s!"ported query requires absent baseline FnDef argument binder for type {id}"
     let some node := nodes.find? (·.id == id) | throw s!"absent type {id}"
     return node
   let oracle (id : Nat) (key : String) : Except String (Option Nat) := do
@@ -123,5 +131,5 @@ def main (args : List String) : IO UInt32 := do
     match check decoded with
     | .error error => throw (IO.userError s!"{path}: {error}")
     | .ok (count, boxes, pointers, tails, sizedPositive, sizedNegative) =>
-      IO.println s!"{path}: {count} rustc/Lean structural query comparisons passed; Box={boxes}, raw_pointer={pointers}, nontrivial_tail={tails}, sized={sizedPositive}, unsized={sizedNegative}; skipped_legacy_alias_shapes={decoded.skippedAliases.size}"
+      IO.println s!"{path}: {count} rustc/Lean structural query comparisons passed; Box={boxes}, raw_pointer={pointers}, nontrivial_tail={tails}, sized={sizedPositive}, unsized={sizedNegative}; skipped_legacy_alias_shapes={decoded.skippedAliases.size}; skipped_legacy_fndef_shapes={decoded.skippedFnDefs.size}"
   return 0

@@ -128,7 +128,7 @@ private def predicateTerms : Predicate → Array Term
   | .hostEffect _ traitRef => traitRef.arguments
   | .unstableFeature _ => #[]
 
-private def validateClauses (parameters : Array ArgSort) (values : Array Clause) : Except String Unit := do
+def validateClauses (parameters : Array ArgSort) (values : Array Clause) : Except String Unit := do
   for clause in values do
     for value in predicateTerms clause.predicate do
       GenericMaterialCodec.validateParameters parameters 4096 value

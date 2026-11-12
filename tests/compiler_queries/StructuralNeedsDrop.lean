@@ -74,3 +74,8 @@ private def sharedGraph (id : Nat) : Except String TypeShape :=
   unless result == (Except.ok (some false) : Except String (Option Bool)) do
     throw (IO.userError "shared needs_drop graph did not resolve to no drop")
   : IO Unit)
+
+-- Exact source-kind rule, independent of function argument/signature binders.
+example : StructuralNeedsDrop.knownKindResult .functionDefinition = some false := by decide +kernel
+example : StructuralNeedsDrop.knownKindResult .functionPointer = some false := by decide +kernel
+example : StructuralNeedsDrop.knownKindResult .adt = none := by decide +kernel

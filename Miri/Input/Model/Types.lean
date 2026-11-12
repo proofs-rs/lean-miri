@@ -1,4 +1,5 @@
 import Miri.Input.AliasMaterial
+import Miri.Input.AdtDeclaration
 import Lean
 import Miri.Memory.CtfeProvenance
 import Miri.MIR.Operators
@@ -60,10 +61,6 @@ inductive IntegerTypeTag where
 
 inductive FloatTypeTag where
   | f16 | f16b | f32 | f64 | f128 | ppcf128
-  deriving Repr, DecidableEq
-
-inductive AdtKind where
-  | structKind | unionKind | enumKind
   deriving Repr, DecidableEq
 
 structure TypeShapeMetadata where
@@ -242,6 +239,7 @@ structure Layout where
   backendRepr : Option TaggedNode
   primitiveRecipe : Option String := none
   tupleType : Option TypeId := none
+  structType : Option TypeId := none
   unionType : Option TypeId := none
 
 inductive ArmCallKind where
@@ -363,6 +361,7 @@ inductive TypeShape where
   | reference (pointee : TypeId) (mutability : Miri.MIR.Mutability) (region : Miri.MIR.Region)
   | functionDefinition (definition : DefinitionRef) (args : Array Miri.MIR.GenericArg)
       (signature : FunctionSignature) (boundVariables : Array Miri.MIR.BoundVariableKind)
+      (argumentBoundVariables : Array Miri.MIR.BoundVariableKind)
   | functionPointer (signature : FunctionSignature) (boundVariables : Array Miri.MIR.BoundVariableKind)
   | unsafeBinder (inner : TypeId) (boundVariables : Array Miri.MIR.BoundVariableKind)
   | dynamicTraitObject (predicates : Array PredicateId) (principal : Option PredicateId) (region : Miri.MIR.Region)
@@ -392,7 +391,7 @@ def metadata (shape : TypeShape) : TypeShapeMetadata := {
   adtKind := match shape with | .adt data => some data.kind | _ => none }
 
 def signature : TypeShape → Option FunctionSignature
-  | .functionDefinition _ _ signature _ | .functionPointer signature _ => some signature
+  | .functionDefinition _ _ signature _ _ | .functionPointer signature _ => some signature
   | _ => none
 
 def pattern : TypeShape → Option CompilerPattern
@@ -606,6 +605,7 @@ structure DefinitionId where
   adtDrop : Option AdtDropMaterial := none
   genericTemplate : Option GenericSubstitution.DefinitionTemplate := none
   aliasDeclaration : Option AliasMaterial.Declaration := none
+  adtDeclaration : Option AdtDeclaration.Material := none
   deriving Repr, DecidableEq
 
 inductive VtableEntryKind where
@@ -888,6 +888,13 @@ structure BodyRoot where
   isStatic : Bool
   threadLocalStatic : Bool
   promotedBodies : Array PromotedBody
+
+/-- Explicit remaining target-ABI query leaf, keyed by complete canonical
+instance identity. This is not a compiler instance-resolution algorithm. -/
+structure InstanceAbiMaterial where
+  instanceId : InstanceId
+  abiId : FunctionAbiId
+  deriving Repr, DecidableEq
 
 structure InstanceNode where
   instanceKind : Miri.Interpreter.CallInstanceKind

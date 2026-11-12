@@ -121,6 +121,7 @@ deriving instance ToExpr for Input.MirTemplate.Operand
 deriving instance ToExpr for Input.MirTemplate.Rvalue
 deriving instance ToExpr for Input.MirTemplate.StatementKind
 deriving instance ToExpr for Input.MirTemplate.Statement
+deriving instance ToExpr for Input.MirTemplate.CallArgument
 deriving instance ToExpr for Input.MirTemplate.TerminatorKind
 deriving instance ToExpr for Input.MirTemplate.Terminator
 deriving instance ToExpr for Input.MirTemplate.Block
@@ -228,6 +229,8 @@ deriving instance ToExpr for Input.TraitSelection.Program
 deriving instance ToExpr for Input.AliasMaterial.Container
 deriving instance ToExpr for Input.AliasMaterial.Kind
 deriving instance ToExpr for Input.AliasMaterial.Declaration
+deriving instance ToExpr for Input.AdtDeclaration.FieldSafety
+deriving instance ToExpr for Input.AdtDeclaration.Material
 deriving instance ToExpr for Input.DefinitionId
 deriving instance ToExpr for Input.VtableEntryKind
 deriving instance ToExpr for Input.VtablePredicateKind
@@ -267,6 +270,7 @@ deriving instance ToExpr for Input.CopyTemplateRef
 deriving instance ToExpr for Input.BodySeed
 deriving instance ToExpr for Input.BodyRoot
 deriving instance ToExpr for Input.InstanceNode
+deriving instance ToExpr for Input.InstanceAbiMaterial
 deriving instance ToExpr for Input.ScopeRoot
 deriving instance ToExpr for Input.SelectedScope
 deriving instance ToExpr for Input.TargetPointerSpec

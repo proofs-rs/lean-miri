@@ -13,6 +13,7 @@ private structure OracleTypes where
   nodes : Array TypeNode
   facts : Array (Nat × TypeCompilerFacts)
   unknownAliasShapes : Array Nat
+  unknownFunctionShapes : Array Nat
   count : Nat
 
 private def readTypes (value : Json) (baseline : Bool := false) : Except String OracleTypes := do
@@ -24,25 +25,29 @@ private def readTypes (value : Json) (baseline : Bool := false) : Except String 
   let mut nodes := #[]
   let mut facts := #[]
   let mut unknownAliasShapes := #[]
+  let mut unknownFunctionShapes := #[]
   for raw in types do
     let id ← (← raw.getObjVal? "type_id").getNat?
     let shape ← raw.getObjVal? "shape"
     let unknownAlias := baseline && (← (← shape.getObjVal? "kind").getStr?) == "alias" &&
       (shape.getObjVal? "rigid").toOption.isNone
-    if unknownAlias then
+    let unknownFunction := baseline && (← (← shape.getObjVal? "kind").getStr?) == "function_definition" &&
+      (shape.getObjVal? "generic_args_bound_variables").toOption.isNone
+    if unknownAlias || unknownFunction then
       -- Old compiler output does not contain this source flag. Preserve its
       -- query oracle and normalization dependency, never invent a type shape.
       let rawFacts ← raw.getObjVal? "compiler_facts"
       let sourceFacts ← JsonReader.run
         (DecoderValues.decodeTypeCompilerFacts "$needs_drop.compiler_facts" pool discriminants) rawFacts.compress
       facts := facts.push (id, sourceFacts)
-      unknownAliasShapes := unknownAliasShapes.push id
+      if unknownAlias then unknownAliasShapes := unknownAliasShapes.push id
+      if unknownFunction then unknownFunctionShapes := unknownFunctionShapes.push id
     else
       let node ← JsonReader.run (DecoderValues.parseTypeNode "$needs_drop.types" pool discriminants) raw.compress
       nodes := nodes.push node
       if let some sourceFacts := node.compilerFacts then facts := facts.push (id, sourceFacts)
       else if baseline then throw "baseline needs_drop oracle absent"
-  pure {nodes, facts, unknownAliasShapes, count := types.size}
+  pure {nodes, facts, unknownAliasShapes, unknownFunctionShapes, count := types.size}
 
 private def definitions (value : Json) : Except String (Array DefinitionId) := do
   let rows ← value.getObjVal? "definitions"
@@ -90,7 +95,11 @@ private def check (baseline candidate : Json) (richCoverage : Bool) : Except Str
   for (id, facts) in input.facts do
     let some (_, expected) := facts.booleanQueries.find? (·.1 == "needs_drop")
       | throw "baseline needs_drop oracle missing"
-    let actual ← StructuralNeedsDrop.query shape adtMaterial (input.count + 1) id
+    let some (_, some normalized) := facts.typeQueries.find? (·.1 == "normalized")
+      | throw "baseline normalization dependency absent"
+    let actual ← if input.unknownFunctionShapes.contains normalized then
+        pure (StructuralNeedsDrop.knownKindResult .functionDefinition)
+      else StructuralNeedsDrop.query shape adtMaterial (input.count + 1) id
     let some actual := actual | do
       residual := residual + 1
       continue
@@ -120,7 +129,7 @@ private def check (baseline candidate : Json) (richCoverage : Bool) : Except Str
   let candidateNodes := candidateTypes.nodes
   let eager := candidateNodes.filter fun source => source.compilerFacts.any fun facts =>
     facts.booleanQueries.any (·.1 == "needs_drop")
-  pure s!"PASS {compared} rustc/Lean needs_drop comparisons; true={positive}, false={negative}, residual={residual}, manual={manual}, destructor={destructors}, union={unions}, zero_array={zeroArrays}, nonzero_array={nonzeroArrays}, closure={closures}; baseline unknown alias shapes={input.unknownAliasShapes.size} (all oracle rows retained); candidate eager rows={eager.size}/{candidateNodes.size}"
+  pure s!"PASS {compared} rustc/Lean needs_drop comparisons; true={positive}, false={negative}, residual={residual}, manual={manual}, destructor={destructors}, union={unions}, zero_array={zeroArrays}, nonzero_array={nonzeroArrays}, closure={closures}; baseline unknown alias shapes={input.unknownAliasShapes.size}, kind-only FnDef cases={input.unknownFunctionShapes.size} (all oracle rows retained); candidate eager rows={eager.size}/{candidateNodes.size}"
 
 def main (args : List String) : IO Unit := do
   let (baselinePath, candidatePath, richCoverage) ← match args with

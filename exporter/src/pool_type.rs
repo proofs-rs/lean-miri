@@ -63,6 +63,7 @@ pub(super) enum Shape {
         def_id: u64,
         def_path: String,
         generic_args: Vec<GenericArgument>,
+        generic_args_bound_variables: Vec<BoundVariable>,
         signature: FunctionSignature,
         signature_bound_variables: Vec<BoundVariable>,
     },

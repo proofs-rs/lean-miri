@@ -18,7 +18,7 @@ def main (args : List String) : IO Unit := do
     let selected ← must ((runtime.node index).mapError toString)
     check (selected.id == index && selected.layoutId == node.layoutId && selected.display == node.display) "type ID lookup changed its definition"
     check (decide (runtime.lookup index = (do
-      let physical ← RuntimeMetadata.resolveLayout runtime.target runtime.source.types runtime.source.layouts node.layoutId
+      let physical ← RuntimeMetadata.resolveLayout runtime.target runtime.source.types runtime.source.layouts node.layoutId runtime.source.definitions
       pure ⟨index, physical⟩))) "type layout ID resolved to the wrong physical definition"
   -- IDs beyond the material table now denote lazy constructor recipes.
   let constructed ← must ((runtime.node runtime.source.types.size).mapError toString)

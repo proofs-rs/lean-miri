@@ -79,9 +79,10 @@ private def typeShape (b : ReferenceBounds) (path : String) : TypeShape → Exce
   | .reference pointee _ lifetime => do
     checkId b.types pointee s!"{path}.pointee" "type"
     region b s!"{path}.region" lifetime
-  | .functionDefinition definition args sig variables => do
+  | .functionDefinition definition args sig variables argumentVariables => do
     checkId b.definitions definition s!"{path}.def_id" "definition"
     genericArgs b s!"{path}.generic_args" args
+    boundVariables b s!"{path}.generic_args_bound_variables" argumentVariables
     signature b s!"{path}.signature" sig
     boundVariables b s!"{path}.bound_variables" variables
   | .functionPointer sig variables => do
@@ -486,6 +487,11 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
     typeShape b s!"{path}.shape" node.shape
     if let some facts := node.compilerFacts then compilerFacts b s!"{path}.compiler_facts" facts
   for (value, index) in document.layouts.toList.zipIdx do
+    if let some id := value.structType then
+      checkId b.types id s!"$.layouts[{index}].struct_type" "type"
+      let some node := document.types[id]? | throw "struct recipe type ID invariant"
+      let .adt data := node.shape | throw s!"$.layouts[{index}].struct_type: source type is not an ADT"
+      unless data.kind == .structKind do throw s!"$.layouts[{index}].struct_type: source type is not a struct"
     if let some id := value.unionType then
       checkId b.types id s!"$.layouts[{index}].union_type" "type"
       let some node := document.types[id]? | throw "union recipe type ID invariant"
@@ -574,7 +580,7 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
             throw s!"{path}: missing LLVM source function type"
           let some sourceType := document.types[functionType]? |
             throw s!"{path}: missing LLVM function type definition"
-          let .functionDefinition sourceDefinition sourceArgs _ _ := sourceType.shape |
+          let .functionDefinition sourceDefinition sourceArgs _ _ _ := sourceType.shape |
             throw s!"{path}: LLVM source function type is not FnDef"
           unless sourceDefinition == definition && sourceArgs == llvmInstance.genericArgs do
             throw s!"{path}: LLVM function type differs from its canonical instance"

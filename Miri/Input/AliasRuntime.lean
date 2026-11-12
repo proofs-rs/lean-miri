@@ -2,6 +2,7 @@ import Miri.Input.AliasMaterialProgram
 import Miri.Input.GenericInstantiation
 import Miri.Input.MirTemplate
 import Miri.Input.StructuralSized
+import Miri.Input.TermSized
 import Miri.Input.StructuralAutoTraits
 import Miri.Input.TraitSelection.Fulfill
 
@@ -37,6 +38,23 @@ private def requireProven (value : TraitSelection.Outcome) : Except String Unit 
   | .noSolution => throw "alias normalization own predicates have no solution"
   | .ambiguous reason => throw s!"alias normalization own predicates are ambiguous: {reason}"
 
+/-- Canonical declaration adapter shared by production trait queries and
+independent term-sizedness correspondence tests. No instantiated TypeId or
+compiler-computed Sized constraint is needed for a novel ADT expression. -/
+def sizedHooks (context : Context) (normalize : Nat → Term → Except String Term) :
+    TermSized.Hooks := {
+  sourceAdt := fun identity => do
+    let reference ← GenericInstantiation.definitionRef context.generic identity
+    let some definition := context.generic.definitions[reference]?
+      | throw "term Sized ADT definition absent"
+    let some material := definition.adtDeclaration
+      | throw "term Sized canonical ADT declaration absent"
+    let some template := definition.genericTemplate
+      | throw "term Sized canonical ADT generic template absent"
+    material.validate template
+    pure (material.kind,template),
+  normalizeAlias := normalize }
+
 /-- One shared builtin/external-predicate dictionary for alias normalization and
 standalone raw trait queries. Normalization is a mandatory recursive dependency. -/
 def traitHooks (context : Context) (depth : Nat)
@@ -48,6 +66,14 @@ def traitHooks (context : Context) (depth : Nat)
         let some kind := declaration.builtin | throw "unimplemented raw lang-item/auto-trait builtin"
         unless goal.traitRef.arguments.size == 1 do throw "structural builtin requires exactly Self"
         let some self := goal.traitRef.arguments[0]? | throw "structural builtin Self absent"
+        match kind with
+        | .sized | .metaSized =>
+          let kind := if kind == .sized then StructuralSized.TraitKind.sized else .metaSized
+          let answer ← TermSized.query
+            (sizedHooks context (fun fuel term => normalize fuel activeGoals term))
+            kind (remaining + 1) self
+          return if answer then some #[] else none
+        | _ => pure ()
         let ty ← GenericInstantiation.resolveType context.generic depth self
         let lookup := fun id => do
           let source ← TypeArena.node context.generic.types id context.generic.constants.size
@@ -59,11 +85,6 @@ def traitHooks (context : Context) (depth : Nat)
             return (← TypeArena.node context.generic.types id context.generic.constants.size).shape
           | _ => pure source.shape
         match kind with
-        | .sized | .metaSized =>
-          let kind := if kind == .sized then StructuralSized.TraitKind.sized else .metaSized
-          let some answer ← StructuralSized.queryKind kind lookup (remaining + 1) ty
-            | throw "structural Sized builtin has unresolved source alias"
-          pure (if answer then some #[] else none)
         | .freeze | .unpin | .unsafeUnpin =>
           if ← StructuralAutoTraits.trivial lookup (remaining + 1) ty then return some #[]
           throw "nontrivial auto-trait builtin requires complete structural candidate assembly"

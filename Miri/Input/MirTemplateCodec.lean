@@ -45,6 +45,20 @@ private def terminator (j : Json) : Except String MirTemplate.Terminator := do
     | "return" => pure MirTemplate.TerminatorKind.return
     | "unreachable" => pure .unreachable
     | "goto" => .goto <$> nat value "target"
+    | "call" => do
+      let args ← (← array value "arguments").mapM fun argument => do
+        let argumentSpan ← nat argument "span"
+        let value ← operand (← field argument "operand")
+        pure (⟨⟨argumentSpan⟩,value⟩ : MirTemplate.CallArgument)
+      let unwind ← match ← text value "unwind" with
+        | "unreachable" => pure Miri.MIR.UnwindAction.Unreachable
+        | _ => throw "ordinary source call requires unreachable unwind"
+      let callSource ← match ← text value "call_source" with
+        | "normal" => pure Miri.MIR.CallSource.Normal
+        | _ => throw "ordinary source call requires normal source"
+      pure (.call ⟨← nat value "function_type"⟩ ⟨← nat value "constant_span"⟩ args
+        (← nat value "destination") (← optionalNat (← field value "target")) unwind
+        callSource ⟨← nat value "function_span"⟩)
     | "switch" => do
       let cases ← (← array value "cases").mapM fun entry => do
         pure (Miri.MIR.SwitchTarget.Case (← nat entry "value") (← nat entry "target"))

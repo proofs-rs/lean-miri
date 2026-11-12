@@ -20,7 +20,9 @@ mod shared_json;
 mod pool_type;
 mod generic_material;
 mod generic_mir;
+mod generic_mir_call;
 mod alias_rules;
+mod adt_material;
 mod trait_material;
 mod pool_layout;
 mod pool_instance;
@@ -156,9 +158,17 @@ impl MirBodyRole {
     }
 }
 
+/// Remaining target-classifier ABI leaf keyed by complete instance identity.
+#[derive(serde::Serialize)]
+struct InstanceAbiMaterial {
+    instance_id: u64,
+    fn_abi: u64,
+}
+
 /// Owned, closed export graph. Pending reference types cannot inhabit this snapshot.
 #[derive(serde::Serialize)]
 struct ExportDocument {
+    instance_abis: Vec<InstanceAbiMaterial>,
     schema: &'static str,
     schema_version: u64,
     mir_query: &'static str,
@@ -1729,6 +1739,7 @@ impl ExportCallbacks {
         // a concrete query-result domain here.
         let mut generic_templates = HashMap::new();
         let mut alias_declarations = HashMap::new();
+        let mut adt_declarations = HashMap::new();
         let mut trait_material_state = trait_material::State::seed(tcx);
         for definition in &local_definitions {
             trait_material_state.register_definition(tcx, definition.to_def_id())?;
@@ -1770,6 +1781,16 @@ impl ExportCallbacks {
                         .map(|destructor| def_json(&mut export_context, destructor.did));
                     adt_drop_material.entry(definition_index).or_insert(
                         pool_values::AdtDropMaterial { manually_drop: adt.is_manually_drop(), destructor });
+                    let declaration = adt_material::declaration(tcx, definition,
+                        |clause| trait_material::clause(tcx, clause))?
+                        .ok_or_else(|| "source ADT declaration classification changed".to_owned())?;
+                    let mut references = Vec::new();
+                    generic_definition_references(&declaration, &mut references)?;
+                    for reference in references {
+                        def_json(&mut export_context, reference);
+                        if material_demand.insert(reference) { material_queue.push(reference); }
+                    }
+                    adt_declarations.insert(definition_index, declaration);
                 }
                 generic_templates.insert(definition_index, material);
             }
@@ -1838,6 +1859,7 @@ impl ExportCallbacks {
             return export_failure("coroutine coverage", "body marker table is incomplete");
         }
         let mut document = ExportDocument {
+            instance_abis: Vec::new(),
             mir_templates: export_context.mir_templates.finish("mir_template")?,
             schema: "lean-miri-rustc-mir",
             schema_version: ROOT_SCHEMA_VERSION,
@@ -1873,6 +1895,7 @@ impl ExportCallbacks {
                     definition.adt_drop = adt_drop_material.get(&id).cloned();
                     definition.generic_template = generic_templates.remove(&id);
                     definition.alias_declaration = alias_declarations.remove(&id);
+                    definition.adt_declaration = adt_declarations.remove(&id);
                     definition
                 }).collect(),
             type_constants: export_context.type_constants.finish("type_constant")?,
@@ -2614,7 +2637,7 @@ fn resolved_mir_body_json<'tcx>(
     }
     if matches!(instance.def, ty::InstanceKind::Item(_))
         && tcx.generics_of(template.source.def_id()).count() > 0
-        && generic_mir::eligible(template, instance.args)
+        && generic_mir::eligible(tcx, template, instance.args)
     {
         // This source category is selected before any monomorphic-body query.
         // Failures after selection propagate; no concrete body is retained.
@@ -3276,6 +3299,8 @@ fn type_json_inner<'tcx>(
                 def_id: def_json(context, def),
                 def_path: tcx.def_path_str(def),
                 generic_args: generic_args_json_inner(context, tcx, args.skip_binder())?,
+                generic_args_bound_variables: args.bound_vars().iter()
+                    .map(|bound| bound_variable_json(context, tcx, bound)).collect(),
                 signature: fn_sig_json_with_query(
                     context,
                     tcx,
@@ -3600,6 +3625,29 @@ fn layout_json<'tcx>(
     })
 }
 
+// Source-constructor eligibility only: this deliberately never calls is_sized.
+// Unknown generic/nominal/alias tails remain explicit material-layout residuals.
+fn struct_recipe_eligible<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> bool {
+    fn guaranteed_sized(ty: ty::Ty<'_>) -> bool {
+        match ty.kind() {
+            ty::Bool | ty::Char | ty::Never | ty::Int(_) | ty::Uint(_) | ty::Float(_)
+            | ty::Ref(..) | ty::RawPtr(..) | ty::FnDef(..) | ty::FnPtr(..)
+            | ty::UnsafeBinder(..) | ty::Array(..) | ty::Pat(..) | ty::Closure(..)
+            | ty::CoroutineClosure(..) | ty::Coroutine(..) | ty::CoroutineWitness(..) => true,
+            ty::Tuple(elements) => elements.last().is_none_or(|tail| guaranteed_sized(*tail)),
+            _ => false,
+        }
+    }
+    let ty::Adt(def, _) = ty.kind() else { return false; };
+    if !def.is_struct() || def.repr().simd() || def.repr().scalable() { return false; }
+    if tcx.is_lang_item(def.did(), rustc_attr_ir::LangItem::F16B)
+        || tcx.is_lang_item(def.did(), rustc_attr_ir::LangItem::PpcF128) {
+        return false;
+    }
+    def.non_enum_variant().fields.iter().last().is_none_or(|field|
+        guaranteed_sized(tcx.type_of(field.did).instantiate_identity().skip_norm_wip()))
+}
+
 // Preserve queried TyAndLayout, including field-specific and uninhabited
 // variant layouts which cannot be replaced by layout_of(result.ty).
 fn layout_value_json<'tcx>(
@@ -3620,6 +3668,8 @@ fn layout_value_json<'tcx>(
         // Union repr options and instantiated field types are material ADT
         // shape data; Lean computes their shared ABI, size and alignment.
         pool_layout::Layout::UnionRecipe { union_type: context.type_id(layout.ty) }
+    } else if struct_recipe_eligible(tcx, layout.ty) {
+        pool_layout::Layout::StructRecipe { struct_type: context.type_id(layout.ty) }
     } else {
         pool_layout::Layout::new(tcx, layout)
     };
@@ -4531,7 +4581,7 @@ fn generic_definition_references(value: &Value, out: &mut Vec<DefId>) -> Result<
 
 fn def_json(context: &mut ExportContext<'_>, def: rustc_hir::def_id::DefId) -> u64 {
     let (id,fresh)=context.definitions.reserve(def);
-    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32(),body_track_caller:None,adt_drop:None,generic_template:None,alias_declaration:None }); }
+    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32(),body_track_caller:None,adt_drop:None,generic_template:None,alias_declaration:None,adt_declaration:None }); }
     id as u64
 }
 

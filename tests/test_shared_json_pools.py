@@ -43,7 +43,7 @@ class SharedFixtureProjectionTests(unittest.TestCase):
         expanded = expand_document(pooled, schema_version=8)
         # The historical fixture adapter supplies required empty source seeds;
         # pooling must preserve every original ABI value exactly.
-        self.assertEqual(expanded, {**source, "mir_templates": [],
+        self.assertEqual(expanded, {**source, "mir_templates": [], "instance_abis": [],
                                    "compiler_trait_program": {"traits": [],
                                        "constructor_scope": {"kind": "all_source_impls"}}})
 

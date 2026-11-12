@@ -37,7 +37,7 @@ def main():
     parser.add_argument('material', type=Path)
     parser.add_argument('output', type=Path, help='new scratch directory')
     parser.add_argument('--mode', choices=('cert', 'raw'), default='cert')
-    parser.add_argument('--case', action='append', choices=('primitive', 'early-reference', 'late-reference'))
+    parser.add_argument('--case', action='append', choices=('primitive', 'early-reference', 'late-reference', 'early-nominal', 'late-nominal'))
     parser.add_argument('--timeout', type=float, default=30)
     parser.add_argument('--cpu', type=int, default=min(os.sched_getaffinity(0)))
     parser.add_argument('--lean', type=Path,

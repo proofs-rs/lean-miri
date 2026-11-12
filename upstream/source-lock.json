@@ -13,9 +13,9 @@
     "procedure": "upstream/fetch-sources.sh",
     "procedure_sha256": "a8ced1c1a19c47193465862bbe2486e25dcf91c544df5b62f9b2265ea12fb7d8",
     "rustc_selected_archive_paths": {
-      "count": 556,
+      "count": 557,
       "path": "upstream/rustc-selected-files.txt",
-      "sha256": "74d719f826b132f43585e2732a5ef48aba0aa81cce7f2eccd3d7da844139cbd0"
+      "sha256": "9613cc0ec8a65267ef64dede2677d49b5435a74ea704c36d50cfa4e29025ac3a"
     }
   },
   "coverage_expected_rust_modules": {
@@ -55,6 +55,7 @@
     "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs": 1,
     "upstream/rustc-source/compiler/rustc_traits/src/normalize_erasing_regions.rs": 1,
     "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs": 1,
+    "upstream/rustc-source/compiler/rustc_ty_utils/src/instance.rs": 1,
     "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs": 1,
     "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/binder.rs": 1,
@@ -104,6 +105,7 @@
     "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
     "upstream/rustc-source/compiler/rustc_traits/src/normalize_erasing_regions.rs",
     "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
+    "upstream/rustc-source/compiler/rustc_ty_utils/src/instance.rs",
     "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
     "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/binder.rs",
@@ -4828,6 +4830,12 @@
       "git_blob": "5c72f6cba398973bd1617b06ff7bf1aa0c7c9b72",
       "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
       "sha256": "1cebc01da4a128b9c7442c20aa299ee0156ef14facb4ecfb639ad3ed23ce1d75"
+    },
+    {
+      "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/instance.rs",
+      "sha256": "1201767c3a62a75cdcc8b473833ff547a5f7965e2abea4e7857bac13ca61c6bf",
+      "git_blob": "1a868ba4b8cee6428cb333aa89012be09ee123f2"
     },
     {
       "component": "rustc",

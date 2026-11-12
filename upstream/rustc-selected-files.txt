@@ -543,6 +543,7 @@ rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_trait_selection/src
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_trait_selection/src/traits/project.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_traits/src/normalize_erasing_regions.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_ty_utils/src/abi.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_ty_utils/src/instance.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_ty_utils/src/layout.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_ty_utils/src/needs_drop.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/binder.rs

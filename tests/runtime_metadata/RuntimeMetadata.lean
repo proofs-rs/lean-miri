@@ -68,7 +68,7 @@ def main (args : List String) : IO Unit := do
   let some materialType := decoded.document.types.find? (fun node =>
       (decoded.document.layouts[node.layoutId]?).any fun layout =>
         layout.primitiveRecipe.isNone && layout.tupleType.isNone &&
-        layout.unionType.isNone && layout.fields.isSome)
+        layout.unionType.isNone && layout.structType.isNone && layout.fields.isSome)
     | throw (IO.userError "fixture lacks a physical layout failure control")
   let some materialLayout := decoded.document.layouts[materialType.layoutId]?
     | throw (IO.userError "physical layout failure control disappeared")

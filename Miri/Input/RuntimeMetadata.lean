@@ -5,6 +5,8 @@ import Miri.Input.StructuralPointerMetadata
 import Miri.ABI.Layout
 import Miri.ABI.PrimitiveLayout
 import Miri.ABI.UnivariantLayout
+import Miri.ABI.StructLayout
+import Miri.Input.StructLayoutMaterial
 import Miri.ABI.UnionLayout
 
 /-! Internal compiler-metadata bridge, not the public import API. Successful
@@ -161,7 +163,7 @@ def variants (target : RuntimeTargetDataLayout) (source : VariantsLayout) : Resu
       (← require source.tagFieldIndex "variants.tag_field_index") values
 
 def layout (target : RuntimeTargetDataLayout) (source : Input.Layout) : Result LayoutData := do
-  if source.tupleType.isSome || source.unionType.isSome then
+  if source.tupleType.isSome || source.unionType.isSome || source.structType.isSome then
     throw (.missing "structural layout requires source type and layout pools")
   if let some recipe := source.primitiveRecipe then
     return ← PrimitiveLayout.compute target recipe
@@ -237,10 +239,50 @@ def importTarget (source : TargetDataLayoutEvidence) : Result RuntimeTargetDataL
 /-- Source-aware physical layout construction. Recursive tuple recipes follow
 raw source type edges; cyclic or malformed material never supplies a layout. -/
 def resolveLayoutWithFuel (target : RuntimeTargetDataLayout) (types : Array TypeNode)
-    (layouts : Array Input.Layout) : Nat → LayoutId → Result LayoutData
+    (layouts : Array Input.Layout) (definitions : Array DefinitionId) : Nat → LayoutId → Result LayoutData
   | 0, _ => .error (.unsupported "material layout recipe recursion exhausted")
   | fuel + 1, id => do
     let source ← require layouts[id]? s!"compiler layout ID {id} out of bounds"
+    if let some typeId := source.structType then
+      unless source.primitiveRecipe.isNone && source.tupleType.isNone && source.unionType.isNone do
+        throw (.invalid "struct layout recipe" "conflicting layout constructor")
+      let node ← require types[typeId]? "struct recipe type ID out of bounds"
+      unless node.id == typeId do throw (.invalid "struct recipe type" "row/index mismatch")
+      let .adt data := node.shape
+        | throw (.invalid "struct layout recipe" "source type is not an ADT")
+      unless data.kind == .structKind && data.variants.size == 1 do
+        throw (.invalid "struct layout recipe" "source type is not a one-variant struct")
+      let definition ← require definitions[data.definition]? "struct declaration definition missing"
+      let declaration ← require definition.adtDeclaration "struct raw ADT declaration missing"
+      let template ← require definition.genericTemplate "struct raw field declaration missing"
+      declaration.validate template |>.mapError (fun e => .invalid "struct declaration" e)
+      unless declaration.kind == .structKind do
+        throw (.invalid "struct declaration" "source declaration is not a struct")
+      unless declaration.langItem != some "f16b" && declaration.langItem != some "ppcf128" do
+        throw (.unsupported "special floating-point struct layout recipe")
+      if let some tail := template.fields.back? then
+        unless StructLayoutMaterial.guaranteedSized (StructLayoutMaterial.termFuel tail.expression + 1) tail.expression do
+          throw (.unsupported "struct declaration tail requires ParamEnv sizedness solver")
+      let variant ← require data.variants[0]? "struct material variant missing"
+      unless variant.fields.size == template.fields.size do
+        throw (.invalid "struct declaration" "instantiated and declared field domains differ")
+      let fields ← variant.fields.mapM fun field => do
+        let node ← require types[field.typeId]? "struct field type ID out of bounds"
+        unless node.id == field.typeId do throw (.invalid "struct field type" "row/index mismatch")
+        resolveLayoutWithFuel target types layouts definitions fuel node.layoutId
+      let repr := data.representation
+      unless repr.flagsBits < 256 do throw (.invalid "struct representation" "flags overflow u8")
+      unless repr.flagsBits &&& (2 + 64) == 0 do
+        throw (.unsupported "SIMD/scalable struct layout recipe")
+      let representation : UnivariantLayout.Representation := {
+        flags := UInt8.ofNat repr.flagsBits, integerRepresentation := repr.integer.isSome,
+        align := ← repr.alignBytes.mapM alignment, pack := ← repr.packBytes.mapM alignment,
+        fieldShuffleSeed := ← u64 repr.fieldShuffleSeed "struct field shuffle seed" }
+      let niches := if declaration.langItem == some "unsafe_cell" ||
+          declaration.langItem == some "unsafe_pinned" then
+        StructLayout.NicheOptimizations.disabled else .enabled
+      return ← StructLayout.compute target fields representation 0 false true niches
+        |>.mapError (fun reason => .invalid "struct layout recipe" reason)
     if let some typeId := source.unionType then
       unless source.primitiveRecipe.isNone && source.tupleType.isNone do
         throw (.invalid "union layout recipe" "conflicting layout constructor")
@@ -254,7 +296,7 @@ def resolveLayoutWithFuel (target : RuntimeTargetDataLayout) (types : Array Type
       let fields ← variant.fields.mapM fun field => do
         let node ← require types[field.typeId]? "union field type ID out of bounds"
         unless node.id == field.typeId do throw (.invalid "union field type" "row/index mismatch")
-        resolveLayoutWithFuel target types layouts fuel node.layoutId
+        resolveLayoutWithFuel target types layouts definitions fuel node.layoutId
       let repr := data.representation
       unless repr.flagsBits < 256 do throw (.invalid "union representation" "flags overflow u8")
       let representation : UnivariantLayout.Representation := {
@@ -273,15 +315,15 @@ def resolveLayoutWithFuel (target : RuntimeTargetDataLayout) (types : Array Type
       let fields ← elements.mapM fun element => do
         let node ← require types[element]? "tuple element type ID out of bounds"
         unless node.id == element do throw (.invalid "tuple element type" "row/index mismatch")
-        resolveLayoutWithFuel target types layouts fuel node.layoutId
+        resolveLayoutWithFuel target types layouts definitions fuel node.layoutId
       let kind := if elements.isEmpty then UnivariantLayout.Kind.alwaysSized else .maybeUnsized
       return ← UnivariantLayout.compute target fields {} kind
         |>.mapError (fun reason => .invalid "tuple layout recipe" reason)
     layout target source
 
 def resolveLayout (target : RuntimeTargetDataLayout) (types : Array TypeNode)
-    (layouts : Array Input.Layout) (id : LayoutId) : Result LayoutData :=
-  resolveLayoutWithFuel target types layouts (types.size + layouts.size + 1) id
+    (layouts : Array Input.Layout) (id : LayoutId) (definitions : Array DefinitionId) : Result LayoutData :=
+  resolveLayoutWithFuel target types layouts definitions (types.size + layouts.size + 1) id
 
 end RuntimeMetadata
 
@@ -353,7 +395,7 @@ private def lookupWithFuel (metadata : RuntimeMetadata) : Nat → TypeId → Res
     let sourceNode ← metadata.node id
     if id < metadata.source.types.size then
       return ⟨id,← resolveLayoutWithFuel metadata.target metadata.source.types
-        metadata.source.layouts (fuel + 1) sourceNode.layoutId⟩
+        metadata.source.layouts metadata.source.definitions (fuel + 1) sourceNode.layoutId⟩
     if let .array element _ constructor := sourceNode.shape then
       unless constructor.count < 2^(metadata.target.base.pointerWidth.bits.toNat) do
         throw (.unsupported "lazy array length overflows target usize")
@@ -443,7 +485,7 @@ private def projectionParents (metadata : RuntimeMetadata) (id : TypeId) : Resul
   pure queries.parents
 /-- Resolve a physical compiler layout only at the operation that needs it. -/
 def layoutById (metadata : RuntimeMetadata) (id : Nat) : Result LayoutData := do
-  resolveLayout metadata.target metadata.source.types metadata.source.layouts id
+  resolveLayout metadata.target metadata.source.types metadata.source.layouts id metadata.source.definitions
 
 private def projectionLayout (metadata : RuntimeMetadata) (id : TypeId) (layoutId : LayoutId) :
     Result (TyAndLayout TypeId) := do

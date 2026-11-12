@@ -70,6 +70,22 @@ impl<'tcx,F:FnMut(Span)->u64> Encoder<'tcx,F> {
     }
     fn terminator(&mut self, terminator:&mir::Terminator<'tcx>)->Result<String,String> {
         let kind=match &terminator.kind {
+            mir::TerminatorKind::Call{func,args,destination,target,unwind,call_source,fn_span}=>{
+                super::generic_mir_call::callee(self.tcx,func)?;
+                if !matches!(unwind,mir::UnwindAction::Unreachable)
+                    || !matches!(call_source,mir::CallSource::Normal) {
+                    return Err("ordinary source call requires normal source and unreachable unwind".into());
+                }
+                let mir::Operand::Constant(constant)=func else {unreachable!()};
+                let function_type=self.ty(constant.const_.ty());
+                let constant_span=(self.span)(constant.span);
+                let function_span=(self.span)(*fn_span);
+                let destination=self.place(*destination)?;
+                let arguments=array(args.iter().map(|argument|Ok(format!("{{\"span\":{},\"operand\":{}}}",
+                    (self.span)(argument.span),self.operand(&argument.node)?))).collect::<Result<Vec<_>,String>>()?);
+                let target=target.map(|target|target.as_u32().to_string()).unwrap_or_else(||"null".into());
+                object("call",&format!("\"function_type\":{function_type},\"constant_span\":{constant_span},\"arguments\":{arguments},\"destination\":{destination},\"target\":{target},\"unwind\":\"unreachable\",\"call_source\":\"normal\",\"function_span\":{function_span}"))
+            }
             mir::TerminatorKind::Return=>object("return",""),
             mir::TerminatorKind::Unreachable=>object("unreachable",""),
             mir::TerminatorKind::Goto{target,loop_hint_attrs}=>{
@@ -116,7 +132,7 @@ pub fn supported_arguments(args:ty::GenericArgsRef<'_>)->bool {
 
 /// Classify the exact ported category before serialization. Once true, any
 /// capture/instantiation failure is an error, never a monomorphic-body fallback.
-pub fn eligible(body:&mir::Body<'_>, args:ty::GenericArgsRef<'_>)->bool {
+pub fn eligible<'tcx>(_tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>, args:ty::GenericArgsRef<'tcx>)->bool {
     fn place(value:mir::Place<'_>)->bool {value.projection.is_empty()}
     fn operand(value:&mir::Operand<'_>)->bool {match value {
         mir::Operand::Copy(value)|mir::Operand::Move(value)=>place(*value), _=>false,
@@ -142,7 +158,11 @@ pub fn eligible(body:&mir::Body<'_>, args:ty::GenericArgsRef<'_>)->bool {
         }) && match &block.terminator().kind {
             mir::TerminatorKind::Return|mir::TerminatorKind::Unreachable=>true,
             mir::TerminatorKind::Goto{loop_hint_attrs,..}=>loop_hint_attrs.is_empty(),
-            mir::TerminatorKind::SwitchInt{discr,..}=>operand(discr),_=>false,
+            mir::TerminatorKind::SwitchInt{discr,..}=>operand(discr),
+            // Raw Call capture is available for differential component tests;
+            // runtime selection awaits the lazy instance/ABI provider bridge.
+            mir::TerminatorKind::Call{..}=>false,
+            _=>false,
         }
     })
 }
@@ -171,7 +191,7 @@ pub fn capture<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>,
         let terminator=e.terminator(block.terminator())?;
         blocks.push(format!("{{\"statements\":{statements},\"terminator\":{terminator},\"cleanup\":{}}}",block.is_cleanup));
     }
-    if !e.types.iter().copied().all(supported_type) {
+    if !e.types.iter().copied().all(|ty|supported_type(ty) || super::generic_mir_call::function_type(tcx,ty).is_ok()) {
         return Err("copy template source type family requires residual compiler instantiation".into());
     }
     let types=array(e.types.iter().map(|&ty|super::generic_material::type_tree(e.tcx,ty)).collect::<Result<Vec<_>,_>>()?);

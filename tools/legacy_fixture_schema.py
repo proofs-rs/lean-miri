@@ -11,6 +11,53 @@ from __future__ import annotations
 import copy
 
 
+def _bound_free_arguments(types, constants, arguments):
+    """Conservative historical replay guard; never recover a source binder."""
+    pending, seen_types, seen_constants = [arguments], set(), set()
+    for _ in range(1_000_000):
+        if not pending:
+            return True
+        value = pending.pop()
+        if isinstance(value, list):
+            pending.extend(value)
+            continue
+        if not isinstance(value, dict):
+            continue
+        kind = value.get("kind", "")
+        if kind in ("bound", "dynamic_trait_object"):
+            return False
+        type_refs, constant_refs = [], []
+        if kind in ("type", "const") and type(value.get("value")) is int:
+            (type_refs if kind == "type" else constant_refs).append(value["value"])
+        for key, child in value.items():
+            pending.append(child)
+            if key in ("pointee", "element", "base", "inner", "output", "type") and type(child) is int:
+                type_refs.append(child)
+            if key in ("length", "start", "end") and type(child) is int:
+                constant_refs.append(child)
+            if key in ("inputs", "elements") and isinstance(child, list):
+                (constant_refs if kind == "branch" else type_refs).extend(
+                    item for item in child if type(item) is int)
+        for identity in type_refs:
+            if identity in seen_types:
+                continue
+            if not 0 <= identity < len(types) or not isinstance(types[identity], dict):
+                return False
+            shape = types[identity].get("shape")
+            if not isinstance(shape, dict):
+                return False
+            seen_types.add(identity)
+            pending.append(shape)
+        for identity in constant_refs:
+            if identity in seen_constants:
+                continue
+            if not 0 <= identity < len(constants):
+                return False
+            seen_constants.add(identity)
+            pending.append(constants[identity])
+    return False
+
+
 def adapt_legacy_fixture(document):
     bodies = document.get("bodies")
     old_13_body_encoding = (document.get("schema_version") == 13
@@ -21,6 +68,7 @@ def adapt_legacy_fixture(document):
         return copy.deepcopy(document)
     result = copy.deepcopy(document)
     result["schema_version"] = 13
+    result.setdefault("instance_abis", [])
     # Historical executable bodies remain material. No source template or trait
     # proof is reconstructed from a monomorphic execution fixture.
     result.setdefault("mir_templates", [])
@@ -34,6 +82,14 @@ def adapt_legacy_fixture(document):
             # Hypothetical old-component representative, never recovered alias
             # rigidity and never used by genuine compiler correspondence tests.
             shape.setdefault("rigid", False)
+        if (shape.get("kind") == "function_definition"
+                and "generic_args_bound_variables" not in shape
+                and "generic_args" in shape
+                and _bound_free_arguments(result.get("types", []), result.get("type_constants", []),
+                                         shape["generic_args"])):
+            # HYPOTHETICAL component representative: the old binder, including
+            # unused variables, is unrecoverable. Never compiler/GI evidence.
+            shape["generic_args_bound_variables"] = []
     if "compiler_coroutine_coverage" not in result and isinstance(result.get("bodies"), list):
         result["compiler_coroutine_coverage"] = {
             "body_coroutines": [False] * len(result["bodies"]),

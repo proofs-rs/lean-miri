@@ -134,6 +134,15 @@ def ofType (context : Context) : Nat → TypeId → Except String Term
     | .adt data => do
       let arguments ← args data.args
       return .definition .type "adt" (← identity context data.definition) (Terms.ofArray arguments)
+    -- Pinned rustc_type_ir/src/ty_kind.rs:223: FnDef identity contains the
+    -- definition and bound arguments. The separately exported signature binder
+    -- is not the binder of those arguments.
+    | .functionDefinition definition arguments _ _ argumentVariables => do
+      unless argumentVariables.isEmpty do
+        throw "function definition argument binder reconstruction is unsupported"
+      let arguments ← args arguments
+      return .definition .type "function_definition" (← identity context definition)
+        (.cons (.binder #[] (.node .aggregate "arguments" "" (Terms.ofArray arguments))) .nil)
     | .foreign definition => return .definition .type "foreign" (← identity context definition) .nil
     | .closure definition arguments _ => do
       let arguments ← args arguments
@@ -198,6 +207,7 @@ def constructorOfTerm : Term → Option TypeShapeKind
   | .node .type "tuple" _ _ => some .tuple
   | .node .type "array" _ _ => some .array
   | .definition .type "adt" _ _ => some .adt
+  | .definition .type "function_definition" _ _ => some .functionDefinition
   | .definition .type "foreign" _ _ => some .foreign
   | .definition .type "closure" _ _ => some .closure
   | .definition .type "coroutine_closure" _ _ => some .coroutineClosure
@@ -211,7 +221,7 @@ def constructorOfTerm : Term → Option TypeShapeKind
 
 private def definitionOfShape : TypeShape → Option DefinitionRef
   | .adt data => some data.definition
-  | .foreign id | .closure id .. | .coroutineClosure id .. | .coroutine id ..
+  | .foreign id | .functionDefinition id .. | .closure id .. | .coroutineClosure id .. | .coroutine id ..
   | .alias _ _ id _ => some id
   | _ => none
 

@@ -288,7 +288,7 @@ def validate (document : ImportDocument) (coverage : CoroutineCoverage) : Except
     let target ← RuntimeMetadata.importTarget targetEvidence |>.mapError toString
     let some _ := document.layouts[coroutineType.layoutId]? |
       throw "coroutine coverage: missing root physical layout"
-    let rootLayout ← RuntimeMetadata.resolveLayout target document.types document.layouts coroutineType.layoutId |>.mapError toString
+    let rootLayout ← RuntimeMetadata.resolveLayout target document.types document.layouts coroutineType.layoutId document.definitions |>.mapError toString
     let requiredVariants := if physical.kind == .multiple then physical.variants.size else 0
     unless projections.typingEnvironment == "fully_monomorphized" &&
         projections.parents.size == requiredVariants + 1 &&
@@ -303,7 +303,7 @@ def validate (document : ImportDocument) (coverage : CoroutineCoverage) : Except
       if let some variant := parent.variant then
         let some _ := document.layouts[parent.layoutId]? |
           throw "coroutine coverage: missing selected physical layout"
-        let actual ← RuntimeMetadata.resolveLayout target document.types document.layouts parent.layoutId |>.mapError toString
+        let actual ← RuntimeMetadata.resolveLayout target document.types document.layouts parent.layoutId document.definitions |>.mapError toString
         let expected ← physicalVariant rootLayout variant
         unless actual == expected do
           throw "coroutine coverage: selected query differs from exact physical variant"

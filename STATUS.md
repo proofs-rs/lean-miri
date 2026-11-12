@@ -136,6 +136,21 @@ scoped results and source/exporter/Lean artifact hashes are recorded in
 exercise production query providers, not a completed guest execution or the
 remaining rigid, opaque, inherent, binder and specialization families.
 
+Canonical ADT declarations now retain source kind, lang-item identity, variant
+and field-safety domains, and own clauses alongside the original generic field
+templates; no computed Sized constraint is exported. Production Sized/MetaSized
+trait providers inspect these expressions before runtime type lookup. Eighteen
+answers over nine concrete type expressions match an independent pinned-rustc
+oracle under the exact fresh compiler invocation, including six expressions
+absent from the material type IDs. The cases include nested `Tail<str>`, a slice
+tail, a raw-pointer field with unsized pointee, and an unsized tuple tail; three
+Sized goals and all nine MetaSized goals hold. Removing canonical ADT material
+produces explicit Unsupported for every ADT query, and a corrupted oracle is
+rejected. The 177,871-byte input and source/exporter/Lean artifact hashes are in
+`scratch/term-sized/{candidate,manifest,results}.json`. Fourteen independent
+kernel component checks also pass. Binder/inference families remain explicitly
+unsupported; these query comparisons are not a generic guest-execution claim.
+
 A default-root exporter ICE also reproduced on canonical c8daa215: a static
 u32 body was incorrectly treated as a callable backtrace-frame candidate.
 Callable-definition guards preserve the static body while preventing the invalid
@@ -147,13 +162,48 @@ hash-bound same-TyCtxt Miri exit-zero reference. This is one finite guest pass;
 no performance ratio is claimed. The latest complete library/test build passes
 1,368 jobs including native runner, frontend and tests, and the axiom audit
 covers 78,993 declarations using only allowed axioms; all 132 Python tests and
-semantic-source lint pass. This does not imply
-that the full multi-stage regression entry point has passed.
+semantic-source lint pass. All 47 self-contained runtime checks also pass.
+This does not imply that the full multi-stage regression entry point has passed.
 On-demand body lowering now uses a minimal context with a kernel equality proof;
 a document-local density certificate removes repeated full type-pool validation,
 with kernel parity proofs. A microprobe over 8,963 types resolves exact identities
 in 53–55 ms; its uncertified control exceeded ten seconds. This is a focused
 algorithm diagnostic, not a full guest pass or comparative architecture benchmark.
+
+Raw ADT declaration material now includes original kind, canonical language-item
+identity, own predicates and field safety, validated against its canonical source
+template. Strict FnDef material distinguishes the generic-argument binder from
+the function-signature binder; three fresh rustc canonical-tree comparisons pass,
+including a nonempty signature binder with an empty argument binder. Bounded
+struct layouts now execute through the same source-aware resolver: ten struct
+recipe type nodes and eight tuples match complete rustc layouts in ordinary and
+three randomized configurations. A fresh executable checks five actual struct
+field-read families against same-TyCtxt Miri and Lean exit-zero. Unsupported
+parameter/alias/nominal declaration tails, SIMD/scalable and special float structs
+retain explicit material layouts; new nominal type construction is not provided
+by this bounded recipe.
+
+The integrated strict input also passes a fresh 88,887,012-byte full generic std
+guest: same-TyCtxt Miri and Lean exit-zero, cursor 1675, no active frame. One
+CPU-pinned, single-thread diagnostic measured 6.678 s wall, 6.568 s child CPU,
+564,240 KiB peak RSS, 31 same-CPU steal ticks and zero cgroup throttling/memory
+event changes; binary/input/source hashes are fixed in its raw manifest. This
+is not a before/after performance comparison. The current build passes 1,378
+jobs and the axiom audit covers 79,286 declarations with allowed axioms only;
+all 133 Python tests, 47 self-contained runtime checks and semantic-source lint
+pass. The full multi-stage regression entry point is still unfinished.
+
+The same minimal generic invocation remains bounded after raw ADT integration:
+111,335 bytes, 33 runtime types, 63 definitions, 38 templates, five traits,
+19 impls and one MIR template/two body seeds. Ordinary source-call substitution
+and effect-parametric identity resolution have actual compiler comparisons, but
+call-containing bodies remain explicitly material-selected until the runtime
+provider/ABI/instance dependencies are connected. Sequence layouts and general
+discriminant-type rules have independent components; their eager catalogs have
+not yet been removed. A comparison harness freezes binaries and records
+alternating CPU-pinned one-thread trials with exact child CPU/RSS and host
+counters; its four identical-runner smoke checks and timeout rejection control
+validate the harness only, not migration speedup.
 
 The remaining migration includes general generic template export/substitution,
 alias/projection normalization, trait selection and fulfillment (including negative,

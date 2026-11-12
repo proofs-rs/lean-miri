@@ -41,9 +41,18 @@ structure Statement where
   kind : StatementKind
   deriving Repr, DecidableEq
 
+structure CallArgument where
+  span : SpanRef
+  operand : Operand
+  deriving Repr, DecidableEq
+
 inductive TerminatorKind where
   | goto (target : BasicBlockId)
   | switchInt (discriminant : Operand) (targets : SwitchTargets)
+  | call (functionType : TypeSlot) (constantSpan : SpanRef)
+      (arguments : Array CallArgument) (destination : LocalId)
+      (target : Option BasicBlockId) (unwind : UnwindAction)
+      (callSource : CallSource) (functionSpan : SpanRef)
   | «return»
   | unreachable
   deriving Repr, DecidableEq
@@ -95,13 +104,20 @@ private def instantiateStatement (resolve : TypeSlot → Except String TyId) (so
     | .nop => pure .Nop
   pure ⟨source.source,kind⟩
 
-private def instantiateTerminator (source : Terminator) : Miri.MIR.Terminator :=
-  let kind := match source.kind with
-    | .goto target => .Goto target #[]
-    | .switchInt value targets => .SwitchInt value.instantiate targets
-    | .return => .Return
-    | .unreachable => .Unreachable
-  ⟨source.source,kind⟩
+private def instantiateTerminator (resolve : TypeSlot → Except String TyId)
+    (source : Terminator) : Except String Miri.MIR.Terminator := do
+  let kind ← match source.kind with
+    | .goto target => pure (.Goto target #[])
+    | .switchInt value targets => pure (.SwitchInt value.instantiate targets)
+    | .call functionType constantSpan arguments destination target unwind callSource functionSpan => do
+      let function := Miri.MIR.Operand.Constant {
+        span := constantSpan, userType := none, value := .Val .ZeroSized (← resolve functionType) }
+      let arguments := arguments.map fun argument =>
+        ({span := argument.span,operand := argument.operand.instantiate} : SpannedOperand)
+      pure (.Call function arguments (localPlace destination) target unwind callSource functionSpan)
+    | .return => pure .Return
+    | .unreachable => pure .Unreachable
+  pure ⟨source.source,kind⟩
 
 private def validateParameters (parameters : Array ArgSort) : Nat → Term → Except String Unit
   | 0, _ => .error "MIR template parameter validation traversal exhausted"
@@ -160,6 +176,12 @@ def validateStructure (template : Template) : Except String Unit := do
         seen := seen.push value
         target id
       target targets.otherwise
+    | .call functionType _ arguments destination returnTarget unwind _ _ =>
+      slot functionType
+      localId destination
+      for argument in arguments do operand argument.operand
+      for id in returnTarget.toArray do target id
+      if let .Cleanup id := unwind then target id
     | .return | .unreachable => pure ()
 
 def validate (template : Template) (args : Array Term) : Except String Unit := do
@@ -176,7 +198,9 @@ def eraseFreeRegions : Nat → Term → Except String Term
   | 0, _ => .error "MIR template region-erasure traversal exhausted"
   | fuel + 1, value => do
     match value with
-    | .binder .. => throw "MIR copy template normalization excludes binder constructors"
+    | .binder variables inner =>
+      unless variables.isEmpty do throw "MIR template normalization excludes nonempty binders"
+      return .binder variables (← eraseFreeRegions fuel inner)
     | .bound .region .. => pure value
     | _ =>
       if value.sort == .region then return .atom .region "erased" ""
@@ -196,7 +220,9 @@ def validateClosed : Nat → Term → Except String Unit
     match value with
     | .parameter .. | .bound .. | .placeholder .. | .inference .. =>
       throw "instantiated MIR retains unresolved generic variables"
-    | .binder .. => throw "MIR copy template normalization excludes binder constructors"
+    | .binder variables inner =>
+      unless variables.isEmpty do throw "MIR template normalization excludes nonempty binders"
+      validateClosed fuel inner
     | .node _ _ _ children | .definition _ _ _ children =>
       let _ ← children.mapM (fun child => do
         validateClosed fuel child
@@ -215,7 +241,7 @@ def instantiate (template : Template) (fuel : Nat) (args : Array Term)
   let locals ← template.skeleton.locals.mapM resolve
   let blocks ← template.skeleton.blocks.mapM fun block => do
     pure ⟨← block.statements.mapM (instantiateStatement resolve),
-      instantiateTerminator block.terminator,block.cleanup⟩
+      ← instantiateTerminator resolve block.terminator,block.cleanup⟩
   pure ⟨template.skeleton.phase,template.skeleton.argumentCount,
     template.skeleton.spreadArgument,locals,blocks⟩
 

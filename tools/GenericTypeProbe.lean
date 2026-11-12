@@ -46,10 +46,15 @@ def main (args : List String) : IO Unit := do
     else throw (IO.userError "material projection has non-dense type identities")
     else throw (IO.userError "unknown context mode")
   let refs := types.filter (primitiveChild types)
+  let nominals := types.filter fun node => match node.shape with
+    | .adt data => data.args.isEmpty
+    | _ => false
   let chosen := match selection with
     | "primitive" => types.find? (fun (node : TypeNode) => node.shapeKind == TypeShapeKind.uint)
     | "early-reference" => refs[0]?
     | "late-reference" => refs.back?
+    | "early-nominal" => nominals[0]?
+    | "late-nominal" => nominals.back?
     | _ => none
   let some chosen := chosen | throw (IO.userError "probe candidate absent")
   let hash ← must ((← must (raw.getObjVal? "source_sha256")).getStr?)
