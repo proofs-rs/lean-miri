@@ -15,7 +15,9 @@ extern_lib nativeMathLgamma pkg := do
   buildStaticLib archive #[objectJob]
 
 -- Standard-stream host adapter, built by the same pinned compiler as the exporter.
-extern_lib nativeStdioHost pkg := do
+-- A general target avoids package-global extern_lib dependencies: pure Miri,
+-- documentation and proof clients do not require Rust. Only runner support links it.
+target nativeStdioHost pkg : System.FilePath := do
   let source := pkg.dir / "native" / "stdio_host.rs"
   let shim := pkg.dir / "native" / "stdio_host.c"
   let object := pkg.staticLibDir / "stdio_host.o"
@@ -40,6 +42,7 @@ extern_lib nativeStdioHost pkg := do
 lean_lib NativeRunnerSupport where
   srcDir := "tools"
   roots := #[`NativeStdioHost, `NativeStdioProtocol]
+  moreLinkObjs := #[⟨.packageTarget .anonymous `nativeStdioHost⟩]
 
 lean_exe native_stdio_host_qa where
   srcDir := "native"
