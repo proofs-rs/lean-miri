@@ -323,6 +323,36 @@ and regression) pass. The UI sweep remains unfinished; its shard-9 AVX2
 export failure used the old producer and is covered by the local repair below. These results
 belong to that main revision; schema 9 has not yet received hosted validation.
 
+### Source-owned descriptor cleanup: local validation
+
+The follow-up on main `d3d79e8e` connects virtual sockets, eventfd and epoll
+last-owner destruction to their canonical ownership/protocol/readiness stores.
+Narrow drop dictionaries reuse the pinned bodies without provisional I/O
+capabilities. Virtual close retains peer-loss notification and the owned delayed
+readiness reference before watched-field cleanup; eventfd removes its watched
+metadata before its state; epoll releases its watcher reference. Both release
+routes retain the actual payload and reject tag/identity mismatches. Legacy
+callback defaults, partial failure state and true host-resource limits remain.
+
+The native fixture also constructs the pinned simple ErrorKind representation
+(kind unchanged, raw errno absent, Unit payload). Existing ordered target tables
+still obtain numeric errno from compiler constants. Raw host conversion, host
+errno lookup and error display remain unavailable; unmapped kinds or missing
+target evidence do not become successful errno conversions.
+
+The coherent 1,285-job combined build and 74,519-declaration library axiom audit
+pass with only the three allowed axioms. All 46 runtime checks and structural
+regressions pass, including the new descriptor and simple-kind controls. The
+unchanged `pass/shims/socket-unix.rs` passes a fresh same-TyCtxt reference/Lean
+comparison with strict profiles, source/snapshot bindings and frozen binaries.
+The earlier cleanup-only run reached EOF handling but stopped at the then
+missing WouldBlock conversion; it is not counted as a successful execution.
+
+The fixed Rust/MIR inputs, checksums, proof targets and caller assumptions are
+unchanged. The complete 268-root proof check is still running for these library
+sources. These finite local results do not establish a green hosted UI sweep,
+host socket support or closure of the other capability/performance gaps.
+
 ### Schema-11 shared-layout test corrections
 
 On main `62129c87`, the test-only follow-up resolves logical layout IDs through
