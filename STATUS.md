@@ -651,7 +651,8 @@ classification. Null, nonzero and successful backtrace capture/resolve controls
 pass fresh strict comparisons; bare `DanglingIntPointer` is not a null alias.
 The common build, 74,541-declaration axiom audit, 119 Python checks and structural
 regressions and all 47 runtime checks pass. The fresh 268-module empty-function
-proof closure is pending.
+proof closure also passes, including source/input binding and the transitive
+allowed-axiom audit for its existing explicit input/profile domain.
 Three older backtrace API/invalid-flags UI cases remain excluded by the existing
 stdout-snapshot/expected-Unsupported profile guards and are not successful
 comparisons. Fixed inputs, proof assumptions and execution budgets are unchanged.
