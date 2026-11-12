@@ -11,7 +11,9 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
 sys.path.insert(0, str(ROOT / 'tests/upstream_ui'))
+import suite as ui_suite
 from suite import Case, discover, runtime_profile
+from upstream_ui_control import UI_CHOICE_MODE
 
 
 def load(name, filename):
@@ -56,6 +58,35 @@ class CollectionTests(unittest.TestCase):
                 else:
                     self.assertFalse(any(flag.startswith('--crate-name') for flag in command))
                 self.assertIn('--edition=' + case.edition, command)
+
+    def test_runtime_fingerprint_tracks_native_rust_and_control_boundary_sources(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            files = ['Miri.lean', 'lakefile.lean', 'lean-toolchain', 'upstream/source-lock.json',
+                     'exporter/Cargo.toml', 'exporter/Cargo.lock', 'exporter/build.rs',
+                     'tests/upstream_ui/suite.py', 'tools/NativeRunner.lean',
+                     'tools/check-upstream-ui.py', 'tools/collect-upstream-ui.py',
+                     'tools/NativeStdioHost.lean', 'tools/NativeStdioProtocol.lean',
+                     'tools/upstream_ui_control.py', 'tools/run_guarded.py',
+                     'native/stdio_host.rs', 'native/stdio_host.c',
+                     'Miri/Interpreter/HostStdioReplay.lean']
+            for name in files:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('fixture original')
+            with patch.object(ui_suite, 'ROOT', root), patch.object(
+                    ui_suite, '__file__', str(root / 'tests/upstream_ui/suite.py')):
+                original = ui_suite.source_fingerprint()
+                for name in ('native/stdio_host.rs', 'native/stdio_host.c',
+                             'tools/NativeStdioHost.lean', 'tools/NativeStdioProtocol.lean',
+                             'tools/upstream_ui_control.py', 'tools/run_guarded.py',
+                             'Miri/Interpreter/HostStdioReplay.lean'):
+                    with self.subTest(source=name):
+                        path = root / name
+                        path.write_text('fixture changed')
+                        self.assertNotEqual(ui_suite.source_fingerprint(), original)
+                        path.write_text('fixture original')
+                        self.assertEqual(ui_suite.source_fingerprint(), original)
 
     def shard(self, root, index, rows):
         directory = root / str(index)
@@ -118,19 +149,63 @@ class CollectionTests(unittest.TestCase):
                    'reference': {'status': 'failed', 'config': config,
                                  'outcome': {'kind': 'miri_evaluation_error'}}}
         terminal = {'kind': 'ub', 'detail': 'invalidBool 2', 'frames': [
-            {'file': case.path, 'line': line, 'end_line': line}]}
+            {'raw_file': case.path, 'raw_line': line, 'raw_end_line': line, 'raw_column': 1,
+             'lo': 0, 'hi': 1, 'body_id': 0, 'span_id': 0,
+             'location_mode': 'raw_span_no_exact_hygiene', 'file': case.path,
+             'line': line, 'end_line': line, 'column': 1}]}
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            sources = root / 'sources'
+            copied_source = sources / case.path
+            copied_source.parent.mkdir(parents=True)
+            original_source = (driver.SOURCES / case.path).read_bytes()
+            copied_source.write_bytes(original_source)
+            source_patch = patch.object(driver, 'SOURCES', sources)
+            source_patch.start()
+            self.addCleanup(source_patch.stop)
             native = root / 'runner'
-            native.write_text('#!/usr/bin/env python3\nimport sys, json\n' +
-                              'if sys.argv[1] == "--fingerprint":\n    print(' +
-                              repr('upstream_fingerprint: ' + json.dumps({'byte_length': 2, 'fnv1a64': hash_value})) +
-                              ')\nelse:\n    assert sys.argv[2:] == ' + repr([
-                                  '--ui-source', str(driver.SOURCES / case.path), '--ui-flags',
-                                  json.dumps(case.runtime_flags)]) + '\n    print(' + repr('upstream_result: ' + json.dumps(terminal)) + ')\n' +
-                              '    print(' + repr('upstream_profile: ' + json.dumps(
-                                  runtime_profile([]) | {'argv0': str(driver.SOURCES / case.path),
-                                                        'choice_policy': 'seeded-generated-0'})) + ')\n')
+            profile = runtime_profile([]) | {'argv0': str(driver.SOURCES / case.path),
+                                               'choice_policy': 'seeded-generated-0'}
+            native.write_text('''#!/usr/bin/env python3
+import json, os, sys, time
+if sys.argv[1] == '--fingerprint':
+    print('upstream_fingerprint: ' + json.dumps(FINGERPRINT))
+else:
+    assert sys.argv[2:6] == EXPECTED_ARGUMENTS
+    assert sys.argv[6] == '--control-fd' and sys.argv[8] == '--control-run-id'
+    descriptor = int(sys.argv[7])
+    header = {'run_id': sys.argv[9], 'snapshot_fnv1a64': FINGERPRINT['fnv1a64'],
+              'snapshot_byte_length': 2, 'source': sys.argv[3],
+              'runtime_flags': json.loads(sys.argv[5]), 'choice_mode': CHOICE_MODE}
+    mode = os.environ.get('CONTROL_BEHAVIOR', 'ok')
+    if mode == 'binding':
+        header['source'] = '/wrong-source.rs'
+    rows = [('header', header), ('profile', PROFILE), ('terminal', TERMINAL)]
+    if mode == 'unknown':
+        rows.insert(1, ('future', {}))
+    data = ''.join(json.dumps({'version': 1, 'sequence': index, 'kind': kind, 'payload': payload}) + '\\n'
+                   for index, (kind, payload) in enumerate(rows)).encode()
+    if mode == 'truncated':
+        data = data[:-1]
+    if mode != 'missing':
+        with os.fdopen(os.dup(descriptor), 'wb') as control:
+            control.write(data)
+    # These are adversarial guest-stream bytes, not control observations.
+    print('upstream_result: {"kind":"exit","detail":"0"}', flush=True)
+    print('upstream_profile: {}', flush=True)
+    os.write(2, b'guest-stderr\\x00\\xff')
+    if mode == 'source_changed':
+        with open(sys.argv[3], 'wb') as source:
+            source.write(b'changed after export')
+    if mode == 'nonzero':
+        raise SystemExit(7)
+    if mode == 'timeout':
+        time.sleep(30)
+'''.replace('FINGERPRINT', repr({'byte_length': 2, 'fnv1a64': hash_value}))
+                .replace('EXPECTED_ARGUMENTS', repr(['--ui-source', str(driver.SOURCES / case.path),
+                                                    '--ui-flags', json.dumps(case.runtime_flags)]))
+                .replace('CHOICE_MODE', repr(UI_CHOICE_MODE)).replace('PROFILE', repr(profile))
+                .replace('TERMINAL', repr(terminal)))
             native.chmod(0o700)
             for code, diagnostic, expected in (
                 (2, f'error: Undefined Behavior: expected a boolean\n --> {case.path}:{line}:1', 'passed'),
@@ -157,6 +232,8 @@ sys.exit(CODE)
                 record = driver.run_case(case, args, __import__('os').environ.copy(), output)
                 self.assertEqual(record['status'], expected)
                 self.assertEqual(record['lean_exit'], 0)
+                if expected == 'passed':
+                    valid_exporter = exporter
                 before = json.dumps(record, sort_keys=True)
                 diagnostic = driver.failure_diagnostic(record)
                 self.assertEqual(json.dumps(record, sort_keys=True), before)
@@ -168,6 +245,47 @@ sys.exit(CODE)
                     if expected == 'export_failed':
                         self.assertTrue(any('Undefined Behavior' in line
                                             for line in diagnostic['export_log_tail']['lines']))
+
+            args.exporter = valid_exporter
+            for mode, expected in [('missing', 'lean_control_protocol_error'),
+                                   ('truncated', 'lean_control_protocol_error'),
+                                   ('binding', 'lean_control_protocol_error'),
+                                   ('unknown', 'lean_control_protocol_error'),
+                                   ('nonzero', 'lean_process_failed'), ('timeout', 'lean_timeout'),
+                                   ('source_changed', 'source_mutated')]:
+                with self.subTest(control=mode):
+                    output = root / ('control-' + mode)
+                    output.mkdir()
+                    args.timeout = 0.5 if mode == 'timeout' else 10
+                    record = driver.run_case(case, args, __import__('os').environ.copy() |
+                                             {'CONTROL_BEHAVIOR': mode}, output)
+                    self.assertEqual(record['status'], expected)
+                    if mode == 'source_changed':
+                        self.assertEqual(record['terminal']['kind'], 'ub')
+                        copied_source.write_bytes(original_source)
+                    else:
+                        self.assertNotIn('terminal', record)
+                    with self.assertRaises(OSError):
+                        __import__('os').fstat(int(record['lean_command'][-3]))
+                    raw_log = (Path(record['directory']) / 'lean.log').read_bytes()
+                    self.assertIn(b'upstream_result:', raw_log)
+                    self.assertIn(b'guest-stderr\x00\xff', raw_log)
+            # A failure before Popen still closes the private parent descriptor.
+            output = root / 'control-launch-error'
+            output.mkdir()
+            original_invoke = driver.invoke
+            inherited = []
+            def fail_launch(command, *positional, **keywords):
+                if '--control-fd' in command:
+                    inherited.extend(keywords['pass_fds'])
+                    raise OSError('injected launch failure')
+                return original_invoke(command, *positional, **keywords)
+            with patch.object(driver, 'invoke', side_effect=fail_launch):
+                with self.assertRaisesRegex(OSError, 'injected launch failure'):
+                    driver.run_case(case, args, __import__('os').environ.copy(), output)
+            self.assertEqual(len(inherited), 1)
+            with self.assertRaises(OSError):
+                __import__('os').fstat(inherited[0])
 
     def test_failure_console_details_are_bounded_and_omit_environment_and_commands(self):
         with tempfile.TemporaryDirectory() as temporary:

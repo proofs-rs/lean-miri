@@ -15,12 +15,14 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tests/upstream_ui'))
 from suite import (SOURCES, compare, discover, profile_differences, reference_oracle,
                    reference_profile_differences, runtime_profile, source_fingerprint)
 from run_guarded import run as guarded_run
+from upstream_ui_control import (ControlProtocolError, UI_CHOICE_MODE, control_file, read_control)
 
 
 def sha256(path):
@@ -31,10 +33,10 @@ def sha256(path):
     return h.hexdigest()
 
 
-def invoke(command, env, log, timeout, memory_limit=None):
+def invoke(command, env, log, timeout, memory_limit=None, *, pass_fds=()):
     try:
         return guarded_run(command, cwd=ROOT, env=env, log=log, timeout=timeout,
-                           memory_limit=memory_limit).returncode
+                           memory_limit=memory_limit, pass_fds=pass_fds).returncode
     except RuntimeError as error:
         return 'timeout' if 'walltime limit' in str(error) else 'resource_limit'
 
@@ -100,30 +102,44 @@ def run_case(case, args, env, output):
         # Run the current interpreter even when the reference profile differs.
         # Both failures and observations remain visible; neither becomes a pass.
         started = time.monotonic()
-        lean_command = [str(args.runner), str(snapshot), '--ui-source', str(source),
-                        '--ui-flags', json.dumps(case.runtime_flags)]
-        record['lean_command'] = lean_command
-        code = invoke(lean_command, env, directory / 'lean.log', args.timeout, args.memory_limit)
-        record['lean_exit'] = code
-        record['lean_seconds'] = time.monotonic() - started
-        if code != 0:
-            lean_status = 'lean_' + code if isinstance(code, str) else 'lean_process_failed'
-        else:
-            lines = (directory / 'lean.log').read_text(errors='replace').splitlines()
-            terminals = [line.removeprefix('upstream_result: ') for line in lines
-                         if line.startswith('upstream_result: ')]
-            profiles = [line.removeprefix('upstream_profile: ') for line in lines
-                        if line.startswith('upstream_profile: ')]
-            lean_status = 'lean_missing_outcome'
-            if len(terminals) == 1:
-                record['terminal'] = json.loads(terminals[0])
-                lean_status = compare(case, record['terminal'], category)
-            if len(profiles) == 1:
-                record['lean_profile'] = json.loads(profiles[0])
+        control_path = directory / 'runner-control.jsonl'
+        run_id = uuid.uuid4().hex
+        binding = {'run_id': run_id,
+                   'snapshot_fnv1a64': int(sidecar['snapshot_fnv1a64'], 16),
+                   'snapshot_byte_length': snapshot.stat().st_size,
+                   'source': str(source), 'runtime_flags': case.runtime_flags,
+                   'choice_mode': UI_CHOICE_MODE}
+        record['control_path'] = str(control_path)
+        control = None
+        with control_file(control_path) as descriptor:
+            lean_command = [str(args.runner), str(snapshot), '--ui-source', str(source),
+                            '--ui-flags', json.dumps(case.runtime_flags),
+                            '--control-fd', str(descriptor), '--control-run-id', run_id]
+            record['lean_command'] = lean_command
+            code = invoke(lean_command, env, directory / 'lean.log', args.timeout,
+                          args.memory_limit, pass_fds=(descriptor,))
+            record['lean_exit'] = code
+            record['lean_seconds'] = time.monotonic() - started
+            # Complete-looking control data never overrides a failed process,
+            # timeout or memory guard. Guest streams are not protocol inputs.
+            if code != 0:
+                lean_status = 'lean_' + code if isinstance(code, str) else 'lean_process_failed'
+            else:
+                try:
+                    control = read_control(descriptor, binding)
+                except (ControlProtocolError, OSError) as error:
+                    record['control_error'] = str(error)
+                    lean_status = 'lean_control_protocol_error'
+        if control is not None:
+            record['control_header'] = control['header']
+            record['control_records'] = control['records']
+            record['terminal'] = control['terminal']
+            record['lean_profile'] = control['profile']
+            lean_status = compare(case, record['terminal'], category)
             record['lean_outcome_status'] = lean_status
             record['lean_profile_differences'] = runner_profile_differences(
-                case, source, record.get('lean_profile', {}))
-            if not runner_profile_matches(case, source, record.get('lean_profile', {})):
+                case, source, record['lean_profile'])
+            if not runner_profile_matches(case, source, record['lean_profile']):
                 lean_status = 'lean_profile_mismatch'
         record['lean_status'] = lean_status
         record['status'] = lean_status if status == 'ready' else status
@@ -133,6 +149,8 @@ def run_case(case, args, env, output):
         temporary.unlink()
     if snapshot.is_file() and 'snapshot_sha256' in record and sha256(snapshot) != record['snapshot_sha256']:
         record['status'] = 'input_mutated'
+    if sha256(source) != record['source_sha256']:
+        record['status'] = 'source_mutated'
     if not args.keep_inputs:
         snapshot.unlink(missing_ok=True)
         (directory / 'guest').unlink(missing_ok=True)
@@ -187,6 +205,7 @@ def failure_diagnostic(record):
                   'lean_outcome_status', 'export_exit', 'lean_exit') if key in record},
         'terminal': bounded_json({key: terminal[key] for key in ('kind', 'detail') if key in terminal}),
         'terminal_frames': bounded_json(terminal.get('frames', [])[-8:]),
+        'control_error': bounded_json(record.get('control_error')),
         'reference_profile_differences': bounded_json(record.get('reference_profile_differences', {})),
         'lean_profile_differences': bounded_json(record.get('lean_profile_differences', {})),
     }
