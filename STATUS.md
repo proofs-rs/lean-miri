@@ -344,10 +344,25 @@ private control channel, so guest output cannot supply an acceptance record.
 Finite fresh reference/Lean checks passed for repeated and binary explicit
 output, spoofed protocol lines and preserved NullOutput, plus all four original
 cell-inside-box/struct tree/tree_implicit_writes cases with workflow budgets and
-original sources/flags/profiles. These used immutable exporter `38f5811b…3203`
-and native runner `23b5172e…afe5`. Pure component, bridge and protocol checks
-also pass. Full common/runtime/structural/SC/proof and hosted validation remain
-pending for this source combination. An unwound attempt is never resumed.
+original sources/flags/profiles. The final scoped-link cohort used immutable
+exporter `38f5811b…3203` and native runner `e5643e70…cb7b`.
+
+Local validation passed the common build (1,299 targets), audit of 74,890 Miri
+declarations, all 47 existing runtime checks, quick checks including 128 Python
+tests, structural checks including pure replay/protocol and compiled native QA,
+and three Rust boundary tests. The fixed SC suite passed all twelve seeds and
+four negative controls. All 268 fixed-input proof modules passed; the transitive
+audit covered 77,532 imported EmptyFunction/Miri declarations with only the
+three permitted axioms. Fixed Rust/input hashes and frozen proof/library source
+bindings passed. The later Lake-only link isolation leaves those Miri/proof/input
+bytes unchanged; final native QA, runtime, structural and genuine comparisons
+were repeated after relinking.
+
+The native archive is a dedicated runner-support target rather than a global
+package external library. An isolated client executable and `Miri:shared` built
+without a Rust toolchain, with zero Rust/Cargo sentinel calls and no stdio
+archive generated; runner/QA targets still failed explicitly without Rust.
+Hosted validation remains pending. An unwound attempt is never resumed.
 Raw host errno is retained; unavailable host errno conversion remains
 Unsupported. No general stdio error support, crash recovery guarantee or
 whole-machine proof follows from these finite checks.
