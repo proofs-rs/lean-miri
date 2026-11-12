@@ -36,7 +36,10 @@ def readVariable (value : Json) : Except String BoundVariable := do
 def readTerm : Nat → Json → Except String GenericSubstitution.Term
   | 0, _ => .error "generic material parser depth exhausted"
   | fuel + 1, value => do
-    let natural (key : String) := do (← value.getObjVal? key).getNat?
+    let natural (key : String) : Except String Nat := do
+      let n ← (← value.getObjVal? key).getNat?
+      unless n < 2^32 do throw "generic material variable index exceeds u32"
+      pure n
     let string (key : String) := do (← value.getObjVal? key).getStr?
     let sort := do readSort (← value.getObjVal? "sort")
     match ← string "kind" with
@@ -108,6 +111,8 @@ def readTemplate (value : Json) : Except String DefinitionTemplate := do
   pure {parameters, typeExpression, signatureExpression, fields}
 
 def decodeTemplate : JsonReader.Parser DefinitionTemplate := do
-  JsonReader.liftExcept (readTemplate (← Lean.Json.Parser.any))
+  -- `any` asserts EOF and is only valid for a standalone JSON document.
+  -- A definition template is one nested value in the streaming root decoder.
+  JsonReader.liftExcept (readTemplate (← Lean.Json.Parser.anyCore))
 
 end Miri.Input.GenericMaterialCodec

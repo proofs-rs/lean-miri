@@ -49,7 +49,7 @@ fn bound_type(kind: ty::BoundTyKind) -> String {
         ty::BoundTyKind::Param(def) => format!("{{\"kind\":\"named\",\"definition\":{}}}",definition_identity(def)),
     }
 }
-fn bound_variable(value: ty::BoundVariableKind) -> String {
+pub(super) fn bound_variable(value: ty::BoundVariableKind) -> String {
     match value {
         ty::BoundVariableKind::Ty(kind) => format!("{{\"kind\":\"type\",\"identity\":{}}}",bound_type(kind)),
         ty::BoundVariableKind::Region(kind) => format!("{{\"kind\":\"region\",\"identity\":{}}}",bound_region(kind)),
@@ -210,8 +210,18 @@ pub fn definition_template<'tcx>(tcx: TyCtxt<'tcx>, def: rustc_hir::def_id::DefI
 {
     use rustc_hir::def::DefKind as D;
     let kind=tcx.def_kind(def);
-    if !matches!(kind,D::Fn|D::AssocFn|D::TyAlias|D::Struct|D::Enum|D::Union|D::Field|D::Const|D::AssocConst|D::Static{..}) {
+    if !matches!(kind,D::Fn|D::AssocFn|D::TyAlias|D::AssocTy|D::Struct|D::Enum|D::Union|D::Const|D::AssocConst|D::Static{..}) {
         return Ok(None);
+    }
+    // Abstract trait associated types have no RHS; asking type_of here would
+    // fabricate declaration material or trigger a compiler error. Explicit
+    // defaults and impl associated values retain their raw EarlyBinder RHS.
+    if kind == D::AssocTy {
+        let item = tcx.associated_item(def);
+        // RPITIT hidden values are inference output, not a declaration RHS.
+        if item.is_impl_trait_in_trait() || !item.defaultness(tcx).has_value() {
+            return Ok(None);
+        }
     }
     let generics=tcx.generics_of(def);
     let parameters=array((0..generics.count()).map(|i|quote(match generics.param_at(i,tcx).kind {

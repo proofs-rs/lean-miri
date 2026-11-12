@@ -10,6 +10,8 @@ pub(crate) struct Definition {
     pub body_track_caller: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adt_drop: Option<AdtDropMaterial>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generic_template: Option<serde_json::Value>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct AdtDropMaterial {

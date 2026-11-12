@@ -1,4 +1,5 @@
 import Miri.MIR.Syntax
+import Miri.MIR.Fold
 import Miri.OperationalSafety
 import Miri.TreeBorrows
 import Miri.Memory

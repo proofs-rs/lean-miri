@@ -18,6 +18,7 @@ mod native_signature_queries;
 mod typed_pool;
 mod shared_json;
 mod pool_type;
+mod generic_material;
 mod pool_layout;
 mod pool_instance;
 mod pool_values;
@@ -68,6 +69,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use rustc_driver::{Callbacks, Compilation};
+use rustc_hir::def_id::DefId;
+use serde_json::Value;
 use rustc_hir::def_id::LocalDefId;
 use rustc_interface::interface;
 use rustc_middle::mir::interpret::{AllocId, CTFE_ALLOC_SALT, GlobalAlloc};
@@ -1699,6 +1702,39 @@ impl ExportCallbacks {
                 manually_drop: definition.is_manually_drop(), destructor,
             });
         }
+        // Source templates are shared across all instances. Close only their
+        // definition references: never instantiate a generic type to discover
+        // a concrete query-result domain here.
+        let mut generic_templates = HashMap::new();
+        let mut generic_definition_cursor = 0;
+        while generic_definition_cursor < export_context.definitions.len() {
+            let definition = *export_context.definitions.key(generic_definition_cursor)
+                .ok_or_else(|| "generic definition material identity absent".to_owned())?;
+            if let Some(material) = generic_material::definition_template(tcx, definition)
+                .map_err(|error| format!("generic source material for {}: {error}", tcx.def_path_str(definition)))?
+            {
+                let material: Value = serde_json::from_str(&material)
+                    .map_err(|error| format!("invalid internal generic material JSON: {error}"))?;
+                let mut references = Vec::new();
+                generic_definition_references(&material, &mut references)?;
+                for reference in references { def_json(&mut export_context, reference); }
+                use rustc_hir::def::DefKind as D;
+                if matches!(tcx.def_kind(definition), D::Fn | D::AssocFn) {
+                    body_track_caller.entry(generic_definition_cursor).or_insert_with(||
+                        tcx.body_codegen_attrs(definition).flags.contains(
+                            rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags::TRACK_CALLER));
+                }
+                if matches!(tcx.def_kind(definition), D::Struct | D::Enum | D::Union) {
+                    let adt = tcx.adt_def(definition);
+                    let destructor = adt.destructor(tcx)
+                        .map(|destructor| def_json(&mut export_context, destructor.did));
+                    adt_drop_material.entry(generic_definition_cursor).or_insert(
+                        pool_values::AdtDropMaterial { manually_drop: adt.is_manually_drop(), destructor });
+                }
+                generic_templates.insert(generic_definition_cursor, material);
+            }
+            generic_definition_cursor += 1;
+        }
         let body_roots = bodies;
         let allocator_world = if self.prepared_allocator_world {
             Some(allocator_world::capture(
@@ -1768,6 +1804,7 @@ impl ExportCallbacks {
                 .map(|(id, mut definition)| {
                     definition.body_track_caller = body_track_caller.get(&id).copied();
                     definition.adt_drop = adt_drop_material.get(&id).cloned();
+                    definition.generic_template = generic_templates.remove(&id);
                     definition
                 }).collect(),
             type_constants: export_context.type_constants.finish("type_constant")?,
@@ -2822,6 +2859,25 @@ fn structural_needs_drop_supported<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>,
     visit(tcx, input, fuel, &mut HashMap::new())
 }
 
+// Closed type-shape coverage for StructuralSized; no Sized query results are
+// serialized for this domain. Struct/tuple constraints follow only the tail.
+fn structural_sized_supported<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>, fuel: usize) -> bool {
+    if fuel == 0 { return false; }
+    let Ok(input) = tcx.try_normalize_erasing_regions(ty::TypingEnv::fully_monomorphized(),
+        ty::Unnormalized::new_wip(input)) else { return false; };
+    match input.kind() {
+        ty::Alias(..) | ty::Param(..) | ty::Bound(..) | ty::Placeholder(..) | ty::Infer(..) => false,
+        ty::Tuple(fields) => fields.last().is_none_or(|tail| structural_sized_supported(tcx, *tail, fuel - 1)),
+        ty::Adt(definition, args) if definition.is_struct() => {
+            definition.non_enum_variant().fields.iter().last().is_none_or(|field| {
+                structural_sized_supported(tcx,
+                    tcx.type_of(field.did).instantiate(tcx, args).skip_norm_wip(), fuel - 1)
+            })
+        },
+        _ => true,
+    }
+}
+
 fn type_compiler_facts_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
@@ -2882,7 +2938,8 @@ fn type_compiler_facts_json<'tcx>(
         needs_drop: if structural_needs_drop_supported(tcx, normalized, 256) { None }
             else { Some(normalized.needs_drop(tcx, env)) },
         opsem_inhabited: normalized.is_opsem_inhabited(tcx, env),
-        is_sized: normalized.is_sized(tcx, env),
+        is_sized: if structural_sized_supported(tcx, normalized, 256) { None }
+            else { Some(normalized.is_sized(tcx, env)) },
     };
     let discriminant_type = discriminant_type_fact_json(context, tcx, normalized)?;
     let normalized_id = type_json(context, tcx, normalized)?;
@@ -2901,14 +2958,25 @@ fn type_compiler_facts_json<'tcx>(
             "rustc ptr_metadata_ty_or_tail does not implement UnsafeBinder",
         );
     }
-    let metadata = normalized
-        .ptr_metadata_ty_or_tail(tcx, |t| tcx.normalize_erasing_regions(env, t))
-        .map_err(|_| "rustc could not determine pointer metadata type".to_owned())?;
+    // Unit/usize selection follows structural tail rules in Lean. Retain only
+    // the unresolved DynMetadata<Self> ADT constructor, once on the dyn node;
+    // aggregate tails use that same residual constructor evidence on demand.
+    let pointer_metadata_type = if matches!(normalized.kind(), ty::Dynamic(..)) {
+        let metadata = normalized
+            .ptr_metadata_ty_or_tail(tcx, |t| tcx.normalize_erasing_regions(env, t))
+            .map_err(|_| "rustc could not determine pointer metadata type".to_owned())?;
+        Some(type_json(context, tcx, metadata)?)
+    } else {
+        if matches!(tail.kind(), ty::Alias(..) | ty::Param(_)) {
+            return export_failure("pointer metadata", "rustc could not determine pointer metadata type");
+        }
+        None
+    };
     let type_queries = TypeQueries {
         discriminant_type,
         normalized: if structural_identity_normalization(input, 1024) { None } else { Some(normalized_id) },
         unsafe_binder_erased,
-        pointer_metadata_type: type_json(context, tcx, metadata)?,
+        pointer_metadata_type,
     };
     let capture_names = match input.kind() {
         ty::Closure(def, _) | ty::CoroutineClosure(def, _) | ty::Coroutine(def, _) => Some(
@@ -3436,6 +3504,10 @@ fn layout_value_json<'tcx>(
         // shape. Lean computes field ordering, offsets, niches and ABI lazily.
         // Reserve before traversal; type export finishes this node normally.
         pool_layout::Layout::TupleRecipe { tuple_type: context.type_id(layout.ty) }
+    } else if matches!(layout.ty.kind(), ty::Adt(def, _) if def.is_union()) {
+        // Union repr options and instantiated field types are material ADT
+        // shape data; Lean computes their shared ABI, size and alignment.
+        pool_layout::Layout::UnionRecipe { union_type: context.type_id(layout.ty) }
     } else {
         pool_layout::Layout::new(tcx, layout)
     };
@@ -4320,9 +4392,32 @@ fn unwind_json(unwind: rustc_middle::mir::UnwindAction) -> pool_body::Unwind {
     }
 }
 
+/// Recover only explicit physical definition references in our internal raw
+/// template schema. Names, debug text and runtime type IDs are never consulted.
+fn generic_definition_references(value: &Value, out: &mut Vec<DefId>) -> Result<(), String> {
+    match value {
+        Value::Object(fields) => {
+            if let Some(identity) = fields.get("definition") {
+                let crate_index = identity.get("crate").and_then(Value::as_u64)
+                    .and_then(|n| u32::try_from(n).ok())
+                    .ok_or_else(|| "generic definition crate identity absent/invalid".to_owned())?;
+                let index = identity.get("index").and_then(Value::as_u64)
+                    .and_then(|n| u32::try_from(n).ok())
+                    .ok_or_else(|| "generic definition index identity absent/invalid".to_owned())?;
+                out.push(DefId { krate: rustc_hir::def_id::CrateNum::from_u32(crate_index),
+                    index: rustc_hir::def_id::DefIndex::from_u32(index) });
+            }
+            for child in fields.values() { generic_definition_references(child, out)?; }
+        }
+        Value::Array(children) => for child in children { generic_definition_references(child, out)?; },
+        _ => {}
+    }
+    Ok(())
+}
+
 fn def_json(context: &mut ExportContext<'_>, def: rustc_hir::def_id::DefId) -> u64 {
     let (id,fresh)=context.definitions.reserve(def);
-    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32(),body_track_caller:None,adt_drop:None }); }
+    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32(),body_track_caller:None,adt_drop:None,generic_template:None }); }
     id as u64
 }
 

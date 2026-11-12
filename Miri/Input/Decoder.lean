@@ -363,7 +363,7 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
   let scalarSize := fun id => do
     let ty ← types[id]?
     let source ← layouts[ty.layoutId]?
-    if source.primitiveRecipe.isNone && source.tupleType.isNone then source.sizeBytes
+    if source.primitiveRecipe.isNone && source.tupleType.isNone && source.unionType.isNone then source.sizeBytes
     else match target with
       | .error _ => none
       | .ok target => match RuntimeMetadata.resolveLayout target types layouts ty.layoutId with

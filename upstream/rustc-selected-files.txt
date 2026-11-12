@@ -536,6 +536,8 @@ rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_target/src/spec/tar
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_target/src/spec/targets/xtensa_esp32s3_espidf.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_target/src/spec/targets/xtensa_esp32s3_none_elf.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_target/src/spec/tuple.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_trait_selection/src/traits/normalize.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_trait_selection/src/traits/project.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_ty_utils/src/abi.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_ty_utils/src/layout.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_ty_utils/src/needs_drop.rs

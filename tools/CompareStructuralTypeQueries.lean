@@ -3,6 +3,7 @@ import Lean.Data.Json.Printer
 import Miri.Input.StructuralDeref
 import Miri.Input.StructuralTail
 import Miri.Input.StructuralAutoTraits
+import Miri.Input.StructuralSized
 
 /-! Differential adapter: input must be a fresh canonical baseline export from
 the pinned rustc. Old result rows are oracle data only; production queries do
@@ -22,7 +23,7 @@ private def readTypes (source : String) : Except String (Array TypeNode) := do
   let types ← value.getObjVal? "types"
   JsonReader.run (JsonReader.array (DecoderValues.parseTypeNode "$oracle.types" pool discriminants)) types.compress
 
-private def check (nodes : Array TypeNode) : Except String (Nat × Nat × Nat × Nat) := do
+private def check (nodes : Array TypeNode) : Except String (Nat × Nat × Nat × Nat × Nat × Nat) := do
   let lookup (id : Nat) : Except String TypeNode := do
     let some node := nodes.find? (·.id == id) | throw s!"absent type {id}"
     return node
@@ -40,6 +41,8 @@ private def check (nodes : Array TypeNode) : Except String (Nat × Nat × Nat ×
   let mut changedTails := 0
   let mut autoTraitTrue := 0
   let mut autoTraitResidual := 0
+  let mut sizedPositive := 0
+  let mut sizedNegative := 0
   for node in nodes do
     let some facts := node.compilerFacts | throw "oracle facts absent"
     let some (_, isBox) := facts.booleanQueries.find? (·.1 == "is_box")
@@ -56,6 +59,12 @@ private def check (nodes : Array TypeNode) : Except String (Nat × Nat × Nat ×
         unless expected do throw s!"type {node.id} {key}: Lean trivial=true, rustc=false"
         autoTraitTrue := autoTraitTrue + 1
       else autoTraitResidual := autoTraitResidual + 1
+    if let some sized ← StructuralSized.query (fun id => do
+        pure (← lookup (← normalize id)).shape) (nodes.size + 1) node.id then
+      let some (_, expected) := facts.booleanQueries.find? (·.1 == "is_sized")
+        | throw "Sized oracle absent"
+      unless sized == expected do throw s!"type {node.id}: Lean Sized={sized}, rustc={expected}"
+      if sized then sizedPositive := sizedPositive + 1 else sizedNegative := sizedNegative + 1
     let queryNode ← lookup (node.layoutQueryInputTypeId.getD node.id)
     let results := #[
       ("boxed_type", ← StructuralDeref.boxedType queryNode.shape isBox),
@@ -75,7 +84,10 @@ private def check (nodes : Array TypeNode) : Except String (Nat × Nat × Nat ×
   unless autoTraitTrue > 0 && autoTraitResidual > 0 do
     throw "oracle fixture does not cover trivial and residual auto-trait branches"
   -- Residual rows are counted, not claimed as Lean solver comparisons.
-  return (comparisons + autoTraitTrue, boxes, pointers, changedTails)
+  unless sizedPositive > 0 && sizedNegative > 0 do
+    throw "oracle fixture lacks sized and unsized type coverage"
+  return (comparisons + autoTraitTrue + sizedPositive + sizedNegative,
+    boxes, pointers, changedTails, sizedPositive, sizedNegative)
 
 def main (args : List String) : IO UInt32 := do
   if args.isEmpty then throw (IO.userError "usage: compare_structural_type_queries BASELINE.json [...]")
@@ -86,6 +98,6 @@ def main (args : List String) : IO UInt32 := do
       | .error error => throw (IO.userError s!"{path}: {error}")
     match check decoded with
     | .error error => throw (IO.userError s!"{path}: {error}")
-    | .ok (count, boxes, pointers, tails) =>
-      IO.println s!"{path}: {count} rustc/Lean structural query comparisons passed; Box={boxes}, raw_pointer={pointers}, nontrivial_tail={tails}"
+    | .ok (count, boxes, pointers, tails, sizedPositive, sizedNegative) =>
+      IO.println s!"{path}: {count} rustc/Lean structural query comparisons passed; Box={boxes}, raw_pointer={pointers}, nontrivial_tail={tails}, sized={sizedPositive}, unsized={sizedNegative}"
   return 0

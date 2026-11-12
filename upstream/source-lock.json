@@ -13,9 +13,9 @@
     "procedure": "upstream/fetch-sources.sh",
     "procedure_sha256": "a8ced1c1a19c47193465862bbe2486e25dcf91c544df5b62f9b2265ea12fb7d8",
     "rustc_selected_archive_paths": {
-      "count": 550,
+      "count": 552,
       "path": "upstream/rustc-selected-files.txt",
-      "sha256": "f3ab5ab3750ca3ddd938baeac18b745261d08a4c56f3e7c930cd09f4219d103a"
+      "sha256": "252ac391f19edcd5652d63c9e7ea13d1f08fb3c20815e37a49680f720207b7e6"
     }
   },
   "coverage_expected_rust_modules": {
@@ -48,6 +48,8 @@
     "upstream/rustc-source/compiler/rustc_target/src/asm/mod.rs": 1,
     "upstream/rustc-source/compiler/rustc_target/src/callconv": 26,
     "upstream/rustc-source/compiler/rustc_target/src/spec": 389,
+    "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/normalize.rs": 1,
+    "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs": 1,
     "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs": 1,
     "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs": 1,
     "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs": 1,
@@ -91,6 +93,8 @@
     "upstream/rustc-source/compiler/rustc_target/src/asm/mod.rs",
     "upstream/rustc-source/compiler/rustc_target/src/callconv",
     "upstream/rustc-source/compiler/rustc_target/src/spec",
+    "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/normalize.rs",
+    "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
     "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
     "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
     "upstream/rustc-source/compiler/rustc_ty_utils/src/needs_drop.rs",
@@ -4774,6 +4778,18 @@
       "git_blob": "2c4a879d79440ba30b42f2fb347fabe4ca0d4f33",
       "path": "upstream/rustc-source/compiler/rustc_target/src/spec/tuple.rs",
       "sha256": "136758a20a5b22cf1804605f56acaa76da3b4c548b66badefa78cb6b45847f42"
+    },
+    {
+      "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/normalize.rs",
+      "sha256": "415d68fad8f4954a6567e18f011f12b4b06b4acc3d1df999f67b9be11a2b94e0",
+      "git_blob": "63f7c6dfc94fc1084113750136dad2afa00ee417"
+    },
+    {
+      "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_trait_selection/src/traits/project.rs",
+      "sha256": "307ac25ad047ace41cb671052f786020c8360f5a840d9319455f9fabd393270c",
+      "git_blob": "6cea4a93008244898226ba4df60c545ed6b62ed1"
     },
     {
       "component": "rustc",

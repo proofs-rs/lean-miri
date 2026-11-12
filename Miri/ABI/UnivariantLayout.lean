@@ -132,7 +132,8 @@ def biased (target : RuntimeTargetDataLayout) (fields : Array LayoutData)
     offset ← offset.alignTo fieldAlign.abi |>.mapError toString
     align := align.max fieldAlign.abi
     maxReprAlign := maxOption maxReprAlign field.maxReprAlign
-    offsets := offsets.set! index offset
+    if h : index < offsets.size then offsets := offsets.set index offset h
+    else throw "univariant field offset index out of bounds"
     if let some niche := field.largestNiche then
       let count ← available target niche
       if (if bias == .start then count > largestAvailable else count >= largestAvailable) then

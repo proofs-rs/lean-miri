@@ -8,6 +8,7 @@ use serde::Serialize;
 pub(super) enum Layout {
     PrimitiveRecipe { primitive_recipe: &'static str },
     TupleRecipe { tuple_type: u64 },
+    UnionRecipe { union_type: u64 },
     Material(FullLayout),
 }
 #[derive(Serialize)]

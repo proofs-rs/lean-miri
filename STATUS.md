@@ -80,6 +80,22 @@ presence does not eliminate the corresponding residual catalogs. Full trait
 selection, alias/projection normalization and generic MIR construction are being
 implemented separately and are not yet available as complete runtime providers.
 
+Raw canonical declaration templates now enter the production definition table
+with typed physical definition/binder identities; the nested streaming decoder
+is exercised against all 305 templates in a real fresh control export. Source
+primitive/tuple/ADT field substitution has 30 pinned-rustc comparisons, but
+instantiated-tree-to-runtime conversion still rejects unsupported constructor
+families. This is not full generic runtime normalization.
+Pointer-metadata types and Sized answers now derive from normalized structural
+tails/source kinds rather than covered eager result fields; dynamic DynMetadata
+construction remains residual. Union layouts use raw union type recipes and the
+source-aware calculator. The repaired third integration passed native/ImportMIR
+1,217 jobs and fresh ordinary, Drop and five-union-field-read guests against
+same-TyCtxt Miri exit-zero. Complete union differential coverage includes eight
+layouts and malformed/conflicting/missing material controls. Full Python
+132 tests and semantic-source lint passed after generating audit inventories;
+source-inventory review and full Lean/component regression remain unfinished.
+
 The remaining migration includes general generic template export/substitution,
 alias/projection normalization, trait selection and fulfillment (including negative,
 coinductive and specialization rules), associated-item and instance resolution,

@@ -14,5 +14,5 @@ bash "$BASELINE/tools/export-mir.sh" --output "$OUT/baseline.json" \
   --root structural_types -- "$ROOT/tests/repro/compiler-queries/structural-types.rs" \
   --crate-type=lib --crate-name=structural_types
 cd "$ROOT"
-flock /tmp/lean-miri-lake-build.lock lake build Miri.Input.TableCore Miri.Input.StructuralDeref Miri.Input.StructuralTail Miri.Input.StructuralAutoTraits
+flock /tmp/lean-miri-lake-build.lock lake build Miri.Input.TableCore Miri.Input.StructuralDeref Miri.Input.StructuralTail Miri.Input.StructuralAutoTraits Miri.Input.StructuralSized
 lake env lean --run tools/CompareStructuralTypeQueries.lean "$OUT/baseline.json"

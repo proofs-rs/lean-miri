@@ -82,9 +82,12 @@ private def chunkBound (start : Nat) : Except String (UInt32 × Nat) :=
   else chunkBoundAux start start (start + 1) 32
 
 private def swap (values : Array α) (i j : Nat) : Except String (Array α) := do
-  let some a := values[i]? | throw "shuffle source index out of bounds"
-  let some b := values[j]? | throw "shuffle target index out of bounds"
-  pure ((values.set! i b).set! j a)
+  if hi : i < values.size then
+    if hj : j < values.size then
+      let first := values.set i values[j] hi
+      pure (first.set j values[i] (by simpa [first] using hj))
+    else throw "shuffle target index out of bounds"
+  else throw "shuffle source index out of bounds"
 
 /-- Full slice shuffle. The small-slice path preserves IncreasingUniform's
 mixed-radix chunk consumption, including its zero-index first iteration. -/

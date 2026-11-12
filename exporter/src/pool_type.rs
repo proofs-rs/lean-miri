@@ -222,7 +222,8 @@ pub(super) struct BooleanQueries {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub needs_drop: Option<bool>,
     pub opsem_inhabited: bool,
-    pub is_sized: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_sized: Option<bool>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct TypeQueries {
@@ -230,7 +231,8 @@ pub(super) struct TypeQueries {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub normalized: Option<u64>,
     pub unsafe_binder_erased: Option<u64>,
-    pub pointer_metadata_type: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pointer_metadata_type: Option<u64>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct AdtFacts {

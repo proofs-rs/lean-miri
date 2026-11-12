@@ -472,6 +472,11 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
     typeShape b s!"{path}.shape" node.shape
     if let some facts := node.compilerFacts then compilerFacts b s!"{path}.compiler_facts" facts
   for (value, index) in document.layouts.toList.zipIdx do
+    if let some id := value.unionType then
+      checkId b.types id s!"$.layouts[{index}].union_type" "type"
+      let some node := document.types[id]? | throw "union recipe type ID invariant"
+      let .adt data := node.shape | throw s!"$.layouts[{index}].union_type: source type is not an ADT"
+      unless data.kind == .unionKind do throw s!"$.layouts[{index}].union_type: source type is not a union"
     if let some id := value.tupleType then
       checkId b.types id s!"$.layouts[{index}].tuple_type" "type"
       let some node := document.types[id]? | throw "tuple recipe type ID invariant"

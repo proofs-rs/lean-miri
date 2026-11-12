@@ -1,4 +1,5 @@
 import Miri.Input.TableCore
+import Miri.Input.GenericMaterialCodec
 
 namespace Miri.Input.DecoderValues
 open JsonReader
@@ -270,6 +271,7 @@ private structure ParseDefinitionIdFields where
   index : Option (Nat) := none
   bodyTrackCaller : Option Bool := none
   adtDrop : Option AdtDropMaterial := none
+  genericTemplate : Option GenericSubstitution.DefinitionTemplate := none
 
 def parseDefinitionId (path : String) : Parser (DefinitionId) := do
   let s ← object ({} : ParseDefinitionIdFields) fun s key => do
@@ -278,10 +280,11 @@ def parseDefinitionId (path : String) : Parser (DefinitionId) := do
     | "index" => return { s with index := some (← natural) }
     | "body_track_caller" => return { s with bodyTrackCaller := some (← boolean) }
     | "adt_drop" => return { s with adtDrop := some (← parseAdtDropMaterial (path ++ ".adt_drop")) }
+    | "generic_template" => return { s with genericTemplate := some (← GenericMaterialCodec.decodeTemplate) }
     | _ => skipValue; pure s
   let crate ← required s.crate (path ++ ".crate")
   let index ← required s.index (path ++ ".index")
-  return ⟨crate, index, s.bodyTrackCaller, s.adtDrop⟩
+  return ⟨crate, index, s.bodyTrackCaller, s.adtDrop, s.genericTemplate⟩
 
 def parseDefinitionRef (_path : String) : Parser DefinitionRef := natural
 

@@ -10,4 +10,4 @@ cargo +miri-exporter-8144389c895d run --locked --offline \
 flock /tmp/lean-miri-lake-build.lock lake build Miri.ABI.LayoutShuffle
 lake env lean --run tests/compiler_queries/LayoutShuffle.lean > "$OUT/lean.txt"
 diff -u "$OUT/rust.txt" "$OUT/lean.txt"
-printf 'PASS 50 pinned layout shuffle permutations and next-generator states\n'
+printf 'PASS 110 pinned layout shuffle/sampling results and next-generator states\n'

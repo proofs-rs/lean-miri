@@ -5,6 +5,7 @@ import Miri.ABI.ExternAbi
 import Miri.ABI.FnAbi
 import Miri.ABI.SignatureSeeds
 import Miri.Interpreter.Instance
+import Miri.Input.GenericSubstitution
 
 /-!
 Typed data model for the pinned rustc MIR export.  These structures describe
@@ -239,6 +240,7 @@ structure Layout where
   backendRepr : Option TaggedNode
   primitiveRecipe : Option String := none
   tupleType : Option TypeId := none
+  unionType : Option TypeId := none
 
 inductive ArmCallKind where
   | aapcs | cmseNonSecureCall | cmseNonSecureEntry
@@ -600,6 +602,7 @@ structure DefinitionId where
   index : Nat
   bodyTrackCaller : Option Bool := none
   adtDrop : Option AdtDropMaterial := none
+  genericTemplate : Option GenericSubstitution.DefinitionTemplate := none
   deriving Repr, DecidableEq
 
 inductive VtableEntryKind where

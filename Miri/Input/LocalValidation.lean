@@ -172,12 +172,13 @@ def validateFunctionAbi (abi : FunctionAbi) (path : String) : Except String Unit
     validateAbiPassMode arg.mode s!"{path}.arguments[{index}].mode"
 
 def validateLayout (layout : Layout) (path : String) : Except String Unit := do
-  if layout.tupleType.isSome then
-    unless layout.primitiveRecipe.isNone && layout.sizeBytes.isNone &&
+  if layout.tupleType.isSome || layout.unionType.isSome then
+    unless (layout.tupleType.isNone || layout.unionType.isNone) &&
+        layout.primitiveRecipe.isNone && layout.sizeBytes.isNone &&
         layout.abiAlignBytes.isNone && layout.unadjustedAbiAlignBytes.isNone &&
         layout.fields.isNone && layout.variantsLayout.isNone &&
         layout.backendRepresentation.isNone do
-      throw s!"{path}: tuple recipe cannot contain eager layout results or another recipe"
+      throw s!"{path}: structural recipe cannot contain eager layout results or another recipe"
     return ()
   if let some recipe := layout.primitiveRecipe then
     unless ["bool", "char", "i8", "i16", "i32", "i64", "i128", "isize",

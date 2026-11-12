@@ -1,3 +1,4 @@
+import Miri.Input.StructuralSized
 import Miri.Input.StructuralNeedsDrop
 import Miri.Input.StructuralAutoTraits
 import Miri.Input.CompilerGlobals
@@ -63,33 +64,9 @@ private def facts (context : Context) (id : TypeId) : Result TypeCompilerFacts :
     throw "compiler query typing-environment mismatch"
   pure facts
 
-/-- Normalize lazy constructor children and re-intern their exact result.
-Complex material types still require the explicit residual normalization seed. -/
-private def normalizeWithFuel (context : Context) : Nat → TypeId → Result TypeId
-  | 0, _ => .error "lazy normalization traversal exhausted"
-  | fuel + 1, id => do
-    let source ← node context id
-    if id >= context.program.input.types.size then
-      match source.shape with
-      | .rawPointer child .Mut =>
-        TypeArena.intern context.program.input.types (← normalizeWithFuel context fuel child) false
-      | .reference child .Mut .Erased =>
-        TypeArena.intern context.program.input.types (← normalizeWithFuel context fuel child) true
-      | .array child _ constructor =>
-        TypeArena.internArray context.program.input.types (← normalizeWithFuel context fuel child)
-          (UInt64.ofNat constructor.count)
-      | _ => throw "unknown lazy normalization constructor"
-    else if ← StructuralNormalization.identityReady context.program.input.types
-        (context.program.input.types.size + 1) id then pure id
-    else
-      let f ← facts context id
-      let some (_, some target) := f.typeQueries.find? (·.1 == "normalized")
-        | throw "missing residual compiler normalization material"
-      let _ ← node context target
-      pure target
-
 private def normalize (context : Context) (id : TypeId) : Result TypeId :=
-  normalizeWithFuel context (id + context.program.input.types.size + 1) id
+  StructuralNormalization.normalize (node context) context.program.input.types
+    (id + context.program.input.types.size + 1) id
 
 private def lazyBoolean (context : Context) (query : String) : Nat → TypeId → Result Bool
   | 0, _ => .error "lazy type boolean traversal exhausted"
@@ -126,6 +103,10 @@ def boolean (context : Context) (id : TypeId) (query : String) : Result Bool := 
     return (← node context id).shapeKind == .dynamicTraitObject
   if query == "is_too_generic" then
     return (← node context id).shapeKind == .alias
+  if query == "is_sized" then
+    if let some answer ← StructuralSized.query (fun ty => do
+        pure (← node context (← normalize context ty)).shape)
+        (id + context.program.input.types.size + 1) id then return answer
   if query == "needs_drop" then
     let normalizedShape (ty : TypeId) : Result TypeShape := do
       pure (← node context (← normalize context ty)).shape
@@ -176,10 +157,8 @@ def optionalType (context : Context) (id : TypeId) (query : String) : Result (Op
       else pure false
       if query == "boxed_type" then StructuralDeref.boxedType source.shape isBox
       else StructuralDeref.builtinDeref source.shape isBox (query == "builtin_deref_explicit")
-    else if id >= context.program.input.types.size && query == "pointer_metadata_type" then do
-      let value ← context.runtime.lookup id |>.mapError toString
-      unless value.layout.isSized do throw "lazy type is not sized"
-      pure (some context.program.input.queries.primitives.unit)
+    else if query == "pointer_metadata_type" then
+      pure (some (← context.runtime.pointerMetadataType id |>.mapError toString))
     else if id >= context.program.input.types.size && query == "unsafe_binder_erased" then
       pure none
     else do

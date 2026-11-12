@@ -528,6 +528,7 @@ def parseLayoutFieldOffsets : Parser LayoutFieldOffsets := do
   return .arrayFormula (← required fields.stride "stride_bytes") (← required fields.count "field_count")
 
 private structure parseLayoutFields where
+  unionType : Option Nat := none
   tupleType : Option Nat := none
   primitiveRecipe : Option String := none
   «kind» : Option (String) := none
@@ -545,8 +546,9 @@ private structure parseLayoutFields where
   «randomization_seed» : Option (Nat) := none
 
 def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
-  let s ← object (parseLayoutFields.mk none none none none none none none none none none none none none none none) fun s key => do
+  let s ← object (parseLayoutFields.mk none none none none none none none none none none none none none none none none) fun s key => do
     match key with
+    | "union_type" => return {s with unionType := some (← natural)}
     | "tuple_type" => return {s with tupleType := some (← natural)}
     | "primitive_recipe" => return {s with primitiveRecipe := some (← string)}
     | "kind" => return { s with «kind» := some (← string) }
@@ -563,8 +565,10 @@ def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
     | "largest_niche" => return { s with «largest_niche» := some (← parseNicheLayout) }
     | "randomization_seed" => return { s with «randomization_seed» := some (← natural) }
     | _ => skipValue; pure s
-  if s.primitiveRecipe.isSome || s.tupleType.isSome then
-    unless s.primitiveRecipe.isNone || s.tupleType.isNone do
+  if s.primitiveRecipe.isSome || s.tupleType.isSome || s.unionType.isSome then
+    unless (s.primitiveRecipe.isNone || s.tupleType.isNone) &&
+        (s.primitiveRecipe.isNone || s.unionType.isNone) &&
+        (s.tupleType.isNone || s.unionType.isNone) do
       fail s!"{path}: conflicting layout recipe constructors"
     unless s.kind.isNone && s.field_offsets_bytes.isNone && s.fields.isNone &&
         s.variants.isNone && s.backend_repr.isNone && s.size_bytes.isNone &&
@@ -578,7 +582,7 @@ def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
           "fn_pointer", "never"].contains recipe do
         fail s!"{path}: unknown primitive layout recipe"
     return {
-      primitiveRecipe := s.primitiveRecipe, tupleType := s.tupleType, kind := .layout,
+      primitiveRecipe := s.primitiveRecipe, tupleType := s.tupleType, unionType := s.unionType, kind := .layout,
       maxReprAlignBytes := none, reprC := false, uninhabited := false,
       largestNiche := none, randomizationSeed := 0, sizeBytes := none,
       abiAlignBytes := none, unadjustedAbiAlignBytes := none,

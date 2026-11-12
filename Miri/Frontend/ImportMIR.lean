@@ -190,6 +190,13 @@ deriving instance ToExpr for ABI.SignatureSeed
 deriving instance ToExpr for Input.AbiSignatureSeed
 deriving instance ToExpr for Input.FunctionAbi
 deriving instance ToExpr for Input.AdtDropMaterial
+deriving instance ToExpr for Input.GenericSubstitution.ArgSort
+deriving instance ToExpr for Input.GenericSubstitution.DefinitionIdentity
+deriving instance ToExpr for Input.GenericSubstitution.BoundIdentity
+deriving instance ToExpr for Input.GenericSubstitution.BoundVariable
+deriving instance ToExpr for Input.GenericSubstitution.Term, Input.GenericSubstitution.Terms
+deriving instance ToExpr for Input.GenericSubstitution.FieldTemplate
+deriving instance ToExpr for Input.GenericSubstitution.DefinitionTemplate
 deriving instance ToExpr for Input.DefinitionId
 deriving instance ToExpr for Input.VtableEntryKind
 deriving instance ToExpr for Input.VtablePredicateKind

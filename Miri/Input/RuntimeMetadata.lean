@@ -1,8 +1,11 @@
 import Miri.Input.Model
 import Miri.Input.TypeArena
+import Miri.Input.StructuralNormalization
+import Miri.Input.StructuralPointerMetadata
 import Miri.ABI.Layout
 import Miri.ABI.PrimitiveLayout
 import Miri.ABI.UnivariantLayout
+import Miri.ABI.UnionLayout
 
 /-! Internal compiler-metadata bridge, not the public import API. Successful
 conversion supplies records and queries; it does not establish execution
@@ -158,8 +161,8 @@ def variants (target : RuntimeTargetDataLayout) (source : VariantsLayout) : Resu
       (← require source.tagFieldIndex "variants.tag_field_index") values
 
 def layout (target : RuntimeTargetDataLayout) (source : Input.Layout) : Result LayoutData := do
-  if source.tupleType.isSome then
-    throw (.missing "tuple layout requires source type and layout pools")
+  if source.tupleType.isSome || source.unionType.isSome then
+    throw (.missing "structural layout requires source type and layout pools")
   if let some recipe := source.primitiveRecipe then
     return ← PrimitiveLayout.compute target recipe
       |>.mapError (fun reason => .invalid "primitive layout recipe" reason)
@@ -238,6 +241,28 @@ def resolveLayoutWithFuel (target : RuntimeTargetDataLayout) (types : Array Type
   | 0, _ => .error (.unsupported "material layout recipe recursion exhausted")
   | fuel + 1, id => do
     let source ← require layouts[id]? s!"compiler layout ID {id} out of bounds"
+    if let some typeId := source.unionType then
+      unless source.primitiveRecipe.isNone && source.tupleType.isNone do
+        throw (.invalid "union layout recipe" "conflicting layout constructor")
+      let node ← require types[typeId]? "union recipe type ID out of bounds"
+      unless node.id == typeId do throw (.invalid "union recipe type" "row/index mismatch")
+      let .adt data := node.shape
+        | throw (.invalid "union layout recipe" "source type is not an ADT")
+      unless data.kind == .unionKind && data.variants.size == 1 do
+        throw (.invalid "union layout recipe" "source type is not a one-variant union")
+      let variant ← require data.variants[0]? "union material variant missing"
+      let fields ← variant.fields.mapM fun field => do
+        let node ← require types[field.typeId]? "union field type ID out of bounds"
+        unless node.id == field.typeId do throw (.invalid "union field type" "row/index mismatch")
+        resolveLayoutWithFuel target types layouts fuel node.layoutId
+      let repr := data.representation
+      unless repr.flagsBits < 256 do throw (.invalid "union representation" "flags overflow u8")
+      let representation : UnivariantLayout.Representation := {
+        flags := UInt8.ofNat repr.flagsBits, integerRepresentation := repr.integer.isSome,
+        align := ← repr.alignBytes.mapM alignment, pack := ← repr.packBytes.mapM alignment,
+        fieldShuffleSeed := ← u64 repr.fieldShuffleSeed "union field shuffle seed" }
+      return ← UnionLayout.compute target fields representation
+        |>.mapError (fun reason => .invalid "union layout recipe" reason)
     if let some typeId := source.tupleType then
       unless source.primitiveRecipe.isNone do
         throw (.invalid "tuple layout recipe" "conflicting primitive constructor")
@@ -288,6 +313,40 @@ def node (metadata : RuntimeMetadata) (id : TypeId) : Result TypeNode :=
     | none => TypeArena.node metadata.source.types id metadata.source.typeConstants.size
   resolved.mapError (.invalid "type arena")
 
+/-- Pinned pointer metadata selection from normalized type structure. Only the
+DynMetadata<Self> constructor remains residual material, keyed by the exact dyn
+tail; sized/extern/str/slice decisions do not inspect physical layout results. -/
+def pointerMetadataType (metadata : RuntimeMetadata) (id : TypeId) : Result TypeId := do
+  let lookup := fun ty => (metadata.node ty).mapError toString
+  let fuel := id + metadata.source.types.size + 1
+  let normalize := StructuralNormalization.normalize lookup metadata.source.types fuel
+  let choice ← (StructuralPointerMetadata.query (fun ty => return (← lookup ty).shape)
+    normalize fuel id).mapError (fun e => .unsupported s!"pointer metadata: {e}")
+  let result ← match choice with
+    | .unit => do
+      let id := metadata.source.queries.primitives.unit
+      let value ← metadata.node id
+      unless (match value.shape with | .tuple fields => fields.isEmpty | _ => false) do
+        throw (.invalid "pointer metadata" "unit primitive is not the empty tuple")
+      pure id
+    | .usize => do
+      let id := metadata.source.queries.primitives.usize
+      let value ← metadata.node id
+      unless value.shapeMetadata.unsignedKind == some (.known .usize) do
+        throw (.invalid "pointer metadata" "usize primitive has wrong integer kind")
+      pure id
+    | .dynamic tail => do
+      let value ← metadata.node tail
+      let facts ← require value.compilerFacts "dynamic pointer metadata constructor material"
+      unless facts.typingEnvironment == "fully_monomorphized" do
+        throw (.invalid "pointer metadata" "typing environment mismatch")
+      let some (_,some result) := facts.typeQueries.find? (·.1 == "pointer_metadata_type")
+        | throw (.unsupported "DynMetadata<Self> constructor material absent")
+      pure result
+    | .unresolved _ => throw (.unsupported "pointer metadata has unresolved alias tail")
+  let _ ← metadata.node result
+  pure result
+
 private def lookupWithFuel (metadata : RuntimeMetadata) : Nat → TypeId → Result (TyAndLayout TypeId)
   | 0, _ => .error (.unsupported "lazy type layout recursion exhausted")
   | fuel + 1, id => do
@@ -307,15 +366,8 @@ private def lookupWithFuel (metadata : RuntimeMetadata) : Nat → TypeId → Res
       | .rawPointer pointee .Mut => pure (pointee, false)
       | .reference pointee .Mut .Erased => pure (pointee, true)
       | _ => throw (.invalid "lazy type arena" "unsupported constructor")
-    let pointeeLayout ← lookupWithFuel metadata fuel pointee
-    let pointerMetadata ← if pointeeLayout.layout.isSized then pure none else do
-      let pointeeNode ← metadata.node pointee
-      let facts ← require pointeeNode.compilerFacts "unsized pointee compiler material"
-      unless facts.typingEnvironment == "fully_monomorphized" do
-        throw (.invalid "pointer metadata" "typing environment mismatch")
-      let some (_, some metadataType) := facts.typeQueries.find? (·.1 == "pointer_metadata_type")
-        | throw (.unsupported "unsized pointee metadata type material absent")
-      pure (some (← lookupWithFuel metadata fuel metadataType).layout)
+    let metadataType ← metadata.pointerMetadataType pointee
+    let pointerMetadata := some (← lookupWithFuel metadata fuel metadataType).layout
     let pointerLayout ← (PrimitiveLayout.pointer metadata.target isReference pointerMetadata)
       |>.mapError (fun e => .unsupported s!"lazy pointer layout: {reprStr e}")
     return ⟨id, pointerLayout⟩
