@@ -49,7 +49,7 @@ def run_case(case, args, env, output):
     entry_root = 'miri_start' if b'#![no_main]' in source.read_bytes() else 'main'
     command += ['--root', entry_root]
     command += ['--', str(source),
-               '--edition=' + case.edition, '--crate-name=upstream_ui', '--sysroot', str(args.sysroot), '--color=never',
+               '--edition=' + case.edition, '--sysroot', str(args.sysroot), '--color=never',
                '-o', str(directory / 'guest'), *case.flags]
     if case.revision:
         command.extend(['--cfg', case.revision])

@@ -587,8 +587,25 @@ so an invalid-discriminant read cannot substitute. On main `c390bf41`, all
 pass strict comparisons; the final tightened predicates also pass on those
 unchanged source/snapshot/sidecar/binary-bound records. No Rust/Lean semantics,
 fixed inputs, profiles, crate naming or budgets changed. Bare dangling-pointer
-null classification and the extern-static crate-name mismatch remain separate
-unrepaired diagnostic/harness issues; this does not establish a hosted sweep.
+null classification remains a separate unrepaired diagnostic issue; the
+extern-static crate-name mismatch is addressed below. This does not establish
+a hosted sweep.
+
+The UI driver no longer injects a fixed crate name. The compiler therefore
+owns filename normalization, source `crate_name` attributes and explicit case
+flags, with the same compiler configuration for the export and prepared
+reference. Driver fingerprints reject results from the previous configuration;
+source, sidecar, byte/FNV, site and profile checks remain strict. The oracle
+separately recognizes the complete extern-static backing-size-or-alignment
+failure, without accepting generic alignment, mutability or non-UB failures.
+On main `d3d79e8e`, 119 quick Python checks (including 21 UI units and nine
+collection units) pass. Both unchanged wrong-size cases and three typed
+`type_name` controls (hyphen filename, attribute and distinct explicit flag)
+pass fresh strict comparisons and actual compiler-name checks. Representative
+generated-ABI checks (three genuine and four malformed-query controls),
+reborrow checks (one genuine and three malformed-query controls), and the five
+LLVM controls pass with the new driver. These are finite local comparisons;
+Miri/exporter semantics, fixed inputs, proof assumptions and budgets are unchanged.
 
 ### Performance and optimization assurance
 

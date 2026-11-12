@@ -6,6 +6,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
@@ -26,6 +27,36 @@ driver = load('upstream_ui_driver', 'check-upstream-ui.py')
 
 
 class CollectionTests(unittest.TestCase):
+    def test_compiler_owns_source_crate_name_and_explicit_flags(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sources = root / 'sources'
+            (sources / 'pass').mkdir(parents=True)
+            examples = {
+                'hyphen-name.rs': 'fn main() {}',
+                'attribute-name.rs': '#![crate_name = "source_attribute"]\nfn main() {}',
+                'directive-name.rs': '//@compile-flags: --crate-name source_flag_override\nfn main() {}',
+            }
+            for name, text in examples.items():
+                (sources / 'pass' / name).write_text(text)
+            for case in discover(sources):
+                output = root / case.path.removeprefix('pass/')
+                output.mkdir()
+                settings = SimpleNamespace(exporter=root/'exporter', runner=root/'runner', sysroot=root,
+                    export_timeout=1, timeout=1, memory_limit=None, keep_inputs=False)
+                with patch.object(driver, 'SOURCES', sources), patch.object(driver, 'invoke', return_value=1) as invoke:
+                    record = driver.run_case(case, settings, {}, output)
+                self.assertEqual(record['status'], 'export_failed')  # mocked launch, no safety claim
+                command = invoke.call_args.args[0]
+                self.assertNotIn('--crate-name=upstream_ui', command)
+                if case.path.endswith('directive-name.rs'):
+                    self.assertEqual(case.flags, ['--crate-name', 'source_flag_override'])
+                    self.assertEqual(command[-2:], case.flags)
+                    self.assertEqual(command.count('--crate-name'), 1)
+                else:
+                    self.assertFalse(any(flag.startswith('--crate-name') for flag in command))
+                self.assertIn('--edition=' + case.edition, command)
+
     def shard(self, root, index, rows):
         directory = root / str(index)
         directory.mkdir()
