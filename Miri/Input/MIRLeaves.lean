@@ -670,11 +670,11 @@ def callEvidence : Parser (CallResolutionEvidence) := do
     | "llvm_intrinsic" => pure CallResolutionKind.llvmIntrinsic
     | "resolved_instance" | "source_instance" => pure CallResolutionKind.direct
     | "virtual_dispatch" => pure .virtualDispatch
-    | "indirect_function_pointer" => pure .indirect
+    | "indirect_function_pointer" | "source_function_pointer" => pure .indirect
     | _ => fail "unknown call resolution"
   let instanceId ← if kind == .indirect then pure none else some <$> (required (← required v.instance_id "instance_id") "non-null instance_id")
   let dispatchSlot ← if kind == .virtualDispatch then some <$> (required (← required v.dispatch_slot "dispatch_slot") "non-null dispatch_slot") else pure none
-  let abi ← if v.kind == some "source_instance" then do
+  let abi ← if v.kind == some "source_instance" || v.kind == some "source_function_pointer" then do
       unless v.fn_abi.isNone && v.dispatch_slot.isNone do
         fail "raw source instance must not carry physical ABI or dispatch-slot evidence"
       pure CallAbiEvidence.sourceSignature

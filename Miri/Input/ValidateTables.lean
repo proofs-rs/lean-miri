@@ -529,9 +529,8 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
       let some node := document.types[id]? | throw "enum recipe type ID invariant"
       let .adt data := node.shape | throw s!"$.layouts[{index}].enum_type: source type is not an ADT"
       unless data.kind == .enumKind do throw s!"$.layouts[{index}].enum_type: source type is not an enum"
-      unless data.variants.size ≤ 1 do throw s!"$.layouts[{index}].enum_type: tagged/niche-filled enum recipe is not implemented"
-      unless data.representation.flagsBits &&& (1 + 2 + 64) == 0 &&
-          data.representation.integer.isNone && data.representation.packBytes.isNone do
+      unless data.representation.flagsBits &&& (2 + 64) == 0 &&
+          data.representation.packBytes.isNone do
         throw s!"$.layouts[{index}].enum_type: unsupported enum representation"
     if let some id := value.unionType then
       checkId b.types id s!"$.layouts[{index}].union_type" "type"
@@ -607,17 +606,25 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
           | none => false
         match resolution.abi with
         | .sourceSignature =>
-          unless resolution.kind == .direct && resolution.dispatchSlot.isNone do
-            throw s!"{path}: raw source ABI requires an ordinary direct instance"
-          let some instanceNode := resolution.instanceId.bind (document.instances[·]?)
-            | throw s!"{path}: raw source ABI instance is absent"
-          let .Item definition := instanceNode.instanceKind
-            | throw s!"{path}: raw source ABI requires an Item instance"
-          let some source := document.definitions[definition]?
-            | throw s!"{path}: raw source ABI definition is absent"
-          unless source.genericTemplate.isSome && source.functionAbiMaterial.isSome &&
-              source.bodyTrackCaller == some false do
-            throw s!"{path}: raw source ABI declaration material is incomplete"
+          unless resolution.dispatchSlot.isNone do throw s!"{path}: source ABI cannot carry a dispatch slot"
+          if resolution.kind == .indirect then
+            unless resolution.instanceId.isNone && document.producer.abiSession.isSome do
+              throw s!"{path}: raw FnPtr ABI has invalid instance/session evidence"
+            let some source := resolution.functionType.bind (document.types[·]?)
+              | throw s!"{path}: raw FnPtr ABI source type absent"
+            unless source.shapeKind == .functionPointer do throw s!"{path}: raw FnPtr ABI source is not a FnPtr"
+          else
+            unless resolution.kind == .direct && resolution.dispatchSlot.isNone do
+              throw s!"{path}: raw source ABI requires an ordinary direct instance"
+            let some instanceNode := resolution.instanceId.bind (document.instances[·]?)
+              | throw s!"{path}: raw source ABI instance is absent"
+            let .Item definition := instanceNode.instanceKind
+              | throw s!"{path}: raw source ABI requires an Item instance"
+            let some source := document.definitions[definition]?
+              | throw s!"{path}: raw source ABI definition is absent"
+            unless source.genericTemplate.isSome && source.functionAbiMaterial.isSome &&
+                source.bodyTrackCaller == some false do
+              throw s!"{path}: raw source ABI declaration material is incomplete"
         | .normal id =>
           unless resolution.kind != .llvmIntrinsic && !isLlvm do
             throw s!"{path}: LLVM intrinsic cannot carry an ordinary ABI"

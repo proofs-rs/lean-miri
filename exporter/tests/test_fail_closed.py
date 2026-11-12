@@ -44,8 +44,12 @@ class FailClosedExportTests(unittest.TestCase):
             cwd=ROOT, env=environment or self.environment, capture_output=True, text=True,
         )
 
-    def accepted(self, fixture, root="identity", crate_type="lib"):
-        result = self.export(fixture, root, crate_type=crate_type)
+    def accepted(self, fixture, root="identity", crate_type="lib", abi_trace=False):
+        environment = dict(self.environment)
+        if abi_trace:
+            environment["LEAN_MIRI_TRACE_ABI_CALLS"] = "1"
+        result = self.export(fixture, root, environment=environment, crate_type=crate_type)
+        self.last_abi_trace = result.stderr.splitlines()
         self.assertEqual(result.returncode, 0, result.stderr)
         document = load_mir_document(self.output)
         self.assertNotIn("completeness", document)
@@ -88,7 +92,7 @@ class FailClosedExportTests(unittest.TestCase):
     def test_source_llvm_abi_keeps_signature_without_synthetic_normal_abi(self):
         for fixture in ("llvm_source_abi", "llvm_stdarch_abi"):
             with self.subTest(fixture=fixture):
-                document = self.accepted(fixture)
+                document = self.accepted(fixture, abi_trace=True)
                 facts = document["compiler_function_facts"]
                 llvm = [row for row in facts["types"]
                         if row["signature_query"]["abi"]["kind"] == "llvm_intrinsic"]
@@ -97,10 +101,24 @@ class FailClosedExportTests(unittest.TestCase):
                 self.assertFalse(any(row["signature"]["abi"]["kind"] == "llvm_intrinsic" for row in helpers))
                 for row in llvm:
                     signature = row["signature_query"]
-                    self.assertTrue(any(helper["signature"]["abi"]["kind"] == "rust"
-                                        and helper["signature"]["inputs"] == signature["inputs"]
-                                        and helper["signature"]["output"] == signature["output"]
-                                        for helper in helpers), "valid Rust helper candidate was dropped")
+                    exact = [helper for helper in helpers
+                             if helper["signature"]["abi"]["kind"] == "rust"
+                             and helper["signature"]["inputs"] == signature["inputs"]
+                             and helper["signature"]["output"] == signature["output"]]
+                    if fixture == "llvm_source_abi":
+                        self.assertEqual(signature["inputs"], [])
+                        output = pool_entry(document, "types", signature["output"])
+                        self.assertEqual(output["shape"], {"kind": "tuple", "elements": []})
+                        self.assertEqual(exact, [], "covered empty Rust helper retained an ABI answer")
+                        key = "signature=Binder { value: fn(), bound_vars: [] } extra=[]"
+                        traces = [line for line in self.last_abi_trace
+                                  if line.startswith("lean_miri_fn_pointer_abi_call ") and line.endswith(key)]
+                        self.assertTrue(any("route=helper-source queried=false " in line for line in traces),
+                                        "valid Rust helper constructor never reached source admission")
+                        self.assertFalse(any("queried=true " in line for line in traces))
+                        self.assertEqual(document["producer"]["abi_session"]["optimization"], "no")
+                    else:
+                        self.assertTrue(exact, "unsupported SIMD Rust helper lost its exact residual ABI")
 
     def test_uncalled_llvm_pointer_preserves_metadata_without_undefined_abi(self):
         document = self.accepted("llvm_pointer_metadata")
@@ -143,16 +161,26 @@ class FailClosedExportTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('did not resolve to a local MIR body', result.stderr)
 
-    def test_foreign_repr_c_transfer_records_exact_false_covariance(self):
+    def test_foreign_repr_c_transfer_uses_raw_nominal_covariance(self):
         document = self.accepted("foreign_repr_c_transfer", crate_type="bin")
         types = {row['display']: row['type_id'] for row in document['types']}
         source, target = types['CallerType'], types['implementation::CalleeType']
         rows = [row for row in document['compiler_covariance_queries']
                 if row['source_type'] == source and row['target_type'] == target]
-        self.assertEqual(len(rows), 1)
-        self.assertIs(rows[0]['value'], False)
+        self.assertEqual(rows, [], "covered nominal relation retained an eager answer")
+        source_shape, target_shape = document['types'][source]['shape'], document['types'][target]['shape']
+        self.assertEqual(source_shape['kind'], 'adt')
+        self.assertEqual(target_shape['kind'], 'adt')
+        self.assertNotEqual(source_shape['def_id'], target_shape['def_id'],
+                            "fixture lost its distinct nominal source identities")
+        trace = self.export("foreign_repr_c_transfer", crate_type="bin",
+                            environment=self.environment | {"LEAN_MIRI_TRACE_COVARIANCE_CALLS": "1"})
+        self.assertEqual(trace.returncode, 0, trace.stderr)
+        traced_types = {row['display']: row['type_id'] for row in load_mir_document(self.output)['types']}
+        source, target = traced_types['CallerType'], traced_types['implementation::CalleeType']
+        self.assertIn(f"queried=false source_id={source} target_id={target} ", trace.stderr)
 
-    def test_shared_reborrow_records_exact_false_covariance(self):
+    def test_shared_reborrow_uses_raw_nominal_covariance(self):
         document = self.accepted("shared_reborrow")
         reborrows = []
         def visit(value):
@@ -171,8 +199,21 @@ class FailClosedExportTests(unittest.TestCase):
             self.assertNotEqual(source, target)
             rows = [row for row in document["compiler_covariance_queries"]
                     if row["source_type"] == source and row["target_type"] == target]
-            self.assertEqual(len(rows), 1)
-            self.assertIs(rows[0]["value"], False, "same layout must not fabricate subtyping")
+            self.assertEqual(rows, [], "covered reborrow retained an eager covariance answer")
+            source_shape, target_shape = document['types'][source]['shape'], document['types'][target]['shape']
+            self.assertEqual(source_shape['kind'], 'adt')
+            self.assertEqual(target_shape['kind'], 'adt')
+            self.assertNotEqual(source_shape['def_id'], target_shape['def_id'],
+                                "same layout must not erase nominal identity")
+        trace = self.export("shared_reborrow", environment=self.environment | {
+            "LEAN_MIRI_TRACE_COVARIANCE_CALLS": "1"})
+        self.assertEqual(trace.returncode, 0, trace.stderr)
+        reborrows.clear()
+        visit(load_mir_document(self.output)["bodies"])
+        self.assertTrue(reborrows)
+        for value in reborrows:
+            source, target = value["place"]["type"], value["type"]
+            self.assertIn(f"queried=false source_id={source} target_id={target} ", trace.stderr)
 
     def test_no_std_keeps_negative_and_optional_query_answers(self):
         document = self.accepted("no_std")
@@ -241,7 +282,7 @@ class FailClosedExportTests(unittest.TestCase):
             self.assertIn("Box", boxed["shape"]["def_path"])
 
     def test_result_main_has_exact_bootstrap_caller_signature(self):
-        document = self.accepted("start_result", "main", "bin")
+        document = self.accepted("start_result", "main", "bin", abi_trace=True)
         main = next(row for row in document["compiler_main_queries"]["entries"]
                     if row["signature_query"]["compiler_selected_entry"])
         primitive = document["compiler_runtime_primitives"]
@@ -260,8 +301,25 @@ class FailClosedExportTests(unittest.TestCase):
                  and row["signature"]["abi"]["kind"] == "rust"
                  and row["signature"]["safety"]["kind"] == "safe"
                  and not row["signature"]["c_variadic"]]
-        self.assertTrue(exact, "source call_main dummy signature was not queried")
+        self.assertTrue(exact, "nested dyn bootstrap helper lost its exact material ABI residual")
         self.assertTrue(all(isinstance(row["abi_query"], int) for row in exact))
+        pointer = types[expected[0]]["shape"]
+        self.assertEqual(pointer["kind"], "function_pointer")
+        self.assertEqual(pointer["signature"]["inputs"], [])
+        self.assertEqual(pointer["signature"]["abi"]["kind"], "rust")
+        self.assertFalse(pointer["signature"]["c_variadic"])
+        self.assertEqual(document["producer"]["abi_session"], {
+            "panic": "unwind", "panic_in_drop": "unwind", "optimization": "no",
+            "llvm_writable": False, "box_noalias": True,
+        })
+        traces = [line for line in self.last_abi_trace
+                  if line.startswith("lean_miri_fn_pointer_abi_call ")
+                  and "signature=Binder { value: fn(Binder { value: fn() -> " in line
+                  and ", isize, *const *const u8, u8) -> isize, bound_vars: [] } extra=[]" in line]
+        self.assertTrue(any("route=helper-residual queried=true " in line for line in traces),
+                        "exact nested dyn bootstrap caller did not retain its physical ABI query")
+        self.assertFalse(any("queried=false " in line for line in traces),
+                         "nested dyn bootstrap was incorrectly admitted by the lossless-key provider")
 
     def test_weak_static_function_demands_retain_exact_named_queries(self):
         for fixture, name, args, ret in [

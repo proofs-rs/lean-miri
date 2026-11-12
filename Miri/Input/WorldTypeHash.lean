@@ -2,14 +2,18 @@ import Miri.Input.TypeArenaWorld
 import Miri.Input.StableSipHash
 import Miri.Input.DefinitionPathHash
 import Miri.Input.AdtStableHash
+import Miri.Input.GenericInstantiationWorld
+import Miri.Input.BinderRegions
+import Miri.Input.FunctionPointerStableHash
 
 /-! Pinned rustc 8144389c895da997dbdecaa635e41d6a50be6ffd
 `TyCtxt::type_id_hash`, `StableHash` for TyKind and RawList. The supported
 structural domain hashes constructor syntax after free-region erasure. Nominal
 types use reconstructed DefKeys and raw ADT declarations. Value constants
-retain their declared types and ValTree syntax; higher-ranked binders and
-unevaluated constants retain an explicit residual boundary. No query answer
-is retained in the execution World. -/
+retain their declared types and ValTree syntax. Function-pointer headers and
+closed region binders are hashed from raw syntax. Unevaluated constants, open
+bound regions and non-region binders retain an explicit residual boundary. No
+query answer is retained in the execution World. -/
 namespace Miri.Input.WorldTypeHash
 open TypeArena
 
@@ -22,6 +26,14 @@ private def integerTag : MIR.IntegerKind → Nat
 private def mutabilityTag : MIR.Mutability → Nat
   | .Not => 0 | .Mut => 1
 
+private def regionBytes (region : MIR.Region) : Except String (Option ByteArray) := do
+  match region with
+  | .Bound (.Bound depth) variableIndex .Anon =>
+    unless depth < 2^32 && variableIndex < 2^32 do throw "bound region index exceeds u32"
+    pure (some (tag 1 ++ tag 0 ++ littleEndian 4 depth ++ littleEndian 4 variableIndex ++ tag 0))
+  | .Bound .. => pure none
+  | _ => pure (some (tag 6))
+
 private def definitionBytes (world : World) (identity : GenericSubstitution.DefinitionIdentity) :
     Except String ByteArray := do
   let reference ← world.definitionRef identity
@@ -32,7 +44,7 @@ private def definitionBytes (world : World) (identity : GenericSubstitution.Defi
 mutual
 /-- Missing structural support is distinct from malformed source identity.
 An unsupported child never substitutes its final TypeId hash for raw syntax. -/
-def sourceBytes (world : World) : Nat → TypeId → Except String (Option ByteArray)
+private def rawSourceBytes (world : World) (normalized : Bool) : Nat → TypeId → Except String (Option ByteArray)
   | 0, _ => throw "type hash source traversal exhausted"
   | fuel + 1, id => do
     let constructor ← match ← world.lookupType id with
@@ -65,13 +77,14 @@ def sourceBytes (world : World) : Nat → TypeId → Except String (Option ByteA
       for argument in arguments do
         match argument with
         | .Type child =>
-          let some child ← sourceBytes world fuel child | return none
+          let some child ← rawSourceBytes world normalized fuel child | return none
           argumentBytes := argumentBytes ++ tag 1 ++ child
         | .Lifetime region =>
-          if let .Bound .. := region then return none
-          argumentBytes := argumentBytes ++ tag 0 ++ tag 6
+          if let .Bound .. := region then unless normalized do return none
+          let some bytes ← regionBytes region | return none
+          argumentBytes := argumentBytes ++ tag 0 ++ bytes
         | .Const child =>
-          let some child ← constantBytes world fuel child | return none
+          let some child ← constantBytes world normalized fuel child | return none
           argumentBytes := argumentBytes ++ tag 2 ++ child
       let argumentsHash := littleEndian 16 (StableSipHash.hash argumentBytes).toNat
       match constructor with
@@ -81,35 +94,54 @@ def sourceBytes (world : World) : Nat → TypeId → Except String (Option ByteA
         let declarationHash ← AdtStableHash.query (definitionBytes world) identity declaration
         pure (some (tag 5 ++ littleEndian 16 declarationHash.toNat ++ argumentsHash))
       | .functionDefinition _ _ variables =>
-        unless variables.isEmpty do return none
-        -- FnDef carries Binder<GenericArgs>; even an empty bound-variable
-        -- RawList contributes its independently hashed length prefix.
-        let variablesHash := StableSipHash.hash (littleEndian 8 0)
+        unless normalized || variables.isEmpty do return none
+        let mut variableBytes := littleEndian 8 variables.size
+        for boundVariable in variables do
+          match boundVariable with
+          | .Region .Anon => variableBytes := variableBytes ++ tag 1 ++ tag 0
+          | _ => return none
+        let variablesHash := StableSipHash.hash variableBytes
         pure (some (tag 13 ++ (← definitionBytes world identity) ++ argumentsHash ++
           littleEndian 16 variablesHash.toNat))
       | _ => throw "type hash nominal source constructor changed"
+    | .functionPointer signature =>
+      unless normalized || signature.variables.isEmpty do return none
+      let mut bytes := littleEndian 8 (signature.inputs.size + 1)
+      for child in signature.inputs.push signature.output do
+        let some child ← rawSourceBytes world normalized fuel child | return none
+        bytes := bytes ++ child
+      let types := StableSipHash.hash bytes
+      let mut variables := littleEndian 8 signature.variables.size
+      for boundVariable in signature.variables do
+        match boundVariable with
+        | .region .anonymous => variables := variables ++ tag 1 ++ tag 0
+        | _ => return none
+      let variablesHash := StableSipHash.hash variables
+      let header ← FunctionPointerStableHash.header signature.abiPacked signature.safe
+        signature.cVariadic signature.splatted signature.inputs.size
+      pure (some (tag 14 ++ littleEndian 16 types.toNat ++ littleEndian 16 variablesHash.toNat ++ header))
     | .str => pure (some (tag 7))
     | .foreign identity => pure (some (tag 6 ++ (← definitionBytes world identity)))
     | .never => pure (some (tag 21))
     | .array child length =>
-      let some child ← sourceBytes world fuel child | return none
-      let some length ← constantBytes world fuel length | return none
+      let some child ← rawSourceBytes world normalized fuel child | return none
+      let some length ← constantBytes world normalized fuel length | return none
       pure (some (tag 8 ++ child ++ length))
     | .slice child =>
-      let some child ← sourceBytes world fuel child | return none
+      let some child ← rawSourceBytes world normalized fuel child | return none
       pure (some (tag 10 ++ child))
     | .rawPointer child mutability =>
-      let some child ← sourceBytes world fuel child | return none
+      let some child ← rawSourceBytes world normalized fuel child | return none
       pure (some (tag 11 ++ child ++ tag (mutabilityTag mutability)))
     | .reference child mutability region =>
-      if let .Bound .. := region then return none
-      let some child ← sourceBytes world fuel child | return none
-      -- RegionKind::ReErased is ordinal6; a bound region is never erased.
-      pure (some (tag 12 ++ tag 6 ++ child ++ tag (mutabilityTag mutability)))
+      if let .Bound .. := region then unless normalized do return none
+      let some region ← regionBytes region | return none
+      let some child ← rawSourceBytes world normalized fuel child | return none
+      pure (some (tag 12 ++ region ++ child ++ tag (mutabilityTag mutability)))
     | .tuple children =>
       let mut bytes := littleEndian 8 children.size
       for child in children do
-        let some child ← sourceBytes world fuel child | return none
+        let some child ← rawSourceBytes world normalized fuel child | return none
         bytes := bytes ++ child
       let fingerprint := StableSipHash.hash bytes
       pure (some (tag 22 ++ littleEndian 16 fingerprint.toNat))
@@ -117,12 +149,12 @@ def sourceBytes (world : World) : Nat → TypeId → Except String (Option ByteA
 
 /-- ConstKind::Value hashes its declared type and the raw ValTree constructor.
 Branch children are constant IDs, and RawList contributes its own fingerprint. -/
-def constantBytes (world : World) : Nat → TypeConstantId → Except String (Option ByteArray)
+private def constantBytes (world : World) (normalized : Bool) : Nat → TypeConstantId → Except String (Option ByteArray)
   | 0, _ => throw "type hash constant traversal exhausted"
   | fuel + 1, id => do
     let source ← world.lookupConstant id
     let .Value ty tree := source | return none
-    let some ty ← sourceBytes world fuel ty | return none
+    let some ty ← rawSourceBytes world normalized fuel ty | return none
     unless tree.root == 0 && tree.nodes.size == 1 do
       throw "type hash value tree is not a canonical raw source node"
     let some root := tree.nodes[tree.root]? | throw "type hash value tree root is absent"
@@ -134,11 +166,80 @@ def constantBytes (world : World) : Nat → TypeConstantId → Except String (Op
       | .Branch children =>
         let mut bytes := littleEndian 8 children.size
         for child in children do
-          let some child ← constantBytes world fuel child | return none
+          let some child ← constantBytes world normalized fuel child | return none
           bytes := bytes ++ child
         pure (tag 1 ++ littleEndian 16 (StableSipHash.hash bytes).toNat)
     pure (some (tag 5 ++ ty ++ value))
 end
+
+mutual
+private def normalizationDomain (world : World) : Nat → TypeId → Except String (Bool × Bool)
+  | 0,_ => throw "hash normalization domain traversal exhausted"
+  | fuel + 1,id => do
+    let constructor ← match ← world.lookupType id with
+      | .constructed value => pure (some value)
+      | .material source => world.materialKey source
+    let some constructor := constructor | return (false,false)
+    let own ← match constructor with
+      | .bool | .char | .str | .never | .integer .. | .foreign .. => pure (true,false)
+      | .float kind => pure (kind != .f16b && kind != .ppcf128,false)
+      | .rawPointer .. | .reference .. | .slice .. | .tuple .. | .array .. | .adt .. => pure (true,false)
+      | .functionPointer signature => pure (BinderRegions.regionOnly signature.variables,true)
+      | .functionDefinition _ _ variables =>
+        pure (variables.all (fun value => match value with | .Region _ => true | _ => false),!variables.isEmpty)
+      | _ => pure (false,false)
+    if !own.1 then return own
+    let mut needed := own.2
+    for child in constructor.typeChildren do
+      let (supported,required) ← normalizationDomain world fuel child
+      if !supported then return (false,false)
+      needed := needed || required
+    for child in constructor.constantChildren do
+      let (supported,required) ← constantNormalizationDomain world fuel child
+      if !supported then return (false,false)
+      needed := needed || required
+    pure (true,needed)
+private def constantNormalizationDomain (world : World) : Nat → TypeConstantId → Except String (Bool × Bool)
+  | 0,_ => throw "hash constant normalization domain traversal exhausted"
+  | fuel + 1,id => do
+    let .Value ty tree ← world.lookupConstant id | return (false,false)
+    let (supported,needed) ← normalizationDomain world fuel ty
+    if !supported then return (false,false)
+    unless tree.root == 0 && tree.nodes.size == 1 do throw "noncanonical value tree source"
+    let some root := tree.nodes[tree.root]? | throw "value tree root absent"
+    let .Branch children := root | return (true,needed)
+    let mut needed := needed
+    for child in children do
+      let (supported,required) ← constantNormalizationDomain world fuel child
+      if !supported then return (false,false)
+      needed := needed || required
+    pure (true,needed)
+end
+
+/-- A compiler type may be an open subterm of a larger binder. Its enclosing
+binder is not available to this operation's region anonymizer yet. -/
+private def hasEscapingRegions : Nat → Nat → GenericSubstitution.Term → Except String Bool
+  | 0,_,_ => throw "type hash bound-region scope traversal exhausted"
+  | fuel + 1,depth,term => do
+    match term with
+    | .bound .region (.Bound index) .. => pure (index ≥ depth)
+    | .bound .region .Canonical .. => pure true
+    | .binder _ body => hasEscapingRegions fuel (depth + 1) body
+    | .node _ _ _ children | .definition _ _ _ children =>
+      children.anyM (hasEscapingRegions fuel depth)
+    | _ => pure false
+
+/-- Covered non-binder syntax hashes directly. Region binders are anonymized
+on the complete root in a query-local World; no normalized result is retained. -/
+def sourceBytes (world : World) (fuel : Nat) (id : TypeId) : Except String (Option ByteArray) := do
+  if let some bytes ← rawSourceBytes world false fuel id then return some bytes
+  let (supported,needed) ← normalizationDomain world fuel id
+  unless supported && needed do return none
+  let term ← GenericInstantiationWorld.ofType world fuel id
+  if ← hasEscapingRegions fuel 0 term then return none
+  let term ← BinderRegions.eraseAndAnonymize fuel term
+  let (id,world) ← (GenericInstantiationWorld.resolveType fuel term).run world
+  rawSourceBytes world true fuel id
 
 /-- Covered syntax is hashed on demand, including IDs outside the material
 prefix. Unported material constructors retain an explicit compiler boundary. -/

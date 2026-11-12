@@ -32,15 +32,15 @@ TypeConstIds and actual current BodyIdentity all belong to this same program. -/
 def make (p : CompilerProviders.Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (compatibilityBudget : Nat) :
     ExecutionCallLeaves.Compiler (MachineHooks.State K U) C ABI.ExternAbi := {
-  functionSignature := fun _ layout => lift do
-    let (count,sourceAbi) ← CompilerFunctionFacts.signature p.functions layout.ty
-    pure (count, sourceAbi)
+  functionSignature := fun _ layout => RuntimeArrayQueries.performCompiler types
+    (CompilerFunctionFacts.signatureInWorld p.functions layout.ty)
   instanceKind := fun inst => do lift (CompilerInstance.kindOf (← RuntimeArrayQueries.compilerSnapshot types) inst)
   instanceArgs := fun inst => do lift (CompilerInstance.argsOf (← RuntimeArrayQueries.compilerSnapshot types) inst)
   itemInstance := fun definition args => RuntimeArrayQueries.performCompiler types (CompilerInstance.item definition args)
   functionKind := fun ty => RuntimeArrayQueries.perform types (CompilerFunctionFacts.kindInWorld p.functions ty)
   resolve := fun _ definition args => CompilerProviders.resolveCurrent p types definition args
-  fnAbiOfFnPtr := fun _ layout extra => lift (CompilerFunctionFacts.pointerAbi p.functions layout.ty extra)
+  fnAbiOfFnPtr := fun _ layout extra => RuntimeArrayQueries.performCompiler types
+      (CompilerFunctionFacts.pointerAbiInWorld p.functions layout.ty extra)
   fnAbiOfInstance := fun _ callee extra => RuntimeArrayQueries.performCompiler types
     (CompilerInstanceAbi.abiOfInstanceInWorld p.lifecycle.instances callee extra)
   isRustCall := fun abi => abi == .RustCall

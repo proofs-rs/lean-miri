@@ -99,7 +99,7 @@ structure Indirect where
   site : Site
   function : MIR.Operand
   functionType : MIR.TyId
-  abi : Nat
+  abi : Option Nat
   source : CallResolutionEvidence
 structure Prepared where
   program : LoweredProgram
@@ -154,11 +154,14 @@ private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgr
     for (blockIndex,function) in metadata.callSites do
         let sourceResolution ← require (metadata.callEvidence[blockIndex]?).join "missing compiler call resolution"
         if sourceResolution.kind == .indirect then
-          let result : Result (TypeId × FunctionAbiId) := do
+          let result : Result (TypeId × Option FunctionAbiId) := do
             let typeId ← require sourceResolution.functionType "indirect function type is missing"
             let sourceType ← require program.input.types[typeId]? "indirect function type is missing"
             unless sourceType.shapeKind == TypeShapeKind.functionPointer do throw "indirect dispatch metadata is not a function-pointer type"
-            let .normal abi := sourceResolution.abi | throw "indirect call is missing its ordinary ABI"
+            let abi ← match sourceResolution.abi with
+              | .normal abi => pure (some abi)
+              | .sourceSignature => pure none
+              | .llvmIntrinsic => throw "indirect call cannot use LLVM no-ABI dispatch"
             pure (typeId,abi)
           match result with
           | .error message =>
@@ -294,7 +297,7 @@ def loadedBodyOfInstance (prepared : Prepared) (fnInstance : CallInstance) : Run
       | .Item _ =>
         let mut found := none
         for (source,index) in prepared.program.input.mirTemplates.zipIdx do
-          if source.sourcePromoted.isNone && (← liftWorld (world.arena.identity source.definitionId)) == key.definition then
+          if source.sourceRole == .runtime && source.sourcePromoted.isNone && (← liftWorld (world.arena.identity source.definitionId)) == key.definition then
             unless found.isNone do throw "ambiguous raw MIR source for constructed instance"
             found := some index
         let index ← liftWorld (require found "raw MIR source for constructed instance is absent")

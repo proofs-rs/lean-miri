@@ -1,3 +1,4 @@
+import Miri.Input.CompilerBodyRole
 import Miri.Input.SourceEnvironment.Material
 import Miri.Input.AliasMaterial
 import Miri.Input.DefinitionPath
@@ -121,11 +122,30 @@ structure SourceInfo where
   scope : Nat
   deriving Repr, DecidableEq
 
+inductive OptimizationLevel where
+  | no | less | more | aggressive | size | sizeMin
+  deriving Repr, DecidableEq
+
+inductive PanicStrategy where
+  | unwind | abort | immediateAbort
+  deriving Repr, DecidableEq
+
+/-- Canonical compiler session configuration, shared by Item and FnPtr ABI.
+These are source options, never inferred function/pointee/attribute answers. -/
+structure AbiSessionMaterial where
+  panic : PanicStrategy
+  panicInDrop : PanicStrategy
+  optimization : OptimizationLevel
+  llvmWritable : Bool
+  boxNoalias : Bool
+  deriving Repr, DecidableEq
+
 structure Producer where
   miriCommit : String
   rustcCommit : String
   rustcVersion : String
   targetTriple : String
+  abiSession : Option AbiSessionMaterial := none
   deriving Repr, DecidableEq
 
 structure TaggedNode where
@@ -566,27 +586,12 @@ structure AdtDropMaterial where
   destructor : Option DefinitionRef
   deriving Repr, DecidableEq
 
-inductive OptimizationLevel where
-  | no | less | more | aggressive | size | sizeMin
-  deriving Repr, DecidableEq
-
-/-- Raw session options and a definition attribute used by reference ABI rules.
-No pointee information or inferred ABI attributes are stored here. -/
-structure ReferenceAbiPolicy where
-  optimization : OptimizationLevel
-  llvmWritable : Bool
-  boxNoalias : Bool
-  rustcNoWritable : Bool
-  deriving Repr, DecidableEq
-
-/-- Definition codegen flags and compilation panic policy, before FnAbi construction. -/
+/-- Definition-local codegen attributes before FnAbi construction. -/
 structure FunctionAbiMaterial where
   neverUnwind : Bool
   foreignItem : Bool
   dropGlue : Bool
-  panicUnwinds : Bool
-  panicInDropUnwinds : Bool
-  references : Option ReferenceAbiPolicy := none
+  rustcNoWritable : Bool
   deriving Repr, DecidableEq
 
 structure DefinitionId where
@@ -825,6 +830,7 @@ structure BodyMetadata where
   requiredConsts : Array Miri.MIR.ConstOperand
 
 structure BodyCore extends BodyMetadata where
+  sourceRole : CompilerBodyRole
   mir : Miri.MIR.Body
   instanceId : InstanceId
 
@@ -853,6 +859,7 @@ structure CopyTemplateSource where
   sourceScopes : Array SourceScope
   backtraceSpans : Array BacktraceSpan
   sourcePromoted : Option Nat
+  sourceRole : CompilerBodyRole
 
 structure CopyTemplateRef where
   templateId : Nat

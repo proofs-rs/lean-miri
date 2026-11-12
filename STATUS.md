@@ -40,9 +40,14 @@ including static-only and repeated-region negatives. Missing-source, malformed
 owner and mutated-oracle controls reject. Closed source type aliases now normalize
 inside the active quantified universe; seven genuine alias-bearing goals agree
 with rustc, including nested forall obligations. Raw RHS/own-clause placeholders,
-missing source and a mutated static-only oracle reject. Quantified type/constant
-assumptions, bound-dependent aliases, inferred outlives, general builtin candidates, specialization and
-coinductive quantified goals remain unresolved.
+missing source and a mutated static-only oracle reject. Type aliases also accept
+already-opened, query-owned placeholder arguments: four fresh compiler goals
+cover identity, checked bounds, nested forall own clauses and a static-only
+negative. Thirteen kernel controls check ownership and malformed arguments;
+mutating a source own clause to an unsatisfied trait is rejected. Lexically bound
+alias arguments still require binder opening and reabstraction. Quantified
+type/constant assumptions, inferred outlives, general builtin candidates,
+specialization and coinductive quantified goals remain unresolved.
 
 Binder-free Item signatures can construct x86_64 Rust scalar/ZST FnAbi in the
 same World from raw signatures and codegen/panic flags. Twenty complete compiler
@@ -55,23 +60,49 @@ panic settings; each covered key eliminates four explicit FnAbi acquisitions.
 Twenty additional complete ABIs exercise source-derived Freeze/Unpin branches
 for ADT, array and tuple pointees, with the same four-call elimination per key.
 An independent empty-catalog World constructs a novel array reference at both
-optimization settings. Raw reference-policy absence and unsupported fat
+optimization settings. Raw ABI session absence and unsupported fat
 references reject. Box/aggregate/foreign/other-target ABI and eager enumeration
 remain unresolved. Thin raw-pointer and binder-free FnPtr scalars additionally pass
 twenty complete rustc comparisons; all forty scalar/pointer comparisons also
 cover constructed instances without result catalogs. A separate base world
 constructs a new array, pointer and instance outside the source prefixes and
 matches the complete compiler ABI.
+Raw panic/drop-panic/optimization/codegen settings now live in one canonical
+ABI session object, while declaration-local flags remain on definitions.
+Independent FnPtr ABI uses the same execution World and preserves the compiler's
+`instance = None` attribute rules. Seventy-two complete compiler comparisons
+cover nested region binders and optimization/panic combinations; a fresh base
+constructs new array/reference/FnPtr identities without result catalogs.
+Covered dummy-signature helper ABI also runs on demand: 264 complete comparisons
+agree, all sixty-six observed helper keys eliminate their one explicit call,
+and eighteen pointer keys eliminate one or two calls. The old hundred complete
+Item/scalar/reference comparisons still pass. Foreign pointer ABI remains an
+exact material residual; constructed/colliding identities reject. General Box,
+aggregate, foreign/variadic and other-target ABI remain unresolved.
+
 Pattern Range, NotNull and signed Or layouts now
 use raw recipes; six complete compiler comparisons and malformed controls pass,
-with covered explicit canonical layout acquisition omitted. Raw single-variant
-and empty enum declarations now construct twelve complete compiler layouts,
-including a novel generic enum outside both type and constant prefixes. Five
-repr/multivariant/unsized cases remain exact residuals; malformed recipes and
-missing raw declarations reject. Tagged/niche/coroutine layouts remain unresolved.
+with covered explicit canonical layout acquisition omitted. Raw enum declarations
+and field syntax now drive the pinned present-variant, tagged and niche layout
+calculators. Twenty-six complete compiler layouts match (nine niche and seventeen
+tagged), including explicit-repr calculator inputs; twenty-three runtime source
+recipes omit canonical layout queries. A generic array enum is constructed
+outside both type and constant prefixes. Missing declarations/field templates,
+physical residuals, conflicting recipes and constructed residual ID collisions
+reject. Three explicit discriminant cases retain exact material layouts until
+source CTFE supplies their values; the calculator comparison assumes those
+values as inputs. The earlier empty/single-variant fixture still matches fourteen
+raw layouts and three residuals. General coroutine layout remains unresolved.
 Non-Value pattern endpoints still require CTFE. Structural pointer/reference/tuple/array/slice
 covariance runs on World syntax: an independent 16-by-16 rustc matrix passes
-with an empty answer catalog. Nominal variance and richer relations remain.
+with an empty answer catalog. Raw declaration constraints now infer fifteen
+complete ADT/function variance arrays, matching the sixteen pinned variance
+composition pairs. An independent 16-by-16 nominal relation matrix reconstructs
+all endpoint types outside material prefixes and uses no answer catalog; missing
+source, malformed arity and fuel controls reject. Static/erased regions follow
+the pinned ignoring-regions relation, including eight actual baseline relations.
+Nine observed covariance query sites are omitted in the source fixture.
+Alias normalization, bound/parameter regions and richer relations remain.
 
 Scalar const-generic names and complete binder-free FnPtr syntax now enter the
 runtime constructor, layout, normalization and printer paths. Nine fresh material
@@ -99,7 +130,14 @@ without material type rows. Raw ADT/variant/field identities, flags, representat
 constructors, discriminant declarations and visibility now determine ADT stable
 hashes. Twenty-eight complete rustc type-hash comparisons cover nominal ADT and
 FnDef syntax, arrays and recursive Value constants, including empty-prefix
-reconstruction and malformed/missing-source controls. FnPtr/HRTB, dyn, aliases,
+reconstruction and malformed/missing-source controls. Twelve closed FnPtr and
+region-only bound FnDef compiler hashes additionally match whole-root
+anonymization and empty-prefix reconstruction, with malformed binders/headers
+and mutated-oracle controls. Two escaping open FnPtr subterms remain explicitly
+Unsupported: the independent raw eligibility check excludes them, while the
+separate erasable-regions omission still leaves no fallback hash. General open
+bound hashing and alignment of those omission conditions remain unresolved.
+Dyn, type/constant binders, aliases,
 closures/coroutines and non-Value constant hashes, full validity and allocation
 identity/dedup reconstruction remain unresolved. These comparisons do
 not establish whole-compiler equivalence, query closure or all-choice guest safety.
@@ -115,8 +153,25 @@ evaluate six ZST and four uniquely scalar tuple/struct values in the same World,
 matching complete compiler values/types/instances and removing two explicit
 evaluation calls per value. Malformed roots, missing nodes/fields and fuel
 exhaustion reject; allocation-bearing pair/reprC values remain exact residuals.
-Unevaluated, allocation-bearing ValTrees and general CTFE/interning remain unresolved; no successful no-op stands
-in for their evaluation.
+Compiler source-body roles now participate in both producer pool keys and the
+execution-owned BodyArena key. Required `source_role` fields distinguish runtime
+and CTFE material/templates; missing/unknown roles reject. Fresh producer tests
+keep the same full instance/promoted identity distinct across roles, reject
+forged role/source pairs, and prevent CTFE material/template bodies from entering
+runtime source resolution or lifecycle hooks. The independent pinned source
+loader selects promoted MIR, Item `mir_for_ctfe`, and non-Item `instance_mir`
+exactly; direct actual-source comparisons pass. These checks establish the source
+and identity boundary, not CTFE interpretation.
+
+CompilerTypingEnv retains ordered caller bounds and all pinned typing-mode
+payloads, with query-free empty Codegen construction and exact PostAnalysis retry
+bounds. Existing source-explicit declaration scopes remain recipes rather than
+normalized ParamEnv answers; general elaboration/normalization is unresolved.
+Unevaluated, allocation-bearing ValTrees and general CTFE/interning remain
+unresolved; no successful no-op stands in for their evaluation. The prepared
+allocator identity accessor patch passes apply checks but has not been compiled
+against a rebuilt pinned compiler; the installed source excerpt lacks bootstrap
+and the available disk is insufficient for that build.
 
 The exact `DropGlue(_, None)` shim family now retains only instance identity and
 raw source position; its raw declaration signature supplies types. Lean builds

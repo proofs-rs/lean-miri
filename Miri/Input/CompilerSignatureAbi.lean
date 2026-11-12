@@ -1,10 +1,11 @@
 import Miri.Input.CompilerProviders
 import Miri.Interpreter.FunctionCalls
+import Miri.Input.WorldSignatureAbi
 
 /-! helpers.rs:427–444 constructs mk_fn_sig/Binder::dummy then queries
 fn_abi_of_fn_ptr with an empty extra-argument list. Match the complete source
-request, never a callee ABI or a same-layout function signature. The finite
-compiler catalog does not claim to answer arbitrary runtime constructors. -/
+request, never a callee ABI or a same-layout function signature. Covered requests are constructed from raw session/type material; the catalog
+is an exact residual for unsupported material signatures. -/
 namespace Miri.Input.CompilerSignatureAbi
 open Lean Miri.ABI Miri.Interpreter
 
@@ -22,13 +23,32 @@ def queryWithIndex (runtime : RuntimeMetadata)
   let some abiId := found | throw s!"missing exact compiler dummy-signature ABI query: inputs={reprStr request.inputs}, output={request.output}, abi={reprStr request.abi}, safety={reprStr request.safety}, c_variadic={request.cVariadic}, splatted={request.splatted}"
   CallResolution.functionAbiId runtime abiId
 
-def query (p : CompilerProviders.Prepared) (request : FunctionCalls.SignatureRequest ABI.ExternAbi) :
+private def importedQuery (p : CompilerProviders.Prepared) (request : FunctionCalls.SignatureRequest ABI.ExternAbi) :
     Except String (FnAbi MIR.TyId) :=
   queryWithIndex p.runtime p.signatureAbiIndex request
 
-def hook (p : CompilerProviders.Prepared) (_ : C) (request : FunctionCalls.SignatureRequest ABI.ExternAbi) :
+/-- Construct the caller-perspective dummy-binder signature in the same World.
+Unsupported requests retain only their exact original material-key residual. -/
+def queryInWorld (p : CompilerProviders.Prepared) (request : FunctionCalls.SignatureRequest ABI.ExternAbi) :
+    RuntimeArrayTypes.CompilerM (FnAbi MIR.TyId) := do
+  let world ← get
+  match (WorldSignatureAbi.query request).run world with
+  | .ok (abi,after) => set after; pure abi
+  | .error sourceError =>
+    let residual : Except String (FnAbi MIR.TyId) := do
+      for id in request.inputs.push request.output do
+        let .material source ← world.arena.lookupType id
+          | throw "constructed helper signature has no imported ABI query"
+        let some original := p.runtime.source.types[id]? | throw "helper material type absent"
+        unless source.id == id && (← world.arena.materialKey source) == (← world.arena.materialKey original) do
+          throw "helper material source differs from execution World"
+      importedQuery p request
+    match residual with
+    | .ok abi => pure abi
+    | .error error => throw s!"{sourceError}; {error}"
+
+def hook (p : CompilerProviders.Prepared) (types : RuntimeArrayQueries.Access S)
+    (_ : C) (request : FunctionCalls.SignatureRequest ABI.ExternAbi) :
     EStateM StepError S (FnAbi MIR.TyId) :=
-  match query p request with
-  | .ok value => pure value
-  | .error reason => throw (.unsupported reason)
+  RuntimeArrayQueries.performCompiler types (queryInWorld p request)
 end Miri.Input.CompilerSignatureAbi

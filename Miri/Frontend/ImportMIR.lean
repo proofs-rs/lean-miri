@@ -150,6 +150,9 @@ deriving instance ToExpr for Input.Obligation
 deriving instance ToExpr for Input.SourcePosition
 deriving instance ToExpr for Input.SourceSpanData
 deriving instance ToExpr for Input.SourceInfo
+deriving instance ToExpr for Input.OptimizationLevel
+deriving instance ToExpr for Input.PanicStrategy
+deriving instance ToExpr for Input.AbiSessionMaterial
 deriving instance ToExpr for Input.Producer
 deriving instance ToExpr for Input.TaggedNode
 deriving instance ToExpr for Input.FieldShape
@@ -240,8 +243,6 @@ deriving instance ToExpr for Input.DefinitionPath.HeaderSafety
 deriving instance ToExpr for Input.DefinitionPath.Component
 deriving instance ToExpr for Input.DefinitionPath.GenericHeader
 deriving instance ToExpr for Input.DefinitionPath.Material
-deriving instance ToExpr for Input.OptimizationLevel
-deriving instance ToExpr for Input.ReferenceAbiPolicy
 deriving instance ToExpr for Input.FunctionAbiMaterial
 deriving instance ToExpr for Input.SourceEnvironment.Parent
 deriving instance ToExpr for Input.SourceEnvironment.Material
@@ -276,6 +277,7 @@ deriving instance ToExpr for Input.PlaceFact
 deriving instance ToExpr for Input.DynamicUpcastEvidence
 deriving instance ToExpr for Input.NodeFacts
 deriving instance ToExpr for Input.BodyMetadata
+deriving instance ToExpr for Input.CompilerBodyRole
 deriving instance ToExpr for Input.BodyCore
 deriving instance ToExpr for Input.PromotedBody
 deriving instance ToExpr for Input.Body

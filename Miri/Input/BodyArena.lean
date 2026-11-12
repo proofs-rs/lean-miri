@@ -6,6 +6,7 @@ namespace Miri.Input.BodyArena
 
 structure Key where
   templateId : Nat
+  role : CompilerBodyRole
   instanceId : InstanceId
   instanceKey : InstanceArena.Key
   promoted : Option Nat
@@ -17,10 +18,11 @@ private def lookupInstanceKey (instances : InstanceArena.Store) (id : InstanceId
 
 def Key.create (types : TypeArena.World) (instances : InstanceArena.Store)
     (templates : Array CopyTemplateSource) (templateId instanceId : Nat)
-    (promoted : Option Nat) : Except String Key := do
+    (promoted : Option Nat) (role : CompilerBodyRole := .runtime) : Except String Key := do
   let key ← lookupInstanceKey instances instanceId
   let .Item _ := key.kind | throw "raw template body requires an Item instance"
   let some source := templates[templateId]? | throw "raw body source template is absent"
+  unless source.sourceRole == role do throw "raw body source compiler role mismatch"
   unless source.sourcePromoted == promoted do throw "raw body source promoted role mismatch"
   unless (← types.identity source.definitionId) == key.definition do
     throw "raw body source physical definition does not match its instance"
@@ -31,7 +33,7 @@ def Key.create (types : TypeArena.World) (instances : InstanceArena.Store)
       | .Type _ => GenericSubstitution.ArgSort.type
       | .Const _ => .constant | .Lifetime _ => .region
     unless parameter == sort do throw "raw body source generic argument sort mismatch"
-  pure ⟨templateId,instanceId,key,promoted⟩
+  pure ⟨templateId,role,instanceId,key,promoted⟩
 
 /-- A raw shim declaration source and complete current instance. The source
 record supplies only immutable method/lang-item identities and source position. -/
@@ -88,7 +90,7 @@ private def Store.append (store : Store) (key : Constructed) : BodyId × Store :
 def Store.intern (types : TypeArena.World) (instances : InstanceArena.Store)
     (templates : Array CopyTemplateSource) (sourceBodies : Array BodySeed) (store : Store) (key : Key) :
     Except String (BodyId × Store) := do
-  let verified ← Key.create types instances templates key.templateId key.instanceId key.promoted
+  let verified ← Key.create types instances templates key.templateId key.instanceId key.promoted key.role
   unless verified == key do throw "raw body key contradicts the current instance universe"
   unless store.materialCount <= sourceBodies.size do throw "material body namespace exceeds source prefix"
   let mut found := none
@@ -96,7 +98,7 @@ def Store.intern (types : TypeArena.World) (instances : InstanceArena.Store)
     let some seed := sourceBodies[index]? | throw "material body source is absent"
     let .copyTemplate reference := seed | continue
     let some source := templates[reference.templateId]? | throw "material body source template is absent"
-    let candidate ← Key.create types instances templates reference.templateId reference.instanceId source.sourcePromoted
+    let candidate ← Key.create types instances templates reference.templateId reference.instanceId source.sourcePromoted source.sourceRole
     unless reference.genericArgs == candidate.instanceKey.arguments do
       throw "material body source arguments contradict its complete instance"
     if candidate == key then

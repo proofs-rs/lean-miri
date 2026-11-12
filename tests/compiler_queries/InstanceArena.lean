@@ -11,7 +11,7 @@ private def source (id : Nat) : InstanceNode := {
 private def rawSource (definition : Nat) : CopyTemplateSource := {
   template := {parameters := #[],types := #[],skeleton := {
     phase := .Built,argumentCount := 0,spreadArgument := none,locals := #[],blocks := #[]}},
-  sourcePromoted := none,definitionId := definition,defPath := "identical display",spanId := 0,preambleDefSpanId := 0,
+  sourceRole := .runtime,sourcePromoted := none,definitionId := definition,defPath := "identical display",spanId := 0,preambleDefSpanId := 0,
   injectionPhase := none,localSources := #[],sourceScopes := #[],backtraceSpans := #[] }
 
 def main : IO Unit := do

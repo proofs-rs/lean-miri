@@ -28,16 +28,15 @@ pub(crate) struct FunctionAbiMaterial {
     pub never_unwind: bool,
     pub foreign_item: bool,
     pub drop_glue: bool,
-    pub panic_unwinds: bool,
-    pub panic_in_drop_unwinds: bool,
-    pub references: ReferenceAbiPolicy,
+    pub rustc_no_writable: bool,
 }
 #[derive(Clone, Debug, Serialize)]
-pub(crate) struct ReferenceAbiPolicy {
+pub(crate) struct AbiSessionMaterial {
+    pub panic: &'static str,
+    pub panic_in_drop: &'static str,
     pub optimization: &'static str,
     pub llvm_writable: bool,
     pub box_noalias: bool,
-    pub rustc_no_writable: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct AdtDropMaterial {

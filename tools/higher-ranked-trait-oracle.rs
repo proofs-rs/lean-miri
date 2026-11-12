@@ -22,13 +22,16 @@ fn reference<'tcx>(tcx:TyCtxt<'tcx>,value:ty::TraitRef<'tcx>)->String {
     format!("{{\"definition\":{},\"arguments\":[{}]}}",identity(value.def_id),arguments(tcx,value.args))
 }
 struct Oracle;
-#[cfg(not(higher_ranked_alias_oracle))]
+#[cfg(not(any(higher_ranked_alias_oracle, higher_ranked_bound_alias_oracle)))]
 const CASES: &[(&str, &str)] = &[("all","All"),("static_only","StaticOnly"),
     ("type_any","TypeAny"),("repeated","Repeated"),("distinct","Distinct"),
     ("fn_for","FnFor"),("fn_static","FnStatic"),("fn_general_vs_static","FnGeneralVsStatic")];
 #[cfg(higher_ranked_alias_oracle)]
 const CASES: &[(&str, &str)] = &[("plain","All"),("checked","All"),("wrong","All"),
     ("quantified_checked","All"),("nested","FnAll"),("nested_checked","FnAll"),("static_only","Static")];
+#[cfg(higher_ranked_bound_alias_oracle)]
+const CASES: &[(&str, &str)] = &[("plain", "All"), ("checked", "All"),
+    ("static_only", "Static"), ("nested", "All")];
 impl Callbacks for Oracle {
     fn after_analysis<'tcx>(&mut self,_:&rustc_interface::interface::Compiler,tcx:TyCtxt<'tcx>)->Compilation {
         tcx.dcx().abort_if_errors();

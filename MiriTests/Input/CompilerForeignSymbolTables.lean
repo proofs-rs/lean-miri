@@ -21,7 +21,12 @@ private def unusedPrimitives : Catalog.Primitives := {
   callerLocationType := none, orderingEnum := none }
 
 private def document (symbols : Catalog.ForeignSymbols) : ImportDocument := {
-  producer := ⟨"miri", "rustc", "version", "target"⟩
+  producer := {
+    miriCommit := "miri"
+    rustcCommit := "rustc"
+    rustcVersion := "version"
+    targetTriple := "target"
+    abiSession := none }
   types := #[], allocations := #[], instances := #[], selectedScope := none
   functionAbis := #[], bodies := #[], producerSettings := unusedSettings
   queries := {

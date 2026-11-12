@@ -19,6 +19,7 @@ pub(super) enum Callee<C = PendingCandidates> {
         fn_abi: u64,
         virtual_resolution: Option<VirtualResolution<C>>,
     },
+    SourceFunctionPointer { function_type: u64, extra_argument_types: Vec<u64> },
     IndirectFunctionPointer {
         function_type: u64,
         signature: super::pool_type::FunctionSignature,
@@ -84,6 +85,8 @@ impl Callee<PendingCandidates> {
                 fn_abi,
                 virtual_resolution: virtual_resolution.map(|item| item.finish(candidates)),
             },
+            Self::SourceFunctionPointer {function_type,extra_argument_types} =>
+                Callee::SourceFunctionPointer {function_type,extra_argument_types},
             Self::IndirectFunctionPointer {
                 function_type,
                 signature,

@@ -165,7 +165,7 @@ pub(super) fn capture<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>
 mod tests {
     use super::*;
     fn body(instance: u64) -> pool_body::Body {
-        pool_body::Body { instance_id: instance, preamble_def_span: 0,
+        pool_body::Body { source_role:"runtime", instance_id: instance, preamble_def_span: 0,
             backtrace_spans: Vec::new().into(), source_def_id: 7,
             phase: pool_body::Phase::Analysis { phase: pool_body::AnalysisPhase::PostCleanup },
             injection_phase: None, arg_count: 2, spread_arg: None, span: 0,

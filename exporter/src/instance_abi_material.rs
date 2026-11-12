@@ -5,11 +5,14 @@ use rustc_middle::ty::{self, TyCtxt, TypeVisitableExt};
 // Source grammar proof of a thin pointee. This never asks Sized/layout/traits;
 // aliases and unsized tails stay residual. Field recursion is bounded even for
 // malformed recursive declarations; pointers stop the traversal.
-fn sized_pointee<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>, fuel: usize) -> bool {
+pub(super) fn sized_pointee<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>, fuel: usize) -> bool {
     if fuel == 0 { return false; }
     match input.kind() {
         ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never |
         ty::RawPtr(..) | ty::Ref(..) | ty::FnPtr(..) => true,
+        // Pattern refinements preserve their base type sizedness. This proves
+        // only pointee thinness; the runtime still computes its exact layout.
+        ty::Pat(base, _) => sized_pointee(tcx, *base, fuel - 1),
         ty::Array(element, _) => sized_pointee(tcx, *element, fuel - 1),
         ty::Tuple(fields) => fields.iter().all(|field| sized_pointee(tcx, field, fuel - 1)),
         ty::Adt(definition, arguments) if definition.is_struct() &&

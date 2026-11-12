@@ -63,7 +63,7 @@ private def canReifyType (world : World) : Nat → TypeId → ReifyDomainM Bool
         | .material source => liftM (world.materialKey source)
       let some constructor := value | return false
       let supported := match constructor with
-        | .functionDefinition _ _ variables => variables.isEmpty
+        | .functionDefinition _ _ variables => variables.all (fun value => match value with | .Region _ => true | _ => false)
         | .functionPointer signature =>
           signature.variables.all (fun value => match value with | .region _ => true | _ => false)
         | _ => true
@@ -153,9 +153,12 @@ def reifyType (world : World) : Nat → TypeId → ReifyM Term
         pure (.definition .type "adt" definition (Terms.ofArray (← args arguments)))
       | .foreign definition => pure (.definition .type "foreign" definition .nil)
       | .functionDefinition definition arguments variables => do
-        unless variables.isEmpty do throw "generic universe FnDef excludes nonempty argument binders"
+        let variables ← liftReify (variables.mapM fun value => do
+          match value with
+          | .Region kind => pure (BoundVariable.region (← boundIdentity world kind))
+          | _ => throw "generic universe FnDef type/constant binder is unsupported")
         pure (.definition .type "function_definition" definition
-          (.cons (.binder #[] (.node .aggregate "arguments" "" (Terms.ofArray (← args arguments)))) .nil))
+          (.cons (.binder variables (.node .aggregate "arguments" "" (Terms.ofArray (← args arguments)))) .nil))
       | .functionPointer signature => do
         let header := Lean.Json.compress (Lean.Json.mkObj [
           ("abi_packed", Lean.toJson signature.abiPacked), ("safe", Lean.toJson signature.safe),
@@ -298,8 +301,12 @@ def constructType : Nat → Term → ConstructM TypeId
       | .definition .type "foreign" identity .nil => pure (.foreign identity)
       | .definition .type "function_definition" identity
           (.cons (.binder variables (.node .aggregate "arguments" "" arguments)) .nil) => do
-        unless variables.isEmpty do throw "generic universe FnDef excludes nonempty argument binders"
-        pure (.functionDefinition identity (← constructArguments fuel (arrayOfTerms #[] arguments)) #[])
+        let world ← getThe World
+        let variables ← lift (variables.mapM fun value => do
+          match value with
+          | .region identity => pure (MIR.BoundVariableKind.Region (← regionIdentity world identity))
+          | _ => throw "generic universe FnDef type/constant binder is unsupported")
+        pure (.functionDefinition identity (← constructArguments fuel (arrayOfTerms #[] arguments)) variables)
       | .definition .type "closure" identity arguments => do
         pure (.closure identity (← constructArguments fuel (arrayOfTerms #[] arguments)))
       | .definition .type "coroutine_closure" identity arguments => do

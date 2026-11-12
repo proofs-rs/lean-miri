@@ -22,7 +22,7 @@ private def sourceTrait (id : TypeId) (languageItem : String) : RuntimeArrayType
   | .noSolution => pure false
   | .ambiguous reason => throw s!"reference ABI source trait is ambiguous: {reason}"
 
-def classify (policy : ReferenceAbiPolicy) (isReturn : Bool) (layout : TyAndLayout TypeId)
+def classify (policy : AbiSessionMaterial) (definition : Option FunctionAbiMaterial) (isReturn : Bool) (layout : TyAndLayout TypeId)
     (pointee : TypeId) (mutability : Miri.MIR.Mutability) :
     RuntimeArrayTypes.CompilerM (ArgAbi TypeId) := do
   let .Scalar (.Initialized (value := .Pointer _) (validRange := range)) := layout.layout.backendRepr
@@ -39,7 +39,7 @@ def classify (policy : ReferenceAbiPolicy) (isReturn : Bool) (layout : TyAndLayo
   if permitted && !isReturn then
     regular := regular ||| 8 ||| 512
     if mutability == .Not then regular := regular ||| 32 ||| 4
-    else if policy.llvmWritable && !policy.rustcNoWritable then regular := regular ||| 256
+    else if policy.llvmWritable && definition.any (! ·.rustcNoWritable) then regular := regular ||| 256
   -- On x86_64 max_reliable_alignment is Align::MAX. The sole lower limit in
   -- pinned Target::max_reliable_alignment is x86-32 Windows (outside admission).
   let align := child.layout.align.abi

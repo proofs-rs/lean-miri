@@ -1,4 +1,5 @@
 import Miri.Input.TraitSelection.Substitution
+import Miri.Input.QueryAliasScope
 
 /-! Declaration-template alias reduction. Sources: pinned rustc
 `traits/normalize.rs::{normalize_free_alias,fold_ty}` and
@@ -91,6 +92,14 @@ private def containsBound : Nat → Term → Except String Bool
     | .node _ _ _ children | .definition _ _ _ children => children.anyM (containsBound fuel)
     | _ => pure false
 
+private def requireArgument (maximumUniverse : Option Nat) (fuel : Nat) (term : Term) :
+    Except String Unit := do
+  match maximumUniverse with
+  | some universeIndex => QueryAliasScope.requireOwned universeIndex fuel term
+  | none =>
+    if ← containsBound fuel term then
+      throw "alias argument requires query-owned placeholder conversion"
+
 private def clauseTerms : TraitSelection.Predicate → Array Term
   | .trait goal => goal.traitRef.arguments
   | .hostEffect _ reference => reference.arguments
@@ -105,7 +114,7 @@ structure Progress where
   obligations : Array Clause := #[]
 
 mutual
-private def fold (program : Program) (hooks : Hooks) :
+private def fold (program : Program) (hooks : Hooks) (maximumUniverse : Option Nat) :
     Nat → Array Key → Term → Except String Progress
   | 0, _, _ => .error "alias normalization recursion exhausted"
   | fuel + 1, active, value => do
@@ -113,14 +122,14 @@ private def fold (program : Program) (hooks : Hooks) :
     | .definition .type tag definition children =>
       let some kind ← aliasKind tag
         | do
-          let (children, obligations) ← foldTerms program hooks fuel active children
+          let (children, obligations) ← foldTerms program hooks maximumUniverse fuel active children
           return ⟨.definition .type tag definition children, obligations⟩
       -- Free aliases instantiate before folding the RHS. Eagerly normalizing
       -- unused arguments would introduce spurious cycles absent from rustc.
       let (arguments, argumentObligations) ← if kind == .free then
           pure (termsToArray children, #[])
         else do
-          let (children, obligations) ← foldTerms program hooks fuel active children
+          let (children, obligations) ← foldTerms program hooks maximumUniverse fuel active children
           pure (termsToArray children, obligations)
       let key : Key := ⟨kind,definition,arguments⟩
       if active.contains key then throw "alias normalization cycle"
@@ -132,8 +141,7 @@ private def fold (program : Program) (hooks : Hooks) :
         pure (rule,arguments,← hooks.ownPredicates rule.definition,arguments)
       else do
         for argument in arguments do
-          if ← containsBound (fuel + 1) argument then
-            throw "associated normalization under bound variables requires placeholder conversion"
+          requireArgument maximumUniverse (fuel + 1) argument
         let declarations := program.associatedDeclarations.filter (·.definition == definition)
         unless declarations.size == 1 do throw "associated declaration absent or duplicated"
         let some declaration := declarations[0]? | throw "associated declaration absent"
@@ -156,27 +164,26 @@ private def fold (program : Program) (hooks : Hooks) :
         pure (rule,substitutions,← hooks.ownPredicates declaration.definition,arguments)
       rule.template.checkArguments substitutions
       let predicates ← TraitSelection.Substitution.clauses (fuel + 1) predicateArguments predicateSource
-      if !predicates.isEmpty then
+      if maximumUniverse.isSome || !predicates.isEmpty then
         for argument in predicateArguments do
-          if ← containsBound (fuel + 1) argument then
-            throw "alias own clauses require bound-variable placeholder conversion"
+          requireArgument maximumUniverse (fuel + 1) argument
       let rhs ← rule.template.instantiateType (fuel + 1) substitutions
-      let result ← fold program hooks fuel active rhs
+      let result ← fold program hooks maximumUniverse fuel active rhs
       -- rustc registers own clauses, folds the RHS, then fulfills at the query
       -- boundary. Fulfilling while this alias is active would add false cycles.
       return ⟨result.value, argumentObligations ++ predicates ++ result.obligations⟩
     | .definition .constant tag definition children =>
       if tag.startsWith "alias_" then throw "constant alias normalization requires const evaluation"
-      let (children, obligations) ← foldTerms program hooks fuel active children
+      let (children, obligations) ← foldTerms program hooks maximumUniverse fuel active children
       return ⟨.definition .constant tag definition children, obligations⟩
     | .definition sort tag definition children =>
-      let (children, obligations) ← foldTerms program hooks fuel active children
+      let (children, obligations) ← foldTerms program hooks maximumUniverse fuel active children
       return ⟨.definition sort tag definition children, obligations⟩
     | .node sort tag payload children =>
-      let (children, obligations) ← foldTerms program hooks fuel active children
+      let (children, obligations) ← foldTerms program hooks maximumUniverse fuel active children
       return ⟨.node sort tag payload children, obligations⟩
     | .binder variables body =>
-      let result ← fold program hooks fuel active body
+      let result ← fold program hooks maximumUniverse fuel active body
       unless variables.isEmpty do
         for obligation in result.obligations do
           unless obligation.variables.isEmpty do
@@ -188,13 +195,13 @@ private def fold (program : Program) (hooks : Hooks) :
     | .inference .. => throw "alias normalization received unresolved inference material"
     | _ => pure ⟨value, #[]⟩
 
-private def foldTerms (program : Program) (hooks : Hooks) :
+private def foldTerms (program : Program) (hooks : Hooks) (maximumUniverse : Option Nat) :
     Nat → Array Key → Terms → Except String (Terms × Array Clause)
   | 0, _, _ => .error "alias normalization recursion exhausted"
   | _ + 1, _, .nil => pure (.nil, #[])
   | fuel + 1, active, .cons head tail => do
-    let head ← fold program hooks fuel active head
-    let (tail, rest) ← foldTerms program hooks fuel active tail
+    let head ← fold program hooks maximumUniverse fuel active head
+    let (tail, rest) ← foldTerms program hooks maximumUniverse fuel active tail
     pure (.cons head.value tail, head.obligations ++ rest)
 end
 
@@ -204,8 +211,19 @@ used. An error, ambiguous impl or unproved clause never returns a normalized typ
 Region erasure and higher-ranked placeholder handling are separate prerequisites. -/
 def normalize (program : Program) (hooks : Hooks) (fuel : Nat)
     (active : Array Key) (value : Term) : Except String Term := do
-  let result ← fold program hooks fuel active value
+  let result ← fold program hooks none fuel active value
   hooks.fulfill fuel active result.obligations
+  pure result.value
+
+/-- Scoped reduction accepts only caller-owned placeholders, never lexical bound
+arguments. Raw RHS and own clauses must be source-validated by the provider
+before instantiation; callbacks preserve the same query universe boundary. -/
+def normalizeInUniverse (maximumUniverse : Nat) (program : Program) (hooks : Hooks)
+    (fuel : Nat) (active : Array Key) (value : Term) : Except String Term := do
+  TraitSelection.HigherRankedMatch.requireScoped maximumUniverse fuel value
+  let result ← fold program hooks (some maximumUniverse) fuel active value
+  hooks.fulfill fuel active result.obligations
+  TraitSelection.HigherRankedMatch.requireScoped maximumUniverse fuel result.value
   pure result.value
 
 end Miri.Input.AliasNormalization

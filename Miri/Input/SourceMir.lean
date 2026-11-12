@@ -196,20 +196,25 @@ def metadata (document : ImportDocument) (index : Nat) : Except String Metadata 
 private def lift (result : Except String α) : TypeArena.WorldM α :=
   match result with | .ok value => pure value | .error error => throw error
 
-def resolveBody (document : ImportDocument) (index : Nat) : TypeArena.WorldM BodyCore := do
+def resolveBody (document : ImportDocument) (index : Nat)
+    (role : CompilerBodyRole := .runtime) : TypeArena.WorldM BodyCore := do
   match ← lift (bodySeed document index) with
-  | .material body => pure body.toBodyCore
+  | .material body =>
+    unless body.sourceRole == role do throw "material body compiler source role mismatch"
+    pure body.toBodyCore
   | .copyTemplate reference =>
     let sourceMetadata ← lift (metadata document index)
     let source ← lift (templateSource document reference.templateId)
+    unless source.sourceRole == role do throw "template body compiler source role mismatch"
     let arguments ← lift (GenericInstantiationWorld.ofArguments (← get) 16384 reference.genericArgs)
     let mir ← MirTemplate.instantiate source.template 16384 arguments fun expression => do
       let expression ← lift (MirTemplate.eraseFreeRegions 16384 expression)
       lift (MirTemplate.validateClosed 16384 expression)
       GenericInstantiationWorld.resolveType 16384 expression
-    pure { toBodyMetadata := sourceMetadata.toBodyMetadata,mir,instanceId := reference.instanceId }
+    pure { toBodyMetadata := sourceMetadata.toBodyMetadata,mir,instanceId := reference.instanceId,sourceRole := source.sourceRole }
 
   | .noopDrop reference =>
+    unless role == .runtime do throw "runtime no-op drop source cannot be used for CTFE"
     let sourceMetadata ← lift (metadata document index)
     let (sourceInstance,material) ← lift (noopDropSource document reference)
     let arguments ← lift (GenericInstantiationWorld.ofArguments (← get) 16384 sourceInstance.genericArgs)
@@ -218,9 +223,10 @@ def resolveBody (document : ImportDocument) (index : Nat) : TypeArena.WorldM Bod
       | throw "no-op drop raw signature disappeared"
     let mir ← NoopDropShim.instantiate 16384 signature arguments ⟨reference.sourceSpan.spanId⟩
       (GenericInstantiationWorld.resolveType 16384)
-    pure {toBodyMetadata := sourceMetadata.toBodyMetadata,mir,instanceId := reference.instanceId}
+    pure {toBodyMetadata := sourceMetadata.toBodyMetadata,mir,instanceId := reference.instanceId,sourceRole := .runtime}
 
   | .fnPointerShim reference =>
+    unless role == .runtime do throw "runtime function-pointer shim source cannot be used for CTFE"
     let sourceMetadata ← lift (fnPointerShimMetadata document index reference)
     let (_,material,direction,selfType) ← lift (fnPointerShimSource document reference)
     let some signature := material.signatureExpression | throw "FnPtr shim raw signature disappeared"
@@ -231,7 +237,7 @@ def resolveBody (document : ImportDocument) (index : Nat) : TypeArena.WorldM Bod
     let nonNull := GenericSubstitution.Term.definition .type "adt" nonNull (.cons code .nil)
     let mir ← FnPointerShim.instantiate 16384 direction signature selfType nonNull ⟨reference.sourceSpan.spanId⟩
       (GenericInstantiationWorld.resolveType 16384)
-    pure {toBodyMetadata := sourceMetadata.toBodyMetadata,mir,instanceId := reference.instanceId}
+    pure {toBodyMetadata := sourceMetadata.toBodyMetadata,mir,instanceId := reference.instanceId,sourceRole := .runtime}
 
 /-- Resolve one exact raw body reference. No material table index is inferred
 from a constructed identity or from a source template number. -/
@@ -239,7 +245,7 @@ private def resolveBodyKey (key : BodyArena.Key) : RuntimeArrayTypes.CompilerM B
   let world ← get
   let document := world.metadata.source
   let verified ← match BodyArena.Key.create world.arena world.instances document.mirTemplates
-      key.templateId key.instanceId key.promoted with
+      key.templateId key.instanceId key.promoted key.role with
     | .ok key => pure key | .error error => throw error
   unless verified == key do throw "body reference contradicts the current compiler universe"
   let index := key.templateId
@@ -268,7 +274,7 @@ private def resolveBodyKey (key : BodyArena.Key) : RuntimeArrayTypes.CompilerM B
     callEvidence := blocks.map (fun _ => none)
     nodeFacts := blocks.map (fun block => Array.replicate (block.statements.size + 1) {})
     requiredConsts := #[] }
-  pure {toBodyMetadata := bodyMetadata,mir,instanceId := key.instanceId}
+  pure {toBodyMetadata := bodyMetadata,mir,instanceId := key.instanceId,sourceRole := key.role}
 
 private def shimKeyMetadata (key : BodyArena.ShimKey) : RuntimeArrayTypes.CompilerM Metadata := do
   let world ← get
@@ -300,7 +306,16 @@ private def resolveShimKey (key : BodyArena.ShimKey) : RuntimeArrayTypes.Compile
     let nonNull := GenericSubstitution.Term.definition .type "adt" nonNull (.cons code .nil)
     FnPointerShim.instantiate 16384 direction signature selfType nonNull ⟨key.source.sourceSpan.spanId⟩
       (GenericInstantiationWorld.resolveType 16384)
-  pure {toBodyMetadata := metadata.toBodyMetadata,mir,instanceId := key.instanceId}
+  pure {toBodyMetadata := metadata.toBodyMetadata,mir,instanceId := key.instanceId,sourceRole := .runtime}
+
+private def validateRuntimeSourceRole (document : ImportDocument) (index : Nat) : Except String Unit := do
+  match ← bodySeed document index with
+  | .material body =>
+    unless body.sourceRole == .runtime do throw "CTFE material body cannot enter runtime metadata"
+  | .copyTemplate reference =>
+    let source ← templateSource document reference.templateId
+    unless source.sourceRole == .runtime do throw "CTFE template body cannot enter runtime metadata"
+  | .noopDrop _ | .fnPointerShim _ => pure ()
 
 private def validateMaterialBodyInstance (world : RuntimeArrayTypes.World) (index : Nat) : Except String Unit := do
   let some seed := world.metadata.source.bodies[index]? | throw "material body source is absent"
@@ -320,10 +335,14 @@ def resolveBodyIdentity (identity : Miri.Interpreter.BodyIdentity) :
     | .ok view => pure view | .error error => throw error
   match view with
   | .material index =>
+    match validateRuntimeSourceRole world.metadata.source index with
+    | .ok () => pure () | .error error => throw error
     match validateMaterialBodyInstance world index with
     | .ok () => pure () | .error error => throw error
     RuntimeArrayTypes.liftType (resolveBody world.metadata.source index)
-  | .constructed (.template key) => resolveBodyKey key
+  | .constructed (.template key) =>
+    unless key.role == .runtime do throw "CTFE body identity cannot enter runtime resolution"
+    resolveBodyKey key
   | .constructed (.fnPointerShim key) => resolveShimKey key
 
 
@@ -337,14 +356,17 @@ def metadataIdentity (identity : Miri.Interpreter.BodyIdentity) :
     | .ok view => pure view | .error error => throw error
   match view with
   | .material index =>
+    match validateRuntimeSourceRole world.metadata.source index with
+    | .ok () => pure () | .error error => throw error
     match validateMaterialBodyInstance world index with
     | .ok () => pure () | .error error => throw error
     match metadata document index with
     | .ok value => pure value.toBodyMetadata | .error error => throw error
   | .constructed (.fnPointerShim key) => return (← shimKeyMetadata key).toBodyMetadata
   | .constructed (.template key) =>
+    unless key.role == .runtime do throw "CTFE body identity cannot enter runtime metadata"
     let verified ← match BodyArena.Key.create world.arena world.instances document.mirTemplates
-        key.templateId key.instanceId key.promoted with
+        key.templateId key.instanceId key.promoted key.role with
       | .ok key => pure key | .error error => throw error
     unless verified == key do throw "metadata body reference contradicts the compiler universe"
     let some source := document.mirTemplates[key.templateId]? | throw "raw body source disappeared"

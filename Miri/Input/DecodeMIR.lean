@@ -982,7 +982,14 @@ def finishPromotedBodyFields (path : String) (s : PromotedBodyFields) : MIRParse
   return ⟨index, bodyId⟩
 def promotedBody (path : String) : MIRParser.Parser (PromotedBody) := do
   finishPromotedBodyFields path (← MIRParser.object {} promotedBodyField)
+def compilerBodyRole : JsonReader.Parser CompilerBodyRole := do
+  match ← string with
+  | "runtime" => pure .runtime
+  | "ctfe" => pure .ctfe
+  | value => JsonReader.fail s!"unknown compiler body source role `{value}`"
+
 structure ParseBodyFields where
+  sourceRole : Option CompilerBodyRole := none
   phase : Option (MIR.MirPhase) := none
   arg_count : Option (Nat) := none
   spread_arg : Option (Option Nat) := none
@@ -1002,6 +1009,7 @@ structure ParseBodyFields where
 
 def parseBodyField (sourcePath : String) (s : ParseBodyFields) (key : String) : MIRParser.Parser (ParseBodyFields) := do
   match key with
+  | "source_role" => return {s with sourceRole := some (← compilerBodyRole)}
   | "phase" => return {s with phase := some (← phase)}
   | "arg_count" => return {s with arg_count := some (← natural)}
   | "spread_arg" => return {s with spread_arg := some (← MIRParser.nullable natural)}
@@ -1059,6 +1067,7 @@ def finishParseBodyFields (sourcePath : String) (s : ParseBodyFields) : MIRParse
   recordSpan preambleDefSpanId
   validateLocalBounds locals.size blocks.size scopes.size
   return {
+    sourceRole := (← required s.sourceRole "source_role"),
     mir := ⟨(← required s.phase "phase"), argumentCount, spreadArgument, locals.map (·.typeId), blocks.map (·.2.value)⟩,
     definitionId, defPath := s.def_path.join.getD sourcePath, sourcePath,
     spanId, preambleDefSpanId, injectionPhase := s.injection_phase.join,
@@ -1136,6 +1145,7 @@ def parseBodySeed (path : String) (pools : Option MIRParser.SharedPools := none)
   pure ⟨value,state.references⟩
 
 private structure CopyTemplateFields where
+  sourceRole : Option CompilerBodyRole := none
   template : Option MirTemplate.Template := none
   definitionId : Option Nat := none
   defPath : Option String := none
@@ -1150,6 +1160,7 @@ private structure CopyTemplateFields where
 def parseCopyTemplate (path : String) : JsonReader.Parser CopyTemplateSource := do
   let fields ← JsonReader.object ({} : CopyTemplateFields) fun fields key => do
     match key with
+    | "source_role" => pure {fields with sourceRole := some (← compilerBodyRole)}
     | "template" => pure {fields with template := some (← liftExcept (MirTemplateCodec.decode (← string)))}
     | "source_def_id" => pure {fields with definitionId := some (← natural)}
     | "source_promoted" => pure {fields with sourcePromoted := some (← JsonReader.nullable natural)}
@@ -1165,7 +1176,8 @@ def parseCopyTemplate (path : String) : JsonReader.Parser CopyTemplateSource := 
     ← required fields.defPath "def_path",← required fields.spanId "span",
     ← required fields.preambleDefSpanId "preamble_def_span",← required fields.injectionPhase "injection_phase",
     ← required fields.localSources "local_sources",← required fields.sourceScopes "source_scopes",
-    ← required fields.backtraces "backtrace_spans",← required fields.sourcePromoted "source_promoted"⟩
+    ← required fields.backtraces "backtrace_spans",← required fields.sourcePromoted "source_promoted",
+    ← required fields.sourceRole "source_role"⟩
 
 def parseSharedStatement (pools : MIRParser.SharedPools) : JsonReader.Parser MIRParser.SharedStatement := do
   let (value, state) ← statementKind.run {pools := some pools}

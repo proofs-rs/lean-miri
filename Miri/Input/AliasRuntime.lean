@@ -12,8 +12,9 @@ import Miri.Input.TraitSelection.StructuralAuto
 /-! Executable composition of source alias RHS reduction and raw trait
 selection/fulfillment. Ground queries use region erasure in an empty parameter
 environment. Region-quantified queries retain lexical owners and query-local
-placeholder universes; closed type aliases may reduce inside those scopes.
-Bound-dependent alias arguments and obligations, constant aliases and opaque
+placeholder universes; type aliases with closed or already-opened arguments
+may reduce inside those scopes. Lexically bound alias arguments and obligations,
+constant aliases and opaque
 hidden-type inference remain explicit unsupported domains. No normalized type
 or selected-impl answer catalog is read. -/
 namespace Miri.Input.AliasRuntime
@@ -153,7 +154,9 @@ def normalizeTermScoped (context : Context) (maximumUniverse work : Nat) :
       fulfill := fun remaining activeAliases predicates => do
         requireProven (← TraitSelection.fulfillInUniverseWithActive context.traits (currentTraitHooks activeAliases)
           environment maximumUniverse (min remaining fuel) work goals predicates) }
-    let result ← AliasNormalization.normalize context.aliases aliasHooks (fuel + 1) aliases input
+    let result ← if isScoped then
+      AliasNormalization.normalizeInUniverse maximumUniverse context.aliases aliasHooks (fuel + 1) aliases input
+      else AliasNormalization.normalize context.aliases aliasHooks (fuel + 1) aliases input
     if isScoped || (← TraitSelection.Match.requiresQuantified (fuel + 1) result) then
       return ← ScopedNormalization.normalize maximumUniverse (fuel + 1) result
     let result ← MirTemplate.eraseFreeRegions (fuel + 1) result

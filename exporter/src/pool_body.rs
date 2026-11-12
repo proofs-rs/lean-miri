@@ -764,6 +764,7 @@ pub(super) struct BasicBlock<Q = VtableQueryKey, C = crate::resolution_values::P
 }
 #[derive(Serialize)]
 pub(super) struct Body<Q = VtableQueryKey, C = crate::resolution_values::PendingCandidates> {
+    pub source_role: &'static str,
     pub instance_id: u64,
     pub preamble_def_span: u64,
     pub backtrace_spans: Shared<Vec<BacktraceSpan>>,
@@ -781,6 +782,7 @@ pub(super) struct Body<Q = VtableQueryKey, C = crate::resolution_values::Pending
 
 #[derive(Serialize)]
 pub(super) struct CopyTemplateSource {
+    pub source_role: &'static str,
     pub source_promoted: Option<u32>,
     pub template: String,
     pub source_def_id: u64,
@@ -1213,6 +1215,7 @@ impl Body<VtableQueryKey, crate::resolution_values::PendingCandidates> {
     ) -> Result<Body<u64, Vec<u64>>, String> {
         Ok({
             let Self {
+                source_role,
                 instance_id,
                 preamble_def_span,
                 backtrace_spans,
@@ -1228,6 +1231,7 @@ impl Body<VtableQueryKey, crate::resolution_values::PendingCandidates> {
                 required_consts,
             } = self;
             Body {
+                source_role,
                 instance_id,
                 preamble_def_span: preamble_def_span,
                 backtrace_spans: backtrace_spans,

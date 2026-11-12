@@ -29,12 +29,47 @@ private def validateSelectedScope (scope : SelectedScope) (_bodies : Array BodyS
       throw (s!"$.selected_scope.roots[{index}]" ++ ": " ++ "selected DefId and path do not resolve to an emitted body or instance")
   return ()
 
+private structure AbiSessionFields where
+  panic : Option PanicStrategy := none
+  panicInDrop : Option PanicStrategy := none
+  optimization : Option OptimizationLevel := none
+  llvmWritable : Option Bool := none
+  boxNoalias : Option Bool := none
+
+private def parsePanicStrategy : JsonReader.Parser PanicStrategy := do
+  match ← JsonReader.string with
+  | "unwind" => pure .unwind | "abort" => pure .abort
+  | "immediate-abort" => pure .immediateAbort
+  | value => JsonReader.fail s!"unknown raw ABI panic strategy {value}"
+
+private def parseAbiSession : JsonReader.Parser AbiSessionMaterial := do
+  let p ← JsonReader.object ({} : AbiSessionFields) fun p key => do
+    match key with
+    | "panic" => return {p with panic := some (← parsePanicStrategy)}
+    | "panic_in_drop" => return {p with panicInDrop := some (← parsePanicStrategy)}
+    | "optimization" =>
+      let level ← match ← JsonReader.string with
+        | "no" => pure OptimizationLevel.no | "less" => pure .less
+        | "more" => pure .more | "aggressive" => pure .aggressive
+        | "size" => pure .size | "size_min" => pure .sizeMin
+        | value => JsonReader.fail s!"unknown raw ABI optimization level {value}"
+      return {p with optimization := some level}
+    | "llvm_writable" => return {p with llvmWritable := some (← JsonReader.boolean)}
+    | "box_noalias" => return {p with boxNoalias := some (← JsonReader.boolean)}
+    | _ => JsonReader.fail s!"unknown raw ABI session field {key}"
+  pure ⟨← JsonReader.required p.panic "abi_session.panic",
+    ← JsonReader.required p.panicInDrop "abi_session.panic_in_drop",
+    ← JsonReader.required p.optimization "abi_session.optimization",
+    ← JsonReader.required p.llvmWritable "abi_session.llvm_writable",
+    ← JsonReader.required p.boxNoalias "abi_session.box_noalias"⟩
+
 private structure ProducerFields where
   miriCommit : Option String := none
   rustcCommit : Option String := none
   rustcVersion : Option String := none
   targetTriple : Option String := none
   settings : Option Catalog.ProducerSettings := none
+  abiSession : Option AbiSessionMaterial := none
 
 private def parseProducer : JsonReader.Parser (Producer × Catalog.ProducerSettings) := do
   let p ← JsonReader.object ({} : ProducerFields) fun p key => do
@@ -43,6 +78,7 @@ private def parseProducer : JsonReader.Parser (Producer × Catalog.ProducerSetti
     | "rustc_commit" => return {p with rustcCommit := some (← JsonReader.string)}
     | "rustc_version" => return {p with rustcVersion := some (← JsonReader.string)}
     | "target_triple" => return {p with targetTriple := some (← JsonReader.string)}
+    | "abi_session" => return {p with abiSession := some (← parseAbiSession)}
     | "input_settings" => return {p with settings := some (← CatalogDecoder.producerSettings)}
     | _ => JsonReader.skipValue; return p
   let producer : Producer := {
@@ -50,6 +86,7 @@ private def parseProducer : JsonReader.Parser (Producer × Catalog.ProducerSetti
     rustcCommit := ← JsonReader.required p.rustcCommit "rustc_commit"
     rustcVersion := ← JsonReader.required p.rustcVersion "rustc_version"
     targetTriple := ← JsonReader.required p.targetTriple "target_triple"
+    abiSession := some (← JsonReader.required p.abiSession "abi_session")
   }
   return (producer, ← JsonReader.required p.settings "input_settings")
 

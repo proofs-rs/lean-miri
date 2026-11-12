@@ -310,7 +310,8 @@
         }
       ],
       "instance_id": 0,
-      "required_consts": []
+      "required_consts": [],
+      "source_role": "runtime"
     }
   ],
   "layouts": [

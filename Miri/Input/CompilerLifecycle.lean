@@ -21,6 +21,7 @@ private def lift (query : Except String A) : MachineHooks.M K User A :=
   | .ok value => pure value
   | .error error => throw (.unsupported s!"compiler lifecycle: {error}")
 def bodyEntry (p : Prepared) (body : LoadedBody) (actual : LoweredBody) : Except String Entry := do
+  unless actual.input.sourceRole = .runtime do throw "CTFE source body cannot enter the runtime lifecycle"
   unless actual.body == body.body do throw "canonical body identity/content mismatch"
   unless actual.input.preambleDefSpanId < p.program.compilerTables.spans.size do
     throw "body preamble span is absent"
@@ -59,6 +60,7 @@ theorem preamble_known (p : Prepared)
     (span : SpanRef) (fnInstance : CallInstance)
     (row : (RuntimeArrayQueries.performCompiler types (p.program.resolveBodyIdentity body.identity) : MachineHooks.M K U LoweredBody) = pure actual)
     (contents : actual.body = body.body)
+    (runtimeRole : actual.input.sourceRole = .runtime)
     (bounded : actual.input.preambleDefSpanId < p.program.compilerTables.spans.size)
     (spanId : actual.input.preambleDefSpanId = span.id)
     (callee : actual.input.instanceId = fnInstance) :
@@ -66,13 +68,14 @@ theorem preamble_known (p : Prepared)
   have boundedSpan : span.id < p.program.compilerTables.spans.size := spanId ▸ bounded
   cases span
   funext state
-  simp [preambleSpan, bodyEntry, lift, row, contents, boundedSpan, spanId, callee,
+  simp [preambleSpan, bodyEntry, lift, row, contents, runtimeRole, boundedSpan, spanId, callee,
     bind, EStateM.bind, Except.bind, pure, EStateM.pure, Except.pure]
  theorem required_empty (p : Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (body : LoadedBody) (actual : LoweredBody)
     (span : SpanRef) (fnInstance : CallInstance)
     (row : (RuntimeArrayQueries.performCompiler types (p.program.resolveBodyIdentity body.identity) : MachineHooks.M K U LoweredBody) = pure actual)
     (contents : actual.body = body.body)
+    (runtimeRole : actual.input.sourceRole = .runtime)
     (bounded : actual.input.preambleDefSpanId < p.program.compilerTables.spans.size)
     (spanId : actual.input.preambleDefSpanId = span.id)
     (callee : actual.input.instanceId = fnInstance)
@@ -86,7 +89,7 @@ theorem preamble_known (p : Prepared)
       .ok () ⟨⟨frames.push frame⟩,machine⟩ := by
   have boundedSpan : span.id < p.program.compilerTables.spans.size := spanId ▸ bounded
   cases span
-  simp [requiredConstants, bodyEntry, lift, row, contents, boundedSpan, spanId, callee, empty,
+  simp [requiredConstants, bodyEntry, lift, row, contents, runtimeRole, boundedSpan, spanId, callee, empty,
     MachineHooks.currentFrame, Stack.currentFrame?, identity, function,
     get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,
     Except.bind,Except.pure]

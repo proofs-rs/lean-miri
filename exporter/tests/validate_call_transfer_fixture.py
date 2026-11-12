@@ -133,7 +133,7 @@ indirect_call = next(
         (body, call)
         for body in indirect_bodies
         for call in calls_in(body)
-        if call.get("resolution", {}).get("kind") == "indirect_function_pointer"
+        if call.get("resolution", {}).get("kind") == "source_function_pointer"
         and "*mut u8" in display(call["resolution"].get("function_type"))
         and "*const u8" in display(call["resolution"].get("function_type"))
     ),
@@ -141,6 +141,16 @@ indirect_call = next(
 )
 require(indirect_call, "typed indirect FnPtr callsite was not exported")
 call_body, call = indirect_call
+resolution = call["resolution"]
+require("fn_abi" not in resolution and resolution["extra_argument_types"] == [],
+        "covered Rust FnPtr call retained a physical ABI answer or unexpected extras")
+raw_pointer_type = types[resolution["function_type"]]
+require(raw_pointer_type["shape"]["kind"] == "function_pointer"
+        and raw_pointer_type["shape"]["signature"]["abi"]["kind"] == "rust"
+        and not raw_pointer_type["shape"]["signature"]["c_variadic"],
+        "source FnPtr call lost its exact raw Rust signature")
+require(isinstance(document["producer"]["abi_session"]["llvm_writable"], bool),
+        "source FnPtr call lost canonical ABI session configuration")
 pointer_target_rows = [row for row in instance_rows if row.get("def_path", "").endswith("pointer_target")]
 require(pointer_target_rows, "pointer_target candidate instance/body is absent")
 pointer_target_body = next(

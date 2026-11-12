@@ -189,11 +189,11 @@ def executionHooks (p : Prepared) (types : RuntimeArrayQueries.Access (MachineHo
   let vtableEngine := {vtableEngine with functions}
   let callCompiler := {base.calls.compiler with
     resolve := fun _ definition args => resolveCurrent p types definition args
-    functionSignature := fun _ layout => lift do
-      let (count,abi) ← CompilerFunctionFacts.signature p.functions layout.ty
-      pure (count, abi)
+    functionSignature := fun _ layout => RuntimeArrayQueries.performCompiler types
+      (CompilerFunctionFacts.signatureInWorld p.functions layout.ty)
     functionKind := fun ty => RuntimeArrayQueries.perform types (CompilerFunctionFacts.kindInWorld p.functions ty)
-    fnAbiOfFnPtr := fun _ layout extra => lift (CompilerFunctionFacts.pointerAbi p.functions layout.ty extra)
+    fnAbiOfFnPtr := fun _ layout extra => RuntimeArrayQueries.performCompiler types
+      (CompilerFunctionFacts.pointerAbiInWorld p.functions layout.ty extra)
     fnAbiOfInstance := fun _ callee extra =>
       RuntimeArrayQueries.performCompiler types
         (CompilerInstanceAbi.abiOfInstanceInWorld p.lifecycle.instances callee extra)}

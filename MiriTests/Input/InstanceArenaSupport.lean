@@ -44,7 +44,7 @@ def ordinaryBodySource (types : TypeArena.World) (sources : Array RawBodySource)
   unless (← Key.ofSource types key.kind key.arguments) == key do
     throw "body request key physical definition does not match its kind"
   let .Item _ := key.kind | throw "ordinary Item body requested for another instance kind"
-  let matching := sources.filter fun source => source.definition == key.definition && source.source.sourcePromoted.isNone
+  let matching := sources.filter fun source => source.definition == key.definition && source.source.sourceRole == .runtime && source.source.sourcePromoted.isNone
   unless matching.size == 1 do throw "ordinary raw MIR source is absent or ambiguous"
   let some source := matching[0]? | throw "ordinary raw MIR source is absent"
   unless (← types.identity source.source.definitionId) == key.definition do

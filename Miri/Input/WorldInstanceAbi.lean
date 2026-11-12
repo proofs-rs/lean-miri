@@ -2,11 +2,11 @@ import Miri.Input.InstanceSignature
 import Miri.Input.RawFunctionSignature
 import Miri.ABI.FnAbi
 import Miri.ABI.SignatureSeeds
-import Miri.Input.WorldReferenceAbi
+import Miri.Input.WorldAbiScalar
 
 /-! Source FnAbi construction for ordinary Item instances. The current target
-classifier covers x86_64 Rust scalar, thin raw pointer, FnPtr and zero-sized
-arguments. Other target, reference/aggregate, higher-ranked and caller-location cases retain explicit
+classifier covers x86_64 Rust scalar, thin raw pointer, FnPtr, thin references
+and zero-sized arguments. Other target, aggregate, higher-ranked and caller-location cases retain explicit
 capability errors. No imported ABI row supplies a constructed instance answer.
 The rules are pinned rustc_ty_utils/src/abi.rs::fn_abi_new_uncached,
 arg_attrs_for_rust_scalar and rustc_target::callconv::adjust_for_rust_abi. -/
@@ -16,24 +16,6 @@ open Miri.ABI GenericSubstitution
 private def liftPure (result : Except String α) : RuntimeArrayTypes.CompilerM α :=
   match result with | .ok value => pure value | .error error => throw error
 
-private def classify (runtime : RuntimeMetadata) (policy : FunctionAbiMaterial)
-    (isReturn : Bool) (id : TypeId) :
-    RuntimeArrayTypes.CompilerM (ArgAbi TypeId) := do
-  let layout ← RuntimeArrayTypes.liftType (RuntimeMetadata.layoutInWorld runtime id)
-  if layout.layout.isZst then return ArgAbi.initial layout
-  let arena := (← get).arena
-  let constructor ← liftPure do
-    match ← arena.lookupType id with
-    | .constructed constructor => pure (some constructor)
-    | .material source => arena.materialKey source
-  if let some (.reference pointee mutability _) := constructor then
-    let some referencePolicy := policy.references | throw "raw reference ABI session options are absent"
-    return ← WorldReferenceAbi.classify referencePolicy isReturn layout pointee mutability
-  if constructor.any (fun constructor => match constructor with
-      | .rawPointer .. | .functionPointer .. => true | _ => false) then
-    return ← liftPure (ArgAbi.conservativePointerScalar layout)
-  liftPure (ArgAbi.nonPointerScalar layout 0)
-
 /-- A source signature is instantiated and normalized in the execution World;
 all appended type identities survive the ABI query. -/
 def construct (instanceId : InstanceId) (extra : Array TypeId) :
@@ -42,6 +24,8 @@ def construct (instanceId : InstanceId) (extra : Array TypeId) :
   unless world.metadata.source.producer.targetTriple.startsWith "x86_64-" &&
       world.metadata.target.pointerSize.bytes == 8 do
     throw "raw instance ABI classifier requires an x86_64 target"
+  let some session := world.metadata.source.producer.abiSession
+    | throw "raw ABI session configuration is absent"
   let key ← liftPure do
     match ← world.instances.lookup instanceId with
     | .material key | .constructed key => pure key
@@ -78,11 +62,11 @@ def construct (instanceId : InstanceId) (extra : Array TypeId) :
   let seed : SignatureSeed TypeId := ⟨inputs,output,signature.abi,signature.cVariadic⟩
   let planned ← liftPure (seed.plan extra none tupleFields)
   unless planned.fixedCount < 2^32 do throw "raw instance ABI fixed argument count exceeds u32"
-  let args ← planned.inputs.mapM (classify world.metadata policy false)
-  let ret ← classify world.metadata policy true planned.output
+  let args ← planned.inputs.mapM (WorldAbiScalar.classify world.metadata session (some policy) false)
+  let ret ← WorldAbiScalar.classify world.metadata session (some policy) true planned.output
   let unwind : UnwindSeed := ⟨signature.abi,
     some ⟨policy.neverUnwind,policy.foreignItem,policy.dropGlue⟩,
-    policy.panicUnwinds,policy.panicInDropUnwinds⟩
+    session.panic == .unwind,session.panicInDrop == .unwind⟩
   pure ⟨args,ret,planned.cVariadic,UInt32.ofNat planned.fixedCount,conv,unwind.canUnwind⟩
 
 end Miri.Input.WorldInstanceAbi

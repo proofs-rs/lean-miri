@@ -14,7 +14,7 @@ import Miri.ABI.Layout
 import Miri.ABI.PrimitiveLayout
 import Miri.ABI.UnivariantLayout
 import Miri.ABI.StructLayout
-import Miri.ABI.UnivariantEnumLayout
+import Miri.ABI.EnumLayout
 import Miri.Input.StructLayoutMaterial
 import Miri.ABI.UnionLayout
 import Miri.ABI.PatternLayout
@@ -429,6 +429,20 @@ private def worldRepresentation (source : ReprOptions) : Except String Univarian
     pack := ← source.packBytes.mapM (fun value => (alignment value).mapError toString)
     fieldShuffleSeed := ← (u64 source.fieldShuffleSeed "layout field shuffle seed").mapError toString }
 
+private def worldEnumInteger : ReprInteger → Except String IntegerType
+  | .pointerSized signed => pure (.Pointer signed)
+  | .fixed (.known kind) bits signed => do
+    let integer ← match kind with
+      | .i8 | .u8 => pure Integer.I8 | .i16 | .u16 => pure .I16
+      | .i32 | .u32 => pure .I32 | .i64 | .u64 => pure .I64
+      | .i128 | .u128 => pure .I128
+      | .isize | .usize => throw "fixed enum repr uses a pointer-sized integer kind"
+    -- rustc_abi::Integer names the width with `int_ty_str` even when
+    -- IntegerType carries unsigned signedness separately.
+    unless integer.size.bytes.toNat * 8 == bits do
+      throw "enum representation integer kind/size disagree"
+    pure (.Fixed integer signed)
+
 open TypeArena in
 private def worldConstructor (id : TypeId) : WorldM Constructor := do
   let world ← get
@@ -632,19 +646,24 @@ mutual
       let niches := if declaration.langItem == some "unsafe_cell" || declaration.langItem == some "unsafe_pinned"
         then StructLayout.NicheOptimizations.disabled else .enabled
       if declaration.kind == .enumKind then
-        unless declaration.variantCount ≤ 1 do throw "tagged/niche-filled universe enum layout is not implemented"
-        if declaration.variantCount == 0 then
-          return ← lift (UnivariantEnumLayout.compute target #[] repr niches)
-        let types ← match normalization with
-          | none => liftWorld (worldAdtFields none fuel id 0)
-          | some context => liftWorld do
-            let (_,_,identity,args,_) ← worldAdt id
-            let sourceFields := declaration.fields.filter (·.variantIndex == 0)
-            sourceFields.mapM fun field => do
-              let term ← lift (GenericInstantiationWorld.instantiateFieldTerm (← get) fuel identity args 0 field.fieldIndex)
-              WorldNormalization.resolveNormalizedTerm context (fuel * (fuel + 1)) fuel term
-        let fields ← types.mapM (worldLayoutType normalization target layouts fuel)
-        return ← lift (UnivariantEnumLayout.compute target #[fields] repr niches)
+        let variants ← (List.range declaration.variantCount).toArray.mapM fun index => do
+          let types ← match normalization with
+            | none => liftWorld (worldAdtFields none fuel id index)
+            | some context => liftWorld do
+              let (_,_,identity,args,_) ← worldAdt id
+              let sourceFields := declaration.fields.filter (·.variantIndex == index)
+              sourceFields.mapM fun field => do
+                let term ← lift (GenericInstantiationWorld.instantiateFieldTerm (← get) fuel identity args index field.fieldIndex)
+                WorldNormalization.resolveNormalizedTerm context (fuel * (fuel + 1)) fuel term
+          types.mapM (worldLayoutType normalization target layouts fuel)
+        let integerRepr ← lift (declaration.representation.integer.mapM worldEnumInteger)
+        let values := declaration.variants.map fun variant => match variant.discriminant with
+          | .relative distance => some (BitVec.ofNat 128 distance)
+          | .explicit _ => none
+        -- Explicit discriminants remain a CTFE obligation. The optimized
+        -- empty/single-present branch does not inspect their values.
+        let discriminants := if values.all Option.isSome then values.filterMap (fun value => value) else #[]
+        return ← lift (EnumLayout.compute target variants repr integerRepr discriminants niches)
       let types ← liftWorld (worldAdtFields normalization fuel id 0)
       let fields ← types.mapM (worldLayoutType normalization target layouts fuel)
       if declaration.kind == .unionKind then return ← lift (UnionLayout.compute target fields repr)

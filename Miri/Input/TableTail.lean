@@ -269,49 +269,19 @@ private def parseAdtDropMaterial (path : String) : Parser AdtDropMaterial := do
   return ⟨← required manuallyDrop (path ++ ".manually_drop"),
     ← required destructor (path ++ ".destructor")⟩
 
-private structure ParseFunctionAbiMaterialFields where
-  neverUnwind : Option Bool := none
-  foreignItem : Option Bool := none
-  dropGlue : Option Bool := none
-  panicUnwinds : Option Bool := none
-  panicInDropUnwinds : Option Bool := none
-  references : Option ReferenceAbiPolicy := none
-
-private def parseReferenceAbiPolicy (path : String) : Parser ReferenceAbiPolicy := do
-  let (optimization,writable,noalias,noWritable) ←
-    object (none,none,none,none) fun (optimization,writable,noalias,noWritable) key => do
-      match key with
-      | "optimization" =>
-        let level ← match ← string with
-          | "no" => pure OptimizationLevel.no | "less" => pure .less
-          | "more" => pure .more | "aggressive" => pure .aggressive
-          | "size" => pure .size | "size_min" => pure .sizeMin
-          | _ => fail s!"{path}: unknown optimization level"
-        pure (some level,writable,noalias,noWritable)
-      | "llvm_writable" => pure (optimization,some (← boolean),noalias,noWritable)
-      | "box_noalias" => pure (optimization,writable,some (← boolean),noWritable)
-      | "rustc_no_writable" => pure (optimization,writable,noalias,some (← boolean))
-      | _ => fail s!"{path}: unknown reference ABI policy field `{key}`"
-  pure ⟨← required optimization (path ++ ".optimization"),
-    ← required writable (path ++ ".llvm_writable"),
-    ← required noalias (path ++ ".box_noalias"),
-    ← required noWritable (path ++ ".rustc_no_writable")⟩
-
 private def parseFunctionAbiMaterial (path : String) : Parser FunctionAbiMaterial := do
-  let s ← object ({} : ParseFunctionAbiMaterialFields) fun s key => do
+  let (neverUnwind,foreignItem,dropGlue,noWritable) ← object (none,none,none,none)
+      fun (neverUnwind,foreignItem,dropGlue,noWritable) key => do
     match key with
-    | "never_unwind" => return {s with neverUnwind := some (← boolean)}
-    | "foreign_item" => return {s with foreignItem := some (← boolean)}
-    | "drop_glue" => return {s with dropGlue := some (← boolean)}
-    | "panic_unwinds" => return {s with panicUnwinds := some (← boolean)}
-    | "panic_in_drop_unwinds" => return {s with panicInDropUnwinds := some (← boolean)}
-    | "references" => return {s with references := some (← parseReferenceAbiPolicy (path ++ ".references"))}
-    | _ => skipValue; pure s
-  pure ⟨← required s.neverUnwind (path ++ ".never_unwind"),
-    ← required s.foreignItem (path ++ ".foreign_item"),
-    ← required s.dropGlue (path ++ ".drop_glue"),
-    ← required s.panicUnwinds (path ++ ".panic_unwinds"),
-    ← required s.panicInDropUnwinds (path ++ ".panic_in_drop_unwinds"),s.references⟩
+    | "never_unwind" => pure (some (← boolean),foreignItem,dropGlue,noWritable)
+    | "foreign_item" => pure (neverUnwind,some (← boolean),dropGlue,noWritable)
+    | "drop_glue" => pure (neverUnwind,foreignItem,some (← boolean),noWritable)
+    | "rustc_no_writable" => pure (neverUnwind,foreignItem,dropGlue,some (← boolean))
+    | _ => fail s!"{path}: unknown definition ABI attribute `{key}`"
+  pure ⟨← required neverUnwind (path ++ ".never_unwind"),
+    ← required foreignItem (path ++ ".foreign_item"),
+    ← required dropGlue (path ++ ".drop_glue"),
+    ← required noWritable (path ++ ".rustc_no_writable")⟩
 
 private structure ParseDefinitionIdFields where
   crate : Option (Nat) := none

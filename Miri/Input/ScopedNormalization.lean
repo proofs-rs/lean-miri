@@ -1,49 +1,42 @@
 import Miri.Input.BinderRegions
 import Miri.Input.TraitSelection.Match
+import Miri.Input.QueryAliasScope
 
 /-! Alias-free normalization inside quantified trait queries. Source binders
 are region-only; placeholders of all sorts retain their query-owned identities.
-This does not provide normalization of bound aliases or deferred constants. -/
+Lexically bound alias arguments and deferred constants remain unsupported. -/
 namespace Miri.Input.ScopedNormalization
 open GenericSubstitution
 
-private def scopedVariable : Nat → Term → Except String Bool
-  | 0,_ => throw "scoped alias argument inspection exhausted"
-  | fuel + 1,term => do
-    match term with
-    | .bound .. | .placeholder .. | .parameter .. | .inference .. => pure true
-    | .binder _ body => scopedVariable fuel body
-    | .node _ _ _ children | .definition _ _ _ children => children.anyM (scopedVariable fuel)
-    | _ => pure false
-
-/-- The first scoped alias domain has closed arguments. Bound aliases need a
-placeholder conversion tied to the binder's own obligations; ordinary tree
-substitution is not a substitute for that operation. -/
-private def closedAliasDomain : Nat → Term → Except String Unit
+/-- Alias parameters may contain already-opened query placeholders. Lexical
+bound arguments still require binder-specific opening and reabstraction. -/
+private def queryAliasDomain (maximumUniverse : Nat) : Nat → Term → Except String Unit
   | 0,_ => throw "scoped alias source-domain inspection exhausted"
   | fuel + 1,term => do
     match term with
     | .definition .type tag _ children =>
       if tag.startsWith "alias_" then
-        if ← children.anyM (scopedVariable fuel) then
-          throw "scoped alias arguments require higher-ranked placeholder conversion"
-      let _ ← children.mapM fun child => do closedAliasDomain fuel child; pure child
+        let _ ← children.mapM fun child => do
+          QueryAliasScope.requireOwned maximumUniverse fuel child
+          pure child
+        pure ()
+      let _ ← children.mapM fun child => do queryAliasDomain maximumUniverse fuel child; pure child
       pure ()
     | .definition .constant tag _ _ =>
       if tag.startsWith "alias_" then throw "scoped constant alias requires const evaluation"
     | .node .constant tag _ children =>
       unless tag == "value" do throw "scoped normalization requires evaluated constants"
-      let _ ← children.mapM fun child => do closedAliasDomain fuel child; pure child
+      let _ ← children.mapM fun child => do queryAliasDomain maximumUniverse fuel child; pure child
       pure ()
-    | .binder _ body => closedAliasDomain fuel body
+    | .binder _ body => queryAliasDomain maximumUniverse fuel body
     | .node _ _ _ children | .definition _ _ _ children =>
-      let _ ← children.mapM fun child => do closedAliasDomain fuel child; pure child
+      let _ ← children.mapM fun child => do queryAliasDomain maximumUniverse fuel child; pure child
       pure ()
     | _ => pure ()
 
 def prepareAliases (maximumUniverse fuel : Nat) (term : Term) : Except String Term := do
   TraitSelection.HigherRankedMatch.requireScoped maximumUniverse fuel term
-  closedAliasDomain fuel term
+  queryAliasDomain maximumUniverse fuel term
   BinderRegions.eraseAndAnonymizeScoped fuel term
 
 def normalize (maximumUniverse fuel : Nat) (term : GenericSubstitution.Term) :

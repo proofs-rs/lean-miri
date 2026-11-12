@@ -66,11 +66,12 @@ def internInstance (kind : Miri.Interpreter.CallInstanceKind)
   set {world with instances}
   pure id
 
-def internBody (templateId instanceId : Nat) (promoted : Option Nat) : CompilerM BodyId := do
+def internBody (templateId instanceId : Nat) (promoted : Option Nat)
+    (role : CompilerBodyRole := .runtime) : CompilerM BodyId := do
   let world ← get
   let result := do
     let key ← BodyArena.Key.create world.arena world.instances
-      world.metadata.source.mirTemplates templateId instanceId promoted
+      world.metadata.source.mirTemplates templateId instanceId promoted role
     world.bodies.intern world.arena world.instances world.metadata.source.mirTemplates world.metadata.source.bodies key
   let (id,bodies) ← match result with
     | .ok value => pure value | .error error => throw error
