@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.EvalConfigurationCore
 import Miri.Input.EvalStartupAssembly
 import Miri.Input.EvalStartupMemoryConstruction
@@ -245,7 +246,7 @@ private def runPrepared (prepared : Input.EvalPreparation.Prepared)
 def main (args : List String) : IO Unit := do
   let some path := args.head? | throw (IO.userError "untouched pinned-export JSON required")
   let some expectedReason := args[1]? | throw (IO.userError "expected UB category required")
-  let decoded ← must (Input.decodeJson (← IO.FS.readFile path))
+  let decoded ← must (Input.decodeFixture (← IO.FS.readFile path))
   let program ← must (Input.lowerProgram decoded.document)
   let attempt := Input.EvalPreparation.prepare program
   let prepared ← must attempt.outcome

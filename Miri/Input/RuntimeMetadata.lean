@@ -1,5 +1,7 @@
 import Miri.Input.Model
+import Miri.Input.TypeArena
 import Miri.ABI.Layout
+import Miri.ABI.PrimitiveLayout
 
 /-! Internal compiler-metadata bridge, not the public import API. Successful
 conversion supplies records and queries; it does not establish execution
@@ -155,6 +157,9 @@ def variants (target : RuntimeTargetDataLayout) (source : VariantsLayout) : Resu
       (← require source.tagFieldIndex "variants.tag_field_index") values
 
 def layout (target : RuntimeTargetDataLayout) (source : Input.Layout) : Result LayoutData := do
+  if let some recipe := source.primitiveRecipe then
+    return ← PrimitiveLayout.compute target recipe
+      |>.mapError (fun reason => .invalid "primitive layout recipe" reason)
   let maxAlign ← source.maxReprAlignBytes.mapM alignment
   let fields ← fields (← require source.fields "layout.fields")
   source.fieldOffsetsBytes.validate (← require source.fields "layout.fields")
@@ -230,6 +235,9 @@ validated dense tables; semantic layouts are constructed only on demand. -/
 structure RuntimeMetadata where
   source : ImportDocument
   target : RuntimeTargetDataLayout
+  /-- Checked once at import. Dependence on the exact source prevents retaining
+  this certificate when replacing its type table. It carries no runtime cache. -/
+  denseTypes : Option (PLift (TypeArena.isDense source.types = true)) := none
 
 namespace RuntimeMetadata
 
@@ -239,21 +247,65 @@ def ofDocument (document : ImportDocument) : Result RuntimeMetadata := do
   for node in document.types do
     if seen.contains node.id then throw (.duplicateType node.id)
     seen := seen.insert node.id
-  return {
-    source := document
-    target := target
-  }
+  if dense : TypeArena.isDense document.types = true then
+    return { source := document, target, denseTypes := some ⟨dense⟩ }
+  else throw (.invalid "compiler type ID" "material type IDs are not dense row positions")
 
-def node (metadata : RuntimeMetadata) (id : TypeId) : Result TypeNode := do
-  let value ← require metadata.source.types[id]? s!"type {id}"
-  unless value.id == id do throw (.invalid "compiler type ID" "row/index mismatch")
-  pure value
+def node (metadata : RuntimeMetadata) (id : TypeId) : Result TypeNode :=
+  let resolved := match metadata.denseTypes with
+    | some _ => TypeArena.nodeWithFuel metadata.source.types
+        metadata.source.typeConstants.size (id + 1) id
+    | none => TypeArena.node metadata.source.types id metadata.source.typeConstants.size
+  resolved.mapError (.invalid "type arena")
 
-def lookup (metadata : RuntimeMetadata) (id : TypeId) : Result (TyAndLayout TypeId) := do
-  let sourceNode ← metadata.node id
-  let sourceLayout ← require metadata.source.layouts[sourceNode.layoutId]?
-    s!"compiler layout ID {sourceNode.layoutId} out of bounds"
-  return ⟨id,← layout metadata.target sourceLayout⟩
+private def lookupWithFuel (metadata : RuntimeMetadata) : Nat → TypeId → Result (TyAndLayout TypeId)
+  | 0, _ => .error (.unsupported "lazy type layout recursion exhausted")
+  | fuel + 1, id => do
+    let sourceNode ← metadata.node id
+    if id < metadata.source.types.size then
+      let sourceLayout ← require metadata.source.layouts[sourceNode.layoutId]?
+        s!"compiler layout ID {sourceNode.layoutId} out of bounds"
+      return ⟨id,← layout metadata.target sourceLayout⟩
+    if let .array element _ constructor := sourceNode.shape then
+      unless constructor.count < 2^(metadata.target.base.pointerWidth.bits.toNat) do
+        throw (.unsupported "lazy array length overflows target usize")
+      let elementLayout ← lookupWithFuel metadata fuel element
+      unless elementLayout.layout.isSized do throw (.unsupported "lazy array element is unsized")
+      let arrayLayout ← (PrimitiveLayout.arrayLike metadata.target elementLayout.layout
+          (UInt64.ofNat constructor.count)).mapError (fun e => .unsupported e)
+      return ⟨id, arrayLayout⟩
+    let (pointee, isReference) ← match sourceNode.shape with
+      | .rawPointer pointee .Mut => pure (pointee, false)
+      | .reference pointee .Mut .Erased => pure (pointee, true)
+      | _ => throw (.invalid "lazy type arena" "unsupported constructor")
+    let pointeeLayout ← lookupWithFuel metadata fuel pointee
+    let pointerMetadata ← if pointeeLayout.layout.isSized then pure none else do
+      let pointeeNode ← metadata.node pointee
+      let facts ← require pointeeNode.compilerFacts "unsized pointee compiler material"
+      unless facts.typingEnvironment == "fully_monomorphized" do
+        throw (.invalid "pointer metadata" "typing environment mismatch")
+      let some (_, some metadataType) := facts.typeQueries.find? (·.1 == "pointer_metadata_type")
+        | throw (.unsupported "unsized pointee metadata type material absent")
+      pure (some (← lookupWithFuel metadata fuel metadataType).layout)
+    let pointerLayout ← (PrimitiveLayout.pointer metadata.target isReference pointerMetadata)
+      |>.mapError (fun e => .unsupported s!"lazy pointer layout: {reprStr e}")
+    return ⟨id, pointerLayout⟩
+
+def lookup (metadata : RuntimeMetadata) (id : TypeId) : Result (TyAndLayout TypeId) :=
+  lookupWithFuel metadata (id + metadata.source.types.size + 1) id
+
+/-- Synthetic array lengths inhabit a disjoint constant namespace and retain the
+exact target-usize ValTree representation. Imported generic constants stay intact. -/
+def typeConstant (metadata : RuntimeMetadata) (id : TypeConstantId) : Result MIR.TypeConst := do
+  if let some value := metadata.source.typeConstants[id]? then return value
+  let count := id - metadata.source.typeConstants.size
+  let bits := metadata.target.base.pointerWidth.bits.toNat
+  unless count < 2^bits do throw (.unsupported "lazy array length overflows target usize")
+  let usizeType := metadata.source.queries.primitives.usize
+  let value ← metadata.node usizeType
+  unless value.shapeMetadata.unsignedKind == some (.known .usize) do
+    throw (.invalid "lazy usize constant" "primitive is not usize")
+  return .Value usizeType ⟨#[.Leaf count (bits / 8)], 0⟩
 
 /-- This is an explicit diagnostic inventory, not an execution-readiness test. -/
 def obligations (metadata : RuntimeMetadata) : Array (TypeId × RuntimeMetadataError) :=

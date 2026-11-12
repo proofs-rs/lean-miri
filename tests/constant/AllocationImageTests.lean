@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 import Miri.Input.AllocationImage
 import Miri.Interpreter.Constant
@@ -43,7 +44,7 @@ private def constantQueries (_program : LoweredProgram) : ConstantValueQueries C
 
 def main (args : List String) : IO Unit := do
   let path ← match args with | path :: _ => pure path | [] => throw (IO.userError "expected mir_features compiler export")
-  let decoded ← must (decodeJson (← IO.FS.readFile path))
+  let decoded ← must (decodeFixture (← IO.FS.readFile path))
   let runtime ← must ((RuntimeMetadata.ofDocument decoded.document).mapError toString)
   let program ← must (lowerProgram decoded.document)
   let initial : MemoryState CtfeProvenance Unit Unit := { MemoryState.empty with nextAllocId := 100 }

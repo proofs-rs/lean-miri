@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 import Miri.Input.LowerMIR
 
@@ -8,7 +9,7 @@ private def must (value : Except String α) : IO α :=
 
 def main (args : List String) : IO Unit := do
   let path ← match args with | path :: _ => pure path | [] => throw (IO.userError "expected full compiler MIR fixture")
-  let decoded ← must (decodeJson (← IO.FS.readFile path))
+  let decoded ← must (decodeFixture (← IO.FS.readFile path))
   let doc := decoded.document
   let some _target := doc.runtimeTargetDataLayout | throw (IO.userError "compiler target data layout evidence was lost")
   let program ← must (lowerProgram doc)

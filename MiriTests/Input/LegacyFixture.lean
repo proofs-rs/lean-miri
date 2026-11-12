@@ -1,0 +1,109 @@
+import Miri.Input.Decoder
+import Lean.Data.Json.Parser
+import Lean.Data.Json.Printer
+
+/-! Explicit test-only projection of retained schema-11/12 fixture payloads to
+schema 13. This does not rerun rustc and is not producer correspondence evidence.
+The source fixtures are immutable. Historical caller-location oracle rows supply
+only the definition attributes selected by the pinned InstanceKind rule; no
+missing attribute is guessed. Unwind and generic-prefix inputs use explicitly
+hypothetical seed representatives preserving historical answers. They are not
+recovered rustc material and provide no new producer, ABI or generic-rebase
+correspondence evidence. Tests of actual raw materials require fresh exports.
+Production imports do not use this adapter. -/
+namespace Miri.Input
+open Lean
+
+private def fixtureDefinition (kind : Json) : Option Nat := do
+  let tag ← (kind.getObjVal? "kind" >>= Json.getStr?).toOption
+  if tag == "item" || tag == "virtual" then
+    (kind.getObjVal? "def_id" >>= Json.getNat?).toOption
+  else if tag == "shim" then
+    let shim ← (kind.getObjVal? "shim_kind" >>= Json.getStr?).toOption
+    if shim == "vtable" then (kind.getObjVal? "def_id" >>= Json.getNat?).toOption else none
+  else none
+
+/-- Adapt known old fixtures only. Invalid and current versions pass unchanged
+so production decoder guards remain the subject of negative tests. -/
+def adaptLegacyFixture (source : String) : Except String String := do
+  -- Preserve duplicate-member and malformed-unknown rejection before Json's
+  -- object map could erase duplicate keys during test-only rewriting.
+  match JsonReader.run JsonReader.skipValue source with
+  | .error _ => return source
+  | .ok _ => pure ()
+  let raw ← Json.parse source
+  let version := (raw.getObjVal? "schema_version" >>= Json.getNat?).toOption
+  unless version == some 11 || version == some 12 do return source
+  let mut value := raw.setObjVal! "schema_version" (toJson (13 : Nat))
+  if !(raw.getObjVal? "compiler_coroutine_coverage").isOk then
+    if let .ok bodies := raw.getObjVal? "bodies" >>= Json.getArr? then
+      value := value.setObjVal! "compiler_coroutine_coverage" (Json.mkObj [
+        ("body_coroutines", toJson (bodies.map fun _ => false)),
+        ("coroutines", toJson (#[] : Array Json)),
+        ("auxiliary_bodies", toJson (#[] : Array Json))])
+  if let .ok definitions := raw.getObjVal? "definitions" >>= Json.getArr? then
+    if let .ok instances := raw.getObjVal? "instances" >>= Json.getArr? then
+      if let .ok rows := do
+          let runtime ← raw.getObjVal? "compiler_runtime_queries"
+          runtime.getObjVal? "instances" >>= Json.getArr? then
+        let mut flags : Array (Nat × Bool) := #[]
+        for row in rows do
+          if let .ok id := row.getObjVal? "instance_id" >>= Json.getNat? then
+            if let some identityNode := instances[id]? then
+              if let .ok kind := identityNode.getObjVal? "instance_kind" then
+                if let some definition := fixtureDefinition kind then
+                  if let .ok flag := row.getObjVal? "requires_caller_location" >>= Json.getBool? then
+                    if let some (_, old) := flags.find? (·.1 == definition) then
+                      unless old == flag do throw "historical caller-location definition flags conflict"
+                    else flags := flags.push (definition, flag)
+        let definitions := definitions.mapIdx fun id definition =>
+          match flags.find? (·.1 == id) with
+          | some (_, flag) => definition.setObjVal! "body_track_caller" (toJson flag)
+          | none => definition
+        value := value.setObjVal! "definitions" (toJson definitions)
+  if let .ok instances := raw.getObjVal? "instances" >>= Json.getArr? then
+    if let .ok runtime := value.getObjVal? "compiler_runtime_queries" then
+      if let .ok rows := runtime.getObjVal? "virtual" >>= Json.getArr? then
+        let rows := rows.map fun row => Id.run do
+          if (row.getObjVal? "parent_generic_count").isOk then return row
+          let some id := (row.getObjVal? "original_instance_id" >>= Json.getNat?).toOption
+            | return row
+          let some identityNode := instances[id]? | return row
+          let some args := (identityNode.getObjVal? "generic_args" >>= Json.getArr?).toOption
+            | return row
+          let some first := args[0]? | return row
+          unless (first.getObjVal? "kind" >>= Json.getStr?).toOption == some "type" do return row
+          let some concrete := (row.getObjVal? "concrete_type" >>= Json.getNat?).toOption
+            | return row
+          let expected := args.set! 0 (Json.mkObj [("kind", toJson "type"), ("value", toJson concrete)])
+          let some oracle := (row.getObjVal? "rebased_args" >>= Json.getArr?).toOption
+            | return row
+          unless expected == oracle do return row
+          -- Every legal parent prefix yields this exact output. Count 1 is a
+          -- synthetic component-test representative, not recovered rustc data.
+          return row.setObjVal! "parent_generic_count" (toJson (1 : Nat))
+        value := value.setObjVal! "compiler_runtime_queries"
+          (runtime.setObjVal! "virtual" (toJson rows))
+  if let .ok abis := raw.getObjVal? "fn_abis" >>= Json.getArr? then
+    let abis := abis.map fun abi => Id.run do
+      let some flag := (abi.getObjVal? "can_unwind" >>= Json.getBool?).toOption
+        | return abi
+      let some fields := abi.getObj?.toOption | return abi
+      -- Synthetic equivalent output for old component replays only. This is
+      -- not recovered compiler ABI/configuration material or ABI validation.
+      let seed := Json.mkObj [("abi", Json.mkObj [("kind", toJson "rust"), ("unwind", .null)]),
+        ("definition", .null), ("panic_unwinds", toJson flag),
+        ("panic_in_drop_unwinds", toJson true)]
+      return Json.mkObj (("unwind_seed", seed) :: fields.toList.filter (·.1 != "can_unwind"))
+    value := value.setObjVal! "fn_abis" (toJson abis)
+  pure value.compress
+
+def decodeFixture (source : String) : Except String ExecutionInput := do
+  decodeJson (← adaptLegacyFixture source)
+
+def decodeFixtureFile (path : System.FilePath) : IO (Except String ExecutionInput) := do
+  try
+    pure (decodeFixture (← IO.FS.readFile path))
+  catch error => pure (.error s!"could not read {path}: {error}")
+
+end Miri.Input

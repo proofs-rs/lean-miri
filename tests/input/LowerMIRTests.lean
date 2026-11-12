@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import MiriTests.Input.JsonFixtures
 import Miri.Input.Decoder
 import Miri.Input.LowerMIR
@@ -18,7 +19,7 @@ def main (args : List String) : IO Unit := do
     | path :: _ => pure path
     | [] => throw (IO.userError "usage: LowerMIRTests <selected add_one export>")
   let source ← IO.FS.readFile path
-  let decoded ← must (decodeJson source)
+  let decoded ← must (decodeFixture source)
   let some selected := decoded.document.bodyRoots.find? (fun root => root.defPath.endsWith "add_one")
     | throw (IO.userError "missing add_one root")
   let some body := decoded.document.bodies[selected.bodyId]?

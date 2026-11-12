@@ -73,7 +73,27 @@ separate tables with document-local, dense, zero-based IDs:
 | `bodies` | Instance, promoted index and source/query mode |
 
 ABI rows store `return` and each `arguments` entry as an index into
-`abi_arguments`. Each payload contains the complete type, layout and passing mode;
+`abi_arguments`. The explicit `Initial` passing-mode recipe reconstructs
+`ArgAbi::new` from the physical layout with empty scalar attributes in Lean.
+The producer selects this recipe only when the complete final rustc mode equals
+that initial constructor; target-adjusted modes retain their explicit payload.
+For primitive nonpointer scalar layouts on 64-bit x86_64, `ScalarRust`,
+`ScalarSysvArgument` and `ScalarSysvReturn` instead derive scalar `NoUndef`
+attributes and integer extensions in Lean. The SysV recipes cover canonical C
+on targets that are neither Windows nor Darwin; ordinary Rust uses its boolean
+extension rule. The producer checks the reconstructed mode against rustc and
+fails export on disagreement. Pointer attributes, aggregates, other target
+classifiers and complete FnAbi query resolution remain compiler results.
+These rules follow pinned [`arg_attrs_for_rust_scalar`](https://github.com/rust-lang/rust/blob/8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_ty_utils/src/abi.rs#L318)
+and the checked-in `rustc_target::callconv` sources.
+`FnAbi` rows also require `unwind_seed`: the original external ABI, optional
+source-definition `NEVER_UNWIND`/foreign-item/drop-glue flags, and the effective
+panic and panic-in-drop policies. Lean evaluates pinned `fn_can_unwind` from
+these materials. The old `can_unwind` result field is rejected. Coroutine,
+closure and thread-local shim signatures follow the source instance signature
+rules; per-row producer checks compare the material's source decision with the
+queried rustc ABI. This seed does not replace the remaining FnAbi query.
+Each payload contains the complete type and layout;
 sharing requires equality of all three, including all mode attributes.
 
 The Rust collector uses one `Pool<K, D>` implementation for the ten compiler identity tables. The additional `files` and `byte_images` tables intern exact strings and byte vectors.
@@ -92,7 +112,7 @@ Prepared-world `raw_pool` positions imply source ID `index + 1`: null slots join
 their unique serialized allocation, while opaque and dangling globals retain
 explicit exceptional rows. Dedup salt arrays carry graph IDs in salt order;
 source IDs and byte keys come from those allocations. All 32 outcomes remain
-required for function, vtable and byte keys. The reader accepts strict schema 11 and schema 12 inputs.
+required for function, vtable and byte keys. The reader accepts only schema 13 inputs.
 
 Schema 12 requires `compiler_coroutine_coverage`, including an explicit Boolean
 marker for every executable body. A marked body owns one complete, normalized
@@ -168,7 +188,7 @@ of those values. Type compiler facts use the owning `type_id` and optional
 This preserves a distinct region-erased query input when one exists.
 Backtrace `source_position.byte_position` is the body-specific collapsed position;
 it can differ from the global span's position for an inlined body.
-The reader accepts schemas 11 and 12. Explicit array offsets retain their count,
+The reader accepts only schema 13. Explicit array offsets retain their count,
 width and per-field equality checks. The producer stores array offsets as an
 exact stride/count formula, and represents a resolved LLVM intrinsic call with
 `kind: "llvm_intrinsic"`, `function_type` and `instance_id`, without `fn_abi`.

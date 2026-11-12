@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import MiriTests.Connected.Proofs.ChoiceHistory206
 import Miri.Input.EvalSourceRunFinalization
 import Miri.Input.ExecutionChoicePolicy
@@ -482,7 +483,7 @@ private def renderGraphReport (report : GraphReport) : String := Id.run do
 
 private def runScLitmusPure [DecidableEq OuterState] (contents : String) (nodeBudget : Nat) (pageSize : UInt64)
     (numCpus hostPid : UInt32) : Except String String := do
-  let decoded ← must (Input.decodeJson contents)
+  let decoded ← must (Input.decodeFixture contents)
   let program ← must (Input.lowerProgram decoded.document)
   let attempt := Input.EvalPreparation.prepare program
   let prepared ← must attempt.outcome
@@ -639,7 +640,9 @@ private def runScLitmusPure [DecidableEq OuterState] (contents : String) (nodeBu
         let world := afterCallbacks.machine.user.user.payload.payload
         let source := world.types.metadata.source
         let withSource := fun (changedSource : Input.ImportDocument) =>
-          let changedMetadata := {world.types.metadata with source := changedSource}
+          let certificate : Option (PLift (Input.TypeArena.isDense changedSource.types = true)) :=
+            if h : Input.TypeArena.isDense changedSource.types = true then some ⟨h⟩ else none
+          let changedMetadata := {world.types.metadata with source := changedSource, denseTypes := certificate}
           let changedTypes := {world.types with metadata := changedMetadata}
           let changedWorld := {world with types := changedTypes}
           let changedValidity := {afterCallbacks.machine.user.user with

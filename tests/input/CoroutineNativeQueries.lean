@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input
 import Miri.Input.CompilerNativeSignatures
 
@@ -12,7 +13,7 @@ private def check (condition : Bool) (message : String) : IO Unit :=
 
 def main (args : List String) : IO Unit := do
   let some path := args.head? | throw (IO.userError "fresh schema-12 coroutine input required")
-  let input ← must (decodeJson (← IO.FS.readFile path))
+  let input ← must (decodeFixture (← IO.FS.readFile path))
   let some coverage := input.document.coroutineCoverage | throw (IO.userError "missing coroutine coverage")
   check (!coverage.coroutines.isEmpty) "fixture has no coroutine body"
   let prepared ← must (CompilerProviders.prepare (← must (lowerProgram input.document)))

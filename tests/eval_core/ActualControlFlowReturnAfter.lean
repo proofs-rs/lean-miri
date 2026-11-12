@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.EvalConfigurationCore
 import Miri.Input.CompilerGlobals
 import Miri.Input.CompilerAllocIdWorld
@@ -219,7 +220,7 @@ private def runPrepared (prepared : Input.CompilerProviders.Prepared) : Except S
 
 def main (args : List String) : IO Unit := do
   let some path := args.head? | throw (IO.userError "actual pinned-export JSON required")
-  let decoded ← must (Input.decodeJson (← IO.FS.readFile path))
+  let decoded ← must (Input.decodeFixture (← IO.FS.readFile path))
   let program ← must (Input.lowerProgram decoded.document)
   let prepared ← must (Input.CompilerProviders.prepare program)
   IO.println (← must (runPrepared prepared))

@@ -11,6 +11,58 @@ and exit, threads, synchronization, atomics, weak memory and data races. Finite
 QA and general whole-machine proofs are separate goals. Overall completion and
 the ability to verify arbitrary Rust are not claimed.
 
+## Compiler material migration (in progress)
+
+The exporter-to-Lean compiler migration is incomplete. Lean now implements
+structural `boxed_ty`, `builtin_deref`, `struct_tail_raw`, selected region-erased
+alias-free normalization, trivial Freeze/Unpin/UnsafeUnpin rules, virtual generic
+argument prefix rebasing, and the instance-kind caller-location rule from raw
+definition attributes. A document-local algebraic type arena creates previously
+absent mutable pointer, erased mutable reference and value-length array nodes,
+layouts and usize constants; it shares identities with the existing array World.
+The exporter no longer seeds mutable pointer/reference result nodes.
+Primitive scalar/never layouts are reconstructed from TyKind recipes and the
+target. Initial ArgAbi construction, covered x86_64 nonpointer scalar passing
+modes and `fn_can_unwind` execute in Lean from explicit material recipes/seeds.
+
+Fresh finite comparisons with pinned rustc passed 3,559 structural/auto-trait
+queries across 541 types, 23 caller-location decisions (both outcomes), four
+virtual generic-rebase prefixes, 22 complete primitive and four complete array
+layouts. Another 316 complete pointer/reference layouts matched the pinned
+rustc oracle, including sized, str, slice and dynamic pointees. Source-extracted
+component comparisons passed 54 initial/scalar ABI and 252 unwind decisions.
+Mutated structural/caller/rebase oracle controls were rejected. These are finite
+component checks, not a compiler equivalence proof. The full native runner and ImportMIR build passed 1,200 jobs after fixing old
+provider references, recipe-width validation and an exhausted build filesystem.
+One fresh 844,898-byte no_std guest passed same-prepared-TyCtxt Miri exit-zero and
+Lean finalized exit-zero with choice cursor 348, including mutable references,
+raw-pointer reads, tuples, array-to-slice coercion and a tracked helper. Its
+nested novel type/array layout and identity checks also passed. A separate
+81,231,642-byte std guest has a same-TyCtxt Miri exit-zero reference, but its Lean
+execution has not yet been run. The new strict production input is schema 13.
+
+The remaining migration includes general generic template export/substitution,
+alias/projection normalization, trait selection and fulfillment (including negative,
+coinductive and specialization rules), associated-item and instance resolution,
+ADT/aggregate/niche layouts, target ABI adjustment, MIR generic bodies and shim
+construction, constant evaluation, vtable construction/upcasting, covariance,
+validity, type hashes/names, and the other compiler-owned intrinsic/platform facts.
+Existing catalogs for those categories still contain rustc query results. The
+exporter still closes a finite query demand graph and monomorphizes MIR. Full
+migration, elimination of query closure, and rustc semantic equivalence are not
+claimed. Some queries on novel arena types remain explicitly unsupported.
+
+Historical fixtures are adapted only in test code. Where original material
+cannot be recovered (old unwind answers and virtual generic counts), those
+adapters use explicitly synthetic seed representatives preserving the old
+component result. Such replay is not evidence that a new producer exported the
+right material, nor independent ABI/rebasing correspondence. Genuine compiler
+comparisons use fresh exports or focused category readers over immutable rustc
+oracle data. Production readers reject schema 11/12 and eager unwind results.
+The complete existing Lean harness suite and full regression entry points have
+not yet passed on this migration; earlier successes elsewhere in this file do
+not cover it.
+
 ## Exported input coverage
 
 Each concrete instance and promoted index has one executable MIR body. The

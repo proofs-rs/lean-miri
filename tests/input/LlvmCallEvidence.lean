@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 import Miri.Input.CompilerInstanceAbi
 
@@ -26,30 +27,30 @@ def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected fresh llvm_no_abi export")
   let text ← IO.FS.readFile path
   let raw ← must (Json.parse text)
-  let decoded ← must (decodeJson text)
+  let decoded ← must (decodeFixture text)
   let legacyText ← IO.FS.readFile "examples/empty_function/input.json"
-  let _ ← must (decodeJson legacyText)
+  let _ ← must (decodeFixture legacyText)
   let calls := decoded.document.bodies.flatMap (·.callEvidence.filterMap id)
   check (calls.any (·.abi == .llvmIntrinsic)) "fixture has no LLVM call evidence"
   for version in #[(8 : Nat), 9, 10] do
-    rejects (decodeJson (set raw "schema_version" (toJson version)).compress)
+    rejects (decodeFixture (set raw "schema_version" (toJson version)).compress)
       s!"obsolete schema {version} accepted current LLVM evidence"
-  rejects (decodeJson (mutateCalls raw (fun j => set j "fn_abi" (toJson (0 : Nat)))).compress)
+  rejects (decodeFixture (mutateCalls raw (fun j => set j "fn_abi" (toJson (0 : Nat)))).compress)
     "LLVM call accepted ordinary ABI"
-  rejects (decodeJson (mutateCalls raw (fun j => set j "kind" (.str "resolved_instance"))).compress)
+  rejects (decodeFixture (mutateCalls raw (fun j => set j "kind" (.str "resolved_instance"))).compress)
     "ordinary call accepted absent ABI"
-  rejects (decodeJson (mutateCalls raw (fun j => set (set j "kind" (.str "resolved_instance")) "fn_abi" (toJson (0 : Nat)))).compress)
+  rejects (decodeFixture (mutateCalls raw (fun j => set (set j "kind" (.str "resolved_instance")) "fn_abi" (toJson (0 : Nat)))).compress)
     "LLVM instance accepted normal ABI evidence"
-  rejects (decodeJson (mutateCalls raw (fun j => set j "kind" (.str "indirect_function_pointer"))).compress)
+  rejects (decodeFixture (mutateCalls raw (fun j => set j "kind" (.str "indirect_function_pointer"))).compress)
     "indirect call accepted absent ABI"
-  rejects (decodeJson (mutateCalls raw (fun j => set j "kind" (.str "virtual_dispatch"))).compress)
+  rejects (decodeFixture (mutateCalls raw (fun j => set j "kind" (.str "virtual_dispatch"))).compress)
     "virtual call accepted absent ABI"
   let some item := decoded.document.instances.findIdx? (fun node =>
       match node.instanceKind with | .Item _ => true | _ => false) |
     throw (IO.userError "fixture has no Item identity")
-  rejects (decodeJson (mutateCalls raw (fun j => set j "instance_id" (toJson item))).compress)
+  rejects (decodeFixture (mutateCalls raw (fun j => set j "instance_id" (toJson item))).compress)
     "no-ABI evidence accepted a normal Item instance"
-  rejects (decodeJson (mutateCalls raw (fun j => set j "dispatch_slot" (toJson (0 : Nat)))).compress)
+  rejects (decodeFixture (mutateCalls raw (fun j => set j "dispatch_slot" (toJson (0 : Nat)))).compress)
     "LLVM call accepted virtual dispatch slot"
   let some llvmCall := calls.find? (·.abi == .llvmIntrinsic) |
     throw (IO.userError "missing LLVM control")
@@ -57,18 +58,18 @@ def main (args : List String) : IO Unit := do
   let some other := calls.find? (fun call => call.abi == .llvmIntrinsic && call.instanceId != llvmCall.instanceId) |
     throw (IO.userError "fixture needs two distinct LLVM calls")
   let some otherType := other.functionType | throw (IO.userError "missing second LLVM type")
-  rejects (decodeJson (mutateCalls raw (fun j => set j "function_type" (toJson otherType))).compress)
+  rejects (decodeFixture (mutateCalls raw (fun j => set j "function_type" (toJson otherType))).compress)
     "LLVM evidence accepted a different LLVM function type"
   let some otherId := other.instanceId | throw (IO.userError "missing second LLVM instance")
-  rejects (decodeJson (mutateCalls raw (fun j => set j "instance_id" (toJson otherId))).compress)
+  rejects (decodeFixture (mutateCalls raw (fun j => set j "instance_id" (toJson otherId))).compress)
     "LLVM evidence accepted a different LLVM instance"
-  rejects (decodeJson (mutateCalls raw (fun j =>
+  rejects (decodeFixture (mutateCalls raw (fun j =>
       set (set j "function_type" (toJson otherType)) "instance_id" (toJson otherId))).compress)
     "LLVM evidence accepted a coherent foreign identity for the wrong MIR operand"
   let queries ← must (raw.getObjValAs? (Array Json) "compiler_instance_abis")
   let fake := Json.mkObj [("typing_env", .str "fully_monomorphized"),
     ("instance_id", toJson llvmId), ("extra_argument_types", .arr #[]), ("abi_query", toJson (0 : Nat))]
-  rejects (decodeJson (set raw "compiler_instance_abis" (.arr (queries.push fake))).compress)
+  rejects (decodeFixture (set raw "compiler_instance_abis" (.arr (queries.push fake))).compress)
     "LLVM intrinsic accepted a fabricated ordinary ABI query"
   let some abiRow := decoded.document.queries.instanceAbis[0]? |
     throw (IO.userError "fixture has no normal ABI control")

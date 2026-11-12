@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.EvalSourceRunFinalization
 import Miri.Input.NativeMathHost
 
@@ -279,7 +280,7 @@ its ordered, actual monotonic/poll observations externally. -/
 private def runTraitUpcastPure (contents : String) (pageSize : UInt64)
     (numCpus hostPid : UInt32) (mathHost expectUnaryUnsupported : Bool)
     (timezone : Bool := false) (hostPoll : Poll := {}) (monotonic : Nat := 0) (traceVtables : Bool := false) : Except String String := do
-  let decoded ← Input.decodeJson contents
+  let decoded ← Input.decodeFixture contents
   let program ← Input.lowerProgram decoded.document
   let attempt := Input.EvalPreparation.prepare program
   let prepared ← attempt.outcome

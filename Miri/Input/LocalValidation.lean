@@ -172,6 +172,16 @@ def validateFunctionAbi (abi : FunctionAbi) (path : String) : Except String Unit
     validateAbiPassMode arg.mode s!"{path}.arguments[{index}].mode"
 
 def validateLayout (layout : Layout) (path : String) : Except String Unit := do
+  if let some recipe := layout.primitiveRecipe then
+    unless ["bool", "char", "i8", "i16", "i32", "i64", "i128", "isize",
+        "u8", "u16", "u32", "u64", "u128", "usize", "f16", "f32", "f64", "f128",
+        "fn_pointer", "never"].contains recipe do
+      throw s!"{path}: unknown primitive layout recipe"
+    unless layout.sizeBytes.isNone && layout.abiAlignBytes.isNone &&
+        layout.unadjustedAbiAlignBytes.isNone && layout.fields.isNone &&
+        layout.variantsLayout.isNone && layout.backendRepresentation.isNone do
+      throw s!"{path}: primitive recipe cannot contain eager layout results"
+    return ()
   match layout.backendRepresentation with
   | some repr => validateBackendRepr repr s!"{path}.backend_repr"
   | none => pure ()

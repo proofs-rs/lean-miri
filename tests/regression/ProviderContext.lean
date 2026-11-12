@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 import Miri.Input.LowerMIR
 import Miri.Input.CompilerProviders
@@ -91,8 +92,8 @@ private def checkInlineLookup (prepared : CompilerProviders.Prepared) : IO Unit 
 def main (args : List String) : IO Unit := do
   let [firstPath, secondPath] := args
     | throw (IO.userError "usage: ProviderContextTests <root-u32> <control-flow>")
-  let first ← must (decodeJson (← IO.FS.readFile firstPath))
-  let second ← must (decodeJson (← IO.FS.readFile secondPath))
+  let first ← must (decodeFixture (← IO.FS.readFile firstPath))
+  let second ← must (decodeFixture (← IO.FS.readFile secondPath))
   let firstProgram ← must (lowerProgram first.document)
   let secondProgram ← must (lowerProgram second.document)
   let prepared ← must (CompilerProviders.prepare firstProgram)

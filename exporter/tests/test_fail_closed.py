@@ -181,10 +181,11 @@ class FailClosedExportTests(unittest.TestCase):
         unsigned = next(node for node in document["types"]
                         if node["shape"].get("unsigned_kind") == "u32")
         facts = unsigned["compiler_facts"]
-        self.assertEqual(facts["boolean_queries"]["is_dynamic"],
-                         False)
-        self.assertEqual(facts["type_queries"]["boxed_type"],
-                         None)
+        self.assertNotIn("is_dynamic", facts["boolean_queries"])
+        self.assertNotIn("is_too_generic", facts["boolean_queries"])
+        self.assertNotIn("boxed_type", facts["type_queries"])
+        self.assertNotIn("builtin_deref_explicit", facts["type_queries"])
+        self.assertNotIn("builtin_deref_implicit", facts["type_queries"])
 
     def test_no_main_binary_exports_startup_facts(self):
         result = subprocess.run(
@@ -318,7 +319,7 @@ class FailClosedExportTests(unittest.TestCase):
 
     def test_coroutine_metadata_retains_exact_coverage_and_runtime_abi(self):
         document = self.accepted("coroutine", "root")
-        self.assertEqual(document["schema_version"], 12)
+        self.assertEqual(document["schema_version"], 13)
         coverage = document["compiler_coroutine_coverage"]
         self.assertTrue(coverage["coroutines"])
         self.assertEqual(len(coverage["body_coroutines"]), len(document["bodies"]))

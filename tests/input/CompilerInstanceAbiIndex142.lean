@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input
 
 open Lean Miri.Input Miri.ABI Miri.Interpreter
@@ -19,7 +20,7 @@ private def set (value : Json) (key : String) (child : Json) : Except String Jso
   pure (Json.mkObj ((key, child) :: fields.toList.filter (fun item => item.1 != key)))
 
 private def prepare (raw : Json) : Except String CompilerInstanceAbi.Prepared := do
-  let decoded ← decodeJson raw.compress
+  let decoded ← decodeFixture raw.compress
   let runtime ← (RuntimeMetadata.ofDocument decoded.document).mapError toString
   let program ← lowerProgram decoded.document
   CompilerInstanceAbi.prepare runtime program

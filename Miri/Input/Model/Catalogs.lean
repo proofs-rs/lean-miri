@@ -61,7 +61,6 @@ structure TargetFeature where
 
 structure RuntimeInstance where
   instanceId : InstanceId
-  requiresCallerLocation : Bool
   display : String
   inlineNever : Bool
   targetFeatures : Array TargetFeature
@@ -75,8 +74,6 @@ structure RuntimeInstance where
 
 structure RuntimeType where
   inputType : TypeId
-  mutPointerType : TypeId
-  mutReferenceType : TypeId
   dropGlue : Option InstanceId
   deriving Repr, DecidableEq
 
@@ -91,7 +88,7 @@ structure RuntimeVirtual where
   methodDefinition : DefinitionRef
   parentTrait : DefinitionRef
   concreteType : TypeId
-  rebasedArgs : Array Miri.MIR.GenericArg
+  parentGenericCount : Nat
   resolved : InstanceId
   vtableQuery : VtableRef
   deriving Repr, DecidableEq

@@ -210,14 +210,15 @@ pub(super) struct BooleanQueries {
     pub is_simd: bool,
     pub is_box: bool,
     pub is_global_box: bool,
-    pub is_dynamic: bool,
-    pub is_too_generic: bool,
     pub is_monomorphic: bool,
     pub is_monomorphic_enough: bool,
     pub is_like_maybe_dangling: bool,
-    pub is_freeze: bool,
-    pub is_unpin: bool,
-    pub is_unsafe_unpin: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_freeze: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_unpin: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_unsafe_unpin: Option<bool>,
     pub needs_drop: bool,
     pub opsem_inhabited: bool,
     pub is_sized: bool,
@@ -225,12 +226,9 @@ pub(super) struct BooleanQueries {
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct TypeQueries {
     pub discriminant_type: u64,
-    pub normalized: u64,
-    pub builtin_deref_explicit: Option<u64>,
-    pub builtin_deref_implicit: Option<u64>,
-    pub boxed_type: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub normalized: Option<u64>,
     pub unsafe_binder_erased: Option<u64>,
-    pub metadata_tail: u64,
     pub pointer_metadata_type: u64,
 }
 #[derive(Clone, Debug, Serialize)]

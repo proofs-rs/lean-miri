@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 import Miri.Input.LowerMIR
 import Miri.Input.CompilerProviders
@@ -20,8 +21,8 @@ private def renderResult {α} (value : Except String α) [Repr α] : String :=
 def main (args : List String) : IO Unit := do
   let [firstPath, secondPath] := args
     | throw (IO.userError "usage: ProviderPrimitiveRebinding <root-u32> <root-control-flow>")
-  let firstDecoded ← must (decodeJson (← IO.FS.readFile firstPath))
-  let secondDecoded ← must (decodeJson (← IO.FS.readFile secondPath))
+  let firstDecoded ← must (decodeFixture (← IO.FS.readFile firstPath))
+  let secondDecoded ← must (decodeFixture (← IO.FS.readFile secondPath))
   let firstProgram ← must (lowerProgram firstDecoded.document)
   let secondProgram ← must (lowerProgram secondDecoded.document)
   let firstProvider ← must (CompilerProviders.prepare firstProgram)

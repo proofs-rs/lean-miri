@@ -44,7 +44,7 @@ def functionAbi (runtime : RuntimeMetadata) (source : FunctionAbi) : Result (FnA
   -- location while `fixed_count` counts only explicit source arguments.
   -- Preserve both exact facts here; demanded call initialization validates
   -- their relationship against the exact `requires_caller_location` query.
-  return ⟨args,ret,source.cVariadic,UInt32.ofNat source.fixedCount,← convention source.callingConvention,source.canUnwind⟩
+  return ⟨args,ret,source.cVariadic,UInt32.ofNat source.fixedCount,← convention source.callingConvention,source.unwindSeed.canUnwind⟩
 
 /-- The input carries only an ABI table reference. Conversion to the semantic
 ABI happens when an operation requests it; input graphs are never expanded. -/

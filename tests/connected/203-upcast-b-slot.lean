@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.EvalSourceRunFinalization
 import Miri.Input.NativeMathHost
 
@@ -258,7 +259,7 @@ private def raceStateInfo (state : OuterState) : String := Id.run do
 universe-0 boundary. Only file/profile/PID acquisition and final printing use IO. -/
 private def runTraitUpcastPure (contents : String) (pageSize : UInt64)
     (numCpus hostPid : UInt32) : Except String String := do
-  let decoded ← Input.decodeJson contents
+  let decoded ← Input.decodeFixture contents
   let program ← Input.lowerProgram decoded.document
   let attempt := Input.EvalPreparation.prepare program
   let prepared ← attempt.outcome

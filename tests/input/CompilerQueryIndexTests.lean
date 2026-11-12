@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input
 import Miri.Interpreter.FunctionCalls
 
@@ -22,7 +23,7 @@ private def setField (value : Json) (key : String) (replacement : Json) : Except
 def main (args : List String) : IO Unit := do
   let some path := args.head? | throw (IO.userError "producer export path required")
   let text ← IO.FS.readFile path
-  let decoded ← must (decodeJson text)
+  let decoded ← must (decodeFixture text)
   let program ← must (lowerProgram decoded.document)
   let baseline ← must (CompilerProviders.prepare program)
   let queries := program.input.queries
@@ -63,9 +64,9 @@ def main (args : List String) : IO Unit := do
     "splatted flag was omitted from the signature key"
   let raw ← must (Json.parse text)
   let badCovariance ← must (setField raw "compiler_covariance_queries" (.arr #[.null]))
-  check (!(decodeJson badCovariance.compress).isOk) "malformed covariance row passed import"
+  check (!(decodeFixture badCovariance.compress).isOk) "malformed covariance row passed import"
   let facts ← must (raw.getObjVal? "compiler_function_facts")
   let badFacts ← must (setField facts "helper_signatures" (.arr #[.null]))
   let badSignatures ← must (setField raw "compiler_function_facts" badFacts)
-  check (!(decodeJson badSignatures.compress).isOk) "malformed helper signature row passed import"
+  check (!(decodeFixture badSignatures.compress).isOk) "malformed helper signature row passed import"
   IO.println "typed query indices preserve exact keys, ABI references, duplicate conflicts and missing-key failures"

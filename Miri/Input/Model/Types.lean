@@ -2,6 +2,7 @@ import Lean
 import Miri.Memory.CtfeProvenance
 import Miri.MIR.Operators
 import Miri.ABI.ExternAbi
+import Miri.ABI.FnAbi
 import Miri.Interpreter.Instance
 
 /-!
@@ -78,6 +79,7 @@ inductive ScalarShapeKind where
 
 
 inductive PassModeKind where
+  | initial | scalarRust | scalarSysvArgument | scalarSysvReturn
   | ignore | direct | pair | cast | indirect | indirectUnsized
   deriving Repr, DecidableEq
 
@@ -234,6 +236,7 @@ structure Layout where
   backendReprKind : Option BackendReprKind
   variants : Option TaggedNode
   backendRepr : Option TaggedNode
+  primitiveRecipe : Option String := none
 
 inductive ArmCallKind where
   | aapcs | cmseNonSecureCall | cmseNonSecureEntry
@@ -572,7 +575,7 @@ structure FunctionAbi where
   arguments : Array AbiArgument
   returnValue : AbiArgument
   callingConvention : CanonicalAbi
-  canUnwind : Bool
+  unwindSeed : Miri.ABI.UnwindSeed
   cVariadic : Bool
   fixedCount : Nat
   deriving BEq
@@ -580,6 +583,7 @@ structure FunctionAbi where
 structure DefinitionId where
   crateIndex : Nat
   index : Nat
+  bodyTrackCaller : Option Bool := none
   deriving Repr, DecidableEq
 
 inductive VtableEntryKind where

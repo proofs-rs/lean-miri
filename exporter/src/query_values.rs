@@ -14,8 +14,6 @@ pub(super) struct PredicateQuery {
 pub(super) struct RuntimeTypeQuery {
     pub input_type_id: u64,
     pub typing_env: &'static str,
-    pub mut_pointer_type: u64,
-    pub mut_reference_type: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drop_glue: Option<u64>,
 }
@@ -50,7 +48,7 @@ pub(super) struct RuntimeVirtualQuery<R> {
     pub method_definition: u64,
     pub parent_trait: u64,
     pub concrete_type: u64,
-    pub rebased_args: Vec<super::pool_values::GenericArgument>,
+    pub parent_generic_count: usize,
     pub resolved: u64,
     pub vtable_query: R,
 }
@@ -127,7 +125,7 @@ mod tests {
             method_definition: 1,
             parent_trait: 2,
             concrete_type: 3,
-            rebased_args: Vec::new(),
+            parent_generic_count: 1,
             resolved: 4,
             vtable_query: VtableRef {
                 input_type: 3,

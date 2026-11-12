@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import MiriTests.Input.JsonFixtures
 import Miri.Input.CallResolution
 
@@ -25,7 +26,7 @@ private def set (value : JsonFixtures.Value) (key child : String) : Except Strin
 def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected exporter MIR input")
   let text ← IO.FS.readFile path
-  let decoded ← must (decodeJson text)
+  let decoded ← must (decodeFixture text)
   let source ← must (JsonFixtures.parse text)
   let rawAbis ← must ((← must (source.field "fn_abis")).array)
   let rawArguments ← must ((← must (source.field "abi_arguments")).array)
@@ -81,13 +82,13 @@ def main (args : List String) : IO Unit := do
   let withUnused (argument : JsonFixtures.Value) : Except String JsonFixtures.Value :=
     set source "abi_arguments" ("[" ++ String.intercalate "," ((rawArguments.push argument).toList.map (·.text)) ++ "]")
   let validUnused ← must (withUnused returnValue)
-  let _ ← must (decodeJson validUnused.text)
+  let _ ← must (decodeFixture validUnused.text)
   let invalidType ← must (set returnValue "type" (toString decoded.document.types.size))
   let invalidUnusedType ← must (withUnused invalidType)
-  rejects (decodeJson invalidUnusedType.text) "unused ABI argument with dangling type accepted"
+  rejects (decodeFixture invalidUnusedType.text) "unused ABI argument with dangling type accepted"
   let invalidLayoutRef ← must (set returnValue "layout" (toString decoded.document.layouts.size))
   let invalidUnusedLayout ← must (withUnused invalidLayoutRef)
-  rejects (decodeJson invalidUnusedLayout.text) "unused ABI argument with dangling layout accepted"
+  rejects (decodeFixture invalidUnusedLayout.text) "unused ABI argument with dangling layout accepted"
   let inlineArgument ← must (set rawSample "return" returnValue.text)
   rejects (JsonReader.run parseAbi inlineArgument.text) "inline ABI argument accepted at pooled ID position"
   let inlineReturn ← must (set returnValue "layout" rawLayout.text)

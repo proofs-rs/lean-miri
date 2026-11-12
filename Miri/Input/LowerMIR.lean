@@ -1,5 +1,6 @@
 import Miri.Input.Model
 import Miri.Input.DecodeMIR
+import Miri.Input.TypeArena
 
 namespace Miri.Input
 
@@ -12,14 +13,22 @@ structure LowerContext where
   instances : Array InstanceNode := #[]
   typeConstants : Array MIR.TypeConst := #[]
   typeIds : Array TypeId
+  lazyTypeNodes : Option (Array TypeNode) := none
   allocationIds : Array AllocationId := #[]
   obligations : Array Obligation := #[]
 
-def LowerContext.containsTypeId (ctx : LowerContext) (id : TypeId) : Bool := ctx.typeIds.contains id
+def LowerContext.containsTypeId (ctx : LowerContext) (id : TypeId) : Bool :=
+  ctx.typeIds.contains id || match ctx.lazyTypeNodes with
+    | some nodes => (TypeArena.node nodes id).isOk
+    | none => false
 
 def LowerContext.containsAllocationId (ctx : LowerContext) (id : AllocationId) : Bool := ctx.allocationIds.contains id
 
-def LowerContext.withTypeIds (ctx : LowerContext) (ids : Array TypeId) : LowerContext := {ctx with typeIds := ids}
+def LowerContext.withTypeIds (ctx : LowerContext) (ids : Array TypeId) : LowerContext := {ctx with typeIds := ids, lazyTypeNodes := none}
+/-- Enable lazy constructor identities only in runtime compiler contexts.
+Source MIR lowering retains strict material-pool bounds. -/
+def LowerContext.withLazyTypes (ctx : LowerContext) (nodes : Array TypeNode) : LowerContext :=
+  {ctx with lazyTypeNodes := some nodes}
 def LowerContext.withAllocationIds (ctx : LowerContext) (ids : Array AllocationId) : LowerContext := {ctx with allocationIds := ids}
 def LowerContext.ofTypes (types : Array TypeNode) : LowerContext :=
   {typeIds := types.map (·.id)}

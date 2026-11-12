@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.EvalPreparation
 import Miri.Input.CompilerIntrinsicSymbols
 import Miri.Interpreter.IntrinsicSymbolsMachine
@@ -28,7 +29,7 @@ private def stateWith
 
 def main (args : List String) : IO Unit := do
   let some path := args.head? | throw (IO.userError "usage: SelectedStaticTypeIdRuntime162 <export.json>")
-  let decoded ← must (decodeJson (← IO.FS.readFile path))
+  let decoded ← must (decodeFixture (← IO.FS.readFile path))
   let program ← must (lowerProgram decoded.document)
   let attempt := EvalPreparation.prepare program
   let prepared ← must attempt.outcome

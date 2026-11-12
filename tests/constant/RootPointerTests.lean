@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 import Miri.Interpreter.Constant
 open Miri Input Memory ABI Interpreter
@@ -20,7 +21,7 @@ private def queries (failAdjust : Bool) : ConstantValueQueries CtfeProvenance Un
 }
 def main (args : List String) : IO Unit := do
   let path ← match args with | p :: _ => pure p | [] => throw (IO.userError "expected compiler metadata fixture")
-  let doc ← must (decodeJson (← IO.FS.readFile path))
+  let doc ← must (decodeFixture (← IO.FS.readFile path))
   let runtime ← must ((RuntimeMetadata.ofDocument doc.document).mapError toString)
   let program ← must (lowerProgram doc.document)
   let some ty := doc.document.types.find? (fun t => ((doc.document.layouts[t.layoutId]?).bind (·.sizeBytes)) == some 8 && (t.shapeKind == .reference || t.shapeKind == .rawPointer))

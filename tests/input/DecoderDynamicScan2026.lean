@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 
 open Lean Miri.Input
@@ -22,13 +23,13 @@ private def check (condition : Bool) (message : String) : IO Unit :=
 def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected current exporter MIR JSON")
   let base ← must (Json.parse (← IO.FS.readFile path))
-  let _ ← must (decodeJson base.compress)
+  let _ ← must (decodeFixture base.compress)
   IO.println "PASS direct-format input accepted before malformed-cast injection"
   -- Unknown extension fields are skipped, even when their names or contents
   -- resemble MIR. Validation applies to the schema's actual typed nodes.
   let withFirst ← must (set base "synthetic_first" malformedCast)
   let extensions ← must (set withFirst "synthetic_second" malformedCast)
-  let _ ← must (decodeJson extensions.compress)
+  let _ ← must (decodeFixture extensions.compress)
   IO.println "PASS unknown Cast-shaped extension payloads skipped"
   let bodies ← must ((← must (base.getObjVal? "bodies")).getArr?)
   let some body := bodies[0]? | throw (IO.userError "fixture has no body")
@@ -54,7 +55,7 @@ def main (args : List String) : IO Unit := do
   let block ← must (set block "statements" (toJson #[statement]))
   let body ← must (set body "basic_blocks" (toJson (blocks.set! 0 block)))
   let input ← must (set base "bodies" (toJson (bodies.set! 0 body)))
-  match decodeJson input.compress with
+  match decodeFixture input.compress with
   | .error message =>
     check (message.contains "runtime_vtable")
       s!"malformed typed vtable must fail its missing metadata; got {message}"

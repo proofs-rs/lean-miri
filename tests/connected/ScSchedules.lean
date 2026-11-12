@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Lean
 import Miri.Input.EvalSourceRunFinalization
 import Miri.Input.ExecutionChoicePolicy
@@ -328,7 +329,7 @@ private def checkGuidedTargets (state : OuterState) (expectedSupports expectedVa
 private def runScLitmusPure (contents : String) (seed : Option UInt64)
     (guided : GuidedChoicePrefix) (pageSize : UInt64)
     (numCpus hostPid : UInt32) : Except String String := do
-  let decoded ← must (Input.decodeJson contents)
+  let decoded ← must (Input.decodeFixture contents)
   let program ← must (Input.lowerProgram decoded.document)
   let attempt := Input.EvalPreparation.prepare program
   let prepared ← must attempt.outcome

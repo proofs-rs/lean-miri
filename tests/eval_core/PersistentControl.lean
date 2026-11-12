@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.CompilerProviders
 import Miri.Input.CompilerGlobals
 import Miri.Input.CompilerAllocIdWorld
@@ -25,7 +26,7 @@ private def success (result : EStateM.Result StepError S Unit) : IO S :=
 
 def main (args : List String) : IO Unit := do
   let some path := args.head? | throw (IO.userError "actual compiler root JSON required")
-  let decoded ← must (Input.decodeJson (← IO.FS.readFile path))
+  let decoded ← must (Input.decodeFixture (← IO.FS.readFile path))
   let program ← must (Input.lowerProgram decoded.document)
   let prepared ← must (Input.CompilerProviders.prepare program)
   let dummySpan ← must (Input.CompilerContextSpan.rootSpan prepared.program)

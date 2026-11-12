@@ -1,5 +1,9 @@
+import Miri.Input.StructuralAutoTraits
 import Miri.Input.CompilerGlobals
 import Miri.Input.CompilerPrimitiveFacts
+import Miri.Input.StructuralNormalization
+import Miri.Input.StructuralDeref
+import Miri.Input.StructuralTail
 import Miri.Interpreter.TypedRetag
 import Miri.Interpreter.LayoutCompat
 import Miri.Interpreter.ValidityVisitor
@@ -26,9 +30,10 @@ structure Context where
   lowering : Option LowerContext := none
 
 def Context.loweringContext (context : Context) : LowerContext :=
-  match context.lowering with
-  | some prepared => prepared
-  | none => LowerContext.ofDocument context.program.input
+  let ctx := match context.lowering with
+    | some prepared => prepared
+    | none => LowerContext.ofDocument context.program.input
+  ctx.withLazyTypes context.program.input.types
 
 def Context.primitiveLayout (context : Context) (key : String) :
     Except String (TyAndLayout TypeId) :=
@@ -57,14 +62,116 @@ private def facts (context : Context) (id : TypeId) : Result TypeCompilerFacts :
     throw "compiler query typing-environment mismatch"
   pure facts
 
+/-- Normalize lazy constructor children and re-intern their exact result.
+Complex material types still require the explicit residual normalization seed. -/
+private def normalizeWithFuel (context : Context) : Nat → TypeId → Result TypeId
+  | 0, _ => .error "lazy normalization traversal exhausted"
+  | fuel + 1, id => do
+    let source ← node context id
+    if id >= context.program.input.types.size then
+      match source.shape with
+      | .rawPointer child .Mut =>
+        TypeArena.intern context.program.input.types (← normalizeWithFuel context fuel child) false
+      | .reference child .Mut .Erased =>
+        TypeArena.intern context.program.input.types (← normalizeWithFuel context fuel child) true
+      | .array child _ constructor =>
+        TypeArena.internArray context.program.input.types (← normalizeWithFuel context fuel child)
+          (UInt64.ofNat constructor.count)
+      | _ => throw "unknown lazy normalization constructor"
+    else if ← StructuralNormalization.identityReady context.program.input.types
+        (context.program.input.types.size + 1) id then pure id
+    else
+      let f ← facts context id
+      let some (_, some target) := f.typeQueries.find? (·.1 == "normalized")
+        | throw "missing residual compiler normalization material"
+      let _ ← node context target
+      pure target
+
+private def normalize (context : Context) (id : TypeId) : Result TypeId :=
+  normalizeWithFuel context (id + context.program.input.types.size + 1) id
+
+private def lazyBoolean (context : Context) (query : String) : Nat → TypeId → Result Bool
+  | 0, _ => .error "lazy type boolean traversal exhausted"
+  | fuel + 1, id => do
+    let source ← node context id
+    if id < context.program.input.types.size then
+      if ["is_freeze", "is_unpin", "is_unsafe_unpin"].contains query then
+        if ← StructuralAutoTraits.trivial (fun ty => return (← node context ty).shape) (fuel + 1) id then
+          return true
+      let f ← facts context id
+      let some (_, result) := f.booleanQueries.find? (·.1 == query)
+        | throw s!"missing material boolean query {query}"
+      return result
+    if ["is_box", "is_global_box", "is_unsafe_cell", "is_c_void", "is_simd"].contains query then return false
+    match source.shape with
+    | .rawPointer .. | .reference .. =>
+      if query == "needs_drop" then return false
+      if ["is_sized", "is_freeze", "is_unpin", "is_unsafe_unpin"].contains query then return true
+    | .array child _ constructor =>
+      if query == "is_sized" then
+        let _ ← context.runtime.lookup id |>.mapError toString
+        return true
+      if query == "needs_drop" && constructor.count == 0 then return false
+      if ["is_freeze", "is_unpin", "is_unsafe_unpin", "needs_drop"].contains query then
+        return ← lazyBoolean context query fuel child
+    | _ => pure ()
+    throw s!"unimplemented lazy type boolean query {query}"
+
 def boolean (context : Context) (id : TypeId) (query : String) : Result Bool := do
-  let facts ← facts context id
+  -- Pinned rustc TyKind tests in compiler_facts_json: inspect the original
+  -- shape before normalization. The input type language represents Alias but
+  -- excludes Param/Bound/Placeholder/Infer/Error nodes.
+  if query == "is_dynamic" then
+    return (← node context id).shapeKind == .dynamicTraitObject
+  if query == "is_too_generic" then
+    return (← node context id).shapeKind == .alias
+  if id >= context.program.input.types.size then
+    return ← lazyBoolean context query (id + context.program.input.types.size + 1) id
+  let originalFacts ← facts context id
+  if query == "is_freeze" || query == "is_unpin" || query == "is_unsafe_unpin" then
+    let normalized ← if ← StructuralNormalization.identityReady context.program.input.types
+        (context.program.input.types.size + 1) id then pure id else do
+      let some (_, some target) := originalFacts.typeQueries.find? (·.1 == "normalized")
+        | throw "missing auto-trait normalization dependency"
+      pure target
+    if ← StructuralAutoTraits.trivial (fun ty => return (← node context ty).shape)
+        (context.program.input.types.size + 1) normalized then return true
+  let facts := originalFacts
   let some (_,entry) := facts.booleanQueries.find? (·.1 == query) | throw s!"missing compiler boolean query {query}"
   pure entry
 
 def optionalType (context : Context) (id : TypeId) (query : String) : Result (Option TypeId) := do
-  let facts ← facts context id
-  let some (_,entry) := facts.typeQueries.find? (·.1 == query) | throw s!"missing compiler type query {query}"
+  let source ← node context id
+  let entry ← if query == "normalized" then
+      pure (some (← normalize context id))
+    else if query == "metadata_tail" then do
+      let root ← normalize context id
+      let result ← StructuralTail.tail (fun ty => return (← node context ty).shape)
+        (normalize context) (id + context.runtime.source.types.size + 1) root
+      pure (some result)
+    else if query == "builtin_deref_explicit" || query == "builtin_deref_implicit" || query == "boxed_type" then do
+      -- Signature-bound source material keeps its Binder graph while facts
+      -- use the explicitly instantiated query view recorded by the exporter.
+      let source ← node context (source.layoutQueryInputTypeId.getD id)
+      let isBox ← if source.shapeKind == .adt then do
+        let f ← facts context id
+        let some (_, isBox) := f.booleanQueries.find? (·.1 == "is_box")
+          | throw "missing Box definition identity"
+        pure isBox
+      else pure false
+      if query == "boxed_type" then StructuralDeref.boxedType source.shape isBox
+      else StructuralDeref.builtinDeref source.shape isBox (query == "builtin_deref_explicit")
+    else if id >= context.program.input.types.size && query == "pointer_metadata_type" then do
+      let value ← context.runtime.lookup id |>.mapError toString
+      unless value.layout.isSized do throw "lazy type is not sized"
+      pure (some context.program.input.queries.primitives.unit)
+    else if id >= context.program.input.types.size && query == "unsafe_binder_erased" then
+      pure none
+    else do
+      let f ← facts context id
+      let some (_, entry) := f.typeQueries.find? (·.1 == query)
+        | throw s!"missing compiler type query {query}"
+      pure entry
   if let some ty := entry then let _ ← node context ty
   pure entry
 

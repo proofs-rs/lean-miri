@@ -6,6 +6,8 @@ pub(crate) struct Definition {
     #[serde(rename = "crate")]
     pub crate_index: u32,
     pub index: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body_track_caller: Option<bool>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct Position {

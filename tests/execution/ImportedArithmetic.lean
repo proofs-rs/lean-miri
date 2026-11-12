@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.CallResolution
 import tests.execution.ReturnMemory
 import Miri.Input.RuntimeMetadata
@@ -318,7 +319,7 @@ def main (args : List String) : IO Unit := do
   let path ← match args with
     | path::_ => pure path
     | [] => throw (IO.userError "usage: ImportedArithmetic <selected add_one export>")
-  let decoded ← must (Input.decodeJson (← IO.FS.readFile path))
+  let decoded ← must (Input.decodeFixture (← IO.FS.readFile path))
   check (decoded.document.producer.targetTriple == "x86_64-unknown-linux-gnu") "unsupported fixture target"
   let program ← must (Input.lowerProgram decoded.document)
   let prepared ← must (Input.CallResolution.prepare program)

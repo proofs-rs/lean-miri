@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 
 open Miri.Input
@@ -15,10 +16,10 @@ private def rejected : List String := [
 def main (args : List String) : IO Unit := do
   let [directory] := args | throw (IO.userError "expected decoder ID case directory")
   for name in accepted do
-    match decodeJson (← IO.FS.readFile s!"{directory}/{name}.json") with
+    match decodeFixture (← IO.FS.readFile s!"{directory}/{name}.json") with
     | .ok _ => IO.println s!"PASS {name}: accepted"
     | .error error => throw (IO.userError s!"valid control {name} rejected: {error}")
   for name in rejected do
-    match decodeJson (← IO.FS.readFile s!"{directory}/{name}.json") with
+    match decodeFixture (← IO.FS.readFile s!"{directory}/{name}.json") with
     | .error error => IO.println s!"PASS {name}: {error}"
     | .ok _ => throw (IO.userError s!"invalid table/reference accepted: {name}")

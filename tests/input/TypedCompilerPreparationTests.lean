@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.CompilerVirtualFacts
 import Miri.Input.CompilerLifecycle
 import Miri.Input.CompilerFactAdapters
@@ -54,7 +55,7 @@ private def checkInlineScopes (program : LoweredProgram) : IO Unit := do
 
 def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected exporter MIR input")
-  let input ← must (decodeJson (← IO.FS.readFile path))
+  let input ← must (decodeFixture (← IO.FS.readFile path))
   let program ← must (lowerProgram input.document)
   checkInlineScopes program
   let prepared := CompilerLifecycle.prepare program

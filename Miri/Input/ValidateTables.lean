@@ -207,8 +207,7 @@ private def catalogs (b : ReferenceBounds) (q : Catalog.Queries) : Except String
     if let some (id, _) := startup.coreEscapeDefault then
       checkId b.definitions id "$.compiler_runtime_queries.startup.core_escape_default" "definition"
   for row in q.runtime.types do
-    for id in #[row.inputType, row.mutPointerType, row.mutReferenceType] do
-      checkId b.types id "$.compiler_runtime_queries.types" "type"
+    checkId b.types row.inputType "$.compiler_runtime_queries.types" "type"
     if let some id := row.dropGlue then checkId b.instances id "$.compiler_runtime_queries.types.drop_glue" "instance"
   for row in q.runtime.instances do
     checkId b.instances row.instanceId "$.compiler_runtime_queries.instances" "instance"
@@ -217,7 +216,6 @@ private def catalogs (b : ReferenceBounds) (q : Catalog.Queries) : Except String
     for id in #[row.originalInstance, row.resolved] do checkId b.instances id path "instance"
     for id in #[row.methodDefinition, row.parentTrait] do checkId b.definitions id path "definition"
     checkId b.types row.concreteType path "type"
-    genericArgs b path row.rebasedArgs
     checkId b.types row.vtableQuery.inputType path "type"
     for id in row.vtableQuery.inputPredicates do checkId b.predicates id path "predicate"
     unless q.vtables.any (fun table => table.queryId == row.vtableQuery.queryId &&

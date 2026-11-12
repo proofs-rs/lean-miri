@@ -48,9 +48,10 @@ structure Prepared where
   tls : Except String (Array CompilerThreadLocal.Entry)
 
 def Prepared.loweringContext (p : Prepared) : LowerContext :=
-  match p.lowering with
-  | some prepared => prepared
-  | none => LowerContext.ofDocument p.program.input
+  let ctx := match p.lowering with
+    | some prepared => prepared
+    | none => LowerContext.ofDocument p.program.input
+  ctx.withLazyTypes p.program.input.types
 
 /-- Resolve the exact primitive reference at its operation. -/
 def Prepared.primitiveLayout (p : Prepared) (key : String) :

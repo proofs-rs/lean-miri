@@ -29,7 +29,6 @@ structure World where
   byteLayout : TyAndLayout TypeId
   wideLayout : TyAndLayout TypeId
   entries : Array Entry
-  nextId : TypeId
   obligations : Array String
   aliases : Array (Key × TypeId) := #[]
 inductive Error where
@@ -48,19 +47,7 @@ private def metadata (result : Except RuntimeMetadataError A) : Except Error A :
 first-element niche retention, alignment and wrapping randomization seed. -/
 def calculate (target : RuntimeTargetDataLayout) (element : LayoutData)
     (count : UInt64) : Except Error LayoutData := do
-  let some size := element.size.checkedMul count target.base | throw .sizeOverflow
-  pure {
-    variants := .Single 0
-    fields := .Array element.size count
-    backendRepr := .Memory (sized := true)
-    largestNiche := if count != 0 then element.largestNiche else none
-    uninhabited := element.uninhabited && count != 0
-    align := element.align
-    size
-    maxReprAlign := none
-    unadjustedAbiAlign := element.align.abi
-    reprC := element.reprC
-    randomizationSeed := element.randomizationSeed + count }
+  (PrimitiveLayout.arrayLike target element count).mapError (fun _ => .sizeOverflow)
 private def primitive (runtime : RuntimeMetadata) (id : TypeId) (key : String)
     (kind : Miri.MIR.IntegerKind) : Except Error (TyAndLayout TypeId) := do
   let source ← metadata (runtime.node id)
@@ -88,13 +75,11 @@ def create (runtime : RuntimeMetadata) : Except Error World := do
   let refs := runtime.source.queries.primitives
   let byte ← primitive runtime refs.u8 "u8" .u8
   let wide ← primitive runtime refs.u16 "u16" .u16
-  let next := runtime.source.types.foldl (fun next node => max next (node.id + 1)) 0
   let mut world : World := {
     metadata := runtime
     byteLayout := byte
     wideLayout := wide
     entries := #[]
-    nextId := next
     obligations := #[] }
   for node in runtime.source.types do
     if let .array element _ constructor := node.shape then
@@ -137,16 +122,17 @@ def intern (world : World) (element : Element) (count : UInt64) :
   let key : Key := ⟨element,count⟩
   if let some prior := world.entries.find? (·.key == key) then return (prior.value,world)
   let layout ← calculate world.metadata.target (← elementLayout world element).layout count
-  let (id,origin,next) ← match world.aliases.find? (·.1 == key) with
-    | some (_,id) => pure (id,Origin.compiler id,world.nextId)
+  let (id,origin) ← match world.aliases.find? (·.1 == key) with
+    | some (_,id) => pure (id,Origin.compiler id)
     | none => do
-      unless !(world.metadata.source.types.any (·.id == world.nextId)) &&
-          !(world.entries.any (·.value.ty == world.nextId)) do throw .conflictingCanonicalIdentity
-      pure (world.nextId,Origin.runtimeConstructor,world.nextId + 1)
+      let elementId := match element with
+        | .u8 => world.byteLayout.ty | .u16 => world.wideLayout.ty | .compiler id => id
+      let id := TypeArena.arrayId world.metadata.source.types.size elementId count
+      if world.entries.any (·.value.ty == id) then throw .conflictingCanonicalIdentity
+      pure (id,Origin.runtimeConstructor)
   let result : TyAndLayout TypeId := ⟨id,layout⟩
   let updated := { world with
-    entries := world.entries.push ⟨key,result,origin⟩
-    nextId := next }
+    entries := world.entries.push ⟨key,result,origin⟩ }
   pure (result,updated)
 
 /-- General source array constructor for an actual compiler/runtime element ID.
@@ -164,8 +150,14 @@ def lookup (world : World) (id : TypeId) : Except Error (TyAndLayout TypeId) := 
   metadata (world.metadata.lookup id)
 
 def arrayInfo (world : World) (id : TypeId) : Except Error (Key × TyAndLayout TypeId) := do
-  let some entry := world.entries.find? (·.value.ty == id) | throw (.missingRuntimeType id)
-  pure (entry.key,← elementLayout world entry.key.element)
+  if let some entry := world.entries.find? (·.value.ty == id) then
+    return (entry.key,← elementLayout world entry.key.element)
+  let source ← metadata (world.metadata.node id)
+  let .array element _ constructor := source.shape | throw (.missingRuntimeType id)
+  unless constructor.canonicalValueConstructor && constructor.count < 2^64 do
+    throw (.missingRuntimeType id)
+  let key : Key := ⟨elementOfId world element, UInt64.ofNat constructor.count⟩
+  pure (key,← elementLayout world key.element)
 
 def fieldLayout (world : World) (id index : Nat) : Except Error (TyAndLayout TypeId) := do
   let (key,element) ← arrayInfo world id

@@ -32,8 +32,9 @@ def prepareProfiled (profile : Lean.Options) (program : LoweredProgram) : Result
   let calls ← profileit "preparation.call.resolution" profile fun _ =>
     CallResolution.prepareWithRuntimeProfiled profile metadata symbols.facts.context.program
   profileit "preparation.call.inline_attribute_validation" profile fun _ => do
-    for (callee,trackCaller) in runtime.callerLocation do
+    for callee in [:runtime.program.input.instances.size] do
       if let some inlineAttribute := CompilerVirtualFacts.inlineAttribute scopes callee then
+        let trackCaller ← CompilerRuntimeQueries.requiresCallerLocation runtime callee
         unless inlineAttribute == trackCaller do throw "inlined/global full-instance caller attributes conflict"
   let program := calls.program
   let context := symbols.facts.context.withProgram program

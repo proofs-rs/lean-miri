@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.EvalSourceRunFinalization
 import Miri.Input.ExecutionChoicePolicy
 import Miri.Input.NativeMathHost
@@ -358,7 +359,7 @@ private def checkFailurePrefix (compiler : Input.CompilerProviders.Prepared)
 
 private def runTlsDrainPure (contents : String) (pageSize : UInt64)
     (numCpus hostPid : UInt32) : Except String String := do
-  let decoded ← must (Input.decodeJson contents)
+  let decoded ← must (Input.decodeFixture contents)
   let program ← must (Input.lowerProgram decoded.document)
   let attempt := Input.EvalPreparation.prepare program
   let prepared ← must attempt.outcome

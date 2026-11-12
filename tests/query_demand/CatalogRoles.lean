@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input
 import Miri.Input.CompilerNativeSignatures
 import Miri.Input.CompilerThreadLocal
@@ -11,7 +12,7 @@ private def must (value : Except String A) : IO A :=
 private def check (condition : Bool) (message : String) : IO Unit :=
   unless condition do throw (IO.userError message)
 private def read (dir file : String) : IO ExecutionInput := do
-  must (decodeJson (← IO.FS.readFile (dir ++ "/" ++ file)))
+  must (decodeFixture (← IO.FS.readFile (dir ++ "/" ++ file)))
 private def arr (value : Json) (key : String) : Except String (Array Json) :=
   (value.getObjVal? key).bind Json.getArr?
 private def getAt (values : Array A) (index : Nat) : Except String A :=
@@ -25,7 +26,7 @@ def main (args : List String) : IO Unit := do
     let name ← must (row.getObjValAs? String "file")
     let source ← IO.FS.readFile (dir ++ "/" ++ name)
     let ready ← must (row.getObjValAs? Bool "ready")
-    let full := decodeJson source
+    let full := decodeFixture source
     check (full.isOk == ready) s!"decoder readiness differs: {name}"
     if ready then
       let provider ← must (row.getObjValAs? String "provider")

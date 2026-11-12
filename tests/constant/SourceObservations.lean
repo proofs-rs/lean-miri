@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 import Miri.Interpreter.Constant
 open Miri Input Memory ABI Interpreter
@@ -16,7 +17,7 @@ private def queries : ConstantValueQueries CtfeProvenance Unit Unit (Array Strin
 }
 def main (args : List String) : IO Unit := do
   let path ← match args with | p :: _ => pure p | [] => throw (IO.userError "expected compiler fixture")
-  let doc ← must (decodeJson (← IO.FS.readFile path))
+  let doc ← must (decodeFixture (← IO.FS.readFile path))
   let runtime ← must ((RuntimeMetadata.ofDocument doc.document).mapError toString)
   let some ty := doc.document.types.find? (fun t => ((doc.document.layouts[t.layoutId]?).bind (·.sizeBytes)) == some 4 && t.shapeKind == .uint)
     | throw (IO.userError "fixture requires u32 layout")

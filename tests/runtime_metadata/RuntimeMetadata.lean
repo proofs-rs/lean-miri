@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 import Miri.Input.RuntimeMetadata
 open Miri Miri.ABI Miri.Input
@@ -7,7 +8,7 @@ private def check (condition : Bool) (message : String) : IO Unit :=
   unless condition do throw (IO.userError message)
 def main (args : List String) : IO Unit := do
   let path ← match args with | path::_ => pure path | [] => throw (IO.userError "missing export")
-  let decoded ← must (decodeJson (← IO.FS.readFile path))
+  let decoded ← must (decodeFixture (← IO.FS.readFile path))
   let metadata ← must ((RuntimeMetadata.ofDocument decoded.document).mapError toString)
   check metadata.obligations.isEmpty s!"metadata obligations: {reprStr metadata.obligations}"
   check ((metadata.target.validate).isOk) "invalid canonical target"

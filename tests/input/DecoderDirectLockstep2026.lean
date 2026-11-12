@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 
 open Lean Miri.Input
@@ -26,7 +27,7 @@ def main (args : List String) : IO Unit := do
   let input ← match Json.parse (← IO.FS.readFile path) with
     | .ok input => pure input
     | .error error => throw (IO.userError error)
-  match decodeJson input.compress with
+  match decodeFixture input.compress with
   | .ok _ => IO.println "PASS direct compiler input accepted"
   | .error error => throw (IO.userError error)
   let wrapped ← match oldLockstep input with
@@ -37,7 +38,7 @@ def main (args : List String) : IO Unit := do
     IO.println "PASS direct input without lockstep upcast answers accepted"
     return
   check (wrapped != input) "fixture must contain lockstep query answers"
-  match decodeJson wrapped.compress with
+  match decodeFixture wrapped.compress with
   | .error error =>
     check (error.endsWith "obsolete wrapped compiler cast query value")
       s!"expected exact upcast-evidence rejection, got {error}"

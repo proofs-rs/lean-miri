@@ -81,7 +81,7 @@ fn export_failure<T>(context: &str, details: impl std::fmt::Display) -> Result<T
 
 const EXPECTED_RUSTC_COMMIT: &str = "8144389c895da997dbdecaa635e41d6a50be6ffd";
 const MIRI_COMMIT: &str = "7fa591d7d4dd9af8154becbc8332f8096f8323b1";
-const ROOT_SCHEMA_VERSION: u64 = 12;
+const ROOT_SCHEMA_VERSION: u64 = 13;
 
 struct Options {
     output: PathBuf,
@@ -1669,6 +1669,20 @@ impl ExportCallbacks {
         for (id, instance) in instances.into_iter().enumerate() {
             export_context.instance_ids.define(id, instance);
         }
+        // Definition attributes are material shared by all monomorphizations.
+        // InstanceKind::requires_caller_location is evaluated by Lean on demand.
+        let mut body_track_caller = HashMap::new();
+        for instance in export_context.instance_ids.keys() {
+            let definition = match instance.def {
+                ty::InstanceKind::Item(definition)
+                | ty::InstanceKind::Virtual(definition, _)
+                | ty::InstanceKind::Shim(ty::ShimKind::VTable(definition)) => definition,
+                _ => continue,
+            };
+            body_track_caller.entry(export_context.definitions[&definition] as usize)
+                .or_insert_with(|| tcx.body_codegen_attrs(definition).flags.contains(
+                    rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags::TRACK_CALLER));
+        }
         let body_roots = bodies;
         let allocator_world = if self.prepared_allocator_world {
             Some(allocator_world::capture(
@@ -1734,7 +1748,11 @@ impl ExportCallbacks {
             body_roots,
             bodies,
             compiler_coroutine_coverage,
-            definitions: export_context.definitions.finish("definition")?,
+            definitions: export_context.definitions.finish("definition")?.into_iter().enumerate()
+                .map(|(id, mut definition)| {
+                    definition.body_track_caller = body_track_caller.get(&id).copied();
+                    definition
+                }).collect(),
             type_constants: export_context.type_constants.finish("type_constant")?,
             files: export_context.files.finish(),
             spans: export_context.spans.finish("span_id")?,
@@ -2324,7 +2342,7 @@ fn export_reachable_instances<'tcx>(
             let fn_abi = match tcx.fn_abi_of_instance(
                 ty::TypingEnv::fully_monomorphized().as_query_input((instance, ty::List::empty())),
             ) {
-                Ok(abi) => fn_abi_json(context, tcx, abi)?,
+                Ok(abi) => fn_abi_json(context, tcx, abi, pool_layout::UnwindSeed::for_instance(tcx, instance)?)?,
                 Err(error) => export_failure(
                     "main::export_reachable_instances",
                     format!(
@@ -2712,8 +2730,8 @@ fn pattern_json<'tcx>(
 }
 
 /// Guard the private fast path in pinned rustc_middle/ty/util.rs::is_trivially_unpin.
-/// The answers still come from rustc's public is_unpin/is_unsafe_unpin methods;
-/// these shapes ensure neither method requires a missing trait language item.
+/// These rules are shared by is_trivially_freeze on serializable TyKinds.
+/// Only nontrivial cases need exported trait-solver results.
 fn unpin_query_needs_no_lang_item(input: ty::Ty<'_>) -> bool {
     match input.kind() {
         ty::Int(_)
@@ -2732,6 +2750,21 @@ fn unpin_query_needs_no_lang_item(input: ty::Ty<'_>) -> bool {
         ty::Pat(input, _) | ty::Slice(input) | ty::Array(input, _) => {
             unpin_query_needs_no_lang_item(*input)
         }
+        _ => false,
+    }
+}
+
+// Same bounded identity-normalization recognizer as StructuralNormalization.lean.
+// Complex forms retain residual compiler normalization material until their
+// full region/alias fold is ported; this is not a trait solver.
+fn structural_identity_normalization(input: ty::Ty<'_>, fuel: usize) -> bool {
+    if fuel == 0 { return false; }
+    match input.kind() {
+        ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_)
+        | ty::Str | ty::Never | ty::Foreign(_) => true,
+        ty::Slice(child) | ty::RawPtr(child, _) => structural_identity_normalization(*child, fuel - 1),
+        ty::Ref(region, child, _) if matches!(region.kind(), ty::RegionKind::ReErased) => structural_identity_normalization(*child, fuel - 1),
+        ty::Tuple(children) => children.iter().all(|child| structural_identity_normalization(child, fuel - 1)),
         _ => false,
     }
 }
@@ -2758,35 +2791,27 @@ fn type_compiler_facts_json<'tcx>(
         .try_normalize_erasing_regions(env, ty::Unnormalized::new_wip(input))
         .map_err(|e| format!("type normalization failed: {e:?}"))?;
     let missing = || "required compiler trait language item is missing".to_owned();
-    let is_freeze = if normalized.is_trivially_freeze()
-        || tcx
-            .lang_items()
-            .get(rustc_attr_ir::LangItem::Freeze)
-            .is_some()
-    {
-        normalized.is_freeze(tcx, env)
-    } else {
-        return Err(missing());
+    // is_trivially_freeze and is_trivially_unpin have identical structural
+    // rules on serializable TyKinds in the pinned compiler. Lean executes that
+    // fast path; only unresolved trait obligations retain solver answers.
+    let trivial_auto_trait = unpin_query_needs_no_lang_item(normalized);
+    let is_freeze = if trivial_auto_trait { None } else {
+        if tcx.lang_items().get(rustc_attr_ir::LangItem::Freeze).is_none() {
+            return Err(missing());
+        }
+        Some(normalized.is_freeze(tcx, env))
     };
-    let is_unpin = if unpin_query_needs_no_lang_item(normalized)
-        || tcx
-            .lang_items()
-            .get(rustc_attr_ir::LangItem::Unpin)
-            .is_some()
-    {
-        normalized.is_unpin(tcx, env)
-    } else {
-        return Err(missing());
+    let is_unpin = if trivial_auto_trait { None } else {
+        if tcx.lang_items().get(rustc_attr_ir::LangItem::Unpin).is_none() {
+            return Err(missing());
+        }
+        Some(normalized.is_unpin(tcx, env))
     };
-    let is_unsafe_unpin = if unpin_query_needs_no_lang_item(normalized)
-        || tcx
-            .lang_items()
-            .get(rustc_attr_ir::LangItem::UnsafeUnpin)
-            .is_some()
-    {
-        normalized.is_unsafe_unpin(tcx, env)
-    } else {
-        return Err(missing());
+    let is_unsafe_unpin = if trivial_auto_trait { None } else {
+        if tcx.lang_items().get(rustc_attr_ir::LangItem::UnsafeUnpin).is_none() {
+            return Err(missing());
+        }
+        Some(normalized.is_unsafe_unpin(tcx, env))
     };
     let boolean_queries = BooleanQueries {
         is_unsafe_cell: matches!(input.kind(),ty::Adt(d,_) if d.is_unsafe_cell()),
@@ -2795,16 +2820,6 @@ fn type_compiler_facts_json<'tcx>(
         is_simd: input.is_simd(),
         is_box: input.is_box(),
         is_global_box: input.is_box_global(tcx),
-        is_dynamic: matches!(input.kind(), ty::Dynamic(..)),
-        is_too_generic: matches!(
-            input.kind(),
-            ty::Param(..)
-                | ty::Alias(..)
-                | ty::Bound(..)
-                | ty::Placeholder(..)
-                | ty::Infer(..)
-                | ty::Error(..)
-        ),
         is_monomorphic: closed,
         is_monomorphic_enough: !input.has_param(),
         is_like_maybe_dangling: input.is_like_maybe_dangling(),
@@ -2817,18 +2832,6 @@ fn type_compiler_facts_json<'tcx>(
     };
     let discriminant_type = discriminant_type_fact_json(context, tcx, normalized)?;
     let normalized_id = type_json(context, tcx, normalized)?;
-    let builtin_deref_explicit = input
-        .builtin_deref(true)
-        .map(|t| type_json(context, tcx, t))
-        .transpose()?;
-    let builtin_deref_implicit = input
-        .builtin_deref(false)
-        .map(|t| type_json(context, tcx, t))
-        .transpose()?;
-    let boxed_type = input
-        .boxed_ty()
-        .map(|t| type_json(context, tcx, t))
-        .transpose()?;
     let unsafe_binder_erased = match input.kind() {
         ty::UnsafeBinder(b) => Some(type_json(
             context,
@@ -2849,12 +2852,8 @@ fn type_compiler_facts_json<'tcx>(
         .map_err(|_| "rustc could not determine pointer metadata type".to_owned())?;
     let type_queries = TypeQueries {
         discriminant_type,
-        normalized: normalized_id,
-        builtin_deref_explicit,
-        builtin_deref_implicit,
-        boxed_type,
+        normalized: if structural_identity_normalization(input, 1024) { None } else { Some(normalized_id) },
         unsafe_binder_erased,
-        metadata_tail: type_json(context, tcx, tail)?,
         pointer_metadata_type: type_json(context, tcx, metadata)?,
     };
     let capture_names = match input.kind() {
@@ -4262,7 +4261,7 @@ fn unwind_json(unwind: rustc_middle::mir::UnwindAction) -> pool_body::Unwind {
 
 fn def_json(context: &mut ExportContext<'_>, def: rustc_hir::def_id::DefId) -> u64 {
     let (id,fresh)=context.definitions.reserve(def);
-    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32() }); }
+    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32(),body_track_caller:None }); }
     id as u64
 }
 
@@ -5104,7 +5103,7 @@ fn resolve_callee_json<'tcx>(
                             } else { None };
                             let dispatch_slot = virtual_resolution.as_ref().map(|resolution| resolution.dispatch_slot);
                             let function_type = type_json(context,tcx,func_ty)?;
-                            let fn_abi = fn_abi_json(context,tcx,abi)?;
+                            let fn_abi = fn_abi_json(context,tcx,abi, pool_layout::UnwindSeed::for_instance(tcx, instance)?)?;
                             if virtual_resolution.is_some() {
                                 Callee::VirtualDispatch { function_type, instance_id, dispatch_slot, fn_abi, virtual_resolution }
                             } else {
@@ -5182,7 +5181,7 @@ fn resolve_callee_json<'tcx>(
                                     Callee::IndirectFunctionPointer {
                                         function_type:type_json(context,tcx,func_ty)?, signature:fn_sig_json_inner(context,tcx,signature)?,
                                         extra_argument_types:extra.iter().map(|ty|type_json(context,tcx,ty)).collect::<Result<Vec<_>,String>>()?,
-                                        fn_abi:fn_abi_json(context,tcx,abi)?,
+                                        fn_abi:fn_abi_json(context,tcx,abi, pool_layout::UnwindSeed::new(tcx, signature.abi(), None))?,
                                     }
                                 }
                                 Err(error) => export_failure(
@@ -5218,12 +5217,13 @@ fn fn_abi_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     abi: &rustc_target::callconv::FnAbi<'tcx, rustc_middle::ty::Ty<'tcx>>,
+    unwind_seed: pool_layout::UnwindSeed,
 ) -> Result<u64, String> {
     let (id, fresh) = context.fn_abis.reserve(abi.clone());
     if !fresh {
         return Ok(id as u64);
     }
-    let value = pool_layout::FnAbi::new(context, tcx, abi)?;
+    let value = pool_layout::FnAbi::new(context, tcx, abi, unwind_seed)?;
     context.fn_abis.define(id, value);
     Ok(id as u64)
 }
@@ -5593,15 +5593,12 @@ fn bytes_hex(bytes: &[u8]) -> String {
 // Newly reached drop-glue MIR can add more demands for a later finite wave.
 struct RuntimeTypeFact {
     input_type_id: u64,
-    mut_pointer_type: u64,
-    mut_reference_type: u64,
     drop_glue: Option<u64>,
 }
 impl RuntimeTypeFact {
     fn finish(self) -> query_values::RuntimeTypeQuery {
         query_values::RuntimeTypeQuery { input_type_id: self.input_type_id,
-            typing_env: "fully_monomorphized", mut_pointer_type: self.mut_pointer_type,
-            mut_reference_type: self.mut_reference_type, drop_glue: self.drop_glue }
+            typing_env: "fully_monomorphized", drop_glue: self.drop_glue }
     }
 }
 fn compiler_runtime_type_queries_json<'tcx>(
@@ -5656,10 +5653,9 @@ fn compiler_runtime_type_queries_json<'tcx>(
             }
             _=>unavailable_compiler_fact("drop glue requires normalized monomorphic type and drop_in_place lang item")?,
         }) };
-        Ok::<_, String>(RuntimeTypeFact { input_type_id:id,
-            mut_pointer_type:query_generated_type_json(context,tcx,ty::Ty::new_mut_ptr(tcx,input))?,
-            mut_reference_type:query_generated_type_json(context,tcx,ty::Ty::new_mut_ref(tcx,tcx.lifetimes.re_erased,input))?,
-            drop_glue: drop })
+        // Mutable pointer/reference constructor nodes and layouts are created
+        // by the consumer's input-relative lazy type arena on actual demand.
+        Ok::<_, String>(RuntimeTypeFact { input_type_id:id, drop_glue: drop })
     } }).collect::<Result<Vec<_>, String>>()?;
     Ok(records)
 }
@@ -5669,7 +5665,7 @@ struct VirtualFact {
     method_definition: u64,
     parent_trait: u64,
     concrete_type: u64,
-    rebased_args: Vec<pool_values::GenericArgument>,
+    parent_generic_count: usize,
     resolved: u64,
     vtable_query: query_values::PendingVtableRef,
 }
@@ -5680,7 +5676,7 @@ impl VirtualFact {
         Ok(query_values::RuntimeVirtualQuery { typing_env: "fully_monomorphized",
             original_instance_id: self.original_instance_id,
             method_definition: self.method_definition, parent_trait: self.parent_trait,
-            concrete_type: self.concrete_type, rebased_args: self.rebased_args,
+            concrete_type: self.concrete_type, parent_generic_count: self.parent_generic_count,
             resolved: self.resolved, vtable_query: self.vtable_query.finish(ids)? })
     }
 }
@@ -5847,7 +5843,7 @@ fn compiler_runtime_virtual_queries_json<'tcx>(
             };
             state.rows.push(VirtualFact {
                 original_instance_id, method_definition:def_json(context,def), parent_trait:def_json(context,parent),
-                concrete_type:input_type, rebased_args:generic_args_json(context,tcx,rebound)?, resolved,
+                concrete_type:input_type, parent_generic_count:tcx.generics_of(parent).count(), resolved,
                 vtable_query:query_values::PendingVtableRef { input_type:type_json(context,tcx,concrete)?,
                     input_predicates, key:(input_type_id,input_predicate_ids) } });
         }
@@ -5913,7 +5909,6 @@ fn vtable_predicates_match<'tcx>(
 #[derive(serde::Serialize)]
 struct CallerInstance {
     instance_id: u64,
-    requires_caller_location: bool,
     display: String,
     inline_never: bool,
     target_features: Vec<TargetFeature>,
@@ -5959,7 +5954,6 @@ fn compiler_caller_location_queries_json<'tcx>(
     for (id, instance) in instances {
         let mut row = CallerInstance {
             instance_id: id,
-            requires_caller_location: instance.def.requires_caller_location(tcx),
             display: instance.to_string(),
             inline_never: matches!(
                 tcx.codegen_instance_attrs(instance.def).inline,
@@ -6125,7 +6119,7 @@ fn compiler_instance_abis_json<'tcx>(
         }else if !closed || !function {
             unavailable_compiler_fact("FnAbi instance query requires a complete monomorphic function instance and extra argument vector")?
         }else{match tcx.fn_abi_of_instance(ty::TypingEnv::fully_monomorphized().as_query_input((instance,extra))){
-                Ok(abi)=>compiler_fact(fn_abi_json(context,tcx,abi)?),
+                Ok(abi)=>compiler_fact(fn_abi_json(context,tcx,abi, pool_layout::UnwindSeed::for_instance(tcx, instance)?)?),
             Err(error)=>export_failure("main::compiler_instance_abis_json", format!("{}; {}", "rustc fn_abi_of_instance failed", format!("{error:?}")))?,
         }};
         let record=InstanceAbiFact { instance_id:context.register_metadata_instance(instance), extra_argument_types:extra.iter().map(|ty| type_json(context,tcx,ty)).collect::<Result<Vec<_>, String>>()?, abi_query:abi };
@@ -6579,7 +6573,7 @@ fn record_helper_signature<'tcx>(
     require_normal_fn_pointer_abi(signature.abi())?;
     let abi = match tcx.fn_abi_of_fn_ptr(ty::TypingEnv::fully_monomorphized()
         .as_query_input((ty::Binder::dummy(signature), ty::List::empty()))) {
-        Ok(abi) => fn_abi_json(context, tcx, abi)?,
+        Ok(abi) => fn_abi_json(context, tcx, abi, pool_layout::UnwindSeed::new(tcx, signature.abi(), None))?,
         Err(error) => export_failure("main::compiler_function_facts_json",
             format!("helper dummy signature ABI query failed; {error:?}"))?,
     };
@@ -6669,7 +6663,7 @@ fn compiler_function_facts_json<'tcx>(
         let abi=if !closed {unavailable_compiler_fact("FnPtr ABI requires a complete monomorphic function type and extra argument vector")?}
         else{require_normal_fn_pointer_abi(input.fn_sig(tcx).skip_binder().abi())?;
         match tcx.fn_abi_of_fn_ptr(ty::TypingEnv::fully_monomorphized().as_query_input((input.fn_sig(tcx),extra))){
-            Ok(abi)=>compiler_fact(fn_abi_json(context,tcx,abi)?),
+            Ok(abi)=>compiler_fact(fn_abi_json(context,tcx,abi, pool_layout::UnwindSeed::new(tcx, input.fn_sig(tcx).skip_binder().abi(), None))?),
             Err(error)=>export_failure("main::compiler_function_facts_json", format!("{}; {}", "rustc fn_abi_of_fn_ptr failed", format!("{error:?}")))?,
         }};
         Ok::<_, String>((context.type_id(input), extra.iter().map(|ty| type_json(context,tcx,ty)).collect::<Result<Vec<_>, String>>()?, abi))
@@ -6733,7 +6727,7 @@ fn compiler_function_facts_json<'tcx>(
                         ty::TypingEnv::fully_monomorphized()
                             .as_query_input((ty::Binder::dummy(signature), ty::List::empty())),
                     ) {
-                        Ok(abi) => compiler_fact(fn_abi_json(context, tcx, abi)?),
+                        Ok(abi) => compiler_fact(fn_abi_json(context, tcx, abi, pool_layout::UnwindSeed::new(tcx, signature.abi(), None))?),
                         Err(error) => export_failure(
                             "main::compiler_function_facts_json",
                             format!(

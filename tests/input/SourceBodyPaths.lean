@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.LowerMIR
 import Miri.Input.Decoder
 
@@ -8,7 +9,7 @@ private def must (value : Except String α) : IO α :=
 
 def main (args : List String) : IO Unit := do
   let path := args.headD "examples/empty_function/input.json"
-  let input ← must (decodeJson (← IO.FS.readFile path))
+  let input ← must (decodeFixture (← IO.FS.readFile path))
   let program ← must (lowerProgram input.document)
   unless program.bundle.bodies.size == input.document.bodies.size &&
       program.bundle.spans == input.document.spans &&

@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import MiriTests.Input.JsonFixtures
 import Miri.Input.Decoder
 
@@ -70,7 +71,7 @@ private def rewriteFirstTerminator (block : String) (rewrite : String → Except
   setField block "terminator" (← rewrite term)
 
 private def malformedResult (json : String) : Bool :=
-  match decodeJson json with
+  match decodeFixture json with
   | .error _ => true
   | .ok _ => false
 
@@ -92,7 +93,7 @@ def main (args : List String) : IO UInt32 := do
   let _ ← must (JsonFixtures.parse source)
   let original := source
 
-  let decoded ← match decodeJson source with
+  let decoded ← match decodeFixture source with
     | .ok value => pure value
     | .error error => fail s!"valid fixture rejected: {error}"
   let document := decoded.document
@@ -155,7 +156,7 @@ def main (args : List String) : IO UInt32 := do
   let allocations ← must (array (← must (getField original "allocations")))
   let expandedAllocations := allocations.push syntheticFunction |>.push syntheticTypeId
   let withSyntheticAllocations ← must (setField original "allocations" (encodeArray expandedAllocations))
-  let allocationDataTest ← match decodeJson withSyntheticAllocations with
+  let allocationDataTest ← match decodeFixture withSyntheticAllocations with
     | .ok result => pure result
     | .error error => fail s!"typed function/type-id allocation payloads were rejected: {error}"
   check (allocationDataTest.document.allocations.any fun node => match node.data with | some (.function _) => true | _ => false)
@@ -337,7 +338,7 @@ def main (args : List String) : IO UInt32 := do
     setField scopedButIncompleteGraph "types" (encodeArray (← updateAt types 0 first))
   check (malformedResult scopedButIncompleteGraph) "selected scope erased failed catalog data"
 
-  check (!(decodeJson "{}").isOk) "missing schema and compiler tables were accepted"
+  check (!(decodeFixture "{}").isOk) "missing schema and compiler tables were accepted"
 
   IO.println s!"input decoder tests passed: bodies={document.bodies.size}, instance_bodies={document.instances.filter (·.bodyId.isSome) |>.size}, types={document.types.size}"
   return 0

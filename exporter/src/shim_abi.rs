@@ -236,7 +236,7 @@ fn variadic_query<'tcx>(
         let value = match tcx.fn_abi_of_fn_ptr(
             ty::TypingEnv::fully_monomorphized().as_query_input((signature, ty::List::empty())),
         ) {
-            Ok(abi) => compiler_fact(fn_abi_json(context, tcx, abi)?),
+            Ok(abi) => compiler_fact(fn_abi_json(context, tcx, abi, super::pool_layout::UnwindSeed::new(tcx, external, None))?),
             Err(error) => export_failure(
                 "shim_abi::variadic_query",
                 format!(

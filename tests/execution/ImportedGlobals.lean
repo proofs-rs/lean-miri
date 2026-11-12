@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.CallResolution
 import tests.execution.GlobalMemory
 import Miri.Interpreter.Constant
@@ -559,7 +560,7 @@ private def callHooks (p : Program) : CallHooks CtfeProvenance State Unit Nat Un
     if abi.args.size != body.body.argumentCount then block "implicit caller location or unsupported ABI args"
     pure false
   callerLocation := block "implicit caller location"
-  abiCanUnwind := fun abi => abi.source.canUnwind
+  abiCanUnwind := fun abi => abi.source.unwindSeed.canUnwind
   abiVariadic := fun abi => abi.source.cVariadic
   abiFixedCount := fun abi => abi.source.fixedCount
   abiArgs := FnABI.args
@@ -717,7 +718,7 @@ private def runCase (p : Program) (name : String) (argument : Nat) : IO (State �
 
 def main (args : List String) : IO Unit := do
   let path ← match args with | path::_ => pure path | [] => throw (IO.userError "usage: ImportedGlobals <export>")
-  let decoded ← must (Input.decodeJson (← IO.FS.readFile path))
+  let decoded ← must (Input.decodeFixture (← IO.FS.readFile path))
   check (decoded.document.producer.targetTriple == "x86_64-unknown-linux-gnu") "fixture target"
   let p ← must ((prepare decoded.document).mapError reprStr)
   let (normal,outcome) ← runCase p "root" 0

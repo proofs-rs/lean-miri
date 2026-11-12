@@ -92,14 +92,14 @@ private def subsliceKnown (world : RuntimeArrayTypes.World) (base : LocalLayout)
   if world.entries.any (·.value.ty == base.ty) then
     let (_,element) ← arrayResult (RuntimeArrayTypes.arrayInfo world base.ty)
     let (layout,after) ← arrayResult (RuntimeArrayTypes.internElement world element.ty count)
-    if after.nextId != world.nextId then throw (.obligation "subslice constructor requires effectful canonical interning")
+    if after.entries.size != world.entries.size then throw (.obligation "subslice constructor requires effectful canonical interning")
     return (layout,.none)
   let node ← shape world.metadata base.ty
   match node.shapeKind with
   | .array =>
     let element ← field world base 0
     let (layout,after) ← arrayResult (RuntimeArrayTypes.internElement world element.ty count)
-    if after.nextId != world.nextId then throw (.obligation "subslice constructor requires effectful canonical interning")
+    if after.entries.size != world.entries.size then throw (.obligation "subslice constructor requires effectful canonical interning")
     pure (layout,.none)
   | .slice =>
     let scalar ← Memory.Scalar.fromUInt (BitVec.ofNat 128 count.toNat) world.metadata.target.pointerSize

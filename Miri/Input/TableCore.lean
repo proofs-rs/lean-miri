@@ -15,7 +15,7 @@ open Lean
 def expectedMiriCommit : String := "7fa591d7d4dd9af8154becbc8332f8096f8323b1"
 def expectedRustcCommit : String := "8144389c895da997dbdecaa635e41d6a50be6ffd"
 def expectedSchema : String := "lean-miri-rustc-mir"
-def expectedSchemaVersion : Nat := 12
+def expectedSchemaVersion : Nat := 13
 def expectedCompilerAbiLayoutSchema : String := "physical_ty_and_layout_v1"
 
 def escapePathKey (key : String) : String :=
@@ -528,6 +528,7 @@ def parseLayoutFieldOffsets : Parser LayoutFieldOffsets := do
   return .arrayFormula (← required fields.stride "stride_bytes") (← required fields.count "field_count")
 
 private structure parseLayoutFields where
+  primitiveRecipe : Option String := none
   «kind» : Option (String) := none
   «field_offsets_bytes» : Option LayoutFieldOffsets := none
   «fields» : Option (Option (FieldShape)) := none
@@ -543,8 +544,9 @@ private structure parseLayoutFields where
   «randomization_seed» : Option (Nat) := none
 
 def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
-  let s ← object (parseLayoutFields.mk none none none none none none none none none none none none none) fun s key => do
+  let s ← object (parseLayoutFields.mk none none none none none none none none none none none none none none) fun s key => do
     match key with
+    | "primitive_recipe" => return {s with primitiveRecipe := some (← string)}
     | "kind" => return { s with «kind» := some (← string) }
     | "field_offsets_bytes" => return { s with «field_offsets_bytes» := some (← parseLayoutFieldOffsets) }
     | "fields" => return { s with «fields» := some (← nullable (parseFieldShape)) }
@@ -559,6 +561,25 @@ def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
     | "largest_niche" => return { s with «largest_niche» := some (← parseNicheLayout) }
     | "randomization_seed" => return { s with «randomization_seed» := some (← natural) }
     | _ => skipValue; pure s
+  if let some recipe := s.primitiveRecipe then
+    unless s.kind.isNone && s.field_offsets_bytes.isNone && s.fields.isNone &&
+        s.variants.isNone && s.backend_repr.isNone && s.size_bytes.isNone &&
+        s.abi_align_bytes.isNone && s.unadjusted_abi_align_bytes.isNone &&
+        s.max_repr_align_bytes.isNone && s.repr_c.isNone && s.uninhabited.isNone &&
+        s.largest_niche.isNone && s.randomization_seed.isNone do
+      fail s!"{path}: primitive recipe cannot contain eager layout results"
+    unless ["bool", "char", "i8", "i16", "i32", "i64", "i128", "isize",
+        "u8", "u16", "u32", "u64", "u128", "usize", "f16", "f32", "f64", "f128",
+        "fn_pointer", "never"].contains recipe do
+      fail s!"{path}: unknown primitive layout recipe"
+    return {
+      primitiveRecipe := some recipe, kind := .layout,
+      maxReprAlignBytes := none, reprC := false, uninhabited := false,
+      largestNiche := none, randomizationSeed := 0, sizeBytes := none,
+      abiAlignBytes := none, unadjustedAbiAlignBytes := none,
+      fieldOffsetsBytes := .explicit #[], fields := none, variantsLayout := none,
+      backendRepresentation := none, variantsKind := none, backendReprKind := none,
+      variants := none, backendRepr := none }
   unless s.kind.isNone || s.kind == some "layout" do fail s!"{path}: unrecognized LayoutKind"
   let offsets := (← required s.«field_offsets_bytes» "field_offsets_bytes")
   let fields := s.fields.join

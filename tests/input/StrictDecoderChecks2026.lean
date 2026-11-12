@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import MiriTests.Input.JsonFixtures
 import Miri.Input.Decoder
 
@@ -37,7 +38,7 @@ private def replaceBodyNode (fixture : String) (kind : String) (terminator : Boo
 
 def main : IO Unit := do
   let fixture ← IO.FS.readFile "tests/input/fixtures/strict-unit.json"
-  let full ← must (decodeJson fixture)
+  let full ← must (decodeFixture fixture)
   unless full.document.types.size == 20 && full.document.layouts.size == 20 do
     throw (IO.userError "typed table definitions were discarded")
   let types ← must (array (← must (get fixture "types")))
@@ -54,34 +55,34 @@ def main : IO Unit := do
   rejects (JsonReader.run (parseInstance "$instance") (← must (set firstInstance "def_id" "99999")))
     "row-local instance definition identity"
   let badType ← must (set firstType "layout" "99999")
-  rejects (decodeJson (← must (set fixture "types" (arr (types.set! 0 badType))))) "out of bounds layout"
+  rejects (decodeFixture (← must (set fixture "types" (arr (types.set! 0 badType))))) "out of bounds layout"
   let invalidScope := object [("kind",string "future_scope"),
     ("semantics",string "structural_export_closure_only"),("roots","[]")]
   let invalidScopeInput ← must (set fixture "selected_scope" invalidScope)
-  match decodeJson invalidScopeInput with
+  match decodeFixture invalidScopeInput with
   | .error message =>
     unless message.contains "selected_scope" do throw (IO.userError s!"wrong scope diagnostic: {message}")
   | .ok _ => throw (IO.userError "invalid selected scope was accepted")
   let malformedOnly ← must (set fixture "compiler_predicate_queries" "[null]")
-  let expectedTableError ← match decodeJson malformedOnly with
+  let expectedTableError ← match decodeFixture malformedOnly with
     | .error message => pure message
     | .ok _ => throw (IO.userError "malformed predicate definition was accepted")
   let malformedTable ← must (set invalidScopeInput "compiler_predicate_queries" "[null]")
-  match decodeJson malformedTable with
+  match decodeFixture malformedTable with
   | .error message =>
     unless message == expectedTableError do
       throw (IO.userError s!"malformed table did not precede scope validation: {message}")
   | .ok _ => throw (IO.userError "malformed predicate definition was accepted")
 
   let badStatement := object [("variant",string "FutureStatement")]
-  rejects (decodeJson (← must (replaceBodyNode fixture badStatement false))) "statement"
+  rejects (decodeFixture (← must (replaceBodyNode fixture badStatement false))) "statement"
   let badTerminator := object [("variant",string "FutureTerminator")]
-  rejects (decodeJson (← must (replaceBodyNode fixture badTerminator true))) "terminator"
+  rejects (decodeFixture (← must (replaceBodyNode fixture badTerminator true))) "terminator"
   let place := object [("local","0"),("type","0"),("projection","[]")]
   let assign (rvalue : String) := object [("variant",string "Assign"),("place",place),("rvalue",rvalue)]
-  rejects (decodeJson (← must (replaceBodyNode fixture (assign (object [("kind",string "FutureRvalue")])) false))) "rvalue"
+  rejects (decodeFixture (← must (replaceBodyNode fixture (assign (object [("kind",string "FutureRvalue")])) false))) "rvalue"
   let operand := object [("kind",string "FutureOperand")]
-  rejects (decodeJson (← must (replaceBodyNode fixture (assign (object [("kind",string "Use"),("operand",operand),
+  rejects (decodeFixture (← must (replaceBodyNode fixture (assign (object [("kind",string "Use"),("operand",operand),
     ("retag",object [("kind",string "no"),("performs_retag","false")])])) false))) "operand"
   let projection := object [("local","0"),("type","0"),("projection",arr #[object [("kind",string "FutureProjection")]])]
   rejects (JsonReader.run DecodeMIR.place projection) "projection"

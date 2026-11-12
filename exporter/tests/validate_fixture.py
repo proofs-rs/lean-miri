@@ -9,7 +9,7 @@ from mir_json import load_mir_inspection_document as load_mir_document, pool_ent
 
 doc = load_mir_document(sys.argv[1])
 assert doc["schema"] == "lean-miri-rustc-mir"
-assert doc["schema_version"] == 12
+assert doc["schema_version"] == 13
 assert doc["compiler_coroutine_coverage"]["body_coroutines"] == [False] * len(doc["bodies"])
 assert doc["compiler_coroutine_coverage"]["coroutines"] == []
 assert doc["compiler_coroutine_coverage"]["auxiliary_bodies"] == []

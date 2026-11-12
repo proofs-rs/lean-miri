@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.CompilerBacktraceSource
 
 open Miri Miri.Input Miri.Interpreter
@@ -18,7 +19,7 @@ private def replaceSpans (program : LoweredProgram) (index : Nat)
 
 def main (args : List String) : IO Unit := do
   let some path := args.head? | throw (IO.userError "producer export path required")
-  let decoded ← must (decodeJson (← IO.FS.readFile path))
+  let decoded ← must (decodeFixture (← IO.FS.readFile path))
   let program ← must (lowerProgram decoded.document)
   let baseline ← must (CompilerBacktraceSource.prepare program)
   let some firstIndex := (List.range program.bundle.bodies.size).toArray.find? (fun index =>

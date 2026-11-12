@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and copy a maintained MIR input without adapting compiler data."""
+"""Project an immutable historical fixture to the current test-only input schema."""
 import argparse
 import hashlib
 import json
@@ -8,6 +8,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from mir_json import decode_mir_document
+from legacy_fixture_schema import adapt_legacy_fixture
 
 
 def reject_duplicate_keys(pairs):
@@ -27,12 +28,15 @@ def copy_fixture(source_path, output_path):
     raw = source_path.read_bytes()
     document = json.loads(raw, object_pairs_hook=reject_duplicate_keys,
                           parse_constant=reject_non_json_constant)
+    document = adapt_legacy_fixture(document)
     decode_mir_document(document)
-    output_path.write_bytes(raw)
+    adapted = (json.dumps(document, separators=(",", ":")) + "\n").encode()
+    output_path.write_bytes(adapted)
     return {"source": str(source_path), "output": str(output_path),
             "source_sha256": hashlib.sha256(raw).hexdigest(),
-            "output_sha256": hashlib.sha256(raw).hexdigest(),
-            "schema_version": 11, "all_json_exactly_unchanged": True}
+            "output_sha256": hashlib.sha256(adapted).hexdigest(),
+            "schema_version": 13, "all_json_exactly_unchanged": False,
+            "adaptation": "test-only legacy schema projection; no new rustc evidence"}
 
 
 def main(argv=None):

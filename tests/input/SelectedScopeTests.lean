@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input
 
 open Lean
@@ -10,7 +11,7 @@ def main (args : List String) : IO UInt32 := do
     | value :: _ => pure value
     | [] => fail "usage: SelectedScopeTests <rooted-schema-v3-export.json>"
   let source ← IO.FS.readFile path
-  let result ← match decodeJson source with
+  let result ← match decodeFixture source with
     | .ok value => pure value
     | .error error => fail s!"rooted compiler graph was rejected: {error}"
   if result.document.selectedScope.isNone then

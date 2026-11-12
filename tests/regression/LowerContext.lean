@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.LowerMIR
 import Miri.Input.Decoder
 import Miri.Input.CompilerInstance
@@ -49,7 +50,7 @@ def main (args : List String) : IO Unit := do
     changed.containsAllocationId 2 && !changed.containsAllocationId 7)
     "context retained obsolete pool IDs"
   if let some path := args.head? then
-    let .ok decoded := decodeJson (← IO.FS.readFile path)
+    let .ok decoded := decodeFixture (← IO.FS.readFile path)
       | throw (IO.userError "input decode failed")
     let some body := decoded.document.bodies[0]?
       | throw (IO.userError "input has no body")

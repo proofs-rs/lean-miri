@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.EvalPreparation
 import Miri.Input.CompilerValueConstants
 
@@ -16,7 +17,7 @@ private def check (condition : Bool) (message : String) : IO Unit :=
 
 def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected ordinary export fixture")
-  let decoded ← must (decodeJson (← IO.FS.readFile path))
+  let decoded ← must (decodeFixture (← IO.FS.readFile path))
   let program ← must (lowerProgram decoded.document)
   let p := (← must (EvalPreparation.prepare program).outcome).compiler
   let some source := p.program.input.queries.callerLocations[0]? |

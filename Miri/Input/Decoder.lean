@@ -6,6 +6,7 @@ import Miri.Input.DecodeMIR
 import Miri.Input.CatalogDecoder
 import Miri.Input.SharedPools
 import Miri.Input.CoroutineCoverage
+import Miri.Input.RuntimeMetadata
 
 namespace Miri.Input
 open Lean DecoderValues
@@ -324,13 +325,11 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
   let compilerAllocIdWorld := d.compilerAllocIdWorld
   let selectedScope := d.selectedScope
   if schema != expectedSchema then throw s!"$.schema: expected `{expectedSchema}`"
-  unless schemaVersion == 11 || schemaVersion == expectedSchemaVersion do
+  unless schemaVersion == expectedSchemaVersion do
     throw "$.schema_version: unsupported schema version"
-  match schemaVersion, d.coroutineCoverage with
-  | 11, some _ => throw "schema 11 forbids compiler_coroutine_coverage"
-  | 12, none => throw "schema 12 requires compiler_coroutine_coverage"
-  | 12, some coverage => CoroutineCoverageCodec.validate d coverage
-  | _, _ => pure ()
+  match d.coroutineCoverage with
+  | none => throw "schema 13 requires compiler_coroutine_coverage"
+  | some coverage => CoroutineCoverageCodec.validate d coverage
   if producer.miriCommit != expectedMiriCommit then throw "$.producer.miri_commit: input is from the wrong pinned Miri revision"
   if producer.rustcCommit != expectedRustcCommit then throw "$.producer.rustc_commit: input is from the wrong pinned rustc revision"
   unless compilerAbiLayoutSchema == some expectedCompilerAbiLayoutSchema do
@@ -351,11 +350,24 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
           throw s!"$.compiler_predicate_queries[{index}]: dangling normalized predicate reference {normalized}"
   profileit "decoder.validate_alloc_id_world" profile fun _ => do
     if let some world := compilerAllocIdWorld then validateCompilerAllocIdWorld allocations world
+  -- Scalar constants are validated against the same target-dependent layout
+  -- constructor used at execution. Recipe rows intentionally omit eager sizes.
+  let target ← (do
+    let evidence ← RuntimeMetadata.require d.runtimeTargetDataLayout "runtime_target_data_layout"
+    RuntimeMetadata.importTarget evidence).mapError toString
+  let scalarSize := fun id => do
+    let ty ← types[id]?
+    let source ← layouts[ty.layoutId]?
+    match source.primitiveRecipe with
+    | none => source.sizeBytes
+    | some recipe => match Miri.ABI.PrimitiveLayout.compute target recipe with
+      | .ok layout => some layout.size.bytes.toNat
+      | .error _ => none
   let bodyContext : DecodeMIR.Context := {
     typeCount := types.size, allocationCount := allocations.size,
     definitionCount := definitions.size, typeConstantCount := typeConstants.size,
     spanCount := spans.size,
-    scalarSize := fun id => (types[id]?).bind fun ty => (layouts[ty.layoutId]?).bind (·.sizeBytes) }
+    scalarSize }
   profileit "decoder.validate_body_references" profile fun _ =>
     parsed.bodyReferences.forM (DecodeMIR.validateReferences bodyContext)
   match selectedScope with

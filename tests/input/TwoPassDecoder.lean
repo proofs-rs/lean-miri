@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import MiriTests.Input.JsonFixtures
 import Miri.Input.Decoder
 
@@ -38,7 +39,7 @@ private def replaceBody (source : String) (change : String → Except String Str
   set source "bodies" (arr (bodies.set! 0 (← change body)))
 
 private def reject (source label : String) : IO Unit :=
-  check (!(decodeJson source).isOk) s!"accepted invalid {label}"
+  check (!(decodeFixture source).isOk) s!"accepted invalid {label}"
 
 private def constant (bits : String) : String :=
   "{\"constant\":{\"value\":{\"bits_unsigned\":" ++ Json.renderString bits ++
@@ -107,11 +108,11 @@ def main : IO Unit := do
   checkCallEvidence
   let fixture ← IO.FS.readFile "tests/input/fixtures/strict-unit.json"
   checkPlaceFactsOrder fixture
-  let baseline ← must (decodeJson fixture)
+  let baseline ← must (decodeFixture fixture)
   let withConstant ← must (replaceBody fixture fun body => set body "required_consts" (arr #[constant "255"]))
-  let expected ← must (decodeJson withConstant)
+  let expected ← must (decodeFixture withConstant)
   let reordered ← must (forwardOrder (permuted (← must (Json.parse withConstant))))
-  let decoded ← must (decodeJson reordered)
+  let decoded ← must (decodeFixture reordered)
   check (decoded.document.types.size == baseline.document.types.size) "field permutation changed type table"
   check (decoded.document.bodies.map (·.mir) == expected.document.bodies.map (·.mir))
     "recursive field permutation changed final MIR"
@@ -150,7 +151,7 @@ def main : IO Unit := do
   let fs ← must (fields fixture)
   reject (obj (#[("schema", "\"lean-miri-rustc-mir\"")] ++ fs)) "root duplicate"
   let unknown ← must (set reordered "future_metadata" "{\"rows\":[null,true,-2.5e3,{\"escaped\":\"\\uD83D\\uDE03\"}]}")
-  let _ ← must (decodeJson unknown)
+  let _ ← must (decodeFixture unknown)
   reject (← must (set fixture "future_metadata" "{\"x\":1,\"x\":2}")) "duplicate unknown member"
   reject (← must (set fixture "future_metadata" "{\"rows\":[1,]}")) "malformed unknown payload"
   reject (← must (replaceBody fixture fun body => set body "phase" "{\"kind\":\"built\",\"phase\":null}")) "invalid union payload"

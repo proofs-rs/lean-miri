@@ -145,21 +145,21 @@ private def componentChecks (original : ImportDocument) : IO Unit := do
   IO.println "PASS constructed coroutine ownership/type/index/conflict/phase/role/residual negatives"
 
 /-- Finite decoder contract checks. The fixed schema-11 input is read, never
-rewritten; schema-12 mutations exist only in memory and establish no guest safety. -/
+rewritten; schema-13 test adaptations exist only in memory and establish no guest safety. -/
 def main : IO Unit := do
   let legacy ← IO.FS.readFile "examples/empty_function/input.json"
-  let decoded ← must (decodeJson legacy)
-  check decoded.document.coroutineCoverage.isNone "legacy input acquired fabricated coroutine evidence"
-  let count := decoded.document.bodies.size
+  rejected legacy "unsupported schema version"
+  let raw ← must (JsonFixtures.parse legacy)
+  let count := (← must ((← must (raw.field "bodies")).array)).size
   let markers := "[" ++ String.intercalate "," (List.replicate count "false") ++ "]"
   let catalog := object [("body_coroutines", markers), ("coroutines", "[]"), ("auxiliary_bodies", "[]")]
-  let newVersion ← must (setField legacy "schema_version" "12")
+  let newVersion ← must (setField legacy "schema_version" "13")
   let valid ← must (setField newVersion "compiler_coroutine_coverage" catalog)
   let newDecoded ← must (decodeJson valid)
-  check newDecoded.document.coroutineCoverage.isSome "schema 12 failed to retain typed coverage"
-  rejected (← must (setField legacy "compiler_coroutine_coverage" catalog)) "schema 11 forbids"
-  rejected newVersion "schema 12 requires"
-  rejected (← must (setField valid "schema_version" "13")) "unsupported schema version"
+  check newDecoded.document.coroutineCoverage.isSome "schema 13 failed to retain typed coverage"
+  rejected (← must (setField legacy "compiler_coroutine_coverage" catalog)) "unsupported schema version"
+  rejected newVersion "schema 13 requires"
+  rejected (← must (setField valid "schema_version" "12")) "unsupported schema version"
   rejected (← must (setField valid "compiler_coroutine_coverage" (object [("auxiliary_bodies", "[]"), ("coroutines", "[]")]))) "body_coroutines"
   let badMarkers ← must (setField catalog "body_coroutines" "[]")
   rejected (← must (setField valid "compiler_coroutine_coverage" badMarkers)) "incomplete body markers"
@@ -201,5 +201,5 @@ def main : IO Unit := do
   let badWitness ← must (setField witness "layout" badSavedSource)
   let badCatalog ← must (setField catalog "coroutines" ("[" ++ badWitness ++ "]"))
   rejected (← must (setField valid "compiler_coroutine_coverage" badCatalog)) "dangling source-info pool reference"
-  componentChecks decoded.document
-  IO.println "PASS strict schema-11/12 coroutine coverage, retained evidence and malformed/missing/unknown guards"
+  componentChecks newDecoded.document
+  IO.println "PASS strict schema-13 coroutine coverage, retained evidence and malformed/missing/unknown guards"

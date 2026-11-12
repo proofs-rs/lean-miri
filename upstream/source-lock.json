@@ -5,18 +5,30 @@
       "aes": "upstream/.pins/aes.commit",
       "miri": "upstream/.pins/miri.commit",
       "rustc": "upstream/.pins/rustc.commit",
-      "rustc_apfloat": "upstream/.pins/rustc_apfloat.commit"
+      "rustc_apfloat": "upstream/.pins/rustc_apfloat.commit",
+      "rustc_rand": "upstream/.pins/rustc_rand.commit",
+      "rustc_rand_core": "upstream/.pins/rustc_rand_core.commit",
+      "rustc_rand_xoshiro": "upstream/.pins/rustc_rand_xoshiro.commit"
     },
     "procedure": "upstream/fetch-sources.sh",
-    "procedure_sha256": "55b652daac6d47405052386a60a48ea2580699be015e7d2af79e5b6601ccc035",
+    "procedure_sha256": "a8ced1c1a19c47193465862bbe2486e25dcf91c544df5b62f9b2265ea12fb7d8",
     "rustc_selected_archive_paths": {
-      "count": 539,
+      "count": 547,
       "path": "upstream/rustc-selected-files.txt",
-      "sha256": "6195d9651c4b0c256583737ddbdc0142d38698d5183ab09e3ac083b6a6594e00"
+      "sha256": "6e7768877b6ce8ff1e99b166f6a544b52986ef9f089aea83f4b71fc6fef71365"
     }
   },
   "coverage_expected_rust_modules": {
     "upstream/crates/aes-0.9.3/src": 27,
+    "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs": 1,
+    "upstream/crates/rand-0.9.3/src/seq/increasing_uniform.rs": 1,
+    "upstream/crates/rand-0.9.3/src/seq/slice.rs": 1,
+    "upstream/crates/rand_core-0.9.3/src/impls.rs": 1,
+    "upstream/crates/rand_core-0.9.3/src/le.rs": 1,
+    "upstream/crates/rand_core-0.9.3/src/lib.rs": 1,
+    "upstream/crates/rand_xoshiro-0.7.0/src/common.rs": 1,
+    "upstream/crates/rand_xoshiro-0.7.0/src/splitmix64.rs": 1,
+    "upstream/crates/rand_xoshiro-0.7.0/src/xoshiro128starstar.rs": 1,
     "upstream/miri-source/src": 133,
     "upstream/rustc-apfloat-source/src": 3,
     "upstream/rustc-source/compiler/rustc_abi/src": 12,
@@ -36,6 +48,8 @@
     "upstream/rustc-source/compiler/rustc_target/src/asm/mod.rs": 1,
     "upstream/rustc-source/compiler/rustc_target/src/callconv": 26,
     "upstream/rustc-source/compiler/rustc_target/src/spec": 389,
+    "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs": 1,
+    "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/binder.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/const_kind.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/inherent.rs": 1,
@@ -46,6 +60,15 @@
   },
   "coverage_roots": [
     "upstream/crates/aes-0.9.3/src",
+    "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+    "upstream/crates/rand-0.9.3/src/seq/increasing_uniform.rs",
+    "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+    "upstream/crates/rand_core-0.9.3/src/impls.rs",
+    "upstream/crates/rand_core-0.9.3/src/le.rs",
+    "upstream/crates/rand_core-0.9.3/src/lib.rs",
+    "upstream/crates/rand_xoshiro-0.7.0/src/common.rs",
+    "upstream/crates/rand_xoshiro-0.7.0/src/splitmix64.rs",
+    "upstream/crates/rand_xoshiro-0.7.0/src/xoshiro128starstar.rs",
     "upstream/miri-source/src",
     "upstream/rustc-apfloat-source/src",
     "upstream/rustc-source/compiler/rustc_abi/src",
@@ -65,6 +88,8 @@
     "upstream/rustc-source/compiler/rustc_target/src/asm/mod.rs",
     "upstream/rustc-source/compiler/rustc_target/src/callconv",
     "upstream/rustc-source/compiler/rustc_target/src/spec",
+    "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
+    "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/binder.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/const_kind.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/inherent.rs",
@@ -285,6 +310,24 @@
         "name": "git2",
         "scope": "genmc-sys:build-dependencies",
         "version": "0.20.2"
+      },
+      {
+        "name": "rand",
+        "version": "0.9.3",
+        "scope": "rustc-layout-reference",
+        "checksum": "7ec095654a25171c2124e9e3393a930bddbffdc939556c914957a4c3e0a87166"
+      },
+      {
+        "name": "rand_core",
+        "version": "0.9.3",
+        "scope": "rustc-layout-reference",
+        "checksum": "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38"
+      },
+      {
+        "name": "rand_xoshiro",
+        "version": "0.7.0",
+        "scope": "rustc-layout-reference",
+        "checksum": "f703f4665700daf5512dcca5f43afa6af89f09db47fb56be587f80636bda2d41"
       }
     ],
     "resolution_file": {
@@ -633,6 +676,60 @@
       "git_blob": "2ee6820a36bed6f0b08bc863eca7c31733389c77",
       "path": "upstream/crates/aes-0.9.3/src/lib.rs",
       "sha256": "8d9d670054b394638ff989e502e1ea18b1fc212bb5bdb0a7fb1ab9332bf4ac1c"
+    },
+    {
+      "component": "rustc_rand",
+      "path": "upstream/crates/rand-0.9.3/src/distr/uniform_int.rs",
+      "git_blob": "4a83c1360b76766f94bb8c9d7521419d2b38b3fd",
+      "sha256": "1fb3ade156995a45b33853c04eb28c4031d7b0f73e731145182adb69de0c5880"
+    },
+    {
+      "component": "rustc_rand",
+      "path": "upstream/crates/rand-0.9.3/src/seq/increasing_uniform.rs",
+      "git_blob": "10dd48a652a337d7afa402a483037aa83730af2c",
+      "sha256": "73b1bf2b30c4e5972f2e902dbb30b90518006bae7eb2628d1ab2547eaeca8ea3"
+    },
+    {
+      "component": "rustc_rand",
+      "path": "upstream/crates/rand-0.9.3/src/seq/slice.rs",
+      "git_blob": "67615f100b6ce9067ba0202c22347140fec0097f",
+      "sha256": "8212a23bbc284b74b981ef8d5fc177c460926415f9d747a5a127453b7fa0f9e2"
+    },
+    {
+      "component": "rustc_rand_core",
+      "path": "upstream/crates/rand_core-0.9.3/src/impls.rs",
+      "git_blob": "4cced0d6f0b945d633a2e6faa600e1afad909535",
+      "sha256": "145ec30e733af5aa0fd8556a706aa932723de45cfa964aacf284bc59e951ca5a"
+    },
+    {
+      "component": "rustc_rand_core",
+      "path": "upstream/crates/rand_core-0.9.3/src/le.rs",
+      "git_blob": "cee84c2f327c621b9ac8cf4ba88ffc42b03d3f06",
+      "sha256": "e1d01e111ce8d2b6fdc8c85e1fcf400b490b302db5c5f32e040c5b9e6b528013"
+    },
+    {
+      "component": "rustc_rand_core",
+      "path": "upstream/crates/rand_core-0.9.3/src/lib.rs",
+      "git_blob": "d41d0c03329dd64a30ccd040909f8a8ab081ec2b",
+      "sha256": "d72f3328eb8ddd4a289a38ec8dfe61ced7d59c4c1b65ffb61c251e42d9e165ef"
+    },
+    {
+      "component": "rustc_rand_xoshiro",
+      "path": "upstream/crates/rand_xoshiro-0.7.0/src/common.rs",
+      "git_blob": "2fe918bc35ccc1be7d906f311e4d22111e72009f",
+      "sha256": "02964e50bc7e32b6c345910226ab1baa009cdbeb18248aee95662329cbdf0213"
+    },
+    {
+      "component": "rustc_rand_xoshiro",
+      "path": "upstream/crates/rand_xoshiro-0.7.0/src/splitmix64.rs",
+      "git_blob": "750b07dde1508d17c0b6c495c5f44236a7616407",
+      "sha256": "5e14a6d56fb2815e6deecaa97b44644b3428b4b3607f446859b81abb86fa3f67"
+    },
+    {
+      "component": "rustc_rand_xoshiro",
+      "path": "upstream/crates/rand_xoshiro-0.7.0/src/xoshiro128starstar.rs",
+      "git_blob": "af7a251c8412c745c053d4df856a9b2f484619ed",
+      "sha256": "32a53c2311a064fa60aad5f1e74909296dfd1fc3fac5740ce8476cbb15eb1784"
     },
     {
       "component": "miri",
@@ -4674,6 +4771,18 @@
     },
     {
       "component": "rustc",
+      "git_blob": "5c72f6cba398973bd1617b06ff7bf1aa0c7c9b72",
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/abi.rs",
+      "sha256": "1cebc01da4a128b9c7442c20aa299ee0156ef14facb4ecfb639ad3ed23ce1d75"
+    },
+    {
+      "component": "rustc",
+      "git_blob": "bcae974daab7e600fb9bb24af8001b75e4f148b7",
+      "path": "upstream/rustc-source/compiler/rustc_ty_utils/src/layout.rs",
+      "sha256": "f6f3014bde9051f06c24cedc25b360d81a8a3057118e8d589ea7d1a723f814a3"
+    },
+    {
+      "component": "rustc",
       "git_blob": "d9b5ec7356e3e47d4e7f716aa3fcf157d04972af",
       "path": "upstream/rustc-source/compiler/rustc_type_ir/src/binder.rs",
       "sha256": "944788200ff781acc1b0b0cf733005bb2fa67beb5b8cb18124bf1c7f745f1944"
@@ -4760,6 +4869,36 @@
       "package_version": "0.2.3+llvm-462a31f5a5ab",
       "registry": "https://crates.io/crates/rustc_apfloat",
       "repository": "https://github.com/rust-lang/rustc_apfloat"
+    },
+    "rustc_rand": {
+      "repository": "https://github.com/rust-random/rand",
+      "commit": "1aeee9f4c506f9f737c6c37c169ccdc365bfbabf",
+      "package_version": "0.9.3",
+      "archive_url": "https://static.crates.io/crates/rand/rand-0.9.3.crate",
+      "archive_path": "upstream/rand-0.9.3.crate",
+      "archive_sha256": "7ec095654a25171c2124e9e3393a930bddbffdc939556c914957a4c3e0a87166",
+      "extracted_root": "upstream/crates/rand-0.9.3",
+      "checksum_source": "upstream/rustc-source/Cargo.lock"
+    },
+    "rustc_rand_core": {
+      "repository": "https://github.com/rust-random/rand",
+      "commit": "340849e53b71da0f15af448d10511c2e62e50ba1",
+      "package_version": "0.9.3",
+      "archive_url": "https://static.crates.io/crates/rand_core/rand_core-0.9.3.crate",
+      "archive_path": "upstream/rand_core-0.9.3.crate",
+      "archive_sha256": "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38",
+      "extracted_root": "upstream/crates/rand_core-0.9.3",
+      "checksum_source": "upstream/rustc-source/Cargo.lock"
+    },
+    "rustc_rand_xoshiro": {
+      "repository": "https://github.com/rust-random/rngs",
+      "commit": "242e4bdaf8d43a59d84c5511f427026026ea4c97",
+      "package_version": "0.7.0",
+      "archive_url": "https://static.crates.io/crates/rand_xoshiro/rand_xoshiro-0.7.0.crate",
+      "archive_path": "upstream/rand_xoshiro-0.7.0.crate",
+      "archive_sha256": "f703f4665700daf5512dcca5f43afa6af89f09db47fb56be587f80636bda2d41",
+      "extracted_root": "upstream/crates/rand_xoshiro-0.7.0",
+      "checksum_source": "upstream/rustc-source/Cargo.lock"
     }
   },
   "schema_version": 1,
@@ -4776,7 +4915,9 @@
     "rustc_type_ir/src/ty_kind.rs records rigid versus non-rigid alias-constant state used by the typed type-system const exporter.",
     "upstream/rustc-source/compiler/rustc_middle/src/ty: Full pinned rustc_middle type-system source surface, including type/const representations and layout definitions consumed by Miri. The source inventory is not a claim that compiler type checking or query machinery must be reimplemented; those remain exporter-boundary candidates.",
     "AES 0.9.3 hazmat runtime dependency is pinned from Miri Cargo.lock. Full crate src inventory is retained; x86 Lean hazmat uses the portable fixslice32 circuit, while alternative hardware implementations remain inventoried and do not imply a complete dependency equivalence proof.",
-    "GenMC is outside the port scope. The immutable Miri reference snapshot retains its optional GenMC bridge; no standalone GenMC source or Lean backend is included."
+    "GenMC is outside the port scope. The immutable Miri reference snapshot retains its optional GenMC bridge; no standalone GenMC source or Lean backend is included.",
+    "The pinned rustc_ty_utils abi.rs and layout.rs source snapshots support material-seed algorithm comparisons. Their inclusion expands source inventory scope; it does not establish full ABI/layout provider correspondence or dependency-closure coverage.",
+    "Selected rand, rand_core and rand_xoshiro package sources support the pinned rustc layout shuffle port. Package checksums come from pinned rustc Cargo.lock. Selection and finite comparisons do not establish the complete dependency closure or all-target layout equivalence."
   ],
   "supporting_files": [
     {
@@ -4808,6 +4949,78 @@
       "git_blob": "a85fb15a3ed5a7bac7c6f330c94d3f85a6c6eeab",
       "path": "upstream/crates/aes-0.9.3/LICENSE-MIT",
       "sha256": "25f77efa393854f7c15eaf6a2589a2071db2d7337642742763adb12bdecf0445"
+    },
+    {
+      "component": "rustc_rand",
+      "path": "upstream/crates/rand-0.9.3/.cargo_vcs_info.json",
+      "git_blob": "06ecf3b2610c0d25596f8c1ace38dee940137c02",
+      "sha256": "3014529656dabf934ee3db8f0c350c9d0ed931f4159462132e33c854ad9fe4d5"
+    },
+    {
+      "component": "rustc_rand",
+      "path": "upstream/crates/rand-0.9.3/Cargo.toml",
+      "git_blob": "0c0e71bcd3fe09a339bdc90d769250d4a70c0704",
+      "sha256": "ce864a62aa38274ce86d81f96a806846bce37e9a599896f7581d28c767d48fa1"
+    },
+    {
+      "component": "rustc_rand",
+      "path": "upstream/crates/rand-0.9.3/LICENSE-APACHE",
+      "git_blob": "494ad3bfdfe44d1a2a1e20553308ba59574fb969",
+      "sha256": "35242e7a83f69875e6edeff02291e688c97caafe2f8902e4e19b49d3e78b4cab"
+    },
+    {
+      "component": "rustc_rand",
+      "path": "upstream/crates/rand-0.9.3/LICENSE-MIT",
+      "git_blob": "d93b5baf341d9813bb48a51f42a7e8e4af89ec52",
+      "sha256": "209fbbe0ad52d9235e37badf9cadfe4dbdc87203179c0899e738b39ade42177b"
+    },
+    {
+      "component": "rustc_rand_core",
+      "path": "upstream/crates/rand_core-0.9.3/.cargo_vcs_info.json",
+      "git_blob": "b63edca9948303841a106771905381871b495d63",
+      "sha256": "1a43bf9751b54237d9a1e3e049f26917c3010adaecbecc6185fbee6f2af8034d"
+    },
+    {
+      "component": "rustc_rand_core",
+      "path": "upstream/crates/rand_core-0.9.3/Cargo.toml",
+      "git_blob": "824850dba0bacfd257018cfc20251cddfbe66e3b",
+      "sha256": "88d9db5184a8b48028072059c1fdd54ba7fcdadac452ebdadbfc16f7f50790ad"
+    },
+    {
+      "component": "rustc_rand_core",
+      "path": "upstream/crates/rand_core-0.9.3/LICENSE-APACHE",
+      "git_blob": "455787c2334661b0c74590c1d35e5f711393cb82",
+      "sha256": "6df43f6f4b5d4587f3d8d71e45532c688fd168afa5fe89d571cb32fa09c4ef51"
+    },
+    {
+      "component": "rustc_rand_core",
+      "path": "upstream/crates/rand_core-0.9.3/LICENSE-MIT",
+      "git_blob": "d93b5baf341d9813bb48a51f42a7e8e4af89ec52",
+      "sha256": "209fbbe0ad52d9235e37badf9cadfe4dbdc87203179c0899e738b39ade42177b"
+    },
+    {
+      "component": "rustc_rand_xoshiro",
+      "path": "upstream/crates/rand_xoshiro-0.7.0/.cargo_vcs_info.json",
+      "git_blob": "b976f3983f5bd41c46efc7555b3f32fec5b3c217",
+      "sha256": "7ad2558c6b730dd60ba7d845df7f45e7a81f940743cefe5b0098b2bf2fbac476"
+    },
+    {
+      "component": "rustc_rand_xoshiro",
+      "path": "upstream/crates/rand_xoshiro-0.7.0/Cargo.toml",
+      "git_blob": "8643670a35a238084c105e8c49c6c7ba88a9caf6",
+      "sha256": "8565d69ef8bdb436384a9c533fd3175b1a1f4673d0a5acd6ca1da0afceadbb4f"
+    },
+    {
+      "component": "rustc_rand_xoshiro",
+      "path": "upstream/crates/rand_xoshiro-0.7.0/LICENSE-APACHE",
+      "git_blob": "1b5ec8b78e237b5c3b3d812a7c0a6589d0f7161d",
+      "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+    },
+    {
+      "component": "rustc_rand_xoshiro",
+      "path": "upstream/crates/rand_xoshiro-0.7.0/LICENSE-MIT",
+      "git_blob": "a5e040c076988b8ebc8c209749a88ed0b3a19b55",
+      "sha256": "31edd94ac845052712d8044ae23c09a451227b522e8215ab4ea4f1ce4741b160"
     },
     {
       "component": "miri",

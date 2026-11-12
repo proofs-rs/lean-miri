@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input
 
 open Miri.Input
@@ -5,7 +6,7 @@ open Miri.Input
 def main (args : List String) : IO UInt32 := do
   match args with
   | path :: _ =>
-    let result ← decodeFile path
+    let result ← decodeFixtureFile path
     match result with
     | .error error =>
       IO.eprintln error

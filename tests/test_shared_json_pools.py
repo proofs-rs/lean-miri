@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 from shared_json_pools import expand_document, pool_document, project_unused_metadata
 from mir_json import decode_mir_document
+from legacy_fixture_schema import adapt_legacy_fixture
 
 
 class SharedFixtureProjectionTests(unittest.TestCase):
@@ -23,7 +24,8 @@ class SharedFixtureProjectionTests(unittest.TestCase):
                 self.assertEqual(hashlib.sha256(raw).hexdigest(), row["target_file_sha256"])
                 if source.suffix == ".gz":
                     raw = gzip.decompress(raw)
-                document = decode_mir_document(json.loads(raw))
+                document = json.loads(raw)
+                decode_mir_document(adapt_legacy_fixture(document))
                 expanded = expand_document(document, schema_version=row["source_schema"])
                 canonical = json.dumps(expanded, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
                 self.assertEqual(hashlib.sha256(canonical).hexdigest(), row["expanded_retained_canonical_sha256"])
@@ -38,7 +40,8 @@ class SharedFixtureProjectionTests(unittest.TestCase):
         pooled = pool_document(source)
         self.assertEqual(len(pooled["abi_arguments"]), 4)
         self.assertEqual(pooled["fn_abis"][0]["return"], pooled["fn_abis"][0]["arguments"][0])
-        self.assertEqual(expand_document(pooled, schema_version=8), source)
+        expanded = expand_document(pooled, schema_version=8)
+        self.assertEqual(expanded, source)
 
     def test_unused_metadata_projection_retains_required_consts(self):
         source = {"schema_version": 8, "layouts": [], "spans": [

@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 import Miri.Input.RuntimeMetadata
 open Lean Miri Miri.Input
@@ -46,7 +47,7 @@ def main (args : List String) : IO Unit := do
   let original ← must (Json.parse source)
   let primitive ← must (field (← must (field original "compiler_runtime_primitives")) "u128")
   let id ← must primitive.getNat?
-  let decoded ← must (decodeJson source)
+  let decoded ← must (decodeFixture source)
   let range ← must (rangeOf decoded.document id)
   check (range == (0,2^128-1)) "actual compiler u128 range was clipped"
   let metadata ← must ((RuntimeMetadata.ofDocument decoded.document).mapError toString)
@@ -58,7 +59,7 @@ def main (args : List String) : IO Unit := do
   for value in [0,2^64,2^128-1] do
     for encoded in [Json.str (toString value), toJson value] do
       let edited ← must (changeEnd original id encoded)
-      let decoded ← must (decodeJson edited.compress)
+      let decoded ← must (decodeFixture edited.compress)
       check ((← must (rangeOf decoded.document id)).2 == value) "decimal/numeric natural changed"
   check (metadata.source.types.any fun node =>
     (metadata.lookup node.id).toOption.any fun value => value.layout.largestNiche.any fun niche =>
@@ -72,13 +73,13 @@ def main (args : List String) : IO Unit := do
     .str (toString (2^128 : Nat)), toJson (2^128 : Nat), toJson (-1 : Int), .bool true, .null]
   for encoded in invalid do
     let edited ← must (changeEnd original id encoded)
-    check (!(decodeJson edited.compress).isOk) s!"invalid u128 range accepted: {encoded.compress}"
+    check (!(decodeFixture edited.compress).isOk) s!"invalid u128 range accepted: {encoded.compress}"
     let niche ← must (field nicheLayout "largest_niche")
     let range ← must (field niche "valid_range")
     let range ← must (replace range "end" encoded)
     let niche ← must (replace niche "valid_range" range)
     let payload ← must (replace nicheLayout "largest_niche" niche)
     let edited ← must (replace original "layout_values" (.arr (payloads.set! nichePayloadId payload)))
-    check (!(decodeJson edited.compress).isOk)
+    check (!(decodeFixture edited.compress).isOk)
       s!"invalid niche endpoint accepted: {encoded.compress}"
   IO.println "actual u128 compiler/runtime range exact; 6 decimal/numeric cases preserved and 11 malformed/overflow scalar and niche cases rejected"

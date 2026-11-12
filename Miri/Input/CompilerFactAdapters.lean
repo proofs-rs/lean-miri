@@ -101,8 +101,10 @@ def prepare (context : CompilerFacts.Context) : Result Prepared := do
   pure ⟨context.withProgram (context.program.withCompilerTables tables),patterns,casts,obligations⟩
 
 def castTypeInfo (prepared : Prepared) (id : TypeId) : Result CastTypeInfo := do
-  let some result := prepared.castTypes[id]? | throw "compiler cast type identity missing"
-  result
+  if let some result := prepared.castTypes[id]? then return ← result
+  unless id >= prepared.context.program.input.types.size do
+    throw "compiler cast type identity missing"
+  pure (← castType prepared.context prepared.context.program.compilerTables #[] id).1
 private def dynamicPredicates (prepared : Prepared) (id : TypeId) : Result PredicateList := do
   let .dynamicTraitObject ids .. := (← source prepared.context id).shape | throw "dynamic predicate query on non-dynamic type"
   pure ids

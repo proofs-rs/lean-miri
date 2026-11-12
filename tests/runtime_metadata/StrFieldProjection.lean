@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 import Miri.Input.RuntimeMetadata
 
@@ -14,11 +15,11 @@ private def fieldAt (runtime : RuntimeMetadata) (strId index : Nat) : Except Str
   (runtime.field parent index).mapError toString
 
 private def withNodes (runtime : RuntimeMetadata) (nodes : Array TypeNode) : RuntimeMetadata :=
-  { runtime with source := { runtime.source with types := nodes } }
+  { runtime with source := { runtime.source with types := nodes }, denseTypes := none }
 
 def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected fresh str_field exporter input")
-  let decoded ← must (decodeJson (← IO.FS.readFile path))
+  let decoded ← must (decodeFixture (← IO.FS.readFile path))
   let runtime ← must ((RuntimeMetadata.ofDocument decoded.document).mapError toString)
   let some strNode := runtime.source.types.find? (·.shapeKind == .str)
     | throw (IO.userError "input contains no str type")

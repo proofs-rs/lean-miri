@@ -1,4 +1,6 @@
 import Miri.Input.CompilerScopes
+import Miri.Input.TypeArena
+import Miri.Input.GenericRebase
 
 /-! Compiler-owned call.rs constructors/drop queries. All keys use canonical
 shared type IDs and complete instances. Absent evidence remains an error. -/
@@ -6,20 +8,18 @@ namespace Miri.Input.CompilerRuntimeQueries
 open Lean Miri.Interpreter
 structure TypeEntry where
   typeId : Nat
-  pointerType : Nat
-  referenceType : Nat
   dropGlue : Except String CallInstance
 structure VirtualEntry where
   original : CallInstance
   methodDefinition : MIR.DefId
   parentTrait : MIR.DefId
   concreteType : Nat
+  parentGenericCount : Nat
   rebasedArgs : Array MIR.GenericArg
   resolved : Except String CallInstance
 structure Prepared where
   program : LoweredProgram
   types : Array TypeEntry
-  callerLocation : Array (CallInstance × Bool)
   virtualQueries : Array VirtualEntry
 private def typeId (ctx : LowerContext) (id : Nat) : Except String Nat := do
   unless ctx.containsTypeId id do throw "runtime query references absent compiler type"
@@ -32,21 +32,11 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
   let mut types := #[]
   for entry in raw.types do
     let id ← typeId ctx entry.inputType
-    let pointer ← typeId ctx entry.mutPointerType
-    let reference ← typeId ctx entry.mutReferenceType
     let drop : Except String CallInstance := match entry.dropGlue with
       | none => .error "drop glue compiler instance absent"
       | some id => (CompilerInstance.source ctx.instances id).map fun _ => id
     unless !(types.any (·.typeId == id)) do throw "duplicate compiler runtime type query"
-    types := types.push ⟨id, pointer, reference, drop⟩
-  let mut callers := #[]
-  for entry in raw.instances do
-    let callee := entry.instanceId
-    let _ ← CompilerInstance.source ctx.instances callee
-    let track := entry.requiresCallerLocation
-    if let some (_,prior) := callers.find? (·.1 == callee) then
-      unless prior == track do throw "conflicting full-instance caller-location query"
-    else callers := callers.push (callee,track)
+    types := types.push ⟨id, drop⟩
   let mut virtualQueries := #[]
   for query in raw.virtualQueries do
     let original := query.originalInstance
@@ -54,28 +44,50 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
     unless query.methodDefinition < tables.definitions.size && query.parentTrait < tables.definitions.size do
       throw "compiler definition ID out of bounds"
     let concrete ← typeId ctx query.concreteType
+    let args ← CompilerInstance.argsOf ctx.instances original
+    let rebound ← GenericRebase.virtualSelf args query.parentGenericCount concrete
     let resolved := (CompilerInstance.source ctx.instances query.resolved).map fun _ => query.resolved
     virtualQueries := virtualQueries.push ⟨original, query.methodDefinition, query.parentTrait,
-      concrete, query.rebasedArgs, resolved⟩
-  pure ⟨program, types, callers, virtualQueries⟩
+      concrete, query.parentGenericCount, rebound, resolved⟩
+  pure ⟨program, types, virtualQueries⟩
 private def entry (prepared : Prepared) (id : Nat) : Except String TypeEntry := do
   let some entry := prepared.types.find? (·.typeId == id)
     | throw "missing exact compiler runtime type query"
   pure entry
 
+/-- Port of rustc_middle/ty/sty.rs mutable pointer/reference constructors.
+Material identities are reused; absent constructor nodes are interned in the
+input-relative lazy arena and receive genuinely new type identities. -/
+def internConstructor := TypeArena.intern
+
 def mutPointerType (prepared : Prepared) (id : Nat) : Except String Nat :=
-  return (← entry prepared id).pointerType
+  TypeArena.intern prepared.program.input.types id false
 
 def mutReferenceType (prepared : Prepared) (id : Nat) : Except String Nat :=
-  return (← entry prepared id).referenceType
+  TypeArena.intern prepared.program.input.types id true
 
 def resolveDropGlue (prepared : Prepared) (id : Nat) : Except String CallInstance := do
   (← entry prepared id).dropGlue
 
+/-- Pinned rustc ty/instance.rs::InstanceKind::requires_caller_location.
+Only Item, Virtual and VTable consult the definition's body codegen attributes;
+ClosureOnce stores its own flag and every other instance kind returns false. -/
+def instanceRequiresCallerLocation (definitions : Array DefinitionId)
+    (kind : CallInstanceKind) : Except String Bool := do
+  match kind with
+  | .Item definition | .Virtual definition _ | .Shim (.VTable definition) =>
+    let some material := definitions[definition]?
+      | throw "caller-location definition material absent"
+    let some flag := material.bodyTrackCaller
+      | throw "caller-location body codegen attribute material absent"
+    pure flag
+  | .Shim (.ClosureOnce _ _ trackCaller) => pure trackCaller
+  | _ => pure false
+
 def requiresCallerLocation (prepared : Prepared) (callee : CallInstance) : Except String Bool := do
-  let some (_,track) := prepared.callerLocation.find? (·.1 == callee)
-    | throw "missing exact full-instance caller-location query"
-  pure track
+  instanceRequiresCallerLocation prepared.program.input.definitions
+    (← CompilerInstance.kindOf prepared.program.input.instances callee)
+
 def parentTrait (prepared : Prepared) (method : MIR.DefId) : Except String MIR.DefId := do
   let matching := prepared.virtualQueries.filter (·.methodDefinition == method)
   let some first := matching[0]? | throw "missing exact virtual parent-trait query"
@@ -84,15 +96,13 @@ def parentTrait (prepared : Prepared) (method : MIR.DefId) : Except String MIR.D
 
 def rebaseVirtualArgs (prepared : Prepared) (args : Array MIR.GenericArg)
     (parent : MIR.DefId) (concrete : Nat) : Except String (Array MIR.GenericArg) := do
-  let instances := prepared.program.input.instances
-  let mut matching := #[]
-  for entry in prepared.virtualQueries do
-    if entry.parentTrait == parent && entry.concreteType == concrete then
-      if (← CompilerInstance.argsOf instances entry.original) == args then
-        matching := matching.push entry
-  let some first := matching[0]? | throw "missing complete-key virtual rebase query"
-  unless matching.all (·.rebasedArgs == first.rebasedArgs) do throw "conflicting virtual rebase queries"
-  pure first.rebasedArgs
+  let matching := prepared.virtualQueries.filter (·.parentTrait == parent)
+  let some first := matching[0]? | throw "virtual trait generic definition material absent"
+  unless matching.all (·.parentGenericCount == first.parentGenericCount) do
+    throw "conflicting virtual trait generic definition material"
+  let some _ := prepared.program.input.types.find? (·.id == concrete)
+    | throw "virtual concrete type material absent"
+  GenericRebase.virtualSelf args first.parentGenericCount concrete
 
 def expectResolveForVTable (prepared : Prepared) (method : MIR.DefId)
     (args : Array MIR.GenericArg) : Except String CallInstance := do

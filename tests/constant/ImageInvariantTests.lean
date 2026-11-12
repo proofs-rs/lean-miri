@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 import Miri.Input.AllocationImage
 
@@ -9,7 +10,7 @@ private def check (condition : Bool) (message : String) : IO Unit :=
 
 def main (args : List String) : IO Unit := do
   let path ← match args with | p :: _ => pure p | [] => throw (IO.userError "expected compiler target fixture")
-  let doc ← must (decodeJson (← IO.FS.readFile path))
+  let doc ← must (decodeFixture (← IO.FS.readFile path))
   let runtime ← must ((RuntimeMetadata.ofDocument doc.document).mapError toString)
   let target := runtime.target
   let width ← must ((target.pointerSizeIn target.defaultAddressSpace).mapError toString)
