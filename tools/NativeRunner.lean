@@ -143,6 +143,14 @@ private def linuxOs : Input.EvalHostRuntimeConstruction.OsHostEffects Os := {
   isEmpty := fun value => value.isEmpty
   containsEquals := fun value => value.data.contains 61 }
 
+namespace NativeRunnerError
+/-- Pinned core/io/error.rs `From<ErrorKind>` creates Repr::new_simple:
+kind is retained and raw_os_error is None. The runner's host payload is Unit;
+constructing this value requires no host I/O or numeric errno convention. -/
+def fromKind (kind : IoError.ErrorKind) : IoError.HostError Unit :=
+  {kind, raw := none, payload := ()}
+end NativeRunnerError
+
 private def unavailableIoError (os : String) : IoError.Hooks S Unit := {
   family := .unix, os, hostUnix := true
   hostErrno := fun _ => unavailable "host errno translation"
@@ -151,7 +159,7 @@ private def unavailableIoError (os : String) : IoError.Hooks S Unit := {
   scalarI32 := fun _ => unavailable "host error scalar conversion"
   scalarU32 := fun _ => unavailable "host error scalar conversion"
   hostFromRaw := fun _ => unavailable "raw host error conversion"
-  hostFromKind := fun _ => unavailable "host error-kind conversion"
+  hostFromKind := fun kind => pure (NativeRunnerError.fromKind kind)
   getLastErrorPlace := unavailable "sync errno lookup"
   setLastErrorPlace := fun _ => unavailable "sync errno update"
   allocateU32Machine := unavailable "sync errno allocation"
@@ -194,7 +202,7 @@ private def sourceLeaves (dummy : SpanRef) (geometry : Input.InitialMachine.Geom
       ioError := {
         hostErrno := fun _ => unavailable "host errno lookup"
         hostFromRaw := fun _ => unavailable "raw host error conversion"
-        hostFromKind := fun _ => unavailable "host error-kind conversion" }
+        hostFromKind := fun kind => pure (NativeRunnerError.fromKind kind) }
       native := {call := fun _ _ _ => unavailable "native library call"}
       openFiles := {
         pathFromOs := id

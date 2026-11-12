@@ -33,4 +33,6 @@ for test in KeyedArray166QA MemoryState166QA; do
 done
 lake env lean --run tests/input/LlvmSymbolRegistry.lean || status=1
 lake env lean --run tests/resource_destruction/SourceDrops.lean || status=1
+flock --no-fork /tmp/lean-miri-lake-build.lock lake build NativeRunner || status=1
+lake env lean tests/resource_destruction/KindOnlyHostError.lean || status=1
 exit "$status"
