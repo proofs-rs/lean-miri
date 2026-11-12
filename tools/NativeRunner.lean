@@ -2,10 +2,13 @@ import Miri.Input.EvalSourceRunFinalization
 import Miri.Input.ExecutionChoicePolicy
 import Miri.Input.CompilerMiriEntry
 import Miri.Input.NativeMathHost
+import NativeStdioHost
+import NativeStdioProtocol
 
-/-! Standalone source run harness draft. It enters through
-EvalSourceRunFinalization.runFromSourceAndFinalize. Host operations that this
-fixture cannot perform remain demand-local Unsupported outcomes. -/
+/-! Standalone source run harness. The default retains the complete source
+entry API. With a dedicated control descriptor, typed stdio probes compose its
+same constructor, runFromInitial and finalizer with checked immutable replay.
+Other unavailable host operations remain demand-local Unsupported outcomes. -/
 open Lean Miri Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
 
 private abbrev Os := ByteArray
@@ -31,6 +34,50 @@ private abbrev OuterState := MachineHooks.State MiriMemoryKind
   (ExecutionStateTransport.Outer
     (Input.EvalWorld.World Os R Payload H D Other Aff B Host))
 private abbrev CoreOptions := Input.EvalConfigurationCore.Options
+
+private abbrev CoreState := Input.EvalCoreMachine.State Os R Payload H D Other Aff B Host
+
+private def installReplay (initial : OuterState) (entries : Array HostStdio.Entry) : OuterState :=
+  {initial with machine := {initial.machine with user :=
+    {initial.machine.user with user := {initial.machine.user.user with payload :=
+      {initial.machine.user.user.payload with payload :=
+        {initial.machine.user.user.payload.payload with stdioReplay := some {entries}}}}}}}
+
+private theorem installReplay_preserves_choices (initial : OuterState) (entries) :
+    (installReplay initial entries).machine.user.user.payload.payload.choices =
+      initial.machine.user.user.payload.payload.choices := rfl
+
+private def stdioAccess : HostStdio.Access CoreState := {
+  get := fun s => s.machine.user.payload.payload.user.stdioReplay
+  put := fun s replay => {s with machine := {s.machine with user := {s.machine.user with payload :=
+    {s.machine.user.payload with payload := {s.machine.user.payload.payload with user :=
+      {s.machine.user.payload.payload.user with stdioReplay := replay}}}}}} }
+
+private def replayWrite (entries : Array HostStdio.Entry)
+    (description : Files.Description H D Other) (bytes : ByteArray) :
+    EStateM StepError CoreState (Except (IoError.HostError Unit) Nat) := do
+  let stream ← match description with
+    | .stdout => pure HostStdio.Stream.stdout
+    | .stderr => pure HostStdio.Stream.stderr
+    | _ => throw (.unsupported "native fixture has no host file write capability")
+  let response ← HostStdio.perform stdioAccess (some entries) (.write stream bytes)
+    (throw (.unsupported "native fixture has no host file write capability"))
+  match response with
+  | .write result => pure (result.mapError HostStdio.Error.toHost)
+  | _ => throw (.invalidProgram "stdio write replay returned a flush response")
+
+private def replayFlush (entries : Array HostStdio.Entry) : EStateM StepError CoreState Unit := do
+  let response ← HostStdio.perform stdioAccess (some entries) .flushStdout
+    (throw (.unsupported "native fixture has no host stdout flush capability"))
+  match response with
+  | .flush (.ok ()) => pure ()
+  | .flush (.error error) => throw (.machineStop s!"host stdout flush failed: {reprStr error}")
+  | _ => throw (.invalidProgram "stdio flush replay returned a write response")
+
+private theorem replayWrite_rejects_file (entries : Array HostStdio.Entry)
+    (bytes : ByteArray) (readable writable : Bool) :
+    replayWrite entries (.file () readable writable) bytes =
+      throw (.unsupported "native fixture has no host file write capability") := rfl
 
 private def unavailable {S A : Type} (name : String) : EStateM StepError S A :=
   throw (.unsupported s!"native fixture has no {name} capability")
@@ -168,7 +215,8 @@ private def unavailableIoError (os : String) : IoError.Hooks S Unit := {
   writeInt := fun _ _ => unavailable "sync errno memory write" }
 
 private def sourceLeaves (dummy : SpanRef) (geometry : Input.InitialMachine.Geometry)
-    (pageSize : UInt64) (numCpus hostPid : UInt32) (uiMode : Bool) (alignment : ValidityMachine.AlignmentCheck) : Input.EvalConfigurationCore.SourceLeaves
+    (pageSize : UInt64) (numCpus hostPid : UInt32) (uiMode : Bool) (alignment : ValidityMachine.AlignmentCheck)
+    (stdio : Option (Array HostStdio.Entry) := none) : Input.EvalConfigurationCore.SourceLeaves
     Os R Payload H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error
     Unit Unit ByteArray Miri.MIR.Place Unit Instant Payload Unit := {
   hostConfiguration := {
@@ -223,8 +271,12 @@ private def sourceLeaves (dummy : SpanRef) (geometry : Input.InitialMachine.Geom
         dropOther := fun _ => unavailable "host Other-resource cleanup" }
       hostFiles := {
         hostRead := fun _ _ => unavailable "host file read"
-        hostWrite := fun _ _ => unavailable "host file write"
-        flushStdout := unavailable "host stdout flush"
+        hostWrite := match stdio with
+          | none => fun _ _ => unavailable "host file write"
+          | some entries => replayWrite entries
+        flushStdout := match stdio with
+          | none => unavailable "host stdout flush"
+          | some entries => replayFlush entries
         hostSeek := fun _ _ => unavailable "host file seek"
         hostMetadata := fun _ => unavailable "host file metadata"
         hostIsTerminal := fun _ => unavailable "host terminal query"
@@ -411,7 +463,7 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
     (initialMemory : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind)
     (pageSize : UInt64) (numCpus hostPid : UInt32) (diagnosticSeed : Option UInt64)
     (profile : Lean.Options) (ui : Option UiSettings) :
-    Except String ((Array ExecutionChoices.Input → Except StepError
+    Except String ((Option (Array HostStdio.Entry) → Array ExecutionChoices.Input → Except StepError
       (Input.EvalSourceRunFinalization.Result OuterState)) ×
       (Array ExecutionChoices.Input → Except String String)) := do
   let options := (ui.map uiOptions).getD options
@@ -431,7 +483,9 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
       arch == "x86_64" && targetBits == 64 do
     throw s!"fixture requires x86_64-unknown-linux-gnu; got triple={compiler.program.input.producer.targetTriple}, arch={arch}, bits={targetBits}"
   let geometry ← (Input.InitialMachine.geometry targetBits arch false none).mapError reprStr
-  let sourceLeaves := sourceLeaves dummy geometry pageSize numCpus hostPid ui.isSome ((ui.map (·.alignment)).getD .Int)
+  let leavesFor := fun stdio => sourceLeaves dummy geometry pageSize numCpus hostPid ui.isSome
+    ((ui.map (·.alignment)).getD .Int) stdio
+  let sourceLeaves := leavesFor none
   let machineConfig : Input.InitialMachine.Configuration Aff B := {
     geometry, dummySpan := dummy, provenance := (ui.map (·.provenance)).getD .default, addressMode := .managed
     addressStop := 18446744073709551615, addressReuse := ⟨0.5, if (ui.map (·.deterministicConcurrency)).getD false then 0 else 0.1⟩
@@ -470,7 +524,30 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
     reportLeaks := fun _ => unavailable "allocation-leak diagnostic reporting"
     ignoreLeaksNote := if ui.isSome then pure () else unavailable "ignore-leaks diagnostic reporting"
     failureCode := -1 }
-  pure (fun inputs =>
+  pure (fun stdio inputs => do
+    if let some entries := stdio then
+      let enabledLeaves := leavesFor (some entries)
+      -- Match runFromSourceProfiled's production provider installation before
+      -- composing its existing create/runFromInitial/finalize operations.
+      let enabledLeaves := if enabledLeaves.foreignSource.host.time.isNone then
+        {enabledLeaves with foreignSource :=
+          Input.EvalChronoTimeSource.installSourceInput enabledLeaves.foreignSource}
+        else enabledLeaves
+      let creation : EStateM.Result StepError InitTrace OuterState :=
+        (Input.MachineConstruction.create rawInitHooks sourceLeaves.hostConfiguration
+          machineTarget machineConfig initialMemory arrays (choiceTape diagnosticSeed inputs)).run ({} : InitTrace)
+      let (initial, trace) ← match creation with
+        | .ok initial trace => pure (initial, trace)
+        | .error error _ => throw error
+      unless trace.cursor == 2 do throw (.invalidProgram "raw init trace not consumed")
+      -- Install once, before source startup can call any guest/Miri operation.
+      let initial := installReplay initial entries
+      let result ← Input.EvalSourceRunConstruction.runFromInitialProfiled
+        profile prepared prepared.image bytes options enabledLeaves () machineConfig
+        bootstrap options.limits 256 0 [] initial
+        (some ⟨fun selected => by cases selected; rfl⟩) true
+      return Input.EvalSourceRunFinalization.finishResultProfiled profile reports
+        ((ui.map (·.ignoreLeaks)).getD false) result
     let finalized : EStateM.Result StepError InitTrace
         (Input.EvalSourceRunFinalization.Result OuterState) :=
       Input.EvalSourceRunFinalization.runFromSourceAndFinalizeProfiled
@@ -479,8 +556,8 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
       [] ((ui.map (·.ignoreLeaks)).getD false) reports
       (some ⟨fun selected => by cases selected; rfl⟩) true ({} : InitTrace)
     match finalized with
-    | .ok result trace => if trace.cursor == 2 then .ok result else .error (.invalidProgram "raw init trace not consumed")
-    | .error error _ => .error error,
+    | .ok result trace => if trace.cursor == 2 then pure result else throw (.invalidProgram "raw init trace not consumed")
+    | .error error _ => throw error,
     fun inputs => do
       let (initial, trace) ← makeInitial inputs
       let before := preflightSnapshot initial
@@ -540,9 +617,35 @@ private def choiceRepair (message : String) : Option ChoiceRepair := Id.run do
 private def readJson (path : String) : IO String :=
   IO.FS.readFile (if path == "-" then "/dev/stdin" else path)
 
-private def boundary (message : String) : IO Unit := do
-  IO.println message
-  (← IO.getStdout).flush
+private structure ControlOutput where
+  runId : String
+  sequence : IO.Ref Nat
+  touched : IO.Ref Bool
+  finalized : IO.Ref Bool
+
+/-- Host-adapter resource finalization is separate from source flush requests.
+Never retry a finalization after an IO failure, and never flush between probes. -/
+private def finalizeStdio (control : Option ControlOutput) : IO Unit := do
+  let some output := control | return
+  if !(← output.touched.get) || (← output.finalized.get) then return
+  output.finalized.set true
+  match ← NativeStdioHost.flushStdout with
+  | .ok () => pure ()
+  | .error error => throw (IO.userError s!"stdio host finalization failed: {reprStr error}")
+
+private def emit (control : Option ControlOutput) (kind : String) (payload : Lean.Json) : IO Unit := do
+  match control with
+  | some output =>
+    let sequence ← output.sequence.get
+    NativeStdioHost.writeControlAll (NativeStdioProtocol.record sequence kind payload)
+    output.sequence.set (sequence + 1)
+  | none =>
+    if kind == "boundary" then
+      IO.println (← must payload.getStr?)
+      (← IO.getStdout).flush
+    else if kind == "profile" then IO.println s!"upstream_profile: {payload.compress}"
+    else if kind == "terminal" then IO.println s!"upstream_result: {payload.compress}"
+    else throw (IO.userError "control-only record requested without a control sink")
 
 private def captureLinuxProfile : IO (UInt64 × UInt32) := do
   let page ← IO.Process.output {cmd := "getconf", args := #["PAGESIZE"]}
@@ -557,7 +660,7 @@ private def captureLinuxProfile : IO (UInt64 × UInt32) := do
     throw (IO.userError "Linux host profile values are outside their supported range")
   pure (UInt64.ofNat page, UInt32.ofNat cpu)
 
-def main (args : List String) : IO Unit := do
+private def runMain (args : List String) (control : Option ControlOutput) : IO Unit := do
   if let ["--fingerprint", path] := args then
     let bytes ← IO.FS.readBinFile path
     let hash := bytes.foldl (fun (hash : UInt64) byte =>
@@ -581,10 +684,23 @@ def main (args : List String) : IO Unit := do
       let ui ← must (uiSettings source flags)
       pure (some 0, some ui)
     | _ => throw (IO.userError "usage: NativeRunner <untouched-export.json|/dev/stdin> [--seed <u64> | --ui-source <source> --ui-flags <JSON-array>] [--profile] (gzip streamed externally)")
+  let input ← readJson path
+  if let some output := control then
+    let bytes := input.toUTF8
+    let hash := bytes.foldl (fun (hash : UInt64) byte =>
+      (hash ^^^ UInt64.ofNat byte.toNat) * 0x100000001b3) 0xcbf29ce484222325
+    let flags ← match args.drop 1 with
+      | ["--ui-source", _, "--ui-flags", flags] => must (Lean.Json.parse flags)
+      | _ => pure (.arr #[])
+    emit control "header" (Lean.Json.mkObj [
+      ("run_id", toJson output.runId), ("snapshot_fnv1a64", toJson hash.toNat),
+      ("snapshot_byte_length", toJson bytes.size),
+      ("source", toJson ((ui.map (·.source)).getD "")), ("runtime_flags", flags),
+      ("choice_mode", toJson (choiceMode diagnosticSeed))])
+  let boundary := fun message => emit control "boundary" (toJson message)
   boundary s!"choice_mode={choiceMode diagnosticSeed}; generated_choices=unbounded; byte_length=uncapped; supplied_prefix=preserved"
   boundary "raw_host_poll: finite source initialization replay; no live poll capability"
   boundary "decode: start"
-  let input ← readJson path
   let decoded ← must (Input.decodeJsonProfiled input profile)
   boundary "decode: accepted"
   boundary "lower: start"
@@ -613,7 +729,7 @@ def main (args : List String) : IO Unit := do
       ("float_nondeterminism", toJson options.floatNondeterministic),
       ("cmpxchg_weak_failure_rate_bits", toJson options.weakFailureRate.toNat),
       ("short_fd_operations", toJson false), ("choice_policy", toJson (choiceMode diagnosticSeed))]
-  IO.println s!"upstream_profile: {actualProfile.compress}"
+  emit control "profile" actualProfile
   let hostPid ← IO.Process.getPID
   boundary "run: start"
   let (execute, checkValidationMismatch) ← must
@@ -623,19 +739,48 @@ def main (args : List String) : IO Unit := do
     | .error error => throw (IO.userError s!"validation preflight regression failed: {error}")
   boundary mismatch
   let rec plan (remaining attemptNumber : Nat) (inputs : Array ExecutionChoices.Input) : IO Unit := do
-    let result ← match execute inputs with
-      | .ok result => pure result
-      | .error error => throw (IO.userError s!"public runner construction error: {reprStr error}")
+    let mut entries : Array HostStdio.Entry := #[]
+    let mut settled : Option (Input.EvalSourceRunFinalization.Result OuterState) := none
+    -- Only the journal changes between probes. Recreate the entire machine,
+    -- choice tape, policy and RNG from the same original inputs every time.
+    while settled.isNone do
+      let result ← match execute (if control.isSome then some entries else none) inputs with
+        | .ok result => pure result
+        | .error error => throw (IO.userError s!"public runner construction error: {reprStr error}")
+      if control.isNone then
+        settled := some result
+      else
+        let state := match result with
+          | .finished state .. | .undefinedBehavior state .. | .unsupported state .. |
+            .failed state .. | .pending state .. => state
+        let replay := state.machine.user.user.payload.payload.stdioReplay
+        -- This gate precedes *all* outcome classification/rendering, including
+        -- cleanup errors that have replaced the original suspension error.
+        match HostStdio.gateFor entries replay with
+        | .rejected reason => throw (IO.userError s!"stdio replay rejected: {reason}")
+        | .complete => settled := some result
+        | .awaiting pending =>
+          if let some output := control then output.touched.set true
+          let response ← match pending.request with
+            | .write stream bytes => HostStdio.Response.write <$> NativeStdioHost.writeOnce stream bytes
+            | .flushStdout => HostStdio.Response.flush <$> NativeStdioHost.flushStdout
+          let some replay := replay | throw (IO.userError "authorized stdio request lost its state")
+          entries ← must (HostStdio.appendResponse entries replay response)
+    let some result := settled | throw (IO.userError "stdio controller produced no outcome")
     boundary s!"candidate={attemptNumber}: {summarize result}"
     let finish (state : OuterState) := do
       let cursor := state.machine.user.user.payload.payload.choices.cursor
       boundary s!"consumed_tape={reprStr state.machine.user.user.payload.payload.choices.inputs}"
       boundary s!"choice_events={reprStr state.machine.user.user.payload.payload.choices.events}"
       boundary s!"run: {summarize result}"
-      IO.println s!"upstream_result: {(terminalDiagnostic prepared result ui.isSome).compress}"
+      finalizeStdio control
+      emit control "terminal" (terminalDiagnostic prepared result ui.isSome)
     match result with
     | .failed state (.callback message) =>
       let some repair := choiceRepair message | return ← finish state
+      -- Never rewrite a past semantic choice after an external observation.
+      -- This guard is independent of the current diagnostic planning fuel.
+      if !entries.isEmpty then return ← finish state
       match remaining with
       | 0 => boundary "run: planning_pending (explicit finite candidate bound exhausted)"
       | fuel + 1 => do
@@ -653,3 +798,21 @@ def main (args : List String) : IO Unit := do
     | .finished state .. | .undefinedBehavior state .. | .unsupported state .. |
       .failed state .. | .pending state .. => finish state
   plan 0 0 #[]
+
+/-- The inherited control descriptor is host-only. Closing it is independent
+of guest stdout/stderr finalization and covers every parser/preflight/error path. -/
+def main (args : List String) : IO Unit := do
+  let (args, configuration) ← must (NativeStdioProtocol.splitArgs args)
+  match configuration with
+  | none => runMain args none
+  | some configuration =>
+    NativeStdioHost.adoptControl configuration.fd
+    let sequence ← IO.mkRef 0
+    let touched ← IO.mkRef false
+    let finalized ← IO.mkRef false
+    let output : ControlOutput := {runId := configuration.runId, sequence, touched, finalized}
+    try
+      runMain args (some output)
+    finally
+      try finalizeStdio (some output)
+      finally NativeStdioHost.closeControl

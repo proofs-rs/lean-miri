@@ -323,22 +323,34 @@ and regression) pass. The UI sweep remains unfinished; its shard-9 AVX2
 export failure used the old producer and is covered by the local repair below. These results
 belong to that main revision; schema 9 has not yet received hosted validation.
 
-### Standard-stream effects: pending native connection
+### Standard-stream effects: local validation
 
-The native runner still reports Unsupported when Tree Borrows diagnostics or
-explicit Miri output shims require an actual host stdout/stderr write. The pure
-typed transcript component does not attach a host IO capability. Its disabled
-callback is definitionally the previous callback; the new World slot defaults
-to `none`. Exact stream/byte requests, response kinds/count bounds, retained
-first-pending requests, poisoned mismatches and binding to the outer immutable
-journal are checked separately from any native implementation.
+With an inherited private control descriptor, the native runner connects actual
+stdout/stderr writes to a checked typed transcript. A missing observation stops
+the pure attempt; the outer IO controller performs one real host operation, then
+restarts a fresh machine with identical supplied choices, seed and policy.
+Recorded observations are checked and replayed without repeating host IO.
+The first pending request survives cleanup error replacement; missing state,
+changed journals, malformed responses and unconsumed suffixes fail closed.
+Without the control descriptor, previous Unsupported callbacks remain in place;
+the new World slot defaults to `none`. Its disabled callback is definitionally
+the previous callback. Arbitrary host files are not enabled, and source muted
+ordinary stdout/stderr descriptors remain NullOutput.
 
-Remaining work is the isolated control channel, a real one-write native backend,
-all-outcome replay integration and fresh genuine comparisons. Replay must begin
-from a new machine with identical supplied choices, seed and policy; an unwound
-attempt is not resumable. Raw host errno must be retained, and unavailable host
-errno conversion remains Unsupported. No general stdio error support, crash
-recovery guarantee or whole-machine proof follows from these pure checks.
+The pinned Rust backend calls `Write::write` once and retains its count/error;
+source write_all owns short-write/Interrupted handling. Source flushes and outer
+host finalization are distinct. All boundary/profile/terminal records use the
+private control channel, so guest output cannot supply an acceptance record.
+Finite fresh reference/Lean checks passed for repeated and binary explicit
+output, spoofed protocol lines and preserved NullOutput, plus all four original
+cell-inside-box/struct tree/tree_implicit_writes cases with workflow budgets and
+original sources/flags/profiles. These used immutable exporter `38f5811b…3203`
+and native runner `23b5172e…afe5`. Pure component, bridge and protocol checks
+also pass. Full common/runtime/structural/SC/proof and hosted validation remain
+pending for this source combination. An unwound attempt is never resumed.
+Raw host errno is retained; unavailable host errno conversion remains
+Unsupported. No general stdio error support, crash recovery guarantee or
+whole-machine proof follows from these finite checks.
 
 ### Source-owned descriptor cleanup: local validation
 

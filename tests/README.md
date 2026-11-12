@@ -297,6 +297,8 @@ when changing it.
 | Check / invocation | What it adds |
 | --- | --- |
 | `lake env lean --run tests/run_loop/HostStdioReplay.lean` | Pure typed stdio replay checks: exact requests, response bounds, first-pending cleanup retention, missing-state rejection and unchanged choice/RNG state. Included in structural regressions; it supplies no host IO capability. |
+| `lake env lean --run tests/run_loop/NativeStdioProtocol.lean` | Pure control-option and JSON framing checks, including escaped spoofed output. Included in structural regressions after the runner module build. |
+| `flock /tmp/lean-miri-ci-guest.lock python3 tests/stdio/check.py --output scratch/stdio-new` | Fresh pinned-reference/guest comparison for explicit stdio: repeated writes, binary bytes, spoofed result lines and preserved muted ordinary descriptors. Requires coherent reference exporter/native runner; unsupported and timeout outcomes fail. |
 | `python3 tests/intrinsic_float/source_compare.py` | Finite intrinsic helper comparison against pinned APFloat: FMA, rounding, min/max and NaN handling. Requires its Rust oracle dependencies. |
 | `python3 tests/aes/source_compare.py` | Compare pinned AES fixslice bodies; requires offline vendor configuration at `scratch/cargo-vendor.toml` and matching crates. |
 | `flock /tmp/lean-miri-ci-guest.lock python3 tests/x86_pack/check.py --output scratch/x86-pack-new` | Fresh pinned-reference/guest comparisons for 128/256/512-bit signed and unsigned saturation boundaries and 128-bit chunk/lane order; requires a reference-feature exporter and matching native runner. Unsupported and timeouts fail the check. |
