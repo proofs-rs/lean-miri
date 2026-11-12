@@ -221,12 +221,6 @@ inductive CastQuery where
   | boxType (input output : TypeId)
   deriving Repr, DecidableEq
 
-structure TypeName where
-  inputType : TypeId
-  resultType : TypeId
-  value : Miri.MIR.ConstValue
-  deriving Repr, DecidableEq
-
 structure CallerLocation where
   span : SpanId
   resultType : Option TypeId
@@ -332,7 +326,6 @@ structure Primitives where
   unitPointerMut : TypeId
   immU8Pointer : TypeId
   immU8PointerPointer : TypeId
-  typeNameResultType : TypeId
   callerLocationType : Option TypeId
   orderingEnum : Option TypeId
   deriving Repr, DecidableEq
@@ -400,7 +393,6 @@ structure Queries where
   instanceAbis : Array InstanceAbi
   functionFacts : FunctionFacts
   casts : Array CastQuery
-  typeNames : Array TypeName
   panic : Array PanicQuery
   nativeSignatures : Array NativeSignature
   retag : Array RetagQuery

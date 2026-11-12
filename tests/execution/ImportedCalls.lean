@@ -27,7 +27,7 @@ private def findKind (m : Metadata) (kind : Input.TypeShapeKind) := (m.findKind 
 private def fieldType (m : Metadata) (parent : TyAndLayout MIR.TyId) (index : Nat) := (m.field parent index).mapError metadataError
 
 private structure Machine where
-  types : Input.TypeArena.World
+  types : Input.RuntimeArrayTypes.World
   returnMemory : ReturnMemory.State
   returnPlace : MemoryOperandPlace AllocId
   localsSupply : LocalsIdentitySupply := ⟨0⟩
@@ -37,11 +37,13 @@ private abbrev State := StepState AllocId (TyAndLayout MIR.TyId) Nat Machine
 private abbrev Exec := RvalueM State
 private def lift (value : Except StepError A) : Exec A :=
   match value with | .ok value => pure value | .error e => throw e
-private def worldQuery (action : Input.TypeArena.WorldM A) : Exec A := do
+private def compilerQuery (action : Input.RuntimeArrayTypes.CompilerM A) : Exec A := do
   let state ← get
   let (value,world) ← lift ((action.run state.machine.types).mapError StepError.invalidProgram)
   modify fun current => {current with machine.types := world}
   pure value
+private def worldQuery (action : Input.TypeArena.WorldM A) : Exec A :=
+  compilerQuery (Input.RuntimeArrayTypes.liftType action)
 private def event (name : String) : Exec Unit :=
   modify fun s => { s with machine.trace := s.machine.trace ++ [name] }
 private def current : Exec (Frame AllocId (TyAndLayout MIR.TyId) Nat) := do
@@ -300,7 +302,7 @@ private def currentResolution (p : Program) : Exec Input.CallResolutionEvidence 
   let body ← bodyAt p frame.bodyIdentity.index
   unless body.body == frame.body do throw (.invalidProgram "frame source body content mismatch")
   let .mir location := frame.location | block "call resolution outside MIR"
-  pure (← worldQuery (Input.CallResolution.atSite p.resolution
+  pure (← compilerQuery (Input.CallResolution.atSite p.resolution
     ⟨frame.bodyIdentity.index,location.block⟩)).source
 private def instanceFromResolution (p : Program) (resolution : Input.CallResolutionEvidence) : Except StepError (CallInstance × Input.InstanceId) := do
   let id ← resolution.instanceId.toExcept (.invalidProgram "missing resolved canonical instance ID")
@@ -376,7 +378,7 @@ private def lifecycle (p : Program) (index : Nat) : StackLifecycleHooks AllocId 
   deallocateVararg := fun machine _ => ⟨machine,.error (.deallocationFailure "vararg deallocation")⟩ }
 private def pushRaw (p : Program) (fnInstance : CallInstance) (body : LoadedBody) (destination : RuntimeStackPlace AllocId)
     (continuation : ReturnContinuation) : Exec Unit := do
-  let expected ← worldQuery (Input.CallResolution.loadedBodyOfInstance p.resolution fnInstance)
+  let expected ← compilerQuery (Input.CallResolution.loadedBodyOfInstance p.resolution fnInstance)
   if expected != body then throw (.invalidProgram "pushed canonical body key does not match compiler instance")
   let index := body.identity.index
   let span ← lift (p.bodySpans[index]?.toExcept (.invalidProgram "preamble source span"))
@@ -555,7 +557,7 @@ private def callHooks (p : Program) : CallHooks AllocId State Unit Nat Unit ABI.
   callIntrinsic := fun _ _ _ _ _ _ => block "intrinsic"
   callLlvmIntrinsic := fun _ _ _ _ _ => block "LLVM intrinsic"
   findMirOrEvalFn := fun _ fnInstance _ _ _ _ _ => do
-    let body ← worldQuery (Input.CallResolution.loadedBodyOfInstance p.resolution fnInstance)
+    let body ← compilerQuery (Input.CallResolution.loadedBodyOfInstance p.resolution fnInstance)
     return some (body,fnInstance)
   resolveVirtual := fun _ _ _ _ _ _ => block "virtual resolution"
   isDynamic := fun _ => block "drop dynamic query"
@@ -611,11 +613,11 @@ private def initialState (p : Program) (root : Nat) (argument : Nat) : Except St
     throw (.invalidProgram "root instance identity mismatch")
   -- One fresh universe per execution. Every subsequent call/body query uses
   -- Machine.types and retains the returned state, including new identities.
-  let initialWorld ← (Input.TypeArena.World.ofDocument p.lowered.input).mapError StepError.invalidProgram
+  let initialWorld ← (Input.RuntimeArrayTypes.create p.metadata).mapError (fun error => StepError.invalidProgram (reprStr error))
   let (loaded,world) ← ((Input.CallResolution.loadedBodyOfInstance p.resolution fnInstance).run initialWorld)
     |>.mapError StepError.invalidProgram
   let index := loaded.identity.index
-  let (body,world) ← ((p.lowered.resolveBody index).run world).mapError StepError.invalidProgram
+  let (body,world) ← ((Input.RuntimeArrayTypes.liftType (p.lowered.resolveBody index)).run world).mapError StepError.invalidProgram
   if (← body.ownDefinitionId.mapError StepError.invalidProgram) != definition then
     throw (.invalidProgram "canonical root instance definition mismatch")
   if body.body.argumentCount != 1 then throw (.unsupported "root argument count")

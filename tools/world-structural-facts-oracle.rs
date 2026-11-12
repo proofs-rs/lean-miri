@@ -3,6 +3,7 @@ extern crate rustc_driver;
 extern crate rustc_hir;
 extern crate rustc_interface;
 extern crate rustc_middle;
+extern crate rustc_const_eval;
 extern crate rustc_span;
 #[path="../exporter/src/generic_material.rs"] mod generic_material;
 use rustc_driver::{Callbacks,Compilation};
@@ -26,9 +27,9 @@ impl Callbacks for Oracle {
             Ty::new_array(tcx,adt("Wrap",dropper),0),
             Ty::new_ptr(tcx,never,Mutability::Mut),Ty::new_ref(tcx,tcx.lifetimes.re_erased,never,Mutability::Mut)];
         let env=ty::TypingEnv::fully_monomorphized();
-        let rows=types.into_iter().map(|ty|format!("{{\"type\":{},\"is_sized\":{},\"needs_drop\":{},\"opsem_inhabited\":{},\"display\":{}}}",
+        let rows=types.into_iter().map(|ty|format!("{{\"type\":{},\"is_sized\":{},\"needs_drop\":{},\"opsem_inhabited\":{},\"display\":{},\"intrinsic\":{}}}",
             generic_material::type_tree(tcx,ty).expect("typed world fact oracle"),ty.is_sized(tcx,env),
-            ty.needs_drop(tcx,env),ty.is_opsem_inhabited(tcx,env),format!("{:?}",ty.to_string()))).collect::<Vec<_>>();
+            ty.needs_drop(tcx,env),ty.is_opsem_inhabited(tcx,env),format!("{:?}",ty.to_string()),format!("{:?}",rustc_const_eval::util::type_name(tcx,ty)))).collect::<Vec<_>>();
         println!("[{}]",rows.join(","));Compilation::Stop
     }
 }

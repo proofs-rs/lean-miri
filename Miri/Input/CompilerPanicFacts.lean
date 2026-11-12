@@ -1,3 +1,4 @@
+import Miri.Input.LowerMIR
 import Miri.Input.CompilerInstance
 import Miri.Interpreter.Panic
 
@@ -90,8 +91,8 @@ def genericParameters (program : LoweredProgram) (requested : MIR.DefId) :
 Instance::mono, retaining erased lifetime arguments and rejecting type/const
 parameters. Missing compiler records remain unsupported; absent required lang
 items are source invariant errors. -/
-def unwindTerminate (program : LoweredProgram) (reason : MIR.UnwindTerminateReason) :
-    Except StepError CallInstance := do
+def unwindTerminateSeed (program : LoweredProgram) (reason : MIR.UnwindTerminateReason) :
+    Except StepError (MIR.DefId × Array MIR.GenericArg) := do
   let tag := match reason with | .Abi => "PanicCannotUnwind" | .InCleanup => "PanicInCleanup"
   let some definition ← langItemByName program tag |>.mapError StepError.unsupported
     | throw (.invalidProgram "missing unwind termination language item")
@@ -101,6 +102,5 @@ def unwindTerminate (program : LoweredProgram) (reason : MIR.UnwindTerminateReas
     | .lifetime => args := args.push (.Lifetime .Erased)
     | .typeParameter | .constParameter =>
       throw (.invalidProgram "Instance::mono called on type/const generic unwind termination item")
-  CompilerInstance.item program.input.instances definition args
-    |>.mapError StepError.unsupported
+  pure (definition,args)
 end Miri.Input.CompilerPanicFacts

@@ -1,5 +1,7 @@
 import Miri.Input.Model
 import Miri.Input.GenericInstantiationWorld
+import Miri.Input.RuntimeArrayTypes
+import Miri.Input.NoopDropShim
 
 /-! Immutable body seeds. Metadata inspection never instantiates a template.
 Executable MIR is produced only by resolveBody, with errors propagated and no
@@ -64,11 +66,53 @@ private def materialCallSites (body : MIR.Body) : Array (Nat × MIR.Operand) := 
     | _ => pure ()
   return result
 
+private def noopDropSource (document : ImportDocument) (reference : NoopDropRef) :
+    Except String (InstanceNode × GenericSubstitution.DefinitionTemplate) := do
+  let some sourceInstance := document.instances[reference.instanceId]?
+    | throw "no-op drop instance is absent"
+  unless sourceInstance.id == reference.instanceId do throw "no-op drop instance ID/index mismatch"
+  let .Shim (.DropGlue definition none) := sourceInstance.instanceKind
+    | throw "no-op drop source requires exact DropGlue(_, None) identity"
+  let some definition := document.definitions[definition]?
+    | throw "no-op drop signature definition is absent"
+  let some material := definition.genericTemplate
+    | throw "no-op drop raw signature material is absent"
+  let some signature := material.signatureExpression
+    | throw "no-op drop definition has no raw signature"
+  NoopDropShim.validateSignature signature
+  unless sourceInstance.genericArgs.size == material.parameters.size do
+    throw "no-op drop signature argument count mismatch"
+  for (argument,sort) in sourceInstance.genericArgs.zip material.parameters do
+    let actual := match argument with
+      | .Type _ => GenericSubstitution.ArgSort.type
+      | .Lifetime _ => .region
+      | .Const _ => .constant
+    unless actual == sort do throw "no-op drop signature argument sort mismatch"
+  unless reference.sourceSpan.spanId < document.spans.size &&
+      reference.sourceSpan.position.filename < document.files.size do
+    throw "no-op drop source position is absent"
+  pure (sourceInstance,material)
+
 /-- Raw metadata access preserves the body-seed order without type resolution. -/
 def metadata (document : ImportDocument) (index : Nat) : Except String Metadata := do
   match ← bodySeed document index with
   | .material body =>
     pure ⟨body.toBodyCore.toBodyMetadata,body.instanceId,body.promotedBodies,materialCallSites body.mir⟩
+  | .noopDrop reference =>
+    let (sourceInstance,_) ← noopDropSource document reference
+    let .Shim (.DropGlue definition none) := sourceInstance.instanceKind
+      | throw "no-op drop source identity changed"
+    let some defPath := sourceInstance.defPath | throw "no-op drop definition path is absent"
+    let span := reference.sourceSpan.spanId
+    let fields : BodyMetadata := {
+      definitionId := some definition,defPath,
+      sourcePath := s!"$.bodies[{index}]",spanId := span,preambleDefSpanId := span,
+      injectionPhase := none,
+      localSources := Array.replicate 2 {spanId := span,scope := 0},
+      sourceScopes := #[{id := 0,parent := none,spanId := span,inlined := none,inlinedParent := none}],
+      backtraceSpans := #[reference.sourceSpan],callEvidence := #[none],
+      nodeFacts := #[#[{}]],requiredConsts := #[] }
+    pure ⟨fields,reference.instanceId,#[],#[]⟩
   | .copyTemplate reference =>
     let source ← templateSource document reference.templateId
     validateTemplate document source
@@ -119,5 +163,59 @@ def resolveBody (document : ImportDocument) (index : Nat) : TypeArena.WorldM Bod
       lift (MirTemplate.validateClosed 16384 expression)
       GenericInstantiationWorld.resolveType 16384 expression
     pure { toBodyMetadata := sourceMetadata.toBodyMetadata,mir,instanceId := reference.instanceId }
+
+  | .noopDrop reference =>
+    let sourceMetadata ← lift (metadata document index)
+    let (sourceInstance,material) ← lift (noopDropSource document reference)
+    let arguments ← lift (GenericInstantiationWorld.ofArguments (← get) 16384 sourceInstance.genericArgs)
+    lift (material.checkArguments arguments)
+    let some signature := material.signatureExpression
+      | throw "no-op drop raw signature disappeared"
+    let mir ← NoopDropShim.instantiate 16384 signature arguments ⟨reference.sourceSpan.spanId⟩
+      (GenericInstantiationWorld.resolveType 16384)
+    pure {toBodyMetadata := sourceMetadata.toBodyMetadata,mir,instanceId := reference.instanceId}
+
+/-- Demand raw ordinary MIR by a complete current-world Item identity. This
+returns no canonical body-table index and establishes no ABI capability. -/
+def resolveInstanceBody (document : ImportDocument) (requestedInstance : InstanceId) :
+    RuntimeArrayTypes.CompilerM BodyCore := do
+  let world ← get
+  let key ← match world.instances.lookup requestedInstance with
+    | .ok (.material key) | .ok (.constructed key) => pure key
+    | .error error => throw error
+  let .Item _ := key.kind | throw "raw ordinary MIR requires an Item instance"
+  let mut matching : Array (Nat × CopyTemplateSource) := #[]
+  for (source,index) in document.mirTemplates.zipIdx do
+    if source.sourcePromoted.isSome then continue
+    let identity ← match world.arena.identity source.definitionId with
+      | .ok identity => pure identity | .error error => throw error
+    if identity == key.definition then matching := matching.push (index,source)
+  unless matching.size == 1 do throw "ordinary raw MIR source is absent or ambiguous"
+  let some (index,source) := matching[0]? | throw "ordinary raw MIR source is absent"
+  match validateTemplate document source with
+  | .error error => throw error | .ok () => pure ()
+  let arguments ← match GenericInstantiationWorld.ofArguments world.arena 16384 key.arguments with
+    | .ok arguments => pure arguments | .error error => throw error
+  let mir ← MirTemplate.instantiate source.template 16384 arguments fun expression => do
+    let expression ← match MirTemplate.eraseFreeRegions 16384 expression with
+      | .ok expression => pure expression | .error error => throw error
+    match MirTemplate.validateClosed 16384 expression with
+    | .error error => throw error | .ok () => pure ()
+    RuntimeArrayTypes.liftType (GenericInstantiationWorld.resolveType 16384 expression)
+  let blocks := source.template.skeleton.blocks
+  let bodyMetadata : BodyMetadata := {
+    definitionId := some source.definitionId
+    defPath := source.defPath
+    sourcePath := s!"$.mir_templates[{index}]"
+    spanId := source.spanId
+    preambleDefSpanId := source.preambleDefSpanId
+    injectionPhase := source.injectionPhase
+    localSources := source.localSources
+    sourceScopes := source.sourceScopes
+    backtraceSpans := source.backtraceSpans
+    callEvidence := blocks.map (fun _ => none)
+    nodeFacts := blocks.map (fun block => Array.replicate (block.statements.size + 1) {})
+    requiredConsts := #[] }
+  pure {toBodyMetadata := bodyMetadata,mir,instanceId := requestedInstance}
 
 end Miri.Input.SourceMir

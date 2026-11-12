@@ -14,7 +14,7 @@ rg -q "^commit-hash: $PIN$" "$OUT/rustc-version.txt"
 export LD_LIBRARY_PATH="$RUSTUP_HOME/toolchains/miri-exporter-${PIN:0:12}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 if [[ "${WORLD_TYPES_SKIP_BUILD:-0}" != 1 ]]; then
   flock /tmp/lean-miri-lake-build.lock lake build \
-    Miri.Input.CompilerWorldFacts Miri.Input.WorldTypeName Miri.Input.Decoder
+    Miri.Input.CompilerWorldFacts Miri.Input.WorldTypeName Miri.Input.WorldIntrinsicTypeName Miri.Input.CompilerIntrinsicConstants Miri.Input.Decoder
 fi
 bash tools/export-mir.sh --output "$OUT/candidate.json" --root miri_start -- \
   tests/repro/compiler-queries/generic-mir-novel-array-start.rs \
@@ -69,3 +69,32 @@ if timeout 30s lake env lean --run tools/CheckWorldNamedTypes.lean "$OUT/structu
   exit 1
 fi
 rg -q 'World named type printer differs from pinned rustc' "$OUT/wrong-named-oracle.log"
+
+timeout 30s lake env lean --run tools/CheckWorldIntrinsicNames.lean "$OUT/structural.json" "$OUT/structural-oracle.json"
+timeout 30s lake env lean --run tests/compiler_queries/FunctionTypePrinter.lean
+bash tools/export-mir.sh --output "$OUT/functions.json" --root function_name_root -- \
+  tests/repro/compiler-queries/function-type-name.rs \
+  --crate-type=lib --crate-name=function_name_probe
+"$RUSTC" --edition=2024 tools/function-type-name-oracle.rs -o "$TEMP_DIR/function-oracle"
+python3 - "$TEMP_DIR/function-oracle" "$OUT" <<'PY_FUNCTIONS'
+import json,pathlib,subprocess,sys
+oracle,out=sys.argv[1],pathlib.Path(sys.argv[2]);value=json.loads((out/'functions.json').read_text())
+assert 'compiler_type_name_constants' not in value, 'eager type_name result category remains'
+assert 'type_name_result_type' not in value['compiler_runtime_primitives'], 'obsolete result-type anchor remains'
+with (out/'function-oracle.json').open('w') as stdout,(out/'function-oracle.log').open('w') as stderr:
+    subprocess.run([oracle,*value['invocation']['rustc_args']],stdout=stdout,stderr=stderr,check=True,timeout=60)
+rows=json.loads((out/'function-oracle.json').read_text());assert len(rows)==5
+rows[0]['intrinsic']+='wrong'
+(out/'wrong-function-oracle.json').write_text(json.dumps(rows))
+PY_FUNCTIONS
+timeout 30s lake env lean --run tools/CheckWorldFunctionNames.lean "$OUT/functions.json" "$OUT/function-oracle.json"
+if timeout 30s lake env lean --run tools/CheckWorldFunctionNames.lean "$OUT/functions.json" "$OUT/wrong-function-oracle.json" > "$OUT/wrong-function-oracle.log" 2>&1; then
+  echo 'corrupt intrinsic function name oracle unexpectedly passed' >&2
+  exit 1
+fi
+rg -q 'FnDef intrinsic differs from pinned rustc' "$OUT/wrong-function-oracle.log"
+
+bash tools/export-mir.sh --output "$OUT/intrinsic-constants.json" --root constant_root -- \
+  tests/repro/compiler-queries/intrinsic-constants.rs \
+  --crate-type=lib --crate-name=intrinsic_constants_probe
+timeout 30s lake env lean --run tools/CheckConstructedIntrinsicConstants.lean "$OUT/intrinsic-constants.json"

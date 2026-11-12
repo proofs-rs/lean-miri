@@ -73,6 +73,7 @@ deriving instance DecidableEq for CoroutineCoverage
 deriving instance DecidableEq for MirTemplate.Template
 deriving instance DecidableEq for CopyTemplateSource
 deriving instance DecidableEq for CopyTemplateRef
+deriving instance DecidableEq for NoopDropRef
 deriving instance DecidableEq for BodySeed
 deriving instance DecidableEq for ImportDocument
 -- Density evidence contains only a proof about this exact document's type

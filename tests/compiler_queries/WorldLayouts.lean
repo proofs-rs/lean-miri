@@ -130,3 +130,29 @@ def main (args : List String) : IO Unit := do
   check (initial.constructedTypes.isEmpty && initial.constructedConstants.isEmpty) "query mutated the original execution value"
   check (!(runtime.lookup results.adt.ty).isOk) "pure source lookup accepted an execution-owned type ID"
   IO.println s!"PASS six genuinely new ADT/field-array/pointer/reference/slice-reference/tuple layouts equal independent rustc; {final.constructedTypes.size} persisted dense constructor nodes; both contextual wide-pointer fields match exact rustc oracle"
+
+  -- Synthetic postdecode corruption: source field identity must agree with
+  -- the original declaration, not merely have enough layout inputs to run.
+  let some original := data.variants[0]? | throw (IO.userError "source struct variant absent")
+  check (!original.fields.isEmpty) "field-domain corruption fixture is empty"
+  let badVariant := {original with fields := original.fields.pop}
+  let badShape := {data with variants := data.variants.set! 0 badVariant}
+  let invalid := {generic with shape := .adt badShape}
+  let badDocument := {decoded.document with types := decoded.document.types.set! generic.id invalid}
+  let badRuntime ← must ((RuntimeMetadata.ofDocument badDocument).mapError toString)
+  let badWorld ← must (TypeArena.World.ofDocument badDocument)
+  match (badRuntime.layoutInWorld generic.id).run badWorld with
+  | .ok _ => throw (IO.userError "layout accepted field domain inconsistent with declaration")
+  | .error reason =>
+    check (reason == "layout ADT field domain differs from raw declaration")
+      s!"field-domain corruption failed for unrelated reason: {reason}"
+  let some phantom := decoded.document.definitions.find? (fun definition =>
+      definition.adtDeclaration.any (·.langItem == some "phantom_data"))
+    | throw (IO.userError "canonical PhantomData raw declaration absent")
+  let wrong : TypeArena.WorldM (Miri.ABI.TyAndLayout Nat) := do
+    let id ← TypeArena.World.internType (.adt ⟨phantom.crateIndex,phantom.index⟩ #[])
+    runtime.layoutInWorld id
+  match wrong initial with
+  | .ok _ => throw (IO.userError "empty ADT layout accepted incomplete nominal generic arguments")
+  | .error reason => check (reason.contains "arity") s!"nominal arity control failed for unrelated reason: {reason}"
+  IO.println "PASS declaration-domain corruption and empty-ADT missing generic argument controls"

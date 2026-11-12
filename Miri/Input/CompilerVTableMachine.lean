@@ -132,27 +132,27 @@ theorem attach_profile_identity (p : Prepared) (image : AllocationImage.Imported
 
 /-- Runtime symbolic maps must wrap the imported queries: reversing this order
 would lose freshly reserved function/vtable identities after successful casts. -/
-def vtableHooks (p : Prepared) (image : AllocationImage.Imported)
+def vtableHooks (p : Prepared) (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (image : AllocationImage.Imported)
     (h : VTableMachine.Hooks K User Other)
     (base : VTableHooks Provenance (MachineHooks.State K User) C CallInstance (FnAbi MIR.TyId)) :
     VTableHooks Provenance (MachineHooks.State K User) C CallInstance (FnAbi MIR.TyId) :=
   VTableMachine.hooks (hooks p image h)
     (CompilerVTableQueries.hooks p.queries
-      (CompilerCallPipeline.vtableHooks p.calls image (fun (state : MachineHooks.State K User) => state.machine.memory) base))
+      (CompilerCallPipeline.vtableHooks p.calls types image (fun (state : MachineHooks.State K User) => state.machine.memory) base))
 
 def virtualHooks (p : Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (image : AllocationImage.Imported)
     (h : VTableMachine.Hooks K User Other)
     (base : VirtualCalls.Hooks Provenance (MachineHooks.State K User) C MachineHooks.FrameExtra) :
     VirtualCalls.Hooks Provenance (MachineHooks.State K User) C MachineHooks.FrameExtra :=
-  {base with compiler := CompilerCallPipeline.compilerHooks p.calls types base.compiler, vtable := vtableHooks p image h base.vtable}
+  {base with compiler := CompilerCallPipeline.compilerHooks p.calls types base.compiler, vtable := vtableHooks p types image h base.vtable}
 
 /-- Production compiler/vtable leaves require no runtime-operation scaffold. -/
 def virtualLeaves (p : Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (image : AllocationImage.Imported)
     (h : VTableMachine.Hooks K User Other) (base : ExecutionCallLeaves.Virtual K User C) :
     ExecutionCallLeaves.Virtual K User C :=
-  {base with compiler := CompilerCallPipeline.compilerHooks p.calls types base.compiler, vtable := vtableHooks p image h base.vtable}
+  {base with compiler := CompilerCallPipeline.compilerHooks p.calls types base.compiler, vtable := vtableHooks p types image h base.vtable}
 
 /-- Close virtual receiver/type selection, dynamic drop, caller location and
 actual function-pointer resolution on the canonical call state. -/
@@ -168,12 +168,12 @@ def callHooks (p : Prepared)
   FunctionPointers.callHooks h.functions (VirtualCalls.bind (virtualHooks p types image h virtual) budget base)
 /-- Unsize/upcast casts create and inspect actual symbolic vtables and actual
 function pointers; compiler layout/type queries remain the source provider. -/
-def castHooks (p : Prepared) (image : AllocationImage.Imported)
+def castHooks (p : Prepared) (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (image : AllocationImage.Imported)
     (h : VTableMachine.Hooks K User Other)
     (vtableBase : VTableHooks Provenance (MachineHooks.State K User) C CallInstance (FnAbi MIR.TyId))
     (base : CastHooks Provenance (MachineHooks.State K User) C D) :
     CastHooks Provenance (MachineHooks.State K User) C D :=
-  let table := vtableHooks p image h vtableBase
+  let table := vtableHooks p types image h vtableBase
   {FunctionPointerConsumers.cast h.functions base with
     vtableType := VTable.getPtrVTableType table
     vtablePointer := VTable.getPointer table
@@ -181,12 +181,12 @@ def castHooks (p : Prepared) (image : AllocationImage.Imported)
 
 /-- Validity preserves FnVal.Other for source get_ptr_fn checks while compiler
 virtual method entries retain full Instance identities. -/
-def validityHooks (p : Prepared) (image : AllocationImage.Imported)
+def validityHooks (p : Prepared) (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (image : AllocationImage.Imported)
     (h : VTableMachine.Hooks K User Other)
     (vtableBase : VTableHooks Provenance (MachineHooks.State K User) C CallInstance (FnAbi MIR.TyId))
     (base : ValidityVisitor.Hooks Provenance (MachineHooks.State K User) C MachineHooks.FrameExtra
       (FnVal Other) (FnAbi MIR.TyId) Pad) :
     ValidityVisitor.Hooks Provenance (MachineHooks.State K User) C MachineHooks.FrameExtra
       (FnVal Other) (FnAbi MIR.TyId) Pad :=
-  {base with vtable := FunctionPointerConsumers.vtable h.functions (vtableHooks p image h vtableBase)}
+  {base with vtable := FunctionPointerConsumers.vtable h.functions (vtableHooks p types image h vtableBase)}
 end Miri.Input.CompilerVTableMachine

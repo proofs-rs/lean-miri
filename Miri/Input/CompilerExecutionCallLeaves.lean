@@ -35,13 +35,13 @@ def make (p : CompilerProviders.Prepared)
   functionSignature := fun _ layout => lift do
     let (count,sourceAbi) ← CompilerFunctionFacts.signature p.functions layout.ty
     pure (count, sourceAbi)
-  instanceKind := fun inst => lift (CompilerInstance.kindOf p.loweringContext.instances inst)
-  instanceArgs := fun inst => lift (CompilerInstance.argsOf p.loweringContext.instances inst)
-  itemInstance := fun definition args => lift (CompilerInstance.item p.loweringContext.instances definition args)
+  instanceKind := fun inst => do lift (CompilerInstance.kindOf (← RuntimeArrayQueries.compilerSnapshot types) inst)
+  instanceArgs := fun inst => do lift (CompilerInstance.argsOf (← RuntimeArrayQueries.compilerSnapshot types) inst)
+  itemInstance := fun definition args => RuntimeArrayQueries.performCompiler types (CompilerInstance.item definition args)
   functionKind := fun ty => RuntimeArrayQueries.perform types (CompilerFunctionFacts.kindInWorld p.functions ty)
   resolve := fun _ definition args => CompilerProviders.resolveCurrent p types definition args
   fnAbiOfFnPtr := fun _ layout extra => lift (CompilerFunctionFacts.pointerAbi p.functions layout.ty extra)
-  fnAbiOfInstance := fun _ callee extra => lift (CompilerInstanceAbi.abiOfInstance p.lifecycle.instances callee extra)
+  fnAbiOfInstance := fun _ callee extra => do lift (CompilerInstanceAbi.abiOfInstance p.lifecycle.instances (← RuntimeArrayQueries.compilerSnapshot types) callee extra)
   isRustCall := fun abi => abi == .RustCall
   rustAbi := .Rust
   checkArgumentCompat := fun _ caller callee =>

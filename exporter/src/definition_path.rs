@@ -29,5 +29,13 @@ pub(crate) fn material(tcx:TyCtxt<'_>, definition:DefId)->Option<Value> {
         ty::GenericParamDefKind::Type{has_default,..}=>has_default,
         ty::GenericParamDefKind::Const{has_default,..}=>has_default,
     }).collect::<Vec<_>>();
-    Some(json!({"components":components,"parent_parameter_count":generics.parent_count,"parameter_defaults":defaults}))
+    let function_header_safety = definition.as_local().and_then(|local| {
+        if !matches!(tcx.def_kind(definition),DefKind::Fn|DefKind::AssocFn) {return None;}
+        tcx.hir_node_by_def_id(local).fn_sig().map(|signature| match signature.header.safety {
+            rustc_hir::HeaderSafety::Normal(rustc_hir::Safety::Safe)=>"normal_safe",
+            rustc_hir::HeaderSafety::Normal(rustc_hir::Safety::Unsafe)=>"normal_unsafe",
+            rustc_hir::HeaderSafety::SafeTargetFeatures=>"safe_target_features",
+        })
+    });
+    Some(json!({"function_header_safety":function_header_safety,"components":components,"parent_parameter_count":generics.parent_count,"parameter_defaults":defaults}))
 }

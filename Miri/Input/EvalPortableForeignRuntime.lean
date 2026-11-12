@@ -57,7 +57,7 @@ def backtraceCore [DecidableEq MiriMemoryKind]
     Backtrace.CoreHooks Provenance (State Os R P H D O Aff B Host)
       (RuntimePlace Provenance) (RuntimePlace Provenance) LoadedBody CallInstance
       MachineHooks.FrameExtra CompilerBacktraceSource.Position :=
-  let functionPointers := CompilerFunctionPointers.hooks providers.pointers image functionPointers
+  let functionPointers := CompilerFunctionPointers.hooks providers.pointers EvalProjectionMachine.arrays image functionPointers
   let source := CompilerBacktraceSource.source providers.lifecycle.backtrace hostUsizeMax
     (RuntimeArrayQueries.perform EvalProjectionMachine.arrays
       (CompilerBacktraceFacts.unitPointerLayout providers.lifecycle.calls))
@@ -135,7 +135,7 @@ def portableOther [DecidableEq MiriMemoryKind]
     allocatorSymbol := exactForeign.allocatorSymbol
     lookupFunction := exactForeign.lookupFunction
     checkSymbolClash := exactForeign.checkSymbolClash }
-  let functionPointers := CompilerFunctionPointers.hooks providers.pointers image functionPointers
+  let functionPointers := CompilerFunctionPointers.hooks providers.pointers EvalProjectionMachine.arrays image functionPointers
   exact EvalPortableForeignConstruction.portableOtherFromSource sourceForeign machine choice
     thread unitLayout reuseClock effects access arithmetic projection providers.lifecycle.backtrace
     hostUsizeMax (RuntimeArrayQueries.perform EvalProjectionMachine.arrays

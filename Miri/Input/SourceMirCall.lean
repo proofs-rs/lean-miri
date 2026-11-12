@@ -1,6 +1,7 @@
 import Miri.Input.SourceMir
 import Miri.Input.SourceCall
 import Miri.Input.GenericInstantiationWorld
+import Miri.Input.CompilerInstance
 
 /-! Symbolic source-call sites. Reading a seed never instantiates a MIR body or
 looks up an ABI. Resolution takes effectful callbacks belonging to the current
@@ -53,12 +54,12 @@ def resolveWith {m : Type → Type} [Monad m] [MonadExceptOf String m]
 
 /-- Resolve in the current execution's universe. The material instance graph
 is still an explicit residual capability; no fresh universe is created. -/
-def resolveInWorld (document : ImportDocument) (seed : Seed) :
-    TypeArena.WorldM (SourceCall.Resolution × Miri.MIR.Operand) :=
+def resolveInWorld (_document : ImportDocument) (seed : Seed) :
+    RuntimeArrayTypes.CompilerM (SourceCall.Resolution × Miri.MIR.Operand) :=
   resolveWith
-    (fun arguments => do liftPure (GenericInstantiationWorld.ofArguments (← get) 16384 arguments))
-    (fun definition => do liftPure ((← get).definitionRef definition))
-    (GenericInstantiationWorld.resolveType 16384)
-    (fun definition arguments => liftPure (SourceCall.materialItem document definition arguments)) seed
+    (fun arguments => do liftPure (GenericInstantiationWorld.ofArguments (← get).arena 16384 arguments))
+    (fun definition => do liftPure ((← get).arena.definitionRef definition))
+    (fun term => RuntimeArrayTypes.liftType (GenericInstantiationWorld.resolveType 16384 term))
+    (fun definition arguments => CompilerInstance.item definition arguments) seed
 
 end Miri.Input.SourceMirCall

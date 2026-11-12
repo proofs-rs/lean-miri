@@ -136,3 +136,29 @@ example : resultClass (fulfill program hooks {} 100 100 #[⟨#[],.constHasType (
 example : resultClass (fulfill program hooks {} 100 100 #[⟨#[],.constHasType (.parameter .constant 0) u32⟩]) = .error "trait matching requires a ground query" := by decide +kernel
 example : resultClass (fulfill program hooks {assumptions := #[obligation gate u32]} 100 100
     #[⟨#[],.constHasType (evaluated u32) u64⟩]) = .ok "ambiguous" := by decide +kernel
+
+private def structuralProgram : Program := {traits := #[
+  {(declaration gate #[]) with isAuto := true, isCoinductive := true}, declaration aux #[]]}
+private def structuralHooks : Hooks := { hooks with builtin := fun _ _ _ goal => .ok (some #[⟨#[],.trait goal⟩]) }
+example : resultClass (solve structuralProgram structuralHooks {} 100 100
+    ⟨.positive,⟨gate,#[u32]⟩⟩) = .ok "proven" := by decide +kernel
+private def negativeSiblingHooks : Hooks := {hooks with builtin := fun _ _ _ goal => .ok (some #[⟨#[],.trait goal⟩,obligation aux u32])}
+example : resultClass (solve structuralProgram negativeSiblingHooks {} 100 100
+    ⟨.positive,⟨gate,#[u32]⟩⟩) = .ok "no_solution" := by decide +kernel
+example : resultClass (solveWithActive structuralProgram structuralHooks {} 100 100
+    #[⟨.positive,⟨gate,#[u32]⟩⟩] ⟨.positive,⟨gate,#[u32]⟩⟩) =
+    .ok "ambiguous" := by decide +kernel
+
+private def inheritedProgram : Program := {traits := #[
+  {(declaration gate #[]) with superPredicates := #[obligation aux (.parameter .type 0)]},
+  declaration aux #[]]}
+example : resultClass (solve inheritedProgram hooks {assumptions := #[obligation gate u32]}
+    100 100 ⟨.positive,⟨aux,#[u32]⟩⟩) = .ok "proven" := by decide +kernel
+example : resultClass (solve inheritedProgram hooks {assumptions := #[obligation gate u32]}
+    100 100 ⟨.positive,⟨aux,#[u64]⟩⟩) = .ok "ambiguous" := by decide +kernel
+example : resultClass (solveWithSourceParameters inheritedProgram hooks
+    {assumptions := #[obligation gate (.parameter .type 0)]} #[.type]
+    100 100 ⟨.positive,⟨aux,#[.parameter .type 0]⟩⟩) = .ok "proven" := by decide +kernel
+example : resultClass (solveWithSourceParameters inheritedProgram hooks
+    {assumptions := #[]} #[.type]
+    100 100 ⟨.positive,⟨aux,#[.parameter .type 0]⟩⟩) = .ok "ambiguous" := by decide +kernel

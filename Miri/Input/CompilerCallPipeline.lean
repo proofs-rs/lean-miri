@@ -35,7 +35,7 @@ def prepareProfiled (profile : Lean.Options) (program : LoweredProgram) : Result
   profileit "preparation.call.inline_attribute_validation" profile fun _ => do
     for callee in [:runtime.program.input.instances.size] do
       if let some inlineAttribute := CompilerVirtualFacts.inlineAttribute scopes callee then
-        let trackCaller ← CompilerRuntimeQueries.requiresCallerLocation runtime callee
+        let trackCaller ← CompilerRuntimeQueries.materialRequiresCallerLocation runtime callee
         unless inlineAttribute == trackCaller do throw "inlined/global full-instance caller attributes conflict"
   let program := calls.program
   let context := symbols.facts.context.withProgram program
@@ -57,11 +57,11 @@ def compilerHooks (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
     (CompilerRuntimeQueries.hooks prepared.runtime types
       (CompilerVirtualFacts.compilerHooks prepared.symbols.facts types base))
 
-def vtableHooks (prepared : Prepared) (image : AllocationImage.Imported)
+def vtableHooks (prepared : Prepared) (types : RuntimeArrayQueries.Access S) (image : AllocationImage.Imported)
     (memory : S → MemoryState P E K) (base : VTableHooks P S C CallInstance (FnAbi MIR.TyId)) :
     VTableHooks P S C CallInstance (FnAbi MIR.TyId) :=
   CompilerVTableFacts.hooks prepared.symbols.facts
-    (CompilerVTableRuntime.hooks prepared.symbols image memory base)
+    (CompilerVTableRuntime.hooks prepared.symbols types image memory base)
 
 /-- Runtime reads/projections/pointer alignment remain actual machine actions.
 Every replaced compiler/symbolic leaf uses the exact imported query evidence. -/
@@ -71,13 +71,13 @@ def runtimeHooks (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
     VirtualCalls.Hooks P S C E :=
   { base with
     compiler := compilerHooks prepared types base.compiler
-    vtable := vtableHooks prepared image memory base.vtable }
+    vtable := vtableHooks prepared types image memory base.vtable }
 
 /-- Source load_mir returns the exact body-table key with executable MIR. Missing
 or ambiguous instance bodies, failed substitutions and templates are errors. -/
 def loadMir (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
     (fnInstance : CallInstance) : EStateM StepError S LoadedBody :=
-  RuntimeArrayQueries.perform types (CallResolution.loadedBodyOfInstance prepared.calls fnInstance)
+  RuntimeArrayQueries.performCompiler types (CallResolution.loadedBodyOfInstance prepared.calls fnInstance)
 
 def bindFunctionCalls (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
     (base : FunctionCalls.Hooks P S C E Other Extern FnABI ArgABI) :

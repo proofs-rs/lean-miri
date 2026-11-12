@@ -66,7 +66,7 @@ private def rootCall (p : Input.CompilerProviders.Prepared) (body : LoadedBody)
     (rootInstance : CallInstance) (config : ExecutionMachine.Config MiriMemoryKind
       CoreUser
       Unit String ABI.ExternAbi Unit) (state : InnerState) : Except String (InnerState × RuntimeStackPlace Provenance) := do
-  let abi ← Input.CompilerInstanceAbi.abiOfInstance p.lifecycle.instances rootInstance #[]
+  let abi ← Input.CompilerInstanceAbi.abiOfInstance p.lifecycle.instances (Input.EvalProjectionMachine.arrays.get state) rootInstance #[]
   let some returnTy := body.body.locals[0]? | throw "root has no return local"
   let returnLayout ← (p.runtime.lookup returnTy).mapError toString
   let hooks := ExecutionMachine.callHooks config options.limits

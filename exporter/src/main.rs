@@ -21,6 +21,7 @@ mod pool_type;
 mod generic_material;
 mod definition_path;
 mod generic_mir;
+mod noop_drop;
 mod generic_mir_call;
 mod alias_rules;
 mod adt_material;
@@ -183,7 +184,6 @@ struct ExportDocument {
     compiler_instance_abis: Vec<InstanceAbi>,
     compiler_function_facts: FunctionFacts,
     compiler_cast_queries: Vec<cast_queries::Query>,
-    compiler_type_name_constants: Vec<intrinsic_value_queries::TypeName>,
     compiler_panic_queries: Vec<panic_queries::Query>,
     compiler_native_signature_queries: Vec<native_signature_queries::Query>,
     compiler_retag_queries: Vec<retag_queries::Query>,
@@ -1304,7 +1304,6 @@ struct RuntimePrimitives {
     unit_pointer_mut: u64,
     imm_u8_pointer: u64,
     imm_u8_pointer_pointer: u64,
-    type_name_result_type: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     caller_location_type: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1422,14 +1421,6 @@ impl ExportCallbacks {
                 tcx,
                 ty::Ty::new_imm_ptr(tcx, ty::Ty::new_imm_ptr(tcx, tcx.types.u8)),
             )?,
-            // Seed the intrinsic's actual result before the finite runtime
-            // query domain is captured; late ConstValue export must not leave
-            // its &str layout without the corresponding compiler leaves.
-            type_name_result_type: type_json(
-                &mut export_context,
-                tcx,
-                ty::Ty::new_imm_ref(tcx, tcx.lifetimes.re_erased, tcx.types.str_),
-            )?,
             caller_location_type: None,
             ordering_enum: None,
         };
@@ -1459,7 +1450,6 @@ impl ExportCallbacks {
             panic_queries::register_termination_helpers(tcx, &mut export_context)?;
         }
         let mut native_state = native_signature_queries::State::default();
-        let mut type_name_state = intrinsic_value_queries::TypeNames::default();
         let mut retag_state = retag_queries::State::default();
         let mut global_byte_state = global_byte_queries::State::default();
         let mut identity_state = IdentityDiscovery::default();
@@ -1470,8 +1460,6 @@ impl ExportCallbacks {
         let _ = native_signature_queries::discover(tcx, &mut export_context, &mut native_state)?;
         let _ = cast_queries::discover(tcx, &mut export_context)?;
         instances.extend(export_reachable_instances(tcx, &mut export_context)?);
-        let _intrinsic_type_names_seed =
-            intrinsic_value_queries::discover_type_names(tcx, &mut export_context, &mut type_name_state)?;
         let _caller_location_constants_seed =
             intrinsic_value_queries::discover_caller_locations(tcx, &mut export_context)?;
         let _ = compiler_vtable_queries_json(tcx, &mut export_context)?;
@@ -1566,7 +1554,6 @@ impl ExportCallbacks {
             compiler_predicate_queries_json(tcx, &mut export_context, &mut predicate_facts)?;
             native_signature_queries::discover(tcx, &mut export_context, &mut native_state)?;
             retag_queries::discover(&mut export_context, &mut retag_state);
-            intrinsic_value_queries::discover_type_names(tcx, &mut export_context, &mut type_name_state)?;
             intrinsic_value_queries::discover_caller_locations(tcx, &mut export_context)?;
             instances.extend(export_reachable_instances(tcx, &mut export_context)?);
             if self.prepared_allocator_world {
@@ -1637,7 +1624,6 @@ impl ExportCallbacks {
         let predicate_queries = finish_predicate_queries(tcx, &export_context, predicate_facts);
         let native_signature_queries = native_signature_queries::finish(native_state, &export_context);
         let retag_queries = retag_queries::finish(tcx, &export_context);
-        let intrinsic_type_names = intrinsic_value_queries::finish_type_names(type_name_state);
         let caller_location_constants = intrinsic_value_queries::finish_caller_locations(tcx, &export_context);
         let runtime_type_queries = runtime_type_facts.into_iter().map(RuntimeTypeFact::finish).collect();
         let mut instances = instances.into_iter().map(InstanceFact::finish).collect::<Vec<_>>();
@@ -1881,7 +1867,6 @@ impl ExportCallbacks {
             compiler_instance_abis: instance_abis,
             compiler_function_facts: function_facts,
             compiler_cast_queries: cast_queries,
-            compiler_type_name_constants: intrinsic_type_names,
             compiler_panic_queries: panic_query_catalog,
             compiler_native_signature_queries: native_signature_queries,
             compiler_retag_queries: retag_queries,
@@ -2520,6 +2505,17 @@ fn export_reachable_instances<'tcx>(
             )?);
             continue;
         }
+        if noop_drop::eligible(tcx,instance) {
+            context.runtime_mir_frame_instances.insert(instance);
+            let body=source_noop_drop_json(tcx,instance,context)?;
+            let instance_kind=instance_kind_json(context,tcx,instance.def)?;
+            let definition=def_json(context,def_id);
+            let def_path=tcx.def_path_str(def_id);
+            let generic_args=generic_args_json(context,tcx,instance.args)?;
+            records.push(InstanceFact {instance_id,instance_kind,def_id:definition,def_path,generic_args,
+                data:pool_instance::InstanceData::InstanceMir {body,promoted_bodies:Vec::new()}});
+            continue;
+        }
         let template = checked_instance_mir(tcx, instance.def)?;
         if callable_runtime_instance(tcx, instance) {
             context.runtime_mir_frame_instances.insert(instance);
@@ -2623,6 +2619,23 @@ fn checked_instance_mir<'tcx>(
     Ok(body)
 }
 
+// Signature/location material only: never construct a no-op shim body here.
+fn source_noop_drop_json<'tcx>(tcx:TyCtxt<'tcx>,instance:ty::Instance<'tcx>,
+    context:&mut ExportContext<'tcx>)->Result<u64,String> {
+    if !noop_drop::eligible(tcx,instance) {
+        return export_failure("no-op drop source","outside selected shim category");
+    }
+    let (id,fresh)=context.bodies.reserve(BodyKey {instance,promoted:None});
+    if !fresh {return Ok(id as u64)}
+    let definition=instance.def.def_id();
+    def_json(context,definition); // raw generic signature declaration demand
+    let span=tcx.def_span(definition);
+    let source_span=backtrace_span_json(context,tcx,span,span);
+    let instance_id=context.register_metadata_instance(instance);
+    context.bodies.define(id,pool_body::BodySeed::NoopDrop{instance_id,source_span});
+    Ok(id as u64)
+}
+
 fn has_source_mir_template<'tcx>(tcx:TyCtxt<'tcx>,
     body:&rustc_middle::mir::Body<'tcx>,instance:ty::Instance<'tcx>)->bool {
     matches!(instance.def,ty::InstanceKind::Item(_))
@@ -2676,6 +2689,7 @@ fn resolved_mir_body_json<'tcx>(
             generic_definition_references(&source_material,&mut references)?;
             for definition in references { def_json(context,definition); }
             let source = pool_body::CopyTemplateSource {
+                source_promoted:template.source.promoted.map(|index|index.as_u32()),
                 template: raw,
                 source_def_id: def_json(context,template.source.def_id()),
                 def_path: tcx.def_path_str(template.source.def_id()),
@@ -4876,8 +4890,12 @@ fn register_call_transfer_for_target<'tcx>(
     // Use the same substituted body that the source interpreter enters. ABI
     // argument types are validation metadata; the actual copy destination is
     // the instantiated MIR local (or spread tuple field).
-    let template = checked_instance_mir(tcx, instance.def)?;
     let (callee_arg_count,callee_spread_arg,callee_argument_types,callee_return_type) =
+        if noop_drop::eligible(tcx,instance) {
+            let interface=noop_drop::interface(tcx,instance)?;
+            (interface.argument_count,interface.spread_argument,interface.arguments,interface.return_type)
+        } else {
+        let template = checked_instance_mir(tcx, instance.def)?;
         if has_source_mir_template(tcx,template,instance) {
             // Only interface type dependencies are needed by this residual
             // covariance catalog. Never instantiate a selected executable body.
@@ -4889,7 +4907,7 @@ fn register_call_transfer_for_target<'tcx>(
                 .map_err(|error|format!("callee MIR instantiation failed: {error:?}"))?;
             let arguments=body.args_iter().map(|local|(local,body.local_decls[local].ty)).collect();
             (body.arg_count,body.spread_arg,arguments,body.local_decls[rustc_middle::mir::RETURN_PLACE].ty)
-        };
+        }};
     let caller_args = if caller_location {
         caller_abi
             .args
@@ -6554,6 +6572,19 @@ fn compiler_instance_abis_json<'tcx>(
 // backtrace.rs::handle_miri_get_backtrace and resolve_frame_pointer. The table
 // covers compiler-produced frame positions only. Forged/unseen byte positions
 // require additional source-map evidence; consumers must never guess a line.
+fn backtrace_span_json<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,
+    span:rustc_span::Span,body_span:rustc_span::Span)->pool_body::BacktraceSpan {
+    let collapsed=rustc_span::hygiene::walk_chain_collapsed(span,body_span);
+    let position=tcx.sess.source_map().lookup_char_pos(collapsed.lo());
+    pool_body::BacktraceSpan {
+        span:span_json(context,tcx,span),
+        source_position:pool_body::SourcePosition {
+            byte_position:collapsed.lo().0,line:position.line,zero_based_char_column:position.col.0,
+            filename:context.files.intern(position.file.name.prefer_remapped_unconditionally().to_string()),
+        },
+    }
+}
+
 fn backtrace_spans_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, body: &rustc_middle::mir::Body<'tcx>) -> Vec<pool_body::BacktraceSpan> {
     let mut spans = vec![body.span, tcx.def_span(body.source.def_id())];
     for local in body.local_decls.iter() {
@@ -6571,18 +6602,7 @@ fn backtrace_spans_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tc
     let records = spans
         .into_iter()
         .filter(|span| seen.insert(*span))
-        .map(|span| {
-            let collapsed = rustc_span::hygiene::walk_chain_collapsed(span, body.span);
-            let position = tcx.sess.source_map().lookup_char_pos(collapsed.lo());
-            pool_body::BacktraceSpan {
-                span: span_json(context, tcx, span),
-                source_position: pool_body::SourcePosition {
-                    byte_position: collapsed.lo().0, line: position.line,
-                    zero_based_char_column: position.col.0,
-                    filename: context.files.intern(position.file.name.prefer_remapped_unconditionally().to_string()),
-                },
-            }
-        })
+        .map(|span|backtrace_span_json(context,tcx,span,body.span))
         .collect::<Vec<_>>();
     records
 }

@@ -13,6 +13,19 @@ the ability to verify arbitrary Rust are not claimed.
 
 ## Compiler material migration (in progress)
 
+The exact `DropGlue(_, None)` shim family now retains only instance identity and
+raw source position; its raw declaration signature supplies types. Lean builds
+the one-Return body on demand and retains the execution World. Five independent
+pinned rustc body/interface comparisons pass, including tuple/reference cases;
+a fresh source-demand test also rejects nontrivial drop glue and mixed material
+fallback fields. The 834,375-byte no-op drop guest exits zero in Lean (cursor 316)
+and same-prepared-TyCtxt Miri. Miri skips the no-op frame, so the guest alone does
+not validate body construction; the separate demand/oracle tests do. Its body
+row shrinks from 519 to 161 compact JSON bytes, while the whole artifact grows
+from 534,788 bytes with added source material/schema. Evidence is recorded in
+`scratch/abi-port/noop-drop-start-world.manifest.json`. Nontrivial drops and other
+shim families remain separate work.
+
 Ordinary binder-free, type-only generic source calls now execute from shared raw
 MIR templates and resolve their symbolic callee in the same execution-owned
 World. A fresh `generic-mir-call-start.rs` guest has four selected body references
@@ -197,25 +210,47 @@ supports scalar/pointer/reference/tuple/array/slice forms and local named ADTs
 from raw DefKey namespace/symbol chains. Twelve newly constructed named/structural
 types match independent rustc Display; missing raw paths fail closed. Raw session
 trimming flags are captured, with active trimming, external visible paths, generic
-default elision, const arguments, impl scopes and full FnDef signatures still
-explicitly unsupported. Intrinsic type_name uses a distinct source printer and
-has not yet been moved to this diagnostic printer. Canonical field/variant names now enter ADT declarations as source
+default elision, const arguments and impl scopes still explicitly unsupported.
+Local Rust-ABI FnDef diagnostics now instantiate raw signature templates and
+print the exact source HIR safety/target-feature prefix and value path. Five
+genuinely novel function items match ten independent diagnostic/intrinsic rustc
+strings, including unsafe, target-feature, unit-return and nested-module cases.
+Intrinsic type_name has a separate printer: it includes crate paths and ignores
+diagnostic settings. Twelve additional novel nominal/structural intrinsic names
+match rustc, including a missing-diagnostic-options control. Other ABI spellings,
+nonempty binders, dynamic types and additional path families remain explicit
+boundaries. The exporter type_name result enumeration, result schema and unused
+result-type anchor are deleted; current native intrinsic allocation validation
+is recorded separately from these string comparisons. Canonical field/variant names now enter ADT declarations as source
 symbols. A second independent rustc oracle agrees on 36 Sized/needs-drop/inhabitedness
 answers across twelve genuinely novel types, including generic never fields,
 destructors, enum alternatives, unions, recursive references and zero-length
 array suppression; a corrupted inhabitedness answer is rejected. The permanent
 World component script passes; logs and artifact hashes
 are in `scratch/world-types-check.log` and `scratch/world-types/`. Current World native execution passes the novel-array and tuple/Wrapper no-std
-guests (approximately 701 KB inputs). The current full build passes 1,426 jobs,
-including ImportMIR and the native runner; the axiom audit covers 80,826 Miri
-declarations with the three permitted axioms only. All 133 Python tests pass.
-A fresh 91,860,263-byte std generic input passes same-prepared-TyCtxt Miri
-exit-zero, but current Lean execution stops Unsupported at cursor 158: the
-residual covariance table lacks the material ThreadId-to-u64 pair (1071 to 4).
-This is not a successful std execution or a new type-ID lookup failure. A source
-port of rigid-constructor mismatch and the general variance relation remain work;
-adding an enumerated answer does not complete that migration. Native component
-successes and earlier checkpoint std runs do not close this current boundary.
+guests (approximately 701 KB inputs). The current type/instance Store wave passes
+1,437 build jobs and the axiom audit covers 81,164 Miri declarations using only
+the three permitted axioms. All 133 Python tests and 47 self-contained runtime
+checks pass. Earlier checkpoint `d23c9e6f` stopped at covariance ThreadId-to-u64;
+the bounded rigid-constructor mismatch rule now derives that false result from
+source syntax, including novel types in the same World. A fresh std generic
+input now passes same-prepared-TyCtxt Miri and Lean exit-zero, cursor 1430 and no
+active frame. General same-constructor variance and alias/binder relations remain
+residual. Artifact hashes are in `scratch/wave7-fullstd/manifest.json`.
+
+The eager intrinsic type_name answer category and result-type anchor are removed.
+Its runtime path computes the string in Lean, reserves CTFE bytes with salt zero,
+checks the destination layout and adjusts a runtime allocation root before making
+the slice operand; runtime IDs never enter the exported allocation-graph namespace.
+A fresh three-name guest passes Miri and Lean exit-zero at cursor 437. The stable
+core::any wrapper contains an anonymous const: current const_operand_json still
+CTFE-evaluates it before capture. An independent pinned driver measures zero
+allocations for MIR acquisition/instantiation and two at that constant evaluation.
+Consequently this guest validates category removal and ordinary constant operands;
+it does not establish execution of the new intrinsic adapter or a fresh-allocation
+miss. Unevaluated constant seeds/Lean CTFE and raw allocator-map capture remain
+necessary. See the frozen
+`scratch/type-name-runtime-v2/manifest.json`.
 
 Contextual layout operations preserve their source provenance separately from
 canonical type layouts. Wide-pointer data fields and enum tag fields have distinct
@@ -1136,10 +1171,25 @@ normalization and that changes to typing mode/ParamEnv invalidate it. Removing
 this seed requires source alias provenance and Lean normalization/rigidification;
 classifying rigidity from the alias family alone would lose semantics.
 
-Prepared, not yet routed: FunctionTypePrinter is an independent source-signature
-formatter for the Rust ABI. Five direct runtime controls pass (safe/unsafe,
-unit output, variadic/splat syntax and unsupported ABI rejection). Its JSON
-signature parsing is not kernel-reducible; these are executable controls, not
-kernel proofs. New FnDef diagnostic printing remains unsupported until raw HIR
-header-safety material and the runtime path are connected. The helper is not
-included in the current query coverage or native execution claims.
+FunctionTypePrinter is now routed for local Rust-ABI FnDef diagnostics; five
+additional executable signature controls cover safe/unsafe, unit output,
+variadic/splat syntax and unsupported ABI rejection. JSON parsing is not kernel
+reducible; these controls are executable checks, not kernel proofs.
+
+CompilerInstanceAbi and native signature adapters now validate runtime instance
+IDs against the execution-owned instance store. Their existing result catalogs
+remain explicit residual domains; a new syntax identity does not create an ABI
+answer. Intrinsic generic-constant operations instead read the same execution's
+argument and constant nodes directly. A fresh const-generic fixture constructs
+constant77 and its full instance outside both material prefixes; const_at/Value
+works without a catalog row, while branch and non-Value invariants fail closed.
+
+The new intrinsic string can be allocated with fixed CTFE salt0 before layout
+checking and root adjustment; it must never be cast from runtime AllocId into
+an exporter-graph ConstValue ID. The prepared allocator byte-key catalog remains
+a separate migration residual: it currently probes32 salts per existing byte
+image. Raw payloads alone cannot recover dedup membership because equal memory
+can also receive distinct non-deduplicated IDs. Minimal exact continuation needs
+actual AllocMap counter/map/dedup state access, currently private to rustc, or an
+explicitly retained prepared catalog boundary. See the source-study artifact in
+scratch/function-type-printer/ALLOCATION-STUDY.md.

@@ -277,8 +277,6 @@ private def catalogs (b : ReferenceBounds) (q : Catalog.Queries) : Except String
       checkId b.types target path "type"
     | .lockstepTails source target sourceTail targetTail =>
       for id in #[source, target, sourceTail, targetTail] do checkId b.types id path "type"
-  for row in q.typeNames do
-    for id in #[row.inputType, row.resultType] do checkId b.types id "$.compiler_type_name_constants" "type"
   for row in q.callerLocations do
     checkId b.spans row.span "$.compiler_caller_location_constants" "span"
     if let some id := row.resultType then checkId b.types id "$.compiler_caller_location_constants" "type"
@@ -317,7 +315,7 @@ private def catalogs (b : ReferenceBounds) (q : Catalog.Queries) : Except String
   let p := q.primitives
   for id in #[p.u8,p.u16,p.u32,p.u64,p.u128,p.i8,p.i16,p.i32,p.i64,p.i128,p.bool,
       p.pointerTagInteger,p.usize,p.isize,p.unit,p.unitPointerConst,p.unitPointerMut,
-      p.immU8Pointer,p.immU8PointerPointer,p.typeNameResultType] do
+      p.immU8Pointer,p.immU8PointerPointer] do
     checkId b.types id "$.compiler_primitive_types" "type"
   for id in #[p.callerLocationType,p.orderingEnum] do
     if let some id := id then checkId b.types id "$.compiler_primitive_types" "type"
@@ -464,6 +462,9 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
     instanceKind b s!"$.compiler_coroutine_coverage.auxiliary_bodies[{index}].source_kind" value.sourceKind
   for source in document.mirTemplates do SourceMir.validateTemplate document source
   for (seed,index) in document.bodies.zipIdx do
+    if let .noopDrop reference := seed then
+      checkId b.instances reference.instanceId s!"$.bodies[{index}]" "instance"
+      let _ ← SourceMir.metadata document index
     if let .copyTemplate reference := seed then
       let path := s!"$.bodies[{index}]"
       checkId b.instances reference.instanceId path "instance"

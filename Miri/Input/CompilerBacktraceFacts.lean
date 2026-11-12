@@ -46,7 +46,7 @@ def hooks (prepared : CompilerCallPipeline.Prepared) (types : RuntimeArrayQuerie
     foreign := CompilerShimAbi.hooks shim base.foreign
     unitPointerLayout := RuntimeArrayQueries.perform types (unitPointerLayout prepared)
     globalFunction := fun id => do
-      lift (CompilerVTableRuntime.globalFunction prepared.symbols image (memory (← get)) id) }
+      lift (CompilerVTableRuntime.globalFunction prepared.symbols (← RuntimeArrayQueries.compilerSnapshot types) image (memory (← get)) id) }
 
 def reprCHook (prepared : CompilerCallPipeline.Prepared) (types : RuntimeArrayQueries.Access S)
     (ty : MIR.TyId) : EStateM StepError S (Option Bool) :=

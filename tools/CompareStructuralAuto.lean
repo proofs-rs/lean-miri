@@ -39,11 +39,7 @@ def main (args : List String) : IO Unit := do
     let kind ← require ((← require (expected.getObjVal? "kind")).getStr?)
     let result ← require (AliasRuntime.solveGoal context 256 20000 ⟨.positive,goal⟩)
     if ← require ((← require (row.getObjVal? "coinductive_boundary")).getBool?) then
-      unless kind == "builtin" do throw (IO.userError "coinductive boundary must be rustc-positive")
-      match result with
-      | .ambiguous _ => cycleBoundaries := cycleBoundaries + 1
-      | _ => throw (IO.userError "unported coinductive cycle was not explicit ambiguity")
-      continue
+      cycleBoundaries := cycleBoundaries + 1
     match kind, result with
     | "implementation", .proven (.implementation selected _) =>
       let definition ← require (GenericMaterialCodec.readDefinition (← require (expected.getObjVal? "definition")))
@@ -55,6 +51,6 @@ def main (args : List String) : IO Unit := do
     | "builtin", .proven (.builtin _ _) => builtins := builtins + 1
     | "no_solution", .noSolution => negative := negative + 1
     | _, _ => throw (IO.userError s!"structural auto-trait outcome differs: expected {kind}, actual {repr result}")
-  unless implementations >= 1 && builtins >= 3 && negative >= 4 && novel >= 2 && cycleBoundaries >= 1 do
+  unless implementations >= 1 && builtins >= 5 && negative >= 6 && novel >= 4 && cycleBoundaries >= 4 do
     throw (IO.userError "structural auto-trait fixture lost source/builtin/negative/novel branches")
-  IO.println s!"structural auto-trait rustc differential PASS: source_impl={implementations}, builtin={builtins}, no_solution={negative}, uninterned_goals={novel}; separate coinductive boundary controls={cycleBoundaries}"
+  IO.println s!"structural auto-trait rustc differential PASS: source_impl={implementations}, builtin={builtins}, no_solution={negative}, uninterned_goals={novel}; genuine coinductive comparisons={cycleBoundaries}"

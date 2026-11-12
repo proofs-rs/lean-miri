@@ -56,6 +56,7 @@ if [[ "${STRUCTURAL_AUTO_SKIP_BUILD:-0}" != 1 ]]; then
   flock /tmp/lean-miri-lake-build.lock lake build Miri.Input.Decoder Miri.Input.AliasRuntime
 fi
 lake env lean tests/compiler_queries/StructuralAuto.lean
+lake env lean tests/compiler_queries/StructuralCycle.lean
 lake env lean tests/compiler_queries/TraitSelectionMatch.lean
 lake env lean tests/compiler_queries/TraitSelectionFulfill.lean
 lake env lean --run tools/CompareStructuralAuto.lean "$OUT/candidate.json" "$OUT/oracle.json"

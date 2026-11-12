@@ -1,9 +1,30 @@
-import Miri.Input.CompilerGlobals
-import Miri.Interpreter.Instance
+import Miri.Input.RuntimeArrayTypes
 
-/-! Exact instance_kind_json schema mirrors pinned ty/instance.rs. No shim or
-generic argument is collapsed to its definition ID. -/
 namespace Miri.Input.CompilerInstance
+open Miri.Interpreter
+
+def source (world : RuntimeArrayTypes.World) (id : InstanceId) : Except String InstanceArena.Key := do
+  match ← world.instances.lookup id with
+  | .material key | .constructed key => pure key
+
+def kindOf (world : RuntimeArrayTypes.World) (id : CallInstance) : Except String CallInstanceKind :=
+  return (← source world id).kind
+
+def argsOf (world : RuntimeArrayTypes.World) (id : CallInstance) : Except String (Array MIR.GenericArg) :=
+  return (← source world id).arguments
+
+def definitionOf (world : RuntimeArrayTypes.World) (id : CallInstance) : Except String MIR.DefId :=
+  return (← kindOf world id).defId
+
+/-- Intern syntax only; the body and ABI providers remain separate capabilities. -/
+def item (definition : MIR.DefId) (args : Array MIR.GenericArg) :
+    RuntimeArrayTypes.CompilerM CallInstance :=
+  RuntimeArrayTypes.internInstance (.Item definition) args
+
+end Miri.Input.CompilerInstance
+
+/- Immutable source-table validation only; never a runtime instance fallback. -/
+namespace Miri.Input.CompilerInstance.Material
 open Lean Miri.Interpreter
 /-- Instance queries need only this canonical table; constructing a full lowering
 context here would repeatedly copy unrelated type and allocation IDs. -/
@@ -38,4 +59,4 @@ def item (instances : Array InstanceNode) (definition : MIR.DefId)
   let some id := found | throw "exact compiler Item instance is absent"
   pure id
 
-end Miri.Input.CompilerInstance
+end Miri.Input.CompilerInstance.Material

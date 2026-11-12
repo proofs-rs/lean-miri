@@ -27,7 +27,9 @@ impl Callbacks for Oracle {
             (Ty::new_array(tcx,plain,2),true,false),(adt("Manual",&[]),false,false),
             (denied,false,false),(adt("UnsafeField",&[]),false,false),
             (Ty::new_imm_ptr(tcx,denied),false,false),(Ty::new_array(tcx,denied,0),false,false),
-            (recursive,false,true)];
+            (recursive,false,true),(Ty::new_array(tcx,recursive,2),true,true),
+            (adt("RecursiveDenied",&[]),false,true),
+            (Ty::new_array(tcx,adt("RecursiveDenied",&[]),2),true,true)];
         let definition=find(DefKind::Trait,"Mark");
         let mut rows=Vec::new();let mut negative=0;
         for (self_ty,novel,coinductive_boundary) in types {
@@ -40,7 +42,7 @@ impl Callbacks for Oracle {
             };
             rows.push(format!("{{\"novel_goal\":{novel},\"coinductive_boundary\":{coinductive_boundary},\"goal\":{{\"definition\":{},\"arguments\":[{}]}},\"expected\":{expected}}}",identity(definition),arguments(tcx,goal.args)));
         }
-        assert_eq!(negative,4);
+        assert_eq!(negative,6);
         println!("[{}]",rows.join(","));Compilation::Stop
     }
 }

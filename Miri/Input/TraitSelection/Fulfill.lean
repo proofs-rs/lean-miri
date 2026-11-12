@@ -1,6 +1,8 @@
 import Miri.Input.TraitSelection.Match
 import Miri.Input.TraitSelection.Substitution
 import Miri.Input.TraitSelection.RelevantImpl
+import Miri.Input.TraitSelection.StructuralCycle
+import Miri.Input.TraitSelection.EnvironmentEntailment
 
 /-! Selection and nested-obligation fulfillment over complete raw impl catalogs.
 Pinned rustc candidate assembly/confirmation first relates an impl head, then
@@ -12,8 +14,9 @@ cannot become a guessed successful selection.
 The initial executable relation is for ground, uniquely selected ordinary
 impls. Higher-ranked universe relations, specialization ordering and builtin
 trait assembly require explicit semantic providers; they are not replaced by
-syntactic success. Depth and total query work are separately bounded. There is
-no shared cache or provisional coinductive cache in this implementation. -/
+syntactic success. Depth and total query work are separately bounded. The ground unique structural-auto fragment admits certified rational
+backedges; other cycles remain ambiguous. No shared or provisional result cache
+is used. -/
 namespace Miri.Input.TraitSelection
 open GenericSubstitution
 
@@ -21,6 +24,8 @@ inductive Evidence where
   | assumption (index : Nat)
   | implementation (selection : ImplSelection) (obligations : Array Evidence)
   | builtin (goal : Goal) (obligations : Array Evidence)
+  | sourceEnvironment (derivation : EnvironmentEntailment.Derivation)
+  | structuralBackedge (goal : Goal) (start : Nat)
   | equality (value : Term)
   | regionErasure
   | conjunction (obligations : Array Evidence)
@@ -82,7 +87,7 @@ private def collect (values : Array Outcome) : Outcome := Id.run do
   return .proven (.conjunction proofs)
 
 mutual
-private def solveCore (program : Program) (hooks : Hooks) (environment : Environment) :
+private def solveCore (program : Program) (hooks : Hooks) (environment : Environment) (entryBoundary : Nat) :
     Nat → Array Goal → Goal → Engine Outcome
   | 0, _, _ => throw "trait selection recursion exhausted"
   | fuel + 1, active, original => do
@@ -99,7 +104,13 @@ private def solveCore (program : Program) (hooks : Hooks) (environment : Environ
     if let .node .type "dynamic" _ _ := self then
       unless source.builtin == some .sized || source.builtin == some .metaSized do
         throw "dynamic trait goals require object candidate assembly"
+    if goal.polarity == .positive && !environment.assumptions.isEmpty then
+      let proof ← liftM (EnvironmentEntailment.entails program #[] environment.assumptions (fuel + 1)
+        ⟨#[],.trait goal⟩)
+      if let some proof := proof then return .proven (.sourceEnvironment proof)
     if active.any (fun prior => decide (prior = goal)) then
+      if let some start ← liftM (StructuralCycle.certify program environment (fuel + 1) active goal entryBoundary) then
+        return .proven (.structuralBackedge goal start)
       return .ambiguous "trait cycle requires coinductive universe-aware evaluation"
     let active := active.push goal
     for index in [:environment.assumptions.size] do
@@ -114,7 +125,7 @@ private def solveCore (program : Program) (hooks : Hooks) (environment : Environ
       let predicates ← liftM (Substitution.clauses fuel goal.traitRef.arguments source.superPredicates)
       let mut results := #[]
       for predicate in predicates do
-        results := results.push (← fulfillCore program hooks environment fuel active predicate)
+        results := results.push (← fulfillCore program hooks environment entryBoundary fuel active predicate)
       return collect results
     let mut candidates : Array Evidence := #[]
     let mut opposite := false
@@ -137,7 +148,7 @@ private def solveCore (program : Program) (hooks : Hooks) (environment : Environ
       let predicates ← liftM (Substitution.clauses fuel substitution implementation.predicates)
       let mut results := #[]
       for predicate in predicates do
-        results := results.push (← fulfillCore program hooks environment fuel active predicate)
+        results := results.push (← fulfillCore program hooks environment entryBoundary fuel active predicate)
       match collect results with
       | .noSolution => pure ()
       | .ambiguous reason => ambiguity := some reason
@@ -150,7 +161,7 @@ private def solveCore (program : Program) (hooks : Hooks) (environment : Environ
       if let some predicates ← liftM (hooks.builtin fuel active source goal) then
         let mut results := #[]
         for predicate in predicates do
-          results := results.push (← fulfillCore program hooks environment fuel active predicate)
+          results := results.push (← fulfillCore program hooks environment entryBoundary fuel active predicate)
         match collect results with
         | .noSolution => pure ()
         | .ambiguous reason => ambiguity := some reason
@@ -172,7 +183,7 @@ private def solveCore (program : Program) (hooks : Hooks) (environment : Environ
       return .proven evidence
     | _ => return .ambiguous "multiple applicable impl candidates require specialization"
 
-private def fulfillCore (program : Program) (hooks : Hooks) (environment : Environment) :
+private def fulfillCore (program : Program) (hooks : Hooks) (environment : Environment) (entryBoundary : Nat) :
     Nat → Array Goal → Clause → Engine Outcome
   | 0, _, _ => throw "trait fulfillment recursion exhausted"
   | fuel + 1, active, clause => do
@@ -183,7 +194,7 @@ private def fulfillCore (program : Program) (hooks : Hooks) (environment : Envir
       if assumed.variables.isEmpty && decide (assumed.predicate = clause.predicate) then
         return .proven (.assumption index)
     match clause.predicate with
-    | .trait goal => solveCore program hooks environment fuel active goal
+    | .trait goal => solveCore program hooks environment entryBoundary fuel active goal
     | .equal left right =>
       let left ← liftM (hooks.normalize fuel active left)
       let right ← liftM (hooks.normalize fuel active right)
@@ -222,7 +233,7 @@ executions. Ambiguity, unsupported providers and exhausted budgets are distinct
 from both a proof and a definite negative trait result. -/
 def solveWithActive (program : Program) (hooks : Hooks) (environment : Environment)
     (depth work : Nat) (active : Array Goal) (goal : Goal) : Except String Outcome :=
-  (solveCore program hooks environment depth active goal work).map (·.1)
+  (solveCore program hooks environment active.size depth active goal work).map (·.1)
 
 def solve (program : Program) (hooks : Hooks) (environment : Environment)
     (depth work : Nat) (goal : Goal) : Except String Outcome :=
@@ -232,7 +243,7 @@ def fulfillWithActive (program : Program) (hooks : Hooks) (environment : Environ
     (depth work : Nat) (active : Array Goal) (clauses : Array Clause) : Except String Outcome := do
   let (results, _) ← (do
     let mut results := #[]
-    for clause in clauses do results := results.push (← fulfillCore program hooks environment depth active clause)
+    for clause in clauses do results := results.push (← fulfillCore program hooks environment active.size depth active clause)
     pure results : Engine (Array Outcome)) work
   pure (collect results)
 
@@ -251,5 +262,18 @@ def selectUniqueWithActive (program : Program) (hooks : Hooks) (environment : En
 def selectUnique (program : Program) (hooks : Hooks) (environment : Environment)
     (depth work : Nat) (traitRef : TraitRef) : Except String ImplSelection :=
   selectUniqueWithActive program hooks environment depth work #[] traitRef
+
+/-- Positive source-parameter caller-bound fragment. Failure to prove a generic
+caller-bound goal remains ambiguity; no impl/inference candidate is invented. -/
+def solveWithSourceParameters (program : Program) (hooks : Hooks) (environment : Environment)
+    (parameters : Array ArgSort) (depth work : Nat) (goal : Goal) : Except String Outcome := do
+  if let some allowed := program.constructorScope then
+    for argument in goal.traitRef.arguments do Match.requireConstructorScope allowed depth argument
+  if goal.polarity == .positive then
+    let proof ← EnvironmentEntailment.entails program parameters environment.assumptions work
+      ⟨#[],.trait goal⟩
+    if let some proof := proof then return .proven (.sourceEnvironment proof)
+  if parameters.isEmpty then return (← solve program hooks environment depth work goal)
+  return .ambiguous "source parameter environment fragment did not establish the trait goal"
 
 end Miri.Input.TraitSelection

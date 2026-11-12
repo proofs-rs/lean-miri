@@ -135,7 +135,8 @@ def common (p : CompilerProviders.Prepared) (options : Options)
     | .error error => .error error state
     | .ok () => match target with
       | .Terminate reason => (do
-        let callee ← lift (CompilerPanicFacts.unwindTerminate p.program reason)
+        let (definition,arguments) ← lift (CompilerPanicFacts.unwindTerminateSeed p.program reason)
+        let callee ← RuntimeArrayQueries.performCompiler EvalProjectionMachine.arrays (CompilerInstance.item definition arguments)
         callFunction choice callee #[] (.goto none .Unreachable)) state
       | _ => .ok () state
   pure {

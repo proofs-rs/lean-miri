@@ -161,13 +161,13 @@ def resolveCurrent (p : Prepared) (types : RuntimeArrayQueries.Access (MachineHo
   let .mir location := frame.location | throw (.invalidProgram "callee resolution outside a MIR source location")
   let body ← p.resolveBody types frame.bodyIdentity.index
   unless body.body == frame.body do throw (.invalidProgram "callee resolution canonical body/content mismatch")
-  let loaded ← RuntimeArrayQueries.perform types
+  let loaded ← RuntimeArrayQueries.performCompiler types
     (CallResolution.loadedBodyOfInstance p.lifecycle.calls.calls frame.functionInstance)
   unless loaded.identity == frame.bodyIdentity do throw (.invalidProgram "callee resolution current full-instance/body mismatch")
   let some block := body.body.basicBlocks[location.block]? | throw (.invalidProgram "callee resolution source block absent")
   unless location.statementIndex == block.statements.size do
     throw (.invalidProgram "callee resolution does not refer to a source terminator")
-  let resolution ← RuntimeArrayQueries.perform types
+  let resolution ← RuntimeArrayQueries.performCompiler types
     (CallResolution.atSite p.lifecycle.calls.calls ⟨frame.bodyIdentity.index,location.block⟩)
   let some ty := resolution.source.functionType | throw (.unsupported "original call function type is absent")
   match ← RuntimeArrayQueries.perform types (CompilerFunctionFacts.kindInWorld p.functions ty) with
@@ -185,7 +185,7 @@ def executionHooks (p : Prepared) (types : RuntimeArrayQueries.Access (MachineHo
     (vtableEngine : VTableMachine.Hooks K User Other) (userRelevantCrates : Array Nat)
     (base : ExecutionMachine.Config K User C Other ABI.ExternAbi Host) :
     ExecutionMachine.Config K User C Other ABI.ExternAbi Host :=
-  let functions := CompilerFunctionPointers.hooks p.pointers image base.functions
+  let functions := CompilerFunctionPointers.hooks p.pointers types image base.functions
   let vtableEngine := {vtableEngine with functions}
   let callCompiler := {base.calls.compiler with
     resolve := fun _ definition args => resolveCurrent p types definition args
@@ -194,15 +194,15 @@ def executionHooks (p : Prepared) (types : RuntimeArrayQueries.Access (MachineHo
       pure (count, abi)
     functionKind := fun ty => RuntimeArrayQueries.perform types (CompilerFunctionFacts.kindInWorld p.functions ty)
     fnAbiOfFnPtr := fun _ layout extra => lift (CompilerFunctionFacts.pointerAbi p.functions layout.ty extra)
-    fnAbiOfInstance := fun _ callee extra =>
-      match CompilerInstanceAbi.abiOfInstance p.lifecycle.instances callee extra with
+    fnAbiOfInstance := fun _ callee extra => do
+      match CompilerInstanceAbi.abiOfInstance p.lifecycle.instances (← RuntimeArrayQueries.compilerSnapshot types) callee extra with
       | .ok abi => pure abi
-      | .error error => throw (.invalidProgram error)}
+      | .error error => throw (.unsupported error)}
   let dispatch := {base.calls.dispatch with loadMir := fun _ callee => CompilerCallPipeline.loadMir p.lifecycle.calls types callee}
   let calls := {base.calls with compiler := callCompiler, dispatch}
   let helpers := {base.helpers with loadMir := fun _ callee => CompilerCallPipeline.loadMir p.lifecycle.calls types callee}
   let facts := p.lifecycle.calls.symbols.facts.context
-  CompilerExecutionFacts.hooks p.intrinsics {base with
+  CompilerExecutionFacts.hooks p.intrinsics types {base with
     functions, calls, helpers
     isRawPointer := fun _ ty => RuntimeArrayQueries.perform types do
       pure ((← RuntimeMetadata.shapeKindInWorld p.runtime ty) == .rawPointer)
@@ -214,8 +214,8 @@ def executionHooks (p : Prepared) (types : RuntimeArrayQueries.Access (MachineHo
     lifecycle := CompilerLifecyclePipeline.lifecycleHooks p.lifecycle types userRelevantCrates base.lifecycle
     virtual := CompilerVTableMachine.virtualLeaves p.vtables types image vtableEngine base.virtual
     casts := {base.casts with
-      vtableType := VTable.getPtrVTableType (CompilerVTableMachine.vtableHooks p.vtables image vtableEngine base.virtual.vtable)
-      vtablePointer := VTable.getPointer (CompilerVTableMachine.vtableHooks p.vtables image vtableEngine base.virtual.vtable)
-      vtableEntries := (CompilerVTableMachine.vtableHooks p.vtables image vtableEngine base.virtual.vtable).entries}
-    validity := CompilerVTableMachine.validityHooks p.vtables image vtableEngine base.virtual.vtable base.validity}
+      vtableType := VTable.getPtrVTableType (CompilerVTableMachine.vtableHooks p.vtables types image vtableEngine base.virtual.vtable)
+      vtablePointer := VTable.getPointer (CompilerVTableMachine.vtableHooks p.vtables types image vtableEngine base.virtual.vtable)
+      vtableEntries := (CompilerVTableMachine.vtableHooks p.vtables types image vtableEngine base.virtual.vtable).entries}
+    validity := CompilerVTableMachine.validityHooks p.vtables types image vtableEngine base.virtual.vtable base.validity}
 end Miri.Input.CompilerProviders

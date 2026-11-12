@@ -1,10 +1,10 @@
 import Miri.Input.RuntimeMetadata
+import Miri.Input.FunctionTypePrinter
 
-/-! Scoped pinned pretty.rs type printer: scalar keywords, raw pointers,
-references with erased/static lifetimes, tuples, arrays and slices. Simple
-material nominal leaves reuse their exact source spelling only while the
-session type-length budget cannot trigger contextual truncation. New named
-definitions, complex source leaves and truncation are explicit boundaries. -/
+/-! Pinned diagnostic type printer. Structural constructors and local named
+ADTs/FnDefs are printed from canonical raw definition paths and source templates.
+Contextual truncation, visible external paths, generic defaults and nonempty
+binders remain explicit boundaries. Intrinsic type_name uses a separate printer. -/
 namespace Miri.Input.WorldTypeName
 open TypeArena
 private structure PrinterState where
@@ -84,6 +84,45 @@ private def visit (metadata : RuntimeMetadata) (options : Catalog.PrintOptions) 
       let element ← child element
       let suffix ← emit ("; " ++ toString count.toNat ++ "]")
       pure (leadingText ++ element ++ suffix)
+    | .functionDefinition identity arguments variables =>
+      enter options true
+      unless variables.isEmpty do throw "FnDef printing requires an empty argument binder"
+      unless identity.crateIndex == 0 do throw "external FnDef diagnostic paths are not implemented"
+      let reference ← lift (world.definitionRef identity)
+      let some definition := world.definitions[reference]? | throw "FnDef source definition absent"
+      let some path := definition.rawPath | throw "FnDef printing requires raw definition path"
+      let some safety := path.functionHeaderSafety
+        | throw "FnDef printing requires raw local HIR header safety"
+      unless path.parentParameterCount == 0 do throw "FnDef inherited generic paths are not implemented"
+      unless path.parameterDefaults.size == arguments.size do throw "FnDef argument/header domain mismatch"
+      if path.parameterDefaults.any (fun value => value) then
+        throw "FnDef default argument elision is not implemented"
+      let some template := definition.genericTemplate | throw "FnDef source signature template absent"
+      let argumentsTerm ← lift (GenericInstantiationWorld.ofArguments world fuel arguments)
+      let signature ← lift (template.instantiateSignature fuel argumentsTerm)
+      let forceSafe := safety == .safeTargetFeatures
+      let mut result ← if forceSafe then emit "#[target_feature(..)] " else pure ""
+      let printTerm := fun term => do
+        let id ← liftM (GenericInstantiationWorld.resolveType fuel term)
+        child id
+      result := result ++ (← FunctionTypePrinter.render emit printTerm signature forceSafe)
+      result := result ++ (← emit " {")
+      result := result ++ (← emit (← lift (DefinitionPath.localNamedPath path options.verboseInternals
+        options.trimDiagnosticPaths options.trimmedDefPaths)))
+      if !arguments.isEmpty then
+        result := result ++ (← emit "::<")
+        for index in [:arguments.size] do
+          if index > 0 then result := result ++ (← emit ", ")
+          let some argument := arguments[index]? | throw "FnDef argument absent"
+          let text ← match argument with
+            | .Type id => child id
+            | .Lifetime .Static => emit "'static"
+            | .Lifetime .Erased => emit "'_"
+            | .Lifetime _ => throw "FnDef named lifetime printing is not implemented"
+            | .Const _ => throw "FnDef constant argument printing is not implemented"
+          result := result ++ text
+        result := result ++ (← emit ">")
+      pure (result ++ (← emit "}"))
     | .adt identity arguments =>
       enter options true
       unless identity.crateIndex == 0 do

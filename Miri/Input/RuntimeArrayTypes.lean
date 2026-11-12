@@ -1,5 +1,6 @@
 import Miri.Input.RuntimeMetadata
 import Miri.Input.GenericInstantiationWorld
+import Miri.Input.InstanceArena
 
 /-! One execution-owned type/constant universe. Runtime arrays use the same
 constructor interner as generic MIR, ADTs and function items. Layout results are
@@ -16,6 +17,7 @@ structure Key where
 structure World where
   metadata : RuntimeMetadata
   arena : TypeArena.World
+  instances : InstanceArena.Store
 inductive Error where
   | metadata (reason : String)
   | targetUsizeOverflow (count : UInt64)
@@ -32,12 +34,38 @@ def calculate (target : RuntimeTargetDataLayout) (element : LayoutData)
 def create (runtime : RuntimeMetadata) : Except Error World := do
   let some checked := runtime.checkedMaterial
     | throw (.metadata "checked source material prefix is absent")
-  pure {metadata := runtime, arena := TypeArena.World.ofCheckedMaterial checked}
+  let arena := TypeArena.World.ofCheckedMaterial checked
+  let instances ← lift (InstanceArena.Store.ofSource arena runtime.source.instances)
+  pure {metadata := runtime, arena, instances}
 
 /-- Every stateful source query commits its returned constructor universe. -/
 def perform (world : World) (action : TypeArena.WorldM α) : Except Error (α × World) := do
   let (result,arena) ← lift (action.run world.arena)
   pure (result,{world with arena})
+
+/-- Type and instance syntax share one execution-owned compiler state. -/
+abbrev CompilerM := StateT World (Except String)
+
+def liftType (action : TypeArena.WorldM α) : CompilerM α := do
+  let world ← get
+  let (value,arena) ← match action.run world.arena with
+    | .ok value => pure value | .error error => throw error
+  set {world with arena}
+  pure value
+
+def internInstance (kind : Miri.Interpreter.CallInstanceKind)
+    (arguments : Array MIR.GenericArg) : CompilerM InstanceId := do
+  let world ← get
+  let result := do
+    let key ← InstanceArena.Key.ofSource world.arena kind arguments
+    world.instances.intern world.arena key
+  let (id,instances) ← match result with
+    | .ok value => pure value | .error error => throw error
+  set {world with instances}
+  pure id
+
+def performCompiler (world : World) (action : CompilerM α) : Except Error (α × World) :=
+  lift (action.run world)
 
 private def elementId (world : World) : Element → TypeId
   | .u8 => world.metadata.source.queries.primitives.u8

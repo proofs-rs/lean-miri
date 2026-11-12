@@ -405,12 +405,12 @@ def makeWithForeignContext {Assembly : Type}
     let facts := p.lifecycle.calls.symbols.facts
     let context := facts.context
     let compatibility := CompilerCovariance.compatible p options.place.debugAssertions
-    let covariance := CompilerCovariance.hook p options.place.debugAssertions
+    let covariance := CompilerCovariance.hook p EvalProjectionMachine.arrays options.place.debugAssertions
     let intrinsicQueries : CompilerCoreIntrinsic.Queries (State Os R P H D O Aff B Host) C := CompilerCoreIntrinsic.make p
     let extra := EvalCoreMachine.extras leaves.sync ConcurrencyErrors.storeBuffer
     let source := EvalPointerSource.make p image extra leaves.pointerSource choice
     let pointers := source.pointers
-    let functions := EvalConfiguration.functions p image options.crossCrateInlineAlways pointers
+    let functions := EvalConfiguration.functions p EvalProjectionMachine.arrays image options.crossCrateInlineAlways pointers
     let nativeBacking := leaves.pointerSource.nativeHost.map (·.backing)
     -- M::extern_static_pointer is a compiler-owned query over the shared
     -- declaration/export tables and the actual runtime ExternStatic registry.
@@ -435,7 +435,7 @@ def makeWithForeignContext {Assembly : Type}
     let allocation := {allocation with
       allocationBacktrace := if options.collectLeakBacktraces then some (fun id kind => do
         unless LeakCheck.mayLeak kind do
-          let trace ← RuntimeArrayQueries.perform EvalProjectionMachine.arrays
+          let trace ← RuntimeArrayQueries.performCompiler EvalProjectionMachine.arrays
             (CompilerAllocationBacktrace.collect p (← get).stack.frames)
           let state ← get
           match MemoryExtras.recordBacktrace extra id trace state.machine with
@@ -594,8 +594,8 @@ def makeWithForeignContext {Assembly : Type}
       EvalConfiguration.symbols access functions operands copy
     let intrinsics := fun callee =>
       let atomic := ExecutionIntrinsic.Atomic.dispatcher atomics
-        (fun _ index => physical (CompilerIntrinsicConstants.ordering p.intrinsics callee index))
-        (fun _ index => physical (CompilerIntrinsicConstants.volatile p.intrinsics callee index))
+        (fun _ index => do physical (CompilerIntrinsicConstants.ordering (← RuntimeArrayQueries.compilerSnapshot EvalProjectionMachine.arrays) callee index))
+        (fun _ index => do physical (CompilerIntrinsicConstants.volatile (← RuntimeArrayQueries.compilerSnapshot EvalProjectionMachine.arrays) callee index))
         (fun c op => do let place ← dereference c op; pure ⟨.memory place.mplace,place.layout⟩)
         access projection.place returnToBlock
       let simd := ExecutionIntrinsic.Simd.make {
@@ -603,8 +603,8 @@ def makeWithForeignContext {Assembly : Type}
         u8Ty := u8Ty.ty
         isSimd := fun _ ty => query (CompilerArchitectureFacts.isSimd context ty)
         simdSizeAndType := fun _ ty => query (CompilerArchitectureFacts.simdSizeAndType context ty)
-        shuffleConst := fun _ index => physical (CompilerIntrinsicConstants.shuffle p.intrinsics callee index)
-        alignmentConst := fun _ index => physical (CompilerIntrinsicConstants.alignment p.intrinsics callee index)
+        shuffleConst := fun _ index => do physical (CompilerIntrinsicConstants.shuffle (← RuntimeArrayQueries.compilerSnapshot EvalProjectionMachine.arrays) callee index)
+        alignmentConst := fun _ index => do physical (CompilerIntrinsicConstants.alignment (← RuntimeArrayQueries.compilerSnapshot EvalProjectionMachine.arrays) callee index)
         chooseEqualFloatRight := equalRight
         fuseMulAdd := fuse
         mathLane := Math.simdMathLane math }
@@ -628,8 +628,8 @@ def makeWithForeignContext {Assembly : Type}
         ensureMonomorphic := fun _ ty => do
           unless ← query (CompilerFacts.boolean context ty "is_monomorphic_enough") do
             throw (.invalidProgram "intrinsic type still requires instantiation")
-        typeNameConstant := CompilerValueConstants.typeNameHook p functions pointers.arithmetic
-          externStatic MemoryErrors.constant (fun a b => physical (compatibility a b))
+        typeNameConstant := CompilerValueConstants.typeNameHook p EvalProjectionMachine.arrays functions
+          (fun a b => physical (compatibility a b))
         needsDrop := intrinsicQueries.needsDrop
         variantCount := intrinsicQueries.variantCount
         callerLocationConstant := EvalCallerLocationConstruction.hook p EvalProjectionMachine.arrays functions
@@ -664,7 +664,9 @@ def makeWithForeignContext {Assembly : Type}
       panic := EvalCallRuntime.panic p
         (EvalPanicMachine.queries p.program p.runtime bytes functions access)
         EvalProjectionMachine.arrays access.runtime.base unwind operands
-      unwindTerminateFunction := fun _ reason => physical (CompilerPanicFacts.unwindTerminate p.program reason)
+      unwindTerminateFunction := fun _ reason => do
+        let (definition,arguments) ← physical (CompilerPanicFacts.unwindTerminateSeed p.program reason)
+        RuntimeArrayQueries.performCompiler EvalProjectionMachine.arrays (CompilerInstance.item definition arguments)
       ignoreOptionalOverflowChecks := options.ignoreOptionalOverflowChecks
       rvalues := CompilerFrameContext.rvalueLeaves p (EvalThreadLocalSource.hook p maximum extra leaves.pointerSource source)
       discriminant := discrQueries

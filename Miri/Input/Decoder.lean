@@ -288,7 +288,7 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
   let seeds ← JsonReader.required d.bodies "bodies"
   let bodies ← seeds.mapM fun seed => do
     match seed with
-    | .copyTemplate _ => pure seed
+    | .copyTemplate _ | .noopDrop _ => pure seed
     | .material body =>
       let values ← JsonReader.liftExcept (finishBodies images #[body])
       let some value := values[0]? | JsonReader.fail "material body disappeared during allocation resolution"

@@ -13,9 +13,9 @@
     "procedure": "upstream/fetch-sources.sh",
     "procedure_sha256": "a8ced1c1a19c47193465862bbe2486e25dcf91c544df5b62f9b2265ea12fb7d8",
     "rustc_selected_archive_paths": {
-      "count": 564,
+      "count": 566,
       "path": "upstream/rustc-selected-files.txt",
-      "sha256": "a6ca9cde465adf56e6b2c310796ac9379d7968069ec98e835f4019a067f15edf"
+      "sha256": "2cbfeb574056aa6ff8023f53f7f6b6e408af5d912235859bda5ff498cd528adf"
     }
   },
   "coverage_expected_rust_modules": {
@@ -36,6 +36,7 @@
     "upstream/rustc-source/compiler/rustc_ast/src/expand/allocator.rs": 1,
     "upstream/rustc-source/compiler/rustc_ast_ir/src/lib.rs": 1,
     "upstream/rustc-source/compiler/rustc_attr_ir/src/data_structures.rs": 1,
+    "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs": 1,
     "upstream/rustc-source/compiler/rustc_const_eval/src/interpret": 21,
     "upstream/rustc-source/compiler/rustc_const_eval/src/lib.rs": 1,
     "upstream/rustc-source/compiler/rustc_const_eval/src/util": 6,
@@ -70,6 +71,7 @@
     "upstream/rustc-source/compiler/rustc_type_ir/src/inherent.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/region_kind.rs": 1,
+    "upstream/rustc-source/compiler/rustc_type_ir/src/relate.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/sty/consts.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/sty/mod.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/ty_kind.rs": 1,
@@ -93,6 +95,7 @@
     "upstream/rustc-source/compiler/rustc_ast/src/expand/allocator.rs",
     "upstream/rustc-source/compiler/rustc_ast_ir/src/lib.rs",
     "upstream/rustc-source/compiler/rustc_attr_ir/src/data_structures.rs",
+    "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs",
     "upstream/rustc-source/compiler/rustc_const_eval/src/interpret",
     "upstream/rustc-source/compiler/rustc_const_eval/src/lib.rs",
     "upstream/rustc-source/compiler/rustc_const_eval/src/util",
@@ -127,6 +130,7 @@
     "upstream/rustc-source/compiler/rustc_type_ir/src/inherent.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/predicate.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/region_kind.rs",
+    "upstream/rustc-source/compiler/rustc_type_ir/src/relate.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/sty/consts.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/sty/mod.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/ty_kind.rs",
@@ -1676,6 +1680,12 @@
       "git_blob": "6ae4eb1d4b388ce91cef23217850adc8b8518b11",
       "path": "upstream/rustc-source/compiler/rustc_attr_ir/src/data_structures.rs",
       "sha256": "9d64ae4d8b11033d60a99942c9b639b77b59fade351121a906c55d7331ec323f"
+    },
+    {
+      "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs",
+      "sha256": "e3df29393d8324086af70463480f6c2358f99a811473be9aaaa42e68865c953a",
+      "git_blob": "9bdafe70fb55378f61a9ab8c6314fd865e1cd38e"
     },
     {
       "component": "rustc_const_eval_interpret",
@@ -4934,6 +4944,12 @@
       "git_blob": "5c14a5072910af51411d91abb069598342d005b3",
       "path": "upstream/rustc-source/compiler/rustc_type_ir/src/region_kind.rs",
       "sha256": "eebe66480a56971d9eb1f9f1e77303e6846df4f51431d98f97df2c2a7fa73443"
+    },
+    {
+      "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/relate.rs",
+      "sha256": "ff80bae6f6fd1be3abc93385e13e9612633bb2319d681ba992f9c2db94eec24d",
+      "git_blob": "e87b584ebcb6bf5d8de2099ad25f3fc7c042332c"
     },
     {
       "component": "rustc",

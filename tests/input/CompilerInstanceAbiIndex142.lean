@@ -26,11 +26,11 @@ private def prepare (raw : Json) : Except String CompilerInstanceAbi.Prepared :=
   CompilerInstanceAbi.prepare runtime program
 
 private def compare (prepared : CompilerInstanceAbi.Prepared) : IO Unit := do
+  let world ← must ((RuntimeArrayTypes.create prepared.runtime).mapError reprStr)
   for entry in prepared.entries do
-    check (CompilerInstanceAbi.abiOfInstance prepared entry.callee entry.extra ==
+    check (CompilerInstanceAbi.abiOfInstance prepared world entry.callee entry.extra ==
       linear prepared entry.callee entry.extra) "indexed ABI lookup differs from source-order lookup"
-  check (CompilerInstanceAbi.abiOfInstance prepared prepared.program.input.instances.size #[] ==
-    linear prepared prepared.program.input.instances.size #[]) "missing ABI query changed its error"
+  check (!(CompilerInstanceAbi.abiOfInstance prepared world prepared.program.input.instances.size #[]).isOk) "missing instance identity was accepted"
 
 def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected exporter MIR input")
@@ -39,9 +39,10 @@ def main (args : List String) : IO Unit := do
   check (!prepared.entries.isEmpty) "fixture contains no exact instance ABI queries"
   compare prepared
   let some firstEntry := prepared.entries[0]? | throw (IO.userError "missing first ABI query")
+  let world ← must ((RuntimeArrayTypes.create prepared.runtime).mapError reprStr)
   let missingIndex : CompilerInstanceAbi.Prepared :=
     ⟨prepared.runtime, prepared.program, prepared.entries, {}⟩
-  check (!(CompilerInstanceAbi.abiOfInstance missingIndex firstEntry.callee firstEntry.extra).isOk)
+  check (!(CompilerInstanceAbi.abiOfInstance missingIndex world firstEntry.callee firstEntry.extra).isOk)
     "an incomplete ABI index silently fell back to scanning entries"
   let rows ← must ((raw.getObjVal? "compiler_instance_abis").bind Json.getArr?)
   let mut selected := none

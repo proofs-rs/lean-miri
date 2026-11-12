@@ -286,7 +286,6 @@ private structure primitivesFields where
   unitPointerMut : Option (Nat) := none
   immU8Pointer : Option (Nat) := none
   immU8PointerPointer : Option (Nat) := none
-  typeNameResultType : Option (Nat) := none
   callerLocationType : Option (Option Nat) := none
   orderingEnum : Option (Option Nat) := none
 
@@ -312,7 +311,6 @@ def primitives : Parser (Primitives) := do
     | "unit_pointer_mut" => return { fields with unitPointerMut := some (← natural) }
     | "imm_u8_pointer" => return { fields with immU8Pointer := some (← natural) }
     | "imm_u8_pointer_pointer" => return { fields with immU8PointerPointer := some (← natural) }
-    | "type_name_result_type" => return { fields with typeNameResultType := some (← natural) }
     | "caller_location_type" => return { fields with callerLocationType := some (← nullable natural) }
     | "ordering_enum" => return { fields with orderingEnum := some (← nullable natural) }
     | _ => skipValue; pure fields
@@ -335,11 +333,10 @@ def primitives : Parser (Primitives) := do
   let unitPointerMut ← need fields.unitPointerMut "unit_pointer_mut"
   let immU8Pointer ← need fields.immU8Pointer "imm_u8_pointer"
   let immU8PointerPointer ← need fields.immU8PointerPointer "imm_u8_pointer_pointer"
-  let typeNameResultType ← need fields.typeNameResultType "type_name_result_type"
   let callerLocationType := fields.callerLocationType
   let orderingEnum := fields.orderingEnum
   return {
-    u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, bool, pointerTagInteger, usize, isize, unit, unitPointerConst, unitPointerMut, immU8Pointer, immU8PointerPointer, typeNameResultType, callerLocationType := callerLocationType.join, orderingEnum := orderingEnum.join }
+    u8, u16, u32, u64, u128, i8, i16, i32, i64, i128, bool, pointerTagInteger, usize, isize, unit, unitPointerConst, unitPointerMut, immU8Pointer, immU8PointerPointer, callerLocationType := callerLocationType.join, orderingEnum := orderingEnum.join }
 
 private structure shim_signatureFields where
   callingConvention : Option (String) := none
@@ -849,26 +846,6 @@ def namedConstant : Parser (NamedConstant) := do
   return {
     name, path, instanceId := query.1, typeId := query.2.1, value := query.2.2 }
 
-private structure typeNameFields where
-  value : DecodeMIR.ConstValueFields := {}
-  environment : Option String := none
-  inputType : Option (Nat) := none
-  resultType : Option (Nat) := none
-
-def typeName : Parser TypeName := do
-  let fields ← object ({} : typeNameFields) fun fields key => do
-    match key with
-    | "input_type" => return { fields with inputType := some (← natural) }
-    | "result_type" => return { fields with resultType := some (← natural) }
-    | "typing_env" => return { fields with environment := some (← expectedString "fully_monomorphized") }
-    | _ => return { fields with value := ← DecodeMIR.parseConstValueField fields.value key }
-  let _ ← need fields.environment "typing_env"
-  let inputType ← need fields.inputType "input_type"
-  let resultType ← need fields.resultType "result_type"
-  let value ← DecodeMIR.finishConstValueFields fields.value
-  return {
-    inputType, resultType, value }
-
 private structure callerLocationFields where
   value : DecodeMIR.ConstValueFields := {}
   span : Option (Nat) := none
@@ -894,7 +871,6 @@ structure QueryFields where
   instanceAbis : Option (Array InstanceAbi) := none
   functionFacts : Option (FunctionFacts) := none
   casts : Option (Array CastQuery) := none
-  typeNames : Option (Array TypeName) := none
   panic : Option (Array PanicQuery) := none
   nativeSignatures : Option (Array NativeSignature) := none
   retag : Option (Array RetagQuery) := none
@@ -920,7 +896,6 @@ def parseField (fields : QueryFields) (key : String) : Parser (Option QueryField
   | "compiler_instance_abis" => return some { fields with instanceAbis := some (← array instance_abi) }
   | "compiler_function_facts" => return some { fields with functionFacts := some (← functionFacts) }
   | "compiler_cast_queries" => return some { fields with casts := some (← array castQuery) }
-  | "compiler_type_name_constants" => return some { fields with typeNames := some (← array typeName) }
   | "compiler_panic_queries" => return some { fields with panic := some (← array panicQuery) }
   | "compiler_native_signature_queries" => return some { fields with nativeSignatures := some (← array native_signature) }
   | "compiler_retag_queries" => return some { fields with retag := some (← array retag_query) }
@@ -947,7 +922,6 @@ def finish (fields : QueryFields) : Parser Queries := do
     instanceAbis := ← need fields.instanceAbis "compiler_instance_abis"
     functionFacts := ← need fields.functionFacts "compiler_function_facts"
     casts := ← need fields.casts "compiler_cast_queries"
-    typeNames := ← need fields.typeNames "compiler_type_name_constants"
     panic := ← need fields.panic "compiler_panic_queries"
     nativeSignatures := ← need fields.nativeSignatures "compiler_native_signature_queries"
     retag := ← need fields.retag "compiler_retag_queries"
@@ -967,8 +941,6 @@ def finish (fields : QueryFields) : Parser Queries := do
   }
 
 def validateQueries (ctx : DecodeMIR.Context) (queries : Queries) : Except String Unit := do
-  for row in queries.typeNames do
-    let _ ← DecodeMIR.resolveConstValue ctx row.resultType row.value
   for row in queries.callerLocations do
     let some resultType := row.resultType | throw "missing caller-location result type"
     let _ ← DecodeMIR.resolveConstValue ctx resultType row.value

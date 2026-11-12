@@ -1,3 +1,4 @@
+import Miri.Input.LowerMIR
 import Miri.Input.RuntimeArrayQueries
 import Miri.Input.CompilerScopes
 import Miri.Input.TypeArena
@@ -35,19 +36,19 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
     let id ← typeId ctx entry.inputType
     let drop : Except String CallInstance := match entry.dropGlue with
       | none => .error "drop glue compiler instance absent"
-      | some id => (CompilerInstance.source ctx.instances id).map fun _ => id
+      | some id => (CompilerInstance.Material.source ctx.instances id).map fun _ => id
     unless !(types.any (·.typeId == id)) do throw "duplicate compiler runtime type query"
     types := types.push ⟨id, drop⟩
   let mut virtualQueries := #[]
   for query in raw.virtualQueries do
     let original := query.originalInstance
-    let _ ← CompilerInstance.source ctx.instances original
+    let _ ← CompilerInstance.Material.source ctx.instances original
     unless query.methodDefinition < tables.definitions.size && query.parentTrait < tables.definitions.size do
       throw "compiler definition ID out of bounds"
     let concrete ← typeId ctx query.concreteType
-    let args ← CompilerInstance.argsOf ctx.instances original
+    let args ← CompilerInstance.Material.argsOf ctx.instances original
     let rebound ← GenericRebase.virtualSelf args query.parentGenericCount concrete
-    let resolved := (CompilerInstance.source ctx.instances query.resolved).map fun _ => query.resolved
+    let resolved := (CompilerInstance.Material.source ctx.instances query.resolved).map fun _ => query.resolved
     virtualQueries := virtualQueries.push ⟨original, query.methodDefinition, query.parentTrait,
       concrete, query.parentGenericCount, rebound, resolved⟩
   pure ⟨program, types, virtualQueries⟩
@@ -88,9 +89,15 @@ def instanceRequiresCallerLocation (definitions : Array DefinitionId)
   | .Shim (.ClosureOnce _ _ trackCaller) => pure trackCaller
   | _ => pure false
 
-def requiresCallerLocation (prepared : Prepared) (callee : CallInstance) : Except String Bool := do
+def materialRequiresCallerLocation (prepared : Prepared) (callee : CallInstance) : Except String Bool := do
   instanceRequiresCallerLocation prepared.program.input.definitions
-    (← CompilerInstance.kindOf prepared.program.input.instances callee)
+    (← CompilerInstance.Material.kindOf prepared.program.input.instances callee)
+
+def requiresCallerLocation (prepared : Prepared) (callee : CallInstance) : RuntimeArrayTypes.CompilerM Bool := do
+  let kind ← match CompilerInstance.kindOf (← get) callee with
+    | .ok value => pure value | .error error => throw error
+  match instanceRequiresCallerLocation prepared.program.input.definitions kind with
+  | .ok value => pure value | .error error => throw error
 
 def parentTrait (prepared : Prepared) (method : MIR.DefId) : Except String MIR.DefId := do
   let matching := prepared.virtualQueries.filter (·.methodDefinition == method)
@@ -125,12 +132,11 @@ def hooks (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
     (base : VirtualCalls.CompilerHooks S C) :
     VirtualCalls.CompilerHooks S C :=
   { base with
-    instanceArgs := fun inst => lift (CompilerInstance.argsOf
-      prepared.program.input.instances inst)
+    instanceArgs := fun inst => do lift (CompilerInstance.argsOf (← RuntimeArrayQueries.compilerSnapshot types) inst)
     mutPointerType := fun ty => RuntimeArrayQueries.perform types (mutPointerType prepared ty)
     mutReferenceType := fun ty => RuntimeArrayQueries.perform types (mutReferenceType prepared ty)
     resolveDropGlue := fun ty => RuntimeArrayQueries.perform types (resolveDropGlue prepared ty)
-    requiresCallerLocation := fun callee => lift (requiresCallerLocation prepared callee)
+    requiresCallerLocation := fun callee => RuntimeArrayQueries.performCompiler types (requiresCallerLocation prepared callee)
     parentTrait := fun method => lift (parentTrait prepared method)
     rebaseVirtualArgs := fun args parent concrete => RuntimeArrayQueries.perform types (rebaseVirtualArgs prepared args parent concrete)
     expectResolveForVTable := fun _ method args => lift (expectResolveForVTable prepared method args) }

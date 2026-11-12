@@ -7,14 +7,14 @@ namespace Miri.Input.CompilerPlaceTypes
 open Lean Miri.ABI Miri.Interpreter Miri.Memory
 
 def expectedLayout (p : CompilerProviders.Prepared) (frame : CompilerFrameContext.ActualFrame)
-    (requested : MIR.Place) : TypeArena.WorldM LocalLayout := do
+    (requested : MIR.Place) : RuntimeArrayTypes.CompilerM LocalLayout := do
   let body ← CompilerFrameContext.bodyOfFrame p frame
   -- rustc Place::ty begins with the source local declaration. No compiler
   -- query-result row is needed for a place with no projection elements.
   if requested.projection.isEmpty then
     let some id := body.body.locals[requested.localId]?
       | throw "place local is absent from its executable body"
-    return ← RuntimeMetadata.layoutInWorld p.runtime id
+    return ← RuntimeArrayTypes.liftType (RuntimeMetadata.layoutInWorld p.runtime id)
   let mut ids := #[]
   for block in body.input.nodeFacts do
     for node in block do
@@ -22,14 +22,14 @@ def expectedLayout (p : CompilerProviders.Prepared) (frame : CompilerFrameContex
         if place.place == requested then ids := ids.push place.typeId
   let some id := ids[0]? | throw "place has no compiler type in its executable body"
   unless ids.all (· == id) do throw "same place has conflicting compiler types"
-  RuntimeMetadata.layoutInWorld p.runtime id
+  RuntimeArrayTypes.liftType (RuntimeMetadata.layoutInWorld p.runtime id)
 
 def check (p : CompilerProviders.Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (debugAssertions : Bool)
     (relateCovariantly : LocalLayout → LocalLayout → MachineHooks.M K U Bool)
     (requested : MIR.Place) (actual : LocalLayout) : MachineHooks.M K U Unit := do
   if !debugAssertions then return
-  let expected ← RuntimeArrayQueries.perform types
+  let expected ← RuntimeArrayQueries.performCompiler types
     (expectedLayout p (← MachineHooks.currentFrame) requested)
   let related ← if expected.ty == actual.ty then pure true else relateCovariantly expected actual
   unless related do throw (.invalidProgram "MIR place compiler type differs from evaluated place type")

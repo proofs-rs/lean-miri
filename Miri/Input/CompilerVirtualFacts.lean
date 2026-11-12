@@ -112,7 +112,7 @@ def runtimeHooks (prepared : CompilerRuntimeQueries.Prepared) (types : RuntimeAr
     mutPointerType := fun ty => RuntimeArrayQueries.perform types (CompilerRuntimeQueries.mutPointerType prepared ty)
     mutReferenceType := fun ty => RuntimeArrayQueries.perform types (CompilerRuntimeQueries.mutReferenceType prepared ty)
     resolveDropGlue := fun ty => RuntimeArrayQueries.perform types (CompilerRuntimeQueries.resolveDropGlue prepared ty)
-    requiresCallerLocation := fun fnInstance => lift (CompilerRuntimeQueries.requiresCallerLocation prepared fnInstance) }
+    requiresCallerLocation := fun fnInstance => RuntimeArrayQueries.performCompiler types (CompilerRuntimeQueries.requiresCallerLocation prepared fnInstance) }
 
 /-- Both type and vtable trait predicates consume the same compiler predicate
 array table; no principal identity is synthesized from a diagnostic string. -/

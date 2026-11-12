@@ -1,4 +1,5 @@
 import Miri.Input.CompilerInstance
+import Miri.Input.LowerMIR
 import Miri.Interpreter.VirtualCalls
 
 /-! Exact SourceScopeData evidence for Body::caller_location_span (mir/mod.rs).
@@ -18,7 +19,7 @@ private def decodeEntry (ctx : LowerContext) (tables : CompilerTables) (scope : 
   match scope.inlined with
   | none => pure (⟨⟨none,scope.inlinedParent⟩,none⟩,tables)
   | some inlined =>
-    let _ ← CompilerInstance.source ctx.instances inlined.instanceId
+    let _ ← CompilerInstance.Material.source ctx.instances inlined.instanceId
     unless inlined.callsiteSpanId < tables.spans.size do throw "inline callsite span ID out of bounds"
     let span : MIR.SpanRef := ⟨inlined.callsiteSpanId⟩
     pure (⟨⟨some (inlined.instanceId,span),scope.inlinedParent⟩,some inlined.requiresCallerLocation⟩,tables)

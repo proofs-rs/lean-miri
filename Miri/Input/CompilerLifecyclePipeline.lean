@@ -77,5 +77,5 @@ def functionHooks (p : Prepared)
     FunctionCalls.Hooks Provenance (MachineHooks.State K User) C MachineHooks.FrameExtra
       Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId) :=
   CompilerCallPipeline.bindFunctionCalls p.calls types
-    {base with call := CompilerInstanceAbi.hooks p.instances base.call}
+    {base with call := CompilerInstanceAbi.hooks p.instances types base.call}
 end Miri.Input.CompilerLifecyclePipeline

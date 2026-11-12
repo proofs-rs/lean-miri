@@ -9,7 +9,7 @@
     "Native C/C++ sources are not scanned by these Rust patterns.",
     "No absence/completeness or semantic equivalence claim."
   ],
-  "scanned_files": 735,
+  "scanned_files": 737,
   "candidates": [
     {
       "path": "upstream/crates/aes-0.9.3/src/backends/aarch64_aes.rs",
@@ -13153,6 +13153,134 @@
       "category": "state_declaration",
       "source_sha256": "9d64ae4d8b11033d60a99942c9b639b77b59fade351121a906c55d7331ec323f",
       "text": "pub enum AttributeKind {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs",
+      "line": 1,
+      "category": "external_dependency",
+      "source_sha256": "e3df29393d8324086af70463480f6c2358f99a811473be9aaaa42e68865c953a",
+      "text": "use rustc_abi::{Align, ExternAbi};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs",
+      "line": 2,
+      "category": "external_dependency",
+      "source_sha256": "e3df29393d8324086af70463480f6c2358f99a811473be9aaaa42e68865c953a",
+      "text": "use rustc_attr_ir::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs",
+      "line": 6,
+      "category": "external_dependency",
+      "source_sha256": "e3df29393d8324086af70463480f6c2358f99a811473be9aaaa42e68865c953a",
+      "text": "use rustc_hir as hir;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs",
+      "line": 7,
+      "category": "external_dependency",
+      "source_sha256": "e3df29393d8324086af70463480f6c2358f99a811473be9aaaa42e68865c953a",
+      "text": "use rustc_hir::def::DefKind;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs",
+      "line": 8,
+      "category": "external_dependency",
+      "source_sha256": "e3df29393d8324086af70463480f6c2358f99a811473be9aaaa42e68865c953a",
+      "text": "use rustc_hir::def_id::{DefId, LOCAL_CRATE, LocalDefId};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs",
+      "line": 9,
+      "category": "external_dependency",
+      "source_sha256": "e3df29393d8324086af70463480f6c2358f99a811473be9aaaa42e68865c953a",
+      "text": "use rustc_lint_defs::builtin::{INLINE_NO_SANITIZE, RTSAN_NONBLOCKING_ASYNC};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs",
+      "line": 10,
+      "category": "external_dependency",
+      "source_sha256": "e3df29393d8324086af70463480f6c2358f99a811473be9aaaa42e68865c953a",
+      "text": "use rustc_macros::Diagnostic;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs",
+      "line": 11,
+      "category": "external_dependency",
+      "source_sha256": "e3df29393d8324086af70463480f6c2358f99a811473be9aaaa42e68865c953a",
+      "text": "use rustc_middle::middle::codegen_fn_attrs::{",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs",
+      "line": 14,
+      "category": "external_dependency",
+      "source_sha256": "e3df29393d8324086af70463480f6c2358f99a811473be9aaaa42e68865c953a",
+      "text": "use rustc_middle::mono::Visibility;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs",
+      "line": 15,
+      "category": "external_dependency",
+      "source_sha256": "e3df29393d8324086af70463480f6c2358f99a811473be9aaaa42e68865c953a",
+      "text": "use rustc_middle::query::Providers;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs",
+      "line": 16,
+      "category": "external_dependency",
+      "source_sha256": "e3df29393d8324086af70463480f6c2358f99a811473be9aaaa42e68865c953a",
+      "text": "use rustc_middle::ty::{self as ty, TyCtxt};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs",
+      "line": 17,
+      "category": "external_dependency",
+      "source_sha256": "e3df29393d8324086af70463480f6c2358f99a811473be9aaaa42e68865c953a",
+      "text": "use rustc_span::{Span, bug};",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs",
+      "line": 18,
+      "category": "external_dependency",
+      "source_sha256": "e3df29393d8324086af70463480f6c2358f99a811473be9aaaa42e68865c953a",
+      "text": "use rustc_target::spec::Os;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs",
+      "line": 49,
+      "category": "state_declaration",
+      "source_sha256": "e3df29393d8324086af70463480f6c2358f99a811473be9aaaa42e68865c953a",
+      "text": "struct InterestingAttributeDiagnosticSpans {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs",
+      "line": 403,
+      "category": "state_declaration",
+      "source_sha256": "e3df29393d8324086af70463480f6c2358f99a811473be9aaaa42e68865c953a",
+      "text": "struct SanitizeOnInline {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_codegen_ssa/src/codegen_attrs.rs",
+      "line": 410,
+      "category": "state_declaration",
+      "source_sha256": "e3df29393d8324086af70463480f6c2358f99a811473be9aaaa42e68865c953a",
+      "text": "struct AsyncBlocking;",
       "review": "pending"
     },
     {
@@ -34033,6 +34161,22 @@
       "category": "state_declaration",
       "source_sha256": "eebe66480a56971d9eb1f9f1e77303e6846df4f51431d98f97df2c2a7fa73443",
       "text": "pub enum RegionKind<I: Interner> {",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/relate.rs",
+      "line": 4,
+      "category": "external_dependency",
+      "source_sha256": "ff80bae6f6fd1be3abc93385e13e9612633bb2319d681ba992f9c2db94eec24d",
+      "text": "use rustc_ast_ir::Mutability;",
+      "review": "pending"
+    },
+    {
+      "path": "upstream/rustc-source/compiler/rustc_type_ir/src/relate.rs",
+      "line": 25,
+      "category": "state_declaration",
+      "source_sha256": "ff80bae6f6fd1be3abc93385e13e9612633bb2319d681ba992f9c2db94eec24d",
+      "text": "pub enum VarianceDiagInfo<I: Interner> {",
       "review": "pending"
     },
     {

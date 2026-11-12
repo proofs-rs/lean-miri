@@ -231,6 +231,7 @@ deriving instance ToExpr for Input.AliasMaterial.Kind
 deriving instance ToExpr for Input.AliasMaterial.Declaration
 deriving instance ToExpr for Input.AdtDeclaration.FieldSafety
 deriving instance ToExpr for Input.AdtDeclaration.Material
+deriving instance ToExpr for Input.DefinitionPath.HeaderSafety
 deriving instance ToExpr for Input.DefinitionPath.Component
 deriving instance ToExpr for Input.DefinitionPath.Material
 deriving instance ToExpr for Input.DefinitionId
@@ -269,6 +270,7 @@ deriving instance ToExpr for Input.PromotedBody
 deriving instance ToExpr for Input.Body
 deriving instance ToExpr for Input.CopyTemplateSource
 deriving instance ToExpr for Input.CopyTemplateRef
+deriving instance ToExpr for Input.NoopDropRef
 deriving instance ToExpr for Input.BodySeed
 deriving instance ToExpr for Input.BodyRoot
 deriving instance ToExpr for Input.InstanceNode
@@ -305,7 +307,6 @@ deriving instance ToExpr for Input.Catalog.PointerAbi
 deriving instance ToExpr for Input.Catalog.HelperSignature
 deriving instance ToExpr for Input.Catalog.FunctionFacts
 deriving instance ToExpr for Input.Catalog.CastQuery
-deriving instance ToExpr for Input.Catalog.TypeName
 deriving instance ToExpr for Input.Catalog.CallerLocation
 deriving instance ToExpr for Input.Catalog.PanicQuery
 deriving instance ToExpr for Input.Catalog.NativeSignature

@@ -9,15 +9,19 @@ structure Component where
   name : Option String
   disambiguator : Nat
   deriving Repr, DecidableEq
+inductive HeaderSafety where
+  | normalSafe | normalUnsafe | safeTargetFeatures
+  deriving Repr, DecidableEq, BEq
 structure Material where
   components : Array Component
   parentParameterCount : Nat
   parameterDefaults : Array Bool
+  functionHeaderSafety : Option HeaderSafety := none
   deriving Repr, DecidableEq
 
 def read (value : Lean.Json) : Except String Material := do
   for (key,_) in (← value.getObj?).toArray do
-    unless ["components", "parent_parameter_count", "parameter_defaults"].contains key do
+    unless ["components", "parent_parameter_count", "parameter_defaults", "function_header_safety"].contains key do
       throw s!"unknown raw definition path field {key}"
   let components ← (← (← value.getObjVal? "components").getArr?).mapM fun value => do
     for (key,_) in (← value.getObj?).toArray do
@@ -32,7 +36,15 @@ def read (value : Lean.Json) : Except String Material := do
       throw "named DefPathData component has no source symbol"
     pure (⟨kind,name,← (← value.getObjVal? "disambiguator").getNat?⟩ : Component)
   let defaults ← (← (← value.getObjVal? "parameter_defaults").getArr?).mapM Lean.Json.getBool?
-  pure ⟨components,← (← value.getObjVal? "parent_parameter_count").getNat?,defaults⟩
+  let safetyValue ← value.getObjVal? "function_header_safety"
+  let safety ← if safetyValue == .null then pure none else do
+    let safety ← match ← safetyValue.getStr? with
+      | "normal_safe" => pure HeaderSafety.normalSafe
+      | "normal_unsafe" => pure HeaderSafety.normalUnsafe
+      | "safe_target_features" => pure HeaderSafety.safeTargetFeatures
+      | _ => throw "unknown raw function HeaderSafety"
+    pure (some safety)
+  pure ⟨components,← (← value.getObjVal? "parent_parameter_count").getNat?,defaults,safety⟩
 def decode : JsonReader.Parser Material :=
   do JsonReader.liftExcept (read (← Lean.Json.Parser.anyCore))
 end Miri.Input.DefinitionPath

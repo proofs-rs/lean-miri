@@ -45,7 +45,8 @@ def make (p : CompilerProviders.Prepared)
       if bound : salt < 32 then VTableMachine.reserve engine ty token ⟨salt,bound⟩
       else throw (.invalidProgram "vtable source salt outside 0..32")
     globalRootPointer := fun _ id => return (← FunctionPointers.rootPointer engine.functions id).withOptionalProvenance
-    entries := fun _ principal ty => lift
-      (CompilerVTableRuntime.entries p.lifecycle.calls.symbols principal ty)
+    entries := fun _ principal ty => do
+      let world ← RuntimeArrayQueries.compilerSnapshot types
+      lift (CompilerVTableRuntime.entries p.lifecycle.calls.symbols world principal ty)
     assertVirtualInstanceMatches := VirtualCalls.assertConcrete (CompilerVirtualLeaves.make p.lifecycle.calls types) }
 end Miri.Input.CompilerVTableLeaves

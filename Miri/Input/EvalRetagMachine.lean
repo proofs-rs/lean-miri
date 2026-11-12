@@ -34,7 +34,8 @@ def hooks [DecidableEq K] (prepared : CompilerFactAdapters.Prepared)
   let size := fun (place : MPlaceTy Provenance) =>
     DynamicLayout.sizeAndAlignFromMeta dynamic choice projection.dynamicFuel place.mplace.metadata place.layout
   {
-    instanceDefinition := fun inst => lift (CompilerInstance.definitionOf context.loweringContext.instances inst)
+    instanceDefinition := fun inst => do
+      lift (CompilerInstance.definitionOf (← RuntimeArrayQueries.compilerSnapshot types) inst)
     typeShape := fun ty => lift (CompilerFacts.retagTypeShape context ty)
     builtinDeref := fun ty => lift (CompilerFacts.requiredType context ty "builtin_deref_explicit")
     referencePointee := fun ty => lift (CompilerFacts.referencePointee context ty)

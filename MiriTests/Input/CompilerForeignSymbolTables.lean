@@ -18,7 +18,7 @@ private def unusedPrimitives : Catalog.Primitives := {
   i8 := 0, i16 := 0, i32 := 0, i64 := 0, i128 := 0, bool := 0
   pointerTagInteger := 0, usize := 0, isize := 0, unit := 0
   unitPointerConst := 0, unitPointerMut := 0, immU8Pointer := 0, immU8PointerPointer := 0
-  typeNameResultType := 0, callerLocationType := none, orderingEnum := none }
+  callerLocationType := none, orderingEnum := none }
 
 private def document (symbols : Catalog.ForeignSymbols) : ImportDocument := {
   producer := ⟨"miri", "rustc", "version", "target"⟩
@@ -30,7 +30,7 @@ private def document (symbols : Catalog.ForeignSymbols) : ImportDocument := {
       rootSpan := 0, runtimeChecks := #[], printOptions := none }
     runtime := ⟨none, #[], #[], #[], symbols⟩
     frameMetadata := ⟨0, #[]⟩, instanceAbis := #[]
-    functionFacts := ⟨#[], #[], #[]⟩, casts := #[], typeNames := #[], panic := #[]
+    functionFacts := ⟨#[], #[], #[]⟩, casts := #[], panic := #[]
     nativeSignatures := #[], retag := #[], covariance := #[]
     globalBytes := ⟨0, 0, #[], #[]⟩, callerLocations := #[]
     main := ⟨none, none, none, #[], none⟩, primitives := unusedPrimitives

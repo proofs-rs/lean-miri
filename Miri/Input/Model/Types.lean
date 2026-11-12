@@ -820,6 +820,7 @@ structure CopyTemplateSource where
   localSources : Array SourceInfo
   sourceScopes : Array SourceScope
   backtraceSpans : Array BacktraceSpan
+  sourcePromoted : Option Nat
 
 structure CopyTemplateRef where
   templateId : Nat
@@ -827,22 +828,31 @@ structure CopyTemplateRef where
   genericArgs : Array Miri.MIR.GenericArg
   promotedBodies : Array PromotedBody
 
-/-- A selected template is never accompanied by a monomorphic fallback. -/
+/-- Exact no-op DropGlue source location. Its signature and complete arguments
+are source material reached through the existing instance/definition identity. -/
+structure NoopDropRef where
+  instanceId : InstanceId
+  sourceSpan : BacktraceSpan
+
+/-- A selected source category has no monomorphic fallback. -/
 inductive BodySeed where
   | material (body : Body)
   | copyTemplate (reference : CopyTemplateRef)
+  | noopDrop (reference : NoopDropRef)
 
 def BodySeed.instanceId : BodySeed → InstanceId
   | .material body => body.instanceId
   | .copyTemplate reference => reference.instanceId
+  | .noopDrop reference => reference.instanceId
 
 def BodySeed.promotedBodies : BodySeed → Array PromotedBody
   | .material body => body.promotedBodies
   | .copyTemplate reference => reference.promotedBodies
+  | .noopDrop _ => #[]
 
 def BodySeed.materialBody? : BodySeed → Option Body
   | .material body => some body
-  | .copyTemplate _ => none
+  | .copyTemplate _ | .noopDrop _ => none
 
 structure BodyRoot where
   bodyId : BodyId

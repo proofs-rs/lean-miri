@@ -25,6 +25,7 @@ import MiriTests.Input.JsonFixtures
 import MiriTests.Input.StructuralDeref
 import MiriTests.Input.StructuralTail
 import MiriTests.Input.GenericRebase
+import MiriTests.Input.InstanceArenaSupport
 import MiriTests.Input.CompilerForeignSymbolTables
 import MiriTests.Input.DecoderProfile2026
 import MiriTests.Input.DefinitionLookup2026

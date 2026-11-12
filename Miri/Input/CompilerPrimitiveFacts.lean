@@ -22,7 +22,6 @@ def primitiveType (runtime : RuntimeMetadata) (key : String) : Except String Typ
     | "usize" => pure p.usize | "isize" => pure p.isize | "unit" => pure p.unit
     | "unit_pointer_const" => pure p.unitPointerConst | "unit_pointer_mut" => pure p.unitPointerMut
     | "imm_u8_pointer" => pure p.immU8Pointer | "imm_u8_pointer_pointer" => pure p.immU8PointerPointer
-    | "type_name_result_type" => pure p.typeNameResultType
     | _ => throw s!"unknown compiler primitive query {key}"
   let source ← runtime.node id |>.mapError toString
   let expected : Option Miri.MIR.IntegerKind := match key with

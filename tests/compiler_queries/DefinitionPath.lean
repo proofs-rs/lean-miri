@@ -1,7 +1,7 @@
 import Miri.Input.DefinitionPath
 open Miri.Input.DefinitionPath
 private def root : Component := ⟨"crate_root",some "source_crate",0⟩
-private def nested : Material := ⟨#[root,⟨"type",some "nested",0⟩,⟨"type",some "Wrap",0⟩],0,#[false]⟩
+private def nested : Material := ⟨#[root,⟨"type",some "nested",0⟩,⟨"type",some "Wrap",0⟩],0,#[false],none⟩
 private def succeeds (value : Except String String) (expected : String) : Bool :=
   match value with | .ok value => value == expected | .error _ => false
 private def fails (value : Except String String) : Bool :=

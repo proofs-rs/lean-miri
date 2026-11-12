@@ -27,12 +27,6 @@ def main (args : List String) : IO Unit := do
   let expected ← must (CompilerValueConstants.callerLocation (withRows p #[row]) span)
   let duplicate ← must (CompilerValueConstants.callerLocation (withRows p #[row,row]) span)
   check (decide (duplicate = expected)) "duplicate caller-location row changed result"
-  let some resultType := row.resultType | throw (IO.userError "caller result type absent")
-  let typeName : Catalog.TypeName := ⟨resultType, resultType, row.value⟩
-  let queries := {p.program.input.queries with typeNames := #[typeName]}
-  let typeNameProvider := {p with program := {p.program with input := {p.program.input with queries}}, lowering := none}
-  check (decide ((← must (CompilerValueConstants.typeName typeNameProvider resultType)) = expected))
-    "type-name and caller-location constant paths disagree"
   let conflict := {row with resultType := none}
   check (!(CompilerValueConstants.callerLocation (withRows p #[row, conflict]) span).isOk)
     "conflicting caller-location rows were accepted"

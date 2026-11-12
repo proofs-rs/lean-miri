@@ -72,7 +72,7 @@ def prepare (instances : CompilerVTableRuntime.Prepared) : Except String Prepare
     let kind ← exportKind record.definitionKind
     let callee ← if kind == .function || kind == .associatedFunction then do
       let some id := record.instanceId | throw "exported callable instance absent"
-      let _ ← CompilerInstance.source ctx.instances id
+      let _ ← CompilerInstance.Material.source ctx.instances id
       pure (some id)
     else pure none
     let some span := program.input.spans[record.span]? | throw "exported symbol span ID out of bounds"

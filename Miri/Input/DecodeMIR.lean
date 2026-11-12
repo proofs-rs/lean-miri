@@ -1047,12 +1047,14 @@ private structure BodySeedFields where
   templateId : Option Nat := none
   genericArgs : Option (Array Miri.MIR.GenericArg) := none
   materialFields : Bool := false
+  noopSpan : Option BacktraceSpan := none
 
 private def parseBodySeedRaw (path : String) : MIRParser.Parser BodySeed := do
   let fields ← MIRParser.object ({} : BodySeedFields) fun fields key => do
     match key with
     | "body_kind" => pure { fields with kind := some (← string) }
     | "template_id" => pure { fields with templateId := some (← natural) }
+    | "source_span" => pure {fields with noopSpan := some (← backtrace s!"{path}.source_span")}
     | "generic_args" =>
       let args ← GenericArgsCodec.decode
       recordArgs args
@@ -1062,10 +1064,17 @@ private def parseBodySeedRaw (path : String) : MIRParser.Parser BodySeed := do
     | _ => pure { fields with material := ← parseBodyField path fields.material key, materialFields := true }
   match ← required fields.kind "body_kind" with
   | "material" =>
-    unless fields.templateId.isNone && fields.genericArgs.isNone do
+    unless fields.templateId.isNone && fields.genericArgs.isNone && fields.noopSpan.isNone do
       reject "material body cannot carry a generic template reference"
     return .material (← finishParseBodyFields path fields.material)
+  | "noop_drop" =>
+    unless !fields.materialFields && fields.templateId.isNone && fields.genericArgs.isNone &&
+        fields.material.promoted_bodies.isNone do
+      reject "no-op drop source cannot carry a monomorphic body or template reference"
+    return .noopDrop ⟨← required fields.material.instance_id "instance_id",
+      ← required fields.noopSpan "source_span"⟩
   | "copy_template" =>
+    unless fields.noopSpan.isNone do reject "generic template cannot carry a no-op drop source span"
     unless !fields.materialFields do reject "generic template reference cannot carry a monomorphic body fallback"
     return .copyTemplate ⟨← required fields.templateId "template_id",
       ← required fields.material.instance_id "instance_id",← required fields.genericArgs "generic_args",
@@ -1086,12 +1095,14 @@ private structure CopyTemplateFields where
   localSources : Option (Array Input.SourceInfo) := none
   sourceScopes : Option (Array SourceScope) := none
   backtraces : Option (Array BacktraceSpan) := none
+  sourcePromoted : Option (Option Nat) := none
 
 def parseCopyTemplate (path : String) : JsonReader.Parser CopyTemplateSource := do
   let fields ← JsonReader.object ({} : CopyTemplateFields) fun fields key => do
     match key with
     | "template" => pure {fields with template := some (← liftExcept (MirTemplateCodec.decode (← string)))}
     | "source_def_id" => pure {fields with definitionId := some (← natural)}
+    | "source_promoted" => pure {fields with sourcePromoted := some (← JsonReader.nullable natural)}
     | "def_path" => pure {fields with defPath := some (← string)}
     | "span" => pure {fields with spanId := some (← natural)}
     | "preamble_def_span" => pure {fields with preambleDefSpanId := some (← natural)}
@@ -1104,7 +1115,7 @@ def parseCopyTemplate (path : String) : JsonReader.Parser CopyTemplateSource := 
     ← required fields.defPath "def_path",← required fields.spanId "span",
     ← required fields.preambleDefSpanId "preamble_def_span",← required fields.injectionPhase "injection_phase",
     ← required fields.localSources "local_sources",← required fields.sourceScopes "source_scopes",
-    ← required fields.backtraces "backtrace_spans"⟩
+    ← required fields.backtraces "backtrace_spans",← required fields.sourcePromoted "source_promoted"⟩
 
 def parseSharedStatement (pools : MIRParser.SharedPools) : JsonReader.Parser MIRParser.SharedStatement := do
   let (value, state) ← statementKind.run {pools := some pools}

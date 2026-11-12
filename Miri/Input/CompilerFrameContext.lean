@@ -14,19 +14,19 @@ private def lift (query : Except String A) : MachineHooks.M K User A :=
 /-- Resolve by canonical identity and validate the complete instance/body pair.
 Structural equality is an assertion, not a body-selection algorithm. -/
 def bodyOfFrame (p : CompilerProviders.Prepared) (frame : ActualFrame) :
-    TypeArena.WorldM LoweredBody := do
-  let body ← p.program.resolveBody frame.bodyIdentity.index
+    RuntimeArrayTypes.CompilerM LoweredBody := do
+  let body ← RuntimeArrayTypes.liftType (p.program.resolveBody frame.bodyIdentity.index)
   unless body.body == frame.body do throw "canonical body/content mismatch"
   let loaded ← CallResolution.loadedBodyOfInstance p.lifecycle.calls.calls frame.functionInstance
   unless loaded.identity == frame.bodyIdentity do throw "full-instance/canonical body identity mismatch"
   pure body
 
 def currentBody (p : CompilerProviders.Prepared) (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) : MachineHooks.M K User LoweredBody := do
-  RuntimeArrayQueries.perform types (bodyOfFrame p (← MachineHooks.currentFrame))
+  RuntimeArrayQueries.performCompiler types (bodyOfFrame p (← MachineHooks.currentFrame))
 
 /-- Local types already belong to the concrete executable body. -/
 def localType (p : CompilerProviders.Prepared) (frame : ActualFrame)
-    (id : MIR.LocalId) : TypeArena.WorldM MIR.TyId := do
+    (id : MIR.LocalId) : RuntimeArrayTypes.CompilerM MIR.TyId := do
   let body ← bodyOfFrame p frame
   let some ty := body.body.locals[id]? | throw "local is absent"
   pure ty
@@ -36,9 +36,9 @@ def computeLocalLayout (p : CompilerProviders.Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (id : MIR.LocalId) :
     MachineHooks.M K User LocalLayout := do
   let frame ← MachineHooks.currentFrame
-  RuntimeArrayQueries.perform types do
+  RuntimeArrayQueries.performCompiler types do
     let ty ← localType p frame id
-    RuntimeMetadata.layoutInWorld p.runtime ty
+    RuntimeArrayTypes.liftType (RuntimeMetadata.layoutInWorld p.runtime ty)
 
 /-- Complete source layout_of_local for the actual current frame: a cached
 layout bypasses lookup; debug compatibility runs before cache mutation. -/
@@ -74,7 +74,7 @@ def localSpan (p : CompilerProviders.Prepared)
     MachineHooks.M K User MIR.SpanRef := do
   let frame ← MachineHooks.currentFrame
   unless supplied == frame.body do throw (.invalidProgram "local span body differs from active frame")
-  let body ← RuntimeArrayQueries.perform types (bodyOfFrame p frame)
+  let body ← RuntimeArrayQueries.performCompiler types (bodyOfFrame p frame)
   let some decl := body.input.localSources[id]? | throw (.invalidProgram "local source span index is absent")
   if decl.spanId < p.program.bundle.spans.size then
     pure ⟨decl.spanId⟩
@@ -85,7 +85,7 @@ def instruction (p : CompilerProviders.Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) :
     MachineHooks.M K User (Option (Sum MIR.Statement MIR.Terminator)) := do
   let frame ← MachineHooks.currentFrame
-  let _ ← RuntimeArrayQueries.perform types (bodyOfFrame p frame)
+  let _ ← RuntimeArrayQueries.performCompiler types (bodyOfFrame p frame)
   match frame.location with
   | .unwinding _ => pure none
   | .mir location =>
@@ -105,7 +105,7 @@ def sourceInfo (p : CompilerProviders.Prepared)
 def currentSpan (p : CompilerProviders.Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) : MachineHooks.M K User MIR.SpanRef := do
   let frame ← MachineHooks.currentFrame
-  let _ ← RuntimeArrayQueries.perform types (bodyOfFrame p frame)
+  let _ ← RuntimeArrayQueries.performCompiler types (bodyOfFrame p frame)
   match AllocationDriver.frameSpan frame with
   | .ok span => pure span
   | .error error => throw error
@@ -176,7 +176,7 @@ variable {K U : Type}
  theorem localSpan_known (p : CompilerProviders.Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K U))
     (frame : ActualFrame) (actual : LoweredBody) (decl : SourceInfo) (span : SpanRef)
-    (queried : (RuntimeArrayQueries.perform types (bodyOfFrame p frame) : MachineHooks.M K U LoweredBody) = pure actual)
+    (queried : (RuntimeArrayQueries.performCompiler types (bodyOfFrame p frame) : MachineHooks.M K U LoweredBody) = pure actual)
     (declaration : actual.input.localSources[0]? = some decl)
     (indexed : decl.spanId = span.id)
     (bounded : span.id < p.program.bundle.spans.size)

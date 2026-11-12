@@ -12,7 +12,7 @@ private def lift (value : Except String A) : EStateM StepError S A :=
 def make (p : CompilerCallPipeline.Prepared) (types : RuntimeArrayQueries.Access S) : VirtualCalls.CompilerHooks S C :=
   let facts := p.symbols.facts
   CompilerVirtualFacts.scopeHooks p.scopes types {
-    instanceArgs := fun inst => lift (CompilerInstance.argsOf facts.context.loweringContext.instances inst)
+    instanceArgs := fun inst => do lift (CompilerInstance.argsOf (← RuntimeArrayQueries.compilerSnapshot types) inst)
     classifyReceiver := fun ty => RuntimeArrayQueries.perform types (CompilerVirtualFacts.receiverKindInWorld facts.context ty)
     fieldLayout := fun layout index => RuntimeArrayQueries.perform types (RuntimeMetadata.fieldLayoutForInWorld facts.context.runtime layout index)
     structTailForCodegen := fun ty => RuntimeArrayQueries.perform types (RuntimeMetadata.metadataTailInWorld facts.context.runtime ty)
@@ -25,7 +25,7 @@ def make (p : CompilerCallPipeline.Prepared) (types : RuntimeArrayQueries.Access
     rebaseVirtualArgs := fun args parent concrete => RuntimeArrayQueries.perform types (CompilerRuntimeQueries.rebaseVirtualArgs p.runtime args parent concrete)
     expectResolveForVTable := fun _ method args => lift (CompilerRuntimeQueries.expectResolveForVTable p.runtime method args)
     resolveDropGlue := fun ty => RuntimeArrayQueries.perform types (CompilerRuntimeQueries.resolveDropGlue p.runtime ty)
-    requiresCallerLocation := fun callee => lift (CompilerRuntimeQueries.requiresCallerLocation p.runtime callee)
+    requiresCallerLocation := fun callee => RuntimeArrayQueries.performCompiler types (CompilerRuntimeQueries.requiresCallerLocation p.runtime callee)
     sourceScope := fun identity _ body index => do
       let actual ← RuntimeArrayQueries.perform types (p.scopes.program.resolveBody identity.index)
       unless actual.body == body do throw (.invalidProgram "frame body identity/content mismatch")

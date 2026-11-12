@@ -23,6 +23,17 @@ def perform (access : Access S) (action : TypeArena.WorldM α) : EStateM StepErr
   set (access.set state world)
   pure result
 
+/-- Commit the single type/instance world, including all nested type effects. -/
+def performCompiler (access : Access S) (action : RuntimeArrayTypes.CompilerM α) :
+    EStateM StepError S α := do
+  let state ← get
+  let (result,world) ← lift (RuntimeArrayTypes.performCompiler (access.get state) action)
+  set (access.set state world)
+  pure result
+
+def compilerSnapshot (access : Access S) : EStateM StepError S RuntimeArrayTypes.World :=
+  return access.get (← get)
+
 def snapshot (access : Access S) : EStateM StepError S TypeArena.World :=
   return (access.get (← get)).arena
 

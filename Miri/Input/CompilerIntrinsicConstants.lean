@@ -1,4 +1,5 @@
-import Miri.Input.CompilerIntrinsicFacts
+import Miri.Input.CompilerInstance
+import Miri.Input.RuntimeArrayQueries
 import Miri.Interpreter.ExecutionMachine
 
 /-! Direct source `const_at/expect_const`, `to_value`, `to_branch` and
@@ -10,10 +11,9 @@ namespace Miri.Input.CompilerIntrinsicConstants
 open Miri.Interpreter Miri.MIR Miri.Memory Miri.ABI
 private def invalid (message : String) : StepError :=
   .invalidProgram s!"intrinsic generic constant: {message}"
-private def value (p : CompilerIntrinsicFacts.Prepared) (id : TypeConstId) :
+private def value (world : RuntimeArrayTypes.World) (id : TypeConstId) :
     Except StepError ValTree := do
-  let some constant := p.program.compilerTables.typeConstants[id]?
-    | throw (.unsupported "intrinsic generic constant missing from compiler table")
+  let constant ← (world.arena.lookupConstant id).mapError StepError.unsupported
   match constant with
   | .Value _ tree => pure tree
   | _ => throw (invalid "source to_value requires ConstKind::Value")
@@ -31,22 +31,20 @@ private def leaf (tree : ValTree) : Except StepError ScalarInt := do
   match ScalarInt.tryFromUInt (BitVec.ofNat 128 bits) (Size.ofBytes (UInt64.ofNat bytes)) with
   | .ok (some scalar) => pure scalar
   | _ => throw (invalid "invalid compiler ScalarInt width")
-private def argument (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance)
+private def argument (world : RuntimeArrayTypes.World) (callee : CallInstance)
     (index : Nat) : Except StepError ValTree := do
-  unless p.entries.any (·.callee == callee) do
-    throw (.unsupported "full intrinsic instance missing from compiler metadata")
-  let args ← CompilerInstance.argsOf p.program.input.instances callee
+  let args ← CompilerInstance.argsOf world callee
     |>.mapError StepError.unsupported
   let some (.Const id) := args[index]?
     | throw (invalid "const_at/expect_const requires a constant argument")
-  value p id
-private def firstLeaf (p : CompilerIntrinsicFacts.Prepared) (tree : ValTree) :
+  value world id
+private def firstLeaf (world : RuntimeArrayTypes.World) (tree : ValTree) :
     Except StepError ScalarInt := do
   let fields ← branch tree
   let some first := fields[0]? | throw (invalid "enum ValTree has no discriminant")
-  leaf (← value p first)
-def ordering (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) (index : Nat) := do
-  let scalar ← firstLeaf p (← argument p callee index)
+  leaf (← value world first)
+def ordering (world : RuntimeArrayTypes.World) (callee : CallInstance) (index : Nat) := do
+  let scalar ← firstLeaf world (← argument world callee index)
   let result ← scalar.toAtomicOrdering.mapError (fun _ => invalid "invalid atomic ordering discriminant")
   pure (match result with
     | .relaxed => Miri.Concurrency.AtomicOrdering.Relaxed
@@ -55,34 +53,34 @@ def ordering (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) (inde
     | .acqRel => .AcqRel
     | .seqCst => .SeqCst)
 /-- Source atomic_load/store only calls to_value; the volatile value is ignored. -/
-def volatile (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) (index : Nat) :
+def volatile (world : RuntimeArrayTypes.World) (callee : CallInstance) (index : Nat) :
     Except StepError Unit := do
-  let _ ← argument p callee index
+  let _ ← argument world callee index
   pure ()
-def shuffle (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) (index : Nat) :
+def shuffle (world : RuntimeArrayTypes.World) (callee : CallInstance) (index : Nat) :
     Except StepError (Array UInt32) := do
-  let fields ← branch (← argument p callee index)
+  let fields ← branch (← argument world callee index)
   fields.mapM fun field => do
-    let scalar ← leaf (← value p field)
+    let scalar ← leaf (← value world field)
     scalar.toUInt32.mapError (fun _ => invalid "shuffle index is not a u32 ScalarInt")
-def alignment (p : CompilerIntrinsicFacts.Prepared) (callee : CallInstance) (index : Nat) := do
-  let scalar ← firstLeaf p (← argument p callee index)
+def alignment (world : RuntimeArrayTypes.World) (callee : CallInstance) (index : Nat) := do
+  let scalar ← firstLeaf world (← argument world callee index)
   scalar.toSimdAlignment.mapError (fun _ => invalid "invalid SIMD alignment discriminant")
 private def lift (result : Except StepError A) : MachineHooks.M K User A :=
   match result with
   | .ok value => pure value
   | .error error => throw error
 
-def hooks (p : CompilerIntrinsicFacts.Prepared)
+def hooks (access : RuntimeArrayQueries.Access (MachineHooks.State K User))
     (base : ExecutionMachine.Config K User C Other Extern Host) :
     ExecutionMachine.Config K User C Other Extern Host :=
   {base with intrinsics := fun callee =>
     let context := base.intrinsics callee
     {context with
       atomicHooks := {context.atomicHooks with
-        orderingConst := fun _ index => lift (ordering p callee index)
-        volatileConst := fun _ index => lift (volatile p callee index)}
+        orderingConst := fun _ index => do lift (ordering (access.get (← get)) callee index)
+        volatileConst := fun _ index => do lift (volatile (access.get (← get)) callee index)}
       simdHooks := {context.simdHooks with
-        shuffleConst := fun _ index => lift (shuffle p callee index)
-        alignmentConst := fun _ index => lift (alignment p callee index)}}}
+        shuffleConst := fun _ index => do lift (shuffle (access.get (← get)) callee index)
+        alignmentConst := fun _ index => do lift (alignment (access.get (← get)) callee index)}}}
 end Miri.Input.CompilerIntrinsicConstants

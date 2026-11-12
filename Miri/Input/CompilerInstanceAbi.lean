@@ -34,7 +34,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except Stri
   let mut buckets : Std.HashMap Nat (Array Nat) := {}
   for record in records do
     let callee := record.instanceId
-    if let .LlvmIntrinsic _ := (← CompilerInstance.source ctx.instances callee).instanceKind then
+    if let .LlvmIntrinsic _ := (← CompilerInstance.Material.source ctx.instances callee).instanceKind then
       throw "LLVM intrinsic has no ordinary FnAbi query"
     let extra := record.extraArgumentTypes
     for id in extra do
@@ -53,8 +53,15 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except Stri
       buckets := buckets.insert callee ((buckets.getD callee #[]).push index)
   pure ⟨runtime,program.withCompilerTables tables,entries,buckets⟩
 
-def abiOfInstance (prepared : Prepared) (callee : CallInstance) (extra : Array MIR.TyId) :
+def abiOfInstance (prepared : Prepared) (world : RuntimeArrayTypes.World) (callee : CallInstance) (extra : Array MIR.TyId) :
     Except String (FnAbi MIR.TyId) := do
+  let .material actual ← world.instances.lookup callee
+    | throw "constructed instance has no imported FnAbi query"
+  let expected ← CompilerInstance.Material.source prepared.program.input.instances callee
+  let expected ← InstanceArena.Key.ofSource world.arena expected.instanceKind expected.genericArgs
+  unless actual == expected do throw "instance ABI source material differs from execution instance store"
+  for typeId in extra do
+    let _ ← world.arena.lookupType typeId
   let found := matchingIndex prepared.entries
     (prepared.index.getD callee #[]) callee extra
   let some entryIndex := found
@@ -63,11 +70,12 @@ def abiOfInstance (prepared : Prepared) (callee : CallInstance) (extra : Array M
     | throw "instance ABI bucket index invariant"
   CallResolution.functionAbiId prepared.runtime (← entry.result)
 
-def hooks (prepared : Prepared)
+def hooks (prepared : Prepared) (access : RuntimeArrayQueries.Access S)
     (base : CallHooks P S C E Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId)) :
     CallHooks P S C E Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId) :=
-  { base with fnAbiOfInstance := fun _ callee extra =>
-      match abiOfInstance prepared callee extra with
+  { base with fnAbiOfInstance := fun _ callee extra => do
+      let world := access.get (← get)
+      match abiOfInstance prepared world callee extra with
       | .ok abi => pure abi
-      | .error error => throw (.invalidProgram error) }
+      | .error error => throw (.unsupported error) }
 end Miri.Input.CompilerInstanceAbi
