@@ -5,6 +5,7 @@ import Miri.Input.TypeConstCodec
 import Miri.Input.DecodeMIR
 import Miri.Input.CatalogDecoder
 import Miri.Input.SharedPools
+import Miri.Input.CoroutineCoverage
 
 namespace Miri.Input
 open Lean DecoderValues
@@ -209,6 +210,7 @@ private structure DocumentFields where
   compilerAbiLayoutSchema : Option (String) := none
   bodies : Option (Array Body) := none
   bodyReferences : Array DecodeMIR.References := #[]
+  coroutineCoverage : Option CoroutineCoverageCodec.Parsed := none
   bodyRoots : Option (Array BodyRoot) := none
   compilerAllocIdWorld : Option PendingCompilerAllocIdWorld := none
   selectedScope : Option SelectedScope := none
@@ -242,6 +244,7 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
     | "bodies" =>
       let bodies ← JsonReader.arrayIndexed (fun index => DecodeMIR.parseBody s!"$.bodies[{index}]" (some pools.mir))
       return {d with bodies := some (bodies.map (·.value)), bodyReferences := bodies.map (·.references)}
+    | "compiler_coroutine_coverage" => return {d with coroutineCoverage := some (← CoroutineCoverageCodec.parse pools.mir)}
     | "body_roots" => return {d with bodyRoots := some (← JsonReader.arrayIndexed (fun index => parseBodyRoot s!"$.body_roots[{index}]"))}
     | "compiler_alloc_id_world" => return {d with compilerAllocIdWorld := ← JsonReader.nullable (parseCompilerAllocIdWorld)}
     | "selected_scope" => return {d with selectedScope := ← JsonReader.nullable (parseSelectedScope "$.selected_scope")}
@@ -270,6 +273,12 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
   let allocations ← JsonReader.liftExcept (finishAllocations images groups pendingNodes)
   let bodies ← JsonReader.liftExcept (finishBodies images (← JsonReader.required d.bodies "bodies"))
   let compilerAllocIdWorld ← JsonReader.liftExcept (d.compilerAllocIdWorld.mapM (finishWorld allocations hexByGraph))
+  let coroutineCoverage ← d.coroutineCoverage.mapM fun parsed => do
+    let auxiliaryBodies ← parsed.value.auxiliaryBodies.mapM fun row => do
+      let resolved ← JsonReader.liftExcept (finishBodies images #[row.body])
+      let some body := resolved[0]? | JsonReader.fail "coroutine auxiliary body disappeared during allocation resolution"
+      pure {row with body}
+    pure {parsed.value with auxiliaryBodies}
   let value : ImportDocument := {
     producer, producerSettings
     predicates := ← JsonReader.required d.predicates "predicates"
@@ -285,13 +294,15 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
     instances := ← JsonReader.required d.instances "instances"
     compilerAbiLayoutSchema := some compilerAbiLayoutSchema
     bodies := bodies
+    coroutineCoverage := coroutineCoverage
     bodyRoots := ← JsonReader.required d.bodyRoots "body_roots"
     compilerAllocIdWorld := compilerAllocIdWorld
     selectedScope := d.selectedScope
     runtimeTargetDataLayout := d.runtimeTargetDataLayout
     queries := ← CatalogDecoder.finish d.queries
   }
-  return ⟨value, schema, schemaVersion, d.bodyReferences, pools.abiArguments⟩
+  return ⟨value, schema, schemaVersion,
+    d.bodyReferences ++ (d.coroutineCoverage.map (·.references)).getD #[], pools.abiArguments⟩
 
 private def validateParsedDocument (parsed : ParsedDocument) (profile : Options) : Except String ImportDocument := do
   let d := parsed.value
@@ -313,8 +324,13 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
   let compilerAllocIdWorld := d.compilerAllocIdWorld
   let selectedScope := d.selectedScope
   if schema != expectedSchema then throw s!"$.schema: expected `{expectedSchema}`"
-  unless schemaVersion == expectedSchemaVersion do
+  unless schemaVersion == 11 || schemaVersion == expectedSchemaVersion do
     throw "$.schema_version: unsupported schema version"
+  match schemaVersion, d.coroutineCoverage with
+  | 11, some _ => throw "schema 11 forbids compiler_coroutine_coverage"
+  | 12, none => throw "schema 12 requires compiler_coroutine_coverage"
+  | 12, some coverage => CoroutineCoverageCodec.validate d coverage
+  | _, _ => pure ()
   if producer.miriCommit != expectedMiriCommit then throw "$.producer.miri_commit: input is from the wrong pinned Miri revision"
   if producer.rustcCommit != expectedRustcCommit then throw "$.producer.rustc_commit: input is from the wrong pinned rustc revision"
   unless compilerAbiLayoutSchema == some expectedCompilerAbiLayoutSchema do

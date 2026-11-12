@@ -4,6 +4,7 @@ mod incremental;
 mod cast_queries;
 mod allocator_world;
 mod covariance_queries;
+mod coroutine_coverage;
 mod foreign_symbols;
 mod generated_call_queries;
 mod global_byte_queries;
@@ -80,7 +81,7 @@ fn export_failure<T>(context: &str, details: impl std::fmt::Display) -> Result<T
 
 const EXPECTED_RUSTC_COMMIT: &str = "8144389c895da997dbdecaa635e41d6a50be6ffd";
 const MIRI_COMMIT: &str = "7fa591d7d4dd9af8154becbc8332f8096f8323b1";
-const ROOT_SCHEMA_VERSION: u64 = 11;
+const ROOT_SCHEMA_VERSION: u64 = 12;
 
 struct Options {
     output: PathBuf,
@@ -171,6 +172,7 @@ struct ExportDocument {
     runtime_catalogs: RuntimeCatalogs,
     body_roots: Vec<BodyRoot>,
     bodies: Vec<pool_body::Body<u64, Vec<u64>>>,
+    compiler_coroutine_coverage: coroutine_coverage::Catalog<pool_body::Body<u64, Vec<u64>>>,
     definitions: Vec<pool_values::Definition>,
     type_constants: Vec<pool_values::TypeConstant>,
     files: Vec<String>,
@@ -266,6 +268,7 @@ struct ExportContext<'tcx> {
     virtual_state: incremental::Virtuals<'tcx>,
     vtable_diagnostics: vtable_diagnostics::Trace<'tcx>,
     bodies: Pool<BodyKey<'tcx>, pool_body::Body>,
+    coroutine_coverage: coroutine_coverage::Catalog,
     definitions: Pool<rustc_hir::def_id::DefId, pool_values::Definition>,
     type_constants: Pool<ty::Const<'tcx>, pool_values::TypeConstant>,
     files: pool_values::Files,
@@ -1683,12 +1686,17 @@ impl ExportCallbacks {
             return Err("type or allocation table has unfinished definitions".into());
         }
         let candidates = query_values::virtual_candidates(&runtime_queries.virtual_queries);
+        let compiler_coroutine_coverage = std::mem::take(&mut export_context.coroutine_coverage)
+            .finish(&vtable_query_ids, &candidates)?;
         let bodies = export_context
             .bodies
             .finish("body")?
             .into_iter()
             .map(|body| body.finish(&vtable_query_ids, &candidates))
             .collect::<Result<Vec<_>, _>>()?;
+        if compiler_coroutine_coverage.body_coroutines.len() != bodies.len() {
+            return export_failure("coroutine coverage", "body marker table is incomplete");
+        }
         let mut document = ExportDocument {
             schema: "lean-miri-rustc-mir",
             schema_version: ROOT_SCHEMA_VERSION,
@@ -1716,6 +1724,7 @@ impl ExportCallbacks {
             runtime_catalogs: runtime_catalogs.unwrap_or_default().finish(),
             body_roots,
             bodies,
+            compiler_coroutine_coverage,
             definitions: export_context.definitions.finish("definition")?,
             type_constants: export_context.type_constants.finish("type_constant")?,
             files: export_context.files.finish(),
@@ -2462,6 +2471,7 @@ fn resolved_mir_body_json<'tcx>(
     {
         return export_failure("resolved MIR", "body retains unresolved generic parameters");
     }
+    coroutine_coverage::capture(tcx, context, &body, instance, id as u64)?;
     let definition = mir_body_json(tcx, &body, instance, context, "resolved_body")?;
     context.bodies.define(id, definition);
     Ok(id as u64)
@@ -2521,7 +2531,10 @@ fn mir_body_json<'tcx>(
         None
     };
     if body.coroutine.is_some() {
-        export_failure::<()>("MIR", "coroutine layout serialization is not implemented")?;
+        let (owner, _) = context.bodies.reserve(BodyKey { instance, promoted: body.source.promoted });
+        if !context.coroutine_coverage.coroutines.iter().any(|row| row.owner_body == owner as u64) {
+            export_failure::<()>("MIR", "coroutine body lacks validated compiler coverage")?;
+        }
     }
     intrinsic_value_queries::collect_spans(tcx, context, body);
     let instance_id = context.register_metadata_instance(instance);
