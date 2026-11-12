@@ -138,6 +138,23 @@ class MirJSONTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(MirJSONError):
                 decode_mir_document(document(files=invalid))
 
+    def test_raw_template_metadata_is_distinct_from_material_body_pools(self):
+        raw = {"template": "raw MIR syntax", "backtrace_spans": [{"span": 7}],
+               "local_sources": [{"span": 8, "scope": 0}],
+               "source_scopes": [{"span": 9}]}
+        encoded = document(mir_templates=[raw], bodies=[{"backtrace_spans": 0}],
+                           backtrace_spans=[[{"span": 11}]])
+        expanded = expand_document(encoded)
+        self.assertEqual(expanded["mir_templates"], [raw])
+        self.assertEqual(expanded["bodies"][0]["backtrace_spans"], [{"span": 11}])
+        expanded["mir_templates"][0]["backtrace_spans"][0]["span"] = 99
+        self.assertEqual(encoded["mir_templates"][0]["backtrace_spans"][0]["span"], 7)
+        # Inline arrays in raw templates must not make material bodies accept
+        # inline fields where the wire schema requires an exact pool reference.
+        encoded["bodies"][0]["backtrace_spans"] = [{"span": 11}]
+        with self.assertRaisesRegex(ValueError, "backtrace_spans reference"):
+            expand_document(encoded)
+
     def test_lossless_pool_projection_preserves_identity_and_defaults(self):
         raw = document(schema_version=8, layouts=[{"size_bytes": 0}, {"size_bytes": 0}],
             types=[{"compiler_facts": {"boolean_queries": {"is_dynamic": False},
@@ -151,7 +168,13 @@ class MirJSONTests(unittest.TestCase):
         for name in SHARED_POOLS:
             raw.pop(name, None)
         pooled = pool_document(raw)
-        self.assertEqual(expand_document(pooled, schema_version=8), raw)
+        expected = copy.deepcopy(raw)
+        expected["mir_templates"] = []
+        expected["compiler_trait_program"] = {
+            "traits": [], "constructor_scope": {"kind": "all_source_impls"}}
+        for body in expected["bodies"]:
+            body["body_kind"] = "material"
+        self.assertEqual(expand_document(pooled, schema_version=8), expected)
         self.assertEqual(pooled["layouts"], [0, 0])
         self.assertEqual(len(pooled["layout_values"]), 1)
         self.assertEqual(len(pooled["source_infos"]), 1)

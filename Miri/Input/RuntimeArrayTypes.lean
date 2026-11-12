@@ -1,6 +1,7 @@
 import Miri.Input.RuntimeMetadata
 import Miri.Input.GenericInstantiationWorld
 import Miri.Input.InstanceArena
+import Miri.Input.BodyArena
 
 /-! One execution-owned type/constant universe. Runtime arrays use the same
 constructor interner as generic MIR, ADTs and function items. Layout results are
@@ -18,6 +19,7 @@ structure World where
   metadata : RuntimeMetadata
   arena : TypeArena.World
   instances : InstanceArena.Store
+  bodies : BodyArena.Store
 inductive Error where
   | metadata (reason : String)
   | targetUsizeOverflow (count : UInt64)
@@ -36,7 +38,7 @@ def create (runtime : RuntimeMetadata) : Except Error World := do
     | throw (.metadata "checked source material prefix is absent")
   let arena := TypeArena.World.ofCheckedMaterial checked
   let instances ← lift (InstanceArena.Store.ofSource arena runtime.source.instances)
-  pure {metadata := runtime, arena, instances}
+  pure {metadata := runtime, arena, instances, bodies := BodyArena.Store.ofSource runtime.source.bodies}
 
 /-- Every stateful source query commits its returned constructor universe. -/
 def perform (world : World) (action : TypeArena.WorldM α) : Except Error (α × World) := do
@@ -62,6 +64,17 @@ def internInstance (kind : Miri.Interpreter.CallInstanceKind)
   let (id,instances) ← match result with
     | .ok value => pure value | .error error => throw error
   set {world with instances}
+  pure id
+
+def internBody (templateId instanceId : Nat) (promoted : Option Nat) : CompilerM BodyId := do
+  let world ← get
+  let result := do
+    let key ← BodyArena.Key.create world.arena world.instances
+      world.metadata.source.mirTemplates templateId instanceId promoted
+    world.bodies.intern world.arena world.instances world.metadata.source.mirTemplates world.metadata.source.bodies key
+  let (id,bodies) ← match result with
+    | .ok value => pure value | .error error => throw error
+  set {world with bodies}
   pure id
 
 def performCompiler (world : World) (action : CompilerM α) : Except Error (α × World) :=

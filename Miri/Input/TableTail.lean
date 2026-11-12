@@ -1,3 +1,4 @@
+import Miri.Input.SourceEnvironmentCodec
 import Miri.Input.AliasMaterialCodec
 import Miri.Input.AdtDeclarationCodec
 import Miri.Input.TableCore
@@ -268,6 +269,28 @@ private def parseAdtDropMaterial (path : String) : Parser AdtDropMaterial := do
   return ⟨← required manuallyDrop (path ++ ".manually_drop"),
     ← required destructor (path ++ ".destructor")⟩
 
+private structure ParseFunctionAbiMaterialFields where
+  neverUnwind : Option Bool := none
+  foreignItem : Option Bool := none
+  dropGlue : Option Bool := none
+  panicUnwinds : Option Bool := none
+  panicInDropUnwinds : Option Bool := none
+
+private def parseFunctionAbiMaterial (path : String) : Parser FunctionAbiMaterial := do
+  let s ← object ({} : ParseFunctionAbiMaterialFields) fun s key => do
+    match key with
+    | "never_unwind" => return {s with neverUnwind := some (← boolean)}
+    | "foreign_item" => return {s with foreignItem := some (← boolean)}
+    | "drop_glue" => return {s with dropGlue := some (← boolean)}
+    | "panic_unwinds" => return {s with panicUnwinds := some (← boolean)}
+    | "panic_in_drop_unwinds" => return {s with panicInDropUnwinds := some (← boolean)}
+    | _ => skipValue; pure s
+  pure ⟨← required s.neverUnwind (path ++ ".never_unwind"),
+    ← required s.foreignItem (path ++ ".foreign_item"),
+    ← required s.dropGlue (path ++ ".drop_glue"),
+    ← required s.panicUnwinds (path ++ ".panic_unwinds"),
+    ← required s.panicInDropUnwinds (path ++ ".panic_in_drop_unwinds")⟩
+
 private structure ParseDefinitionIdFields where
   crate : Option (Nat) := none
   index : Option (Nat) := none
@@ -277,14 +300,18 @@ private structure ParseDefinitionIdFields where
   aliasDeclaration : Option AliasMaterial.Declaration := none
   adtDeclaration : Option Lean.Json := none
   rawPath : Option DefinitionPath.Material := none
+  sourceEnvironment : Option SourceEnvironment.Material := none
+  functionAbiMaterial : Option FunctionAbiMaterial := none
 
 def parseDefinitionId (path : String) : Parser (DefinitionId) := do
   let s ← object ({} : ParseDefinitionIdFields) fun s key => do
     match key with
     | "crate" => return { s with crate := some (← natural) }
     | "index" => return { s with index := some (← natural) }
+    | "function_abi_material" => return { s with functionAbiMaterial := some (← parseFunctionAbiMaterial (path ++ ".function_abi_material")) }
     | "body_track_caller" => return { s with bodyTrackCaller := some (← boolean) }
     | "adt_drop" => return { s with adtDrop := some (← parseAdtDropMaterial (path ++ ".adt_drop")) }
+    | "source_environment" => return { s with sourceEnvironment := some (← liftExcept (SourceEnvironmentCodec.read (← Lean.Json.Parser.anyCore))) }
     | "raw_path" => return { s with rawPath := some (← DefinitionPath.decode) }
     | "generic_template" => return { s with genericTemplate := some (← GenericMaterialCodec.decodeTemplate) }
     | "alias_declaration" => return { s with aliasDeclaration := some (← AliasMaterialCodec.decodeDeclaration) }
@@ -319,7 +346,9 @@ def parseDefinitionId (path : String) : Parser (DefinitionId) := do
     genericTemplate := s.genericTemplate
     aliasDeclaration := s.aliasDeclaration
     adtDeclaration := adtDeclaration
-    rawPath := s.rawPath }
+    rawPath := s.rawPath
+    sourceEnvironment := s.sourceEnvironment
+    functionAbiMaterial := s.functionAbiMaterial }
 
 def parseDefinitionRef (_path : String) : Parser DefinitionRef := natural
 

@@ -51,9 +51,9 @@ def hooks (p : Prepared)
     let some (_,name) := p.crates.find? (·.1 == id) | throw "compiler crate name absent"
     return name
   sourceScope := fun identity _ body scope => do
-    let actual ← RuntimeArrayQueries.perform types (p.calls.scopes.program.resolveBody identity.index)
+    let actual ← RuntimeArrayQueries.performCompiler types (p.calls.scopes.program.resolveBodyIdentity identity)
     unless actual.body == body do throw (.invalidProgram "frame body identity/content mismatch")
-    lift (CompilerScopes.sourceScope p.calls.scopes identity.index scope) }
+    RuntimeArrayQueries.performCompiler types (CompilerScopes.sourceScopeIdentity p.calls.scopes identity scope) }
 
 end Miri.Input.CompilerFrameMetadata
 

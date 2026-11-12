@@ -20,12 +20,89 @@ assert all(isinstance(name, str) for name in doc["files"])
 assert len(doc["files"]) == len(set(doc["files"])), "duplicate filename spellings"
 for span in doc["spans"]:
     assert type(span["file"]) is int and 0 <= span["file"] < len(doc["files"])
-for body in doc["bodies"]:
-    for span in body["backtrace_spans"]:
-        assert "collapsed_lo" not in span
-        assert type(span["source_position"]["byte_position"]) is int
-        filename = span["source_position"]["filename"]
-        assert type(filename) is int and 0 <= filename < len(doc["files"])
+def check_source_position(span):
+    assert "collapsed_lo" not in span
+    assert type(span["span"]) is int and 0 <= span["span"] < len(doc["spans"])
+    assert type(span["source_position"]["byte_position"]) is int
+    filename = span["source_position"]["filename"]
+    assert type(filename) is int and 0 <= filename < len(doc["files"])
+
+
+# Source seeds are checked in their own roles. No Python adapter constructs
+# monomorphic MIR or invents locals/blocks for a raw template or shim seed.
+material_bodies = []
+copy_templates = {}
+noop_drops = []
+for body_index, body in enumerate(doc["bodies"]):
+    instance = pool_entry(doc, "instances", body["instance_id"])
+    owned_bodies = [instance["body"], *[promoted["body"] for promoted in instance["promoted_bodies"]]]
+    assert owned_bodies.count(body_index) == 1, "body seed must have one ordinary/promoted role in its complete instance"
+    role = body["body_kind"]
+    if role == "material":
+        material_bodies.append(body)
+        source_spans = body["backtrace_spans"]
+    elif role == "copy_template":
+        assert set(body) == {"body_kind", "template_id", "instance_id", "generic_args", "promoted_bodies"}
+        template_id = body["template_id"]
+        assert type(template_id) is int and 0 <= template_id < len(doc["mir_templates"])
+        source = doc["mir_templates"][template_id]
+        assert source["source_def_id"] == instance["def_id"]
+        assert source["def_path"] == instance["def_path"]
+        assert instance["instance_kind"] == {"kind": "item", "def_id": instance["def_id"]}
+        assert body["generic_args"] == instance["generic_args"], "raw MIR argument binding mismatch"
+        assert source["source_promoted"] is None and body["promoted_bodies"] == []
+        assert isinstance(source["template"], str), "raw MIR syntax must retain its explicit source encoding"
+        template = json.loads(source["template"])
+        arguments = body["generic_args"]
+        assert template["parameters"] == [
+            {"type": "type", "const": "constant", "lifetime": "region"}[argument["kind"]]
+            for argument in arguments
+        ], "raw MIR parameter/argument sorts differ"
+        skeleton = template["skeleton"]
+        assert skeleton["phase"] == "runtime_optimized"
+        assert len(source["local_sources"]) == len(skeleton["locals"])
+        assert all(type(slot) is int and 0 <= slot < len(template["types"])
+                   for slot in skeleton["locals"]), "raw local type slot is absent"
+        assert all(scope["scope"] == index and scope["inlined"] is None
+                   for index, scope in enumerate(source["source_scopes"]))
+        copy_templates[body_index] = (source, template)
+        source_spans = source["backtrace_spans"]
+    elif role == "noop_drop":
+        assert set(body) == {"body_kind", "instance_id", "source_span"}
+        assert instance["instance_kind"] == {
+            "kind": "shim", "shim_kind": "drop_glue", "def_id": instance["def_id"], "drop_type": None
+        }, "signature-only shim must be exact DropGlue(_, None)"
+        definition = pool_entry(doc, "definitions", instance["def_id"])
+        declaration = definition["generic_template"]
+        assert declaration["parameters"] == ["type"]
+        assert len(instance["generic_args"]) == 1 and instance["generic_args"][0]["kind"] == "type"
+        pool_entry(doc, "types", instance["generic_args"][0]["value"])
+        signature = declaration["signature_expression"]
+        assert signature["kind"] == "binder" and len(signature["variables"]) == 1
+        region = signature["variables"][0]
+        assert region["kind"] == "region"
+        signature = signature["value"]
+        assert signature["kind"] == "node" and signature["sort"] == "aggregate" and signature["tag"] == "signature"
+        assert json.loads(signature["payload"]) == {
+            "abi_packed": 2, "safe": False, "c_variadic": False, "splatted": None
+        }, "raw drop signature must retain the pinned unsafe Rust header"
+        input_type, output_type = signature["children"]
+        assert input_type["kind"] == "node" and input_type["sort"] == "type"
+        assert input_type["tag"] == "reference" and input_type["payload"] == "mutable"
+        assert len(input_type["children"]) == 2
+        assert input_type["children"][0] == {
+            "kind": "bound", "sort": "region", "index": 0, "variable": 0, "identity": region["identity"]
+        }, "raw drop input region must refer to its own signature binder"
+        assert input_type["children"][1] == {"kind": "parameter", "sort": "type", "index": 0}
+        assert output_type == {"kind": "node", "sort": "type", "tag": "tuple", "payload": "", "children": []}
+        noop_drops.append(body)
+        source_spans = [body["source_span"]]
+    else:
+        raise AssertionError(f"unknown body seed role {role}")
+    for span in source_spans:
+        check_source_position(span)
+assert copy_templates and noop_drops, "fixture must exercise raw generic MIR and signature-only no-op drop seeds"
+
 type_nodes = {node["type_id"]: node for node in doc["types"]}
 assert type_nodes, "compilation-scoped type graph missing"
 assert sorted(type_nodes) == list(range(len(type_nodes))), "type IDs must be session-local monotonic IDs"
@@ -92,8 +169,34 @@ def check_scalar_widths(value):
             size = value["size_bytes"]
             assert type(size) is int and size > 0, "scalar byte width must be positive"
             assert 0 <= int(value["bits_unsigned"]) < 2 ** (8 * size), "scalar bits exceed byte width"
-            layout = pool_entry(doc, "layouts", type_nodes[value["type"]]["layout"])
-            assert size == layout["size_bytes"], "scalar byte width differs from compiler type layout"
+            node = type_nodes[value["type"]]
+            layout = pool_entry(doc, "layouts", node["layout"])
+            if "primitive_recipe" in layout:
+                # These widths follow the raw primitive kind and actual target,
+                # independently of the MIR scalar's exported width.
+                primitive = layout["primitive_recipe"]
+                shape = node["shape"]
+                fixed = {"bool": 1, "char": 4, "u8": 1, "i8": 1, "u16": 2, "i16": 2,
+                         "u32": 4, "i32": 4, "u64": 8, "i64": 8, "u128": 16, "i128": 16,
+                         "f16": 2, "f32": 4, "f64": 8, "f128": 16}
+                if primitive in ("usize", "isize"):
+                    bits = doc["runtime_target_data_layout"]["pointer_width_bits"]
+                    assert type(bits) is int and bits > 0 and bits % 8 == 0
+                    expected_size = bits // 8
+                else:
+                    assert primitive in fixed, f"unexpected scalar primitive recipe {primitive}"
+                    expected_size = fixed[primitive]
+                if primitive.startswith("u"):
+                    assert shape == {"kind": "uint", "unsigned_kind": primitive}
+                elif primitive.startswith("i"):
+                    assert shape == {"kind": "int", "signed_kind": primitive}
+                elif primitive.startswith("f"):
+                    assert shape == {"kind": "float", "float_kind": primitive}
+                else:
+                    assert shape == {"kind": primitive}
+            else:
+                expected_size = layout["size_bytes"]
+            assert size == expected_size, "scalar byte width differs from its raw type/target or physical layout"
         for child in value.values():
             check_scalar_widths(child)
     elif isinstance(value, list):
@@ -156,7 +259,29 @@ id_instance = next(
 )
 assert pool_entry(doc, "bodies", id_instance["body"])["instance_id"] == id_instance["instance_id"]
 assert id_instance["instance_kind"] == {"kind": "item", "def_id": id_instance["def_id"]}
-assert any(type_nodes[local["type"]]["display"] == "u32" for local in pool_entry(doc, "bodies", id_instance["body"])["locals"])
+# `id::<u32>` retains its raw parameter-local relation, not a fabricated
+# monomorphic body. Check both the binding and the entire source operation.
+id_source, id_template = copy_templates[id_instance["body"]]
+assert id_source["def_path"] == "id"
+assert id_template["parameters"] == ["type"]
+assert id_template["types"] == [{"kind": "parameter", "sort": "type", "index": 0}]
+assert len(id_instance["generic_args"]) == 1
+id_argument = id_instance["generic_args"][0]
+assert id_argument["kind"] == "type" and type_nodes[id_argument["value"]]["shape"] == {
+    "kind": "uint", "unsigned_kind": "u32"
+}
+id_skeleton = id_template["skeleton"]
+assert id_skeleton["argument_count"] == 1 and id_skeleton["spread_argument"] is None
+assert id_skeleton["locals"] == [0, 0], "return/argument locals must refer to the same raw type parameter"
+assert len(id_skeleton["blocks"]) == 1
+id_block = id_skeleton["blocks"][0]
+assert id_block["cleanup"] is False and len(id_block["statements"]) == 1
+assert id_block["statements"][0]["kind"] == {
+    "kind": "assign", "destination": 0,
+    "value": {"kind": "use", "operand": {"kind": "move", "local": 1}, "retag": "yes"}
+}, "raw id MIR must move its argument to its return local with the exact retag"
+assert id_block["terminator"]["kind"] == {"kind": "return"}
+assert {source["def_path"] for source, _ in copy_templates.values()} == {"id"}, "unexpected raw source fixture role"
 assert not any(
     (pool_entry(doc, "type_constants", node["shape"]["length"]).get("kind") if "length" in node["shape"] else None) == "parameter"
     for node in type_nodes.values()
@@ -220,7 +345,7 @@ assert retags and all(
 )
 reference_regions = [
     statement["kind"]["rvalue"]["region"]
-    for body in doc["bodies"]
+    for body in material_bodies
     for block in body["basic_blocks"]
     for statement in block["statements"]
     if statement["kind"].get("rvalue", {}).get("kind") == "Ref"
@@ -339,11 +464,11 @@ def check_allocation_refs(value):
 check_allocation_refs([doc["bodies"], doc["instances"], doc["allocations"]])
 
 # Every encountered operation in a successful document has typed semantics.
-for body in doc["bodies"]:
+for body in material_bodies:
     for block in body["basic_blocks"]:
         for statement in block["statements"]:
             assert statement["kind"].get("variant") and "status" not in statement["kind"]
         if block["terminator"]:
             assert block["terminator"]["kind"].get("variant") and "status" not in block["terminator"]["kind"]
 
-print(f"validated {len(bodies)} local MIR bodies, {len(instances)} reachable instances, {len(allocations)} allocations, exact rustc pin")
+print(f"validated {len(bodies)} local MIR bodies, {len(instances)} reachable instances, {len(allocations)} allocations, exact rustc pin; raw id parameter bindings and no-op drop signature checked")

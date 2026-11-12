@@ -1,4 +1,5 @@
 import Miri.Input.CompilerInstance
+import Miri.Input.RuntimeArrayQueries
 import Miri.Input.LowerMIR
 import Miri.Interpreter.Backtrace
 import Miri.Interpreter.BacktraceMachine
@@ -18,7 +19,6 @@ structure SpanEntry where
   position : Position
 structure Prepared where
   program : LoweredProgram
-  bodySpans : Array (Except String (Array SpanEntry))
   positions : Array Position
   names : Array (CallInstance × String)
 
@@ -42,7 +42,6 @@ private def spans (files : Array String) (ctx : LowerContext) (tables : Compiler
 def prepare (program : LoweredProgram) : Except String Prepared := do
   let ctx := LowerContext.ofDocument program.input
   let mut tables := program.compilerTables
-  let mut bodySpans := #[]
   let mut positions := #[]
   let mut positionIndex : Std.HashMap UInt32 Position := {}
   for index in [:program.bodyCount] do
@@ -50,16 +49,27 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
       let metadata ← program.bodyMetadata index
       spans program.input.files ctx tables metadata.backtraceSpans
     match source with
-    | .error error => bodySpans := bodySpans.push (.error error)
+    | .error _ => pure ()
     | .ok (entries,next) =>
       tables := next
-      bodySpans := bodySpans.push (.ok entries)
       for entry in entries do
         if let some old := positionIndex.get? entry.position.bytePosition then
           unless old == entry.position do throw "conflicting exact source-map query"
         else
           positionIndex := positionIndex.insert entry.position.bytePosition entry.position
           positions := positions.push entry.position
+  -- Undemanded raw templates also own immutable source-map positions.
+  -- Retaining them does not instantiate a body or assign a runtime body ID.
+  for source in program.input.mirTemplates do
+    let entries ← match spans program.input.files ctx tables source.backtraceSpans with
+      | .ok (entries,_) => pure entries
+      | .error _ => pure #[]
+    for entry in entries do
+      if let some old := positionIndex.get? entry.position.bytePosition then
+        unless old == entry.position do throw "conflicting exact source-map query"
+      else
+        positionIndex := positionIndex.insert entry.position.bytePosition entry.position
+        positions := positions.push entry.position
   let ctx := LowerContext.ofDocument program.input
   let records := program.input.queries.runtime.instances
   let mut names := #[]
@@ -79,16 +89,25 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
       let index := names.size
       names := names.push (callee,name)
       namesByDefinition := namesByDefinition.insert callee (candidates.push index)
-  return ⟨program.withCompilerTables tables,bodySpans,positions,names⟩
+  return ⟨program.withCompilerTables tables,positions,names⟩
 
 private def lift (result : Except String A) : EStateM StepError S A :=
   match result with
   | .ok value => pure value
   | .error error => throw (.unsupported s!"compiler backtrace source: {error}")
 
+def collapsedSpan (p : Prepared) (types : RuntimeArrayQueries.Access S)
+    (identity : BodyIdentity) (span : MIR.SpanRef) : EStateM StepError S UInt32 := do
+  let metadata ← RuntimeArrayQueries.performCompiler types (SourceMir.metadataIdentity identity)
+  lift do
+    let (entries,_) ← spans p.program.input.files (LowerContext.ofDocument p.program.input)
+      p.program.compilerTables metadata.backtraceSpans
+    let some entry := entries.find? (·.span == span) | throw "exact body/span hygiene query absent"
+    pure entry.position.bytePosition
+
 /-- Compiler-source construction with only runtime global/pointer queries.
 Every hygiene/source-map/name result is selected by its exact exported key. -/
-def source (p : Prepared) (hostUsizeMax : Nat)
+def source (p : Prepared) (types : RuntimeArrayQueries.Access S) (hostUsizeMax : Nat)
     (unitPointerLayout : EStateM StepError S LocalLayout)
     (misaligned : Memory.Pointer (Option Memory.Provenance) → ABI.Align → EStateM StepError S (Option Memory.Misalignment))
     (functionPointer : CallInstance → EStateM StepError S (Memory.Pointer (Option Memory.Provenance)))
@@ -96,11 +115,7 @@ def source (p : Prepared) (hostUsizeMax : Nat)
     (globalFunction : Memory.AllocId → EStateM StepError S (Option CallInstance)) :
     BacktraceMachine.Sources S Position := {
   hostUsizeMax,unitPointerLayout,misaligned,functionPointer,allocation,globalFunction
-  collapsedSpanLo := fun identity span => lift do
-    let some records := p.bodySpans[identity.index]? | throw "canonical backtrace body identity absent"
-    let entries ← records
-    let some entry := entries.find? (·.span == span) | throw "exact body/span hygiene query absent"
-    return entry.position.bytePosition
+  collapsedSpanLo := collapsedSpan p types
   lookupCharPos := fun offset => lift do
     let some location := p.positions.find? (·.bytePosition == offset)
       | throw "unseen BytePos needs actual compiler source-map query"
@@ -115,14 +130,10 @@ def source (p : Prepared) (hostUsizeMax : Nat)
       | throw "backtrace filename ID out of bounds"
     return filename }
 
-def hooks (p : Prepared) (base : Backtrace.Hooks P S D MD B I E Position) :
+def hooks (p : Prepared) (types : RuntimeArrayQueries.Access S) (base : Backtrace.Hooks P S D MD B I E Position) :
     Backtrace.Hooks P S D MD B I E Position :=
   {base with
-    collapsedSpanLo := fun identity span => lift do
-      let some records := p.bodySpans[identity.index]? | throw "canonical backtrace body identity absent"
-      let entries ← records
-      let some entry := entries.find? (·.span == span) | throw "exact body/span hygiene query absent"
-      return entry.position.bytePosition
+    collapsedSpanLo := collapsedSpan p types
     lookupCharPos := fun offset => lift do
       let some location := p.positions.find? (·.bytePosition == offset)
         | throw "unseen BytePos needs actual compiler source-map query"

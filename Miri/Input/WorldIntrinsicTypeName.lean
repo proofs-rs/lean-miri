@@ -1,3 +1,5 @@
+import Miri.Input.FunctionTypePrinter
+import Miri.Input.WorldConstantName
 import Miri.Input.RuntimeMetadata
 
 /-! Pinned rustc_const_eval/util/type_name.rs mode. This printer has no diagnostic
@@ -55,7 +57,7 @@ private def visit (metadata : RuntimeMetadata) : Nat → TypeId → PrintM Strin
           let text ← match argument with
             | .Type id => child id
             | .Lifetime _ => emit "'_"
-            | .Const _ => throw "intrinsic generic constant printing is not implemented"
+            | .Const id => emit (← liftM (WorldConstantName.query id))
           result := result ++ text
         result := result ++ (← emit ">")
       pure result
@@ -70,6 +72,14 @@ private def visit (metadata : RuntimeMetadata) : Nat → TypeId → PrintM Strin
     | .adt identity arguments | .functionDefinition identity arguments #[] => named identity arguments
     | .functionDefinition _ _ _ => throw "intrinsic FnDef nonempty argument binder is not supported"
     | .foreign identity => named identity #[]
+    | .functionPointer _ =>
+      let term ← lift (GenericInstantiationWorld.ofType world (fuel + 1) id)
+      let .node .type "function_pointer" "" (.cons signature .nil) := term
+        | throw "function-pointer source signature absent"
+      let printTerm := fun term => do
+        let id ← liftM (GenericInstantiationWorld.resolveType fuel term)
+        child id
+      FunctionTypePrinter.render emit printTerm signature
     | .rawPointer pointee mutability =>
       let start ← emit (if mutability == .Mut then "*mut " else "*const ")
       pure (start ++ (← child pointee))

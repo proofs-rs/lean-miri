@@ -234,6 +234,9 @@ deriving instance ToExpr for Input.AdtDeclaration.Material
 deriving instance ToExpr for Input.DefinitionPath.HeaderSafety
 deriving instance ToExpr for Input.DefinitionPath.Component
 deriving instance ToExpr for Input.DefinitionPath.Material
+deriving instance ToExpr for Input.FunctionAbiMaterial
+deriving instance ToExpr for Input.SourceEnvironment.Parent
+deriving instance ToExpr for Input.SourceEnvironment.Material
 deriving instance ToExpr for Input.DefinitionId
 deriving instance ToExpr for Input.VtableEntryKind
 deriving instance ToExpr for Input.VtablePredicateKind

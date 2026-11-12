@@ -27,8 +27,8 @@ def make (p : CompilerCallPipeline.Prepared) (types : RuntimeArrayQueries.Access
     resolveDropGlue := fun ty => RuntimeArrayQueries.perform types (CompilerRuntimeQueries.resolveDropGlue p.runtime ty)
     requiresCallerLocation := fun callee => RuntimeArrayQueries.performCompiler types (CompilerRuntimeQueries.requiresCallerLocation p.runtime callee)
     sourceScope := fun identity _ body index => do
-      let actual ← RuntimeArrayQueries.perform types (p.scopes.program.resolveBody identity.index)
+      let actual ← RuntimeArrayQueries.performCompiler types (p.scopes.program.resolveBodyIdentity identity)
       unless actual.body == body do throw (.invalidProgram "frame body identity/content mismatch")
-      lift (CompilerScopes.sourceScope p.scopes identity.index index)
+      RuntimeArrayQueries.performCompiler types (CompilerScopes.sourceScopeIdentity p.scopes identity index)
     unitLayout := lift (CompilerFacts.unitLayout facts.context) }
 end Miri.Input.CompilerVirtualLeaves

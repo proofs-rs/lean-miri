@@ -38,6 +38,8 @@ inductive Outcome where
   deriving Repr
 
 structure Hooks where
+  /-- Resolve source inherited obligations only after an impl head matches. -/
+  implementationPredicates : Impl → Except String (Array Clause) := fun source => .ok source.predicates
   /-- Normalize actual generic trees using raw alias/impl declarations. -/
   normalize : Nat → Array Goal → Term → Except String Term
   /-- Return source-derived nested obligations for a real builtin candidate.
@@ -145,7 +147,8 @@ private def solveCore (program : Program) (hooks : Hooks) (environment : Environ
       if implementation.isDefault then
         throw "default impl selection requires specialization semantics"
       let substitution ← liftM (Match.complete implementation.parameters environment.eraseRegions bindings)
-      let predicates ← liftM (Substitution.clauses fuel substitution implementation.predicates)
+      let predicateSource ← liftM (hooks.implementationPredicates implementation)
+      let predicates ← liftM (Substitution.clauses fuel substitution predicateSource)
       let mut results := #[]
       for predicate in predicates do
         results := results.push (← fulfillCore program hooks environment entryBoundary fuel active predicate)

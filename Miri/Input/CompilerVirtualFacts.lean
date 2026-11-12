@@ -94,9 +94,9 @@ def scopeHooks (prepared : CompilerScopes.Prepared) (types : RuntimeArrayQueries
     VirtualCalls.CompilerHooks S C :=
   { base with
     sourceScope := fun identity _ body scope => do
-      let actual ← RuntimeArrayQueries.perform types (prepared.program.resolveBody identity.index)
+      let actual ← RuntimeArrayQueries.performCompiler types (prepared.program.resolveBodyIdentity identity)
       unless actual.body == body do throw (.invalidProgram "frame body identity/content mismatch")
-      lift (CompilerScopes.sourceScope prepared identity.index scope)
+      RuntimeArrayQueries.performCompiler types (CompilerScopes.sourceScopeIdentity prepared identity scope)
     requiresCallerLocation := fun fnInstance => do
       match inlineAttribute prepared fnInstance with
       | some value => pure value

@@ -71,6 +71,16 @@ def require_transfer(source_ref, target_ref, label):
     require(source_ref is not None and target_ref is not None,
             f"{label}: source/destination type ID is missing")
     if type_id(source_ref) != type_id(target_ref):
+        source_shape = types[source_ref]["shape"]
+        target_shape = types[target_ref]["shape"]
+        if (source_shape.get("kind") == target_shape.get("kind") == "raw_pointer"
+                and source_shape.get("mutability") != target_shape.get("mutability")):
+            # Pinned structurally_relate_tys rejects unequal pointer mutability
+            # before inspecting pointees. Lean owns this constructor rule;
+            # the independent covariance matrix checks its actual answer.
+            require(not relation_ids(source_ref, target_ref),
+                    f"{label}: migrated pointer-mutability relation retained an eager answer")
+            return
         require(relation_ids(source_ref, target_ref),
                 f"{label}: exact source/destination covariance query is absent")
 

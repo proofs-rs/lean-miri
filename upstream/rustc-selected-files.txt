@@ -48,6 +48,7 @@ rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_data_structures/src
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_hir/src/def.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_hir/src/hir.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_hir_analysis/src/collect/clauses_of.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_hir_analysis/src/collect/generics_of.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_middle/src/middle/codegen_fn_attrs.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_middle/src/mir/basic_blocks.rs
@@ -564,3 +565,4 @@ rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/sty/con
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/sty/mod.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/ty_kind.rs
 rust-8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_type_ir/src/visit.rs
+rust-8144389c895da997dbdecaa635e41d6a50be6ffd/library/core/src/any.rs

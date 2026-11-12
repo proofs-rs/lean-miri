@@ -20,6 +20,27 @@ fn closed(input: ty::Ty<'_>) -> bool {
         && !input.has_placeholders()
         && !input.references_error()
 }
+
+// This recognizes the raw-syntax domain implemented by Lean's
+// CompilerCovariance.structural. It never evaluates the compiler relation.
+// Nominal variance, aliases, binders and non-erased regions stay outside it.
+fn lean_structural_domain<'tcx>(a: ty::Ty<'tcx>, b: ty::Ty<'tcx>, fuel: usize) -> bool {
+    if fuel == 0 { return false; }
+    if a == b { return true; }
+    match (a.kind(), b.kind()) {
+        (ty::Bool | ty::Char | ty::Never | ty::Str | ty::Int(_) | ty::Uint(_) | ty::Float(_),
+         ty::Bool | ty::Char | ty::Never | ty::Str | ty::Int(_) | ty::Uint(_) | ty::Float(_)) => true,
+        (ty::RawPtr(a, am), ty::RawPtr(b, bm)) => am != bm || lean_structural_domain(*a, *b, fuel - 1),
+        (ty::Ref(ar, a, am), ty::Ref(br, b, bm)) if ar.is_erased() && br.is_erased() =>
+            am != bm || lean_structural_domain(*a, *b, fuel - 1),
+        (ty::Slice(a), ty::Slice(b)) => lean_structural_domain(*a, *b, fuel - 1),
+        (ty::Array(a, ac), ty::Array(b, bc)) => ac == bc && lean_structural_domain(*a, *b, fuel - 1),
+        (ty::Tuple(a), ty::Tuple(b)) => a.len() != b.len() ||
+            a.iter().zip(b.iter()).all(|(a,b)| lean_structural_domain(a,b,fuel - 1)),
+        (ty::Foreign(_), ty::Foreign(_)) => true,
+        _ => false,
+    }
+}
 // Discovery runs inside the export fixed point because serializing a demanded
 // endpoint can recursively add types, predicates, instances and allocations.
 // Normalized identity pairs use types already in the pool and add no endpoints.
@@ -132,7 +153,9 @@ pub(super) fn evaluate<'tcx>(
         Ok((source_type, target_type, source, target))
     }).collect::<Result<Vec<_>, String>>()?;
     ordered.sort_by_key(|(source_id, target_id, _, _)| (*source_id, *target_id));
-    Ok(ordered.into_iter().map(|(source_type, target_type, source, target)| Query {
+    Ok(ordered.into_iter()
+      .filter(|(_, _, source, target)| !lean_structural_domain(*source, *target, 16384))
+      .map(|(source_type, target_type, source, target)| Query {
         typing_env: "fully_monomorphized",
         variance: "covariant",
         source_type,

@@ -26,6 +26,7 @@ mod generic_mir_call;
 mod alias_rules;
 mod adt_material;
 mod trait_material;
+mod source_environment;
 mod pool_layout;
 mod pool_instance;
 mod pool_values;
@@ -1735,6 +1736,8 @@ impl ExportCallbacks {
         let mut generic_templates = HashMap::new();
         let mut alias_declarations = HashMap::new();
         let mut adt_declarations = HashMap::new();
+        let mut source_environments = HashMap::new();
+        let mut function_abi_material = HashMap::new();
         let mut trait_material_state = trait_material::State::seed(tcx);
         for definition in &local_definitions {
             trait_material_state.register_definition(tcx, definition.to_def_id())?;
@@ -1745,13 +1748,19 @@ impl ExportCallbacks {
         let mut material_queue = export_context.definitions.keys().copied().collect::<Vec<_>>();
         let mut material_demand = material_queue.iter().copied().collect::<HashSet<_>>();
         let mut generic_definition_cursor = 0;
+        let mut discovery_boundary = 0;
         while generic_definition_cursor < material_queue.len() {
             let definition = material_queue[generic_definition_cursor];
             let definition_index = def_json(&mut export_context, definition) as usize;
-            trait_material_state.update_constructors(tcx, &material_demand);
             trait_material_state.register_definition(tcx, definition)?;
-            for reference in trait_material_state.discover(tcx)? {
-                def_json(&mut export_context, reference);
+            // Close catalog dependencies once per worklist batch. Repeating
+            // the full impl catalog for every raw scope has no semantic role.
+            if generic_definition_cursor == discovery_boundary {
+                trait_material_state.update_constructors(tcx, &material_demand);
+                for reference in trait_material_state.discover(tcx)? {
+                    def_json(&mut export_context, reference);
+                }
+                discovery_boundary = material_queue.len();
             }
             if let Some(material) = generic_material::definition_template(tcx, definition)
                 .map_err(|error| format!("generic source material for {}: {error}", tcx.def_path_str(definition)))?
@@ -1766,6 +1775,14 @@ impl ExportCallbacks {
                 }
                 use rustc_hir::def::DefKind as D;
                 if matches!(tcx.def_kind(definition), D::Fn | D::AssocFn) {
+                    function_abi_material.insert(definition_index, pool_values::FunctionAbiMaterial {
+                        never_unwind: tcx.codegen_fn_attrs(definition).flags.contains(
+                            rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags::NEVER_UNWIND),
+                        foreign_item: tcx.is_foreign_item(definition),
+                        drop_glue: tcx.is_lang_item(definition, rustc_attr_ir::lang_items::LangItem::DropGlue),
+                        panic_unwinds: tcx.sess.panic_strategy().unwinds(),
+                        panic_in_drop_unwinds: tcx.sess.opts.unstable_opts.panic_in_drop.unwinds(),
+                    });
                     body_track_caller.entry(definition_index).or_insert_with(||
                         tcx.body_codegen_attrs(definition).flags.contains(
                             rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags::TRACK_CALLER));
@@ -1809,9 +1826,44 @@ impl ExportCallbacks {
                 }
                 alias_declarations.insert(definition_index, declaration);
             }
-            for reference in trait_material_state.rhs_demands(tcx, &material_demand)? {
-                def_json(&mut export_context, reference);
-                if material_demand.insert(reference) { material_queue.push(reference); }
+            // Scope-only catalog headers do not request generic RHS/signatures
+            // and must not repeat the main material/catalog discovery pass.
+            let mut scopes = Vec::new();
+            use rustc_hir::def::DefKind as ScopeKind;
+            if matches!(tcx.def_kind(definition), ScopeKind::Fn | ScopeKind::AssocFn | ScopeKind::TyAlias |
+                ScopeKind::AssocTy | ScopeKind::Struct | ScopeKind::Enum | ScopeKind::Union |
+                ScopeKind::Const | ScopeKind::AssocConst | ScopeKind::Static { .. } |
+                ScopeKind::Trait | ScopeKind::TraitAlias | ScopeKind::Impl { .. }) {
+                scopes.push(definition);
+            }
+            if generic_definition_cursor + 1 == discovery_boundary {
+                // Include trait declarations registered anywhere in this batch.
+                trait_material_state.update_constructors(tcx, &material_demand);
+                for reference in trait_material_state.discover(tcx)? {
+                    def_json(&mut export_context, reference);
+                }
+                for reference in trait_material_state.rhs_demands(tcx, &material_demand, &mut scopes)? {
+                    def_json(&mut export_context, reference);
+                    if material_demand.insert(reference) { material_queue.push(reference); }
+                }
+            }
+            // Capture declaration scopes independently of instantiated ParamEnv answers.
+            while let Some(scope) = scopes.pop() {
+                let scope_id = def_json(&mut export_context, scope) as usize;
+                if source_environments.contains_key(&scope_id) { continue; }
+                let environment = source_environment::declaration(tcx, scope,
+                    |clause| trait_material::clause(tcx, clause))
+                    .map_err(|error| format!("source predicate scope for {}: {error}", tcx.def_path_str(scope)))?;
+                for parent in [tcx.generics_of(scope).parent, tcx.explicit_clauses_of(scope).parent].into_iter().flatten() {
+                    scopes.push(parent);
+                }
+                let mut references = Vec::new();
+                generic_definition_references(&environment["own_predicates"], &mut references)?;
+                for reference in references {
+                    def_json(&mut export_context, reference);
+                    if material_demand.insert(reference) { material_queue.push(reference); }
+                }
+                source_environments.insert(scope_id, environment);
             }
             generic_definition_cursor += 1;
         }
@@ -1892,6 +1944,8 @@ impl ExportCallbacks {
                     definition.generic_template = generic_templates.remove(&id);
                     definition.alias_declaration = alias_declarations.remove(&id);
                     definition.adt_declaration = adt_declarations.remove(&id);
+                    definition.source_environment = source_environments.remove(&id);
+                    definition.function_abi_material = function_abi_material.remove(&id);
                     definition
                 }).collect(),
             type_constants: export_context.type_constants.finish("type_constant")?,
@@ -3626,6 +3680,7 @@ fn fn_sig_json_with_query<'tcx>(
         safety: safety_json(sig.safety()),
         abi: extern_abi_json(sig.abi()),
         c_variadic: sig.c_variadic(),
+        splatted: sig.splatted(),
     })
 }
 
@@ -3660,10 +3715,71 @@ fn layout_json<'tcx>(
             ),
         )?);
     }
+    // Reserve the raw request before following type edges. No computed
+    // TyAndLayout exists on this path; canonical/contextual keys are disjoint.
+    if let Some(recipe) = canonical_layout_recipe(context,tcx,ty) {
+        let (id,fresh) = context.layouts.reserve(pool_layout::LayoutKey::Canonical(ty));
+        if fresh {
+            context.layouts.define(id,recipe);
+        }
+        layout_query_trace("canonical",ty,false);
+        return Ok(id as u64);
+    }
+    layout_query_trace("canonical-residual",ty,true);
     let typing_env = rustc_middle::ty::TypingEnv::fully_monomorphized();
     Ok::<_, String>(match tcx.layout_of(typing_env.as_query_input(ty)) {
         Ok(layout) => layout_value_json(context, tcx, layout),
         Err(error) => export_failure("layout query", format!("{ty:?}: {error:?}"))?,
+    })
+}
+
+// Diagnostic instrumentation reports explicit exporter call sites only. It
+// makes no assertion about rustc-internal transitive query execution.
+fn layout_query_trace(route: &str, input: ty::Ty<'_>, queried: bool) {
+    if std::env::var_os("LEAN_MIRI_LAYOUT_QUERY_TRACE").is_some() {
+        eprintln!("lean_miri_layout_call route={route} queried={queried} type={input:?}");
+    }
+}
+
+fn canonical_layout_recipe_eligible<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>) -> bool {
+    match *input.kind() {
+        ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_)
+        | ty::FnPtr(..) | ty::Never | ty::Tuple(_) | ty::Str | ty::Slice(_) => true,
+        ty::Pat(_,pattern) => match *pattern.0 {
+            ty::PatternKind::NotNull => true,
+            ty::PatternKind::Range { start, end } => matches!(start.kind(), ty::ConstKind::Value(..)) && matches!(end.kind(), ty::ConstKind::Value(..)),
+            ty::PatternKind::Or(patterns) => patterns.iter().all(|pattern| match *pattern.0 {
+                ty::PatternKind::Range { start, end } => matches!(start.kind(), ty::ConstKind::Value(..)) && matches!(end.kind(), ty::ConstKind::Value(..)),
+                _ => false,
+            }),
+        },
+        ty::Array(_,count) => count.try_to_target_usize(tcx).is_some(),
+        ty::Adt(def,_) if def.is_union() => true,
+        ty::RawPtr(pointee,_) | ty::Ref(_,pointee,_) => pointer_recipe_eligible(tcx,pointee),
+        _ => struct_recipe_eligible(tcx,input),
+    }
+}
+
+fn canonical_layout_recipe<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>)
+    -> Option<pool_layout::Layout> {
+    let primitive = match input.kind() {
+        ty::Bool => Some("bool"), ty::Char => Some("char"),
+        ty::Int(kind) => Some(kind.name_str()), ty::Uint(kind) => Some(kind.name_str()),
+        ty::Float(kind) => Some(kind.name_str()), ty::FnPtr(..) => Some("fn_pointer"),
+        ty::Never => Some("never"), _ => None,
+    };
+    if let Some(primitive_recipe) = primitive {
+        return Some(pool_layout::Layout::PrimitiveRecipe {primitive_recipe});
+    }
+    if !canonical_layout_recipe_eligible(tcx,input) { return None; }
+    let id = context.type_id(input);
+    Some(match *input.kind() {
+        ty::Pat(..) => pool_layout::Layout::PatternRecipe {pattern_type:id},
+        ty::Tuple(_) => pool_layout::Layout::TupleRecipe {tuple_type:id},
+        ty::Adt(def,_) if def.is_union() => pool_layout::Layout::UnionRecipe {union_type:id},
+        ty::Str | ty::Slice(_) | ty::Array(..) => pool_layout::Layout::SequenceRecipe {sequence_type:id},
+        ty::RawPtr(..) | ty::Ref(..) => pool_layout::Layout::PointerRecipe {pointer_type:id},
+        _ => pool_layout::Layout::StructRecipe {struct_type:id},
     })
 }
 
@@ -3737,30 +3853,13 @@ fn layout_value_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     layout: rustc_abi::TyAndLayout<'tcx, ty::Ty<'tcx>>,
 ) -> u64 {
-    let (id, fresh) = context.layouts.reserve(pool_layout::LayoutKey::Computed(layout));
-    if !fresh {
+    if let Some(recipe) = canonical_layout_recipe(context,tcx,layout.ty) {
+        let (id,fresh) = context.layouts.reserve(pool_layout::LayoutKey::Canonical(layout.ty));
+        if fresh { context.layouts.define(id,recipe); }
         return id as u64;
     }
-    let value = if matches!(layout.ty.kind(), ty::Tuple(_)) {
-        // Raw canonical Ty identity: element types already live in its material
-        // shape. Lean computes field ordering, offsets, niches and ABI lazily.
-        // Reserve before traversal; type export finishes this node normally.
-        pool_layout::Layout::TupleRecipe { tuple_type: context.type_id(layout.ty) }
-    } else if matches!(layout.ty.kind(), ty::Adt(def, _) if def.is_union()) {
-        // Union repr options and instantiated field types are material ADT
-        // shape data; Lean computes their shared ABI, size and alignment.
-        pool_layout::Layout::UnionRecipe { union_type: context.type_id(layout.ty) }
-    } else if matches!(layout.ty.kind(), ty::Str | ty::Slice(_))
-        || matches!(*layout.ty.kind(), ty::Array(_,count) if count.try_to_target_usize(tcx).is_some()) {
-        pool_layout::Layout::SequenceRecipe { sequence_type: context.type_id(layout.ty) }
-    } else if matches!(*layout.ty.kind(), ty::RawPtr(pointee,_) | ty::Ref(_,pointee,_) if pointer_recipe_eligible(tcx,pointee)) {
-        pool_layout::Layout::PointerRecipe { pointer_type: context.type_id(layout.ty) }
-    } else if struct_recipe_eligible(tcx, layout.ty) {
-        pool_layout::Layout::StructRecipe { struct_type: context.type_id(layout.ty) }
-    } else {
-        pool_layout::Layout::new(tcx, layout)
-    };
-    context.layouts.define(id, value);
+    let (id,fresh) = context.layouts.reserve(pool_layout::LayoutKey::Computed(layout));
+    if fresh { context.layouts.define(id,pool_layout::Layout::new(tcx,layout)); }
     id as u64
 }
 
@@ -4668,7 +4767,7 @@ fn generic_definition_references(value: &Value, out: &mut Vec<DefId>) -> Result<
 
 fn def_json(context: &mut ExportContext<'_>, def: rustc_hir::def_id::DefId) -> u64 {
     let (id,fresh)=context.definitions.reserve(def);
-    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32(),body_track_caller:None,adt_drop:None,generic_template:None,alias_declaration:None,adt_declaration:None,raw_path:None }); }
+    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32(),body_track_caller:None,adt_drop:None,generic_template:None,alias_declaration:None,adt_declaration:None,source_environment:None,function_abi_material:None,raw_path:None }); }
     id as u64
 }
 

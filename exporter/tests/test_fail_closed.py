@@ -438,14 +438,40 @@ class FailClosedExportTests(unittest.TestCase):
         self.assertEqual(extra["shape"], {"kind": "int", "signed_kind": "i32"})
         callee_abi = pool_entry(document, "fn_abis", rows[0]["abi_query"])
         self.assertTrue(callee_abi["c_variadic"])
-        self.assertEqual(callee_abi["fixed_count"], 1)
-        self.assertEqual(len(callee_abi["arguments"]), 2)
+        self.assertNotIn("fixed_count", callee_abi)
+        callee_seed = callee_abi["signature_seed"]
+        callee_signature = callee_seed["signature"]
+        self.assertEqual(callee_signature["abi"], {"kind": "c", "unwind": False})
+        self.assertTrue(callee_signature["c_variadic"])
+        self.assertEqual(callee_signature["inputs"], [extra["type_id"]])
+        self.assertEqual(callee_seed["extra_argument_types"], rows[0]["extra_argument_types"])
+        self.assertIsNone(callee_seed["caller_location"])
+        self.assertEqual([argument["type"] for argument in callee_abi["arguments"]],
+                         callee_signature["inputs"] + callee_seed["extra_argument_types"])
         caller_rows = [row for row in document["compiler_function_facts"]["pointer_abis"]
                        if row["extra_argument_types"] == rows[0]["extra_argument_types"]]
         caller_abis = [pool_entry(document, "fn_abis", row["abi_query"]) for row in caller_rows]
-        self.assertTrue(any(abi["c_variadic"] and abi["fixed_count"] == 0
-                            and len(abi["arguments"]) == 1 for abi in caller_abis),
+        mismatched_callers = [abi for abi in caller_abis
+                              if abi.get("signature_seed", {}).get("signature", {}).get("inputs") == []]
+        self.assertTrue(mismatched_callers,
                         "the actual caller/callee fixed-count mismatch must remain visible")
+        for caller_abi in mismatched_callers:
+            self.assertNotIn("fixed_count", caller_abi)
+            caller_seed = caller_abi["signature_seed"]
+            caller_signature = caller_seed["signature"]
+            self.assertTrue(caller_abi["c_variadic"])
+            self.assertTrue(caller_signature["c_variadic"])
+            self.assertEqual(caller_signature["abi"], callee_signature["abi"])
+            self.assertEqual(caller_seed["extra_argument_types"], callee_seed["extra_argument_types"])
+            self.assertIsNone(caller_seed["caller_location"])
+            self.assertEqual([argument["type"] for argument in caller_abi["arguments"]],
+                             caller_seed["extra_argument_types"])
+            self.assertEqual(caller_signature["output"], callee_signature["output"])
+            self.assertEqual(caller_abi["calling_convention"], callee_abi["calling_convention"])
+            # C signatures do not splat arguments. Their distinct raw input
+            # counts reconstruct fixed_count=0 vs 1, despite identical extras.
+            self.assertEqual(len(caller_signature["inputs"]), 0)
+            self.assertEqual(len(callee_signature["inputs"]), 1)
 
     def test_resolved_generic_has_one_body_and_no_source_constant_payload(self):
         document = self.accepted("resolved_generic", "root")

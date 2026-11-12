@@ -1,3 +1,4 @@
+import Miri.ABI.PackedExternAbi
 import Miri.Input.Model
 import Miri.Input.TypeArenaCheckedMaterial
 
@@ -7,6 +8,16 @@ nested Nat encoding. No compiler query answers, layouts, bodies, or normalizatio
 -/
 namespace Miri.Input.TypeArena
 open GenericSubstitution
+
+/-- Raw FnPtr header plus child identities; no ABI query result is stored. -/
+structure FunctionPointer where
+  abiPacked : Nat
+  safe : Bool
+  cVariadic : Bool
+  splatted : Option Nat
+  inputs : Array TypeId
+  output : TypeId
+  deriving Repr, DecidableEq
 
 inductive Constructor where
   | bool | char | str | never
@@ -21,6 +32,7 @@ inductive Constructor where
   | foreign (definition : DefinitionIdentity)
   | functionDefinition (definition : DefinitionIdentity) (arguments : Array MIR.GenericArg)
       (variables : Array MIR.BoundVariableKind)
+  | functionPointer (signature : FunctionPointer)
   | closure (definition : DefinitionIdentity) (arguments : Array MIR.GenericArg)
   | coroutineClosure (definition : DefinitionIdentity) (arguments : Array MIR.GenericArg)
   | coroutine (definition : DefinitionIdentity) (arguments : Array MIR.GenericArg)
@@ -86,7 +98,8 @@ def Constructor.shapeKind : Constructor → TypeShapeKind
   | .integer true _ => .int | .integer false _ => .uint | .float _ => .float
   | .rawPointer .. => .rawPointer | .reference .. => .reference | .slice .. => .slice
   | .tuple .. => .tuple | .array .. => .array | .adt .. => .adt | .foreign .. => .foreign
-  | .functionDefinition .. => .functionDefinition | .closure .. => .closure
+  | .functionDefinition .. => .functionDefinition | .functionPointer .. => .functionPointer
+  | .closure .. => .closure
   | .coroutineClosure .. => .coroutineClosure | .coroutine .. => .coroutine | .alias .. => .alias
 
 def World.shapeKind (world : World) (id : TypeId) : Except String TypeShapeKind := do
@@ -102,7 +115,7 @@ def World.definitionRef (world : World) (wanted : DefinitionIdentity) : Except S
   world.checkedMaterial.definitionRef wanted
 
 /-- Unsupported material families have no reconstructable identity key here.
-FnPtr in particular needs its complete raw header before it can be constructed. -/
+FnPtr requires the complete raw header, including the splatted marker. -/
 def World.materialKey (world : World) (source : TypeNode) : Except String (Option Constructor) := do
   match source.shape with
   | .bool => pure (some .bool) | .char => pure (some .char)
@@ -117,6 +130,13 @@ def World.materialKey (world : World) (source : TypeNode) : Except String (Optio
   | .array child length _ => pure (some (.array child length))
   | .adt data => return some (.adt (← world.identity data.definition) data.args)
   | .foreign definition => return some (.foreign (← world.identity definition))
+  | .functionPointer signature variables => do
+    unless variables.isEmpty do return none
+    let some splatted := signature.rawSplatted | return none
+    pure (some (.functionPointer {
+      abiPacked := Miri.ABI.ExternAbi.asPacked signature.abi
+      safe := signature.safety == .Safe, cVariadic := signature.cVariadic, splatted,
+      inputs := signature.inputs, output := signature.output }))
   | .functionDefinition definition args _ _ variables =>
     return some (.functionDefinition (← world.identity definition) args variables)
   | .closure definition args _ => return some (.closure (← world.identity definition) args)
@@ -135,6 +155,7 @@ def Constructor.typeChildren (constructor : Constructor) : Array TypeId :=
   let direct := match constructor with
     | .rawPointer child _ | .reference child .. | .slice child | .array child _ => #[child]
     | .tuple children => children
+    | .functionPointer signature => signature.inputs.push signature.output
     | _ => #[]
   direct ++ constructor.arguments.filterMap (fun argument => match argument with
     | .Type id => some id | _ => none)

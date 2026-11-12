@@ -11,54 +11,30 @@ structure Entry where
   callee : Except String CallInstance
 structure Prepared where
   program : LoweredProgram
-  entries : Array Entry
 
-def prepare (program : LoweredProgram) : Prepared := Id.run do
-  let ctx := LowerContext.ofDocument program.input
-  let mut tables := program.compilerTables
-  let mut entries := #[]
-  for index in [:program.bodyCount] do
-    let source := program.bodyMetadata index
-    let preamble := do
-      let metadata ← source
-      lowerCompilerSpan tables ⟨metadata.preambleDefSpanId⟩
-    let preamble ← match preamble with
-      | .error error => pure (.error error)
-      | .ok (span,next) =>
-        tables := next
-        pure (.ok span)
-    let decoded : Except String (CallInstance × CompilerTables) := do
-      let metadata ← source
-      unless metadata.instanceId < ctx.instances.size do throw "body instance ID out of bounds"
-      pure (metadata.instanceId,tables)
-    let callee ← match decoded with
-      | .error error => pure (.error error)
-      | .ok (callee,next) =>
-        tables := next
-        pure (.ok callee)
-    entries := entries.push ⟨preamble,callee⟩
-  return ⟨program.withCompilerTables tables,entries⟩
+def prepare (program : LoweredProgram) : Prepared := ⟨program⟩
 
 private def lift (query : Except String A) : MachineHooks.M K User A :=
   match query with
   | .ok value => pure value
   | .error error => throw (.unsupported s!"compiler lifecycle: {error}")
-private def entry (p : Prepared) (body : LoadedBody) (actual : LoweredBody) : Except String Entry := do
+def bodyEntry (p : Prepared) (body : LoadedBody) (actual : LoweredBody) : Except String Entry := do
   unless actual.body == body.body do throw "canonical body identity/content mismatch"
-  let some entry := p.entries[body.identity.index]? | throw "body lifecycle evidence absent"
-  return entry
+  unless actual.input.preambleDefSpanId < p.program.compilerTables.spans.size do
+    throw "body preamble span is absent"
+  pure ⟨.ok ⟨actual.input.preambleDefSpanId⟩,.ok actual.input.instanceId⟩
 
 def preambleSpan (p : Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K User))
     (body : LoadedBody) : MachineHooks.M K User MIR.SpanRef := do
-  let actual ← RuntimeArrayQueries.perform types (p.program.resolveBody body.identity.index)
-  lift do (← entry p body actual).preamble
+  let actual ← RuntimeArrayQueries.performCompiler types (p.program.resolveBodyIdentity body.identity)
+  lift do (← bodyEntry p body actual).preamble
 
 def requiredConstants (p : Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K User))
     (body : LoadedBody) : MachineHooks.M K User Unit := do
-  let actual ← RuntimeArrayQueries.perform types (p.program.resolveBody body.identity.index)
-  let entry ← lift (entry p body actual)
+  let actual ← RuntimeArrayQueries.performCompiler types (p.program.resolveBodyIdentity body.identity)
+  let entry ← lift (bodyEntry p body actual)
   let callee ← lift entry.callee
   let frame ← MachineHooks.currentFrame
   unless frame.bodyIdentity == body.identity && frame.functionInstance == callee do
@@ -77,19 +53,25 @@ variable {K U : Type}
 theorem preamble_known (p : Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (body : LoadedBody) (actual : LoweredBody)
     (span : SpanRef) (fnInstance : CallInstance)
-    (row : (RuntimeArrayQueries.perform types (p.program.resolveBody body.identity.index) : MachineHooks.M K U LoweredBody) = pure actual)
+    (row : (RuntimeArrayQueries.performCompiler types (p.program.resolveBodyIdentity body.identity) : MachineHooks.M K U LoweredBody) = pure actual)
     (contents : actual.body = body.body)
-    (evidence : p.entries[body.identity.index]? = some ⟨.ok span,.ok fnInstance⟩) :
+    (bounded : actual.input.preambleDefSpanId < p.program.compilerTables.spans.size)
+    (spanId : actual.input.preambleDefSpanId = span.id)
+    (callee : actual.input.instanceId = fnInstance) :
     (preambleSpan p types body : MachineHooks.M K U SpanRef) = pure span := by
+  have boundedSpan : span.id < p.program.compilerTables.spans.size := spanId ▸ bounded
+  cases span
   funext state
-  simp [preambleSpan, entry, lift, row, contents, evidence,
+  simp [preambleSpan, bodyEntry, lift, row, contents, boundedSpan, spanId, callee,
     bind, EStateM.bind, Except.bind, pure, EStateM.pure, Except.pure]
  theorem required_empty (p : Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (body : LoadedBody) (actual : LoweredBody)
     (span : SpanRef) (fnInstance : CallInstance)
-    (row : (RuntimeArrayQueries.perform types (p.program.resolveBody body.identity.index) : MachineHooks.M K U LoweredBody) = pure actual)
+    (row : (RuntimeArrayQueries.performCompiler types (p.program.resolveBodyIdentity body.identity) : MachineHooks.M K U LoweredBody) = pure actual)
     (contents : actual.body = body.body)
-    (evidence : p.entries[body.identity.index]? = some ⟨.ok span,.ok fnInstance⟩)
+    (bounded : actual.input.preambleDefSpanId < p.program.compilerTables.spans.size)
+    (spanId : actual.input.preambleDefSpanId = span.id)
+    (callee : actual.input.instanceId = fnInstance)
     (frames : Array (Frame Provenance LocalLayout MachineHooks.FrameExtra))
     (frame : Frame Provenance LocalLayout MachineHooks.FrameExtra)
     (machine : MachineHooks.MachineState K U)
@@ -97,7 +79,9 @@ theorem preamble_known (p : Prepared)
     (function : frame.functionInstance = fnInstance) :
     requiredConstants p types body (⟨⟨frames.push frame⟩,machine⟩ : MachineHooks.State K U) =
       .ok () ⟨⟨frames.push frame⟩,machine⟩ := by
-  simp [requiredConstants, entry, lift, row, contents, evidence,
+  have boundedSpan : span.id < p.program.compilerTables.spans.size := spanId ▸ bounded
+  cases span
+  simp [requiredConstants, bodyEntry, lift, row, contents, boundedSpan, spanId, callee,
     MachineHooks.currentFrame, Stack.currentFrame?, identity, function,
     get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,
     Except.bind,Except.pure]

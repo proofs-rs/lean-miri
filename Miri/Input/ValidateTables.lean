@@ -488,6 +488,10 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
     typeShape b s!"{path}.shape" node.shape
     if let some facts := node.compilerFacts then compilerFacts b s!"{path}.compiler_facts" facts
   for (value, index) in document.layouts.toList.zipIdx do
+    if let some id := value.patternType then
+      checkId b.types id s!"$.layouts[{index}].pattern_type" "type"
+      let some node := document.types[id]? | throw "pattern recipe type ID invariant"
+      let .patternType .. := node.shape | throw s!"$.layouts[{index}].pattern_type: source is not a pattern"
     if let some id := value.sequenceType then
       checkId b.types id s!"$.layouts[{index}].sequence_type" "type"
       let some node := document.types[id]? | throw "sequence recipe type ID invariant"
@@ -587,6 +591,7 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
           | some node => match node.instanceKind with | .LlvmIntrinsic _ => true | _ => false
           | none => false
         match resolution.abi with
+        | .sourceSignature => throw s!"{path}: runtime source-signature evidence cannot occur in imported MIR"
         | .normal id =>
           unless resolution.kind != .llvmIntrinsic && !isLlvm do
             throw s!"{path}: LLVM intrinsic cannot carry an ordinary ABI"

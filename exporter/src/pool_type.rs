@@ -156,6 +156,7 @@ pub(super) struct FunctionSignature {
     pub safety: Safety,
     pub abi: ExternAbi,
     pub c_variadic: bool,
+    pub splatted: Option<u8>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct Alias {

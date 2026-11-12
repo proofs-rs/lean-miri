@@ -1,3 +1,4 @@
+import Miri.Input.SourceEnvironment.Material
 import Miri.Input.AliasMaterial
 import Miri.Input.DefinitionPath
 import Miri.Input.AdtDeclaration
@@ -236,6 +237,7 @@ structure Layout where
   backendRepr : Option TaggedNode
   primitiveRecipe : Option String := none
   tupleType : Option TypeId := none
+  patternType : Option TypeId := none
   sequenceType : Option TypeId := none
   pointerType : Option TypeId := none
   pointerDataType : Option TypeId := none
@@ -273,6 +275,8 @@ structure FunctionSignature where
   safety : Miri.MIR.Safety
   abi : Miri.ABI.ExternAbi
   cVariadic : Bool
+  /-- Present only when the raw rustc FnSig splatted header was serialized. -/
+  rawSplatted : Option (Option Nat) := none
 
 
 inductive CompilerPattern where
@@ -561,6 +565,15 @@ structure AdtDropMaterial where
   destructor : Option DefinitionRef
   deriving Repr, DecidableEq
 
+/-- Definition codegen flags and compilation panic policy, before FnAbi construction. -/
+structure FunctionAbiMaterial where
+  neverUnwind : Bool
+  foreignItem : Bool
+  dropGlue : Bool
+  panicUnwinds : Bool
+  panicInDropUnwinds : Bool
+  deriving Repr, DecidableEq
+
 structure DefinitionId where
   crateIndex : Nat
   index : Nat
@@ -570,6 +583,8 @@ structure DefinitionId where
   aliasDeclaration : Option AliasMaterial.Declaration := none
   adtDeclaration : Option AdtDeclaration.Material := none
   rawPath : Option DefinitionPath.Material := none
+  sourceEnvironment : Option SourceEnvironment.Material := none
+  functionAbiMaterial : Option FunctionAbiMaterial := none
   deriving Repr, DecidableEq
 
 inductive VtableEntryKind where
@@ -707,6 +722,8 @@ inductive CallResolutionKind where
 /-- Only the compiler's LLVM intrinsic dispatch has no ordinary FnAbi. -/
 inductive CallAbiEvidence where
   | normal (id : FunctionAbiId)
+  /-- Runtime raw-signature path; never a serialized ABI table index. -/
+  | sourceSignature
   | llvmIntrinsic
   deriving Repr, DecidableEq
 

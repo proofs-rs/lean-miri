@@ -15,5 +15,7 @@ def main : IO Unit := do
   unless render false false 2 none #[] unit == some "unsafe fn()" do throw (IO.userError "unsafe unit signature differs")
   unless render true true 2 none #[b] unit == some "fn(bool, ...)" do throw (IO.userError "variadic signature differs")
   unless render true false 2 (some 0) #[b] unit == some "fn(#[rustc_splat] bool)" do throw (IO.userError "splatted signature differs")
-  unless render true false 0 none #[b] unit == none do throw (IO.userError "unsupported ABI unexpectedly printed")
-  IO.println "PASS five source-signature printer runtime controls (not kernel proofs)"
+  unless render true false 0 none #[b] unit == some "extern \"C\" fn(bool)" do throw (IO.userError "C ABI spelling differs")
+  unless render false false 1 none #[] unit == some "unsafe extern \"C-unwind\" fn()" do throw (IO.userError "C-unwind ABI spelling differs")
+  unless render true false 40 none #[b] unit == none do throw (IO.userError "invalid packed ABI unexpectedly printed")
+  IO.println "PASS seven source-signature printer runtime controls (not kernel proofs)"

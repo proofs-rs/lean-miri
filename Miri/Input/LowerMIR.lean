@@ -179,4 +179,19 @@ def lowerCompilerSpan (tables : CompilerTables) (value : MIR.SpanRef) :
   unless value.id < tables.spans.size do throw s!"missing span {value.id}"
   pure (value,tables)
 
+/-- Lower a runtime body after resolving its exact material/constructed key in
+this execution. No body syntax or lowering result is cached in the universe. -/
+def LoweredProgram.resolveBodyIdentity (program : LoweredProgram)
+    (identity : Miri.Interpreter.BodyIdentity) : RuntimeArrayTypes.CompilerM LoweredBody := do
+  let source ← SourceMir.resolveBodyIdentity identity
+  let world ← get
+  let ctx : LowerContext := {
+    spans := program.bundle.spans, definitions := program.bundle.definitions,
+    typeConstants := program.bundle.typeConstants, typeIds := #[] }
+  let ctx := ctx.withWorld world.arena
+  for ty in source.mir.locals do
+    unless ctx.containsTypeId ty do throw "runtime body local type is absent from its compiler universe"
+  match lowerBody ctx source with
+  | .ok body => pure body | .error error => throw error
+
 end Miri.Input

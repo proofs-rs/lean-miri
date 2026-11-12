@@ -18,6 +18,18 @@ pub(crate) struct Definition {
     pub adt_declaration: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_path: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_environment: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function_abi_material: Option<FunctionAbiMaterial>,
+}
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct FunctionAbiMaterial {
+    pub never_unwind: bool,
+    pub foreign_item: bool,
+    pub drop_glue: bool,
+    pub panic_unwinds: bool,
+    pub panic_in_drop_unwinds: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct AdtDropMaterial {

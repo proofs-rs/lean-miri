@@ -58,7 +58,7 @@ pub(super) fn declaration<'tcx>(
     // The RHS is shared through Definition.generic_template, captured once by
     // generic_material::definition_template under the same has_value guard.
     // Do not duplicate instantiated or source RHS trees in per-alias records.
-    let clauses = tcx.clauses_of(definition).clauses.iter()
+    let clauses = tcx.explicit_clauses_of(definition).clauses.iter()
         .map(|(clause, _span)| encode_clause(*clause))
         .collect::<Result<Vec<_>, _>>()?;
     source.insert("own_predicates".into(), json!(clauses));

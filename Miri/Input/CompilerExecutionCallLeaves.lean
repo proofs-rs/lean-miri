@@ -41,7 +41,8 @@ def make (p : CompilerProviders.Prepared)
   functionKind := fun ty => RuntimeArrayQueries.perform types (CompilerFunctionFacts.kindInWorld p.functions ty)
   resolve := fun _ definition args => CompilerProviders.resolveCurrent p types definition args
   fnAbiOfFnPtr := fun _ layout extra => lift (CompilerFunctionFacts.pointerAbi p.functions layout.ty extra)
-  fnAbiOfInstance := fun _ callee extra => do lift (CompilerInstanceAbi.abiOfInstance p.lifecycle.instances (← RuntimeArrayQueries.compilerSnapshot types) callee extra)
+  fnAbiOfInstance := fun _ callee extra => RuntimeArrayQueries.performCompiler types
+    (CompilerInstanceAbi.abiOfInstanceInWorld p.lifecycle.instances callee extra)
   isRustCall := fun abi => abi == .RustCall
   rustAbi := .Rust
   checkArgumentCompat := fun _ caller callee =>

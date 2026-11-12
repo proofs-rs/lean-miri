@@ -32,11 +32,57 @@ def relationWithIndex (index : CompilerQueryIndices.Covariance)
     throw s!"missing exact rustc covariance relation query (source={source}, target={target})"
   pure value
 
+private def constructor (world : TypeArena.World) (id : MIR.TyId) :
+    Except String (Option TypeArena.Constructor) := do
+  match ← world.lookupType id with
+  | .constructed value => pure (some value)
+  | .material value => world.materialKey value
+
+/-- The structural fragment of pinned `structurally_relate_tys`. Both variance
+modes coincide for this region-erased fragment: mutable pointees are invariant,
+and no supported leaf admits a proper subtype. Nominal generic variance,
+aliases, binders and non-erased regions require their own relation providers.
+`none` means no answer, rather than a failed relation. -/
+def structural (world : TypeArena.World) : Nat → MIR.TyId → MIR.TyId →
+    Except String (Option Bool)
+  | 0, _, _ => throw "structural covariance traversal exhausted"
+  | fuel + 1, source, target => do
+    let sourceKind ← world.shapeKind source
+    let targetKind ← world.shapeKind target
+    if source == target then return some true
+    if rigidMismatch sourceKind targetKind then return some false
+    let some left ← constructor world source | return none
+    let some right ← constructor world target | return none
+    if left == right then return some true
+    match left, right with
+    | .rawPointer a am, .rawPointer b bm =>
+      if am != bm then return some false
+      structural world fuel a b
+    | .reference a am .Erased, .reference b bm .Erased =>
+      if am != bm then return some false
+      structural world fuel a b
+    | .slice a, .slice b => structural world fuel a b
+    | .array a ac, .array b bc =>
+      let av ← world.lookupConstant ac
+      let bv ← world.lookupConstant bc
+      if av != bv then return none
+      structural world fuel a b
+    | .tuple a, .tuple b =>
+      if a.size != b.size then return some false
+      let mut unresolved := false
+      for (a,b) in a.zip b do
+        match ← structural world fuel a b with
+        | some false => return some false
+        | some true => pure ()
+        | none => unresolved := true
+      return if unresolved then none else some true
+    | .integer .., .integer .. | .float .., .float .. => return some false
+    | .foreign a, .foreign b => return some (a == b)
+    | _, _ => return none
+
 def relationInWorld (index : CompilerQueryIndices.Covariance) (world : TypeArena.World)
     (source target : MIR.TyId) : Except String Bool := do
-  let sourceKind ← world.shapeKind source
-  let targetKind ← world.shapeKind target
-  if rigidMismatch sourceKind targetKind then return false
+  if let some answer ← structural world 16384 source target then return answer
   relationWithIndex index source target
 
 def relation (p : CompilerProviders.Prepared) (source target : MIR.TyId) : Except String Bool := do

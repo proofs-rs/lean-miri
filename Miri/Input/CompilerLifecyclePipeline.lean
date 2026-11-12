@@ -65,7 +65,7 @@ def backtraceHooks (p : Prepared) (types : RuntimeArrayQueries.Access S) (image 
     (memory : S → MemoryState P Extra K)
     (base : Backtrace.Hooks P S D MD B I E CompilerBacktraceSource.Position) :
     Backtrace.Hooks P S D MD B I E CompilerBacktraceSource.Position :=
-  CompilerBacktraceSource.hooks p.backtrace
+  CompilerBacktraceSource.hooks p.backtrace types
     (CompilerBacktraceFacts.hooks p.calls types p.shim image memory base)
 
 /-- Root/direct/virtual/drop calls share exact full-instance/extra-argument ABI

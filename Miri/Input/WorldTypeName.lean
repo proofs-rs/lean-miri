@@ -1,3 +1,4 @@
+import Miri.Input.WorldConstantName
 import Miri.Input.RuntimeMetadata
 import Miri.Input.FunctionTypePrinter
 
@@ -54,6 +55,15 @@ private def visit (metadata : RuntimeMetadata) (options : Catalog.PrintOptions) 
         | _ => throw "constructed float type printer has no pinned source spelling"
       enter options false
       emit name
+    | .functionPointer _ =>
+      enter options true
+      let term ← lift (GenericInstantiationWorld.ofType world (fuel + 1) id)
+      let .node .type "function_pointer" "" (.cons signature .nil) := term
+        | throw "function-pointer source signature absent"
+      let printTerm := fun term => do
+        let id ← liftM (GenericInstantiationWorld.resolveType fuel term)
+        child id
+      FunctionTypePrinter.render emit printTerm signature
     | .rawPointer pointee mutability =>
       enter options true
       let leadingText ← emit (if mutability == .Mut then "*mut " else "*const ")
@@ -119,7 +129,7 @@ private def visit (metadata : RuntimeMetadata) (options : Catalog.PrintOptions) 
             | .Lifetime .Static => emit "'static"
             | .Lifetime .Erased => emit "'_"
             | .Lifetime _ => throw "FnDef named lifetime printing is not implemented"
-            | .Const _ => throw "FnDef constant argument printing is not implemented"
+            | .Const id => emit (← liftM (WorldConstantName.query id))
           result := result ++ text
         result := result ++ (← emit ">")
       pure (result ++ (← emit "}"))
@@ -155,7 +165,7 @@ private def visit (metadata : RuntimeMetadata) (options : Catalog.PrintOptions) 
             | .Lifetime .Static => emit "'static"
             | .Lifetime .Erased => emit "'_"
             | .Lifetime _ => throw "named generic lifetime printing is not implemented"
-            | .Const _ => throw "named generic constant printing is not implemented"
+            | .Const id => emit (← liftM (WorldConstantName.query id))
           result := result ++ text
         result := result ++ (← emit ">")
       pure result

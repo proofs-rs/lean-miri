@@ -6,6 +6,7 @@ import Miri.Input.RuntimeArrayQueries
 import Miri.Input.CallCompatibility
 import Miri.ABI.FnAbi
 import Miri.Input.StructuralNormalization
+import Miri.Input.WorldInstanceAbi
 import Miri.Interpreter.Call
 
 /-! Internal reuse of actual rustc instance-resolution and FnAbi query results.
@@ -218,21 +219,28 @@ private def sourceInstanceAbi (document : ImportDocument) (world : RuntimeArrayT
   require found "missing exact full-instance/extra-argument FnAbi query"
 
 def atSite (prepared : Prepared) (site : Site) : RuntimeArrayTypes.CompilerM Resolution := do
-  let matching := prepared.entries.filter (·.site == site)
+  let world ← get
+  let view ← liftWorld (world.bodies.lookup site.bodyIndex)
+  let matching : Array Entry := match view with
+    | .material _ => prepared.entries.filter (·.site == site)
+    | .constructed _ => #[]
   if !matching.isEmpty then
     unless matching.size == 1 do throw "missing or ambiguous compiler call site"
     let entry ← liftWorld (require matching[0]? "missing compiler call site")
     let resolution ← liftWorld entry.outcome
     liftWorld (sourcePrefixInstance prepared.program.input (← get) resolution.callee)
     return resolution
-  let some source ← liftWorld (SourceMirCall.source prepared.program.input site.bodyIndex site.block)
+  let some source ← SourceMirCall.sourceIdentity (.ofCanonicalIndex site.bodyIndex) site.block
     | throw "missing or ambiguous compiler call site"
   let (resolved,function) ← SourceMirCall.resolveInWorld prepared.program.input source
-  let abi ← liftWorld (sourceInstanceAbi prepared.program.input (← get) resolved.instanceId)
+  let current ← get
+  let abi ← match WorldInstanceAbi.construct resolved.instanceId #[] |>.run current with
+    | .ok (_,after) => set after; pure CallAbiEvidence.sourceSignature
+    | .error _ => pure (.normal (← liftWorld (sourceInstanceAbi prepared.program.input current resolved.instanceId)))
   let evidence : CallResolutionEvidence := {
     kind := .direct,instanceId := some resolved.instanceId,
-    functionType := some resolved.functionType,dispatchSlot := none,abi := .normal abi }
-  pure ⟨resolved.instanceId,resolved.instanceId,function,.normal abi,evidence⟩
+    functionType := some resolved.functionType,dispatchSlot := none,abi }
+  pure ⟨resolved.instanceId,resolved.instanceId,function,abi,evidence⟩
 
 /-- Function operand identity is checked in addition to body and block.
 Source sites are compiler-table indices, never diagnostic span matches. -/
@@ -261,19 +269,33 @@ def abiOfInstance (prepared : Prepared) (world : RuntimeArrayTypes.World)
 /-- A loaded body carries the exact source table key. Equal MIR syntax does
 not make distinct root/template/promoted/instance body identities interchangeable. -/
 def loadedBodyOfInstance (prepared : Prepared) (fnInstance : CallInstance) : RuntimeArrayTypes.CompilerM LoadedBody := do
-  liftWorld (sourcePrefixInstance prepared.program.input (← get) fnInstance)
-  let matching := prepared.bodies.filter (·.fnInstance == fnInstance)
-  unless matching.size == 1 do
-    throw s!"missing or ambiguous canonical instance body identity: requested={reprStr fnInstance}, matches={matching.size}"
-  let some candidate := matching[0]? | throw "compiler instance body is unavailable"
-  let source ← liftWorld (require prepared.program.input.instances[candidate.sourceInstanceId]?
-    "canonical source instance record is missing")
-  unless source.kind == .instanceMir do throw "compiler body is not a substituted executable instance"
-  let _ ← liftWorld (CompilerInstance.source (← get) fnInstance)
-  let body ← RuntimeArrayTypes.liftType (prepared.program.resolveBody candidate.bodyIndex)
-  unless body.input.instanceId == candidate.sourceInstanceId do throw "instance/body identity mismatch"
+  let world ← get
+  let view ← liftWorld (world.instances.lookup fnInstance)
+  let bodyIndex ← match view with
+    | .material _ => do
+      liftWorld (sourcePrefixInstance prepared.program.input world fnInstance)
+      let matching := prepared.bodies.filter (·.fnInstance == fnInstance)
+      unless matching.size == 1 do
+        throw s!"missing or ambiguous canonical instance body identity: requested={reprStr fnInstance}, matches={matching.size}"
+      let some candidate := matching[0]? | throw "compiler instance body is unavailable"
+      let source ← liftWorld (require prepared.program.input.instances[candidate.sourceInstanceId]?
+        "canonical source instance record is missing")
+      unless source.kind == .instanceMir do throw "compiler body is not a substituted executable instance"
+      pure candidate.bodyIndex
+    | .constructed key => do
+      let .Item _ := key.kind | throw "constructed shim body is unsupported"
+      let mut found := none
+      for (source,index) in prepared.program.input.mirTemplates.zipIdx do
+        if source.sourcePromoted.isNone && (← liftWorld (world.arena.identity source.definitionId)) == key.definition then
+          unless found.isNone do throw "ambiguous raw MIR source for constructed instance"
+          found := some index
+      let index ← liftWorld (require found "raw MIR source for constructed instance is absent")
+      RuntimeArrayTypes.internBody index fnInstance none
+  let identity := BodyIdentity.ofCanonicalIndex bodyIndex
+  let body ← prepared.program.resolveBodyIdentity identity
+  unless body.input.instanceId == fnInstance do throw "instance/body identity mismatch"
   unless body.obligations.isEmpty do throw "lowered instance body has unresolved obligations"
-  return ⟨.ofCanonicalIndex candidate.bodyIndex, body.body⟩
+  return ⟨identity, body.body⟩
 
 /-- Compatibility syntax-only view of the exact loaded body. It retains the
 same unique-key and body ownership checks; equal bodies are not merged. -/

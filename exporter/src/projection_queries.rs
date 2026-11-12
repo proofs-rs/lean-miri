@@ -66,7 +66,17 @@ pub(super) fn export<'tcx>(
             "projection queries require a complete monomorphic parent type",
         );
     }
+    // These exact source constructors have fully ported field operations.
+    // Non-erased regions retain their explicit query identity material.
+    let covered = matches!(input.kind(),ty::Str)
+        || matches!(*input.kind(),ty::RawPtr(pointee,_) | ty::Ref(_,pointee,_)
+            if !input.has_free_regions() && pointer_recipe_eligible(tcx,pointee));
+    if covered {
+        layout_query_trace("projection-constructor",input,false);
+        return Ok(None);
+    }
     let env = ty::TypingEnv::fully_monomorphized();
+    layout_query_trace("projection-parent",input,true);
     let layout = match tcx.layout_of(env.as_query_input(input)) {
         Ok(layout) => layout,
         Err(error) => {

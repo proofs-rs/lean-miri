@@ -422,16 +422,21 @@ private def terminalDiagnostic (prepared : Input.EvalPreparation.Prepared)
     let source? := span?.bind fun span => prepared.compiler.program.bundle.spans[span.id]?
     let collapsed? : Option Input.CompilerBacktraceSource.Position := do
       let span ← span?
-      let arena := state.machine.user.user.payload.payload.types.arena
-      let (body,retained) ← ((prepared.compiler.program.resolveBody frame.bodyIdentity.index).run arena).toOption
-      if retained.constructedTypes.size != arena.constructedTypes.size ||
-          retained.constructedConstants.size != arena.constructedConstants.size then none else pure ()
+      let world := state.machine.user.user.payload.payload.types
+      let (body,retained) ← ((prepared.compiler.program.resolveBodyIdentity frame.bodyIdentity).run world).toOption
+      if retained.arena.constructedTypes.size != world.arena.constructedTypes.size ||
+          retained.arena.constructedConstants.size != world.arena.constructedConstants.size ||
+          retained.instances.constructed.size != world.instances.constructed.size ||
+          retained.bodies.constructed.size != world.bodies.constructed.size then none else pure ()
       if body.body != frame.body || body.input.instanceId != frame.functionInstance then none
       else do
-        let records ← prepared.compiler.lifecycle.backtrace.bodySpans[frame.bodyIdentity.index]?
-        let entries ← match records with | .ok entries => some entries | .error _ => none
-        let entry ← entries.find? (·.span == span)
-        pure entry.position
+        let records := body.input.backtraceSpans.filter (·.spanId == span.id)
+        let entry ← records[0]?
+        if !records.all (fun row => row.position == entry.position) then none else pure ()
+        let location := entry.position
+        if location.bytePosition >= 2^32 || location.filename >= prepared.compiler.program.input.files.size then none
+        else pure ⟨UInt32.ofNat location.bytePosition,location.line,location.column,location.filename⟩
+
     return match source? with
     | none => Lean.Json.null
     | some source =>

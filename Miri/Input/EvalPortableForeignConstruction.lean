@@ -1,4 +1,5 @@
 import Miri.Input.EvalForeignConstruction
+import Miri.Input.EvalProjectionMachine
 import Miri.Interpreter.MiriShimMachine
 import Miri.Interpreter.BacktraceMachine
 import Miri.Interpreter.ThreadMachine
@@ -136,7 +137,7 @@ def backtraceCore [DecidableEq MiriMemoryKind]
       (RuntimePlace Provenance) (RuntimePlace Provenance) LoadedBody CallInstance
       MachineHooks.FrameExtra CompilerBacktraceSource.Position :=
   BacktraceMachine.core access arithmetic projection choice
-    (CompilerBacktraceSource.source prepared hostUsizeMax unitPointerLayout
+    (CompilerBacktraceSource.source prepared EvalProjectionMachine.arrays hostUsizeMax unitPointerLayout
       misaligned functionPointer allocation globalFunction) foreign
 
 /-- Full portable order uses the source Miri family, then backtrace, then

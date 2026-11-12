@@ -13,9 +13,9 @@
     "procedure": "upstream/fetch-sources.sh",
     "procedure_sha256": "a8ced1c1a19c47193465862bbe2486e25dcf91c544df5b62f9b2265ea12fb7d8",
     "rustc_selected_archive_paths": {
-      "count": 566,
+      "count": 568,
       "path": "upstream/rustc-selected-files.txt",
-      "sha256": "2cbfeb574056aa6ff8023f53f7f6b6e408af5d912235859bda5ff498cd528adf"
+      "sha256": "13efe8be23f1d70ee71026ee3292f3baa057c831d79dd6b71824a88cca748612"
     }
   },
   "coverage_expected_rust_modules": {
@@ -44,6 +44,7 @@
     "upstream/rustc-source/compiler/rustc_hir/src/def.rs": 1,
     "upstream/rustc-source/compiler/rustc_hir/src/hir.rs": 1,
     "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/clauses_of.rs": 1,
+    "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs": 1,
     "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs": 1,
     "upstream/rustc-source/compiler/rustc_middle/src/middle/codegen_fn_attrs.rs": 1,
     "upstream/rustc-source/compiler/rustc_middle/src/mir": 23,
@@ -75,7 +76,8 @@
     "upstream/rustc-source/compiler/rustc_type_ir/src/sty/consts.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/sty/mod.rs": 1,
     "upstream/rustc-source/compiler/rustc_type_ir/src/ty_kind.rs": 1,
-    "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs": 1
+    "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs": 1,
+    "upstream/rustc-source/library/core/src/any.rs": 1
   },
   "coverage_roots": [
     "upstream/crates/aes-0.9.3/src",
@@ -103,6 +105,7 @@
     "upstream/rustc-source/compiler/rustc_hir/src/def.rs",
     "upstream/rustc-source/compiler/rustc_hir/src/hir.rs",
     "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/clauses_of.rs",
+    "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
     "upstream/rustc-source/compiler/rustc_hir_analysis/src/hir_ty_lowering/mod.rs",
     "upstream/rustc-source/compiler/rustc_middle/src/middle/codegen_fn_attrs.rs",
     "upstream/rustc-source/compiler/rustc_middle/src/mir",
@@ -134,7 +137,8 @@
     "upstream/rustc-source/compiler/rustc_type_ir/src/sty/consts.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/sty/mod.rs",
     "upstream/rustc-source/compiler/rustc_type_ir/src/ty_kind.rs",
-    "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs"
+    "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs",
+    "upstream/rustc-source/library/core/src/any.rs"
   ],
   "external_dependencies": {
     "cargo_packages": [
@@ -1878,6 +1882,12 @@
       "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/clauses_of.rs",
       "sha256": "465f5dd0f397f87716aedc65048a12dce7ec3af51d88e584ea5ad902b2251bf3",
       "git_blob": "ae384a67ee6aa279a97782aa4a47fc7e5169e95d"
+    },
+    {
+      "component": "rustc",
+      "path": "upstream/rustc-source/compiler/rustc_hir_analysis/src/collect/generics_of.rs",
+      "sha256": "a26f5435775f700cdec9c2517fe8465bb52a2903e2de366eec05b851481d9463",
+      "git_blob": "356f429ae65f1dc91d17758b130d7efe6e9e733d"
     },
     {
       "component": "rustc",
@@ -4974,6 +4984,12 @@
       "path": "upstream/rustc-source/compiler/rustc_type_ir/src/visit.rs",
       "sha256": "7105f9eef232ace6a3f16e7c9869581580b338e4d744eb4d8bbf5a05b125b79e",
       "git_blob": "396c8c17a29520c3e93454da3f277da13b1a0924"
+    },
+    {
+      "component": "rustc",
+      "path": "upstream/rustc-source/library/core/src/any.rs",
+      "sha256": "949842fb7fccf848f9b402f1da4b83d2218d3a5bdf4c3ed1c4375a8691ec905b",
+      "git_blob": "c6cb5b0f50c5646e9767322957274540aa1747c0"
     }
   ],
   "pins": {

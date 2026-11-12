@@ -25,7 +25,12 @@ def _walk(value, transform):
         return value
     result = {}
     for key, child in value.items():
-        if key in FIELD_POOLS:
+        if key == "mir_templates":
+            # CopyTemplateSource is raw immutable declaration material. Its
+            # backtrace_spans/local_sources are inline, unlike the corresponding
+            # fields of a material execution body; freeze() never pools them.
+            result[key] = copy.deepcopy(child)
+        elif key in FIELD_POOLS:
             result[key] = None if key == "discriminants" and child is None else transform(FIELD_POOLS[key], child)
         elif key == "fn_abis" and isinstance(child, list):
             result[key] = [{**_walk({field: item for field, item in abi.items()

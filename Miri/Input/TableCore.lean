@@ -529,6 +529,7 @@ def parseLayoutFieldOffsets : Parser LayoutFieldOffsets := do
   return .arrayFormula (← required fields.stride "stride_bytes") (← required fields.count "field_count")
 
 private structure parseLayoutFields where
+  patternType : Option Nat := none
   sequenceType : Option Nat := none
   pointerType : Option Nat := none
   pointerDataType : Option Nat := none
@@ -554,6 +555,7 @@ private structure parseLayoutFields where
 def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
   let s ← object ({} : parseLayoutFields) fun s key => do
     match key with
+    | "pattern_type" => return {s with patternType := some (← natural)}
     | "sequence_type" => return {s with sequenceType := some (← natural)}
     | "enum_tag_type" => return {s with enumTagType := some (← natural)}
     | "pointer_data_type" => return {s with pointerDataType := some (← natural)}
@@ -577,7 +579,7 @@ def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
     | "randomization_seed" => return { s with «randomization_seed» := some (← natural) }
     | _ => skipValue; pure s
   let constructors := #[s.primitiveRecipe.isSome, s.tupleType.isSome, s.unionType.isSome,
-    s.structType.isSome, s.sequenceType.isSome, s.pointerType.isSome, s.pointerDataType.isSome, s.enumTagType.isSome].filter (fun enabled => enabled)
+    s.structType.isSome, s.patternType.isSome, s.sequenceType.isSome, s.pointerType.isSome, s.pointerDataType.isSome, s.enumTagType.isSome].filter (fun enabled => enabled)
   if !constructors.isEmpty then
     unless constructors.size == 1 do fail s!"{path}: conflicting layout recipe constructors"
     unless s.kind.isNone && s.field_offsets_bytes.isNone && s.fields.isNone &&
@@ -592,7 +594,7 @@ def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
           "fn_pointer", "never"].contains recipe do
         fail s!"{path}: unknown primitive layout recipe"
     return {
-      primitiveRecipe := s.primitiveRecipe, tupleType := s.tupleType, unionType := s.unionType, structType := s.structType, sequenceType := s.sequenceType,
+      primitiveRecipe := s.primitiveRecipe, tupleType := s.tupleType, unionType := s.unionType, structType := s.structType, patternType := s.patternType, sequenceType := s.sequenceType,
       pointerType := s.pointerType, pointerDataType := s.pointerDataType, enumTagType := s.enumTagType, kind := .layout,
       maxReprAlignBytes := none, reprC := false, uninhabited := false,
       largestNiche := none, randomizationSeed := 0, sizeBytes := none,
@@ -634,22 +636,24 @@ private structure parseFunctionSignatureFields where
   «safety» : Option (TaggedNode) := none
   «abi» : Option (Miri.ABI.ExternAbi) := none
   «c_variadic» : Option (Bool) := none
+  splatted : Option (Option Nat) := none
 
 def parseFunctionSignature (path : String := "$parseFunctionSignature") : Parser (FunctionSignature) := do
-  let s ← object (parseFunctionSignatureFields.mk none none none none none) fun s key => do
+  let s ← object (parseFunctionSignatureFields.mk none none none none none none) fun s key => do
     match key with
     | "inputs" => return { s with «inputs» := some (← array (natural)) }
     | "output" => return { s with «output» := some (← natural) }
     | "safety" => return { s with «safety» := some (← parseAbiTag) }
     | "abi" => return { s with «abi» := some (← CompilerExternAbi.decode) }
     | "c_variadic" => return { s with «c_variadic» := some (← boolean) }
+    | "splatted" => return { s with splatted := some (← nullable natural) }
     | _ => skipValue; pure s
   let safety ← match (← required s.«safety» "safety").tag with
     | "safe" => pure Miri.MIR.Safety.Safe
     | "unsafe" => pure .Unsafe
     | _ => fail s!"{path}: unknown function signature safety"
   return {
-    inputs := (← required s.«inputs» "inputs"), output := (← required s.«output» "output"), safety, abi := (← required s.«abi» "abi"), cVariadic := (← required s.«c_variadic» "c_variadic") }
+    inputs := (← required s.«inputs» "inputs"), output := (← required s.«output» "output"), safety, abi := (← required s.«abi» "abi"), cVariadic := (← required s.«c_variadic» "c_variadic"), rawSplatted := s.splatted }
 
 private structure decodeCompilerPredicateEvidenceFields where
   «predicate_id» : Option (Nat) := none

@@ -18,7 +18,7 @@ private def visit (world : World) : Nat → TypeId → QueryM Bool
           | _ => pure none
         | .constructed constructor => match constructor with
           | .integer .. | .float _ | .bool | .char | .str | .never
-          | .reference .. | .rawPointer .. | .functionDefinition .. => return true
+          | .reference .. | .rawPointer .. | .functionDefinition .. | .functionPointer .. => return true
           | .tuple children => pure (some children)
           | .slice child | .array child _ => pure (some #[child])
           | _ => pure none

@@ -1,6 +1,7 @@
 import Miri.Input.Model
 import Miri.Input.GenericInstantiationWorld
 import Miri.Input.RuntimeArrayTypes
+import Miri.Interpreter.BodyIdentity
 import Miri.Input.NoopDropShim
 
 /-! Immutable body seeds. Metadata inspection never instantiates a template.
@@ -175,26 +176,20 @@ def resolveBody (document : ImportDocument) (index : Nat) : TypeArena.WorldM Bod
       (GenericInstantiationWorld.resolveType 16384)
     pure {toBodyMetadata := sourceMetadata.toBodyMetadata,mir,instanceId := reference.instanceId}
 
-/-- Demand raw ordinary MIR by a complete current-world Item identity. This
-returns no canonical body-table index and establishes no ABI capability. -/
-def resolveInstanceBody (document : ImportDocument) (requestedInstance : InstanceId) :
-    RuntimeArrayTypes.CompilerM BodyCore := do
+/-- Resolve one exact raw body reference. No material table index is inferred
+from a constructed identity or from a source template number. -/
+private def resolveBodyKey (key : BodyArena.Key) : RuntimeArrayTypes.CompilerM BodyCore := do
   let world ← get
-  let key ← match world.instances.lookup requestedInstance with
-    | .ok (.material key) | .ok (.constructed key) => pure key
-    | .error error => throw error
-  let .Item _ := key.kind | throw "raw ordinary MIR requires an Item instance"
-  let mut matching : Array (Nat × CopyTemplateSource) := #[]
-  for (source,index) in document.mirTemplates.zipIdx do
-    if source.sourcePromoted.isSome then continue
-    let identity ← match world.arena.identity source.definitionId with
-      | .ok identity => pure identity | .error error => throw error
-    if identity == key.definition then matching := matching.push (index,source)
-  unless matching.size == 1 do throw "ordinary raw MIR source is absent or ambiguous"
-  let some (index,source) := matching[0]? | throw "ordinary raw MIR source is absent"
+  let document := world.metadata.source
+  let verified ← match BodyArena.Key.create world.arena world.instances document.mirTemplates
+      key.templateId key.instanceId key.promoted with
+    | .ok key => pure key | .error error => throw error
+  unless verified == key do throw "body reference contradicts the current compiler universe"
+  let index := key.templateId
+  let some source := document.mirTemplates[index]? | throw "raw body source disappeared"
   match validateTemplate document source with
   | .error error => throw error | .ok () => pure ()
-  let arguments ← match GenericInstantiationWorld.ofArguments world.arena 16384 key.arguments with
+  let arguments ← match GenericInstantiationWorld.ofArguments world.arena 16384 key.instanceKey.arguments with
     | .ok arguments => pure arguments | .error error => throw error
   let mir ← MirTemplate.instantiate source.template 16384 arguments fun expression => do
     let expression ← match MirTemplate.eraseFreeRegions 16384 expression with
@@ -216,6 +211,66 @@ def resolveInstanceBody (document : ImportDocument) (requestedInstance : Instanc
     callEvidence := blocks.map (fun _ => none)
     nodeFacts := blocks.map (fun block => Array.replicate (block.statements.size + 1) {})
     requiredConsts := #[] }
-  pure {toBodyMetadata := bodyMetadata,mir,instanceId := requestedInstance}
+  pure {toBodyMetadata := bodyMetadata,mir,instanceId := key.instanceId}
+
+private def validateMaterialBodyInstance (world : RuntimeArrayTypes.World) (index : Nat) : Except String Unit := do
+  let some seed := world.metadata.source.bodies[index]? | throw "material body source is absent"
+  let some expected := world.metadata.source.instances[seed.instanceId]?
+    | throw "material body instance source is absent"
+  let expected ← InstanceArena.Key.ofSource world.arena expected.instanceKind expected.genericArgs
+  let actual ← match ← world.instances.lookup seed.instanceId with
+    | .material key | .constructed key => pure key
+  unless actual == expected do throw "material body source differs from execution instance store"
+
+/-- Runtime body identities always dispatch through this execution's body
+universe. The immutable body array is addressed only after a material lookup. -/
+def resolveBodyIdentity (identity : Miri.Interpreter.BodyIdentity) :
+    RuntimeArrayTypes.CompilerM BodyCore := do
+  let world ← get
+  let view ← match world.bodies.lookup identity.index with
+    | .ok view => pure view | .error error => throw error
+  match view with
+  | .material index =>
+    match validateMaterialBodyInstance world index with
+    | .ok () => pure () | .error error => throw error
+    RuntimeArrayTypes.liftType (resolveBody world.metadata.source index)
+  | .constructed key => resolveBodyKey key
+
+
+/-- Type-free metadata for an exact runtime body identity. The return type does
+not claim a promoted-body catalog or instantiate source local types. -/
+def metadataIdentity (identity : Miri.Interpreter.BodyIdentity) :
+    RuntimeArrayTypes.CompilerM BodyMetadata := do
+  let world ← get
+  let document := world.metadata.source
+  let view ← match world.bodies.lookup identity.index with
+    | .ok view => pure view | .error error => throw error
+  match view with
+  | .material index =>
+    match validateMaterialBodyInstance world index with
+    | .ok () => pure () | .error error => throw error
+    match metadata document index with
+    | .ok value => pure value.toBodyMetadata | .error error => throw error
+  | .constructed key =>
+    let verified ← match BodyArena.Key.create world.arena world.instances document.mirTemplates
+        key.templateId key.instanceId key.promoted with
+      | .ok key => pure key | .error error => throw error
+    unless verified == key do throw "metadata body reference contradicts the compiler universe"
+    let some source := document.mirTemplates[key.templateId]? | throw "raw body source disappeared"
+    match validateTemplate document source with
+    | .error error => throw error | .ok () => pure ()
+    pure {
+      definitionId := some source.definitionId
+      defPath := source.defPath
+      sourcePath := s!"$.mir_templates[{key.templateId}]"
+      spanId := source.spanId
+      preambleDefSpanId := source.preambleDefSpanId
+      injectionPhase := source.injectionPhase
+      localSources := source.localSources
+      sourceScopes := source.sourceScopes
+      backtraceSpans := source.backtraceSpans
+      callEvidence := source.template.skeleton.blocks.map (fun _ => none)
+      nodeFacts := source.template.skeleton.blocks.map (fun block => Array.replicate (block.statements.size + 1) {})
+      requiredConsts := #[] }
 
 end Miri.Input.SourceMir

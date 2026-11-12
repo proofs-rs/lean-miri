@@ -82,7 +82,7 @@ fn parameters(tcx: TyCtxt<'_>, definition: DefId) -> Vec<&'static str> {
     }).collect()
 }
 fn clauses(tcx: TyCtxt<'_>, definition: DefId) -> Result<Vec<Value>, String> {
-    tcx.clauses_of(definition).clauses.iter()
+    tcx.explicit_clauses_of(definition).clauses.iter()
         .map(|(value, _)| clause(tcx, *value)).collect()
 }
 fn implementation(tcx: TyCtxt<'_>, definition: DefId) -> Result<Value, String> {
@@ -236,7 +236,7 @@ impl State {
     }
     /// Demand raw RHS expressions only for associated declarations occurring in
     /// retained source expressions. Headers alone never demand member signatures.
-    pub(super) fn rhs_demands(&self, tcx: TyCtxt<'_>, demanded: &std::collections::HashSet<DefId>) -> Result<Vec<DefId>, String> {
+    pub(super) fn rhs_demands(&self, tcx: TyCtxt<'_>, demanded: &std::collections::HashSet<DefId>, scopes: &mut Vec<DefId>) -> Result<Vec<DefId>, String> {
         let mut result = Vec::new();
         for source in self.emitted.values() {
             // These are the retained source expressions needed for matching
@@ -246,6 +246,8 @@ impl State {
                 super::generic_definition_references(&implementation["trait_ref"], &mut result)?;
                 super::generic_definition_references(&implementation["predicates"], &mut result)?;
                 let definition = read_identity(&implementation["definition"])?;
+                // Scope declarations carry obligations, not method signatures.
+                scopes.push(definition);
                 for item in tcx.associated_items(definition).in_definition_order() {
                     if matches!(item.kind, ty::AssocKind::Type { .. })
                         && item.trait_item_def_id().is_some_and(|parent| demanded.contains(&parent)) {

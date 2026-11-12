@@ -54,7 +54,7 @@ private def trivialInWorld (world : TypeArena.World) : Nat → TyId → Except S
         | some tail => trivialInWorld world fuel tail
       | .str | .slice _ | .foreign _ | .adt .. | .alias .. => pure false
       | .bool | .char | .never | .integer .. | .float .. | .rawPointer .. | .reference ..
-      | .functionDefinition .. | .closure .. | .coroutineClosure .. | .coroutine ..
+      | .functionDefinition .. | .functionPointer .. | .closure .. | .coroutineClosure .. | .coroutine ..
       | .array .. => pure true
 
 /-- Actual source storage dictionary. The only allocation input is the real

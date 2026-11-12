@@ -10,8 +10,6 @@ open Miri.Interpreter
 def get (p : CompilerProviders.Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (frame : Frame P L E) :
     MachineHooks.M K U MIR.SpanRef := do
-  unless frame.bodyIdentity.index < p.program.bodyCount do
-    throw (.invalidProgram "unwind body identity absent from canonical compilation")
   let body ← p.resolveBody types frame.bodyIdentity.index
   unless body.body == frame.body do
     throw (.invalidProgram "unwind body identity/content mismatch")

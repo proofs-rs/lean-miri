@@ -16,6 +16,8 @@ import Miri.ABI.UnivariantLayout
 import Miri.ABI.StructLayout
 import Miri.Input.StructLayoutMaterial
 import Miri.ABI.UnionLayout
+import Miri.ABI.PatternLayout
+import Miri.Input.PatternLayoutMaterial
 
 /-! Internal compiler-metadata bridge, not the public import API. Successful
 conversion supplies records and queries; it does not establish execution
@@ -172,7 +174,7 @@ def variants (target : RuntimeTargetDataLayout) (source : VariantsLayout) : Resu
 
 def layout (target : RuntimeTargetDataLayout) (source : Input.Layout) : Result LayoutData := do
   if source.tupleType.isSome || source.unionType.isSome || source.structType.isSome ||
-      source.sequenceType.isSome || source.pointerType.isSome || source.pointerDataType.isSome || source.enumTagType.isSome then
+      source.patternType.isSome || source.sequenceType.isSome || source.pointerType.isSome || source.pointerDataType.isSome || source.enumTagType.isSome then
     throw (.missing "structural layout requires source type and layout pools")
   if let some recipe := source.primitiveRecipe then
     return ← PrimitiveLayout.compute target recipe
@@ -503,8 +505,12 @@ private def worldStructSized (normalization : Option AliasRuntime.Context) (fuel
     unless sized.size <= 1 do throw "layout declaration environment has ambiguous canonical Sized trait"
     if let some sized := sized[0]? then
       let goal : TraitSelection.Clause := ⟨#[],.trait ⟨.positive,⟨sized.definition,#[tail.expression]⟩⟩⟩
+      let .definition .type "adt" identity _ := template.typeExpression
+        | throw "layout declaration environment lacks a nominal source identity"
+      let assumptions ← lift (SourceEnvironment.predicates
+        (SourceEnvironmentRuntime.lookupDefinitions context.generic.definitions) (fuel + 1) identity)
       let proof ← lift (TraitSelection.EnvironmentEntailment.entails context.traits
-        template.parameters declaration.ownPredicates (fuel * (fuel + 1)) goal)
+        template.parameters assumptions (fuel * (fuel + 1)) goal)
       if proof.isSome then return true
   -- A missing positive environment proof remains unknown. Only the separate
   -- structural source algorithm below may establish its supported cases;
@@ -635,7 +641,7 @@ mutual
     | fuel + 1, id => do
       let some source := layouts[id]? | throw "universe layout seed absent"
       let constructors := #[source.structType.isSome,source.unionType.isSome,source.tupleType.isSome,
-        source.primitiveRecipe.isSome,source.sequenceType.isSome,source.pointerType.isSome,source.pointerDataType.isSome,source.enumTagType.isSome].filter (fun enabled => enabled)
+        source.primitiveRecipe.isSome,source.patternType.isSome,source.sequenceType.isSome,source.pointerType.isSome,source.pointerDataType.isSome,source.enumTagType.isSome].filter (fun enabled => enabled)
       unless constructors.size <= 1 do throw "conflicting universe layout recipe constructors"
       if let some ty := source.structType then
         let (declaration,_,_,_,_) ← liftWorld (worldAdt ty)
@@ -649,6 +655,27 @@ mutual
         let key ← liftWorld (worldConstructor ty)
         let .tuple elements := key | throw "tuple layout recipe source is not a tuple"
         return ← worldLayoutConstructor normalization target layouts fuel ty (.tuple elements)
+      if let some ty := source.patternType then
+        let world ← liftWorld get
+        let .material node ← lift (world.lookupType ty)
+          | throw "pattern recipe requires raw source pattern material"
+        let .patternType base pattern := node.shape
+          | throw "pattern recipe source is not a pattern"
+        let baseLayout ← worldLayoutType normalization target layouts fuel base
+        match pattern with
+        | .notNull => return ← lift (PatternLayout.notNull target baseLayout)
+        | .range start finish =>
+          let start ← lift (PatternLayoutMaterial.endpoint world.lookupConstant base baseLayout.size.bytes.toNat start)
+          let finish ← lift (PatternLayoutMaterial.endpoint world.lookupConstant base baseLayout.size.bytes.toNat finish)
+          return ← lift (PatternLayout.range target baseLayout start finish)
+        | .or patterns =>
+          let ranges ← patterns.mapM fun pattern => do
+            let .range start finish := pattern
+              | throw "Or pattern contains a non-range source pattern"
+            let start ← lift (PatternLayoutMaterial.endpoint world.lookupConstant base baseLayout.size.bytes.toNat start)
+            let finish ← lift (PatternLayoutMaterial.endpoint world.lookupConstant base baseLayout.size.bytes.toNat finish)
+            pure (start,finish)
+          return ← lift (PatternLayout.orRanges target baseLayout ranges)
       if let some ty := source.sequenceType then
         let key ← liftWorld (worldConstructor ty)
         unless (match key with | .array .. | .slice .. | .str => true | _ => false) do
@@ -692,7 +719,7 @@ def resolveLayout (target : RuntimeTargetDataLayout) (types : Array TypeNode)
     (constants : Array MIR.TypeConst) : Result LayoutData := do
   let source ← require layouts[id]? "compiler layout ID out of bounds"
   if source.tupleType.isNone && source.unionType.isNone && source.structType.isNone &&
-      source.sequenceType.isNone && source.pointerType.isNone && source.pointerDataType.isNone && source.enumTagType.isNone then
+      source.patternType.isNone && source.sequenceType.isNone && source.pointerType.isNone && source.pointerDataType.isNone && source.enumTagType.isNone then
     return ← layout target source
   let world ← (TypeArena.World.ofMaterial types constants definitions target.pointerSize.bytes.toNat)
     |>.mapError (fun e => .invalid "layout material" e)
@@ -706,7 +733,7 @@ def lookup (metadata : RuntimeMetadata) (id : TypeId) : Result (TyAndLayout Type
   let source ← metadata.node id
   let seed ← require metadata.source.layouts[source.layoutId]? "compiler layout seed"
   if seed.tupleType.isNone && seed.unionType.isNone && seed.structType.isNone &&
-      seed.sequenceType.isNone && seed.pointerType.isNone && seed.pointerDataType.isNone && seed.enumTagType.isNone then
+      seed.patternType.isNone && seed.sequenceType.isNone && seed.pointerType.isNone && seed.pointerDataType.isNone && seed.enumTagType.isNone then
     return ⟨id, ← layout metadata.target seed⟩
   let checked ← require metadata.checkedMaterial "checked source material prefix"
   let world := TypeArena.World.ofCheckedMaterial checked
@@ -867,7 +894,8 @@ def shapeKindInWorld (_metadata : RuntimeMetadata) (id : TypeId) : TypeArena.Wor
     | .integer true _ => .int | .integer false _ => .uint | .float _ => .float
     | .rawPointer .. => .rawPointer | .reference .. => .reference | .slice .. => .slice
     | .tuple .. => .tuple | .array .. => .array | .adt .. => .adt | .foreign .. => .foreign
-    | .functionDefinition .. => .functionDefinition | .alias .. => .alias
+    | .functionDefinition .. => .functionDefinition | .functionPointer .. => .functionPointer
+    | .alias .. => .alias
     | .closure .. => .closure | .coroutineClosure .. => .coroutineClosure | .coroutine .. => .coroutine)
 
 def packedAlignInWorld (_metadata : RuntimeMetadata) (id : TypeId) : TypeArena.WorldM (Option Align) := do

@@ -58,7 +58,7 @@ def backtraceCore [DecidableEq MiriMemoryKind]
       (RuntimePlace Provenance) (RuntimePlace Provenance) LoadedBody CallInstance
       MachineHooks.FrameExtra CompilerBacktraceSource.Position :=
   let functionPointers := CompilerFunctionPointers.hooks providers.pointers EvalProjectionMachine.arrays image functionPointers
-  let source := CompilerBacktraceSource.source providers.lifecycle.backtrace hostUsizeMax
+  let source := CompilerBacktraceSource.source providers.lifecycle.backtrace EvalProjectionMachine.arrays hostUsizeMax
     (RuntimeArrayQueries.perform EvalProjectionMachine.arrays
       (CompilerBacktraceFacts.unitPointerLayout providers.lifecycle.calls))
     (PointerPlaceMachine.misalignmentWith access PointerPlaceMachine.controlledAlignment)

@@ -255,9 +255,9 @@ mod semantic_tests {
 
     #[test]
     fn complete_layout_equality_preserves_every_original_layout_slot() {
-        use crate::pool_layout::{BackendRepr, FieldOffsets, Fields, Layout, Variants};
+        use crate::pool_layout::{BackendRepr, FieldOffsets, Fields, FullLayout, Layout, Variants};
         let layout = |seed| {
-            Shared::from(Layout {
+            Shared::from(Layout::Material(FullLayout {
                 size_bytes: 0,
                 abi_align_bytes: 1,
                 unadjusted_abi_align_bytes: 1,
@@ -270,7 +270,7 @@ mod semantic_tests {
                 backend_repr: BackendRepr::Memory { sized: true },
                 largest_niche: None,
                 randomization_seed: seed,
-            })
+            }))
         };
         let mut slots = vec![layout(7), layout(7), layout(8)];
         let mut pool = Payloads::default();

@@ -13,6 +13,40 @@ the ability to verify arbitrary Rust are not claimed.
 
 ## Compiler material migration (in progress)
 
+Runtime body providers now resolve exact identities through the execution-owned
+BodyArena. Constructed Item instances select a unique ordinary raw MIR template
+by physical definition and complete arguments; local layouts, frames, source
+scopes and backtraces consume that identity. The obsolete lifecycle, scope and
+backtrace result indexes are removed. Promoted bodies and general compiler shim
+construction remain unresolved. Novel-body controls exercise actual provider
+demand, dense identity reuse and missing/ambiguous-source rejection.
+
+Raw source environments retain explicit clauses, physical generic/predicate
+parents, parameter sorts and trait identity. Lean assembles inherited obligations
+after matching an impl head and for selected associated values; fully monomorphized
+queries retain the empty ParamEnv. ADT Sized declaration entailment uses these
+scopes. Fresh selection controls consume the source scope while rejecting its
+absence and ignoring poisoned legacy copies. Inferred outlives, universe-aware
+HRTB, general builtin candidates and specialization remain unresolved.
+
+Binder-free Item signatures can construct x86_64 Rust scalar/ZST FnAbi in the
+same World from raw signatures and codegen/panic flags. Twenty complete compiler
+comparisons cover abort/unwind policies, including constructed instances with
+empty ABI catalogs. Pointer/aggregate/foreign/other-target ABI and producer ABI
+enumeration remain unresolved. Pattern Range, NotNull and signed Or layouts now
+use raw recipes; six complete compiler comparisons and malformed controls pass,
+with covered explicit canonical layout acquisition omitted. Non-Value pattern
+endpoints still require CTFE. Structural pointer/reference/tuple/array/slice
+covariance runs on World syntax: an independent 16-by-16 rustc matrix passes
+with an empty answer catalog. Nominal variance and richer relations remain.
+
+Scalar const-generic names and complete binder-free FnPtr syntax now enter the
+runtime constructor and printer paths. Pinned comparisons cover 72 integer
+strings, nine const-generic types and six FnPtr signatures. Material display
+fallbacks, bound names, default-argument elision and external-path reconstruction
+remain unresolved. These component comparisons do not establish whole-compiler
+equivalence, query closure or all-choice guest safety.
+
 The exact `DropGlue(_, None)` shim family now retains only instance identity and
 raw source position; its raw declaration signature supplies types. Lean builds
 the one-Return body on demand and retains the execution World. Five independent

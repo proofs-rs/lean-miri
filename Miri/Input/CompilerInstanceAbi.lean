@@ -1,4 +1,5 @@
 import Miri.Input.CallResolution
+import Miri.Input.WorldInstanceAbi
 
 /-! Exact fn_abi_of_instance evidence. A full instance, ordered additional
 argument-type vector and explicit typing environment form the key. Runtime drop
@@ -53,7 +54,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except Stri
       buckets := buckets.insert callee ((buckets.getD callee #[]).push index)
   pure ⟨runtime,program.withCompilerTables tables,entries,buckets⟩
 
-def abiOfInstance (prepared : Prepared) (world : RuntimeArrayTypes.World) (callee : CallInstance) (extra : Array MIR.TyId) :
+private def importedAbiOfInstance (prepared : Prepared) (world : RuntimeArrayTypes.World) (callee : CallInstance) (extra : Array MIR.TyId) :
     Except String (FnAbi MIR.TyId) := do
   let .material actual ← world.instances.lookup callee
     | throw "constructed instance has no imported FnAbi query"
@@ -70,12 +71,30 @@ def abiOfInstance (prepared : Prepared) (world : RuntimeArrayTypes.World) (calle
     | throw "instance ABI bucket index invariant"
   CallResolution.functionAbiId prepared.runtime (← entry.result)
 
+/-- Construct covered source ABIs before considering the explicit residual
+catalog. A constructed key can never use a material-prefix numeric query. -/
+def abiOfInstanceInWorld (prepared : Prepared) (callee : CallInstance) (extra : Array MIR.TyId) :
+    RuntimeArrayTypes.CompilerM (FnAbi MIR.TyId) := do
+  let world ← get
+  match WorldInstanceAbi.construct callee extra |>.run world with
+  | .ok (abi,after) => set after; pure abi
+  | .error sourceError =>
+    match importedAbiOfInstance prepared world callee extra with
+    | .ok abi => pure abi
+    | .error residualError => throw s!"{sourceError}; {residualError}"
+
+/-- Read-only callers must not discard newly appended type identities. -/
+def abiOfInstance (prepared : Prepared) (world : RuntimeArrayTypes.World)
+    (callee : CallInstance) (extra : Array MIR.TyId) : Except String (FnAbi MIR.TyId) := do
+  let (abi,after) ← (abiOfInstanceInWorld prepared callee extra).run world
+  unless after.arena.constructedTypes == world.arena.constructedTypes &&
+      after.arena.constructedConstants == world.arena.constructedConstants do
+    throw "instance ABI query constructs types and requires the stateful compiler hook"
+  pure abi
+
 def hooks (prepared : Prepared) (access : RuntimeArrayQueries.Access S)
     (base : CallHooks P S C E Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId)) :
     CallHooks P S C E Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId) :=
   { base with fnAbiOfInstance := fun _ callee extra => do
-      let world := access.get (← get)
-      match abiOfInstance prepared world callee extra with
-      | .ok abi => pure abi
-      | .error error => throw (.unsupported error) }
+      RuntimeArrayQueries.performCompiler access (abiOfInstanceInWorld prepared callee extra) }
 end Miri.Input.CompilerInstanceAbi

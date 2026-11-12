@@ -1,3 +1,4 @@
+import Miri.ABI.PackedExternAbi
 import Miri.Input.TypeArenaWorld
 import Miri.Input.GenericMaterialCodec
 import Lean.Data.Json.Parser
@@ -104,6 +105,13 @@ def reifyType (world : World) : Nat → TypeId → ReifyM Term
         unless variables.isEmpty do throw "generic universe FnDef excludes nonempty argument binders"
         pure (.definition .type "function_definition" definition
           (.cons (.binder #[] (.node .aggregate "arguments" "" (Terms.ofArray (← args arguments)))) .nil))
+      | .functionPointer signature => do
+        let header := Lean.Json.compress (Lean.Json.mkObj [
+          ("abi_packed", Lean.toJson signature.abiPacked), ("safe", Lean.toJson signature.safe),
+          ("c_variadic", Lean.toJson signature.cVariadic), ("splatted", Lean.toJson signature.splatted)])
+        let types ← (signature.inputs.push signature.output).mapM child
+        pure (.node .type "function_pointer" ""
+          (.cons (.binder #[] (.node .aggregate "signature" header (Terms.ofArray types))) .nil))
       | .closure definition arguments => do
         pure (.definition .type "closure" definition (Terms.ofArray (← args arguments)))
       | .coroutineClosure definition arguments => do
@@ -218,6 +226,22 @@ def constructType : Nat → Term → ConstructM TypeId
         pure (.tuple (← (arrayOfTerms #[] children).mapM (constructType fuel)))
       | .node .type "array" "" (.cons child (.cons length .nil)) => do
         pure (.array (← constructType fuel child) (← constructConstant fuel length))
+      | .node .type "function_pointer" ""
+          (.cons (.binder variables (.node .aggregate "signature" payload children)) .nil) => do
+        unless variables.isEmpty do throw "function-pointer bound type construction is not implemented"
+        let header ← lift (Lean.Json.parse payload)
+        for (key,_) in (← lift header.getObj?).toArray do
+          unless ["abi_packed", "safe", "c_variadic", "splatted"].contains key do
+            throw "function-pointer signature header has unknown field"
+        let abiPacked ← lift ((← lift (header.getObjVal? "abi_packed")).getNat?)
+        let _ ← lift (Miri.ABI.ExternAbi.ofPacked abiPacked)
+        let safe ← lift ((← lift (header.getObjVal? "safe")).getBool?)
+        let cVariadic ← lift ((← lift (header.getObjVal? "c_variadic")).getBool?)
+        let rawSplatted ← lift (header.getObjVal? "splatted")
+        let splatted ← if rawSplatted == .null then pure none else some <$> lift rawSplatted.getNat?
+        let types ← (arrayOfTerms #[] children).mapM (constructType fuel)
+        let some output := types.back? | throw "function-pointer output absent"
+        pure (.functionPointer {abiPacked, safe, cVariadic, splatted, inputs := types.pop, output})
       | .definition .type "adt" identity arguments => do
         pure (.adt identity (← constructArguments fuel (arrayOfTerms #[] arguments)))
       | .definition .type "foreign" identity .nil => pure (.foreign identity)

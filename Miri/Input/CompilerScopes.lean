@@ -12,7 +12,6 @@ structure Entry where
   trackCaller : Option Bool
 structure Prepared where
   program : LoweredProgram
-  scopes : Array (Array (Except String Entry))
   inlineAttributes : Std.HashMap CallInstance Bool
 private def decodeEntry (ctx : LowerContext) (tables : CompilerTables) (scope : SourceScope) :
     Except String (Entry × CompilerTables) := do
@@ -27,11 +26,9 @@ private def decodeEntry (ctx : LowerContext) (tables : CompilerTables) (scope : 
 def prepare (program : LoweredProgram) : Except String Prepared := do
   let ctx := LowerContext.ofDocument program.input
   let mut tables := program.compilerTables
-  let mut all := #[]
   let mut inlineAttributes : Std.HashMap CallInstance Bool := {}
   for index in [:program.bodyCount] do
     let metadata ← program.bodyMetadata index
-    let mut entries := #[]
     let scopes := metadata.sourceScopes
     for index in [:scopes.size] do
       let result := do
@@ -39,7 +36,7 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
         unless scope.id == index do throw "source scope index does not match canonical position"
         decodeEntry ctx tables scope
       match result with
-      | .error e => entries := entries.push (.error e)
+      | .error _ => pure ()
       | .ok (entry,next) =>
         if let some (callee,_) := entry.scope.inlined then
           let some value := entry.trackCaller | throw "inlinecallee attribute evidence missing"
@@ -47,17 +44,19 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
             unless previous == value do throw "conflicting full-instance inlinecallee attributes"
           inlineAttributes := inlineAttributes.insert callee value
         tables := next
-        entries := entries.push (.ok entry)
-    all := all.push entries
-  return ⟨program.withCompilerTables tables,all,inlineAttributes⟩
+  return ⟨program.withCompilerTables tables,inlineAttributes⟩
 
-/-- The caller supplies the canonical body index from its frame identity map.
-No fallback chooses a root, promoted body, or template by structural equality. -/
-def sourceScope (prepared : Prepared) (bodyIndex scopeIndex : Nat) :
-    Except String VirtualCalls.CallerScope := do
-  let some scopes := prepared.scopes[bodyIndex]? | throw "unknown canonical body index"
-  let some entry := scopes[scopeIndex]? | throw "unknown canonical source scope"
-  pure (← entry).scope
+/-- Source scopes follow the exact execution-owned body key. Raw template
+scope evidence remains immutable; no constructed identity indexes a material row. -/
+def sourceScopeIdentity (prepared : Prepared) (identity : BodyIdentity) (scopeIndex : Nat) :
+    RuntimeArrayTypes.CompilerM VirtualCalls.CallerScope := do
+  let metadata ← SourceMir.metadataIdentity identity
+  let some scope := metadata.sourceScopes[scopeIndex]? | throw "unknown canonical source scope"
+  unless scope.id == scopeIndex do throw "source scope index does not match canonical position"
+  let ctx := LowerContext.ofDocument prepared.program.input
+  match decodeEntry ctx prepared.program.compilerTables scope with
+  | .ok (entry,_) => pure entry.scope
+  | .error error => throw error
 
 /-- Full inlinecallee instances are the keys, including every generic argument. -/
 def inlineRequiresCallerLocation (prepared : Prepared) (fnInstance : CallInstance) :

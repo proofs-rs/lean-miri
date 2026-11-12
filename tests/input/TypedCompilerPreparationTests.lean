@@ -24,6 +24,10 @@ private def materialBody (program : LoweredProgram) (index : Nat) : Except Strin
   let some seed := program.input.bodies[index]? | throw "test body seed absent"
   pure {toBodyCore := source, promotedBodies := seed.promotedBodies}
 
+private def worldFor (program : LoweredProgram) : Except String RuntimeArrayTypes.World := do
+  let runtime ← (RuntimeMetadata.ofDocument program.input).mapError toString
+  (RuntimeArrayTypes.create runtime).mapError reprStr
+
 private def checkInlineScopes (program : LoweredProgram) : IO Unit := do
   -- Scope preparation rejects contradictions even when nobody queries that instance.
   let body ← must (materialBody program 0)
@@ -56,7 +60,11 @@ private def checkInlineScopes (program : LoweredProgram) : IO Unit := do
   let erroneous ← must (CompilerScopes.prepare (withScopes #[scope 9 false, scope 1 true]))
   check (CompilerVirtualFacts.inlineAttribute erroneous callee.id == some true)
     "failed scope entry changed the valid inlinecallee evidence"
-  check (!(CompilerScopes.sourceScope erroneous 0 0).isOk)
+  let original ← must (worldFor program)
+  let malformed := {original with
+    metadata := {original.metadata with source := erroneous.program.input, checkedMaterial := none, denseTypes := none}
+    bodies := BodyArena.Store.ofSource erroneous.program.input.bodies}
+  check (!((CompilerScopes.sourceScopeIdentity erroneous (.ofCanonicalIndex 0) 0).run malformed).isOk)
     "failed scope entry lost its deferred source-scope error"
   IO.println "inline attribute indexing rejects contradictions during table construction"
 
@@ -67,21 +75,27 @@ def main (args : List String) : IO Unit := do
   checkInlineScopes program
   let prepared := CompilerLifecycle.prepare program
   check (tables prepared.program == tables program) "lifecycle preparation changed compiler pool IDs"
-  check (prepared.entries.size == program.bodyCount) "lifecycle entries changed body pool indexing"
   let index := 0
+  let world ← must (worldFor program)
   let body ← must (materialBody program index)
   check (body.instanceId < program.input.instances.size) "resolved body instance is absent"
+  let identity := Miri.Interpreter.BodyIdentity.ofCanonicalIndex index
+  let (actual,_) ← must ((program.resolveBodyIdentity identity).run world)
+  check ((CompilerLifecycle.bodyEntry prepared ⟨identity,actual.body⟩ actual).isOk)
+    "valid demanded body lost its lifecycle metadata"
   let invalidBody := { body with preambleDefSpanId := program.input.spans.size }
   let invalid := { program with input := { program.input with bodies := program.input.bodies.set! index (.material invalidBody) } }
   let rejected := CompilerLifecycle.prepare invalid
-  let some rejectedEntry := rejected.entries[index]? | throw (IO.userError "missing lifecycle entry")
-  check (!rejectedEntry.preamble.isOk) "invalid source span became lifecycle evidence"
-  check (tables rejected.program == tables program) "failed lifecycle preparation changed compiler pools"
+  let invalidWorld := {world with metadata := {world.metadata with source := invalid.input, checkedMaterial := none, denseTypes := none}}
+  let (actual,_) ← must ((invalid.resolveBodyIdentity identity).run invalidWorld)
+  check (!(CompilerLifecycle.bodyEntry rejected ⟨identity,actual.body⟩ actual).isOk)
+    "invalid demanded source span became lifecycle evidence"
+  check (tables rejected.program == tables program) "lifecycle preparation changed compiler pools"
   let invalidBody := { body with instanceId := program.input.instances.size }
   let invalid := { program with input := { program.input with bodies := program.input.bodies.set! index (.material invalidBody) } }
-  let rejected := CompilerLifecycle.prepare invalid
-  let some entry := rejected.entries[index]? | throw (IO.userError "missing lifecycle entry")
-  check (!entry.callee.isOk) "out of bounds body instance was accepted"
+  let invalidWorld := {world with metadata := {world.metadata with source := invalid.input, checkedMaterial := none, denseTypes := none}}
+  check (!((invalid.resolveBodyIdentity identity).run invalidWorld).isOk)
+    "out of bounds demanded body instance was accepted"
   let runtime ← must ((RuntimeMetadata.ofDocument input.document).mapError toString)
   let context ← must (CompilerFacts.ofProgram runtime program)
   let casts ← must (CompilerFactAdapters.prepare context)

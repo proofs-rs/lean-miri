@@ -29,6 +29,27 @@ def source (document : ImportDocument) (bodyIndex blockIndex : Nat) : Except Str
     | throw "source call function type slot is absent"
   pure (some ⟨expression,reference.genericArgs,constantSpan⟩)
 
+/-- Read a symbolic call from this execution's exact body namespace. -/
+def sourceIdentity (identity : Miri.Interpreter.BodyIdentity) (blockIndex : Nat) :
+    RuntimeArrayTypes.CompilerM (Option Seed) := do
+  let world ← get
+  let view ← match world.bodies.lookup identity.index with
+    | .ok view => pure view | .error error => throw error
+  match view with
+  | .material index =>
+    match source world.metadata.source index blockIndex with
+    | .ok value => pure value | .error error => throw error
+  | .constructed key =>
+    let _ ← SourceMir.metadataIdentity identity
+    let some template := world.metadata.source.mirTemplates[key.templateId]?
+      | throw "generic MIR source template is absent"
+    let some block := template.template.skeleton.blocks[blockIndex]?
+      | throw "source call block is absent"
+    let .call functionType constantSpan .. := block.terminator.kind | return none
+    let some expression := template.template.types[functionType.index]?
+      | throw "source call function type slot is absent"
+    pure (some ⟨expression,key.instanceKey.arguments,constantSpan⟩)
+
 private def liftPure {m : Type → Type} [Monad m] [MonadExceptOf String m]
     (result : Except String α) : m α :=
   match result with | .ok value => pure value | .error message => throw message

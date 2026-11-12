@@ -7,6 +7,7 @@ use serde::Serialize;
 // because rustc happened to produce equal physical layout values.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum LayoutKey<'tcx> {
+    Canonical(rustc_middle::ty::Ty<'tcx>),
     Computed(rustc_abi::TyAndLayout<'tcx, rustc_middle::ty::Ty<'tcx>>),
     PointerData(rustc_middle::ty::Ty<'tcx>),
     EnumTag(rustc_middle::ty::Ty<'tcx>),
@@ -20,6 +21,7 @@ pub(super) enum Layout {
     UnionRecipe { union_type: u64 },
     StructRecipe { struct_type: u64 },
     SequenceRecipe { sequence_type: u64 },
+    PatternRecipe { pattern_type: u64 },
     PointerRecipe { pointer_type: u64 },
     PointerDataRecipe { pointer_data_type: u64 },
     EnumTagRecipe { enum_tag_type: u64 },

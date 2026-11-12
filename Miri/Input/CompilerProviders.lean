@@ -50,7 +50,7 @@ structure Prepared where
 /-- Resolve executable MIR in the caller's persistent execution universe. -/
 def Prepared.resolveBody (p : Prepared) (types : RuntimeArrayQueries.Access S) (index : Nat) :
     EStateM StepError S LoweredBody :=
-  RuntimeArrayQueries.perform types (p.program.resolveBody index)
+  RuntimeArrayQueries.performCompiler types (p.program.resolveBodyIdentity (.ofCanonicalIndex index))
 
 def Prepared.loweringContext (p : Prepared) : LowerContext :=
   let ctx := match p.lowering with
@@ -194,10 +194,9 @@ def executionHooks (p : Prepared) (types : RuntimeArrayQueries.Access (MachineHo
       pure (count, abi)
     functionKind := fun ty => RuntimeArrayQueries.perform types (CompilerFunctionFacts.kindInWorld p.functions ty)
     fnAbiOfFnPtr := fun _ layout extra => lift (CompilerFunctionFacts.pointerAbi p.functions layout.ty extra)
-    fnAbiOfInstance := fun _ callee extra => do
-      match CompilerInstanceAbi.abiOfInstance p.lifecycle.instances (← RuntimeArrayQueries.compilerSnapshot types) callee extra with
-      | .ok abi => pure abi
-      | .error error => throw (.unsupported error)}
+    fnAbiOfInstance := fun _ callee extra =>
+      RuntimeArrayQueries.performCompiler types
+        (CompilerInstanceAbi.abiOfInstanceInWorld p.lifecycle.instances callee extra)}
   let dispatch := {base.calls.dispatch with loadMir := fun _ callee => CompilerCallPipeline.loadMir p.lifecycle.calls types callee}
   let calls := {base.calls with compiler := callCompiler, dispatch}
   let helpers := {base.helpers with loadMir := fun _ callee => CompilerCallPipeline.loadMir p.lifecycle.calls types callee}

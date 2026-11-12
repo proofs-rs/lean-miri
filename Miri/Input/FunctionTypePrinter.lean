@@ -1,3 +1,4 @@
+import Miri.ABI.PackedExternAbi
 import Miri.Input.GenericSubstitution
 import Lean
 
@@ -26,9 +27,7 @@ def render [Monad m] [MonadExceptOf String m]
     unless ["abi_packed", "safe", "c_variadic", "splatted"].contains key do
       throw "function printer signature header has unknown field"
   let abi ← lift ((← lift (header.getObjVal? "abi_packed")).getNat?)
-  -- extern_abi.rs::ALL_VARIANTS: C, C-unwind, Rust. Other ABI spellings
-  -- require their own exact source mapping, never target call-convention names.
-  unless abi == 2 do throw "function printer ABI spelling is not implemented"
+  let abi ← lift (Miri.ABI.ExternAbi.ofPacked abi)
   let safe ← lift ((← lift (header.getObjVal? "safe")).getBool?)
   let variadic ← lift ((← lift (header.getObjVal? "c_variadic")).getBool?)
   let splattedValue ← lift (header.getObjVal? "splatted")
@@ -37,7 +36,10 @@ def render [Monad m] [MonadExceptOf String m]
   let children := collect #[] children
   let some output := children.back? | throw "function signature output absent"
   let inputs := children.pop
-  let mut result ← emit (if safe || forceSafe then "fn(" else "unsafe fn(")
+  let mut result ← emit (if safe || forceSafe then "" else "unsafe ")
+  if abi != .Rust then
+    result := result ++ (← emit ("extern \"" ++ Miri.ABI.ExternAbi.asStr abi ++ "\" "))
+  result := result ++ (← emit "fn(")
   for index in [:inputs.size] do
     if index > 0 then result := result ++ (← emit ", ")
     if splatted == some index then result := result ++ (← emit "#[rustc_splat] ")
