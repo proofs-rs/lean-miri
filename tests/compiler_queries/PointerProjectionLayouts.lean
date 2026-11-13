@@ -14,6 +14,7 @@ private structure Fixture where
   types : Array TypeNode
   layouts : Array Layout
   definitions : Array DefinitionId
+  predicates : Array VtablePredicate
   constants : Array Miri.MIR.TypeConst
 
 /-- A focused source-derived adapter. It reads target/type/layout material
@@ -51,11 +52,13 @@ private def readFixture (path : String) (version : Nat) : IO Fixture := do
     must (JsonReader.run (DecoderValues.parseDefinitionId "$.definitions") row.compress)
   let constants ← (← must ((← must (raw.getObjVal? "type_constants")).getArr?)).mapM fun row =>
     must (JsonReader.run (TypeConstCodec.decode "oracle.constant") row.compress)
-  return ⟨target,types,layouts,definitions,constants⟩
+  let predicates ← (← must ((← must (raw.getObjVal? "predicates")).getArr?)).mapM fun row =>
+    must (JsonReader.run (DecoderValues.parseVtablePredicate "$.predicates") row.compress)
+  return ⟨target,types,layouts,definitions,predicates,constants⟩
 
 private def Fixture.lookup (fixture : Fixture) (id : Nat) : IO Miri.ABI.LayoutData := do
   let some node := fixture.types.find? (·.id == id) | throw (IO.userError "type absent")
-  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions fixture.constants).mapError toString)
+  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions fixture.constants fixture.predicates).mapError toString)
 
 private def pointerParents (raw : Json) (id : Nat) : IO (Array Json) := do
   let rows ← must ((← must (raw.getObjVal? "types")).getArr?)
@@ -89,7 +92,7 @@ def main (args : List String) : IO Unit := do
       check (operation.pointerDataType == some returnedType)
         "pointer data operation changed the compiler query parent wide Ty identity"
       let actual ← must ((RuntimeMetadata.resolveLayout candidate.target candidate.types candidate.layouts
-        layoutId candidate.definitions candidate.constants).mapError toString)
+        layoutId candidate.definitions candidate.constants candidate.predicates).mapError toString)
       let matching := baseline.types.filter (fun prior => prior.display == node.display && prior.shapeKind == node.shapeKind)
       check (!matching.isEmpty) "contextual pointer source correspondence absent"
       let mut compared := false
@@ -98,7 +101,7 @@ def main (args : List String) : IO Unit := do
           let some oracleField ← fieldZero? oracleParent | continue
           let oracleLayout ← must ((← must (oracleField.getObjVal? "layout")).getNat?)
           let expected ← must ((RuntimeMetadata.resolveLayout baseline.target baseline.types baseline.layouts
-            oracleLayout baseline.definitions baseline.constants).mapError toString)
+            oracleLayout baseline.definitions baseline.constants baseline.predicates).mapError toString)
           check (actual == expected) s!"contextual pointer data field differs from pinned rustc: {node.display}\nexpected={repr expected}\nactual={repr actual}"
           compared := true
       check compared "contextual pointer has no complete source field oracle"

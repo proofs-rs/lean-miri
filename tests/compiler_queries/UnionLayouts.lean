@@ -14,6 +14,7 @@ private structure Fixture where
   types : Array TypeNode
   layouts : Array Layout
   definitions : Array DefinitionId
+  predicates : Array VtablePredicate
   constants : Array Miri.MIR.TypeConst
 
 /-- A focused source-derived adapter. It reads target/type/layout material
@@ -51,11 +52,13 @@ private def readFixture (path : String) (version : Nat) : IO Fixture := do
     must (JsonReader.run (DecoderValues.parseDefinitionId "$.definitions") row.compress)
   let constants ← (← must ((← must (raw.getObjVal? "type_constants")).getArr?)).mapM fun row =>
     must (JsonReader.run (TypeConstCodec.decode "oracle.constant") row.compress)
-  return ⟨target,types,layouts,definitions,constants⟩
+  let predicates ← (← must ((← must (raw.getObjVal? "predicates")).getArr?)).mapM fun row =>
+    must (JsonReader.run (DecoderValues.parseVtablePredicate "$.predicates") row.compress)
+  return ⟨target,types,layouts,definitions,predicates,constants⟩
 
 private def Fixture.lookup (fixture : Fixture) (id : Nat) : IO Miri.ABI.LayoutData := do
   let some node := fixture.types.find? (·.id == id) | throw (IO.userError "type absent")
-  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions fixture.constants).mapError toString)
+  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions fixture.constants fixture.predicates).mapError toString)
 
 def main (args : List String) : IO Unit := do
   let path::candidatePaths := args | throw (IO.userError "expected pinned union baseline export [candidate export]")
@@ -108,13 +111,13 @@ def main (args : List String) : IO Unit := do
       let wrong := candidate.layouts.set! node.layoutId
         {recipe with unionType := some candidate.types.size}
       check (!(RuntimeMetadata.resolveLayout candidate.target candidate.types wrong
-        node.layoutId candidate.definitions candidate.constants).isOk) "union recipe accepted absent source type"
+        node.layoutId candidate.definitions candidate.constants candidate.predicates).isOk) "union recipe accepted absent source type"
       let some nonUnion := candidate.types.find? (·.shapeKind == .bool)
         | throw (IO.userError "non-union control type absent")
       let wrong := candidate.layouts.set! node.layoutId
         {recipe with unionType := some nonUnion.id}
       check (!(RuntimeMetadata.resolveLayout candidate.target candidate.types wrong
-        node.layoutId candidate.definitions candidate.constants).isOk) "union recipe accepted non-union source type"
+        node.layoutId candidate.definitions candidate.constants candidate.predicates).isOk) "union recipe accepted non-union source type"
       comparisons := comparisons + 1
     check (comparisons >= 8) "union recipe fixture coverage incomplete"
     IO.println s!"PASS {comparisons} raw union recipes equal complete pinned rustc layouts; invalid recipes rejected"

@@ -14,6 +14,7 @@ private structure Fixture where
   types : Array TypeNode
   layouts : Array Layout
   definitions : Array DefinitionId
+  predicates : Array VtablePredicate
   constants : Array Miri.MIR.TypeConst
 
 /-- A focused source-derived adapter. It reads target/type/layout material
@@ -51,11 +52,13 @@ private def readFixture (path : String) (version : Nat) : IO Fixture := do
     must (JsonReader.run (DecoderValues.parseDefinitionId "$.definitions") row.compress)
   let constants ← (← must ((← must (raw.getObjVal? "type_constants")).getArr?)).mapM fun row =>
     must (JsonReader.run (TypeConstCodec.decode "oracle.constant") row.compress)
-  return ⟨target,types,layouts,definitions,constants⟩
+  let predicates ← (← must ((← must (raw.getObjVal? "predicates")).getArr?)).mapM fun row =>
+    must (JsonReader.run (DecoderValues.parseVtablePredicate "$.predicates") row.compress)
+  return ⟨target,types,layouts,definitions,predicates,constants⟩
 
 private def Fixture.lookup (fixture : Fixture) (id : Nat) : IO Miri.ABI.LayoutData := do
   let some node := fixture.types.find? (·.id == id) | throw (IO.userError "type absent")
-  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions fixture.constants).mapError toString)
+  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions fixture.constants fixture.predicates).mapError toString)
 
 def main (args : List String) : IO Unit := do
   let path :: candidates := args | throw (IO.userError "expected pinned baseline export [candidate]")
@@ -108,16 +111,16 @@ def main (args : List String) : IO Unit := do
     let .array element length identity := array.shape | throw (IO.userError "array control shape")
     let altered := candidate.types.set! array.id {array with shape := .array element length {identity with count := identity.count + 1}}
     check (!(RuntimeMetadata.resolveLayout candidate.target altered candidate.layouts array.layoutId
-      candidate.definitions candidate.constants).isOk) "array accepted summarized count inconsistent with raw Value"
+      candidate.definitions candidate.constants candidate.predicates).isOk) "array accepted summarized count inconsistent with raw Value"
     let altered := candidate.types.set! array.id {array with shape := .array element candidate.constants.size identity}
     check (!(RuntimeMetadata.resolveLayout candidate.target altered candidate.layouts array.layoutId
-      candidate.definitions candidate.constants).isOk) "array accepted missing raw length constant"
+      candidate.definitions candidate.constants candidate.predicates).isOk) "array accepted missing raw length constant"
     let some scalar := candidate.types.find? (fun node => node.shapeKind == .bool)
       | throw (IO.userError "wrong sequence shape control absent")
     let some recipe := candidate.layouts[array.layoutId]? | throw (IO.userError "array control layout absent")
     let altered := candidate.layouts.set! array.layoutId {recipe with sequenceType := some scalar.id}
     check (!(RuntimeMetadata.resolveLayout candidate.target candidate.types altered array.layoutId
-      candidate.definitions candidate.constants).isOk) "sequence recipe accepted scalar source type"
+      candidate.definitions candidate.constants candidate.predicates).isOk) "sequence recipe accepted scalar source type"
     check (!(JsonReader.run DecoderValues.parseLayout "{\"sequence_type\":0,\"pointer_type\":0}").isOk)
       "decoder accepted conflicting sequence and pointer recipes"
     check (!(JsonReader.run DecoderValues.parseLayout "{\"pointer_type\":0,\"size_bytes\":8}").isOk)

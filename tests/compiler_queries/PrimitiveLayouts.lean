@@ -13,6 +13,7 @@ private structure Fixture where
   types : Array TypeNode
   layouts : Array Layout
   definitions : Array DefinitionId
+  predicates : Array VtablePredicate
   constants : Array Miri.MIR.TypeConst
 
 /-- A focused source-derived adapter. It reads target/type/layout material
@@ -50,11 +51,13 @@ private def readFixture (path : String) (version : Nat) : IO Fixture := do
     must (JsonReader.run (DecoderValues.parseDefinitionId "$.definitions") row.compress)
   let constants ← (← must ((← must (raw.getObjVal? "type_constants")).getArr?)).mapM fun row =>
     must (JsonReader.run (TypeConstCodec.decode "oracle.constant") row.compress)
-  return ⟨target,types,layouts,definitions,constants⟩
+  let predicates ← (← must ((← must (raw.getObjVal? "predicates")).getArr?)).mapM fun row =>
+    must (JsonReader.run (DecoderValues.parseVtablePredicate "$.predicates") row.compress)
+  return ⟨target,types,layouts,definitions,predicates,constants⟩
 
 private def Fixture.lookup (fixture : Fixture) (id : Nat) : IO Miri.ABI.LayoutData := do
   let some node := fixture.types.find? (·.id == id) | throw (IO.userError "type absent")
-  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions fixture.constants).mapError toString)
+  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions fixture.constants fixture.predicates).mapError toString)
 
 /-- Compare complete computed layouts to rustc's eager layouts from a separate
 baseline export of exactly the same fixture/compiler/flags. -/
@@ -85,15 +88,15 @@ def main (args : List String) : IO Unit := do
   let invalidKind := candidate.layouts.set! tupleNode.layoutId
     {tupleLayout with tupleType := some nonTuple.id}
   check (!(RuntimeMetadata.resolveLayout candidate.target candidate.types invalidKind
-    tupleNode.layoutId candidate.definitions candidate.constants).isOk) "tuple recipe accepted non-tuple source material"
+    tupleNode.layoutId candidate.definitions candidate.constants candidate.predicates).isOk) "tuple recipe accepted non-tuple source material"
   let invalidId := candidate.layouts.set! tupleNode.layoutId
     {tupleLayout with tupleType := some candidate.types.size}
   check (!(RuntimeMetadata.resolveLayout candidate.target candidate.types invalidId
-    tupleNode.layoutId candidate.definitions candidate.constants).isOk) "tuple recipe accepted absent source material"
+    tupleNode.layoutId candidate.definitions candidate.constants candidate.predicates).isOk) "tuple recipe accepted absent source material"
   let cyclicTypes := candidate.types.set! tupleNode.id
     {tupleNode with shape := .tuple #[tupleNode.id]}
   check (!(RuntimeMetadata.resolveLayout candidate.target cyclicTypes candidate.layouts
-    tupleNode.layoutId candidate.definitions candidate.constants).isOk) "cyclic tuple material supplied a successful layout"
+    tupleNode.layoutId candidate.definitions candidate.constants candidate.predicates).isOk) "cyclic tuple material supplied a successful layout"
   let mut count := 0
   for node in candidate.types do
     let some input := candidate.layouts[node.layoutId]?

@@ -270,18 +270,20 @@ private def parseAdtDropMaterial (path : String) : Parser AdtDropMaterial := do
     ← required destructor (path ++ ".destructor")⟩
 
 private def parseFunctionAbiMaterial (path : String) : Parser FunctionAbiMaterial := do
-  let (neverUnwind,foreignItem,dropGlue,noWritable) ← object (none,none,none,none)
-      fun (neverUnwind,foreignItem,dropGlue,noWritable) key => do
+  let (neverUnwind,foreignItem,dropGlue,noWritable,alwaysComptime) ← object (none,none,none,none,none)
+      fun (neverUnwind,foreignItem,dropGlue,noWritable,alwaysComptime) key => do
     match key with
-    | "never_unwind" => pure (some (← boolean),foreignItem,dropGlue,noWritable)
-    | "foreign_item" => pure (neverUnwind,some (← boolean),dropGlue,noWritable)
-    | "drop_glue" => pure (neverUnwind,foreignItem,some (← boolean),noWritable)
-    | "rustc_no_writable" => pure (neverUnwind,foreignItem,dropGlue,some (← boolean))
+    | "never_unwind" => pure (some (← boolean),foreignItem,dropGlue,noWritable,alwaysComptime)
+    | "foreign_item" => pure (neverUnwind,some (← boolean),dropGlue,noWritable,alwaysComptime)
+    | "drop_glue" => pure (neverUnwind,foreignItem,some (← boolean),noWritable,alwaysComptime)
+    | "rustc_no_writable" => pure (neverUnwind,foreignItem,dropGlue,some (← boolean),alwaysComptime)
+    | "always_comptime" => pure (neverUnwind,foreignItem,dropGlue,noWritable,some (← boolean))
     | _ => fail s!"{path}: unknown definition ABI attribute `{key}`"
   pure ⟨← required neverUnwind (path ++ ".never_unwind"),
     ← required foreignItem (path ++ ".foreign_item"),
     ← required dropGlue (path ++ ".drop_glue"),
-    ← required noWritable (path ++ ".rustc_no_writable")⟩
+    ← required noWritable (path ++ ".rustc_no_writable"),
+    ← required alwaysComptime (path ++ ".always_comptime")⟩
 
 private def parseCallableSource (path : String) : Parser CallableSource := do
   let raw ← Lean.Json.Parser.anyCore
@@ -411,7 +413,7 @@ private structure ParseProjectionTermFields where
   kind : Option (String) := none
   value : Option (Nat) := none
 
-private def parseProjectionTerm (path : String) : Parser (Nat) := do
+private def parseProjectionTerm (path : String) : Parser PredicateProjectionTerm := do
   let s ← object (ParseProjectionTermFields.mk none none) fun s key => do
     match key with
     | "kind" => return { s with kind := some (← string) }
@@ -419,8 +421,10 @@ private def parseProjectionTerm (path : String) : Parser (Nat) := do
     | _ => skipValue; pure s
   let kind ← required s.kind (path ++ ".kind")
   let value ← required s.value (path ++ ".value")
-  unless kind == "type" do fail s!"{path}: unsupported predicate projection term"
-  pure value
+  match kind with
+  | "type" => pure (.type value)
+  | "const" => pure (.constant value)
+  | _ => fail s!"{path}: unsupported predicate projection term"
 
 private structure ParseVtablePredicateFields where
   kind : Option (String) := none
@@ -428,7 +432,7 @@ private structure ParseVtablePredicateFields where
   def_path : Option (Option String) := none
   generic_args : Option (Array Miri.MIR.GenericArg) := none
   bound_variables : Option (Array Miri.MIR.BoundVariableKind) := none
-  term : Option (Option Nat) := none
+  term : Option (Option PredicateProjectionTerm) := none
 
 def parseVtablePredicate (path : String) : Parser (VtablePredicate) := do
   let s ← object (ParseVtablePredicateFields.mk none none none none none none) fun s key => do

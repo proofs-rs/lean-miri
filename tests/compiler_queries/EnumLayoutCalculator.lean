@@ -17,6 +17,7 @@ private structure Oracle where
   types : Array TypeNode
   layouts : Array Miri.Input.Layout
   definitions : Array DefinitionId
+  predicates : Array VtablePredicate
   constants : Array Miri.MIR.TypeConst
 
 /-- Focused historical producer adapter: read raw type identity and actual
@@ -42,11 +43,13 @@ private def readOracle (path : String) : IO Oracle := do
     must (JsonReader.run DecoderValues.parseLayout value.compress)
   let constants ← (← must ((← must (raw.getObjVal? "type_constants")).getArr?)).mapM fun row =>
     must (JsonReader.run (TypeConstCodec.decode "oracle.constant") row.compress)
-  pure ⟨target,types,layouts,definitions,constants⟩
+  let predicates ← (← must ((← must (raw.getObjVal? "predicates")).getArr?)).mapM fun row =>
+    must (JsonReader.run (DecoderValues.parseVtablePredicate "$.predicates") row.compress)
+  pure ⟨target,types,layouts,definitions,predicates,constants⟩
 
 private def Oracle.layout (oracle : Oracle) (node : TypeNode) : IO LayoutData :=
   must ((RuntimeMetadata.resolveLayout oracle.target oracle.types oracle.layouts node.layoutId
-    oracle.definitions oracle.constants).mapError toString)
+    oracle.definitions oracle.constants oracle.predicates).mapError toString)
 
 
 private def integerFromRaw : ReprInteger → IO IntegerType

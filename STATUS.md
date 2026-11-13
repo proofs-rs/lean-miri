@@ -13,22 +13,33 @@ the ability to verify arbitrary Rust are not claimed.
 
 ## Compiler material migration (in progress)
 
+FnPtr/closure cast resolution now follows actual MIR cast requests, including
+requests discovered after their type was registered. Non-demanded FnDef result
+enumeration is removed. Plain/KCFI vtable fixtures retain zero such query rows;
+late-demand physical joins and valid source KCFI casts pass. A pinned compiler
+failure for direct impl-DefId KCFI queries remains an explicit residual.
+
 Required raw scalar CTFE source catalogues now survive producer capture, strict
 decoding and Lean import. A real two-source arithmetic dependency closure and
 four malformed/missing/duplicate/dangling controls pass; the captured arithmetic
 body executes in the local scalar machine with matching counters and value.
 This does not admit general CTFE queries: root calls, required-constant preambles,
 allocation/interner semantics and unsupported raw MIR remain unresolved.
+An independent frame-entry controller preserves ordered duplicate requests and
+callback World state on failure before initialization. Five kernel examples use
+no axioms; evaluation callbacks and query-root admission remain separate work.
 
 Runtime body providers now resolve exact identities through the execution-owned
 BodyArena. Constructed Item instances select a unique ordinary raw MIR template
 by physical definition and complete arguments; local layouts, frames, source
 scopes and backtraces consume that identity. The obsolete lifecycle, scope and
-backtrace result indexes are removed. Binder-free FnPtr AsPtr/FromPtr shims now
-retain raw signatures, lang-item identities and source spans only; Lean constructs
-their MIR, including for novel type/instance/body identities. Eight complete
-pass-after rustc bodies and production corruption controls agree. HRTB FnPtr,
-promoted bodies, general compiler shims and constructed shim ABI remain unresolved.
+backtrace result indexes are removed. FnPtr AsPtr/FromPtr shims retain raw
+binder-free method signatures, lang-item identities and source spans; Self can
+retain region-only higher-ranked binders. Lean constructs their MIR, including
+novel type/instance/body identities. Sixteen complete higher-ranked production
+and prefix-external bodies match actual rustc queries at normalized Self keys;
+raw alias-key comparisons and corruption/non-region-binder controls also pass.
+Promoted bodies, general compiler shims and constructed shim ABI remain unresolved.
 Novel-body controls exercise actual provider demand, dense identity reuse and
 missing/ambiguous-source rejection.
 
@@ -73,8 +84,12 @@ An independent World provider now resolves twelve raw own-method slots from
 source signatures, predicates and arguments with all instance, allocation, ABI
 and vtable answer rows removed. Vacant and by-value-shim selections retain their
 physical declaration identities; missing source controls reject. Declaration-local
-callable metadata is captured, but final instance selection and caller-location
-reification are not yet connected.
+callable metadata now drives thirty source-selected final-slot comparisons and
+ten Virtual postprocessing comparisons across ordinary/KCFI policies. Selected
+Item, by-value VTable shim and track-caller Reify identities are interned in the
+shared World with answer catalogs removed; missing/forged source, policy and
+oracle controls reject. Runtime hooks, source object-candidate selection,
+specialized leaves, shim MIR/ABI and real allocation remain unconnected.
 Generic receiver alias normalization, abstract-constant expansion and raw crate
 feature/session policy material remain unresolved; unavailable semantics error
 instead of silently omitting entries.
@@ -122,7 +137,13 @@ Primitive non-pointer two-field tuples now derive complete scalar-pair ABI in
 World: 32 Item, 36 FnPtr and 136 helper comparisons cover optimization and panic
 settings, with empty-catalog and novel-instance controls. Twelve traced Item keys
 eliminate four explicit ABI calls each. Pointer pairs and general indirect or
-aggregate ABI remain exact residuals.
+aggregate ABI remain exact residuals. Small byte-storage Memory ABI additionally
+matches 48 Item, 52 FnPtr and 200 helper comparisons, including target-aligned
+cast storage and NoUndef distinctions. Forty-eight constructed repetitions and
+a novel six-byte array/instance agree without ABI catalogs. Twelve Item keys
+eliminate four explicit calls each; 13 FnPtr and 50 helper keys are audited.
+Nine-byte storage, target/width/collision and constructed variadic boundaries
+reject or retain exact residuals. Indirect aggregate deduction remains unported.
 
 The execution World now interns complete Pattern base/Range/Or/NotNull syntax
 and retains endpoint constant identities. Novel/material roundtrip, ambiguity,
@@ -149,7 +170,12 @@ raw layouts and three residuals. Independent source calculators match fourteen
 complete coroutine layouts, eight MaybeUninit wrappers, ten selected coroutine
 bodies and eight generic body instantiations; 96 finite dispatch cases also pass.
 These calculators are not yet connected to execution World coroutine queries,
-and general coroutine layout remains unresolved.
+and general coroutine layout remains unresolved. Required nested generic source
+catalogues now preserve two raw owners/eight instantiations and ten physical
+body sources, including three generated by-move bodies. Fresh strict decoder
+checks, zero-prefix substitution and ten malformed header/pool controls pass.
+Saved source metadata is pooled explicitly; a serialization regression checks
+reference reuse, scope independence, empty fields and double-pooling rejection.
 Non-Value pattern endpoints still require CTFE. Structural pointer/reference/tuple/array/slice
 covariance runs on World syntax: an independent 16-by-16 rustc matrix passes
 with an empty answer catalog. Raw declaration constraints now infer fifteen
@@ -195,8 +221,17 @@ two open FnPtr subterms, Anon, physical Named, UTF-8 NamedForPrinting, ClosureEn
 and Canonical identities in material and empty-prefix Worlds. The producer raw
 eligibility predicate covers this domain; local binders still validate their
 owned variables and closed normalization still rejects escaping regions.
-Dyn, type/constant binders, aliases,
-closures/coroutines and non-Value constant hashes, full validity and allocation
+Dynamic World syntax now owns ordered typed existential predicates, including
+Type/Const projection terms and region binders, behind a checked physical-reference
+pool certificate. Eight complete compiler root/component hashes, 24 novel flags
+and eight normalized trees agree with type/constant/predicate prefixes removed
+while retaining raw definitions. Exact reuse,
+roundtrip and malformed/duplicate/binder/region/fuel/oracle controls pass.
+Constructed Dynamic is unsized; raw DynMetadata and virtual predicate runtime
+bridges remain unported, so those requests error rather than inventing thin
+pointers or treating an object as nondynamic. Exact material residuals remain.
+Non-region binders, unsupported alias children, closures/coroutines and non-Value
+constant hashes, full validity and allocation
 identity/dedup reconstruction remain unresolved. These comparisons do
 not establish whole-compiler equivalence, query closure or all-choice guest safety.
 

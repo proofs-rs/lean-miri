@@ -27,6 +27,17 @@ correspondence claim. Tests asserting actual raw materials require fresh exports
 the genuine differential drivers use category parsers or independently fresh
 baseline and candidate exports.
 
+Source compiler-query comparisons also have dedicated drivers in `tools/`:
+`check-dynamic-type-hash.sh`, `check-pattern-type-hash.sh`,
+`check-vtable-method-slots.sh`, `check-vtable-final-instances.sh` and
+`check-fn-pointer-hrtb-shims.sh`. They compare fresh exports with independent
+pinned-rustc queries and exercise their stated malformed-source controls.
+Use an exporter built from the same source revision and the pinned environment;
+the FnPtr driver requires its immutable path in `EXPORTER_BIN`. These finite
+comparisons do not establish general query equivalence. Run their build stages
+before starting other fixture readers; `*_SKIP_BUILD=1` is appropriate only after
+a coordinated complete rebuild of changed schemas and their dependents.
+
 ## Self-contained Lean checks: MiriTests
 
 Self-contained theorem examples and assertions live in [`MiriTests/`](../MiriTests/),

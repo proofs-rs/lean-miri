@@ -311,6 +311,7 @@ class FailClosedExportTests(unittest.TestCase):
         self.assertEqual(document["producer"]["abi_session"], {
             "panic": "unwind", "panic_in_drop": "unwind", "optimization": "no",
             "llvm_writable": False, "box_noalias": True,
+            "incremental_enabled": False, "sanitizers": [],
         })
         traces = [line for line in self.last_abi_trace
                   if line.startswith("lean_miri_fn_pointer_abi_call ")

@@ -17,7 +17,8 @@ pub fn eligible<'tcx>(tcx:TyCtxt<'tcx>,instance:ty::Instance<'tcx>)->bool {
         || self_ty.has_placeholders() || self_ty.references_error() {return false}
     let ty::FnPtr(signature,header)=self_ty.kind() else {return false};
     let signature=signature.with(*header);
-    if !signature.bound_vars().is_empty() {return false}
+    if !signature.bound_vars().iter().all(|variable|
+        matches!(variable,ty::BoundVariableKind::Region(_))) {return false}
     let signature=signature.skip_binder();
     if !signature.inputs_and_output.iter().all(|ty|
         super::generic_mir::supported_arguments(tcx.mk_args(&[ty.into()]))) {return false}

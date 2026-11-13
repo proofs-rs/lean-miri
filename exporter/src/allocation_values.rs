@@ -203,6 +203,7 @@ pub(super) enum PredicateData {
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub(super) enum ProjectionTerm {
     Type(u64),
+    Const(u64),
 }
 
 #[cfg(test)]

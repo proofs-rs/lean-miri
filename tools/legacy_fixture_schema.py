@@ -92,7 +92,11 @@ def adapt_legacy_fixture(document):
     if "compiler_coroutine_coverage" not in result and isinstance(result.get("bodies"), list):
         result["compiler_coroutine_coverage"] = {
             "body_coroutines": [False] * len(result["bodies"]),
-            "coroutines": [], "auxiliary_bodies": []}
+            "coroutines": [], "auxiliary_bodies": [], "generic_sources": []}
+    # Historical replay has no raw generic declarations; never infer them from
+    # closed coverage or claim this adapter as fresh source evidence.
+    if isinstance(result.get("compiler_coroutine_coverage"), dict):
+        result["compiler_coroutine_coverage"].setdefault("generic_sources", [])
     definitions = result.get("definitions", [])
     instances = result.get("instances", [])
     runtime = result.get("compiler_runtime_queries", {})

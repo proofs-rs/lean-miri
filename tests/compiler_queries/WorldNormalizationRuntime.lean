@@ -6,7 +6,7 @@ private def context : AliasRuntime.Context := {
   generic := {types := #[],definitions := #[],constants := #[],pointerBytes := 8},
   aliases := {freeRules := #[],associatedDeclarations := #[]}, traits := {traits := #[]} }
 def main : IO Unit := do
-  let initial ← must (World.ofMaterial #[] #[] #[] 8)
+  let initial ← must (World.ofMaterial #[] #[] #[] #[] 8)
   let (root,world) ← must ((do
     let mut id ← World.internType .bool
     for _ in [:64] do id ← World.internType (.tuple #[id,id])

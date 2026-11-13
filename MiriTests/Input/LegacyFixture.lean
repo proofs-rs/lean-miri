@@ -119,7 +119,12 @@ def adaptLegacyFixture (source : String) : Except String String := do
       value := value.setObjVal! "compiler_coroutine_coverage" (Json.mkObj [
         ("body_coroutines", toJson (bodies.map fun _ => false)),
         ("coroutines", toJson (#[] : Array Json)),
-        ("auxiliary_bodies", toJson (#[] : Array Json))])
+        ("auxiliary_bodies", toJson (#[] : Array Json)),
+        ("generic_sources", toJson (#[] : Array Json))])
+  if let .ok coverage := value.getObjVal? "compiler_coroutine_coverage" then
+    if !(coverage.getObjVal? "generic_sources").isOk then
+      value := value.setObjVal! "compiler_coroutine_coverage"
+        (coverage.setObjVal! "generic_sources" (toJson (#[] : Array Json)))
   if let .ok definitions := raw.getObjVal? "definitions" >>= Json.getArr? then
     if let .ok instances := raw.getObjVal? "instances" >>= Json.getArr? then
       if let .ok rows := do

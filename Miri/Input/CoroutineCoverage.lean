@@ -1,6 +1,8 @@
 import Miri.Input.Model
 import Miri.Input.DecodeMIR
 import Miri.Input.RuntimeMetadata
+import Miri.Input.GenericMaterialCodec
+import Miri.Input.CoroutineGenericSource
 
 namespace Miri.Input.CoroutineCoverageCodec
 open JsonReader
@@ -95,32 +97,32 @@ private def sharedSource (pools : DecodeMIR.MIRParser.SharedPools) : Parser Sour
   let some value := pools.sources[reference]? | fail "coroutine coverage: dangling source-info pool reference"
   pure value
 
-private structure fieldFields where
-  type : Option (Nat) := none
+private structure fieldFields (Child : Type) where
+  type : Option Child := none
   source_info : Option (SourceInfo) := none
   ignore_for_traits : Option (Bool) := none
   debuginfo_name : Option (Option String) := none
 
-private def field (pools : DecodeMIR.MIRParser.SharedPools) : Parser CoroutineSavedField := do
-  let v ← object ({} : fieldFields) fun v key => do
+private def field (pools : DecodeMIR.MIRParser.SharedPools) (child : Parser Child) : Parser (CoroutineSavedField Child) := do
+  let v ← object ({} : fieldFields Child) fun v key => do
     match key with
-    | "type" => return {v with type := some (← natural)}
+    | "type" => return {v with type := some (← child)}
     | "source_info" => return {v with source_info := some (← sharedSource pools)}
     | "ignore_for_traits" => return {v with ignore_for_traits := some (← boolean)}
     | "debuginfo_name" => return {v with debuginfo_name := some (← nullable string)}
     | _ => fail s!"unknown coroutine coverage field `{key}`"
   return ⟨(← required v.type "type"), (← required v.source_info "source_info"), (← required v.ignore_for_traits "ignore_for_traits"), (← required v.debuginfo_name "debuginfo_name")⟩
 
-private structure layoutFields where
-  field_tys : Option (Array CoroutineSavedField) := none
+private structure layoutFields (Child : Type) where
+  field_tys : Option (Array (CoroutineSavedField Child)) := none
   variant_fields : Option (Array (Array Nat)) := none
   variant_source_info : Option (Array SourceInfo) := none
   storage_conflicts : Option (Array (Array Nat)) := none
 
-private def layout (pools : DecodeMIR.MIRParser.SharedPools) : Parser CoroutineLayoutEvidence := do
-  let v ← object ({} : layoutFields) fun v key => do
+private def layout (pools : DecodeMIR.MIRParser.SharedPools) (child : Parser Child) : Parser (CoroutineLayoutEvidence Child) := do
+  let v ← object ({} : layoutFields Child) fun v key => do
     match key with
-    | "field_tys" => return {v with field_tys := some (← array (field pools))}
+    | "field_tys" => return {v with field_tys := some (← array (field pools child))}
     | "variant_fields" => return {v with variant_fields := some (← array (array natural))}
     | "variant_source_info" => return {v with variant_source_info := some (← array sourceInfo)}
     | "storage_conflicts" => return {v with storage_conflicts := some (← array (array natural))}
@@ -146,7 +148,7 @@ private def evidence (pools : DecodeMIR.MIRParser.SharedPools) : Parser Coroutin
     | "coroutine_kind" => return {v with coroutine_kind := some (← kind)}
     | "yield_type" => return {v with yield_type := some (← nullable natural)}
     | "resume_type" => return {v with resume_type := some (← nullable natural)}
-    | "layout" => return {v with layout := some (← layout pools)}
+    | "layout" => return {v with layout := some (← layout pools natural)}
     | "drop_sync" => return {v with drop_sync := some (← nullable natural)}
     | "drop_async" => return {v with drop_async := some (← nullable natural)}
     | "drop_proxy_async" => return {v with drop_proxy_async := some (← nullable natural)}
@@ -175,7 +177,48 @@ private def auxiliary (pools : DecodeMIR.MIRParser.SharedPools) : Parser (Corout
   return (⟨(← required v.owner "owner_body"), (← required v.role "role"),
     (← required v.sourceKind "source_kind"), body.value⟩, body.references)
 
+private def rawJson : Parser Lean.Json := Lean.Json.Parser.anyCore
+private def rawTerm : Parser GenericSubstitution.Term := do
+  liftExcept (GenericMaterialCodec.readTerm 4096 (← rawJson))
+private def rawDefinition : Parser GenericSubstitution.DefinitionIdentity := do
+  liftExcept (GenericMaterialCodec.readDefinition (← rawJson))
+private def rawSort : Parser GenericSubstitution.ArgSort := do
+  liftExcept (GenericMaterialCodec.readSort (← rawJson))
+
+private structure GenericSourceFields where
+  owner : Option GenericSubstitution.DefinitionIdentity := none
+  physicalOwner : Option GenericSubstitution.DefinitionIdentity := none
+  typeckOwner : Option GenericSubstitution.DefinitionIdentity := none
+  parentCount : Option Nat := none
+  parameters : Option (Array GenericSubstitution.ArgSort) := none
+  witnessParameters : Option (Array GenericSubstitution.ArgSort) := none
+  typeExpression : Option GenericSubstitution.Term := none
+  identityKind : Option GenericSubstitution.Term := none
+  byMoveOwner : Option (Option GenericSubstitution.DefinitionIdentity) := none
+  layout : Option (CoroutineLayoutEvidence GenericSubstitution.Term) := none
+
+private def genericSource (pools : DecodeMIR.MIRParser.SharedPools) : Parser CoroutineGenericSource := do
+  let v ← object ({} : GenericSourceFields) fun v key => do
+    match key with
+    | "owner" => return {v with owner := some (← rawDefinition)}
+    | "physical_owner" => return {v with physicalOwner := some (← rawDefinition)}
+    | "typeck_owner" => return {v with typeckOwner := some (← rawDefinition)}
+    | "parent_count" => return {v with parentCount := some (← natural)}
+    | "parameters" => return {v with parameters := some (← array rawSort)}
+    | "witness_parameters" => return {v with witnessParameters := some (← array rawSort)}
+    | "type_expression" => return {v with typeExpression := some (← rawTerm)}
+    | "identity_kind" => return {v with identityKind := some (← rawTerm)}
+    | "by_move_owner" => return {v with byMoveOwner := some (← nullable rawDefinition)}
+    | "layout" => return {v with layout := some (← layout pools rawTerm)}
+    | _ => fail s!"unknown coroutine generic source field `{key}`"
+  return ⟨(← required v.owner "owner"), (← required v.physicalOwner "physical_owner"),
+    (← required v.typeckOwner "typeck_owner"), (← required v.parentCount "parent_count"),
+    (← required v.parameters "parameters"), (← required v.witnessParameters "witness_parameters"),
+    (← required v.typeExpression "type_expression"), (← required v.identityKind "identity_kind"),
+    (← required v.byMoveOwner "by_move_owner"), (← required v.layout "layout")⟩
+
 private structure CatalogFields where
+  genericSources : Option (Array CoroutineGenericSource) := none
   markers : Option (Array Bool) := none
   coroutines : Option (Array CoroutineEvidence) := none
   auxiliary : Option (Array (CoroutineAuxiliaryBody × DecodeMIR.References)) := none
@@ -183,12 +226,13 @@ private structure CatalogFields where
 def parse (pools : DecodeMIR.MIRParser.SharedPools) : Parser Parsed := do
   let v ← object ({} : CatalogFields) fun v key => do
     match key with
+    | "generic_sources" => return {v with genericSources := some (← array (genericSource pools))}
     | "body_coroutines" => return {v with markers := some (← array boolean)}
     | "coroutines" => return {v with coroutines := some (← array (evidence pools))}
     | "auxiliary_bodies" => return {v with auxiliary := some (← array (auxiliary pools))}
     | _ => fail s!"unknown coroutine catalog field `{key}`"
   let auxiliary ← required v.auxiliary "auxiliary_bodies"
-  return ⟨⟨(← required v.markers "body_coroutines"), (← required v.coroutines "coroutines"), auxiliary.map (·.1)⟩,
+  return ⟨⟨(← required v.markers "body_coroutines"), (← required v.coroutines "coroutines"), auxiliary.map (·.1), (← required v.genericSources "generic_sources")⟩,
     auxiliary.map (·.2)⟩
 
 
@@ -226,6 +270,19 @@ private def physicalVariant (root : Miri.ABI.LayoutData) (index : Nat) : Except 
 
 /-- Validate evidence without ever adding auxiliary bodies to the callable graph. -/
 def validate (document : ImportDocument) (coverage : CoroutineCoverage) : Except String Unit := do
+  CoroutineGenericSource.validateCatalog coverage.genericSources
+  let registered (identity : GenericSubstitution.DefinitionIdentity) :=
+    document.definitions.any fun value => value.crateIndex == identity.crateIndex && value.index == identity.index
+  for source in coverage.genericSources do
+    unless registered source.owner && registered source.physicalOwner && registered source.typeckOwner &&
+        source.byMoveOwner.all registered do
+      throw "coroutine generic source: declaration identity absent from definition pool"
+    for field in source.layout.fields do
+      unless field.sourceInfo.spanId < document.spans.size do
+        throw "coroutine generic source: dangling saved-field source span"
+    for info in source.layout.variantSources do
+      unless info.spanId < document.spans.size do
+        throw "coroutine generic source: dangling state source span"
   unless coverage.bodyCoroutines.size == document.bodies.size do
     throw "coroutine coverage: incomplete body markers"
   let mut owners : Array Nat := #[]
@@ -249,6 +306,11 @@ def validate (document : ImportDocument) (coverage : CoroutineCoverage) : Except
       throw "coroutine coverage: absent owner instance"
     match coroutineType.shape, ownerInstance.instanceKind with
     | .coroutine definition args, .Item source =>
+      let some declaration := document.definitions[definition]? |
+        throw "coroutine generic source: coroutine owner definition absent"
+      unless coverage.genericSources.any (fun value =>
+          value.owner.crateIndex == declaration.crateIndex && value.owner.index == declaration.index) do
+        throw "coroutine generic source: executable coroutine declaration missing"
       unless definition == source && args == ownerInstance.genericArgs do
         throw "coroutine coverage: coroutine type differs from owner instance"
     | .coroutine .., .Shim (.AsyncDropGlue _ ty) =>
@@ -288,7 +350,7 @@ def validate (document : ImportDocument) (coverage : CoroutineCoverage) : Except
     let target ← RuntimeMetadata.importTarget targetEvidence |>.mapError toString
     let some _ := document.layouts[coroutineType.layoutId]? |
       throw "coroutine coverage: missing root physical layout"
-    let rootLayout ← RuntimeMetadata.resolveLayout target document.types document.layouts coroutineType.layoutId document.definitions document.typeConstants |>.mapError toString
+    let rootLayout ← RuntimeMetadata.resolveLayout target document.types document.layouts coroutineType.layoutId document.definitions document.typeConstants document.predicates |>.mapError toString
     let requiredVariants := if physical.kind == .multiple then physical.variants.size else 0
     unless projections.typingEnvironment == "fully_monomorphized" &&
         projections.parents.size == requiredVariants + 1 &&
@@ -303,7 +365,7 @@ def validate (document : ImportDocument) (coverage : CoroutineCoverage) : Except
       if let some variant := parent.variant then
         let some _ := document.layouts[parent.layoutId]? |
           throw "coroutine coverage: missing selected physical layout"
-        let actual ← RuntimeMetadata.resolveLayout target document.types document.layouts parent.layoutId document.definitions document.typeConstants |>.mapError toString
+        let actual ← RuntimeMetadata.resolveLayout target document.types document.layouts parent.layoutId document.definitions document.typeConstants document.predicates |>.mapError toString
         let expected ← physicalVariant rootLayout variant
         unless actual == expected do
           throw "coroutine coverage: selected query differs from exact physical variant"

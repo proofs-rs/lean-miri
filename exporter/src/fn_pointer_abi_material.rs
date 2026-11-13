@@ -58,7 +58,9 @@ pub(super) fn signature<'tcx>(tcx:TyCtxt<'tcx>, signature:ty::PolyFnSig<'tcx>,
         A::Rust|A::RustCold|A::RustPreserveNone|A::RustTail) {return None;}
     signature.inputs_and_output.iter().all(|input| match input.kind() {
         ty::Bool|ty::Char|ty::Int(_)|ty::Uint(_)|ty::Float(_)|ty::Never => true,
-        ty::Tuple(fields)=>fields.is_empty()||super::instance_abi_material::small_nonpointer_pair(input),
+        ty::Tuple(fields)=>fields.is_empty()||super::instance_abi_material::small_nonpointer_pair(input)||
+            super::instance_abi_material::small_memory(input),
+        ty::Array(..)=>super::instance_abi_material::small_memory(input),
         ty::RawPtr(child,_)|ty::Ref(_,child,_)=>super::instance_abi_material::sized_pointee(tcx,*child,256),
         ty::FnPtr(..)=>true,
         ty::Adt(..)=>super::instance_abi_material::thin_box(tcx,input),

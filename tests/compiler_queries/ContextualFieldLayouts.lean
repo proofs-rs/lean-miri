@@ -14,6 +14,7 @@ private structure Fixture where
   types : Array TypeNode
   layouts : Array Layout
   definitions : Array DefinitionId
+  predicates : Array VtablePredicate
   constants : Array Miri.MIR.TypeConst
 
 /-- A focused source-derived adapter. It reads target/type/layout material
@@ -51,11 +52,13 @@ private def readFixture (path : String) (version : Nat) : IO Fixture := do
     must (JsonReader.run (DecoderValues.parseDefinitionId "$.definitions") row.compress)
   let constants ← (← must ((← must (raw.getObjVal? "type_constants")).getArr?)).mapM fun row =>
     must (JsonReader.run (TypeConstCodec.decode "oracle.constant") row.compress)
-  return ⟨target,types,layouts,definitions,constants⟩
+  let predicates ← (← must ((← must (raw.getObjVal? "predicates")).getArr?)).mapM fun row =>
+    must (JsonReader.run (DecoderValues.parseVtablePredicate "$.predicates") row.compress)
+  return ⟨target,types,layouts,definitions,predicates,constants⟩
 
 private def Fixture.lookup (fixture : Fixture) (id : Nat) : IO Miri.ABI.LayoutData := do
   let some node := fixture.types.find? (·.id == id) | throw (IO.userError "type absent")
-  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions fixture.constants).mapError toString)
+  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions fixture.constants fixture.predicates).mapError toString)
 
 private def pointerParents (raw : Json) (id : Nat) : IO (Array Json) := do
   let rows ← must ((← must (raw.getObjVal? "types")).getArr?)
@@ -88,7 +91,7 @@ def main (args : List String) : IO Unit := do
         let index ← must ((← must (field.getObjVal? "index")).getNat?)
         let layoutId ← must ((← must (field.getObjVal? "layout")).getNat?)
         let actual ← must ((RuntimeMetadata.resolveLayout candidate.target candidate.types candidate.layouts
-          layoutId candidate.definitions candidate.constants).mapError toString)
+          layoutId candidate.definitions candidate.constants candidate.predicates).mapError toString)
         let mut compared := false
         for prior in matching do
           for oracleParent in ← pointerParents baselineRaw prior.id do
@@ -97,7 +100,7 @@ def main (args : List String) : IO Unit := do
               unless (← must ((← must (oracleField.getObjVal? "index")).getNat?)) == index do continue
               let oracleLayout ← must ((← must (oracleField.getObjVal? "layout")).getNat?)
               let expected ← must ((RuntimeMetadata.resolveLayout baseline.target baseline.types baseline.layouts
-                oracleLayout baseline.definitions baseline.constants).mapError toString)
+                oracleLayout baseline.definitions baseline.constants baseline.predicates).mapError toString)
               check (actual == expected) s!"contextual field differs from pinned rustc: {node.display}, field={index}, variant={variant.compress}\nexpected={repr expected}\nactual={repr actual}"
               compared := true
         check compared s!"contextual field lacks exact source oracle: {node.display}, field={index}"
@@ -112,7 +115,7 @@ def main (args : List String) : IO Unit := do
       | throw (IO.userError "canonical u8 control absent")
     check (tagId != unsigned.layoutId) "contextual full-range tag aliased canonical primitive request identity"
     let tag ← must ((RuntimeMetadata.resolveLayout candidate.target candidate.types candidate.layouts
-      tagId candidate.definitions candidate.constants).mapError toString)
+      tagId candidate.definitions candidate.constants candidate.predicates).mapError toString)
     check (tag == (← candidate.lookup unsigned.id)) "full-range context control does not equal canonical primitive physically"
     let some recipe := candidate.layouts[tagId]? | throw (IO.userError "tag operation recipe absent")
     check (recipe.enumTagType == some niche.id) "tag operation does not retain original parent type"
@@ -120,7 +123,7 @@ def main (args : List String) : IO Unit := do
       | throw (IO.userError "malformed tag parent control absent")
     let corrupted := candidate.layouts.set! tagId {recipe with enumTagType := some boolean.id}
     check (!(RuntimeMetadata.resolveLayout candidate.target candidate.types corrupted tagId
-      candidate.definitions candidate.constants).isOk) "tag operation accepted a scalar parent without discriminant"
+      candidate.definitions candidate.constants candidate.predicates).isOk) "tag operation accepted a scalar parent without discriminant"
     check (!(JsonReader.run DecoderValues.parseLayout "{\"enum_tag_type\":0,\"primitive_recipe\":\"i8\"}").isOk)
       "decoder accepted tag operation and canonical primitive conflict"
     check (!(JsonReader.run DecoderValues.parseLayout "{\"enum_tag_type\":0,\"size_bytes\":1}").isOk)

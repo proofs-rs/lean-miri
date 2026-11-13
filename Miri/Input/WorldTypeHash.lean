@@ -5,6 +5,7 @@ import Miri.Input.AdtStableHash
 import Miri.Input.GenericInstantiationWorld
 import Miri.Input.BinderRegions
 import Miri.Input.FunctionPointerStableHash
+import Miri.Input.DynamicStableHash
 
 /-! Pinned rustc 8144389c895da997dbdecaa635e41d6a50be6ffd
 `TyCtxt::type_id_hash`, `StableHash` for TyKind and RawList. The supported
@@ -128,6 +129,13 @@ private def rawSourceBytes (world : World) (normalized : Bool) : Nat → TypeId 
       let header ← FunctionPointerStableHash.header signature.abiPacked signature.safe
         signature.cVariadic signature.splatted signature.inputs.size
       pure (some (tag 14 ++ littleEndian 16 types.toNat ++ littleEndian 16 variablesHash.toNat ++ header))
+    | .dynamic value =>
+      unless normalized do return none
+      DynamicStableHash.sourceBytes (definitionBytes world)
+        (rawSourceBytes world normalized fuel) (constantBytes world normalized fuel)
+        (fun region => do
+          let some bytes ← regionBytes world region | throw "dynamic region hash source is unsupported"
+          pure bytes) value
     | .patternType base pattern =>
       let some base ← rawSourceBytes world normalized fuel base | return none
       let some pattern ← patternBytes world normalized fuel pattern | return none
@@ -210,6 +218,7 @@ private def normalizationDomain (world : World) : Nat → TypeId → Except Stri
       | .bool | .char | .str | .never | .integer .. | .foreign .. => pure (true,false)
       | .float kind => pure (kind != .f16b && kind != .ppcf128,false)
       | .rawPointer .. | .reference .. | .slice .. | .tuple .. | .array .. | .adt .. | .patternType .. => pure (true,false)
+      | .dynamic value => pure (value.predicates.all (fun predicate => BinderRegions.regionOnly predicate.variables),true)
       | .functionPointer signature => pure (BinderRegions.regionOnly signature.variables,true)
       | .functionDefinition _ _ variables =>
         pure (variables.all (fun value => match value with | .Region _ => true | _ => false),!variables.isEmpty)

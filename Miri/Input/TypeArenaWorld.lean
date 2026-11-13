@@ -3,6 +3,8 @@ import Miri.Input.Model
 import Miri.Input.TypeArenaCheckedMaterial
 import Miri.Input.RawFunctionSignature
 import Miri.Input.PatternSyntax
+import Miri.Input.DynamicPredicate
+import Miri.Input.DefinitionPathHash
 
 /-! The execution-owned type and constant constructor universe. Nodes store
 one constructor plus existing child IDs; repeated children never duplicate a
@@ -37,6 +39,7 @@ inductive Constructor where
   | functionDefinition (definition : DefinitionIdentity) (arguments : Array MIR.GenericArg)
       (variables : Array MIR.BoundVariableKind)
   | functionPointer (signature : FunctionPointer)
+  | dynamic (value : DynamicPredicate.Dynamic)
   | closure (definition : DefinitionIdentity) (arguments : Array MIR.GenericArg)
   | coroutineClosure (definition : DefinitionIdentity) (arguments : Array MIR.GenericArg)
   | coroutine (definition : DefinitionIdentity) (arguments : Array MIR.GenericArg)
@@ -51,8 +54,9 @@ structure World where
   materialTypes : Array TypeNode
   materialConstants : Array MIR.TypeConst
   definitions : Array DefinitionId
+  materialPredicates : Array VtablePredicate
   pointerBytes : Nat
-  checkedMaterial : CheckedMaterial materialTypes materialConstants definitions pointerBytes
+  checkedMaterial : CheckedMaterial materialTypes materialConstants definitions materialPredicates pointerBytes
   constructedTypes : Array Constructor := #[]
   constructedConstants : Array MIR.TypeConst := #[]
 
@@ -65,19 +69,19 @@ abbrev WorldM := StateT World (Except String)
 def World.typeCount (world : World) : Nat := world.materialTypes.size + world.constructedTypes.size
 def World.constantCount (world : World) : Nat := world.materialConstants.size + world.constructedConstants.size
 
-def World.ofCheckedMaterial {types constants definitions pointerBytes}
-    (checked : CheckedMaterial types constants definitions pointerBytes) : World := {
-  materialTypes := types, materialConstants := constants, definitions, pointerBytes,
+def World.ofCheckedMaterial {types constants definitions predicates pointerBytes}
+    (checked : CheckedMaterial types constants definitions predicates pointerBytes) : World := {
+  materialTypes := types, materialConstants := constants, definitions, materialPredicates := predicates, pointerBytes,
   checkedMaterial := checked }
 
 def World.ofMaterial (types : Array TypeNode) (constants : Array MIR.TypeConst)
-    (definitions : Array DefinitionId) (pointerBytes : Nat) : Except String World := do
-  pure (World.ofCheckedMaterial (← CheckedMaterial.create types constants definitions pointerBytes))
+    (definitions : Array DefinitionId) (predicates : Array VtablePredicate) (pointerBytes : Nat) : Except String World := do
+  pure (World.ofCheckedMaterial (← CheckedMaterial.create types constants definitions predicates pointerBytes))
 
 def World.ofDocument (document : ImportDocument) : Except String World := do
   let some target := document.runtimeTargetDataLayout
     | throw "type universe target material absent"
-  World.ofMaterial document.types document.typeConstants document.definitions
+  World.ofMaterial document.types document.typeConstants document.definitions document.predicates
     target.defaultAddressSpacePointerSpec.pointerSizeBytes
 
 def World.lookupType (world : World) (id : TypeId) : Except String TypeView := do
@@ -104,6 +108,7 @@ def Constructor.shapeKind : Constructor → TypeShapeKind
   | .patternType .. => .patternType
   | .tuple .. => .tuple | .array .. => .array | .adt .. => .adt | .foreign .. => .foreign
   | .functionDefinition .. => .functionDefinition | .functionPointer .. => .functionPointer
+  | .dynamic .. => .dynamicTraitObject
   | .closure .. => .closure
   | .coroutineClosure .. => .coroutineClosure | .coroutine .. => .coroutine | .alias .. => .alias
 
@@ -118,6 +123,69 @@ def World.identity (world : World) (id : DefinitionRef) : Except String Definiti
 
 def World.definitionRef (world : World) (wanted : DefinitionIdentity) : Except String DefinitionRef := do
   world.checkedMaterial.definitionRef wanted
+
+/-- Raw binder syntax retains all source sorts, even where an operation later
+reports an explicit unsupported domain. -/
+def World.boundVariable (world : World) : MIR.BoundVariableKind → Except String BoundVariable
+  | .Const => pure .constant
+  | .Type .Anon => pure (.type .anonymous)
+  | .Type (.Param id) => return .type (.named (← world.identity id))
+  | .Region kind => do
+    let identity ← match kind with
+      | .Anon => pure BoundIdentity.anonymous
+      | .ClosureEnv => pure .closureEnvironment
+      | .NamedForPrinting name => pure (.namedForPrinting name)
+      | .Named id => do pure (BoundIdentity.named (← world.identity id))
+    pure (.region identity)
+
+def World.existential (world : World) (id : PredicateId) : Except String DynamicPredicate.Predicate := do
+  let some source := world.materialPredicates[id]? | throw "dynamic source predicate is absent"
+  let identity ← world.identity source.definitionId
+  let body ← match source.kind with
+    | .trait =>
+      unless source.projectionTerm.isNone do throw "trait predicate has a projection term"
+      pure (DynamicPredicate.Body.trait identity source.genericArgs)
+    | .autoTrait =>
+      unless source.genericArgs.isEmpty && source.projectionTerm.isNone do throw "auto trait predicate has arguments or term"
+      pure (.autoTrait identity)
+    | .projection =>
+      let some term := source.projectionTerm | throw "dynamic projection source term is absent"
+      pure (.projection identity source.genericArgs (match term with
+        | .type id => .type id | .constant id => .constant id))
+  pure ⟨← source.boundVariables.mapM world.boundVariable,body⟩
+
+private def World.validateDynamic (world : World) (value : DynamicPredicate.Dynamic) : Except String Unit := do
+  unless !value.predicates.isEmpty do throw "dynamic source predicate list is empty"
+  unless regionReferencesValid world.definitions.size value.region do
+    throw "dynamic object lifetime has an absent physical definition"
+  let mut previous : Option DynamicPredicate.Body := none
+  for predicate in value.predicates do
+    let _ ← world.definitionRef predicate.body.definition
+    for argument in predicate.body.arguments do
+      if let .Lifetime region := argument then
+        unless regionReferencesValid world.definitions.size region do
+          throw "dynamic predicate lifetime has an absent physical definition"
+    for boundVariable in predicate.variables do
+      let identity := match boundVariable with
+        | .region (.named identity) | .type (.named identity) => some identity
+        | _ => none
+      if let some identity := identity then
+        let _ ← world.definitionRef identity
+        pure ()
+    if let some before := previous then
+      unless before.rank ≤ predicate.body.rank do throw "dynamic source predicate order is invalid"
+      if before.rank == predicate.body.rank && before.rank != 0 then
+        let fingerprint := fun identity => do
+          let reference ← world.definitionRef identity
+          let some definition := world.definitions[reference]? | throw "dynamic predicate definition is absent"
+          let some path := definition.rawPath | throw "dynamic ordering requires physical definition path"
+          pure (← DefinitionPathHash.query path).toNat
+        let left ← fingerprint before.definition
+        let right ← fingerprint predicate.body.definition
+        unless left % 2^64 < right % 2^64 ||
+            (left % 2^64 == right % 2^64 && left / 2^64 ≤ right / 2^64) do
+          throw "dynamic source predicate physical order is invalid"
+    previous := some predicate.body
 
 /-- Unsupported material families have no reconstructable identity key here.
 FnPtr requires the complete raw header, including the splatted marker. -/
@@ -153,6 +221,13 @@ def World.materialKey (world : World) (source : TypeNode) : Except String (Optio
       abiPacked := Miri.ABI.ExternAbi.asPacked signature.abi
       safe := signature.safety == .Safe, cVariadic := signature.cVariadic, splatted,
       inputs := signature.inputs, output := signature.output }))
+  | .dynamicTraitObject predicates principal region =>
+    let values ← predicates.mapM world.existential
+    let expected := predicates.find? (fun id => (world.materialPredicates[id]?).any (·.kind == .trait))
+    unless principal == expected do throw "dynamic principal contradicts source predicate list"
+    let value := DynamicPredicate.Dynamic.mk values region
+    world.validateDynamic value
+    pure (some (.dynamic value))
   | .functionDefinition definition args _ _ variables =>
     return some (.functionDefinition (← world.identity definition) args variables)
   | .closure definition args _ => return some (.closure (← world.identity definition) args)
@@ -173,6 +248,7 @@ def Constructor.typeChildren (constructor : Constructor) : Array TypeId :=
     | .patternType base _ => #[base]
     | .tuple children => children
     | .functionPointer signature => signature.inputs.push signature.output
+    | .dynamic value => value.predicates.foldl (fun acc predicate => acc ++ predicate.body.typeChildren) #[]
     | _ => #[]
   direct ++ constructor.arguments.filterMap (fun argument => match argument with
     | .Type id => some id | _ => none)
@@ -181,6 +257,7 @@ def Constructor.constantChildren (constructor : Constructor) : Array TypeConstan
   let direct := match constructor with
     | .array _ length => #[length]
     | .patternType _ pattern => pattern.constantChildren
+    | .dynamic value => value.predicates.foldl (fun acc predicate => acc ++ predicate.body.constantChildren) #[]
     | _ => #[]
   direct ++ constructor.arguments.filterMap (fun argument => match argument with
     | .Const id => some id | _ => none)
@@ -194,6 +271,8 @@ private def World.validateConstructor (world : World) (constructor : Constructor
   if let .functionPointer signature := constructor then
     let _ ← Miri.ABI.ExternAbi.ofPacked signature.abiPacked
     RawFunctionSignature.validateSplatted signature.inputs.size signature.splatted
+  if let .dynamic value := constructor then
+    world.validateDynamic value
   for child in constructor.typeChildren do
     unless child < world.typeCount do throw "new type constructor references an absent type"
   for child in constructor.constantChildren do

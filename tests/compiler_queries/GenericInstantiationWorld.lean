@@ -22,7 +22,7 @@ private def types : Array TypeNode := #[
 def main : IO Unit := do
   let initial ← must (World.ofMaterial types #[] #[
     {crateIndex := 1,index := 7,genericTemplate := some adtTemplate},
-    {crateIndex := 1,index := 8,genericTemplate := some fnTemplate}] 8)
+    {crateIndex := 1,index := 8,genericTemplate := some fnTemplate}] #[] 8)
   let u8 := Term.atom .type "uint" "u8"
   let pair := Term.node .type "tuple" "" (.cons u8 (.cons u8 .nil))
   let nominal := Term.definition .type "adt" ⟨1,7⟩ (.cons pair .nil)

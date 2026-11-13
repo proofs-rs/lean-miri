@@ -107,7 +107,8 @@ private def fnPointerShimSource (document : ImportDocument) (reference : FnPoint
   unless source.genericArgs == #[.Type selfType] do throw "FnPtr shim source arguments differ from Self"
   let some selfNode := document.types[selfType]? | throw "FnPtr shim Self source is absent"
   let .functionPointer _ variables := selfNode.shape | throw "FnPtr shim Self is not a function pointer"
-  unless variables.isEmpty do throw "FnPtr shim Self has unsupported bound variables"
+  unless variables.all (fun boundVariable => match boundVariable with | .Region _ => true | _ => false) do
+    throw "FnPtr shim Self has unsupported non-region bound variables"
   let some definition := document.definitions[definition]? | throw "FnPtr shim method definition is absent"
   let some material := definition.genericTemplate | throw "FnPtr shim raw signature material is absent"
   unless material.parameters == #[.type] && material.signatureExpression.isSome do

@@ -31,6 +31,7 @@ pub(crate) struct FunctionAbiMaterial {
     pub foreign_item: bool,
     pub drop_glue: bool,
     pub rustc_no_writable: bool,
+    pub always_comptime: bool,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct AbiSessionMaterial {
@@ -39,6 +40,8 @@ pub(crate) struct AbiSessionMaterial {
     pub optimization: &'static str,
     pub llvm_writable: bool,
     pub box_noalias: bool,
+    pub incremental_enabled: bool,
+    pub sanitizers: Vec<String>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct AdtDropMaterial {

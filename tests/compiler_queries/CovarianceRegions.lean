@@ -22,7 +22,9 @@ def main (args : List String) : IO Unit := do
     must (JsonReader.run (DecoderValues.parseTypeNode "$.types" booleans discriminants) row.compress)
   let constants ← (← must ((← must (raw.getObjVal? "type_constants")).getArr?)).mapM fun row =>
     must (JsonReader.run (TypeConstCodec.decode "$.type_constants") row.compress)
-  let world ← must (TypeArena.World.ofMaterial types constants definitions 8)
+  let predicates ← (← must ((← must (raw.getObjVal? "predicates")).getArr?)).mapM fun row =>
+    must (JsonReader.run (DecoderValues.parseVtablePredicate "$.predicates") row.compress)
+  let world ← must (TypeArena.World.ofMaterial types constants definitions predicates 8)
   let rows ← must ((← must (raw.getObjVal? "compiler_covariance_queries")).getArr?)
   unless rows.size == 8 do throw (IO.userError "expected eight actual static/erased baseline relations")
   for row in rows do

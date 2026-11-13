@@ -14,6 +14,7 @@ private structure Fixture where
   types : Array TypeNode
   layouts : Array Layout
   definitions : Array DefinitionId
+  predicates : Array VtablePredicate
   constants : Array Miri.MIR.TypeConst
 
 /-- A focused source-derived adapter. It reads target/type/layout material
@@ -51,11 +52,13 @@ private def readFixture (path : String) (version : Nat) : IO Fixture := do
     must (JsonReader.run (DecoderValues.parseDefinitionId "$.definitions") row.compress)
   let constants ← (← must ((← must (raw.getObjVal? "type_constants")).getArr?)).mapM fun row =>
     must (JsonReader.run (TypeConstCodec.decode "oracle.constant") row.compress)
-  return ⟨target,types,layouts,definitions,constants⟩
+  let predicates ← (← must ((← must (raw.getObjVal? "predicates")).getArr?)).mapM fun row =>
+    must (JsonReader.run (DecoderValues.parseVtablePredicate "$.predicates") row.compress)
+  return ⟨target,types,layouts,definitions,predicates,constants⟩
 
 private def Fixture.lookup (fixture : Fixture) (id : Nat) : IO Miri.ABI.LayoutData := do
   let some node := fixture.types.find? (·.id == id) | throw (IO.userError "type absent")
-  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions fixture.constants).mapError toString)
+  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions fixture.constants fixture.predicates).mapError toString)
 
 private def pointerParents (raw : Json) (id : Nat) : IO (Array Json) := do
   let rows ← must ((← must (raw.getObjVal? "types")).getArr?)
@@ -99,7 +102,7 @@ def main (args : List String) : IO Unit := do
             unless (← must ((← must (field.getObjVal? "index")).getNat?)) == index do continue
             let layoutId ← must ((← must (field.getObjVal? "layout")).getNat?)
             let expected ← must ((RuntimeMetadata.resolveLayout baseline.target baseline.types baseline.layouts
-              layoutId baseline.definitions baseline.constants).mapError toString)
+              layoutId baseline.definitions baseline.constants baseline.predicates).mapError toString)
             check (actual.layout == expected) s!"omitted pointer field differs from rustc: {node.display} field {index}"
             compared := true
       check compared "missing independent field oracle"
@@ -117,7 +120,7 @@ def main (args : List String) : IO Unit := do
       let some field ← fieldZero? oracleParent | throw (IO.userError "independent str field absent")
       let layoutId ← must ((← must (field.getObjVal? "layout")).getNat?)
       let expected ← must ((RuntimeMetadata.resolveLayout baseline.target baseline.types baseline.layouts
-        layoutId baseline.definitions baseline.constants).mapError toString)
+        layoutId baseline.definitions baseline.constants baseline.predicates).mapError toString)
       check (actual.layout == expected) "str field special operation differs from rustc"
     strings := strings + 1
   check (strings > 0) "missing str projection omission control"

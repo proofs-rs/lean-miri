@@ -41,6 +41,7 @@ def construct (id : TypeId) (extra : Array TypeId) :
   let some session := world.metadata.source.producer.abiSession
     | throw "raw ABI session configuration is absent"
   let signature ← liftPure (sourceSignature world.arena id)
+  if signature.cVariadic then throw "function pointer ABI variadic classification is unavailable"
   let conv ← match signature.abi with
     | .Rust | .RustCall => pure CanonAbi.Rust
     | .RustCold => pure .RustCold

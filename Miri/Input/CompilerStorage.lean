@@ -54,7 +54,7 @@ private def trivialInWorld (world : TypeArena.World) : Nat → TyId → Except S
         match elements.back? with
         | none => pure true
         | some tail => trivialInWorld world fuel tail
-      | .str | .slice _ | .foreign _ | .adt .. | .alias .. => pure false
+      | .str | .slice _ | .foreign _ | .adt .. | .alias .. | .dynamic .. => pure false
       | .bool | .char | .never | .integer .. | .float .. | .rawPointer .. | .reference ..
       | .functionDefinition .. | .functionPointer .. | .closure .. | .coroutineClosure .. | .coroutine ..
       | .array .. => pure true

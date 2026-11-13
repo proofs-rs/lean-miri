@@ -24,7 +24,7 @@ private def rejected (result : Except String α) : Bool :=
   match result with | .error _ => true | .ok _ => false
 
 def main : IO Unit := do
-  let initial ← must (World.ofMaterial sourceTypes #[] #[{crateIndex := 1,index := 7,genericTemplate := some template}] 8)
+  let initial ← must (World.ofMaterial sourceTypes #[] #[{crateIndex := 1,index := 7,genericTemplate := some template}] #[] 8)
   let (material,unchanged) ← must ((World.internType (.tuple #[0,1])).run initial)
   unless material == 2 && unchanged.constructedTypes.isEmpty do
     throw (IO.userError "material tuple was not reused exactly")

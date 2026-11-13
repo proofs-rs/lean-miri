@@ -12,7 +12,7 @@ def main (args : List String) : IO Unit := do
   let [sourcePath,oraclePath] := args | throw (IO.userError "expected fresh nominal source and compiler oracle")
   let source := (← must (decodeJson (← IO.FS.readFile sourcePath))).document
   let mut world ← must (World.ofDocument source)
-  let mut novel ← must (World.ofMaterial #[] #[] source.definitions world.pointerBytes)
+  let mut novel ← must (World.ofMaterial #[] #[] source.definitions #[] world.pointerBytes)
   let oracle ← must (Json.parse (← IO.FS.readFile oraclePath))
   let rows ← must ((← must (oracle.getObjVal? "types")).getArr?)
   let mut compared := 0
@@ -55,7 +55,7 @@ def main (args : List String) : IO Unit := do
   let definitions := source.definitions.map fun current =>
     if current.crateIndex == identity.crateIndex && current.index == identity.index then
       {current with adtDeclaration := none} else current
-  let broken ← must (World.ofMaterial #[] #[] definitions world.pointerBytes)
+  let broken ← must (World.ofMaterial #[] #[] definitions #[] world.pointerBytes)
   let (id,broken) ← must ((World.internType (.adt identity #[])).run broken)
   if (WorldTypeHash.query broken 4096 id).isOk then
     throw (IO.userError "missing raw ADT declaration was accepted")
@@ -64,14 +64,14 @@ def main (args : List String) : IO Unit := do
   let missingPath := source.definitions.map fun current =>
     if current.crateIndex == field.definition.crateIndex && current.index == field.definition.index then
       {current with rawPath := none} else current
-  let broken ← must (World.ofMaterial #[] #[] missingPath world.pointerBytes)
+  let broken ← must (World.ofMaterial #[] #[] missingPath #[] world.pointerBytes)
   let (id,broken) ← must ((World.internType (.adt identity #[])).run broken)
   if (WorldTypeHash.query broken 4096 id).isOk then
     throw (IO.userError "missing raw field definition path was accepted")
   let malformed := source.definitions.map fun current =>
     if current.crateIndex == identity.crateIndex && current.index == identity.index then
       {current with adtDeclaration := some {declaration with flagsBits := 2^15}} else current
-  match World.ofMaterial #[] #[] malformed world.pointerBytes with
+  match World.ofMaterial #[] #[] malformed #[] world.pointerBytes with
   | .error _ => pure ()
   | .ok broken =>
     let (id,broken) ← must ((World.internType (.adt identity #[])).run broken)

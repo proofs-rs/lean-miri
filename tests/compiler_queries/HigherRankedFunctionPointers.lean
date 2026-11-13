@@ -32,7 +32,7 @@ def main (args : List String) : IO Unit := do
   -- A genuinely empty type/constant prefix prevents material ID or printer rows
   -- from certifying any case. Physical source definitions are retained exactly.
   let mut world ← must (World.ofMaterial #[] #[] document.definitions
-    target.defaultAddressSpacePointerSpec.pointerSizeBytes)
+    #[] target.defaultAddressSpacePointerSpec.pointerSizeBytes)
   let rows ← must ((← must (Json.parse (← IO.FS.readFile oraclePath))).getArr?)
   unless rows.size == 9 do throw (IO.userError "incomplete higher-ranked FnPtr matrix")
   for row in rows do

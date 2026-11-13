@@ -40,6 +40,8 @@ def construct (instanceId : InstanceId) (extra : Array TypeId) :
   if trackCaller then throw "raw instance ABI caller-location argument construction is unavailable"
   let raw ← InstanceSignature.instantiate 16384 instanceId
   let signature ← liftPure (RawFunctionSignature.read raw)
+  if signature.cVariadic then
+    throw "raw instance ABI variadic classification is unavailable"
   unless signature.variables.isEmpty do
     throw "raw instance ABI higher-ranked signature normalization is unavailable"
   let conv ← match signature.abi with

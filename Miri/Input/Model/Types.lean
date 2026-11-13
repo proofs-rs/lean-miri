@@ -138,6 +138,8 @@ structure AbiSessionMaterial where
   optimization : OptimizationLevel
   llvmWritable : Bool
   boxNoalias : Bool
+  incrementalEnabled : Bool
+  sanitizers : Array String
   deriving Repr, DecidableEq
 
 structure Producer where
@@ -592,6 +594,7 @@ structure FunctionAbiMaterial where
   foreignItem : Bool
   dropGlue : Bool
   rustcNoWritable : Bool
+  alwaysComptime : Bool
   deriving Repr, DecidableEq
 
 /-- Raw callable header. Optional absence is unresolved source material. -/
@@ -649,13 +652,18 @@ structure StaticAllocation where
   initializer : Option AllocationMemory
   deriving BEq
 
+inductive PredicateProjectionTerm where
+  | type (id : TypeId)
+  | constant (id : TypeConstantId)
+  deriving Repr, DecidableEq, BEq
+
 structure VtablePredicate where
   kind : VtablePredicateKind
   definitionId : DefinitionRef
   definitionPath : Option String
   genericArgs : Array Miri.MIR.GenericArg
   boundVariables : Array Miri.MIR.BoundVariableKind
-  projectionTerm : Option TypeId
+  projectionTerm : Option PredicateProjectionTerm
   deriving BEq
 
 structure VtableEntry where

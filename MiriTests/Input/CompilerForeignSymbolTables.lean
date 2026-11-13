@@ -79,7 +79,7 @@ private def prepare (symbols : Catalog.ForeignSymbols) (definitions : Array Defi
       types := source.types, definitions, constants := source.typeConstants,
       pointerBytes := target.pointerSize.bytes.toNat }
     aliases, traits := source.traitProgram }
-  let checked ← TypeArena.CheckedMaterial.create source.types source.typeConstants definitions
+  let checked ← TypeArena.CheckedMaterial.create source.types source.typeConstants definitions source.predicates
     target.pointerSize.bytes.toNat
   let runtime : RuntimeMetadata := {
     source, target, normalizationContext, materialLayoutFuel := definitions.size + 1,

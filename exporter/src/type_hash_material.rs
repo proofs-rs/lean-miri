@@ -24,6 +24,17 @@ fn type_in_binder(input: ty::Ty<'_>, bound: bool) -> bool {
         ty::Array(child, length) => type_in_binder(child, bound) && constant_in_binder(length, bound),
         ty::Ref(_, child, _) => type_in_binder(child, bound),
         ty::Pat(base, pattern) => type_in_binder(base, bound) && pattern_in_binder(pattern, bound),
+        ty::Dynamic(predicates, _) => predicates.iter().all(|predicate| {
+            let binder = predicate.bound_vars().iter().all(|variable| matches!(variable, ty::BoundVariableKind::Region(_)));
+            binder && match predicate.skip_binder() {
+                ty::ExistentialPredicate::Trait(value) => arguments_in_binder(value.args, true),
+                ty::ExistentialPredicate::Projection(value) => arguments_in_binder(value.args, true) && match value.term.kind() {
+                    ty::TermKind::Ty(value) => type_in_binder(value, true),
+                    ty::TermKind::Const(value) => constant_in_binder(value, true),
+                },
+                ty::ExistentialPredicate::AutoTrait(_) => true,
+            }
+        }),
         ty::Tuple(children) => children.iter().all(|child| type_in_binder(child, bound)),
         ty::Adt(_, arguments) => arguments_in_binder(arguments, bound),
         ty::FnDef(_, arguments) => region_variables(arguments.bound_vars()) &&

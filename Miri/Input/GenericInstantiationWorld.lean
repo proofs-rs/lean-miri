@@ -64,6 +64,7 @@ private def canReifyType (world : World) : Nat → TypeId → ReifyDomainM Bool
       let some constructor := value | return false
       let supported := match constructor with
         | .functionDefinition _ _ variables => variables.all (fun value => match value with | .Region _ => true | _ => false)
+        | .dynamic value => value.predicates.all (fun predicate => predicate.variables.all (fun boundVariable => match boundVariable with | .region _ => true | _ => false))
         | .functionPointer signature =>
           signature.variables.all (fun value => match value with | .region _ => true | _ => false)
         | _ => true
@@ -169,6 +170,8 @@ def reifyType (world : World) : Nat → TypeId → ReifyM Term
         let types ← (signature.inputs.push signature.output).mapM child
         pure (.node .type "function_pointer" ""
           (.cons (.binder signature.variables (.node .aggregate "signature" header (Terms.ofArray types))) .nil))
+      | .dynamic value =>
+        DynamicPredicate.writeDynamic (reifyArgument world fuel) (fun region => liftReify (ofRegion world region)) value
       | .closure definition arguments => do
         pure (.definition .type "closure" definition (Terms.ofArray (← args arguments)))
       | .coroutineClosure definition arguments => do
@@ -285,6 +288,13 @@ def constructType : Nat → Term → ConstructM TypeId
         pure (.tuple (← (arrayOfTerms #[] children).mapM (constructType fuel)))
       | .node .type "array" "" (.cons child (.cons length .nil)) => do
         pure (.array (← constructType fuel child) (← constructConstant fuel length))
+      | .node .type "dynamic" "" _ => do
+        let value ← DynamicPredicate.readDynamic (fun term => do
+          let values ← constructArguments fuel #[term]
+          let some value := values[0]? | throw "dynamic argument absent"
+          pure value)
+          (fun region => do lift (resolveRegion (← getThe World) region)) term
+        pure (.dynamic value)
       | .node .type "function_pointer" ""
           (.cons (.binder variables (.node .aggregate "signature" payload children)) .nil) => do
         unless variables.all (fun value => match value with | .region _ => true | _ => false) do

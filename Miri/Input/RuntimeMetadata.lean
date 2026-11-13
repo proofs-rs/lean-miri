@@ -268,7 +268,7 @@ structure RuntimeMetadata where
   normalizationContext : AliasRuntime.Context
   /-- Immutable validation/index evidence tied to the exact raw source prefix. -/
   checkedMaterial : Option (TypeArena.CheckedMaterial source.types source.typeConstants
-    source.definitions target.pointerSize.bytes.toNat) := none
+    source.definitions source.predicates target.pointerSize.bytes.toNat) := none
   /-- Checked once at import. Dependence on the exact source prevents retaining
   this certificate when replacing its type table. It carries no runtime cache. -/
   denseTypes : Option (PLift (TypeArena.isDense source.types = true)) := none
@@ -283,7 +283,7 @@ def ofDocument (document : ImportDocument) : Result RuntimeMetadata := do
     seen := seen.insert node.id
   if dense : TypeArena.isDense document.types = true then
     let checked ← (TypeArena.CheckedMaterial.create document.types document.typeConstants
-      document.definitions target.pointerSize.bytes.toNat).mapError (fun e => .invalid "material prefix" e)
+      document.definitions document.predicates target.pointerSize.bytes.toNat).mapError (fun e => .invalid "material prefix" e)
     let normalizationContext ← (AliasRuntime.Context.ofDocument document).mapError (fun e => .invalid "normalization material" e)
     return {
       source := document
@@ -470,7 +470,7 @@ private def worldSized (normalization : Option AliasRuntime.Context) : Nat → T
       | .alias .. => throw "layout sizedness requires source alias normalization"
       | _ => pure true
     | .constructed key => match key with
-      | .str | .slice .. | .foreign .. => pure false
+      | .str | .slice .. | .foreign .. | .dynamic .. => pure false
       | .tuple elements => match elements.back? with
         | none => pure true | some tail => worldSized normalization fuel tail
       | .adt .. =>
@@ -500,6 +500,7 @@ private def worldMetadata (normalization : Option AliasRuntime.Context) (target 
       | .dynamicTraitObject .. => throw "layout dynamic metadata needs raw DynMetadata constructor"
       | _ => throw "layout source pointer metadata constructor unsupported"
     | .constructed key => match key with
+      | .dynamic .. => throw "layout dynamic metadata needs raw DynMetadata constructor"
       | .str | .slice .. => return some (← lift (PrimitiveLayout.compute target "usize"))
       | .foreign .. => pure none
       | .tuple elements =>
@@ -744,12 +745,12 @@ def layoutInWorld (metadata : RuntimeMetadata) (id : TypeId) : TypeArena.WorldM 
 IDs; execution providers must use layoutInWorld and retain its updated World. -/
 def resolveLayout (target : RuntimeTargetDataLayout) (types : Array TypeNode)
     (layouts : Array Input.Layout) (id : LayoutId) (definitions : Array DefinitionId)
-    (constants : Array MIR.TypeConst) : Result LayoutData := do
+    (constants : Array MIR.TypeConst) (predicates : Array VtablePredicate) : Result LayoutData := do
   let source ← require layouts[id]? "compiler layout ID out of bounds"
   if source.tupleType.isNone && source.unionType.isNone && source.structType.isNone && source.enumType.isNone &&
       source.patternType.isNone && source.sequenceType.isNone && source.pointerType.isNone && source.pointerDataType.isNone && source.enumTagType.isNone then
     return ← layout target source
-  let world ← (TypeArena.World.ofMaterial types constants definitions target.pointerSize.bytes.toNat)
+  let world ← (TypeArena.World.ofMaterial types constants definitions predicates target.pointerSize.bytes.toNat)
     |>.mapError (fun e => .invalid "layout material" e)
   let result ← ((worldLayoutSeed none target layouts (rawLayoutBudget types.size layouts.size definitions) id).run' {}).run world
     |>.mapError (fun e => .unsupported e)
@@ -830,7 +831,7 @@ private def projectionParents (metadata : RuntimeMetadata) (id : TypeId) : Resul
   pure queries.parents
 /-- Resolve a physical compiler layout only at the operation that needs it. -/
 def layoutById (metadata : RuntimeMetadata) (id : Nat) : Result LayoutData := do
-  resolveLayout metadata.target metadata.source.types metadata.source.layouts id metadata.source.definitions metadata.source.typeConstants
+  resolveLayout metadata.target metadata.source.types metadata.source.layouts id metadata.source.definitions metadata.source.typeConstants metadata.source.predicates
 
 private def projectionLayout (metadata : RuntimeMetadata) (id : TypeId) (layoutId : LayoutId) :
     Result (TyAndLayout TypeId) := do

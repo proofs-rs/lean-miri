@@ -16,7 +16,7 @@ def document(**fields):
             **{name: [] for name in POOL_NAMES}, **{name: [] for name in SHARED_POOLS},
             "layouts": [], "files": [], "byte_images": [],
             "compiler_coroutine_coverage": {"body_coroutines": [False] * (len(fields["bodies"]) if isinstance(fields.get("bodies"), list) else 0),
-                                            "coroutines": [], "auxiliary_bodies": []}, **fields}
+                                            "coroutines": [], "auxiliary_bodies": [], "generic_sources": []}, **fields}
 
 
 class MirJSONTests(unittest.TestCase):
@@ -66,7 +66,7 @@ class MirJSONTests(unittest.TestCase):
                 decode_mir_document(document(schema_version=version))
 
     def test_schema_13_requires_exact_coroutine_catalog_and_preserves_version(self):
-        catalog = {"body_coroutines": [], "coroutines": [], "auxiliary_bodies": []}
+        catalog = {"body_coroutines": [], "coroutines": [], "auxiliary_bodies": [], "generic_sources": []}
         current = document(schema_version=13, compiler_coroutine_coverage=catalog)
         self.assertIs(decode_mir_document(current), current)
         self.assertEqual(expand_document(current)["schema_version"], 13)
@@ -75,6 +75,10 @@ class MirJSONTests(unittest.TestCase):
                         {**catalog, "body_coroutines": [0]}):
             with self.subTest(catalog=invalid), self.assertRaises(MirJSONError):
                 decode_mir_document(document(schema_version=13, compiler_coroutine_coverage=invalid))
+        missing_sources = document(schema_version=13)
+        missing_sources["compiler_coroutine_coverage"].pop("generic_sources")
+        with self.assertRaisesRegex(MirJSONError, "generic_sources"):
+            decode_mir_document(missing_sources)
         missing = document(schema_version=13)
         missing.pop("compiler_coroutine_coverage")
         with self.assertRaisesRegex(MirJSONError, "coroutine"):
@@ -94,8 +98,8 @@ class MirJSONTests(unittest.TestCase):
                               "variant_source_info": [{"span": 0, "scope": 0}] * 3,
                               "storage_conflicts": [[]]},
                    "drop_sync": None, "drop_async": 0, "drop_proxy_async": None}
-        catalog = {"body_coroutines": [True], "coroutines": [witness], "auxiliary_bodies": [auxiliary]}
-        current = document(schema_version=13, bodies=[body], types=[{}], instances=[{}], definitions=[{}], spans=[{}],
+        catalog = {"body_coroutines": [True], "coroutines": [witness], "auxiliary_bodies": [auxiliary], "generic_sources": []}
+        current = document(schema_version=13, bodies=[body], types=[{}], instances=[{}], definitions=[{"crate": 0, "index": 0}], spans=[{}],
                            source_infos=[{"span": 0, "scope": 0}], compiler_coroutine_coverage=catalog)
         self.assertIs(decode_mir_document(current), current)
         expanded = expand_document(current)

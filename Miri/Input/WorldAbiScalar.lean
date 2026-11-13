@@ -12,6 +12,8 @@ def classify (runtime : RuntimeMetadata) (session : AbiSessionMaterial) (definit
     RuntimeArrayTypes.CompilerM (ArgAbi TypeId) := do
   let layout ← RuntimeArrayTypes.liftType (RuntimeMetadata.layoutInWorld runtime id)
   if layout.layout.isZst then return ArgAbi.initial layout
+  if let .Memory := layout.layout.backendRepr then
+    return ← WorldAggregateAbi.smallMemory runtime layout
   if let .ScalarPair .. := layout.layout.backendRepr then
     return ← liftPure (WorldAggregateAbi.nonPointerPair layout)
   let arena := (← get).arena

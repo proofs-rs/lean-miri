@@ -64,6 +64,6 @@ def main (args : List String) : IO Unit := do
     let types := base.arena.materialTypes.map fun node =>
       {node with compilerFacts := node.compilerFacts.map (fun facts => {facts with typeIdHash := none})}
     let missing ← must (TypeArena.World.ofMaterial types base.arena.materialConstants
-      base.arena.definitions base.arena.pointerBytes)
+      base.arena.definitions base.arena.materialPredicates base.arena.pointerBytes)
     check (!(WorldTypeHash.query missing 256 residual.id).isOk) "unsupported source type fabricated a missing hash"
   IO.println s!"PASS {count} independent rustc source type hashes without eager seeds; novel prefix-external type, missing identity and traversal controls"

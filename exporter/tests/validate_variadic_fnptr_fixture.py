@@ -68,6 +68,7 @@ require(raw["signature"] == {
 require(document["producer"]["abi_session"] == {
     "panic": "abort", "panic_in_drop": "unwind", "optimization": "no",
     "llvm_writable": False, "box_noalias": True,
+    "incremental_enabled": False, "sanitizers": [],
 }, "source ABI canonical session differs from the pinned fixture configuration")
 trace = Path(sys.argv[2]).read_text().splitlines()
 key = "signature=Binder { value: fn(i32) -> i32, bound_vars: [] } extra=[]"

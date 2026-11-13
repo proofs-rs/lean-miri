@@ -25,7 +25,7 @@ def main (args : List String) : IO Unit := do
         throw (IO.userError "function-pointer source retained an eager hash answer")
       covered := covered + 1
   unless covered ≥ 11 do throw (IO.userError "fresh source lacks complete FnPtr/HRTB material domain")
-  let mut world ← must (World.ofMaterial #[] #[] source.definitions base.pointerBytes)
+  let mut world ← must (World.ofMaterial #[] #[] source.definitions #[] base.pointerBytes)
   let rows ← must ((← must (Json.parse (← IO.FS.readFile oraclePath))).getArr?)
   for row in rows do
     let display ← must (row.getObjValAs? String "display")
@@ -55,13 +55,13 @@ def main (args : List String) : IO Unit := do
   let missingHeader := source.types.map fun node =>
     if node.id == pointer.id then
       {node with shape := .functionPointer {signature with rawSplatted := none} variables} else node
-  let broken ← must (World.ofMaterial missingHeader source.typeConstants source.definitions base.pointerBytes)
+  let broken ← must (World.ofMaterial missingHeader source.typeConstants source.definitions source.predicates base.pointerBytes)
   if (WorldTypeHash.query broken 4096 pointer.id).isOk then
     throw (IO.userError "missing raw function-pointer header was accepted")
   let badHeader := source.types.map fun node =>
     if node.id == pointer.id then
       {node with shape := .functionPointer {signature with rawSplatted := some (some 255)} variables} else node
-  let broken ← must (World.ofMaterial badHeader source.typeConstants source.definitions base.pointerBytes)
+  let broken ← must (World.ofMaterial badHeader source.typeConstants source.definitions source.predicates base.pointerBytes)
   if (WorldTypeHash.query broken 4096 pointer.id).isOk then
     throw (IO.userError "function-pointer splatted sentinel was accepted as an index")
   IO.println s!"PASS {rows.size} FnPtr/HRTB compiler hashes/anonymized trees from an empty material prefix; malformed binder/header rejected"

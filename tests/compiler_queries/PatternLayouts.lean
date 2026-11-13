@@ -15,6 +15,7 @@ private structure Fixture where
   types : Array TypeNode
   layouts : Array Layout
   definitions : Array DefinitionId
+  predicates : Array VtablePredicate
   constants : Array Miri.MIR.TypeConst
 
 /-- A focused source-derived adapter. It reads target/type/layout material
@@ -48,15 +49,22 @@ private def readFixture (path : String) (version : Nat) : IO Fixture := do
     let id ← must row.getNat?
     let some value := values[id]? | throw (IO.userError "layout value reference absent")
     must (JsonReader.run DecoderValues.parseLayout value.compress)
-  let definitions ← (← must ((← must (raw.getObjVal? "definitions")).getArr?)).mapM fun row =>
-    must (JsonReader.run (DecoderValues.parseDefinitionId "$.definitions") row.compress)
+  -- This frozen primitive/pointer Pattern oracle predates physical raw paths.
+  -- Its layout comparison needs physical definition identity only; the fresh
+  -- producer below still passes the complete strict production decoder.
+  let definitions ← (← must ((← must (raw.getObjVal? "definitions")).getArr?)).mapM fun row => do
+    pure ({
+      crateIndex := ← must ((← must (row.getObjVal? "crate")).getNat?)
+      index := ← must ((← must (row.getObjVal? "index")).getNat?) } : DefinitionId)
   let constants ← (← must ((← must (raw.getObjVal? "type_constants")).getArr?)).mapM fun row =>
     must (JsonReader.run (TypeConstCodec.decode "oracle.constant") row.compress)
-  return ⟨target,types,layouts,definitions,constants⟩
+  let predicates ← (← must ((← must (raw.getObjVal? "predicates")).getArr?)).mapM fun row =>
+    must (JsonReader.run (DecoderValues.parseVtablePredicate "$.predicates") row.compress)
+  return ⟨target,types,layouts,definitions,predicates,constants⟩
 
 private def Fixture.lookup (fixture : Fixture) (id : Nat) : IO Miri.ABI.LayoutData := do
   let some node := fixture.types.find? (·.id == id) | throw (IO.userError "type absent")
-  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions fixture.constants).mapError toString)
+  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions fixture.constants fixture.predicates).mapError toString)
 
 def main (args : List String) : IO Unit := do
   let path :: rest := args | throw (IO.userError "expected pinned pattern baseline and optional fresh production export")

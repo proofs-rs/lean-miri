@@ -21,7 +21,7 @@ def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected pinned FnSigKind boundary oracle")
   let rows ← must ((← must (Json.parse (← IO.FS.readFile path))).getArr?)
   unless rows.size == 8 do throw (IO.userError "incomplete FnSigKind boundary oracle")
-  let world ← must (World.ofMaterial #[] #[] #[] 8)
+  let world ← must (World.ofMaterial #[] #[] #[] #[] 8)
   let (unitId,world) ← must ((World.internType (.tuple #[])).run world)
   for row in rows do
     let count ← must ((← must (row.getObjVal? "inputs")).getNat?)

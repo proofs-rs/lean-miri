@@ -19,7 +19,7 @@ private def resolve (callee : MirDirectCall.Callee) : TypeArena.WorldM SourceCal
       pure 17) callee
 
 private def checked : Except String Unit := do
-  let initial ← TypeArena.World.ofMaterial #[] #[] #[{crateIndex := 7,index := 11}] 8
+  let initial ← TypeArena.World.ofMaterial #[] #[] #[{crateIndex := 7,index := 11}] #[] 8
   let callee : MirDirectCall.Callee := ⟨⟨7,11⟩,#[.atom .type "uint" "u32"]⟩
   let (first,retained) ← (resolve callee).run initial
   unless first.instanceId == 17 && first.arguments == #[.Type 0] && first.functionType == 1 do

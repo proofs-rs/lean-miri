@@ -548,7 +548,10 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
     checkId b.definitions value.definitionId s!"{path}.def_id" "definition"
     genericArgs b s!"{path}.generic_args" value.genericArgs
     boundVariables b s!"{path}.bound_variables" value.boundVariables
-    if let some id := value.projectionTerm then checkId b.types id s!"{path}.term" "type"
+    if let some term := value.projectionTerm then
+      match term with
+      | .type id => checkId b.types id s!"{path}.term" "type"
+      | .constant id => checkId b.constants id s!"{path}.term" "type constant"
   for (value, index) in document.instances.toList.zipIdx do
     let path := s!"$.instances[{index}]"
     instanceKind b s!"{path}.instance_kind" value.instanceKind

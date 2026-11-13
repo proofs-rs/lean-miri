@@ -23,7 +23,7 @@ private def baselineLayout (raw : Json) (target : Miri.ABI.RuntimeTargetDataLayo
     let reference ← must reference.getNat?
     let some value := values[reference]? | throw (IO.userError "baseline layout reference absent")
     must (JsonReader.run DecoderValues.parseLayout value.compress)
-  must ((RuntimeMetadata.resolveLayout target #[] layouts layoutId #[] #[]).mapError toString)
+  must ((RuntimeMetadata.resolveLayout target #[] layouts layoutId #[] #[] #[]).mapError toString)
 
 def main (args : List String) : IO Unit := do
   let [candidatePath,baseWorldPath,baselinePath] := args

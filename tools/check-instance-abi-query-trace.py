@@ -8,6 +8,7 @@ import re
 parser = argparse.ArgumentParser()
 parser.add_argument("oracle")
 parser.add_argument("candidate")
+parser.add_argument("--keys", type=int, default=10)
 parser.add_argument("--unsupported-name", default="unused")
 args = parser.parse_args()
 pattern = re.compile(r"^lean_miri_instance_abi_call route=(\S+) queried=(true|false) instance=(.*)$")
@@ -29,8 +30,8 @@ def load(path):
 oracle = load(args.oracle)
 candidate = load(args.candidate)
 identities = {identity for _, queried, identity in oracle if queried and "::identity)" in identity}
-if len(identities) != 10:
-    raise SystemExit(f"expected 10 independent generic ABI oracle keys, got {len(identities)}")
+if len(identities) != args.keys:
+    raise SystemExit(f"expected {args.keys} independent generic ABI oracle keys, got {len(identities)}")
 for identity in sorted(identities):
     old = sum(queried and key == identity for _, queried, key in oracle)
     new = sum(queried and key == identity for _, queried, key in candidate)

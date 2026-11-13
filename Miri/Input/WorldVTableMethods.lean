@@ -86,9 +86,14 @@ def ownSlots (context : AliasRuntime.Context) (work fuel : Nat) (reference : Tra
   unless declarations.size == 1 do throw "vtable own trait source missing or ambiguous"
   let some declaration := declarations[0]? | throw "vtable own trait source absent"
   unless declaration.parameters.size == reference.arguments.size do throw "vtable concrete trait arity mismatch"
+  let mut normalizedArguments := #[]
   for (sort,argument) in declaration.parameters.zip reference.arguments do
     unless sort == argument.sort do throw "vtable concrete trait argument sort mismatch"
     MirTemplate.validateClosed fuel argument
+    let erased ← BinderRegions.eraseAndAnonymize fuel argument
+    normalizedArguments := normalizedArguments.push
+      (← AliasRuntime.normalizeTerm context work fuel #[] #[] erased)
+  let reference := {reference with arguments := normalizedArguments}
   let methods ← WorldDynMethods.ownMethods context work fuel reference.definition
   let hooks := AliasRuntime.traitHooks context fuel (fun universeIndex remaining goals term =>
     AliasRuntime.normalizeTermScoped context universeIndex work remaining #[] goals term)
@@ -99,7 +104,11 @@ def ownSlots (context : AliasRuntime.Context) (work fuel : Nat) (reference : Tra
     let some member := members[0]? | throw "vtable own method source absent"
     let source ← scope context fuel identity
     let actual ← arguments source declaration.definition reference.arguments
-    let clauses ← Substitution.clauses fuel actual source.ownPredicates
+    -- rustc instantiate_and_check_impossible_clauses uses clauses_of, including
+    -- inherited clauses, and explicitly adds Self:Trait. Canonical source
+    -- parent traversal retains both; checking only own clauses misses even the
+    -- absent-impl case before the early by-value VTable shim branch.
+    let clauses ← SourceEnvironment.instantiate (scope context fuel) fuel identity actual
     match ← fulfill context.traits hooks {eraseRegions := true} fuel work clauses with
     | .noSolution => result := result.push .vacant
     | .ambiguous reason => throw s!"vtable concrete method predicates ambiguous: {reason}"

@@ -44,6 +44,8 @@ def dynamicDataInWorld (_prepared : CompilerFactAdapters.Prepared) (id : TypeId)
   | .material node => match node.shape with
     | .dynamicTraitObject predicates principal _ => pure (some ⟨predicates,principal⟩)
     | _ => pure none
+  | .constructed (.dynamic _) =>
+    throw "constructed dynamic predicate identity requires its source runtime bridge"
   | .constructed _ => pure none
 
 def builtinDerefInWorld (context : CompilerFacts.Context) (id : TypeId) :

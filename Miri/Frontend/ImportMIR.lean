@@ -253,6 +253,7 @@ deriving instance ToExpr for Input.VtablePredicateKind
 deriving instance ToExpr for Input.FunctionAllocation
 deriving instance ToExpr for Input.StaticGlobalInfo
 deriving instance ToExpr for Input.StaticAllocation
+deriving instance ToExpr for Input.PredicateProjectionTerm
 deriving instance ToExpr for Input.VtablePredicate
 deriving instance ToExpr for Input.VtableEntry
 deriving instance ToExpr for Input.VtableAllocation
@@ -349,6 +350,7 @@ deriving instance ToExpr for Input.CoroutineSavedField
 deriving instance ToExpr for Input.CoroutineLayoutEvidence
 deriving instance ToExpr for Input.CoroutineEvidence
 deriving instance ToExpr for Input.CoroutineAuxiliaryBody
+deriving instance ToExpr for Input.CoroutineGenericSource
 deriving instance ToExpr for Input.CoroutineCoverage
 deriving instance ToExpr for Input.CompilerTypingEnv.Mode
 deriving instance ToExpr for Input.CompilerTypingEnv.Recipe

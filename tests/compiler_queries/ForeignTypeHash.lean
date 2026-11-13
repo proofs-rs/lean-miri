@@ -28,7 +28,7 @@ def main (args : List String) : IO Unit := do
     let actual ← must (WorldTypeHash.query world 4096 id)
     unless actual.toNat == expected do throw (IO.userError s!"foreign structural hash differs from rustc: {display}")
     compared := compared + 1
-  let blank ← must (World.ofMaterial #[] #[] source.definitions world.pointerBytes)
+  let blank ← must (World.ofMaterial #[] #[] source.definitions #[] world.pointerBytes)
   let (novel,next) ← must ((World.internType (.foreign identity)).run blank)
   unless novel == 0 && next.materialTypes.isEmpty do throw (IO.userError "foreign constructor reused a material node")
   let actual ← must (WorldTypeHash.query next 4096 novel)
@@ -37,7 +37,7 @@ def main (args : List String) : IO Unit := do
   let definitions := source.definitions.map fun definition =>
     if definition.crateIndex == identity.crateIndex && definition.index == identity.index then
       {definition with rawPath := none} else definition
-  let missing ← must (World.ofMaterial #[] #[] definitions world.pointerBytes)
+  let missing ← must (World.ofMaterial #[] #[] definitions #[] world.pointerBytes)
   let (id,missing) ← must ((World.internType (.foreign identity)).run missing)
   if (WorldTypeHash.query missing 4096 id).isOk then
     throw (IO.userError "missing raw physical definition identity was accepted")

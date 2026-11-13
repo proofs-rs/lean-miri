@@ -114,32 +114,18 @@ pub(super) fn discover<'tcx>(
     let env = ty::TypingEnv::fully_monomorphized();
     let mut state = std::mem::take(&mut context.cast_state);
     let mut records = Vec::new();
-    // A type may have been resolved before a source cast made it a target.
-    // Replay only newly observed cast inputs against the retained resolution.
+    // These are actual MIR ReifyFnPointer/ClosureFnPointer requests, not the
+    // universe of retained FnDef headers. A late request is processed even when
+    // its type belonged to a prefix scanned in an earlier discovery wave.
     let cast_end = context.fn_pointer_cast_inputs.len();
-    for index in state.inputs..cast_end {
-        let input = *context.fn_pointer_cast_inputs.get_index(index).unwrap();
-        if !closed(input) {
-            return export_failure("cast resolution", "requires normalized monomorphic input");
-        }
-        if let Some(instance) = state.resolutions.get(&input).copied() {
-            context.fn_pointer_targets.insert(instance);
-            context.register_instance(instance);
-        }
-    }
-    state.inputs = cast_end;
-    let type_end = context.type_ids.len();
-    let types = (state.types..type_end)
-        .map(|id| (id as u64, *context.type_ids.key(id).unwrap()))
-        .filter(|(_, input)| matches!(input.kind(), ty::FnDef(..) | ty::Closure(..))
-            && (closed(*input) || context.fn_pointer_cast_inputs.contains(input)))
+    let inputs = (state.inputs..cast_end)
+        .map(|index| *context.fn_pointer_cast_inputs.get_index(index).unwrap())
         .collect::<Vec<_>>();
-    state.types = type_end;
-    for (_, input) in types {
+    for input in inputs {
         let no_bound = match input.kind() {
             ty::FnDef(_, args) => args.no_bound_vars().is_some(),
             ty::Closure(..) => true,
-            _ => unreachable!(),
+            _ => return export_failure("cast resolution", "actual request is not a function or closure"),
         };
         if !closed(input) {
             export_failure::<()>("cast resolution", "requires normalized monomorphic input")?;
@@ -157,9 +143,28 @@ pub(super) fn discover<'tcx>(
                         );
                     }
                 };
-                let _ = ty::Instance::try_resolve(tcx, env, def, args)
+                let preliminary = ty::Instance::try_resolve(tcx, env, def, args)
                     .map_err(|error| format!("function-pointer resolution failed: {error:?}"))?;
-                let source_cast = context.fn_pointer_cast_inputs.contains(&input);
+                // Pinned instance.rs::resolve_for_fn_ptr's KCFI fallback asks
+                // is_dyn_compatible(assoc.container_id), but assoc.rs defines
+                // container_id of a TraitImpl member as its impl, not its trait.
+                // That compiler query panics. Preserve an explicit residual for
+                // actual requests that reach that branch, rather than invoking
+                // it or fabricating a successful/negative resolution.
+                if tcx.sess.is_sanitizer_kcfi_enabled()
+                    && tcx.opt_associated_item(def).is_some_and(|item|
+                        matches!(item.container, ty::AssocContainer::TraitImpl(Ok(_))))
+                    && preliminary.is_some_and(|resolved| {
+                        !matches!(resolved.def, ty::InstanceKind::Item(_)
+                            if resolved.def.requires_caller_location(tcx))
+                        && !matches!(resolved.def, ty::InstanceKind::Virtual(..))
+                        && !tcx.is_closure_like(resolved.def_id())
+                    })
+                {
+                    return export_failure("function-pointer resolution",
+                        "pinned KCFI trait-impl function-pointer fallback queries dyn compatibility of an impl");
+                }
+                let source_cast = true;
                 let resolution = match ty::Instance::resolve_for_fn_ptr(tcx, env, def, args) {
                     Some(resolved) => {
                         state.resolutions.insert(input, resolved);
@@ -174,7 +179,7 @@ pub(super) fn discover<'tcx>(
                 }
             }
             ty::Closure(def, args) => {
-                let source_cast = context.fn_pointer_cast_inputs.contains(&input);
+                let source_cast = true;
                 let resolved = ty::Instance::resolve_closure(tcx, def, args, ty::ClosureKind::FnOnce);
                 state.resolutions.insert(input, resolved);
                 let instance_id = instance(context, resolved, source_cast);
@@ -193,6 +198,7 @@ pub(super) fn discover<'tcx>(
         };
         records.push(result);
     }
+    state.inputs = cast_end;
     let pairs = context.cast_unsize_requests.suffix(state.pairs).to_vec();
     state.pairs = context.cast_unsize_requests.len();
     for (source, target) in pairs {

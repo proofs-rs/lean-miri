@@ -29,7 +29,9 @@
       "panic_in_drop": "unwind",
       "optimization": "no",
       "llvm_writable": false,
-      "box_noalias": true
+      "box_noalias": true,
+      "incremental_enabled": false,
+      "sanitizers": []
     }
   },
   "types": [

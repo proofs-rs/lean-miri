@@ -26,7 +26,7 @@ def main (args : List String) : IO Unit := do
       if source.id == node.id then {source with compilerFacts := source.compilerFacts.map fun facts =>
         {facts with typeQueries := facts.typeQueries.filter (·.1 != "normalized")}}
       else source
-    let absent ← must (World.ofMaterial missing document.typeConstants document.definitions world.pointerBytes)
+    let absent ← must (World.ofMaterial missing document.typeConstants document.definitions document.predicates world.pointerBytes)
     if ((WorldNormalization.normalizeType metadata.normalizationContext 10000 4096 node.id).run absent).isOk then
       throw (IO.userError "missing residual normalization answer was invented")
     let some child := signature.inputs[0]? | throw (IO.userError "dynamic signature input absent")

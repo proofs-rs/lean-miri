@@ -16,6 +16,7 @@ class LegacyFixtureSchemaTests(unittest.TestCase):
             projected = adapt_legacy_fixture(source)
             self.assertEqual(source, frozen)
             self.assertEqual(projected["compiler_coroutine_coverage"]["body_coroutines"], [False])
+            self.assertEqual(projected["compiler_coroutine_coverage"]["generic_sources"], [])
             abi = projected["fn_abis"][0]
             self.assertEqual(abi["arguments"], [3])
             self.assertEqual(abi["return"], 2)

@@ -36,6 +36,8 @@ private structure AbiSessionFields where
   optimization : Option OptimizationLevel := none
   llvmWritable : Option Bool := none
   boxNoalias : Option Bool := none
+  incrementalEnabled : Option Bool := none
+  sanitizers : Option (Array String) := none
 
 private def parsePanicStrategy : JsonReader.Parser PanicStrategy := do
   match ← JsonReader.string with
@@ -57,12 +59,16 @@ private def parseAbiSession : JsonReader.Parser AbiSessionMaterial := do
       return {p with optimization := some level}
     | "llvm_writable" => return {p with llvmWritable := some (← JsonReader.boolean)}
     | "box_noalias" => return {p with boxNoalias := some (← JsonReader.boolean)}
+    | "incremental_enabled" => return {p with incrementalEnabled := some (← JsonReader.boolean)}
+    | "sanitizers" => return {p with sanitizers := some (← JsonReader.array JsonReader.string)}
     | _ => JsonReader.fail s!"unknown raw ABI session field {key}"
   pure ⟨← JsonReader.required p.panic "abi_session.panic",
     ← JsonReader.required p.panicInDrop "abi_session.panic_in_drop",
     ← JsonReader.required p.optimization "abi_session.optimization",
     ← JsonReader.required p.llvmWritable "abi_session.llvm_writable",
-    ← JsonReader.required p.boxNoalias "abi_session.box_noalias"⟩
+    ← JsonReader.required p.boxNoalias "abi_session.box_noalias",
+    ← JsonReader.required p.incrementalEnabled "abi_session.incremental_enabled",
+    ← JsonReader.required p.sanitizers "abi_session.sanitizers"⟩
 
 private structure ProducerFields where
   miriCommit : Option String := none
@@ -453,7 +459,7 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
     if source.primitiveRecipe.isNone && source.tupleType.isNone && source.unionType.isNone && source.structType.isNone && source.enumType.isNone && source.patternType.isNone && source.sequenceType.isNone && source.pointerType.isNone && source.pointerDataType.isNone && source.enumTagType.isNone then source.sizeBytes
     else match target with
       | .error _ => none
-      | .ok target => match RuntimeMetadata.resolveLayout target types layouts ty.layoutId definitions typeConstants with
+      | .ok target => match RuntimeMetadata.resolveLayout target types layouts ty.layoutId definitions typeConstants predicates with
         | .ok layout => some layout.size.bytes.toNat
         | .error _ => none
   let bodyContext : DecodeMIR.Context := {

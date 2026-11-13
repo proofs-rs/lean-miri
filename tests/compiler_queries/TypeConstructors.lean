@@ -8,7 +8,7 @@ private def must (result : Except String α) : IO α :=
 
 def main : IO Unit := do
   let initial ← must (World.ofMaterial #[node 0 .bool,node 1 (.rawPointer 0 .Mut),
-    node 2 (.reference 0 .Mut .Erased)] #[] #[] 8)
+    node 2 (.reference 0 .Mut .Erased)] #[] #[] #[] 8)
   let (pointer,world) ← must ((World.internType (.rawPointer 0 .Mut)).run initial)
   let (reference,world) ← must ((World.internType (.reference 0 .Mut .Erased)).run world)
   unless pointer == 1 && reference == 2 && world.constructedTypes.isEmpty do
@@ -20,7 +20,7 @@ def main : IO Unit := do
   unless immutable != pointer && staticRef != reference do
     throw (IO.userError "constructor mutability or lifetime identity was erased")
   let ambiguous ← must (World.ofMaterial #[node 0 .bool,node 1 (.rawPointer 0 .Mut),
-    node 2 (.rawPointer 0 .Mut)] #[] #[] 8)
+    node 2 (.rawPointer 0 .Mut)] #[] #[] #[] 8)
   match (World.internType (.rawPointer 0 .Mut)).run ambiguous with
   | .error "ambiguous canonical type universe material identity" => pure ()
   | _ => throw (IO.userError "duplicate material identity was accepted")

@@ -29,7 +29,7 @@ def main (args : List String) : IO Unit := do
     | .nil => #[] | .cons term rest => #[term] ++ values rest
   let inputs := (values terms).pop
   unless inputs.size == 16 do throw (IO.userError "incomplete nominal fixture inputs")
-  let mut world ← must (TypeArena.World.ofMaterial #[] #[] definitions 8)
+  let mut world ← must (TypeArena.World.ofMaterial #[] #[] definitions #[] 8)
   let mut types := #[]
   for input in inputs do
     let (id,after) ← must ((GenericInstantiationWorld.resolveType 16384 input) world)
@@ -50,7 +50,7 @@ def main (args : List String) : IO Unit := do
   let missing : Except String Bool := do
     let definitions := definitions.filter fun source =>
       source.crateIndex != nominal.crateIndex || source.index != nominal.index
-    let world ← TypeArena.World.ofMaterial #[] #[] definitions 8
+    let world ← TypeArena.World.ofMaterial #[] #[] definitions #[] 8
     let (left,world) ← (GenericInstantiationWorld.resolveType 16384 (inputs[0]?.getD (.atom .type "bool" ""))) world
     let (right,world) ← (GenericInstantiationWorld.resolveType 16384 (inputs[1]?.getD (.atom .type "bool" ""))) world
     CompilerCovariance.relationInWorld {} world left right

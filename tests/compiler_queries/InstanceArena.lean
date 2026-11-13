@@ -18,7 +18,7 @@ def main : IO Unit := do
   let types ← must (TypeArena.World.ofMaterial #[
     {id := 0,display := "same",layoutId := 0,shape := .uint (.known .u32)},
     {id := 1,display := "same",layoutId := 0,shape := .uint (.known .u8)}] #[]
-    #[{crateIndex := 0,index := 11},{crateIndex := 0,index := 12}] 8)
+    #[{crateIndex := 0,index := 11},{crateIndex := 0,index := 12}] #[] 8)
   let initialStore ← must (InstanceArena.Store.ofSource types #[source 0])
   let initial : InstanceArena.World := ⟨types,initialStore⟩
   let (material,world) ← must ((InstanceArena.World.internInstance (.Item 0) #[.Type 0]).run initial)

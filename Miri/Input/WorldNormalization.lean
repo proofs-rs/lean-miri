@@ -14,7 +14,7 @@ private def lift [Monad m] [MonadExceptOf String m] (value : Except String A) : 
 
 private def structuralMaterial : TypeShape → Bool
   | .bool | .char | .int _ | .uint _ | .float _ | .str | .never | .foreign _
-  | .rawPointer .. | .reference .. | .slice _ | .tuple _
+  | .rawPointer .. | .reference .. | .slice _ | .tuple _ | .dynamicTraitObject ..
   | .alias .free false .. | .alias .projection false .. => true
   | .functionPointer signature variables =>
     variables.all (fun value => match value with | .Region _ => true | _ => false) &&
@@ -85,6 +85,21 @@ private def normalizeCached (context : AliasRuntime.Context) (work : Nat) :
           pure constructor
       if let .alias .. := constructor then
         let term ← lift (GenericInstantiationWorld.ofType (← liftM (get : WorldM World)) (fuel + 1) id)
+        let result ← lift (AliasRuntime.normalizeTerm context work (fuel + 1) #[] #[] term)
+        return ← liftM (GenericInstantiationWorld.resolveType (fuel + 1) result)
+      if let .dynamic _ := constructor then
+        unless ← lift (GenericInstantiationWorld.supportsTypeReification world (fuel + 1) id) do
+          match view with
+          | .material source => return ← lift (residual world source)
+          | .constructed _ => throw "dynamic normalization requires lossless child source"
+        let term ← lift (GenericInstantiationWorld.ofType world (fuel + 1) id)
+        match BinderRegions.requireAliasFree (fuel + 1) term with
+        | .error error =>
+          match view with
+          | .material source => return ← lift (residual world source)
+          | .constructed _ => throw error
+        | .ok () => pure ()
+        let term ← lift (BinderRegions.eraseAndAnonymize (fuel + 1) term)
         let result ← lift (AliasRuntime.normalizeTerm context work (fuel + 1) #[] #[] term)
         return ← liftM (GenericInstantiationWorld.resolveType (fuel + 1) result)
       if let .functionPointer signature := constructor then

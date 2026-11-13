@@ -34,7 +34,7 @@ private def compareBody (world : RuntimeArrayTypes.World) (reference : FnPointer
       let kind ← (← row.getObjVal? "kind").getStr?
       let term ← GenericMaterialCodec.readTerm 16384 (← row.getObjVal? "self_type") >>= remap #[] 16384
       pure (kind == direction && term == selfTerm)) with
-    | some row => pure row | none => throw "fresh shim Self has no independent rustc oracle row"
+    | some row => pure row | none => throw s!"fresh shim Self has no independent rustc oracle row: {direction}, type {selfType}, term {repr selfTerm}"
   let nonNull ← GenericMaterialCodec.readTerm 16384 (← row.getObjVal? "non_null_type")
   let .definition .type "adt" oldNonNull (.cons (.definition .type "foreign" oldCode .nil) .nil) := nonNull
     | throw "oracle NonNull<Code> identity shape changed"
@@ -68,11 +68,22 @@ private def compareBody (world : RuntimeArrayTypes.World) (reference : FnPointer
     actual.spreadArgument.isNone && actual.basicBlocks == blocks) "production shim differs from complete independent rustc body"
 
 def main (args : List String) : IO Unit := do
-  let [path,oraclePath] := args | throw (IO.userError "expected fresh shim export and independent rustc oracle")
+  let (path,oraclePath,expectedCount,novelOraclePath) ← match args with
+    | [path,oraclePath] => pure (path,oraclePath,2,none)
+    | [path,oraclePath,count] => match count.toNat? with
+      | some count => pure (path,oraclePath,count,none)
+      | none => throw (IO.userError "expected a numeric shim count")
+    | [path,oraclePath,count,novelOracle] => match count.toNat? with
+      | some count => pure (path,oraclePath,count,some novelOracle)
+      | none => throw (IO.userError "expected a numeric shim count")
+    | _ => throw (IO.userError "expected fresh shim export, independent rustc oracle and optional count")
   let text ← IO.FS.readFile path
   let raw ← must (Json.parse text)
   let document := (← must (decodeJson text)).document
   let oracle ← must (Json.parse (← IO.FS.readFile oraclePath) >>= Json.getArr?)
+  let novelOracle ← match novelOraclePath with
+    | none => pure none
+    | some path => some <$> must (Json.parse (← IO.FS.readFile path) >>= Json.getArr?)
   let metadata ← must ((RuntimeMetadata.ofDocument document).mapError toString)
   let initial ← must ((RuntimeArrayTypes.create metadata).mapError reprStr)
   let prepared ← must (CallResolution.prepareWithRuntime metadata (← must (lowerProgram document)))
@@ -92,7 +103,7 @@ def main (args : List String) : IO Unit := do
     unless again.identity == loaded.identity && again.body == loaded.body &&
         repeated.arena.constructedTypes == world.arena.constructedTypes && repeated.bodies == world.bodies do
       throw (IO.userError "repeated shim body demand duplicated constructor identities")
-    let novel : RuntimeArrayTypes.CompilerM (Nat × Miri.Interpreter.LoadedBody) := do
+    let novel : RuntimeArrayTypes.CompilerM (Nat × Nat × Miri.Interpreter.LoadedBody) := do
       let world ← get
       let some source := document.types[selfType]? | throw "original FnPtr source is absent"
       let constructor ← match world.arena.materialKey source with
@@ -104,8 +115,10 @@ def main (args : List String) : IO Unit := do
       let shim := if direction == "as_pointer" then Miri.Interpreter.CallShimKind.FnPtrAsPtr kind ty else .FnPtrFromPtr kind ty
       let instanceId ← RuntimeArrayTypes.internInstance (.Shim shim) #[.Type ty]
       unless instanceId >= document.instances.size do throw "novel shim instance did not append outside material prefix"
-      pure (instanceId,← CallResolution.loadedBodyOfInstance prepared instanceId)
-    let ((instanceId,novelBody),novelWorld) ← must (novel.run world)
+      pure (instanceId,ty,← CallResolution.loadedBodyOfInstance prepared instanceId)
+    let ((instanceId,novelType,novelBody),novelWorld) ← must (novel.run world)
+    if let some oracle := novelOracle then
+      must (compareBody novelWorld reference direction novelType novelBody.body oracle)
     unless novelBody.identity.index >= document.bodies.size do throw (IO.userError "novel shim body did not append outside material prefix")
     let (body,_) ← must ((prepared.program.resolveBodyIdentity novelBody.identity).run novelWorld)
     unless body.input.instanceId == instanceId && body.body == novelBody.body do
@@ -116,6 +129,15 @@ def main (args : List String) : IO Unit := do
       let malformed ← must (replaceField body key value)
       let malformed ← must (replaceField raw "bodies" (.arr (bodies.set! index malformed)))
       if (decodeJson malformed.compress).isOk then throw (IO.userError s!"raw shim accepted invalid field {key}")
+    let types ← must ((← must (raw.getObjVal? "types")).getArr?)
+    let some selfNode := types[selfType]? | throw (IO.userError "raw FnPtr Self disappeared")
+    let selfShape ← must (selfNode.getObjVal? "shape")
+    for boundVariable in [Json.mkObj [("kind",toJson "const")],
+        Json.mkObj [("kind",toJson "type"),("type_kind",Json.mkObj [("kind",toJson "anonymous")])]] do
+      let shape ← must (replaceField selfShape "signature_bound_variables" (.arr #[boundVariable]))
+      let malformedNode ← must (replaceField selfNode "shape" shape)
+      let malformed ← must (replaceField raw "types" (.arr (types.set! selfType malformedNode)))
+      if (decodeJson malformed.compress).isOk then throw (IO.userError "raw shim accepted a non-region Self binder")
     count := count + 1
-  unless count == 2 do throw (IO.userError s!"expected both raw FnPtr conversion directions, found {count}")
-  IO.println "PASS both production FnPtr source shims match independent rustc bodies; novel type/instance/body identities and malformed-source controls pass"
+  unless count == expectedCount do throw (IO.userError s!"expected {expectedCount} raw FnPtr conversion shims, found {count}")
+  IO.println s!"PASS {count} production FnPtr source shims match independent rustc bodies; novel type/instance/body identities and malformed-source controls pass"

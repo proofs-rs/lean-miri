@@ -47,6 +47,18 @@ private def typeFlag (world : World) (key : String) (depth : Nat) : Nat → Type
         if let .functionDefinition _ _ variables := constructor then
           unless variables.isEmpty do throw "world closed-type flags exclude nonempty FnDef binders"
       if (argsRegions constructor).any (regionFlag key depth) then return true
+      if let .dynamic value := constructor then
+        if regionFlag key depth value.region then return true
+        for predicate in value.predicates do
+          let predicateDepth := depth + 1
+          for argument in predicate.body.arguments do
+            if let .Lifetime region := argument then
+              if regionFlag key predicateDepth region then return true
+          for child in predicate.body.typeChildren do
+            if ← typeFlag world key predicateDepth fuel child then return true
+          for child in predicate.body.constantChildren do
+            if ← constFlag world key predicateDepth fuel child then return true
+        return false
       let childDepth := match constructor with | .functionPointer _ => depth + 1 | _ => depth
       for child in constructor.typeChildren do
         if ← typeFlag world key childDepth fuel child then return true

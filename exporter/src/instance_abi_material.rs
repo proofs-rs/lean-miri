@@ -82,6 +82,22 @@ pub(super) fn small_nonpointer_pair(input: ty::Ty<'_>) -> bool {
     })
 }
 
+// Bounded byte-array/tuple source grammar for the small Memory adjustment.
+// Raw value-tree bits establish the count, never layout_of or ABI results.
+pub(super) fn small_memory(input: ty::Ty<'_>) -> bool {
+    let byte = |field: ty::Ty<'_>| matches!(field.kind(),
+        ty::Bool | ty::Uint(ty::UintTy::U8) | ty::Int(ty::IntTy::I8));
+    match input.kind() {
+        ty::Tuple(fields) => (3..=8).contains(&fields.len()) && fields.iter().all(byte),
+        ty::Array(element, count) if byte(*element) => {
+            let ty::ConstKind::Value(value) = count.kind() else { return false; };
+            let ty::ValTreeKind::Leaf(scalar) = **value.valtree else { return false; };
+            scalar.to_bits_unchecked() <= 8
+        },
+        _ => false,
+    }
+}
+
 pub(super) fn signature<'tcx>(tcx: TyCtxt<'tcx>, instance: ty::Instance<'tcx>,
     extra: &'tcx ty::List<ty::Ty<'tcx>>) -> Option<ty::FnSig<'tcx>> {
     use rustc_abi::ExternAbi as A;
@@ -112,7 +128,8 @@ pub(super) fn signature<'tcx>(tcx: TyCtxt<'tcx>, instance: ty::Instance<'tcx>,
         if !super::generic_mir::supported_arguments(tcx.mk_args(&[ty.into()])) { return false; }
         match ty.kind() {
             ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never => true,
-            ty::Tuple(fields) => fields.is_empty() || small_nonpointer_pair(ty),
+            ty::Tuple(fields) => fields.is_empty() || small_nonpointer_pair(ty) || small_memory(ty),
+            ty::Array(..) => small_memory(ty),
             ty::RawPtr(pointee,_) => sized_pointee(tcx, *pointee, 256),
             ty::Ref(_,pointee,_) => sized_pointee(tcx, *pointee, 256),
             ty::FnPtr(types,header) => types.with(*header).bound_vars().is_empty(),

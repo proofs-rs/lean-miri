@@ -63,6 +63,12 @@ impl Callbacks for Oracle {
     let nonnull=tcx.type_of(nonnull).instantiate(tcx,&[tcx.type_of(code).instantiate_identity().skip_norm_wip().into()]).skip_norm_wip();
     let mut rows=Vec::new();
     for pointer in pointers {
+        // Production MIR instances carry the fully monomorphized, region-erased
+        // key. Query that key independently rather than rewriting expected MIR.
+        let pointer = if std::env::var_os("FN_POINTER_SHIM_NORMALIZE").is_some() {
+            tcx.try_normalize_erasing_regions(ty::TypingEnv::fully_monomorphized(),
+                ty::Unnormalized::new_wip(pointer)).expect("closed FnPtr key normalization")
+        } else { pointer };
         for (tag,def,shim) in [("as_pointer",as_def,ty::ShimKind::FnPtrAsPtr(as_def,pointer)),
             ("from_pointer",from_def,ty::ShimKind::FnPtrFromPtr(from_def,pointer))] {
             let signature=generic_material::signature_tree(tcx,tcx.fn_sig(def).instantiate_identity().skip_norm_wip()).unwrap();

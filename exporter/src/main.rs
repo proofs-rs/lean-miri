@@ -1679,6 +1679,10 @@ impl ExportCallbacks {
                 },
                 llvm_writable: tcx.sess.opts.unstable_opts.llvm_writable,
                 box_noalias: tcx.sess.opts.unstable_opts.box_noalias,
+                incremental_enabled: tcx.sess.opts.incremental.is_some(),
+                sanitizers: tcx.sess.opts.unstable_opts.sanitizer.into_iter().map(|flag|
+                    flag.as_str().map(str::to_owned).ok_or("raw sanitizer flag has no source spelling".to_owned()))
+                    .collect::<Result<Vec<_>,_>>()?,
             },
             input_settings: producer::evidence(
                 tcx,
@@ -1818,6 +1822,7 @@ impl ExportCallbacks {
                         "trait_item": associated.and_then(|item| item.trait_item_def_id()).map(trait_material::identity),
                     }));
                     function_abi_material.insert(definition_index, pool_values::FunctionAbiMaterial {
+                        always_comptime: matches!(tcx.constness(definition), rustc_hir::Constness::Const { always: true }),
                         never_unwind: tcx.codegen_fn_attrs(definition).flags.contains(
                             rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags::NEVER_UNWIND),
                         foreign_item: tcx.is_foreign_item(definition),
@@ -6265,7 +6270,7 @@ fn existential_predicate_payload_json<'tcx>(
         ty::ExistentialPredicate::Projection(projection) => {
             let term = match projection.term.kind() {
                 ty::TermKind::Ty(value) => ProjectionTerm::Type(type_json(context,tcx,value)?),
-                ty::TermKind::Const(value) => return export_failure("existential projection", format!("constant projection is not implemented: {value:?}")),
+                ty::TermKind::Const(value) => ProjectionTerm::Const(const_type_json(context,tcx,value)?),
             };
             P::Projection { def_id: def_json(context, projection.def_id), def_path: tcx.def_path_str(projection.def_id),
                 generic_args: generic_args_json(context,tcx,projection.args)?, term }

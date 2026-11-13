@@ -14,6 +14,7 @@ private structure Fixture where
   types : Array TypeNode
   layouts : Array Layout
   definitions : Array DefinitionId
+  predicates : Array VtablePredicate
   constants : Array Miri.MIR.TypeConst
 
 /-- A focused source-derived adapter. It reads target/type/layout material
@@ -51,11 +52,13 @@ private def readFixture (path : String) (version : Nat) : IO Fixture := do
     must (JsonReader.run (DecoderValues.parseDefinitionId "$.definitions") row.compress)
   let constants ← (← must ((← must (raw.getObjVal? "type_constants")).getArr?)).mapM fun row =>
     must (JsonReader.run (TypeConstCodec.decode "oracle.constant") row.compress)
-  return ⟨target,types,layouts,definitions,constants⟩
+  let predicates ← (← must ((← must (raw.getObjVal? "predicates")).getArr?)).mapM fun row =>
+    must (JsonReader.run (DecoderValues.parseVtablePredicate "$.predicates") row.compress)
+  return ⟨target,types,layouts,definitions,predicates,constants⟩
 
 private def Fixture.lookup (fixture : Fixture) (id : Nat) : IO Miri.ABI.LayoutData := do
   let some node := fixture.types.find? (·.id == id) | throw (IO.userError "type absent")
-  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions fixture.constants).mapError toString)
+  must ((RuntimeMetadata.resolveLayout fixture.target fixture.types fixture.layouts node.layoutId fixture.definitions fixture.constants fixture.predicates).mapError toString)
 
 private structure Built where
   adt : Miri.ABI.TyAndLayout Nat
@@ -122,7 +125,7 @@ def main (args : List String) : IO Unit := do
     check ((← must ((← must (field.getObjVal? "index")).getNat?)) == index) "wide oracle field order mismatch"
     let layout ← must ((← must (field.getObjVal? "layout")).getNat?)
     let expected ← must ((RuntimeMetadata.resolveLayout oracle.target oracle.types oracle.layouts layout
-      oracle.definitions oracle.constants).mapError toString)
+      oracle.definitions oracle.constants oracle.predicates).mapError toString)
     check (actual.layout == expected) s!"constructed wide pointer contextual field {index} differs from rustc"
   check (results.metadata.ty == decoded.document.queries.primitives.usize)
     "constructed slice metadata field did not return exact usize identity"

@@ -15,17 +15,17 @@ private def patterned (pattern : Term) : Term :=
   .node .type "pattern" "" (.cons (.atom .type "uint" "u8") (.cons pattern .nil))
 
 def main : IO Unit := do
-  let initial ← must (World.ofMaterial #[] #[] #[] 8)
+  let initial ← must (World.ofMaterial #[] #[] #[] #[] 8)
   let notNull : Term := .node .type "pattern" "" (.cons
     (.node .type "raw_pointer" "immutable" (.cons (.atom .type "uint" "u8") .nil))
     (.cons (.atom .aggregate "pattern_not_null" "") .nil))
   let node := fun id shape => ({id,shape,display := "pattern source",layoutId := 0} : TypeNode)
   let source ← must (World.ofMaterial #[node 0 (.uint (.known .u8)),node 1 (.rawPointer 0 .Not),
-    node 2 (.patternType 1 .notNull)] #[] #[] 8)
+    node 2 (.patternType 1 .notNull)] #[] #[] #[] 8)
   let (materialId,material) ← must ((GenericInstantiationWorld.resolveType 4096 notNull).run source)
   check (materialId == 2 && material.constructedTypes.isEmpty) "complete material pattern identity was not reused"
   let duplicate ← must (World.ofMaterial #[node 0 (.uint (.known .u8)),node 1 (.rawPointer 0 .Not),
-    node 2 (.patternType 1 .notNull),node 3 (.patternType 1 .notNull)] #[] #[] 8)
+    node 2 (.patternType 1 .notNull),node 3 (.patternType 1 .notNull)] #[] #[] #[] 8)
   check (!((GenericInstantiationWorld.resolveType 4096 notNull).run duplicate).isOk)
     "ambiguous material pattern identities were accepted"
   let terms := #[notNull,patterned (interval 1 7),patterned (.node .aggregate "pattern_or" ""
@@ -41,7 +41,7 @@ def main : IO Unit := do
       "identical pattern source did not reuse canonical syntax"
     check ((← must (world.shapeKind id)) == .patternType) "constructed pattern has wrong shape"
     check (← must (WorldTypeFlags.query world "is_monomorphic" 4096 id)) "closed pattern rejected by type flags"
-    check (!(WorldTypeHash.query world 4096 id).isOk) "unsupported pattern hash invented"
+    check ((WorldTypeHash.query world 4096 id).isOk) "raw pattern hash unavailable outside material prefixes"
   let (first,next) ← must ((GenericInstantiationWorld.resolveType 4096 (patterned (interval 1 7))).run world)
   let (different,afterDifferent) ← must ((GenericInstantiationWorld.resolveType 4096 (patterned (interval 2 7))).run next)
   check (first != different) "different pattern endpoints collided"
@@ -53,4 +53,4 @@ def main : IO Unit := do
   check (!((GenericInstantiationWorld.resolveType 4096 malformed).run world).isOk) "malformed pattern accepted"
   check (!((GenericInstantiationWorld.resolveType 0 notNull).run world).isOk) "pattern traversal ignored fuel exhaustion"
   check (world.materialTypes.isEmpty && world.materialConstants.isEmpty) "novel pattern acquired source/result prefixes"
-  IO.println "PASS novel NotNull/Range/Or pattern roundtrips, exact reuse, endpoint distinction, flags, missing constants, malformed syntax, fuel, explicit hash boundary"
+  IO.println "PASS novel NotNull/Range/Or pattern roundtrips, exact reuse, endpoint distinction, flags, missing constants, malformed syntax, fuel, raw hash availability"

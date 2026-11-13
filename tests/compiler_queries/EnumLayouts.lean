@@ -13,6 +13,7 @@ private structure Oracle where
   types : Array TypeNode
   layouts : Array Miri.Input.Layout
   definitions : Array DefinitionId
+  predicates : Array VtablePredicate
   constants : Array Miri.MIR.TypeConst
 
 /-- Focused historical producer adapter: read raw type identity and actual
@@ -38,11 +39,13 @@ private def readOracle (path : String) : IO Oracle := do
     must (JsonReader.run DecoderValues.parseLayout value.compress)
   let constants ← (← must ((← must (raw.getObjVal? "type_constants")).getArr?)).mapM fun row =>
     must (JsonReader.run (TypeConstCodec.decode "oracle.constant") row.compress)
-  pure ⟨target,types,layouts,definitions,constants⟩
+  let predicates ← (← must ((← must (raw.getObjVal? "predicates")).getArr?)).mapM fun row =>
+    must (JsonReader.run (DecoderValues.parseVtablePredicate "$.predicates") row.compress)
+  pure ⟨target,types,layouts,definitions,predicates,constants⟩
 
 private def Oracle.layout (oracle : Oracle) (node : TypeNode) : IO LayoutData :=
   must ((RuntimeMetadata.resolveLayout oracle.target oracle.types oracle.layouts node.layoutId
-    oracle.definitions oracle.constants).mapError toString)
+    oracle.definitions oracle.constants oracle.predicates).mapError toString)
 
 private def internNovelEnum (identity : GenericSubstitution.DefinitionIdentity)
     (initial : TypeArena.World) : IO (TypeId × TypeArena.World) := do
@@ -65,7 +68,7 @@ def main (args : List String) : IO Unit := do
     | throw (IO.userError "expected frozen compiler oracle, fresh tagged/niche candidate and fresh base")
   let oracle ← readOracle oraclePath
   let oracleWorld ← must (TypeArena.World.ofMaterial oracle.types oracle.constants oracle.definitions
-    oracle.target.pointerSize.bytes.toNat)
+    oracle.predicates oracle.target.pointerSize.bytes.toNat)
   let candidate := (← must (decodeJson (← IO.FS.readFile candidatePath))).document
   let metadata ← must ((RuntimeMetadata.ofDocument candidate).mapError toString)
   let world ← must (TypeArena.World.ofDocument candidate)
@@ -98,7 +101,7 @@ def main (args : List String) : IO Unit := do
         "missing residual enum layout silently succeeded"
       check adt.args.isEmpty "residual fixture unexpectedly requires generic substitution"
       let constructedWorld ← must (TypeArena.World.ofMaterial #[] #[] candidate.definitions
-        metadata.target.pointerSize.bytes.toNat)
+        #[] metadata.target.pointerSize.bytes.toNat)
       let (constructedId,constructedWorld) ← must ((TypeArena.World.internType
         (.adt identity #[])).run constructedWorld)
       check (!((RuntimeMetadata.layoutInWorld metadata constructedId).run constructedWorld).isOk)
@@ -107,7 +110,7 @@ def main (args : List String) : IO Unit := do
   let base := (← must (decodeJson (← IO.FS.readFile basePath))).document
   let baseMetadata ← must ((RuntimeMetadata.ofDocument base).mapError toString)
   let mut novel ← must (TypeArena.World.ofMaterial #[] #[] base.definitions
-    baseMetadata.target.pointerSize.bytes.toNat)
+    #[] baseMetadata.target.pointerSize.bytes.toNat)
   let some expectedNode := oracle.types.find? (fun node => match node.shape with
     | .adt adt => adt.args.any fun arg => match arg with
       | .Type id => (oracle.types[id]?).any fun element => match element.shape with
@@ -128,7 +131,7 @@ def main (args : List String) : IO Unit := do
       { declaration with adtDeclaration := none }
     else declaration
   let missingWorld ← must (TypeArena.World.ofMaterial #[] #[] missingDefinitions
-    baseMetadata.target.pointerSize.bytes.toNat)
+    #[] baseMetadata.target.pointerSize.bytes.toNat)
   let (missingId,missingWorld) ← internNovelEnum identity missingWorld
   check (!((RuntimeMetadata.layoutInWorld baseMetadata missingId).run missingWorld).isOk)
     "missing raw enum declaration borrowed a material layout"
@@ -137,7 +140,7 @@ def main (args : List String) : IO Unit := do
       { declaration with genericTemplate := none }
     else declaration
   let templateWorld ← must (TypeArena.World.ofMaterial #[] #[] missingTemplate
-    baseMetadata.target.pointerSize.bytes.toNat)
+    #[] baseMetadata.target.pointerSize.bytes.toNat)
   let (templateId,templateWorld) ← internNovelEnum identity templateWorld
   check (!((RuntimeMetadata.layoutInWorld baseMetadata templateId).run templateWorld).isOk)
     "missing raw enum field template borrowed a material layout"

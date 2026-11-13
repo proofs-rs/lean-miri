@@ -9,8 +9,8 @@ def main (args : List String) : IO Unit := do
   let [sourcePath,oraclePath] := args | throw (IO.userError "expected independent source and oracle")
   let source := (← must (decodeJson (← IO.FS.readFile sourcePath))).document
   let types := source.types.map fun node => {node with compilerFacts := node.compilerFacts.map fun facts => {facts with typeIdHash := none}}
-  let mut material ← must (World.ofMaterial types source.typeConstants source.definitions 8)
-  let mut novel ← must (World.ofMaterial #[] #[] source.definitions 8)
+  let mut material ← must (World.ofMaterial types source.typeConstants source.definitions source.predicates 8)
+  let mut novel ← must (World.ofMaterial #[] #[] source.definitions #[] 8)
   let rows ← must ((← must (Json.parse (← IO.FS.readFile oraclePath))).getArr?)
   check (rows.size == 7) "actual Pattern oracle domain incomplete"
   let mut materialHits := 0
@@ -38,12 +38,12 @@ def main (args : List String) : IO Unit := do
     let some expectedPattern := text.toNat? | throw (IO.userError "invalid independent Pattern fingerprint")
     check ((StableSipHash.hash bytes).toNat == expectedPattern) "Pattern component hash differs from compiler"
 
-    let missing ← must (World.ofMaterial types #[] source.definitions 8)
+    let missing ← must (World.ofMaterial types #[] source.definitions #[] 8)
     if id < types.size && !(WorldTypeHash.query missing 4096 id).isOk then missingEndpoints := missingEndpoints + 1
     let (novelId,next) ← must ((GenericInstantiationWorld.resolveType 4096 term).run novel)
     novel := next
     check ((← must (WorldTypeHash.query novel 4096 novelId)).toNat == expected) "Pattern raw novel hash differs from compiler"
-    let blank ← must (World.ofMaterial #[] #[] (source.definitions.map fun definition => {definition with rawPath := none}) 8)
+    let blank ← must (World.ofMaterial #[] #[] (source.definitions.map fun definition => {definition with rawPath := none}) #[] 8)
     let (badId,broken) ← must ((GenericInstantiationWorld.resolveType 4096 term).run blank)
     if !(WorldTypeHash.query broken 4096 badId).isOk then missingPaths := missingPaths + 1
     check (!(WorldTypeHash.query novel 0 novelId).isOk) "Pattern hash ignored traversal exhaustion"
