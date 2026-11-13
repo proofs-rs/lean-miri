@@ -59,6 +59,7 @@ def compute (target : RuntimeTargetDataLayout) (recipe : String) : Except String
       | "f16" => pure (.Float .F16) | "f32" => pure (.Float .F32)
       | "f64" => pure (.Float .F64) | "f128" => pure (.Float .F128)
       | "fn_pointer" => pure (.Pointer target.instructionAddressSpace)
+      | "raw_pointer" => pure (.Pointer .ZERO)
       | _ => throw "unknown primitive layout recipe"
   let size ← value.size target |>.mapError toString
   let range ← WrappingRange.full size |>.mapError reprStr

@@ -273,6 +273,8 @@ private structure DocumentFields where
 private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser ParsedDocument := do
   let d ← JsonReader.object ({} : DocumentFields) fun d key => do
     match key with
+    | "compiler_initial_global_snapshot" | "compiler_initial_ctfe_roots" =>
+      JsonReader.fail "initial compiler allocation/CTFE profiles require the dedicated initial-profile decoder; legacy decoding is unsupported"
     | "schema" => return {d with schema := some (← JsonReader.string)}
     | "schema_version" => do
       let version ← JsonReader.natural

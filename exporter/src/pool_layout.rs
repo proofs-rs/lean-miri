@@ -10,6 +10,7 @@ pub(super) enum LayoutKey<'tcx> {
     Canonical(rustc_middle::ty::Ty<'tcx>),
     Computed(rustc_abi::TyAndLayout<'tcx, rustc_middle::ty::Ty<'tcx>>),
     PointerData(rustc_middle::ty::Ty<'tcx>),
+    VirtualReceiver(rustc_middle::ty::Ty<'tcx>),
     EnumTag(rustc_middle::ty::Ty<'tcx>),
 }
 
@@ -693,6 +694,7 @@ impl FnAbi {
         abi: &rustc_target::callconv::FnAbi<'tcx, rustc_middle::ty::Ty<'tcx>>,
         unwind_seed: UnwindSeed,
         signature_seed: Option<SignatureSeed>,
+        virtual_receiver: bool,
     ) -> Result<Self, String> {
         if unwind_seed.reference_can_unwind != abi.can_unwind {
             return Err("FnAbi unwind material source signature disagrees with rustc final ABI".into());
@@ -711,9 +713,12 @@ impl FnAbi {
             a: &rustc_target::callconv::ArgAbi<'tcx, rustc_middle::ty::Ty<'tcx>>,
             conv: rustc_abi::CanonAbi,
             is_return: bool,
+            virtual_receiver: bool,
         ) -> Result<super::shared_json::Shared<ArgAbi>, String> {
             let ty = super::type_json(context, tcx, a.layout.ty)?;
-            let layout = super::layout_value_json(context, tcx, a.layout) as usize;
+            let layout = if virtual_receiver {
+                super::virtual_receiver_layout_value_json(context, tcx, a.layout)
+            } else {super::layout_value_json(context, tcx, a.layout)} as usize;
             Ok(ArgAbi {
                 ty,
                 layout,
@@ -776,11 +781,11 @@ impl FnAbi {
             fixed_count: signature_seed.is_none().then_some(abi.fixed_count),
             signature_seed,
             unwind_seed,
-            ret: arg(context, tcx, &abi.ret, abi.conv, true)?,
+            ret: arg(context, tcx, &abi.ret, abi.conv, true, false)?,
             arguments: abi
                 .args
-                .iter()
-                .map(|a| arg(context, tcx, a, abi.conv, false))
+                .iter().enumerate()
+                .map(|(index,a)| arg(context, tcx, a, abi.conv, false, virtual_receiver && index==0))
                 .collect::<Result<_, _>>()?,
         })
     }

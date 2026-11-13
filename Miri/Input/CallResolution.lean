@@ -123,15 +123,20 @@ private def decodeResolution (instances : Array InstanceNode)
     unless source.kind == .llvmIntrinsic && source.abi == .llvmIntrinsic do
       throw "LLVM intrinsic requires exact no-ABI evidence"
   | .Virtual _ slot =>
-    unless virtual do throw "virtual instance lacks virtual-dispatch query tag"
-    unless source.dispatchSlot == some slot do throw "virtual dispatch slot/instance mismatch"
+    if source.kind == .direct && source.abi == .sourceSignature then
+      unless source.dispatchSlot.isNone do throw "source Virtual dispatch slot must come from its canonical instance"
+    else
+      unless virtual do throw "virtual instance lacks virtual-dispatch query tag"
+      unless source.dispatchSlot == some slot do throw "virtual dispatch slot/instance mismatch"
   | _ => unless !virtual do throw "virtual dispatch query did not return a Virtual instance"
   unless source.kind == .llvmIntrinsic do
     match source.abi with
     | .normal _ => pure ()
     | .sourceSignature =>
       unless source.kind == .direct do throw "raw source ABI requires a direct call"
-      let .Item _ := calleeKind | throw "raw source ABI requires an Item instance"
+      match calleeKind with
+      | .Item _ | .Virtual .. => pure ()
+      | _ => throw "raw source ABI requires an Item or Virtual instance"
     | .llvmIntrinsic => throw "ordinary call lacks ABI evidence"
   pure ⟨callee,callee,function,source.abi,source⟩
 
@@ -238,6 +243,19 @@ def atSite (prepared : Prepared) (site : Site) : RuntimeArrayTypes.CompilerM Res
     let resolution ← liftWorld entry.outcome
     liftWorld (sourcePrefixInstance prepared.program.input (← get) resolution.callee)
     if resolution.abi == .sourceSignature then
+      let current ← get
+      let key ← liftWorld do
+        match ← current.instances.lookup resolution.callee with
+        | .material key | .constructed key => pure key
+      if let .Virtual method _ := key.kind then
+        -- Source Virtual call requests must select the exact canonical method,
+        -- complete arguments and slot. FnAbi itself does not prove dispatch.
+        let selected ← WorldObjectCandidate.resolveOrdinary 100000 16384 method key.arguments
+        let selectedWorld ← get
+        let selectedKey ← liftWorld do
+          match ← selectedWorld.instances.lookup selected with
+          | .material key | .constructed key => pure key
+        unless selectedKey == key do throw "source Virtual key differs from normal source method/argument/slot selection"
       let _ ← WorldInstanceAbi.construct resolution.callee #[]
     return resolution
   let some source ← SourceMirCall.sourceIdentity (.ofCanonicalIndex site.bodyIndex) site.block

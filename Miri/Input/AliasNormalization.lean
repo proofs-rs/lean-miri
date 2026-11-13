@@ -68,6 +68,10 @@ structure Hooks where
   /-- Select from complete raw impl declarations. Overlap, ambiguity, absent
   predicates and unsupported specialization may not return a guessed winner. -/
   select : Nat → Array Key → Kind → DefinitionIdentity → Array Term → Except String SelectedImpl
+  /-- Builtin associated projection from a real callable source, never a fake
+  impl identity. Returning none retains ordinary source impl selection. -/
+  builtinProjection : Nat → Array Key → AssociatedDeclaration → Array Term →
+    Except String (Option (Term × Array Clause)) := fun _ _ _ _ => pure none
   /-- Prove every instantiated own-clause obligation; no default callback exists. -/
   fulfill : Nat → Array Key → Array Clause → Except String Unit
 
@@ -134,6 +138,16 @@ private def fold (program : Program) (hooks : Hooks) (maximumUniverse : Option N
       let key : Key := ⟨kind,definition,arguments⟩
       if active.contains key then throw "alias normalization cycle"
       let active := active.push key
+      if kind == .projection then
+        for argument in arguments do requireArgument maximumUniverse (fuel + 1) argument
+        let declarations := program.associatedDeclarations.filter (·.definition == definition)
+        unless declarations.size == 1 do throw "associated declaration absent or duplicated"
+        let some declaration := declarations[0]? | throw "associated declaration absent"
+        if let some (value,builtinObligations) ← hooks.builtinProjection fuel active declaration arguments then
+          let source ← hooks.ownPredicates declaration.definition
+          let own ← TraitSelection.Substitution.clauses (fuel + 1) arguments source
+          let result ← fold program hooks maximumUniverse fuel active value
+          return ⟨result.value,argumentObligations ++ own ++ builtinObligations ++ result.obligations⟩
       let (rule, substitutions, predicateSource, predicateArguments) ← if kind == .free then do
         let rules := program.freeRules.filter (·.definition == definition)
         unless rules.size == 1 do throw "free alias declaration RHS absent or duplicated"

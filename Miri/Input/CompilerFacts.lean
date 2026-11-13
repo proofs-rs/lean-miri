@@ -220,25 +220,9 @@ def retagTypeShape (context : Context) (id : TypeId) : Result Miri.TreeBorrows.R
   pure ⟨← boolean context id "is_global_box",source.shapeKind == .reference,
     source.shapeKind == .rawPointer,← boolean context id "is_box"⟩
 
-private def adtFacts (context : Context) (id : TypeId) : Result AdtCompilerFacts := do
-  let some value := (← facts context id).adt | throw "ADT query requested for a non-ADT"
-  pure value
-
 private def adtShape (context : Context) (id : TypeId) : Result AdtShape := do
   let .adt value := (← node context id).shape | throw "ADT layout query on non-ADT"
   pure value
-
-def itemName (context : Context) (id : TypeId) : Result String :=
-  return (← adtFacts context id).itemName
-
-def nonnullOptimizationGuaranteed (context : Context) (id : TypeId) : Result Bool :=
-  return (← adtFacts context id).nonnullOptimizationGuaranteed
-
-def reprEqualUpToSeed (context : Context) (left right : TypeId) : Result Bool := do
-  let a := (← adtShape context left).representation
-  let b := (← adtShape context right).representation
-  pure (a.integer == b.integer && a.alignBytes == b.alignBytes &&
-    a.packBytes == b.packBytes && a.flagsBits == b.flagsBits && a.scalableElement == b.scalableElement)
 
 def adtInfo (context : Context) (id : TypeId) : Result (LayoutCompat.AdtInfo TypeId) := do
   let data ← adtShape context id
@@ -247,21 +231,6 @@ def adtInfo (context : Context) (id : TypeId) : Result (LayoutCompat.AdtInfo Typ
   let variants := data.variants.map fun variant => variant.fields.map fun field =>
     ({ name := field.name, ty := field.typeId } : LayoutCompat.Field TypeId)
   pure ⟨kind,data.representation.transparent,data.representation.c,data.representation.rust,variants⟩
-
-def compatibilityKind (context : Context) (id : TypeId) : Result (LayoutCompat.TypeKind TypeId) := do
-  match (← node context id).shape with
-  | .tuple _ => pure .tuple | .never => pure .never | .functionDefinition .. => pure .functionDefinition
-  | .closure .. => pure .closure | .coroutine .. => pure .coroutine | .coroutineClosure .. => pure .coroutineClosure
-  | .array element .. => pure (.array element)
-  | .adt _ => pure .adt
-  | .patternType base _ => pure (.pattern base)
-  | .unsafeBinder .. => pure .unsafeBinder | .alias .. => pure .alias
-  | .reference pointee .. => pure (.reference pointee)
-  | .rawPointer pointee _ => pure (.rawPointer pointee)
-  | .functionPointer .. => pure .functionPointer
-  | .int (.known kind) | .uint (.known kind) => pure (.integer kind)
-  | .char => pure .char
-  | .bool | .float _ | .foreign _ | .str | .slice _ | .dynamicTraitObject .. => pure .other
 
 private def lift (value : Result A) : EStateM StepError S A :=
   match value with | .ok value => pure value | .error error => throw (.invalidProgram error)
@@ -282,21 +251,5 @@ def typedRetagHooks (context : Context) (machine : TypedRetag.Hooks K U) : Typed
       isDynamic := fun ty => lift (boolean context ty "is_dynamic")
       isBox := fun ty => lift (boolean context ty "is_box")
       isTooGeneric := fun ty => lift (boolean context ty "is_too_generic") } }
-
-def compatibilityQueries (context : Context) : LayoutCompat.Queries TypeId S := {
-  target := context.runtime.target
-  kind := fun ty => lift (compatibilityKind context ty)
-  adt := fun ty => lift (adtInfo context ty)
-  field := fun layout index => lift ((context.runtime.field layout index).mapError toString)
-  layoutOf := fun ty => lift (layoutOf context ty)
-  unitLayout := lift (unitLayout context)
-  eraseUnsafeBinder := fun ty => lift (requiredType context ty "unsafe_binder_erased")
-  normalize := fun ty => lift (requiredType context ty "normalized")
-  reprEqualUpToSeed := fun a b => lift (reprEqualUpToSeed context a b)
-  itemName := fun ty => lift (itemName context ty)
-  nonnullOptimizationGuaranteed := fun ty => lift (nonnullOptimizationGuaranteed context ty)
-  isGlobalBox := fun ty => lift (boolean context ty "is_global_box")
-  boxedType := fun ty => lift (requiredType context ty "boxed_type")
-  pointerMetadataType := fun ty => lift (requiredType context ty "pointer_metadata_type") }
 
 end Miri.Input.CompilerFacts

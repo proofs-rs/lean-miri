@@ -588,7 +588,7 @@ def makeWithForeignContext {Assembly : Type}
     let fuse := fun (_ : C) => do
       if !options.floatNondeterministic then return false
       ExecutionChoices.boolean EvalCoreMachine.tape .floatFuse
-    let varArgs := IntrinsicSymbolsMachine.varArgs (CompilerVarArgsLeaves.make p options.compatibilityBudget)
+    let varArgs := IntrinsicSymbolsMachine.varArgs (CompilerVarArgsLeaves.make p EvalProjectionMachine.arrays options.compatibilityBudget)
       EvalConfiguration.symbols access pointers.arithmetic functions operands copy
     let typeId := IntrinsicSymbolsMachine.typeId (CompilerIntrinsicSymbols.typeIdLeaves p image EvalProjectionMachine.arrays)
       EvalConfiguration.symbols access functions operands copy
@@ -1386,12 +1386,11 @@ def makeFromSourcePackage [DecidableEq Os]
                 System Native Profiler Raw Listener TcpStream Error)
               (RuntimePlace Provenance) (RuntimePlace Provenance)
               (Pointer (Option Provenance)) LoadedBody CallInstance :=
-            CompilerShimSignatures.hooks compilerFacts {
+            CompilerShimSignatures.hooks compilerFacts EvalProjectionMachine.arrays {
               foreign := assembly.foreign
-              types := CompilerFacts.compatibilityQueries compilerFacts
-              isCVoid := fun ty => match CompilerFacts.boolean compilerFacts ty "is_c_void" with
-                | .ok value => pure value
-                | .error reason => throw (.unsupported s!"compiler c_void query: {reason}")
+              types := CompilerWorldCompatibility.queries compilerFacts EvalProjectionMachine.arrays
+              isCVoid := fun ty => RuntimeArrayQueries.perform EvalProjectionMachine.arrays
+                (CompilerFacts.booleanInWorld compilerFacts ty "is_c_void")
               readScalar := fun operand => do
                 let immediate ← ValidityMachine.readImmediate memory.access operand
                 match immediate.imm.toScalar with

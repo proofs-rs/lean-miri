@@ -1,4 +1,4 @@
-//! Source-only ordinary direct callee material for the selected raw MIR family.
+//! Raw direct-callee declarations for ordinary and associated source calls.
 //! Instance graph and ABI construction remain explicit residual providers.
 use rustc_middle::{mir,ty::{self,TyCtxt,TypeVisitableExt}};
 
@@ -19,16 +19,16 @@ pub fn function_type_material<'tcx>(tcx:TyCtxt<'tcx>, function_type:ty::Ty<'tcx>
     let ty::FnDef(def,args)=function_type.kind() else {
         return Err("direct source call excludes function pointers and virtual receivers".into());
     };
-    if tcx.def_kind(*def)!=rustc_hir::def::DefKind::Fn || !args.bound_vars().is_empty() {
-        return Err("direct source call supports only binder-free ordinary functions".into());
+    if !matches!(tcx.def_kind(*def),rustc_hir::def::DefKind::Fn|rustc_hir::def::DefKind::AssocFn) || !args.bound_vars().is_empty() {
+        return Err("direct source call supports only binder-free function declarations".into());
     }
-    if tcx.trait_of_assoc(*def).is_some() || tcx.intrinsic(*def).is_some()
+    if tcx.intrinsic(*def).is_some()
         || tcx.is_lang_item(*def,rustc_attr_ir::LangItem::DropGlue)
         || tcx.is_lang_item(*def,rustc_attr_ir::LangItem::AsyncDropInPlace)
         || tcx.is_async_drop_in_place_coroutine(*def)
         || tcx.is_foreign_item(*def)
         || tcx.codegen_fn_attrs(*def).symbol_name.is_some_and(|name|name.as_str().starts_with("llvm.")) {
-        return Err("source callee requires intrinsic/drop/foreign/trait instance resolution".into());
+        return Err("source callee requires intrinsic/drop/foreign instance resolution".into());
     }
     if tcx.fn_sig(*def).instantiate_identity().skip_norm_wip().c_variadic() {
         return Err("ordinary source call requires a non-variadic declaration".into());
@@ -49,7 +49,9 @@ pub fn function_type_material<'tcx>(tcx:TyCtxt<'tcx>, function_type:ty::Ty<'tcx>
 /// canonical per-instance graph/ABI material remains an explicit residual.
 pub struct Dependency<'tcx> {
     pub function_type:ty::Ty<'tcx>,
-    pub instance:ty::Instance<'tcx>,
+    /// Only an ordinary declaration is already an Item identity. A trait
+    /// declaration must be selected in the execution-owned Lean World.
+    pub instance:Option<ty::Instance<'tcx>>,
 }
 
 pub fn dependencies<'tcx>(tcx:TyCtxt<'tcx>,body:&mir::Body<'tcx>,
@@ -67,8 +69,9 @@ pub fn dependencies<'tcx>(tcx:TyCtxt<'tcx>,body:&mir::Body<'tcx>,
         }
         function_type_material(tcx,function_type)?;
         let ty::FnDef(def,args)=function_type.kind() else {unreachable!()};
-        dependencies.push(Dependency {function_type,instance:ty::Instance {
-            def:ty::InstanceKind::Item(*def),args:args.skip_binder() }});
+        let instance=if tcx.trait_of_assoc(*def).is_some() {None} else {Some(ty::Instance {
+            def:ty::InstanceKind::Item(*def),args:args.skip_binder() })};
+        dependencies.push(Dependency {function_type,instance});
     }
     Ok(dependencies)
 }

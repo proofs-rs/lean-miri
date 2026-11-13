@@ -237,17 +237,72 @@ require(
 )
 virtual_bodies = body_by_path("virtual_call")
 require(virtual_bodies, "virtual_call body is absent")
-virtual_callsite = next(
-    (
-        call
-        for body in virtual_bodies
-        for call in calls_in(body)
-        if call.get("resolution", {}).get("kind") == "virtual_dispatch"
-    ),
-    None,
-)
-require(virtual_callsite, "trait-object virtual callsite is absent")
-virtual_target = fixture_virtual_targets[0]
+def virtual_request(call):
+    resolution = call.get("resolution", {})
+    instance = instance_by_id.get(resolution.get("instance_id"), {})
+    return (resolution.get("kind") in ("source_instance", "virtual_dispatch")
+            and instance.get("instance_kind", {}).get("kind") == "virtual")
+
+
+virtual_callsite = next((call for body in virtual_bodies for call in calls_in(body)
+                         if virtual_request(call)), None)
+require(virtual_callsite, "trait-object Virtual source request is absent")
+virtual_resolution = virtual_callsite["resolution"]
+virtual_instance = instance_by_id[virtual_resolution["instance_id"]]
+virtual_kind = virtual_instance["instance_kind"]
+virtual_function = types[virtual_resolution["function_type"]]["shape"]
+require(virtual_function.get("kind") == "function_definition"
+        and virtual_function["def_id"] == virtual_kind["def_id"] == virtual_instance["def_id"]
+        and virtual_function["generic_args"] == virtual_instance["generic_args"],
+        "Virtual source request lost exact FnDef physical identity/full arguments")
+method = document["definitions"][virtual_kind["def_id"]]
+require(method["callable_source"]["definition_kind"] == "associated_function"
+        and method["callable_source"]["container"] == "trait"
+        and method["callable_source"]["has_self"],
+        "Virtual source request does not name a trait method")
+require(method["raw_path"]["components"][-2:]
+        == [{"kind": "type", "name": "TransferObject", "disambiguator": 0},
+            {"kind": "value", "name": "get", "disambiguator": 0}],
+        "Virtual source method is not the exact fixture trait declaration")
+require(len(virtual_instance["generic_args"]) == 1
+        and virtual_instance["generic_args"][0]["kind"] == "type",
+        "Virtual source request lost its complete Self argument")
+self_type = virtual_instance["generic_args"][0]["value"]
+require(types[self_type]["shape"]["kind"] == "dynamic_trait_object",
+        "Virtual source Self is not the actual dynamic receiver")
+require(virtual_kind["dispatch_slot"] == 3,
+        "single own method must retain pinned first-method slot after three metadata entries")
+if virtual_resolution["kind"] == "source_instance":
+    require(set(virtual_resolution) == {"kind", "function_type", "instance_id"},
+            "Virtual source request retained an eager ABI/dispatch result")
+    require(virtual_instance["kind"] == "identity_only"
+            and "virtual_identity" not in virtual_instance and "body" not in virtual_instance,
+            "covered Virtual instance retained an eager identity ABI or executable body")
+    require(not any(row["instance_id"] == virtual_instance["instance_id"]
+                    for row in document["compiler_instance_abis"]),
+            "covered Virtual source identity retained an eager FnAbi result row")
+else:
+    require(method["body_track_caller"] is True,
+            "material Virtual dispatch is only valid here for an unported caller-location residual")
+
+dynamic = types[self_type]["shape"]
+principal = pool_entry(document, "predicates", dynamic["principal_predicate"])
+parent = method["source_environment"]["generic_parent"]
+principal_definition = document["definitions"][principal["def_id"]]
+require(principal["kind"] == "trait" and principal["generic_args"] == []
+        and principal["bound_variables"] == [] and parent["parameter_count"] == 1
+        and parent["definition"] == {key: principal_definition[key] for key in ("crate", "index")},
+        "Virtual Self principal is not the physical owner trait with exact own arguments")
+selected_virtual_rows = [row for row in resolved_virtual
+                         if row["original_instance_id"] == virtual_instance["instance_id"]
+                         and row["method_definition"] == virtual_kind["def_id"]
+                         and row["parent_trait"] == principal["def_id"]
+                         and row["vtable_query"]["input_predicates"] == dynamic["predicates"]]
+require(len(selected_virtual_rows) == 1,
+        "Virtual source identity does not join one exact concrete vtable source owner")
+selected_virtual_row = selected_virtual_rows[0]
+virtual_target = instance_by_id[selected_virtual_row["resolved"]]
+require(virtual_target in fixture_virtual_targets, "Virtual source request resolved to an unrelated concrete method")
 virtual_target_body = next(
     (row for row in instance_rows
      if row.get("instance_id") == virtual_target.get("instance_id") and "body" in row),

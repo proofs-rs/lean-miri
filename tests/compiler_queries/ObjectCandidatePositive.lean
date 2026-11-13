@@ -51,7 +51,7 @@ def main (args : List String) : IO Unit := do
           (GenericInstantiationWorld.resolveType 4096 (.atom .type "uint" "u8"))).run start)
         match (WorldObjectCandidate.resolveOrdinary 100000 4096 physical
             (arguments.set! 0 (.Type concreteSelf))).run concreteWorld with
-        | .error "ordinary concrete trait method requires source impl selection" => pure ()
+        | .error "trait has no applicable source impl" => pure ()
         | _ => throw (IO.userError "concrete trait Self fabricated an Item instance")
         match (WorldObjectCandidate.resolveOrdinary 100000 4096 physical #[]).run start with
         | .error "ordinary trait method canonical Self absent" => pure ()

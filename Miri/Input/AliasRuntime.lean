@@ -6,6 +6,7 @@ import Miri.Input.MirTemplate
 import Miri.Input.StructuralSized
 import Miri.Input.TermSized
 import Miri.Input.TraitSelection.Fulfill
+import Miri.Input.SourceFnTraits
 import Miri.Input.TraitSelection.StructuralCopyClone
 import Miri.Input.TraitSelection.StructuralAuto
 
@@ -86,6 +87,13 @@ def traitHooks (context : Context) (_depth : Nat)
         SourceEnvironment.predicates lookup 16384 implementation.definition
       normalize := normalize
       builtin := fun universeIndex remaining activeGoals declaration goal => do
+        if declaration.builtin == some .fn || declaration.builtin == some .fnMut || declaration.builtin == some .fnOnce then
+          unless universeIndex == 0 do throw "fn builtin higher-ranked query requires universe relation"
+          let source : SourceFnTraits.Source := ⟨context.generic.definitions,context.traits,
+            fun _ => throw "fn builtin FnDef raw target-feature source material absent"⟩
+          let some result ← SourceFnTraits.query source (normalize universeIndex remaining activeGoals)
+              (remaining + 1) declaration goal.traitRef.arguments | return none
+          return some result.obligations
         unless goal.traitRef.arguments.size == 1 do throw "structural builtin requires exactly Self"
         let some self := goal.traitRef.arguments[0]? | throw "structural builtin Self absent"
         if declaration.isAuto then
@@ -151,6 +159,27 @@ def normalizeTermScoped (context : Context) (maximumUniverse work : Nat) :
         unless implementations.size == 1 do throw "selected raw impl declaration absent or duplicated"
         let some implementation := implementations[0]? | throw "selected raw impl declaration absent"
         AliasNormalization.fromTraitSelection implementation selection
+      builtinProjection := fun remaining activeAliases declaration arguments => do
+        let source : SourceFnTraits.Source := ⟨context.generic.definitions,context.traits,
+          fun _ => throw "fn builtin FnDef raw target-feature source material absent"⟩
+        let normalize := fun term => normalizeTermScoped context maximumUniverse work
+          fuel activeAliases goals term
+        let some result ← SourceFnTraits.outputProjection source normalize (remaining + 1)
+            declaration.definition arguments | return none
+        unless maximumUniverse == 0 do throw "fn builtin projection higher-ranked query requires universe relation"
+        let fnRows := context.traits.traits.filter (·.builtin == some .fnOnce)
+        unless fnRows.size == 1 do throw "fn builtin FnOnce source absent or ambiguous"
+        let some fnOnce := fnRows[0]? | throw "fn builtin FnOnce source absent"
+        unless declaration.parent == fnOnce.definition && declaration.parentParameterCount == 2 do
+          throw "fn builtin Output associated declaration parent mismatch"
+        let outcome ← TraitSelection.solveWithActive context.traits (currentTraitHooks activeAliases)
+          environment (min remaining fuel) work goals ⟨.positive,⟨fnOnce.definition,arguments⟩⟩
+        match outcome with
+        | .proven (.builtin _ _) => pure (some (result.output,result.obligations))
+        | .proven (.implementation ..) => pure none
+        | .proven _ => throw "fn builtin projection requires builtin or real impl evidence"
+        | .noSolution => throw "fn builtin projection has no callable candidate"
+        | .ambiguous reason => throw s!"fn builtin projection ambiguous: {reason}"
       fulfill := fun remaining activeAliases predicates => do
         requireProven (← TraitSelection.fulfillInUniverseWithActive context.traits (currentTraitHooks activeAliases)
           environment maximumUniverse (min remaining fuel) work goals predicates) }

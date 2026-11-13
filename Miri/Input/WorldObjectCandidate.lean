@@ -1,5 +1,6 @@
 import Miri.Input.WorldDynamicData
 import Miri.Input.WorldVTableInstance
+import Miri.Input.WorldOrdinaryTraitInstance
 
 /-! Direct-principal ground ObjectCandidate slice. No inference, upcast or
 projection obligation is silently discharged. Pinned candidate_assembly.rs:916,
@@ -21,6 +22,36 @@ private def uniqueTrait (context : AliasRuntime.Context) (identity : DefinitionI
   unless rows.size == 1 do throw "object candidate trait source missing or ambiguous"
   let some row := rows[0]? | throw "object candidate trait source absent"
   pure row
+
+/-- Candidate assembly first rejects known concrete impl heads against Dynamic
+Self (fast_reject.rs). No impl is dropped by failed fulfillment, by a guessed
+blanket relation, or by missing source. The retained slice has no specialization. -/
+private def disjointManualCatalog (context : AliasRuntime.Context) (fuel : Nat)
+    (declaration : TraitDeclaration) : Except String Unit := do
+  let mut seen := #[]
+  for implementation in declaration.implementations do
+    if implementation.isDefault || implementation.methods.any (fun method => !method.isFinal) ||
+        implementation.constants.any (fun constant => !constant.isFinal) then
+      throw "object candidate specialization requires source ordering"
+    unless implementation.traitRef.definition == declaration.definition do
+      throw "object candidate impl belongs to another trait source"
+    if seen.contains implementation.definition then
+      throw "object candidate duplicate raw impl definition"
+    seen := seen.push implementation.definition
+    let scope ← SourceEnvironmentRuntime.lookupDefinitions context.generic.definitions implementation.definition
+    unless !scope.isTrait && scope.parent == scope.genericParent &&
+        scope.parameters == implementation.parameters do
+      throw "object candidate impl canonical source scope mismatch"
+    unless implementation.traitRef.arguments.size == declaration.parameters.size do
+      throw "object candidate impl trait argument arity mismatch"
+    for (sort,argument) in declaration.parameters.zip implementation.traitRef.arguments do
+      unless sort == argument.sort do throw "object candidate impl trait argument sort mismatch"
+    HigherRankedMatch.validateSourceClause implementation.parameters fuel
+      ⟨#[],.trait ⟨implementation.polarity,implementation.traitRef⟩⟩
+    let some head := implementation.traitRef.arguments[0]?
+      | throw "object candidate impl Self absent"
+    if ← RelevantImpl.dynamicHeadPossible fuel head then
+      throw "object candidate competing impls require candidate winnowing"
 
 /-- Confirm a ground direct-principal candidate and all supported nested clauses.
 The implicit MetaSized bound is proved by the existing builtin solver. Other
@@ -55,8 +86,7 @@ def select (work fuel : Nat) (method : MIR.DefId) (args : Array MIR.GenericArg) 
   let declaration ← lift (uniqueTrait context reference.definition)
   if declaration.implementations.any (·.isDefault) then
     throw "object candidate specialization requires source ordering"
-  unless declaration.implementations.isEmpty do
-    throw "object candidate competing impls require candidate winnowing"
+  lift (disjointManualCatalog context fuel declaration)
   unless !declaration.isAuto && !declaration.isAlias &&
       declaration.parameters[0]? == some .type &&
       parent.parameterCount == declaration.parameters.size &&
@@ -113,7 +143,8 @@ def forVTable (work fuel : Nat) (method : MIR.DefId) (args : Array MIR.GenericAr
     selection.method selection.arguments)
   WorldVTableInstance.intern fuel declaration
 /-- Runtime source-call instance selection preserves ordinary non-object Item
-construction. Trait methods with Dynamic Self must confirm an object candidate. -/
+construction. Trait methods select a source impl for concrete Self or confirm
+an object candidate for Dynamic Self. -/
 def resolveOrdinary (work fuel : Nat) (method : MIR.DefId) (args : Array MIR.GenericArg) :
     RuntimeArrayTypes.CompilerM InstanceId := do
   let world ← get
@@ -123,9 +154,9 @@ def resolveOrdinary (work fuel : Nat) (method : MIR.DefId) (args : Array MIR.Gen
     | throw "source callable definition absent"
   if definition.callableSource.bind (·.container) == some "trait" then
     let some (MIR.GenericArg.Type owner) := args[0]? | throw "ordinary trait method canonical Self absent"
-    unless (← WorldDynamicData.query fuel owner).isSome do
-      throw "ordinary concrete trait method requires source impl selection"
-    return ← ordinary work fuel method args
+    if (← WorldDynamicData.query fuel owner).isSome then
+      return ← ordinary work fuel method args
+    return ← WorldOrdinaryTraitInstance.resolve work fuel method args
   CompilerInstance.item method args
 
 /-- Final VirtualCalls leaf dispatches Dynamic Self through confirmed source

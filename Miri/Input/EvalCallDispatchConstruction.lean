@@ -858,12 +858,11 @@ def fromSeedEnvironment [DecidableEq MiriMemoryKind]
   let fdSignatures : ShimSignatures.Hooks Provenance
       (State Os R EvalSyncPayload.Payload H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error)
       Miri.MIR.Place (MPlaceTy Provenance) (Pointer (Option Provenance)) LoadedBody CallInstance :=
-    CompilerShimSignatures.hooks compilerFacts {
+    CompilerShimSignatures.hooks compilerFacts EvalProjectionMachine.arrays {
       foreign := fdSignatureForeign
-      types := CompilerFacts.compatibilityQueries compilerFacts
-      isCVoid := fun ty => match CompilerFacts.boolean compilerFacts ty "is_c_void" with
-        | .ok value => pure value
-        | .error reason => throw (.unsupported s!"compiler c_void query: {reason}")
+      types := CompilerWorldCompatibility.queries compilerFacts EvalProjectionMachine.arrays
+      isCVoid := fun ty => RuntimeArrayQueries.perform EvalProjectionMachine.arrays
+                (CompilerFacts.booleanInWorld compilerFacts ty "is_c_void")
       readScalar := sourceReadScalar memory.access
       hostUsizeBits }
   let fdSource : EvalUnixNativeFdConstruction.Components Os R EvalSyncPayload.Payload H D Aff B

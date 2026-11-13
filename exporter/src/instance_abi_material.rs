@@ -176,6 +176,9 @@ pub(super) fn signature<'tcx>(tcx: TyCtxt<'tcx>, instance: ty::Instance<'tcx>,
     use rustc_abi::ExternAbi as A;
     use rustc_hir::def::DefKind as D;
     use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags as F;
+    if matches!(instance.def, ty::InstanceKind::Virtual(..)) {
+        return virtual_signature(tcx,instance,extra);
+    }
     let ty::InstanceKind::Item(definition) = instance.def else { return None };
     if tcx.sess.target.arch != rustc_target::spec::Arch::X86_64 ||
         tcx.sess.target.pointer_width != 64 || !extra.is_empty() ||
@@ -219,6 +222,48 @@ pub(super) fn signature<'tcx>(tcx: TyCtxt<'tcx>, instance: ty::Instance<'tcx>,
         }
     };
     signature.inputs_and_output.iter().all(simple).then_some(signature)
+}
+
+// Ordinary Virtual ABI, not a VTable shim: the first argument retains its
+// source type while abi.rs::make_thin_self_ptr replaces its layout with *mut().
+fn virtual_signature<'tcx>(tcx: TyCtxt<'tcx>, instance: ty::Instance<'tcx>,
+    extra: &'tcx ty::List<ty::Ty<'tcx>>) -> Option<ty::FnSig<'tcx>> {
+    use rustc_abi::ExternAbi as A;
+    use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags as F;
+    let ty::InstanceKind::Virtual(definition,_) = instance.def else {return None;};
+    if tcx.sess.target.arch != rustc_target::spec::Arch::X86_64 ||
+        tcx.sess.target.pointer_width != 64 || !extra.is_empty() ||
+        instance.args.has_non_region_param() || instance.args.has_escaping_bound_vars() ||
+        instance.args.has_infer() || instance.args.has_placeholders() || instance.args.references_error() ||
+        tcx.body_codegen_attrs(definition).flags.contains(F::TRACK_CALLER) ||
+        tcx.data_layout.default_address_space != rustc_abi::AddressSpace::ZERO {
+        return None;
+    }
+    let bound = tcx.fn_sig(definition).instantiate(tcx,instance.args).skip_norm_wip();
+    if !bound.bound_vars().iter().all(|v|matches!(v,ty::BoundVariableKind::Region(_))) {return None;}
+    let sig = tcx.instantiate_bound_regions_with_erased(bound);
+    if sig.c_variadic() || !matches!(sig.abi(),A::Rust|A::RustCold|A::RustPreserveNone|A::RustTail) {return None;}
+    let first = *sig.inputs().first()?;
+    let child = match first.kind() {
+        ty::Ref(_,child,_)|ty::RawPtr(child,_) => *child,
+        _=>return None,
+    };
+    if !matches!(child.kind(),ty::Dynamic(..)) {return None;}
+    let simple = |input:ty::Ty<'tcx>| {
+        if !super::generic_mir::supported_arguments(tcx.mk_args(&[input.into()])) {return false;}
+        match input.kind() {
+            ty::Bool|ty::Char|ty::Int(_)|ty::Uint(_)|ty::Float(_)|ty::Never=>true,
+            ty::Tuple(fields)=>fields.is_empty()||small_nonpointer_pair(input)||small_raw_pointer_pair(tcx,input)||
+                (fields.len()<=8 && small_memory(input)),
+            ty::Array(..)=>small_memory(input)&&tail_direct(input),
+            ty::RawPtr(child,_)=>sized_pointee(tcx,*child,256)||raw_slice_pointer(tcx,input),
+            ty::Ref(_,child,_)=>sized_pointee(tcx,*child,256),
+            ty::FnPtr(signature,header)=>signature.with(*header).bound_vars().is_empty(),
+            _=>false,
+        }
+    };
+    (sig.inputs()[1..].iter().all(|&input|simple(input)) && simple(sig.output()) &&
+        !newly_indirect(sig.output(),true)).then_some(sig)
 }
 
 pub(super) fn trace(route: &str, queried: bool, instance: ty::Instance<'_>) {

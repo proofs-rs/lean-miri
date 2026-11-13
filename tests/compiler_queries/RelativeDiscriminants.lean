@@ -5,7 +5,7 @@ open Miri.Input
 private def representation : ReprOptions := ⟨none,none,none,0,none,0⟩
 private def declaration (count : Nat) : AdtDeclaration.Material :=
   ⟨representation,1,none,(Array.range count).map (fun index =>
-    ⟨⟨0,index⟩,none,toString index,.relative index,0,0⟩),#[]⟩
+    ⟨⟨0,index⟩,none,toString index,.relative index,0,0⟩),#[],false⟩
 private def rejects (result : Except String α) : Bool := !result.isOk
 example : RelativeDiscriminants.values 64 (declaration 3) =
     .ok (some #[0,1,2]) := by cbv

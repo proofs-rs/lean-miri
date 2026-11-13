@@ -318,6 +318,9 @@ when changing it.
 
 | Check / invocation | What it adds |
 | --- | --- |
+| `bash tools/check-fn-trait-output.sh` | Independent pinned Fn/FnMut/FnOnce candidate and Output normalization comparisons, including genuine standard-library closure material selected by `FN_TRAIT_STD_SOURCE`. Requires the pinned exporter, source sysroot and coherent Lean build; it does not establish general trait selection. |
+| `bash tools/check-fn-trait-boundaries.sh` | Genuine nested-FnPtr tuple comparisons retain all signature fields despite JSON key order; unsafe-inner-signature controls reject. An actual async closure's successful compiler FnOnce candidate must remain explicitly Unsupported in the bounded Lean provider. |
+| `bash tools/check-initial-profile-rejection.sh VALID_DOCUMENT.json` | Four malformed/present-field controls added to an independently accepted current document require the legacy public decoder to reject the separate initial-allocation/CTFE profile explicitly. Requires a built decoder; it does not validate the dedicated initial-profile execution path. |
 | `lake env lean --run tests/run_loop/HostStdioReplay.lean` | Pure typed stdio replay checks: exact requests, response bounds, first-pending cleanup retention, missing-state rejection and unchanged choice/RNG state. Included in structural regressions; it supplies no host IO capability. |
 | `lake env lean --run tests/run_loop/NativeStdioProtocol.lean` | Pure control-option and JSON framing checks, including escaped spoofed output. Included in structural regressions after the runner module build. |
 | `flock /tmp/lean-miri-ci-guest.lock python3 tests/stdio/check.py --output scratch/stdio-new` | Fresh pinned-reference/guest comparison for explicit stdio: repeated writes, binary bytes, spoofed result lines and preserved muted ordinary descriptors. Requires coherent reference exporter/native runner; unsupported and timeout outcomes fail. |
@@ -431,3 +434,15 @@ annotation indices and spans, eight raw-source rejection controls, and five
 malformed annotation decoder controls. Runtime annotations explicitly retain the
 post-borrowck cleared-table marker; stale indices are not dereferenced into that
 empty table. FnDef-to-FnPtr reification remains unsupported in this source grammar.
+
+`tools/check-source-trait-call.py --exporter EXPORTER --oracle ORACLE
+--sysroot SYSROOT --output scratch/source-trait-call [--lake LAKE]
+[--runner NATIVE_RUNNER]` uses an ORACLE compiled from
+`tools/source-trait-call-oracle.rs`. It preserves a genuine method-syntax
+associated FnDef declaration and compares its selected physical impl with pinned
+rustc. Default export retains the nongeneric impl as an independent actual root;
+root-only export deliberately tests missing impl source. This is not general
+source impl-body discovery. Annotated UFCS call operands remain unsupported.
+Optional Lean checks compare the complete caller body and resolve its selected
+raw impl body; the optional existing runner must report finalized exit zero.
+Neither option builds primary artifacts.

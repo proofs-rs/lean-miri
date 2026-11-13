@@ -59,7 +59,7 @@ def main (args : List String) : IO Unit := do
   let predicate : DynamicPredicate.Predicate := ⟨#[],.autoTrait ⟨dynamicOwner.crateIndex,dynamicOwner.index⟩⟩
   let (dynamic,withDynamic) ← must ((World.internType (.dynamic ⟨#[predicate],.Erased⟩)).run withSlice)
   match EvalProjectionMachine.dynamicKind projectionFacts {state with arena := withDynamic} dynamic with
-  | .error (.obligation "constructed dynamic predicates are not available") => pure ()
+  | .error (.obligation "dynamic predicate trait source missing or ambiguous") => pure ()
   | _ => throw (IO.userError "constructed dynamic predicate boundary changed")
   let facts := prepared.lifecycle.calls.symbols.facts.context
   match CompilerExecutionProviders.worldInteger access facts byte state with
@@ -73,4 +73,4 @@ def main (args : List String) : IO Unit := do
   invalid (CompilerCoreIntrinsic.variantCountInWorld prepared novel alias) "TooGeneric in variant_count"
   check (novel.materialTypes.isEmpty && novel.materialConstants.isEmpty && novel.materialPredicates.isEmpty)
     "queries acquired closed source prefixes"
-  IO.println s!"PASS {adts} material and {adts} empty-prefix constructed ADT counts; {adts} one-Pat counts and nested-Pat errors; pointer zero, alias invalidProgram, actual World integer provider and slice projection; explicit constructed-dynamic Unsupported; no layout catalogue"
+  IO.println s!"PASS {adts} material and {adts} empty-prefix constructed ADT counts; {adts} one-Pat counts and nested-Pat errors; pointer zero, alias invalidProgram, actual World integer provider and slice projection; explicit malformed dynamic source rejection; no layout catalogue"

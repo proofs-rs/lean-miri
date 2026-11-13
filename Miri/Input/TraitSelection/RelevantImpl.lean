@@ -74,6 +74,14 @@ def simplify (instantiate : Bool) : Nat → Term → Except String (Option Key)
       if instantiate then pure none else throw "impl relevance requires a rigid query Self"
     | _ => throw "impl relevance requires a type Self"
 
+/-- All currently represented concrete fast-reject keys are distinct from
+rustc Trait/MarkerTraitObject keys. This proves only head disjointness: a
+blanket/alias head remains possible, while Dynamic or unknown syntax errors.
+Declaration identity and generic/header validation remain caller checks. -/
+def dynamicHeadPossible (fuel : Nat) (source : Term) : Except String Bool := do
+  let key ← simplify true fuel source
+  pure key.isNone
+
 def possible (fuel : Nat) (implementation : Impl) (goal : TraitRef) : Except String Bool := do
   if implementation.traitRef.definition != goal.definition then return false
   let some source := implementation.traitRef.arguments[0]? | throw "source impl Self absent"

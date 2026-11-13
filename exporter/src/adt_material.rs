@@ -42,5 +42,6 @@ pub(super) fn declaration<'tcx>(tcx:TyCtxt<'tcx>,definition:DefId)->Result<Optio
     }
     Ok(Some(json!({"representation":super::repr_options_json(&adt.repr()),
         "flags_bits":adt.flags().bits(),"lang_item":tcx.as_lang_item(definition).map(|item|item.name().as_str().to_owned()),
+        "nonnull_optimization_guaranteed":rustc_attr_ir::find_attr!(tcx,definition,RustcNonnullOptimizationGuaranteed),
         "variants":variants,"fields":fields})))
 }

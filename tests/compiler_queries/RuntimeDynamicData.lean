@@ -163,6 +163,20 @@ def main (args : List String) : IO Unit := do
         repeated.arena.constructedConstants == after.arena.constructedConstants do
       throw (IO.userError "typed Dynamic did not reuse current-World identity")
     let _ ← must ((WorldDynamicData.validate 4096 view).run repeated)
+    let (.dynamic validityPredicates,validityWorld) ← must
+      ((CompilerFactAdapters.validityKindInWorld calls.symbols.facts owner).run world.arena)
+      | throw (IO.userError "constructed validity classifier lost Dynamic")
+    let (some validityData,validityRepeat) ← must
+      ((WorldDynamicSource.runtimeData metadata 4096 owner).run validityWorld)
+      | throw (IO.userError "shared World source callback lost Dynamic")
+    unless validityPredicates == validityData.predicates &&
+        validityWorld.constructedPredicates == validityRepeat.constructedPredicates &&
+        validityWorld.materialPredicates.isEmpty &&
+        validityPredicates == Array.range view.value.predicates.size do
+      throw (IO.userError "validity/source predicate handles did not commit/reuse one execution suffix")
+    if let some principal := validityData.principal then
+      let .trait .. := (← must (validityRepeat.existential principal)).body
+        | throw (IO.userError "validity principal is not an actual trait predicate")
     for hooks in compilers do
       let start := state world
       let (some data,selected) ← runStep start (hooks.dynamicData owner)

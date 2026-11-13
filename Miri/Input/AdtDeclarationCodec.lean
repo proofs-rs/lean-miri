@@ -53,13 +53,14 @@ private def variant (value : Lean.Json) : Except String Variant := do
     flagsBits := ← (← value.getObjVal? "flags_bits").getNat? }
 
 def read (template : DefinitionTemplate) (value : Lean.Json) : Except String Material := do
-  keys value ["flags_bits", "lang_item", "variants", "fields", "representation"]
+  keys value ["flags_bits", "lang_item", "variants", "fields", "representation", "nonnull_optimization_guaranteed"]
   let rawLang ← value.getObjVal? "lang_item"
   let langItem ← if rawLang == .null then pure none else pure (some (← rawLang.getStr?))
   let material : Material := {
     representation := ← ReprMaterialCodec.read (← value.getObjVal? "representation")
     flagsBits := ← (← value.getObjVal? "flags_bits").getNat?
     langItem
+    nonnullOptimizationGuaranteed := ← (← value.getObjVal? "nonnull_optimization_guaranteed").getBool?
     variants := ← (← (← value.getObjVal? "variants").getArr?).mapM variant
     fields := ← (← (← value.getObjVal? "fields").getArr?).mapM field }
   material.validate template

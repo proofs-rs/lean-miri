@@ -594,7 +594,7 @@ def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
     if let some recipe := s.primitiveRecipe then
       unless ["bool", "char", "i8", "i16", "i32", "i64", "i128", "isize",
         "u8", "u16", "u32", "u64", "u128", "usize", "f16", "f32", "f64", "f128",
-          "fn_pointer", "never"].contains recipe do
+          "fn_pointer", "raw_pointer", "never"].contains recipe do
         fail s!"{path}: unknown primitive layout recipe"
     return {
       primitiveRecipe := s.primitiveRecipe, tupleType := s.tupleType, unionType := s.unionType, structType := s.structType, enumType := s.enumType, patternType := s.patternType, sequenceType := s.sequenceType,

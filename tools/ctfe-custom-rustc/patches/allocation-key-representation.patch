@@ -1,0 +1,42 @@
+--- a/compiler/rustc_middle/src/mir/interpret/allocation/init_mask.rs
++++ b/compiler/rustc_middle/src/mir/interpret/allocation/init_mask.rs
+@@ -35,6 +35,16 @@
+ }
+ 
+ impl InitMask {
++    /// Read the exact Eq-relevant mask representation without changing it.
++    /// Some(state) denotes Lazy; None denotes Materialized with every block,
++    /// including unused trailing bits and blocks. Callers must not normalize.
++    pub fn lean_miri_complete_init_mask_snapshot(&self) -> (Size, Option<bool>, Vec<u64>) {
++        match &self.blocks {
++            InitMaskBlocks::Lazy { state } => (self.len, Some(*state), Vec::new()),
++            InitMaskBlocks::Materialized(value) => (self.len, None, value.blocks.clone()),
++        }
++    }
++
+     pub fn new(size: Size, state: bool) -> Self {
+         // Blocks start lazily allocated, until we have to materialize them.
+         let blocks = InitMaskBlocks::Lazy { state };
+--- a/compiler/rustc_middle/src/mir/interpret/allocation/provenance_map.rs
++++ b/compiler/rustc_middle/src/mir/interpret/allocation/provenance_map.rs
+@@ -54,6 +54,20 @@
+         let Self { ptrs, bytes } = self;
+         assert!(bytes.is_none()); // interning refuses allocations with pointer fragments
+         ptrs.encode(s)
++    }
++}
++
++impl<Prov: Clone> ProvenanceMap<Prov> {
++    /// Read every Eq-relevant provenance field without merging fragments or
++    /// assuming the interned-allocation None invariant. Preserve Some(empty).
++    pub fn lean_miri_complete_provenance_snapshot(
++        &self,
++    ) -> (Vec<(Size, Prov)>, Option<Vec<(Size, u8, Prov, [u8; 8])>>) {
++        let pointers = self.ptrs.iter().map(|(offset, prov)| (*offset, prov.clone())).collect();
++        let fragments = self.bytes.as_ref().map(|bytes| {
++            bytes.iter().map(|(offset, frag)| (*offset, frag.idx, frag.prov.clone(), frag.bytes)).collect()
++        });
++        (pointers, fragments)
+     }
+ }
+ 

@@ -2,6 +2,7 @@ import Miri.Input.LowerMIR
 import Miri.Input.CompilerInstanceAbi
 import Miri.Input.CompilerExternAbi
 import Miri.Input.WorldFunctionPointerAbi
+import Miri.Input.InstanceSignature
 
 /-! `step.rs::eval_fn_call`: normalized original signature and function kind,
 plus `fn_abi_of_fn_ptr` keyed by original function type and ordered extra types.
@@ -91,6 +92,17 @@ are only an exact residual for unchanged material types. -/
 def signatureInWorld (prepared : Prepared) (ty : MIR.TyId) :
     RuntimeArrayTypes.CompilerM (Nat × ABI.ExternAbi) := do
   let world ← get
+  let functionKind ← match kindAt world.arena ty with
+    | .ok value => pure value | .error error => throw error
+  if let .FnDef definition arguments := functionKind then
+    let raw ← InstanceSignature.instantiateDefinition 16384 definition arguments
+    let signature ← match WorldFunctionPointerAbi.erasedSourceSignature raw with
+      | .ok value => pure value | .error error => throw error
+    let normalize (term : GenericSubstitution.Term) := RuntimeArrayTypes.liftType
+      (WorldNormalization.normalizeTerm world.metadata.normalizationContext 100000 16384 term)
+    let inputs ← signature.inputs.mapM normalize
+    let _ ← normalize signature.output
+    return (inputs.size,signature.abi)
   match WorldFunctionPointerAbi.sourceSignature world.arena ty with
   | .ok signature => pure (signature.inputs.size,signature.abi)
   | .error sourceError =>

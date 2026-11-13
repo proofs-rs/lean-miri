@@ -6,6 +6,8 @@ import Miri.Input.TermSized
 import Miri.Input.TraitSelection.EnvironmentEntailment
 import Miri.Input.WorldNormalization
 import Miri.Input.WorldTypeMetadata
+import Miri.Input.SourceDynamicView
+import Miri.Input.SourceDynMethods
 import Miri.Input.RelativeDiscriminants
 import Miri.Input.SequenceLayoutMaterial
 import Miri.ABI.SequenceLayout
@@ -951,9 +953,20 @@ private def projectionParents (metadata : RuntimeMetadata) (id : TypeId) : Resul
   unless queries.typingEnvironment == "fully_monomorphized" do
     throw (.invalid "projection query" "typing environment mismatch")
   pure queries.parents
-/-- Resolve a physical compiler layout only at the operation that needs it. -/
+/-- Import a contextual physical layout seed from this immutable material
+prefix. Unlike `layoutInWorld`, this accepts a LayoutId rather than an execution
+TypeId. Source normalization may intern intermediate field/metadata types, but
+LayoutData contains no type handles, so none can escape this local query World.
+The bare `resolveLayout` adapter remains context-free and fallible. -/
 def layoutById (metadata : RuntimeMetadata) (id : Nat) : Result LayoutData := do
-  resolveLayout metadata.target metadata.source.types metadata.source.layouts id metadata.source.definitions metadata.source.typeConstants metadata.source.predicates
+  let _ ← require metadata.source.layouts[id]? "compiler layout ID out of bounds"
+  let checked ← require metadata.checkedMaterial "checked source material prefix"
+  let world := TypeArena.World.ofCheckedMaterial checked
+  let (result,_) ← ((worldLayoutSeed (some metadata.normalizationContext) metadata.target
+    metadata.source.layouts ((metadata.source.coroutineCoverage.map (·.genericSources)).getD #[])
+    metadata.materialLayoutFuel id).run' {}).run world
+    |>.mapError (fun error => .unsupported error)
+  pure result
 
 private def projectionLayout (metadata : RuntimeMetadata) (id : TypeId) (layoutId : LayoutId) :
     Result (TyAndLayout TypeId) := do
@@ -1119,6 +1132,29 @@ def pointerMetadataTypeInWorld (metadata : RuntimeMetadata) (id : TypeId) : Type
     fieldType := fieldTypeInWorld metadata }
     (metadata.materialLayoutFuel + 3 * world.constructedTypes.size + 1) id
 
+/-- layout.rs917-960 maps normalized DynMetadata<dyn Trait> back to the
+source vtable reference type, not to the opaque DynMetadata wrapper. -/
+private def vtableFieldTypeInWorld (metadata : RuntimeMetadata) (metadataType : TypeId) :
+    TypeArena.WorldM (Option TypeId) := do
+  unless (← shapeKindInWorld metadata metadataType) == .adt do return none
+  let (declaration,_,_,_,_) ← worldAdt metadataType
+  unless declaration.langItem == some "dyn_metadata" do return none
+  let .adt _ arguments ← worldConstructor metadataType | throw "DynMetadata source constructor mismatch"
+  let some (Miri.MIR.GenericArg.Type dynamic) := arguments[0]? | throw "DynMetadata source type argument absent"
+  let world ← get
+  let fuel := metadata.materialLayoutFuel + 3 * (world.constructedTypes.size + world.constructedConstants.size)
+  let some view ← lift (SourceDynamicView.query metadata.normalizationContext fuel world dynamic) | return none
+  let principal := view.principal.map (fun predicate => predicate.body.definition)
+  let count ← lift (SourceDynMethods.minimumEntries metadata.normalizationContext (fuel * (fuel + 1)) fuel principal)
+  let bytes := metadata.target.pointerSize.bytes.toNat
+  unless count < 2^(8*bytes) do throw "vtable minimum length exceeds target usize"
+  let usize ← TypeArena.World.internType (.integer false .usize)
+  let length ← TypeArena.World.internConstant (.Value usize ⟨#[.Leaf count bytes],0⟩)
+  let array ← TypeArena.World.internType (.array usize length)
+  let reference ← TypeArena.World.internType (.reference array .Not .Static)
+  -- The pinned layout_of boundary normalizes/erases the constructed static region.
+  some <$> WorldNormalization.normalizeType metadata.normalizationContext (fuel * (fuel + 1)) fuel reference
+
 private def worldProjection (metadata : RuntimeMetadata) (ty : TypeId) (layoutId : LayoutId) :
     TypeArena.WorldM (TyAndLayout TypeId) := do
   let world ← get
@@ -1152,15 +1188,6 @@ def fieldLayoutForInWorld (metadata : RuntimeMetadata) (parent : TyAndLayout Typ
     let fuel := metadata.materialLayoutFuel + 3 * (world.constructedTypes.size + world.constructedConstants.size)
     let child ← WorldNormalization.resolveNormalizedTerm metadata.normalizationContext (fuel * (fuel + 1)) fuel term
     return ← layoutInWorld metadata child
-  if let .material node ← lift (world.lookupType parent.ty) then
-    for record in ← lift ((projectionParents metadata parent.ty).mapError toString) do
-      let queried ← worldProjection metadata parent.ty record.layoutId
-      if queried == parent then
-        let sourceIndex := if node.shapeKind == .str then 0 else index
-        let some source := record.fields.find? (·.index == sourceIndex)
-          | throw "compiler projection field material absent"
-        let _ ← lift ((← get).lookupType source.typeId)
-        return ← worldProjection metadata source.typeId source.layoutId
   let pointer ← match ← lift ((← get).lookupType parent.ty) with
     | .material node => match node.shape with
       | .rawPointer pointee _ => pure (some (pointee,false))
@@ -1174,9 +1201,18 @@ def fieldLayoutForInWorld (metadata : RuntimeMetadata) (parent : TyAndLayout Typ
     if index == 0 then
       return ⟨parent.ty, ← lift (PrimitiveLayout.pointer metadata.target isReference none)⟩
     let metadataType ← pointerMetadataTypeInWorld metadata pointee
-    if (← shapeKindInWorld metadata metadataType) == .adt then
-      throw "dynamic pointer metadata field requires exact vtable projection material"
+    if let some vtableType ← vtableFieldTypeInWorld metadata metadataType then
+      return ← layoutInWorld metadata vtableType
     return ← layoutInWorld metadata metadataType
+  if let .material node ← lift (world.lookupType parent.ty) then
+    for record in ← lift ((projectionParents metadata parent.ty).mapError toString) do
+      let queried ← worldProjection metadata parent.ty record.layoutId
+      if queried == parent then
+        let sourceIndex := if node.shapeKind == .str then 0 else index
+        let some source := record.fields.find? (·.index == sourceIndex)
+          | throw "compiler projection field material absent"
+        let _ ← lift ((← get).lookupType source.typeId)
+        return ← worldProjection metadata source.typeId source.layoutId
   let selected ← match parent.layout.variants with
     | .Single selected => pure selected
     | _ => throw "ADT field needs a selected variant"

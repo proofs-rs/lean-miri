@@ -1,0 +1,22 @@
+--- a/compiler/rustc_const_eval/src/const_eval/eval_queries.rs
++++ b/compiler/rustc_const_eval/src/const_eval/eval_queries.rs
+@@ -133,7 +133,18 @@
+     ecx.push_stack_frame_done()?;
+ 
+     // The main interpreter loop.
+-    while ecx.step()? {
++    loop {
++        // Opt-in observation only. This preserves the private query-root setup,
++        // ABI bypass, and original interruption-check placement.
++        if std::env::var_os("LEAN_MIRI_OBSERVE_CTFE_ROOT").is_some() {
++            // The preceding step can have popped the terminal root frame.
++            // Observe only an actual remaining frame; do not invent a terminal PC.
++            if let Some(frame) = ecx.stack().last() {
++                eprintln!("ctfe_root_pc\t{}\t{:?}",
++                    tcx.def_path_str(frame.instance().def_id()), frame.current_loc());
++            }
++        }
++        if !ecx.step()? { break; }
+         if CTRL_C_RECEIVED.load(Relaxed) {
+             throw_exhaust!(Interrupted);
+         }

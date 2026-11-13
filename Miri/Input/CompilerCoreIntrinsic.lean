@@ -7,23 +7,6 @@ peels exactly one Pat, handles ADT declarations without requiring mono, rejects
 source generic/bound cases and returns zero for the source non-ADT kinds. -/
 namespace Miri.Input.CompilerCoreIntrinsic
 open Lean Miri.ABI Miri.Interpreter
-private def lift (value : Except String A) : EStateM StepError S A :=
-  match value with | .ok value => pure value | .error e => throw (.unsupported e)
-
-def variantCount (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except StepError Nat := do
-  let get := fun id => do
-    let source ← (p.runtime.node id).mapError (fun e => StepError.unsupported (toString e))
-    pure source
-  let source ← get ty
-  let source ← match source.shape with
-    | .patternType base _ => get base
-    | _ => pure source
-  match source.shape with
-  | .alias .. => throw (.invalidProgram "TooGeneric in variant_count")
-  | .patternType .. => throw (.invalidProgram "source invariant: invalid nested pattern/bound type in variant_count")
-  | .adt data => pure data.variants.size
-  | _ => pure 0
-
 /-- Pinned intrinsics.rs:249–291: peel one Pat, count raw ADT variants without
 monomorphization or layout, reject aliases, and return zero for other World kinds.
 The caller supplies the same execution universe that owns `ty`. -/
@@ -46,30 +29,4 @@ def variantCountInWorld (p : CompilerProviders.Prepared) (world : TypeArena.Worl
     pure declaration.variants.size
   | _ => pure 0
 
-structure Queries (S C : Type) where
-  layoutOf : C → MIR.TyId → RvalueM S LocalLayout
-  pointeeType : C → MIR.TyId → RvalueM S MIR.TyId
-  integerKind : C → MIR.TyId → RvalueM S MIR.IntegerKind
-  usizeLayout : C → RvalueM S LocalLayout
-  isizeLayout : C → RvalueM S LocalLayout
-  variantLayout : C → LocalLayout → Nat → RvalueM S LocalLayout
-  ensureMonomorphic : C → MIR.TyId → RvalueM S Unit
-  needsDrop : C → MIR.TyId → RvalueM S Bool
-  variantCount : C → MIR.TyId → RvalueM S Nat
-
-def make (p : CompilerProviders.Prepared) : Queries S C :=
-  let context := p.lifecycle.calls.symbols.facts.context
-  { layoutOf := fun _ ty => lift (CompilerFacts.layoutOf context ty)
-    pointeeType := fun _ ty => lift (CompilerFacts.requiredType context ty "builtin_deref_explicit")
-    integerKind := fun _ ty => match CompilerExecutionProviders.integerKind context ty with
-      | .ok value => pure value | .error e => throw e
-    usizeLayout := fun _ => lift (p.primitiveLayout "usize")
-    isizeLayout := fun _ => lift (p.primitiveLayout "isize")
-    variantLayout := fun _ layout index => lift (p.runtime.forVariant layout index |>.mapError toString)
-    ensureMonomorphic := fun _ ty => do
-      unless ← lift (CompilerFacts.boolean context ty "is_monomorphic_enough") do
-        throw (.invalidProgram "TooGeneric: intrinsic type requires instantiation")
-    needsDrop := fun _ ty => lift (CompilerFacts.boolean context ty "needs_drop")
-    variantCount := fun _ ty => match variantCount p ty with
-      | .ok value => pure value | .error e => throw e }
 end Miri.Input.CompilerCoreIntrinsic

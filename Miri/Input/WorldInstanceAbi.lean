@@ -4,6 +4,7 @@ import Miri.ABI.FnAbi
 import Miri.ABI.SignatureSeeds
 import Miri.Input.WorldAbiScalar
 import Miri.Input.WorldDeducedAbi
+import Miri.Input.WorldVirtualAbi
 
 /-! Source FnAbi construction for ordinary Item instances. The current target
 classifier covers x86_64 Rust scalar, thin raw pointer, FnPtr, thin references,
@@ -33,7 +34,8 @@ def construct (instanceId : InstanceId) (extra : Array TypeId) :
   let key ← liftPure do
     match ← world.instances.lookup instanceId with
     | .material key | .constructed key => pure key
-  let .Item definition := key.kind | throw "raw instance ABI requires an ordinary Item"
+  if let .Virtual _ _ := key.kind then return ← WorldVirtualAbi.construct instanceId extra
+  let .Item definition := key.kind | throw "raw instance ABI requires an Item or Virtual"
   let some source := world.metadata.source.definitions[definition]?
     | throw "raw instance ABI definition is absent"
   let some policy := source.functionAbiMaterial

@@ -1,5 +1,6 @@
 import Miri.Input.RuntimeArrayTypes
 import Miri.Input.WorldTrivialAutoTraits
+import Miri.Input.WorldDynamicAutoTrait
 
 namespace Miri.Input.WorldSourceAutoTraits
 open GenericSubstitution
@@ -12,6 +13,7 @@ def query (id : TypeId) (languageItem : String) : RuntimeArrayTypes.CompilerM Bo
   let context := world.metadata.normalizationContext
   let declarations := context.traits.traits.filter (·.langItem == some languageItem)
   let #[declaration] := declarations | throw s!"ABI source trait absent or ambiguous: {languageItem}"
+  if let some answer ← WorldDynamicAutoTrait.query 16384 id declaration then return answer
   let ty ← liftPure (GenericInstantiationWorld.ofType world.arena 16384 id)
   match ← liftPure (AliasRuntime.solveGoal context 16384 100000
       ⟨.positive,⟨declaration.definition,#[ty]⟩⟩) with

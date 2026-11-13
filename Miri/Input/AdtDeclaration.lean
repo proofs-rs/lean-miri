@@ -52,6 +52,8 @@ structure Material where
   langItem : Option String
   variants : Array Variant
   fields : Array FieldSafety
+  /-- Raw presence of #[rustc_nonnull_optimization_guaranteed], before instantiation. -/
+  nonnullOptimizationGuaranteed : Bool
   deriving Repr, DecidableEq
 
 def Material.kind (material : Material) : AdtKind :=

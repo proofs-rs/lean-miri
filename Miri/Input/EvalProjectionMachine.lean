@@ -44,7 +44,8 @@ private def readonly (world : RuntimeArrayTypes.World) (action : TypeArena.World
     Except ProjectionError α := do
   let (value,after) ← query (action.run world.arena)
   unless after.typeCount == world.arena.typeCount &&
-      after.constantCount == world.arena.constantCount do
+      after.constantCount == world.arena.constantCount &&
+      after.predicateCount == world.arena.predicateCount do
     throw (.obligation "projection snapshot requires effectful type interning")
   pure value
 
@@ -163,10 +164,18 @@ def dynamicKind (prepared : CompilerFactAdapters.Prepared) (world : RuntimeArray
   | _ => throw (.invariant "invalid unsized dynamic layout kind")
 
 def dynamic (prepared : CompilerFactAdapters.Prepared)
-    (base : DynamicLayoutHooks Provenance (State Os R P H D O Aff B Host) C) :=
+    (base : DynamicLayoutHooks Provenance (State Os R P H D O Aff B Host) C) :
+    DynamicLayoutHooks Provenance (State Os R P H D O Aff B Host) C :=
   {base with
     target := prepared.context.runtime.target.base
-    classify := fun _ ty => do lift (dynamicKind prepared (arrays.get (← get)) ty)
+    classify := fun _ ty => do
+      let world := arrays.get (← get)
+      if (← lift (kind world ty)) == TypeShapeKind.dynamicTraitObject then
+        let some data ← RuntimeArrayQueries.perform arrays
+          (WorldDynamicSource.runtimeData prepared.context.runtime (max 256 world.arena.typeCount) ty)
+          | throw (StepError.invalidProgram "dynamic projection owner changed its source kind")
+        return .dynamic data.predicates
+      lift (dynamicKind prepared world ty)
     field := fun _ layout index => RuntimeArrayQueries.fieldLayout arrays layout index
     packedAlign := fun _ ty => RuntimeArrayQueries.perform arrays
       (RuntimeMetadata.packedAlignInWorld prepared.context.runtime ty)}

@@ -318,7 +318,7 @@ struct ExportContext<'tcx> {
     files: pool_values::Files,
     spans: Pool<rustc_span::Span, pool_values::Span>,
     layouts: Pool<pool_layout::LayoutKey<'tcx>, pool_layout::Layout>,
-    fn_abis: Pool<rustc_target::callconv::FnAbi<'tcx, ty::Ty<'tcx>>, pool_layout::FnAbi>,
+    fn_abis: Pool<(rustc_target::callconv::FnAbi<'tcx, ty::Ty<'tcx>>, bool), pool_layout::FnAbi>,
     type_ids: Pool<rustc_middle::ty::Ty<'tcx>, pool_type::Type>,
     /// Types demanded by serialized source MIR/signatures/metadata. Compiler
     /// query constructors can create type nodes without adding them here.
@@ -2582,6 +2582,16 @@ fn export_reachable_instances<'tcx>(
             continue;
         }
         if let ty::InstanceKind::Virtual(def, slot) = instance.def {
+            if instance_abi_material::signature(tcx,instance,ty::List::empty()).is_some() {
+                instance_abi_material::trace("identity-source",false,instance);
+                records.push(InstanceFact { instance_id, instance_kind:instance_kind_json(context,tcx,instance.def)?,
+                    def_id:def_json(context,def),def_path:tcx.def_path_str(def),
+                    generic_args:generic_args_json(context,tcx,instance.args)?,
+                    data:pool_instance::InstanceData::IdentityOnly {
+                        reason:"Virtual source identity; FnAbi is constructed on demand without executable MIR" } });
+                continue;
+            }
+            instance_abi_material::trace("identity-residual",true,instance);
             let function_type = instance.ty(tcx, ty::TypingEnv::fully_monomorphized());
             let fn_abi = match tcx.fn_abi_of_instance(
                 ty::TypingEnv::fully_monomorphized().as_query_input((instance, ty::List::empty())),
@@ -2828,9 +2838,11 @@ fn resolved_mir_body_json<'tcx>(
         // Retain only the remaining complete-instance/type/ABI dependencies.
         // No enclosing/target executable MIR is instantiated for source calls.
         for dependency in generic_mir_call::dependencies(tcx,template,instance.args)? {
-            context.register_instance(dependency.instance);
             type_json(context,tcx,dependency.function_type)?;
-            context.instance_abi_requests.insert((dependency.instance,ty::List::empty()));
+            if let Some(instance)=dependency.instance {
+                context.register_instance(instance);
+                context.instance_abi_requests.insert((instance,ty::List::empty()));
+            }
         }
         // This source category is selected before any monomorphic-body query.
         // Failures after selection propagate; no concrete body is retained.
@@ -3990,6 +4002,16 @@ fn pointer_data_layout_value_json<'tcx>(
         let pointer_data_type = context.type_id(layout.ty);
         context.layouts.define(id,pool_layout::Layout::PointerDataRecipe { pointer_data_type });
     }
+    id as u64
+}
+
+// Pinned abi.rs::make_thin_self_ptr uses *mut () storage and FULL nullable
+// validity while retaining the original receiver type. Context comes only
+// from InstanceKind::Virtual argument zero, never from copied geometry.
+fn virtual_receiver_layout_value_json<'tcx>(context: &mut ExportContext<'tcx>, _tcx: TyCtxt<'tcx>,
+    layout: rustc_abi::TyAndLayout<'tcx, ty::Ty<'tcx>>) -> u64 {
+    let (id,fresh) = context.layouts.reserve(pool_layout::LayoutKey::VirtualReceiver(layout.ty));
+    if fresh {context.layouts.define(id,pool_layout::Layout::PrimitiveRecipe {primitive_recipe:"raw_pointer"});}
     id as u64
 }
 
@@ -5939,13 +5961,14 @@ fn instance_fn_abi_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tc
                 instance.def.requires_caller_location(tcx).then(|| tcx.caller_location_ty()))?
         } else { None }
     } else { None };
-    store_fn_abi(context, tcx, abi, pool_layout::UnwindSeed::for_instance(tcx, instance)?, seed)
+    store_fn_abi(context, tcx, abi, pool_layout::UnwindSeed::for_instance(tcx, instance)?, seed,
+        matches!(instance.def,ty::InstanceKind::Virtual(..)))
 }
 fn pointer_fn_abi_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>,
     abi: &rustc_target::callconv::FnAbi<'tcx, ty::Ty<'tcx>>, signature: ty::FnSig<'tcx>,
     extra: &'tcx ty::List<ty::Ty<'tcx>>) -> Result<u64, String> {
     let seed = pool_layout::SignatureSeed::new(context, tcx, signature, extra, None)?;
-    store_fn_abi(context, tcx, abi, pool_layout::UnwindSeed::new(tcx, signature.abi(), None), seed)
+    store_fn_abi(context, tcx, abi, pool_layout::UnwindSeed::new(tcx, signature.abi(), None), seed, false)
 }
 
 fn store_fn_abi<'tcx>(
@@ -5954,12 +5977,13 @@ fn store_fn_abi<'tcx>(
     abi: &rustc_target::callconv::FnAbi<'tcx, rustc_middle::ty::Ty<'tcx>>,
     unwind_seed: pool_layout::UnwindSeed,
     signature_seed: Option<pool_layout::SignatureSeed>,
+    virtual_receiver: bool,
 ) -> Result<u64, String> {
-    let (id, fresh) = context.fn_abis.reserve(abi.clone());
+    let (id, fresh) = context.fn_abis.reserve((abi.clone(),virtual_receiver));
     if !fresh {
         return Ok(id as u64);
     }
-    let value = pool_layout::FnAbi::new(context, tcx, abi, unwind_seed, signature_seed)?;
+    let value = pool_layout::FnAbi::new(context, tcx, abi, unwind_seed, signature_seed, virtual_receiver)?;
     context.fn_abis.define(id, value);
     Ok(id as u64)
 }
@@ -7431,14 +7455,24 @@ fn compiler_function_facts_json<'tcx>(
             };
             let kind = match *input.kind() {
                 ty::FnPtr(..) => None,
-                ty::FnDef(def, args) => Some( context.register_metadata_instance(ty::Instance {
+                // Trait FnDef is a declaration, not a selected Item target.
+                // Preserve its raw function type/signature without inventing
+                // even a metadata-only instance of the unresolved trait item.
+                ty::FnDef(def, args) if tcx.trait_of_assoc(def).is_none() => Some( context.register_metadata_instance(ty::Instance {
                         def: ty::InstanceKind::Item(def),
                         args: args.skip_binder(),
                     }),
                 ),
+                ty::FnDef(..) => None,
                 _ => unreachable!(),
             };
-            state.types.insert(id, (kind, signature));
+            // This legacy fact encodes FnDef through a concrete Item ID;
+            // omitting a trait declaration avoids both a fabricated Item and
+            // misclassifying it as FnPtr. The raw type already owns its exact
+            // declaration signature and is the runtime kind/signature source.
+            if !matches!(input.kind(),ty::FnDef(def,_) if tcx.trait_of_assoc(*def).is_some()) {
+                state.types.insert(id, (kind, signature));
+            }
         }
     let abis=requests.into_iter().filter(|key| state.completed_abis.insert(*key)).filter(|(input,extra)| {
         let covered=fn_pointer_abi_material::signature(tcx,input.fn_sig(tcx),extra).is_some();

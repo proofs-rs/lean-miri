@@ -57,10 +57,31 @@ Projection diagnostics and explicit type-name query boundaries are preserved.
 Intrinsic pointee/integer/variant/normalization/drop callbacks and dynamic
 projection classification also consume the execution World. Source variantCount
 uses raw declarations, including one-layer Pattern handling and the pinned
-alias/nested-Pattern errors. Six material and six constructed ADTs, Pattern and
-invalid-kind controls pass without layout answers. Constructed Dynamic validity
-still rejects explicitly; full varargs/shim compatibility dictionaries and
-additional runtime leaves remain unresolved.
+alias/nested-Pattern errors. Eight material and eight constructed ADTs, Pattern
+and invalid-kind controls pass without layout answers. Checked Dynamic source
+transport and validity classification intern and reuse predicate/principal
+handles in the same execution World; nine empty-prefix source trees and actual
+runtime callbacks pass against fresh pinned compiler input. Source declaration
+headers, binder ownership and missing/malformed declarations remain checked.
+Dynamic pointer metadata-field projections derive the pinned vtable array
+reference from raw trait declarations and eligible supertrait methods, deduplicated
+by physical definition. Nine material and nine empty-prefix constructed pointers
+match independent compiler field types, including final lifetime erasure, and
+complete physical layouts. Diamond, generic, region-binder and no-principal
+cases pass; wrong-count/full-layout oracles, field bounds, malformed constructors,
+duplicate declarations, corrupt headers and exhausted source fuel reject. These
+are finite component checks; the independent compiler vectors also agree with
+trait-vptr allocation disabled.
+Call, varargs and shim structural-compatibility dictionaries now use source
+World queries, including raw instantiated fields and the required raw nonnull
+attribute. Eight ADTs match compiler fields, representation, item names and
+nonnull attributes (two true); missing/non-boolean attributes reject. A raw
+associated field alias stays unnormalized in ADT info and separately normalizes
+at the actual structural-comparison site; distinct physical C records compare
+identical with empty prefixes. These are finite component/callback checks;
+complete varargs guest coverage remains unverified. Constructed dynamic-child
+and closure/coroutine diagnostic names, raw retag frame-attribute migration,
+named shim ABI acquisition and additional runtime leaves remain unresolved.
 
 Raw source environments retain explicit clauses, physical generic/predicate
 parents, parameter sorts and trait identity. Lean assembles inherited obligations
@@ -121,15 +142,50 @@ negatives and mutated compiler oracles also reject. Ground direct-principal
 object candidates now confirm canonical scopes, full arguments, MetaSized
 obligations and own-method eligibility before selecting Virtual/Reify identities.
 Four-policy comparisons cover four SourceMirCall API Virtual selections and four
-runtime-hook Reify selections each. Concrete/missing Self, competing impls,
-specialization and unsupported obligations reject. The older dynamic hook suite
+runtime-hook Reify selections each. Missing Self, overlapping/unknown impl heads,
+specialization and unsupported obligations reject. Proven ground impl heads
+disjoint from Dynamic no longer block the object candidate; actual manual-impl
+catalogues select two Virtual and two Reify identities with malformed/overlap
+controls. Concrete Self uses the separate bounded ordinary-impl provider.
+The older dynamic hook suite
 now selects six Reify identities per policy, retaining twenty object and two
-binder residuals. Exported AssocFn trait-call body admission/dependency discovery,
-Virtual FnAbi/call execution, upcasts, projection/higher-ranked confirmation,
+binder residuals. Upcasts, projection/higher-ranked confirmation,
 nonempty own predicates, specialized leaves and real allocation remain unresolved.
 Generic receiver alias normalization, abstract-constant expansion and raw crate
 feature/session policy material remain unresolved; unavailable semantics error
 instead of silently omitting entries.
+
+Covered Virtual methods now construct complete FnAbi from raw signatures and
+source receiver attributes, preserving logical reference types while using the
+pinned nullable thin physical receiver. Thirty-one independent complete ABI
+comparisons cover ordinary, optimized and panic policies, with answer catalogues
+removed. A real mutable-dyn method-call guest now finalizes exit zero in Lean and
+same-prepared-TyCtxt Miri. By-value/newtype receivers, tracked-caller ABI and
+general virtual shim execution remain separate work. Original FnDef signatures
+instantiate their raw declaration, erase the outer binder and normalize each
+input/output in the same World. Ground closure/FnPtr Fn-family candidates and
+FnOnce Output reduce from source signatures with real nested obligations;
+FnDef target-feature material, async closures and higher-ranked candidate
+confirmation remain explicit unsupported domains.
+
+Genuine binder-free, type-only method-syntax trait calls now retain their raw
+associated FnDef declaration and resolve in the execution-owned World. No Item
+instance or instance-bearing function catalogue row is fabricated for the trait
+declaration. One actual default export retains the nongeneric impl as an
+independent root: its complete caller and selected impl World bodies match
+independently normalized compiler MIR, with persistent callback and physical
+selection checks. A root-only export compares the caller and rejects the absent
+impl body source; general raw impl-body discovery remains unresolved. Annotated
+UFCS callee operands remain unsupported because their user-type metadata is not
+represented by this call constructor. The full seeded guest has not completed:
+the current native runner passes the earlier std::rt::lang_start ABI, dynamic
+pointer metadata and original FnOnce signature boundaries. It remains pending
+before the trait call at choice cursor 115: validity traversal repeatedly visits
+the parent Multiple layout for an Ordering variant because the material variant
+projection reconstructs that same parent instead of the selected Single layout.
+This source variant-projection defect requires a faithful for_variant port;
+increasing fuel would not resolve the loop. Process exit zero for this pending
+result is not successful guest execution.
 
 Binder-free Item signatures can construct x86_64 Rust scalar/ZST FnAbi in the
 same World from raw signatures and codegen/panic flags. Twenty complete compiler
@@ -351,11 +407,31 @@ compiler sources, vendor dependencies and verified CI LLVM are now prepared;
 a baseline stage1 build succeeded, but the first strict metadata probe exposed a
 stage0/stage1 version distinction. Bootstrap copying also replaced instrumentation
 through a rustc-src symlink; source detachment, a narrow copy filter and continuous
-hash audits now protect repaired instrumentation. Its monitored rebuild and actual
-accessor/PC probe remain incomplete. Public probes do not reconstruct the private
-allocation map. Archived
+hash audits now protect repaired instrumentation. The instrumented stage1 rebuild
+succeeded. An actual fresh-driver probe verified complete allocation snapshots,
+snapshot nonmutation, a fresh generic-constant query root and distinct
+dedup/non-dedup membership. The terminal empty-stack PC bug was repaired and
+rebuilt; a fresh-driver traced probe now emits two real positions and completes
+without fabricating a terminal event. These checks do not
+connect the private allocation map to production World execution. Archived
 vendor source remains recoverable offline, and no production allocation admission
-is inferred from an incomplete compiler build.
+is inferred from a compiler build or an isolated accessor probe.
+
+A private snapshot/export and Lean integration path now evaluates one fresh,
+nontrivial `u32` associated-constant root from raw role-tagged CTFE MIR. Five real
+interpreter steps and root interning match an independent rustc evaluation's
+complete allocation key, source allocation ID and counter frontier. This bounded
+path is not connected to the public importer and does not admit general CTFE.
+Initial typed query memoization is a separate missing input: an actual frontend-
+evaluated root returns from Codegen/PostAnalysis caches with zero evaluation
+steps and no allocation changes, whereas a fresh root evaluates once and its
+repeat also hits the cache. Global allocations and deduplication keys cannot
+recover those query keys/results. The private fresh-only slice therefore checks
+absence in all four relevant typed value/allocation caches at its frozen
+boundary, with incremental and on-disk query caching disabled; cached selected
+roots reject. Importing initial query memo entries, general repeated queries,
+shared allocation-counter updates across every reservation, and production
+snapshot dispatch remain unresolved.
 
 The exact `DropGlue(_, None)` shim family now retains only instance identity and
 raw source position; its raw declaration signature supplies types. Lean builds

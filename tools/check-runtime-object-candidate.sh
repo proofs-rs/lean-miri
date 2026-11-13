@@ -9,6 +9,10 @@ RUSTC="$RUSTUP_HOME/toolchains/miri-exporter-${PIN:0:12}/bin/rustc"
 export LD_LIBRARY_PATH="$RUSTUP_HOME/toolchains/miri-exporter-${PIN:0:12}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 OUT="${RUNTIME_OBJECT_CANDIDATE_OUT:-$ROOT/scratch/runtime-object-candidate}"
 mkdir -p "$OUT"
+EXPORT_COMMAND=(bash tools/export-mir.sh)
+if [[ -n "${MIRI_SEALED_EXPORTER:-}${MIRI_SEALED_EXPORTER_MANIFEST:-}" ]]; then
+  EXPORT_COMMAND=(bash tools/run-sealed-exporter.sh)
+fi
 "$RUSTC" -vV | rg "^commit-hash: $PIN$" > /dev/null
 TEMP_DIR="$(mktemp -d /tmp/lean-miri-dynamic-data.XXXXXXXX)"
 trap 'rm -rf -- "$TEMP_DIR"' EXIT
@@ -23,7 +27,7 @@ for MODE in plain kcfi plain-no-vptr kcfi-no-vptr; do
     # Query-only comparison against prebuilt unsanitized core, not linked guest ABI.
     FLAGS+=(-Zsanitizer=kcfi -Clto -Cpanic=abort -Cunsafe-allow-abi-mismatch=sanitizer)
   fi
-  bash tools/export-mir.sh --output "$OUT/$MODE-source.json" --root dynamic_root -- tests/repro/compiler-queries/runtime-object-candidate.rs --edition=2024 --crate-type=lib --crate-name=runtime_dynamic_data "${FLAGS[@]}"
+  "${EXPORT_COMMAND[@]}" --output "$OUT/$MODE-source.json" --root dynamic_root -- tests/repro/compiler-queries/runtime-object-candidate.rs --edition=2024 --crate-type=lib --crate-name=runtime_dynamic_data "${FLAGS[@]}"
   python3 - "$TEMP_DIR/oracle" "$OUT" "$MODE" <<'PY'
 import json,pathlib,subprocess,sys
 oracle,out,mode=sys.argv[1],pathlib.Path(sys.argv[2]),sys.argv[3]

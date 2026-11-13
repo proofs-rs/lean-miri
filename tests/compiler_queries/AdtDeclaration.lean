@@ -17,6 +17,7 @@ private def material (kind : AdtKind) (variants : Nat) (fields : Array FieldSafe
       ⟨⟨0,100 + index⟩,none,"ComponentVariant",.relative index,
         (fields.filter (·.variantIndex == index)).size,0⟩
     fields := fields
+    nonnullOptimizationGuaranteed := false
     langItem := lang
     representation := {
       integer := none

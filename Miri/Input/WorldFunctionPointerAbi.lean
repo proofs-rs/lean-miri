@@ -22,16 +22,21 @@ private def eraseSignatureBinder : Nat → Nat → Term → Except String Term
     | .definition sort tag identity children => pure (.definition sort tag identity (← children.mapM (eraseSignatureBinder fuel depth)))
     | _ => pure term
 
-def sourceSignature (world : TypeArena.World) (id : TypeId) : Except String RawFunctionSignature.Signature := do
-  let term ← GenericInstantiationWorld.ofType world 16384 id
-  let .node .type "function_pointer" "" (.cons binder .nil) := term
-    | throw "function pointer ABI requires its source FnPtr constructor"
+/-- Pinned instantiate_bound_regions_with_erased removes only the outer
+FnSig binder. Nested binders retain their own variables and identity. -/
+def erasedSourceSignature (binder : Term) : Except String RawFunctionSignature.Signature := do
   BinderRegions.validateClosed #[] 16384 binder
   let .binder variables body := binder | throw "function pointer signature binder absent"
   unless variables.all (fun boundVariable => match boundVariable with | .region _ => true | _ => false) do
     throw "function pointer signature contains non-region bound variables"
   let erased ← BinderRegions.eraseAndAnonymize 16384 (.binder #[] (← eraseSignatureBinder 16384 0 body))
   RawFunctionSignature.read erased
+
+def sourceSignature (world : TypeArena.World) (id : TypeId) : Except String RawFunctionSignature.Signature := do
+  let term ← GenericInstantiationWorld.ofType world 16384 id
+  let .node .type "function_pointer" "" (.cons binder .nil) := term
+    | throw "function pointer ABI requires its source FnPtr constructor"
+  erasedSourceSignature binder
 
 def construct (id : TypeId) (extra : Array TypeId) :
     RuntimeArrayTypes.CompilerM (FnAbi TypeId) := do

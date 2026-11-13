@@ -185,7 +185,7 @@ def validateLayout (layout : Layout) (path : String) : Except String Unit := do
   if let some recipe := layout.primitiveRecipe then
     unless ["bool", "char", "i8", "i16", "i32", "i64", "i128", "isize",
         "u8", "u16", "u32", "u64", "u128", "usize", "f16", "f32", "f64", "f128",
-        "fn_pointer", "never"].contains recipe do
+        "fn_pointer", "raw_pointer", "never"].contains recipe do
       throw s!"{path}: unknown primitive layout recipe"
     unless layout.sizeBytes.isNone && layout.abiAlignBytes.isNone &&
         layout.unadjustedAbiAlignBytes.isNone && layout.fields.isNone &&

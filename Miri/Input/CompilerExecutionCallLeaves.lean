@@ -1,4 +1,5 @@
 import Miri.Input.CompilerProviders
+import Miri.Input.CompilerWorldCompatibility
 import Miri.Input.CompilerCallFacts
 import Miri.Input.CompilerTargetFeatures
 import Miri.Interpreter.ExecutionCallLeaves
@@ -11,21 +12,6 @@ namespace Miri.Input.CompilerExecutionCallLeaves
 open Lean Miri.ABI Miri.Interpreter
 private def lift (query : Except String A) : MachineHooks.M K U A :=
   match query with | .ok value => pure value | .error error => throw (.unsupported error)
-
-def tupleFields (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except String (Array MIR.TyId) := do
-  let node ← p.runtime.node ty |>.mapError toString
-  unless node.shapeKind == .tuple do
-    throw "source RustCall spreading requires the exact tuple type"
-  let .tuple elements := node.shape | throw "tuple field query on non-tuple"
-  for id in elements do
-    let _ ← p.runtime.node id |>.mapError toString
-  pure elements
-
-def closureUpvarCount (p : CompilerProviders.Prepared) (ty : MIR.TyId) : Except String (Option Nat) := do
-  let node ← p.runtime.node ty |>.mapError toString
-  match node.shape with
-  | .closure _ _ count => pure (some count)
-  | _ => pure none
 
 /-- Exact source ExternAbi identity, canonical FnAbi records, shared DefIds/
 TypeConstIds and actual current BodyIdentity all belong to this same program. -/
@@ -46,12 +32,22 @@ def make (p : CompilerProviders.Prepared)
   isRustCall := fun abi => abi == .RustCall
   rustAbi := .Rust
   checkArgumentCompat := fun _ caller callee =>
-    LayoutCompat.checkArgumentCompat (CompilerFacts.compatibilityQueries p.lifecycle.calls.symbols.facts.context)
+    LayoutCompat.checkArgumentCompat (CompilerWorldCompatibility.queries p.lifecycle.calls.symbols.facts.context types)
       compatibilityBudget caller callee
   targetFeatures := CompilerTargetFeatures.dictionary p.intrinsics
-  tupleFields := fun ty => lift (tupleFields p ty)
+  tupleFields := fun ty => do
+    let .tuple fields ← RuntimeArrayQueries.perform types
+      (CompilerFactAdapters.castTypeInfoInWorld p.lifecycle.calls.symbols.facts ty)
+      | throw (.unsupported "source RustCall spreading requires the exact tuple type")
+    pure fields
   isClosureLike := fun callee => lift (CompilerCallFacts.isClosureLike p.intrinsics callee)
-  closureUpvarCount := fun ty => lift (closureUpvarCount p ty)
+  closureUpvarCount := fun ty => do
+    let kind ← RuntimeArrayQueries.perform types (RuntimeMetadata.shapeKindInWorld p.runtime ty)
+    if kind != .closure then return none
+    let .closure _ _ count ← RuntimeArrayQueries.perform types
+      (CompilerFactAdapters.castTypeInfoInWorld p.lifecycle.calls.symbols.facts ty)
+      | throw (.unsupported "closure source constructor mismatch")
+    pure (some count)
   llvmLinkName := fun callee => do
     let some name ← lift (CompilerCallFacts.codegenSymbolName p.intrinsics callee)
       | throw (.invalidProgram "source LLVM intrinsic requires a codegen symbol_name attribute")

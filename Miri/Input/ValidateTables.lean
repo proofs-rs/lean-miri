@@ -421,7 +421,9 @@ private def validateRequiredExecution (document : ImportDocument) : Except Strin
       else if kind == 1 then
         let some inst := document.instances[id]? | throw "required instance is absent"
         if inst.kind == .identityOnly then
-          throw s!"$.instances[{id}].kind: selected execution depends on a symbol identity that has no imported MIR body"
+          match inst.instanceKind with
+          | .Virtual .. => pure () -- Runtime vtable dispatch selects a concrete body; this identity has none.
+          | _ => throw s!"$.instances[{id}].kind: selected execution depends on a symbol identity that has no imported MIR body"
         if let some body := inst.bodyId then pending := pending.push (0, body)
       else
         let some allocation := document.allocations[id]? | throw "required allocation is absent"
@@ -623,13 +625,49 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
               throw s!"{path}: raw source ABI requires an ordinary direct instance"
             let some instanceNode := resolution.instanceId.bind (document.instances[·]?)
               | throw s!"{path}: raw source ABI instance is absent"
-            let .Item definition := instanceNode.instanceKind
-              | throw s!"{path}: raw source ABI requires an Item instance"
+            let (definition,isVirtual) ← match instanceNode.instanceKind with
+              | .Item definition => pure (definition,false)
+              | .Virtual definition _ => pure (definition,true)
+              | _ => throw s!"{path}: raw source ABI requires an Item or Virtual instance"
             let some source := document.definitions[definition]?
               | throw s!"{path}: raw source ABI definition is absent"
-            unless source.genericTemplate.isSome && source.functionAbiMaterial.isSome &&
-                source.bodyTrackCaller == some false do
+            unless source.genericTemplate.isSome && source.bodyTrackCaller == some false &&
+                (isVirtual || source.functionAbiMaterial.isSome) do
               throw s!"{path}: raw source ABI declaration material is incomplete"
+            if isVirtual then
+              unless instanceNode.bodyId.isNone && document.producer.abiSession.isSome do
+                throw s!"{path}: source Virtual ABI requires a bodyless identity and canonical session"
+              let some callable := source.callableSource
+                | throw s!"{path}: source Virtual callable header absent"
+              unless callable.hasSelf && callable.definitionKind == "associated_function" && callable.container == some "trait" do
+                throw s!"{path}: source Virtual is not a trait method"
+              let some functionType := resolution.functionType
+                | throw s!"{path}: source Virtual function type absent"
+              let some sourceType := document.types[functionType]?
+                | throw s!"{path}: source Virtual function type definition absent"
+              let .functionDefinition sourceDefinition sourceArgs _ _ _ := sourceType.shape
+                | throw s!"{path}: source Virtual function type is not FnDef"
+              unless sourceDefinition == definition && sourceArgs == instanceNode.genericArgs do
+                throw s!"{path}: source Virtual FnDef differs from its complete canonical instance"
+              let some block := value.mir.basicBlocks[blockIndex]?
+                | throw s!"{path}: source Virtual has no source block"
+              let operand ← match block.terminator.kind with
+                | .Call operand .. | .TailCall operand .. => pure operand
+                | _ => throw s!"{path}: source Virtual evidence does not belong to a call"
+              let operandType ← match operand with
+                | .Constant constant => pure constant.value.declaredType
+                | .Copy place | .Move place => do
+                  let some facts := (value.nodeFacts[blockIndex]?).bind (·.back?)
+                    | throw s!"{path}: source Virtual callee place has no terminator facts"
+                  let matching := facts.places.filter (·.place == place)
+                  let some first := matching[0]?
+                    | throw s!"{path}: source Virtual callee place type absent"
+                  unless matching.all (·.typeId == first.typeId) do
+                    throw s!"{path}: conflicting source Virtual callee place types"
+                  pure first.typeId
+                | .RuntimeChecks _ => throw s!"{path}: invalid source Virtual callee operand"
+              unless operandType == functionType do
+                throw s!"{path}: source Virtual FnDef differs from its actual MIR function operand"
         | .normal id =>
           unless resolution.kind != .llvmIntrinsic && !isLlvm do
             throw s!"{path}: LLVM intrinsic cannot carry an ordinary ABI"

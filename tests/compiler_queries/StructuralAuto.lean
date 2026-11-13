@@ -35,6 +35,7 @@ private def source : StructuralAuto.SourceAdt := fun identity => do
       scalableElement := none
       fieldShuffleSeed := 0 }
     flagsBits := 4
+    nonnullOptimizationGuaranteed := false
     langItem := if phantom then some "phantom_data" else none
     variants := #[⟨identity,none,"Component",.relative 0,if phantom then 0 else 1,0⟩]
     fields := if phantom then #[] else #[⟨0,0,unsafeField,"component_field",⟨identity.crateIndex,identity.index + 1000⟩,none,none,none⟩]

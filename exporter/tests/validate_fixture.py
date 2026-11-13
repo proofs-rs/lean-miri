@@ -310,13 +310,36 @@ assert any(
     and instance.get("reason") == "Miri executes intrinsic semantics outside a MIR body"
     for instance in instances.values()
 ), "intrinsic source identity and non-MIR dispatch boundary must be explicit"
-assert any(
-    instance.get("kind") == "virtual_dispatch_target"
-    and "status" not in instance
-    and instance.get("body_status") == "not_applicable"
-    and "status" not in pool_entry(doc, "fn_abis", instance["virtual_identity"]["fn_abi"])
-    for instance in instances.values()
-), "virtual dispatch must retain exact non-body identity and ABI evidence"
+virtuals = [instance for instance in instances.values() if instance["instance_kind"]["kind"] == "virtual"]
+assert virtuals, "fixture must retain genuine Virtual identities"
+for instance in virtuals:
+    kind = instance["instance_kind"]
+    assert instance["kind"] == "identity_only" and "body" not in instance and "virtual_identity" not in instance
+    assert instance["def_id"] == kind["def_id"] and kind["dispatch_slot"] == 3
+    declaration = pool_entry(doc, "definitions", kind["def_id"])
+    assert declaration["callable_source"]["container"] == "trait" and declaration["callable_source"]["has_self"]
+    assert declaration["callable_source"]["definition_kind"] == "associated_function"
+    assert declaration["body_track_caller"] is False
+    assert declaration["generic_template"]["parameters"] == ["type"]
+    assert len(instance["generic_args"]) == 1 and instance["generic_args"][0]["kind"] == "type"
+    self_type = pool_entry(doc, "types", instance["generic_args"][0]["value"])["shape"]
+    assert self_type["kind"] == "dynamic_trait_object"
+    principal = pool_entry(doc, "predicates", self_type["principal_predicate"])
+    owner = pool_entry(doc, "definitions", principal["def_id"])
+    assert principal["kind"] == "trait" and principal["generic_args"] == []
+    assert declaration["source_environment"]["generic_parent"] == {
+        "definition": {"crate": owner["crate"], "index": owner["index"]}, "parameter_count": 1}
+    assert not any(row["instance_id"] == instance["instance_id"] for row in doc["compiler_instance_abis"])
+    calls = [block["terminator"]["kind"] for body in material_bodies for block in body["basic_blocks"]
+             if block["terminator"]["kind"].get("variant") == "Call"
+             and block["terminator"]["kind"].get("resolution", {}).get("instance_id") == instance["instance_id"]]
+    assert calls, "fixture Virtual identity must be demanded by an actual MIR call"
+    for call in calls:
+        resolution = call["resolution"]
+        assert set(resolution) == {"kind", "function_type", "instance_id"} and resolution["kind"] == "source_instance"
+        function = pool_entry(doc, "types", resolution["function_type"])["shape"]
+        assert function["kind"] == "function_definition" and function["def_id"] == kind["def_id"]
+        assert function["generic_args"] == instance["generic_args"]
 
 serialized = json.dumps(exercise)
 binary_ops = [

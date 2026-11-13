@@ -1,6 +1,7 @@
 import Miri.Input.CompilerWorldFacts
 import Miri.Input.RuntimeArrayQueries
 import Miri.Input.WorldTypeName
+import Miri.Input.WorldDynamicSource
 import Miri.Interpreter.Cast
 
 /-! Compiler shape/query adapters for Cast and ValidityVisitor. Definition and
@@ -239,9 +240,9 @@ def validityKindInWorld (prepared : Prepared) (id : TypeId) : TypeArena.WorldM V
     let .slice child ← worldConstructor id | throw "slice world kind mismatch"
     return .sequence child
   | .dynamicTraitObject =>
-    let .material source := view | throw "constructed dynamic predicates are not available"
-    let .dynamicTraitObject predicates .. := source.shape | throw "dynamic world kind mismatch"
-    return .dynamic predicates
+    let some data ← WorldDynamicSource.runtimeData context.runtime (max 256 world.typeCount) id
+      | throw "dynamic world kind mismatch"
+    return .dynamic data.predicates
   | .patternType =>
     let .material source := view | throw "constructed pattern source is not available"
     let .patternType child _ := source.shape | throw "pattern world kind mismatch"
