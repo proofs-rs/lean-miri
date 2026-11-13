@@ -207,12 +207,6 @@ These raw external bodies, associated-const selection and u64/ValTree evaluation
 are not connected; closed normalized constants are not substituted for them.
 Process exit zero for this Unsupported result is not successful guest execution.
 
-The full exporter Rust suite requires rerunning after the receiver-admission
-changes: the latest debug build exhausted workspace space before test execution.
-Three immutable release builds and fresh ABI exports pass, but they do not replace
-that suite. Generated failed-build objects were reclaimed; source, binaries and
-failure evidence remain preserved.
-
 Binder-free Item signatures can construct x86_64 Rust scalar/ZST FnAbi in the
 same World from raw signatures and codegen/panic flags. Twenty complete compiler
 comparisons cover abort/unwind policies, including constructed instances with
