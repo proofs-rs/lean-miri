@@ -32,6 +32,8 @@ private def reserve : M K U AllocId := do
   | .error error => throw (.resourceExhaustion s!"symbolic allocation ID: {reprStr error}")
 
 def reserveTypeId (registry : Access U) (ty : TyId) : M K U AllocId := do
+  if (← get).machine.memory.activeInitialCompilerRun.isSome then
+    throw (.unsupported "complete initial TypeId key provider is not installed")
   if let some (id,_) := (registry.get (← get).machine.user).typeIds.find? (·.2 == ty) then return id
   if (← get).machine.memory.sourceAllocIdWorldActive then
     throw (.unsupported "source TypeId AllocId key is not captured by the prepared raw-world profile")

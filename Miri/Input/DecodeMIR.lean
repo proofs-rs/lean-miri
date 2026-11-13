@@ -95,11 +95,15 @@ open MIRParser
 inductive SourceConstant where
   | value (value : MIR.ConstValue)
   | typeConstant (id : Nat)
+  | unevaluated (definition : Nat) (arguments : Array MIR.GenericArg) (promoted : Option Nat)
 
 private structure SourceConstantFields where
   kind : Option String := none
   value : Option MIR.ConstValue := none
   typeConstant : Option Nat := none
+  definition : Option Nat := none
+  arguments : Option (Array MIR.GenericArg) := none
+  promoted : Option (Option Nat) := none
 
 private def sourceConstant : JsonReader.Parser SourceConstant := do
   let s ← object ({} : SourceConstantFields) fun s key => do
@@ -107,20 +111,36 @@ private def sourceConstant : JsonReader.Parser SourceConstant := do
     | "kind" => return {s with kind := some (← string)}
     | "value" => return {s with value := some (← parseConstValue)}
     | "type_constant" => return {s with typeConstant := some (← natural)}
+    | "definition" => return {s with definition := some (← natural)}
+    | "arguments" => return {s with arguments := some (← GenericArgsCodec.decode)}
+    | "promoted" => return {s with promoted := some (← nullable natural)}
     | _ => skipValue; pure s
   match ← required s.kind "kind" with
   | "evaluated_const" | "literal_const" =>
-    unless s.typeConstant.isNone do reject "evaluated MIR constant contains raw type material"
+    unless s.typeConstant.isNone && s.definition.isNone && s.arguments.isNone && s.promoted.isNone do
+      reject "evaluated MIR constant contains raw source material"
     return .value (← required s.value "value")
   | "type_constant" =>
-    unless s.value.isNone do reject "raw MIR type constant contains evaluated fallback"
+    unless s.value.isNone && s.definition.isNone && s.arguments.isNone && s.promoted.isNone do
+      reject "raw MIR type constant contains evaluated/Unevaluated fallback"
     return .typeConstant (← required s.typeConstant "type_constant")
+  | "unevaluated_const" =>
+    unless s.value.isNone && s.typeConstant.isNone do
+      reject "raw MIR Unevaluated contains an evaluated/type-constant fallback"
+    pure (.unevaluated (← required s.definition "definition")
+      (← required s.arguments "arguments") (← required s.promoted "promoted"))
   | _ => reject "unknown MIR constant source category"
 
 private def makeSourceConstant (ty : Nat) (span : MIR.SpanRef) (userType : Option Nat) :
     SourceConstant → MIRParser.Parser MIR.ConstOperand
   | .value value => makeConstant ty span userType value
   | .typeConstant id => makeTypeConstant ty span userType id
+  | .unevaluated definition arguments promoted => do
+    recordType ty
+    recordSpan span.id
+    recordDef definition
+    recordArgs arguments
+    pure ⟨span,userType,.Unevaluated ⟨definition,arguments,promoted⟩ ty⟩
 
 structure ParseConstOperandFields where
   type : Option (Nat) := none

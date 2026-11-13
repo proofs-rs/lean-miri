@@ -1,3 +1,5 @@
+import Miri.Input.RuntimeCtfeQueryMachine
+import Miri.Input.CompilerInitialAllocationByteMachine
 import Miri.Input.EvalConfiguration
 import Miri.Interpreter.NativeAllocationLifecycle
 import Miri.Interpreter.MemoryErrors
@@ -89,6 +91,7 @@ structure Options where
 local storage, retagging, calls/returns and every ordinary MIR operation are
 constructed below, rather than independently chosen callbacks. -/
 structure Leaves (Os R P H D O Aff B Host C ClockHost : Type) where
+  constQueries : RuntimeCtfeQueryMachine.Capability
   pointerSource : EvalPointerSource.Leaves Os R P H D O Aff B Host C
   sync : P → Miri.Concurrency.SyncObject.AccessKind → PlaceMachine.MachineM MiriMemoryKind (User Os R P H D O Aff B Host) Unit
   storage : Size → Align → Option (Array UInt8)
@@ -125,6 +128,7 @@ The dimensions match EvalWorld's canonical Unix Other/Host payload exactly. -/
 structure SourceLeaves
     (Os R P H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error ErrorHost
       Meta Path Place C ClockHost I AddrIter : Type) where
+  constQueries : RuntimeCtfeQueryMachine.Capability
   /-- The actual runtime configuration selected by the source runner.  Foreign
   callback and scheduler bindings project communication/host limits from this
   value; they do not choose an independent mode. -/
@@ -475,10 +479,19 @@ def makeWithForeignContext {Assembly : Type}
       dereference
       runtimeChecks := CompilerScalarLeaves.runtimeChecks p
       boolLayout := CompilerScalarLeaves.boolLayout p
-      constant := fun _ constant known =>
-        CompilerMirConstants.hook p.runtime EvalProjectionMachine.arrays functions pointers.arithmetic
-          externStatic MemoryErrors.constant constant known
-          (if options.place.debugAssertions then some (fun computed expected => physical (compatibility computed expected)) else none) }
+      constant := fun _ constant known => do
+        let checkKnown := if options.place.debugAssertions then
+          some (fun computed expected => physical (compatibility computed expected)) else none
+        match constant.value with
+        | .Unevaluated .. =>
+          let (ty,value) ← RuntimeCtfeQueryMachine.evaluate leaves.constQueries p image
+            EvalProjectionMachine.arrays EvalWorld.initialCompilerStoreInnerAccess
+            EvalWorld.initialCompilerQueryInnerAccess CompilerTypingEnv.fullyMonomorphized constant
+          CompilerMirConstants.convert p.runtime EvalProjectionMachine.arrays functions pointers.arithmetic
+            externStatic MemoryErrors.constant ty value known checkKnown
+        | _ =>
+          CompilerMirConstants.hook p.runtime EvalProjectionMachine.arrays functions pointers.arithmetic
+            externStatic MemoryErrors.constant constant known checkKnown }
     let callBackend : CallDispatchMachine.Backend (State Os R P H D O Aff B Host) := {
       selection := fun state => do
         match ← EvalBackendMachine.handler state.machine with
@@ -532,6 +545,18 @@ def makeWithForeignContext {Assembly : Type}
     let lifecycle := CompilerCallConstruction.lifecycle p EvalProjectionMachine.arrays options.userRelevantCrates
       (CompilerStorage.hooks p EvalProjectionMachine.arrays allocation projection.dynamic projection.dynamicFuel choice deallocateStack)
       EvalConfiguration.identity unwind
+    let lifecycle := {lifecycle with requiredConstants :=
+      CompilerLifecycle.requiredConstantsWith p.lifecycle.lifecycle EvalProjectionMachine.arrays (fun constant => do
+        match constant.value with
+        | .Unevaluated .. =>
+          let _ ← RuntimeCtfeQueryMachine.evaluate leaves.constQueries p image EvalProjectionMachine.arrays
+            EvalWorld.initialCompilerStoreInnerAccess EvalWorld.initialCompilerQueryInnerAccess
+            CompilerTypingEnv.fullyMonomorphized constant
+          pure ()
+        | _ =>
+          let _ ← RuntimeArrayQueries.performCompiler EvalProjectionMachine.arrays do
+            RuntimeArrayTypes.liftType (WorldValTree.evaluate (← get).metadata constant.span constant.value)
+          pure ())}
     let ⟨math⟩ ← liftConstruction (EvalMathMachine.hooks p (EvalMathMachine.optionalHost leaves.math) leaves.mathError none access projection.place scalar floats returnToBlock)
     let atomics := ExecutionIntrinsic.Atomic.access {
       loadChoiceRank := fun _ count => ExecutionChoices.index EvalCoreMachine.tape .atomicStale count
@@ -632,6 +657,7 @@ def makeWithForeignContext {Assembly : Type}
               (CompilerFacts.booleanInWorld context ty "is_monomorphic_enough") do
             throw (.invalidProgram "intrinsic type still requires instantiation")
         typeNameConstant := CompilerValueConstants.typeNameHook p EvalProjectionMachine.arrays functions
+          (CompilerInitialAllocation.ByteMachine.reserveCurrent EvalWorld.initialCompilerStoreInnerAccess p.runtime.target.base)
           (fun a b => physical (compatibility a b))
         needsDrop := fun _ ty => RuntimeArrayQueries.perform EvalProjectionMachine.arrays
           (CompilerFacts.booleanInWorld context ty "needs_drop")
@@ -668,7 +694,9 @@ def makeWithForeignContext {Assembly : Type}
       helpers := helpers
       control := ⟨CompilerBodySpan.get p EvalProjectionMachine.arrays⟩
       panic := EvalCallRuntime.panic p
-        (EvalPanicMachine.queries p.program p.runtime bytes functions access)
+        (EvalPanicMachine.queries p.program p.runtime bytes functions access
+          (CompilerInitialAllocation.ByteMachine.stringCurrent EvalWorld.initialCompilerStoreInnerAccess
+            p.runtime.target.base functions access (CompilerGlobalBytes.strLayout p.runtime bytes)))
         EvalProjectionMachine.arrays access.runtime.base unwind operands
       unwindTerminateFunction := fun _ reason => do
         let (definition,arguments) ← physical (CompilerPanicFacts.unwindTerminateSeed p.program reason)
@@ -994,6 +1022,7 @@ def makeFromSourcePackage [DecidableEq Os]
         nativeHost := sourceLeaves.nativeHost
          }
       let leaves : Leaves Os R EvalSyncObjectAccess.Payload H D other CpuAffinity.Mask B sourceHost C ClockHost := {
+        constQueries := sourceLeaves.constQueries
         pointerSource := sourcePointer
         sync := EvalSyncObjectAccess.onAccess
         storage := sourceLeaves.storage

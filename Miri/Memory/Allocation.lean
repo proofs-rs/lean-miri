@@ -1203,3 +1203,49 @@ theorem tryNew_uninit_shape (size : Size) (align : Align) (allocation : Allocati
     subst allocation
     exact ⟨rfl,rfl⟩
 end Miri.Memory.Allocation
+
+namespace Miri.Memory.Allocation
+open Miri.ABI
+
+/-- Exact initial-compiler snapshot construction. Unlike the older compiler
+image entry point, this retains optional byte-fragment representation, including
+Some(empty). It does not merge fragments, normalize masks, or infer keys from
+initialized bytes. The original fromCompilerImage contract remains unchanged. -/
+def fromCompilerSnapshot (bytes : Array UInt8) (align : Align) (mutability : Mutability)
+    (mask : InitMask) (provenance : ProvenanceMap CtfeProvenance) (pointerSize : Size) :
+    Except AllocError (Allocation CtfeProvenance Unit) := do
+  let align ← checkedAlign align
+  let size ← sizeForArray bytes.size
+  if mask.len != size then throw (.storageLengthMismatch size mask.len.bytes.toNat)
+  for i in [:bytes.size] do
+    let _ ← (mask.get (Size.ofBytes (UInt64.ofNat i))).mapError AllocError.memory
+  if pointerSize.bytes == 0 then throw (.provenance .pointerSizeZero)
+  let _ ← (ProvenanceMap.fromParts provenance.ptrs provenance.byteFragments).mapError AllocError.provenance
+  let mut previousEnd := 0
+  for (offset, _) in provenance.ptrs do
+    let start := offset.bytes.toNat
+    let finish := start + pointerSize.bytes.toNat
+    if start < previousEnd then throw (.provenance .insertOverlapsExistingProvenance)
+    if finish > bytes.size then throw (.outOfBounds (allocRange offset pointerSize) size)
+    for i in [start:finish] do
+      let initialized ← (mask.get (Size.ofBytes (UInt64.ofNat i))).mapError AllocError.memory
+      unless initialized do throw (.invalidUninitBytes none)
+    previousEnd := finish
+  for (slot, fragment) in provenance.byteFragments.getD #[] do
+    if pointerSize.bytes > 8 then throw (.provenance (.pointerSizeExceedsFragmentStorage pointerSize.bytes))
+    let index := slot.bytes.toNat
+    if index ≥ bytes.size then throw (.outOfBounds (allocRange slot (Size.ofBytes 1)) size)
+    if fragment.idx.toNat ≥ pointerSize.bytes.toNat then throw (.readPartialPointer slot)
+    let initialized ← (mask.get slot).mapError AllocError.memory
+    unless initialized do throw (.invalidUninitBytes none)
+    for (offset, _) in provenance.ptrs do
+      if offset.bytes.toNat ≤ index && index < offset.bytes.toNat + pointerSize.bytes.toNat then
+        throw (.provenance .insertOverlapsExistingProvenance)
+    let some stored := bytes[index]? | throw (.outOfBounds (allocRange slot (Size.ofBytes 1)) size)
+    let some fragmentByte := fragment.bytes.toArray[fragment.idx.toNat]? | throw (.readPartialPointer slot)
+    unless stored == fragmentByte do throw (.readPartialPointer slot)
+  -- Every Eq-relevant source field is retained exactly. The raw global has no
+  -- native buffer ownership or machine-specific extra state to fabricate.
+  return ⟨bytes,size,provenance,mask,align,mutability,(),none⟩
+
+end Miri.Memory.Allocation

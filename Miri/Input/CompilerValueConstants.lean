@@ -44,6 +44,7 @@ const_val_to_op checks the supplied layout and adjusts the runtime root. A runti
 AllocId never passes through the exported-graph ConstValue namespace. -/
 def typeNameHook (p : CompilerProviders.Prepared) (types : RuntimeArrayQueries.Access (MachineHooks.State K U))
     (functions : FunctionPointers.Hooks K U Other)
+    (reserveBytes : Array UInt8 → UInt64 → MachineHooks.M K U AllocId)
     (checkKnown : LocalLayout → LocalLayout → MachineHooks.M K U Bool)
     (_ : C) (ty : MIR.TyId) (destination : LocalLayout) : MachineHooks.M K U (OpTy Provenance) := do
   let monomorphic ← RuntimeArrayQueries.perform types do
@@ -55,7 +56,7 @@ def typeNameHook (p : CompilerProviders.Prepared) (types : RuntimeArrayQueries.A
     (WorldIntrinsicTypeName.query p.runtime p.runtime.materialLayoutFuel ty)
   let bytes := name.toUTF8.data
   if bytes.size >= 2^64 then throw (.invalidProgram "type_name UTF8 length exceeds source u64")
-  let allocation ← GlobalByteMachine.reserve bytes ⟨0,by decide⟩
+  let allocation ← reserveBytes bytes 0
   let computed ← RuntimeArrayQueries.layoutOf types destination.ty
   unless ← checkKnown computed destination do
     throw (.invalidProgram "known type_name constant layout differs from compiler layout")

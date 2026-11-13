@@ -33,8 +33,9 @@ def preambleSpan (p : Prepared)
   let actual ← RuntimeArrayQueries.performCompiler types (p.program.resolveBodyIdentity body.identity)
   lift do (← bodyEntry p body actual).preamble
 
-def requiredConstants (p : Prepared)
+def requiredConstantsWith (p : Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K User))
+    (evaluate : Miri.MIR.ConstOperand → MachineHooks.M K User Unit)
     (body : LoadedBody) : MachineHooks.M K User Unit := do
   let actual ← RuntimeArrayQueries.performCompiler types (p.program.resolveBodyIdentity body.identity)
   let entry ← lift (bodyEntry p body actual)
@@ -42,9 +43,14 @@ def requiredConstants (p : Prepared)
   let frame ← MachineHooks.currentFrame
   unless frame.bodyIdentity == body.identity && frame.functionInstance == callee do
     throw (.invalidProgram "required-constant current frame identity/instance mismatch")
-  for constant in actual.input.requiredConsts do
+  for constant in actual.input.requiredConsts do evaluate constant
+
+def requiredConstants (p : Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K User))
+    (body : LoadedBody) : MachineHooks.M K User Unit :=
+  requiredConstantsWith p types (fun constant => do
     let _ ← RuntimeArrayQueries.performCompiler types do
-      RuntimeArrayTypes.liftType (WorldValTree.evaluate (← get).metadata constant.span constant.value)
+      RuntimeArrayTypes.liftType (WorldValTree.evaluate (← get).metadata constant.span constant.value)) body
 
 def hooks (p : Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (base : CallMachine.Lifecycle K User C) : CallMachine.Lifecycle K User C :=
@@ -89,7 +95,7 @@ theorem preamble_known (p : Prepared)
       .ok () ⟨⟨frames.push frame⟩,machine⟩ := by
   have boundedSpan : span.id < p.program.compilerTables.spans.size := spanId ▸ bounded
   cases span
-  simp [requiredConstants, bodyEntry, lift, row, contents, runtimeRole, boundedSpan, spanId, callee, empty,
+  simp [requiredConstants, requiredConstantsWith, bodyEntry, lift, row, contents, runtimeRole, boundedSpan, spanId, callee, empty,
     MachineHooks.currentFrame, Stack.currentFrame?, identity, function,
     get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,
     Except.bind,Except.pure]

@@ -103,6 +103,9 @@ private def parseProducer : JsonReader.Parser (Producer × Catalog.ProducerSetti
 /-- The completed import plus numeric reference bounds that require all tables.
 MIR and catalogs already have their final representation. -/
 private structure ParsedDocument where
+  initialSnapshot : Option Json := none
+  initialCtfeRoots : Option (Array Json) := none
+  initialSelectedCache : Option (Array Json) := none
   value : ImportDocument
   schema : String
   schemaVersion : Nat
@@ -242,6 +245,9 @@ private def finishWorld (nodes : Array AllocationNode) (hexByGraph : Array (Opti
     rawPool, dedupCatalog, pending.completeKeyFamilies, pending.nonExhaustiveKeyFamilies⟩
 
 private structure DocumentFields where
+  initialSnapshot : Option Json := none
+  initialCtfeRoots : Option (Array Json) := none
+  initialSelectedCache : Option (Array Json) := none
   traitProgram : Option Json := none
   schema : Option (String) := none
   schemaVersion : Option (Nat) := none
@@ -270,11 +276,28 @@ private structure DocumentFields where
   runtimeTargetDataLayout : Option TargetDataLayoutEvidence := none
   queries : CatalogDecoder.QueryFields := {}
 
-private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser ParsedDocument := do
+private inductive ProfileFields where
+  | reject
+  | initial
+
+private def parseDocumentFields (pools : SharedPools) (policy : ProfileFields) : JsonReader.Parser ParsedDocument := do
   let d ← JsonReader.object ({} : DocumentFields) fun d key => do
     match key with
-    | "compiler_initial_global_snapshot" | "compiler_initial_ctfe_roots" =>
-      JsonReader.fail "initial compiler allocation/CTFE profiles require the dedicated initial-profile decoder; legacy decoding is unsupported"
+    | "compiler_initial_global_snapshot" =>
+      match policy with
+      | .reject => JsonReader.fail "initial compiler allocation/CTFE profiles require the dedicated initial-profile decoder; legacy decoding is unsupported"
+      | .initial => do
+        let snapshot ← Lean.Json.Parser.anyCore
+        let _ ← JsonReader.liftExcept snapshot.getObj?
+        return {d with initialSnapshot := some snapshot}
+    | "compiler_initial_ctfe_roots" =>
+      match policy with
+      | .reject => JsonReader.fail "initial compiler allocation/CTFE profiles require the dedicated initial-profile decoder; legacy decoding is unsupported"
+      | .initial => return {d with initialCtfeRoots := some (← JsonReader.array Lean.Json.Parser.anyCore)}
+    | "compiler_initial_selected_query_cache" =>
+      match policy with
+      | .reject => JsonReader.fail "initial compiler query memo requires the dedicated cache-aware profile decoder; legacy decoding is unsupported"
+      | .initial => return {d with initialSelectedCache := some (← JsonReader.array Lean.Json.Parser.anyCore)}
     | "schema" => return {d with schema := some (← JsonReader.string)}
     | "schema_version" => do
       let version ← JsonReader.natural
@@ -311,7 +334,13 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
     | "mir_templates" => return {d with mirTemplates := some (← JsonReader.arrayIndexed (fun index => DecodeMIR.parseCopyTemplate s!"$.mir_templates[{index}]"))}
     | "compiler_coroutine_coverage" => return {d with coroutineCoverage := some (← CoroutineCoverageCodec.parse pools.mir)}
     | "body_roots" => return {d with bodyRoots := some (← JsonReader.arrayIndexed (fun index => parseBodyRoot s!"$.body_roots[{index}]"))}
-    | "compiler_alloc_id_world" => return {d with compilerAllocIdWorld := ← JsonReader.nullable (parseCompilerAllocIdWorld)}
+    | "compiler_alloc_id_world" =>
+      match policy with
+      | .reject => return {d with compilerAllocIdWorld := ← JsonReader.nullable (parseCompilerAllocIdWorld)}
+      | .initial => do
+        let legacy ← JsonReader.nullable Lean.Json.Parser.anyCore
+        if legacy.isSome then JsonReader.fail "initial and prepared compiler allocator profiles cannot coexist"
+        return d
     | "selected_scope" => return {d with selectedScope := ← JsonReader.nullable (parseSelectedScope "$.selected_scope")}
     | "runtime_target_data_layout" => return {d with runtimeTargetDataLayout := ← JsonReader.nullable (CatalogDecoder.targetDataLayout)}
     | _ =>
@@ -389,8 +418,16 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
     runtimeTargetDataLayout := d.runtimeTargetDataLayout
     queries := ← CatalogDecoder.finish d.queries
   }
-  return ⟨value, schema, schemaVersion,
-    d.bodyReferences ++ (d.coroutineCoverage.map (·.references)).getD #[], pools.abiArguments⟩
+  return {
+    value := value
+    schema := schema
+    schemaVersion := schemaVersion
+    bodyReferences := d.bodyReferences ++ (d.coroutineCoverage.map (·.references)).getD #[]
+    abiArguments := pools.abiArguments
+    initialSnapshot := d.initialSnapshot
+    initialCtfeRoots := d.initialCtfeRoots
+    initialSelectedCache := d.initialSelectedCache
+  }
 
 private def validateParsedDocument (parsed : ParsedDocument) (profile : Options) : Except String ImportDocument := do
   let d := parsed.value
@@ -498,13 +535,36 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
 before returning the final import. Completion bookkeeping stays internal. -/
 def parseDocument (profile : Options := {}) : JsonReader.Parser ImportDocument := do
   let pools ← readSharedPools
-  let parsed ← parseDocumentFields pools
+  let parsed ← parseDocumentFields pools .reject
   JsonReader.liftExcept (profileit "decoder.validate_forward_references" profile fun _ =>
     validateParsedDocument parsed profile)
 
 def decodeJsonProfiled (text : String) (profile : Options) : Except String ExecutionInput := do
   let document ← profileit "decoder.parse" profile fun _ => JsonReader.run (parseDocument profile) text
   pure ⟨document⟩
+
+/-- Dedicated profile decoder: shares the typed streaming base parser, captures
+only owned initial descriptors, and never permits a missing/mixed profile. -/
+def decodeInitialQueryProfiled (text : String) (profile : Options) :
+    Except String (ExecutionInput × Json × Array Json × Option (Array Json)) := do
+  let parsed ← JsonReader.run (do
+    let pools ← readSharedPools
+    parseDocumentFields pools .initial) text
+  let some snapshot := parsed.initialSnapshot
+    | throw "initial CTFE roots require an explicit complete initial allocation snapshot"
+  let _ ← snapshot.getObj?
+  if parsed.value.compilerAllocIdWorld.isSome then
+    throw "initial and prepared compiler allocator profiles cannot coexist"
+  let document ← profileit "decoder.validate_forward_references" profile fun _ =>
+    validateParsedDocument parsed profile
+  pure (⟨document⟩,snapshot,parsed.initialCtfeRoots.getD #[],parsed.initialSelectedCache)
+
+/-- The allocation-only API never silently drops a query-memo capability. -/
+def decodeInitialProfiled (text : String) (profile : Options) :
+    Except String (ExecutionInput × Json × Array Json) := do
+  let (input,snapshot,roots,selected) ← decodeInitialQueryProfiled text profile
+  if selected.isSome then throw "selected initial compiler query memo requires the cache-aware decoder"
+  pure (input,snapshot,roots)
 
 def decodeJson (text : String) : Except String ExecutionInput := decodeJsonProfiled text {}
 

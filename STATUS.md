@@ -453,9 +453,26 @@ roots reject. A separate private selected-u32 memo importer now reads exact froz
 VALUE/ALLOC keys and results, validates their source-allocation joins, and matches
 the real cached runtime fixture: PostAnalysis entries complete Codegen queries
 without steps or allocations. Compatible bytes never identify a missing result.
-This prototype is not production snapshot dispatch. General initial memo families,
-u64/type-level PostAnalysis ValTree queries, shared allocation-counter dependency
-closure and actual runtime Unevaluated dispatch remain unresolved.
+The Native runner now admits the checked initial-snapshot profile separately from
+the legacy prepared profile. Its initial typed memo is run-owned data, not a saved
+execution World. Raw Unevaluated operands and required-constant preambles call
+the runtime query adapter using the current memory, type arena and memo; the
+Native capability is cached-only, so a missing query remains Unsupported. The
+complete initial allocation prefix and later runtime allocations share the
+MemoryState counter and raw/runtime identity map. Byte access reattaches that
+current state rather than restoring a prepared heap or counter. An actual raw
+u32 assignment returns 17 through this path; wrong-width, promoted and cold
+controls reject while preserving a live allocation prefix. These are finite
+checks, not general CTFE equivalence.
+
+The snapshot producer/accessor is still a private compiler integration, not the
+standard exporter profile. General initial memo families, cold runtime execution,
+u64/type-level PostAnalysis ValTree queries, symbolic function/vtable/type-ID
+materialization, and their full dependency closure remain unresolved. A fresh
+replay of the std NonZero-u64 input observes all three raw dependency roots absent
+in both PostAnalysis ValTree/allocation caches before export, without executing
+missing queries. This does not recover the historical post-export cache and does
+not justify reusing an eagerly normalized Pattern/constant row.
 
 The exact `DropGlue(_, None)` shim family now retains only instance identity and
 raw source position; its raw declaration signature supplies types. Lean builds

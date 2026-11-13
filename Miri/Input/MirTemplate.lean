@@ -42,6 +42,8 @@ inductive SourceOperand where
   table is explicitly known empty; this index must not be dereferenced into it. -/
   | annotatedScalar (type : TypeSlot) (span : SpanRef) (bits bytes userType : Nat)
   | annotatedZeroSized (type : TypeSlot) (span : SpanRef) (userType : Nat)
+  | unevaluated (type : TypeSlot) (span : SpanRef) (definition : DefinitionIdentity)
+      (arguments : Array Term) (promoted userType : Option Nat)
   deriving Repr, DecidableEq
 structure SourceCallArgument where
   span : SpanRef
@@ -151,25 +153,30 @@ def SourcePlace.instantiate {m : Type → Type} [Monad m]
     | .subslice first last fromEnd => pure (.Subslice first last fromEnd)
   pure ⟨place.localId,projection⟩
 def SourceOperand.instantiate {m : Type → Type} [Monad m]
-    (resolve : TypeSlot → m TyId) : SourceOperand → m Miri.MIR.Operand
+    (resolve : TypeSlot → m TyId)
+    (resolveConst : DefinitionIdentity → Array Term → Option Nat → m Miri.MIR.UnevaluatedConst) :
+    SourceOperand → m Miri.MIR.Operand
   | .copy place => return .Copy (← place.instantiate resolve)
   | .move place => return .Move (← place.instantiate resolve)
   | .scalar type span bits bytes => return .Constant ⟨span,none,.Val (.Scalar (.Int bits bytes)) (← resolve type)⟩
   | .zeroSized type span => return .Constant ⟨span,none,.Val .ZeroSized (← resolve type)⟩
   | .annotatedScalar type span bits bytes userType => return .Constant ⟨span,some userType,.Val (.Scalar (.Int bits bytes)) (← resolve type)⟩
   | .annotatedZeroSized type span userType => return .Constant ⟨span,some userType,.Val .ZeroSized (← resolve type)⟩
+  | .unevaluated type span definition arguments promoted userType =>
+    return .Constant ⟨span,userType,.Unevaluated (← resolveConst definition arguments promoted) (← resolve type)⟩
 private def instantiateSourceRvalue {m : Type → Type} [Monad m]
-    (resolve : TypeSlot → m TyId) (resolveAdt : TyId → Nat → m AggregateKind) :
+    (resolve : TypeSlot → m TyId) (resolveAdt : TyId → Nat → m AggregateKind)
+    (resolveConst : DefinitionIdentity → Array Term → Option Nat → m Miri.MIR.UnevaluatedConst) :
     SourceRvalue → m Miri.MIR.Rvalue
-  | .cast kind value target => return .Cast kind (← value.instantiate resolve) (← resolve target)
+  | .cast kind value target => return .Cast kind (← value.instantiate resolve resolveConst) (← resolve target)
   | .reference borrow place => return .Ref .Erased borrow (← place.instantiate resolve)
   | .rawPointer kind place => return .RawPtr kind (← place.instantiate resolve)
-  | .use value retag => return .Use (← value.instantiate resolve) retag
+  | .use value retag => return .Use (← value.instantiate resolve resolveConst) retag
   | .discriminant place => return .Discriminant (← place.instantiate resolve)
   | .adt type variant operands => do
     let kind ← resolveAdt (← resolve type) variant
-    return .Aggregate kind (← operands.mapM (SourceOperand.instantiate resolve))
-  | .tuple operands => return .Aggregate .Tuple (← operands.mapM (SourceOperand.instantiate resolve))
+    return .Aggregate kind (← operands.mapM (SourceOperand.instantiate resolve resolveConst))
+  | .tuple operands => return .Aggregate .Tuple (← operands.mapM (SourceOperand.instantiate resolve resolveConst))
 
 private def instantiateRvalue {m : Type → Type} [Monad m]
     (resolve : TypeSlot → m TyId) : Rvalue → m Miri.MIR.Rvalue
@@ -178,9 +185,10 @@ private def instantiateRvalue {m : Type → Type} [Monad m]
   | .array element values => return .Aggregate (.Array (← resolve element)) (values.map Operand.instantiate)
 
 private def instantiateStatement {m : Type → Type} [Monad m]
-    (resolve : TypeSlot → m TyId) (resolveAdt : TyId → Nat → m AggregateKind) (source : Statement) : m Miri.MIR.Statement := do
+    (resolve : TypeSlot → m TyId) (resolveAdt : TyId → Nat → m AggregateKind)
+    (resolveConst : DefinitionIdentity → Array Term → Option Nat → m Miri.MIR.UnevaluatedConst) (source : Statement) : m Miri.MIR.Statement := do
   let kind : Miri.MIR.StatementKind ← match source.kind with
-    | .sourceAssign place value => pure (.Assign (← place.instantiate resolve) (← instantiateSourceRvalue resolve resolveAdt value))
+    | .sourceAssign place value => pure (.Assign (← place.instantiate resolve) (← instantiateSourceRvalue resolve resolveAdt resolveConst value))
     | .setDiscriminant place variant => pure (.SetDiscriminant (← place.instantiate resolve) variant)
     | .sourcePlaceMention place => pure (.PlaceMention (← place.instantiate resolve))
     | .assign destination value =>
@@ -192,15 +200,16 @@ private def instantiateStatement {m : Type → Type} [Monad m]
   pure ⟨source.source,kind⟩
 
 private def instantiateTerminator {m : Type → Type} [Monad m]
-    (resolve : TypeSlot → m TyId) (source : Terminator) : m Miri.MIR.Terminator := do
+    (resolve : TypeSlot → m TyId)
+    (resolveConst : DefinitionIdentity → Array Term → Option Nat → m Miri.MIR.UnevaluatedConst) (source : Terminator) : m Miri.MIR.Terminator := do
   let kind : Miri.MIR.TerminatorKind ← match source.kind with
     | .sourceCall functionType constantSpan arguments destination target unwind functionSpan => do
       let function := Miri.MIR.Operand.Constant ⟨constantSpan,none,.Val .ZeroSized (← resolve functionType)⟩
       let arguments ← arguments.mapM fun argument => do
-        pure ({span := argument.span,operand := ← argument.operand.instantiate resolve} : SpannedOperand)
+        pure ({span := argument.span,operand := ← argument.operand.instantiate resolve resolveConst} : SpannedOperand)
       pure (.Call function arguments (← destination.instantiate resolve) target unwind .Normal functionSpan)
-    | .sourceSwitch value targets => pure (.SwitchInt (← value.instantiate resolve) targets)
-    | .assertResume value expected message target unwind => pure (.Assert (← value.instantiate resolve) expected message target unwind)
+    | .sourceSwitch value targets => pure (.SwitchInt (← value.instantiate resolve resolveConst) targets)
+    | .assertResume value expected message target unwind => pure (.Assert (← value.instantiate resolve resolveConst) expected message target unwind)
     | .sourceDrop place target unwind replace asyncDrop => pure (.Drop (← place.instantiate resolve) target unwind replace asyncDrop)
     | .unwindResume => pure .UnwindResume
     | .goto target => pure (.Goto target #[])
@@ -265,6 +274,12 @@ def validateStructure (template : Template) : Except String Unit := do
       slot type
       unless body.phase == .Runtime .Optimized && userType < 2^32 do
         throw "annotated source operand has wrong phase or raw index domain"
+    | .unevaluated type _ _ arguments _ userType =>
+      slot type
+      for argument in arguments do validateParameters template.parameters 16384 argument
+      if let some index := userType then
+        unless body.phase == .Runtime .Optimized && index < 2^32 do
+          throw "raw source Unevaluated annotation phase/index invalid"
   let unwind (value : UnwindAction) : Except String Unit := do
     if let .Cleanup id := value then
       unless id < body.blocks.size do throw "MIR template unwind target is out of bounds"
@@ -399,15 +414,20 @@ interning failures propagate. No executable skeleton or global cache exists. -/
 def instantiate {m : Type → Type} [Monad m] [MonadExceptOf String m]
     (template : Template) (fuel : Nat) (args : Array Term)
     (resolveType : Term → m TyId)
-    (resolveAdt : TyId → Nat → m AggregateKind := fun _ _ => throw "MIR source ADT aggregate resolver absent") : m Miri.MIR.Body := do
+    (resolveAdt : TyId → Nat → m AggregateKind := fun _ _ => throw "MIR source ADT aggregate resolver absent")
+    (resolveConstant : DefinitionIdentity → Array Term → Option Nat → m Miri.MIR.UnevaluatedConst :=
+      fun _ _ _ => throw "raw MIR Unevaluated source resolver unavailable") : m Miri.MIR.Body := do
   liftPure (validate template args)
   let resolve (slot : TypeSlot) : m TyId := do
     let some expression := template.types[slot.index]? | throw "MIR template type slot is absent"
     resolveType (← liftPure (GenericSubstitution.instantiate fuel args expression))
+  let resolveConst (definition : DefinitionIdentity) (arguments : Array Term) (promoted : Option Nat) := do
+    let arguments ← arguments.mapM (fun argument => liftPure (GenericSubstitution.instantiate fuel args argument))
+    resolveConstant definition arguments promoted
   let locals ← template.skeleton.locals.mapM resolve
   let blocks ← template.skeleton.blocks.mapM fun block => do
-    pure ⟨← block.statements.mapM (instantiateStatement resolve resolveAdt),
-      ← instantiateTerminator resolve block.terminator,block.cleanup⟩
+    pure ⟨← block.statements.mapM (instantiateStatement resolve resolveAdt resolveConst),
+      ← instantiateTerminator resolve resolveConst block.terminator,block.cleanup⟩
   pure ⟨template.skeleton.phase,template.skeleton.argumentCount,
     template.skeleton.spreadArgument,locals,blocks⟩
 

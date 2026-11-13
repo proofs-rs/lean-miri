@@ -1,3 +1,5 @@
+import Miri.Input.CompilerInitialCtfeRootEngine
+import Miri.Input.ProfileRuntime
 import Miri.Input.EvalSourceRunFinalization
 import Miri.Input.ExecutionChoicePolicy
 import Miri.Input.CompilerMiriEntry
@@ -219,6 +221,7 @@ private def sourceLeaves (dummy : SpanRef) (geometry : Input.InitialMachine.Geom
     (stdio : Option (Array HostStdio.Entry) := none) : Input.EvalConfigurationCore.SourceLeaves
     Os R Payload H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error
     Unit Unit ByteArray Miri.MIR.Place Unit Instant Payload Unit := {
+  constQueries := .unavailable
   hostConfiguration := {
     communicate := false, muteOutput := true, hostUsizeBits := 64
     profileOutput := none, nativeLibraries := #[]
@@ -467,13 +470,14 @@ private def terminalDiagnostic (prepared : Input.EvalPreparation.Prepared)
         ("instance_id", toJson fnInstance), ("span_id", toJson span.id)]))]
   return Lean.Json.mkObj (fields ++ [("allocation_backtraces", .arr traces)])
 
-private def prepareRun (prepared : Input.EvalPreparation.Prepared)
+private def prepareRun (profilePrepared : Input.ProfilePreparation.Prepared)
     (initialMemory : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind)
     (pageSize : UInt64) (numCpus hostPid : UInt32) (diagnosticSeed : Option UInt64)
     (profile : Lean.Options) (ui : Option UiSettings) :
     Except String ((Option (Array HostStdio.Entry) → Array ExecutionChoices.Input → Except StepError
       (Input.EvalSourceRunFinalization.Result OuterState)) ×
       (Array ExecutionChoices.Input → Except String String)) := do
+  let prepared := profilePrepared.base
   let options := (ui.map uiOptions).getD options
   let compiler := prepared.compiler
   let dummy := prepared.dummySpan
@@ -483,17 +487,24 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
     | none => do
       unless ui.isSome do throw "compiler did not select an rustc_main entry"
       pure (← Input.CompilerMiriEntry.miriStart compiler, MainEntryType.miriStart)
-  let bytes ← (Input.CompilerGlobalBytes.prepare compiler.program compiler.runtime initialMemory).mapError toString
-  let arrays ← compiler.initialTypes
+  let bytes ← Input.ProfileRuntime.bytes profilePrepared initialMemory
+  let arrays := Input.ProfileRuntime.arrays profilePrepared
   let targetBits := compiler.runtime.target.base.pointerWidth.bits.toNat
   let arch ← (Input.EvalArchitectureMachine.targetArch compiler.intrinsics).mapError toString
   unless compiler.program.input.producer.targetTriple == "x86_64-unknown-linux-gnu" &&
       arch == "x86_64" && targetBits == 64 do
     throw s!"fixture requires x86_64-unknown-linux-gnu; got triple={compiler.program.input.producer.targetTriple}, arch={arch}, bits={targetBits}"
   let geometry ← (Input.InitialMachine.geometry targetBits arch false none).mapError reprStr
-  let leavesFor := fun stdio => sourceLeaves dummy geometry pageSize numCpus hostPid ui.isSome
-    ((ui.map (·.alignment)).getD .Int) stdio
+  let capability : Input.RuntimeCtfeQueryMachine.Capability := match profilePrepared with
+    | .legacy _ => .unavailable
+    | .initial .. => .cachedOnly
+  let leavesFor := fun stdio => {sourceLeaves dummy geometry pageSize numCpus hostPid ui.isSome
+    ((ui.map (·.alignment)).getD .Int) stdio with constQueries := capability}
   let sourceLeaves := leavesFor none
+  let sourceLeaves := if sourceLeaves.foreignSource.host.time.isNone then
+    {sourceLeaves with foreignSource :=
+      Input.EvalChronoTimeSource.installSourceInput sourceLeaves.foreignSource}
+    else sourceLeaves
   let machineConfig : Input.InitialMachine.Configuration Aff B := {
     geometry, dummySpan := dummy, provenance := (ui.map (·.provenance)).getD .default, addressMode := .managed
     addressStop := 18446744073709551615, addressReuse := ⟨0.5, if (ui.map (·.deterministicConcurrency)).getD false then 0 else 0.1⟩
@@ -525,6 +536,10 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
       | .ok initial trace => pure (initial, trace)
       | .error error _ => throw s!"source machine construction failed: {reprStr error}"
     unless trace.cursor == 2 do throw s!"raw init trace not consumed: {trace.cursor}"
+    let initial ← (Input.ProfileRuntime.installStoreState
+      Input.EvalWorld.initialCompilerStoreAccess profilePrepared initial).mapError reprStr
+    let initial ← (Input.ProfileRuntime.installQueriesState
+      Input.EvalWorld.initialCompilerQueryAccess profilePrepared initial).mapError reprStr
     pure (initial, trace)
   let reports : Input.EvalSourceRunFinalization.ReportEffects
       Os R Input.EvalSyncPayload.Payload H D Other Aff B Poll Instant System Native Profiler := {
@@ -549,6 +564,10 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
         | .error error _ => throw error
       unless trace.cursor == 2 do throw (.invalidProgram "raw init trace not consumed")
       -- Install once, before source startup can call any guest/Miri operation.
+      let initial ← Input.ProfileRuntime.installStoreState
+        Input.EvalWorld.initialCompilerStoreAccess profilePrepared initial
+      let initial ← Input.ProfileRuntime.installQueriesState
+        Input.EvalWorld.initialCompilerQueryAccess profilePrepared initial
       let initial := installReplay initial entries
       let result ← Input.EvalSourceRunConstruction.runFromInitialProfiled
         profile prepared prepared.image bytes options enabledLeaves () machineConfig
@@ -556,16 +575,13 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
         (some ⟨fun selected => by cases selected; rfl⟩) true
       return Input.EvalSourceRunFinalization.finishResultProfiled profile reports
         ((ui.map (·.ignoreLeaks)).getD false) result
-    let finalized : EStateM.Result StepError InitTrace
-        (Input.EvalSourceRunFinalization.Result OuterState) :=
-      Input.EvalSourceRunFinalization.runFromSourceAndFinalizeProfiled
-      profile prepared prepared.image bytes options sourceLeaves () machineConfig initialMemory arrays
-      (choiceTape diagnosticSeed inputs) rawInitHooks bootstrap options.limits 256 0
-      [] ((ui.map (·.ignoreLeaks)).getD false) reports
-      (some ⟨fun selected => by cases selected; rfl⟩) true ({} : InitTrace)
-    match finalized with
-    | .ok result trace => if trace.cursor == 2 then pure result else throw (.invalidProgram "raw init trace not consumed")
-    | .error error _ => throw error,
+    let (initial, _) ← (makeInitial inputs).mapError StepError.invalidProgram
+    let result ← Input.EvalSourceRunConstruction.runFromInitialProfiled
+      profile prepared prepared.image bytes options sourceLeaves () machineConfig
+      bootstrap options.limits 256 0 [] initial
+      (some ⟨fun selected => by cases selected; rfl⟩) true
+    pure (Input.EvalSourceRunFinalization.finishResultProfiled profile reports
+      ((ui.map (·.ignoreLeaks)).getD false) result),
     fun inputs => do
       let (initial, trace) ← makeInitial inputs
       let before := preflightSnapshot initial
@@ -709,15 +725,13 @@ private def runMain (args : List String) (control : Option ControlOutput) : IO U
   boundary s!"choice_mode={choiceMode diagnosticSeed}; generated_choices=unbounded; byte_length=uncapped; supplied_prefix=preserved"
   boundary "raw_host_poll: finite source initialization replay; no live poll capability"
   boundary "decode: start"
-  let decoded ← must (Input.decodeJsonProfiled input profile)
+  let decoded ← must (Input.ProfileDocument.decodeProfiled input profile)
   boundary "decode: accepted"
-  boundary "lower: start"
-  let program ← must (Input.lowerProgram decoded.document)
-  boundary "lower: complete"
-  boundary "prepare: start"
-  let attempt := Input.EvalPreparation.prepareProfiled profile program
-  let prepared ← must attempt.outcome
-  boundary "prepare: complete"
+  boundary "lower_and_prepare: start"
+  let attempt := Input.ProfilePreparation.prepareProfiled profile (input.utf8ByteSize + 1) 0 decoded
+  let profilePrepared ← must attempt.outcome
+  let prepared := profilePrepared.base
+  boundary "lower_and_prepare: complete"
   -- Keep the actual prepared identity tables visible at the body reported by
   -- the source105 terminal. This is diagnostic only; all lookups stay exact.
   let bodyIndex := 1814
@@ -741,7 +755,7 @@ private def runMain (args : List String) (control : Option ControlOutput) : IO U
   let hostPid ← IO.Process.getPID
   boundary "run: start"
   let (execute, checkValidationMismatch) ← must
-    (prepareRun prepared attempt.memory pageSize numCpus hostPid diagnosticSeed profile ui)
+    (prepareRun profilePrepared attempt.memory pageSize numCpus hostPid diagnosticSeed profile ui)
   let mismatch ← match checkValidationMismatch initialInputs with
     | .ok report => pure report
     | .error error => throw (IO.userError s!"validation preflight regression failed: {error}")

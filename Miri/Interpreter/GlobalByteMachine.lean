@@ -14,6 +14,8 @@ def reserve (bytes : Array UInt8) (salt : Fin 32) : MachineHooks.M K U AllocId :
     | .ok value => pure value
     | .error error => throw (.resourceExhaustion s!"global byte allocation: {reprStr error}")
   let memory := (← get).machine.memory
+  if memory.activeInitialCompilerRun.isSome then
+    throw (.unsupported "complete initial profile requires authoritative typed byte provider")
   unless memory.byteGlobalKeysReady do
     throw (.unsupported "exact imported compiler-global byte salt catalog has not been attached")
   if let some entry := memory.byteGlobalKeys.find? (fun entry => entry.1 == bytes && entry.2.1 == salt) then

@@ -97,6 +97,8 @@ structure Hooks (K User Other : Type) where
 compiler identities. Metadata uses source pointer alignment and size zero. -/
 def reserve (h : Hooks K User Other) (ty : MIR.TyId) (dynType : PredicateList) (salt : Fin 32) : M K User AllocId := do
   let state ← get
+  if state.machine.memory.activeInitialCompilerRun.isSome then
+    throw (.unsupported "complete initial vtable key provider is not installed")
   let registry := h.registry state.machine.user
   if let some entry := registry.entries.find? (fun e => e.typeId == ty && e.dynamicType == dynType && e.salt == salt) then
     return entry.allocation

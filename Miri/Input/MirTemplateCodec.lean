@@ -50,6 +50,17 @@ private def sourceOperand (j : Json) : Except String SourceOperand := do
     let some bits := bits.toNat? | throw "invalid MIR source scalar decimal"
     return .annotatedScalar ⟨← nat j "type"⟩ ⟨← nat j "span"⟩ bits (← nat j "bytes") (← clearedAnnotation j)
   | "annotated_zero_sized" => return .annotatedZeroSized ⟨← nat j "type"⟩ ⟨← nat j "span"⟩ (← clearedAnnotation j)
+  | "unevaluated" =>
+    let keys := (← j.getObj?).toArray.map (·.1)
+    unless keys.size == 7 && keys.all (#["kind","type","span","definition","arguments","promoted","user_type"].contains ·) do
+      throw "raw source Unevaluated field set differs; no evaluated fallback is permitted"
+    let arguments ← (← array j "arguments").mapM (GenericMaterialCodec.readTerm 1024)
+    let userType ← match ← field j "user_type" with
+      | .null => pure none
+      | _ => some <$> clearedAnnotation j
+    pure (.unevaluated ⟨← nat j "type"⟩ ⟨← nat j "span"⟩
+      (← GenericMaterialCodec.readDefinition (← field j "definition")) arguments
+      (← optionalNat (← field j "promoted")) userType)
   | _ => throw "unsupported MIR source operand"
 private def sourceRvalue (j : Json) : Except String SourceRvalue := do
   match ← text j "kind" with

@@ -55,6 +55,8 @@ The exported graph must be the same complete identity universe that was probed.
 Compiler pool identity/serialization remains an explicit exporter trust boundary. -/
 def prepare (program : LoweredProgram) (runtime : RuntimeMetadata)
     (memory : MemoryState P E K) : Except String Prepared := do
+  if memory.activeInitialCompilerRun.isSome then
+    throw "initial profile requires complete typed byte preparation, not the legacy catalog"
   if memory.byteGlobalKeysReady || !memory.byteGlobalKeys.isEmpty then
     throw "global byte keys already initialized"
   let source := program.input.queries.globalBytes

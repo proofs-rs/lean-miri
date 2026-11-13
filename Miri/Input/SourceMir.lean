@@ -52,12 +52,36 @@ def validateTemplate (document : ImportDocument) (source : CopyTemplateSource) :
   for value in source.backtraceSpans do
     span value.spanId
     unless value.position.filename < document.files.size do throw "MIR template backtrace file is absent"
+  let owner (definition : GenericSubstitution.DefinitionIdentity) : Except String Unit := do
+    unless document.definitions.any (fun row => row.crateIndex == definition.crateIndex && row.index == definition.index) do
+      throw "raw source Unevaluated physical declaration/argument owner is absent"
+  let boundOwner (identity : GenericSubstitution.BoundIdentity) : Except String Unit :=
+    match identity with | .named definition => owner definition | _ => pure ()
+  let rec argumentOwners (fuel : Nat) (argument : GenericSubstitution.Term) : Except String Unit := do
+    match fuel with
+    | 0 => throw "raw source constant argument owner validation exhausted"
+    | fuel+1 =>
+      match argument with
+      | .bound _ _ _ identity | .placeholder _ _ _ identity => boundOwner identity
+      | .definition _ _ definition children =>
+        owner definition
+        discard <| children.anyM (fun child => do argumentOwners fuel child; pure false)
+      | .node _ _ _ children => discard <| children.anyM (fun child => do argumentOwners fuel child; pure false)
+      | .binder variables value =>
+        for boundVariable in variables do
+          match boundVariable with | .type identity | .region identity => boundOwner identity | .constant => pure ()
+        argumentOwners fuel value
+      | _ => pure ()
   let sourceOperand (value : MirTemplate.SourceOperand) : Except String Unit := do
     match value with
     | .scalar _ location _ _ | .zeroSized _ location => span location.id
     | .annotatedScalar _ location _ _ _ | .annotatedZeroSized _ location _ =>
       unless source.sourceRole == .runtime do throw "annotated source operand requires runtime compiler role"
       span location.id
+    | .unevaluated _ location definition arguments _ _ =>
+      span location.id
+      owner definition
+      for argument in arguments do argumentOwners 16384 argument
     | _ => pure ()
   for block in source.template.skeleton.blocks do
     for statement in block.statements do
@@ -247,7 +271,11 @@ def resolveBody (document : ImportDocument) (index : Nat)
     let source ← lift (templateSource document reference.templateId)
     unless source.sourceRole == role do throw "template body compiler source role mismatch"
     let arguments ← lift (GenericInstantiationWorld.ofArguments (← get) 16384 reference.genericArgs)
-    let mir ← MirTemplate.instantiate source.template 16384 arguments (resolveAdt := sourceAggregate) fun expression => do
+    let mir ← MirTemplate.instantiate source.template 16384 arguments (resolveAdt := sourceAggregate)
+      (resolveConstant := fun definition arguments promoted => do
+        let owner ← lift ((← get).definitionRef definition)
+        let arguments ← GenericInstantiationWorld.resolveArguments 16384 arguments
+        pure ⟨owner,arguments,promoted⟩) fun expression => do
       let expression ← lift (MirTemplate.eraseFreeRegions 16384 expression)
       lift (MirTemplate.validateClosed 16384 expression)
       GenericInstantiationWorld.resolveType 16384 expression
@@ -294,7 +322,11 @@ private def resolveBodyKey (key : BodyArena.Key) : RuntimeArrayTypes.CompilerM B
   | .error error => throw error | .ok () => pure ()
   let arguments ← match GenericInstantiationWorld.ofArguments world.arena 16384 key.instanceKey.arguments with
     | .ok arguments => pure arguments | .error error => throw error
-  let mir ← MirTemplate.instantiate source.template 16384 arguments (resolveAdt := fun id variant => RuntimeArrayTypes.liftType (sourceAggregate id variant)) fun expression => do
+  let mir ← MirTemplate.instantiate source.template 16384 arguments (resolveAdt := fun id variant => RuntimeArrayTypes.liftType (sourceAggregate id variant))
+    (resolveConstant := fun definition arguments promoted => RuntimeArrayTypes.liftType do
+      let owner ← lift ((← get).definitionRef definition)
+      let arguments ← GenericInstantiationWorld.resolveArguments 16384 arguments
+      pure ⟨owner,arguments,promoted⟩) fun expression => do
     let expression ← match MirTemplate.eraseFreeRegions 16384 expression with
       | .ok expression => pure expression | .error error => throw error
     match MirTemplate.validateClosed 16384 expression with

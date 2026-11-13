@@ -1,3 +1,4 @@
+import Miri.Input.CompilerInitialAllocationByteMachine
 import Miri.Input.EvalUnixConstruction
 import Miri.Input.EvalUnixFdConstruction
 import Miri.Input.EvalUnixIoConstruction
@@ -427,7 +428,7 @@ def stdOnlyFromRuntime {MirBody : Type} [DecidableEq MiriMemoryKind]
       | .error reason => throw (StepError.unsupported reason)
     writeScalar
     allocateStringDedup := fun value => do
-      let place ← GlobalByteMachine.string functions access
+      let place ← CompilerInitialAllocation.ByteMachine.stringCurrent EvalWorld.initialCompilerStoreInnerAccess p.runtime.target.base functions access
         (CompilerGlobalBytes.strLayout p.runtime globalBytes) value
       pure place.mplace.ptr
     windowsAbi := fun name => CompilerNamedShimAbi.query p.namedAbi name

@@ -1,3 +1,6 @@
+import Miri.Input.RuntimeCtfeQueryMachine
+import Miri.Interpreter.ExecutionStateTransport
+import Miri.Input.CompilerInitialAllocationByteMachine
 import Miri.Interpreter.RaceMode
 import Miri.Input.EvalBootstrap
 import Miri.Interpreter.WindowsExitMachine
@@ -17,6 +20,10 @@ structure World (Os R Payload H D O Aff B Host : Type) where
   main : Option MainMachine.Data
   exit : WindowsExitMachine.Registry := {}
   types : RuntimeArrayTypes.World
+  /-- Per-run authoritative compiler state; no duplicate MemoryState is stored. -/
+  initialCompilerStore : Option CompilerInitialAllocation.Store := none
+  /-- Run-owned typed memo only; no cached machine memory or arena. -/
+  initialCompilerQueries : Option RuntimeCtfeQueryMachine.Memo := none
   functions : FunctionPointers.Registry O
   vtables : VTableMachine.Registry
   symbols : IntrinsicSymbolsMachine.Registry := .empty
@@ -33,6 +40,32 @@ abbrev User (Os R Payload H D O Aff B Host : Type) :=
   ThreadStacks.Storage (PointerMachine.User (ValidityMachine.Control (World Os R Payload H D O Aff B Host)))
 abbrev State (Os R Payload H D O Aff B Host : Type) :=
   MachineHooks.State MiriMemoryKind (User Os R Payload H D O Aff B Host)
+
+def initialCompilerStoreAccess : CompilerInitialAllocation.ByteMachine.Access (User Os R Payload H D O Aff B Host) where
+  getStore := fun user => user.user.payload.payload.initialCompilerStore
+  setStore := fun store user => {user with user := {user.user with payload := {user.user.payload with payload :=
+    {user.user.payload.payload with initialCompilerStore := some store}}}}
+  get_set := by intros; rfl
+
+def initialCompilerStoreInnerAccess : CompilerInitialAllocation.ByteMachine.Access
+    (ExecutionStateTransport.Inner (World Os R Payload H D O Aff B Host)) where
+  getStore := fun user => user.payload.payload.user.initialCompilerStore
+  setStore := fun store user => {user with payload := {user.payload with payload := {user.payload.payload with user :=
+    {user.payload.payload.user with initialCompilerStore := some store}}}}
+  get_set := by intros; rfl
+
+def initialCompilerQueryAccess : RuntimeCtfeQueryMachine.MemoAccess (User Os R Payload H D O Aff B Host) where
+  getMemo := fun user => user.user.payload.payload.initialCompilerQueries
+  setMemo := fun memo user => {user with user := {user.user with payload := {user.user.payload with payload :=
+    {user.user.payload.payload with initialCompilerQueries := some memo}}}}
+  get_set := by intros; rfl
+
+def initialCompilerQueryInnerAccess : RuntimeCtfeQueryMachine.MemoAccess
+    (ExecutionStateTransport.Inner (World Os R Payload H D O Aff B Host)) where
+  getMemo := fun user => user.payload.payload.user.initialCompilerQueries
+  setMemo := fun memo user => {user with payload := {user.payload with payload := {user.payload.payload with user :=
+    {user.payload.payload.user with initialCompilerQueries := some memo}}}}
+  get_set := by intros; rfl
 
 def stdioReplayAccess : HostStdio.Access (World Os R Payload H D O Aff B Host) :=
   ⟨(·.stdioReplay), fun world replay => {world with stdioReplay := replay}⟩
