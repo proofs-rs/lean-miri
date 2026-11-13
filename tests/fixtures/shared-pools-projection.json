@@ -196,10 +196,10 @@
       "source_schema": 8,
       "target_schema": 11,
       "source_file_sha256": "6bb463c5eb76a51eb4fd4ca3e7fe27ac1f2a1ab32d8afe57462edf4b61bbcc63",
-      "target_file_sha256": "b7c8642327884c9934384abe5245dab571a9d46aa597b70fa38da912071fc124",
+      "target_file_sha256": "383eefc608ea99b572b007357adc69e63820dc235487fe0a8c1839fc39b40ba7",
       "source_json_sha256": "6bb463c5eb76a51eb4fd4ca3e7fe27ac1f2a1ab32d8afe57462edf4b61bbcc63",
       "expanded_source_canonical_sha256": "672bb7a357f24d59dc2797159ad75876ae8a161feeec5ec004e4919a24e1d224",
-      "expanded_retained_canonical_sha256": "de7fa855f63df571ce846223845e50f64f90e81741dadd83bd31cdc10f9788af"
+      "expanded_retained_canonical_sha256": "6d801ee22db1b44c31f6273c52a12affd8c620ee3efcb2cbd36affc5d4a23606"
     }
   ]
 }

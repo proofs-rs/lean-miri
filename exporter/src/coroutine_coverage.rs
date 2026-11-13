@@ -176,7 +176,11 @@ pub(super) fn capture<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>
     let coroutine_type = type_json(context, tcx, coroutine_ty)?;
     let source = info.coroutine_layout.as_ref().ok_or("coroutine coverage: transformed layout is absent")?;
     let field_tys = source.field_tys.iter().map(|field| Ok(SavedField {
-        r#type: type_json(context, tcx, field.ty)?,
+        // Source-template bodies retain raw saved-local types. Close only this
+        // coverage oracle under the complete current instance, as state_tys
+        // does; the genericSources declaration above remains untouched.
+        r#type: type_json(context, tcx, tcx.erase_and_anonymize_regions(
+            ty::EarlyBinder::bind(tcx,field.ty).instantiate(tcx,instance.args).skip_normalization()))?,
         source_info: source_info_json(context, tcx, field.source_info).into(),
         ignore_for_traits: field.ignore_for_traits,
         debuginfo_name: field.debuginfo_name.map(|name| name.to_string()),
@@ -194,7 +198,15 @@ pub(super) fn capture<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>
     // Serialize all actual auxiliary MIR, not merely its presence. Canonical
     // DropGlue/FutureDropPoll remains separately supplied by instance_mir.
     let mut auxiliary = |value: &Option<rustc_middle::mir::Body<'tcx>>, role| -> Result<Option<usize>, String> {
-        let Some(value) = value else { return Ok(None) };
+        let Some(raw_value) = value else { return Ok(None) };
+        // A selected source runtime template is deliberately uninstantiated.
+        // Close its metadata-only auxiliary snapshot in the enclosing source
+        // environment, exactly as the old whole-body normalization did. The
+        // raw generic layout declaration and executable template stay raw.
+        let closed_value = instance.try_instantiate_mir_and_normalize_erasing_regions(
+            tcx, body.typing_env(tcx), ty::EarlyBinder::bind(tcx,raw_value.clone()),
+        ).map_err(|error|format!("coroutine auxiliary snapshot instantiation failed: {error:?}"))?;
+        let value = &closed_value;
         // Raw auxiliary snapshots are captured inside StateTransform, before
         // the pass manager advances Analysis(PostCleanup) to Runtime(Initial).
         // Sync drop explicitly advances its own phase (drop.rs:236–241).

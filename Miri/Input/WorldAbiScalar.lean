@@ -13,9 +13,13 @@ def classify (runtime : RuntimeMetadata) (session : AbiSessionMaterial) (definit
   let layout ← RuntimeArrayTypes.liftType (RuntimeMetadata.layoutInWorld runtime id)
   if layout.layout.isZst then return ArgAbi.initial layout
   if let .Memory := layout.layout.backendRepr then
+    if layout.layout.isSized && layout.layout.size.bytes > 8 then
+      unless layout.layout.size.bytes <= 32 do
+        throw "source indirect Memory ABI exceeds the supported aggregate bound"
+      return ArgAbi.initial layout
     return ← WorldAggregateAbi.smallMemory runtime layout
   if let .ScalarPair .. := layout.layout.backendRepr then
-    return ← liftPure (WorldAggregateAbi.nonPointerPair layout)
+    return ← liftPure (WorldAggregateAbi.nonPointerPair layout isReturn)
   let arena := (← get).arena
   let constructor ← liftPure do
     match ← arena.lookupType id with

@@ -20,6 +20,9 @@ import Miri.Input.StructLayoutMaterial
 import Miri.ABI.UnionLayout
 import Miri.ABI.PatternLayout
 import Miri.Input.PatternLayoutMaterial
+import Miri.Input.CoroutineSourceInstantiation
+import Miri.Input.DefinitionPathHash
+import Miri.ABI.CoroutineLayout
 
 /-! Internal compiler-metadata bridge, not the public import API. Successful
 conversion supplies records and queries; it does not establish execution
@@ -482,36 +485,6 @@ private def worldSized (normalization : Option AliasRuntime.Context) : Nat → T
       | _ => pure true
 
 open TypeArena in
-private def worldMetadata (normalization : Option AliasRuntime.Context) (target : RuntimeTargetDataLayout) : Nat → TypeId → WorldM (Option LayoutData)
-  | 0, _ => throw "layout pointer metadata recursion exhausted"
-  | fuel + 1, id => do
-    if ← worldSized normalization (fuel + 1) id then return none
-    let world ← get
-    match ← lift (world.lookupType id) with
-    | .material node => match node.shape with
-      | .str | .slice .. => return some (← lift (PrimitiveLayout.compute target "usize"))
-      | .foreign .. => pure none
-      | .tuple elements =>
-        let some tail := elements.back? | throw "unsized tuple has no tail"
-        worldMetadata normalization target fuel tail
-      | .adt .. =>
-        let some tail ← worldAdtLastField normalization fuel id | throw "unsized struct has no tail"
-        worldMetadata normalization target fuel tail
-      | .dynamicTraitObject .. => throw "layout dynamic metadata needs raw DynMetadata constructor"
-      | _ => throw "layout source pointer metadata constructor unsupported"
-    | .constructed key => match key with
-      | .dynamic .. => throw "layout dynamic metadata needs raw DynMetadata constructor"
-      | .str | .slice .. => return some (← lift (PrimitiveLayout.compute target "usize"))
-      | .foreign .. => pure none
-      | .tuple elements =>
-        let some tail := elements.back? | throw "unsized tuple has no tail"
-        worldMetadata normalization target fuel tail
-      | .adt .. =>
-        let some tail ← worldAdtLastField normalization fuel id | throw "unsized struct has no tail"
-        worldMetadata normalization target fuel tail
-      | _ => throw "layout constructed pointer metadata constructor unsupported"
-
-open TypeArena in
 private def worldStructSized (normalization : Option AliasRuntime.Context) (fuel : Nat)
     (declaration : AdtDeclaration.Material) (template : GenericSubstitution.DefinitionTemplate) : WorldM Bool := do
   let some tail := template.fields.back? | return true
@@ -529,6 +502,36 @@ private def worldStructSized (normalization : Option AliasRuntime.Context) (fuel
       let proof ← lift (TraitSelection.EnvironmentEntailment.entails context.traits
         template.parameters assumptions (fuel * (fuel + 1)) goal)
       if proof.isSome then return true
+  -- Pinned core ManuallyDrop<T: ?Sized> retains the raw T constraint.
+  -- Its instantiated T can be sized while the declaration stays MaybeUnsized.
+  -- Recognize only this complete raw header/scope, never catalogue absence.
+  if declaration.langItem == some "manually_drop" then
+    unless template.parameters == #[.type] && template.fields.size == 1 do
+      throw "ManuallyDrop declaration Sized source header is malformed"
+    let some field := template.fields[0]? | throw "ManuallyDrop raw field absent"
+    unless field.variantIndex == 0 && field.fieldIndex == 0 &&
+        field.expression == .parameter .type 0 do
+      throw "ManuallyDrop declaration Sized source tail is malformed"
+    let .definition .type "adt" identity (.cons (.parameter .type 0) .nil) := template.typeExpression
+      | throw "ManuallyDrop declaration Sized physical header is malformed"
+    let world ← get
+    let reference ← lift (world.definitionRef identity)
+    let some owner := world.definitions[reference]? | throw "ManuallyDrop physical owner absent"
+    unless owner.adtDeclaration == some declaration && owner.genericTemplate == some template do
+      throw "ManuallyDrop declaration Sized physical owner mismatch"
+    let scope ← lift (SourceEnvironmentRuntime.lookupDefinitions world.definitions identity)
+    unless scope.parameters == #[.type] && scope.parent.isNone && scope.genericParent.isNone && !scope.isTrait do
+      throw "ManuallyDrop declaration Sized source scope is malformed"
+    let some context := normalization | throw "ManuallyDrop declaration Sized requires canonical MetaSized source"
+    let metaSources := context.traits.traits.filter (·.langItem == some "meta_sized")
+    unless metaSources.size == 1 do throw "ManuallyDrop canonical MetaSized source absent or ambiguous"
+    let some metaSource := metaSources[0]? | throw "ManuallyDrop canonical MetaSized source absent"
+    unless metaSource.parameters == #[.type] && !metaSource.isAlias && metaSource.superPredicates.isEmpty do
+      throw "ManuallyDrop canonical MetaSized source header is malformed"
+    let expected : TraitSelection.Clause := ⟨#[],.trait ⟨.positive,⟨metaSource.definition,#[.parameter .type 0]⟩⟩⟩
+    unless scope.ownPredicates == #[expected] do
+      throw "ManuallyDrop declaration Sized source is outside the pinned MetaSized-only scope"
+    return false
   -- A missing positive environment proof remains unknown. Only the separate
   -- structural source algorithm below may establish its supported cases;
   -- generic parameter tails remain explicit unsupported obligations.
@@ -566,7 +569,74 @@ private def liftWorld (action : TypeArena.WorldM α) : LayoutQuery α := fun cac
   pure ((← action),cache)
 
 mutual
-  private def worldLayoutType (normalization : Option AliasRuntime.Context) (target : RuntimeTargetDataLayout) (layouts : Array Input.Layout) :
+  private def worldMetadata (normalization : Option AliasRuntime.Context) (target : RuntimeTargetDataLayout) (layouts : Array Input.Layout) (coroutineSources : Array CoroutineGenericSource) : Nat → TypeId → LayoutQuery (Option LayoutData)
+    | 0, _ => throw "layout pointer metadata recursion exhausted"
+    | fuel + 1, id => do
+      if ← liftWorld (worldSized normalization (fuel + 1) id) then return none
+      let world ← liftWorld get
+      match ← lift (world.lookupType id) with
+      | .material node => match node.shape with
+        | .str | .slice .. => return some (← lift (PrimitiveLayout.compute target "usize"))
+        | .foreign .. => pure none
+        | .tuple elements =>
+          let some tail := elements.back? | throw "unsized tuple has no tail"
+          worldMetadata normalization target layouts coroutineSources fuel tail
+        | .adt .. =>
+          let some tail ← liftWorld (worldAdtLastField normalization fuel id) | throw "unsized struct has no tail"
+          worldMetadata normalization target layouts coroutineSources fuel tail
+        | .dynamicTraitObject .. => do
+          let metadata ← liftWorld (WorldTypeMetadata.dynMetadataType id)
+          return some (← worldRawMetadataLayout normalization target fuel metadata)
+        | _ => throw "layout source pointer metadata constructor unsupported"
+      | .constructed key => match key with
+        | .dynamic .. => do
+          let metadata ← liftWorld (WorldTypeMetadata.dynMetadataType id)
+          return some (← worldRawMetadataLayout normalization target fuel metadata)
+        | .str | .slice .. => return some (← lift (PrimitiveLayout.compute target "usize"))
+        | .foreign .. => pure none
+        | .tuple elements =>
+          let some tail := elements.back? | throw "unsized tuple has no tail"
+          worldMetadata normalization target layouts coroutineSources fuel tail
+        | .adt .. =>
+          let some tail ← liftWorld (worldAdtLastField normalization fuel id) | throw "unsized struct has no tail"
+          worldMetadata normalization target layouts coroutineSources fuel tail
+        | _ => throw "layout constructed pointer metadata constructor unsupported"
+
+  /-- Source-only DynMetadata representation. Even a reused material identity
+  traverses raw field templates; no physical layout row is consulted. Pinned
+  core::ptr::{DynMetadata,NonNull} uses a NotNull raw pointer and PhantomData. -/
+  private def worldRawMetadataLayout (normalization : Option AliasRuntime.Context)
+      (target : RuntimeTargetDataLayout) : Nat → TypeId → LayoutQuery LayoutData
+    | 0, _ => throw "raw metadata layout recursion exhausted"
+    | fuel + 1, id => do
+      let key ← liftWorld (worldConstructor id)
+      match key with
+      | .adt .. =>
+        let (declaration,template,identity,args,_) ← liftWorld (worldAdt id)
+        unless declaration.kind == .structKind &&
+            #[some "dyn_metadata",some "non_null",some "phantom_data"].contains declaration.langItem do
+          throw "raw metadata field ADT source is outside the checked representation"
+        let some context := normalization | throw "raw metadata fields need source normalization"
+        let types ← declaration.fields.mapM fun field => liftWorld do
+          let term ← lift (GenericInstantiationWorld.instantiateFieldTerm (← get) fuel identity args
+            field.variantIndex field.fieldIndex)
+          WorldNormalization.resolveNormalizedTerm context (fuel * (fuel + 1)) fuel term
+        let fields ← types.mapM (worldRawMetadataLayout normalization target fuel)
+        let repr ← lift (worldRepresentation declaration.representation)
+        let alwaysSized ← liftWorld (worldStructSized normalization fuel declaration template)
+        lift (StructLayout.compute target fields repr 0 false alwaysSized .enabled)
+      | .patternType base pattern =>
+        let baseLayout ← worldRawMetadataLayout normalization target fuel base
+        let world ← liftWorld get
+        lift (PatternLayoutMaterial.compute world.lookupConstant target base baseLayout pattern)
+      | .rawPointer pointee _ =>
+        let world ← liftWorld get
+        unless (← lift (world.shapeKind pointee)) == .foreign do
+          throw "raw metadata vtable pointer requires its foreign source pointee"
+        lift (PrimitiveLayout.pointer target false none)
+      | _ => throw "raw metadata field constructor is outside the checked representation"
+
+  private def worldLayoutType (normalization : Option AliasRuntime.Context) (target : RuntimeTargetDataLayout) (layouts : Array Input.Layout) (coroutineSources : Array CoroutineGenericSource) :
       Nat → TypeId → LayoutQuery LayoutData
     | 0, _ => throw "universe layout recursion exhausted"
     | fuel + 1, id => do
@@ -574,12 +644,23 @@ mutual
       if let some cached := cache[id]? then return cached
       let world ← liftWorld get
       let result ← match ← lift (world.lookupType id) with
-        | .material node => worldLayoutSeed normalization target layouts fuel node.layoutId
-        | .constructed key => worldLayoutConstructor normalization target layouts fuel id key
+        | .material node => match node.shape with
+          | .coroutine .. => do
+            let key ← liftWorld (worldConstructor id)
+            worldLayoutConstructor normalization target layouts coroutineSources fuel id key
+          | .adt data =>
+            if (world.definitions[data.definition]?).any (fun source =>
+                source.adtDeclaration.any (·.langItem == some "dyn_metadata")) then
+              worldRawMetadataLayout normalization target fuel id
+            else worldLayoutSeed normalization target layouts coroutineSources fuel node.layoutId
+          | _ => worldLayoutSeed normalization target layouts coroutineSources fuel node.layoutId
+        | .constructed key => worldLayoutConstructor normalization target layouts coroutineSources fuel id key
       modify fun cache => cache.insert id result
       pure result
 
-  private def worldLayoutConstructor (normalization : Option AliasRuntime.Context) (target : RuntimeTargetDataLayout) (layouts : Array Input.Layout) :
+  termination_by structural fuel _ => fuel
+
+  private def worldLayoutConstructor (normalization : Option AliasRuntime.Context) (target : RuntimeTargetDataLayout) (layouts : Array Input.Layout) (coroutineSources : Array CoroutineGenericSource) :
       Nat → TypeId → TypeArena.Constructor → LayoutQuery LayoutData
     | 0, _, _ => throw "universe constructor layout recursion exhausted"
     | fuel + 1, id, key => match key with
@@ -599,7 +680,7 @@ mutual
         lift (PrimitiveLayout.scalar target value range)
       | .str => lift (SequenceLayout.str target)
       | .slice element => do
-        let element ← worldLayoutType normalization target layouts fuel element
+        let element ← worldLayoutType normalization target layouts coroutineSources fuel element
         lift (SequenceLayout.slice target element)
       | .array element length => do
         let world ← liftWorld get
@@ -613,23 +694,57 @@ mutual
             | _ => throw "array layout constructor source mismatch"
           | .constructed _ => pure ⟨bits,true⟩
         let count ← liftWorld (worldArrayCount target length identity)
-        let element ← worldLayoutType normalization target layouts fuel element
+        let element ← worldLayoutType normalization target layouts coroutineSources fuel element
         unless element.isSized do throw "universe array element is unsized"
         lift (SequenceLayout.arrayLike target element (some count))
       | .tuple elements => do
-        let fields ← elements.mapM (worldLayoutType normalization target layouts fuel)
+        let fields ← elements.mapM (worldLayoutType normalization target layouts coroutineSources fuel)
         lift (UnivariantLayout.compute target fields {} (if fields.isEmpty then .alwaysSized else .maybeUnsized))
       | .rawPointer pointee _ => do
-        let metadata ← liftWorld (worldMetadata normalization target fuel pointee)
+        let metadata ← worldMetadata normalization target layouts coroutineSources fuel pointee
         lift (PrimitiveLayout.pointer target false metadata)
       | .reference pointee .. => do
-        let metadata ← liftWorld (worldMetadata normalization target fuel pointee)
+        let metadata ← worldMetadata normalization target layouts coroutineSources fuel pointee
         lift (PrimitiveLayout.pointer target true metadata)
       | .patternType base pattern => do
-        let baseLayout ← worldLayoutType normalization target layouts fuel base
+        let baseLayout ← worldLayoutType normalization target layouts coroutineSources fuel base
         let world ← liftWorld get
         lift (PatternLayoutMaterial.compute world.lookupConstant target base baseLayout pattern)
-      | .adt .. => worldAdtLayout normalization target layouts fuel id
+      | .coroutine owner _ => do
+        let world ← liftWorld get
+        let term ← lift (GenericInstantiationWorld.ofType world fuel id)
+        let instantiated ← lift (CoroutineSourceInstantiation.instantiate coroutineSources fuel term)
+        let wrappers := world.definitions.filter fun definition =>
+          definition.adtDeclaration.any (·.langItem == some "maybe_uninit")
+        unless wrappers.size == 1 do throw "coroutine MaybeUninit declaration missing or ambiguous"
+        let some wrapper := wrappers[0]? | throw "coroutine MaybeUninit declaration absent"
+        let wrapperIdentity : GenericSubstitution.DefinitionIdentity := ⟨wrapper.crateIndex,wrapper.index⟩
+        let resolve (term : GenericSubstitution.Term) := match normalization with
+          | none => GenericInstantiationWorld.resolveType fuel term
+          | some context => WorldNormalization.resolveNormalizedTerm context (fuel * (fuel + 1)) fuel term
+        let saved ← instantiated.saved.mapM fun term => do
+          let value ← liftWorld (resolve term)
+          let wrapped ← liftWorld (TypeArena.World.internType (.adt wrapperIdentity #[.Type value]))
+          worldLayoutType normalization target layouts coroutineSources fuel wrapped
+        let upvars ← instantiated.upvars.mapM fun term => do
+          let value ← liftWorld (resolve term)
+          worldLayoutType normalization target layouts coroutineSources fuel value
+        let layout ← lift (CoroutineLayout.compute target saved upvars
+          instantiated.source.layout.variants instantiated.source.layout.storageConflicts)
+        let world ← liftWorld get
+        let reference ← lift (world.definitionRef owner)
+        let some definition := world.definitions[reference]? | throw "coroutine logical definition absent"
+        let some path := definition.rawPath | throw "coroutine logical definition path absent"
+        let fingerprint ← lift (DefinitionPathHash.query path)
+        let low := UInt64.ofNat fingerprint.toNat
+        let high := UInt64.ofNat (fingerprint.toNat / 2^64)
+        -- Pinned Fingerprint::to_smaller_hash: low*3 + high, wrapping.
+        pure {layout with randomizationSeed := low * 3 + high}
+      | .adt .. => do
+        let (declaration,_,_,_,_) ← liftWorld (worldAdt id)
+        if declaration.langItem == some "dyn_metadata" then
+          worldRawMetadataLayout normalization target fuel id
+        else worldAdtLayout normalization target layouts coroutineSources fuel id
       | .functionDefinition .. | .foreign .. =>
         pure {
           fields := .Arbitrary #[] #[]
@@ -639,7 +754,9 @@ mutual
           size := Size.ZERO, maxReprAlign := none, unadjustedAbiAlign := target.i8Align,
           reprC := false, randomizationSeed := 0 }
       | _ => throw "universe layout constructor is not implemented"
-  private def worldAdtLayout (normalization : Option AliasRuntime.Context) (target : RuntimeTargetDataLayout) (layouts : Array Input.Layout)
+  termination_by structural fuel _ _ => fuel
+
+  private def worldAdtLayout (normalization : Option AliasRuntime.Context) (target : RuntimeTargetDataLayout) (layouts : Array Input.Layout) (coroutineSources : Array CoroutineGenericSource)
       : Nat → TypeId → LayoutQuery LayoutData
     | 0, _ => throw "universe ADT layout recursion exhausted"
     | fuel + 1, id => do
@@ -661,19 +778,21 @@ mutual
               sourceFields.mapM fun field => do
                 let term ← lift (GenericInstantiationWorld.instantiateFieldTerm (← get) fuel identity args index field.fieldIndex)
                 WorldNormalization.resolveNormalizedTerm context (fuel * (fuel + 1)) fuel term
-          types.mapM (worldLayoutType normalization target layouts fuel)
+          types.mapM (worldLayoutType normalization target layouts coroutineSources fuel)
         let integerRepr ← lift (declaration.representation.integer.mapM worldEnumInteger)
         -- Explicit expressions remain a CTFE obligation; optimized empty/single
         -- branches do not inspect their values.
         let discriminants ← lift (RelativeDiscriminants.values (target.pointerSize.bytes.toNat * 8) declaration)
         return ← lift (EnumLayout.compute target variants repr integerRepr (discriminants.getD #[]) niches)
       let types ← liftWorld (worldAdtFields normalization fuel id 0)
-      let fields ← types.mapM (worldLayoutType normalization target layouts fuel)
+      let fields ← types.mapM (worldLayoutType normalization target layouts coroutineSources fuel)
       if declaration.kind == .unionKind then return ← lift (UnionLayout.compute target fields repr)
       unless declaration.kind == .structKind do throw "universe enum layout is not implemented"
       let alwaysSized ← liftWorld (worldStructSized normalization fuel declaration template)
       lift (StructLayout.compute target fields repr 0 false alwaysSized niches)
-  private def worldLayoutSeed (normalization : Option AliasRuntime.Context) (target : RuntimeTargetDataLayout) (layouts : Array Input.Layout) :
+  termination_by structural fuel _ => fuel
+
+  private def worldLayoutSeed (normalization : Option AliasRuntime.Context) (target : RuntimeTargetDataLayout) (layouts : Array Input.Layout) (coroutineSources : Array CoroutineGenericSource) :
       Nat → LayoutId → LayoutQuery LayoutData
     | 0, _ => throw "universe layout recipe recursion exhausted"
     | fuel + 1, id => do
@@ -684,34 +803,34 @@ mutual
       if let some ty := source.structType then
         let (declaration,_,_,_,_) ← liftWorld (worldAdt ty)
         unless declaration.kind == .structKind do throw "struct recipe source is not a struct"
-        return ← worldAdtLayout normalization target layouts fuel ty
+        return ← worldAdtLayout normalization target layouts coroutineSources fuel ty
       if let some ty := source.enumType then
         let (declaration,_,_,_,_) ← liftWorld (worldAdt ty)
         unless declaration.kind == .enumKind do throw "enum recipe source is not an enum"
-        return ← worldAdtLayout normalization target layouts fuel ty
+        return ← worldAdtLayout normalization target layouts coroutineSources fuel ty
       if let some ty := source.unionType then
         let (declaration,_,_,_,_) ← liftWorld (worldAdt ty)
         unless declaration.kind == .unionKind do throw "union recipe source is not a union"
-        return ← worldAdtLayout normalization target layouts fuel ty
+        return ← worldAdtLayout normalization target layouts coroutineSources fuel ty
       if let some ty := source.tupleType then
         let key ← liftWorld (worldConstructor ty)
         let .tuple elements := key | throw "tuple layout recipe source is not a tuple"
-        return ← worldLayoutConstructor normalization target layouts fuel ty (.tuple elements)
+        return ← worldLayoutConstructor normalization target layouts coroutineSources fuel ty (.tuple elements)
       if let some ty := source.patternType then
         let world ← liftWorld get
         let .material node ← lift (world.lookupType ty)
           | throw "pattern recipe requires raw source pattern material"
         let .patternType base pattern := node.shape
           | throw "pattern recipe source is not a pattern"
-        let baseLayout ← worldLayoutType normalization target layouts fuel base
+        let baseLayout ← worldLayoutType normalization target layouts coroutineSources fuel base
         return ← lift (PatternLayoutMaterial.compute world.lookupConstant target base baseLayout pattern)
       if let some ty := source.sequenceType then
         let key ← liftWorld (worldConstructor ty)
         unless (match key with | .array .. | .slice .. | .str => true | _ => false) do
           throw "sequence recipe source is not a sequence"
-        return ← worldLayoutConstructor normalization target layouts fuel ty key
+        return ← worldLayoutConstructor normalization target layouts coroutineSources fuel ty key
       if let some ty := source.enumTagType then
-        let parent ← worldLayoutType normalization target layouts fuel ty
+        let parent ← worldLayoutType normalization target layouts coroutineSources fuel ty
         let .Multiple tag _ _ _ := parent.variants | throw "tag operation parent has no discriminant field"
         let .Initialized (value := value) (validRange := range) := tag
           | throw "tag operation requires initialized discriminant scalar"
@@ -721,16 +840,18 @@ mutual
         let isReference ← match key with
           | .rawPointer .. => pure false | .reference .. => pure true
           | _ => throw "pointer data recipe source is not a pointer"
-        let canonical ← worldLayoutType normalization target layouts fuel ty
+        let canonical ← worldLayoutType normalization target layouts coroutineSources fuel ty
         unless canonical.fields.count > 0 do throw "thin pointer has no data projection field"
         return ← lift (PrimitiveLayout.pointer target isReference none)
       if let some ty := source.pointerType then
         let key ← liftWorld (worldConstructor ty)
         unless (match key with | .rawPointer .. | .reference .. => true | _ => false) do
           throw "pointer recipe source is not a pointer"
-        return ← worldLayoutConstructor normalization target layouts fuel ty key
+        return ← worldLayoutConstructor normalization target layouts coroutineSources fuel ty key
       lift ((layout target source).mapError toString)
 
+
+  termination_by structural fuel _ => fuel
 
 end
 
@@ -739,7 +860,8 @@ source rows and newly constructed types use the same recipe operations. -/
 def layoutInWorld (metadata : RuntimeMetadata) (id : TypeId) : TypeArena.WorldM (TyAndLayout TypeId) := do
   let world ← get
   let budget := metadata.materialLayoutFuel + 3 * (world.constructedTypes.size + world.constructedConstants.size)
-  pure ⟨id, ← (worldLayoutType (some metadata.normalizationContext) metadata.target metadata.source.layouts budget id).run' {}⟩
+  pure ⟨id, ← (worldLayoutType (some metadata.normalizationContext) metadata.target metadata.source.layouts
+    ((metadata.source.coroutineCoverage.map (·.genericSources)).getD #[]) budget id).run' {}⟩
 
 /-- Physical source-only adapter. LayoutData contains no newly allocated type
 IDs; execution providers must use layoutInWorld and retain its updated World. -/
@@ -752,7 +874,7 @@ def resolveLayout (target : RuntimeTargetDataLayout) (types : Array TypeNode)
     return ← layout target source
   let world ← (TypeArena.World.ofMaterial types constants definitions predicates target.pointerSize.bytes.toNat)
     |>.mapError (fun e => .invalid "layout material" e)
-  let result ← ((worldLayoutSeed none target layouts (rawLayoutBudget types.size layouts.size definitions) id).run' {}).run world
+  let result ← ((worldLayoutSeed none target layouts #[] (rawLayoutBudget types.size layouts.size definitions) id).run' {}).run world
     |>.mapError (fun e => .unsupported e)
   pure result.1
 
@@ -929,6 +1051,23 @@ def packedAlignInWorld (_metadata : RuntimeMetadata) (id : TypeId) : TypeArena.W
     | _ => pure none
   lift (packed.mapM (fun value => (alignment value).mapError toString))
 
+/-- Raw coroutine source selection in the execution-owned type universe. -/
+private def coroutineSourceInWorld (metadata : RuntimeMetadata) (id : TypeId) :
+    TypeArena.WorldM CoroutineSourceInstantiation.Result := do
+  let world ← get
+  let fuel := metadata.materialLayoutFuel + 3 * (world.constructedTypes.size + world.constructedConstants.size)
+  let some coverage := metadata.source.coroutineCoverage | throw "coroutine source catalog absent"
+  let term ← lift (GenericInstantiationWorld.ofType world fuel id)
+  lift (CoroutineSourceInstantiation.instantiate coverage.genericSources fuel term)
+
+private def coroutineFieldTypeInWorld (metadata : RuntimeMetadata) (id variant index : Nat) :
+    TypeArena.WorldM TypeId := do
+  let source ← coroutineSourceInWorld metadata id
+  let term ← lift (source.stateField variant index)
+  let world ← get
+  let fuel := metadata.materialLayoutFuel + 3 * (world.constructedTypes.size + world.constructedConstants.size)
+  WorldNormalization.resolveNormalizedTerm metadata.normalizationContext (fuel * (fuel + 1)) fuel term
+
 /-- Constructor field selection may instantiate and intern raw ADT field types
 in the same execution universe. The requested variant is explicit. -/
 def fieldTypeInWorld (_metadata : RuntimeMetadata) (id variant index : Nat) : TypeArena.WorldM TypeId := do
@@ -936,6 +1075,7 @@ def fieldTypeInWorld (_metadata : RuntimeMetadata) (id variant index : Nat) : Ty
   let fuel := _metadata.materialLayoutFuel + 3 * (world.constructedTypes.size + world.constructedConstants.size)
   match ← lift (world.lookupType id) with
   | .material node => match node.shape with
+    | .coroutine .. => coroutineFieldTypeInWorld _metadata id variant index
     | .adt .. =>
       worldAdtField (some _metadata.normalizationContext) fuel id variant index
     | .tuple elements =>
@@ -948,6 +1088,7 @@ def fieldTypeInWorld (_metadata : RuntimeMetadata) (id variant index : Nat) : Ty
       pure base
     | _ => throw "source type field constructor is not implemented"
   | .constructed key => match key with
+    | .coroutine .. => coroutineFieldTypeInWorld _metadata id variant index
     | .adt .. =>
       worldAdtField (some _metadata.normalizationContext) fuel id variant index
     | .tuple elements =>
@@ -982,6 +1123,7 @@ private def worldProjection (metadata : RuntimeMetadata) (ty : TypeId) (layoutId
     TypeArena.WorldM (TyAndLayout TypeId) := do
   let world ← get
   pure ⟨ty, ← (worldLayoutSeed (some metadata.normalizationContext) metadata.target metadata.source.layouts
+    ((metadata.source.coroutineCoverage.map (·.genericSources)).getD #[])
     (metadata.materialLayoutFuel + 3 * (world.constructedTypes.size + world.constructedConstants.size)) layoutId).run' {}⟩
 
 /-- Preserve the exact selected-parent field contract for material residual
@@ -989,6 +1131,27 @@ projection categories. Constructor fields use source substitution directly. -/
 def fieldLayoutForInWorld (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index : Nat) :
     TypeArena.WorldM (TyAndLayout TypeId) := do
   let world ← get
+  if (← shapeKindInWorld metadata parent.ty) == .coroutine then
+    let source ← coroutineSourceInWorld metadata parent.ty
+    let term ← match parent.layout.variants with
+      | .Empty => throw "coroutine field has empty variants"
+      | .Single variant => lift (source.stateField variant index)
+      | .Multiple tag _ tagField _ => do
+        unless index < parent.layout.fields.count do throw "coroutine outer field index absent"
+        if index == tagField then
+          let .Initialized (value := value) (validRange := range) := tag |
+            throw "coroutine discriminant scalar is uninitialized"
+          let .Int integer signed := value | throw "coroutine discriminant is not an integer"
+          let kind := match integer with
+            | .I8 => Miri.MIR.IntegerKind.u8 | .I16 => .u16 | .I32 => .u32
+            | .I64 => .u64 | .I128 => .u128
+          let id ← TypeArena.World.internType (.integer signed kind)
+          return ⟨id, ← lift (PrimitiveLayout.scalar metadata.target value range)⟩
+        lift (source.upvarField index)
+    let world ← get
+    let fuel := metadata.materialLayoutFuel + 3 * (world.constructedTypes.size + world.constructedConstants.size)
+    let child ← WorldNormalization.resolveNormalizedTerm metadata.normalizationContext (fuel * (fuel + 1)) fuel term
+    return ← layoutInWorld metadata child
   if let .material node ← lift (world.lookupType parent.ty) then
     for record in ← lift ((projectionParents metadata parent.ty).mapError toString) do
       let queried ← worldProjection metadata parent.ty record.layoutId
@@ -1030,17 +1193,18 @@ remains an explicit source projection category until that algorithm is ported. -
 def variantLayoutInWorld (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index : Nat) :
     TypeArena.WorldM (TyAndLayout TypeId) := do
   let world ← get
-  if let .material _ ← lift (world.lookupType parent.ty) then
-    for record in ← lift ((projectionParents metadata parent.ty).mapError toString) do
-      if record.variant == some index then
-        let canonical ← layoutInWorld metadata parent.ty
-        unless canonical == parent do
-          match parent.layout.variants with
-          | .Single actual =>
-            if actual == index then return parent
-            throw "cannot apply for_variant twice to a selected parent"
-          | _ => throw "variant projection parent differs from source layout"
-        return ← worldProjection metadata parent.ty record.layoutId
+  if (← shapeKindInWorld metadata parent.ty) != .coroutine then
+    if let .material _ ← lift (world.lookupType parent.ty) then
+      for record in ← lift ((projectionParents metadata parent.ty).mapError toString) do
+        if record.variant == some index then
+          let canonical ← layoutInWorld metadata parent.ty
+          unless canonical == parent do
+            match parent.layout.variants with
+            | .Single actual =>
+              if actual == index then return parent
+              throw "cannot apply for_variant twice to a selected parent"
+            | _ => throw "variant projection parent differs from source layout"
+          return ← worldProjection metadata parent.ty record.layoutId
   match parent.layout.variants with
   | .Single actual =>
     if actual == index then return parent

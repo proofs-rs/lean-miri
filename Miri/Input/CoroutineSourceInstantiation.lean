@@ -57,4 +57,19 @@ def instantiate (sources : Array CoroutineGenericSource) (fuel : Nat) (coroutine
   pure ⟨source,arguments,saved,terms upvarChildren,
     .definition .type "coroutine_witness" owner (Terms.ofArray witnessArguments)⟩
 
+/-- Pinned CoroutineArgs::state_tys: selected variant fields refer to the
+instantiated saved-local types, without their layout-only MaybeUninit wrapper. -/
+def Result.stateField (value : Result) (variant index : Nat) : Except String Term := do
+  let some fields := value.source.layout.variants[variant]? |
+    throw "coroutine state variant index absent"
+  let some saved := fields[index]? | throw "coroutine state field index absent"
+  let some field := value.saved[saved]? | throw "coroutine state saved-local index absent"
+  pure field
+
+/-- The outer coroutine layout exposes upvars before its discriminant. The
+scalar discriminant needs its exact tag layout and is handled by the caller. -/
+def Result.upvarField (value : Result) (index : Nat) : Except String Term := do
+  let some field := value.upvars[index]? | throw "coroutine upvar field index absent"
+  pure field
+
 end Miri.Input.CoroutineSourceInstantiation

@@ -22,7 +22,7 @@ fn object(kind:&str, fields:&str)->String {
     format!("{{\"kind\":{}{}{} }}",quote(kind),if fields.is_empty(){""}else{","},fields)
 }
 struct Encoder<'tcx,F> {
-    tcx:TyCtxt<'tcx>, types:Vec<ty::Ty<'tcx>>, span:F,
+    tcx:TyCtxt<'tcx>, types:Vec<ty::Ty<'tcx>>, span:F, coroutine:bool,
 }
 impl<'tcx,F:FnMut(Span)->u64> Encoder<'tcx,F> {
     fn ty(&mut self, ty:ty::Ty<'tcx>)->usize {
@@ -57,7 +57,123 @@ impl<'tcx,F:FnMut(Span)->u64> Encoder<'tcx,F> {
             _=>return Err("copy template does not support this rvalue".into()),
         })
     }
+    fn source_place(&mut self, place:mir::Place<'tcx>)->Result<String,String> {
+        let mut projections=Vec::new();
+        for projection in place.projection.iter() {
+            projections.push(match projection {
+                mir::ProjectionElem::Deref=>object("deref",""),
+                mir::ProjectionElem::Field(index,ty)=>{
+                    let slot=self.ty(ty);object("field",&format!("\"index\":{},\"type\":{slot}",index.as_u32()))
+                }
+                mir::ProjectionElem::Downcast(name,index)=>object("downcast",&format!("\"name\":{},\"variant\":{}",
+                    name.map(|name|quote(name.as_str())).unwrap_or_else(||"null".into()),index.as_u32())),
+                _=>return Err("coroutine source projection is outside deref/field/downcast".into()),
+            });
+        }
+        Ok(format!("{{\"local\":{},\"projection\":{}}}",place.local.as_u32(),array(projections)))
+    }
+    fn source_operand(&mut self, value:&mir::Operand<'tcx>)->Result<String,String> {
+        Ok(match value {
+            mir::Operand::Copy(place)=>object("copy",&format!("\"place\":{}",self.source_place(*place)?)),
+            mir::Operand::Move(place)=>object("move",&format!("\"place\":{}",self.source_place(*place)?)),
+            mir::Operand::Constant(constant)=>{
+                if constant.user_ty.is_some() {return Err("coroutine source constant has user type annotation".into())}
+                let mir::Const::Val(value,ty)=constant.const_ else {
+                    return Err("coroutine source constant requires raw Val, no CTFE evaluation".into());
+                };
+                let slot=self.ty(ty);let span=(self.span)(constant.span);
+                match value {
+                    mir::ConstValue::ZeroSized=>object("zero_sized",&format!("\"type\":{slot},\"span\":{span}")),
+                    mir::ConstValue::Scalar(scalar)=>{
+                        let scalar=scalar.try_to_scalar_int().map_err(|_|"coroutine source pointer constant unsupported")?;
+                        let bytes=scalar.size().bytes();let bits=scalar.to_bits_unchecked();
+                        object("scalar",&format!("\"type\":{slot},\"span\":{span},\"bits\":\"{bits}\",\"bytes\":{bytes}"))
+                    }
+                    _=>return Err("coroutine source allocation constant unsupported".into()),
+                }
+            }
+            _=>return Err("coroutine source runtime-check operand unsupported".into()),
+        })
+    }
+    fn source_rvalue(&mut self, value:&mir::Rvalue<'tcx>)->Result<String,String> {
+        Ok(match value {
+            mir::Rvalue::Use(value,retag)=>object("use",&format!("\"operand\":{},\"retag\":{}",self.source_operand(value)?,quote(match retag{mir::WithRetag::Yes=>"yes",mir::WithRetag::No=>"no"}))),
+            mir::Rvalue::Discriminant(place)=>object("discriminant",&format!("\"place\":{}",self.source_place(*place)?)),
+            mir::Rvalue::Aggregate(kind,values)=>{
+                let operands=array(values.iter().map(|value|self.source_operand(value)).collect::<Result<Vec<_>,_>>()?);
+                match &**kind {
+                    mir::AggregateKind::Tuple=>object("tuple",&format!("\"operands\":{operands}")),
+                    mir::AggregateKind::Adt(def,variant,args,user,active)=>{
+                        if user.is_some() || active.is_some() {return Err("coroutine source annotated/union aggregate unsupported".into())}
+                        let ty=ty::Ty::new_adt(self.tcx,self.tcx.adt_def(*def),args);
+                        let slot=self.ty(ty);
+                        object("adt",&format!("\"type\":{slot},\"variant\":{},\"operands\":{operands}",variant.as_u32()))
+                    }
+                    _=>return Err("coroutine source aggregate unsupported".into()),
+                }
+            }
+            _=>return Err("coroutine source rvalue unsupported".into()),
+        })
+    }
+    fn source_unwind(value:mir::UnwindAction)->Result<String,String> {
+        Ok(match value {
+            mir::UnwindAction::Continue=>object("continue",""),
+            mir::UnwindAction::Unreachable=>object("unreachable",""),
+            mir::UnwindAction::Cleanup(target)=>object("cleanup",&format!("\"target\":{}",target.as_u32())),
+            _=>return Err("coroutine source terminate unwind unsupported".into()),
+        })
+    }
+    fn source_statement(&mut self, statement:&mir::Statement<'tcx>)->Result<String,String> {
+        let kind=match &statement.kind {
+            mir::StatementKind::Assign(pair)=>object("source_assign",&format!("\"place\":{},\"value\":{}",self.source_place(pair.0)?,self.source_rvalue(&pair.1)?)),
+            mir::StatementKind::PlaceMention(place)=>object("source_place_mention",&format!("\"place\":{}",self.source_place(**place)?)),
+            mir::StatementKind::SetDiscriminant{place,variant_index}=>object("set_discriminant",&format!("\"place\":{},\"variant\":{}",self.source_place(**place)?,variant_index.as_u32())),
+            mir::StatementKind::StorageLive(local)=>object("storage_live",&format!("\"local\":{}",local.as_u32())),
+            mir::StatementKind::StorageDead(local)=>object("storage_dead",&format!("\"local\":{}",local.as_u32())),
+            mir::StatementKind::Nop=>object("nop",""),
+            _=>return Err("coroutine source statement unsupported".into()),
+        };
+        Ok(format!("{{\"source\":{},\"kind\":{kind}}}",self.source(statement.source_info)))
+    }
+    fn source_terminator(&mut self, terminator:&mir::Terminator<'tcx>)->Result<String,String> {
+        let kind=match &terminator.kind {
+            mir::TerminatorKind::Return=>object("return",""),
+            mir::TerminatorKind::Unreachable=>object("unreachable",""),
+            mir::TerminatorKind::UnwindResume=>object("unwind_resume",""),
+            mir::TerminatorKind::Goto{target,loop_hint_attrs}=>{
+                if !loop_hint_attrs.is_empty(){return Err("coroutine source loop hints unsupported".into())}
+                object("goto",&format!("\"target\":{}",target.as_u32()))
+            }
+            mir::TerminatorKind::SwitchInt{discr,targets}=>{
+                let cases=array(targets.iter().map(|(value,target)|format!("{{\"value\":\"{value}\",\"target\":{}}}",target.as_u32())));
+                object("source_switch",&format!("\"operand\":{},\"cases\":{cases},\"otherwise\":{}",self.source_operand(discr)?,targets.otherwise().as_u32()))
+            }
+            mir::TerminatorKind::Assert{cond,expected,msg,target,unwind}=>{
+                let (message,kind)=match &**msg {
+                    mir::AssertKind::ResumedAfterReturn(kind)=>("return",kind),
+                    mir::AssertKind::ResumedAfterPanic(kind)=>("panic",kind),
+                    mir::AssertKind::ResumedAfterDrop(kind)=>("drop",kind),
+                    _=>return Err("coroutine source assertion diagnostic unsupported".into()),
+                };
+                let coroutine=match *kind {
+                    rustc_hir::CoroutineKind::Coroutine(movability)=>object("coroutine",&format!("\"movability\":{}",quote(match movability {
+                        rustc_hir::Movability::Static=>"static",rustc_hir::Movability::Movable=>"movable" }))),
+                    rustc_hir::CoroutineKind::Desugared(desugaring,source)=>object("desugared",&format!("\"desugaring\":{},\"source\":{}",
+                        quote(match desugaring {rustc_hir::CoroutineDesugaring::Async=>"async",rustc_hir::CoroutineDesugaring::Gen=>"gen",rustc_hir::CoroutineDesugaring::AsyncGen=>"async_gen"}),
+                        quote(match source {rustc_hir::CoroutineSource::Block=>"block",rustc_hir::CoroutineSource::Closure=>"closure",rustc_hir::CoroutineSource::Fn=>"function"}))),
+                };
+                object("assert_resume",&format!("\"operand\":{},\"expected\":{expected},\"message\":{},\"coroutine\":{coroutine},\"target\":{},\"unwind\":{}",self.source_operand(cond)?,quote(message),target.as_u32(),Self::source_unwind(*unwind)?))
+            }
+            mir::TerminatorKind::Drop{place,target,unwind,replace,drop:async_drop}=>{
+                let async_drop=async_drop.map(|v|v.as_u32().to_string()).unwrap_or_else(||"null".into());
+                object("source_drop",&format!("\"place\":{},\"target\":{},\"unwind\":{},\"replace\":{replace},\"async_drop\":{async_drop}",self.source_place(*place)?,target.as_u32(),Self::source_unwind(*unwind)?))
+            }
+            _=>return Err("coroutine source terminator unsupported".into()),
+        };
+        Ok(format!("{{\"source\":{},\"kind\":{kind}}}",self.source(terminator.source_info)))
+    }
     fn statement(&mut self, statement:&mir::Statement<'tcx>)->Result<String,String> {
+        if self.coroutine {return self.source_statement(statement)}
         let kind=match &statement.kind {
             mir::StatementKind::Assign(pair)=>object("assign",&format!("\"destination\":{},\"value\":{}",self.place(pair.0)?,self.rvalue(&pair.1)?)),
             mir::StatementKind::StorageLive(local)=>object("storage_live",&format!("\"local\":{}",local.as_u32())),
@@ -69,6 +185,7 @@ impl<'tcx,F:FnMut(Span)->u64> Encoder<'tcx,F> {
         Ok(format!("{{\"source\":{},\"kind\":{kind}}}",self.source(statement.source_info)))
     }
     fn terminator(&mut self, terminator:&mir::Terminator<'tcx>)->Result<String,String> {
+        if self.coroutine {return self.source_terminator(terminator)}
         let kind=match &terminator.kind {
             mir::TerminatorKind::Call{func,args,destination,target,unwind,call_source,fn_span}=>{
                 super::generic_mir_call::callee(self.tcx,func)?;
@@ -111,7 +228,7 @@ pub(super) fn supported_type(ty:ty::Ty<'_>)->bool {
         ty::Tuple(fields)=>fields.iter().all(supported_type),
         ty::RawPtr(inner,_)|ty::Ref(_,inner,_)|ty::Slice(inner)=>supported_type(*inner),
         ty::Array(inner,count)=>supported_type(*inner)&&supported_constant(*count),
-        ty::Adt(_,args)=>supported_arguments(args),
+        ty::Adt(_,args)|ty::Coroutine(_,args)=>supported_arguments(args),
         ty::FnPtr(types,header)=>{
             let signature=types.with(*header);
             signature.bound_vars().is_empty() &&
@@ -138,6 +255,9 @@ pub fn supported_arguments(args:ty::GenericArgsRef<'_>)->bool {
 /// Classify the exact ported category before serialization. Once true, any
 /// capture/instantiation failure is an error, never a monomorphic-body fallback.
 pub fn eligible<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>, args:ty::GenericArgsRef<'tcx>)->bool {
+    if body.coroutine.is_some() {
+        return supported_arguments(args) && capture(tcx,body,|_|0).is_ok();
+    }
     fn place(value:mir::Place<'_>)->bool {value.projection.is_empty()}
     fn operand(value:&mir::Operand<'_>)->bool {match value {
         mir::Operand::Copy(value)|mir::Operand::Move(value)=>place(*value), _=>false,
@@ -182,8 +302,8 @@ pub fn capture<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>,
     if body.phase!=mir::MirPhase::Runtime(mir::RuntimePhase::Optimized) {
         return Err("copy template requires optimized runtime MIR".into());
     }
-    if body.coroutine.is_some() || body.source_scopes.iter().any(|s|s.inlined.is_some()) {
-        return Err("copy template excludes coroutine and inlined-source bodies".into());
+    if body.source_scopes.iter().any(|s|s.inlined.is_some()) {
+        return Err("source template excludes inlined-source bodies".into());
     }
     if body.required_consts.as_ref().is_none_or(|constants|!constants.is_empty()) {
         return Err("copy template requires an empty explicit required-constants list".into());
@@ -193,7 +313,7 @@ pub fn capture<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>,
         ty::GenericParamDefKind::Lifetime=>"region",ty::GenericParamDefKind::Type{..}=>"type",
         ty::GenericParamDefKind::Const{..}=>"constant",
     })));
-    let mut e=Encoder{tcx,types:Vec::new(),span};
+    let mut e=Encoder{tcx,types:Vec::new(),span,coroutine:body.coroutine.is_some()};
     let locals=array(body.local_decls.iter().map(|local|e.ty(local.ty).to_string()));
     let mut blocks=Vec::new();
     for block in body.basic_blocks.iter() {

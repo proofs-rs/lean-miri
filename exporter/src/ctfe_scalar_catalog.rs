@@ -4,7 +4,7 @@ use rustc_hir::{def::DefKind,def_id::DefId};
 use rustc_middle::{mir,ty::{self,TyCtxt}};
 use rustc_middle::mir::visit::Visitor;
 use serde_json::Value;
-use super::{ExportContext,ctfe_body_source,ctfe_scalar_source,def_json,span_json};
+use super::{ExportContext,ctfe_body_source,ctfe_scalar_source,ctfe_calls_source,def_json,span_json};
 
 #[derive(Default)]
 pub(super) struct Catalog {
@@ -84,7 +84,8 @@ pub(super) fn demand<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,def
     for scope in body.source_scopes.iter() {
         if let mir::ClearCrossCrate::Set(data)=&scope.local_data {def_json(context,data.lint_root.owner.def_id.to_def_id());}
     }
-    match ctfe_scalar_source::capture(tcx,definition,promoted,body,|span|span_json(context,tcx,span)) {
+    match ctfe_scalar_source::capture(tcx,definition,promoted,body,|span|span_json(context,tcx,span))
+        .or_else(|_|ctfe_calls_source::capture(tcx,definition,promoted,body,|span|span_json(context,tcx,span))) {
         Ok(source)=>context.ctfe_scalar_sources.sources.push(source),
         Err(reason)=>{
             if std::env::var_os("LEAN_MIRI_TRACE_CTFE_SOURCE").is_some() {

@@ -1,6 +1,7 @@
 #![feature(rustc_private)]
 mod ctfe_body_source;
 mod ctfe_scalar_source;
+mod ctfe_calls_source;
 mod ctfe_scalar_catalog;
 
 mod incremental;
@@ -114,6 +115,7 @@ struct Producer {
     rustc_commit: &'static str,
     rustc_version: String,
     target_triple: String,
+    freeze_lang_item: Option<u64>,
     input_settings: producer::Evidence,
     abi_session: pool_values::AbiSessionMaterial,
 }
@@ -1658,6 +1660,7 @@ impl ExportCallbacks {
             rustc_commit: EXPECTED_RUSTC_COMMIT,
             rustc_version: self.rustc_version.clone(),
             target_triple: tcx.sess.opts.target_triple.to_string(),
+            freeze_lang_item: tcx.lang_items().freeze_trait().map(|definition| def_json(&mut export_context, definition)),
             abi_session: pool_values::AbiSessionMaterial {
                 panic: match tcx.sess.panic_strategy() {
                     rustc_target::spec::PanicStrategy::Unwind => "unwind",
@@ -3279,20 +3282,15 @@ fn type_compiler_facts_json<'tcx>(
             "rustc ptr_metadata_ty_or_tail does not implement UnsafeBinder",
         );
     }
-    // Unit/usize selection follows structural tail rules in Lean. Retain only
-    // the unresolved DynMetadata<Self> ADT constructor, once on the dyn node;
-    // aggregate tails use that same residual constructor evidence on demand.
-    let pointer_metadata_type = if matches!(normalized.kind(), ty::Dynamic(..)) {
-        let metadata = normalized
-            .ptr_metadata_ty_or_tail(tcx, |t| tcx.normalize_erasing_regions(env, t))
-            .map_err(|_| "rustc could not determine pointer metadata type".to_owned())?;
-        Some(type_json(context, tcx, metadata)?)
-    } else {
-        if matches!(tail.kind(), ty::Alias(..) | ty::Param(_)) {
-            return export_failure("pointer metadata", "rustc could not determine pointer metadata type");
-        }
-        None
-    };
+    // The execution World constructs DynMetadata<tail> from this raw lang-item
+    // declaration and its generic field source. Retain no queried metadata Ty.
+    if matches!(normalized.kind(), ty::Dynamic(..)) {
+        let definition = tcx.require_lang_item(rustc_attr_ir::LangItem::DynMetadata, rustc_span::DUMMY_SP);
+        def_json(context, definition);
+    } else if matches!(tail.kind(), ty::Alias(..) | ty::Param(_)) {
+        return export_failure("pointer metadata", "rustc could not determine pointer metadata type");
+    }
+    let pointer_metadata_type = None;
     let type_queries = TypeQueries {
         normalized: if structural_identity_normalization(input, 1024)
             || matches!(input.kind(), ty::Alias(ty::IsRigid::No, alias)
@@ -3883,8 +3881,20 @@ fn canonical_layout_recipe<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<
 // Raw syntax capability only: do not let a material success become a raw
 // recipe whose field bridge or recursive calculator is unsupported. Pointer
 // branches need pointee metadata/reification, not the pointee's physical layout.
+// Layout constructor syntax extends the generic body subset only for raw
+// Dynamic pointer chains already owned by the World syntax bridge. This does
+// not admit Dynamic operands or instructions to the generic MIR interpreter.
+fn layout_type_syntax_supported(input: ty::Ty<'_>) -> bool {
+    if generic_mir::supported_type(input) { return true; }
+    match *input.kind() {
+        ty::Dynamic(..) => type_hash_material::eligible(input),
+        ty::RawPtr(inner,_) | ty::Ref(_,inner,_) => layout_type_syntax_supported(inner),
+        _ => false,
+    }
+}
+
 fn enum_layout_source_capable<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>, fuel: usize) -> bool {
-    if fuel == 0 || !generic_mir::supported_type(input) { return false; }
+    if fuel == 0 || !layout_type_syntax_supported(input) { return false; }
     match *input.kind() {
         ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never
             | ty::FnPtr(..) => true,
@@ -3906,7 +3916,7 @@ fn enum_layout_source_capable<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>, fuel
             } else if !def.is_union() { return false; }
             if !generic_mir::supported_arguments(args) { return false; }
             def.all_fields().all(|field|
-                generic_mir::supported_type(tcx.type_of(field.did).instantiate_identity().skip_norm_wip()) &&
+                layout_type_syntax_supported(tcx.type_of(field.did).instantiate_identity().skip_norm_wip()) &&
                 enum_layout_source_capable(tcx,field.ty(tcx,args).skip_norm_wip(),fuel-1))
         }
         _ => false,
@@ -3936,12 +3946,14 @@ fn struct_recipe_eligible<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> bool {
         guaranteed_sized(tcx.type_of(field.did).instantiate_identity().skip_norm_wip()))
 }
 
-// Structural source eligibility only. Dyn tails and unresolved aliases remain
-// explicit material residuals until their raw metadata constructor is supported.
+// Structural source eligibility only. Covered Dynamic syntax uses the raw
+// DynMetadata declaration; unresolved aliases and unsupported binders stay residual.
 fn pointer_recipe_eligible<'tcx>(tcx: TyCtxt<'tcx>, pointee: ty::Ty<'tcx>) -> bool {
     match *pointee.kind() {
         ty::Alias(..) | ty::Param(..) | ty::Bound(..) | ty::Placeholder(..)
-        | ty::Infer(..) | ty::Dynamic(..) | ty::Error(..) => false,
+        | ty::Infer(..) | ty::Error(..) => false,
+        ty::Dynamic(..) => tcx.lang_items().get(rustc_attr_ir::LangItem::DynMetadata).is_some()
+            && type_hash_material::eligible(pointee),
         ty::Tuple(elements) => elements.last().is_none_or(|tail| pointer_recipe_eligible(tcx,*tail)),
         ty::Adt(def,args) if def.is_struct() => def.non_enum_variant().fields.iter().last()
             .is_none_or(|field| pointer_recipe_eligible(tcx,field.ty(tcx,args).skip_norm_wip())),

@@ -106,7 +106,9 @@ def main (args : List String) : IO Unit := do
         (.adt identity #[])).run constructedWorld)
       check (!((RuntimeMetadata.layoutInWorld metadata constructedId).run constructedWorld).isOk)
         s!"constructed unsupported enum borrowed a physical material type ID: {node.display}"
-  check (compared >= 12 && residuals >= 3) "missing enum source/residual coverage"
+  -- DynamicControl and NestedDynamicControl now use source DynMetadata layouts.
+  -- The remaining explicit-discriminant residual keeps every rejection control.
+  check (compared == 16 && residuals == 1) "missing enum source/residual coverage"
   let base := (← must (decodeJson (← IO.FS.readFile basePath))).document
   let baseMetadata ← must ((RuntimeMetadata.ofDocument base).mapError toString)
   let mut novel ← must (TypeArena.World.ofMaterial #[] #[] base.definitions

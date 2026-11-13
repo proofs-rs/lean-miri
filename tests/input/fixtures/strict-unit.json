@@ -32,7 +32,8 @@
       "box_noalias": true,
       "incremental_enabled": false,
       "sanitizers": []
-    }
+    },
+    "freeze_lang_item": null
   },
   "types": [
     {

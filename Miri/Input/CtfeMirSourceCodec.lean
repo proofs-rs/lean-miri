@@ -1,5 +1,6 @@
 import Miri.Input.CtfeMirSource
 import Miri.Input.GenericMaterialCodec
+import Miri.Input.CtfeCallsSourceCodec
 
 namespace Miri.Input.CtfeMirSourceCodec
 open Lean CtfeMirSource Miri.Interpreter.CompileTime.ScalarFrame
@@ -111,6 +112,8 @@ private def scope (value : Json) : Except String Scope := do
   pure ⟨⟨← nat value "span"⟩,← optionalNat (← field value "parent"),lintRoot⟩
 
 def read (value : Json) : Except String Source := do
+  if (text value "policy").toOption == some "scalar_u32_calls_v1" then
+    return ← CtfeCallsSourceCodec.read value
   keys value ["definition","source_role","promoted","policy","phase","environment_recipe",
     "parameters","required_consts","span","arg_count","spread_arg","locals","blocks","source_scopes"]
   let definition ← GenericMaterialCodec.readDefinition (← field value "definition")
@@ -145,7 +148,7 @@ def read (value : Json) : Except String Source := do
     parameters := ← (← arr value "parameters").mapM GenericMaterialCodec.readSort
     requiredConstants := ← (← arr value "required_consts").mapM operand
     span := ⟨← nat value "span"⟩
-    program := ⟨locals.map (·.1),← nat value "arg_count",blocks.map (·.1)⟩
+    program := .scalar ⟨locals.map (·.1),← nat value "arg_count",blocks.map (·.1)⟩
     localSources := locals.map (·.2.1),localMutability := locals.map (·.2.2)
     statementSources := blocks.map (·.2.1),terminatorSources := blocks.map (·.2.2)
     scopes := ← (← arr value "source_scopes").mapM scope }

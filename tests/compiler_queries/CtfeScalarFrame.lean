@@ -18,8 +18,9 @@ def main (args : List String) : IO Unit := do
       !(CtfeMirSource.lookup #[source,source] source.definition source.promoted).isOk do
     throw (IO.userError "missing/duplicate physical CTFE source was accepted")
   let some input := input.toNat? | throw (IO.userError "invalid scalar input")
-  let initial ← must (ScalarFrame.initializeState source.program #[.uint 32 input])
-  match ScalarFrame.run source.program ⟨64,tiny == "1",deny == "1"⟩ 1000000 initial with
+  let .scalar program := source.program | throw (IO.userError "expected scalar policy")
+  let initial ← must (ScalarFrame.initializeState program #[.uint 32 input])
+  match ScalarFrame.run program ⟨64,tiny == "1",deny == "1"⟩ 1000000 initial with
   | .returned (.uint _ value) state =>
     outputTrace state
     IO.println s!"result\t{state.steps}\t{state.counters}\t{value}"

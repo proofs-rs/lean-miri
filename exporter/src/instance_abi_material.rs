@@ -68,32 +68,64 @@ pub(super) fn thin_box<'tcx>(tcx:TyCtxt<'tcx>,input:ty::Ty<'tcx>)->bool {
         sized_pointee(tcx,pointee,256)&&empty_allocator(allocator)&&pointer_storage(tcx,input,pointee,256)
 }
 
-// Two primitive nonpointer fields, each at most one x86_64 register. Tuple
-// layout is a ScalarPair of at most 16 bytes; no layout/FnAbi query selects
-// this domain. Wider fields remain residual until large-return attributes.
+// Two primitive nonpointer fields. Position-dependent return indirection is
+// reconstructed in Lean; no layout/FnAbi query selects this source domain.
 pub(super) fn small_nonpointer_pair(input: ty::Ty<'_>) -> bool {
     let ty::Tuple(fields) = input.kind() else { return false; };
     fields.len() == 2 && fields.iter().all(|field| match field.kind() {
         ty::Bool | ty::Char => true,
-        ty::Int(kind) => !matches!(kind, ty::IntTy::I128),
-        ty::Uint(kind) => !matches!(kind, ty::UintTy::U128),
-        ty::Float(kind) => !matches!(kind, ty::FloatTy::F128),
+        ty::Int(_) | ty::Uint(_) | ty::Float(_) => true,
         _ => false,
     })
 }
 
-// Bounded byte-array/tuple source grammar for the small Memory adjustment.
+// Bounded byte-array/tuple source grammar for direct and indirect Memory.
 // Raw value-tree bits establish the count, never layout_of or ABI results.
 pub(super) fn small_memory(input: ty::Ty<'_>) -> bool {
     let byte = |field: ty::Ty<'_>| matches!(field.kind(),
         ty::Bool | ty::Uint(ty::UintTy::U8) | ty::Int(ty::IntTy::I8));
     match input.kind() {
-        ty::Tuple(fields) => (3..=8).contains(&fields.len()) && fields.iter().all(byte),
+        ty::Tuple(fields) => (3..=32).contains(&fields.len()) && fields.iter().all(byte),
         ty::Array(element, count) if byte(*element) => {
+            let ty::ConstKind::Value(value) = count.kind() else { return false; };
+            let ty::ValTreeKind::Leaf(scalar) = **value.valtree else { return false; };
+            scalar.to_bits_unchecked() <= 32
+        },
+        _ => false,
+    }
+}
+
+// RustTail indirect arguments require stack-offset lowering, still residual.
+// Reject only its aggregate inputs conservatively from raw source grammar.
+pub(super) fn tail_direct(input: ty::Ty<'_>) -> bool {
+    match input.kind() {
+        // Admitted primitive ScalarPair arguments stay direct at every size.
+        ty::Tuple(fields) if fields.len() == 2 => true,
+        ty::Tuple(fields) => fields.len() <= 8,
+        ty::Array(_, count) => {
             let ty::ConstKind::Value(value) = count.kind() else { return false; };
             let ty::ValTreeKind::Leaf(scalar) = **value.valtree else { return false; };
             scalar.to_bits_unchecked() <= 8
         },
+        _ => true,
+    }
+}
+
+// Only the newly admitted indirect domains need MIR-deduced attributes.
+// Dependency metadata was produced using that crate's original options, not
+// this session's optimization/incremental flags. Keep its exact FnAbi query.
+fn newly_indirect(input: ty::Ty<'_>, is_return: bool) -> bool {
+    match input.kind() {
+        ty::Array(_, count) if small_memory(input) => {
+            let ty::ConstKind::Value(value) = count.kind() else { return false; };
+            let ty::ValTreeKind::Leaf(scalar) = **value.valtree else { return false; };
+            scalar.to_bits_unchecked() > 8
+        },
+        ty::Tuple(fields) if small_memory(input) => fields.len() > 8,
+        ty::Tuple(fields) if is_return && small_nonpointer_pair(input) =>
+            fields.iter().any(|field| matches!(field.kind(),
+                ty::Int(ty::IntTy::I128) | ty::Uint(ty::UintTy::U128) |
+                ty::Float(ty::FloatTy::F128))),
         _ => false,
     }
 }
@@ -119,6 +151,13 @@ pub(super) fn signature<'tcx>(tcx: TyCtxt<'tcx>, instance: ty::Instance<'tcx>,
     let signature = signature.skip_binder();
     if signature.c_variadic() || !matches!(signature.abi(),
         A::Rust | A::RustCold | A::RustPreserveNone | A::RustTail) {
+        return None;
+    }
+    if signature.abi() == A::RustTail && !signature.inputs().iter().all(|input| tail_direct(*input)) {
+        return None;
+    }
+    if !definition.is_local() && (newly_indirect(signature.output(), true) ||
+        signature.inputs().iter().any(|input| newly_indirect(*input, false))) {
         return None;
     }
     // Only a syntactically sized pointee is admitted here. This is source

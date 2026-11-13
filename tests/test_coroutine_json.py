@@ -1,5 +1,6 @@
 """Strict raw coroutine catalog wire controls; no compiler authenticity claim."""
 import copy
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -25,7 +26,70 @@ def fixture():
                           "compiler_coroutine_coverage": {"body_coroutines": [], "coroutines": [], "auxiliary_bodies": [], "generic_sources": [source]}})
 
 
+def template_fixture():
+    document = fixture()
+    arguments = [{"kind": "type", "value": 0}] * 6
+    document["types"] = [{"shape": {"kind": "coroutine", "def_id": 1, "generic_args": arguments}}]
+    document["instances"] = [{"instance_id": 0, "instance_kind": {"kind": "item", "def_id": 1}, "generic_args": arguments}]
+    document["bodies"] = [{"body_kind": "copy_template", "template_id": 0, "instance_id": 0,
+                           "generic_args": arguments, "promoted_bodies": []}]
+    document["mir_templates"] = [{"source_role": "runtime", "source_promoted": None,
+        "source_def_id": 1, "def_path": "owner", "span": 0, "preamble_def_span": 0,
+        "injection_phase": None, "local_sources": [], "source_scopes": [{}], "backtrace_spans": [],
+        "template": json.dumps({"parameters": ["type"] * 6, "types": [], "skeleton": {
+            "phase": "runtime_optimized", "argument_count": 0, "spread_argument": None,
+            "locals": [], "blocks": []}})}]
+    catalog = document["compiler_coroutine_coverage"]
+    catalog["body_coroutines"] = [True]
+    catalog["coroutines"] = [{"owner_body": 0, "coroutine_type": 0,
+        "coroutine_kind": {"kind": "coroutine", "movability": "movable"},
+        "yield_type": None, "resume_type": None, "drop_sync": 0, "drop_async": None, "drop_proxy_async": 1,
+        "layout": {"field_tys": [], "variant_fields": [[], [], []],
+                   "variant_source_info": [{"span": 0, "scope": 0}] * 3, "storage_conflicts": []}}]
+    catalog["auxiliary_bodies"] = [{"owner_body": 0, "role": role, "source_kind": kind,
+        "body": {"instance_id": 0, "source_def_id": 1, "phase": {"kind": "runtime", "phase": "initial"}}}
+        for role, kind in [("sync", {"kind": "shim", "shim_kind": "drop_glue", "def_id": 1, "drop_type": 0}),
+                           ("proxy_async", {"kind": "item", "def_id": 1})]]
+    return document
+
+
 class CoroutineCatalogTests(unittest.TestCase):
+    def test_valid_raw_runtime_template_owner(self):
+        validate_catalog(template_fixture())
+
+    def test_raw_template_owner_header_controls(self):
+        changes = [
+            lambda d: d["bodies"][0].update(template_id=1),
+            lambda d: d["mir_templates"][0].update(source_role="ctfe"),
+            lambda d: d["mir_templates"][0].update(source_promoted=0),
+            lambda d: d["mir_templates"][0].update(source_def_id=0),
+            lambda d: d["mir_templates"][0].update(template="{"),
+            lambda d: d["mir_templates"][0].update(template='{"parameters":[],"parameters":[]}'),
+            lambda d: d["mir_templates"][0].update(source_scopes=[]),
+            lambda d: d["bodies"][0].update(generic_args=[]),
+            lambda d: d["instances"][0].update(instance_kind={"kind": "item", "def_id": 0}),
+            lambda d: d["instances"][0].update(instance_id=1),
+            lambda d: d["types"][0]["shape"].update(generic_args=[]),
+            lambda d: d["bodies"][0].update(instance_id=1),
+        ]
+        for index, change in enumerate(changes):
+            with self.subTest(index=index):
+                document = template_fixture()
+                change(document)
+                with self.assertRaises(ValueError):
+                    validate_catalog(document)
+        for key, value in [("phase", "analysis"), ("parameters", ["constant"] * 6)]:
+            document = template_fixture()
+            source = document["mir_templates"][0]
+            template = json.loads(source["template"])
+            if key == "phase":
+                template["skeleton"][key] = value
+            else:
+                template[key] = value
+            source["template"] = json.dumps(template)
+            with self.assertRaises(ValueError):
+                validate_catalog(document)
+
     def test_valid_generic_catalog(self):
         validate_catalog(fixture())
 

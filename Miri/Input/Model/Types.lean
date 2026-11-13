@@ -148,6 +148,8 @@ structure Producer where
   rustcVersion : String
   targetTriple : String
   abiSession : Option AbiSessionMaterial := none
+  /-- Required raw lang-item presence, not membership in the sliced trait catalogue. -/
+  freezeLangItem : Option DefinitionRef := none
   deriving Repr, DecidableEq
 
 structure TaggedNode where

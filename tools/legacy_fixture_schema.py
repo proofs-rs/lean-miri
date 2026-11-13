@@ -68,6 +68,10 @@ def adapt_legacy_fixture(document):
         return copy.deepcopy(document)
     result = copy.deepcopy(document)
     result["schema_version"] = 13
+    producer = result.get("producer")
+    if isinstance(producer, dict):
+        # Hypothetical old component environment, not recovered lang-item data.
+        producer.setdefault("freeze_lang_item", None)
     # Historical executable bodies remain material. No source template or trait
     # proof is reconstructed from a monomorphic execution fixture.
     result.setdefault("mir_templates", [])

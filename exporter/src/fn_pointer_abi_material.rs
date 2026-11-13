@@ -56,6 +56,8 @@ pub(super) fn signature<'tcx>(tcx:TyCtxt<'tcx>, signature:ty::PolyFnSig<'tcx>,
     if !signature.inputs_and_output.iter().all(|input|reifiable_type(input,256)) {return None;}
     if signature.c_variadic() || !matches!(signature.abi(),
         A::Rust|A::RustCold|A::RustPreserveNone|A::RustTail) {return None;}
+    if signature.abi()==A::RustTail && !signature.inputs().iter().all(|input|
+        super::instance_abi_material::tail_direct(*input)) {return None;}
     signature.inputs_and_output.iter().all(|input| match input.kind() {
         ty::Bool|ty::Char|ty::Int(_)|ty::Uint(_)|ty::Float(_)|ty::Never => true,
         ty::Tuple(fields)=>fields.is_empty()||super::instance_abi_material::small_nonpointer_pair(input)||

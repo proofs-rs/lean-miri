@@ -11,7 +11,7 @@ private def lift (value : Except String A) : EStateM StepError S A :=
 
 def make (p : CompilerCallPipeline.Prepared) (types : RuntimeArrayQueries.Access S) : VirtualCalls.CompilerHooks S C :=
   let facts := p.symbols.facts
-  CompilerVirtualFacts.scopeHooks p.scopes types {
+  WorldVirtualHooks.hooks types <| CompilerVirtualFacts.scopeHooks p.scopes types {
     instanceArgs := fun inst => do lift (CompilerInstance.argsOf (← RuntimeArrayQueries.compilerSnapshot types) inst)
     classifyReceiver := fun ty => RuntimeArrayQueries.perform types (CompilerVirtualFacts.receiverKindInWorld facts.context ty)
     fieldLayout := fun layout index => RuntimeArrayQueries.perform types (RuntimeMetadata.fieldLayoutForInWorld facts.context.runtime layout index)

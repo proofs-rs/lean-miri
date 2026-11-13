@@ -118,6 +118,10 @@ deriving instance ToExpr for Input.GenericSubstitution.BoundIdentity
 deriving instance ToExpr for Input.GenericSubstitution.BoundVariable
 deriving instance ToExpr for Input.GenericSubstitution.Term, Input.GenericSubstitution.Terms
 deriving instance ToExpr for Input.MirTemplate.TypeSlot
+deriving instance ToExpr for Input.MirTemplate.Projection
+deriving instance ToExpr for Input.MirTemplate.SourcePlace
+deriving instance ToExpr for Input.MirTemplate.SourceOperand
+deriving instance ToExpr for Input.MirTemplate.SourceRvalue
 deriving instance ToExpr for Input.MirTemplate.Operand
 deriving instance ToExpr for Input.MirTemplate.Rvalue
 deriving instance ToExpr for Input.MirTemplate.StatementKind
@@ -368,6 +372,25 @@ deriving instance ToExpr for Interpreter.CompileTime.ScalarFrame.AssertMessage
 deriving instance ToExpr for Interpreter.CompileTime.ScalarFrame.Terminator
 deriving instance ToExpr for Interpreter.CompileTime.ScalarFrame.Block
 deriving instance ToExpr for Interpreter.CompileTime.ScalarFrame.Program
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Ty
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Value
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Place
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.SourceValueKind
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.SourceValue
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Reference
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Operand
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Binary
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Rvalue
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Statement
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.OverflowKind
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.AssertMessage
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Unwind
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Call
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Terminator
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Block
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Program
+deriving instance ToExpr for Interpreter.CompileTime.SourceStack.Source
+deriving instance ToExpr for Input.CtfeMirSource.Program
 deriving instance ToExpr for Input.CtfeMirSource.Policy
 deriving instance ToExpr for Input.CtfeMirSource.LintRoot
 deriving instance ToExpr for Input.CtfeMirSource.Scope

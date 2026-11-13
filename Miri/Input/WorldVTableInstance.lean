@@ -147,4 +147,68 @@ def ownInstances (work fuel : Nat) (reference : TraitRef) :
     | none => pure none
     | some declaration => some <$> intern fuel declaration
 
+private def traitHeader (method : MIR.DefId) : RuntimeArrayTypes.CompilerM
+    (DefinitionIdentity × SourceEnvironment.Material × SourceEnvironment.Parent) := do
+  let world ← get
+  let identity ← lift (world.arena.identity method)
+  let (_,definition,header) ← lift (source world.metadata.normalizationContext identity)
+  unless header.container == some "trait" do throw "virtual method requires a trait declaration"
+  let _ ← lift (rawSignature definition identity)
+  let some scope := definition.sourceEnvironment | throw "virtual method source scope absent"
+  let some parent := scope.genericParent | throw "virtual method trait parent absent"
+  let parentScope ← lift (SourceEnvironmentRuntime.lookupDefinitions
+    world.metadata.normalizationContext.generic.definitions parent.definition)
+  unless parentScope.isTrait && parentScope.parameters[0]? == some .type &&
+      scope.parameters[0]? == some .type do
+    throw "virtual method source has no canonical trait Self"
+  pure (identity,scope,parent)
+
+/-- Physical trait parent from the checked declaration, without runtime answers. -/
+def parentTrait (method : MIR.DefId) : RuntimeArrayTypes.CompilerM MIR.DefId := do
+  let (_,_,parent) ← traitHeader method
+  lift ((← get).arena.definitionRef parent.definition)
+
+/-- The source trait's complete generic header owns the prefix being rebased. -/
+def rebaseVirtualArgs (args : Array MIR.GenericArg) (parent : MIR.DefId) (concrete : MIR.TyId) :
+    RuntimeArrayTypes.CompilerM (Array MIR.GenericArg) := do
+  let world ← get
+  let identity ← lift (world.arena.identity parent)
+  let scope ← lift (SourceEnvironmentRuntime.lookupDefinitions
+    world.metadata.normalizationContext.generic.definitions identity)
+  unless scope.isTrait && scope.parameters[0]? == some .type do
+    throw "virtual rebase parent has no canonical trait Self"
+  let _ ← lift (world.arena.lookupType concrete)
+  lift (GenericRebase.virtualSelf args scope.parameters.size concrete)
+
+/-- Resolve an eligible concrete vtable method in the execution World. This
+entry checks own-slot membership and concrete predicates; it is not the general
+rustc expect_resolve_for_vtable API for arbitrary non-vtable declarations.
+Object candidates, specialization and unsupported own generics remain errors. -/
+def resolveMethod (work fuel : Nat) (method : MIR.DefId) (args : Array MIR.GenericArg) :
+    RuntimeArrayTypes.CompilerM InstanceId := do
+  let (identity,scope,parent) ← traitHeader method
+  let world ← get
+  let arguments ← lift (GenericInstantiationWorld.ofArguments world.arena fuel args)
+  unless arguments.size == scope.parameters.size do throw "virtual method argument count mismatch"
+  for (sort,argument) in scope.parameters.zip arguments do
+    unless sort == argument.sort do throw "virtual method argument sort mismatch"
+    lift (MirTemplate.validateClosed fuel argument)
+  for sort in scope.parameters.toList.drop parent.parameterCount do
+    unless sort == .region do throw "virtual method own type or const parameter unsupported"
+  let reference : TraitRef := ⟨parent.definition,arguments.take parent.parameterCount⟩
+  let context := world.metadata.normalizationContext
+  let identities ← lift (WorldDynMethods.ownMethods context work fuel reference.definition)
+  let kcfi := world.metadata.source.producer.abiSession.map (fun session => session.sanitizers.contains "kcfi")
+  let declarations ← lift (ownDeclarations context work fuel kcfi reference)
+  unless identities.size == declarations.size do throw "virtual method source slot count mismatch"
+  let matching := (identities.zip declarations).filter (fun entry => entry.1 == identity)
+  unless matching.size == 1 do throw "virtual method is not a unique eligible own slot"
+  let some (_,some declaration) := matching[0]? | throw "virtual method concrete slot is vacant"
+  -- The pinned early VTable branch returns the passed args verbatim. Ordinary
+  -- resolution instead erases regions in Instance::try_resolve. Eligibility
+  -- above remains the explicit domain restriction of this runtime adapter.
+  let declaration := if declaration.kind == .vtable then
+    {declaration with arguments} else declaration
+  intern fuel declaration
+
 end Miri.Input.WorldVTableInstance

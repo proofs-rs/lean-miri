@@ -11,6 +11,62 @@ private def optionalNat (j : Json) : Except String (Option Nat) :=
   match j with | .null => pure none | _ => some <$> j.getNat?
 private def source (j : Json) : Except String Miri.MIR.SourceInfo := do
   pure ⟨⟨← nat j "span"⟩,← nat j "scope"⟩
+private def sourcePlace (j : Json) : Except String SourcePlace := do
+  let projection ← (← array j "projection").mapM fun value => do
+    match ← text value "kind" with
+    | "deref" => pure Projection.deref
+    | "field" => return .field (← nat value "index") ⟨← nat value "type"⟩
+    | "downcast" =>
+      let name ← match ← field value "name" with
+        | .null => pure none | value => some <$> value.getStr?
+      return .downcast name (← nat value "variant")
+    | _ => throw "unsupported MIR source projection"
+  pure ⟨← nat j "local",projection⟩
+private def sourceOperand (j : Json) : Except String SourceOperand := do
+  match ← text j "kind" with
+  | "copy" => .copy <$> sourcePlace (← field j "place")
+  | "move" => .move <$> sourcePlace (← field j "place")
+  | "scalar" =>
+    let bits ← text j "bits"
+    let some bits := bits.toNat? | throw "invalid MIR source scalar decimal"
+    return .scalar ⟨← nat j "type"⟩ ⟨← nat j "span"⟩ bits (← nat j "bytes")
+  | "zero_sized" => return .zeroSized ⟨← nat j "type"⟩ ⟨← nat j "span"⟩
+  | _ => throw "unsupported MIR source operand"
+private def sourceRvalue (j : Json) : Except String SourceRvalue := do
+  match ← text j "kind" with
+  | "use" =>
+    let retag ← match ← text j "retag" with
+      | "yes" => pure Miri.MIR.WithRetag.Yes | "no" => pure .No
+      | _ => throw "unknown MIR source retag"
+    return .use (← sourceOperand (← field j "operand")) retag
+  | "discriminant" => .discriminant <$> sourcePlace (← field j "place")
+  | "adt" => return .adt ⟨← nat j "type"⟩ (← nat j "variant") (← (← array j "operands").mapM sourceOperand)
+  | "tuple" => .tuple <$> (← array j "operands").mapM sourceOperand
+  | _ => throw "unsupported MIR source rvalue"
+private def sourceUnwind (j : Json) : Except String Miri.MIR.UnwindAction := do
+  match ← text j "kind" with
+  | "unreachable" => pure .Unreachable
+  | "continue" => pure .Continue
+  | "cleanup" => .Cleanup <$> nat j "target"
+  | _ => throw "unsupported MIR source unwind"
+private def coroutineKind (j : Json) : Except String Miri.MIR.CoroutineKind := do
+  match ← text j "kind" with
+  | "coroutine" =>
+    match ← text j "movability" with
+    | "static" => pure (.Coroutine .Static)
+    | "movable" => pure (.Coroutine .Movable)
+    | _ => throw "invalid coroutine movability"
+  | "desugared" =>
+    let kind ← match ← text j "desugaring" with
+      | "async" => pure Miri.MIR.CoroutineDesugaring.Async
+      | "gen" => pure .Gen | "async_gen" => pure .AsyncGen
+      | _ => throw "invalid coroutine desugaring"
+    let source ← match ← text j "source" with
+      | "block" => pure Miri.MIR.CoroutineSource.Block
+      | "closure" => pure .Closure | "function" => pure .Fn
+      | _ => throw "invalid coroutine source"
+    pure (.Desugared kind source)
+  | _ => throw "invalid coroutine kind"
 private def operand (j : Json) : Except String MirTemplate.Operand := do
   match ← text j "kind" with
   | "copy" => .copy <$> nat j "local"
@@ -29,6 +85,10 @@ private def rvalue (j : Json) : Except String MirTemplate.Rvalue := do
 private def statement (j : Json) : Except String MirTemplate.Statement := do
   let value ← field j "kind"
   let kind ← match ← text value "kind" with
+    | "source_assign" => pure (MirTemplate.StatementKind.sourceAssign
+        (← sourcePlace (← field value "place")) (← sourceRvalue (← field value "value")))
+    | "source_place_mention" => .sourcePlaceMention <$> sourcePlace (← field value "place")
+    | "set_discriminant" => pure (.setDiscriminant (← sourcePlace (← field value "place")) (← nat value "variant"))
     | "assign" => do
       let destination ← nat value "destination"
       let expression ← rvalue (← field value "value")
@@ -42,6 +102,25 @@ private def statement (j : Json) : Except String MirTemplate.Statement := do
 private def terminator (j : Json) : Except String MirTemplate.Terminator := do
   let value ← field j "kind"
   let kind ← match ← text value "kind" with
+    | "source_switch" =>
+      let cases ← (← array value "cases").mapM fun entry => do
+        let bits ← text entry "value"
+        let some bits := bits.toNat? | throw "invalid MIR source switch decimal"
+        pure (Miri.MIR.SwitchTarget.Case bits (← nat entry "target"))
+      pure (MirTemplate.TerminatorKind.sourceSwitch (← sourceOperand (← field value "operand")) ⟨cases,← nat value "otherwise"⟩)
+    | "assert_resume" =>
+      let kind ← coroutineKind (← field value "coroutine")
+      let message ← match ← text value "message" with
+        | "return" => pure (Miri.MIR.AssertKind.ResumedAfterReturn kind)
+        | "panic" => pure (.ResumedAfterPanic kind)
+        | "drop" => pure (.ResumedAfterDrop kind)
+        | _ => throw "invalid coroutine resume assertion"
+      pure (.assertResume (← sourceOperand (← field value "operand"))
+        (← (← field value "expected").getBool?) message (← nat value "target") (← sourceUnwind (← field value "unwind")))
+    | "source_drop" => pure (.sourceDrop (← sourcePlace (← field value "place"))
+        (← nat value "target") (← sourceUnwind (← field value "unwind"))
+        (← (← field value "replace").getBool?) (← optionalNat (← field value "async_drop")))
+    | "unwind_resume" => pure .unwindResume
     | "return" => pure MirTemplate.TerminatorKind.return
     | "unreachable" => pure .unreachable
     | "goto" => .goto <$> nat value "target"

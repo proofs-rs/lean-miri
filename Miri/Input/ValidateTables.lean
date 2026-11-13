@@ -457,6 +457,8 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
     constants := document.typeConstants.size
     bodies := document.bodies.size
     predicates := document.predicates.size }
+  if let some reference := document.producer.freezeLangItem then
+    checkId b.definitions reference "$.producer.freeze_lang_item" "definition"
   let auxiliary := (document.coroutineCoverage.map (·.auxiliaryBodies)).getD #[]
   for (value, index) in auxiliary.toList.zipIdx do
     LocalValidation.validateBody value.body s!"$.compiler_coroutine_coverage.auxiliary_bodies[{index}].body"

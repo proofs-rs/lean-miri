@@ -3,6 +3,7 @@ import Miri.Input.DecodeMIR
 import Miri.Input.RuntimeMetadata
 import Miri.Input.GenericMaterialCodec
 import Miri.Input.CoroutineGenericSource
+import Miri.Input.SourceMir
 
 namespace Miri.Input.CoroutineCoverageCodec
 open JsonReader
@@ -243,8 +244,8 @@ private def noResidual (body : Body) : Except String Unit := do
       throw "coroutine coverage: unlowered terminator"
     | _ => pure ()
 
-private def sourceBounds (document : ImportDocument) (owner : Body) (info : SourceInfo) : Except String Unit := do
-  unless info.spanId < document.spans.size && info.scope < owner.sourceScopes.size do
+private def sourceBounds (document : ImportDocument) (scopeCount : Nat) (info : SourceInfo) : Except String Unit := do
+  unless info.spanId < document.spans.size && info.scope < scopeCount do
     throw "coroutine coverage: dangling source info"
 
 /-- Pinned rustc_middle::ty::layout::ty_and_layout_for_variant and
@@ -290,14 +291,27 @@ def validate (document : ImportDocument) (coverage : CoroutineCoverage) : Except
   for row in coverage.coroutines do
     let some seed := document.bodies[row.ownerBody]? |
       throw "coroutine coverage: dangling owner body"
-    let .material owner := seed | throw "coroutine coverage: generic copy template cannot be a coroutine owner"
+    -- Metadata lookup checks exact template/instance argument joins without
+    -- constructing executable MIR or treating auxiliary snapshots as bodies.
+    let owner ← SourceMir.metadata document row.ownerBody
+    match seed with
+    | .material body =>
+      match body.mir.phase with
+      | .Runtime _ => pure ()
+      | _ => throw "coroutine coverage: executable owner has not reached runtime MIR"
+      noResidual body
+    | .copyTemplate reference =>
+      let some source := document.mirTemplates[reference.templateId]? |
+        throw "coroutine coverage: raw runtime template absent"
+      unless source.sourceRole == .runtime && source.sourcePromoted.isNone &&
+          source.template.skeleton.phase == .Runtime .Optimized do
+        throw "coroutine coverage: raw owner template is not ordinary optimized runtime MIR"
+      -- This grammar has no Yield/CoroutineDrop/FalseEdge/FalseUnwind nodes.
+      MirTemplate.validateStructure source.template
+    | _ => throw "coroutine coverage: owner seed is not material or raw runtime template"
     unless coverage.bodyCoroutines[row.ownerBody]? == some true && !owners.contains row.ownerBody do
       throw "coroutine coverage: missing marker or duplicate owner"
     owners := owners.push row.ownerBody
-    match owner.mir.phase with
-    | .Runtime _ => pure ()
-    | _ => throw "coroutine coverage: executable owner has not reached runtime MIR"
-    noResidual owner
     unless row.yieldType.isNone && row.resumeType.isNone do
       throw "coroutine coverage: unlowered yield/resume types"
     let some coroutineType := document.types[row.coroutineType]? |
@@ -323,8 +337,8 @@ def validate (document : ImportDocument) (coverage : CoroutineCoverage) : Except
     for field in fields do
       unless field.typeId < document.types.size do
         throw "coroutine coverage: dangling saved field type"
-      sourceBounds document owner field.sourceInfo
-    for info in row.layout.variantSources do sourceBounds document owner info
+      sourceBounds document owner.sourceScopes.size field.sourceInfo
+    for info in row.layout.variantSources do sourceBounds document owner.sourceScopes.size info
     for indices in row.layout.variants ++ row.layout.storageConflicts do
       unless indices.all (· < fields.size) && indices.toList.eraseDups.length == indices.size do
         throw "coroutine coverage: invalid or duplicate saved field index"

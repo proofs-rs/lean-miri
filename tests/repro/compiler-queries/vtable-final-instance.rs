@@ -4,23 +4,23 @@ pub struct D;
 pub struct NoImpl;
 pub struct G<T>(T);
 pub trait Shape<T> {
- fn plain(&self);
+ fn plain<'a>(&'a self) where 'a: 'a;
  fn implementation_track(&self);
  #[track_caller] fn prototype_track(&self);
  #[track_caller] fn default_track(&self) {}
- fn by_value(self);
+ fn by_value<'a>(self) where 'a: 'a;
 }
 impl Shape<u8> for D {
- fn plain(&self) {}
+ fn plain<'a>(&'a self) where 'a: 'a {}
  #[track_caller] fn implementation_track(&self) {}
  fn prototype_track(&self) {}
- fn by_value(self) {}
+ fn by_value<'a>(self) where 'a: 'a {}
 }
 impl<T> Shape<T> for G<T> {
- fn plain(&self) {}
+ fn plain<'a>(&'a self) where 'a: 'a {}
  #[track_caller] fn implementation_track(&self) {}
  fn prototype_track(&self) {}
- fn by_value(self) {}
+ fn by_value<'a>(self) where 'a: 'a {}
 }
 pub fn query_d(_: &D) {}
 pub fn query_g(_: &G<u8>) {}

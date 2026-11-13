@@ -182,6 +182,75 @@ def _generic_sources(document, sources):
                 raise ValueError("coroutine generic source: physical owner missing")
 
 
+def _unique_source_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("coroutine template owner: duplicate raw source key")
+        result[key] = value
+    return result
+
+
+def _coroutine_owner(document, owner, coroutine_type):
+    body = document["bodies"][owner]
+    if body.get("body_kind") != "copy_template":
+        if not isinstance(body.get("source_scopes"), list):
+            raise ValueError("coroutine owner: source scopes must be an array")
+        return body
+    # Only the new raw-template branch changes. Auxiliary snapshots remain
+    # metadata; this header must identify an ordinary runtime Item source.
+    _record(body, "body_kind template_id instance_id generic_args promoted_bodies", "coroutine template reference")
+    templates = document.get("mir_templates")
+    if not isinstance(templates, list):
+        raise ValueError("coroutine template owner: missing source table")
+    _reference(body["template_id"], len(templates), "coroutine runtime template")
+    source = templates[body["template_id"]]
+    _record(source, "source_role source_promoted template source_def_id def_path span preamble_def_span injection_phase local_sources source_scopes backtrace_spans", "coroutine runtime template")
+    if source["source_role"] != "runtime" or source["source_promoted"] is not None:
+        raise ValueError("coroutine template owner: source is not ordinary runtime MIR")
+    _reference(source["source_def_id"], len(document["definitions"]), "coroutine template physical definition")
+    import json
+    if not isinstance(source["template"], str):
+        raise ValueError("coroutine template owner: raw source must be encoded text")
+    try:
+        template = json.loads(source["template"], object_pairs_hook=_unique_source_object)
+    except (ValueError, TypeError) as error:
+        raise ValueError("coroutine template owner: malformed raw source") from error
+    _record(template, "parameters types skeleton", "coroutine template source")
+    skeleton = template["skeleton"]
+    _record(skeleton, "phase argument_count spread_argument locals blocks", "coroutine template skeleton")
+    if skeleton["phase"] != "runtime_optimized":
+        raise ValueError("coroutine template owner: source phase is not optimized runtime")
+    scopes = source["source_scopes"]
+    if not isinstance(scopes, list):
+        raise ValueError("coroutine template owner: source scopes must be an array")
+    _reference(body["instance_id"], len(document["instances"]), "coroutine template instance")
+    instance = document["instances"][body["instance_id"]]
+    if instance.get("instance_id") != body["instance_id"]:
+        raise ValueError("coroutine template owner: instance pool identity differs")
+    if instance.get("instance_kind") != {"kind": "item", "def_id": source["source_def_id"]}:
+        raise ValueError("coroutine template owner: instance physical definition differs")
+    arguments = body["generic_args"]
+    parameters = template["parameters"]
+    if not isinstance(arguments, list) or arguments != instance.get("generic_args"):
+        raise ValueError("coroutine template owner: complete instance arguments differ")
+    if not isinstance(parameters, list) or len(parameters) != len(arguments):
+        raise ValueError("coroutine template owner: generic argument domain differs")
+    for argument, parameter in zip(arguments, parameters):
+        if parameter not in ("type", "constant", "region"):
+            raise ValueError("coroutine template owner: invalid parameter sort")
+        _record(argument, "kind value", "coroutine template argument")
+        if {"type": "type", "const": "constant", "lifetime": "region"}.get(argument["kind"]) != parameter:
+            raise ValueError("coroutine template owner: generic argument sort differs")
+        if argument["kind"] in ("type", "const"):
+            table = "types" if argument["kind"] == "type" else "type_constants"
+            _reference(argument["value"], len(document[table]), "coroutine template argument")
+    shape = document["types"][coroutine_type].get("shape")
+    if not isinstance(shape, dict) or shape.get("kind") != "coroutine" or shape.get("def_id") != source["source_def_id"] or shape.get("generic_args") != arguments:
+        raise ValueError("coroutine template owner: coroutine type/source arguments differ")
+    return {"source_scopes": scopes, "instance_id": body["instance_id"]}
+
+
 def validate_catalog(document):
     catalog = document.get("compiler_coroutine_coverage")
     _record(catalog, "body_coroutines coroutines auxiliary_bodies generic_sources", "coroutine catalog")
@@ -216,9 +285,10 @@ def validate_catalog(document):
             raise ValueError("unknown coroutine kind")
         if row["yield_type"] is not None or row["resume_type"] is not None:
             raise ValueError("unlowered coroutine yield/resume types")
+        owner_body = _coroutine_owner(document, owner, row["coroutine_type"])
         _layout(document, row["layout"],
                 lambda value: _reference(value, len(document["types"]), "saved field type"),
-                len(document["bodies"][owner]["source_scopes"]))
+                len(owner_body["source_scopes"]))
         sync, async_, proxy = (row[key] for key in ("drop_sync", "drop_async", "drop_proxy_async"))
         if (sync is None) == (async_ is None) or (proxy is None) != (sync is None):
             raise ValueError("inconsistent coroutine drop roles")
@@ -232,7 +302,6 @@ def validate_catalog(document):
                 raise ValueError("mismatched/duplicate auxiliary owner or role")
             _reference(auxiliary["owner_body"], len(markers), "auxiliary owner")
             body = auxiliary["body"]
-            owner_body = document["bodies"][owner]
             _reference(body.get("instance_id"), len(document["instances"]), "auxiliary normalization instance")
             _reference(body.get("source_def_id"), len(document["definitions"]), "auxiliary source definition")
             if body["instance_id"] != owner_body["instance_id"]:

@@ -14,7 +14,7 @@ TEMP_DIR="$(mktemp -d /tmp/lean-miri-vtable-instances.XXXXXXXX)"
 trap 'rm -rf -- "$TEMP_DIR"' EXIT
 "$RUSTC" --edition=2024 tools/vtable-final-instance-oracle.rs -o "$TEMP_DIR/oracle"
 if [[ "${VTABLE_FINAL_INSTANCES_SKIP_BUILD:-0}" != 1 ]]; then
-  flock /tmp/lean-miri-lake-build.lock lake build Miri.Input.WorldVTableInstance Miri.Input.Decoder
+  flock /tmp/lean-miri-lake-build.lock lake build Miri.Input.CompilerVirtualLeaves Miri.Input.CompilerInstanceAbi Miri.Input.Decoder
 fi
 for MODE in plain kcfi; do
   FLAGS=()
@@ -33,6 +33,11 @@ with (out/f'{mode}-oracle.json').open('w') as stdout, (out/f'{mode}-oracle.log')
 changed=json.loads((out/f'{mode}-oracle.json').read_text())
 changed['queries'][0]['entries'][1]['kind']='selected'
 (out/f'{mode}-wrong-oracle.json').write_text(json.dumps(changed))
+raw_changed=json.loads((out/f'{mode}-oracle.json').read_text())
+raw=next(entry for row in raw_changed['queries'] for entry in row['raw_static'] if entry['result']['kind']=='by_value_shim')
+assert raw['result']['arguments'][-1]['tag']=='static'
+raw['result']['arguments'][-1]['tag']='erased'
+(out/f'{mode}-wrong-raw-oracle.json').write_text(json.dumps(raw_changed))
 PY
   lake env lean --run tests/compiler_queries/VTableInstances.lean "$OUT/$MODE-source.json" "$OUT/$MODE-oracle.json"
   if lake env lean --run tests/compiler_queries/VTableInstances.lean "$OUT/$MODE-source.json" "$OUT/$MODE-wrong-oracle.json" > "$OUT/$MODE-wrong-oracle.log" 2>&1; then
@@ -40,5 +45,10 @@ PY
     exit 1
   fi
   rg -q 'final declarations differ from rustc' "$OUT/$MODE-wrong-oracle.log"
+  if lake env lean --run tests/compiler_queries/VTableInstances.lean "$OUT/$MODE-source.json" "$OUT/$MODE-wrong-raw-oracle.json" > "$OUT/$MODE-wrong-raw-oracle.log" 2>&1; then
+    printf 'mutated raw Static method oracle unexpectedly passed\n' >&2
+    exit 1
+  fi
+  rg -q 'raw static method result differs from rustc' "$OUT/$MODE-wrong-raw-oracle.log"
 done
 printf 'final vtable instance policy and mutated-oracle comparisons PASS\n'

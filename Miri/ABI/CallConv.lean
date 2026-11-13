@@ -140,6 +140,18 @@ only when rustc's final adjusted argument equals this entire initial argument. -
 def initial (layout : TyAndLayout Ty) : ArgAbi Ty :=
   new layout (fun _ _ => ArgAttributes.new)
 
+/-- Pinned sized `make_indirect` adjustment, including fresh indirect attributes. -/
+def makeIndirect (arg : ArgAbi Ty) : Except String (ArgAbi Ty) := do
+  match arg.mode with
+  | .Direct _ | .Pair .. =>
+    unless arg.layout.layout.isSized do throw "sized indirect adjustment requires sized layout"
+    let attrs : ArgAttributes := {ArgAttributes.new with
+      regular := 670, pointeeSize := arg.layout.layout.size,
+      pointeeAlign := some arg.layout.layout.align.abi}
+    pure {arg with mode := .Indirect attrs none .Pointer}
+  | .Indirect _ _ .Pointer | .IndirectUnsized .. => pure arg
+  | _ => throw "invalid indirect ABI adjustment"
+
 def eqAbi [DecidableEq Ty] (left right : ArgAbi Ty) : Bool :=
   left.layout.layout.eqAbi right.layout.layout && left.mode.eqAbi right.mode &&
   (if left.mode.isDirect then

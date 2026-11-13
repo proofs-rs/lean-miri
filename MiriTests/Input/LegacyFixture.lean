@@ -85,6 +85,10 @@ def adaptLegacyFixture (source : String) : Except String String := do
       !bodies.isEmpty && bodies.all (fun body => !(body.getObjVal? "body_kind").isOk))
   unless version == some 11 || version == some 12 || oldBodyEncoding do return source
   let mut value := raw.setObjVal! "schema_version" (toJson (13 : Nat))
+  if let .ok producer := value.getObjVal? "producer" then
+    if !(producer.getObjVal? "freeze_lang_item").isOk then
+      -- Hypothetical historical component environment, not recovered lang items.
+      value := value.setObjVal! "producer" (producer.setObjVal! "freeze_lang_item" .null)
   if !(raw.getObjVal? "ctfe_scalar_sources").isOk then
     value := value.setObjVal! "ctfe_scalar_sources" (toJson (#[] : Array Json))
   if !(raw.getObjVal? "mir_templates").isOk then

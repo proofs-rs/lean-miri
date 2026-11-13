@@ -77,6 +77,7 @@ private structure ProducerFields where
   targetTriple : Option String := none
   settings : Option Catalog.ProducerSettings := none
   abiSession : Option AbiSessionMaterial := none
+  freezeLangItem : Option (Option DefinitionRef) := none
 
 private def parseProducer : JsonReader.Parser (Producer × Catalog.ProducerSettings) := do
   let p ← JsonReader.object ({} : ProducerFields) fun p key => do
@@ -86,6 +87,7 @@ private def parseProducer : JsonReader.Parser (Producer × Catalog.ProducerSetti
     | "rustc_version" => return {p with rustcVersion := some (← JsonReader.string)}
     | "target_triple" => return {p with targetTriple := some (← JsonReader.string)}
     | "abi_session" => return {p with abiSession := some (← parseAbiSession)}
+    | "freeze_lang_item" => return {p with freezeLangItem := some (← JsonReader.nullable JsonReader.natural)}
     | "input_settings" => return {p with settings := some (← CatalogDecoder.producerSettings)}
     | _ => JsonReader.skipValue; return p
   let producer : Producer := {
@@ -94,6 +96,7 @@ private def parseProducer : JsonReader.Parser (Producer × Catalog.ProducerSetti
     rustcVersion := ← JsonReader.required p.rustcVersion "rustc_version"
     targetTriple := ← JsonReader.required p.targetTriple "target_triple"
     abiSession := some (← JsonReader.required p.abiSession "abi_session")
+    freezeLangItem := ← JsonReader.required p.freezeLangItem "freeze_lang_item"
   }
   return (producer, ← JsonReader.required p.settings "input_settings")
 

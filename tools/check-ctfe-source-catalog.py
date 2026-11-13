@@ -30,8 +30,8 @@ def main():
     sources = raw['ctfe_scalar_sources']
     assert len(sources) >= 2
     assert all(source['source_role'] == 'ctfe' for source in sources)
-    assert 'unavailable=ROOT ' in exported.stderr
-    assert 'required-constant preamble evaluator' in exported.stderr
+    assert any(source['policy'] == 'scalar_u32_calls_v1' for source in sources)
+    assert all(source['policy'] in ('scalar_u32', 'scalar_u32_calls_v1') for source in sources)
     candidates = [source for source in sources if source['arg_count'] == 1]
     assert len(candidates) == 1, candidates
     source_path = out / 'arithmetic.json'
@@ -47,7 +47,7 @@ def main():
         if test == 'CtfeScalarFrame':
             assert checked.stdout.splitlines()[-1] == 'result\t189\t9\t45'
     print('PASS actual source closure and strict catalogue; captured arithmetic 189 steps/9 counters/45')
-    print('ROOT remains unavailable: required-constant preamble/call/root-allocation capabilities are separate')
+    print('ROOT raw Call/cleanup source is retained; compiler root allocation/interner/query admission remains unavailable')
 
 
 if __name__ == '__main__':

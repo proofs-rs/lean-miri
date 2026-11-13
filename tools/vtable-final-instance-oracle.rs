@@ -19,6 +19,16 @@ fn arguments<'tcx>(tcx:TyCtxt<'tcx>,args:ty::GenericArgsRef<'tcx>)->String {
 fn reference<'tcx>(tcx:TyCtxt<'tcx>,value:ty::TraitRef<'tcx>)->String {
     format!("{{\"definition\":{},\"arguments\":[{}]}}",identity(value.def_id),arguments(tcx,value.args))
 }
+fn instance<'tcx>(tcx:TyCtxt<'tcx>,value:ty::Instance<'tcx>)->String {
+ let kind=match value.def {
+  ty::InstanceKind::Item(_)=>"selected",
+  ty::InstanceKind::Shim(ty::ShimKind::VTable(_))=>"by_value_shim",
+  ty::InstanceKind::Shim(ty::ShimKind::Reify(_,None))=>"reify_none",
+  ty::InstanceKind::Shim(ty::ShimKind::Reify(_,Some(ty::ReifyReason::Vtable)))=>"reify_vtable",
+  _=>panic!("unsupported independent oracle kind {:?}",value.def),
+ };
+ format!("{{\"kind\":\"{}\",\"definition\":{},\"arguments\":[{}]}}",kind,identity(value.def_id()),arguments(tcx,value.args))
+}
 struct Oracle;
 fn parameters(tcx:TyCtxt<'_>, definition:DefId)->String {
  let generics=tcx.generics_of(definition);
@@ -42,22 +52,28 @@ impl Callbacks for Oracle {
    let mut entries=Vec::new();
    for entry in tcx.vtable_entries(trait_ref) {
     let text=match entry {
-      ty::VtblEntry::Method(instance)=> {
-        let kind=match instance.def {
-          ty::InstanceKind::Item(_)=>"selected",
-          ty::InstanceKind::Shim(ty::ShimKind::VTable(_))=>"by_value_shim",
-          ty::InstanceKind::Shim(ty::ShimKind::Reify(_,None))=>"reify_none",
-          ty::InstanceKind::Shim(ty::ShimKind::Reify(_,Some(ty::ReifyReason::Vtable)))=>"reify_vtable",
-          _=>panic!("unsupported independent oracle kind {:?}",instance.def),
-        };
-        format!("{{\"kind\":\"{}\",\"definition\":{},\"arguments\":[{}]}}",kind,identity(instance.def_id()),arguments(tcx,instance.args))
-      },
+      ty::VtblEntry::Method(value)=>instance(tcx,*value),
       ty::VtblEntry::Vacant=>"{\"kind\":\"vacant\"}".into(),
       _=>continue,
     };
     entries.push(text);
    }
-   rows.push(format!("{{\"name\":\"{}\",\"reference\":{},\"entries\":[{}]}}",name,reference(tcx,trait_ref),entries.join(",")));
+   // These are separate raw method queries, not vtable_entries answers. The
+   // early by-value branch must keep Static own regions; try_resolve erases them.
+   let mut raw_static=Vec::new();
+   if name=="query_d" || name=="query_g" {
+    for item in tcx.associated_items(definition).in_definition_order() {
+     if !item.is_fn() {continue;}
+     let generics=tcx.generics_of(item.def_id);
+     let args=tcx.mk_args_from_iter(trait_ref.args.iter().chain(generics.own_params.iter().map(|parameter|->ty::GenericArg<'tcx>{
+      assert!(matches!(parameter.kind,ty::GenericParamDefKind::Lifetime));
+      tcx.lifetimes.re_static.into()
+     })));
+     let value=ty::Instance::expect_resolve_for_vtable(tcx,ty::TypingEnv::fully_monomorphized(),item.def_id,args,tcx.def_span(item.def_id));
+     raw_static.push(format!("{{\"method\":{},\"arguments\":[{}],\"result\":{}}}",identity(item.def_id),arguments(tcx,args),instance(tcx,value)));
+    }
+   }
+   rows.push(format!("{{\"name\":\"{}\",\"reference\":{},\"entries\":[{}],\"raw_static\":[{}]}}",name,reference(tcx,trait_ref),entries.join(","),raw_static.join(",")));
   }
   println!("{{\"queries\":[{}]}}",rows.join(","));
   Compilation::Stop

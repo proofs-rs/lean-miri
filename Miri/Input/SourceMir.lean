@@ -52,9 +52,22 @@ def validateTemplate (document : ImportDocument) (source : CopyTemplateSource) :
   for value in source.backtraceSpans do
     span value.spanId
     unless value.position.filename < document.files.size do throw "MIR template backtrace file is absent"
+  let sourceOperand (value : MirTemplate.SourceOperand) : Except String Unit := do
+    match value with
+    | .scalar _ location _ _ | .zeroSized _ location => span location.id
+    | _ => pure ()
   for block in source.template.skeleton.blocks do
-    for statement in block.statements do info statement.source
+    for statement in block.statements do
+      info statement.source
+      if let .sourceAssign _ value := statement.kind then
+        match value with
+        | .use value _ => sourceOperand value
+        | .adt _ _ values | .tuple values => for value in values do sourceOperand value
+        | .discriminant _ => pure ()
     info block.terminator.source
+    match block.terminator.kind with
+    | .sourceSwitch value _ | .assertResume value .. => sourceOperand value
+    | _ => pure ()
     if let .call _ constantSpan arguments _ _ _ _ functionSpan := block.terminator.kind then
       span constantSpan.id
       span functionSpan.id
@@ -197,6 +210,22 @@ def metadata (document : ImportDocument) (index : Nat) : Except String Metadata 
 private def lift (result : Except String α) : TypeArena.WorldM α :=
   match result with | .ok value => pure value | .error error => throw error
 
+/-- Construct an ADT aggregate identity from its instantiated source type in
+this World; no display name, copied argument list or layout result is consulted. -/
+private def sourceAggregate (id variant : Nat) : TypeArena.WorldM MIR.AggregateKind := do
+  let world ← get
+  let key ← match ← lift (world.lookupType id) with
+    | .constructed key => pure key
+    | .material node => do
+      let some key ← lift (world.materialKey node) | throw "source aggregate type constructor absent"
+      pure key
+  let .adt definition arguments := key | throw "source aggregate type is not an ADT"
+  let reference ← lift (world.definitionRef definition)
+  let some declaration := world.definitions[reference]?.bind (·.adtDeclaration) |
+    throw "source aggregate ADT declaration absent"
+  unless variant < declaration.variantCount do throw "source aggregate variant index absent"
+  pure (.Adt reference variant arguments none none)
+
 def resolveBody (document : ImportDocument) (index : Nat)
     (role : CompilerBodyRole := .runtime) : TypeArena.WorldM BodyCore := do
   match ← lift (bodySeed document index) with
@@ -208,7 +237,7 @@ def resolveBody (document : ImportDocument) (index : Nat)
     let source ← lift (templateSource document reference.templateId)
     unless source.sourceRole == role do throw "template body compiler source role mismatch"
     let arguments ← lift (GenericInstantiationWorld.ofArguments (← get) 16384 reference.genericArgs)
-    let mir ← MirTemplate.instantiate source.template 16384 arguments fun expression => do
+    let mir ← MirTemplate.instantiate source.template 16384 arguments (resolveAdt := sourceAggregate) fun expression => do
       let expression ← lift (MirTemplate.eraseFreeRegions 16384 expression)
       lift (MirTemplate.validateClosed 16384 expression)
       GenericInstantiationWorld.resolveType 16384 expression
@@ -255,7 +284,7 @@ private def resolveBodyKey (key : BodyArena.Key) : RuntimeArrayTypes.CompilerM B
   | .error error => throw error | .ok () => pure ()
   let arguments ← match GenericInstantiationWorld.ofArguments world.arena 16384 key.instanceKey.arguments with
     | .ok arguments => pure arguments | .error error => throw error
-  let mir ← MirTemplate.instantiate source.template 16384 arguments fun expression => do
+  let mir ← MirTemplate.instantiate source.template 16384 arguments (resolveAdt := fun id variant => RuntimeArrayTypes.liftType (sourceAggregate id variant)) fun expression => do
     let expression ← match MirTemplate.eraseFreeRegions 16384 expression with
       | .ok expression => pure expression | .error error => throw error
     match MirTemplate.validateClosed 16384 expression with

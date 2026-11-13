@@ -33,6 +33,34 @@ def prepare (world : TypeArena.World) (environments : SourceEnvironment.Lookup)
   verifyInstance world frame
   let .Item _ := frame.kind | throw "scalar CTFE source policy requires an Item frame"
   let source ← CtfeMirSource.lookup sources frame.definition promoted
+  if let .calls calls := source.program then
+    let known (index : Nat) : Except String Unit := do
+      let _ ← world.definitionRef ⟨0,index⟩
+      pure ()
+    let reference (value : Miri.Interpreter.CompileTime.CallFrame.Reference) : Except String Unit :=
+      match value with
+      | .direct definition _ _ _ | .associated definition _ _ _ _ => known definition
+    let operand (value : Miri.Interpreter.CompileTime.CallFrame.Operand) : Except String Unit :=
+      match value with | .constant value => reference value | _ => pure ()
+    for value in calls.required do reference value
+    for block in calls.program.blocks do
+      for statement in block.statements do
+        match statement with
+        | .assign _ (.use value _) => operand value
+        | .assign _ (.binary _ left right) => operand left *> operand right
+        | _ => pure ()
+      match block.terminator with
+      | .call call =>
+        known call.callee
+        for value in call.typeArguments do known value
+        for value in call.arguments do operand value
+      | .switch value _ _ => operand value
+      | .assert value _ message _ =>
+        operand value
+        match message with
+        | .overflow _ left right => operand left *> operand right
+        | .divisionByZero value => operand value
+      | _ => pure ()
   let material ← environments frame.definition
   unless material.parameters == source.parameters do throw "CTFE source generic scope contradicts canonical declaration material"
   let arguments ← GenericInstantiationWorld.ofArguments world 16384 frame.arguments

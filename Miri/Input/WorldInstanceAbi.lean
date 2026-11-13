@@ -3,11 +3,14 @@ import Miri.Input.RawFunctionSignature
 import Miri.ABI.FnAbi
 import Miri.ABI.SignatureSeeds
 import Miri.Input.WorldAbiScalar
+import Miri.Input.WorldDeducedAbi
 
 /-! Source FnAbi construction for ordinary Item instances. The current target
 classifier covers x86_64 Rust scalar, thin raw pointer, FnPtr, thin references,
-zero-sized arguments and nonpointer scalar pairs up to sixteen bytes. Other
-target, aggregate, higher-ranked and caller-location cases retain explicit
+zero-sized arguments, nonpointer scalar pairs and bounded sized Memory.
+Indirect attributes use retained optimized source MIR; constructed instances
+require raw templates when deduction is enabled. Other target, aggregate,
+higher-ranked and caller-location cases retain explicit
 capability errors. No imported ABI row supplies a constructed instance answer.
 The rules are pinned rustc_ty_utils/src/abi.rs::fn_abi_new_uncached,
 arg_attrs_for_rust_scalar and rustc_target::callconv::adjust_for_rust_abi. -/
@@ -67,6 +70,9 @@ def construct (instanceId : InstanceId) (extra : Array TypeId) :
   unless planned.fixedCount < 2^32 do throw "raw instance ABI fixed argument count exceeds u32"
   let args ← planned.inputs.mapM (WorldAbiScalar.classify world.metadata session (some policy) false)
   let ret ← WorldAbiScalar.classify world.metadata session (some policy) true planned.output
+  if conv == .RustTail && args.any (fun arg => match arg.mode with | .Indirect .. => true | _ => false) then
+    throw "RustTail indirect argument stack adjustment is unavailable"
+  let (args,ret) ← WorldDeducedAbi.adjust instanceId session policy args ret
   let unwind : UnwindSeed := ⟨signature.abi,
     some ⟨policy.neverUnwind,policy.foreignItem,policy.dropGlue⟩,
     session.panic == .unwind,session.panicInDrop == .unwind⟩

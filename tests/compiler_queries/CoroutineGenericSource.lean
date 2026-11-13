@@ -45,4 +45,14 @@ def main : IO Unit := do
     (Terms.ofArray #[unit,.atom .type "bool" "",unit,unit,unit])
   unless (CoroutineSourceInstantiation.instantiate #[base] 100 forged).toOption.isNone do
     throw (IO.userError "forged synthetic resume source accepted")
+  let field := {base with layout := {base.layout with
+    fields := #[{
+      typeId := .atom .type "bool" "", sourceInfo := ⟨0,0⟩,
+      ignoreForTraits := false, debuginfoName := none}],
+    variants := #[#[],#[],#[0]], storageConflicts := #[#[0]]}}
+  let projected ← must (CoroutineSourceInstantiation.instantiate #[field] 100 field.typeExpression)
+  unless (← must (projected.stateField 2 0)) == .atom .type "bool" "" do
+    throw (IO.userError "state field did not preserve unwrapped saved type")
+  for result in [projected.stateField 3 0, projected.stateField 2 1, projected.upvarField 0] do
+    unless result.toOption.isNone do throw (IO.userError "invalid coroutine projection accepted")
   IO.println "PASS raw coroutine source controls and exact generated-owner substitution"

@@ -8,13 +8,39 @@ the producer must classify them as a different body-seed category.
 
 Pinned instance.rs:974–994 substitutes args_for_mir_body before normalization.
 The supplied resolver must normalize and intern instantiated type material.
-Constants requiring CTFE, calls, drops, projected places, inlined scopes and
-coroutine bodies remain outside this initial template category. -/
+The coroutine source subset retains deref/field/downcast projections, raw Val
+scalar/ZST operands, ADT aggregates, state discriminants, resume assertions and
+drop control flow. Constants requiring CTFE, other rvalues and inlined scopes
+remain explicit residual categories. Ordinary source calls retain their separate
+restricted direct-call admission. -/
 namespace Miri.Input.MirTemplate
 open Miri.MIR GenericSubstitution
 
 structure TypeSlot where
   index : Nat
+  deriving Repr, DecidableEq
+
+/-- Raw projected source places keep field type slots separate from runtime IDs. -/
+inductive Projection where
+  | deref
+  | field (index : Nat) (type : TypeSlot)
+  | downcast (name : Option String) (variant : Nat)
+  deriving Repr, DecidableEq
+structure SourcePlace where
+  localId : LocalId
+  projection : Array Projection
+  deriving Repr, DecidableEq
+inductive SourceOperand where
+  | copy (place : SourcePlace)
+  | move (place : SourcePlace)
+  | scalar (type : TypeSlot) (span : SpanRef) (bits bytes : Nat)
+  | zeroSized (type : TypeSlot) (span : SpanRef)
+  deriving Repr, DecidableEq
+inductive SourceRvalue where
+  | use (operand : SourceOperand) (retag : WithRetag)
+  | discriminant (place : SourcePlace)
+  | adt (type : TypeSlot) (variant : Nat) (operands : Array SourceOperand)
+  | tuple (operands : Array SourceOperand)
   deriving Repr, DecidableEq
 
 inductive Operand where
@@ -29,6 +55,9 @@ inductive Rvalue where
   deriving Repr, DecidableEq
 
 inductive StatementKind where
+  | sourceAssign (destination : SourcePlace) (value : SourceRvalue)
+  | setDiscriminant (place : SourcePlace) (variant : Nat)
+  | sourcePlaceMention (place : SourcePlace)
   | assign (destination : LocalId) (value : Rvalue)
   | storageLive (localId : LocalId)
   | storageDead (localId : LocalId)
@@ -47,6 +76,12 @@ structure CallArgument where
   deriving Repr, DecidableEq
 
 inductive TerminatorKind where
+  | sourceSwitch (discriminant : SourceOperand) (targets : SwitchTargets)
+  | assertResume (condition : SourceOperand) (expected : Bool) (message : AssertKind)
+      (target : BasicBlockId) (unwind : UnwindAction)
+  | sourceDrop (place : SourcePlace) (target : BasicBlockId) (unwind : UnwindAction)
+      (replace : Bool) (asyncDrop : Option BasicBlockId)
+  | unwindResume
   | goto (target : BasicBlockId)
   | switchInt (discriminant : Operand) (targets : SwitchTargets)
   | call (functionType : TypeSlot) (constantSpan : SpanRef)
@@ -88,6 +123,29 @@ def Operand.instantiate : Operand → Miri.MIR.Operand
   | .copy localId => .Copy (localPlace localId)
   | .move localId => .Move (localPlace localId)
 
+def SourcePlace.instantiate {m : Type → Type} [Monad m]
+    (resolve : TypeSlot → m TyId) (place : SourcePlace) : m Miri.MIR.Place := do
+  let projection ← place.projection.mapM fun value => match value with
+    | .deref => pure ProjectionElem.Deref
+    | .field index type => return .Field index (← resolve type)
+    | .downcast name variant => pure (.Downcast name variant)
+  pure ⟨place.localId,projection⟩
+def SourceOperand.instantiate {m : Type → Type} [Monad m]
+    (resolve : TypeSlot → m TyId) : SourceOperand → m Miri.MIR.Operand
+  | .copy place => return .Copy (← place.instantiate resolve)
+  | .move place => return .Move (← place.instantiate resolve)
+  | .scalar type span bits bytes => return .Constant ⟨span,none,.Val (.Scalar (.Int bits bytes)) (← resolve type)⟩
+  | .zeroSized type span => return .Constant ⟨span,none,.Val .ZeroSized (← resolve type)⟩
+private def instantiateSourceRvalue {m : Type → Type} [Monad m]
+    (resolve : TypeSlot → m TyId) (resolveAdt : TyId → Nat → m AggregateKind) :
+    SourceRvalue → m Miri.MIR.Rvalue
+  | .use value retag => return .Use (← value.instantiate resolve) retag
+  | .discriminant place => return .Discriminant (← place.instantiate resolve)
+  | .adt type variant operands => do
+    let kind ← resolveAdt (← resolve type) variant
+    return .Aggregate kind (← operands.mapM (SourceOperand.instantiate resolve))
+  | .tuple operands => return .Aggregate .Tuple (← operands.mapM (SourceOperand.instantiate resolve))
+
 private def instantiateRvalue {m : Type → Type} [Monad m]
     (resolve : TypeSlot → m TyId) : Rvalue → m Miri.MIR.Rvalue
   | .use value retag => pure (.Use value.instantiate retag)
@@ -95,8 +153,11 @@ private def instantiateRvalue {m : Type → Type} [Monad m]
   | .array element values => return .Aggregate (.Array (← resolve element)) (values.map Operand.instantiate)
 
 private def instantiateStatement {m : Type → Type} [Monad m]
-    (resolve : TypeSlot → m TyId) (source : Statement) : m Miri.MIR.Statement := do
+    (resolve : TypeSlot → m TyId) (resolveAdt : TyId → Nat → m AggregateKind) (source : Statement) : m Miri.MIR.Statement := do
   let kind : Miri.MIR.StatementKind ← match source.kind with
+    | .sourceAssign place value => pure (.Assign (← place.instantiate resolve) (← instantiateSourceRvalue resolve resolveAdt value))
+    | .setDiscriminant place variant => pure (.SetDiscriminant (← place.instantiate resolve) variant)
+    | .sourcePlaceMention place => pure (.PlaceMention (← place.instantiate resolve))
     | .assign destination value =>
       pure (Miri.MIR.StatementKind.Assign (localPlace destination) (← instantiateRvalue resolve value))
     | .storageLive localId => pure (.StorageLive localId)
@@ -107,7 +168,11 @@ private def instantiateStatement {m : Type → Type} [Monad m]
 
 private def instantiateTerminator {m : Type → Type} [Monad m]
     (resolve : TypeSlot → m TyId) (source : Terminator) : m Miri.MIR.Terminator := do
-  let kind ← match source.kind with
+  let kind : Miri.MIR.TerminatorKind ← match source.kind with
+    | .sourceSwitch value targets => pure (.SwitchInt (← value.instantiate resolve) targets)
+    | .assertResume value expected message target unwind => pure (.Assert (← value.instantiate resolve) expected message target unwind)
+    | .sourceDrop place target unwind replace asyncDrop => pure (.Drop (← place.instantiate resolve) target unwind replace asyncDrop)
+    | .unwindResume => pure .UnwindResume
     | .goto target => pure (.Goto target #[])
     | .switchInt value targets => pure (.SwitchInt value.instantiate targets)
     | .call functionType constantSpan arguments destination target unwind callSource functionSpan => do
@@ -147,6 +212,20 @@ def validateStructure (template : Template) : Except String Unit := do
     unless id < body.locals.size do throw "MIR template local is out of bounds"
   let slot (value : TypeSlot) : Except String Unit :=
     unless value.index < template.types.size do throw "MIR template type slot is absent"
+  let place (value : SourcePlace) : Except String Unit := do
+    localId value.localId
+    for projection in value.projection do
+      if let .field _ type := projection then slot type
+  let sourceOperand (value : SourceOperand) : Except String Unit := do
+    match value with
+    | .copy value | .move value => place value
+    | .scalar type _ bits bytes =>
+      slot type
+      unless bytes > 0 && bytes ≤ 16 && bits < 2^(8*bytes) do throw "MIR source scalar bits/width invalid"
+    | .zeroSized type _ => slot type
+  let unwind (value : UnwindAction) : Except String Unit := do
+    if let .Cleanup id := value then
+      unless id < body.blocks.size do throw "MIR template unwind target is out of bounds"
   let operand (value : Operand) : Except String Unit :=
     match value with | .copy id | .move id => localId id
   let target (id : Nat) : Except String Unit :=
@@ -157,6 +236,14 @@ def validateStructure (template : Template) : Except String Unit := do
   for block in body.blocks do
     for statement in block.statements do
       match statement.kind with
+      | .sourceAssign destination value =>
+        place destination
+        match value with
+        | .use value _ => sourceOperand value
+        | .discriminant value => place value
+        | .adt type _ values => slot type; for value in values do sourceOperand value
+        | .tuple values => for value in values do sourceOperand value
+      | .setDiscriminant value _ | .sourcePlaceMention value => place value
       | .assign destination value =>
         localId destination
         match value with
@@ -168,6 +255,27 @@ def validateStructure (template : Template) : Except String Unit := do
       | .storageLive id | .storageDead id | .placeMention id => localId id
       | .nop => pure ()
     match block.terminator.kind with
+    | .sourceSwitch value targets =>
+      sourceOperand value
+      let mut seen : Array Nat := #[]
+      for .Case value id in targets.cases do
+        unless value < 2^128 && !seen.contains value do throw "MIR template switch value is invalid or duplicated"
+        seen := seen.push value
+        target id
+      target targets.otherwise
+    | .assertResume condition _ message id action =>
+      sourceOperand condition
+      match message with
+      | .ResumedAfterReturn _ | .ResumedAfterPanic _ | .ResumedAfterDrop _ => pure ()
+      | _ => throw "MIR source assertion is outside resume diagnostics"
+      target id
+      unwind action
+    | .sourceDrop value id action _ asyncDrop =>
+      place value
+      target id
+      unwind action
+      for id in asyncDrop.toArray do target id
+    | .unwindResume => pure ()
     | .goto id => target id
     | .switchInt value targets =>
       operand value
@@ -240,14 +348,15 @@ private def liftPure {m : Type → Type} [Monad m] [MonadExceptOf String m]
 interning failures propagate. No executable skeleton or global cache exists. -/
 def instantiate {m : Type → Type} [Monad m] [MonadExceptOf String m]
     (template : Template) (fuel : Nat) (args : Array Term)
-    (resolveType : Term → m TyId) : m Miri.MIR.Body := do
+    (resolveType : Term → m TyId)
+    (resolveAdt : TyId → Nat → m AggregateKind := fun _ _ => throw "MIR source ADT aggregate resolver absent") : m Miri.MIR.Body := do
   liftPure (validate template args)
   let resolve (slot : TypeSlot) : m TyId := do
     let some expression := template.types[slot.index]? | throw "MIR template type slot is absent"
     resolveType (← liftPure (GenericSubstitution.instantiate fuel args expression))
   let locals ← template.skeleton.locals.mapM resolve
   let blocks ← template.skeleton.blocks.mapM fun block => do
-    pure ⟨← block.statements.mapM (instantiateStatement resolve),
+    pure ⟨← block.statements.mapM (instantiateStatement resolve resolveAdt),
       ← instantiateTerminator resolve block.terminator,block.cleanup⟩
   pure ⟨template.skeleton.phase,template.skeleton.argumentCount,
     template.skeleton.spreadArgument,locals,blocks⟩

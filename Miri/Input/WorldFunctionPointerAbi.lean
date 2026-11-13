@@ -62,6 +62,8 @@ def construct (id : TypeId) (extra : Array TypeId) :
   unless plan.fixedCount < 2^32 do throw "function pointer ABI fixed count exceeds u32"
   let args ← plan.inputs.mapM (WorldAbiScalar.classify world.metadata session none false)
   let ret ← WorldAbiScalar.classify world.metadata session none true plan.output
+  if conv == .RustTail && args.any (fun arg => match arg.mode with | .Indirect .. => true | _ => false) then
+    throw "RustTail indirect argument stack adjustment is unavailable"
   let unwind : UnwindSeed := ⟨signature.abi,none,session.panic == .unwind,session.panicInDrop == .unwind⟩
   pure ⟨args,ret,plan.cVariadic,UInt32.ofNat plan.fixedCount,conv,unwind.canUnwind⟩
 end Miri.Input.WorldFunctionPointerAbi

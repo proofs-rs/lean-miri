@@ -3,10 +3,12 @@ import Miri.Frontend.ImportMIR
 import Miri.Input.ExecutionChoicePolicy
 import Miri.Input.WorldVTableInstance
 import Miri.Input.CoroutineSourceInstantiation
+import Miri.Input.CoroutineBodyWorld
 import Miri.Input.CoroutineBodyDispatch
 import Miri.ABI.CoroutineLayout
 import Miri.ABI.MaybeUninitLayout
 import Miri.Interpreter.CompileTime.FrameEntry
+import Miri.Input.CtfeSourceRequest
 import MiriTests
 import Lean
 

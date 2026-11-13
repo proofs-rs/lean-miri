@@ -1,6 +1,7 @@
 import Miri.Input.CompilerVTableRuntime
 import Miri.Input.CallResolution
 import Miri.Input.RuntimeArrayQueries
+import Miri.Input.WorldVirtualHooks
 
 /-! Shared preparation and actual compiler-leaf wiring for virtual/drop/caller
 calls. All adapters retain one final compilation-local identity table; none
@@ -53,7 +54,7 @@ private def lift (result : Result A) : EStateM StepError S A :=
 def compilerHooks (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
     (base : VirtualCalls.CompilerHooks S C) :
     VirtualCalls.CompilerHooks S C :=
-  CompilerVirtualFacts.scopeHooks prepared.scopes types
+  WorldVirtualHooks.hooks types <| CompilerVirtualFacts.scopeHooks prepared.scopes types
     (CompilerRuntimeQueries.hooks prepared.runtime types
       (CompilerVirtualFacts.compilerHooks prepared.symbols.facts types base))
 
