@@ -219,9 +219,7 @@ private def bindEnvironmentMemory
         | .error reason => throw (.unsupported s!"compiler pointer-cell layout: {reason}")
       pointerPlace operand layout
     projectNamed := fun parent name => do
-      let index ← match CompilerNamedFields.fieldIndex p.runtime parent.layout name with
-        | .ok index => pure index
-        | .error error => throw error
+      let index ← CompilerNamedFields.fieldIndex EvalProjectionMachine.arrays parent.layout name
       let projected ← PlaceDynamic.field projection choice
         ⟨.memory parent.mplace,parent.layout⟩ index
       match projected.ref with
@@ -496,9 +494,7 @@ def environmentFromRuntime [DecidableEq MiriMemoryKind]
         | .error reason => throw (.unsupported s!"compiler pointer-cell layout: {reason}")
       pointerPlace operand layout
     projectNamed := fun parent name => do
-      let index ← match CompilerNamedFields.fieldIndex p.runtime parent.layout name with
-        | .ok index => pure index
-        | .error error => throw error
+      let index ← CompilerNamedFields.fieldIndex EvalProjectionMachine.arrays parent.layout name
       let projected ← PlaceDynamic.field memory.projection choice
         ⟨.memory parent.mplace,parent.layout⟩ index
       match projected.ref with

@@ -1,5 +1,6 @@
 import Miri.Input.CompilerWorldFacts
 import Miri.Input.RuntimeArrayQueries
+import Miri.Input.RuntimeEffectfulLayout
 
 /-! Source compiler leaves for call.rs structural compatibility, evaluated in
 one execution World. Raw declaration attributes remain distinct from layouts. -/
@@ -73,22 +74,23 @@ def itemName (ty : TypeId) : WorldM String := do
   let some name := component.name | throw "compatibility item_name source symbol absent"
   pure name
 
-def queries (context : CompilerFacts.Context) (types : RuntimeArrayQueries.Access S) :
+def queries (context : CompilerFacts.Context) (types : RuntimeArrayQueries.Access S)
+    (provider : RuntimeEffectfulLayout.Provider S := RuntimeEffectfulLayout.unavailable) :
     LayoutCompat.Queries TypeId S :=
   let run := fun {A} (action : WorldM A) => RuntimeArrayQueries.perform types action
   { target := context.runtime.target
     kind := fun ty => run (kind ty)
     adt := fun ty => run (adt context.runtime ty)
-    field := fun layout index => run (RuntimeMetadata.fieldLayoutForInWorld context.runtime layout index)
-    layoutOf := fun ty => run (CompilerFacts.layoutOfInWorld context ty)
+    field := fun layout index => RuntimeEffectfulLayout.fieldLayout types provider CompilerTypingEnv.fullyMonomorphized none context.runtime layout index
+    layoutOf := fun ty => RuntimeEffectfulLayout.layout types provider CompilerTypingEnv.fullyMonomorphized none context.runtime ty
     unitLayout := run (CompilerFacts.unitLayoutInWorld context)
     eraseUnsafeBinder := fun ty => run (CompilerFacts.requiredTypeInWorld context ty "unsafe_binder_erased")
-    normalize := fun ty => run (CompilerFacts.requiredTypeInWorld context ty "normalized")
+    normalize := fun ty => RuntimeEffectfulLayout.normalizeType types provider CompilerTypingEnv.fullyMonomorphized none context.runtime ty
     reprEqualUpToSeed := fun a b => run (reprEqualUpToSeed context.runtime a b)
     itemName := fun ty => run (itemName ty)
     nonnullOptimizationGuaranteed := fun ty => run do
       pure (← RuntimeMetadata.adtDeclarationInWorld context.runtime ty).nonnullOptimizationGuaranteed
     isGlobalBox := fun ty => run (CompilerFacts.booleanInWorld context ty "is_global_box")
     boxedType := fun ty => run (CompilerFacts.requiredTypeInWorld context ty "boxed_type")
-    pointerMetadataType := fun ty => run (CompilerFacts.requiredTypeInWorld context ty "pointer_metadata_type") }
+    pointerMetadataType := fun ty => RuntimeEffectfulLayout.pointerMetadataType types provider CompilerTypingEnv.fullyMonomorphized none context.runtime ty }
 end Miri.Input.CompilerWorldCompatibility

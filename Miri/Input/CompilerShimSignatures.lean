@@ -6,9 +6,10 @@ compatibility. Missing facts are unresolved; spelling/size does not imply void. 
 namespace Miri.Input.CompilerShimSignatures
 open Miri.Interpreter
 
-def hooks (context : CompilerFacts.Context) (types : RuntimeArrayQueries.Access S) (base : ShimSignatures.Hooks P S D MD Ptr B I) :
+def hooks (context : CompilerFacts.Context) (types : RuntimeArrayQueries.Access S) (base : ShimSignatures.Hooks P S D MD Ptr B I)
+    (typeConstants : RuntimeEffectfulLayout.Provider S := RuntimeEffectfulLayout.unavailable) :
     ShimSignatures.Hooks P S D MD Ptr B I :=
   {base with
-    types := CompilerWorldCompatibility.queries context types
+    types := CompilerWorldCompatibility.queries context types typeConstants
     isCVoid := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld context ty "is_c_void")}
 end Miri.Input.CompilerShimSignatures

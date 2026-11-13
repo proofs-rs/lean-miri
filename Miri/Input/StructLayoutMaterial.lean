@@ -32,8 +32,9 @@ def guaranteedSized : Nat → Term → Bool
     | .atom .type tag _ => ["bool", "char", "never", "int", "uint", "float"].contains tag
     | .node .type "tuple" _ children =>
       match last? children with | none => true | some tail => guaranteedSized fuel tail
+    | .node .type "pattern" _ (.cons base (.cons _ .nil)) => guaranteedSized fuel base
     | .node .type tag _ _ =>
-      ["array", "pattern", "raw_pointer", "reference", "function_pointer", "unsafe_binder"].contains tag
+      ["array", "raw_pointer", "reference", "function_pointer", "unsafe_binder"].contains tag
     | .definition .type tag _ _ =>
       ["function_definition", "closure", "coroutine_closure", "coroutine", "coroutine_witness"].contains tag
     | _ => false

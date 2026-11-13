@@ -10,11 +10,12 @@ Target-specific VaList fields come from instantiated compiler ADT declarations.
 namespace Miri.Input.CompilerVarArgsLeaves
 open Miri.ABI Miri.Interpreter Miri.Memory
 def make (p : CompilerProviders.Prepared)
-    (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (compatibilityBudget : Nat) :
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (compatibilityBudget : Nat)
+    (typeConstants : RuntimeEffectfulLayout.Provider (MachineHooks.State K U) := RuntimeEffectfulLayout.unavailable) :
     IntrinsicSymbolsMachine.VarArgsLeaves K U C :=
   let context := p.lifecycle.calls.symbols.facts.context
   let run := fun {A} (action : TypeArena.WorldM A) => RuntimeArrayQueries.perform types action
-  { layoutOf := fun _ ty => run (CompilerFacts.layoutOfInWorld context ty)
+  { layoutOf := fun _ ty => RuntimeEffectfulLayout.layout types typeConstants CompilerTypingEnv.fullyMonomorphized none context.runtime ty
     typeInfo := fun _ ty => do
       match ← run (CompilerWorldCompatibility.kind ty) with
       | .integer kind =>
@@ -22,7 +23,7 @@ def make (p : CompilerProviders.Prepared)
       | .rawPointer child | .reference child => return .pointer child
       | _ => pure .other
     identicalCTypes := fun _ left right =>
-      LayoutCompat.identicalCTypes (CompilerWorldCompatibility.queries context types) compatibilityBudget left right
+      LayoutCompat.identicalCTypes (CompilerWorldCompatibility.queries context types typeConstants) compatibilityBudget left right
     isCVoid := fun _ ty => run (CompilerFacts.booleanInWorld context ty "is_c_void")
     vaListFields := fun _ ty => do
       let adt ← run (CompilerWorldCompatibility.adt context.runtime ty)

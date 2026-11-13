@@ -151,9 +151,7 @@ def fromSource [DecidableEq MiriMemoryKind] [DecidableEq Os]
     let scalar ← readScalar operand
     lift (scalar.toPointer access.runtime.base |>.mapError ScalarOps.scalarError)
   let projectNamed := fun (parent : MPlaceTy Provenance) (name : String) => do
-    let index ← match CompilerNamedFields.fieldIndex p.runtime parent.layout name with
-      | .ok index => pure index
-      | .error error => throw error
+    let index ← CompilerNamedFields.fieldIndex EvalProjectionMachine.arrays parent.layout name
     fieldPlace projection choice parent index
   let writeFields := fun (values : Array Int) (parent : MPlaceTy Provenance) => do
     for (value,index) in values.toList.zipIdx do

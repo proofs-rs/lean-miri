@@ -13,9 +13,10 @@ private def lift (query : Except String A) : MachineHooks.M K U A :=
 
 /-- Canonical full compiler dictionary, including target-feature policy. -/
 def compiler (p : CompilerProviders.Prepared)
-    (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (budget : Nat) :
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (budget : Nat)
+    (provider : RuntimeEffectfulLayout.Provider (MachineHooks.State K U) := RuntimeEffectfulLayout.unavailable) :
     ExecutionCallLeaves.Compiler (MachineHooks.State K U) C ABI.ExternAbi :=
-  CompilerExecutionCallLeaves.make p types budget
+  CompilerExecutionCallLeaves.make p types budget provider
 
 /-- Foreign emulation and real backend hooks are actual source interpreters;
 MIR loading is the same exact LoadedBody provider used by helper/root calls. -/

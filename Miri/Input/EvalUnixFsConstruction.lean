@@ -183,9 +183,7 @@ def metadataFromSource [DecidableEq MiriMemoryKind]
     | .memory memory => pure (MPlaceTy.mk memory place.layout)
     | .local .. => throw (.invalidProgram "filesystem field projection became local")
   let field := fun (parent : MPlaceTy Provenance) (name : String) => do
-    let index ← match CompilerNamedFields.fieldIndex p.runtime parent.layout name with
-      | .ok value => pure value
-      | .error error => throw error
+    let index ← CompilerNamedFields.fieldIndex types parent.layout name
     project parent index
   let result : UnixFsMetadata.Hooks
       (MachineHooks.State MiriMemoryKind (ValidityMachine.UserState U))
@@ -442,9 +440,7 @@ def timesFromSource [DecidableEq MiriMemoryKind]
     | .ok value => pure value
     | .error error => throw (ScalarOps.scalarError error)
   let field := fun (parent : MPlaceTy Provenance) (name : String) => do
-    let index ← match CompilerNamedFields.fieldIndex p.runtime parent.layout name with
-      | .ok value => pure value
-      | .error error => throw error
+    let index ← CompilerNamedFields.fieldIndex memory.arrays parent.layout name
     indexedField parent index
   let layout : M stateType LocalLayout := do
     match CompilerPrimitiveFacts.namedLayout p.runtime "libc_timespec" with

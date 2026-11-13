@@ -16,7 +16,8 @@ private def lift (query : Except String A) : MachineHooks.M K U A :=
 /-- Exact source ExternAbi identity, canonical FnAbi records, shared DefIds/
 TypeConstIds and actual current BodyIdentity all belong to this same program. -/
 def make (p : CompilerProviders.Prepared)
-    (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (compatibilityBudget : Nat) :
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (compatibilityBudget : Nat)
+    (typeConstants : RuntimeEffectfulLayout.Provider (MachineHooks.State K U) := RuntimeEffectfulLayout.unavailable) :
     ExecutionCallLeaves.Compiler (MachineHooks.State K U) C ABI.ExternAbi := {
   functionSignature := fun _ layout => RuntimeArrayQueries.performCompiler types
     (CompilerFunctionFacts.signatureInWorld p.functions layout.ty)
@@ -32,7 +33,7 @@ def make (p : CompilerProviders.Prepared)
   isRustCall := fun abi => abi == .RustCall
   rustAbi := .Rust
   checkArgumentCompat := fun _ caller callee =>
-    LayoutCompat.checkArgumentCompat (CompilerWorldCompatibility.queries p.lifecycle.calls.symbols.facts.context types)
+    LayoutCompat.checkArgumentCompat (CompilerWorldCompatibility.queries p.lifecycle.calls.symbols.facts.context types typeConstants)
       compatibilityBudget caller callee
   targetFeatures := CompilerTargetFeatures.dictionary p.intrinsics
   tupleFields := fun ty => do

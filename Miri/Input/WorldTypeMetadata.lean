@@ -28,33 +28,6 @@ def adtDeclaration (id : TypeId) : WorldM AdtDeclaration.Material := do
   lift (declaration.validate template)
   pure declaration
 
-private def tail (context : Context) : Nat → TypeId → WorldM TypeId
-  | 0, _ => throw "world metadata tail traversal exhausted"
-  | fuel + 1, id => do
-    let world ← get
-    let view ← lift (world.lookupType id)
-    if let .material source := view then
-      match source.shape with
-      | .patternType base _ => return ← tail context fuel base
-      | .tuple fields => match fields.back? with
-        | none => return id | some last => return ← tail context fuel last
-      | _ => pure ()
-    if let .constructed (.tuple fields) := view then
-      match fields.back? with
-      | none => return id | some last => return ← tail context fuel last
-    unless (← lift (world.shapeKind id)) == .adt do return id
-    let declaration ← adtDeclaration id
-    unless declaration.kind == .structKind do return id
-    let fields := declaration.fields.filter (·.variantIndex == 0)
-    let some last := fields.back? | return id
-    let child ← context.fieldType id 0 last.fieldIndex
-    let child ← WorldNormalization.normalizeType context.normalization 10000 (fuel + 1) child
-    tail context fuel child
-
-def metadataTail (context : Context) (fuel : Nat) (id : TypeId) : WorldM TypeId := do
-  let normalized ← WorldNormalization.normalizeType context.normalization 10000 fuel id
-  tail context fuel normalized
-
 /-- Pinned `ptr_metadata_ty_or_tail`: instantiate the raw DynMetadata lang
 item with the exact dynamic tail. No queried metadata type identity is used. -/
 def dynMetadataType (tail : TypeId) : WorldM TypeId := do
@@ -76,8 +49,48 @@ def dynMetadataType (tail : TypeId) : WorldM TypeId := do
     throw "raw DynMetadata generic header has a mismatched physical owner"
   World.internType (.adt identity #[.Type tail])
 
-def pointerMetadataType (context : Context) (fuel : Nat) (id : TypeId) : WorldM TypeId := do
-  let id ← metadataTail context fuel id
+structure EffectContext (m : Type → Type) where
+  normalizeType : Nat → TypeId → m TypeId
+  unitType : TypeId
+  usizeType : TypeId
+  fieldType : TypeId → Nat → Nat → m TypeId
+
+section EffectfulTail
+variable {m : Type → Type} [Monad m] [MonadStateOf World m]
+  [MonadExceptOf String m] [MonadLiftT (Except String) m] [MonadLiftT WorldM m]
+private def tail (context : EffectContext m) : Nat → TypeId → m TypeId
+  | 0, _ => throw "world metadata tail traversal exhausted"
+  | fuel + 1, id => do
+    let world ← get
+    let view ← lift (world.lookupType id)
+    if let .material source := view then
+      match source.shape with
+      | .patternType base _ => return ← tail context fuel base
+      | .tuple fields => match fields.back? with
+        | none => return id | some last => return ← tail context fuel last
+      | _ => pure ()
+    if let .constructed (.patternType base _) := view then
+      return ← tail context fuel base
+    if let .constructed (.tuple fields) := view then
+      match fields.back? with
+      | none => return id | some last => return ← tail context fuel last
+    unless (← lift (world.shapeKind id)) == .adt do return id
+    let declaration ← adtDeclaration id
+    unless declaration.kind == .structKind do return id
+    let fields := declaration.fields.filter (·.variantIndex == 0)
+    let some last := fields.back? | return id
+    -- The owning field callback normalizes the raw field term exactly once.
+    -- Resolving a raw constant alias to a TypeId first is not an admission.
+    let child ← context.fieldType id 0 last.fieldIndex
+    tail context fuel child
+
+def metadataTailEffectful (context : EffectContext m) (fuel : Nat) (id : TypeId) : m TypeId := do
+  -- struct_tail_raw starts from self; only an ADT field invokes normalize.
+  -- Tuple/Pattern steps must not evaluate unrelated constant bounds.
+  tail context fuel id
+
+def pointerMetadataTypeEffectful (context : EffectContext m) (fuel : Nat) (id : TypeId) : m TypeId := do
+  let id ← metadataTailEffectful context fuel id
   let world ← get
   match ← lift (world.shapeKind id) with
   | .str | .slice => pure context.usizeType
@@ -86,4 +99,17 @@ def pointerMetadataType (context : Context) (fuel : Nat) (id : TypeId) : WorldM 
   | .dynamicTraitObject => dynMetadataType id
   | _ => pure context.unitType
 
+end EffectfulTail
+
+private def Context.effectful (context : Context) : EffectContext WorldM := {
+  normalizeType := WorldNormalization.normalizeType context.normalization 10000
+  unitType := context.unitType
+  usizeType := context.usizeType
+  fieldType := context.fieldType }
+
+def metadataTail (context : Context) (fuel : Nat) (id : TypeId) : WorldM TypeId :=
+  metadataTailEffectful context.effectful fuel id
+
+def pointerMetadataType (context : Context) (fuel : Nat) (id : TypeId) : WorldM TypeId :=
+  pointerMetadataTypeEffectful context.effectful fuel id
 end Miri.Input.WorldTypeMetadata

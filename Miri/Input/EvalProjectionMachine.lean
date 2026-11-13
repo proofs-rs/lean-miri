@@ -1,5 +1,6 @@
 import Miri.Input.EvalAllocationMachine
 import Miri.Input.RuntimeArrayQueries
+import Miri.Input.RuntimeEffectfulLayout
 
 /-! Physical projection and canonical type/layout queries on the final World.
 Source: interpret/{projection,operand,place}.rs and eval_context.rs. Pure
@@ -48,6 +49,12 @@ private def readonly (world : RuntimeArrayTypes.World) (action : TypeArena.World
       after.predicateCount == world.arena.predicateCount do
     throw (.obligation "projection snapshot requires effectful type interning")
   pure value
+
+/-- Stateful source-field lens; query and CTFE effects stay in this machine. -/
+def fieldEffectful (metadata : RuntimeMetadata)
+    (provider : RuntimeEffectfulLayout.Provider (State Os R P H D O Aff B Host))
+    (parent : LocalLayout) (index : Nat) : EStateM StepError (State Os R P H D O Aff B Host) LocalLayout :=
+  RuntimeEffectfulLayout.fieldLayout arrays provider CompilerTypingEnv.fullyMonomorphized none metadata parent index
 
 def packed (world : RuntimeArrayTypes.World) (ty : TyId) : Except ProjectionError (Option Align) :=
   readonly world (RuntimeMetadata.packedAlignInWorld world.metadata ty)
@@ -164,7 +171,8 @@ def dynamicKind (prepared : CompilerFactAdapters.Prepared) (world : RuntimeArray
   | _ => throw (.invariant "invalid unsized dynamic layout kind")
 
 def dynamic (prepared : CompilerFactAdapters.Prepared)
-    (base : DynamicLayoutHooks Provenance (State Os R P H D O Aff B Host) C) :
+    (base : DynamicLayoutHooks Provenance (State Os R P H D O Aff B Host) C)
+    (provider : RuntimeEffectfulLayout.Provider (State Os R P H D O Aff B Host) := RuntimeEffectfulLayout.unavailable) :
     DynamicLayoutHooks Provenance (State Os R P H D O Aff B Host) C :=
   {base with
     target := prepared.context.runtime.target.base
@@ -176,7 +184,7 @@ def dynamic (prepared : CompilerFactAdapters.Prepared)
           | throw (StepError.invalidProgram "dynamic projection owner changed its source kind")
         return .dynamic data.predicates
       lift (dynamicKind prepared world ty)
-    field := fun _ layout index => RuntimeArrayQueries.fieldLayout arrays layout index
+    field := fun _ layout index => fieldEffectful prepared.context.runtime provider layout index
     packedAlign := fun _ ty => RuntimeArrayQueries.perform arrays
       (RuntimeMetadata.packedAlignInWorld prepared.context.runtime ty)}
 
@@ -203,19 +211,20 @@ def bindCompiler (prepared : CompilerFactAdapters.Prepared) (maxSizeOfVal : Size
       if base.debugAssertions then lift (assertAbi prepared.context.runtime.target value layout.layout) else pure ()}
 
 def bindProjection (prepared : CompilerFactAdapters.Prepared)
-    (base : PlaceProjectionHooks Provenance (State Os R P H D O Aff B Host) C MachineHooks.FrameExtra) :
+    (base : PlaceProjectionHooks Provenance (State Os R P H D O Aff B Host) C MachineHooks.FrameExtra)
+    (provider : RuntimeEffectfulLayout.Provider (State Os R P H D O Aff B Host) := RuntimeEffectfulLayout.unavailable) :
     PlaceProjectionHooks Provenance (State Os R P H D O Aff B Host) C MachineHooks.FrameExtra :=
   {base with
     target := prepared.context.runtime.target.base
-    dynamic := dynamic prepared base.dynamic
+    dynamic := dynamic prepared base.dynamic provider
     isSliceOrStr := fun _ ty => do
       let sourceKind ← lift (kind (arrays.get (← get)) ty)
       pure (sourceKind == .slice || sourceKind == .str)
-    field := fun _ layout index => RuntimeArrayQueries.fieldLayout arrays layout index
+    field := fun _ layout index => fieldEffectful prepared.context.runtime provider layout index
     variant := fun _ layout index => RuntimeArrayQueries.perform arrays
       (RuntimeMetadata.variantLayoutInWorld prepared.context.runtime layout index)
     packedAlign := fun _ ty => RuntimeArrayQueries.perform arrays
       (RuntimeMetadata.packedAlignInWorld prepared.context.runtime ty)
     subsliceLayout := fun _ => subslice
-    layoutOf := fun _ ty => RuntimeArrayQueries.layoutOf arrays ty}
+    layoutOf := fun _ ty => RuntimeEffectfulLayout.layout arrays provider CompilerTypingEnv.fullyMonomorphized none prepared.context.runtime ty}
 end Miri.Input.EvalProjectionMachine

@@ -301,9 +301,7 @@ def pollWithDeadlineMillis
       let field ← ArrayProjection.get projection choice cursor.iterator cursor.next
       pure (some (field,{cursor with next := cursor.next + 1}))
     namedField := fun base name => do
-      let index ← match CompilerNamedFields.fieldIndex p.runtime base.layout name with
-        | .ok index => pure index
-        | .error error => throw error
+      let index ← CompilerNamedFields.fieldIndex EvalProjectionMachine.arrays base.layout name
       let place ← PlaceDynamic.field projection choice ⟨.memory base.mplace,base.layout⟩ index
       match place.ref with
       | .memory mplace => pure ⟨mplace,place.layout⟩
@@ -454,12 +452,8 @@ def epoll
     arrayLength := fun place => do
       return (← PlaceDynamic.length projection choice ⟨.memory place.mplace,place.layout⟩).toNat
     writeEvent := fun place events data => do
-      let eventIndex ← match CompilerNamedFields.fieldIndex p.runtime place.layout "events" with
-        | .ok value => pure value
-        | .error error => throw error
-      let dataIndex ← match CompilerNamedFields.fieldIndex p.runtime place.layout "u64" with
-        | .ok value => pure value
-        | .error error => throw error
+      let eventIndex ← CompilerNamedFields.fieldIndex EvalProjectionMachine.arrays place.layout "events"
+      let dataIndex ← CompilerNamedFields.fieldIndex EvalProjectionMachine.arrays place.layout "u64"
       writeU32 events (← field place eventIndex)
       writeU64 data (← field place dataIndex)
     writeI32 := fun value dest => do

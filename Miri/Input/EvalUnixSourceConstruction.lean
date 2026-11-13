@@ -365,9 +365,7 @@ def stdOnlyFromRuntime {MirBody : Type} [DecidableEq MiriMemoryKind]
       EStateM StepError
         (State Os R P H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error)
         (MPlaceTy Provenance) := fun parent name => do
-    let index ← match CompilerNamedFields.fieldIndex p.runtime parent.layout name with
-      | .ok index => pure index
-      | .error error => throw error
+    let index ← CompilerNamedFields.fieldIndex EvalProjectionMachine.arrays parent.layout name
     let projected ← PlaceDynamic.field projection choice
       (RuntimePlace.mk (.memory parent.mplace) parent.layout) index
     match projected.ref with

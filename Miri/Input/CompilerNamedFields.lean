@@ -7,23 +7,25 @@ neither offsets nor layout equality establish field/type identity. -/
 namespace Miri.Input.CompilerNamedFields
 open Lean Miri.ABI Miri.Interpreter
 
-def fieldIndex (runtime : RuntimeMetadata) (parent : LocalLayout) (name : String) :
-    Except StepError Nat := do
-  let node ← runtime.node parent.ty |>.mapError (fun e => StepError.unsupported (toString e))
-  let parse : Except String Nat := do
-    let .adt data := node.shape | throw "named field source requires ADT"
-    unless data.kind == .structKind || data.kind == .unionKind do
-      throw "named field source requires non-enum ADT"
-    unless data.variants.size == 1 do throw "non-enum ADT has invalid variant declarations"
-    let some variant := data.variants[0]? | throw "missing non-enum variant"
-    let matching := variant.fields.filter (·.name == name)
-    unless matching.size == 1 do throw s!"missing or ambiguous compiler field {name}"
-    let some field := matching[0]? | throw "missing named field"
-    pure field.index
-  let index ← parse.mapError StepError.invalidProgram
-  -- Require the exact source field projection to be available as well.
-  let _ ← runtime.field parent index |>.mapError (fun e => StepError.unsupported (toString e))
-  pure index
+/-- Name lookup uses raw declaration symbols only. It does not request a field
+layout or normalize its type before the caller actually projects that field. -/
+def fieldIndex (types : RuntimeArrayQueries.Access S) (parent : LocalLayout) (name : String) :
+    EStateM StepError S Nat := do
+  let runtime := (types.get (← get)).metadata
+  let result ← RuntimeArrayQueries.perform types do
+    unless (← RuntimeMetadata.shapeKindInWorld runtime parent.ty) == .adt do
+      return Except.error (StepError.invalidProgram "named field source requires ADT")
+    let declaration ← RuntimeMetadata.adtDeclarationInWorld runtime parent.ty
+    unless declaration.kind == .structKind || declaration.kind == .unionKind do
+      return Except.error (StepError.invalidProgram "named field source requires non-enum ADT")
+    unless declaration.variants.size == 1 do
+      return Except.error (StepError.invalidProgram "non-enum ADT has invalid variant declarations")
+    let fields := declaration.fields.filter (fun field => field.variantIndex == 0 && field.fieldName == name)
+    unless fields.size == 1 do
+      return Except.error (StepError.invalidProgram s!"missing or ambiguous compiler field {name}")
+    let some field := fields[0]? | return Except.error (StepError.invalidProgram "missing named field")
+    pure (Except.ok field.fieldIndex)
+  match result with | .ok index => pure index | .error error => throw error
 
 def libcArrayLayout (runtime : RuntimeMetadata) (arrays : RuntimeArrayQueries.Access S)
     (key : String) (count : UInt64) : EStateM StepError S LocalLayout := do

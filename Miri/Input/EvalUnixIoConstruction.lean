@@ -452,9 +452,7 @@ def vectoredFromFieldsWithLifecycle
     | .error reason => throw (.unsupported reason)
   let arrayLayout := CompilerNamedFields.iovecArrayLayout p.runtime EvalProjectionMachine.arrays
   let fieldIndex := fun parent name => do
-    match CompilerNamedFields.fieldIndex p.runtime parent name with
-    | .ok index => pure index
-    | .error error => throw error
+    CompilerNamedFields.fieldIndex EvalProjectionMachine.arrays parent name
   let deallocateStack := fun pointer =>
     EvalAllocationMachine.deallocateWith spans pointers extras diagnostic nativeDrop pointer none .stack
   return UnixVectoredMachine.bind access allocation pointers projection

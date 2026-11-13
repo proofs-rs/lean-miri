@@ -5,7 +5,7 @@ import Miri.Input.RuntimeArrayQueries
 namespace Miri.Input.RuntimeEffectfulLayout
 open Miri.Interpreter GenericSubstitution
 set_option autoImplicit false
-variable {S : Type}
+variable {S A : Type}
 
 /-- Must perform genuine type-level VALTREE demand and retain the entire owning
 runtime successor. There is no evaluated scalar or normalized-table capability. -/
@@ -17,15 +17,19 @@ def unavailable : Provider S := fun _ _ _ _ =>
 
 /-- Source String errors are a separate layer. Runtime provider StepError
 failures bypass this layer, retaining the runtime EStateM successor unchanged. -/
-private abbrev SourceM (S : Type) := ExceptT String (RvalueM S)
+abbrev SourceM (S : Type) := ExceptT String (RvalueM S)
 
 private def getRuntime : SourceM S S := liftM (getThe S : RvalueM S S)
 private def setRuntime (state : S) : SourceM S Unit := liftM (set state : RvalueM S Unit)
 
-def layout (types : RuntimeArrayQueries.Access S) (provider : Provider S)
+def perform (types : RuntimeArrayQueries.Access S) (provider : Provider S)
     (environment : CompilerTypingEnv.Env) (usage : Option MIR.SpanRef)
-    (metadata : RuntimeMetadata) (id : TypeId) : RvalueM S (Miri.ABI.TyAndLayout TypeId) := do
-  let action : SourceM S (Miri.ABI.TyAndLayout TypeId) := do
+    (metadata : RuntimeMetadata)
+    (query : ∀ {m : Type → Type} [Monad m] [MonadStateOf TypeArena.World m]
+      [MonadExceptOf String m] [MonadLiftT (Except String) m] [MonadLiftT TypeArena.WorldM m],
+      RuntimeMetadata.LayoutNormalization m → m A)
+    (sourceError : String → StepError := fun message => .unsupported s!"runtime source layout: {message}") : RvalueM S A := do
+  let action : SourceM S A := do
     letI : MonadStateOf TypeArena.World (SourceM S) := {
       get := do pure (types.get (← getRuntime)).arena
       set := fun arena => do
@@ -79,8 +83,40 @@ def layout (types : RuntimeArrayQueries.Access S) (provider : Provider S)
           MirTemplate.validateClosed fuel result
           pure result
       GenericInstantiationWorld.resolveType fuel result
-    RuntimeMetadata.layoutEffectfulInWorld {toContext := context,resolve := normalize} metadata id
+    query (m := SourceM S) {toContext := context,resolve := normalize}
   match ← action.run with
   | .ok value => pure value
-  | .error message => throw (.unsupported s!"runtime source layout: {message}")
+  | .error message => throw (sourceError message)
+def layout (types : RuntimeArrayQueries.Access S) (provider : Provider S)
+    (environment : CompilerTypingEnv.Env) (usage : Option MIR.SpanRef)
+    (metadata : RuntimeMetadata) (id : TypeId) : RvalueM S (Miri.ABI.TyAndLayout TypeId) :=
+  perform types provider environment usage metadata fun {_} _ _ _ _ _ normalization =>
+    RuntimeMetadata.layoutEffectfulInWorld normalization metadata id
+
+def fieldType (types : RuntimeArrayQueries.Access S) (provider : Provider S)
+    (environment : CompilerTypingEnv.Env) (usage : Option MIR.SpanRef)
+    (metadata : RuntimeMetadata) (id variant index : Nat) : RvalueM S TypeId :=
+  perform types provider environment usage metadata fun {_} _ _ _ _ _ normalization =>
+    RuntimeMetadata.fieldTypeEffectfulInWorld normalization metadata id variant index
+
+def fieldLayout (types : RuntimeArrayQueries.Access S) (provider : Provider S)
+    (environment : CompilerTypingEnv.Env) (usage : Option MIR.SpanRef)
+    (metadata : RuntimeMetadata) (parent : Miri.ABI.TyAndLayout TypeId) (index : Nat) :
+    RvalueM S (Miri.ABI.TyAndLayout TypeId) :=
+  perform types provider environment usage metadata fun {_} _ _ _ _ _ normalization =>
+    RuntimeMetadata.fieldLayoutForEffectfulInWorld normalization metadata parent index
+def normalizeType (types : RuntimeArrayQueries.Access S) (provider : Provider S)
+    (environment : CompilerTypingEnv.Env) (usage : Option MIR.SpanRef)
+    (metadata : RuntimeMetadata) (id : TypeId) : RvalueM S TypeId :=
+  perform types provider environment usage metadata fun {_} _ _ _ _ _ normalization => do
+    let arena ← get
+    let fuel := metadata.materialLayoutFuel + 3 * (arena.constructedTypes.size + arena.constructedConstants.size)
+    let term ← GenericInstantiationWorld.ofType arena fuel id
+    normalization.resolve (fuel * (fuel + 1)) fuel term
+
+def pointerMetadataType (types : RuntimeArrayQueries.Access S) (provider : Provider S)
+    (environment : CompilerTypingEnv.Env) (usage : Option MIR.SpanRef)
+    (metadata : RuntimeMetadata) (id : TypeId) : RvalueM S TypeId :=
+  perform types provider environment usage metadata fun {_} _ _ _ _ _ normalization =>
+    RuntimeMetadata.pointerMetadataTypeEffectfulInWorld normalization metadata id
 end Miri.Input.RuntimeEffectfulLayout

@@ -37,13 +37,14 @@ def localLayout (p : CompilerProviders.Prepared)
   pure layout
 
 def dynamic (p : CompilerProviders.Prepared) (options : Options)
-    (vtable : VTableHooks Provenance (State Os R P H D O Aff B Host) C F A) :
+    (vtable : VTableHooks Provenance (State Os R P H D O Aff B Host) C F A)
+    (typeConstants : RuntimeEffectfulLayout.Provider (State Os R P H D O Aff B Host) := RuntimeEffectfulLayout.unavailable) :
     DynamicLayoutHooks Provenance (State Os R P H D O Aff B Host) C where
   target := p.runtime.target.base
   maxSizeOfVal := options.maxSizeOfVal
   classify := fun _ ty => do lift (EvalProjectionMachine.dynamicKind p.lifecycle.calls.symbols.facts
     (EvalProjectionMachine.arrays.get (← get)) ty)
-  field := fun _ layout index => RuntimeArrayQueries.fieldLayout EvalProjectionMachine.arrays layout index
+  field := fun _ layout index => EvalProjectionMachine.fieldEffectful p.runtime typeConstants layout index
   packedAlign := fun _ ty => RuntimeArrayQueries.perform EvalProjectionMachine.arrays
     (RuntimeMetadata.packedAlignInWorld p.runtime ty)
   vtableSizeAndAlign := VTable.getSizeAndAlign vtable
@@ -58,7 +59,8 @@ def compiler
       (ValidityMachine.Control (EvalCoreMachine.Stored Os R P H D O Aff B Host)))
     (vtable : VTableHooks Provenance (State Os R P H D O Aff B Host) C F A)
     (checkPlaceType : C → MIR.Place → RuntimePlace Provenance → MachineHooks.M MiriMemoryKind (User Os R P H D O Aff B Host) Unit)
-    (validate : C → RuntimePlace Provenance → MachineHooks.M MiriMemoryKind (User Os R P H D O Aff B Host) Unit) :
+    (validate : C → RuntimePlace Provenance → MachineHooks.M MiriMemoryKind (User Os R P H D O Aff B Host) Unit)
+    (typeConstants : RuntimeEffectfulLayout.Provider (State Os R P H D O Aff B Host) := RuntimeEffectfulLayout.unavailable) :
     PlaceMachine.CompilerHooks MiriMemoryKind (User Os R P H D O Aff B Host) C :=
   let projection := fun (_ : C) => do
     return EvalProjectionMachine.context p.lifecycle.calls.symbols.facts options.maxSizeOfVal options.debugAssertions pointers (← get)
@@ -75,7 +77,7 @@ def compiler
      let pointerCompiler := CompilerExecutionProviders.pointerCompiler p.lifecycle.calls.symbols.facts EvalProjectionMachine.arrays
      let memory ← if skip then do
          PointerPlaceMachine.fromImmediate access pointerCompiler choice (← ValidityMachine.readImmediate access source)
-       else PointerPlaceMachine.dereference access pointerCompiler (dynamic p options vtable) vtable options.dynamicFuel choice source
+       else PointerPlaceMachine.dereference access pointerCompiler (dynamic p options vtable typeConstants) vtable options.dynamicFuel choice source
      pure ⟨.memory memory.mplace,memory.layout⟩
    checkPlaceType
    memoryOffset := fun _ place amount mode metadata => do
@@ -93,24 +95,25 @@ def projection
     (access : ValidityMachine.Access MiriMemoryKind (EvalCoreMachine.Stored Os R P H D O Aff B Host))
     (allocation : PlaceMachine.AllocationConfig MiriMemoryKind (User Os R P H D O Aff B Host))
     (compiler : PlaceMachine.CompilerHooks MiriMemoryKind (User Os R P H D O Aff B Host) C)
-    (vtable : VTableHooks Provenance (State Os R P H D O Aff B Host) C F A) :
+    (vtable : VTableHooks Provenance (State Os R P H D O Aff B Host) C F A)
+    (typeConstants : RuntimeEffectfulLayout.Provider (State Os R P H D O Aff B Host) := RuntimeEffectfulLayout.unavailable) :
     PlaceProjectionHooks Provenance (State Os R P H D O Aff B Host) C MachineHooks.FrameExtra where
   place := ValidityMachine.placeHooks access allocation compiler
   target := p.runtime.target.base
   maxSizeOfVal := options.maxSizeOfVal
-  dynamic := dynamic p options vtable
+  dynamic := dynamic p options vtable typeConstants
   dynamicFuel := options.dynamicFuel
   isSliceOrStr := fun _ ty => do
     let sourceKind ← RuntimeArrayQueries.perform EvalProjectionMachine.arrays
       (RuntimeMetadata.shapeKindInWorld p.runtime ty)
     pure (sourceKind == .slice || sourceKind == .str)
-  field := fun _ layout index => RuntimeArrayQueries.fieldLayout EvalProjectionMachine.arrays layout index
+  field := fun _ layout index => EvalProjectionMachine.fieldEffectful p.runtime typeConstants layout index
   variant := fun _ layout index => RuntimeArrayQueries.perform EvalProjectionMachine.arrays
     (RuntimeMetadata.variantLayoutInWorld p.runtime layout index)
   packedAlign := fun _ ty => RuntimeArrayQueries.perform EvalProjectionMachine.arrays
     (RuntimeMetadata.packedAlignInWorld p.runtime ty)
   subsliceLayout := fun _ => EvalProjectionMachine.subslice
-  layoutOf := fun _ ty => RuntimeArrayQueries.layoutOf EvalProjectionMachine.arrays ty
+  layoutOf := fun _ ty => RuntimeEffectfulLayout.layout EvalProjectionMachine.arrays typeConstants CompilerTypingEnv.fullyMonomorphized none p.runtime ty
   localIndex := fun _ id => do
     let operand ← PlaceMachine.localToOpCore (localLayout p EvalProjectionMachine.arrays) ValidityMachine.validationInProgress id
     let value ← ValidityMachine.readImmediate access operand

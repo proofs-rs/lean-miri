@@ -50,11 +50,10 @@ private def namedLayout (p : CompilerProviders.Prepared) (name : String) :
   | .error reason => throw (.unsupported s!"compiler Windows layout `{name}`: {reason}")
 
 private def field (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access S)
     (projection : PlaceProjectionHooks Provenance S C MachineHooks.FrameExtra)
     (choice : C) (parent : MPlaceTy Provenance) (name : String) : M S (MPlaceTy Provenance) := do
-  let index ← match CompilerNamedFields.fieldIndex p.runtime parent.layout name with
-    | .ok index => pure index
-    | .error error => throw error
+  let index ← CompilerNamedFields.fieldIndex types parent.layout name
   let projected ← PlaceDynamic.field projection choice
     ⟨.memory parent.mplace,parent.layout⟩ index
   match projected.ref with
@@ -196,7 +195,7 @@ def fromSource [DecidableEq MiriMemoryKind]
     pointerPlace pointer layout
   let derefAs := fun (operand : OpTy Provenance) name => do
     layoutPlace (← readPointer operand) name
-  let fieldPlace := fun parent name => field p projection choice parent name
+  let fieldPlace := fun parent name => field p EvalProjectionMachine.outerArrays projection choice parent name
   let fileBase : WindowsFiles.Hooks (State Os R P H D O Aff B Host)
       (Ref H D O) H D Path HM Time Error := {
     handles

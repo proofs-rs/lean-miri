@@ -44,7 +44,8 @@ def make (p : CompilerProviders.Prepared) (types : RuntimeArrayQueries.Access S)
     builtinDeref := fun _ ty explicit => run (CompilerFacts.builtinDerefInWorld context ty explicit)
     boxLayout := required.boxLayout
     validateImmediateABI := validateABI
-    fieldLayout := fun _ parent index => run (RuntimeMetadata.fieldLayoutForInWorld context.runtime parent index)
+    fieldLayout := fun _ parent index => RuntimeEffectfulLayout.fieldLayout types typeConstants
+      CompilerTypingEnv.fullyMonomorphized none context.runtime parent index
     lockstepTails := required.lockstepTails
     vtableType := VTable.getPtrVTableType vtable
     vtablePointer := VTable.getPointer vtable

@@ -491,6 +491,9 @@ private def worldSized (normalization : Option (LayoutNormalization m)) : Nat �
         | none => pure true | some tail => worldSized normalization fuel tail
       | .adt data =>
         if data.kind != .structKind then return true
+        let (_,template,_,_,_) ← worldAdt id
+        if template.fields.back?.any (fun field => StructLayoutMaterial.guaranteedSized
+            (StructLayoutMaterial.termFuel field.expression + 1) field.expression) then return true
         match ← worldAdtLastField normalization fuel id with
         | none => pure true | some tail => worldSized normalization fuel tail
       | .alias .. => throw "layout sizedness requires source alias normalization"
@@ -500,8 +503,10 @@ private def worldSized (normalization : Option (LayoutNormalization m)) : Nat �
       | .tuple elements => match elements.back? with
         | none => pure true | some tail => worldSized normalization fuel tail
       | .adt .. =>
-        let (declaration,_,_,_,_) ← worldAdt id
+        let (declaration,template,_,_,_) ← worldAdt id
         if declaration.kind != .structKind then return true
+        if template.fields.back?.any (fun field => StructLayoutMaterial.guaranteedSized
+            (StructLayoutMaterial.termFuel field.expression + 1) field.expression) then return true
         match ← worldAdtLastField normalization fuel id with
         | none => pure true | some tail => worldSized normalization fuel tail
       | .alias .. => throw "layout sizedness requires source alias normalization"
@@ -1199,28 +1204,33 @@ private def coroutineSourceInWorld (metadata : RuntimeMetadata) (id : TypeId) :
   let term ← lift (GenericInstantiationWorld.ofType world fuel id)
   lift (CoroutineSourceInstantiation.instantiate coverage.genericSources fuel term)
 
-private def coroutineFieldTypeInWorld (metadata : RuntimeMetadata) (id variant index : Nat) :
-    TypeArena.WorldM TypeId := do
+section EffectfulFields
+variable {m : Type → Type} [Monad m] [MonadStateOf TypeArena.World m]
+  [MonadExceptOf String m] [MonadLiftT (Except String) m]
+  [MonadLiftT TypeArena.WorldM m]
+
+private def coroutineFieldTypeEffectful (normalization : LayoutNormalization m) (metadata : RuntimeMetadata) (id variant index : Nat) :
+    m TypeId := do
   let source ← coroutineSourceInWorld metadata id
   let term ← lift (source.stateField variant index)
   let world ← get
   let fuel := metadata.materialLayoutFuel + 3 * (world.constructedTypes.size + world.constructedConstants.size)
-  WorldNormalization.resolveNormalizedTerm metadata.normalizationContext (fuel * (fuel + 1)) fuel term
+  normalization.resolve (fuel * (fuel + 1)) fuel term
 
 /-- Constructor field selection may instantiate and intern raw ADT field types
 in the same execution universe. The requested variant is explicit. -/
-def fieldTypeInWorld (_metadata : RuntimeMetadata) (id variant index : Nat) : TypeArena.WorldM TypeId := do
+def fieldTypeEffectfulInWorld (normalization : LayoutNormalization m) (_metadata : RuntimeMetadata) (id variant index : Nat) : m TypeId := do
   let world ← get
   let fuel := _metadata.materialLayoutFuel + 3 * (world.constructedTypes.size + world.constructedConstants.size)
   match ← lift (world.lookupType id) with
   | .material node => match node.shape with
-    | .coroutine .. => coroutineFieldTypeInWorld _metadata id variant index
+    | .coroutine .. => coroutineFieldTypeEffectful normalization _metadata id variant index
     | .closure .. | .coroutineClosure .. => do
       let fields ← worldClosureFields id
       let some field := fields[index]? | throw "capture field index absent"
       pure field
     | .adt .. =>
-      worldAdtField (some (pureLayoutNormalization _metadata.normalizationContext)) fuel id variant index
+      worldAdtField (some normalization) fuel id variant index
     | .tuple elements =>
       let some field := elements[index]? | throw "source tuple field index absent"
       pure field
@@ -1231,13 +1241,13 @@ def fieldTypeInWorld (_metadata : RuntimeMetadata) (id variant index : Nat) : Ty
       pure base
     | _ => throw "source type field constructor is not implemented"
   | .constructed key => match key with
-    | .coroutine .. => coroutineFieldTypeInWorld _metadata id variant index
+    | .coroutine .. => coroutineFieldTypeEffectful normalization _metadata id variant index
     | .closure .. | .coroutineClosure .. => do
       let fields ← worldClosureFields id
       let some field := fields[index]? | throw "capture field index absent"
       pure field
     | .adt .. =>
-      worldAdtField (some (pureLayoutNormalization _metadata.normalizationContext)) fuel id variant index
+      worldAdtField (some normalization) fuel id variant index
     | .tuple elements =>
       let some field := elements[index]? | throw "constructed tuple field index absent"
       pure field
@@ -1247,6 +1257,11 @@ def fieldTypeInWorld (_metadata : RuntimeMetadata) (id variant index : Nat) : Ty
       unless index == 0 do throw "constructed pattern has only its base field"
       pure base
     | _ => throw "constructed type field constructor is not implemented"
+
+end EffectfulFields
+
+def fieldTypeInWorld (metadata : RuntimeMetadata) (id variant index : Nat) : TypeArena.WorldM TypeId :=
+  fieldTypeEffectfulInWorld (pureLayoutNormalization metadata.normalizationContext) metadata id variant index
 
 def metadataTailInWorld (metadata : RuntimeMetadata) (id : TypeId) : TypeArena.WorldM TypeId := do
   let world ← get
@@ -1296,10 +1311,29 @@ private def worldProjection (metadata : RuntimeMetadata) (ty : TypeId) (layoutId
     ((metadata.source.coroutineCoverage.map (·.genericSources)).getD #[])
     (metadata.materialLayoutFuel + 3 * (world.constructedTypes.size + world.constructedConstants.size)) layoutId).run' {}⟩
 
-/-- Preserve the exact selected-parent field contract for material residual
+/- Preserve the exact selected-parent field contract for material residual
 projection categories. Constructor fields use source substitution directly. -/
-def fieldLayoutForInWorld (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index : Nat) :
-    TypeArena.WorldM (TyAndLayout TypeId) := do
+section EffectfulProjection
+variable {m : Type → Type} [Monad m] [MonadStateOf TypeArena.World m]
+  [MonadExceptOf String m] [MonadLiftT (Except String) m]
+  [MonadLiftT TypeArena.WorldM m]
+
+/-- Pointer metadata tail fields normalize in the same effectful source query.
+No separate World is reconstructed and no pure alias callback is installed. -/
+def pointerMetadataTypeEffectfulInWorld (normalization : LayoutNormalization m)
+    (metadata : RuntimeMetadata) (id : TypeId) : m TypeId := do
+  let world ← get
+  WorldTypeMetadata.pointerMetadataTypeEffectful {
+    normalizeType := fun fuel child => do
+      let term ← lift (GenericInstantiationWorld.ofType (← get) fuel child)
+      normalization.resolve (fuel * (fuel + 1)) fuel term
+    unitType := metadata.source.queries.primitives.unit
+    usizeType := metadata.source.queries.primitives.usize
+    fieldType := fieldTypeEffectfulInWorld normalization metadata }
+    (metadata.materialLayoutFuel + 3 * world.constructedTypes.size + 1) id
+
+def fieldLayoutForEffectfulInWorld (normalization : LayoutNormalization m) (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index : Nat) :
+    m (TyAndLayout TypeId) := do
   if (← shapeKindInWorld metadata parent.ty) == .coroutine then
     let source ← coroutineSourceInWorld metadata parent.ty
     let term ← match parent.layout.variants with
@@ -1319,8 +1353,8 @@ def fieldLayoutForInWorld (metadata : RuntimeMetadata) (parent : TyAndLayout Typ
         lift (source.upvarField index)
     let world ← get
     let fuel := metadata.materialLayoutFuel + 3 * (world.constructedTypes.size + world.constructedConstants.size)
-    let child ← WorldNormalization.resolveNormalizedTerm metadata.normalizationContext (fuel * (fuel + 1)) fuel term
-    return ← layoutInWorld metadata child
+    let child ← normalization.resolve (fuel * (fuel + 1)) fuel term
+    return ← layoutEffectfulInWorld normalization metadata child
   let pointer ← match ← lift ((← get).lookupType parent.ty) with
     | .material node => match node.shape with
       | .rawPointer pointee _ => pure (some (pointee,false))
@@ -1333,10 +1367,10 @@ def fieldLayoutForInWorld (metadata : RuntimeMetadata) (parent : TyAndLayout Typ
     unless index < parent.layout.fields.count do throw "pointer projection field index out of bounds"
     if index == 0 then
       return ⟨parent.ty, ← lift (PrimitiveLayout.pointer metadata.target isReference none)⟩
-    let metadataType ← pointerMetadataTypeInWorld metadata pointee
+    let metadataType ← pointerMetadataTypeEffectfulInWorld normalization metadata pointee
     if let some vtableType ← vtableFieldTypeInWorld metadata metadataType then
-      return ← layoutInWorld metadata vtableType
-    return ← layoutInWorld metadata metadataType
+      return ← layoutEffectfulInWorld normalization metadata vtableType
+    return ← layoutEffectfulInWorld normalization metadata metadataType
   -- The enum discriminant is a source scalar, not an ADT field or a
   -- contextual LayoutId. Its logical primitive type follows Primitive::to_ty.
   if let .adt .. ← worldConstructor parent.ty then
@@ -1365,19 +1399,28 @@ def fieldLayoutForInWorld (metadata : RuntimeMetadata) (parent : TyAndLayout Typ
   let selected ← match parent.layout.variants with
     | .Single selected => pure selected
     | _ => throw "ADT field needs a selected variant"
-  let child ← fieldTypeInWorld metadata parent.ty selected index
+  let child ← fieldTypeEffectfulInWorld normalization metadata parent.ty selected index
   -- layout_of erases regions and normalizes the projected source field. Use
   -- raw terms for both material and constructed children, never normalized rows.
   let world ← get
   let fuel := metadata.materialLayoutFuel + 3 * (world.constructedTypes.size + world.constructedConstants.size)
   let term ← lift (GenericInstantiationWorld.ofType world fuel child)
-  let child ← WorldNormalization.resolveNormalizedTerm metadata.normalizationContext (fuel * (fuel + 1)) fuel term
-  layoutInWorld metadata child
+  let child ← normalization.resolve (fuel * (fuel + 1)) fuel term
+  layoutEffectfulInWorld normalization metadata child
 
-def fieldLayoutInWorld (metadata : RuntimeMetadata) (id index : Nat) :
-    TypeArena.WorldM (TyAndLayout TypeId) := do
-  let parent ← layoutInWorld metadata id
-  fieldLayoutForInWorld metadata parent index
+def fieldLayoutEffectfulInWorld (normalization : LayoutNormalization m) (metadata : RuntimeMetadata) (id index : Nat) :
+    m (TyAndLayout TypeId) := do
+  let parent ← layoutEffectfulInWorld normalization metadata id
+  fieldLayoutForEffectfulInWorld normalization metadata parent index
+
+end EffectfulProjection
+
+def fieldLayoutForInWorld (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index : Nat) :
+    TypeArena.WorldM (TyAndLayout TypeId) :=
+  fieldLayoutForEffectfulInWorld (pureLayoutNormalization metadata.normalizationContext) metadata parent index
+
+def fieldLayoutInWorld (metadata : RuntimeMetadata) (id index : Nat) : TypeArena.WorldM (TyAndLayout TypeId) :=
+  fieldLayoutEffectfulInWorld (pureLayoutNormalization metadata.normalizationContext) metadata id index
 
 /-- Raw nominal attributes; no physical layout or fields are computed. -/
 def adtDeclarationInWorld (_metadata : RuntimeMetadata) (id : TypeId) :

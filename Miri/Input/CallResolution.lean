@@ -4,6 +4,7 @@ import Miri.Input.SourceMirCall
 import Miri.Input.CompilerInstance
 import Miri.Input.RuntimeArrayQueries
 import Miri.Input.CallCompatibility
+import Miri.Input.CompilerWorldCompatibility
 import Miri.ABI.FnAbi
 import Miri.Input.StructuralNormalization
 import Miri.Input.WorldInstanceAbi
@@ -354,7 +355,7 @@ private def lift (result : Result A) : CallM S A :=
 compatibility. Machine dispatch, target features, caller locations, pointer
 resolution and actual body interception remain required in the supplied hooks. -/
 def bindAbi (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
-    (compatibility : CallCompatibility.Evidence S)
+    (_compatibility : CallCompatibility.Evidence S)
     (budget : Nat)
     (base : CallHooks P S C E Other Extern (FnAbi TypeId) (ArgAbi TypeId)) :
     CallHooks P S C E Other Extern (FnAbi TypeId) (ArgAbi TypeId) := {
@@ -373,7 +374,7 @@ def bindAbi (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
   argIsIgnore := ArgAbi.isIgnore
   isOneZst := fun layout => layout.layout.is1zst
   checkArgumentCompat := fun _ caller callee =>
-    LayoutCompat.checkArgumentCompat (CallCompatibility.queries prepared.runtime compatibility)
+    LayoutCompat.checkArgumentCompat (CompilerWorldCompatibility.queries ⟨prepared.runtime,prepared.program,none⟩ types)
       budget caller callee }
 
 end Miri.Input.CallResolution

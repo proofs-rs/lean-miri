@@ -134,6 +134,7 @@ private def parseClock (p : CompilerProviders.Prepared) (value : Int32) :
   return none
 
 private def readTimespec (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (ValidityMachine.State K U))
     (access : ValidityMachine.Access K U)
     (projection : PlaceProjectionHooks Provenance (ValidityMachine.State K U) C MachineHooks.FrameExtra)
     (choice : C) (op : OpTy Provenance) :
@@ -144,9 +145,7 @@ private def readTimespec (p : CompilerProviders.Prepared)
   let (pointer,metadata) ← operandPointer access op
   let parent ← PointerPlaceMachine.withMetadata access pointer metadata layout false
   let field := fun name => do
-    let index ← match CompilerNamedFields.fieldIndex p.runtime parent.layout name with
-      | .ok value => pure value
-      | .error reason => throw reason
+    let index ← CompilerNamedFields.fieldIndex types parent.layout name
     let projected ← PlaceDynamic.field projection choice ⟨.memory parent.mplace,parent.layout⟩ index
     match projected.ref with
     | .memory memory => pure ⟨memory,projected.layout⟩
@@ -208,7 +207,7 @@ def fromSource [DecidableEq MiriMemoryKind]
       let object ← objects.pthread.deref op kind
       PlaceMachine.writeMemory access (fun _ => false) .uninit object
     parseClock := parseClock p
-    readTimespec := readTimespec p access projection choice
+    readTimespec := readTimespec p types access projection choice
     timeout := fun kind relative duration => do
       let kind := match kind with | .realTime => Clock.TimeoutClock.realTime | .monotonic => .monotonic
       let style := if relative then Clock.TimeoutStyle.relative else .absolute

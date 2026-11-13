@@ -469,8 +469,8 @@ def makeWithForeignContext {Assembly : Type}
       | .error error => throw error
       | .ok config => ValidityMachine.validateRuntime config.validity c options.limits.validation place true
     let compiler := EvalPlaceConstruction.compiler p placeOptions access pointers table
-      (CompilerPlaceTypes.place p EvalProjectionMachine.arrays options.place.debugAssertions covariance) validate
-    let projection := EvalPlaceConstruction.projection p placeOptions access allocation compiler table
+      (CompilerPlaceTypes.place p EvalProjectionMachine.arrays options.place.debugAssertions covariance) validate leaves.typeConstants
+    let projection := EvalPlaceConstruction.projection p placeOptions access allocation compiler table leaves.typeConstants
     let pointerCompiler := CompilerExecutionProviders.pointerCompiler facts EvalProjectionMachine.arrays
     let dereference := PointerPlaceMachine.dereference access pointerCompiler projection.dynamic table projection.dynamicFuel
     let operands : OperandMachine.Hooks MiriMemoryKind (User Os R P H D O Aff B Host) C := {
@@ -614,7 +614,7 @@ def makeWithForeignContext {Assembly : Type}
     let fuse := fun (_ : C) => do
       if !options.floatNondeterministic then return false
       ExecutionChoices.boolean EvalCoreMachine.tape .floatFuse
-    let varArgs := IntrinsicSymbolsMachine.varArgs (CompilerVarArgsLeaves.make p EvalProjectionMachine.arrays options.compatibilityBudget)
+    let varArgs := IntrinsicSymbolsMachine.varArgs (CompilerVarArgsLeaves.make p EvalProjectionMachine.arrays options.compatibilityBudget leaves.typeConstants)
       EvalConfiguration.symbols access pointers.arithmetic functions operands copy
     let typeId := IntrinsicSymbolsMachine.typeId (CompilerIntrinsicSymbols.typeIdLeaves p image EvalProjectionMachine.arrays)
       EvalConfiguration.symbols access functions operands copy
