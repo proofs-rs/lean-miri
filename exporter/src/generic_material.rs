@@ -210,7 +210,7 @@ pub fn definition_template<'tcx>(tcx: TyCtxt<'tcx>, def: rustc_hir::def_id::DefI
 {
     use rustc_hir::def::DefKind as D;
     let kind=tcx.def_kind(def);
-    if !matches!(kind,D::Fn|D::AssocFn|D::TyAlias|D::AssocTy|D::Struct|D::Enum|D::Union|D::Const|D::AssocConst|D::Static{..}) {
+    if !matches!(kind,D::Fn|D::AssocFn|D::TyAlias|D::AssocTy|D::Struct|D::Enum|D::Union|D::Const|D::AssocConst|D::AnonConst|D::Static{..}) {
         return Ok(None);
     }
     // Abstract trait associated types have no RHS; asking type_of here would

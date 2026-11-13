@@ -5,8 +5,8 @@ import Miri.Input.CompilerInstance
 Pinned rustc_ty_utils/src/instance.rs resolve_associated_item UserDefined arm:
 select and fulfill an impl, find its final associated leaf, rebase method args,
 erase regions and return Item. No vtable or track-caller shim postprocessing.
-Specialization ancestry, trait defaults and builtin candidates remain explicit
-residuals. Signature comparison is a deliberately exact supported subset of
+Specialization ancestry and builtin candidates remain explicit residuals.
+Unmodified binder-free trait defaults retain the original trait generic scope. Signature comparison is a deliberately exact supported subset of
 compare_impl_item, never a substitute for missing compatibility evidence. -/
 namespace Miri.Input.WorldOrdinaryTraitInstance
 open GenericSubstitution TraitSelection Miri.Interpreter
@@ -117,7 +117,18 @@ def resolve (work fuel : Nat) (method : MIR.DefId) (args : Array MIR.GenericArg)
     throw "ordinary trait selected impl canonical scope mismatch"
   let substitution ← lift (normalizedArguments context work fuel implementation.parameters selection.substitution)
   let methods := implementation.methods.filter (·.traitAssociatedDefinition == identity)
-  if methods.isEmpty then throw "ordinary trait default method requires source ancestry"
+  if methods.isEmpty then
+    unless member.hasValue do throw "ordinary trait selected default leaf has no source value"
+    let defaultSignature ← lift (RawFunctionSignature.read rawSignature)
+    unless defaultSignature.variables.isEmpty do
+      throw "ordinary trait default method binder requires source ancestry provider"
+    -- With default impls excluded and a uniquely fulfilled impl, an absent
+    -- override selects the trait leaf. Pinned translate_args returns to the
+    -- trait ancestor: preserve its original Self/trait/method-own arguments.
+    lift (fulfill context work fuel identity arguments)
+    let _ ← lift (signature context work fuel rawSignature arguments)
+    let physical ← RuntimeArrayTypes.liftType (GenericInstantiationWorld.resolveArguments fuel arguments)
+    return ← CompilerInstance.item method physical
   unless methods.size == 1 do throw "ordinary trait selected method source ambiguous"
   let some selected := methods[0]? | throw "ordinary trait selected method absent"
   unless selected.isFinal do throw "ordinary trait selected method specialization requires source leaf provider"

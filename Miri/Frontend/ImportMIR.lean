@@ -393,6 +393,14 @@ deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Terminator
 deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Block
 deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Program
 deriving instance ToExpr for Interpreter.CompileTime.SourceStack.Source
+deriving instance ToExpr for Input.RawU64Frame.OwnerKind
+deriving instance ToExpr for Input.RawU64Frame.ValueClass
+deriving instance ToExpr for Input.RawU64Frame.SourceValue
+deriving instance ToExpr for Input.RawU64Frame.Reference
+deriving instance ToExpr for Input.RawU64Frame.Operand
+deriving instance ToExpr for Input.RawU64Frame.Rvalue
+deriving instance ToExpr for Input.RawU64Frame.Statement
+deriving instance ToExpr for Input.RawU64Frame.Program
 deriving instance ToExpr for Input.CtfeMirSource.Program
 deriving instance ToExpr for Input.CtfeMirSource.Policy
 deriving instance ToExpr for Input.CtfeMirSource.LintRoot

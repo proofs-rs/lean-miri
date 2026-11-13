@@ -1,3 +1,4 @@
+import Miri.Input.RawU64Frame
 import Miri.Input.CompilerBodyRole
 import Miri.Input.CompilerTypingEnv
 import Miri.Interpreter.CompileTime.ScalarFrame
@@ -10,7 +11,7 @@ namespace Miri.Input.CtfeMirSource
 open GenericSubstitution Miri.MIR
 open Miri.Interpreter.CompileTime
 inductive Policy where
-  | scalarU32 | scalarU32CallsV1 | scalarU32ConstArgsV1
+  | scalarU32 | scalarU32CallsV1 | scalarU32ConstArgsV1 | rawU64
   deriving Repr, DecidableEq
 structure LintRoot where
   owner : DefinitionIdentity
@@ -23,6 +24,7 @@ structure Scope where
   deriving Repr, DecidableEq
 /-- Policies carry disjoint typed programs; old scalar consumers must dispatch. -/
 inductive Program where
+  | rawU64 (value : RawU64Frame.Program)
   | scalar (value : ScalarFrame.Program)
   | calls (value : SourceStack.Source)
   deriving Repr, DecidableEq
@@ -79,6 +81,7 @@ def stackSource (source : Source) : Except String SourceStack.Source := do
   unless source.definition.crateIndex == 0 && source.promoted.isNone do
     throw "source stack requires unpromoted local crate0 identity"
   match source.program with
+  | .rawU64 _ => throw "physical u64 source requires the typed CTFE root provider"
   | .calls program => pure program
   | .scalar program =>
     unless source.requiredConstants.isEmpty do throw "scalar embedding requires empty preamble"
@@ -93,6 +96,21 @@ def validate (source : Source) : Except String Unit := do
   unless source.environment == .declaration source.definition .postAnalysis do
     throw "CTFE source declaration environment recipe contradicts its source owner/mode"
   unless source.parameters.all (· != .aggregate) do throw "invalid CTFE declaration parameter sort"
+  if source.policy == .rawU64 then
+    let .rawU64 program := source.program | throw "raw u64 policy/program mismatch"
+    unless source.parameters.isEmpty && source.promoted.isNone && source.requiredConstants.isEmpty do
+      throw "raw u64 frame header/preamble domain mismatch"
+    RawU64Frame.validate program
+    unless source.localSources.size == program.localCount && source.localMutability.size == program.localCount &&
+        source.statementSources.size == 1 && source.terminatorSources.size == 1 do throw "raw u64 frame source-info domain mismatch"
+    let some statements := source.statementSources[0]? | throw "raw u64 frame source block absent"
+    unless statements.size == program.statements.size do throw "raw u64 frame statement source-info mismatch"
+    for value in source.localSources ++ statements ++ source.terminatorSources do
+      unless value.scope < source.scopes.size do throw "raw u64 frame source scope absent"
+    for (scope,index) in source.scopes.zipIdx do
+      if let some parent := scope.parent then
+        unless parent < index do throw "raw u64 scope parent is not earlier"
+    return ()
   let program ← match source.policy,source.program with
     | .scalarU32,.scalar program => pure program
     | policy,.calls calls => do
@@ -235,6 +253,39 @@ def validateReferences (spanCount : Nat) (knownDefinition : DefinitionIdentity �
       unless knownDefinition root.owner do throw "CTFE source lint owner is absent"
   let operand (value : ScalarFrame.Operand) : Except String Unit := do
     if let .sourceValue value := value then span ⟨value.span⟩
+  if let .rawU64 program := source.program then
+    span program.preambleDefSpan
+    let rec term : Nat → GenericSubstitution.Term → Except String Unit
+      | 0,_ => throw "raw u64 reference term traversal exhausted"
+      | fuel+1,value => do
+        match value with
+        | .definition _ _ identity children =>
+          unless knownDefinition identity do throw "raw u64 argument definition absent"
+          let rec visit : GenericSubstitution.Terms → Except String Unit
+            | .nil => pure ()
+            | .cons child rest => term fuel child *> visit rest
+          visit children
+        | .node _ _ _ children =>
+          let rec visitNode : GenericSubstitution.Terms → Except String Unit
+            | .nil => pure ()
+            | .cons child rest => term fuel child *> visitNode rest
+          visitNode children
+        | .binder _ body => term fuel body
+        | _ => pure ()
+    let reference (value : RawU64Frame.Reference) : Except String Unit := do
+      unless knownDefinition value.definition do throw "raw u64 physical constant definition absent"
+      span value.span
+      for argument in value.arguments do term 16384 argument
+    let operand : RawU64Frame.Operand → Except String Unit
+      | .constant value => reference value
+      | .sourceValue value => span value.span
+      | _ => pure ()
+    for value in program.required do reference value
+    for statement in program.statements do
+      match statement with
+      | .assign _ (.use value _) | .assign _ (.unaryNot value) => operand value
+      | _ => pure ()
+    return ()
   let .scalar program := source.program | do
     let .calls calls := source.program | throw "CTFE program payload absent"
     let definition (index : Nat) : Except String Unit :=

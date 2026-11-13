@@ -1,6 +1,7 @@
 import Miri.Input.CtfeMirSource
 import Miri.Input.GenericMaterialCodec
 import Miri.Input.CtfeCallsSourceCodec
+import Miri.Input.RawU64FrameCodec
 
 namespace Miri.Input.CtfeMirSourceCodec
 open Lean CtfeMirSource Miri.Interpreter.CompileTime.ScalarFrame
@@ -112,6 +113,8 @@ private def scope (value : Json) : Except String Scope := do
   pure ⟨⟨← nat value "span"⟩,← optionalNat (← field value "parent"),lintRoot⟩
 
 def read (value : Json) : Except String Source := do
+  if (text value "policy").toOption == some "u64_physical_constants_v1" then
+    return ← RawU64FrameCodec.read value
   if (text value "policy").toOption == some "scalar_u32_calls_v1" ||
       (text value "policy").toOption == some "scalar_u32_const_args_v1" then
     return ← CtfeCallsSourceCodec.read value

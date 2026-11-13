@@ -169,6 +169,8 @@ private def scope (value : Json) : Except String Scope := do
   pure ⟨⟨← nat value "span"⟩,← optionalNat (← field value "parent"),lintRoot⟩
 
 def read (value : Json) : Except String Source := do
+  unless #["scalar_u32_calls_v1","scalar_u32_const_args_v1"].contains (← text value "policy") do
+    throw "legacy calls codec requires its explicit u32 calls policy"
   let constArgs := (← text value "policy") == "scalar_u32_const_args_v1"
   keys value (["definition","source_role","promoted","policy","phase","environment_recipe",
     "parameters","required_consts","span","arg_count","spread_arg","locals","blocks","source_scopes","user_type_annotations"] ++ if constArgs then ["constant_parameter_types"] else [])

@@ -260,9 +260,12 @@ impl State {
                         result.push(item.def_id);
                         scopes.push(item.def_id);
                     }
-                    if matches!(item.kind, ty::AssocKind::Type { .. })
+                    if matches!(item.kind, ty::AssocKind::Type { .. } | ty::AssocKind::Const { .. })
                         && item.trait_item_def_id().is_some_and(|parent| demanded.contains(&parent)) {
                         result.push(item.def_id);
+                        // The source resolver needs canonical const scopes and
+                        // generic headers, never an exported selected answer.
+                        if matches!(item.kind, ty::AssocKind::Const { .. }) { scopes.push(item.def_id); }
                     }
                 }
             }

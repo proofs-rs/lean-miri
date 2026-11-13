@@ -38,6 +38,17 @@ finish adapter preserves callback World state and intern/validation/error order;
 it requires an actual allocated-root callback. Component proofs use no axioms.
 This does not supply missing allocator semantics or admit general query roots.
 
+External raw u64 constants have a separate strict source policy. It retains
+physical constant references, ordered required preambles, UnaryNot, declared
+u64 types and canonical definition/span/scope metadata. Three genuine external
+frames and seventeen malformed controls pass the maintained codec check. MIR
+availability follows the pinned CTFE metadata rule: optimized-MIR availability
+is insufficient, and trivial constants have no CTFE MIR body. This availability check neither evaluates trivial constants nor manufactures
+a body. Trivial constants need a distinct source/provider path. The full std document also passes a private preparation
+check for the external UnaryNot leaf; its parent frames still require the
+constant-query dependency engine. This source admission does not install u64
+PostAnalysis evaluation or type-level alias normalization into runtime execution.
+
 Runtime body providers now resolve exact identities through the execution-owned
 BodyArena. Constructed Item instances select a unique ordinary raw MIR template
 by physical definition and complete arguments; local layouts, frames, source
@@ -609,6 +620,14 @@ from declarations in Lean; specialization, universe/HRTB and other solver rules
 are incomplete. Production normalization routes every nonrigid free/projection
 alias through the source-rule engine and omits its eager normalized result;
 unsupported providers fail explicitly without an answer-catalog fallback.
+
+Covered non-specialized trait-default methods retain the original trait and
+method arguments, rather than rebasing them onto impl parameters. Source demand
+captures the actual default runtime templates and their direct default-body
+dependencies. Two fresh compiler selections, both complete BodyArena identities,
+eight rejection controls and a wrong-physical-oracle control pass without instance,
+ABI or body-answer catalogs. Broader defaults, predicates and specialization
+remain bounded by the ordinary source solver.
 Five fresh canonical-main/current export pairs passed rebuilt Lean query checks:
 ordinary generic projection, GAT substitution/own clauses, checked free alias,
 checked alias with an associated-type equality clause, and an explicit unsupported

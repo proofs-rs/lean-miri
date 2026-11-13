@@ -1,6 +1,7 @@
 #![feature(rustc_private)]
 mod ctfe_body_source;
 mod ctfe_scalar_source;
+mod ctfe_type_const_source;
 mod ctfe_calls_source;
 mod ctfe_scalar_catalog;
 
@@ -29,6 +30,7 @@ mod generic_mir;
 mod noop_drop;
 mod fn_pointer_shim;
 mod generic_mir_call;
+mod source_runtime_default;
 mod alias_rules;
 mod adt_material;
 mod type_hash_material;
@@ -1790,6 +1792,17 @@ impl ExportCallbacks {
             let definition = material_queue[generic_definition_cursor];
             let definition_index = def_json(&mut export_context, definition) as usize;
             trait_material_state.register_definition(tcx, definition)?;
+            // Raw type-level constants can be reached through field syntax,
+            // without any runtime MIR Unevaluated operand. Capture their raw
+            // frame closure, then demand canonical headers/scopes separately.
+            if matches!(tcx.def_kind(definition), rustc_hir::def::DefKind::Const |
+                rustc_hir::def::DefKind::AssocConst | rustc_hir::def::DefKind::AnonConst) {
+                ctfe_scalar_catalog::demand(&mut export_context, tcx, definition, None)?;
+                for reference in export_context.ctfe_scalar_sources.demanded_definitions()? {
+                    def_json(&mut export_context, reference);
+                    if material_demand.insert(reference) { material_queue.push(reference); }
+                }
+            }
             // Close catalog dependencies once per worklist batch. Repeating
             // the full impl catalog for every raw scope has no semantic role.
             if generic_definition_cursor == discovery_boundary {
@@ -1879,7 +1892,7 @@ impl ExportCallbacks {
             use rustc_hir::def::DefKind as ScopeKind;
             if matches!(tcx.def_kind(definition), ScopeKind::Fn | ScopeKind::AssocFn | ScopeKind::TyAlias |
                 ScopeKind::AssocTy | ScopeKind::Struct | ScopeKind::Enum | ScopeKind::Union |
-                ScopeKind::Const | ScopeKind::AssocConst | ScopeKind::Static { .. } |
+                ScopeKind::Const | ScopeKind::AssocConst | ScopeKind::AnonConst | ScopeKind::Static { .. } |
                 ScopeKind::Trait | ScopeKind::TraitAlias | ScopeKind::Impl { .. }) {
                 scopes.push(definition);
             }
@@ -2839,6 +2852,9 @@ fn resolved_mir_body_json<'tcx>(
         // No enclosing/target executable MIR is instantiated for source calls.
         for dependency in generic_mir_call::dependencies(tcx,template,instance.args)? {
             type_json(context,tcx,dependency.function_type)?;
+            if let ty::FnDef(definition,_) = dependency.function_type.kind() {
+                source_runtime_default::capture(context,tcx,*definition)?;
+            }
             if let Some(instance)=dependency.instance {
                 context.register_instance(instance);
                 context.instance_abi_requests.insert((instance,ty::List::empty()));

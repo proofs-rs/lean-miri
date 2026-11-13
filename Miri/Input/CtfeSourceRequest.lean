@@ -34,6 +34,7 @@ def prepare (world : TypeArena.World) (environments : SourceEnvironment.Lookup)
   verifyInstance world frame
   let .Item _ := frame.kind | throw "scalar CTFE source policy requires an Item frame"
   let source ← CtfeMirSource.lookup sources frame.definition promoted
+  if source.policy == .rawU64 then throw "raw u64 frame requires the family-aware typed CTFE provider"
   if let .calls calls := source.program then
     let known (index : Nat) : Except String Unit := do
       let _ ← world.definitionRef ⟨0,index⟩
@@ -89,7 +90,7 @@ def enterSource (prepared : Prepared) (sources : Array CtfeMirSource.Source)
     (resolve : Array Nat → Interpreter.CompileTime.CallFrame.Reference → Except String Interpreter.CompileTime.CallFrame.Value)
     (arguments : Array Interpreter.CompileTime.CallFrame.Value) :
     Except String Unit × Interpreter.CompileTime.SourceStack.Machine := Id.run do
-  let .ok programs := sources.mapM CtfeMirSource.stackSource
+  let .ok programs := (sources.filter (fun source => source.policy != .rawU64)).mapM CtfeMirSource.stackSource
     | return (.error "source stack contains unsupported physical source identity",{})
   unless prepared.frame.arguments.isEmpty || prepared.source.policy == .scalarU32ConstArgsV1 do
     return (.error "source entry requires a separate physical type-argument adapter",{})

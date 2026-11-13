@@ -15,6 +15,18 @@ pub(super) struct Catalog {
     unavailable: Vec<(ctfe_body_source::TemplateKey,String)>,
 }
 impl Catalog {
+    pub(super) fn demanded_definitions(&self)->Result<Vec<DefId>,String> {
+        let mut values=Vec::new();
+        // Close only retained physical-u64 source syntax. Unavailable or legacy
+        // scalar/calls candidates must not amplify the raw template worklist.
+        for source in &self.sources {
+            if source.get("policy").and_then(Value::as_str)==Some("u64_physical_constants_v1") {
+                super::generic_definition_references(source,&mut values)?;
+            }
+        }
+        values.sort_by_key(|id|(id.krate.as_u32(),id.index.as_u32()));
+        values.dedup();Ok(values)
+    }
     pub(super) fn finish(self)->Vec<Value> {
         // The typed scalar catalogue deliberately contains only complete sources.
         // Missing entries are rejected by lookup, never used as query answers.
@@ -41,6 +53,7 @@ impl<'tcx> Visitor<'tcx> for Dependencies {
     }
 }
 fn has_body(tcx:TyCtxt<'_>,definition:DefId)->bool {
+    if let Some(available)=super::ctfe_type_const_source::const_body_available(tcx,definition) {return available}
     match tcx.def_kind(definition) {
         DefKind::AssocConst|DefKind::AssocFn if !tcx.associated_item(definition).defaultness(tcx).has_value()=>return false,
         _=>{},
@@ -86,7 +99,11 @@ pub(super) fn demand<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,def
     }
     match ctfe_scalar_source::capture(tcx,definition,promoted,body,|span|span_json(context,tcx,span))
         .or_else(|_|ctfe_calls_source::capture(tcx,definition,promoted,body,|span|span_json(context,tcx,span)))
-        .or_else(|_|ctfe_calls_source::capture_const_args(tcx,definition,promoted,body,|span|span_json(context,tcx,span))) {
+        .or_else(|_|ctfe_calls_source::capture_const_args(tcx,definition,promoted,body,|span|span_json(context,tcx,span)))
+        .or_else(|_| {
+            if promoted.is_some() {return Err("u64 physical type-const policy excludes promoted bodies".into())}
+            super::ctfe_type_const_source::capture(tcx,definition,body,|span|span_json(context,tcx,span))
+        }) {
         Ok(source)=>context.ctfe_scalar_sources.sources.push(source),
         Err(reason)=>{
             if std::env::var_os("LEAN_MIRI_TRACE_CTFE_SOURCE").is_some() {

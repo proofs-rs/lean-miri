@@ -1,0 +1,335 @@
+[
+  {
+    "arg_count": 0,
+    "blocks": [
+      {
+        "cleanup": false,
+        "statements": [
+          {
+            "kind": {
+              "destination": {
+                "fields": [],
+                "local": 0
+              },
+              "kind": "assign",
+              "value": {
+                "kind": "use",
+                "operand": {
+                  "kind": "constant",
+                  "source": {
+                    "arguments": [
+                      {
+                        "kind": "atom",
+                        "payload": "u64",
+                        "sort": "type",
+                        "tag": "uint"
+                      }
+                    ],
+                    "declared_type": {
+                      "bits": 64,
+                      "kind": "uint"
+                    },
+                    "definition": {
+                      "crate": 2,
+                      "index": 54180
+                    },
+                    "kind": "unevaluated",
+                    "promoted": null,
+                    "span": 41285,
+                    "user_type": null
+                  }
+                },
+                "retag": "yes"
+              }
+            },
+            "source": {
+              "scope": 0,
+              "span": 41285
+            }
+          }
+        ],
+        "terminator": {
+          "kind": {
+            "kind": "return"
+          },
+          "source": {
+            "scope": 0,
+            "span": 41285
+          }
+        }
+      }
+    ],
+    "def_path": "core::num::niche_types::NonZeroU64Inner::{constant#0}",
+    "definition": {
+      "crate": 2,
+      "index": 69102
+    },
+    "environment_recipe": {
+      "kind": "declaration",
+      "mode": "post_analysis",
+      "owner": {
+        "crate": 2,
+        "index": 69102
+      }
+    },
+    "locals": [
+      {
+        "mutable": true,
+        "source": {
+          "scope": 0,
+          "span": 41285
+        },
+        "type": {
+          "bits": 64,
+          "kind": "uint"
+        }
+      }
+    ],
+    "owner_kind": "anon_const",
+    "parameters": [],
+    "phase": "runtime_post_cleanup",
+    "policy": "u64_physical_constants_v1",
+    "preamble_def_span": 41286,
+    "promoted": null,
+    "required_consts": [
+      {
+        "arguments": [
+          {
+            "kind": "atom",
+            "payload": "u64",
+            "sort": "type",
+            "tag": "uint"
+          }
+        ],
+        "declared_type": {
+          "bits": 64,
+          "kind": "uint"
+        },
+        "definition": {
+          "crate": 2,
+          "index": 54180
+        },
+        "kind": "unevaluated",
+        "promoted": null,
+        "span": 41285,
+        "user_type": null
+      }
+    ],
+    "source_role": "ctfe",
+    "source_scopes": [
+      {
+        "lint_root": null,
+        "parent": null,
+        "span": 41285
+      }
+    ],
+    "span": 41285,
+    "spread_arg": null,
+    "user_type_annotations": []
+  },
+  {
+    "arg_count": 0,
+    "blocks": [
+      {
+        "cleanup": false,
+        "statements": [
+          {
+            "kind": {
+              "destination": {
+                "fields": [],
+                "local": 0
+              },
+              "kind": "assign",
+              "value": {
+                "kind": "use",
+                "operand": {
+                  "kind": "constant",
+                  "source": {
+                    "arguments": [],
+                    "declared_type": {
+                      "bits": 64,
+                      "kind": "uint"
+                    },
+                    "definition": {
+                      "crate": 2,
+                      "index": 38452
+                    },
+                    "kind": "unevaluated",
+                    "promoted": null,
+                    "span": 41288,
+                    "user_type": null
+                  }
+                },
+                "retag": "yes"
+              }
+            },
+            "source": {
+              "scope": 0,
+              "span": 41288
+            }
+          }
+        ],
+        "terminator": {
+          "kind": {
+            "kind": "return"
+          },
+          "source": {
+            "scope": 0,
+            "span": 41289
+          }
+        }
+      }
+    ],
+    "def_path": "<u64 as core::pat::RangePattern>::MAX",
+    "definition": {
+      "crate": 2,
+      "index": 54220
+    },
+    "environment_recipe": {
+      "kind": "declaration",
+      "mode": "post_analysis",
+      "owner": {
+        "crate": 2,
+        "index": 54220
+      }
+    },
+    "locals": [
+      {
+        "mutable": true,
+        "source": {
+          "scope": 0,
+          "span": 41287
+        },
+        "type": {
+          "bits": 64,
+          "kind": "uint"
+        }
+      }
+    ],
+    "owner_kind": "associated_const",
+    "parameters": [],
+    "phase": "runtime_post_cleanup",
+    "policy": "u64_physical_constants_v1",
+    "preamble_def_span": 41289,
+    "promoted": null,
+    "required_consts": [
+      {
+        "arguments": [],
+        "declared_type": {
+          "bits": 64,
+          "kind": "uint"
+        },
+        "definition": {
+          "crate": 2,
+          "index": 38452
+        },
+        "kind": "unevaluated",
+        "promoted": null,
+        "span": 41288,
+        "user_type": null
+      }
+    ],
+    "source_role": "ctfe",
+    "source_scopes": [
+      {
+        "lint_root": null,
+        "parent": null,
+        "span": 41289
+      }
+    ],
+    "span": 41289,
+    "spread_arg": null,
+    "user_type_annotations": []
+  },
+  {
+    "arg_count": 0,
+    "blocks": [
+      {
+        "cleanup": false,
+        "statements": [
+          {
+            "kind": {
+              "destination": {
+                "fields": [],
+                "local": 0
+              },
+              "kind": "assign",
+              "value": {
+                "kind": "unary",
+                "op": "not",
+                "operand": {
+                  "kind": "source_value",
+                  "source_class": "literal_value",
+                  "span": 7192,
+                  "user_type": null,
+                  "value": {
+                    "bits": 64,
+                    "kind": "uint",
+                    "value": "0"
+                  }
+                }
+              }
+            },
+            "source": {
+              "scope": 0,
+              "span": 7193
+            }
+          }
+        ],
+        "terminator": {
+          "kind": {
+            "kind": "return"
+          },
+          "source": {
+            "scope": 0,
+            "span": 7194
+          }
+        }
+      }
+    ],
+    "def_path": "core::num::<impl u64>::MAX",
+    "definition": {
+      "crate": 2,
+      "index": 38452
+    },
+    "environment_recipe": {
+      "kind": "declaration",
+      "mode": "post_analysis",
+      "owner": {
+        "crate": 2,
+        "index": 38452
+      }
+    },
+    "locals": [
+      {
+        "mutable": true,
+        "source": {
+          "scope": 0,
+          "span": 7191
+        },
+        "type": {
+          "bits": 64,
+          "kind": "uint"
+        }
+      }
+    ],
+    "owner_kind": "associated_const",
+    "parameters": [],
+    "phase": "runtime_post_cleanup",
+    "policy": "u64_physical_constants_v1",
+    "preamble_def_span": 7195,
+    "promoted": null,
+    "required_consts": [],
+    "source_role": "ctfe",
+    "source_scopes": [
+      {
+        "lint_root": null,
+        "parent": null,
+        "span": 7194
+      }
+    ],
+    "span": 7194,
+    "spread_arg": null,
+    "user_type_annotations": []
+  }
+]
