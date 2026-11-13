@@ -136,7 +136,7 @@ def vtableHooks (p : Prepared) (types : RuntimeArrayQueries.Access (MachineHooks
     (h : VTableMachine.Hooks K User Other)
     (base : VTableHooks Provenance (MachineHooks.State K User) C CallInstance (FnAbi MIR.TyId)) :
     VTableHooks Provenance (MachineHooks.State K User) C CallInstance (FnAbi MIR.TyId) :=
-  VTableMachine.hooks (hooks p image h)
+  WorldVirtualHooks.vtableHooks types <| VTableMachine.hooks (hooks p image h)
     (CompilerVTableQueries.hooks p.queries
       (CompilerCallPipeline.vtableHooks p.calls types image (fun (state : MachineHooks.State K User) => state.machine.memory) base))
 

@@ -79,6 +79,31 @@ pub(super) fn small_nonpointer_pair(input: ty::Ty<'_>) -> bool {
     })
 }
 
+// Direct tuple ScalarPairs with raw data pointers. These target alignment
+// bounds ensure two register-sized fields occupy at most sixteen bytes, so
+// neither Item return deduction nor the external indirect policy is needed.
+pub(super) fn small_raw_pointer_pair<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>) -> bool {
+    let ty::Tuple(fields) = input.kind() else { return false; };
+    if fields.len() != 2 { return false; }
+    let dl = &tcx.data_layout;
+    if dl.default_address_space != rustc_abi::AddressSpace::ZERO ||
+        dl.pointer_size_in(rustc_abi::AddressSpace::ZERO).bytes() != 8 ||
+        dl.pointer_align_in(rustc_abi::AddressSpace::ZERO).bytes() > 8 ||
+        [dl.aggregate_align,dl.i8_align,dl.i16_align,dl.i32_align,dl.i64_align,
+            dl.f16_align,dl.f32_align,dl.f64_align].iter().any(|align|align.bytes()>8) {
+        return false;
+    }
+    let mut raw = false;
+    fields.iter().all(|field|match field.kind() {
+        ty::RawPtr(pointee,_) => {raw=true;sized_pointee(tcx,*pointee,256)},
+        ty::Bool | ty::Char => true,
+        ty::Int(kind) => !matches!(kind,ty::IntTy::I128),
+        ty::Uint(kind) => !matches!(kind,ty::UintTy::U128),
+        ty::Float(kind) => !matches!(kind,ty::FloatTy::F128),
+        _ => false,
+    }) && raw
+}
+
 // Bounded byte-array/tuple source grammar for direct and indirect Memory.
 // Raw value-tree bits establish the count, never layout_of or ABI results.
 pub(super) fn small_memory(input: ty::Ty<'_>) -> bool {
@@ -167,7 +192,8 @@ pub(super) fn signature<'tcx>(tcx: TyCtxt<'tcx>, instance: ty::Instance<'tcx>,
         if !super::generic_mir::supported_arguments(tcx.mk_args(&[ty.into()])) { return false; }
         match ty.kind() {
             ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never => true,
-            ty::Tuple(fields) => fields.is_empty() || small_nonpointer_pair(ty) || small_memory(ty),
+            ty::Tuple(fields) => fields.is_empty() || small_nonpointer_pair(ty) ||
+                small_raw_pointer_pair(tcx,ty) || small_memory(ty),
             ty::Array(..) => small_memory(ty),
             ty::RawPtr(pointee,_) => sized_pointee(tcx, *pointee, 256),
             ty::Ref(_,pointee,_) => sized_pointee(tcx, *pointee, 256),

@@ -51,6 +51,44 @@ private def regionBytes (world : World) (region : MIR.Region) : Except String (O
     pure (some (tag 1 ++ index ++ littleEndian 4 variableIndex ++ kind))
   | _ => pure (some (tag 6))
 
+private def sourceConstructor (world : World) (id : TypeId) : Except String Constructor := do
+  match ← world.lookupType id with
+  | .constructed key => pure key
+  | .material node =>
+    let some key ← world.materialKey node | throw "closure hash child source constructor is unavailable"
+    pure key
+
+/-- Pinned ClosureArgs consists of the parent prefix and three synthetic type
+arguments: closure kind, RustCall signature, and tupled captures. No callable
+body or result hash supplies their identity. -/
+private def validateClosureHeader (world : World)
+    (identity : GenericSubstitution.DefinitionIdentity) (arguments : Array MIR.GenericArg) : Except String Unit := do
+  let reference ← world.definitionRef identity
+  let some definition := world.definitions[reference]? | throw "closure hash physical owner absent"
+  let some path := definition.rawPath | throw "closure hash raw definition path absent"
+  unless path.components.back?.any (·.kind == "closure") do throw "closure hash owner is not a raw closure definition"
+  let header ← DefinitionPath.requireGenerics path
+  unless header.parameters.size == arguments.size && header.parentParameterCount + 3 == arguments.size do
+    throw "closure hash raw generic/synthetic argument domain mismatch"
+  for (sort,argument) in header.parameters.zip arguments do
+    unless (match sort,argument with
+      | .type,.Type _ | .region,.Lifetime _ | .constant,.Const _ => true | _,_ => false) do
+      throw "closure hash generic argument sort mismatch"
+  let some (.Type kind) := arguments[header.parentParameterCount]? | throw "closure hash kind type absent"
+  let .integer true width ← sourceConstructor world kind | throw "closure hash kind is not a pinned integer marker"
+  unless [MIR.IntegerKind.i8,.i16,.i32].contains width do throw "closure hash kind integer marker is invalid"
+  let some (.Type signature) := arguments[header.parentParameterCount + 1]? | throw "closure hash signature type absent"
+  let .functionPointer signature ← sourceConstructor world signature | throw "closure hash signature source is not a FnPtr"
+  let abi ← Miri.ABI.ExternAbi.ofPacked signature.abiPacked
+  unless abi == .RustCall && signature.safe && !signature.cVariadic && signature.inputs.size == 1 do
+    throw "closure hash signature header is outside the pinned RustCall domain"
+  let some input := signature.inputs[0]? | throw "closure hash tupled signature input absent"
+  unless (match ← sourceConstructor world input with | .tuple .. => true | _ => false) do
+    throw "closure hash signature input is not tupled"
+  let some (.Type captures) := arguments[header.parentParameterCount + 2]? | throw "closure hash capture type absent"
+  unless (match ← sourceConstructor world captures with | .tuple .. => true | _ => false) do
+    throw "closure hash capture source is not a tuple"
+
 mutual
 /-- Missing structural support is distinct from malformed source identity.
 An unsupported child never substitutes its final TypeId hash for raw syntax. -/
@@ -113,6 +151,22 @@ private def rawSourceBytes (world : World) (normalized : Bool) : Nat → TypeId 
         pure (some (tag 13 ++ (← definitionBytes world identity) ++ argumentsHash ++
           littleEndian 16 variablesHash.toNat))
       | _ => throw "type hash nominal source constructor changed"
+    | .closure identity arguments =>
+      validateClosureHeader world identity arguments
+      let mut bytes := littleEndian 8 arguments.size
+      for argument in arguments do
+        match argument with
+        | .Type child =>
+          let some child ← rawSourceBytes world normalized fuel child | return none
+          bytes := bytes ++ tag 1 ++ child
+        | .Lifetime region =>
+          let some child ← regionBytes world region | return none
+          bytes := bytes ++ tag 0 ++ child
+        | .Const child =>
+          let some child ← constantBytes world normalized fuel child | return none
+          bytes := bytes ++ tag 2 ++ child
+      pure (some (tag 17 ++ (← definitionBytes world identity) ++
+        littleEndian 16 (StableSipHash.hash bytes).toNat))
     | .functionPointer signature =>
       unless normalized || signature.variables.isEmpty do return none
       let mut bytes := littleEndian 8 (signature.inputs.size + 1)
@@ -217,7 +271,7 @@ private def normalizationDomain (world : World) : Nat → TypeId → Except Stri
     let own ← match constructor with
       | .bool | .char | .str | .never | .integer .. | .foreign .. => pure (true,false)
       | .float kind => pure (kind != .f16b && kind != .ppcf128,false)
-      | .rawPointer .. | .reference .. | .slice .. | .tuple .. | .array .. | .adt .. | .patternType .. => pure (true,false)
+      | .rawPointer .. | .reference .. | .slice .. | .tuple .. | .array .. | .adt .. | .patternType .. | .closure .. => pure (true,false)
       | .dynamic value => pure (value.predicates.all (fun predicate => BinderRegions.regionOnly predicate.variables),true)
       | .functionPointer signature => pure (BinderRegions.regionOnly signature.variables,true)
       | .functionDefinition _ _ variables =>

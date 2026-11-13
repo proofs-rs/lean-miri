@@ -45,13 +45,64 @@ def material_local_displays(instance):
     return {types[local["type"]]["display"] for local in body["locals"]}
 
 
-assert "u32" in material_local_displays(wrap), "external generic wrapper MIR lost its u32 substitution"
 wrap_body = pool_entry(app, "bodies", wrap["body"])
-wrap_calls = [block["terminator"]["kind"] for block in wrap_body["basic_blocks"]
-              if block["terminator"]["kind"]["variant"] == "Call"]
-assert len(wrap_calls) == 1 and wrap_calls[0]["resolution"]["kind"] == "source_instance"
-assert "fn_abi" not in wrap_calls[0]["resolution"]
-assert wrap_calls[0]["resolution"]["instance_id"] == identity["instance_id"], "wrapper must call the exact identity::<u32> instance"
+if wrap_body["body_kind"] == "material":
+    assert "u32" in material_local_displays(wrap), "external generic wrapper MIR lost its u32 substitution"
+    wrap_calls = [block["terminator"]["kind"] for block in wrap_body["basic_blocks"]
+                  if block["terminator"]["kind"]["variant"] == "Call"]
+    assert len(wrap_calls) == 1 and wrap_calls[0]["resolution"]["kind"] == "source_instance"
+    assert "fn_abi" not in wrap_calls[0]["resolution"]
+    assert wrap_calls[0]["resolution"]["instance_id"] == identity["instance_id"]
+else:
+    # The compiler-owned wrapper keeps T as syntax. Its complete instance key
+    # supplies u32; this inspection does not substitute or manufacture MIR.
+    assert wrap_body["body_kind"] == "copy_template"
+    assert set(wrap_body) == {"body_kind", "template_id", "instance_id", "generic_args", "promoted_bodies"}
+    assert wrap_body["generic_args"] == wrap["generic_args"] and u32_argument(wrap)
+    assert wrap_body["promoted_bodies"] == []
+    assert wrap["instance_kind"] == {"kind": "item", "def_id": wrap["def_id"]}
+    wrap_source = app["mir_templates"][wrap_body["template_id"]]
+    assert wrap_source["source_def_id"] == wrap["def_id"]
+    assert wrap_source["def_path"] == wrap["def_path"] == "exporter_helper::wrap"
+    assert wrap_source["source_role"] == "runtime" and wrap_source["source_promoted"] is None
+    assert wrap_source["injection_phase"] is None
+    wrap_definition = pool_entry(app, "definitions", wrap["def_id"])
+    identity_definition = pool_entry(app, "definitions", identity["def_id"])
+    assert wrap_definition["crate"] == identity_definition["crate"] != 0
+    assert wrap_definition["raw_path"]["components"] == [
+        {"kind": "crate_root", "name": "exporter_helper", "disambiguator": 0},
+        {"kind": "value", "name": "wrap", "disambiguator": 0}]
+    wrap_template = json.loads(wrap_source["template"])
+    parameter = {"kind": "parameter", "sort": "type", "index": 0}
+    assert wrap_template["parameters"] == ["type"]
+    assert wrap_template["types"][0] == parameter
+    skeleton = wrap_template["skeleton"]
+    assert skeleton["phase"] == "runtime_optimized"
+    assert skeleton["argument_count"] == 1 and skeleton["spread_argument"] is None
+    assert skeleton["locals"] == [0, 0, 0]
+    assert len(wrap_source["local_sources"]) == len(skeleton["locals"])
+    assert all(not block["cleanup"] for block in skeleton["blocks"])
+    calls = [block["terminator"]["kind"] for block in skeleton["blocks"]
+             if block["terminator"]["kind"]["kind"] == "source_call"]
+    assert len(calls) == 1
+    call = calls[0]
+    callee = wrap_template["types"][call["function"]]
+    assert callee == {"kind": "definition", "sort": "type", "tag": "function_definition",
+        "definition": {"crate": identity_definition["crate"], "index": identity_definition["index"]},
+        "children": [{"kind": "binder", "variables": [], "value": {
+            "kind": "node", "sort": "aggregate", "tag": "arguments", "payload": "", "children": [parameter]}}]}
+    assert identity["generic_args"] == wrap_body["generic_args"]
+    assert call["place"] == {"local": 0, "projection": []} and call["target"] == 1
+    assert call["unwind"] == {"kind": "continue"}
+    assert [arg["operand"] for arg in call["arguments"]] == [
+        {"kind": "move", "place": {"local": 2, "projection": []}}]
+    assignments = [statement["kind"] for block in skeleton["blocks"] for statement in block["statements"]
+                   if statement["kind"]["kind"] == "source_assign"]
+    assert assignments == [{"kind": "source_assign", "place": {"local": 2, "projection": []},
+        "value": {"kind": "use", "operand": {"kind": "copy", "place": {"local": 1, "projection": []}}, "retag": "yes"}}]
+    assert len(skeleton["blocks"]) == 2 and skeleton["blocks"][1]["terminator"]["kind"] == {"kind": "return"}
+    assert all(scope["scope"] == index and scope["inlined"] is None
+               for index, scope in enumerate(wrap_source["source_scopes"]))
 
 # The transitive identity callee is compiler-owned source syntax. Validate its
 # complete source operation and actual type binding without instantiating MIR
@@ -63,6 +114,7 @@ assert seed["generic_args"] == identity["generic_args"] == wrap["generic_args"]
 assert seed["promoted_bodies"] == [] and u32_argument(identity)
 assert type(seed["template_id"]) is int and 0 <= seed["template_id"] < len(app["mir_templates"])
 source = app["mir_templates"][seed["template_id"]]
+assert source["source_role"] == "runtime" and source["injection_phase"] is None
 assert source["source_promoted"] is None
 assert source["source_def_id"] == identity["def_id"] and source["def_path"] == "exporter_helper::identity"
 assert identity["instance_kind"] == {"kind": "item", "def_id": identity["def_id"]}

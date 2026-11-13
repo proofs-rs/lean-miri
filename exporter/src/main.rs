@@ -2783,11 +2783,20 @@ fn source_fn_pointer_shim_json<'tcx>(tcx:TyCtxt<'tcx>,instance:ty::Instance<'tcx
     Ok(id as u64)
 }
 
+fn source_mir_template_category<'tcx>(tcx:TyCtxt<'tcx>,
+    body:&rustc_middle::mir::Body<'tcx>,instance:ty::Instance<'tcx>)->Option<generic_mir::Category> {
+    if !matches!(instance.def,ty::InstanceKind::Item(_)) {return None;}
+    let category=generic_mir::source_category(tcx,body,instance.args)?;
+    // Preserve the old plain-copy generic domain. Extended raw source syntax
+    // also admits monomorphic declarations without acquiring a closed body.
+    if tcx.generics_of(body.source.def_id()).count()==0 && category==generic_mir::Category::Copy {
+        return None;
+    }
+    Some(category)
+}
 fn has_source_mir_template<'tcx>(tcx:TyCtxt<'tcx>,
     body:&rustc_middle::mir::Body<'tcx>,instance:ty::Instance<'tcx>)->bool {
-    matches!(instance.def,ty::InstanceKind::Item(_))
-        && tcx.generics_of(body.source.def_id()).count()>0
-        && generic_mir::eligible(tcx,body,instance.args)
+    source_mir_template_category(tcx,body,instance).is_some()
 }
 
 // Each concrete instance owns one executable body. Normalize only its template:
@@ -2814,7 +2823,8 @@ fn resolved_mir_body_json<'tcx>(
     if !fresh {
         return Ok(id as u64);
     }
-    if has_source_mir_template(tcx,template,instance) {
+    if let Some(category)=source_mir_template_category(tcx,template,instance) {
+        generic_mir::source_query_trace(match category {generic_mir::Category::Copy=>"runtime-copy",generic_mir::Category::Extended=>"runtime-extended"},false,instance);
         // Retain only the remaining complete-instance/type/ABI dependencies.
         // No enclosing/target executable MIR is instantiated for source calls.
         for dependency in generic_mir_call::dependencies(tcx,template,instance.args)? {
@@ -2827,7 +2837,7 @@ fn resolved_mir_body_json<'tcx>(
         let key = ctfe_body_source::TemplateKey {definition:template.source.def_id(),promoted:template.source.promoted,role:ctfe_body_source::Role::Runtime};
         let (template_id, fresh) = context.mir_templates.reserve(key);
         if fresh {
-            let raw = generic_mir::capture(tcx, template, |span|span_json(context,tcx,span))?;
+            let raw = generic_mir::capture_category(tcx, template, category, |span|span_json(context,tcx,span))?;
             // Nominal types can occur only in a source local, without any
             // concrete caller type seeding their definitions. Capture their
             // declaration closure, never an instantiated type/body answer.
@@ -2864,6 +2874,7 @@ fn resolved_mir_body_json<'tcx>(
         });
         return Ok(id as u64);
     }
+    generic_mir::source_query_trace("runtime-residual",true,instance);
     let body = instance.try_instantiate_mir_and_normalize_erasing_regions(
         tcx, template.typing_env(tcx), ty::EarlyBinder::bind(tcx, template.clone()),
     ).map_err(|error| format!("resolved MIR: instantiation or normalization failed: {error:?}"))?;
@@ -3559,10 +3570,16 @@ fn type_json_inner<'tcx>(
             def_path: tcx.def_path_str(def),
             generic_args: generic_args_json_inner(context, tcx, args)?,
         },
-        ty::Coroutine(def, args) => Shape::Coroutine {
-            def_id: def_json(context, def),
-            def_path: tcx.def_path_str(def),
-            generic_args: generic_args_json_inner(context, tcx, args)?,
+        ty::Coroutine(def, args) => {
+            // Layout/frame demands can occur without a resume-body demand.
+            // Retain raw physical declarations when their type is encountered;
+            // this is not a callable-body or layout-answer acquisition.
+            coroutine_coverage::capture_generic_source(tcx,context,def)?;
+            Shape::Coroutine {
+                def_id: def_json(context, def),
+                def_path: tcx.def_path_str(def),
+                generic_args: generic_args_json_inner(context, tcx, args)?,
+            }
         },
         ty::CoroutineWitness(def, args) => {
             return export_failure(
@@ -5151,11 +5168,13 @@ fn register_call_transfer_for_target<'tcx>(
         } else {
         let template = checked_instance_mir(tcx, instance.def)?;
         if has_source_mir_template(tcx,template,instance) {
+            generic_mir::source_query_trace("covariance-interface",false,instance);
             // Only interface type dependencies are needed by this residual
             // covariance catalog. Never instantiate a selected executable body.
             let interface=generic_mir::interface(tcx,template,instance.args)?;
             (interface.argument_count,interface.spread_argument,interface.arguments,interface.return_type)
         } else {
+            generic_mir::source_query_trace("covariance-residual",true,instance);
             let body=instance.try_instantiate_mir_and_normalize_erasing_regions(
                 tcx,template.typing_env(tcx),ty::EarlyBinder::bind(tcx,template.clone()))
                 .map_err(|error|format!("callee MIR instantiation failed: {error:?}"))?;

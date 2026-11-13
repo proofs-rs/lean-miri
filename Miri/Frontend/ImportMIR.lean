@@ -121,6 +121,7 @@ deriving instance ToExpr for Input.MirTemplate.TypeSlot
 deriving instance ToExpr for Input.MirTemplate.Projection
 deriving instance ToExpr for Input.MirTemplate.SourcePlace
 deriving instance ToExpr for Input.MirTemplate.SourceOperand
+deriving instance ToExpr for Input.MirTemplate.SourceCallArgument
 deriving instance ToExpr for Input.MirTemplate.SourceRvalue
 deriving instance ToExpr for Input.MirTemplate.Operand
 deriving instance ToExpr for Input.MirTemplate.Rvalue
@@ -377,6 +378,8 @@ deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Value
 deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Place
 deriving instance ToExpr for Interpreter.CompileTime.CallFrame.SourceValueKind
 deriving instance ToExpr for Interpreter.CompileTime.CallFrame.SourceValue
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.ConstantParameter
+deriving instance ToExpr for Interpreter.CompileTime.CallFrame.ConstantArgument
 deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Reference
 deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Operand
 deriving instance ToExpr for Interpreter.CompileTime.CallFrame.Binary

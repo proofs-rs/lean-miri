@@ -22,7 +22,7 @@ fn object(kind:&str, fields:&str)->String {
     format!("{{\"kind\":{}{}{} }}",quote(kind),if fields.is_empty(){""}else{","},fields)
 }
 struct Encoder<'tcx,F> {
-    tcx:TyCtxt<'tcx>, types:Vec<ty::Ty<'tcx>>, span:F, coroutine:bool,
+    tcx:TyCtxt<'tcx>, types:Vec<ty::Ty<'tcx>>, span:F, source_syntax:bool,
 }
 impl<'tcx,F:FnMut(Span)->u64> Encoder<'tcx,F> {
     fn ty(&mut self, ty:ty::Ty<'tcx>)->usize {
@@ -67,7 +67,10 @@ impl<'tcx,F:FnMut(Span)->u64> Encoder<'tcx,F> {
                 }
                 mir::ProjectionElem::Downcast(name,index)=>object("downcast",&format!("\"name\":{},\"variant\":{}",
                     name.map(|name|quote(name.as_str())).unwrap_or_else(||"null".into()),index.as_u32())),
-                _=>return Err("coroutine source projection is outside deref/field/downcast".into()),
+                mir::ProjectionElem::Index(local)=>object("index",&format!("\"local\":{}",local.as_u32())),
+                mir::ProjectionElem::ConstantIndex{offset,min_length,from_end}=>object("constant_index",&format!("\"offset\":{offset},\"min_length\":{min_length},\"from_end\":{from_end}")),
+                mir::ProjectionElem::Subslice{from,to,from_end}=>object("subslice",&format!("\"from\":{from},\"to\":{to},\"from_end\":{from_end}")),
+                _=>return Err("source projection outside prototype domain".into()),
             });
         }
         Ok(format!("{{\"local\":{},\"projection\":{}}}",place.local.as_u32(),array(projections)))
@@ -99,6 +102,20 @@ impl<'tcx,F:FnMut(Span)->u64> Encoder<'tcx,F> {
         Ok(match value {
             mir::Rvalue::Use(value,retag)=>object("use",&format!("\"operand\":{},\"retag\":{}",self.source_operand(value)?,quote(match retag{mir::WithRetag::Yes=>"yes",mir::WithRetag::No=>"no"}))),
             mir::Rvalue::Discriminant(place)=>object("discriminant",&format!("\"place\":{}",self.source_place(*place)?)),
+            mir::Rvalue::Cast(kind,value,target)=>{
+                let kind=match kind {mir::CastKind::IntToInt=>"int_to_int",mir::CastKind::FloatToInt=>"float_to_int",mir::CastKind::FloatToFloat=>"float_to_float",mir::CastKind::IntToFloat=>"int_to_float",mir::CastKind::PtrToPtr=>"ptr_to_ptr",mir::CastKind::FnPtrToPtr=>"fn_ptr_to_ptr",mir::CastKind::PointerExposeProvenance=>"pointer_expose_provenance",mir::CastKind::PointerWithExposedProvenance=>"pointer_with_exposed_provenance",mir::CastKind::Transmute=>"transmute",_=>return Err("source cast kind outside prototype domain".into())};
+                let target=self.ty(*target);object("cast",&format!("\"cast\":{},\"operand\":{},\"target\":{target}",quote(kind),self.source_operand(value)?))
+            }
+            mir::Rvalue::Ref(region,borrow,place)=>{
+                if !matches!(region.kind(),ty::RegionKind::ReErased) {return Err("source Ref requires explicit raw erased region".into())}
+                let borrow=match borrow {mir::BorrowKind::Shared=>"shared",mir::BorrowKind::Mut{kind:mir::MutBorrowKind::Default}=>"mut_default",mir::BorrowKind::Mut{kind:mir::MutBorrowKind::TwoPhaseBorrow}=>"mut_two_phase",mir::BorrowKind::Mut{kind:mir::MutBorrowKind::ClosureCapture}=>"mut_closure_capture",mir::BorrowKind::Fake(mir::FakeBorrowKind::Shallow)=>"fake_shallow",mir::BorrowKind::Fake(mir::FakeBorrowKind::Deep)=>"fake_deep"};
+                object("reference",&format!("\"region\":\"erased\",\"borrow\":{},\"place\":{}",quote(borrow),self.source_place(*place)?))
+            }
+            mir::Rvalue::RawPtr(kind,place)=>{
+                let kind=match kind {mir::RawPtrKind::Const=>"const",mir::RawPtrKind::Mut=>"mut",mir::RawPtrKind::FakeForPtrMetadata=>"fake_for_metadata"};
+                object("raw_pointer",&format!("\"pointer\":{},\"place\":{}",quote(kind),self.source_place(*place)?))
+            }
+
             mir::Rvalue::Aggregate(kind,values)=>{
                 let operands=array(values.iter().map(|value|self.source_operand(value)).collect::<Result<Vec<_>,_>>()?);
                 match &**kind {
@@ -148,6 +165,15 @@ impl<'tcx,F:FnMut(Span)->u64> Encoder<'tcx,F> {
                 let cases=array(targets.iter().map(|(value,target)|format!("{{\"value\":\"{value}\",\"target\":{}}}",target.as_u32())));
                 object("source_switch",&format!("\"operand\":{},\"cases\":{cases},\"otherwise\":{}",self.source_operand(discr)?,targets.otherwise().as_u32()))
             }
+            mir::TerminatorKind::Call{func,args,destination,target,unwind,call_source,fn_span}=>{
+                super::generic_mir_call::callee(self.tcx,func)?;
+                if !matches!(call_source,mir::CallSource::Normal) {return Err("source call kind outside normal source".into())}
+                let mir::Operand::Constant(constant)=func else {unreachable!()};
+                let function=self.ty(constant.const_.ty());let span=(self.span)(constant.span);let function_span=(self.span)(*fn_span);
+                let arguments=array(args.iter().map(|argument|Ok(format!("{{\"span\":{},\"operand\":{}}}",(self.span)(argument.span),self.source_operand(&argument.node)?))).collect::<Result<Vec<_>,String>>()?);
+                let target=target.map(|value|value.as_u32().to_string()).unwrap_or_else(||"null".into());
+                object("source_call",&format!("\"function\":{function},\"constant_span\":{span},\"arguments\":{arguments},\"place\":{},\"target\":{target},\"unwind\":{},\"function_span\":{function_span}",self.source_place(*destination)?,Self::source_unwind(*unwind)?))
+            }
             mir::TerminatorKind::Assert{cond,expected,msg,target,unwind}=>{
                 let (message,kind)=match &**msg {
                     mir::AssertKind::ResumedAfterReturn(kind)=>("return",kind),
@@ -173,7 +199,7 @@ impl<'tcx,F:FnMut(Span)->u64> Encoder<'tcx,F> {
         Ok(format!("{{\"source\":{},\"kind\":{kind}}}",self.source(terminator.source_info)))
     }
     fn statement(&mut self, statement:&mir::Statement<'tcx>)->Result<String,String> {
-        if self.coroutine {return self.source_statement(statement)}
+        if self.source_syntax {return self.source_statement(statement)}
         let kind=match &statement.kind {
             mir::StatementKind::Assign(pair)=>object("assign",&format!("\"destination\":{},\"value\":{}",self.place(pair.0)?,self.rvalue(&pair.1)?)),
             mir::StatementKind::StorageLive(local)=>object("storage_live",&format!("\"local\":{}",local.as_u32())),
@@ -185,7 +211,7 @@ impl<'tcx,F:FnMut(Span)->u64> Encoder<'tcx,F> {
         Ok(format!("{{\"source\":{},\"kind\":{kind}}}",self.source(statement.source_info)))
     }
     fn terminator(&mut self, terminator:&mir::Terminator<'tcx>)->Result<String,String> {
-        if self.coroutine {return self.source_terminator(terminator)}
+        if self.source_syntax {return self.source_terminator(terminator)}
         let kind=match &terminator.kind {
             mir::TerminatorKind::Call{func,args,destination,target,unwind,call_source,fn_span}=>{
                 super::generic_mir_call::callee(self.tcx,func)?;
@@ -297,8 +323,48 @@ pub fn eligible<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>, args:ty::GenericA
     })
 }
 
-pub fn capture<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>,
+/// Optional evidence for the two explicit executable-body acquisition sites
+/// in the producer. Auxiliary snapshot normalization is a separate metadata
+/// operation and is not an executable-body acquisition.
+pub fn source_query_trace(route:&str,queried:bool,instance:ty::Instance<'_>) {
+    if std::env::var_os("LEAN_MIRI_MIR_SOURCE_TRACE").is_some() {
+        let definition=instance.def.def_id();
+        eprintln!("LEAN_MIRI_MIR_SOURCE_QUERY\t{route}\tqueried={queried}\t{}:{}\t{instance:?}",definition.krate.as_u32(),definition.index.as_u32());
+    }
+}
+
+/// Explicit raw source syntax category. The root selector decides admission
+/// before any closed-body acquisition; selected capture errors propagate.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum Category { Copy, Extended }
+
+pub fn source_category<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>, args:ty::GenericArgsRef<'tcx>)->Option<Category> {
+    if eligible(tcx,body,args) {
+        return Some(if body.coroutine.is_some(){Category::Extended}else{Category::Copy});
+    }
+    if supported_arguments(args) && capture_extended(tcx,body,|_|0).is_ok() {
+        Some(Category::Extended)
+    } else {None}
+}
+pub fn capture_category<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>, category:Category,
     span:impl FnMut(Span)->u64)->Result<String,String> {
+    match category {
+        Category::Copy=>{
+            if body.coroutine.is_some() {return Err("copy source category cannot contain coroutine metadata".into())}
+            capture_mode(tcx,body,span,false)
+        }
+        Category::Extended=>capture_extended(tcx,body,span),
+    }
+}
+
+pub fn capture<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>, span:impl FnMut(Span)->u64)->Result<String,String> {
+    capture_mode(tcx,body,span,body.coroutine.is_some())
+}
+pub fn capture_extended<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>, span:impl FnMut(Span)->u64)->Result<String,String> {
+    capture_mode(tcx,body,span,true)
+}
+fn capture_mode<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>,
+    span:impl FnMut(Span)->u64,source_syntax:bool)->Result<String,String> {
     if body.phase!=mir::MirPhase::Runtime(mir::RuntimePhase::Optimized) {
         return Err("copy template requires optimized runtime MIR".into());
     }
@@ -313,7 +379,7 @@ pub fn capture<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>,
         ty::GenericParamDefKind::Lifetime=>"region",ty::GenericParamDefKind::Type{..}=>"type",
         ty::GenericParamDefKind::Const{..}=>"constant",
     })));
-    let mut e=Encoder{tcx,types:Vec::new(),span,coroutine:body.coroutine.is_some()};
+    let mut e=Encoder{tcx,types:Vec::new(),span,source_syntax};
     let locals=array(body.local_decls.iter().map(|local|e.ty(local.ty).to_string()));
     let mut blocks=Vec::new();
     for block in body.basic_blocks.iter() {
@@ -321,12 +387,19 @@ pub fn capture<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>,
         let terminator=e.terminator(block.terminator())?;
         blocks.push(format!("{{\"statements\":{statements},\"terminator\":{terminator},\"cleanup\":{}}}",block.is_cleanup));
     }
-    if !e.types.iter().copied().all(|ty|supported_type(ty) || super::generic_mir_call::function_type_material(tcx,ty).is_ok()) {
+    if !e.types.iter().copied().all(|ty|supported_source_type(tcx,ty)) {
         return Err("copy template source type family requires residual compiler instantiation".into());
     }
     let types=array(e.types.iter().map(|&ty|super::generic_material::type_tree(e.tcx,ty)).collect::<Result<Vec<_>,_>>()?);
     let spread=body.spread_arg.map(|id|id.as_u32().to_string()).unwrap_or_else(||"null".into());
     Ok(format!("{{\"parameters\":{parameters},\"types\":{types},\"skeleton\":{{\"phase\":\"runtime_optimized\",\"argument_count\":{},\"spread_argument\":{spread},\"locals\":{locals},\"blocks\":{}}}}}",body.arg_count,array(blocks)))
+}
+
+/// The exact raw source type admission used by executable capture and its
+/// interface-only consumer. FnDef slots retain ordinary callable declaration
+/// syntax; neither path substitutes a closed body or acquires an ABI answer.
+fn supported_source_type<'tcx>(tcx:TyCtxt<'tcx>, value:ty::Ty<'tcx>)->bool {
+    supported_type(value) || super::generic_mir_call::function_type_material(tcx,value).is_ok()
 }
 
 /// Argument/return type dependencies for the remaining covariance leaf. Never
@@ -340,7 +413,7 @@ pub struct Interface<'tcx> {
 
 pub fn interface<'tcx>(tcx:TyCtxt<'tcx>,body:&mir::Body<'tcx>,
     args:ty::GenericArgsRef<'tcx>)->Result<Interface<'tcx>,String> {
-    if !supported_arguments(args) || !body.local_decls.iter().all(|local|supported_type(local.ty)) {
+    if !supported_arguments(args) || !body.local_decls.iter().all(|local|supported_source_type(tcx,local.ty)) {
         return Err("source MIR interface requires the exact selected constructor family".into());
     }
     let instantiate=|ty|tcx.erase_and_anonymize_regions(

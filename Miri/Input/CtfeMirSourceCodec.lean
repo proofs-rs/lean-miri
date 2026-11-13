@@ -112,7 +112,8 @@ private def scope (value : Json) : Except String Scope := do
   pure ⟨⟨← nat value "span"⟩,← optionalNat (← field value "parent"),lintRoot⟩
 
 def read (value : Json) : Except String Source := do
-  if (text value "policy").toOption == some "scalar_u32_calls_v1" then
+  if (text value "policy").toOption == some "scalar_u32_calls_v1" ||
+      (text value "policy").toOption == some "scalar_u32_const_args_v1" then
     return ← CtfeCallsSourceCodec.read value
   keys value ["definition","source_role","promoted","policy","phase","environment_recipe",
     "parameters","required_consts","span","arg_count","spread_arg","locals","blocks","source_scopes"]

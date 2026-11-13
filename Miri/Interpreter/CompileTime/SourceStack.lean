@@ -8,11 +8,13 @@ structure Source where
   name : String
   required : Array Reference
   typeParameters : Nat := 0
+  constantParameters : Array ConstantParameter := #[]
   annotationDebug : Array String := #[]
   program : Program
   cleanup : Array Bool
   deriving Repr, DecidableEq
 structure Frame where
+  constantArguments : Array ConstantArgument := #[]
   source : Source
   current : Option State := none
   typeArguments : Array Nat := #[]
@@ -50,14 +52,24 @@ def validateSource (source : Source) : Except String Unit := do
     | _,.boolean | _,.unit | _,.never => pure ()
     | fuel+1,.pair a b => ty fuel a *> ty fuel b
   for shape in source.program.locals do ty 16384 shape
+  let mut parameterIndices := #[]
+  unless source.constantParameters.isEmpty || source.typeParameters == 0 do throw "mixed type/constant source parameters unsupported"
+  for (parameter,index) in source.constantParameters.zipIdx do
+    unless parameter.index == index do throw "constant parameter header has a physical index hole"
+    unless parameter.ty == .uint 32 && !parameterIndices.contains parameter.index do throw "invalid or duplicate constant parameter header"
+    parameterIndices := parameterIndices.push parameter.index
   let referenceType (value : Reference) : Ty :=
-    match value with | .direct _ _ shape _ | .associated _ _ _ shape _ => shape
+    match value with | .direct _ _ shape _ | .associated _ _ _ shape _ | .parameterConstant _ _ shape _ => shape
   let reference (value : Reference) : Except String Unit := do
     ty 16384 (referenceType value)
     unless referenceType value != .never do throw "uninhabited constant reference"
     -- CleanupPostBorrowck clears the annotation table but leaves operand indices.
     -- The index is retained metadata; it is never an executed table lookup.
     match value with
+    | .parameterConstant index _ shape _ =>
+      let #[parameter] := source.constantParameters.filter (·.index == index)
+        | throw "constant Param has no unique declaration header"
+      unless parameter.ty == shape do throw "constant Param type contradicts declaration"
     | .direct _ _ _ _ => pure ()
     | .associated _ parameter _ _ _ => unless parameter < source.typeParameters do throw "source type parameter is absent"
   let placeType (value : Place) : Except String Ty := do
@@ -151,7 +163,7 @@ namespace is explicitly local crate0; keys are physical definition indices. -/
 def pushWithWorld (sources : Array Source)
     (resolve : Frame → Reference → FrameEntry.Action World String Unit)
     (definition : Nat) (arguments : Array Value) (types : Array Nat) (continuation : Option Call)
-    (machine : Machine) (world : World) : Except String Unit × Machine × World := Id.run do
+    (machine : Machine) (world : World) (constantArguments : Array ConstantArgument := #[]) : Except String Unit × Machine × World := Id.run do
   let .ok source := lookup sources definition | return (.error "missing or forged source definition",machine,world)
   if let .error error := validateSource source then return (.error error,machine,world)
   unless source.typeParameters == types.size do return (.error "source generic arity mismatch",machine,world)
@@ -165,15 +177,23 @@ def pushWithWorld (sources : Array Source)
     let some call := continuation | return (.error "source call lacks continuation",machine,world)
     unless caller.source.program.locals[call.destination.slot]? == source.program.locals[0]? do
       return (.error "source call return destination type mismatch",machine,world)
-  let frame : Frame := {source,current := none,typeArguments := types,continuation}
+  unless constantArguments.size == source.constantParameters.size do
+    return (.error "source constant argument arity mismatch",machine,world)
+  for parameter in source.constantParameters do
+    if let .error error := parameterValue constantArguments parameter.index parameter.ty then
+      return (.error error,machine,world)
+  let frame : Frame := {source,current := none,typeArguments := types,continuation,constantArguments}
   let machine := {machine with frames := frame::machine.frames}
   let evaluate (pending : Frame) (reference : Reference) (state : Machine × World) :=
     let index := state.1.requiredRequests.size - machine.requiredRequests.size
     let machine := {state.1 with requiredRequests := state.1.requiredRequests.push (definition,index,reference)}
-    let (result,world) := resolve pending reference state.2
+    let (result,world) := match reference with
+      | .parameterConstant index _ declared _ =>
+        ((parameterValue pending.constantArguments index declared).map (fun _ => ()),state.2)
+      | _ => resolve pending reference state.2
     (result,(machine,world))
   let finish (pending : Frame) (state : Machine × World) :=
-    match initializeState source.program arguments with
+    match initializeState source.program arguments constantArguments with
     | .error error => (.error error,state)
     | .ok initialized => (.ok {pending with current := some initialized},state)
   match FrameEntry.enter source.required evaluate finish frame (machine,world) with
@@ -184,10 +204,10 @@ def pushWithWorld (sources : Array Source)
 this resolver never constructs a compiler query-success result. -/
 def push (sources : Array Source) (resolve : Array Nat → Reference → Except String Value)
     (definition : Nat) (arguments : Array Value) (types : Array Nat) (continuation : Option Call)
-    (machine : Machine) : Except String Unit × Machine :=
+    (machine : Machine) (constantArguments : Array ConstantArgument := #[]) : Except String Unit × Machine :=
   let (result,machine,_) := pushWithWorld sources
     (fun frame reference world => ((resolve frame.typeArguments reference).map (fun _ => ()),world))
-    definition arguments types continuation machine ()
+    definition arguments types continuation machine () constantArguments
   (result,machine)
 
 private def record (definition : Nat) (current : State) (machine : Machine) : Machine :=
@@ -269,6 +289,7 @@ structure AssociatedSource where
 /-- Syntactic source-impl matching for this restricted parameter-only fixture,
 not a compiler-selected-instance table or a normalization answer. -/
 def instantiate (rules : Array AssociatedSource) (types : Array Nat) : Reference → Except String Nat
+  | .parameterConstant .. => .error "constant Param requires its current frame source argument"
   | .direct definition _ _ _ => .ok definition
   | .associated declaration parameter _ _ _ => do
     let some selfType := types[parameter]? | throw "missing source type parameter"

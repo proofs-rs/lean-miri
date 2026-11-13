@@ -404,3 +404,21 @@ whole-machine claim.
 `bash tools/check-lowering-reader.sh [INPUT.json ...]` checks source paths and
 compiler pool IDs across lowering for root, instance and promoted bodies.
 The default input is the fixed empty-function fixture.
+
+`tools/check-extended-source-mir.py --exporter EXPORTER --oracle ORACLE
+--sysroot SYSROOT --output scratch/extended-source-mir [--lake LAKE]` exports
+fresh extended-source and no-resume inputs with the pinned producer. Compile
+`tools/extended-source-mir-oracle.rs` with the pinned exporter rustc to obtain
+ORACLE. The runner replays the fresh document's exact `input_settings.rustc_args`
+through that independent oracle, including `-Zmir-preserve-ub`, and records the
+command and selection indices in `oracle-scope-manifest.json`.
+
+The full oracle covers 38 complete normalized MIR bodies, 33 raw-source rejection
+controls and four FnDef interface controls. The World comparison covers the 37
+unchanged oracle rows whose physical definitions the producer retains, including
+12 persistent call callbacks and missing/ambiguous-source rejection. The remaining
+`raw_pointer` row must reject for an absent physical definition; it is expected
+Unsupported, not a successful World comparison. `--lake` runs these focused Lean
+checks and the two no-resume layout controls without building artifacts. Run only
+after primary writers release their barrier; export/oracle capture alone does not
+establish any Lean comparison result.

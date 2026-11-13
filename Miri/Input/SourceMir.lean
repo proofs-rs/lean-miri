@@ -61,11 +61,18 @@ def validateTemplate (document : ImportDocument) (source : CopyTemplateSource) :
       info statement.source
       if let .sourceAssign _ value := statement.kind then
         match value with
-        | .use value _ => sourceOperand value
+        | .cast _ value _ | .use value _ => sourceOperand value
+        | .reference _ _ | .rawPointer _ _ => pure ()
         | .adt _ _ values | .tuple values => for value in values do sourceOperand value
         | .discriminant _ => pure ()
     info block.terminator.source
     match block.terminator.kind with
+    | .sourceCall _ constantSpan arguments _ _ _ functionSpan =>
+      span constantSpan.id
+      span functionSpan.id
+      for argument in arguments do
+        span argument.span.id
+        sourceOperand argument.operand
     | .sourceSwitch value _ | .assertResume value .. => sourceOperand value
     | _ => pure ()
     if let .call _ constantSpan arguments _ _ _ _ functionSpan := block.terminator.kind then

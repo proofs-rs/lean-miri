@@ -46,6 +46,7 @@ for body_index, body in enumerate(doc["bodies"]):
         template_id = body["template_id"]
         assert type(template_id) is int and 0 <= template_id < len(doc["mir_templates"])
         source = doc["mir_templates"][template_id]
+        assert source["source_role"] == "runtime" and source["injection_phase"] is None
         assert source["source_def_id"] == instance["def_id"]
         assert source["def_path"] == instance["def_path"]
         assert instance["instance_kind"] == {"kind": "item", "def_id": instance["def_id"]}
@@ -281,7 +282,11 @@ assert id_block["statements"][0]["kind"] == {
     "value": {"kind": "use", "operand": {"kind": "move", "local": 1}, "retag": "yes"}
 }, "raw id MIR must move its argument to its return local with the exact retag"
 assert id_block["terminator"]["kind"] == {"kind": "return"}
-assert {source["def_path"] for source, _ in copy_templates.values()} == {"id"}, "unexpected raw source fixture role"
+raw_paths = {source["def_path"] for source, _ in copy_templates.values()}
+assert {"id", "direct_tag_value", "make_link"} <= raw_paths, "fixture must exercise generic and extended raw MIR"
+# Every additional source was checked above against its complete instance owner,
+# runtime role, phase, argument sorts and physical source metadata.
+assert any(template["parameters"] == [] for _, template in copy_templates.values())
 assert not any(
     (pool_entry(doc, "type_constants", node["shape"]["length"]).get("kind") if "length" in node["shape"] else None) == "parameter"
     for node in type_nodes.values()

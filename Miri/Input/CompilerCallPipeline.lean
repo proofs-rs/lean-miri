@@ -61,7 +61,7 @@ def compilerHooks (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
 def vtableHooks (prepared : Prepared) (types : RuntimeArrayQueries.Access S) (image : AllocationImage.Imported)
     (memory : S → MemoryState P E K) (base : VTableHooks P S C CallInstance (FnAbi MIR.TyId)) :
     VTableHooks P S C CallInstance (FnAbi MIR.TyId) :=
-  CompilerVTableFacts.hooks prepared.symbols.facts
+  WorldVirtualHooks.vtableHooks types <| CompilerVTableFacts.hooks prepared.symbols.facts
     (CompilerVTableRuntime.hooks prepared.symbols types image memory base)
 
 /-- Runtime reads/projections/pointer alignment remain actual machine actions.

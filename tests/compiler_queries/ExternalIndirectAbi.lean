@@ -70,5 +70,5 @@ def main (args : List String) : IO Unit := do
     let (actual,after) ← must ((CompilerInstanceAbi.abiOfInstanceInWorld prepared source.id #[]).run initial)
     unless ← must (sameAbi after.arena oracleWorld.arena actual expected) do
       throw (IO.userError "external source/direct or exact indirect residual differs from rustc")
-  unless indirect == 3 && direct == 3 do throw (IO.userError s!"wrong external coverage {indirect}/{direct}")
-  IO.println "PASS3constructed external indirect policy rejections before session guards,3preserved external direct domains,6complete ABI matches"
+  unless indirect == 3 && direct == 4 do throw (IO.userError s!"wrong external coverage {indirect}/{direct}")
+  IO.println "PASS3constructed external indirect policy rejections before session guards,4external direct domains including raw pointer pair,7complete ABI matches"

@@ -29,9 +29,14 @@ World. Seven complete compiler traces cover success, limits and overflow; eighte
 fresh strict source documents also cover generic required constants and malformed
 callee/physical-source metadata. This does not admit general CTFE query roots:
 allocation/interner semantics and unsupported raw MIR remain unresolved.
-An independent frame-entry controller preserves ordered duplicate requests and
-callback World state on failure before initialization. Five kernel examples use
-no axioms; evaluation callbacks and query-root admission remain separate work.
+The scalar_u32_const_args_v1 policy binds typed primitive constant arguments
+from the current execution World's actual constant nodes. Eight complete compiler
+allocation/value references agree with two demanded sources at four inputs;
+strict type/width/index/header and catalogue corruption controls reject. Mixed
+parameter families and broader constants remain unsupported. The allocated-root
+finish adapter preserves callback World state and intern/validation/error order;
+it requires an actual allocated-root callback. Component proofs use no axioms.
+This does not supply missing allocator semantics or admit general query roots.
 
 Runtime body providers now resolve exact identities through the execution-owned
 BodyArena. Constructed Item instances select a unique ordinary raw MIR template
@@ -45,7 +50,10 @@ and prefix-external bodies match actual rustc queries at normalized Self keys;
 raw alias-key comparisons and corruption/non-region-binder controls also pass.
 Promoted bodies, general compiler shims and constructed shim ABI remain unresolved.
 Novel-body controls exercise actual provider demand, dense identity reuse and
-missing/ambiguous-source rejection.
+missing/ambiguous-source rejection. Runtime retag/validity hooks use that same
+World for constructed types. Validation retains the actual root type identity,
+as pinned validity.rs does, without eagerly printing a successful value's type.
+Projection diagnostics and explicit type-name query boundaries are preserved.
 
 Raw source environments retain explicit clauses, physical generic/predicate
 parents, parameter sorts and trait identity. Lean assembles inherited obligations
@@ -96,7 +104,13 @@ oracle controls reject. Both production compiler hook assemblies now connect
 parent-trait, virtual-argument rebasing and expected vtable resolution through
 these source providers. Twenty canonical hook demands and twenty independent
 raw-resolution comparisons per ordinary/KCFI policy preserve early by-value
-arguments and reject malformed metadata and wrong oracles. Source object-candidate
+arguments and reject malformed metadata and wrong oracles. Actual dynamicData
+callbacks now intern complete checked predicates in an execution-owned dense
+suffix; material predicate/principal identities remain unchanged. Four policies
+each check 35 material views, nine constructed roundtrips, 18 callbacks and 42
+final-assembly guards. Missing object candidates reject 26 demands, while two
+quantified demands stop at unsupported binder normalization. Source declaration
+negatives and mutated compiler oracles also reject. Source object-candidate
 selection, specialized leaves, shim MIR/ABI and real allocation remain unresolved.
 Generic receiver alias normalization, abstract-constant expansion and raw crate
 feature/session policy material remain unresolved; unavailable semantics error
@@ -144,8 +158,14 @@ ABI remain unresolved.
 Primitive non-pointer two-field tuples now derive complete scalar-pair ABI in
 World: 32 Item, 36 FnPtr and 136 helper comparisons cover optimization and panic
 settings, with empty-catalog and novel-instance controls. Twelve traced Item keys
-eliminate four explicit ABI calls each. Pointer pairs and general indirect or
-aggregate ABI remain exact residuals. Small byte-storage Memory ABI additionally
+eliminate four explicit ABI calls each. Thin raw-pointer pairs now derive exact
+scalar attributes and source field offsets for two-field tuples of at most 16
+bytes, with other fields restricted to raw pointers or small primitive scalars.
+Twelve signatures agree for Item/FnPtr/helper across four sessions; query traces
+cover twelve Item, twelve FnPtr and 48 helper keys per session. Novel identities
+and five malformed physical layouts are checked. Reference/FnPtr/fat-pointer
+fields and large companions remain explicit residuals. General aggregate ABI
+remains unresolved. Small byte-storage Memory ABI additionally
 matches 48 Item, 52 FnPtr and 200 helper comparisons, including target-aligned
 cast storage and NoUndef distinctions. Forty-eight constructed repetitions and
 a novel six-byte array/instance agree without ABI catalogs. Twelve Item keys
@@ -191,7 +211,16 @@ Covered transformed coroutine MIR, layouts and field/variant projections now
 connect to the execution World and BodyArena: four complete actual bodies, eight
 generic layouts and 24 saved/upvar projections agree with rustc. Four instances
 without exact templates reject explicitly. This remains a bounded raw MIR subset;
-general coroutine layout/body generation remains unresolved. Required nested generic source
+general coroutine layout/body generation remains unresolved. Extended source
+MIR now supports typed projections, casts, references, raw pointers and direct
+calls, including monomorphic declarations. Replaying the exact producer flags
+(including mir-preserve-ub) gives 38 complete normalized MIR comparisons and 37
+complete World bodies with twelve persistent callbacks. One oracle-only physical
+definition is absent from the producer universe and explicitly rejects; it is
+not counted as a successful World body. Type-only coroutine demands retain raw
+source declarations without fabricating resume or auxiliary executable bodies.
+Annotated constants, indirect source calls and broader MIR remain unresolved.
+Required nested generic source
 catalogues now preserve two raw owners/eight instantiations and ten physical
 body sources, including three generated by-move bodies. Fresh strict decoder
 checks, zero-prefix substitution and ten malformed header/pool controls pass.
@@ -252,10 +281,16 @@ Constructed Dynamic is unsized. Raw DynMetadata declarations now derive metadata
 layout in World: three fat-pointer comparisons share one unique DynMetadata key,
 and two complete dynamic enum layouts agree with rustc after removing all layout
 answers and type/constant/predicate prefixes. Canonical query tracing confirms
-the covered omissions. Missing/malformed declarations reject. Virtual predicate
-runtime bridges remain unported and retain explicit residuals.
-Non-region binders, unsupported alias children, closures/coroutines and non-Value
-constant hashes, full validity and allocation
+the covered omissions. Missing/malformed declarations reject. The typed virtual
+predicate runtime bridge is connected, while object confirmation, predicate
+normalization/comparison and vtable allocation for new predicate handles remain
+explicit residuals.
+Closure hashes now use raw definition/generic headers and complete synthetic
+kind, RustCall signature and capture arguments. Nine complete compiler hashes
+and components agree, including novel identities and whole-root binders;
+missing/malformed headers, kind/arity, fuel and wrong-oracle controls reject.
+Non-region binders, unsupported alias children, coroutine and non-Value constant
+hashes, full validity and allocation
 identity/dedup reconstruction remain unresolved. These comparisons do
 not establish whole-compiler equivalence, query closure or all-choice guest safety.
 
@@ -286,9 +321,12 @@ bounds. Existing source-explicit declaration scopes remain recipes rather than
 normalized ParamEnv answers; general elaboration/normalization is unresolved.
 Unevaluated, allocation-bearing ValTrees and general CTFE/interning remain
 unresolved; no successful no-op stands in for their evaluation. The prepared
-allocator identity accessor patch passes apply checks but has not been compiled
-against a rebuilt pinned compiler; the installed source excerpt lacks bootstrap
-and the available disk is insufficient for that build.
+allocator identity accessor patch passes applicability checks. Complete pinned
+compiler sources, vendor dependencies and verified CI LLVM are now prepared;
+the resource-limited stage1 build remains incomplete before accessor/metadata
+validation. Public probes do not reconstruct the private allocation map. Archived
+vendor source remains recoverable offline, and no production allocation admission
+is inferred from an incomplete compiler build.
 
 The exact `DropGlue(_, None)` shim family now retains only instance identity and
 raw source position; its raw declaration signature supplies types. Lean builds

@@ -1,8 +1,8 @@
 import Miri.Input.RuntimeArrayTypes
 
 /-! Pinned rustc_ty_utils/src/abi.rs::arg_attrs_for_rust_scalar and
-rustc_target/src/callconv/mod.rs::adjust_for_rust_abi, nonpointer ScalarPair
-branch and sized aggregate adjustment. Pointer components require additional rules. -/
+rustc_target/src/callconv/mod.rs::adjust_for_rust_abi, primitive and bounded
+raw-pointer ScalarPairs plus sized aggregate adjustment. -/
 namespace Miri.Input.WorldAggregateAbi
 open Miri.ABI
 
@@ -17,6 +17,72 @@ def nonPointerPair (layout : TyAndLayout TypeId) (isReturn : Bool := false) : Ex
       regular := if scalar.isUninitValid then 0 else 128
       argExt := if scalar.isBool then .Zext else .None }
   if isReturn && layout.layout.size.bytes > 16 then arg.makeIndirect else pure arg
+
+private def liftPure (result : Except String α) : RuntimeArrayTypes.CompilerM α :=
+  match result with | .ok value => pure value | .error error => throw error
+
+private def sourceConstructor (id : TypeId) : RuntimeArrayTypes.CompilerM TypeArena.Constructor := do
+  let arena := (← get).arena
+  match ← liftPure (arena.lookupType id) with
+  | .constructed constructor => pure constructor
+  | .material source =>
+    let some constructor ← liftPure (arena.materialKey source)
+      | throw "raw pair field source constructor is unavailable"
+    pure constructor
+
+/-- Pinned pointee_info_at walks tuple fields by physical offsets. In this
+bounded grammar every pointer-bearing field is a thin RawPtr: its recursive
+answer is safe=None, size=0, align=1. References, wrappers and FnPtr value fields
+remain unsupported. No material projection/pointee/trait answers are read. -/
+def rawPointerPair (runtime : RuntimeMetadata) (layout : TyAndLayout TypeId) :
+    RuntimeArrayTypes.CompilerM (ArgAbi TypeId) := do
+  let .ScalarPair (a := a) (b := b) (bOffset := bOffset) := layout.layout.backendRepr
+    | throw "raw pointer pair requires ScalarPair representation"
+  unless layout.layout.isSized && layout.layout.size.bytes <= 16 do
+    throw "raw pointer pair exceeds the direct aggregate bound"
+  unless (match layout.layout.variants with | .Single _ => true | _ => false) do
+    throw "raw pointer pair requires a single tuple variant"
+  let .tuple children ← sourceConstructor layout.ty
+    | throw "raw pointer pair requires a source tuple"
+  unless children.size == 2 do throw "raw pointer pair requires exactly two fields"
+  let .Arbitrary offsets _ := layout.layout.fields
+    | throw "raw pointer pair requires explicit tuple field offsets"
+  unless offsets.size == 2 do throw "raw pointer pair field offsets are malformed"
+  let mut attrsA := none
+  let mut attrsB := none
+  let mut rawCount := 0
+  for index in [:2] do
+    let some child := children[index]? | throw "raw pointer pair source field is absent"
+    let some offset := offsets[index]? | throw "raw pointer pair source offset is absent"
+    let constructor ← sourceConstructor child
+    let field ← RuntimeArrayTypes.liftType (RuntimeMetadata.layoutInWorld runtime child)
+    let .Scalar scalar := field.layout.backendRepr
+      | throw "raw pointer pair field is not a thin scalar"
+    unless field.layout.size.bytes <= 8 do throw "raw pointer pair field exceeds one register"
+    unless offset.bytes <= layout.layout.size.bytes do throw "raw pointer pair field offset exceeds its parent"
+    unless field.layout.size.bytes <= layout.layout.size.bytes - offset.bytes do
+      throw "raw pointer pair field storage exceeds its parent"
+    if (match constructor with | .rawPointer .. => true | _ => false) then rawCount := rawCount + 1
+    let arg ← match constructor with
+      | .rawPointer .. => do
+        let .Initialized (value := .Pointer space) (validRange := _) := scalar
+          | throw "raw pointer pair field has no initialized pointer scalar"
+        unless space == .ZERO do throw "raw pointer pair requires data address space zero"
+        liftPure (ArgAbi.conservativePointerScalar field)
+      | .bool | .char | .integer .. | .float .. => liftPure (ArgAbi.nonPointerScalar field 0)
+      | _ => throw "raw pointer pair field is outside the source grammar"
+    let .Direct attrs := arg.mode | throw "raw pointer pair field is not passed directly"
+    if offset == Size.ZERO && scalar == a then
+      unless attrsA.isNone do throw "raw pointer pair has duplicate first component"
+      attrsA := some attrs
+    else if offset == bOffset && scalar == b then
+      unless attrsB.isNone do throw "raw pointer pair has duplicate second component"
+      attrsB := some attrs
+    else throw "raw pointer pair field does not match its physical scalar component"
+  unless rawCount > 0 do throw "raw pointer pair has no raw-pointer field"
+  let some first := attrsA | throw "raw pointer pair first component is absent"
+  let some second := attrsB | throw "raw pointer pair second component is absent"
+  pure ⟨layout,.Pair first second⟩
 
 /-- Pinned layout_is_noundef/fields_are_noundef, including padding and union
 rejection. Field construction extends the execution World. -/

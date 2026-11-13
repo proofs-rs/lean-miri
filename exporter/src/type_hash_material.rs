@@ -36,7 +36,7 @@ fn type_in_binder(input: ty::Ty<'_>, bound: bool) -> bool {
             }
         }),
         ty::Tuple(children) => children.iter().all(|child| type_in_binder(child, bound)),
-        ty::Adt(_, arguments) => arguments_in_binder(arguments, bound),
+        ty::Adt(_, arguments) | ty::Closure(_, arguments) => arguments_in_binder(arguments, bound),
         ty::FnDef(_, arguments) => region_variables(arguments.bound_vars()) &&
             arguments_in_binder(arguments.skip_binder(), bound || !arguments.bound_vars().is_empty()),
         ty::FnPtr(signature, _) => region_variables(signature.bound_vars()) &&

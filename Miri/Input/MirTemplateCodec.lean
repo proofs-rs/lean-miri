@@ -16,6 +16,9 @@ private def sourcePlace (j : Json) : Except String SourcePlace := do
     match ← text value "kind" with
     | "deref" => pure Projection.deref
     | "field" => return .field (← nat value "index") ⟨← nat value "type"⟩
+    | "index" => .index <$> nat value "local"
+    | "constant_index" => return .constantIndex (← nat value "offset") (← nat value "min_length") (← (← field value "from_end").getBool?)
+    | "subslice" => return .subslice (← nat value "from") (← nat value "to") (← (← field value "from_end").getBool?)
     | "downcast" =>
       let name ← match ← field value "name" with
         | .null => pure none | value => some <$> value.getStr?
@@ -39,6 +42,31 @@ private def sourceRvalue (j : Json) : Except String SourceRvalue := do
       | "yes" => pure Miri.MIR.WithRetag.Yes | "no" => pure .No
       | _ => throw "unknown MIR source retag"
     return .use (← sourceOperand (← field j "operand")) retag
+  | "cast" =>
+    let kind ← match ← text j "cast" with
+      | "int_to_int" => pure Miri.MIR.CastKind.IntToInt
+      | "float_to_int" => pure .FloatToInt | "float_to_float" => pure .FloatToFloat
+      | "int_to_float" => pure .IntToFloat | "ptr_to_ptr" => pure .PtrToPtr
+      | "fn_ptr_to_ptr" => pure .FnPtrToPtr | "transmute" => pure .Transmute
+      | "pointer_expose_provenance" => pure .PointerExposeProvenance
+      | "pointer_with_exposed_provenance" => pure .PointerWithExposedProvenance
+      | _ => throw "source cast outside prototype domain"
+    return .cast kind (← sourceOperand (← field j "operand")) ⟨← nat j "target"⟩
+  | "reference" =>
+    unless (← text j "region") == "erased" do throw "source Ref requires explicit erased region"
+    let borrow ← match ← text j "borrow" with
+      | "shared" => pure Miri.MIR.BorrowKind.Shared
+      | "mut_default" => pure (.Mut .Default) | "mut_two_phase" => pure (.Mut .TwoPhaseBorrow)
+      | "mut_closure_capture" => pure (.Mut .ClosureCapture)
+      | "fake_shallow" => pure (.Fake .Shallow) | "fake_deep" => pure (.Fake .Deep)
+      | _ => throw "source borrow outside prototype domain"
+    return .reference borrow (← sourcePlace (← field j "place"))
+  | "raw_pointer" =>
+    let kind ← match ← text j "pointer" with
+      | "const" => pure Miri.MIR.RawPtrKind.Const | "mut" => pure .Mut
+      | "fake_for_metadata" => pure .FakeForPtrMetadata
+      | _ => throw "source raw pointer outside prototype domain"
+    return .rawPointer kind (← sourcePlace (← field j "place"))
   | "discriminant" => .discriminant <$> sourcePlace (← field j "place")
   | "adt" => return .adt ⟨← nat j "type"⟩ (← nat j "variant") (← (← array j "operands").mapM sourceOperand)
   | "tuple" => .tuple <$> (← array j "operands").mapM sourceOperand
@@ -102,6 +130,12 @@ private def statement (j : Json) : Except String MirTemplate.Statement := do
 private def terminator (j : Json) : Except String MirTemplate.Terminator := do
   let value ← field j "kind"
   let kind ← match ← text value "kind" with
+    | "source_call" =>
+      let arguments ← (← array value "arguments").mapM fun argument => do
+        pure (⟨⟨← nat argument "span"⟩,← sourceOperand (← field argument "operand")⟩ : SourceCallArgument)
+      pure (MirTemplate.TerminatorKind.sourceCall ⟨← nat value "function"⟩ ⟨← nat value "constant_span"⟩
+        arguments (← sourcePlace (← field value "place")) (← optionalNat (← field value "target"))
+        (← sourceUnwind (← field value "unwind")) ⟨← nat value "function_span"⟩)
     | "source_switch" =>
       let cases ← (← array value "cases").mapM fun entry => do
         let bits ← text entry "value"

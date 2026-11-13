@@ -29,7 +29,17 @@ structure SourceValue where
   userType : Option Nat
   value : Value
   deriving Repr, DecidableEq
+structure ConstantParameter where
+  index : Nat
+  ty : Ty
+  deriving Repr, DecidableEq
+structure ConstantArgument where
+  index : Nat
+  ty : Ty
+  value : Value
+  deriving Repr, DecidableEq
 inductive Reference where
+  | parameterConstant (index : Nat) (annotation : Option Nat) (declaredType : Ty) (span : Nat)
   | direct (definition : Nat) (annotation : Option Nat) (declaredType : Ty := .uint 32) (span : Nat := 0)
   | associated (declaration parameter : Nat) (annotation : Option Nat) (declaredType : Ty := .uint 32) (span : Nat := 0)
   deriving Repr, DecidableEq
@@ -91,6 +101,7 @@ structure Local where
   value : Option Value := none
   deriving Repr
 structure State where
+  constantArguments : Array ConstantArgument := #[]
   locals : Array Local
   block : Nat := 0
   statement : Nat := 0
@@ -130,13 +141,23 @@ private def advance (state : State) : State := {state with statement := state.st
 private def liftExcept (action : Except String α) : EStateM String World α :=
   fun world => match action with | .ok value => .ok value world | .error error => .error error world
 
+/-- Primitive source Param substitution reads the current frame's explicit
+constant namespace. It performs no compiler query or allocation. -/
+def parameterValue (arguments : Array ConstantArgument) (index : Nat) (declared : Ty) : Except String Value := do
+  let #[argument] := arguments.filter (·.index == index) | throw "missing or duplicate current-frame constant argument"
+  unless argument.ty == declared && argument.value.ty == declared do throw "constant argument declared type mismatch"
+  let .uint 32 bits := argument.value | throw "constant argument outside source u32 policy"
+  unless bits < 2^32 do throw "constant argument scalar out of range"
+  pure argument.value
+
 private def operandAction (resolve : Reference → EStateM String World Value) (state : State) : Operand → EStateM String World Value
   | .sourceValue source => pure source.value
   -- Pinned eval_operand treats Move like Copy and does not invalidate source.
   | .copy place | .move place => liftExcept (read state place)
+  | .constant (.parameterConstant index _ declared _) => liftExcept (parameterValue state.constantArguments index declared)
   | .constant reference => do
     let value ← resolve reference
-    let declared := match reference with | .direct _ _ ty _ | .associated _ _ _ ty _ => ty
+    let declared := match reference with | .direct _ _ ty _ | .associated _ _ _ ty _ | .parameterConstant _ _ ty _ => ty
     unless value.ty == declared do throw "constant callback contradicts declared source type"
     match value with
     | .uint bits number => unless bits == 32 && number < 2^32 do throw "constant callback scalar out of range"
@@ -230,7 +251,8 @@ def step (program : Program) (config : Counter.Config)
     (resolve : Reference → Except String Value) (initial : State) : Outcome :=
   (stepWithWorld program config (fun reference => liftExcept (resolve reference)) initial ()).1
 
-def initializeState (program : Program) (arguments : Array Value) : Except String State := do
+def initializeState (program : Program) (arguments : Array Value)
+    (constantArguments : Array ConstantArgument := #[]) : Except String State := do
   unless program.argumentCount < program.locals.size do throw "scalar return/argument local domain is absent"
   unless arguments.size == program.argumentCount do throw "scalar argument count mismatch"
   let marked := program.blocks.flatMap fun block => block.statements.filterMap fun statement =>
@@ -243,5 +265,5 @@ def initializeState (program : Program) (arguments : Array Value) : Except Strin
       unless ty == value.ty do throw "scalar argument type mismatch"
       locals := locals.set slot ⟨true,some value⟩ bound
     else throw "absent scalar argument slot"
-  pure {locals}
+  pure {locals,constantArguments}
 end Miri.Interpreter.CompileTime.CallFrame

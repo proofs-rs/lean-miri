@@ -220,7 +220,7 @@ def main : IO Unit := do
   | .error (.failure .neverValue) _ => pure ()
   | other => throw (IO.userError s!"never-type classification mismatch: {reprStr other}")
 
-  let path : ValidationPath := ⟨"Root", #[.field "inner", .tupleElem 2,
+  let path : ValidationPath := ⟨17, #[.field "inner", .tupleElem 2,
     .arrayElem 7, .deref, .dynDowncast "Concrete"]⟩
   check (path.render == ".inner.2[7].<deref>.<dyn-downcast(Concrete)>")
     "validity path rendering diverged from source write_path"
@@ -337,7 +337,7 @@ def main : IO Unit := do
       { typeName := "u16", pathInfo := ⟨"u16", .other "u16", .single, 0, none, none, "?"⟩,
         fields := .primitive, variants := .single }]
   }
-  match walkValue walkHooks structWalk ⟨"Root", #[]⟩ ⟨false, false⟩ #[] with
+  match walkValue walkHooks structWalk ⟨0, #[]⟩ ⟨false, false⟩ #[] with
   | .ok () events =>
     check (events == #[
       "primitive:0::dangle=false", "unsafe:0", "special:0",
@@ -355,7 +355,7 @@ def main : IO Unit := do
       { typeName := "B", pathInfo := ⟨"B", .other "B", .single, 0, none, none, "?"⟩,
         fields := .primitive, variants := .single }]
   }
-  match walkValue walkHooks enumWalk ⟨"E", #[]⟩ ⟨false, false⟩ #[] with
+  match walkValue walkHooks enumWalk ⟨0, #[]⟩ ⟨false, false⟩ #[] with
   | .ok () events =>
     check (events == #["primitive:0::dangle=false", "unsafe:0", "special:0",
       "tag:0", "primitive:2:.<enum-variant(B)>:dangle=false"])
@@ -368,7 +368,7 @@ def main : IO Unit := do
         fields := .arbitrary #[0] #[0], variants := .single,
         fieldNames := #[some "self"] }]
   }
-  match walkValue walkHooks cyclicWalk ⟨"Loop", #[]⟩ ⟨false, false⟩ #[] with
+  match walkValue walkHooks cyclicWalk ⟨0, #[]⟩ ⟨false, false⟩ #[] with
   | .error (.walkInvariant _) events =>
     check (events.size == 3) "recursive by-value layout ran visitor hooks past its cycle boundary"
   | other => throw (IO.userError s!"recursive ValueVisitor layout mismatch: {reprStr other}")
@@ -376,7 +376,7 @@ def main : IO Unit := do
   let placeHooks : ValidatePlaceHooks Nat Nat String (Array String) := {
     isStoredInMemory := fun _ state => .ok true (state.push "stored")
     visitValue := fun place session state => Id.run do
-      let state := state.push s!"visit:{place}:dangle={session.flags.mayDangle}"
+      let state := state.push s!"visit:{place}:root={session.path.originalType}:dangle={session.flags.mayDangle}"
       if place == 0 then
         let data ← match DataRangeSet.empty.addRange (size 11) (size 2) with
           | .ok value => pure value
@@ -392,11 +392,11 @@ def main : IO Unit := do
       .ok () (state.push s!"uninit:{range.start.bytes}:{range.size.bytes}")
     trackedPlace := fun key state => .ok key (state.push s!"tracked:{key}")
   }
-  match validatePlace placeHooks 0 "Root" true none
+  match validatePlace placeHooks 0 17 true none
       (some RefTracking.empty) true #[] with
   | .ok () events =>
-    check (events == #["stored", "visit:0:dangle=false", "allocation-range:0",
-      "uninit:0:1", "uninit:3:2", "tracked:42", "visit:42:dangle=true"])
+    check (events == #["stored", "visit:0:root=17:dangle=false", "allocation-range:0",
+      "uninit:0:1", "uninit:3:2", "tracked:42", "visit:42:root=17:dangle=true"])
       "validate_place initialization, padding, or recursive-reference order diverged"
   | other => throw (IO.userError s!"validate_place driver mismatch: {reprStr other}")
 

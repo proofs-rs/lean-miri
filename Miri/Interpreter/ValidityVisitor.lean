@@ -528,9 +528,9 @@ theorem resetPadding_memory_zero [PointerProvenance P] (h : Hooks P S C E F A Pa
 LIFO order without reset, without further tracking, and under may_dangle. -/
 def validatePlace [PointerProvenance P] [DecidableEq P] (h : Hooks P S C E F A Pad) (c : C)
     (fuel : Nat) (place : RuntimePlace P) (recursive reset : Bool) : M S Unit := do
-  let name ← h.typeName c place.layout.ty
+  -- Pinned Path::new keeps the actual root Ty; names are demand-time diagnostics.
   let initial : Session P := {
-    path := ⟨name,#[]⟩, flags := ⟨reset,false⟩, ctfeMode := none
+    path := ⟨place.layout.ty,#[]⟩, flags := ⟨reset,false⟩, ctfeMode := none
     refTracking := if recursive then some .empty else none, dataBytes := none }
   let mut session ← h.withGhostValidation do
     let mut session := initial

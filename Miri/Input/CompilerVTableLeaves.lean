@@ -18,7 +18,8 @@ def make (p : CompilerProviders.Prepared)
     VTableHooks Provenance (MachineHooks.State K U) C CallInstance (FnAbi MIR.TyId) :=
   let facts := p.lifecycle.calls.symbols.facts
   let engine := CompilerVTableMachine.hooks p.vtables image engine
-  { target := p.runtime.target.base
+  WorldVirtualHooks.vtableHooks types {
+    target := p.runtime.target.base
     isDynamic := fun _ ty => lift (CompilerFacts.boolean facts.context ty "is_dynamic")
     memoryOffset := memoryOffset
     resolvePointer := fun _ pointer => do

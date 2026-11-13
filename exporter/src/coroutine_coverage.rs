@@ -76,7 +76,7 @@ impl Catalog {
 
 // Capture raw declarations directly from physical optimized MIR. Query-selected
 // layouts and closed field layout answers are intentionally not source inputs.
-fn capture_generic_source<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>,
+pub(super) fn capture_generic_source<'tcx>(tcx: TyCtxt<'tcx>, context: &mut ExportContext<'tcx>,
     owner: rustc_hir::def_id::DefId) -> Result<(), String> {
     if tcx.is_async_drop_in_place_coroutine(owner) { return Ok(()); }
     let ty::Coroutine(logical, args) = *tcx.type_of(owner).instantiate_identity().skip_norm_wip().kind()

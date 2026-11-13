@@ -7,4 +7,5 @@ pub fn root(){
  core::hint::black_box(foreign_abi_dep::identity((1u64,2u64)));
  core::hint::black_box(foreign_abi_dep::identity((1u128,2u128)));
  core::hint::black_box(foreign_abi_dep::accept_pair((1,2)));
+ core::hint::black_box(foreign_abi_dep::identity((core::ptr::null::<u8>(),1u64)));
 }

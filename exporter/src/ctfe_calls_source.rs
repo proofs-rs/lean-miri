@@ -26,6 +26,11 @@ fn place<'tcx>(body:&mir::Body<'tcx>,value:mir::Place<'tcx>)->Result<(Value,ty::
  Ok((json!({"local":value.local.as_u32(),"fields":fields}),current))
 }
 fn reference(value:&mir::ConstOperand<'_>,span:&mut dyn FnMut(Span)->u64)->Result<Value,String> {
+ if let mir::Const::Ty(declared,constant)=value.const_ {
+  if let ty::ConstKind::Param(parameter)=constant.kind() {
+   return Ok(json!({"kind":"parameter_constant","index":parameter.index,"declared_type":shape(declared)?,"span":span(value.span),"user_type":value.user_ty.map(|index|index.as_u32())}));
+  }
+ }
  let mir::Const::Unevaluated(source,declared)=value.const_ else {return Err("required source must retain Unevaluated constructor".into())};
  if !source.def.is_local() || source.promoted.is_some() {return Err("calls policy requires unpromoted local constant".into())}
  let parameter=if source.args.is_empty() {None} else {
@@ -40,7 +45,7 @@ fn operand<'tcx>(body:&mir::Body<'tcx>,value:&mir::Operand<'tcx>,span:&mut dyn F
  mir::Operand::Copy(value)=>json!({"kind":"copy","place":place(body,*value)?.0}),
  mir::Operand::Move(value)=>json!({"kind":"move","place":place(body,*value)?.0}),
  mir::Operand::Constant(value)=>{
-  if matches!(value.const_,mir::Const::Unevaluated(..)) {
+  if matches!(value.const_,mir::Const::Unevaluated(..)) || matches!(value.const_,mir::Const::Ty(_,constant) if matches!(constant.kind(),ty::ConstKind::Param(_))) {
    return Ok(json!({"kind":"constant","source":reference(value,span)?}));
   }
   if value.user_ty.is_some() {return Err("scalar CTFE source requires complete user-type annotation material".into())}
@@ -127,10 +132,26 @@ fn terminator<'tcx>(tcx:TyCtxt<'tcx>,body:&mir::Body<'tcx>,value:&mir::Terminato
  mir::TerminatorKind::Return=>json!({"kind":"return"}),other=>return Err(format!("scalar CTFE terminator unsupported: {other:?}")),
 })}
 
-pub(super) fn capture<'tcx>(tcx:TyCtxt<'tcx>,definition:DefId,promoted:Option<mir::Promoted>,body:&mir::Body<'tcx>,mut span:impl FnMut(Span)->u64)->Result<Value,String> {
+fn capture_impl<'tcx>(const_args:bool,tcx:TyCtxt<'tcx>,definition:DefId,promoted:Option<mir::Promoted>,body:&mir::Body<'tcx>,mut span:impl FnMut(Span)->u64)->Result<Value,String> {
  if body.source.def_id()!=definition || body.source.promoted!=promoted {return Err("CTFE raw source identity mismatch".into())}
  if !matches!(body.source.instance,ty::InstanceKind::Item(_)) || body.phase!=mir::MirPhase::Runtime(mir::RuntimePhase::PostCleanup) {return Err("scalar CTFE source requires Item mir_for_ctfe PostCleanup".into())}
  if body.coroutine.is_some() || body.spread_arg.is_some() || body.injection_phase.is_some() || body.source_scopes.iter().any(|scope|scope.inlined.is_some()) {return Err("scalar CTFE source has unsupported frame policy".into())}
+ let generics=tcx.generics_of(definition);
+ let mut constant_parameters=Vec::new();
+ for index in 0..generics.count() {
+  let parameter=generics.param_at(index,tcx);
+  match parameter.kind {
+   ty::GenericParamDefKind::Const{..} if const_args=>{
+    let declared=tcx.type_of(parameter.def_id).instantiate_identity().skip_norm_wip();
+    if !matches!(declared.kind(),ty::Uint(ty::UintTy::U32)) {return Err("const-args source requires u32 parameter declarations".into())}
+    constant_parameters.push(json!({"index":index,"type":shape(declared)?}));
+   },
+   ty::GenericParamDefKind::Const{..}=>return Err("const parameter requires distinct const-args policy".into()),
+   _ if const_args=>return Err("mixed type/region/constant parameter source unsupported".into()),
+   _=>{},
+  }
+ }
+ if const_args && constant_parameters.is_empty() {return Err("const-args source requires a constant parameter".into())}
  let required=body.required_consts.as_ref().ok_or("CTFE source lacks required-constant domain")?;
  if !definition.is_local() || promoted.is_some() || !body.user_type_annotations.is_empty() {return Err("calls policy requires local unpromoted PostCleanup source with cleared annotation table".into())}
  let info=|value:mir::SourceInfo,span:&mut dyn FnMut(Span)->u64|json!({"span":span(value.span),"scope":value.scope.as_u32()});
@@ -144,5 +165,13 @@ pub(super) fn capture<'tcx>(tcx:TyCtxt<'tcx>,definition:DefId,promoted:Option<mi
   json!({"span":span(scope.span),"parent":scope.parent_scope.map(|value|value.as_u32()),"lint_root":lint})
  }).collect::<Vec<_>>();
  let generics=tcx.generics_of(definition);let parameters=(0..generics.count()).map(|index|match generics.param_at(index,tcx).kind{ty::GenericParamDefKind::Lifetime=>"region",ty::GenericParamDefKind::Type{..}=>"type",ty::GenericParamDefKind::Const{..}=>"constant"}).collect::<Vec<_>>();
- Ok(json!({"definition":identity(definition),"source_role":"ctfe","promoted":promoted.map(|value|value.as_u32()),"policy":"scalar_u32_calls_v1","phase":"runtime_post_cleanup","environment_recipe":{"kind":"declaration","owner":identity(definition),"mode":"post_analysis"},"parameters":parameters,"user_type_annotations":[],"required_consts":required.iter().map(|value|reference(value,&mut span)).collect::<Result<Vec<_>,String>>()?,"span":span(body.span),"arg_count":body.arg_count,"spread_arg":null,"locals":locals,"blocks":blocks,"source_scopes":scopes}))
+ let mut captured=json!({"definition":identity(definition),"source_role":"ctfe","promoted":promoted.map(|value|value.as_u32()),"policy":if const_args {"scalar_u32_const_args_v1"} else {"scalar_u32_calls_v1"},"phase":"runtime_post_cleanup","environment_recipe":{"kind":"declaration","owner":identity(definition),"mode":"post_analysis"},"parameters":parameters,"user_type_annotations":[],"required_consts":required.iter().map(|value|reference(value,&mut span)).collect::<Result<Vec<_>,String>>()?,"span":span(body.span),"arg_count":body.arg_count,"spread_arg":null,"locals":locals,"blocks":blocks,"source_scopes":scopes});
+ if const_args {captured["constant_parameter_types"]=json!(constant_parameters);}
+ Ok(captured)
+}
+pub(super) fn capture<'tcx>(tcx:TyCtxt<'tcx>,definition:DefId,promoted:Option<mir::Promoted>,body:&mir::Body<'tcx>,span:impl FnMut(Span)->u64)->Result<Value,String> {
+ capture_impl(false,tcx,definition,promoted,body,span)
+}
+pub(super) fn capture_const_args<'tcx>(tcx:TyCtxt<'tcx>,definition:DefId,promoted:Option<mir::Promoted>,body:&mir::Body<'tcx>,span:impl FnMut(Span)->u64)->Result<Value,String> {
+ capture_impl(true,tcx,definition,promoted,body,span)
 }

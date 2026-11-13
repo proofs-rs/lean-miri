@@ -1,5 +1,6 @@
 import Miri.Input.CompilerTypingEnv
 import Miri.Input.InstanceArena
+import Miri.Interpreter.CompileTime.RootFinish
 /-! Source-to-query orchestration. Callbacks must supply actual World
 resolution, normalization/region erasure and CTFE evaluation. This file provides
 none of those capabilities and does not admit any production raw Unevaluated. -/
@@ -46,6 +47,35 @@ structure Access (World Diagnostic Value : Type) where
   queryInput : ResolvedInput → Action World Diagnostic QueryKey
   /-- Memoized raw value provider, including distinct allocation-query semantics. -/
   evaluate : QueryKey → Action World Diagnostic Value
+/-- Explicit allocated-root provider stages. executeRoot must perform the real
+layout/allocation/raw-frame/body operations before returning an opaque root.
+There is no default allocator and no scalar-candidate-to-root conversion. -/
+structure AllocatedRootAccess (World Diagnostic Root Value : Type) where
+  executeRoot : QueryKey → Action World Diagnostic Root
+  intern : QueryKey → Root → World → Except Interpreter.CompileTime.RootFinish.InternError Unit × World
+  validateRoot : QueryKey → Root → Action World Diagnostic Unit
+  reportIntern : QueryKey → Interpreter.CompileTime.RootFinish.InternError → World → Failure Diagnostic × World
+  makeResult : QueryKey → Root → World → Value × World
+
+/-- Compose genuine root capabilities through the pinned finish order. Missing
+allocator/validator capabilities must fail through executeRoot, never fabricate
+an allocated root or return a source-frame candidate as a compiler answer. -/
+def evaluateAllocatedRoot (access : AllocatedRootAccess W D R V) (key : QueryKey) : Action W D V := fun world =>
+  let (executed,world) := access.executeRoot key world
+  match executed with
+  | .error error => (.error error,world)
+  | .ok root =>
+    match Interpreter.CompileTime.RootFinish.finish (access.intern key) (access.validateRoot key)
+        (access.reportIntern key) (access.makeResult key) root world with
+    | .returned value world => (.ok value,world)
+    | .failed _ error world => (.error error,world)
+
+/-- The public source-to-query bridge uses the same finish controller when a
+caller supplies real allocated-root capabilities. No such production allocator
+is installed by this adapter. -/
+def Access.withAllocatedRoots (access : Access W D V) (roots : AllocatedRootAccess W D R V) : Access W D V :=
+  {access with evaluate := evaluateAllocatedRoot roots}
+
 private def resolutionFailure : Failure D → Failure D
   | .tooGeneric _ => .tooGeneric none
   | .reported diagnostic _ => .reported diagnostic none

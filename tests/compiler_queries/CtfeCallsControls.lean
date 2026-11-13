@@ -37,7 +37,7 @@ def main (args : List String) : IO Unit := do
     terminator := .ret}]}
   let initial ← must (CallFrame.initializeState body #[])
   let requestBody (reference : Reference) : EStateM String (List Nat) Value := fun world =>
-    let key := match reference with | .direct key _ _ _ | .associated key _ _ _ _ => key
+    let key := match reference with | .direct key _ _ _ | .associated key _ _ _ _ | .parameterConstant key _ _ _ => key
     .error "first operand" (world ++ [key])
   let (result,world) := CallFrame.stepWithWorld body ⟨64,false,true⟩ requestBody initial []
   check (world == [1]) "failed left operand evaluated right operand or discarded World"

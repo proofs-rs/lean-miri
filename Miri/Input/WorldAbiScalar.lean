@@ -18,7 +18,9 @@ def classify (runtime : RuntimeMetadata) (session : AbiSessionMaterial) (definit
         throw "source indirect Memory ABI exceeds the supported aggregate bound"
       return ArgAbi.initial layout
     return ← WorldAggregateAbi.smallMemory runtime layout
-  if let .ScalarPair .. := layout.layout.backendRepr then
+  if let .ScalarPair (a := a) (b := b) (bOffset := _) := layout.layout.backendRepr then
+    let pointer := fun (scalar : Scalar) => match scalar.primitive with | .Pointer _ => true | _ => false
+    if pointer a || pointer b then return ← WorldAggregateAbi.rawPointerPair runtime layout
     return ← liftPure (WorldAggregateAbi.nonPointerPair layout isReturn)
   let arena := (← get).arena
   let constructor ← liftPure do

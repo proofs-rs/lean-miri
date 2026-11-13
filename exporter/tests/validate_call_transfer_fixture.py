@@ -112,8 +112,49 @@ def operand_type_ref(operand):
     return constant.get("type")
 
 
+def raw_type_matches(term, material_id):
+    """Fixture-only exact raw syntax join; never constructs a closed type."""
+    if term.get("sort") != "type":
+        return False
+    shape = types[material_id]["shape"]
+    if term == {"kind": "atom", "sort": "type", "tag": "uint", "payload": "u8"}:
+        return shape == {"kind": "uint", "unsigned_kind": "u8"}
+    if term.get("kind") == "definition" and term.get("tag") == "adt":
+        if shape.get("kind") != "adt" or term.get("children") != [] or shape.get("generic_args") != []:
+            return False
+        physical = document["definitions"][shape["def_id"]]
+        return term["definition"] == {key: physical[key] for key in ("crate", "index")}
+    if term.get("kind") == "node" and term.get("tag") in ("raw_pointer", "reference"):
+        if shape.get("kind") != term["tag"] or shape.get("mutability", {}).get("kind") != term["payload"]:
+            return False
+        children = term["children"]
+        if term["tag"] == "reference":
+            if (len(children) != 2 or children[0] != {"kind": "atom", "sort": "region", "tag": "erased", "payload": ""}
+                    or shape.get("region") != {"kind": "erased"}):
+                return False
+            children = children[1:]
+        return len(children) == 1 and raw_type_matches(children[0], shape["pointee"])
+    return False
+
+
 def local_type_ref(body, local):
-    for item in body_payload(body).get("locals", []):
+    payload = body_payload(body)
+    if payload.get("body_kind") == "copy_template":
+        source = document["mir_templates"][payload["template_id"]]
+        template = json.loads(source["template"])
+        require(source["source_role"] == "runtime" and source["source_promoted"] is None,
+                "transfer candidate lost its exact runtime source role")
+        require(source["source_def_id"] == body["def_id"]
+                and payload["instance_id"] == body["instance_id"],
+                "transfer candidate physical source/instance identity differs")
+        require(template["parameters"] == [] and payload["generic_args"] == [],
+                "transfer fixture raw local join requires an actual parameter-free source")
+        term = template["types"][template["skeleton"]["locals"][local]]
+        matches = [type_id for type_id in types if raw_type_matches(term, type_id)]
+        require(len(matches) == 1,
+                "raw candidate local has no unique exact captured type-pool correspondence")
+        return matches[0]
+    for item in payload.get("locals", []):
         if item.get("local") == local:
             return item.get("type")
     return None

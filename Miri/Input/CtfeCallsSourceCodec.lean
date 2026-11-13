@@ -48,6 +48,10 @@ private def localDefinition (value : Json) : Except String Nat := do
   unless definition.crateIndex == 0 do throw "calls policy requires local crate0 source identity"
   pure definition.index
 private def reference (value : Json) : Except String Reference := do
+  if (← text value "kind") == "parameter_constant" then
+    keys value ["kind","index","declared_type","span","user_type"]
+    return .parameterConstant (← nat value "index") (← optionalNat (← field value "user_type"))
+      (← shape 16384 (← field value "declared_type")) (← nat value "span")
   keys value ["kind","definition","promoted","arguments","parameter","declared_type","span","user_type"]
   unless (← field value "promoted") == .null do throw "promoted calls references unsupported"
   let arguments ← arr value "arguments"
@@ -165,14 +169,16 @@ private def scope (value : Json) : Except String Scope := do
   pure ⟨⟨← nat value "span"⟩,← optionalNat (← field value "parent"),lintRoot⟩
 
 def read (value : Json) : Except String Source := do
-  keys value ["definition","source_role","promoted","policy","phase","environment_recipe",
-    "parameters","required_consts","span","arg_count","spread_arg","locals","blocks","source_scopes","user_type_annotations"]
+  let constArgs := (← text value "policy") == "scalar_u32_const_args_v1"
+  keys value (["definition","source_role","promoted","policy","phase","environment_recipe",
+    "parameters","required_consts","span","arg_count","spread_arg","locals","blocks","source_scopes","user_type_annotations"] ++ if constArgs then ["constant_parameter_types"] else [])
   let definition ← GenericMaterialCodec.readDefinition (← field value "definition")
   let role ← match ← text value "source_role" with
     | "ctfe" => pure CompilerBodyRole.ctfe | "runtime" => pure .runtime
     | _ => throw "unknown raw CTFE compiler body role"
   let policy ← match ← text value "policy" with
-    | "scalar_u32_calls_v1" => pure Policy.scalarU32CallsV1 | _ => throw "unknown raw CTFE source policy"
+    | "scalar_u32_calls_v1" => pure Policy.scalarU32CallsV1
+    | "scalar_u32_const_args_v1" => pure .scalarU32ConstArgsV1 | _ => throw "unknown raw CTFE source policy"
   unless (← text value "phase") == "runtime_post_cleanup" do throw "unsupported raw CTFE source phase"
   unless (← field value "spread_arg") == .null do throw "raw CTFE scalar frame cannot have a spread argument"
   let recipe ← field value "environment_recipe"
@@ -196,9 +202,13 @@ def read (value : Json) : Except String Source := do
   unless (← arr value "user_type_annotations").isEmpty do throw "PostCleanup annotation table must be cleared"
   let parameters ← (← arr value "parameters").mapM GenericMaterialCodec.readSort
   let required ← (← arr value "required_consts").mapM reference
+  let constantParameters ← if constArgs then (← arr value "constant_parameter_types").mapM fun item => do
+    keys item ["index","type"]
+    pure ({index := ← nat item "index",ty := ← shape 16384 (← field item "type")} : ConstantParameter)
+    else pure #[]
   let program : Miri.Interpreter.CompileTime.SourceStack.Source := {
     definition := ← localDefinition (← field value "definition"),name := ""
-    required,typeParameters := parameters.size
+    required,constantParameters,typeParameters := if constArgs then 0 else parameters.size
     cleanup := blocks.map (·.2.2.2)
     program := ⟨locals.map (·.1),← nat value "arg_count",blocks.map (·.1)⟩ }
   let source : Source := {

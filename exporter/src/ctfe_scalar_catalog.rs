@@ -85,7 +85,8 @@ pub(super) fn demand<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,def
         if let mir::ClearCrossCrate::Set(data)=&scope.local_data {def_json(context,data.lint_root.owner.def_id.to_def_id());}
     }
     match ctfe_scalar_source::capture(tcx,definition,promoted,body,|span|span_json(context,tcx,span))
-        .or_else(|_|ctfe_calls_source::capture(tcx,definition,promoted,body,|span|span_json(context,tcx,span))) {
+        .or_else(|_|ctfe_calls_source::capture(tcx,definition,promoted,body,|span|span_json(context,tcx,span)))
+        .or_else(|_|ctfe_calls_source::capture_const_args(tcx,definition,promoted,body,|span|span_json(context,tcx,span))) {
         Ok(source)=>context.ctfe_scalar_sources.sources.push(source),
         Err(reason)=>{
             if std::env::var_os("LEAN_MIRI_TRACE_CTFE_SOURCE").is_some() {

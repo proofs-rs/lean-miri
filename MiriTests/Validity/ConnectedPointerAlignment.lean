@@ -161,7 +161,7 @@ private def check (condition : Bool) (message : String) : IO Unit :=
   if condition then pure () else throw <| IO.userError message
 
 def main : IO Unit := do
-  let path : ValidationPath := ⟨"Root", #[.field "inner", .tupleElem 2]⟩
+  let path : ValidationPath := ⟨17, #[.field "inner", .tupleElem 2]⟩
   let session : ValidityVisitor.Session Provenance := {
     path, flags := ⟨false, false⟩, ctfeMode := none,
     refTracking := none, dataBytes := none }

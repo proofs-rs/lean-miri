@@ -10,7 +10,7 @@ namespace Miri.Input.CtfeMirSource
 open GenericSubstitution Miri.MIR
 open Miri.Interpreter.CompileTime
 inductive Policy where
-  | scalarU32 | scalarU32CallsV1
+  | scalarU32 | scalarU32CallsV1 | scalarU32ConstArgsV1
   deriving Repr, DecidableEq
 structure LintRoot where
   owner : DefinitionIdentity
@@ -95,12 +95,20 @@ def validate (source : Source) : Except String Unit := do
   unless source.parameters.all (· != .aggregate) do throw "invalid CTFE declaration parameter sort"
   let program ← match source.policy,source.program with
     | .scalarU32,.scalar program => pure program
-    | .scalarU32CallsV1,.calls calls => do
+    | policy,.calls calls => do
+      unless policy == .scalarU32CallsV1 || policy == .scalarU32ConstArgsV1 do throw "CTFE source policy/program mismatch"
       unless source.definition.crateIndex == 0 && calls.definition == source.definition.index do
         throw "calls policy requires exact local crate0 physical source identity"
       unless source.requiredConstants.isEmpty do throw "calls preamble must reside in the typed calls payload"
       unless source.promoted.isNone do throw "calls policy promoted sources unsupported"
-      unless calls.typeParameters == source.parameters.size && source.parameters.all (· == .type) do throw "calls generic domain mismatch"
+      if policy == .scalarU32CallsV1 then
+        unless calls.constantParameters.isEmpty && calls.typeParameters == source.parameters.size && source.parameters.all (· == .type) do
+          throw "calls generic domain mismatch"
+      else
+        unless calls.typeParameters == 0 && !calls.constantParameters.isEmpty && source.parameters.all (· == .constant) &&
+            calls.constantParameters.size == source.parameters.size do throw "const-args generic domain mismatch"
+        for (parameter,index) in calls.constantParameters.zipIdx do
+          unless parameter.index == index && parameter.ty == .uint 32 do throw "const-args declaration index/type mismatch"
       SourceStack.validateSource calls
       let program := calls.program
       unless source.localSources.size == program.locals.size && source.localMutability.size == program.locals.size do
@@ -233,6 +241,7 @@ def validateReferences (spanCount : Nat) (knownDefinition : DefinitionIdentity �
       unless knownDefinition ⟨0,index⟩ do throw "CTFE local source reference is absent"
     let reference (value : CallFrame.Reference) : Except String Unit :=
       match value with
+      | .parameterConstant _ _ _ location => span ⟨location⟩
       | .direct index _ _ location | .associated index _ _ _ location => definition index *> span ⟨location⟩
     let operand (value : CallFrame.Operand) : Except String Unit :=
       match value with

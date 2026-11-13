@@ -47,7 +47,7 @@ inductive Constructor where
       (arguments : Array MIR.GenericArg)
   deriving Repr, DecidableEq
 
-/-- The two pools have separate dense namespaces. Material prefixes are never
+/-- Type, constant and existential-predicate pools have separate dense namespaces. Material prefixes are never
 changed; append-only constructor syntax belongs to one execution. -/
 structure World where
   private mk ::
@@ -59,6 +59,7 @@ structure World where
   checkedMaterial : CheckedMaterial materialTypes materialConstants definitions materialPredicates pointerBytes
   constructedTypes : Array Constructor := #[]
   constructedConstants : Array MIR.TypeConst := #[]
+  constructedPredicates : Array DynamicPredicate.Predicate := #[]
 
 inductive TypeView where
   | material (node : TypeNode)
@@ -68,6 +69,7 @@ abbrev WorldM := StateT World (Except String)
 
 def World.typeCount (world : World) : Nat := world.materialTypes.size + world.constructedTypes.size
 def World.constantCount (world : World) : Nat := world.materialConstants.size + world.constructedConstants.size
+def World.predicateCount (world : World) : Nat := world.materialPredicates.size + world.constructedPredicates.size
 
 def World.ofCheckedMaterial {types constants definitions predicates pointerBytes}
     (checked : CheckedMaterial types constants definitions predicates pointerBytes) : World := {
@@ -138,7 +140,35 @@ def World.boundVariable (world : World) : MIR.BoundVariableKind → Except Strin
       | .Named id => do pure (BoundIdentity.named (← world.identity id))
     pure (.region identity)
 
+/-- Core execution-universe references for a typed existential predicate.
+Binder ownership and closedness are checked by TypeArenaPredicateWorld before
+suffix insertion; material binders keep their explicit residual syntax. -/
+def World.validateExistential (world : World) (predicate : DynamicPredicate.Predicate) : Except String Unit := do
+  let _ ← world.definitionRef predicate.body.definition
+  for argument in predicate.body.arguments do
+    if let .Lifetime region := argument then
+      unless regionReferencesValid world.definitions.size region do
+        throw "dynamic predicate lifetime has an absent physical definition"
+  for binderVar in predicate.variables do
+    let identity := match binderVar with
+      | .region (.named identity) | .type (.named identity) => some identity
+      | _ => none
+    if let some identity := identity then
+      let _ ← world.definitionRef identity
+      pure ()
+  for child in predicate.body.typeChildren do
+    let _ ← world.lookupType child
+    pure ()
+  for child in predicate.body.constantChildren do
+    let _ ← world.lookupConstant child
+    pure ()
+
 def World.existential (world : World) (id : PredicateId) : Except String DynamicPredicate.Predicate := do
+  if id >= world.materialPredicates.size then
+    let some predicate := world.constructedPredicates[id - world.materialPredicates.size]?
+      | throw "dynamic constructed predicate is absent"
+    world.validateExistential predicate
+    return predicate
   let some source := world.materialPredicates[id]? | throw "dynamic source predicate is absent"
   let identity ← world.identity source.definitionId
   let body ← match source.kind with
@@ -152,7 +182,26 @@ def World.existential (world : World) (id : PredicateId) : Except String Dynamic
       let some term := source.projectionTerm | throw "dynamic projection source term is absent"
       pure (.projection identity source.genericArgs (match term with
         | .type id => .type id | .constant id => .constant id))
-  pure ⟨← source.boundVariables.mapM world.boundVariable,body⟩
+  let predicate := DynamicPredicate.Predicate.mk (← source.boundVariables.mapM world.boundVariable) body
+  world.validateExistential predicate
+  pure predicate
+
+/-- Core-checked syntax interning inside the module that owns private World.mk.
+This preserves immutable prefixes, valid execution child references and dense
+exact reuse. It does not establish closed binder ownership: runtime consumers
+must enter through TypeArenaPredicateWorld.internExistential. -/
+def World.internExistentialSyntax (predicate : DynamicPredicate.Predicate) : WorldM PredicateId := do
+  let world ← get
+  world.validateExistential predicate
+  let mut found : Option PredicateId := none
+  for id in [:world.predicateCount] do
+    if (← world.existential id) == predicate then
+      unless found.isNone do throw "ambiguous canonical existential predicate identity"
+      found := some id
+  if let some id := found then return id
+  let id := world.predicateCount
+  set {world with constructedPredicates := world.constructedPredicates.push predicate}
+  pure id
 
 private def World.validateDynamic (world : World) (value : DynamicPredicate.Dynamic) : Except String Unit := do
   unless !value.predicates.isEmpty do throw "dynamic source predicate list is empty"
@@ -160,18 +209,7 @@ private def World.validateDynamic (world : World) (value : DynamicPredicate.Dyna
     throw "dynamic object lifetime has an absent physical definition"
   let mut previous : Option DynamicPredicate.Body := none
   for predicate in value.predicates do
-    let _ ← world.definitionRef predicate.body.definition
-    for argument in predicate.body.arguments do
-      if let .Lifetime region := argument then
-        unless regionReferencesValid world.definitions.size region do
-          throw "dynamic predicate lifetime has an absent physical definition"
-    for boundVariable in predicate.variables do
-      let identity := match boundVariable with
-        | .region (.named identity) | .type (.named identity) => some identity
-        | _ => none
-      if let some identity := identity then
-        let _ ← world.definitionRef identity
-        pure ()
+    world.validateExistential predicate
     if let some before := previous then
       unless before.rank ≤ predicate.body.rank do throw "dynamic source predicate order is invalid"
       if before.rank == predicate.body.rank && before.rank != 0 then
@@ -222,6 +260,12 @@ def World.materialKey (world : World) (source : TypeNode) : Except String (Optio
       safe := signature.safety == .Safe, cVariadic := signature.cVariadic, splatted,
       inputs := signature.inputs, output := signature.output }))
   | .dynamicTraitObject predicates principal region =>
+    for predicate in predicates do
+      unless predicate < world.materialPredicates.size do
+        throw "material dynamic type references a constructed predicate handle"
+    if let some principal := principal then
+      unless principal < world.materialPredicates.size do
+        throw "material dynamic principal references a constructed predicate handle"
     let values ← predicates.mapM world.existential
     let expected := predicates.find? (fun id => (world.materialPredicates[id]?).any (·.kind == .trait))
     unless principal == expected do throw "dynamic principal contradicts source predicate list"

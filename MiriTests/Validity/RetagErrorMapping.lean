@@ -16,7 +16,7 @@ private def failedAt (expectedError : StepError) (expectedState : Nat)
   | .ok _ _ => false
 
 def main : IO Unit := do
-  let fieldPath : ValidationPath := ⟨"Root", #[.field "inner", .tupleElem 2]⟩
+  let fieldPath : ValidationPath := ⟨17, #[.field "inner", .tupleElem 2]⟩
   check
     (ValidityVisitor.classifyRetagError fieldPath (.reference true)
       .retagWriteToReadOnly ==
@@ -48,7 +48,7 @@ def main : IO Unit := do
       43 (ValidityVisitor.mapRetagOutcome fieldPath (.reference false) machineStop 41))
     "machine-stop path mapping discarded the callback successor state"
   check
-    (ValidityVisitor.classifyRetagError ⟨"Root", #[]⟩ .box (.machineStop "stop") ==
+    (ValidityVisitor.classifyRetagError ⟨17, #[]⟩ .box (.machineStop "stop") ==
       .machineStop "stop")
     "root machine-stop diagnostic was changed despite having no projection path"
   check

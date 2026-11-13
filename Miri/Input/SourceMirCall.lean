@@ -24,7 +24,9 @@ def source (document : ImportDocument) (bodyIndex blockIndex : Nat) : Except Str
     | throw "generic MIR source template is absent"
   let some block := source.template.skeleton.blocks[blockIndex]?
     | throw "source call block is absent"
-  let .call functionType constantSpan .. := block.terminator.kind | return none
+  let (functionType,constantSpan) ← match block.terminator.kind with
+    | .call functionType constantSpan .. | .sourceCall functionType constantSpan .. => pure (functionType,constantSpan)
+    | _ => return none
   let some expression := source.template.types[functionType.index]?
     | throw "source call function type slot is absent"
   pure (some ⟨expression,reference.genericArgs,constantSpan⟩)
@@ -46,7 +48,9 @@ def sourceIdentity (identity : Miri.Interpreter.BodyIdentity) (blockIndex : Nat)
       | throw "generic MIR source template is absent"
     let some block := template.template.skeleton.blocks[blockIndex]?
       | throw "source call block is absent"
-    let .call functionType constantSpan .. := block.terminator.kind | return none
+    let (functionType,constantSpan) ← match block.terminator.kind with
+      | .call functionType constantSpan .. | .sourceCall functionType constantSpan .. => pure (functionType,constantSpan)
+      | _ => return none
     let some expression := template.template.types[functionType.index]?
       | throw "source call function type slot is absent"
     pure (some ⟨expression,key.instanceKey.arguments,constantSpan⟩)

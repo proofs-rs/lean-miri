@@ -36,12 +36,12 @@ def hooks [DecidableEq K] (prepared : CompilerFactAdapters.Prepared)
   {
     instanceDefinition := fun inst => do
       lift (CompilerInstance.definitionOf (← RuntimeArrayQueries.compilerSnapshot types) inst)
-    typeShape := fun ty => lift (CompilerFacts.retagTypeShape context ty)
-    builtinDeref := fun ty => lift (CompilerFacts.requiredType context ty "builtin_deref_explicit")
-    referencePointee := fun ty => lift (CompilerFacts.referencePointee context ty)
-    isUnpin := fun ty => lift (CompilerFacts.boolean context ty "is_unpin")
-    isUnsafeUnpin := fun ty => lift (CompilerFacts.boolean context ty "is_unsafe_unpin")
-    typeIsFreeze := fun ty => lift (CompilerFacts.boolean context ty "is_freeze")
+    typeShape := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.retagTypeShapeInWorld context ty)
+    builtinDeref := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.requiredTypeInWorld context ty "builtin_deref_explicit")
+    referencePointee := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.referencePointeeInWorld context ty)
+    isUnpin := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld context ty "is_unpin")
+    isUnsafeUnpin := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld context ty "is_unsafe_unpin")
+    typeIsFreeze := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld context ty "is_freeze")
     implicitWrites := leaves.implicitWrites
     rustcNoWritable := leaves.rustcNoWritable
     preciseInteriorMut := leaves.preciseInteriorMut
@@ -62,11 +62,11 @@ def hooks [DecidableEq K] (prepared : CompilerFactAdapters.Prepared)
     freeze := {
       target := pointers.arithmetic
       debugAssertions := projection.place.debugAssertions
-      isUnsafeCell := fun ty => lift (CompilerFacts.boolean context ty "is_unsafe_cell")
-      typeIsFreeze := fun ty => lift (CompilerFacts.boolean context ty "is_freeze")
-      isDynamic := fun ty => lift (CompilerFacts.boolean context ty "is_dynamic")
-      isBox := fun ty => lift (CompilerFacts.boolean context ty "is_box")
-      isTooGeneric := fun ty => lift (CompilerFacts.boolean context ty "is_too_generic")
+      isUnsafeCell := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld context ty "is_unsafe_cell")
+      typeIsFreeze := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld context ty "is_freeze")
+      isDynamic := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld context ty "is_dynamic")
+      isBox := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld context ty "is_box")
+      isTooGeneric := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld context ty "is_too_generic")
       sizeAndAlign := size
       projectField := fun place index => do
         memory (← PlaceDynamic.field projection choice ⟨.memory place.mplace,place.layout⟩ index)
@@ -78,7 +78,8 @@ def hooks [DecidableEq K] (prepared : CompilerFactAdapters.Prepared)
           ⟨.memory place.mplace,place.layout⟩
         pure (← memory pointer,← memory allocator)
       unpackDynTrait := fun place => do
-        let .dynamic expected ← lift (CompilerFactAdapters.validityKind prepared place.layout.ty)
+        let .dynamic expected ← RuntimeArrayQueries.perform types
+          (CompilerFactAdapters.validityKindInWorld prepared place.layout.ty)
           | throw (.invalidProgram "freeze dyn unpack on non-dynamic compiler type")
         let inner ← VTable.unpackDynTrait vtable choice ⟨.indirect place.mplace,place.layout⟩ expected
         let .indirect memory := inner.op | throw (.invalidProgram "dynamic unpack returned immediate")

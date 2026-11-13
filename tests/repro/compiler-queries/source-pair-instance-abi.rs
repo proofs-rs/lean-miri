@@ -2,7 +2,7 @@
 #[inline(never)]
 pub fn identity<T>(value:T)->T {value}
 #[inline(never)]
-pub fn residual(value:(*const u8,u64))->(*const u8,u64) {value}
+pub fn residual(value:(*const u8,u128))->(*const u8,u128) {value}
 pub fn root() {
  core::hint::black_box(identity((true,false)));
  core::hint::black_box(identity((1u8,2u64)));

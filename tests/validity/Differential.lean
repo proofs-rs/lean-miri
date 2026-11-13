@@ -71,7 +71,7 @@ def main : IO Unit := do
   let encoded := String.intercalate "," (data.toArray.toList.map fun range =>
     s!"{range.start.bytes}:{range.size.bytes}")
   IO.println s!"R {encoded}"
-  let sourcePath : ValidationPath := ⟨"Root", #[
+  let sourcePath : ValidationPath := ⟨17, #[
     .field "field", .enumTag, .variant "Variant", .coroutineTag,
     .coroutineState 7, .capturedVar "capture", .tupleElem 2, .arrayElem 3,
     .deref, .dynDowncast "Concrete", .vtable]⟩

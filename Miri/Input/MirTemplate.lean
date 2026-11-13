@@ -25,6 +25,9 @@ inductive Projection where
   | deref
   | field (index : Nat) (type : TypeSlot)
   | downcast (name : Option String) (variant : Nat)
+  | index (localId : LocalId)
+  | constantIndex (offset minLength : Nat) (fromEnd : Bool)
+  | subslice (fromIndex toIndex : Nat) (fromEnd : Bool)
   deriving Repr, DecidableEq
 structure SourcePlace where
   localId : LocalId
@@ -36,7 +39,14 @@ inductive SourceOperand where
   | scalar (type : TypeSlot) (span : SpanRef) (bits bytes : Nat)
   | zeroSized (type : TypeSlot) (span : SpanRef)
   deriving Repr, DecidableEq
+structure SourceCallArgument where
+  span : SpanRef
+  operand : SourceOperand
+  deriving Repr, DecidableEq
 inductive SourceRvalue where
+  | cast (kind : CastKind) (operand : SourceOperand) (target : TypeSlot)
+  | reference (borrow : BorrowKind) (place : SourcePlace)
+  | rawPointer (kind : RawPtrKind) (place : SourcePlace)
   | use (operand : SourceOperand) (retag : WithRetag)
   | discriminant (place : SourcePlace)
   | adt (type : TypeSlot) (variant : Nat) (operands : Array SourceOperand)
@@ -76,6 +86,9 @@ structure CallArgument where
   deriving Repr, DecidableEq
 
 inductive TerminatorKind where
+  | sourceCall (functionType : TypeSlot) (constantSpan : SpanRef)
+      (arguments : Array SourceCallArgument) (destination : SourcePlace)
+      (target : Option BasicBlockId) (unwind : UnwindAction) (functionSpan : SpanRef)
   | sourceSwitch (discriminant : SourceOperand) (targets : SwitchTargets)
   | assertResume (condition : SourceOperand) (expected : Bool) (message : AssertKind)
       (target : BasicBlockId) (unwind : UnwindAction)
@@ -129,6 +142,9 @@ def SourcePlace.instantiate {m : Type → Type} [Monad m]
     | .deref => pure ProjectionElem.Deref
     | .field index type => return .Field index (← resolve type)
     | .downcast name variant => pure (.Downcast name variant)
+    | .index localId => pure (.Index localId)
+    | .constantIndex offset minLength fromEnd => pure (.ConstantIndex offset minLength fromEnd)
+    | .subslice first last fromEnd => pure (.Subslice first last fromEnd)
   pure ⟨place.localId,projection⟩
 def SourceOperand.instantiate {m : Type → Type} [Monad m]
     (resolve : TypeSlot → m TyId) : SourceOperand → m Miri.MIR.Operand
@@ -139,6 +155,9 @@ def SourceOperand.instantiate {m : Type → Type} [Monad m]
 private def instantiateSourceRvalue {m : Type → Type} [Monad m]
     (resolve : TypeSlot → m TyId) (resolveAdt : TyId → Nat → m AggregateKind) :
     SourceRvalue → m Miri.MIR.Rvalue
+  | .cast kind value target => return .Cast kind (← value.instantiate resolve) (← resolve target)
+  | .reference borrow place => return .Ref .Erased borrow (← place.instantiate resolve)
+  | .rawPointer kind place => return .RawPtr kind (← place.instantiate resolve)
   | .use value retag => return .Use (← value.instantiate resolve) retag
   | .discriminant place => return .Discriminant (← place.instantiate resolve)
   | .adt type variant operands => do
@@ -169,6 +188,11 @@ private def instantiateStatement {m : Type → Type} [Monad m]
 private def instantiateTerminator {m : Type → Type} [Monad m]
     (resolve : TypeSlot → m TyId) (source : Terminator) : m Miri.MIR.Terminator := do
   let kind : Miri.MIR.TerminatorKind ← match source.kind with
+    | .sourceCall functionType constantSpan arguments destination target unwind functionSpan => do
+      let function := Miri.MIR.Operand.Constant ⟨constantSpan,none,.Val .ZeroSized (← resolve functionType)⟩
+      let arguments ← arguments.mapM fun argument => do
+        pure ({span := argument.span,operand := ← argument.operand.instantiate resolve} : SpannedOperand)
+      pure (.Call function arguments (← destination.instantiate resolve) target unwind .Normal functionSpan)
     | .sourceSwitch value targets => pure (.SwitchInt (← value.instantiate resolve) targets)
     | .assertResume value expected message target unwind => pure (.Assert (← value.instantiate resolve) expected message target unwind)
     | .sourceDrop place target unwind replace asyncDrop => pure (.Drop (← place.instantiate resolve) target unwind replace asyncDrop)
@@ -215,7 +239,10 @@ def validateStructure (template : Template) : Except String Unit := do
   let place (value : SourcePlace) : Except String Unit := do
     localId value.localId
     for projection in value.projection do
-      if let .field _ type := projection then slot type
+      match projection with
+      | .field _ type => slot type
+      | .index id => localId id
+      | _ => pure ()
   let sourceOperand (value : SourceOperand) : Except String Unit := do
     match value with
     | .copy value | .move value => place value
@@ -239,6 +266,8 @@ def validateStructure (template : Template) : Except String Unit := do
       | .sourceAssign destination value =>
         place destination
         match value with
+        | .cast _ value target => sourceOperand value; slot target
+        | .reference _ value | .rawPointer _ value => place value
         | .use value _ => sourceOperand value
         | .discriminant value => place value
         | .adt type _ values => slot type; for value in values do sourceOperand value
@@ -255,6 +284,12 @@ def validateStructure (template : Template) : Except String Unit := do
       | .storageLive id | .storageDead id | .placeMention id => localId id
       | .nop => pure ()
     match block.terminator.kind with
+    | .sourceCall functionType _ arguments destination returnTarget action _ =>
+      slot functionType
+      place destination
+      for argument in arguments do sourceOperand argument.operand
+      for id in returnTarget.toArray do target id
+      unwind action
     | .sourceSwitch value targets =>
       sourceOperand value
       let mut seen : Array Nat := #[]

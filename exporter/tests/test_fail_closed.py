@@ -1,6 +1,7 @@
 """Fresh compiler-boundary regressions; missing setup is an error, never a skip."""
 
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -10,6 +11,28 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 from mir_json import load_mir_inspection_document as load_mir_document, pool_entry
+
+
+def raw_body_source(document, body):
+    """Inspect the encoded source in its own role; never instantiate its MIR."""
+    assert body["body_kind"] == "copy_template"
+    assert set(body) == {"body_kind", "template_id", "instance_id", "generic_args", "promoted_bodies"}
+    instance = pool_entry(document, "instances", body["instance_id"])
+    assert instance["instance_kind"] == {"kind": "item", "def_id": instance["def_id"]}
+    assert pool_entry(document, "bodies", instance["body"]) == body
+    assert body["generic_args"] == instance["generic_args"] and body["promoted_bodies"] == []
+    source = document["mir_templates"][body["template_id"]]
+    assert source["source_def_id"] == instance["def_id"] and source["def_path"] == instance["def_path"]
+    assert source["source_role"] == "runtime" and source["source_promoted"] is None
+    assert source["injection_phase"] is None
+    template = json.loads(source["template"])
+    assert template["parameters"] == [{"type": "type", "const": "constant", "lifetime": "region"}[a["kind"]]
+                                      for a in body["generic_args"]]
+    skeleton = template["skeleton"]
+    assert skeleton["phase"] == "runtime_optimized"
+    assert len(source["local_sources"]) == len(skeleton["locals"])
+    assert all(type(slot) is int and 0 <= slot < len(template["types"]) for slot in skeleton["locals"])
+    return source, template
 
 
 class FailClosedExportTests(unittest.TestCase):
@@ -444,13 +467,44 @@ class FailClosedExportTests(unittest.TestCase):
         returned = pool_entry(document, "types", abi["return"]["type"])
         self.assertEqual(returned["shape"]["kind"], "coroutine")
         root = pool_entry(document, "bodies", document["body_roots"][0]["body"])
-        calls = [block["terminator"]["kind"] for block in root["basic_blocks"]
-                 if block["terminator"]["kind"].get("variant") == "Call"]
-        calls = [call for call in calls
-                 if call["resolution"].get("instance_id") == instance["instance_id"]]
-        self.assertTrue(calls, "fixture must call the concrete async constructor")
-        self.assertTrue(all(call["resolution"]["fn_abi"] == queries[0]["abi_query"]
-                            for call in calls))
+        self.assertEqual(abi["calling_convention"], {"kind": "rust"})
+        self.assertEqual((abi["arguments"], abi["fixed_count"], abi["c_variadic"]), ([], 0, False))
+        self.assertEqual(abi["unwind_seed"], {
+            "abi": {"kind": "rust", "unwind": None},
+            "definition": {"never_unwind": False, "foreign_item": False, "drop_glue": False},
+            "panic_unwinds": True, "panic_in_drop_unwinds": True})
+        returned_layout = pool_entry(document, "layouts", abi["return"]["layout"])
+        self.assertEqual(returned_layout["size_bytes"], 1)
+        self.assertEqual(returned_layout["abi_align_bytes"], 1)
+        self.assertEqual(returned_layout["backend_repr"], {"kind": "memory", "sized": True})
+        self.assertFalse(returned_layout["uninhabited"])
+        self.assertEqual(abi["return"]["mode"], {
+            "kind": "Cast", "pad_i32_count": 0,
+            "target": {"prefix_registers": [], "rest_offset_bytes": None,
+                       "rest_register": {"kind": {"kind": "integer"}, "size_bits": 8},
+                       "rest_total_bytes": 1, "rest_is_consecutive": False,
+                       "attributes": {"regular_bits": 0, "arg_extension": {"kind": "none"},
+                                      "pointee_size_bytes": 0, "pointee_align_bytes": None}}})
+        if root["body_kind"] == "material":
+            calls = [block["terminator"]["kind"] for block in root["basic_blocks"]
+                     if block["terminator"]["kind"].get("variant") == "Call"]
+            calls = [call for call in calls
+                     if call["resolution"].get("instance_id") == instance["instance_id"]]
+            self.assertTrue(calls, "fixture must call the concrete async constructor")
+            self.assertTrue(all(call["resolution"]["fn_abi"] == queries[0]["abi_query"] for call in calls))
+        else:
+            _, template = raw_body_source(document, root)
+            definition = pool_entry(document, "definitions", instance["def_id"])
+            identity = {"crate": definition["crate"], "index": definition["index"]}
+            calls = [block["terminator"]["kind"] for block in template["skeleton"]["blocks"]
+                     if block["terminator"]["kind"].get("kind") == "source_call"]
+            callees = [template["types"][call["function"]] for call in calls]
+            matches = [callee for callee in callees if callee.get("tag") == "function_definition"
+                       and callee["definition"] == identity]
+            self.assertEqual(len(matches), 1, "raw root must call the exact async constructor")
+            self.assertEqual(matches[0]["children"], [{"kind": "binder", "variables": [],
+                "value": {"kind": "node", "sort": "aggregate", "tag": "arguments", "payload": "", "children": []}}])
+            self.assertEqual(instance["generic_args"], [])
 
     def test_nested_signature_regions_keep_source_identity_and_closed_query_view(self):
         document = self.accepted("higher_ranked_variadic", "root")
@@ -567,13 +621,30 @@ class FailClosedExportTests(unittest.TestCase):
         document = self.accepted("resolved_generic", "root")
         removed = {"source_instance_kind", "source_promoted", "pass_count", "tainted_by_errors",
                    "var_debug_info", "mentioned_items", "user_type_annotations", "coroutine_info"}
+        material_count = source_count = 0
         for body in document["bodies"]:
             self.assertFalse(removed & body.keys())
-            self.assertIn("required_consts", body)
-            for local in body["locals"]:
+            if body["body_kind"] == "material":
+                material_count += 1
+                self.assertIn("required_consts", body)
+                self.assertIsInstance(body["required_consts"], list)
+                locals_, scopes = body["locals"], body["source_scopes"]
+            else:
+                source_count += 1
+                source, template = raw_body_source(document, body)
+                # Raw copy templates admit only an explicit empty required-const
+                # preamble (generic_mir::capture_mode); they do not serialize a
+                # closed-body field. Keep checking that category on material MIR.
+                self.assertNotIn("required_consts", body)
+                self.assertNotIn("required_consts", template["skeleton"])
+                self.assertFalse((removed - {"source_promoted"}) & source.keys())
+                locals_, scopes = source["local_sources"], source["source_scopes"]
+            for local in locals_:
                 self.assertFalse({"local_info", "mutability", "layout"} & local.keys())
-            for scope in body["source_scopes"]:
+            for scope in scopes:
                 self.assertNotIn("local_data", scope)
+        self.assertGreater(material_count, 0, "required-constant material category must remain exercised")
+        self.assertGreater(source_count, 0, "raw source metadata category must be exercised")
 
     def test_typecheck_errors_abort_without_export_output(self):
         result = self.export("typeck_error")
