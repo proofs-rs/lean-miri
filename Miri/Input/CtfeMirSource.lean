@@ -14,12 +14,12 @@ inductive Policy where
 structure LintRoot where
   owner : DefinitionIdentity
   localId : Nat
-  deriving Repr
+  deriving Repr, DecidableEq
 structure Scope where
   span : SpanRef
   parent : Option Nat
   lintRoot : Option LintRoot
-  deriving Repr
+  deriving Repr, DecidableEq
 structure Source where
   definition : DefinitionIdentity
   role : CompilerBodyRole
@@ -36,7 +36,7 @@ structure Source where
   statementSources : Array (Array SourceInfo)
   terminatorSources : Array SourceInfo
   scopes : Array Scope
-  deriving Repr
+  deriving Repr, DecidableEq
 
 def validate (source : Source) : Except String Unit := do
   unless source.role == .ctfe do throw "CTFE source requires the CTFE compiler body role"

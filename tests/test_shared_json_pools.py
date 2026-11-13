@@ -47,6 +47,34 @@ class SharedFixtureProjectionTests(unittest.TestCase):
                                    "compiler_trait_program": {"traits": [],
                                        "constructor_scope": {"kind": "all_source_impls"}}})
 
+    def test_raw_ctfe_sources_are_independent_of_execution_pools(self):
+        raw_source = {"definition": {"crate": 0, "index": 7},
+                      "source_role": "ctfe", "source_scopes": [{"span": 3}],
+                      "blocks": [{"statements": [{"source": {"span": 3, "scope": 0},
+                          "kind": {"kind": "assign", "destination": {"local": 0, "fields": []},
+                                   "value": {"kind": "use", "operand": {"kind": "source_value",
+                                       "source_class": "literal_value", "span": 3, "user_type": None,
+                                       "value": {"kind": "boolean", "value": False}},
+                                       "retag": "yes"}}}]}]}
+        statement = {"source_info": {"span": 1, "scope": 0}, "kind": {"variant": "Nop"}}
+        source = {"schema_version": 8, "layouts": [],
+                  "ctfe_scalar_sources": [raw_source],
+                  "bodies": [{"body_kind": "material", "basic_blocks": [{"statements": [statement]}]}]}
+        pooled = pool_document(source)
+        self.assertEqual(pooled["ctfe_scalar_sources"], [raw_source])
+        self.assertIsNot(pooled["ctfe_scalar_sources"][0], raw_source)
+        self.assertEqual(pooled["statement_kinds"], [{"variant": "Nop"}])
+        self.assertEqual(pooled["bodies"][0]["basic_blocks"][0]["statements"][0]["kind"], 0)
+        expanded = expand_document(pooled)
+        self.assertEqual(expanded["ctfe_scalar_sources"], [raw_source])
+        self.assertIsNot(expanded["ctfe_scalar_sources"][0], pooled["ctfe_scalar_sources"][0])
+        self.assertEqual(expanded["bodies"], source["bodies"])
+        # A malformed execution-body reference must still fail instead of being
+        # mistaken for an inline raw CTFE statement.
+        pooled["bodies"][0]["basic_blocks"][0]["statements"][0]["kind"] = {"variant": "Nop"}
+        with self.assertRaisesRegex(ValueError, "statement_kinds reference"):
+            expand_document(pooled)
+
     def test_unused_metadata_projection_retains_required_consts(self):
         source = {"schema_version": 8, "layouts": [], "spans": [
             {"ctxt": {"status": "debug_payload", "rustc_debug": "#123"}}], "bodies": [{

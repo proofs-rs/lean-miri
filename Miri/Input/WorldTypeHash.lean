@@ -128,6 +128,10 @@ private def rawSourceBytes (world : World) (normalized : Bool) : Nat → TypeId 
       let header ← FunctionPointerStableHash.header signature.abiPacked signature.safe
         signature.cVariadic signature.splatted signature.inputs.size
       pure (some (tag 14 ++ littleEndian 16 types.toNat ++ littleEndian 16 variablesHash.toNat ++ header))
+    | .patternType base pattern =>
+      let some base ← rawSourceBytes world normalized fuel base | return none
+      let some pattern ← patternBytes world normalized fuel pattern | return none
+      pure (some (tag 9 ++ base ++ pattern))
     | .str => pure (some (tag 7))
     | .foreign identity => pure (some (tag 6 ++ (← definitionBytes world identity)))
     | .never => pure (some (tag 21))
@@ -153,6 +157,21 @@ private def rawSourceBytes (world : World) (normalized : Bool) : Nat → TypeId 
       let fingerprint := StableSipHash.hash bytes
       pure (some (tag 22 ++ littleEndian 16 fingerprint.toNat))
     | _ => pure none
+
+private def patternBytes (world : World) (normalized : Bool) : Nat → CompilerPattern → Except String (Option ByteArray)
+  | 0,_ => throw "type hash pattern traversal exhausted"
+  | _ + 1,.notNull => pure (some (tag 2))
+  | fuel + 1,.range start finish => do
+    let some start ← constantBytes world normalized fuel start | return none
+    let some finish ← constantBytes world normalized fuel finish | return none
+    pure (some (tag 0 ++ start ++ finish))
+  | fuel + 1,.or patterns => do
+    unless !patterns.isEmpty do throw "pattern Or source is empty"
+    let mut bytes := littleEndian 8 patterns.size
+    for pattern in patterns do
+      let some pattern ← patternBytes world normalized fuel pattern | return none
+      bytes := bytes ++ pattern
+    pure (some (tag 1 ++ littleEndian 16 (StableSipHash.hash bytes).toNat))
 
 /-- ConstKind::Value hashes its declared type and the raw ValTree constructor.
 Branch children are constant IDs, and RawList contributes its own fingerprint. -/
@@ -190,7 +209,7 @@ private def normalizationDomain (world : World) : Nat → TypeId → Except Stri
     let own ← match constructor with
       | .bool | .char | .str | .never | .integer .. | .foreign .. => pure (true,false)
       | .float kind => pure (kind != .f16b && kind != .ppcf128,false)
-      | .rawPointer .. | .reference .. | .slice .. | .tuple .. | .array .. | .adt .. => pure (true,false)
+      | .rawPointer .. | .reference .. | .slice .. | .tuple .. | .array .. | .adt .. | .patternType .. => pure (true,false)
       | .functionPointer signature => pure (BinderRegions.regionOnly signature.variables,true)
       | .functionDefinition _ _ variables =>
         pure (variables.all (fun value => match value with | .Region _ => true | _ => false),!variables.isEmpty)
@@ -244,4 +263,8 @@ def query (world : World) (fuel : Nat) (id : TypeId) : Except String Miri.ABI.U1
   let some value := facts.typeIdHash | throw "residual compiler TypeId hash material absent"
   unless value < 2^128 do throw "residual compiler TypeId hash exceeds u128"
   pure (BitVec.ofNat 128 value)
+/-- Raw PatternKind stream, using source endpoint constants rather than TypeId answers. -/
+def patternSourceBytes (world : World) (fuel : Nat) (pattern : CompilerPattern) :
+    Except String (Option ByteArray) :=
+  patternBytes world false fuel pattern
 end Miri.Input.WorldTypeHash

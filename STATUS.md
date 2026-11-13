@@ -13,6 +13,13 @@ the ability to verify arbitrary Rust are not claimed.
 
 ## Compiler material migration (in progress)
 
+Required raw scalar CTFE source catalogues now survive producer capture, strict
+decoding and Lean import. A real two-source arithmetic dependency closure and
+four malformed/missing/duplicate/dangling controls pass; the captured arithmetic
+body executes in the local scalar machine with matching counters and value.
+This does not admit general CTFE queries: root calls, required-constant preambles,
+allocation/interner semantics and unsupported raw MIR remain unresolved.
+
 Runtime body providers now resolve exact identities through the execution-owned
 BodyArena. Constructed Item instances select a unique ordinary raw MIR template
 by physical definition and complete arguments; local layouts, frames, source
@@ -61,7 +68,13 @@ generic supertrait instances. Both query consumers remove compiler predicate
 normalization and vtable answer rows before execution. Missing signatures,
 scopes, receiver impl material and lang items, source placeholders, required
 member flags and mismatched oracle/policy controls reject. Real runtime vtable
-allocation/upcasting and method-instance/shim resolution remain separate work.
+allocation/upcasting and final method-instance/shim resolution remain separate work.
+An independent World provider now resolves twelve raw own-method slots from
+source signatures, predicates and arguments with all instance, allocation, ABI
+and vtable answer rows removed. Vacant and by-value-shim selections retain their
+physical declaration identities; missing source controls reject. Declaration-local
+callable metadata is captured, but final instance selection and caller-location
+reification are not yet connected.
 Generic receiver alias normalization, abstract-constant expansion and raw crate
 feature/session policy material remain unresolved; unavailable semantics error
 instead of silently omitting entries.
@@ -105,11 +118,19 @@ Item/scalar/reference comparisons still pass. Foreign pointer ABI remains an
 exact material residual; constructed/colliding identities reject. General fat/nontrivial-allocator Box, aggregate, foreign/variadic and other-target
 ABI remain unresolved.
 
+Primitive non-pointer two-field tuples now derive complete scalar-pair ABI in
+World: 32 Item, 36 FnPtr and 136 helper comparisons cover optimization and panic
+settings, with empty-catalog and novel-instance controls. Twelve traced Item keys
+eliminate four explicit ABI calls each. Pointer pairs and general indirect or
+aggregate ABI remain exact residuals.
+
 The execution World now interns complete Pattern base/Range/Or/NotNull syntax
 and retains endpoint constant identities. Novel/material roundtrip, ambiguity,
 collision, missing-constant, flags and malformed/fuel controls pass. Runtime
 layout uses the same checked source algorithm for material and constructed
-patterns. Constructed Pattern hash/name printing remains explicitly unsupported;
+patterns. Seven complete actual Pattern type/component hashes now agree from
+material and empty-prefix Worlds, with endpoint, malformed syntax, missing-source,
+fuel and oracle controls. Constructed Pattern name printing remains unsupported;
 non-Value endpoints still require CTFE.
 
 Pattern Range, NotNull and signed Or layouts now
@@ -124,7 +145,11 @@ physical residuals, conflicting recipes and constructed residual ID collisions
 reject. Three explicit discriminant cases retain exact material layouts until
 source CTFE supplies their values; the calculator comparison assumes those
 values as inputs. The earlier empty/single-variant fixture still matches fourteen
-raw layouts and three residuals. General coroutine layout remains unresolved.
+raw layouts and three residuals. Independent source calculators match fourteen
+complete coroutine layouts, eight MaybeUninit wrappers, ten selected coroutine
+bodies and eight generic body instantiations; 96 finite dispatch cases also pass.
+These calculators are not yet connected to execution World coroutine queries,
+and general coroutine layout remains unresolved.
 Non-Value pattern endpoints still require CTFE. Structural pointer/reference/tuple/array/slice
 covariance runs on World syntax: an independent 16-by-16 rustc matrix passes
 with an empty answer catalog. Raw declaration constraints now infer fifteen

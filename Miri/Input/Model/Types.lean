@@ -594,10 +594,19 @@ structure FunctionAbiMaterial where
   rustcNoWritable : Bool
   deriving Repr, DecidableEq
 
+/-- Raw callable header. Optional absence is unresolved source material. -/
+structure CallableSource where
+  hasSelf : Bool
+  definitionKind : String
+  container : Option String
+  traitItem : Option GenericSubstitution.DefinitionIdentity
+  deriving Repr, DecidableEq
+
 structure DefinitionId where
   crateIndex : Nat
   index : Nat
   bodyTrackCaller : Option Bool := none
+  callableSource : Option CallableSource := none
   adtDrop : Option AdtDropMaterial := none
   genericTemplate : Option GenericSubstitution.DefinitionTemplate := none
   aliasDeclaration : Option AliasMaterial.Declaration := none

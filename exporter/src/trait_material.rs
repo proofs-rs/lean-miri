@@ -254,6 +254,12 @@ impl State {
                 // Scope declarations carry obligations, not method signatures.
                 scopes.push(definition);
                 for item in tcx.associated_items(definition).in_definition_order() {
+                    if item.is_fn() {
+                        // Raw implementation signatures and scopes permit physical
+                        // method selection and argument rebasing in the World.
+                        result.push(item.def_id);
+                        scopes.push(item.def_id);
+                    }
                     if matches!(item.kind, ty::AssocKind::Type { .. })
                         && item.trait_item_def_id().is_some_and(|parent| demanded.contains(&parent)) {
                         result.push(item.def_id);

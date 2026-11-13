@@ -74,6 +74,7 @@ separate tables with document-local, dense, zero-based IDs:
 | `predicates` | Full bound existential predicate; comparison rank is separate |
 | `bodies` | Instance, promoted index and source/query mode |
 | `mir_templates` | Generic definition and promoted index, within the supported source-body category |
+| `ctfe_scalar_sources` | Physical definition, promoted index and CTFE source role, within the bounded scalar frame policy |
 
 ABI rows store `return` and each `arguments` entry as an index into
 `abi_arguments`. The explicit `Initial` passing-mode recipe reconstructs
@@ -225,6 +226,17 @@ seeds without instantiating executable MIR; `SourceMir.resolveBody` substitutes
 arguments, erases free regions in its supported binder-free domain and resolves
 exact type identities on demand. Missing source capabilities fail that demand.
 The pure resolver keeps no body-answer cache across executions.
+
+The required `ctfe_scalar_sources` array contains complete raw CTFE frames
+accepted by the `scalar_u32` policy, using `mir_for_ctfe` for Items and the
+compiler promoted-MIR table for promoted bodies. The collector follows raw Unevaluated
+operands and direct const-function dependencies without resolving implementations
+or evaluating constants. Unsupported bodies are omitted, with reasons available
+through `LEAN_MIRI_TRACE_CTFE_SOURCE=1`; a missing source remains an error at
+lookup. This bounded table does not establish whole-query closure: call/root
+setup, required-constant preambles, compiler allocation, validation and recursive
+interning remain separate capabilities. Existing evaluated runtime constants
+retain their residual producer path.
 
 The source-template category currently covers ordinary generic item bodies with
 unprojected local copy/move operations, tuple/array aggregates, storage markers,

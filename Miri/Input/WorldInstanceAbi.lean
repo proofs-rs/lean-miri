@@ -5,8 +5,9 @@ import Miri.ABI.SignatureSeeds
 import Miri.Input.WorldAbiScalar
 
 /-! Source FnAbi construction for ordinary Item instances. The current target
-classifier covers x86_64 Rust scalar, thin raw pointer, FnPtr, thin references
-and zero-sized arguments. Other target, aggregate, higher-ranked and caller-location cases retain explicit
+classifier covers x86_64 Rust scalar, thin raw pointer, FnPtr, thin references,
+zero-sized arguments and nonpointer scalar pairs up to sixteen bytes. Other
+target, aggregate, higher-ranked and caller-location cases retain explicit
 capability errors. No imported ABI row supplies a constructed instance answer.
 The rules are pinned rustc_ty_utils/src/abi.rs::fn_abi_new_uncached,
 arg_attrs_for_rust_scalar and rustc_target::callconv::adjust_for_rust_abi. -/

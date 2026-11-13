@@ -1,3 +1,4 @@
+import Miri.Input.CtfeMirSource
 import Miri.Input.TraitSelection.Material
 import Miri.Input.Model.Types
 import Miri.Input.Model.Catalogs
@@ -27,6 +28,8 @@ structure ImportDocument where
   functionAbis : Array FunctionAbi
   bodyRoots : Array BodyRoot := #[]
   mirTemplates : Array CopyTemplateSource := #[]
+  /-- Bounded raw CTFE frame sources; absence never grants query admission. -/
+  ctfeScalarSources : Array CtfeMirSource.Source := #[]
   bodies : Array BodySeed
   coroutineCoverage : Option CoroutineCoverage := none
   queries : Catalog.Queries

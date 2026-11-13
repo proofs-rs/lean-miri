@@ -1,5 +1,7 @@
 #![feature(rustc_private)]
 mod ctfe_body_source;
+mod ctfe_scalar_source;
+mod ctfe_scalar_catalog;
 
 mod incremental;
 mod raw_valtree_material;
@@ -207,6 +209,7 @@ struct ExportDocument {
     runtime_catalogs: RuntimeCatalogs,
     body_roots: Vec<BodyRoot>,
     mir_templates: Vec<pool_body::CopyTemplateSource>,
+    ctfe_scalar_sources: Vec<Value>,
     bodies: Vec<pool_body::BodySeed<u64, Vec<u64>>>,
     compiler_coroutine_coverage: coroutine_coverage::Catalog<pool_body::Body<u64, Vec<u64>>>,
     definitions: Vec<pool_values::Definition>,
@@ -304,6 +307,7 @@ struct ExportContext<'tcx> {
     virtual_state: incremental::Virtuals<'tcx>,
     vtable_diagnostics: vtable_diagnostics::Trace<'tcx>,
     mir_templates: Pool<ctfe_body_source::TemplateKey, pool_body::CopyTemplateSource>,
+    ctfe_scalar_sources: ctfe_scalar_catalog::Catalog,
     bodies: Pool<BodyKey<'tcx>, pool_body::BodySeed>,
     coroutine_coverage: coroutine_coverage::Catalog,
     constant_eval_role: Option<MirBodyRole>,
@@ -1763,6 +1767,7 @@ impl ExportCallbacks {
         let mut adt_declarations = HashMap::new();
         let mut source_environments = HashMap::new();
         let mut function_abi_material = HashMap::new();
+        let mut callable_sources = HashMap::new();
         let mut trait_material_state = trait_material::State::seed(tcx);
         for definition in &local_definitions {
             trait_material_state.register_definition(tcx, definition.to_def_id())?;
@@ -1800,6 +1805,18 @@ impl ExportCallbacks {
                 }
                 use rustc_hir::def::DefKind as D;
                 if matches!(tcx.def_kind(definition), D::Fn | D::AssocFn) {
+                    let associated = tcx.opt_associated_item(definition);
+                    let container = associated.map(|item| match item.container {
+                        ty::AssocContainer::Trait => "trait",
+                        ty::AssocContainer::TraitImpl(_) => "trait_impl",
+                        ty::AssocContainer::InherentImpl => "inherent_impl",
+                    });
+                    callable_sources.insert(definition_index, serde_json::json!({
+                        "has_self": tcx.generics_of(definition).has_self,
+                        "definition_kind": if matches!(tcx.def_kind(definition), D::AssocFn) { "associated_function" } else { "function" },
+                        "container": container,
+                        "trait_item": associated.and_then(|item| item.trait_item_def_id()).map(trait_material::identity),
+                    }));
                     function_abi_material.insert(definition_index, pool_values::FunctionAbiMaterial {
                         never_unwind: tcx.codegen_fn_attrs(definition).flags.contains(
                             rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags::NEVER_UNWIND),
@@ -1929,6 +1946,7 @@ impl ExportCallbacks {
         }
         let mut document = ExportDocument {
             mir_templates: export_context.mir_templates.finish("mir_template")?,
+            ctfe_scalar_sources: export_context.ctfe_scalar_sources.finish(),
             schema: "lean-miri-rustc-mir",
             schema_version: ROOT_SCHEMA_VERSION,
             mir_query: "TyCtxt::instance_mir(InstanceKind::Item(def_id)); ordinary runtime function bodies use optimized_mir",
@@ -1962,6 +1980,7 @@ impl ExportCallbacks {
                         krate: rustc_hir::def_id::CrateNum::from_u32(definition.crate_index),
                         index: rustc_hir::def_id::DefIndex::from_u32(definition.index) });
                     definition.body_track_caller = body_track_caller.get(&id).copied();
+                    definition.callable_source = callable_sources.remove(&id);
                     definition.adt_drop = adt_drop_material.get(&id).cloned();
                     definition.generic_template = generic_templates.remove(&id);
                     definition.alias_declaration = alias_declarations.remove(&id);
@@ -2901,6 +2920,7 @@ fn mir_body_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     role: MirBodyRole,
 ) -> Result<pool_body::Body, String> {
+    ctfe_scalar_catalog::demand_reachable(context, tcx, body)?;
     let previous_constant_role = context.constant_eval_role.replace(role);
     let previous = if context.vtable_diagnostics.enabled() {
         context
@@ -4872,7 +4892,7 @@ fn generic_definition_references(value: &Value, out: &mut Vec<DefId>) -> Result<
 
 fn def_json(context: &mut ExportContext<'_>, def: rustc_hir::def_id::DefId) -> u64 {
     let (id,fresh)=context.definitions.reserve(def);
-    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32(),body_track_caller:None,adt_drop:None,generic_template:None,alias_declaration:None,adt_declaration:None,source_environment:None,function_abi_material:None,raw_path:None }); }
+    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32(),body_track_caller:None,callable_source:None,adt_drop:None,generic_template:None,alias_declaration:None,adt_declaration:None,source_environment:None,function_abi_material:None,raw_path:None }); }
     id as u64
 }
 
@@ -5929,6 +5949,9 @@ fn trace_mir_constant(route: &str, queried: bool, value: &rustc_middle::mir::Con
 fn const_operand_json<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,body:&rustc_middle::mir::Body<'tcx>,operand:&rustc_middle::mir::ConstOperand<'tcx>)->Result<pool_constant::Operand,String>{
     use pool_constant::{Constant,Annotation,Operand};
     let ty=operand.const_.ty();
+    if let rustc_middle::mir::Const::Unevaluated(source, _) = operand.const_ {
+        ctfe_scalar_catalog::demand(context, tcx, source.def, source.promoted)?;
+    }
     if operand.const_.has_non_region_param() || operand.const_.has_escaping_bound_vars()
         || operand.const_.has_infer() || operand.const_.has_placeholders() || operand.const_.references_error() {
         return export_failure("MIR constant", "constant requires concrete type and const arguments");

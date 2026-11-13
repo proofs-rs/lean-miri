@@ -9,6 +9,7 @@ import Miri.Input.SharedPools
 import Miri.Input.CoroutineCoverage
 import Miri.Input.RuntimeMetadata
 import Miri.Input.SourceMir
+import Miri.Input.CtfeMirSourceCodec
 
 namespace Miri.Input
 open Lean DecoderValues
@@ -251,6 +252,7 @@ private structure DocumentFields where
   compilerAbiLayoutSchema : Option (String) := none
   bodies : Option (Array BodySeed) := none
   mirTemplates : Option (Array CopyTemplateSource) := none
+  ctfeScalarSources : Option (Array CtfeMirSource.Source) := none
   bodyReferences : Array DecodeMIR.References := #[]
   coroutineCoverage : Option CoroutineCoverageCodec.Parsed := none
   bodyRoots : Option (Array BodyRoot) := none
@@ -294,6 +296,7 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
     | "bodies" =>
       let bodies ← JsonReader.arrayIndexed (fun index => DecodeMIR.parseBodySeed s!"$.bodies[{index}]" (some pools.mir))
       return {d with bodies := some (bodies.map (·.value)), bodyReferences := bodies.map (·.references)}
+    | "ctfe_scalar_sources" => return {d with ctfeScalarSources := some (← JsonReader.arrayIndexed (fun _ => do JsonReader.liftExcept (CtfeMirSourceCodec.read (← Lean.Json.Parser.anyCore))))}
     | "mir_templates" => return {d with mirTemplates := some (← JsonReader.arrayIndexed (fun index => DecodeMIR.parseCopyTemplate s!"$.mir_templates[{index}]"))}
     | "compiler_coroutine_coverage" => return {d with coroutineCoverage := some (← CoroutineCoverageCodec.parse pools.mir)}
     | "body_roots" => return {d with bodyRoots := some (← JsonReader.arrayIndexed (fun index => parseBodyRoot s!"$.body_roots[{index}]"))}
@@ -367,6 +370,7 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
     compilerAbiLayoutSchema := some compilerAbiLayoutSchema
     bodies := bodies
     mirTemplates := ← JsonReader.required d.mirTemplates "mir_templates"
+    ctfeScalarSources := ← JsonReader.required d.ctfeScalarSources "ctfe_scalar_sources"
     coroutineCoverage := coroutineCoverage
     bodyRoots := ← JsonReader.required d.bodyRoots "body_roots"
     compilerAllocIdWorld := compilerAllocIdWorld
@@ -470,6 +474,8 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
   | none => pure ()
   profileit "decoder.validate_catalog_queries" profile fun _ =>
     CatalogDecoder.validateQueries bodyContext d.queries
+  CtfeMirSource.validateCatalogue spans.size (fun identity => definitions.any fun definition =>
+    definition.crateIndex == identity.crateIndex && definition.index == identity.index) d.ctfeScalarSources
   let core := d
   profileit "decoder.validate_cross_table_references" profile fun _ => validateParsedTables core
   for (argument, index) in parsed.abiArguments.toList.zipIdx do

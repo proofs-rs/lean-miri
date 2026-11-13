@@ -25,10 +25,11 @@ def _walk(value, transform):
         return value
     result = {}
     for key, child in value.items():
-        if key == "mir_templates":
-            # CopyTemplateSource is raw immutable declaration material. Its
-            # backtrace_spans/local_sources are inline, unlike the corresponding
-            # fields of a material execution body; freeze() never pools them.
+        if key in ("mir_templates", "ctfe_scalar_sources"):
+            # These are raw immutable declaration/frame material. In particular,
+            # CTFE statements have inline kind objects, not statement_kinds pool
+            # references. Neither source format participates in execution-body
+            # payload pooling; preserve its complete subtree in both directions.
             result[key] = copy.deepcopy(child)
         elif key in FIELD_POOLS:
             result[key] = None if key == "discriminants" and child is None else transform(FIELD_POOLS[key], child)

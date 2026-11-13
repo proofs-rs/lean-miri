@@ -1,5 +1,6 @@
 import Miri.Input.WorldReferenceAbi
 import Miri.Input.WorldBoxAbi
+import Miri.Input.WorldAggregateAbi
 
 namespace Miri.Input.WorldAbiScalar
 open Miri.ABI GenericSubstitution
@@ -11,6 +12,8 @@ def classify (runtime : RuntimeMetadata) (session : AbiSessionMaterial) (definit
     RuntimeArrayTypes.CompilerM (ArgAbi TypeId) := do
   let layout ← RuntimeArrayTypes.liftType (RuntimeMetadata.layoutInWorld runtime id)
   if layout.layout.isZst then return ArgAbi.initial layout
+  if let .ScalarPair .. := layout.layout.backendRepr then
+    return ← liftPure (WorldAggregateAbi.nonPointerPair layout)
   let arena := (← get).arena
   let constructor ← liftPure do
     match ← arena.lookupType id with

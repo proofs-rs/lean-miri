@@ -283,10 +283,35 @@ private def parseFunctionAbiMaterial (path : String) : Parser FunctionAbiMateria
     ← required dropGlue (path ++ ".drop_glue"),
     ← required noWritable (path ++ ".rustc_no_writable")⟩
 
+private def parseCallableSource (path : String) : Parser CallableSource := do
+  let raw ← Lean.Json.Parser.anyCore
+  liftExcept do
+    for (key,_) in (← raw.getObj?).toArray do
+      unless ["has_self","definition_kind","container","trait_item"].contains key do
+        throw s!"{path}: unknown callable source field {key}"
+    let hasSelf ← (← raw.getObjVal? "has_self").getBool?
+    let definitionKind ← (← raw.getObjVal? "definition_kind").getStr?
+    let containerRaw ← raw.getObjVal? "container"
+    let container ← if containerRaw == .null then pure none else some <$> containerRaw.getStr?
+    let traitRaw ← raw.getObjVal? "trait_item"
+    let traitItem ← if traitRaw == .null then pure none else some <$> GenericMaterialCodec.readDefinition traitRaw
+    unless definitionKind == "function" || definitionKind == "associated_function" do
+      throw "callable source definition kind unsupported"
+    if definitionKind == "function" then
+      unless container.isNone && traitItem.isNone && !hasSelf do
+        throw "ordinary callable source has associated header"
+    else
+      unless container == some "trait" || container == some "trait_impl" || container == some "inherent_impl" do
+        throw "associated callable source container unsupported"
+      unless (container == some "trait_impl") == traitItem.isSome do
+        throw "callable source trait mapping and container disagree"
+    pure ⟨hasSelf,definitionKind,container,traitItem⟩
+
 private structure ParseDefinitionIdFields where
   crate : Option (Nat) := none
   index : Option (Nat) := none
   bodyTrackCaller : Option Bool := none
+  callableSource : Option CallableSource := none
   adtDrop : Option AdtDropMaterial := none
   genericTemplate : Option GenericSubstitution.DefinitionTemplate := none
   aliasDeclaration : Option AliasMaterial.Declaration := none
@@ -301,6 +326,7 @@ def parseDefinitionId (path : String) : Parser (DefinitionId) := do
     | "crate" => return { s with crate := some (← natural) }
     | "index" => return { s with index := some (← natural) }
     | "function_abi_material" => return { s with functionAbiMaterial := some (← parseFunctionAbiMaterial (path ++ ".function_abi_material")) }
+    | "callable_source" => return { s with callableSource := some (← parseCallableSource (path ++ ".callable_source")) }
     | "body_track_caller" => return { s with bodyTrackCaller := some (← boolean) }
     | "adt_drop" => return { s with adtDrop := some (← parseAdtDropMaterial (path ++ ".adt_drop")) }
     | "source_environment" => return { s with sourceEnvironment := some (← liftExcept (SourceEnvironmentCodec.read (← Lean.Json.Parser.anyCore))) }
@@ -337,6 +363,7 @@ def parseDefinitionId (path : String) : Parser (DefinitionId) := do
     crateIndex := crate
     index := index
     bodyTrackCaller := s.bodyTrackCaller
+    callableSource := s.callableSource
     adtDrop := s.adtDrop
     genericTemplate := s.genericTemplate
     aliasDeclaration := s.aliasDeclaration

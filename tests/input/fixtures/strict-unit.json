@@ -23,6 +23,13 @@
       "always_encode_mir": false,
       "deduplicate_diagnostics": false,
       "qualification": "synthetic decoder-only fixture; not compiler or execution evidence"
+    },
+    "abi_session": {
+      "panic": "unwind",
+      "panic_in_drop": "unwind",
+      "optimization": "no",
+      "llvm_writable": false,
+      "box_noalias": true
     }
   },
   "types": [
@@ -1016,5 +1023,6 @@
       "scope": 0
     }
   ],
+  "ctfe_scalar_sources": [],
   "abi_arguments": []
 }

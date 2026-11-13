@@ -68,6 +68,20 @@ pub(super) fn thin_box<'tcx>(tcx:TyCtxt<'tcx>,input:ty::Ty<'tcx>)->bool {
         sized_pointee(tcx,pointee,256)&&empty_allocator(allocator)&&pointer_storage(tcx,input,pointee,256)
 }
 
+// Two primitive nonpointer fields, each at most one x86_64 register. Tuple
+// layout is a ScalarPair of at most 16 bytes; no layout/FnAbi query selects
+// this domain. Wider fields remain residual until large-return attributes.
+pub(super) fn small_nonpointer_pair(input: ty::Ty<'_>) -> bool {
+    let ty::Tuple(fields) = input.kind() else { return false; };
+    fields.len() == 2 && fields.iter().all(|field| match field.kind() {
+        ty::Bool | ty::Char => true,
+        ty::Int(kind) => !matches!(kind, ty::IntTy::I128),
+        ty::Uint(kind) => !matches!(kind, ty::UintTy::U128),
+        ty::Float(kind) => !matches!(kind, ty::FloatTy::F128),
+        _ => false,
+    })
+}
+
 pub(super) fn signature<'tcx>(tcx: TyCtxt<'tcx>, instance: ty::Instance<'tcx>,
     extra: &'tcx ty::List<ty::Ty<'tcx>>) -> Option<ty::FnSig<'tcx>> {
     use rustc_abi::ExternAbi as A;
@@ -98,7 +112,7 @@ pub(super) fn signature<'tcx>(tcx: TyCtxt<'tcx>, instance: ty::Instance<'tcx>,
         if !super::generic_mir::supported_arguments(tcx.mk_args(&[ty.into()])) { return false; }
         match ty.kind() {
             ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never => true,
-            ty::Tuple(fields) => fields.is_empty(),
+            ty::Tuple(fields) => fields.is_empty() || small_nonpointer_pair(ty),
             ty::RawPtr(pointee,_) => sized_pointee(tcx, *pointee, 256),
             ty::Ref(_,pointee,_) => sized_pointee(tcx, *pointee, 256),
             ty::FnPtr(types,header) => types.with(*header).bound_vars().is_empty(),

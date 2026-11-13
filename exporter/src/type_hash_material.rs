@@ -1,6 +1,7 @@
 //! Exact raw syntax domain consumed by Lean WorldTypeHash. No compiler query
 //! result is inspected, and no child's final TypeId replaces constructor syntax.
 use rustc_middle::ty;
+use rustc_middle::ty::inherent::IntoKind;
 
 pub(super) fn eligible(input: ty::Ty<'_>) -> bool {
     type_in_binder(input, false)
@@ -22,6 +23,7 @@ fn type_in_binder(input: ty::Ty<'_>, bound: bool) -> bool {
         ty::Slice(child) | ty::RawPtr(child, _) => type_in_binder(child, bound),
         ty::Array(child, length) => type_in_binder(child, bound) && constant_in_binder(length, bound),
         ty::Ref(_, child, _) => type_in_binder(child, bound),
+        ty::Pat(base, pattern) => type_in_binder(base, bound) && pattern_in_binder(pattern, bound),
         ty::Tuple(children) => children.iter().all(|child| type_in_binder(child, bound)),
         ty::Adt(_, arguments) => arguments_in_binder(arguments, bound),
         ty::FnDef(_, arguments) => region_variables(arguments.bound_vars()) &&
@@ -36,5 +38,13 @@ fn constant_in_binder(input: ty::Const<'_>, bound: bool) -> bool {
     type_in_binder(value.ty, bound) && match **value.valtree {
         ty::ValTreeKind::Leaf(_) => true,
         ty::ValTreeKind::Branch(children) => children.iter().all(|child| constant_in_binder(child, bound)),
+    }
+}
+
+fn pattern_in_binder(pattern: ty::Pattern<'_>, bound: bool) -> bool {
+    match pattern.kind() {
+        ty::PatternKind::Range {start, end} => constant_in_binder(start, bound) && constant_in_binder(end, bound),
+        ty::PatternKind::Or(patterns) => !patterns.is_empty() && patterns.iter().all(|pattern| pattern_in_binder(pattern, bound)),
+        ty::PatternKind::NotNull => true,
     }
 }

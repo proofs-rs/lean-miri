@@ -18,49 +18,49 @@ def Value.ty : Value → Ty
 structure Place where
   slot : Nat
   fields : Array Nat := #[]
-  deriving Repr
+  deriving Repr, DecidableEq
 inductive SourceValueKind where
   | typeValue | literalValue
-  deriving Repr
+  deriving Repr, DecidableEq
 structure SourceValue where
   kind : SourceValueKind
   span : Nat
   userType : Option Nat
   value : Value
-  deriving Repr
+  deriving Repr, DecidableEq
 inductive Operand where
   | copy (place : Place) | move (place : Place) | sourceValue (source : SourceValue)
-  deriving Repr
+  deriving Repr, DecidableEq
 inductive Binary where
   | gt | addWithOverflow | subWithOverflow
-  deriving Repr
+  deriving Repr, DecidableEq
 inductive Rvalue where
   | use (value : Operand) (withRetag : Bool) | binary (kind : Binary) (left right : Operand)
-  deriving Repr
+  deriving Repr, DecidableEq
 inductive Statement where
   | live (slot : Nat) | dead (slot : Nat) | assign (place : Place) (value : Rvalue) | counter | nop
-  deriving Repr
+  deriving Repr, DecidableEq
 inductive OverflowKind where
   | add | sub
-  deriving Repr
+  deriving Repr, DecidableEq
 inductive AssertMessage where
   | overflow (kind : OverflowKind) (left right : Operand)
-  deriving Repr
+  deriving Repr, DecidableEq
 inductive Terminator where
   | goto (target : Nat)
   | switch (value : Operand) (cases : Array (Nat × Nat)) (otherwise : Nat)
   | assert (value : Operand) (expected : Bool) (message : AssertMessage) (target : Nat)
   | ret
-  deriving Repr
+  deriving Repr, DecidableEq
 structure Block where
   statements : Array Statement
   terminator : Terminator
-  deriving Repr
+  deriving Repr, DecidableEq
 structure Program where
   locals : Array Ty
   argumentCount : Nat
   blocks : Array Block
-  deriving Repr
+  deriving Repr, DecidableEq
 structure Local where
   live : Bool
   value : Option Value := none

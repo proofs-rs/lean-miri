@@ -9,6 +9,8 @@ pub(crate) struct Definition {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body_track_caller: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub callable_source: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub adt_drop: Option<AdtDropMaterial>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generic_template: Option<serde_json::Value>,

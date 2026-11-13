@@ -246,6 +246,7 @@ deriving instance ToExpr for Input.DefinitionPath.Material
 deriving instance ToExpr for Input.FunctionAbiMaterial
 deriving instance ToExpr for Input.SourceEnvironment.Parent
 deriving instance ToExpr for Input.SourceEnvironment.Material
+deriving instance ToExpr for Input.CallableSource
 deriving instance ToExpr for Input.DefinitionId
 deriving instance ToExpr for Input.VtableEntryKind
 deriving instance ToExpr for Input.VtablePredicateKind
@@ -349,6 +350,26 @@ deriving instance ToExpr for Input.CoroutineLayoutEvidence
 deriving instance ToExpr for Input.CoroutineEvidence
 deriving instance ToExpr for Input.CoroutineAuxiliaryBody
 deriving instance ToExpr for Input.CoroutineCoverage
+deriving instance ToExpr for Input.CompilerTypingEnv.Mode
+deriving instance ToExpr for Input.CompilerTypingEnv.Recipe
+deriving instance ToExpr for Interpreter.CompileTime.ScalarFrame.Ty
+deriving instance ToExpr for Interpreter.CompileTime.ScalarFrame.Value
+deriving instance ToExpr for Interpreter.CompileTime.ScalarFrame.Place
+deriving instance ToExpr for Interpreter.CompileTime.ScalarFrame.SourceValueKind
+deriving instance ToExpr for Interpreter.CompileTime.ScalarFrame.SourceValue
+deriving instance ToExpr for Interpreter.CompileTime.ScalarFrame.Operand
+deriving instance ToExpr for Interpreter.CompileTime.ScalarFrame.Binary
+deriving instance ToExpr for Interpreter.CompileTime.ScalarFrame.Rvalue
+deriving instance ToExpr for Interpreter.CompileTime.ScalarFrame.Statement
+deriving instance ToExpr for Interpreter.CompileTime.ScalarFrame.OverflowKind
+deriving instance ToExpr for Interpreter.CompileTime.ScalarFrame.AssertMessage
+deriving instance ToExpr for Interpreter.CompileTime.ScalarFrame.Terminator
+deriving instance ToExpr for Interpreter.CompileTime.ScalarFrame.Block
+deriving instance ToExpr for Interpreter.CompileTime.ScalarFrame.Program
+deriving instance ToExpr for Input.CtfeMirSource.Policy
+deriving instance ToExpr for Input.CtfeMirSource.LintRoot
+deriving instance ToExpr for Input.CtfeMirSource.Scope
+deriving instance ToExpr for Input.CtfeMirSource.Source
 deriving instance ToExpr for Input.ImportDocument
 deriving instance ToExpr for Input.ExecutionInput
 
