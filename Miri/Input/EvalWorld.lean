@@ -1,3 +1,4 @@
+import Miri.Input.CompilerSourceVTableMaterializer
 import Miri.Input.RuntimeCtfeQueryMachine
 import Miri.Interpreter.ExecutionStateTransport
 import Miri.Input.CompilerInitialAllocationByteMachine
@@ -24,6 +25,8 @@ structure World (Os R Payload H D O Aff B Host : Type) where
   initialCompilerStore : Option CompilerInitialAllocation.Store := none
   /-- Run-owned typed memo only; no cached machine memory or arena. -/
   initialCompilerQueries : Option RuntimeCtfeQueryMachine.Memo := none
+  /-- Separate allocation-query memory memo, never symbolic vtable IDs. -/
+  initialVTableQueries : CompilerSourceVTableMaterializer.Memo := {}
   functions : FunctionPointers.Registry O
   vtables : VTableMachine.Registry
   symbols : IntrinsicSymbolsMachine.Registry := .empty

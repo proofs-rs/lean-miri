@@ -117,10 +117,18 @@ structure Progress where
   value : Term
   obligations : Array Clause := #[]
 
+/-- The constant branch executes in the caller's owning effect monad. -/
+structure EffectHooks (m : Type → Type) extends Hooks where
+  constant : Nat → Term → m Term
+
+section Effectful
+variable {m : Type → Type} [Monad m] [MonadExceptOf String m]
+  [MonadLiftT (Except String) m]
+
 mutual
-private def fold (program : Program) (hooks : Hooks) (maximumUniverse : Option Nat) :
-    Nat → Array Key → Term → Except String Progress
-  | 0, _, _ => .error "alias normalization recursion exhausted"
+private def fold (program : Program) (hooks : EffectHooks m) (maximumUniverse : Option Nat) :
+    Nat → Array Key → Term → m Progress
+  | 0, _, _ => throw "alias normalization recursion exhausted"
   | fuel + 1, active, value => do
     match value with
     | .definition .type tag definition children =>
@@ -187,7 +195,9 @@ private def fold (program : Program) (hooks : Hooks) (maximumUniverse : Option N
       -- boundary. Fulfilling while this alias is active would add false cycles.
       return ⟨result.value, argumentObligations ++ predicates ++ result.obligations⟩
     | .definition .constant tag definition children =>
-      if tag.startsWith "alias_" then throw "constant alias normalization requires const evaluation"
+      if tag.startsWith "alias_" then
+        let result ← hooks.constant fuel value
+        return ⟨result,#[]⟩
       let (children, obligations) ← foldTerms program hooks maximumUniverse fuel active children
       return ⟨.definition .constant tag definition children, obligations⟩
     | .definition sort tag definition children =>
@@ -209,9 +219,9 @@ private def fold (program : Program) (hooks : Hooks) (maximumUniverse : Option N
     | .inference .. => throw "alias normalization received unresolved inference material"
     | _ => pure ⟨value, #[]⟩
 
-private def foldTerms (program : Program) (hooks : Hooks) (maximumUniverse : Option Nat) :
-    Nat → Array Key → Terms → Except String (Terms × Array Clause)
-  | 0, _, _ => .error "alias normalization recursion exhausted"
+private def foldTerms (program : Program) (hooks : EffectHooks m) (maximumUniverse : Option Nat) :
+    Nat → Array Key → Terms → m (Terms × Array Clause)
+  | 0, _, _ => throw "alias normalization recursion exhausted"
   | _ + 1, _, .nil => pure (.nil, #[])
   | fuel + 1, active, .cons head tail => do
     let head ← fold program hooks maximumUniverse fuel active head
@@ -223,8 +233,8 @@ end
 The stack is shared with trait selection; no cross-query or execution cache is
 used. An error, ambiguous impl or unproved clause never returns a normalized type.
 Region erasure and higher-ranked placeholder handling are separate prerequisites. -/
-def normalize (program : Program) (hooks : Hooks) (fuel : Nat)
-    (active : Array Key) (value : Term) : Except String Term := do
+def normalizeEffectful (program : Program) (hooks : EffectHooks m) (fuel : Nat)
+    (active : Array Key) (value : Term) : m Term := do
   let result ← fold program hooks none fuel active value
   hooks.fulfill fuel active result.obligations
   pure result.value
@@ -232,12 +242,25 @@ def normalize (program : Program) (hooks : Hooks) (fuel : Nat)
 /-- Scoped reduction accepts only caller-owned placeholders, never lexical bound
 arguments. Raw RHS and own clauses must be source-validated by the provider
 before instantiation; callbacks preserve the same query universe boundary. -/
-def normalizeInUniverse (maximumUniverse : Nat) (program : Program) (hooks : Hooks)
-    (fuel : Nat) (active : Array Key) (value : Term) : Except String Term := do
+def normalizeInUniverseEffectful (maximumUniverse : Nat) (program : Program) (hooks : EffectHooks m)
+    (fuel : Nat) (active : Array Key) (value : Term) : m Term := do
   TraitSelection.HigherRankedMatch.requireScoped maximumUniverse fuel value
   let result ← fold program hooks (some maximumUniverse) fuel active value
   hooks.fulfill fuel active result.obligations
   TraitSelection.HigherRankedMatch.requireScoped maximumUniverse fuel result.value
   pure result.value
+
+end Effectful
+
+private def pureHooks (hooks : Hooks) : EffectHooks (Except String) :=
+  {toHooks := hooks,constant := fun _ _ => throw "constant alias normalization requires const evaluation"}
+
+def normalize (program : Program) (hooks : Hooks) (fuel : Nat)
+    (active : Array Key) (value : Term) : Except String Term :=
+  normalizeEffectful program (pureHooks hooks) fuel active value
+
+def normalizeInUniverse (maximumUniverse : Nat) (program : Program) (hooks : Hooks)
+    (fuel : Nat) (active : Array Key) (value : Term) : Except String Term :=
+  normalizeInUniverseEffectful maximumUniverse program (pureHooks hooks) fuel active value
 
 end Miri.Input.AliasNormalization

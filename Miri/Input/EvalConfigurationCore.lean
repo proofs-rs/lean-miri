@@ -91,6 +91,7 @@ structure Options where
 local storage, retagging, calls/returns and every ordinary MIR operation are
 constructed below, rather than independently chosen callbacks. -/
 structure Leaves (Os R P H D O Aff B Host C ClockHost : Type) where
+  typeConstants : RuntimeEffectfulLayout.Provider (State Os R P H D O Aff B Host) := RuntimeEffectfulLayout.unavailable
   constQueries : RuntimeCtfeQueryMachine.Capability
   pointerSource : EvalPointerSource.Leaves Os R P H D O Aff B Host C
   sync : P → Miri.Concurrency.SyncObject.AccessKind → PlaceMachine.MachineM MiriMemoryKind (User Os R P H D O Aff B Host) Unit
@@ -526,7 +527,7 @@ def makeWithForeignContext {Assembly : Type}
     let castQueries := CompilerCastLeaves.make p EvalProjectionMachine.arrays (CompilerCastQueries.required p) table
       (fun _ provenance => PointerMachine.exposeProvenance pointers provenance)
       (fun _ address => PointerMachine.pointerFromExposedAddress pointers address)
-      (fun value layout => EvalProjectionMachine.assertAbi p.runtime.target value layout |>.mapError IntrinsicVectorMachine.projectionError)
+      (fun value layout => EvalProjectionMachine.assertAbi p.runtime.target value layout |>.mapError IntrinsicVectorMachine.projectionError) leaves.typeConstants
     let casts := ExecutionCast.hooks castQueries access allocation compiler projection copy retag validity functions floats
       dereference (OperandMachine.field operands) (fun _ _ => ValidityMachine.enforceValidityRecursively)
       options.limits.retag options.limits.validation

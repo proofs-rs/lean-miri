@@ -4,6 +4,12 @@ mod ctfe_scalar_source;
 mod ctfe_type_const_source;
 mod ctfe_calls_source;
 mod ctfe_scalar_catalog;
+mod initial_profile_config;
+#[cfg(feature="ctfe-initial-global-snapshot")] mod initial_profile;
+#[cfg(feature="ctfe-initial-global-snapshot")] mod initial_query_cache;
+#[cfg(feature="ctfe-initial-global-snapshot")] mod compiler_initial_snapshot;
+#[cfg(feature="ctfe-initial-global-snapshot")] mod ctfe_initial_global_payload;
+#[cfg(feature="ctfe-initial-global-snapshot")] mod ctfe_initial_global_symbols;
 
 mod incremental;
 mod raw_valtree_material;
@@ -232,6 +238,10 @@ struct ExportDocument {
     #[serde(skip_serializing_if = "Option::is_none")]
     compiler_alloc_id_world: Option<allocator_world::World>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    compiler_initial_global_snapshot: Option<Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    compiler_initial_selected_query_cache: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     selected_scope: Option<SelectedScope>,
     #[serde(skip_serializing_if = "Option::is_none")]
     invocation: Option<Invocation>,
@@ -291,6 +301,8 @@ struct ExportCallbacks {
 /// payloads refer to them by `type_id`.
 #[derive(Default)]
 struct ExportContext<'tcx> {
+    raw_initial_unevaluated: bool,
+    initial_query_demands: HashSet<DefId>,
     reachable_instance_cursor: usize,
     backtrace_event_cursor: usize,
     backtrace_frame_cursor: usize,
@@ -621,6 +633,8 @@ fn loaded_rustc_driver_is_pinned() -> Result<(), String> {
         let maps = fs::read_to_string("/proc/self/maps")
             .map_err(|error| format!("cannot inspect loaded rustc driver libraries: {error}"))?;
         let mut saw_driver = false;
+        #[cfg(feature="ctfe-initial-global-snapshot")]
+        let mut audited_driver_hashed=false;
         for line in maps.lines() {
             let Some(path) = line.split_whitespace().last() else {
                 continue;
@@ -632,6 +646,22 @@ fn loaded_rustc_driver_is_pinned() -> Result<(), String> {
                 format!("cannot canonicalize loaded compiler library {path}: {error}")
             })?;
             saw_driver = true;
+            #[cfg(feature="ctfe-initial-global-snapshot")]
+            {
+                let audited=Path::new(env!("LEAN_MIRI_INITIAL_SNAPSHOT_DRIVER"));
+                if path != audited {
+                    return Err(format!("snapshot feature loaded an unaudited compiler driver: {}",path.display()));
+                }
+                if !audited_driver_hashed {
+                    let (digest,_)=producer::hash_file(&path)?;
+                    if digest != env!("LEAN_MIRI_INITIAL_SNAPSHOT_DRIVER_SHA256") {
+                        return Err("audited snapshot compiler driver SHA256 mismatch".into());
+                    }
+                    audited_driver_hashed=true;
+                }
+                continue;
+            }
+            #[cfg(not(feature="ctfe-initial-global-snapshot"))]
             if !path.starts_with(&expected) {
                 return Err(format!(
                     "loaded rustc driver library {} is outside pinned sysroot {}",
@@ -1323,7 +1353,9 @@ struct RuntimePrimitives {
 }
 
 impl ExportCallbacks {
-    fn export_document<'tcx>(&mut self, tcx: TyCtxt<'tcx>) -> Result<Compilation, String> {
+    fn export_document<'tcx>(&mut self, tcx: TyCtxt<'tcx>,
+        #[cfg(feature="ctfe-initial-global-snapshot")] initial_profile:Option<initial_profile::FrozenProfile<'tcx>>,
+    ) -> Result<Compilation, String> {
         #[cfg(feature = "miri-reference")]
         let reference_entry = if self.miri_reference {
             if !self.prepared_allocator_world {
@@ -1361,6 +1393,8 @@ impl ExportCallbacks {
             .map(|def_id| def_id.to_def_id())
             .collect::<HashSet<_>>();
         let mut export_context = ExportContext::default();
+        #[cfg(feature="ctfe-initial-global-snapshot")]
+        {export_context.raw_initial_unevaluated=initial_profile.is_some();}
         let main_query_roots = local_definitions
             .iter()
             .copied()
@@ -1768,6 +1802,12 @@ impl ExportCallbacks {
                 manually_drop: definition.is_manually_drop(), destructor,
             });
         }
+
+        #[cfg(feature="ctfe-initial-global-snapshot")]
+        let initial_snapshot=initial_profile.as_ref().map(|frozen|
+            frozen.source_snapshot(tcx,&mut export_context)).transpose()?;
+        #[cfg(not(feature="ctfe-initial-global-snapshot"))]
+        let initial_snapshot:Option<Value>=None;
         // Source templates are shared across all instances. Close only their
         // definition references: never instantiate a generic type to discover
         // a concrete query-result domain here.
@@ -1956,6 +1996,13 @@ impl ExportCallbacks {
         let candidates = query_values::virtual_candidates(&runtime_queries.virtual_queries);
         let compiler_coroutine_coverage = std::mem::take(&mut export_context.coroutine_coverage)
             .finish(&vtable_query_ids, &candidates)?;
+        #[cfg(feature="ctfe-initial-global-snapshot")]
+        let initial_query_tables=match &initial_profile {
+            Some(frozen)=>frozen.selected_tables(tcx,&export_context)?,
+            None=>Vec::new(),
+        };
+        #[cfg(not(feature="ctfe-initial-global-snapshot"))]
+        let initial_query_tables=Vec::new();
         let bodies = export_context
             .bodies
             .finish("body")?
@@ -1965,7 +2012,10 @@ impl ExportCallbacks {
         if compiler_coroutine_coverage.body_coroutines.len() != bodies.len() {
             return export_failure("coroutine coverage", "body marker table is incomplete");
         }
+
         let mut document = ExportDocument {
+            compiler_initial_global_snapshot: initial_snapshot,
+            compiler_initial_selected_query_cache: initial_query_tables,
             mir_templates: export_context.mir_templates.finish("mir_template")?,
             ctfe_scalar_sources: export_context.ctfe_scalar_sources.finish(),
             schema: "lean-miri-rustc-mir",
@@ -2026,6 +2076,8 @@ impl ExportCallbacks {
             invocation: self.invocation.take(),
         };
         shared_json::freeze(&mut document)?;
+        #[cfg(feature="ctfe-initial-global-snapshot")]
+        if let Some(frozen)=&initial_profile {frozen.observe_after_export(tcx)?;}
         #[cfg(feature = "miri-reference")]
         let miri_reference_frontier = document
             .compiler_alloc_id_world
@@ -2115,7 +2167,18 @@ impl Callbacks for ExportCallbacks {
         tcx.dcx().emit_stashed_diagnostics();
         tcx.dcx().abort_if_errors();
         tcx.dcx().flush_delayed();
-        match self.export_document(tcx) {
+
+        // No ordinary exporter or raw source acquisition precedes this capture.
+        let configuration=initial_profile_config::Config::read(self.prepared_allocator_world);
+        #[cfg(feature="ctfe-initial-global-snapshot")]
+        let outcome=configuration.and_then(|config|initial_profile::capture(tcx,config))
+            .and_then(|profile|self.export_document(tcx,profile));
+        #[cfg(not(feature="ctfe-initial-global-snapshot"))]
+        let outcome=configuration.and_then(|config| {
+            if config.enabled {return Err("complete initial profile requires the audited ctfe-initial-global-snapshot feature".into())}
+            self.export_document(tcx)
+        });
+        match outcome {
             Ok(outcome) => outcome,
             Err(error) => {
                 self.export_error = Some(error);
@@ -2806,10 +2869,12 @@ fn source_fn_pointer_shim_json<'tcx>(tcx:TyCtxt<'tcx>,instance:ty::Instance<'tcx
     Ok(id as u64)
 }
 
-fn source_mir_template_category<'tcx>(tcx:TyCtxt<'tcx>,
+fn source_mir_template_category<'tcx>(context:&ExportContext<'tcx>,tcx:TyCtxt<'tcx>,
     body:&rustc_middle::mir::Body<'tcx>,instance:ty::Instance<'tcx>)->Option<generic_mir::Category> {
     if !matches!(instance.def,ty::InstanceKind::Item(_)) {return None;}
-    let category=generic_mir::source_category(tcx,body,instance.args)?;
+    let category=(if context.raw_initial_unevaluated {
+        generic_mir::source_category_raw(tcx,body,instance.args)
+    } else {generic_mir::source_category(tcx,body,instance.args)})?;
     // Preserve the old plain-copy generic domain. Extended raw source syntax
     // also admits monomorphic declarations without acquiring a closed body.
     if tcx.generics_of(body.source.def_id()).count()==0 && category==generic_mir::Category::Copy {
@@ -2817,9 +2882,9 @@ fn source_mir_template_category<'tcx>(tcx:TyCtxt<'tcx>,
     }
     Some(category)
 }
-fn has_source_mir_template<'tcx>(tcx:TyCtxt<'tcx>,
+fn has_source_mir_template<'tcx>(context:&ExportContext<'tcx>,tcx:TyCtxt<'tcx>,
     body:&rustc_middle::mir::Body<'tcx>,instance:ty::Instance<'tcx>)->bool {
-    source_mir_template_category(tcx,body,instance).is_some()
+    source_mir_template_category(context,tcx,body,instance).is_some()
 }
 
 // Each concrete instance owns one executable body. Normalize only its template:
@@ -2846,7 +2911,7 @@ fn resolved_mir_body_json<'tcx>(
     if !fresh {
         return Ok(id as u64);
     }
-    if let Some(category)=source_mir_template_category(tcx,template,instance) {
+    if let Some(category)=source_mir_template_category(context,tcx,template,instance) {
         generic_mir::source_query_trace(match category {generic_mir::Category::Copy=>"runtime-copy",generic_mir::Category::Extended=>"runtime-extended"},false,instance);
         // Retain only the remaining complete-instance/type/ABI dependencies.
         // No enclosing/target executable MIR is instantiated for source calls.
@@ -2865,7 +2930,9 @@ fn resolved_mir_body_json<'tcx>(
         let key = ctfe_body_source::TemplateKey {definition:template.source.def_id(),promoted:template.source.promoted,role:ctfe_body_source::Role::Runtime};
         let (template_id, fresh) = context.mir_templates.reserve(key);
         if fresh {
-            let raw = generic_mir::capture_category(tcx, template, category, |span|span_json(context,tcx,span))?;
+            let raw=if context.raw_initial_unevaluated {
+                generic_mir::capture_category_raw(tcx,template,category,|span|span_json(context,tcx,span))?
+            } else {generic_mir::capture_category(tcx,template,category,|span|span_json(context,tcx,span))?};
             // Nominal types can occur only in a source local, without any
             // concrete caller type seeding their definitions. Capture their
             // declaration closure, never an instantiated type/body answer.
@@ -5214,7 +5281,7 @@ fn register_call_transfer_for_target<'tcx>(
             (interface.argument_count,interface.spread_argument,interface.arguments,interface.return_type)
         } else {
         let template = checked_instance_mir(tcx, instance.def)?;
-        if has_source_mir_template(tcx,template,instance) {
+        if has_source_mir_template(context,tcx,template,instance) {
             generic_mir::source_query_trace("covariance-interface",false,instance);
             // Only interface type dependencies are needed by this residual
             // covariance catalog. Never instantiate a selected executable body.
@@ -6035,6 +6102,22 @@ fn const_operand_json<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,bo
     use pool_constant::{Constant,Annotation,Operand};
     let ty=operand.const_.ty();
     if let rustc_middle::mir::Const::Unevaluated(source, _) = operand.const_ {
+        if context.raw_initial_unevaluated {
+            if !matches!(context.constant_eval_role,Some(MirBodyRole::RuntimeExecutable)) {
+                return Err("initial raw Unevaluated operand outside runtime typing-environment scope".into());
+            }
+            // Preserve all raw arguments/promoted syntax. Only the bounded
+            // empty-u32 domain demands an automatically selected cache table.
+            if source.args.is_empty() && source.promoted.is_none() && matches!(ty.kind(),ty::Uint(ty::UintTy::U32)) {
+                context.initial_query_demands.insert(source.def);
+            }
+            trace_mir_constant("raw_initial_unevaluated",false,&operand.const_);
+            return Ok(Operand {ty:type_json(context,tcx,ty)?,
+                user_type_annotation:operand.user_ty.map(|index|Annotation::AnnotationRef{index:index.as_u32()}),
+                constant:Constant::UnevaluatedConst {definition:def_json(context,source.def),
+                    arguments:generic_args_json(context,tcx,source.args)?,promoted:source.promoted.map(|index|index.as_u32())},
+                span:span_json(context,tcx,operand.span)});
+        }
         ctfe_scalar_catalog::demand(context, tcx, source.def, source.promoted)?;
     }
     if operand.const_.has_non_region_param() || operand.const_.has_escaping_bound_vars()

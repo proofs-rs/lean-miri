@@ -39,15 +39,15 @@ it requires an actual allocated-root callback. Component proofs use no axioms.
 This does not supply missing allocator semantics or admit general query roots.
 
 External raw u64 constants have a separate strict source policy. It retains
-physical constant references, ordered required preambles, UnaryNot, declared
-u64 types and canonical definition/span/scope metadata. Three genuine external
-frames and seventeen malformed controls pass the maintained codec check. MIR
-availability follows the pinned CTFE metadata rule: optimized-MIR availability
-is insufficient, and trivial constants have no CTFE MIR body. This availability check neither evaluates trivial constants nor manufactures
-a body. Trivial constants need a distinct source/provider path. The full std document also passes a private preparation
-check for the external UnaryNot leaf; its parent frames still require the
-constant-query dependency engine. This source admission does not install u64
-PostAnalysis evaluation or type-level alias normalization into runtime execution.
+physical references, ordered preambles, UnaryNot and canonical type/definition/
+span/scope metadata. Three genuine frames and seventeen malformed controls pass.
+CTFE metadata availability accounts for trivial constants having no MIR body;
+this check neither evaluates them nor manufactures a body. Trivial constants
+still need a distinct provider path. The public cold-u64 engine executes a
+nongeneric external UnaryNot leaf before runtime starts. Its two real steps,
+eight-byte immutable root, full allocation key/identity/frontier, dedup state and
+ValTree match an independent compiler query. This bounded component does not
+install general runtime CTFE or type-level normalization.
 
 Runtime body providers now resolve exact identities through the execution-owned
 BodyArena. Constructed Item instances select a unique ordinary raw MIR template
@@ -460,7 +460,7 @@ repeat also hits the cache. Global allocations and deduplication keys cannot
 recover those query keys/results. The private fresh-only slice therefore checks
 absence in all four relevant typed value/allocation caches at its frozen
 boundary, with incremental and on-disk query caching disabled; cached selected
-roots reject. A separate private selected-u32 memo importer now reads exact frozen
+roots reject. The selected-u32 memo importer reads exact frozen
 VALUE/ALLOC keys and results, validates their source-allocation joins, and matches
 the real cached runtime fixture: PostAnalysis entries complete Codegen queries
 without steps or allocations. Compatible bytes never identify a missing result.
@@ -476,14 +476,35 @@ u32 assignment returns 17 through this path; wrong-width, promoted and cold
 controls reject while preserving a live allocation prefix. These are finite
 checks, not general CTFE equivalence.
 
-The snapshot producer/accessor is still a private compiler integration, not the
-standard exporter profile. General initial memo families, cold runtime execution,
-u64/type-level PostAnalysis ValTree queries, symbolic function/vtable/type-ID
-materialization, and their full dependency closure remain unresolved. A fresh
-replay of the std NonZero-u64 input observes all three raw dependency roots absent
-in both PostAnalysis ValTree/allocation caches before export, without executing
-missing queries. This does not recover the historical post-export cache and does
-not justify reusing an eagerly normalized Pattern/constant row.
+The standard exporter has an opt-in `ctfe-initial-global-snapshot` feature using
+an audited matching custom compiler, private metadata and target std. Public
+build tooling verifies those artifact/source pins. The profile freezes complete
+allocations and all three constant-query caches after analysis, before export
+queries. Requested u32 tables serialize from that frozen cache, never late
+lookups. Six maintained profile controls and the real Lean runtime consumers
+pass. Export work can advance the compiler's allocation/cache state afterward;
+those observations are reported separately and never merged into the initial
+World. The default compiler path cannot supply the private snapshot accessor.
+
+Cast layout normalization now suspends at the source constant demand in an
+execution-owned monad. Its default provider remains explicitly unavailable.
+Provider errors preserve their exact StepError and updated state; source errors
+are separate. Two full std-document controls confirm this behavior. Other
+field/projection hooks, the actual runtime constant provider, parent VALUE
+preambles and arbitrary guest-live CTFE still need integration. A separate
+pre-runtime parent-chain component matches six real steps, three allocation
+roots, all eighteen typed cache slots and Codegen retry behavior; it is not yet
+installed in the Native runner.
+
+The source vtable planner and real allocation factory preserve the distinct
+full-predicate/salt symbolic key and principal-only allocation-query key. Active
+initial runs select the source reserve capability and keep successor memory and
+memo effects. Ground-u32 slot/byte/provenance/counter and MachineHooks controls
+match independent compiler observations, including open-source rejection.
+Typed initial vtable-cache import, issued Function/VTable prefix metadata and
+native allocation/function conversion remain incomplete. Unknown runtime query
+prefixes do not fall back to legacy tables. General initial memo families,
+symbolic type IDs and full CTFE/interner dependency closure remain unresolved.
 
 The exact `DropGlue(_, None)` shim family now retains only instance identity and
 raw source position; its raw declaration signature supplies types. Lean builds

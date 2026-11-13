@@ -121,3 +121,55 @@ its own `--attempt N`. This requires the old library build success, its original
 verified artifact hashes, matching generated std files, fresh new private
 metadata/driver, and an actual ordinary-target run. It never changes metadata
 version checks. The subsequent std smoke uses that exact verified target sysroot.
+
+## Build and check the initial-profile exporter
+
+After a successful ordinary-target probe, build the maintained exporter through
+that probe's original stage0 host route. The entrypoint verifies the protected
+source audit, the successful attempt/probe manifests, all fifteen fresh compiler
+metadata files, the matching driver and host std, and the preserved target std.
+It does not change compiler versions or disable metadata compatibility checks.
+Use a new exclusive target directory and evidence directory:
+
+```sh
+python3 tools/ctfe-custom-rustc/build-exporter.py \
+  --root /path/to/custom-rustc --attempt N \
+  --target-dir /path/to/new-exporter-target --out scratch/initial-exporter-build \
+  --prepare-only
+# Inspect the verified command and capacity before running the same command
+# with a fresh evidence directory and without --prepare-only.
+python3 tools/ctfe-custom-rustc/build-exporter.py \
+  --root /path/to/custom-rustc --attempt N \
+  --target-dir /path/to/new-exporter-target --out scratch/initial-exporter-run
+```
+
+The build uses offline locked Cargo, one job, no debug information or incremental
+codegen, and a target-directory lock. It defaults to requiring 512 MiB free;
+`--minimum-free-bytes` sets an explicitly assessed capacity budget. The recorded
+host configuration and actual exporter rustc arguments retain the complete
+artifact paths/hashes. `manifest.json` records the binary hash, build result,
+and source hashes before and after. Keep the target and driver artifacts intact
+while checking; this command never deletes another build's artifacts.
+
+Run the six exporter controls against that hash-verified binary and manifest:
+
+```sh
+python3 tools/check-initial-profile.py \
+  --root /path/to/custom-rustc --attempt N \
+  --exporter /path/to/new-exporter-target/debug/lean-miri-mir-exporter \
+  --manifest scratch/initial-exporter-run/manifest.json \
+  --out scratch/initial-profile-controls
+lake env lean --run tools/check-initial-ctfe-runtime.lean \
+  scratch/initial-profile-controls/profile-cached.json
+lake env lean --run tools/check-initial-ctfe-rejections.lean \
+  scratch/initial-profile-controls/profile-cached.json
+```
+
+The exporter check runs cached and automatically selected profiles, disabled
+profile behavior, unknown-root rejection, mixed allocator-profile rejection,
+and disabled-profile key rejection. It checks the complete initial table sizes,
+the two present memo slots, the actual cached u32 result, retained raw operands,
+and absence of a selected-root PC after initial capture. The two separate Lean
+checks consume that actual exported profile through their existing CLI. These
+finite checks establish the cached fixture's connection and rejection boundaries;
+they do not establish general cold CTFE execution.

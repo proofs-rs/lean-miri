@@ -51,6 +51,7 @@ pub(crate) enum Annotation {
 pub(crate) enum Constant {
     LiteralConst { value: Value },
     TypeConstant { type_constant: u64 },
+    UnevaluatedConst { definition:u64, arguments:Vec<super::pool_values::GenericArgument>, promoted:Option<u32> },
     EvaluatedConst { value: Value },
 }
 #[derive(Clone, Debug, Serialize)]

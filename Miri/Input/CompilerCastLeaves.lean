@@ -1,4 +1,5 @@
 import Miri.Input.CompilerProviders
+import Miri.Input.RuntimeEffectfulLayout
 import Miri.Interpreter.ExecutionCast
 
 /-! Direct cast query construction. Unexported generic/trait transformations
@@ -21,13 +22,15 @@ def make (p : CompilerProviders.Prepared) (types : RuntimeArrayQueries.Access S)
     (vtable : VTableHooks Provenance S C CallInstance (FnAbi TyId))
     (expose : C → Provenance → RvalueM S Unit)
     (fromExposed : C → UInt64 → RvalueM S (Pointer (Option Provenance)))
-    (validateABI : Immediate Provenance → LayoutData → Except StepError Unit) :
+    (validateABI : Immediate Provenance → LayoutData → Except StepError Unit)
+    (typeConstants : RuntimeEffectfulLayout.Provider S := RuntimeEffectfulLayout.unavailable) :
     ExecutionCast.Leaves S C :=
   let facts := p.lifecycle.calls.symbols.facts
   let context := facts.context
   let run := fun {A} (action : TypeArena.WorldM A) => RuntimeArrayQueries.perform types action
   { typeInfo := fun _ ty => run (CompilerFactAdapters.castTypeInfoInWorld facts ty)
-    layoutOf := fun _ ty => run (CompilerFacts.layoutOfInWorld context ty)
+    layoutOf := fun _ ty => RuntimeEffectfulLayout.layout types typeConstants
+      CompilerTypingEnv.fullyMonomorphized none p.runtime ty
     exposeProvenance := expose
     pointerFromExposedAddress := fromExposed
     usizeLayout := fun _ => run do

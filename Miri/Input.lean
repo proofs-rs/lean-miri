@@ -35,6 +35,10 @@ import Miri.Input.EvalWorld
 import Miri.Input.EvalCoreMachine
 import Miri.Input.CompilerProviders
 import Miri.Input.InitialMachine
+import Miri.Input.CompilerColdU64Source
+import Miri.Input.CompilerColdU64RootFinish
+import Miri.Input.CompilerColdU64Machine
+import Miri.Input.CompilerColdU64Engine
 import Miri.Input.CompilerLinuxSyscall
 import Miri.Input.CompilerUnixThreadDispatch
 import Miri.Input.CompilerRandomDispatch

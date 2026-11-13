@@ -22,7 +22,7 @@ fn object(kind:&str, fields:&str)->String {
     format!("{{\"kind\":{}{}{} }}",quote(kind),if fields.is_empty(){""}else{","},fields)
 }
 struct Encoder<'tcx,F> {
-    tcx:TyCtxt<'tcx>, types:Vec<ty::Ty<'tcx>>, span:F, source_syntax:bool,
+    tcx:TyCtxt<'tcx>, types:Vec<ty::Ty<'tcx>>, span:F, source_syntax:bool, allow_unevaluated:bool,
 }
 impl<'tcx,F:FnMut(Span)->u64> Encoder<'tcx,F> {
     fn ty(&mut self, ty:ty::Ty<'tcx>)->usize {
@@ -82,18 +82,27 @@ impl<'tcx,F:FnMut(Span)->u64> Encoder<'tcx,F> {
             mir::Operand::Constant(constant)=>{
                 let annotation=constant.user_ty.map(|index|index.as_u32());
                 let annotation_fields=annotation.map(|index|format!(",\"user_type\":{{\"index\":{index},\"table_state\":\"cleared_post_borrowck\",\"entries\":[]}}" )).unwrap_or_default();
-                let mir::Const::Val(value,ty)=constant.const_ else {
-                    return Err("coroutine source constant requires raw Val, no CTFE evaluation".into());
-                };
-                let slot=self.ty(ty);let span=(self.span)(constant.span);
-                match value {
-                    mir::ConstValue::ZeroSized=>object(if annotation.is_some(){"annotated_zero_sized"}else{"zero_sized"},&format!("\"type\":{slot},\"span\":{span}{annotation_fields}")),
-                    mir::ConstValue::Scalar(scalar)=>{
-                        let scalar=scalar.try_to_scalar_int().map_err(|_|"coroutine source pointer constant unsupported")?;
-                        let bytes=scalar.size().bytes();let bits=scalar.to_bits_unchecked();
-                        object(if annotation.is_some(){"annotated_scalar"}else{"scalar"},&format!("\"type\":{slot},\"span\":{span},\"bits\":\"{bits}\",\"bytes\":{bytes}{annotation_fields}"))
+                if let mir::Const::Unevaluated(source,ty)=constant.const_ {
+                    if !self.allow_unevaluated {return Err("raw Unevaluated source requires the explicit initial-query profile".into())}
+                    let slot=self.ty(ty);let span=(self.span)(constant.span);
+                    let arguments=array(source.args.iter().map(|argument|super::generic_material::argument(self.tcx,argument)).collect::<Result<Vec<_>,_>>()?);
+                    let promoted=source.promoted.map(|index|index.as_u32().to_string()).unwrap_or_else(||"null".into());
+                    let user_type=annotation.map(|index|format!("{{\"index\":{index},\"table_state\":\"cleared_post_borrowck\",\"entries\":[]}}")).unwrap_or_else(||"null".into());
+                    object("unevaluated",&format!("\"type\":{slot},\"span\":{span},\"definition\":{{\"crate\":{},\"index\":{}}},\"arguments\":{arguments},\"promoted\":{promoted},\"user_type\":{user_type}",source.def.krate.as_u32(),source.def.index.as_u32()))
+                } else {
+                    let mir::Const::Val(value,ty)=constant.const_ else {
+                        return Err("coroutine source constant requires raw Val, no CTFE evaluation".into());
+                    };
+                    let slot=self.ty(ty);let span=(self.span)(constant.span);
+                    match value {
+                        mir::ConstValue::ZeroSized=>object(if annotation.is_some(){"annotated_zero_sized"}else{"zero_sized"},&format!("\"type\":{slot},\"span\":{span}{annotation_fields}")),
+                        mir::ConstValue::Scalar(scalar)=>{
+                            let scalar=scalar.try_to_scalar_int().map_err(|_|"coroutine source pointer constant unsupported")?;
+                            let bytes=scalar.size().bytes();let bits=scalar.to_bits_unchecked();
+                            object(if annotation.is_some(){"annotated_scalar"}else{"scalar"},&format!("\"type\":{slot},\"span\":{span},\"bits\":\"{bits}\",\"bytes\":{bytes}{annotation_fields}"))
+                        }
+                        _=>return Err("coroutine source allocation constant unsupported".into()),
                     }
-                    _=>return Err("coroutine source allocation constant unsupported".into()),
                 }
             }
             _=>return Err("coroutine source runtime-check operand unsupported".into()),
@@ -352,20 +361,20 @@ pub fn capture_category<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>, category:
     match category {
         Category::Copy=>{
             if body.coroutine.is_some() {return Err("copy source category cannot contain coroutine metadata".into())}
-            capture_mode(tcx,body,span,false)
+            capture_mode(tcx,body,span,false,false)
         }
         Category::Extended=>capture_extended(tcx,body,span),
     }
 }
 
 pub fn capture<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>, span:impl FnMut(Span)->u64)->Result<String,String> {
-    capture_mode(tcx,body,span,body.coroutine.is_some())
+    capture_mode(tcx,body,span,body.coroutine.is_some(),false)
 }
 pub fn capture_extended<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>, span:impl FnMut(Span)->u64)->Result<String,String> {
-    capture_mode(tcx,body,span,true)
+    capture_mode(tcx,body,span,true,false)
 }
 fn capture_mode<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>,
-    span:impl FnMut(Span)->u64,source_syntax:bool)->Result<String,String> {
+    span:impl FnMut(Span)->u64,source_syntax:bool,allow_unevaluated:bool)->Result<String,String> {
     if body.phase!=mir::MirPhase::Runtime(mir::RuntimePhase::Optimized) {
         return Err("copy template requires optimized runtime MIR".into());
     }
@@ -386,7 +395,7 @@ fn capture_mode<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>,
         ty::GenericParamDefKind::Lifetime=>"region",ty::GenericParamDefKind::Type{..}=>"type",
         ty::GenericParamDefKind::Const{..}=>"constant",
     })));
-    let mut e=Encoder{tcx,types:Vec::new(),span,source_syntax};
+    let mut e=Encoder{tcx,types:Vec::new(),span,source_syntax,allow_unevaluated};
     let locals=array(body.local_decls.iter().map(|local|e.ty(local.ty).to_string()));
     let mut blocks=Vec::new();
     for block in body.basic_blocks.iter() {
@@ -428,4 +437,16 @@ pub fn interface<'tcx>(tcx:TyCtxt<'tcx>,body:&mir::Body<'tcx>,
     let arguments=body.args_iter().map(|local|(local,instantiate(body.local_decls[local].ty))).collect();
     Ok(Interface {argument_count:body.arg_count,spread_argument:body.spread_arg,
         arguments,return_type:instantiate(body.local_decls[mir::RETURN_PLACE].ty)})
+}
+
+/// Initial-query profile only. Legacy source admission retains its prior
+/// categories, so adding raw syntax cannot silently disable old provider paths.
+pub fn source_category_raw<'tcx>(tcx:TyCtxt<'tcx>,body:&mir::Body<'tcx>,args:ty::GenericArgsRef<'tcx>)->Option<Category> {
+    source_category(tcx,body,args).or_else(|| {
+        if supported_arguments(args) && capture_mode(tcx,body,|_|0,true,true).is_ok() {Some(Category::Extended)} else {None}
+    })
+}
+pub fn capture_category_raw<'tcx>(tcx:TyCtxt<'tcx>,body:&mir::Body<'tcx>,category:Category,
+    span:impl FnMut(Span)->u64)->Result<String,String> {
+    match category {Category::Copy=>capture_mode(tcx,body,span,false,false),Category::Extended=>capture_mode(tcx,body,span,true,true)}
 }

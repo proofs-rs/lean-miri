@@ -79,7 +79,7 @@ fn pattern_tree<'tcx>(tcx: TyCtxt<'tcx>, pattern: ty::Pattern<'tcx>) -> Result<S
         ty::PatternKind::NotNull => atom("aggregate","pattern_not_null",""),
     })
 }
-fn predicate_tree<'tcx>(tcx: TyCtxt<'tcx>, value: ty::PolyExistentialPredicate<'tcx>) -> Result<String,String> {
+pub(super) fn predicate_tree<'tcx>(tcx: TyCtxt<'tcx>, value: ty::PolyExistentialPredicate<'tcx>) -> Result<String,String> {
     let body = match value.skip_binder() {
         ty::ExistentialPredicate::Trait(t) => definition("aggregate","trait",t.def_id,arguments(tcx,t.args)?),
         ty::ExistentialPredicate::AutoTrait(d) => definition("aggregate","auto_trait",d,vec![]),

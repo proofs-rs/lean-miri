@@ -215,6 +215,8 @@ deriving instance DecidableEq for Miri.Input.CompilerInitialSelectedMemo.Registe
 deriving instance DecidableEq for Miri.Input.CompilerInitialSelectedMemo.Memo
 deriving instance DecidableEq for Miri.Input.CompilerInitialSelectedMemo.Registry
 deriving instance DecidableEq for Miri.Input.RuntimeCtfeQueryMachine.Memo
+deriving instance DecidableEq for Miri.Input.CompilerSourceVTableMaterializer.MemoEntry
+deriving instance DecidableEq for Miri.Input.CompilerSourceVTableMaterializer.Memo
 deriving instance DecidableEq for Miri.Input.EvalWorld.World
 
 #synth DecidableEq (KeyedArray UInt64 AllocId (fun (id : AllocId) => id.value))
