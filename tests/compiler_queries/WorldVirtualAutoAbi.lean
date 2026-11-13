@@ -18,8 +18,16 @@ private def sameAbi (aWorld bWorld : TypeArena.World) (a b : Miri.ABI.FnAbi Type
 def main (args : List String) : IO Unit := do
   let [candidatePath,oraclePath] := args | throw (IO.userError "expected source Virtual candidate and pinned actual ABI oracle")
   let decoded := (← must (decodeJson (← IO.FS.readFile candidatePath))).document
-  let document := {decoded with types := decoded.types.map (fun node =>
-    {node with compilerFacts := node.compilerFacts.map (fun facts => {facts with booleanQueries := #[],projectionQueries := none})})}
+  let poisonedTypes := decoded.types.map fun (node : TypeNode) =>
+    let shape : TypeShape := match node.shape with
+      | .adt data =>
+        let variants := data.variants.map fun (variant : AdtVariant) =>
+          {variant with fields := variant.fields.map (fun field => {field with typeId := decoded.queries.primitives.u8})}
+        .adt {data with variants}
+      | other => other
+    let compilerFacts := node.compilerFacts.map (fun facts => {facts with booleanQueries := #[],projectionQueries := none,adt := none})
+    {node with shape,compilerFacts}
+  let document := {decoded with types := poisonedTypes}
   let oracle := (← must (decodeJson (← IO.FS.readFile oraclePath))).document
   let metadata ← must ((RuntimeMetadata.ofDocument document).mapError toString)
   let reference ← must ((RuntimeMetadata.ofDocument oracle).mapError toString)

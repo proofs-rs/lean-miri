@@ -453,20 +453,18 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
           throw s!"$.compiler_predicate_queries[{index}]: dangling normalized predicate reference {normalized}"
   profileit "decoder.validate_alloc_id_world" profile fun _ => do
     if let some world := compilerAllocIdWorld then validateCompilerAllocIdWorld allocations world
-  -- Scalar constants are validated against the same target-dependent layout
-  -- constructor used at execution. Recipe rows intentionally omit eager sizes.
+  -- Scalar wire width is storage geometry, not a Pattern-validity query.
+  -- Range endpoints/niches remain a separate full-layout/CTFE obligation.
   let target : RuntimeMetadata.Result Miri.ABI.RuntimeTargetDataLayout := do
     let evidence ← RuntimeMetadata.require d.runtimeTargetDataLayout "runtime_target_data_layout"
     RuntimeMetadata.importTarget evidence
-  let scalarSize := fun id => do
-    let ty ← types[id]?
-    let source ← layouts[ty.layoutId]?
-    if source.primitiveRecipe.isNone && source.tupleType.isNone && source.unionType.isNone && source.structType.isNone && source.enumType.isNone && source.patternType.isNone && source.sequenceType.isNone && source.pointerType.isNone && source.pointerDataType.isNone && source.enumTagType.isNone then source.sizeBytes
-    else match target with
+  let scalarQuery : RuntimeMetadata.Result (Nat → RuntimeMetadata.Result Nat) := do
+    RuntimeMetadata.scalarStorageQuery (← target) types layouts definitions typeConstants predicates
+  let scalarSize := fun id => match scalarQuery with
+    | .error _ => none
+    | .ok query => match query id with
+      | .ok bytes => some bytes
       | .error _ => none
-      | .ok target => match RuntimeMetadata.resolveLayout target types layouts ty.layoutId definitions typeConstants predicates with
-        | .ok layout => some layout.size.bytes.toNat
-        | .error _ => none
   let bodyContext : DecodeMIR.Context := {
     typeCount := types.size, allocationCount := allocations.size,
     definitionCount := definitions.size, typeConstantCount := typeConstants.size,

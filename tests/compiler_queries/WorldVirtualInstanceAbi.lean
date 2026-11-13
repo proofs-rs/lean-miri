@@ -18,8 +18,16 @@ private def sameAbi (aWorld bWorld : TypeArena.World) (a b : Miri.ABI.FnAbi Type
 def main (args : List String) : IO Unit := do
   let [candidatePath,oraclePath] := args | throw (IO.userError "expected source Virtual candidate and pinned actual ABI oracle")
   let decoded := (← must (decodeJson (← IO.FS.readFile candidatePath))).document
-  let document := {decoded with types := decoded.types.map (fun node =>
-    {node with compilerFacts := node.compilerFacts.map (fun facts => {facts with booleanQueries := #[],projectionQueries := none})})}
+  let poisonedTypes := decoded.types.map fun (node : TypeNode) =>
+    let shape : TypeShape := match node.shape with
+      | .adt data =>
+        let variants := data.variants.map fun (variant : AdtVariant) =>
+          {variant with fields := variant.fields.map (fun field => {field with typeId := decoded.queries.primitives.u8})}
+        .adt {data with variants}
+      | other => other
+    let compilerFacts := node.compilerFacts.map (fun facts => {facts with booleanQueries := #[],projectionQueries := none,adt := none})
+    {node with shape,compilerFacts}
+  let document := {decoded with types := poisonedTypes}
   let oracle := (← must (decodeJson (← IO.FS.readFile oraclePath))).document
   let metadata ← must ((RuntimeMetadata.ofDocument document).mapError toString)
   let reference ← must ((RuntimeMetadata.ofDocument oracle).mapError toString)
@@ -47,11 +55,6 @@ def main (args : List String) : IO Unit := do
     unless key.kind == .Virtual method slot && key.arguments == actualArguments do
       throw (IO.userError "normal source resolver differs from complete rustc Virtual key")
     let expected ← must (CallResolution.functionAbiId reference row.abiId)
-    if declaration.bodyTrackCaller == some true then
-      if ((WorldInstanceAbi.construct callee #[]).run selected).isOk then
-        throw (IO.userError "tracked Virtual escaped caller-location capability boundary")
-      residual := residual + 1
-      continue
     let (actual,after) ← must ((WorldInstanceAbi.construct callee #[]).run selected)
     unless ← must (sameAbi after.arena referenceWorld.arena actual expected) do
       throw (IO.userError "complete source Virtual ABI differs from pinned rustc")
@@ -63,7 +66,7 @@ def main (args : List String) : IO Unit := do
     if ((WorldInstanceAbi.construct callee extra).run selected).isOk then
       throw (IO.userError "nonvariadic Virtual accepted extra arguments")
     checked := checked + 1
-  unless checked == 7 && residual == 1 do throw (IO.userError s!"Virtual coverage differs {checked}/{residual}")
+  unless checked == 8 && residual == 0 do throw (IO.userError s!"Virtual coverage differs {checked}/{residual}")
   let prepared ← must (CallResolution.prepareWithRuntime metadata (← must (lowerProgram document)))
   let mut sourceSite := none
   for entry in prepared.entries do
@@ -83,4 +86,4 @@ def main (args : List String) : IO Unit := do
   | .ok _ => throw (IO.userError "source Virtual call accepted a noncanonical method slot")
   | .error error => unless error.contains "normal source method/argument/slot selection" do
       throw (IO.userError s!"wrong Virtual slot failed at an unrelated boundary: {error}")
-  IO.println "PASS7complete actual Virtual ABIs from normal source resolver,empty instance/body prefixes and no ABI catalogs;tracked/session/extra controls;actual material caller source request and wrong-slot rejection"
+  IO.println "PASS8complete actual Virtual ABIs from normal source resolver,empty instance/body prefixes and no ABI catalogs;tracked included/session/extra controls;actual material caller source request and wrong-slot rejection"

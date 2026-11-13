@@ -3955,13 +3955,22 @@ fn enum_layout_source_capable<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>, fuel
 // Source-constructor eligibility only: this deliberately never calls is_sized.
 // Unknown generic/nominal/alias tails remain explicit material-layout residuals.
 fn struct_recipe_eligible<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> bool {
-    fn guaranteed_sized(ty: ty::Ty<'_>) -> bool {
+    fn guaranteed_sized<'tcx>(tcx:TyCtxt<'tcx>,ty: ty::Ty<'tcx>,fuel:usize) -> bool {
+        if fuel==0 {return false;}
         match ty.kind() {
             ty::Bool | ty::Char | ty::Never | ty::Int(_) | ty::Uint(_) | ty::Float(_)
             | ty::Ref(..) | ty::RawPtr(..) | ty::FnDef(..) | ty::FnPtr(..)
             | ty::UnsafeBinder(..) | ty::Array(..) | ty::Pat(..) | ty::Closure(..)
             | ty::CoroutineClosure(..) | ty::Coroutine(..) | ty::CoroutineWitness(..) => true,
-            ty::Tuple(elements) => elements.last().is_none_or(|tail| guaranteed_sized(*tail)),
+            ty::Tuple(elements) => elements.last().is_none_or(|tail| guaranteed_sized(tcx,*tail,fuel-1)),
+            // Raw lang-item flag proves PhantomData<T> sized for all T,
+            // without using a layout/Sized answer. Includes PanicLocation's tail.
+            ty::Adt(def,_) if def.is_phantom_data() => true,
+            ty::Adt(def,_) if def.is_struct() && def.repr().transparent() &&
+                def.non_enum_variant().fields.len()==1 => {
+                let field=def.non_enum_variant().fields.iter().next().unwrap();
+                guaranteed_sized(tcx,tcx.type_of(field.did).instantiate_identity().skip_norm_wip(),fuel-1)
+            },
             _ => false,
         }
     }
@@ -3972,7 +3981,7 @@ fn struct_recipe_eligible<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> bool {
         return false;
     }
     def.non_enum_variant().fields.iter().last().is_none_or(|field|
-        guaranteed_sized(tcx.type_of(field.did).instantiate_identity().skip_norm_wip()))
+        guaranteed_sized(tcx,tcx.type_of(field.did).instantiate_identity().skip_norm_wip(),256))
 }
 
 // Structural source eligibility only. Covered Dynamic syntax uses the raw

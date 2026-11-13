@@ -631,7 +631,8 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
               | _ => throw s!"{path}: raw source ABI requires an Item or Virtual instance"
             let some source := document.definitions[definition]?
               | throw s!"{path}: raw source ABI definition is absent"
-            unless source.genericTemplate.isSome && source.bodyTrackCaller == some false &&
+            unless source.genericTemplate.isSome &&
+                (if isVirtual then source.bodyTrackCaller.isSome else source.bodyTrackCaller == some false) &&
                 (isVirtual || source.functionAbiMaterial.isSome) do
               throw s!"{path}: raw source ABI declaration material is incomplete"
             if isVirtual then

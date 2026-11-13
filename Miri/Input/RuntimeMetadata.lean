@@ -385,29 +385,18 @@ open TypeArena in
 private def worldAdtField (normalization : Option AliasRuntime.Context) (fuel : Nat)
     (id variant index : Nat) : WorldM TypeId := do
   let world ← get
-  if let .material node ← lift (world.lookupType id) then
-    let .adt shape := node.shape | throw "field source type is not an ADT"
-    let some source := shape.variants.find? (·.index == variant) | throw "field source ADT variant absent"
-    let matching := source.fields.filter (·.index == index)
-    unless matching.size == 1 do throw "field source ADT field is absent or duplicated"
-    let some field := matching[0]? | throw "field source ADT field absent"
-    return field.typeId
   let (declaration,_,identity,args,_) ← worldAdt id
   unless variant < declaration.variantCount && declaration.fields.any (fun field =>
       field.variantIndex == variant && field.fieldIndex == index) do
     throw "constructed ADT field index absent"
-  let some context := normalization | throw "constructed ADT field needs source normalization context"
   let term ← lift (GenericInstantiationWorld.instantiateFieldTerm world fuel identity args variant index)
-  WorldNormalization.resolveNormalizedTerm context (fuel * (fuel + 1)) fuel term
+  match normalization with
+  | some context => WorldNormalization.resolveNormalizedTerm context (fuel * (fuel + 1)) fuel term
+  | none => GenericInstantiationWorld.resolveType fuel term
 
 open TypeArena in
 private def worldAdtFields (normalization : Option AliasRuntime.Context) (fuel : Nat)
     (id variant : Nat) : WorldM (Array TypeId) := do
-  let world ← get
-  if let .material node ← lift (world.lookupType id) then
-    let .adt shape := node.shape | throw "layout source type is not an ADT"
-    let some source := shape.variants.find? (·.index == variant) | throw "layout source ADT variant absent"
-    return source.fields.map (·.typeId)
   let (declaration,_,_,_,_) ← worldAdt id
   unless variant < declaration.variantCount do throw "layout ADT variant index absent"
   let fields := declaration.fields.filter (·.variantIndex == variant)
@@ -416,12 +405,6 @@ private def worldAdtFields (normalization : Option AliasRuntime.Context) (fuel :
 open TypeArena in
 private def worldAdtLastField (normalization : Option AliasRuntime.Context) (fuel : Nat)
     (id : Nat) : WorldM (Option TypeId) := do
-  let world ← get
-  if let .material node ← lift (world.lookupType id) then
-    let .adt shape := node.shape | throw "tail source type is not an ADT"
-    let some variant := shape.variants.find? (·.index == 0) | throw "tail source ADT variant absent"
-    let some last := variant.fields.back? | return none
-    return some (← worldAdtField normalization fuel id 0 last.index)
   let (declaration,_,_,_,_) ← worldAdt id
   let fields := declaration.fields.filter (·.variantIndex == 0)
   let some last := fields.back? | return none
@@ -457,6 +440,34 @@ private def worldConstructor (id : TypeId) : WorldM Constructor := do
   | .material node =>
     let some key ← lift (world.materialKey node) | throw "layout source constructor has no universe key"
     pure key
+
+open TypeArena in
+/-- layout.rs975-987 and rustc_type_ir/ty_kind/closure.rs138-173,250-281:
+closure fields are the actual capture tuple's fields. The raw generic header
+checks the parent prefix and synthetic suffix before selecting upvars. -/
+private def worldClosureFields (id : TypeId) : WorldM (Array TypeId) := do
+  let (owner,arguments,suffix) ← match ← worldConstructor id with
+    | .closure owner arguments => pure (owner,arguments,3)
+    | .coroutineClosure owner arguments => pure (owner,arguments,4)
+    | _ => throw "capture fields require a closure constructor"
+  let world ← get
+  let reference ← lift (world.definitionRef owner)
+  let some definition := world.definitions[reference]? | throw "capture field owner absent"
+  let some path := definition.rawPath | throw "capture field raw generic header absent"
+  unless path.components.back?.any (·.kind == "closure") do
+    throw "capture field raw owner is not a closure"
+  let header ← lift (DefinitionPath.requireGenerics path)
+  unless header.parameters.size == arguments.size &&
+      header.parentParameterCount + suffix == arguments.size do
+    throw "capture field canonical synthetic scope mismatch"
+  for (sort,argument) in header.parameters.zip arguments do
+    let actual : GenericSubstitution.ArgSort := match argument with
+      | .Type _ => .type | .Const _ => .constant | .Lifetime _ => .region
+    unless sort == actual do throw "capture field generic argument sort mismatch"
+  let some (MIR.GenericArg.Type captures) := arguments[header.parentParameterCount + 2]?
+    | throw "capture field tuple argument absent"
+  let .tuple fields ← worldConstructor captures | throw "capture field upvars are not a tuple"
+  pure fields
 
 open TypeArena in
 private def worldSized (normalization : Option AliasRuntime.Context) : Nat → TypeId → WorldM Bool
@@ -865,6 +876,79 @@ def layoutInWorld (metadata : RuntimeMetadata) (id : TypeId) : TypeArena.WorldM 
   pure ⟨id, ← (worldLayoutType (some metadata.normalizationContext) metadata.target metadata.source.layouts
     ((metadata.source.coroutineCoverage.map (·.genericSources)).getD #[]) budget id).run' {}⟩
 
+private structure ScalarStorage where
+  size : Size
+  align : Align
+  kind : Nat
+
+mutual
+/-- Storage geometry only: the second component records Memory/Scalar/ScalarPair.
+Pinned rustc_ty_utils/layout.rs:241–310 clones a Pattern's base LayoutData and
+changes validity/niches, never size. rustc_abi/layout.rs::univariant_biased
+preserves the single field's geometry for the narrow repr(transparent) case.
+No Pattern endpoint is evaluated here; this is not a value-validity judgment. -/
+private def worldScalarStorage (target : RuntimeTargetDataLayout) (layouts : Array Input.Layout)
+    (seen : Array TypeId) :
+    Nat → TypeId → TypeArena.WorldM ScalarStorage
+  | 0, _ => throw "scalar storage geometry recursion exhausted"
+  | fuel + 1, id => do
+    if seen.contains id then throw "cyclic scalar storage source type"
+    let seen := seen.push id
+    match ← worldConstructor id with
+    | .patternType base pattern =>
+      let storage ← worldScalarStorage target layouts seen fuel base
+      let kind := storage.kind
+      match pattern with
+      | .range .. => unless kind == 1 do throw "range Pattern storage base is not scalar"
+      | .notNull => unless kind == 1 || kind == 2 do throw "nonnull Pattern storage base is not scalar or scalar-pair"
+      | .or _ => throw "or Pattern scalar storage is not implemented"
+      pure storage
+    | .adt .. =>
+      let (declaration,_,_,_,_) ← worldAdt id
+      -- No inference from material field IDs or cached normalized projections.
+      -- Additional fields, repr modifiers and enum niches need full layout.
+      if declaration.kind == .structKind && declaration.variantCount == 1 &&
+          declaration.fields.size == 1 && declaration.representation.flagsBits == 4 &&
+          declaration.representation.integer.isNone && declaration.representation.alignBytes.isNone &&
+          declaration.representation.packBytes.isNone && declaration.representation.scalableElement.isNone then
+        let (_,_,identity,args,_) ← worldAdt id
+        let term ← lift (GenericInstantiationWorld.instantiateFieldTerm (← get) fuel identity args 0 0)
+        let field ← worldScalarStorageTerm target layouts seen fuel term
+        let align := target.aggregateAlign.max field.align
+        let size ← lift ((field.size.alignTo align).mapError toString)
+        let kind := if align == field.align && size == field.size then field.kind else 0
+        pure ⟨size,align,kind⟩
+      else
+        let layout ← (worldLayoutType none target layouts #[] fuel id).run' {}
+        pure ⟨layout.size,layout.align.abi, match layout.backendRepr with | .Scalar .. => 1 | .ScalarPair .. => 2 | _ => 0⟩
+    | _ =>
+      let layout ← (worldLayoutType none target layouts #[] fuel id).run' {}
+      pure ⟨layout.size,layout.align.abi, match layout.backendRepr with | .Scalar .. => 1 | .ScalarPair .. => 2 | _ => 0⟩
+
+private def worldScalarStorageTerm (target : RuntimeTargetDataLayout) (layouts : Array Input.Layout)
+    (seen : Array TypeId) :
+    Nat → GenericSubstitution.Term → TypeArena.WorldM ScalarStorage
+  | 0, _ => throw "scalar storage raw field recursion exhausted"
+  | fuel + 1, term => do
+    match term with
+    | .node .type "pattern" "" (.cons base (.cons pattern .nil)) =>
+      let kind ← match pattern with
+        | .node .aggregate "pattern_range" "" (.cons start (.cons finish .nil)) =>
+          unless start.sort == .constant && finish.sort == .constant do
+            throw "scalar storage range endpoint sort mismatch"
+          pure 1
+        | .atom .aggregate "pattern_not_null" "" => pure 2
+        | _ => throw "scalar storage raw Pattern syntax is not implemented"
+      let storage ← worldScalarStorageTerm target layouts seen fuel base
+      let baseKind := storage.kind
+      unless baseKind == 1 || (kind == 2 && baseKind == 2) do
+        throw "scalar storage raw Pattern base ABI mismatch"
+      pure storage
+    | _ =>
+      let id ← GenericInstantiationWorld.resolveType fuel term
+      worldScalarStorage target layouts seen fuel id
+end
+
 /-- Physical source-only adapter. LayoutData contains no newly allocated type
 IDs; execution providers must use layoutInWorld and retain its updated World. -/
 def resolveLayout (target : RuntimeTargetDataLayout) (types : Array TypeNode)
@@ -879,6 +963,28 @@ def resolveLayout (target : RuntimeTargetDataLayout) (types : Array TypeNode)
   let result ← ((worldLayoutSeed none target layouts #[] (rawLayoutBudget types.size layouts.size definitions) id).run' {}).run world
     |>.mapError (fun e => .unsupported e)
   pure result.1
+
+/-- Build one import-local, immutable storage query context. Each demand uses
+this same checked source World; temporary substitutions are discarded and only
+bytes escape. No query result table or cross-import state is retained.
+Pattern validity/niche CTFE remains a separate complete-layout obligation. -/
+def scalarStorageQuery (target : RuntimeTargetDataLayout) (types : Array TypeNode)
+    (layouts : Array Input.Layout) (definitions : Array DefinitionId)
+    (constants : Array MIR.TypeConst) (predicates : Array VtablePredicate) : Result (TypeId → Result Nat) := do
+  let world ← TypeArena.World.ofMaterial types constants definitions predicates target.pointerSize.bytes.toNat
+    |>.mapError (fun error => .invalid "scalar storage material" error)
+  let fuel := rawLayoutBudget types.size layouts.size definitions
+  pure fun id => do
+    let (storage,_) ← (worldScalarStorage target layouts #[] fuel id).run world
+      |>.mapError (fun error => .unsupported error)
+    pure storage.size.bytes.toNat
+
+/-- ID-free standalone adapter. Decoder captures scalarStorageQuery once for
+all scalar-wire checks, rather than rebuilding the checked prefix per value. -/
+def scalarStorageSize (target : RuntimeTargetDataLayout) (types : Array TypeNode)
+    (layouts : Array Input.Layout) (definitions : Array DefinitionId)
+    (constants : Array MIR.TypeConst) (predicates : Array VtablePredicate) (id : TypeId) : Result Nat := do
+  (← scalarStorageQuery target types layouts definitions constants predicates) id
 
 def lookup (metadata : RuntimeMetadata) (id : TypeId) : Result (TyAndLayout TypeId) := do
   unless id < metadata.source.types.size do
@@ -1089,6 +1195,10 @@ def fieldTypeInWorld (_metadata : RuntimeMetadata) (id variant index : Nat) : Ty
   match ← lift (world.lookupType id) with
   | .material node => match node.shape with
     | .coroutine .. => coroutineFieldTypeInWorld _metadata id variant index
+    | .closure .. | .coroutineClosure .. => do
+      let fields ← worldClosureFields id
+      let some field := fields[index]? | throw "capture field index absent"
+      pure field
     | .adt .. =>
       worldAdtField (some _metadata.normalizationContext) fuel id variant index
     | .tuple elements =>
@@ -1102,6 +1212,10 @@ def fieldTypeInWorld (_metadata : RuntimeMetadata) (id variant index : Nat) : Ty
     | _ => throw "source type field constructor is not implemented"
   | .constructed key => match key with
     | .coroutine .. => coroutineFieldTypeInWorld _metadata id variant index
+    | .closure .. | .coroutineClosure .. => do
+      let fields ← worldClosureFields id
+      let some field := fields[index]? | throw "capture field index absent"
+      pure field
     | .adt .. =>
       worldAdtField (some _metadata.normalizationContext) fuel id variant index
     | .tuple elements =>
@@ -1166,7 +1280,6 @@ private def worldProjection (metadata : RuntimeMetadata) (ty : TypeId) (layoutId
 projection categories. Constructor fields use source substitution directly. -/
 def fieldLayoutForInWorld (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index : Nat) :
     TypeArena.WorldM (TyAndLayout TypeId) := do
-  let world ← get
   if (← shapeKindInWorld metadata parent.ty) == .coroutine then
     let source ← coroutineSourceInWorld metadata parent.ty
     let term ← match parent.layout.variants with
@@ -1204,19 +1317,41 @@ def fieldLayoutForInWorld (metadata : RuntimeMetadata) (parent : TyAndLayout Typ
     if let some vtableType ← vtableFieldTypeInWorld metadata metadataType then
       return ← layoutInWorld metadata vtableType
     return ← layoutInWorld metadata metadataType
-  if let .material node ← lift (world.lookupType parent.ty) then
-    for record in ← lift ((projectionParents metadata parent.ty).mapError toString) do
-      let queried ← worldProjection metadata parent.ty record.layoutId
-      if queried == parent then
-        let sourceIndex := if node.shapeKind == .str then 0 else index
-        let some source := record.fields.find? (·.index == sourceIndex)
-          | throw "compiler projection field material absent"
-        let _ ← lift ((← get).lookupType source.typeId)
-        return ← worldProjection metadata source.typeId source.layoutId
+  -- The enum discriminant is a source scalar, not an ADT field or a
+  -- contextual LayoutId. Its logical primitive type follows Primitive::to_ty.
+  if let .adt .. ← worldConstructor parent.ty then
+    match parent.layout.variants with
+    | .Multiple tag _ _ _ =>
+      unless index == 0 do throw "enum tag field index is not zero"
+      let .Initialized (value := value) (validRange := range) := tag
+        | throw "enum tag source scalar malformed"
+      let ty ← match value with
+        | .Int integer signed => do
+          let kind : MIR.IntegerKind := if signed then match integer with
+            | .I8 => .i8 | .I16 => .i16 | .I32 => .i32 | .I64 => .i64 | .I128 => .i128
+            else match integer with
+            | .I8 => .u8 | .I16 => .u16 | .I32 => .u32 | .I64 => .u64 | .I128 => .u128
+          TypeArena.World.internType (.integer signed kind)
+        | .Pointer _ => do
+          let unit ← TypeArena.World.internType (.tuple #[])
+          TypeArena.World.internType (.rawPointer unit .Mut)
+        | .Float value =>
+          TypeArena.World.internType (.float (match value with
+            | .F16 => .f16 | .F16B => .f16b | .F32 => .f32 | .F64 => .f64
+            | .F128 => .f128 | .PpcF128 => .ppcf128))
+      return ⟨ty, ← lift (PrimitiveLayout.scalar metadata.target value range)⟩
+    | .Empty => throw "there is no field in an empty enum layout"
+    | .Single _ => pure ()
   let selected ← match parent.layout.variants with
     | .Single selected => pure selected
     | _ => throw "ADT field needs a selected variant"
   let child ← fieldTypeInWorld metadata parent.ty selected index
+  -- layout_of erases regions and normalizes the projected source field. Use
+  -- raw terms for both material and constructed children, never normalized rows.
+  let world ← get
+  let fuel := metadata.materialLayoutFuel + 3 * (world.constructedTypes.size + world.constructedConstants.size)
+  let term ← lift (GenericInstantiationWorld.ofType world fuel child)
+  let child ← WorldNormalization.resolveNormalizedTerm metadata.normalizationContext (fuel * (fuel + 1)) fuel term
   layoutInWorld metadata child
 
 def fieldLayoutInWorld (metadata : RuntimeMetadata) (id index : Nat) :
@@ -1224,35 +1359,45 @@ def fieldLayoutInWorld (metadata : RuntimeMetadata) (id index : Nat) :
   let parent ← layoutInWorld metadata id
   fieldLayoutForInWorld metadata parent index
 
-/-- Pinned for_variant transformation. Contextual uninhabited-variant material
-remains an explicit source projection category until that algorithm is ported. -/
+/-- Raw nominal attributes; no physical layout or fields are computed. -/
+def adtDeclarationInWorld (_metadata : RuntimeMetadata) (id : TypeId) :
+    TypeArena.WorldM AdtDeclaration.Material := do
+  let (declaration,_,_,_,_) ← worldAdt id
+  pure declaration
+
+/-- Pinned ty/layout.rs803-850 and rustc_abi/layout/simple.rs132-185.
+Multiple variants are projected directly from the supplied source layout.
+Single/Empty canonical enums can reconstruct pruned variants from raw ADT
+field counts; applying a different variant to an already selected Multiple
+layout is rejected. Contextual LayoutIds never stand in for this operation. -/
 def variantLayoutInWorld (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index : Nat) :
     TypeArena.WorldM (TyAndLayout TypeId) := do
-  let world ← get
-  if (← shapeKindInWorld metadata parent.ty) != .coroutine then
-    if let .material _ ← lift (world.lookupType parent.ty) then
-      for record in ← lift ((projectionParents metadata parent.ty).mapError toString) do
-        if record.variant == some index then
-          let canonical ← layoutInWorld metadata parent.ty
-          unless canonical == parent do
-            match parent.layout.variants with
-            | .Single actual =>
-              if actual == index then return parent
-              throw "cannot apply for_variant twice to a selected parent"
-            | _ => throw "variant projection parent differs from source layout"
-          return ← worldProjection metadata parent.ty record.layoutId
   match parent.layout.variants with
   | .Single actual =>
     if actual == index then return parent
-    throw "uninhabited variant layout requires source material"
-  | .Empty => throw "empty-enum variant layout requires source material"
   | .Multiple _ _ _ variants =>
     let some variant := variants[index]? | throw "variant index absent"
-    pure ⟨parent.ty, {parent.layout with
+    return ⟨parent.ty, {parent.layout with
       fields := .Arbitrary variant.fieldOffsets variant.fieldsInMemoryOrder
       variants := .Single index, backendRepr := variant.backendRepr
       largestNiche := variant.largestNiche, uninhabited := variant.uninhabited
       size := variant.size, randomizationSeed := 0}⟩
+  | .Empty => pure ()
+  -- The pinned assertion compares the canonical variant representation, not a
+  -- contextual projection row or the rest of the caller's physical layout.
+  let canonical ← layoutInWorld metadata parent.ty
+  unless canonical.layout.variants == parent.layout.variants do
+    throw "cannot apply for_variant twice to a selected parent"
+  let declaration ← adtDeclarationInWorld metadata parent.ty
+  unless !declaration.variantNames.isEmpty do throw "for_variant called on zero-variant enum"
+  unless index < declaration.variantNames.size do throw "variant index absent"
+  let fields := (declaration.fields.filter (·.variantIndex == index)).size
+  let fields : FieldsShape := if fields == 0 then .Arbitrary #[] #[] else .Union fields
+  return ⟨parent.ty, {
+    fields, variants := .Single index, backendRepr := .Memory (sized := true)
+    largestNiche := none, uninhabited := true, align := ⟨metadata.target.i8Align⟩
+    size := Size.ZERO, maxReprAlign := none, unadjustedAbiAlign := metadata.target.i8Align
+    reprC := false, randomizationSeed := 0}⟩
 
 /-- Exact monomorphic Sized dispatch in the current universe after erasing
 regions and normalizing the requested source type. -/
@@ -1261,12 +1406,6 @@ def sizedInWorld (metadata : RuntimeMetadata) (id : TypeId) : TypeArena.WorldM B
   let fuel := metadata.materialLayoutFuel + 3 * (world.constructedTypes.size + world.constructedConstants.size)
   let id ← WorldNormalization.normalizeType metadata.normalizationContext (fuel * (fuel + 1)) fuel id
   worldSized (some metadata.normalizationContext) fuel id
-
-/-- Raw nominal attributes; no physical layout or fields are computed. -/
-def adtDeclarationInWorld (_metadata : RuntimeMetadata) (id : TypeId) :
-    TypeArena.WorldM AdtDeclaration.Material := do
-  let (declaration,_,_,_,_) ← worldAdt id
-  pure declaration
 
 /-- Canonical source Value extraction, never a summarized normalized answer. -/
 def arrayCountInWorld (metadata : RuntimeMetadata) (id : TypeId) : TypeArena.WorldM UInt64 := do

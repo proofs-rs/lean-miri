@@ -7,6 +7,7 @@ import Miri.Input.StructuralSized
 import Miri.Input.TermSized
 import Miri.Input.TraitSelection.Fulfill
 import Miri.Input.SourceFnTraits
+import Miri.Input.SourceBuiltinDispatch
 import Miri.Input.TraitSelection.StructuralCopyClone
 import Miri.Input.TraitSelection.StructuralAuto
 
@@ -87,6 +88,8 @@ def traitHooks (context : Context) (_depth : Nat)
         SourceEnvironment.predicates lookup 16384 implementation.definition
       normalize := normalize
       builtin := fun universeIndex remaining activeGoals declaration goal => do
+        let dispatch ← SourceBuiltinDispatch.classify (remaining + 1) declaration goal.traitRef.arguments
+        if dispatch == .noCompilerCandidate then return none
         if declaration.builtin == some .fn || declaration.builtin == some .fnMut || declaration.builtin == some .fnOnce then
           unless universeIndex == 0 do throw "fn builtin higher-ranked query requires universe relation"
           let source : SourceFnTraits.Source := ⟨context.generic.definitions,context.traits,

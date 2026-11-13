@@ -157,16 +157,33 @@ instead of silently omitting entries.
 
 Covered Virtual methods now construct complete FnAbi from raw signatures and
 source receiver attributes, preserving logical reference types while using the
-pinned nullable thin physical receiver. Thirty-one independent complete ABI
-comparisons cover ordinary, optimized and panic policies, with answer catalogues
-removed. A real mutable-dyn method-call guest now finalizes exit zero in Lean and
-same-prepared-TyCtxt Miri. By-value/newtype receivers, tracked-caller ABI and
-general virtual shim execution remain separate work. Original FnDef signatures
+pinned nullable thin physical receiver. Fifty-one independent complete ABI
+comparisons cover ordinary, optimized and panic policies, by-value dyn Self,
+up to two one-field transparent raw-pointer wrappers and tracked caller Location.
+All comparisons remove answer catalogues and poison closed ADT field types;
+raw field substitution supplies both material and constructed prefixes. Exact
+source recipe ownership, missing Location material, wrong ABI fields and the
+three-wrapper bound reject. A real mutable-dyn method-call guest finalizes exit
+zero in Lean and same-prepared-TyCtxt Miri. General wrapper/marker layouts,
+other targets and new receiver native execution remain separate work.
+Original FnDef signatures
 instantiate their raw declaration, erase the outer binder and normalize each
 input/output in the same World. Ground closure/FnPtr Fn-family candidates and
 FnOnce Output reduce from source signatures with real nested obligations;
 FnDef target-feature material, async closures and higher-ranked candidate
 confirmation remain explicit unsupported domains.
+
+Runtime field queries no longer prioritize copied projection rows or closed ADT
+field types. Raw declaration templates and checked closure capture tuples supply
+the execution-owned World; field-projection and layout demands apply source normalization.
+Scalar MIR wire-width checks separately derive Pattern storage geometry from its
+base and transparent raw fields, without evaluating range endpoints or inventing
+niche validity. Full Pattern layout can still require CTFE. Legacy context-free
+field consumers and their unused projection wire catalogues remain to migrate.
+Conditional Iterator/Future/coroutine builtin candidates now distinguish checked
+non-coroutine heads from unported coroutine confirmation. The actual IntoIterator
+signature and reference/slice/IterMut goals match rustc, including the exact impl;
+unknown, dynamic and unresolved cases remain explicit errors.
 
 Genuine binder-free, type-only method-syntax trait calls now retain their raw
 associated FnDef declaration and resolve in the execution-owned World. No Item
@@ -179,13 +196,22 @@ impl body source; general raw impl-body discovery remains unresolved. Annotated
 UFCS callee operands remain unsupported because their user-type metadata is not
 represented by this call constructor. The full seeded guest has not completed:
 the current native runner passes the earlier std::rt::lang_start ABI, dynamic
-pointer metadata and original FnOnce signature boundaries. It remains pending
-before the trait call at choice cursor 115: validity traversal repeatedly visits
-the parent Multiple layout for an Ordering variant because the material variant
-projection reconstructs that same parent instead of the selected Single layout.
-This source variant-projection defect requires a faithful for_variant port;
-increasing fuel would not resolve the loop. Process exit zero for this pending
-result is not successful guest execution.
+pointer metadata, original FnOnce signature and enum variant boundaries. Source
+for_variant now selects the Single layout instead of looping through its parent;
+38 material/constructed complete variants agree with independent compiler data.
+The current guest stops at choice cursor 267 in NonZero<u64>::new because source
+constant-alias normalization needs CTFE. Its raw chain is external anonymous
+const core(2,69102), RangePattern::MAX<u64>, selected impl const core(2,54220),
+then inherent u64::MAX core(2,38452), whose actual MIR computes Not(0).
+These raw external bodies, associated-const selection and u64/ValTree evaluation
+are not connected; closed normalized constants are not substituted for them.
+Process exit zero for this Unsupported result is not successful guest execution.
+
+The full exporter Rust suite requires rerunning after the receiver-admission
+changes: the latest debug build exhausted workspace space before test execution.
+Three immutable release builds and fresh ABI exports pass, but they do not replace
+that suite. Generated failed-build objects were reclaimed; source, binaries and
+failure evidence remain preserved.
 
 Binder-free Item signatures can construct x86_64 Rust scalar/ZST FnAbi in the
 same World from raw signatures and codegen/panic flags. Twenty complete compiler
@@ -422,16 +448,20 @@ nontrivial `u32` associated-constant root from raw role-tagged CTFE MIR. Five re
 interpreter steps and root interning match an independent rustc evaluation's
 complete allocation key, source allocation ID and counter frontier. This bounded
 path is not connected to the public importer and does not admit general CTFE.
-Initial typed query memoization is a separate missing input: an actual frontend-
+Initial typed query memoization is a separate required input: an actual frontend-
 evaluated root returns from Codegen/PostAnalysis caches with zero evaluation
 steps and no allocation changes, whereas a fresh root evaluates once and its
 repeat also hits the cache. Global allocations and deduplication keys cannot
 recover those query keys/results. The private fresh-only slice therefore checks
 absence in all four relevant typed value/allocation caches at its frozen
 boundary, with incremental and on-disk query caching disabled; cached selected
-roots reject. Importing initial query memo entries, general repeated queries,
-shared allocation-counter updates across every reservation, and production
-snapshot dispatch remain unresolved.
+roots reject. A separate private selected-u32 memo importer now reads exact frozen
+VALUE/ALLOC keys and results, validates their source-allocation joins, and matches
+the real cached runtime fixture: PostAnalysis entries complete Codegen queries
+without steps or allocations. Compatible bytes never identify a missing result.
+This prototype is not production snapshot dispatch. General initial memo families,
+u64/type-level PostAnalysis ValTree queries, shared allocation-counter dependency
+closure and actual runtime Unevaluated dispatch remain unresolved.
 
 The exact `DropGlue(_, None)` shim family now retains only instance identity and
 raw source position; its raw declaration signature supplies types. Lean builds

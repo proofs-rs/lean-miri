@@ -224,31 +224,61 @@ pub(super) fn signature<'tcx>(tcx: TyCtxt<'tcx>, instance: ty::Instance<'tcx>,
     signature.inputs_and_output.iter().all(simple).then_some(signature)
 }
 
+// Source-only bounded one-field transparent wrappers around raw dyn pointers.
+// No tcx layout/pointee/field projection result selects this admission domain.
+fn transparent_virtual_raw_pointee<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>, depth:u32) -> Option<ty::Ty<'tcx>> {
+    if depth == 0 {return None;}
+    match input.kind() {
+        ty::RawPtr(child,_) if matches!(child.kind(),ty::Dynamic(..)) => Some(*child),
+        ty::Adt(def,args) if def.is_struct() && def.repr().transparent() &&
+            def.repr().align.is_none() && def.repr().pack.is_none() && def.non_enum_variant().fields.len()==1 => {
+            let field=def.non_enum_variant().fields.iter().next()?;
+            let child=field.ty(tcx,args).skip_norm_wip();
+            transparent_virtual_raw_pointee(tcx,child,depth-1)
+        },
+        _=>None,
+    }
+}
+
+// Disjoint receiver source policy. All recursive raw terminals are pointers,
+// hence non-1ZST on the already-checked64bit data target. A one-field transparent
+// wrapper inherits that size/alignment, so the raw recursive witness entails
+// exactly the non_1zst_field predicate recomputed by Lean from raw field layouts.
+fn virtual_receiver_pointee<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>) -> Option<ty::Ty<'tcx>> {
+    match input.kind() {
+        ty::Ref(_,child,_)|ty::RawPtr(child,_) if matches!(child.kind(),ty::Dynamic(..)) => Some(*child),
+        ty::Dynamic(..) => Some(input),
+        ty::Adt(..) => transparent_virtual_raw_pointee(tcx,input,3),
+        _=>None,
+    }
+}
+
 // Ordinary Virtual ABI, not a VTable shim: the first argument retains its
-// source type while abi.rs::make_thin_self_ptr replaces its layout with *mut().
+// inner builtin pointer type (or newly raw-mut unsizedSelf) while pinned
+// make_thin_self_ptr replaces the physical layout with *mut().
 fn virtual_signature<'tcx>(tcx: TyCtxt<'tcx>, instance: ty::Instance<'tcx>,
     extra: &'tcx ty::List<ty::Ty<'tcx>>) -> Option<ty::FnSig<'tcx>> {
     use rustc_abi::ExternAbi as A;
-    use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags as F;
     let ty::InstanceKind::Virtual(definition,_) = instance.def else {return None;};
     if tcx.sess.target.arch != rustc_target::spec::Arch::X86_64 ||
         tcx.sess.target.pointer_width != 64 || !extra.is_empty() ||
         instance.args.has_non_region_param() || instance.args.has_escaping_bound_vars() ||
         instance.args.has_infer() || instance.args.has_placeholders() || instance.args.references_error() ||
-        tcx.body_codegen_attrs(definition).flags.contains(F::TRACK_CALLER) ||
         tcx.data_layout.default_address_space != rustc_abi::AddressSpace::ZERO {
         return None;
+    }
+    if instance.def.requires_caller_location(tcx) {
+        let _=tcx.lang_items().get(rustc_attr_ir::LangItem::PanicLocation)?;
+        let location=tcx.caller_location_ty();
+        let ty::Ref(_,child,rustc_hir::Mutability::Not)=location.kind() else {return None;};
+        if !sized_pointee(tcx,*child,256) || !super::canonical_layout_recipe_eligible(tcx,*child) {return None;}
     }
     let bound = tcx.fn_sig(definition).instantiate(tcx,instance.args).skip_norm_wip();
     if !bound.bound_vars().iter().all(|v|matches!(v,ty::BoundVariableKind::Region(_))) {return None;}
     let sig = tcx.instantiate_bound_regions_with_erased(bound);
     if sig.c_variadic() || !matches!(sig.abi(),A::Rust|A::RustCold|A::RustPreserveNone|A::RustTail) {return None;}
     let first = *sig.inputs().first()?;
-    let child = match first.kind() {
-        ty::Ref(_,child,_)|ty::RawPtr(child,_) => *child,
-        _=>return None,
-    };
-    if !matches!(child.kind(),ty::Dynamic(..)) {return None;}
+    let _child = virtual_receiver_pointee(tcx,first)?;
     let simple = |input:ty::Ty<'tcx>| {
         if !super::generic_mir::supported_arguments(tcx.mk_args(&[input.into()])) {return false;}
         match input.kind() {
