@@ -64,7 +64,9 @@ pub(super) fn signature<'tcx>(tcx:TyCtxt<'tcx>, signature:ty::PolyFnSig<'tcx>,
             super::instance_abi_material::small_raw_pointer_pair(tcx,input)||
             super::instance_abi_material::small_memory(input),
         ty::Array(..)=>super::instance_abi_material::small_memory(input),
-        ty::RawPtr(child,_)|ty::Ref(_,child,_)=>super::instance_abi_material::sized_pointee(tcx,*child,256),
+        ty::RawPtr(child,_)=>super::instance_abi_material::sized_pointee(tcx,*child,256)||
+            super::instance_abi_material::raw_slice_pointer(tcx,input),
+        ty::Ref(_,child,_)=>super::instance_abi_material::sized_pointee(tcx,*child,256),
         ty::FnPtr(..)=>true,
         ty::Adt(..)=>super::instance_abi_material::thin_box(tcx,input),
         _=>false,

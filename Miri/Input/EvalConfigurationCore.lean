@@ -407,7 +407,6 @@ def makeWithForeignContext {Assembly : Type}
     let context := facts.context
     let compatibility := CompilerCovariance.compatible p options.place.debugAssertions
     let covariance := CompilerCovariance.hook p EvalProjectionMachine.arrays options.place.debugAssertions
-    let intrinsicQueries : CompilerCoreIntrinsic.Queries (State Os R P H D O Aff B Host) C := CompilerCoreIntrinsic.make p
     let extra := EvalCoreMachine.extras leaves.sync ConcurrencyErrors.storeBuffer
     let source := EvalPointerSource.make p image extra leaves.pointerSource choice
     let pointers := source.pointers
@@ -615,24 +614,30 @@ def makeWithForeignContext {Assembly : Type}
         maxSizeOfVal := maximum
         layoutOf := fun _ ty => RuntimeArrayQueries.layoutOf EvalProjectionMachine.arrays ty
         pointeeType := fun _ ty => do
-          let some pointee ← query (CompilerFacts.builtinDeref context ty true)
+          let some pointee ← RuntimeArrayQueries.perform EvalProjectionMachine.arrays
+              (CompilerFacts.builtinDerefInWorld context ty true)
             | throw (.invalidProgram "intrinsic requires a pointer type")
           pure pointee
-        integerKind := fun _ ty => physical (CompilerExecutionProviders.integerKind context ty)
+        integerKind := fun _ ty => CompilerExecutionProviders.worldInteger EvalProjectionMachine.arrays context ty
         usizeLayout := usize
         isizeLayout := fun _ => query (p.primitiveLayout "isize")
         applyFloatNondeterminism := fun c value => Math.floatFastError math c value 4
         chooseEqualFloatRight := equalRight
         fuseMulAdd := fuse
         floatFastError := Math.floatFastError math
-        variantLayout := fun _ layout index => query (p.runtime.forVariant layout index |>.mapError toString)
+        variantLayout := fun _ layout index => RuntimeArrayQueries.perform EvalProjectionMachine.arrays
+          (RuntimeMetadata.variantLayoutInWorld p.runtime layout index)
         ensureMonomorphic := fun _ ty => do
-          unless ← query (CompilerFacts.boolean context ty "is_monomorphic_enough") do
+          unless ← RuntimeArrayQueries.perform EvalProjectionMachine.arrays
+              (CompilerFacts.booleanInWorld context ty "is_monomorphic_enough") do
             throw (.invalidProgram "intrinsic type still requires instantiation")
         typeNameConstant := CompilerValueConstants.typeNameHook p EvalProjectionMachine.arrays functions
           (fun a b => physical (compatibility a b))
-        needsDrop := intrinsicQueries.needsDrop
-        variantCount := intrinsicQueries.variantCount
+        needsDrop := fun _ ty => RuntimeArrayQueries.perform EvalProjectionMachine.arrays
+          (CompilerFacts.booleanInWorld context ty "needs_drop")
+        variantCount := fun _ ty => do
+          let world ← RuntimeArrayQueries.snapshot EvalProjectionMachine.arrays
+          physical (CompilerCoreIntrinsic.variantCountInWorld p world ty)
         callerLocationConstant := EvalCallerLocationConstruction.hook p EvalProjectionMachine.arrays functions
           (VirtualCalls.callerLocation (ExecutionCalls.virtualHooks
             (CompilerCallConstruction.virtual p EvalProjectionMachine.arrays table PointerPlaceMachine.controlledAlignment)

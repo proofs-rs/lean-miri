@@ -124,6 +124,7 @@ def main (args : List String) : IO Unit := do
   let mut runtimeCallbacks := 0
   let mut guardChecks := 0
   let mut confirmationNegatives := 0
+  let mut confirmationPositives := 0
   let mut binderConfirmationNegatives := 0
   let mut declarationNegatives := 0
   let mut constTagChecks := 0
@@ -198,15 +199,32 @@ def main (args : List String) : IO Unit := do
         let terms ← must ((← must ((← must (method.getObjVal? "arguments")).getArr?)).mapM (GenericMaterialCodec.readTerm 4096))
         let (arguments,callWorld) ← must ((RuntimeArrayTypes.liftType
           (GenericInstantiationWorld.resolveArguments 4096 terms)).run selectedWorld)
+        let name ← must ((← must (row.getObjVal? "name")).getStr?)
         match (hooks.expectResolveForVTable () definition arguments).run (state callWorld) with
         | .error (.unsupported reason) _ =>
-          if reason == "runtime type universe query: MIR template normalization excludes nonempty binders" &&
+          if reason.endsWith "object candidate higher-ranked relation requires universe provider" &&
               view.value.predicates.any (fun predicate => !predicate.variables.isEmpty) then
             binderConfirmationNegatives := binderConfirmationNegatives + 1
-          else unless reason.endsWith "dynamic trait goals require object candidate assembly" do
+          else unless #["object candidate projection obligations require source confirmation",
+              "object candidate explicit supertrait requires source confirmation",
+              "object candidate upcast requires supertrait confirmation"].any (fun residual => reason.endsWith residual) do
             throw (IO.userError s!"wrong object confirmation residual: {reason}")
-        | _ => throw (IO.userError "unconfirmed builtin object candidate selected an instance")
-        confirmationNegatives := confirmationNegatives + 1
+          unless !#["query_base","query_auto","query_lifetime"].contains name do
+            throw (IO.userError "covered direct-principal hook rejected source selection")
+          confirmationNegatives := confirmationNegatives + 1
+        | .ok result afterCall =>
+          unless #["query_base","query_auto","query_lifetime"].contains name do
+            throw (IO.userError "unsupported object candidate selected an instance")
+          let .constructed actual ← must (afterCall.machine.user.world.instances.lookup result)
+            | throw (IO.userError "object hook reused compiler instance material")
+          let expected ← must (method.getObjVal? "vtable")
+          let expectedKind ← must ((← must (expected.getObjVal? "kind")).getStr?)
+          let reason := if expectedKind == "reify_vtable" then some CallReifyReason.Vtable else none
+          unless (expectedKind == "reify_vtable" || expectedKind == "reify_none") &&
+              actual.kind == .Shim (.Reify definition reason) && actual.arguments == arguments do
+            throw (IO.userError "actual runtime object hook differs from genuine Reify oracle")
+          confirmationPositives := confirmationPositives + 1
+        | .error error _ => throw (IO.userError s!"wrong object callback failure: {reprStr error}")
       if projectionRows == 0 && view.value.predicates.any (fun p => match p.body with | .projection .. => true | _ => false) then
         let some first := data.predicates[0]? | throw (IO.userError "suffix guard input absent")
         unless first < providers.program.input.predicates.size do
@@ -324,7 +342,7 @@ def main (args : List String) : IO Unit := do
         declarationNegatives := declarationNegatives + 1
   unless quantified == 1 && projectionRows == 2 && principalAbsent == 1 && staleBranchChecks == 2 do
     throw (IO.userError "typed bridge binder/projection/owner control counts changed")
-  unless binderConfirmationNegatives == 2 && prefixReuseChecks == 2 && runtimeCallbacks == 18 && guardChecks == 42 && confirmationNegatives == 28 &&
+  unless binderConfirmationNegatives == 2 && prefixReuseChecks == 2 && runtimeCallbacks == 18 && guardChecks == 42 && confirmationPositives == 6 && confirmationNegatives == 22 &&
       declarationNegatives == 72 && constTagChecks == 2 && prefixReinterpretationNegatives == 4 do
-    throw (IO.userError s!"runtime bridge/guard/confirmation counts: binder={binderConfirmationNegatives} prefix={prefixReuseChecks} callbacks={runtimeCallbacks} guards={guardChecks} confirmations={confirmationNegatives} declarations={declarationNegatives} const={constTagChecks} reinterpret={prefixReinterpretationNegatives}")
-  IO.println s!"PASS {materialCount} material views; 9 empty-prefix Dynamic roundtrips; 18 real callbacks, 42 final-assembly guards, 28 confirmation and 72 declaration negatives; 2 Type/Const syntax controls"
+    throw (IO.userError s!"runtime bridge/guard/confirmation counts: binder={binderConfirmationNegatives} prefix={prefixReuseChecks} callbacks={runtimeCallbacks} guards={guardChecks} positive={confirmationPositives} confirmations={confirmationNegatives} declarations={declarationNegatives} const={constTagChecks} reinterpret={prefixReinterpretationNegatives}")
+  IO.println s!"PASS {materialCount} material views; 9 empty-prefix Dynamic roundtrips; 18 real callbacks, 42 final-assembly guards, 6 Reify selections, 20 object residuals +2 binder residuals and 72 declaration negatives; 2 Type/Const syntax controls"

@@ -79,6 +79,22 @@ pub(super) fn small_nonpointer_pair(input: ty::Ty<'_>) -> bool {
     })
 }
 
+// Source-only wide raw pointers with canonical usize metadata. Dynamic,
+// borrowed and unsized-struct tails remain exact material residuals.
+pub(super) fn raw_slice_pointer<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>) -> bool {
+    let ty::RawPtr(pointee,_) = input.kind() else { return false; };
+    let dl = &tcx.data_layout;
+    if dl.default_address_space != rustc_abi::AddressSpace::ZERO ||
+        dl.pointer_size_in(rustc_abi::AddressSpace::ZERO).bytes() != 8 ||
+        dl.pointer_align_in(rustc_abi::AddressSpace::ZERO).bytes() > 8 ||
+        dl.i64_align.bytes() > 8 || dl.aggregate_align.bytes() > 8 { return false; }
+    match pointee.kind() {
+        ty::Str => true,
+        ty::Slice(element) => sized_pointee(tcx,*element,256),
+        _ => false,
+    }
+}
+
 // Direct tuple ScalarPairs with raw data pointers. These target alignment
 // bounds ensure two register-sized fields occupy at most sixteen bytes, so
 // neither Item return deduction nor the external indirect policy is needed.
@@ -185,9 +201,9 @@ pub(super) fn signature<'tcx>(tcx: TyCtxt<'tcx>, instance: ty::Instance<'tcx>,
         signature.inputs().iter().any(|input| newly_indirect(*input, false))) {
         return None;
     }
-    // Only a syntactically sized pointee is admitted here. This is source
-    // grammar classification, not a layout/Sized query. Fat raw pointers and
-    // references retain an explicit residual until their full ABI rules exist.
+    // Source pointee syntax selects thin pointers and slice/str raw pointers.
+    // Borrowed wide pointers and other unsized tails remain material residuals;
+    // no layout/Sized query answer selects this domain.
     let simple = |ty: ty::Ty<'tcx>| {
         if !super::generic_mir::supported_arguments(tcx.mk_args(&[ty.into()])) { return false; }
         match ty.kind() {
@@ -195,7 +211,7 @@ pub(super) fn signature<'tcx>(tcx: TyCtxt<'tcx>, instance: ty::Instance<'tcx>,
             ty::Tuple(fields) => fields.is_empty() || small_nonpointer_pair(ty) ||
                 small_raw_pointer_pair(tcx,ty) || small_memory(ty),
             ty::Array(..) => small_memory(ty),
-            ty::RawPtr(pointee,_) => sized_pointee(tcx, *pointee, 256),
+            ty::RawPtr(pointee,_) => sized_pointee(tcx, *pointee, 256) || raw_slice_pointer(tcx,ty),
             ty::Ref(_,pointee,_) => sized_pointee(tcx, *pointee, 256),
             ty::FnPtr(types,header) => types.with(*header).bound_vars().is_empty(),
             ty::Adt(..) => thin_box(tcx,ty),

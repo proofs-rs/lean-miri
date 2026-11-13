@@ -30,6 +30,39 @@ private def sourceConstructor (id : TypeId) : RuntimeArrayTypes.CompilerM TypeAr
       | throw "raw pair field source constructor is unavailable"
     pure constructor
 
+/-- Source raw pointer to slice/str: data component uses the raw-pointer
+pointee rule at offset zero; usize metadata is a nonpointer scalar. No pointee,
+Freeze, Unpin or projection answers enter this construction. -/
+def rawSlicePointer (runtime : RuntimeMetadata) (layout : TyAndLayout TypeId) :
+    RuntimeArrayTypes.CompilerM (ArgAbi TypeId) := do
+  unless runtime.target.defaultAddressSpace == .ZERO && runtime.target.pointerSize.bytes == 8 do
+    throw "wide raw pointer ABI requires the 64-bit data address space"
+  for align in #[runtime.target.defaultAddressSpacePointerSpec.pointerAlign,
+      runtime.target.i64Align,runtime.target.aggregateAlign,layout.layout.align.abi] do
+    unless (← liftPure (align.bytes.mapError reprStr)) <= 8 do
+      throw "wide raw pointer ABI alignment exceeds one register"
+  let .rawPointer pointee _ ← sourceConstructor layout.ty
+    | throw "wide raw pointer ABI requires a raw-pointer source constructor"
+  let constructor ← sourceConstructor pointee
+  unless (match constructor with | .slice _ | .str => true | _ => false) do
+    throw "wide raw pointer ABI requires slice or str metadata"
+  let usize ← liftPure (PrimitiveLayout.compute runtime.target "usize")
+  let expected ← liftPure (PrimitiveLayout.pointer runtime.target false (some usize))
+  unless layout.layout == expected do
+    throw "wide raw pointer layout differs from its source-derived pointer/usize layout"
+  let .ScalarPair (a := data) (b := metadata) (bOffset := offset) := layout.layout.backendRepr
+    | throw "wide raw pointer requires scalar-pair storage"
+  unless layout.layout.isSized && layout.layout.size.bytes == 16 && offset.bytes == 8 do
+    throw "wide raw pointer storage differs from pointer-plus-usize"
+  let .Initialized (value := .Pointer space) (validRange := range) := data
+    | throw "wide raw pointer data component is not an initialized pointer"
+  unless space == .ZERO do throw "wide raw pointer requires data address space zero"
+  let .Initialized (value := .Int .I64 false) (validRange := _) := metadata
+    | throw "wide raw pointer metadata component is not initialized usize"
+  let attrs : ArgAttributes := {ArgAttributes.new with
+    regular := 128 ||| (if range.contains 0 then 0 else 16)}
+  pure ⟨layout,.Pair attrs {ArgAttributes.new with regular := 128}⟩
+
 /-- Pinned pointee_info_at walks tuple fields by physical offsets. In this
 bounded grammar every pointer-bearing field is a thin RawPtr: its recursive
 answer is safe=None, size=0, align=1. References, wrappers and FnPtr value fields

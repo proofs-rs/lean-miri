@@ -156,7 +156,7 @@ def dynamicKind (prepared : CompilerFactAdapters.Prepared) (world : RuntimeArray
     pure (.adt declaration.representation.simd)
   | .tuple => pure (.tuple false)
   | .dynamicTraitObject =>
-    let .dynamic expected ← query (CompilerFactAdapters.validityKind prepared ty)
+    let .dynamic expected ← readonly world (CompilerFactAdapters.validityKindInWorld prepared ty)
       | throw (.invariant "dynamic type missing compiler predicates")
     pure (.dynamic expected)
   | .slice => pure .slice | .str => pure .str | .foreign => pure .foreign

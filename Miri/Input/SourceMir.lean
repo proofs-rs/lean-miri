@@ -55,6 +55,9 @@ def validateTemplate (document : ImportDocument) (source : CopyTemplateSource) :
   let sourceOperand (value : MirTemplate.SourceOperand) : Except String Unit := do
     match value with
     | .scalar _ location _ _ | .zeroSized _ location => span location.id
+    | .annotatedScalar _ location _ _ _ | .annotatedZeroSized _ location _ =>
+      unless source.sourceRole == .runtime do throw "annotated source operand requires runtime compiler role"
+      span location.id
     | _ => pure ()
   for block in source.template.skeleton.blocks do
     for statement in block.statements do

@@ -87,7 +87,7 @@ impl Callbacks for Inspector {
       }
      }
     }}
-    if changed {reject("unsupported-pointer-coercion",&unsupported_cast,"source cast kind outside prototype domain");}
+    if changed {reject("unsupported-pointer-coercion",&unsupported_cast,"source cast kind outside supported source grammar");}
     let generics=tcx.generics_of(owner);let parents=if body.coroutine.is_some(){generics.parent_count}else{generics.count()};
     let type_generic=(0..parents).any(|index|matches!(generics.param_at(index,tcx).kind,ty::GenericParamDefKind::Type{..}));
     for replacement in [tcx.types.u8,tcx.types.u64,tcx.types.bool,tcx.types.i128].into_iter().take(if type_generic{4}else{1}) {

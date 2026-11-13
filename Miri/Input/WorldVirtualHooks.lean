@@ -1,6 +1,7 @@
 import Miri.Input.WorldVTableInstance
 import Miri.Input.RuntimeArrayQueries
 import Miri.Input.WorldDynamicData
+import Miri.Input.WorldObjectCandidate
 
 /-! Source-owned virtual-call consistency leaves. Runtime receiver selection,
 vtable memory and recursive callee body/ABI checks remain their own providers. -/
@@ -19,7 +20,7 @@ def hooks (types : RuntimeArrayQueries.Access S) (base : VirtualCalls.CompilerHo
     rebaseVirtualArgs := fun args parent concrete => RuntimeArrayQueries.performCompiler types
       (WorldVTableInstance.rebaseVirtualArgs args parent concrete)
     expectResolveForVTable := fun _ method args => RuntimeArrayQueries.performCompiler types
-      (WorldVTableInstance.resolveMethod work fuel method args)}
+      (WorldObjectCandidate.resolveForVTable work fuel method args)}
 
 /-- Install last, after machine reservation adapters. New predicate handles
 cannot enter unported comparison, normalization, entry or allocation catalogs. -/

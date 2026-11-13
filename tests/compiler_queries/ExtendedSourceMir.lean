@@ -69,6 +69,6 @@ private def check (row : Json) : Except String Unit := do
 def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected fresh coroutine MIR oracle JSON")
   let rows ← must ((← must (Json.parse (← IO.FS.readFile path))).getArr?)
-  unless rows.size == 38 do throw (IO.userError "expected 38 complete extended source body comparisons")
+  unless rows.size == 42 do throw (IO.userError "expected 42 complete extended source body comparisons")
   for row in rows do must (check row)
-  IO.println "PASS 38 complete extended source MIR comparisons and typed malformed/source-error controls"
+  IO.println "PASS 42 complete extended source MIR comparisons and typed malformed/source-error controls"

@@ -88,18 +88,18 @@ def main():
     if oracle_run.returncode:
         raise RuntimeError(f"independent oracle failed: {oracle_run.stderr}")
     rows = json.loads((oracle_dir / "oracle.json").read_text())
-    if len(rows) != 38:
+    if len(rows) != 42:
         raise ValueError("full same-flags normalized oracle domain changed")
     negatives = json.loads((oracle_dir / "negative-controls.json").read_text())
     interfaces = json.loads((oracle_dir / "interface-controls.json").read_text())
-    if len(negatives) != 33 or any(not row.get("error") for row in negatives) or len(interfaces) != 4:
+    if len(negatives) != 35 or any(not row.get("error") for row in negatives) or len(interfaces) != 4:
         raise ValueError("raw-source rejection/FnDef interface control domain changed")
     physical = {(item["crate"], item["index"]) for item in document["definitions"]}
     retained, unsupported = [], []
     for row in rows:
         owner = row["physical_owner"]
         (retained if (owner["crate"], owner["index"]) in physical else unsupported).append(row)
-    if len(retained) != 37 or len(unsupported) != 1 or unsupported[0]["name"] != "raw_pointer":
+    if len(retained) != 41 or len(unsupported) != 1 or unsupported[0]["name"] != "raw_pointer":
         raise ValueError("retained-source/expected-Unsupported World domain changed")
     for name, selection in (("world-retained.json", retained), ("world-unsupported.json", unsupported)):
         (oracle_dir / name).write_text(json.dumps(selection, indent=2) + "\n")

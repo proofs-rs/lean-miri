@@ -29,7 +29,7 @@ def main (args : List String) : IO Unit := do
   let document := (← must (decodeJson (← IO.FS.readFile input))).document
   let runtime ← must ((RuntimeMetadata.ofDocument document).mapError toString)
   let rows ← must ((← must (Json.parse (← IO.FS.readFile oraclePath))).getArr?)
-  unless rows.size == 37 do throw (IO.userError "expected 37 complete source-body comparisons")
+  unless rows.size == 41 do throw (IO.userError "expected 41 complete source-body comparisons")
   let excluded ← must ((← must (Json.parse (← IO.FS.readFile excludedPath))).getArr?)
   unless excluded.size == 1 do throw (IO.userError "expected one explicit unsupported oracle row")
   for row in excluded do
@@ -114,4 +114,4 @@ def main (args : List String) : IO Unit := do
         (sourceFor {document with mirTemplates := document.mirTemplates.push source} physical).toOption.isNone do
       throw (IO.userError "missing or ambiguous physical source selected")
   unless callbacks == 12 do throw (IO.userError s!"actual source callback domain changed: {callbacks}")
-  IO.println s!"PASS 37 complete actual World bodies and {callbacks} persistent direct-call callbacks; missing/ambiguous sources reject; one raw_pointer expected Unsupported"
+  IO.println s!"PASS 41 complete actual World bodies and {callbacks} persistent direct-call callbacks; missing/ambiguous sources reject; one raw_pointer expected Unsupported"

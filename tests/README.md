@@ -413,8 +413,8 @@ ORACLE. The runner replays the fresh document's exact `input_settings.rustc_args
 through that independent oracle, including `-Zmir-preserve-ub`, and records the
 command and selection indices in `oracle-scope-manifest.json`.
 
-The full oracle covers 38 complete normalized MIR bodies, 33 raw-source rejection
-controls and four FnDef interface controls. The World comparison covers the 37
+The full oracle covers 42 complete normalized MIR bodies, 35 raw-source rejection
+controls and four FnDef interface controls. The World comparison covers the 41
 unchanged oracle rows whose physical definitions the producer retains, including
 12 persistent call callbacks and missing/ambiguous-source rejection. The remaining
 `raw_pointer` row must reject for an absent physical definition; it is expected
@@ -422,3 +422,12 @@ Unsupported, not a successful World comparison. `--lake` runs these focused Lean
 checks and the two no-resume layout controls without building artifacts. Run only
 after primary writers release their barrier; export/oracle capture alone does not
 establish any Lean comparison result.
+
+`tools/check-annotated-source-mir.py --exporter EXPORTER --oracle ORACLE
+--sysroot SYSROOT --output scratch/annotated-source-mir [--lake LAKE]` uses an
+ORACLE compiled from `tools/annotated-source-mir-oracle.rs`. It replays exact
+producer flags and captures eight complete normalized bodies with preserved
+annotation indices and spans, eight raw-source rejection controls, and five
+malformed annotation decoder controls. Runtime annotations explicitly retain the
+post-borrowck cleared-table marker; stale indices are not dereferenced into that
+empty table. FnDef-to-FnPtr reification remains unsupported in this source grammar.

@@ -38,6 +38,10 @@ inductive SourceOperand where
   | move (place : SourcePlace)
   | scalar (type : TypeSlot) (span : SpanRef) (bits bytes : Nat)
   | zeroSized (type : TypeSlot) (span : SpanRef)
+  /-- Runtime post-CleanupPostBorrowck breadcrumbs. The canonical annotation
+  table is explicitly known empty; this index must not be dereferenced into it. -/
+  | annotatedScalar (type : TypeSlot) (span : SpanRef) (bits bytes userType : Nat)
+  | annotatedZeroSized (type : TypeSlot) (span : SpanRef) (userType : Nat)
   deriving Repr, DecidableEq
 structure SourceCallArgument where
   span : SpanRef
@@ -152,6 +156,8 @@ def SourceOperand.instantiate {m : Type → Type} [Monad m]
   | .move place => return .Move (← place.instantiate resolve)
   | .scalar type span bits bytes => return .Constant ⟨span,none,.Val (.Scalar (.Int bits bytes)) (← resolve type)⟩
   | .zeroSized type span => return .Constant ⟨span,none,.Val .ZeroSized (← resolve type)⟩
+  | .annotatedScalar type span bits bytes userType => return .Constant ⟨span,some userType,.Val (.Scalar (.Int bits bytes)) (← resolve type)⟩
+  | .annotatedZeroSized type span userType => return .Constant ⟨span,some userType,.Val .ZeroSized (← resolve type)⟩
 private def instantiateSourceRvalue {m : Type → Type} [Monad m]
     (resolve : TypeSlot → m TyId) (resolveAdt : TyId → Nat → m AggregateKind) :
     SourceRvalue → m Miri.MIR.Rvalue
@@ -250,6 +256,15 @@ def validateStructure (template : Template) : Except String Unit := do
       slot type
       unless bytes > 0 && bytes ≤ 16 && bits < 2^(8*bytes) do throw "MIR source scalar bits/width invalid"
     | .zeroSized type _ => slot type
+    | .annotatedScalar type _ bits bytes userType =>
+      slot type
+      unless body.phase == .Runtime .Optimized && userType < 2^32 do
+        throw "annotated source operand has wrong phase or raw index domain"
+      unless bytes > 0 && bytes ≤ 16 && bits < 2^(8*bytes) do throw "MIR source scalar bits/width invalid"
+    | .annotatedZeroSized type _ userType =>
+      slot type
+      unless body.phase == .Runtime .Optimized && userType < 2^32 do
+        throw "annotated source operand has wrong phase or raw index domain"
   let unwind (value : UnwindAction) : Except String Unit := do
     if let .Cleanup id := value then
       unless id < body.blocks.size do throw "MIR template unwind target is out of bounds"

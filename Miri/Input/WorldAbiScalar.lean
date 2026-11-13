@@ -20,7 +20,16 @@ def classify (runtime : RuntimeMetadata) (session : AbiSessionMaterial) (definit
     return ← WorldAggregateAbi.smallMemory runtime layout
   if let .ScalarPair (a := a) (b := b) (bOffset := _) := layout.layout.backendRepr then
     let pointer := fun (scalar : Scalar) => match scalar.primitive with | .Pointer _ => true | _ => false
-    if pointer a || pointer b then return ← WorldAggregateAbi.rawPointerPair runtime layout
+    if pointer a || pointer b then
+      let arena := (← get).arena
+      let constructor ← liftPure do
+        match ← arena.lookupType id with
+        | .constructed constructor => pure (some constructor)
+        | .material source => arena.materialKey source
+      if constructor.any (fun constructor => match constructor with
+          | .rawPointer .. => true | _ => false) then
+        return ← WorldAggregateAbi.rawSlicePointer runtime layout
+      return ← WorldAggregateAbi.rawPointerPair runtime layout
     return ← liftPure (WorldAggregateAbi.nonPointerPair layout isReturn)
   let arena := (← get).arena
   let constructor ← liftPure do

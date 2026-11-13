@@ -54,6 +54,13 @@ missing/ambiguous-source rejection. Runtime retag/validity hooks use that same
 World for constructed types. Validation retains the actual root type identity,
 as pinned validity.rs does, without eagerly printing a successful value's type.
 Projection diagnostics and explicit type-name query boundaries are preserved.
+Intrinsic pointee/integer/variant/normalization/drop callbacks and dynamic
+projection classification also consume the execution World. Source variantCount
+uses raw declarations, including one-layer Pattern handling and the pinned
+alias/nested-Pattern errors. Six material and six constructed ADTs, Pattern and
+invalid-kind controls pass without layout answers. Constructed Dynamic validity
+still rejects explicitly; full varargs/shim compatibility dictionaries and
+additional runtime leaves remain unresolved.
 
 Raw source environments retain explicit clauses, physical generic/predicate
 parents, parameter sorts and trait identity. Lean assembles inherited obligations
@@ -110,8 +117,16 @@ suffix; material predicate/principal identities remain unchanged. Four policies
 each check 35 material views, nine constructed roundtrips, 18 callbacks and 42
 final-assembly guards. Missing object candidates reject 26 demands, while two
 quantified demands stop at unsupported binder normalization. Source declaration
-negatives and mutated compiler oracles also reject. Source object-candidate
-selection, specialized leaves, shim MIR/ABI and real allocation remain unresolved.
+negatives and mutated compiler oracles also reject. Ground direct-principal
+object candidates now confirm canonical scopes, full arguments, MetaSized
+obligations and own-method eligibility before selecting Virtual/Reify identities.
+Four-policy comparisons cover four SourceMirCall API Virtual selections and four
+runtime-hook Reify selections each. Concrete/missing Self, competing impls,
+specialization and unsupported obligations reject. The older dynamic hook suite
+now selects six Reify identities per policy, retaining twenty object and two
+binder residuals. Exported AssocFn trait-call body admission/dependency discovery,
+Virtual FnAbi/call execution, upcasts, projection/higher-ranked confirmation,
+nonempty own predicates, specialized leaves and real allocation remain unresolved.
 Generic receiver alias normalization, abstract-constant expansion and raw crate
 feature/session policy material remain unresolved; unavailable semantics error
 instead of silently omitting entries.
@@ -164,8 +179,13 @@ bytes, with other fields restricted to raw pointers or small primitive scalars.
 Twelve signatures agree for Item/FnPtr/helper across four sessions; query traces
 cover twelve Item, twelve FnPtr and 48 helper keys per session. Novel identities
 and five malformed physical layouts are checked. Reference/FnPtr/fat-pointer
-fields and large companions remain explicit residuals. General aggregate ABI
-remains unresolved. Small byte-storage Memory ABI additionally
+fields and large companions remain explicit residuals. Fat raw pointers to slice
+and str now derive the complete source pointer layout and exact two-component
+attributes on the covered 64-bit AS0 target. Four sessions compare twelve Item,
+thirteen FnPtr and fifty helper signatures; novel array/slice/pointer identities,
+five malformed layouts and borrowed/fat-tuple residual controls pass. Query traces
+confirm the covered acquisitions are omitted. Fat references and broader
+aggregate ABI remain unresolved. Small byte-storage Memory ABI additionally
 matches 48 Item, 52 FnPtr and 200 helper comparisons, including target-aligned
 cast storage and NoUndef distinctions. Forty-eight constructed repetitions and
 a novel six-byte array/instance agree without ABI catalogs. Twelve Item keys
@@ -213,13 +233,18 @@ generic layouts and 24 saved/upvar projections agree with rustc. Four instances
 without exact templates reject explicitly. This remains a bounded raw MIR subset;
 general coroutine layout/body generation remains unresolved. Extended source
 MIR now supports typed projections, casts, references, raw pointers and direct
-calls, including monomorphic declarations. Replaying the exact producer flags
-(including mir-preserve-ub) gives 38 complete normalized MIR comparisons and 37
-complete World bodies with twelve persistent callbacks. One oracle-only physical
+calls, including monomorphic declarations. Annotated scalar/ZST constants retain
+raw user-type indices, spans and explicit post-borrowck cleared-table provenance;
+indices are not incorrectly checked against that deliberately cleared table.
+Eight complete annotation bodies, eight raw-source negatives and five decoder
+controls pass. Four annotated function-item bodies also enter the World comparison.
+Replaying the exact producer flags (including mir-preserve-ub) gives 42 complete
+normalized MIR comparisons and 41 complete World bodies with twelve persistent
+callbacks. One oracle-only physical
 definition is absent from the producer universe and explicitly rejects; it is
 not counted as a successful World body. Type-only coroutine demands retain raw
 source declarations without fabricating resume or auxiliary executable bodies.
-Annotated constants, indirect source calls and broader MIR remain unresolved.
+Annotated callee operands, function reification, indirect source calls and broader MIR remain unresolved.
 Required nested generic source
 catalogues now preserve two raw owners/eight instantiations and ten physical
 body sources, including three generated by-move bodies. Fresh strict decoder
@@ -323,8 +348,12 @@ Unevaluated, allocation-bearing ValTrees and general CTFE/interning remain
 unresolved; no successful no-op stands in for their evaluation. The prepared
 allocator identity accessor patch passes applicability checks. Complete pinned
 compiler sources, vendor dependencies and verified CI LLVM are now prepared;
-the resource-limited stage1 build remains incomplete before accessor/metadata
-validation. Public probes do not reconstruct the private allocation map. Archived
+a baseline stage1 build succeeded, but the first strict metadata probe exposed a
+stage0/stage1 version distinction. Bootstrap copying also replaced instrumentation
+through a rustc-src symlink; source detachment, a narrow copy filter and continuous
+hash audits now protect repaired instrumentation. Its monitored rebuild and actual
+accessor/PC probe remain incomplete. Public probes do not reconstruct the private
+allocation map. Archived
 vendor source remains recoverable offline, and no production allocation admission
 is inferred from an incomplete compiler build.
 

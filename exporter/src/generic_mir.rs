@@ -70,7 +70,7 @@ impl<'tcx,F:FnMut(Span)->u64> Encoder<'tcx,F> {
                 mir::ProjectionElem::Index(local)=>object("index",&format!("\"local\":{}",local.as_u32())),
                 mir::ProjectionElem::ConstantIndex{offset,min_length,from_end}=>object("constant_index",&format!("\"offset\":{offset},\"min_length\":{min_length},\"from_end\":{from_end}")),
                 mir::ProjectionElem::Subslice{from,to,from_end}=>object("subslice",&format!("\"from\":{from},\"to\":{to},\"from_end\":{from_end}")),
-                _=>return Err("source projection outside prototype domain".into()),
+                _=>return Err("source projection outside supported source grammar".into()),
             });
         }
         Ok(format!("{{\"local\":{},\"projection\":{}}}",place.local.as_u32(),array(projections)))
@@ -80,17 +80,18 @@ impl<'tcx,F:FnMut(Span)->u64> Encoder<'tcx,F> {
             mir::Operand::Copy(place)=>object("copy",&format!("\"place\":{}",self.source_place(*place)?)),
             mir::Operand::Move(place)=>object("move",&format!("\"place\":{}",self.source_place(*place)?)),
             mir::Operand::Constant(constant)=>{
-                if constant.user_ty.is_some() {return Err("coroutine source constant has user type annotation".into())}
+                let annotation=constant.user_ty.map(|index|index.as_u32());
+                let annotation_fields=annotation.map(|index|format!(",\"user_type\":{{\"index\":{index},\"table_state\":\"cleared_post_borrowck\",\"entries\":[]}}" )).unwrap_or_default();
                 let mir::Const::Val(value,ty)=constant.const_ else {
                     return Err("coroutine source constant requires raw Val, no CTFE evaluation".into());
                 };
                 let slot=self.ty(ty);let span=(self.span)(constant.span);
                 match value {
-                    mir::ConstValue::ZeroSized=>object("zero_sized",&format!("\"type\":{slot},\"span\":{span}")),
+                    mir::ConstValue::ZeroSized=>object(if annotation.is_some(){"annotated_zero_sized"}else{"zero_sized"},&format!("\"type\":{slot},\"span\":{span}{annotation_fields}")),
                     mir::ConstValue::Scalar(scalar)=>{
                         let scalar=scalar.try_to_scalar_int().map_err(|_|"coroutine source pointer constant unsupported")?;
                         let bytes=scalar.size().bytes();let bits=scalar.to_bits_unchecked();
-                        object("scalar",&format!("\"type\":{slot},\"span\":{span},\"bits\":\"{bits}\",\"bytes\":{bytes}"))
+                        object(if annotation.is_some(){"annotated_scalar"}else{"scalar"},&format!("\"type\":{slot},\"span\":{span},\"bits\":\"{bits}\",\"bytes\":{bytes}{annotation_fields}"))
                     }
                     _=>return Err("coroutine source allocation constant unsupported".into()),
                 }
@@ -103,7 +104,7 @@ impl<'tcx,F:FnMut(Span)->u64> Encoder<'tcx,F> {
             mir::Rvalue::Use(value,retag)=>object("use",&format!("\"operand\":{},\"retag\":{}",self.source_operand(value)?,quote(match retag{mir::WithRetag::Yes=>"yes",mir::WithRetag::No=>"no"}))),
             mir::Rvalue::Discriminant(place)=>object("discriminant",&format!("\"place\":{}",self.source_place(*place)?)),
             mir::Rvalue::Cast(kind,value,target)=>{
-                let kind=match kind {mir::CastKind::IntToInt=>"int_to_int",mir::CastKind::FloatToInt=>"float_to_int",mir::CastKind::FloatToFloat=>"float_to_float",mir::CastKind::IntToFloat=>"int_to_float",mir::CastKind::PtrToPtr=>"ptr_to_ptr",mir::CastKind::FnPtrToPtr=>"fn_ptr_to_ptr",mir::CastKind::PointerExposeProvenance=>"pointer_expose_provenance",mir::CastKind::PointerWithExposedProvenance=>"pointer_with_exposed_provenance",mir::CastKind::Transmute=>"transmute",_=>return Err("source cast kind outside prototype domain".into())};
+                let kind=match kind {mir::CastKind::IntToInt=>"int_to_int",mir::CastKind::FloatToInt=>"float_to_int",mir::CastKind::FloatToFloat=>"float_to_float",mir::CastKind::IntToFloat=>"int_to_float",mir::CastKind::PtrToPtr=>"ptr_to_ptr",mir::CastKind::FnPtrToPtr=>"fn_ptr_to_ptr",mir::CastKind::PointerExposeProvenance=>"pointer_expose_provenance",mir::CastKind::PointerWithExposedProvenance=>"pointer_with_exposed_provenance",mir::CastKind::Transmute=>"transmute",_=>return Err("source cast kind outside supported source grammar".into())};
                 let target=self.ty(*target);object("cast",&format!("\"cast\":{},\"operand\":{},\"target\":{target}",quote(kind),self.source_operand(value)?))
             }
             mir::Rvalue::Ref(region,borrow,place)=>{
@@ -373,6 +374,12 @@ fn capture_mode<'tcx>(tcx:TyCtxt<'tcx>, body:&mir::Body<'tcx>,
     }
     if body.required_consts.as_ref().is_none_or(|constants|!constants.is_empty()) {
         return Err("copy template requires an empty explicit required-constants list".into());
+    }
+    // Runtime optimized source is post-CleanupPostBorrowck. ConstOperand
+    // retains a phase-stale user_ty breadcrumb even though the table is empty.
+    // Nonempty canonical tables require a different complete source category.
+    if source_syntax && (!body.user_type_annotations.is_empty() || body.local_decls.iter().any(|local|local.user_ty.is_some())) {
+        return Err("source annotation table was not cleared post borrowck".into());
     }
     let def=body.source.def_id();let generics=tcx.generics_of(def);
     let parameters=array((0..generics.count()).map(|index|quote(match generics.param_at(index,tcx).kind {

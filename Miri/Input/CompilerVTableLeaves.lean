@@ -20,7 +20,7 @@ def make (p : CompilerProviders.Prepared)
   let engine := CompilerVTableMachine.hooks p.vtables image engine
   WorldVirtualHooks.vtableHooks types {
     target := p.runtime.target.base
-    isDynamic := fun _ ty => lift (CompilerFacts.boolean facts.context ty "is_dynamic")
+    isDynamic := fun _ ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld facts.context ty "is_dynamic")
     memoryOffset := memoryOffset
     resolvePointer := fun _ pointer => do
       match pointer.intoPointerOrAddr with

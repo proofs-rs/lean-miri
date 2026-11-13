@@ -25,6 +25,17 @@ private def sourcePlace (j : Json) : Except String SourcePlace := do
       return .downcast name (← nat value "variant")
     | _ => throw "unsupported MIR source projection"
   pure ⟨← nat j "local",projection⟩
+private def clearedAnnotation (j : Json) : Except String Nat := do
+  let value ← field j "user_type"
+  let keys := (← value.getObj?).toArray.map (·.1)
+  unless keys.size == 3 && keys.all (#["index","table_state","entries"].contains ·) do
+    throw "annotated source operand requires complete cleared-table provenance"
+  unless (← text value "table_state") == "cleared_post_borrowck" &&
+      (← array value "entries").isEmpty do
+    throw "source annotation table was not cleared post borrowck"
+  let index ← nat value "index"
+  unless index < 2^32 do throw "raw source user-type index is not u32"
+  pure index
 private def sourceOperand (j : Json) : Except String SourceOperand := do
   match ← text j "kind" with
   | "copy" => .copy <$> sourcePlace (← field j "place")
@@ -34,6 +45,11 @@ private def sourceOperand (j : Json) : Except String SourceOperand := do
     let some bits := bits.toNat? | throw "invalid MIR source scalar decimal"
     return .scalar ⟨← nat j "type"⟩ ⟨← nat j "span"⟩ bits (← nat j "bytes")
   | "zero_sized" => return .zeroSized ⟨← nat j "type"⟩ ⟨← nat j "span"⟩
+  | "annotated_scalar" =>
+    let bits ← text j "bits"
+    let some bits := bits.toNat? | throw "invalid MIR source scalar decimal"
+    return .annotatedScalar ⟨← nat j "type"⟩ ⟨← nat j "span"⟩ bits (← nat j "bytes") (← clearedAnnotation j)
+  | "annotated_zero_sized" => return .annotatedZeroSized ⟨← nat j "type"⟩ ⟨← nat j "span"⟩ (← clearedAnnotation j)
   | _ => throw "unsupported MIR source operand"
 private def sourceRvalue (j : Json) : Except String SourceRvalue := do
   match ← text j "kind" with
@@ -50,7 +66,7 @@ private def sourceRvalue (j : Json) : Except String SourceRvalue := do
       | "fn_ptr_to_ptr" => pure .FnPtrToPtr | "transmute" => pure .Transmute
       | "pointer_expose_provenance" => pure .PointerExposeProvenance
       | "pointer_with_exposed_provenance" => pure .PointerWithExposedProvenance
-      | _ => throw "source cast outside prototype domain"
+      | _ => throw "source cast outside supported source grammar"
     return .cast kind (← sourceOperand (← field j "operand")) ⟨← nat j "target"⟩
   | "reference" =>
     unless (← text j "region") == "erased" do throw "source Ref requires explicit erased region"
@@ -59,13 +75,13 @@ private def sourceRvalue (j : Json) : Except String SourceRvalue := do
       | "mut_default" => pure (.Mut .Default) | "mut_two_phase" => pure (.Mut .TwoPhaseBorrow)
       | "mut_closure_capture" => pure (.Mut .ClosureCapture)
       | "fake_shallow" => pure (.Fake .Shallow) | "fake_deep" => pure (.Fake .Deep)
-      | _ => throw "source borrow outside prototype domain"
+      | _ => throw "source borrow outside supported source grammar"
     return .reference borrow (← sourcePlace (← field j "place"))
   | "raw_pointer" =>
     let kind ← match ← text j "pointer" with
       | "const" => pure Miri.MIR.RawPtrKind.Const | "mut" => pure .Mut
       | "fake_for_metadata" => pure .FakeForPtrMetadata
-      | _ => throw "source raw pointer outside prototype domain"
+      | _ => throw "source raw pointer outside supported source grammar"
     return .rawPointer kind (← sourcePlace (← field j "place"))
   | "discriminant" => .discriminant <$> sourcePlace (← field j "place")
   | "adt" => return .adt ⟨← nat j "type"⟩ (← nat j "variant") (← (← array j "operands").mapM sourceOperand)
