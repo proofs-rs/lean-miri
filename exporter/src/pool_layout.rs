@@ -7,26 +7,12 @@ use serde::Serialize;
 // because rustc happened to produce equal physical layout values.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum LayoutKey<'tcx> {
-    Canonical(rustc_middle::ty::Ty<'tcx>),
     Computed(rustc_abi::TyAndLayout<'tcx, rustc_middle::ty::Ty<'tcx>>),
-    PointerData(rustc_middle::ty::Ty<'tcx>),
-    VirtualReceiver(rustc_middle::ty::Ty<'tcx>),
-    EnumTag(rustc_middle::ty::Ty<'tcx>),
 }
 
 #[derive(Serialize)]
 #[serde(untagged)]
 pub(super) enum Layout {
-    PrimitiveRecipe { primitive_recipe: &'static str },
-    TupleRecipe { tuple_type: u64 },
-    UnionRecipe { union_type: u64 },
-    StructRecipe { struct_type: u64 },
-    EnumRecipe { enum_type: u64 },
-    SequenceRecipe { sequence_type: u64 },
-    PatternRecipe { pattern_type: u64 },
-    PointerRecipe { pointer_type: u64 },
-    PointerDataRecipe { pointer_data_type: u64 },
-    EnumTagRecipe { enum_tag_type: u64 },
     Material(FullLayout),
 }
 #[derive(Serialize)]
@@ -292,19 +278,6 @@ impl Layout {
         layout: rustc_abi::TyAndLayout<'tcx, rustc_middle::ty::Ty<'tcx>>,
     ) -> Self {
         use rustc_abi::{TagEncoding as T, Variants as V};
-        let primitive_recipe = match layout.ty.kind() {
-            rustc_middle::ty::Bool => Some("bool"),
-            rustc_middle::ty::Char => Some("char"),
-            rustc_middle::ty::Int(kind) => Some(kind.name_str()),
-            rustc_middle::ty::Uint(kind) => Some(kind.name_str()),
-            rustc_middle::ty::Float(kind) => Some(kind.name_str()),
-            rustc_middle::ty::FnPtr(..) => Some("fn_pointer"),
-            rustc_middle::ty::Never => Some("never"),
-            _ => None,
-        };
-        if let Some(primitive_recipe) = primitive_recipe {
-            return Self::PrimitiveRecipe { primitive_recipe };
-        }
         let variants = match &layout.variants {
             V::Empty => Variants::Empty,
             V::Single { index } => Variants::Single {
@@ -517,10 +490,6 @@ pub(super) enum IndirectMode {
 #[derive(Serialize)]
 #[serde(tag = "kind")]
 pub(super) enum PassMode {
-    Initial,
-    ScalarRust,
-    ScalarSysvArgument,
-    ScalarSysvReturn,
     Ignore,
     Direct {
         attributes: ArgAttributes,
@@ -694,7 +663,7 @@ impl FnAbi {
         abi: &rustc_target::callconv::FnAbi<'tcx, rustc_middle::ty::Ty<'tcx>>,
         unwind_seed: UnwindSeed,
         signature_seed: Option<SignatureSeed>,
-        virtual_receiver: bool,
+        _virtual_receiver: bool,
     ) -> Result<Self, String> {
         if unwind_seed.reference_can_unwind != abi.can_unwind {
             return Err("FnAbi unwind material source signature disagrees with rustc final ABI".into());
@@ -711,81 +680,29 @@ impl FnAbi {
             context: &mut super::ExportContext<'tcx>,
             tcx: TyCtxt<'tcx>,
             a: &rustc_target::callconv::ArgAbi<'tcx, rustc_middle::ty::Ty<'tcx>>,
-            conv: rustc_abi::CanonAbi,
-            is_return: bool,
-            virtual_receiver: bool,
+            _conv: rustc_abi::CanonAbi,
+            _is_return: bool,
+            _virtual_receiver: bool,
         ) -> Result<super::shared_json::Shared<ArgAbi>, String> {
             let ty = super::type_json(context, tcx, a.layout.ty)?;
-            let layout = if virtual_receiver {
-                super::virtual_receiver_layout_value_json(context, tcx, a.layout)
-            } else {super::layout_value_json(context, tcx, a.layout)} as usize;
+            let layout = super::layout_value_json(context, tcx, a.layout) as usize;
             Ok(ArgAbi {
                 ty,
                 layout,
-                mode: {
-                    // Pinned ty_utils abi.rs scalar attributes return immediately for
-                    // nonpointers. The x86_64 Rust/SysV scalar classifiers then only
-                    // extend integers (callconv/mod.rs and x86_64.rs). No pointer
-                    // pointee facts, aggregate classification, or deduced indirect
-                    // attributes are inferred by this material recipe.
-                    let scalar_recipe = match a.layout.backend_repr {
-                        rustc_abi::BackendRepr::Scalar(scalar)
-                            if !matches!(scalar.primitive(), rustc_abi::Primitive::Pointer(_))
-                            && matches!(a.layout.ty.kind(),
-                                rustc_middle::ty::Bool | rustc_middle::ty::Char |
-                                rustc_middle::ty::Int(_) | rustc_middle::ty::Uint(_) |
-                                rustc_middle::ty::Float(_))
-                            && tcx.sess.target.arch == rustc_target::spec::Arch::X86_64
-                            && tcx.data_layout.pointer_size().bytes() == 8 => {
-                                match conv {
-                                    rustc_abi::CanonAbi::Rust => Some((PassMode::ScalarRust, 0)),
-                                    rustc_abi::CanonAbi::C
-                                        if !tcx.sess.target.is_like_windows
-                                        && !tcx.sess.target.is_like_darwin =>
-                                        Some(if is_return { (PassMode::ScalarSysvReturn, 8) }
-                                             else { (PassMode::ScalarSysvArgument, 32) }),
-                                    _ => None,
-                                }
-                            }
-                        _ => None,
-                    };
-                    if let Some((recipe, extension_bits)) = scalar_recipe {
-                        let mut reconstructed = rustc_target::callconv::ArgAbi::new(a.layout, |scalar, _| {
-                            let mut attrs = rustc_target::callconv::ArgAttributes::new();
-                            if !scalar.is_uninit_valid() {
-                                attrs.set(rustc_target::callconv::ArgAttribute::NoUndef);
-                            }
-                            attrs
-                        });
-                        reconstructed.extend_integer_width_to(extension_bits);
-                        if reconstructed.mode != a.mode {
-                            return Err("nonpointer scalar ABI source rule disagrees with rustc final mode".into());
-                        }
-                        recipe
-                    } else {
-                    // rustc's target adjustment is retained unless its complete mode
-                    // equals the source initial constructor with empty scalar attrs.
-                    // Lean runs that constructor from the physical layout on demand.
-                    let initial = rustc_target::callconv::ArgAbi::new(a.layout, |_, _| {
-                        rustc_target::callconv::ArgAttributes::new()
-                    });
-                    if initial.mode == a.mode { PassMode::Initial }
-                    else { PassMode::new(&a.mode) }
-                    }
-                },
+                mode: PassMode::new(&a.mode),
             }.into())
         }
         Ok(Self {
             calling_convention: CanonAbi::new(abi.conv),
             c_variadic: abi.c_variadic,
-            fixed_count: signature_seed.is_none().then_some(abi.fixed_count),
-            signature_seed,
+            fixed_count: Some(abi.fixed_count),
+            signature_seed: None,
             unwind_seed,
             ret: arg(context, tcx, &abi.ret, abi.conv, true, false)?,
             arguments: abi
                 .args
                 .iter().enumerate()
-                .map(|(index,a)| arg(context, tcx, a, abi.conv, false, virtual_receiver && index==0))
+                .map(|(index,a)| arg(context, tcx, a, abi.conv, false, _virtual_receiver && index==0))
                 .collect::<Result<_, _>>()?,
         })
     }

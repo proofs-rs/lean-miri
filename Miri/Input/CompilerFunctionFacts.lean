@@ -1,8 +1,6 @@
 import Miri.Input.LowerMIR
 import Miri.Input.CompilerInstanceAbi
 import Miri.Input.CompilerExternAbi
-import Miri.Input.WorldFunctionPointerAbi
-import Miri.Input.InstanceSignature
 
 /-! `step.rs::eval_fn_call`: normalized original signature and function kind,
 plus `fn_abi_of_fn_ptr` keyed by original function type and ordered extra types.
@@ -87,56 +85,42 @@ def pointerAbi (prepared : Prepared) (ty : MIR.TyId) (extra : Array MIR.TyId) : 
     | throw "missing exact function-pointer/extra-argument FnAbi query"
   CallResolution.functionAbiId prepared.runtime (← entry.result)
 
-/-- A constructed FnPtr has its own source signature; normalized answer rows
-are only an exact residual for unchanged material types. -/
+/-- The normalized signature is the rustc result for the unchanged material
+function type. Locally constructed function types need a compiler answer. -/
 def signatureInWorld (prepared : Prepared) (ty : MIR.TyId) :
     RuntimeArrayTypes.CompilerM (Nat × ABI.ExternAbi) := do
   let world ← get
-  let functionKind ← match kindAt world.arena ty with
-    | .ok value => pure value | .error error => throw error
-  if let .FnDef definition arguments := functionKind then
-    let raw ← InstanceSignature.instantiateDefinition 16384 definition arguments
-    let signature ← match WorldFunctionPointerAbi.erasedSourceSignature raw with
-      | .ok value => pure value | .error error => throw error
-    let normalize (term : GenericSubstitution.Term) := RuntimeArrayTypes.liftType
-      (WorldNormalization.normalizeTerm world.metadata.normalizationContext 100000 16384 term)
-    let inputs ← signature.inputs.mapM normalize
-    let _ ← normalize signature.output
-    return (inputs.size,signature.abi)
-  match WorldFunctionPointerAbi.sourceSignature world.arena ty with
-  | .ok signature => pure (signature.inputs.size,signature.abi)
-  | .error sourceError =>
-    match world.arena.lookupType ty with
-    | .ok (.material _) =>
-      match signature prepared ty with | .ok value => pure value | .error error => throw error
-    | _ => throw s!"{sourceError}; constructed function type has no signature residual"
+  let .material source ← world.arena.lookupType ty
+    | throw "constructed function type has no rustc signature result"
+  let some original := prepared.runtime.source.types[ty]?
+    | throw "function type material source absent"
+  unless source.id == ty && (← world.arena.materialKey source) == (← world.arena.materialKey original) do
+    throw "function type material source differs from execution World"
+  match signature prepared ty with
+  | .ok result => pure result
+  | .error error => throw error
 
-/-- Source FnPtr ABI in the current World. Only an unchanged material source
-constructor and material extra keys may consult an exact residual row. -/
+/-- The exact rustc FnPtr ABI answer is valid only for unchanged material
+identities. Runtime constructed keys require a separate compiler result. -/
 def pointerAbiInWorld (prepared : Prepared) (ty : MIR.TyId) (extra : Array MIR.TyId) :
     RuntimeArrayTypes.CompilerM (FnAbi MIR.TyId) := do
   let world ← get
-  match (WorldFunctionPointerAbi.construct ty extra).run world with
-  | .ok (abi,after) => set after; pure abi
-  | .error sourceError =>
-    let residual : Except String (FnAbi MIR.TyId) := do
-      let .material source ← world.arena.lookupType ty
-        | throw "constructed FnPtr has no imported ABI query"
-      let some original := prepared.runtime.source.types[ty]?
-        | throw "FnPtr material source absent"
-      unless source.id == ty && (← world.arena.materialKey source) == (← world.arena.materialKey original) do
-        throw "FnPtr material source differs from execution World"
-      for id in extra do
-        let .material source ← world.arena.lookupType id
-          | throw "constructed extra type has no imported FnPtr ABI query"
-        let some original := prepared.runtime.source.types[id]?
-          | throw "FnPtr extra material source absent"
-        unless source.id == id && (← world.arena.materialKey source) == (← world.arena.materialKey original) do
-          throw "FnPtr extra material source differs from execution World"
-      pointerAbi prepared ty extra
-    match residual with
-    | .ok abi => pure abi
-    | .error error => throw s!"{sourceError}; {error}"
+  let .material source ← world.arena.lookupType ty
+    | throw "constructed FnPtr has no rustc ABI result"
+  let some original := prepared.runtime.source.types[ty]?
+    | throw "FnPtr material source absent"
+  unless source.id == ty && (← world.arena.materialKey source) == (← world.arena.materialKey original) do
+    throw "FnPtr material source differs from execution World"
+  for id in extra do
+    let .material source ← world.arena.lookupType id
+      | throw "constructed extra type has no rustc FnPtr ABI result"
+    let some original := prepared.runtime.source.types[id]?
+      | throw "FnPtr extra material source absent"
+    unless source.id == id && (← world.arena.materialKey source) == (← world.arena.materialKey original) do
+      throw "FnPtr extra material source differs from execution World"
+  match pointerAbi prepared ty extra with
+  | .ok abi => pure abi
+  | .error error => throw error
 
 def hooks (prepared : Prepared) (types : RuntimeArrayQueries.Access S) (extern : ABI.ExternAbi → Except String Extern)
     (base : CallHooks P S C E Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId)) :

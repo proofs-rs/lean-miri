@@ -1,5 +1,4 @@
 import Miri.Input.CallResolution
-import Miri.Input.WorldInstanceAbi
 
 /-! Exact fn_abi_of_instance evidence. A full instance, ordered additional
 argument-type vector and explicit typing environment form the key. Runtime drop
@@ -71,17 +70,15 @@ private def importedAbiOfInstance (prepared : Prepared) (world : RuntimeArrayTyp
     | throw "instance ABI bucket index invariant"
   CallResolution.functionAbiId prepared.runtime (← entry.result)
 
-/-- Construct covered source ABIs before considering the explicit residual
-catalog. A constructed key can never use a material-prefix numeric query. -/
+/-- ABI results are owned by rustc and keyed by the complete material instance
+and ordered extra argument types. A runtime constructed instance has no rustc
+answer in this immutable export and therefore fails at the demand. -/
 def abiOfInstanceInWorld (prepared : Prepared) (callee : CallInstance) (extra : Array MIR.TyId) :
     RuntimeArrayTypes.CompilerM (FnAbi MIR.TyId) := do
   let world ← get
-  match WorldInstanceAbi.construct callee extra |>.run world with
-  | .ok (abi,after) => set after; pure abi
-  | .error sourceError =>
-    match importedAbiOfInstance prepared world callee extra with
-    | .ok abi => pure abi
-    | .error residualError => throw s!"{sourceError}; {residualError}"
+  match importedAbiOfInstance prepared world callee extra with
+  | .ok abi => pure abi
+  | .error error => throw error
 
 /-- Read-only callers must not discard newly appended type identities. -/
 def abiOfInstance (prepared : Prepared) (world : RuntimeArrayTypes.World)

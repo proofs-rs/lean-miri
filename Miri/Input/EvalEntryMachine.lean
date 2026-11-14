@@ -135,8 +135,8 @@ def main (p : CompilerProviders.Prepared) (physical : Physical Os R P H D O Aff 
     format
     cNoUnwind := .C false
     lookupLinkSection := CompilerLinkSections.lookup p.main memory
-    itemInstance := fun definition args => action (RuntimeArrayQueries.performCompiler EvalProjectionMachine.arrays
-      (CompilerInstance.item definition args))
+    itemInstance := fun definition args => lift
+      (CompilerInstance.Material.item p.program.input.instances definition args)
     genericParameters := fun id => lift do return (← exactEntry p.main id).parameters
     entrySignature := fun id => lift do (← exactEntry p.main id).signature
     startLangItem := pure p.main.start

@@ -4,7 +4,6 @@ use serde::Serialize;
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum Callee<C = PendingCandidates> {
     LlvmIntrinsic { function_type: u64, instance_id: u64 },
-    SourceInstance { function_type: u64, instance_id: u64 },
     ResolvedInstance {
         function_type: u64,
         instance_id: u64,
@@ -19,7 +18,6 @@ pub(super) enum Callee<C = PendingCandidates> {
         fn_abi: u64,
         virtual_resolution: Option<VirtualResolution<C>>,
     },
-    SourceFunctionPointer { function_type: u64, extra_argument_types: Vec<u64> },
     IndirectFunctionPointer {
         function_type: u64,
         signature: super::pool_type::FunctionSignature,
@@ -58,7 +56,6 @@ impl Callee<PendingCandidates> {
     pub fn finish(self, candidates: &std::collections::HashMap<u64, Vec<u64>>) -> Callee<Vec<u64>> {
         match self {
             Self::LlvmIntrinsic { function_type, instance_id } => Callee::LlvmIntrinsic { function_type, instance_id },
-            Self::SourceInstance { function_type, instance_id } => Callee::SourceInstance { function_type, instance_id },
             Self::ResolvedInstance {
                 function_type,
                 instance_id,
@@ -85,8 +82,6 @@ impl Callee<PendingCandidates> {
                 fn_abi,
                 virtual_resolution: virtual_resolution.map(|item| item.finish(candidates)),
             },
-            Self::SourceFunctionPointer {function_type,extra_argument_types} =>
-                Callee::SourceFunctionPointer {function_type,extra_argument_types},
             Self::IndirectFunctionPointer {
                 function_type,
                 signature,

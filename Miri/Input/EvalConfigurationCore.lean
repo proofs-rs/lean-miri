@@ -483,16 +483,8 @@ def makeWithForeignContext {Assembly : Type}
       constant := fun _ constant known => do
         let checkKnown := if options.place.debugAssertions then
           some (fun computed expected => physical (compatibility computed expected)) else none
-        match constant.value with
-        | .Unevaluated .. =>
-          let (ty,value) ← RuntimeCtfeQueryMachine.evaluate leaves.constQueries p image
-            EvalProjectionMachine.arrays EvalWorld.initialCompilerStoreInnerAccess
-            EvalWorld.initialCompilerQueryInnerAccess CompilerTypingEnv.fullyMonomorphized constant
-          CompilerMirConstants.convert p.runtime EvalProjectionMachine.arrays functions pointers.arithmetic
-            externStatic MemoryErrors.constant ty value known checkKnown
-        | _ =>
-          CompilerMirConstants.hook p.runtime EvalProjectionMachine.arrays functions pointers.arithmetic
-            externStatic MemoryErrors.constant constant known checkKnown }
+        CompilerMirConstants.hook p.runtime EvalProjectionMachine.arrays functions pointers.arithmetic
+          externStatic MemoryErrors.constant constant known checkKnown }
     let callBackend : CallDispatchMachine.Backend (State Os R P H D O Aff B Host) := {
       selection := fun state => do
         match ← EvalBackendMachine.handler state.machine with
@@ -549,15 +541,9 @@ def makeWithForeignContext {Assembly : Type}
     let lifecycle := {lifecycle with requiredConstants :=
       CompilerLifecycle.requiredConstantsWith p.lifecycle.lifecycle EvalProjectionMachine.arrays (fun constant => do
         match constant.value with
-        | .Unevaluated .. =>
-          let _ ← RuntimeCtfeQueryMachine.evaluate leaves.constQueries p image EvalProjectionMachine.arrays
-            EvalWorld.initialCompilerStoreInnerAccess EvalWorld.initialCompilerQueryInnerAccess
-            CompilerTypingEnv.fullyMonomorphized constant
-          pure ()
-        | _ =>
-          let _ ← RuntimeArrayQueries.performCompiler EvalProjectionMachine.arrays do
-            RuntimeArrayTypes.liftType (WorldValTree.evaluate (← get).metadata constant.span constant.value)
-          pure ())}
+        | .Val .. => pure ()
+        | .Ty .. | .Unevaluated .. =>
+          throw (.unsupported "required constant lacks a rustc evaluated value"))}
     let ⟨math⟩ ← liftConstruction (EvalMathMachine.hooks p (EvalMathMachine.optionalHost leaves.math) leaves.mathError none access projection.place scalar floats returnToBlock)
     let atomics := ExecutionIntrinsic.Atomic.access {
       loadChoiceRank := fun _ count => ExecutionChoices.index EvalCoreMachine.tape .atomicStale count
@@ -701,7 +687,7 @@ def makeWithForeignContext {Assembly : Type}
         EvalProjectionMachine.arrays access.runtime.base unwind operands
       unwindTerminateFunction := fun _ reason => do
         let (definition,arguments) ← physical (CompilerPanicFacts.unwindTerminateSeed p.program reason)
-        RuntimeArrayQueries.performCompiler EvalProjectionMachine.arrays (CompilerInstance.item definition arguments)
+        query (CompilerInstance.Material.item p.program.input.instances definition arguments)
       ignoreOptionalOverflowChecks := options.ignoreOptionalOverflowChecks
       rvalues := CompilerFrameContext.rvalueLeaves p (EvalThreadLocalSource.hook p maximum extra leaves.pointerSource source)
       discriminant := discrQueries
@@ -1023,6 +1009,7 @@ def makeFromSourcePackage [DecidableEq Os]
         nativeHost := sourceLeaves.nativeHost
          }
       let leaves : Leaves Os R EvalSyncObjectAccess.Payload H D other CpuAffinity.Mask B sourceHost C ClockHost := {
+        typeConstants := RuntimeEffectfulLayout.compilerResults EvalProjectionMachine.arrays p.runtime
         constQueries := sourceLeaves.constQueries
         pointerSource := sourcePointer
         sync := EvalSyncObjectAccess.onAccess

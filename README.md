@@ -6,6 +6,8 @@ behavior under Miri's execution model.
 
 Rust programs enter Lean as MIR and compiler metadata. A shared interpreter
 executes that data and defines the semantics used in safety proofs.
+The [compiler result boundary](docs/compiler-result-boundary.md) explains which
+concrete compiler answers are exported and how Lean uses them.
 The project is under development; the import and proof APIs are experimental.
 See [STATUS.md](STATUS.md) for remaining work.
 

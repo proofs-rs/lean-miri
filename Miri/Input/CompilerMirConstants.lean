@@ -1,12 +1,18 @@
-import Miri.Input.WorldValTree
 import Miri.Input.RuntimeArrayQueries
 import Miri.Interpreter.ConstantMachine
 
-/-! Source eval_mir_constant/const_val_to_op event cuts. Raw MIR constants are
-evaluated in the execution's compiler World, then use the ordinary stateful
-constant pointer adjustment and allocation conversion. -/
+/-! Executable MIR carries rustc evaluated constants. Keep the ordinary
+constant pointer adjustment and allocation conversion in the execution World.
+Unevaluated and type-system constants have no runtime fallback. -/
 namespace Miri.Input.CompilerMirConstants
 open Miri.ABI Miri.Interpreter Miri.Memory
+
+/-- A concrete executable operand must arrive with rustc's evaluated value. -/
+def requireEvaluated (constant : Miri.MIR.ConstOperand) : Except String (Miri.MIR.TyId × Miri.MIR.ConstValue) :=
+  match constant.value with
+  | .Val value ty => pure (ty,value)
+  | .Ty .. | .Unevaluated .. =>
+    throw "executable MIR constant lacks a rustc evaluated value"
 
 def convert (runtime : RuntimeMetadata)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K User))
@@ -36,8 +42,9 @@ def hook (runtime : RuntimeMetadata)
     (constant : Miri.MIR.ConstOperand) (known : Option LocalLayout)
     (checkKnown : Option (LocalLayout → LocalLayout → MachineHooks.M K User Bool)) :
     MachineHooks.M K User (OpTy Provenance) := do
-  let (ty,value) ← RuntimeArrayQueries.performCompiler types do
-    RuntimeArrayTypes.liftType (WorldValTree.evaluate runtime constant.span constant.value)
+  let (ty,value) ← match requireEvaluated constant with
+    | .ok answer => pure answer
+    | .error reason => throw (.unsupported reason)
   convert runtime types functions arithmetic externStatic classifyError ty value known checkKnown
 
 end Miri.Input.CompilerMirConstants

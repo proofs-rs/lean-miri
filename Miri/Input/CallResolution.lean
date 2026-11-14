@@ -1,13 +1,10 @@
 import Miri.Input.CompilerGlobals
 import Miri.Input.LowerMIR
-import Miri.Input.SourceMirCall
 import Miri.Input.CompilerInstance
 import Miri.Input.RuntimeArrayQueries
 import Miri.Input.CallCompatibility
 import Miri.Input.CompilerWorldCompatibility
 import Miri.ABI.FnAbi
-import Miri.Input.StructuralNormalization
-import Miri.Input.WorldInstanceAbi
 import Miri.Interpreter.Call
 
 /-! Internal reuse of actual rustc instance-resolution and FnAbi query results.
@@ -45,25 +42,9 @@ def convention (source : CanonicalAbi) : Result CanonAbi := do
 def functionAbi (runtime : RuntimeMetadata) (source : FunctionAbi) : Result (FnAbi TypeId) := do
   let args ← source.arguments.mapM fun argument => (CallCompatibility.argument runtime argument).mapError toString
   let ret ← (CallCompatibility.argument runtime source.returnValue).mapError toString
-  let fixedCount ← match source.signatureSeed with
-    | none => match source.residualFixedCount with
-      | some count => pure count
-      | none => throw "FnAbi argument construction is absent"
-    | some material => do
-      let normalize (id : Nat) : Result Nat := do
-        StructuralNormalization.normalize
-          (fun ty => (runtime.node ty).mapError toString) runtime.source
-          (runtime.source.types.size + id + 1) id
-      let tupleFields (id : Nat) :=
-        match (runtime.node id).toOption with
-        | some node => match node.shape with | .tuple fields => some fields | _ => none
-        | none => none
-      let planned ← material.signature.plan material.extraArgumentTypes material.callerLocation tupleFields
-      let expected ← planned.inputs.mapM normalize
-      unless expected == args.map (·.layout.ty) && (← normalize planned.output) == ret.layout.ty do
-        throw "source signature construction disagrees with physical FnAbi argument order/types"
-      unless source.cVariadic == planned.cVariadic do throw "signature seed variadic flag mismatch"
-      pure planned.fixedCount
+  if source.signatureSeed.isSome then throw "legacy source ABI signature seed is not a rustc result"
+  let some fixedCount := source.residualFixedCount
+    | throw "rustc FnAbi fixed_count result is absent"
   if fixedCount >= 2^32 then throw "FnAbi.fixed_count exceeds u32"
   if fixedCount > args.size then throw "FnAbi.fixed_count exceeds actual arguments"
   -- rustc's physical `FnAbi.args` can include the compiler-injected caller
@@ -124,20 +105,13 @@ private def decodeResolution (instances : Array InstanceNode)
     unless source.kind == .llvmIntrinsic && source.abi == .llvmIntrinsic do
       throw "LLVM intrinsic requires exact no-ABI evidence"
   | .Virtual _ slot =>
-    if source.kind == .direct && source.abi == .sourceSignature then
-      unless source.dispatchSlot.isNone do throw "source Virtual dispatch slot must come from its canonical instance"
-    else
-      unless virtual do throw "virtual instance lacks virtual-dispatch query tag"
-      unless source.dispatchSlot == some slot do throw "virtual dispatch slot/instance mismatch"
+    unless virtual do throw "virtual instance lacks virtual-dispatch query tag"
+    unless source.dispatchSlot == some slot do throw "virtual dispatch slot/instance mismatch"
   | _ => unless !virtual do throw "virtual dispatch query did not return a Virtual instance"
   unless source.kind == .llvmIntrinsic do
     match source.abi with
     | .normal _ => pure ()
-    | .sourceSignature =>
-      unless source.kind == .direct do throw "raw source ABI requires a direct call"
-      match calleeKind with
-      | .Item _ | .Virtual .. => pure ()
-      | _ => throw "raw source ABI requires an Item or Virtual instance"
+    | .sourceSignature => throw "legacy source ABI call evidence is not a rustc result"
     | .llvmIntrinsic => throw "ordinary call lacks ABI evidence"
   pure ⟨callee,callee,function,source.abi,source⟩
 
@@ -166,7 +140,7 @@ private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgr
             unless sourceType.shapeKind == TypeShapeKind.functionPointer do throw "indirect dispatch metadata is not a function-pointer type"
             let abi ← match sourceResolution.abi with
               | .normal abi => pure (some abi)
-              | .sourceSignature => pure none
+              | .sourceSignature => throw "legacy source FnPtr ABI evidence is not a rustc result"
               | .llvmIntrinsic => throw "indirect call cannot use LLVM no-ABI dispatch"
             pure (typeId,abi)
           match result with
@@ -219,19 +193,6 @@ private def sourcePrefixInstance (document : ImportDocument) (world : RuntimeArr
   let expected ← InstanceArena.Key.ofSource world.arena source.instanceKind source.genericArgs
   unless actual == expected do throw "source instance capability identity disagrees with current world"
 
-/-- ABI remains an explicit fully-monomorphized complete-instance query leaf.
-The existing catalog owns the key, including its ordered extra-argument vector. -/
-private def sourceInstanceAbi (document : ImportDocument) (world : RuntimeArrayTypes.World)
-    (callee : CallInstance) : Result Nat := do
-  sourcePrefixInstance document world callee
-  let mut found := none
-  for record in document.queries.instanceAbis do
-    if record.instanceId == callee && record.extraArgumentTypes.isEmpty then
-      if let some previous := found then
-        unless previous == record.abiId do throw "conflicting exact instance ABI evidence"
-      found := some record.abiId
-  require found "missing exact full-instance/extra-argument FnAbi query"
-
 def atSite (prepared : Prepared) (site : Site) : RuntimeArrayTypes.CompilerM Resolution := do
   let world ← get
   let view ← liftWorld (world.bodies.lookup site.bodyIndex)
@@ -243,33 +204,8 @@ def atSite (prepared : Prepared) (site : Site) : RuntimeArrayTypes.CompilerM Res
     let entry ← liftWorld (require matching[0]? "missing compiler call site")
     let resolution ← liftWorld entry.outcome
     liftWorld (sourcePrefixInstance prepared.program.input (← get) resolution.callee)
-    if resolution.abi == .sourceSignature then
-      let current ← get
-      let key ← liftWorld do
-        match ← current.instances.lookup resolution.callee with
-        | .material key | .constructed key => pure key
-      if let .Virtual method _ := key.kind then
-        -- Source Virtual call requests must select the exact canonical method,
-        -- complete arguments and slot. FnAbi itself does not prove dispatch.
-        let selected ← WorldObjectCandidate.resolveOrdinary 100000 16384 method key.arguments
-        let selectedWorld ← get
-        let selectedKey ← liftWorld do
-          match ← selectedWorld.instances.lookup selected with
-          | .material key | .constructed key => pure key
-        unless selectedKey == key do throw "source Virtual key differs from normal source method/argument/slot selection"
-      let _ ← WorldInstanceAbi.construct resolution.callee #[]
     return resolution
-  let some source ← SourceMirCall.sourceIdentity (.ofCanonicalIndex site.bodyIndex) site.block
-    | throw "missing or ambiguous compiler call site"
-  let (resolved,function) ← SourceMirCall.resolveInWorld prepared.program.input source
-  let current ← get
-  let abi ← match WorldInstanceAbi.construct resolved.instanceId #[] |>.run current with
-    | .ok (_,after) => set after; pure CallAbiEvidence.sourceSignature
-    | .error _ => pure (.normal (← liftWorld (sourceInstanceAbi prepared.program.input current resolved.instanceId)))
-  let evidence : CallResolutionEvidence := {
-    kind := .direct,instanceId := some resolved.instanceId,
-    functionType := some resolved.functionType,dispatchSlot := none,abi }
-  pure ⟨resolved.instanceId,resolved.instanceId,function,abi,evidence⟩
+  throw "missing exact rustc call-site instance resolution"
 
 /-- Function operand identity is checked in addition to body and block.
 Source sites are compiler-table indices, never diagnostic span matches. -/
@@ -311,32 +247,7 @@ def loadedBodyOfInstance (prepared : Prepared) (fnInstance : CallInstance) : Run
         "canonical source instance record is missing")
       unless source.kind == .instanceMir do throw "compiler body is not a substituted executable instance"
       pure candidate.bodyIndex
-    | .constructed key => do
-      match key.kind with
-      | .Item _ =>
-        let mut found := none
-        for (source,index) in prepared.program.input.mirTemplates.zipIdx do
-          if source.sourceRole == .runtime && source.sourcePromoted.isNone && (← liftWorld (world.arena.identity source.definitionId)) == key.definition then
-            unless found.isNone do throw "ambiguous raw MIR source for constructed instance"
-            found := some index
-        let index ← liftWorld (require found "raw MIR source for constructed instance is absent")
-        RuntimeArrayTypes.internBody index fnInstance none
-      | .Shim (.FnPtrAsPtr ..) | .Shim (.FnPtrFromPtr ..) =>
-        let mut found : Option FnPointerShimRef := none
-        for seed in prepared.program.input.bodies do
-          let .fnPointerShim source := seed | continue
-          let candidate := BodyArena.ShimKey.create world.arena world.instances prepared.program.input.instances source fnInstance
-          match candidate with
-          | .error _ => pure ()
-          | .ok _ =>
-            if let some previous := found then
-              unless previous.sourceSpan == source.sourceSpan &&
-                  previous.nonNullDefinition == source.nonNullDefinition && previous.codeDefinition == source.codeDefinition do
-                throw "conflicting raw FnPtr shim declaration sources"
-            else found := some source
-        let source ← liftWorld (require found "raw FnPtr shim declaration source is absent")
-        RuntimeArrayTypes.internFnPointerShim source fnInstance
-      | _ => throw "constructed shim body is unsupported"
+    | .constructed _ => throw "constructed instance has no exact rustc body result"
   let identity := BodyIdentity.ofCanonicalIndex bodyIndex
   let body ← prepared.program.resolveBodyIdentity identity
   unless body.input.instanceId == fnInstance do throw "instance/body identity mismatch"
@@ -362,7 +273,8 @@ def bindAbi (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
   base with
   instanceKind := fun inst => do lift (CompilerInstance.kindOf (← RuntimeArrayQueries.compilerSnapshot types) inst)
   instanceArgs := fun inst => do lift (CompilerInstance.argsOf (← RuntimeArrayQueries.compilerSnapshot types) inst)
-  itemInstance := fun definition args => RuntimeArrayQueries.performCompiler types (CompilerInstance.item definition args)
+  itemInstance := fun definition args => lift
+    (CompilerInstance.Material.item prepared.program.input.instances definition args)
   fnAbiOfInstance := fun _ fnInstance extra => do lift (abiOfInstance prepared (← RuntimeArrayQueries.compilerSnapshot types) fnInstance extra)
   abiCanUnwind := FnAbi.canUnwind
   abiVariadic := FnAbi.cVariadic

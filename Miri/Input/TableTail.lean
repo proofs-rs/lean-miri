@@ -1227,17 +1227,6 @@ private def parseUnwindSeed (path : String) : Parser Miri.ABI.UnwindSeed := do
   return ⟨← required abi (path ++ ".abi"), ← required definition (path ++ ".definition"),
     ← required panic (path ++ ".panic_unwinds"), ← required drop (path ++ ".panic_in_drop_unwinds")⟩
 
-private def parseAbiSignatureSeed (path : String) : Parser AbiSignatureSeed := do
-  let (signature, extra, caller) ← object (none, none, none) fun (signature, extra, caller) key => do
-    match key with
-    | "signature" => pure (some (← parseFunctionSignature (path ++ ".signature")), extra, caller)
-    | "extra_argument_types" => pure (signature, some (← JsonReader.array natural), caller)
-    | "caller_location" => pure (signature, extra, some (← nullable natural))
-    | _ => fail s!"{path}: unknown signature seed field `{key}`"
-  let signature ← required signature (path ++ ".signature")
-  return ⟨⟨signature.inputs,signature.output,signature.abi,signature.cVariadic⟩,
-    ← required extra (path ++ ".extra_argument_types"), ← required caller (path ++ ".caller_location")⟩
-
 private structure ParseFunctionAbiFields where
   arguments : Option (Array AbiArgument) := none
   returnValue : Option (AbiArgument) := none
@@ -1264,15 +1253,15 @@ def parseFunctionAbi (path : String) (argumentPool : Option (Array AbiArgument) 
     | "can_unwind" => fail s!"{path}: eager unwind result is not a material seed"
     | "c_variadic" => return { s with c_variadic := some (← boolean) }
     | "fixed_count" => return { s with fixed_count := some (← natural) }
-    | "signature_seed" => return { s with signature_seed := some (← parseAbiSignatureSeed (path ++ ".signature_seed")) }
+    | "signature_seed" => fail s!"{path}: legacy source ABI signature seed is not a rustc result"
     | _ => skipValue; pure s
   let arguments ← required s.arguments (path ++ ".arguments")
   let returnValue ← required s.returnValue (path ++ ".returnValue")
   let calling_convention ← required s.calling_convention (path ++ ".calling_convention")
   let unwind_seed ← required s.unwind_seed (path ++ ".unwind_seed")
   let c_variadic ← required s.c_variadic (path ++ ".c_variadic")
-  unless s.signature_seed.isSome != s.fixed_count.isSome do
-    fail s!"{path}: expected exactly one signature seed or residual fixed_count"
+  unless s.fixed_count.isSome do
+    fail s!"{path}: rustc fixed_count result is absent"
   return ⟨arguments, returnValue, calling_convention, unwind_seed, c_variadic, s.fixed_count, s.signature_seed⟩
 
 def decodeCompilerLayout : Parser Layout := parseLayout "$.compiler_projection_layout"

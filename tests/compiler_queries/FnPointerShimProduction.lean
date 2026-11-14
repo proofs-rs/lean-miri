@@ -103,7 +103,7 @@ def main (args : List String) : IO Unit := do
     unless again.identity == loaded.identity && again.body == loaded.body &&
         repeated.arena.constructedTypes == world.arena.constructedTypes && repeated.bodies == world.bodies do
       throw (IO.userError "repeated shim body demand duplicated constructor identities")
-    let novel : RuntimeArrayTypes.CompilerM (Nat × Nat × Miri.Interpreter.LoadedBody) := do
+    let novel : RuntimeArrayTypes.CompilerM Unit := do
       let world ← get
       let some source := document.types[selfType]? | throw "original FnPtr source is absent"
       let constructor ← match world.arena.materialKey source with
@@ -115,14 +115,11 @@ def main (args : List String) : IO Unit := do
       let shim := if direction == "as_pointer" then Miri.Interpreter.CallShimKind.FnPtrAsPtr kind ty else .FnPtrFromPtr kind ty
       let instanceId ← RuntimeArrayTypes.internInstance (.Shim shim) #[.Type ty]
       unless instanceId >= document.instances.size do throw "novel shim instance did not append outside material prefix"
-      pure (instanceId,ty,← CallResolution.loadedBodyOfInstance prepared instanceId)
-    let ((instanceId,novelType,novelBody),novelWorld) ← must (novel.run world)
-    if let some oracle := novelOracle then
-      must (compareBody novelWorld reference direction novelType novelBody.body oracle)
-    unless novelBody.identity.index >= document.bodies.size do throw (IO.userError "novel shim body did not append outside material prefix")
-    let (body,_) ← must ((prepared.program.resolveBodyIdentity novelBody.identity).run novelWorld)
-    unless body.input.instanceId == instanceId && body.body == novelBody.body do
-      throw (IO.userError "constructed shim body lost current instance ownership")
+      match (CallResolution.loadedBodyOfInstance prepared instanceId).run world with
+      | .error "constructed instance has no exact rustc body result" => pure ()
+      | .error error => throw s!"unexpected constructed shim body error: {error}"
+      | .ok _ => throw "constructed shim borrowed a rustc body result"
+    let _ ← must (novel.run world)
     let bodies ← must ((← must (raw.getObjVal? "bodies")).getArr?)
     let some body := bodies[index]? | throw (IO.userError "raw shim seed disappeared")
     for (key,value) in [("locals",Json.arr #[]),("code_definition",toJson document.definitions.size)] do

@@ -6,6 +6,14 @@ import Miri.Input.Model.Coroutine
 
 namespace Miri.Input
 
+structure CompilerTypeConstResult where
+  aliasKind : String
+  rigid : Bool
+  definition : Nat
+  genericArgs : Array Miri.MIR.GenericArg
+  valueConstId : TypeConstantId
+  deriving BEq
+
 structure ImportDocument where
   traitProgram : TraitSelection.Program := {traits := #[]}
   compilerPredicates : Array CompilerPredicateEvidence := #[]
@@ -16,6 +24,8 @@ structure ImportDocument where
   predicates : Array VtablePredicate := #[]
   definitions : Array DefinitionId := #[]
   typeConstants : Array Miri.MIR.TypeConst := #[]
+  /-- rustc-evaluated answers for concrete type-level alias demands. -/
+  compilerTypeConstResults : Array CompilerTypeConstResult := #[]
   layouts : Array Layout := #[]
   /-- Exact diagnostic and remapped filenames, shared across all source records. -/
   files : Array String := #[]

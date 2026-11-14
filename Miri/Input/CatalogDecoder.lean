@@ -361,13 +361,13 @@ private def shim_signature : Parser (ShimSignature) := do
 
 private structure functionKindFields where
   kind : Option (String) := none
-  instanceId : Option (Nat) := none
+  instanceId : Option (Option Nat) := none
 
 private def functionKind : Parser (Option Nat) := do
   let fields ← object ({} : functionKindFields) fun fields key => do
     match key with
     | "kind" => return { fields with kind := some (← string) }
-    | "instance_id" => return { fields with instanceId := some (← natural) }
+    | "instance_id" => return { fields with instanceId := some (← nullable natural) }
     | _ => skipValue; pure fields
   let kind ← need fields.kind "kind"
   let instanceId := fields.instanceId
@@ -375,7 +375,7 @@ private def functionKind : Parser (Option Nat) := do
   | "function_pointer" =>
     if instanceId.isSome then fail "function pointer kind carries instance"
     pure none
-  | "function_definition" => some <$> need instanceId "instance_id"
+  | "function_definition" => need instanceId "instance_id"
   | _ => fail "unknown compiler function kind"
 
 private structure functionTypeFields where

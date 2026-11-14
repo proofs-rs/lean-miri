@@ -114,7 +114,8 @@ private def lift (value : Except String A) : MainMachine.M U A :=
 def hooks (p : Prepared) (types : RuntimeArrayQueries.Access (MainMachine.State U)) (base : MainMachine.Hooks U C O ABI.ExternAbi F A Aff P) :
     MainMachine.Hooks U C O ABI.ExternAbi F A Aff P :=
   {base with
-    itemInstance := fun definition args => RuntimeArrayQueries.performCompiler types (CompilerInstance.item definition args)
+    itemInstance := fun definition args => lift
+      (CompilerInstance.Material.item p.program.input.instances definition args)
     cNoUnwind := .C false
     genericParameters := fun id => lift do return (← entry p id).parameters
     entrySignature := fun id => lift do (← entry p id).signature

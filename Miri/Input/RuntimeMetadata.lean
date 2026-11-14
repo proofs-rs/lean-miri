@@ -883,13 +883,24 @@ mutual
 
 end
 
-/-- A layout demand runs in the caller's execution-owned type universe. Raw
-source rows and newly constructed types use the same recipe operations. -/
+/-- A canonical layout demand consumes the exact rustc LayoutData exported for
+this material type. The execution World verifies its identity; locally interned
+types cannot borrow a numeric row from the immutable compiler prefix. -/
 def layoutEffectfulInWorld (normalization : LayoutNormalization m) (metadata : RuntimeMetadata) (id : TypeId) : m (TyAndLayout TypeId) := do
-  let world ← get
-  let budget := metadata.materialLayoutFuel + 3 * (world.constructedTypes.size + world.constructedConstants.size)
-  pure ⟨id, ← (worldLayoutType (some normalization) metadata.target metadata.source.layouts
-    ((metadata.source.coroutineCoverage.map (·.genericSources)).getD #[]) budget id).run' {}⟩
+  let _ := normalization
+  let actual ← match ← lift ((← get).lookupType id) with
+    | .material node => pure node
+    | .constructed constructor =>
+      throw s!"constructed type {id} ({reprStr constructor}) has no rustc canonical layout result"
+  let some original := metadata.source.types[id]?
+    | throw "canonical layout type is absent from rustc export"
+  unless actual.id == id && actual.layoutId == original.layoutId &&
+      (← lift ((← get).materialKey actual)) == (← lift ((← get).materialKey original)) do
+    throw "canonical layout type differs from rustc export"
+  let some seed := metadata.source.layouts[original.layoutId]?
+    | throw "rustc canonical layout result is absent"
+  let result ← lift ((layout metadata.target seed).mapError toString)
+  pure ⟨id,result⟩
 
 end EffectfulSourceLayouts
 
@@ -976,33 +987,22 @@ end
 
 /-- Physical source-only adapter. LayoutData contains no newly allocated type
 IDs; execution providers must use layoutInWorld and retain its updated World. -/
-def resolveLayout (target : RuntimeTargetDataLayout) (types : Array TypeNode)
-    (layouts : Array Input.Layout) (id : LayoutId) (definitions : Array DefinitionId)
-    (constants : Array MIR.TypeConst) (predicates : Array VtablePredicate) : Result LayoutData := do
+def resolveLayout (target : RuntimeTargetDataLayout) (_types : Array TypeNode)
+    (layouts : Array Input.Layout) (id : LayoutId) (_definitions : Array DefinitionId)
+    (_constants : Array MIR.TypeConst) (_predicates : Array VtablePredicate) : Result LayoutData := do
   let source ← require layouts[id]? "compiler layout ID out of bounds"
-  if source.tupleType.isNone && source.unionType.isNone && source.structType.isNone && source.enumType.isNone &&
-      source.patternType.isNone && source.sequenceType.isNone && source.pointerType.isNone && source.pointerDataType.isNone && source.enumTagType.isNone then
-    return ← layout target source
-  let world ← (TypeArena.World.ofMaterial types constants definitions predicates target.pointerSize.bytes.toNat)
-    |>.mapError (fun e => .invalid "layout material" e)
-  let result ← ((worldLayoutSeed (m := TypeArena.WorldM) none target layouts #[] (rawLayoutBudget types.size layouts.size definitions) id).run' {}).run world
-    |>.mapError (fun e => .unsupported e)
-  pure result.1
+  layout target source
 
-/-- Build one import-local, immutable storage query context. Each demand uses
-this same checked source World; temporary substitutions are discarded and only
-bytes escape. No query result table or cross-import state is retained.
-Pattern validity/niche CTFE remains a separate complete-layout obligation. -/
+/-- Decode rustc's exact material layout for scalar-wire width validation.
+The closure owns only immutable source arrays; it keeps no query memo. -/
 def scalarStorageQuery (target : RuntimeTargetDataLayout) (types : Array TypeNode)
-    (layouts : Array Input.Layout) (definitions : Array DefinitionId)
-    (constants : Array MIR.TypeConst) (predicates : Array VtablePredicate) : Result (TypeId → Result Nat) := do
-  let world ← TypeArena.World.ofMaterial types constants definitions predicates target.pointerSize.bytes.toNat
-    |>.mapError (fun error => .invalid "scalar storage material" error)
-  let fuel := rawLayoutBudget types.size layouts.size definitions
+    (layouts : Array Input.Layout) (_definitions : Array DefinitionId)
+    (_constants : Array MIR.TypeConst) (_predicates : Array VtablePredicate) : Result (TypeId → Result Nat) := do
   pure fun id => do
-    let (storage,_) ← (worldScalarStorage target layouts #[] fuel id).run world
-      |>.mapError (fun error => .unsupported error)
-    pure storage.size.bytes.toNat
+    let node ← require types[id]? "scalar storage type ID out of bounds"
+    let source ← require layouts[node.layoutId]? "scalar storage rustc layout result absent"
+    let value ← layout target source
+    pure value.size.bytes.toNat
 
 /-- ID-free standalone adapter. Decoder captures scalarStorageQuery once for
 all scalar-wire checks, rather than rebuilding the checked prefix per value. -/
@@ -1016,15 +1016,7 @@ def lookup (metadata : RuntimeMetadata) (id : TypeId) : Result (TyAndLayout Type
     throw (.unsupported "constructed type layout requires the execution-owned universe")
   let source ← metadata.node id
   let seed ← require metadata.source.layouts[source.layoutId]? "compiler layout seed"
-  if seed.tupleType.isNone && seed.unionType.isNone && seed.structType.isNone && seed.enumType.isNone &&
-      seed.patternType.isNone && seed.sequenceType.isNone && seed.pointerType.isNone && seed.pointerDataType.isNone && seed.enumTagType.isNone then
-    return ⟨id, ← layout metadata.target seed⟩
-  let checked ← require metadata.checkedMaterial "checked source material prefix"
-  let world := TypeArena.World.ofCheckedMaterial checked
-  let (result, final) ← (layoutInWorld metadata id).run world |>.mapError (fun e => .unsupported e)
-  unless final.constructedTypes.isEmpty && final.constructedConstants.isEmpty do
-    throw (.unsupported "source-only layout demand needs execution-owned type construction")
-  pure result
+  return ⟨id, ← layout metadata.target seed⟩
 
 /-- Pure source-constant access. Constructed constants belong to the execution
 universe and must be obtained through its checked lookup. -/
@@ -1084,20 +1076,11 @@ private def projectionParents (metadata : RuntimeMetadata) (id : TypeId) : Resul
   unless queries.typingEnvironment == "fully_monomorphized" do
     throw (.invalid "projection query" "typing environment mismatch")
   pure queries.parents
-/-- Import a contextual physical layout seed from this immutable material
-prefix. Unlike `layoutInWorld`, this accepts a LayoutId rather than an execution
-TypeId. Source normalization may intern intermediate field/metadata types, but
-LayoutData contains no type handles, so none can escape this local query World.
-The bare `resolveLayout` adapter remains context-free and fallible. -/
+/-- Import the exact rustc contextual LayoutData by LayoutId. It contains no
+type identities and requires no local layout reconstruction or World cache. -/
 def layoutById (metadata : RuntimeMetadata) (id : Nat) : Result LayoutData := do
-  let _ ← require metadata.source.layouts[id]? "compiler layout ID out of bounds"
-  let checked ← require metadata.checkedMaterial "checked source material prefix"
-  let world := TypeArena.World.ofCheckedMaterial checked
-  let (result,_) ← ((worldLayoutSeed (some (pureLayoutNormalization metadata.normalizationContext)) metadata.target
-    metadata.source.layouts ((metadata.source.coroutineCoverage.map (·.genericSources)).getD #[])
-    metadata.materialLayoutFuel id).run' {}).run world
-    |>.mapError (fun error => .unsupported error)
-  pure result
+  let source ← require metadata.source.layouts[id]? "compiler layout ID out of bounds"
+  layout metadata.target source
 
 private def projectionLayout (metadata : RuntimeMetadata) (id : TypeId) (layoutId : LayoutId) :
     Result (TyAndLayout TypeId) := do
@@ -1111,26 +1094,17 @@ def field (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index : Na
   for record in ← projectionParents metadata parent.ty do
     let queried ← projectionLayout metadata parent.ty record.layoutId
     if queried == parent then
-      -- The source `str` branch ignores the requested index and always
-      -- returns u8. The producer represents that single exact query result
-      -- at row zero; do not infer a fictitious field count from it.
-      let sourceIndex := if node.shapeKind == .str then 0 else index
-      let source ← require (record.fields.find? (·.index == sourceIndex)) "compiler projection field"
+      -- Pinned rustc TyAbiInterface::ty_and_layout_field returns the same
+      -- element TyAndLayout for every array/slice/str index. The row at zero
+      -- is rustc's concrete result for this whole query family.
+      let sourceIndex := if node.shapeKind == .str || node.shapeKind == .slice ||
+          node.shapeKind == .array then 0 else index
+      let source ← require (record.fields.find? (·.index == sourceIndex))
+        s!"compiler projection field: parent={parent.ty}, shape={reprStr node.shapeKind}, index={index}, source_index={sourceIndex}, variants={reprStr parent.layout.variants}"
       let id := source.typeId
       let _ ← metadata.node id
       return ← projectionLayout metadata id source.layoutId
-  let id ← match node.shape with
-    | .tuple values => require values[index]? "tuple field"
-    | .array element .. | .slice element => pure element
-    | .str => return ← stringElementLayout metadata
-    | .adt data => do
-      let .Single selected := parent.layout.variants
-        | throw (.unsupported "ADT field needs selected variant")
-      let variant ← require (data.variants.find? (·.index == selected)) "ADT variant"
-      let source ← require (variant.fields.find? (·.index == index)) "ADT field"
-      pure source.typeId
-    | _ => throw (.unsupported "type field query")
-  metadata.lookup id
+  throw (.unsupported "missing exact rustc contextual field layout result")
 
 /-- Reconstructs precisely `LayoutData::for_variant` in pinned
 rustc_abi/layout/simple.rs:158–185. Missing uninhabited-variant compiler queries
@@ -1140,31 +1114,15 @@ def forVariant (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index
   let _ ← metadata.node parent.ty
   for record in ← projectionParents metadata parent.ty do
     if record.variant == some index then
-      -- Validate the supplied parent against a source default/variant result
-      -- before applying another query; structural resemblance is not a key.
       let canonical ← metadata.lookup parent.ty
       unless canonical == parent do
         match parent.layout.variants with
         | .Single actual =>
           if actual == index then return parent
           throw (.invalid "compiler variant projection" "cannot apply for_variant twice to a selected parent")
-        | _ => throw (.invalid "compiler variant projection" "parent differs from exact source layout")
+        | _ => throw (.invalid "compiler variant projection" "parent differs from exact rustc layout")
       return ← projectionLayout metadata parent.ty record.layoutId
-  match parent.layout.variants with
-  | .Single actual =>
-    if actual == index then return parent
-    throw (.unsupported "compiler uninhabited variant query")
-  | .Empty => throw (.unsupported "compiler empty-enum variant query")
-  | .Multiple _ _ _ variants =>
-    let variant ← require variants[index]? "variant index"
-    return ⟨parent.ty, { parent.layout with
-      fields := .Arbitrary variant.fieldOffsets variant.fieldsInMemoryOrder
-      variants := .Single index
-      backendRepr := variant.backendRepr
-      largestNiche := variant.largestNiche
-      uninhabited := variant.uninhabited
-      size := variant.size
-      randomizationSeed := 0 }⟩
+  throw (.unsupported "missing exact rustc contextual variant layout result")
 
 def pointee (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) :
     Result (TyAndLayout TypeId) := do
@@ -1332,81 +1290,17 @@ def pointerMetadataTypeEffectfulInWorld (normalization : LayoutNormalization m)
     fieldType := fieldTypeEffectfulInWorld normalization metadata }
     (metadata.materialLayoutFuel + 3 * world.constructedTypes.size + 1) id
 
-def fieldLayoutForEffectfulInWorld (normalization : LayoutNormalization m) (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index : Nat) :
-    m (TyAndLayout TypeId) := do
-  if (← shapeKindInWorld metadata parent.ty) == .coroutine then
-    let source ← coroutineSourceInWorld metadata parent.ty
-    let term ← match parent.layout.variants with
-      | .Empty => throw "coroutine field has empty variants"
-      | .Single variant => lift (source.stateField variant index)
-      | .Multiple tag _ tagField _ => do
-        unless index < parent.layout.fields.count do throw "coroutine outer field index absent"
-        if index == tagField then
-          let .Initialized (value := value) (validRange := range) := tag |
-            throw "coroutine discriminant scalar is uninitialized"
-          let .Int integer signed := value | throw "coroutine discriminant is not an integer"
-          let kind := match integer with
-            | .I8 => Miri.MIR.IntegerKind.u8 | .I16 => .u16 | .I32 => .u32
-            | .I64 => .u64 | .I128 => .u128
-          let id ← TypeArena.World.internType (.integer signed kind)
-          return ⟨id, ← lift (PrimitiveLayout.scalar metadata.target value range)⟩
-        lift (source.upvarField index)
-    let world ← get
-    let fuel := metadata.materialLayoutFuel + 3 * (world.constructedTypes.size + world.constructedConstants.size)
-    let child ← normalization.resolve (fuel * (fuel + 1)) fuel term
-    return ← layoutEffectfulInWorld normalization metadata child
-  let pointer ← match ← lift ((← get).lookupType parent.ty) with
-    | .material node => match node.shape with
-      | .rawPointer pointee _ => pure (some (pointee,false))
-      | .reference pointee .. => pure (some (pointee,true))
-      | _ => pure none
-    | .constructed (.rawPointer pointee _) => pure (some (pointee,false))
-    | .constructed (.reference pointee ..) => pure (some (pointee,true))
-    | _ => pure none
-  if let some (pointee,isReference) := pointer then
-    unless index < parent.layout.fields.count do throw "pointer projection field index out of bounds"
-    if index == 0 then
-      return ⟨parent.ty, ← lift (PrimitiveLayout.pointer metadata.target isReference none)⟩
-    let metadataType ← pointerMetadataTypeEffectfulInWorld normalization metadata pointee
-    if let some vtableType ← vtableFieldTypeInWorld metadata metadataType then
-      return ← layoutEffectfulInWorld normalization metadata vtableType
-    return ← layoutEffectfulInWorld normalization metadata metadataType
-  -- The enum discriminant is a source scalar, not an ADT field or a
-  -- contextual LayoutId. Its logical primitive type follows Primitive::to_ty.
-  if let .adt .. ← worldConstructor parent.ty then
-    match parent.layout.variants with
-    | .Multiple tag _ _ _ =>
-      unless index == 0 do throw "enum tag field index is not zero"
-      let .Initialized (value := value) (validRange := range) := tag
-        | throw "enum tag source scalar malformed"
-      let ty ← match value with
-        | .Int integer signed => do
-          let kind : MIR.IntegerKind := if signed then match integer with
-            | .I8 => .i8 | .I16 => .i16 | .I32 => .i32 | .I64 => .i64 | .I128 => .i128
-            else match integer with
-            | .I8 => .u8 | .I16 => .u16 | .I32 => .u32 | .I64 => .u64 | .I128 => .u128
-          TypeArena.World.internType (.integer signed kind)
-        | .Pointer _ => do
-          let unit ← TypeArena.World.internType (.tuple #[])
-          TypeArena.World.internType (.rawPointer unit .Mut)
-        | .Float value =>
-          TypeArena.World.internType (.float (match value with
-            | .F16 => .f16 | .F16B => .f16b | .F32 => .f32 | .F64 => .f64
-            | .F128 => .f128 | .PpcF128 => .ppcf128))
-      return ⟨ty, ← lift (PrimitiveLayout.scalar metadata.target value range)⟩
-    | .Empty => throw "there is no field in an empty enum layout"
-    | .Single _ => pure ()
-  let selected ← match parent.layout.variants with
-    | .Single selected => pure selected
-    | _ => throw "ADT field needs a selected variant"
-  let child ← fieldTypeEffectfulInWorld normalization metadata parent.ty selected index
-  -- layout_of erases regions and normalizes the projected source field. Use
-  -- raw terms for both material and constructed children, never normalized rows.
-  let world ← get
-  let fuel := metadata.materialLayoutFuel + 3 * (world.constructedTypes.size + world.constructedConstants.size)
-  let term ← lift (GenericInstantiationWorld.ofType world fuel child)
-  let child ← normalization.resolve (fuel * (fuel + 1)) fuel term
-  layoutEffectfulInWorld normalization metadata child
+def fieldLayoutForEffectfulInWorld (_normalization : LayoutNormalization m) (metadata : RuntimeMetadata)
+    (parent : TyAndLayout TypeId) (index : Nat) : m (TyAndLayout TypeId) := do
+  let actual ← match ← lift ((← get).lookupType parent.ty) with
+    | .material node => pure node
+    | .constructed _ => throw "constructed type has no rustc contextual field layout result"
+  let some original := metadata.source.types[parent.ty]?
+    | throw "contextual field layout type is absent from rustc export"
+  unless actual.id == parent.ty && actual.layoutId == original.layoutId &&
+      (← lift ((← get).materialKey actual)) == (← lift ((← get).materialKey original)) do
+    throw "contextual field layout type differs from rustc export"
+  lift ((metadata.field parent index).mapError toString)
 
 def fieldLayoutEffectfulInWorld (normalization : LayoutNormalization m) (metadata : RuntimeMetadata) (id index : Nat) :
     m (TyAndLayout TypeId) := do
@@ -1435,32 +1329,15 @@ field counts; applying a different variant to an already selected Multiple
 layout is rejected. Contextual LayoutIds never stand in for this operation. -/
 def variantLayoutInWorld (metadata : RuntimeMetadata) (parent : TyAndLayout TypeId) (index : Nat) :
     TypeArena.WorldM (TyAndLayout TypeId) := do
-  match parent.layout.variants with
-  | .Single actual =>
-    if actual == index then return parent
-  | .Multiple _ _ _ variants =>
-    let some variant := variants[index]? | throw "variant index absent"
-    return ⟨parent.ty, {parent.layout with
-      fields := .Arbitrary variant.fieldOffsets variant.fieldsInMemoryOrder
-      variants := .Single index, backendRepr := variant.backendRepr
-      largestNiche := variant.largestNiche, uninhabited := variant.uninhabited
-      size := variant.size, randomizationSeed := 0}⟩
-  | .Empty => pure ()
-  -- The pinned assertion compares the canonical variant representation, not a
-  -- contextual projection row or the rest of the caller's physical layout.
-  let canonical ← layoutInWorld metadata parent.ty
-  unless canonical.layout.variants == parent.layout.variants do
-    throw "cannot apply for_variant twice to a selected parent"
-  let declaration ← adtDeclarationInWorld metadata parent.ty
-  unless !declaration.variantNames.isEmpty do throw "for_variant called on zero-variant enum"
-  unless index < declaration.variantNames.size do throw "variant index absent"
-  let fields := (declaration.fields.filter (·.variantIndex == index)).size
-  let fields : FieldsShape := if fields == 0 then .Arbitrary #[] #[] else .Union fields
-  return ⟨parent.ty, {
-    fields, variants := .Single index, backendRepr := .Memory (sized := true)
-    largestNiche := none, uninhabited := true, align := ⟨metadata.target.i8Align⟩
-    size := Size.ZERO, maxReprAlign := none, unadjustedAbiAlign := metadata.target.i8Align
-    reprC := false, randomizationSeed := 0}⟩
+  let actual ← match ← lift ((← get).lookupType parent.ty) with
+    | .material node => pure node
+    | .constructed _ => throw "constructed type has no rustc contextual variant layout result"
+  let some original := metadata.source.types[parent.ty]?
+    | throw "contextual variant layout type is absent from rustc export"
+  unless actual.id == parent.ty && actual.layoutId == original.layoutId &&
+      (← lift ((← get).materialKey actual)) == (← lift ((← get).materialKey original)) do
+    throw "contextual variant layout type differs from rustc export"
+  lift ((metadata.forVariant parent index).mapError toString)
 
 /-- Exact monomorphic Sized dispatch in the current universe after erasing
 regions and normalizing the requested source type. -/

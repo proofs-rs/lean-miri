@@ -487,7 +487,8 @@ private def prepareRun (profilePrepared : Input.ProfilePreparation.Prepared)
     | none => do
       unless ui.isSome do throw "compiler did not select an rustc_main entry"
       pure (← Input.CompilerMiriEntry.miriStart compiler, MainEntryType.miriStart)
-  let bytes ← Input.ProfileRuntime.bytes profilePrepared initialMemory
+  let bytes ← profileit "startup.prepare_run.bytes" profile fun _ =>
+    Input.ProfileRuntime.bytes profilePrepared initialMemory
   let arrays := Input.ProfileRuntime.arrays profilePrepared
   let targetBits := compiler.runtime.target.base.pointerWidth.bits.toNat
   let arch ← (Input.EvalArchitectureMachine.targetArch compiler.intrinsics).mapError toString
@@ -518,7 +519,8 @@ private def prepareRun (profilePrepared : Input.ProfilePreparation.Prepared)
     arguments := #[(ui.map (·.source)).getD "/workspace/lean-miri/scratch/main31.rs"], entry := definition, entryType
     communicate := false, forwarded := #[], environment := #[], overrides := #[] }
   let targetFacts ← compiler.externStatics.targetFacts.mapError id
-  let startupFacts ← (Input.EvalStartupRuntimeConstruction.prepare compiler).mapError id
+  let startupFacts ← profileit "startup.prepare_run.facts" profile fun _ =>
+    (Input.EvalStartupRuntimeConstruction.prepare compiler).mapError id
   let noCore ← startupFacts.noCore.mapError fun reason => s!"compiler no_core query: {reason}"
   let cULong ← (Input.CompilerPrimitiveFacts.cULongLayout compiler.runtime).mapError id
   let machineTarget : Input.MachineConstruction.Target := {
@@ -756,6 +758,8 @@ private def runMain (args : List String) (control : Option ControlOutput) : IO U
   boundary "run: start"
   let (execute, checkValidationMismatch) ← must
     (prepareRun profilePrepared attempt.memory pageSize numCpus hostPid diagnosticSeed profile ui)
+  boundary "run: hooks ready"
+  boundary "run: validation preflight start"
   let mismatch ← match checkValidationMismatch initialInputs with
     | .ok report => pure report
     | .error error => throw (IO.userError s!"validation preflight regression failed: {error}")

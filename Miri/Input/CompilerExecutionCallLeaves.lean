@@ -23,7 +23,8 @@ def make (p : CompilerProviders.Prepared)
     (CompilerFunctionFacts.signatureInWorld p.functions layout.ty)
   instanceKind := fun inst => do lift (CompilerInstance.kindOf (← RuntimeArrayQueries.compilerSnapshot types) inst)
   instanceArgs := fun inst => do lift (CompilerInstance.argsOf (← RuntimeArrayQueries.compilerSnapshot types) inst)
-  itemInstance := fun definition args => RuntimeArrayQueries.performCompiler types (CompilerInstance.item definition args)
+  itemInstance := fun definition args => lift
+    (CompilerInstance.Material.item p.program.input.instances definition args)
   functionKind := fun ty => RuntimeArrayQueries.perform types (CompilerFunctionFacts.kindInWorld p.functions ty)
   resolve := fun _ definition args => CompilerProviders.resolveCurrent p types definition args
   fnAbiOfFnPtr := fun _ layout extra => RuntimeArrayQueries.performCompiler types

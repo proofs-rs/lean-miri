@@ -13,6 +13,44 @@ the ability to verify arbitrary Rust are not claimed.
 
 ## Compiler material migration (in progress)
 
+The current draft changes the compiler boundary: executable concrete constants,
+layout, ABI and instance selection require the exact rustc result exported for
+the requested identity. Lean still computes local type syntax, but it does not
+evaluate an executable constant or synthesize a missing compiler answer. The
+older source-algorithm results described below are historical component
+comparisons and no longer define the runtime fallback policy. The immutable
+export cannot answer a new type or instance constructed only after export;
+such a demand currently fails explicitly. A fresh `main` export with 3,149
+material bodies, 6,614 rustc layouts and 20 concrete type-constant result rows
+decodes and runs through the former type-constant, projection and covariance
+failures. The current fresh export completes `main` with `finalized_exit code=0`
+and an upstream `exit 0` result at choice cursor 1348. This is one concrete
+guest, not a general demand-closure result. Broader execution coverage remains
+validation work for this migration; final fixed-CPU performance measurements
+are recorded below.
+The initial compiler profile and execution query memos are scoped to one
+execution; there is no cross-execution mutable answer cache.
+
+Final fresh-guest measurement used the 102,376,624-byte export of the concrete
+`main` input, pinned Lean runner, one Lean thread and CPU 2, with three full
+executions. All three reached `finalized_exit code=0`. Wall times were 205.675,
+206.116 and 207.388 seconds (median 206.116); process CPU times were 204.464,
+204.886 and 205.779 seconds (median 204.886). Selected CPU steal was 6.29,
+7.32 and 7.23 seconds; cgroup throttling was zero in every interval. Raw logs
+and counters are in `scratch/performance/pivot-final/rustc-boundary-main-full-*`
+in the working tree. This shared-host run supplies no reliable small-speedup
+comparison against an earlier implementation.
+
+The exporter supplies concrete Item bodies in its reachable-instance closure
+through rustc's instantiated MIR query. A novel instance first interned during
+execution is outside that closure and now fails with an explicit missing rustc
+body result. FnPtr conversion shims have a rustc `instance_mir` query, but the
+current exporter does not add novel concrete shim instances to its demand
+closure; exporting their rustc body and ABI is required before those calls can
+run under this boundary. The older raw template/shim body constructor is not
+an execution fallback. Source trait/impl selection helpers remain in the tree
+for component tests but have no production caller.
+
 FnPtr/closure cast resolution now follows actual MIR cast requests, including
 requests discovered after their type was registered. Non-demanded FnDef result
 enumeration is removed. Plain/KCFI vtable fixtures retain zero such query rows;

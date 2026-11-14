@@ -97,12 +97,28 @@ def prepare (program : LoweredProgram) (runtime : RuntimeMetadata)
   else
     let ids := source.coveredAllocations
     let expected := program.input.allocations.map (·.id)
-    unless ids.size == expected.size && ids.all expected.contains && expected.all ids.contains do
+    let mut expectedIds : Std.HashMap Nat Bool := {}
+    for id in expected do
+      if expectedIds.contains id then throw "duplicate imported graph allocation identity"
+      expectedIds := expectedIds.insert id true
+    let mut coveredIds : Std.HashMap Nat Bool := {}
+    for id in ids do
+      if coveredIds.contains id then throw "duplicate global byte coverage identity"
+      coveredIds := coveredIds.insert id true
+    unless coveredIds.size == expectedIds.size &&
+        ids.all expectedIds.contains do
       throw "global byte query coverage differs from imported graph"
-    unless ids.toList.eraseDups.length == ids.size do throw "duplicate global byte coverage identity"
     let mapped ← ids.mapM (AllocationImage.runtimeId memory)
     let actual := memory.globals.map (·.allocId)
-    unless mapped.size == actual.size && mapped.all actual.contains && actual.all mapped.contains do
+    let mut actualIds : Std.HashMap UInt64 Bool := {}
+    for id in actual do
+      if actualIds.contains id.value then throw "duplicate imported runtime allocation identity"
+      actualIds := actualIds.insert id.value true
+    let mut mappedIds : Std.HashMap UInt64 Bool := {}
+    for id in mapped do
+      if mappedIds.contains id.value then throw "duplicate mapped runtime allocation identity"
+      mappedIds := mappedIds.insert id.value true
+    unless mappedIds.size == actualIds.size && mapped.all (fun id => actualIds.contains id.value) do
       throw "global byte keys must attach before runtime global reservations"
     let mut candidates := #[]
     for global in memory.globals do

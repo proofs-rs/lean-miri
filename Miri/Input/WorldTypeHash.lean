@@ -89,6 +89,35 @@ private def validateClosureHeader (world : World)
   unless (match ← sourceConstructor world captures with | .tuple .. => true | _ => false) do
     throw "closure hash capture source is not a tuple"
 
+/-- Pinned CoroutineArgs: parent prefix followed by kind, resume, yield,
+return and tupled captures. These are raw type arguments, not witness answers. -/
+private def validateCoroutineHeader (world : World)
+    (identity : GenericSubstitution.DefinitionIdentity) (arguments : Array MIR.GenericArg) : Except String Unit := do
+  let reference ← world.definitionRef identity
+  let some definition := world.definitions[reference]? | throw "coroutine hash physical owner absent"
+  let some path := definition.rawPath | throw "coroutine hash raw definition path absent"
+  unless path.components.back?.any (fun value => value.kind == "closure" || value.kind == "synthetic_coroutine_body") do
+    throw "coroutine hash owner is not a raw coroutine definition"
+  let header ← DefinitionPath.requireGenerics path
+  unless header.parameters.size == arguments.size && header.parentParameterCount + 5 == arguments.size do
+    throw "coroutine hash raw generic/synthetic argument domain mismatch"
+  for (sort,argument) in header.parameters.zip arguments do
+    unless (match sort,argument with
+      | .type,.Type _ | .region,.Lifetime _ | .constant,.Const _ => true | _,_ => false) do
+      throw "coroutine hash generic argument sort mismatch"
+  for index in Array.range 5 do
+    unless (arguments[header.parentParameterCount + index]?).any (fun argument => match argument with | .Type _ => true | _ => false) do
+      throw "coroutine hash synthetic argument is not a type"
+  let some (.Type kind) := arguments[header.parentParameterCount]? | throw "coroutine hash kind absent"
+  match ← sourceConstructor world kind with
+  | .tuple children => unless children.isEmpty do throw "coroutine hash regular kind is not unit"
+  | .integer true width => unless [MIR.IntegerKind.i8,.i16,.i32].contains width do
+      throw "coroutine hash by-move kind marker is invalid"
+  | _ => throw "coroutine hash kind is outside pinned domain"
+  let some (.Type captures) := arguments[header.parentParameterCount + 4]? | throw "coroutine hash captures absent"
+  unless (match ← sourceConstructor world captures with | .tuple .. => true | _ => false) do
+    throw "coroutine hash captures are not tupled"
+
 mutual
 /-- Missing structural support is distinct from malformed source identity.
 An unsupported child never substitutes its final TypeId hash for raw syntax. -/
@@ -166,6 +195,22 @@ private def rawSourceBytes (world : World) (normalized : Bool) : Nat → TypeId 
           let some child ← constantBytes world normalized fuel child | return none
           bytes := bytes ++ tag 2 ++ child
       pure (some (tag 17 ++ (← definitionBytes world identity) ++
+        littleEndian 16 (StableSipHash.hash bytes).toNat))
+    | .coroutine identity arguments =>
+      validateCoroutineHeader world identity arguments
+      let mut bytes := littleEndian 8 arguments.size
+      for argument in arguments do
+        match argument with
+        | .Type child =>
+          let some child ← rawSourceBytes world normalized fuel child | return none
+          bytes := bytes ++ tag 1 ++ child
+        | .Lifetime region =>
+          let some child ← regionBytes world region | return none
+          bytes := bytes ++ tag 0 ++ child
+        | .Const child =>
+          let some child ← constantBytes world normalized fuel child | return none
+          bytes := bytes ++ tag 2 ++ child
+      pure (some (tag 19 ++ (← definitionBytes world identity) ++
         littleEndian 16 (StableSipHash.hash bytes).toNat))
     | .functionPointer signature =>
       unless normalized || signature.variables.isEmpty do return none
@@ -271,7 +316,7 @@ private def normalizationDomain (world : World) : Nat → TypeId → Except Stri
     let own ← match constructor with
       | .bool | .char | .str | .never | .integer .. | .foreign .. => pure (true,false)
       | .float kind => pure (kind != .f16b && kind != .ppcf128,false)
-      | .rawPointer .. | .reference .. | .slice .. | .tuple .. | .array .. | .adt .. | .patternType .. | .closure .. => pure (true,false)
+      | .rawPointer .. | .reference .. | .slice .. | .tuple .. | .array .. | .adt .. | .patternType .. | .closure .. | .coroutine .. => pure (true,false)
       | .dynamic value => pure (value.predicates.all (fun predicate => BinderRegions.regionOnly predicate.variables),true)
       | .functionPointer signature => pure (BinderRegions.regionOnly signature.variables,true)
       | .functionDefinition _ _ variables =>

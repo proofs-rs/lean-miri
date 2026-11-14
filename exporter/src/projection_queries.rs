@@ -13,8 +13,8 @@ fn parent<'tcx>(
     // returns `u8` even though `str`'s layout has zero ordinary fields. Keep
     // that exact query result available to the importer without inventing a
     // field count or enumerating a synthetic array.
-    let query_count = if matches!(layout.ty.kind(), ty::Str) {
-        1
+    let query_count = if matches!(layout.ty.kind(), ty::Str | ty::Slice(..) | ty::Array(..)) {
+        layout.fields.count().max(1)
     } else {
         layout.fields.count()
     };
@@ -24,11 +24,7 @@ fn parent<'tcx>(
             Ok(pool_type::ProjectionField {
                 index,
                 ty: type_json(context, tcx, field.ty)?,
-                layout: if index == 0 && matches!(layout.ty.kind(),ty::RawPtr(..)|ty::Ref(..)) {
-                    pointer_data_layout_value_json(context,field)
-                } else if matches!(&layout.variants,rustc_abi::Variants::Multiple { tag_field,.. } if tag_field.index() == index) {
-                    enum_tag_layout_value_json(context,layout)
-                } else { layout_value_json(context,tcx,field) },
+                layout: layout_value_json(context,tcx,field),
             })
         })
         .collect::<Result<_, String>>()?;
@@ -51,6 +47,9 @@ pub(super) fn export<'tcx>(
             | ty::RawPtr(..)
             | ty::Ref(..)
             | ty::Adt(..)
+            | ty::Tuple(..)
+            | ty::Array(..)
+            | ty::Slice(..)
             | ty::Pat(..)
             | ty::Str
     ) {
@@ -65,15 +64,6 @@ pub(super) fn export<'tcx>(
             "projection queries",
             "projection queries require a complete monomorphic parent type",
         );
-    }
-    // These exact source constructors have fully ported field operations.
-    // Non-erased regions retain their explicit query identity material.
-    let covered = matches!(input.kind(),ty::Str)
-        || matches!(*input.kind(),ty::RawPtr(pointee,_) | ty::Ref(_,pointee,_)
-            if !input.has_free_regions() && pointer_recipe_eligible(tcx,pointee));
-    if covered {
-        layout_query_trace("projection-constructor",input,false);
-        return Ok(None);
     }
     let env = ty::TypingEnv::fully_monomorphized();
     layout_query_trace("projection-parent",input,true);

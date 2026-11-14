@@ -141,6 +141,33 @@ private def parseConstants : JsonReader.Parser (Array MIR.TypeConst) :=
     if seen.contains value then JsonReader.fail s!"$.type_constants[{index}]: duplicate compiler type-constant identity"
     pure (value, seen.push value)
 
+private structure TypeConstResultFields where
+  aliasKind : Option String := none
+  rigidity : Option String := none
+  definition : Option Nat := none
+  genericArgs : Option (Array MIR.GenericArg) := none
+  valueConstId : Option Nat := none
+
+private def parseTypeConstResult : JsonReader.Parser CompilerTypeConstResult := do
+  let fields ← JsonReader.object ({} : TypeConstResultFields) fun fields key => do
+    match key with
+    | "alias_kind" => return {fields with aliasKind := some (← JsonReader.string)}
+    | "rigidity" => return {fields with rigidity := some (← JsonReader.string)}
+    | "def_id" => return {fields with definition := some (← JsonReader.natural)}
+    | "generic_args" => return {fields with genericArgs := some (← GenericArgsCodec.decode)}
+    | "value_const_id" => return {fields with valueConstId := some (← JsonReader.natural)}
+    | _ => JsonReader.skipValue; return fields
+  let aliasKind ← JsonReader.required fields.aliasKind "alias_kind"
+  unless #["projection", "inherent_self", "inherent_impl", "free", "anonymous"].contains aliasKind do
+    JsonReader.fail "compiler type constant result: unknown alias kind"
+  let rigid ← match ← JsonReader.required fields.rigidity "rigidity" with
+    | "rigid" => pure true
+    | "not_rigid" => pure false
+    | _ => JsonReader.fail "compiler type constant result: unknown rigidity"
+  return ⟨aliasKind, rigid, ← JsonReader.required fields.definition "def_id",
+    ← JsonReader.required fields.genericArgs "generic_args",
+    ← JsonReader.required fields.valueConstId "value_const_id"⟩
+
 private def parseInstances : JsonReader.Parser (Array InstanceNode) :=
   JsonReader.arrayWithState ({} : Std.HashMap Nat (Array InstanceNode)) fun seen index => do
     let value ← denseRow "instance IDs" index (·.id) (parseInstance s!"$.instances[{index}]")
@@ -256,6 +283,7 @@ private structure DocumentFields where
   compilerPredicates : Option (Array CompilerPredicateEvidence) := none
   definitions : Option (Array DefinitionId) := none
   typeConstants : Option (Array MIR.TypeConst) := none
+  compilerTypeConstResults : Option (Array CompilerTypeConstResult) := none
   files : Option (Array String) := none
   spans : Option (Array SourceSpanData) := none
   layouts : Option (Array Layout) := none
@@ -313,6 +341,7 @@ private def parseDocumentFields (pools : SharedPools) (policy : ProfileFields) :
     | "compiler_predicate_queries" => return {d with compilerPredicates := some (← JsonReader.array decodeCompilerPredicateEvidence)}
     | "definitions" => return {d with definitions := some (← parseDefinitions)}
     | "type_constants" => return {d with typeConstants := some (← parseConstants)}
+    | "compiler_type_const_results" => return {d with compilerTypeConstResults := some (← JsonReader.array parseTypeConstResult)}
     | "files" => return {d with files := some (← parseFiles)}
     | "spans" => return {d with spans := some (← JsonReader.arrayIndexed (fun index => parseSourceSpan s!"$.spans[{index}]"))}
     | "layouts" =>
@@ -400,6 +429,7 @@ private def parseDocumentFields (pools : SharedPools) (policy : ProfileFields) :
     compilerPredicates := ← JsonReader.required d.compilerPredicates "compiler_predicate_queries"
     definitions := definitions
     typeConstants := ← JsonReader.required d.typeConstants "type_constants"
+    compilerTypeConstResults := ← JsonReader.required d.compilerTypeConstResults "compiler_type_const_results"
     files := ← JsonReader.required d.files "files"
     spans := ← JsonReader.required d.spans "spans"
     layouts := ← JsonReader.required d.layouts "layouts"
@@ -476,6 +506,21 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
           throw "$.definitions: ADT destructor definition identity out of bounds"
   if types.isEmpty then throw "$.types: input has no type graph; refusing an empty import"
   if bodies.isEmpty then throw "$.bodies: input has no MIR bodies; refusing an empty import"
+  let mut typeConstKeys : Array (String × Bool × Nat × Array MIR.GenericArg) := #[]
+  for (row, index) in d.compilerTypeConstResults.toList.zipIdx do
+    unless row.definition < definitions.size do
+      throw s!"$.compiler_type_const_results[{index}]: definition reference out of bounds"
+    unless row.valueConstId < typeConstants.size do
+      throw s!"$.compiler_type_const_results[{index}]: value reference out of bounds"
+    let some result := typeConstants[row.valueConstId]?
+      | throw s!"$.compiler_type_const_results[{index}]: value reference out of bounds"
+    match result with
+    | MIR.TypeConst.Value .. => pure ()
+    | _ => throw s!"$.compiler_type_const_results[{index}]: rustc result is not a value"
+    let key := (row.aliasKind, row.rigid, row.definition, row.genericArgs)
+    if typeConstKeys.contains key then
+      throw s!"$.compiler_type_const_results[{index}]: duplicate rustc query key"
+    typeConstKeys := typeConstKeys.push key
   profileit "decoder.validate_predicate_queries" profile fun _ => do
     unless compilerPredicates.size == predicates.size do
       throw "$.compiler_predicate_queries: predicate query and definition tables differ in size"

@@ -1,11 +1,10 @@
 import Miri.Input.CompilerInstance
 import Miri.Interpreter.CallMachine
 import Miri.Input.RuntimeArrayQueries
-import Miri.Input.WorldValTree
 
 /-! The resolved body identifies its concrete callee and preamble span.
-Required constants are evaluated in the current compiler World after the callee
-frame is installed, before its first instruction. -/
+Required constants carry rustc evaluated values and are checked after the
+callee frame is installed, before its first instruction. -/
 namespace Miri.Input.CompilerLifecycle
 open Lean Miri.Interpreter
 structure Entry where
@@ -49,8 +48,10 @@ def requiredConstants (p : Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K User))
     (body : LoadedBody) : MachineHooks.M K User Unit :=
   requiredConstantsWith p types (fun constant => do
-    let _ ← RuntimeArrayQueries.performCompiler types do
-      RuntimeArrayTypes.liftType (WorldValTree.evaluate (← get).metadata constant.span constant.value)) body
+    match constant.value with
+    | .Val .. => pure ()
+    | .Ty .. | .Unevaluated .. =>
+      throw (.unsupported "required constant lacks a rustc evaluated value")) body
 
 def hooks (p : Prepared)
     (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (base : CallMachine.Lifecycle K User C) : CallMachine.Lifecycle K User C :=

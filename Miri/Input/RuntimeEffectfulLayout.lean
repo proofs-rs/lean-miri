@@ -12,8 +12,50 @@ runtime successor. There is no evaluated scalar or normalized-table capability. 
 abbrev Provider (S : Type) := CompilerTypingEnv.Env → TypeId → Option MIR.SpanRef → Term → RvalueM S Term
 
 /-- Missing engine capability remains a failure at the actual constant demand. -/
-def unavailable : Provider S := fun _ _ _ _ =>
-  throw (.unsupported "runtime type-level constant requires an effectful VALTREE/ALLOC provider with its physical VALUE dependencies")
+def unavailable : Provider S := fun _ _ _ term =>
+  throw (.unsupported s!"runtime type-level constant has no rustc evaluation result: {repr term}")
+
+private def argumentArray : Terms → Array Term
+  | .nil => #[]
+  | .cons head tail => #[head] ++ argumentArray tail
+
+/-- Consume the exact rustc result for a concrete type-level alias.  The
+source key is rebuilt in the current world so runtime-instantiated types use
+the same definition and argument identities as the exporter. -/
+def compilerResults (types : RuntimeArrayQueries.Access S)
+    (metadata : RuntimeMetadata) : Provider S := fun _ expected _ source => do
+  let current ← getThe S
+  let arena := (types.get current).arena
+  let fuel := metadata.materialLayoutFuel + 3 * (arena.constructedTypes.size + arena.constructedConstants.size)
+  let mut found : Option TypeConstantId := none
+  for row in metadata.source.compilerTypeConstResults do
+    let sourceKind := if row.aliasKind == "inherent_impl" || row.aliasKind == "inherent_self"
+      then "inherent" else row.aliasKind
+    let tag := s!"alias_{sourceKind}_{if row.rigid then "rigid" else "not_rigid"}"
+    if let .definition .constant sourceTag definition children := source then
+      if sourceTag == tag then
+        let identity ← match arena.identity row.definition with
+          | .ok value => pure value
+          | .error error => throw (.unsupported s!"rustc type constant definition: {error}")
+        if identity == definition then
+          let arguments ← match GenericInstantiationWorld.ofArguments arena fuel row.genericArgs with
+            | .ok value => pure value
+            | .error error => throw (.unsupported s!"rustc type constant arguments: {error}")
+          if children == GenericSubstitution.Terms.ofArray arguments then
+            found := some row.valueConstId
+  let some resultId := found
+    | throw (.unsupported s!"missing exact rustc type-level constant result for {repr source}")
+  let result ← match arena.lookupConstant resultId with
+    | .ok value => pure value
+    | .error error => throw (.unsupported s!"rustc type constant result: {error}")
+  match result with
+  | .Value ty _ =>
+    unless ty == expected do
+      throw (.unsupported "rustc type constant result type disagrees with instantiated source")
+  | _ => throw (.unsupported "rustc type constant result is not a value")
+  match GenericInstantiationWorld.ofConstant arena fuel resultId with
+  | .ok term => pure term
+  | .error error => throw (.unsupported s!"rustc type constant value reification: {error}")
 
 /-- Source String errors are a separate layer. Runtime provider StepError
 failures bypass this layer, retaining the runtime EStateM successor unchanged. -/
@@ -60,15 +102,17 @@ def perform (types : RuntimeArrayQueries.Access S) (provider : Provider S)
       let hooks : AliasNormalization.EffectHooks (SourceM S) := {
         toHooks := pureHooks
         constant := fun remaining source => do
-          let .definition .constant "alias_anonymous_not_rigid" definition .nil := source
-            | throw "effectful type constant requires separate generic/trait/rigid source admission"
+          let .definition .constant tag definition children := source
+            | throw "type constant source is not a definition alias"
+          unless tag.startsWith "alias_" do
+            throw "type constant source is not an alias"
           let arena := (types.get (← getRuntime)).arena
           let reference ← arena.definitionRef definition
           let some declaration := arena.definitions[reference]?
             | throw "type constant source declaration absent"
           let some template := declaration.genericTemplate
             | throw "type constant raw declared type template absent"
-          let expectedTerm ← template.instantiateType remaining #[]
+          let expectedTerm ← template.instantiateType remaining (argumentArray children)
           let expected ← GenericInstantiationWorld.resolveType remaining expectedTerm
           -- Lift the runtime provider, not its error into a source String.
           -- A provider failure never enters ExceptT's String catch channel.

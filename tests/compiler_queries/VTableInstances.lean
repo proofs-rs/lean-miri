@@ -189,7 +189,7 @@ def main (args : List String) : IO Unit := do
           | _ => throw (IO.userError "virtual/concrete mismatch control failed")
           if wanted.kind != .item then
             match (CallResolution.loadedBodyOfInstance prepared.calls actualId).run selectedWorld with
-            | .error "constructed shim body is unsupported" => pure ()
+            | .error "constructed instance has no exact rustc body result" => pure ()
             | .error error => throw (IO.userError s!"wrong constructed shim body residual: {error}")
             | .ok _ => throw (IO.userError "constructed shim obtained an unsupported body")
             let abi ← must (CompilerInstanceAbi.prepare selectedWorld.metadata

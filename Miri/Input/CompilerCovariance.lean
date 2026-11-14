@@ -121,11 +121,10 @@ def relationInWorld (index : CompilerQueryIndices.Covariance) (world : TypeArena
 
 def relation (p : CompilerProviders.Prepared) (source target : MIR.TyId) : Except String Bool := do
   if source == target then return true
-  let some sourceNode := p.program.input.types[source]? |
+  let some _sourceNode := p.program.input.types[source]? |
     throw s!"covariance source type is absent from material prefix: {source}"
-  let some targetNode := p.program.input.types[target]? |
+  let some _targetNode := p.program.input.types[target]? |
     throw s!"covariance target type is absent from material prefix: {target}"
-  if rigidMismatch sourceNode.shape.kind targetNode.shape.kind then return false
   relationWithIndex p.covarianceIndex source target
 
 def compatible (p : CompilerProviders.Prepared) (debugAssertions : Bool)
@@ -139,8 +138,7 @@ def compatible (p : CompilerProviders.Prepared) (debugAssertions : Bool)
 
 def hook (p : CompilerProviders.Prepared) (access : RuntimeArrayQueries.Access S)
     (debugAssertions : Bool) (source target : LocalLayout) : EStateM StepError S Bool := do
-  let world ← RuntimeArrayQueries.snapshot access
-  let related ← match relationInWorld p.covarianceIndex world source.ty target.ty with
+  let related ← match relation p source.ty target.ty with
     | .ok value => pure value | .error error => throw (.unsupported error)
   if !related then return false
   if debugAssertions || source.ty != target.ty then

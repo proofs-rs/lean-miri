@@ -136,7 +136,7 @@ def common (p : CompilerProviders.Prepared) (options : Options)
     | .ok () => match target with
       | .Terminate reason => (do
         let (definition,arguments) ← lift (CompilerPanicFacts.unwindTerminateSeed p.program reason)
-        let callee ← RuntimeArrayQueries.performCompiler EvalProjectionMachine.arrays (CompilerInstance.item definition arguments)
+        let callee ← query (CompilerInstance.Material.item p.program.input.instances definition arguments)
         callFunction choice callee #[] (.goto none .Unreachable)) state
       | _ => .ok () state
   pure {

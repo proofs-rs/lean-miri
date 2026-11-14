@@ -58,10 +58,7 @@ impl<'tcx> FrozenProfile<'tcx> {
     /// Discover demands freely, but answer them only from the frozen cache.
     /// Unsupported selected result types/errors reject explicitly in serialize.
     pub fn selected_tables(&self,tcx:TyCtxt<'tcx>,context:&ExportContext<'tcx>)->Result<Vec<Value>,String> {
-        let mut selected=self.selected.clone();
-        selected.extend(context.initial_query_demands.iter().copied());
-        selected.sort_by_key(|def|(def.krate.as_u32(),def.index.as_u32()));selected.dedup();
-        selected.into_iter().map(|definition| {
+        self.selected.iter().copied().map(|definition| {
             if context.definitions.get(&definition).is_none() {return Err("selected memo declaration was not retained in source scope".into())}
             cache::serialize(tcx,&self.caches.selected(definition))
         }).collect()
