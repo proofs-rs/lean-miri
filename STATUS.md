@@ -41,15 +41,15 @@ and counters are in `scratch/performance/pivot-final/rustc-boundary-main-full-*`
 in the working tree. This shared-host run supplies no reliable small-speedup
 comparison against an earlier implementation.
 
-The exporter supplies concrete Item bodies in its reachable-instance closure
-through rustc's instantiated MIR query. A novel instance first interned during
-execution is outside that closure and now fails with an explicit missing rustc
-body result. FnPtr conversion shims have a rustc `instance_mir` query, but the
-current exporter does not add novel concrete shim instances to its demand
-closure; exporting their rustc body and ABI is required before those calls can
-run under this boundary. The older raw template/shim body constructor is not
-an execution fallback. Source trait/impl selection helpers remain in the tree
-for component tests but have no production caller.
+The exporter supplies concrete Item and demanded FnPtr conversion shim bodies
+in its reachable-instance closure through rustc's instantiated MIR query;
+concrete shim ABI rows are also exported. A fresh shim fixture contains eight
+material rustc bodies with exact ABI results and no source shim bodies. A novel
+instance first interned during execution remains outside that closure and
+fails with an explicit missing rustc body result. The older raw template/shim
+body constructor and wire form are not execution fallbacks. Source trait/impl
+selection helpers remain in the tree for component tests but have no production
+caller.
 
 FnPtr/closure cast resolution now follows actual MIR cast requests, including
 requests discovered after their type was registered. Non-demanded FnDef result

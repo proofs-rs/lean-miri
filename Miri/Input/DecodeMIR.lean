@@ -121,14 +121,9 @@ private def sourceConstant : JsonReader.Parser SourceConstant := do
       reject "evaluated MIR constant contains raw source material"
     return .value (← required s.value "value")
   | "type_constant" =>
-    unless s.value.isNone && s.definition.isNone && s.arguments.isNone && s.promoted.isNone do
-      reject "raw MIR type constant contains evaluated/Unevaluated fallback"
-    return .typeConstant (← required s.typeConstant "type_constant")
+    reject "raw MIR type constant has no rustc evaluated operand result"
   | "unevaluated_const" =>
-    unless s.value.isNone && s.typeConstant.isNone do
-      reject "raw MIR Unevaluated contains an evaluated/type-constant fallback"
-    pure (.unevaluated (← required s.definition "definition")
-      (← required s.arguments "arguments") (← required s.promoted "promoted"))
+    reject "raw MIR Unevaluated has no rustc evaluated operand result"
   | _ => reject "unknown MIR constant source category"
 
 private def makeSourceConstant (ty : Nat) (span : MIR.SpanRef) (userType : Option Nat) :
@@ -1146,18 +1141,9 @@ private def parseBodySeedRaw (path : String) : MIRParser.Parser BodySeed := do
     return .noopDrop ⟨← required fields.material.instance_id "instance_id",
       ← required fields.noopSpan "source_span"⟩
   | "fn_pointer_shim" =>
-    unless !fields.materialFields && fields.templateId.isNone && fields.genericArgs.isNone &&
-        fields.material.promoted_bodies.isNone do
-      reject "FnPtr shim source cannot carry a monomorphic body or template reference"
-    return .fnPointerShim ⟨← required fields.material.instance_id "instance_id",
-      ← required fields.noopSpan "source_span",← required fields.nonNullDefinition "non_null_definition",
-      ← required fields.codeDefinition "code_definition"⟩
+    reject "source FnPtr shim body is not a rustc MIR result"
   | "copy_template" =>
-    unless fields.noopSpan.isNone && fields.nonNullDefinition.isNone && fields.codeDefinition.isNone do reject "generic template cannot carry a no-op drop source span"
-    unless !fields.materialFields do reject "generic template reference cannot carry a monomorphic body fallback"
-    return .copyTemplate ⟨← required fields.templateId "template_id",
-      ← required fields.material.instance_id "instance_id",← required fields.genericArgs "generic_args",
-      fields.material.promoted_bodies.getD #[]⟩
+    reject "source MIR template body has no exact rustc executable result"
   | _ => reject "unknown body seed kind"
 
 def parseBodySeed (path : String) (pools : Option MIRParser.SharedPools := none) : JsonReader.Parser ParsedBodySeed := do

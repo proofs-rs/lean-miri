@@ -359,8 +359,14 @@ private def parseDocumentFields (pools : SharedPools) (policy : ProfileFields) :
     | "bodies" =>
       let bodies ← JsonReader.arrayIndexed (fun index => DecodeMIR.parseBodySeed s!"$.bodies[{index}]" (some pools.mir))
       return {d with bodies := some (bodies.map (·.value)), bodyReferences := bodies.map (·.references)}
-    | "ctfe_scalar_sources" => return {d with ctfeScalarSources := some (← JsonReader.arrayIndexed (fun _ => do JsonReader.liftExcept (CtfeMirSourceCodec.read (← Lean.Json.Parser.anyCore))))}
-    | "mir_templates" => return {d with mirTemplates := some (← JsonReader.arrayIndexed (fun index => DecodeMIR.parseCopyTemplate s!"$.mir_templates[{index}]"))}
+    | "ctfe_scalar_sources" =>
+      let sources ← JsonReader.arrayIndexed (fun _ => do JsonReader.liftExcept (CtfeMirSourceCodec.read (← Lean.Json.Parser.anyCore)))
+      unless sources.isEmpty do JsonReader.fail "ctfe_scalar_sources: source constant evaluator is not a rustc result"
+      return {d with ctfeScalarSources := some sources}
+    | "mir_templates" =>
+      let sources ← JsonReader.arrayIndexed (fun index => DecodeMIR.parseCopyTemplate s!"$.mir_templates[{index}]")
+      unless sources.isEmpty do JsonReader.fail "mir_templates: source executable body is not a rustc result"
+      return {d with mirTemplates := some sources}
     | "compiler_coroutine_coverage" => return {d with coroutineCoverage := some (← CoroutineCoverageCodec.parse pools.mir)}
     | "body_roots" => return {d with bodyRoots := some (← JsonReader.arrayIndexed (fun index => parseBodyRoot s!"$.body_roots[{index}]"))}
     | "compiler_alloc_id_world" =>

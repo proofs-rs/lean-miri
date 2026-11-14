@@ -800,8 +800,6 @@ pub(super) struct CopyTemplateSource {
 pub(super) enum BodySeed<Q = VtableQueryKey, C = crate::resolution_values::PendingCandidates> {
     Material { #[serde(flatten)] body: Body<Q,C> },
     NoopDrop {instance_id:u64, source_span:BacktraceSpan},
-    FnPointerShim {instance_id:u64, source_span:BacktraceSpan,
-        non_null_definition:u64, code_definition:u64},
     CopyTemplate {
         template_id: u64,
         instance_id: u64,
@@ -815,8 +813,6 @@ impl BodySeed<VtableQueryKey,crate::resolution_values::PendingCandidates> {
         Ok(match self {
             Self::Material{body}=>BodySeed::Material{body:body.finish(ids,candidates)?},
             Self::NoopDrop{instance_id,source_span}=>BodySeed::NoopDrop{instance_id,source_span},
-            Self::FnPointerShim{instance_id,source_span,non_null_definition,code_definition}=>
-                BodySeed::FnPointerShim{instance_id,source_span,non_null_definition,code_definition},
             Self::CopyTemplate{template_id,instance_id,generic_args,promoted_bodies}=>
                 BodySeed::CopyTemplate{template_id,instance_id,generic_args,promoted_bodies},
         })

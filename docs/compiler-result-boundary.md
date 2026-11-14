@@ -73,6 +73,7 @@ The current runtime cannot ask rustc for an
 identity first constructed after export; the exporter must include every
 identity needed by a chosen execution, or the demand stops explicitly. See
 [STATUS.md](../STATUS.md) for the remaining coverage and execution evidence.
-Concrete Item bodies come from rustc's instantiated MIR in the export closure.
-Novel FnPtr shim instances can also be queried from rustc, but are not yet
-included in that closure with body and ABI material.
+Concrete Item and demanded FnPtr conversion shim bodies come from rustc's
+instantiated MIR in the export closure; shims also have exact ABI rows. A novel
+instance first constructed during execution is still outside that frozen
+closure and fails at its body or ABI demand.

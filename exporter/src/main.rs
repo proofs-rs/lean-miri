@@ -2704,17 +2704,6 @@ fn export_reachable_instances<'tcx>(
                 data:pool_instance::InstanceData::InstanceMir {body,promoted_bodies:Vec::new()}});
             continue;
         }
-        if fn_pointer_shim::eligible(tcx,instance) {
-            context.runtime_mir_frame_instances.insert(instance);
-            let body=source_fn_pointer_shim_json(tcx,instance,context)?;
-            let instance_kind=instance_kind_json(context,tcx,instance.def)?;
-            let definition=def_json(context,def_id);
-            let def_path=tcx.def_path_str(def_id);
-            let generic_args=generic_args_json(context,tcx,instance.args)?;
-            records.push(InstanceFact {instance_id,instance_kind,def_id:definition,def_path,generic_args,
-                data:pool_instance::InstanceData::InstanceMir {body,promoted_bodies:Vec::new()}});
-            continue;
-        }
         let template = checked_instance_mir(tcx, instance.def)?;
         if callable_runtime_instance(tcx, instance) {
             context.runtime_mir_frame_instances.insert(instance);
@@ -2837,34 +2826,6 @@ fn source_noop_drop_json<'tcx>(tcx:TyCtxt<'tcx>,instance:ty::Instance<'tcx>,
     let source_span=backtrace_span_json(context,tcx,span,span);
     let instance_id=context.register_metadata_instance(instance);
     context.bodies.define(id,pool_body::BodySeed::NoopDrop{instance_id,source_span});
-    Ok(id as u64)
-}
-
-// Raw identities/signature/location only. The Lean provider builds executable
-// cast statements on demand in the current execution's constructor universe.
-fn source_fn_pointer_shim_json<'tcx>(tcx:TyCtxt<'tcx>,instance:ty::Instance<'tcx>,
-    context:&mut ExportContext<'tcx>)->Result<u64,String> {
-    if !fn_pointer_shim::eligible(tcx,instance) {
-        return export_failure("FnPtr conversion source","outside selected shim category");
-    }
-    let (id,fresh)=context.bodies.reserve(BodyKey {instance,promoted:None,role:ctfe_body_source::Role::Runtime});
-    if !fresh {return Ok(id as u64)}
-    // These exact source-generated shim families cannot own coroutine state.
-    // Record the raw body's marker even when it is the final body in the pool.
-    if context.coroutine_coverage.body_coroutines.len() <= id {
-        context.coroutine_coverage.body_coroutines.resize(id + 1,false);
-    }
-    let definition=instance.def.def_id();
-    def_json(context,definition);
-    let non_null=tcx.require_lang_item(rustc_attr_ir::lang_items::LangItem::NonNull,rustc_span::DUMMY_SP);
-    let code=tcx.require_lang_item(rustc_attr_ir::lang_items::LangItem::Code,rustc_span::DUMMY_SP);
-    let non_null_definition=def_json(context,non_null);
-    let code_definition=def_json(context,code);
-    let span=tcx.def_span(definition);
-    let source_span=backtrace_span_json(context,tcx,span,span);
-    let instance_id=context.register_metadata_instance(instance);
-    context.bodies.define(id,pool_body::BodySeed::FnPointerShim {
-        instance_id,source_span,non_null_definition,code_definition });
     Ok(id as u64)
 }
 
