@@ -33,11 +33,12 @@ execution; there is no cross-execution mutable answer cache.
 
 Final fresh-guest measurement used the 102,376,624-byte export of the concrete
 `main` input, pinned Lean runner, one Lean thread and CPU 2, with three full
-executions. All three reached `finalized_exit code=0`. Wall times were 205.675,
-206.116 and 207.388 seconds (median 206.116); process CPU times were 204.464,
-204.886 and 205.779 seconds (median 204.886). Selected CPU steal was 6.29,
-7.32 and 7.23 seconds; cgroup throttling was zero in every interval. Raw logs
-and counters are in `scratch/performance/pivot-final/rustc-boundary-main-full-*`
+executions of commit `be11ca46`. All three reached `finalized_exit code=0`.
+Wall times were 202.823, 202.465 and 204.055 seconds (median 202.823);
+process CPU times were 201.558, 201.202 and 202.859 seconds (median 201.558).
+Selected CPU steal was 4.94, 5.11 and 5.15 seconds; cgroup throttling was zero
+in every interval. Raw logs and counters are in
+`scratch/performance/pivot-final/rustc-boundary-main-final-*`
 in the working tree. This shared-host run supplies no reliable small-speedup
 comparison against an earlier implementation.
 
