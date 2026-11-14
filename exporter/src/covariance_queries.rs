@@ -2,8 +2,7 @@
 //! Canonical normalized identity chooses one finite request domain, not
 //! answers. Exact MIR transmute/subtype casts, shared reborrows and vtable receiver
 //! pairs add source-demanded requests outside that domain. Every recorded
-//! answer comes from the actual rustc relation query; no layout-based answer
-//! is fabricated.
+//! answer comes from the actual rustc relation query.
 use super::*;
 #[derive(serde::Serialize)]
 pub(super) struct Query {
@@ -20,6 +19,7 @@ fn closed(input: ty::Ty<'_>) -> bool {
         && !input.has_placeholders()
         && !input.references_error()
 }
+
 // Discovery runs inside the export fixed point because serializing a demanded
 // endpoint can recursively add types, predicates, instances and allocations.
 // Normalized identity pairs use types already in the pool and add no endpoints.
@@ -72,12 +72,17 @@ pub(super) fn discover<'tcx>(
                 continue;
             };
             let source = ty::Ty::new_mut_ptr(tcx, input);
-            let query = (instance, ty::List::empty());
-            let abi = tcx
-                .fn_abi_of_instance(env.as_query_input(query))
-                .map_err(|error| format!("vtable receiver ABI query failed: {error:?}"))?;
-            if let Some(receiver) = abi.args.first() {
-                let target = receiver.layout.ty;
+            let target = if let Some(signature) = super::instance_abi_material::signature(tcx, instance, ty::List::empty()) {
+                super::instance_abi_material::trace("vtable-receiver-source", false, instance);
+                signature.inputs().first().copied()
+            } else {
+                super::instance_abi_material::trace("vtable-receiver-residual", true, instance);
+                let query = (instance, ty::List::empty());
+                let abi = tcx.fn_abi_of_instance(env.as_query_input(query))
+                    .map_err(|error| format!("vtable receiver ABI query failed: {error:?}"))?;
+                abi.args.first().map(|receiver| receiver.layout.ty)
+            };
+            if let Some(target) = target {
                 if closed(target) && source != target {
                     pairs.insert((source, target));
                 }
@@ -132,7 +137,8 @@ pub(super) fn evaluate<'tcx>(
         Ok((source_type, target_type, source, target))
     }).collect::<Result<Vec<_>, String>>()?;
     ordered.sort_by_key(|(source_id, target_id, _, _)| (*source_id, *target_id));
-    Ok(ordered.into_iter().map(|(source_type, target_type, source, target)| Query {
+    Ok(ordered.into_iter()
+      .map(|(source_type, target_type, source, target)| Query {
         typing_env: "fully_monomorphized",
         variance: "covariant",
         source_type,

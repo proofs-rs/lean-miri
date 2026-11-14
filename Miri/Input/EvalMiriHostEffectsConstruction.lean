@@ -120,6 +120,12 @@ def sourceAllocIdNumberFromImage
     (image : AllocationImage.Imported) :
     AllocId → M Os R P H D O Aff B Host UInt64 := fun id => do
   let state ← get
+  if let some run := state.machine.memory.activeInitialCompilerRun then
+    if state.machine.memory.sourceAllocIdWorldActive then
+      throw (.unsupported "prepared and initial compiler source profiles conflict")
+    match state.machine.memory.initialCompilerSource? run id with
+    | some raw => return raw
+    | none => throw (.unsupported "miri_get_alloc_id raw identity absent from active initial source run")
   if state.machine.memory.sourceAllocIdWorldActive then
     match state.machine.memory.sourceAllocIdForRuntime? id with
     | some sourceId => return sourceId
@@ -145,6 +151,15 @@ def sourceAllocIdFromImage
     UInt64 → M Os R P H D O Aff B Host (Option AllocId) := fun sourceNumber => do
   if sourceNumber == 0 then return none
   let state ← get
+  if let some run := state.machine.memory.activeInitialCompilerRun then
+    if state.machine.memory.sourceAllocIdWorldActive then
+      throw (.unsupported "prepared and initial compiler source profiles conflict")
+    let some runtime := state.machine.memory.initialCompilerRuntime? run sourceNumber | return none
+    -- Frozen holes reserve identities but never become live allocation objects.
+    unless state.machine.memory.hasGlobalId runtime ||
+        state.machine.memory.live.any (fun row => row.1 == runtime) ||
+        state.machine.memory.dead.any (fun row => row.allocId == runtime) do return none
+    return some runtime
   if state.machine.memory.sourceAllocIdWorldActive then
     if state.machine.memory.opaqueSourceGlobalIds.contains sourceNumber then
       throw (.unsupported "miri_print_borrow_state source global payload is opaque in the prepared AllocId world")

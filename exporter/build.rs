@@ -18,6 +18,18 @@ fn output(command: &mut Command, description: &str) -> String {
 
 fn main() {
     println!("cargo:rerun-if-env-changed=RUSTC");
+    println!("cargo:rerun-if-env-changed=LEAN_MIRI_INITIAL_SNAPSHOT_DRIVER");
+    println!("cargo:rerun-if-env-changed=LEAN_MIRI_INITIAL_SNAPSHOT_DRIVER_SHA256");
+    if std::env::var_os("CARGO_FEATURE_CTFE_INITIAL_GLOBAL_SNAPSHOT").is_some() {
+        let driver=std::fs::canonicalize(std::env::var_os("LEAN_MIRI_INITIAL_SNAPSHOT_DRIVER")
+            .expect("audited snapshot feature requires exact driver path")).expect("audited driver path must exist");
+        let expected=std::env::var("LEAN_MIRI_INITIAL_SNAPSHOT_DRIVER_SHA256").expect("audited snapshot feature requires exact driver SHA256");
+        assert!(expected.len()==64 && expected.bytes().all(|byte|byte.is_ascii_hexdigit()),"invalid audited driver SHA256");
+        let observed=output(Command::new("sha256sum").arg(&driver),"audited compiler driver SHA256");
+        assert_eq!(observed.split_whitespace().next(),Some(expected.as_str()),"audited compiler driver changed");
+        println!("cargo:rustc-env=LEAN_MIRI_INITIAL_SNAPSHOT_DRIVER={}",driver.display());
+        println!("cargo:rustc-env=LEAN_MIRI_INITIAL_SNAPSHOT_DRIVER_SHA256={expected}");
+    }
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
     let version = output(
         Command::new(&rustc).arg("--version").arg("--verbose"),

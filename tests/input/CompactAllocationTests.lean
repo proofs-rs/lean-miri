@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 import Miri.Input.AllocationImage
 
@@ -15,7 +16,7 @@ def main (args : List String) : IO Unit := do
   let directory := args.headD "scratch/compact-allocation-inputs"
   let load := fun name => IO.FS.readFile s!"{directory}/{name}.json"
   for name in #["valid-noncontiguous-salts", "valid-grouped-without-world", "valid-shared-bytes-cycle", "valid-body-tls-image"] do
-    let decoded ← must (decodeJson (← load name))
+    let decoded ← must (decodeFixture (← load name))
     if name == "valid-noncontiguous-salts" then
       let some world := decoded.document.compilerAllocIdWorld |
         throw (IO.userError "noncontiguous control lost the source world")
@@ -90,6 +91,6 @@ def main (args : List String) : IO Unit := do
       "obsolete-schema", "missing-byte-image", "zero-group-source-id",
       "zero-source-id", "duplicate-source-id", "duplicate-graph-id", "shuffled-group-identities",
       "empty-function-group", "dangling-byte-image", "duplicate-byte-image"] do
-    match decodeJson (← load name) with
+    match decodeFixture (← load name) with
     | .error message => IO.println s!"PASS {name}: {message}"
     | .ok _ => throw (IO.userError s!"malformed compact allocation accepted: {name}")

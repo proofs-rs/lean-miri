@@ -35,10 +35,11 @@ def options (prepared : Prepared) (base : EvalForeignConstruction.Options) :
     EvalForeignConstruction.Options :=
   {base with noAllocShimSymbol := prepared.noAllocShimSymbol}
 
-def hooks (prepared : Prepared) (calls : CompilerCallPipeline.Prepared) :
+def hooks (prepared : Prepared) (calls : CompilerCallPipeline.Prepared)
+    (types : RuntimeArrayQueries.Access S) :
     EvalForeignConstruction.Symbols S := {
   allocatorSymbol := fun symbol => pure (allocatorSymbol prepared symbol)
-  lookupFunction := lookupFunction prepared (CompilerCallPipeline.loadMir calls)
+  lookupFunction := lookupFunction prepared (CompilerCallPipeline.loadMir calls types)
   checkSymbolClash := fun symbol => do
     match checkSymbolClash prepared symbol with
     | .ok () => pure ()

@@ -22,7 +22,8 @@ private def memory (place : RuntimePlace Provenance) : MachineHooks.M K U (MPlac
   | .local .. => throw (.invalidProgram "freeze projection returned a local place")
 
 def hooks [DecidableEq K] (prepared : CompilerFactAdapters.Prepared)
-    (runtime : CompilerRuntimeQueries.Prepared) (leaves : Leaves K U)
+    (runtime : CompilerRuntimeQueries.Prepared)
+    (types : RuntimeArrayQueries.Access (ValidityMachine.State K U)) (leaves : Leaves K U)
     (access : ValidityMachine.Access K U)
     (projection : PlaceProjectionHooks Provenance (ValidityMachine.State K U) C MachineHooks.FrameExtra)
     (vtable : VTableHooks Provenance (ValidityMachine.State K U) C F A)
@@ -33,17 +34,18 @@ def hooks [DecidableEq K] (prepared : CompilerFactAdapters.Prepared)
   let size := fun (place : MPlaceTy Provenance) =>
     DynamicLayout.sizeAndAlignFromMeta dynamic choice projection.dynamicFuel place.mplace.metadata place.layout
   {
-    instanceDefinition := fun inst => lift (CompilerInstance.definitionOf context.loweringContext.instances inst)
-    typeShape := fun ty => lift (CompilerFacts.retagTypeShape context ty)
-    builtinDeref := fun ty => lift (CompilerFacts.requiredType context ty "builtin_deref_explicit")
-    referencePointee := fun ty => lift (CompilerFacts.referencePointee context ty)
-    isUnpin := fun ty => lift (CompilerFacts.boolean context ty "is_unpin")
-    isUnsafeUnpin := fun ty => lift (CompilerFacts.boolean context ty "is_unsafe_unpin")
-    typeIsFreeze := fun ty => lift (CompilerFacts.boolean context ty "is_freeze")
+    instanceDefinition := fun inst => do
+      lift (CompilerInstance.definitionOf (← RuntimeArrayQueries.compilerSnapshot types) inst)
+    typeShape := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.retagTypeShapeInWorld context ty)
+    builtinDeref := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.requiredTypeInWorld context ty "builtin_deref_explicit")
+    referencePointee := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.referencePointeeInWorld context ty)
+    isUnpin := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld context ty "is_unpin")
+    isUnsafeUnpin := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld context ty "is_unsafe_unpin")
+    typeIsFreeze := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld context ty "is_freeze")
     implicitWrites := leaves.implicitWrites
     rustcNoWritable := leaves.rustcNoWritable
     preciseInteriorMut := leaves.preciseInteriorMut
-    immPtrToMPlace := PointerPlaceMachine.fromImmediate access (CompilerExecutionProviders.pointerCompiler prepared) choice
+    immPtrToMPlace := PointerPlaceMachine.fromImmediate access (CompilerExecutionProviders.pointerCompiler prepared types) choice
     sizeAndAlign := size
     checkPtrAccess := ValidityMachine.checkPointerAccess access
     resolveAllocation := TypedValidityProviders.resolveAllocation pointers
@@ -60,11 +62,11 @@ def hooks [DecidableEq K] (prepared : CompilerFactAdapters.Prepared)
     freeze := {
       target := pointers.arithmetic
       debugAssertions := projection.place.debugAssertions
-      isUnsafeCell := fun ty => lift (CompilerFacts.boolean context ty "is_unsafe_cell")
-      typeIsFreeze := fun ty => lift (CompilerFacts.boolean context ty "is_freeze")
-      isDynamic := fun ty => lift (CompilerFacts.boolean context ty "is_dynamic")
-      isBox := fun ty => lift (CompilerFacts.boolean context ty "is_box")
-      isTooGeneric := fun ty => lift (CompilerFacts.boolean context ty "is_too_generic")
+      isUnsafeCell := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld context ty "is_unsafe_cell")
+      typeIsFreeze := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld context ty "is_freeze")
+      isDynamic := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld context ty "is_dynamic")
+      isBox := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld context ty "is_box")
+      isTooGeneric := fun ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld context ty "is_too_generic")
       sizeAndAlign := size
       projectField := fun place index => do
         memory (← PlaceDynamic.field projection choice ⟨.memory place.mplace,place.layout⟩ index)
@@ -72,11 +74,12 @@ def hooks [DecidableEq K] (prepared : CompilerFactAdapters.Prepared)
       projectIndex := fun place index => do
         memory (← PlaceDynamic.index projection choice ⟨.memory place.mplace,place.layout⟩ index)
       projectBox := fun place => do
-        let (pointer,allocator) ← CompilerExecutionProviders.projectBox context runtime projection choice
+        let (pointer,allocator) ← CompilerExecutionProviders.projectBox context runtime types projection choice
           ⟨.memory place.mplace,place.layout⟩
         pure (← memory pointer,← memory allocator)
       unpackDynTrait := fun place => do
-        let .dynamic expected ← lift (CompilerFactAdapters.validityKind prepared place.layout.ty)
+        let .dynamic expected ← RuntimeArrayQueries.perform types
+          (CompilerFactAdapters.validityKindInWorld prepared place.layout.ty)
           | throw (.invalidProgram "freeze dyn unpack on non-dynamic compiler type")
         let inner ← VTable.unpackDynTrait vtable choice ⟨.indirect place.mplace,place.layout⟩ expected
         let .indirect memory := inner.op | throw (.invalidProgram "dynamic unpack returned immediate")

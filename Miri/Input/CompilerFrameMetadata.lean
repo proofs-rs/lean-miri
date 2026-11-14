@@ -1,5 +1,6 @@
 import Miri.Input.CompilerCallPipeline
 import Miri.Interpreter.FrameMetadataBindings
+import Miri.Input.RuntimeArrayQueries
 
 /-! Exact compiler crate identity/name, caller attributes and source scopes.
 The configured user-relevant crate set is supplied explicitly by the machine. -/
@@ -25,30 +26,34 @@ private def lift (result : Except String A) : MachineHooks.M K User A :=
   | .ok value => pure value
   | .error error => throw (.unsupported s!"compiler frame metadata: {error}")
 
-private def definitionCrate (p : Prepared) (callee : CallInstance) : Except String Nat := do
-  let id ← CompilerInstance.definitionOf p.calls.calls.program.input.instances callee
-  let some definition := p.calls.calls.program.compilerTables.definitions[id]?
-    | throw "frame full-instance definition absent from shared compiler table"
-  return definition.crateIndex
+def definitionIndex (types : RuntimeArrayQueries.Access (MachineHooks.State K U))
+    (callee : CallInstance) : MachineHooks.M K U Nat := do
+  lift (CompilerInstance.definitionOf (← RuntimeArrayQueries.compilerSnapshot types) callee)
 
-def hooks (p : Prepared) (userRelevantCrates : Array Nat) : FrameMetadata.CompilerHooks K User := {
+private def definitionCrate (p : Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (callee : CallInstance) : MachineHooks.M K U Nat := do
+  let id ← definitionIndex types callee
+  lift do
+    let some definition := p.calls.calls.program.compilerTables.definitions[id]?
+      | throw "frame full-instance definition absent from shared compiler table"
+    return definition.crateIndex
+
+def hooks (p : Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (userRelevantCrates : Array Nat) : FrameMetadata.CompilerHooks K User := {
   requiresCallerLocation := fun callee => do
     match CompilerVirtualFacts.inlineAttribute p.calls.scopes callee with
     | some value => pure value
-    | none => lift (CompilerRuntimeQueries.requiresCallerLocation p.calls.runtime callee)
-  isLocalDefinition := fun callee => return (← lift (definitionCrate p callee)) == p.localCrate
-  definitionCrate := fun callee => lift (definitionCrate p callee)
+    | none => RuntimeArrayQueries.performCompiler types (CompilerRuntimeQueries.requiresCallerLocation p.calls.runtime callee)
+  isLocalDefinition := fun callee => return (← definitionCrate p types callee) == p.localCrate
+  definitionCrate := fun callee => definitionCrate p types callee
   userRelevantCrate := fun id => pure (userRelevantCrates.contains id)
   crateName := fun id => lift do
     let some (_,name) := p.crates.find? (·.1 == id) | throw "compiler crate name absent"
     return name
   sourceScope := fun identity _ body scope => do
-    let actual ← lift do
-      let some actual := p.calls.scopes.program.bundle.bodies[identity.index]?
-        | throw "canonical frame body identity absent"
-      return actual
+    let actual ← RuntimeArrayQueries.performCompiler types (p.calls.scopes.program.resolveBodyIdentity identity)
     unless actual.body == body do throw (.invalidProgram "frame body identity/content mismatch")
-    lift (CompilerScopes.sourceScope p.calls.scopes identity.index scope) }
+    RuntimeArrayQueries.performCompiler types (CompilerScopes.sourceScopeIdentity p.calls.scopes identity scope) }
 
 end Miri.Input.CompilerFrameMetadata
 
@@ -58,14 +63,15 @@ set_option autoImplicit false
 variable {K U P : Type}
 def resolvedRank (localCrate definitionCrate : Nat) (relevant : Array Nat) : UInt8 :=
   if definitionCrate == localCrate || relevant.contains definitionCrate then 255 else 1
- theorem userRelevance_resolved (p : Prepared) (relevant : Array Nat)
+ theorem userRelevance_resolved (p : Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (relevant : Array Nat)
     (frame : Frame P LocalLayout Unit) (definition : DefinitionId) (definitionIndex : Nat)
     (inline : CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = none ∨
       CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = (some false))
-    (track : CompilerRuntimeQueries.requiresCallerLocation p.calls.runtime frame.functionInstance = .ok false)
-    (resolved : CompilerInstance.definitionOf p.calls.calls.program.input.instances frame.functionInstance = .ok definitionIndex)
+    (track : RuntimeArrayQueries.performCompiler types (CompilerRuntimeQueries.requiresCallerLocation p.calls.runtime frame.functionInstance) = pure false)
+    (resolved : CompilerFrameMetadata.definitionIndex types frame.functionInstance = pure definitionIndex)
     (found : p.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition) :
-    (FrameMetadata.userRelevance (hooks p relevant) frame : MachineHooks.M K U UInt8) =
+    (FrameMetadata.userRelevance (hooks p types relevant) frame : MachineHooks.M K U UInt8) =
       pure (resolvedRank p.localCrate definition.crateIndex relevant) := by
   rcases inline with inline | inline <;> funext state
   all_goals simp [FrameMetadata.userRelevance, hooks, lift, definitionCrate, inline, track, resolved, found,
@@ -73,21 +79,22 @@ def resolvedRank (localCrate definitionCrate : Nat) (relevant : Array Nat) : UIn
   all_goals split <;> simp_all [bind, EStateM.bind, EStateM.pure]
   all_goals split <;> rfl
 
- theorem initFrame_resolved (p : Prepared) (relevant : Array Nat)
+ theorem initFrame_resolved (p : Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (relevant : Array Nat)
     (frame : Frame Provenance LocalLayout Unit) (definition : DefinitionId) (definitionIndex : Nat)
     (inline : CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = none ∨
       CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = (some false))
-    (track : CompilerRuntimeQueries.requiresCallerLocation p.calls.runtime frame.functionInstance = .ok false)
-    (resolved : CompilerInstance.definitionOf p.calls.calls.program.input.instances frame.functionInstance = .ok definitionIndex)
+    (track : RuntimeArrayQueries.performCompiler types (CompilerRuntimeQueries.requiresCallerLocation p.calls.runtime frame.functionInstance) = pure false)
+    (resolved : CompilerFrameMetadata.definitionIndex types frame.functionInstance = pure definitionIndex)
     (found : p.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition)
     (state : MachineHooks.State K U) :
     ∃ fresh,
-      MachineHooks.initFrame (FrameMetadata.userRelevance (hooks p relevant)) frame state = .ok fresh state ∧
+      MachineHooks.initFrame (FrameMetadata.userRelevance (hooks p types relevant)) frame state = .ok fresh state ∧
       fresh.extra.borrowTracker = state.machine.borrowTracker.map (fun _ => {}) ∧
       fresh.extra.dataRace = state.machine.dataRace.map (fun _ => {}) ∧
       fresh.extra.userRelevance = resolvedRank p.localCrate definition.crateIndex relevant ∧
       fresh.returnContinuation = frame.returnContinuation ∧ fresh.returnPlace = frame.returnPlace := by
-  have exactQuery := userRelevance_resolved (K := K) (U := U) p relevant frame definition definitionIndex inline track resolved found
+  have exactQuery := userRelevance_resolved (K := K) (U := U) p types relevant frame definition definitionIndex inline track resolved found
   unfold MachineHooks.initFrame
   simp only [get, getThe, MonadStateOf.get, EStateM.get, bind, EStateM.bind, pure, EStateM.pure]
   rw [exactQuery]
@@ -110,17 +117,18 @@ def resolvedRank (localCrate definitionCrate : Nat) (relevant : Array Nat) : UIn
   vaList := frame.vaList
   trackCallerArg := frame.trackCallerArg
   location := frame.location }
- theorem initFrame_explicit (p : Prepared) (relevant : Array Nat)
+ theorem initFrame_explicit (p : Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (relevant : Array Nat)
     (frame : Frame Provenance LocalLayout Unit) (definition : DefinitionId) (definitionIndex : Nat)
     (inline : CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = none ∨
       CompilerVirtualFacts.inlineAttribute p.calls.scopes frame.functionInstance = (some false))
-    (track : CompilerRuntimeQueries.requiresCallerLocation p.calls.runtime frame.functionInstance = .ok false)
-    (resolved : CompilerInstance.definitionOf p.calls.calls.program.input.instances frame.functionInstance = .ok definitionIndex)
+    (track : RuntimeArrayQueries.performCompiler types (CompilerRuntimeQueries.requiresCallerLocation p.calls.runtime frame.functionInstance) = pure false)
+    (resolved : CompilerFrameMetadata.definitionIndex types frame.functionInstance = pure definitionIndex)
     (found : p.calls.calls.program.compilerTables.definitions[definitionIndex]? = some definition)
     (state : MachineHooks.State K U) :
-    MachineHooks.initFrame (FrameMetadata.userRelevance (hooks p relevant)) frame state =
+    MachineHooks.initFrame (FrameMetadata.userRelevance (hooks p types relevant)) frame state =
       .ok (resolvedFrame frame state.machine (resolvedRank p.localCrate definition.crateIndex relevant)) state := by
-  have exactQuery := userRelevance_resolved (K := K) (U := U) p relevant frame definition definitionIndex inline track resolved found
+  have exactQuery := userRelevance_resolved (K := K) (U := U) p types relevant frame definition definitionIndex inline track resolved found
   unfold MachineHooks.initFrame
   simp only [get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure]
   rw [exactQuery]

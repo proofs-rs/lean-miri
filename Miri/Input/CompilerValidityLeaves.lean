@@ -23,29 +23,15 @@ def make (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
     ExecutionValidity.Leaves (ValidityMachine.State K U) C :=
   let facts := p.lifecycle.calls.symbols.facts
   let context := facts.context
-  let constructed := fun ty => do
-    return (arrays.get (← get)).entries.any (·.value.ty == ty)
-  { classify := fun _ ty => do
-      if ← constructed ty then
-        let (_,element) ← match RuntimeArrayTypes.arrayInfo (arrays.get (← get)) ty with
-          | .ok value => pure value
-          | .error reason => throw (.unsupported s!"runtime array classification: {reprStr reason}")
-        pure (.sequence element.ty)
-      else lift (CompilerFactAdapters.validityKind facts ty)
-    unitLayout := fun _ => lift (CompilerFacts.unitLayout context)
-    typeName := fun _ ty => do
-      -- A runtime constructor has no compiler-rendered name unless it aliases
-      -- an existing source type. Missing diagnostics remain an explicit query.
-      pure (← lift (context.runtime.node ty |>.mapError toString)).display
-    opsemInhabited := fun _ ty => do
-      let world := arrays.get (← get)
-      lift (RuntimeArrayFacts.opsemInhabited context world ty (world.entries.size+1))
-    isFreeze := fun _ ty => do lift (RuntimeArrayFacts.boolean context (arrays.get (← get)) ty "is_freeze")
-    fieldPath := fun _ layout index child => do
-      if ← constructed layout.ty then pure (.arrayElem index)
-      else lift (CompilerPaths.fieldPath context layout index child)
-    variantPath := fun _ layout index => lift (CompilerPaths.variantPath context layout index)
-    projectBox := CompilerExecutionProviders.projectBox context p.lifecycle.calls.runtime projection
-    metadataTail := fun _ ty => lift (CompilerFactAdapters.metadataTail facts ty)
+  let run := fun {A} (action : TypeArena.WorldM A) => RuntimeArrayQueries.perform arrays action
+  { classify := fun _ ty => run (CompilerFactAdapters.validityKindInWorld facts ty)
+    unitLayout := fun _ => run (CompilerFacts.unitLayoutInWorld context)
+    typeName := fun _ ty => run (CompilerFactAdapters.typeNameInWorld facts ty)
+    opsemInhabited := fun _ ty => run (CompilerFacts.booleanInWorld context ty "opsem_inhabited")
+    isFreeze := fun _ ty => run (CompilerFacts.booleanInWorld context ty "is_freeze")
+    fieldPath := fun _ layout index child => run (CompilerPaths.fieldPathInWorld context layout index child)
+    variantPath := fun _ layout index => run (CompilerPaths.variantPathInWorld context layout index)
+    projectBox := CompilerExecutionProviders.projectBox context p.lifecycle.calls.runtime arrays projection
+    metadataTail := fun _ ty => run (CompilerFactAdapters.metadataTailInWorld facts ty)
     ctfePointerLookup := CompilerCtfeValidity.lookup p image pointers }
 end Miri.Input.CompilerValidityLeaves

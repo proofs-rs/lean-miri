@@ -131,7 +131,7 @@ def fromSource [DecidableEq MiriMemoryKind]
   let thread := WindowsThreadMachine.bindNames environment.env.strings .winLocal thread
   let symbols ← p.foreignSymbols
     |>.mapError StepError.unsupported
-  let calls := CompilerCallConstruction.compiler p compatibilityBudget
+  let calls := CompilerCallConstruction.compiler p EvalProjectionMachine.outerArrays compatibilityBudget
   let writeScalar := fun (value : Scalar Provenance)
       (destination : MPlaceTy Provenance) =>
     writePlaceImmediate place choice (.scalar value)

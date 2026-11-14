@@ -51,9 +51,11 @@ def dynamic (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
     DynamicLayoutHooks Provenance (Machine Os R P H D O Aff B Host) Unit where
   target := p.runtime.target.base
   maxSizeOfVal := maximum
-  classify := fun _ ty => project (EvalProjectionMachine.dynamicKind p.lifecycle.calls.symbols.facts ty)
-  field := fun _ layout index => do project (EvalProjectionMachine.field (arrays.get (← get)) layout index)
-  packedAlign := fun _ ty => project (EvalProjectionMachine.packed p.runtime ty)
+  classify := fun _ ty => do project (EvalProjectionMachine.dynamicKind p.lifecycle.calls.symbols.facts
+    (arrays.get (← get)) ty)
+  field := fun _ layout index => RuntimeArrayQueries.fieldLayout arrays layout index
+  packedAlign := fun _ ty => RuntimeArrayQueries.perform arrays
+    (RuntimeMetadata.packedAlignInWorld p.runtime ty)
   vtableSizeAndAlign := VTable.getSizeAndAlignRead (vtables p image pointers)
 
 /-- The source operation runs on the real machine carried by the memory

@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.LowerMIR
 import Miri.Input.Decoder
 import Miri.Input.CompilerInstance
@@ -49,12 +50,14 @@ def main (args : List String) : IO Unit := do
     changed.containsAllocationId 2 && !changed.containsAllocationId 7)
     "context retained obsolete pool IDs"
   if let some path := args.head? then
-    let .ok decoded := decodeJson (← IO.FS.readFile path)
+    let .ok decoded := decodeFixture (← IO.FS.readFile path)
       | throw (IO.userError "input decode failed")
-    let some body := decoded.document.bodies[0]?
-      | throw (IO.userError "input has no body")
-    let context := LowerContext.ofDocument decoded.document
-    let .ok prepared := lowerBody context body.toBodyCore
+    let .ok initial := TypeArena.World.ofDocument decoded.document
+      | throw (IO.userError "input type universe rejected")
+    let .ok (body,arena) := (SourceMir.resolveBody decoded.document 0).run initial
+      | throw (IO.userError "input body resolution failed")
+    let context := (LowerContext.ofDocument decoded.document).withWorld arena
+    let .ok prepared := lowerBody context body
       | throw (IO.userError "body preparation failed")
     check (prepared.body == body.mir) "preparation changed decoded MIR"
     check (prepared.definitions == decoded.document.definitions)

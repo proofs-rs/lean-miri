@@ -97,6 +97,18 @@ inductive LiveAllocationInfoError where
   | useAfterFree (allocId : AllocId) (message : CheckInAllocMsg)
   deriving DecidableEq, Repr
 
+/-- Explicit complete-pre-query source namespace; distinct from prepared profiles. -/
+structure InitialCompilerSourceRun where
+  token : Nat
+  next : UInt64
+  exhausted : Bool := false
+  deriving DecidableEq, Repr
+structure InitialCompilerSourceBinding where
+  run : Nat
+  source : UInt64
+  runtime : AllocId
+  deriving DecidableEq, Repr
+
 structure MemoryState (Prov Extra MachineKind : Type) where
   /-- Mirrors rustc's `AllocMap::next_id`, which starts at one and increments
   monotonically for every reserved local or imported-global allocation. -/
@@ -104,6 +116,11 @@ structure MemoryState (Prov Extra MachineKind : Type) where
   idSupplyExhausted : Bool := false
   private issuedIdTable : KeyedArray UInt64 AllocId (fun (id : AllocId) => id.value) :=
     .empty (fun (id : AllocId) => id.value)
+  /-- The currently executing compiler run. Every ordinary reserveAllocId
+  participates, including stack/local allocations and allocation failures. -/
+  activeInitialCompilerRun : Option Nat := none
+  initialCompilerRuns : Array InitialCompilerSourceRun := #[]
+  initialCompilerBindings : Array InitialCompilerSourceBinding := #[]
   live : Array (AllocId × LocalAllocation Prov Extra MachineKind) := #[]
   dead : Array DeadAllocation := #[]
   private globalTable : KeyedArray UInt64 GlobalAllocation
@@ -296,7 +313,7 @@ private def containsId (state : MemoryState Prov Extra MachineKind) (id : AllocI
 The returned ID is consumed before later machine hooks run. A zero value
 reifies the source's `NonZero::new(...).unwrap()` exhaustion panic; the state
 is marked exhausted so a caller cannot continue after that source-fatal path. -/
-def reserveAllocId (state : MemoryState Prov Extra MachineKind) :
+private def reserveBaseAllocId (state : MemoryState Prov Extra MachineKind) :
     MemoryState Prov Extra MachineKind × Except AllocationIdError AllocId := Id.run do
   if state.idSupplyExhausted || (state.sourceAllocIdWorldActive && state.sourceAllocIdExhausted) then
     return (state, .error .exhausted)
@@ -320,6 +337,56 @@ def reserveAllocId (state : MemoryState Prov Extra MachineKind) :
             runtimeBySourceAllocIdTable := advanced.runtimeBySourceAllocIdTable.push (rawId, allocId) }
         else advanced
       return (advanced, .ok allocId)
+
+/-- Bootstrap-only reservation of a runtime slot representing an ALREADY
+reserved initial source identity. It must not consume the active source run.
+Ordinary runtime/local/global allocations must call reserveAllocId instead. -/
+def reserveInitialSnapshotSlot (state : MemoryState Prov Extra MachineKind) :
+    MemoryState Prov Extra MachineKind × Except AllocationIdError AllocId :=
+  if state.sourceAllocIdWorldActive || state.activeInitialCompilerRun.isSome then (state,.error .exhausted)
+  else reserveBaseAllocId state
+
+def initialCompilerRuntime? (state : MemoryState Prov Extra MachineKind)
+    (run : Nat) (source : UInt64) : Option AllocId :=
+  (state.initialCompilerBindings.find? (fun row => row.run == run && row.source == source)).map (·.runtime)
+def initialCompilerSource? (state : MemoryState Prov Extra MachineKind)
+    (run : Nat) (runtime : AllocId) : Option UInt64 :=
+  (state.initialCompilerBindings.find? (fun row => row.run == run && row.runtime == runtime)).map (·.source)
+
+def activateInitialCompilerRun (state : MemoryState Prov Extra MachineKind)
+    (run : Nat) (next : UInt64) (bindings : Array (UInt64 × AllocId)) :
+    Except String (MemoryState Prov Extra MachineKind) := do
+  if state.sourceAllocIdWorldActive then throw "prepared/initial source allocator profiles conflict"
+  if state.activeInitialCompilerRun.isSome then throw "initial compiler source run is already active"
+  if state.initialCompilerRuns.any (fun row => row.token == run) then throw "initial compiler run already registered"
+  unless next != 0 && bindings.size == next.toNat-1 do throw "initial compiler prefix/frontier mismatch"
+  let mut seen : Array AllocId := #[]
+  for (row,index) in bindings.zipIdx do
+    unless row.1.toNat == index+1 && state.hasIssuedId row.2 do throw "initial compiler prefix identity invalid"
+    if seen.contains row.2 then throw "initial compiler prefix aliases runtime identities"
+    if state.initialCompilerBindings.any (fun old => old.runtime == row.2) then
+      throw "initial compiler runtime identity already belongs to another source run"
+    seen := seen.push row.2
+  pure {state with activeInitialCompilerRun := some run, initialCompilerRuns := state.initialCompilerRuns.push ⟨run,next,false⟩, initialCompilerBindings := state.initialCompilerBindings ++ bindings.map (fun row => ⟨run,row.1,row.2⟩)}
+
+/-- Shared actual TCX reserve boundary. A new-profile run advances its own raw
+source counter for EVERY allocation; runtime IDs remain a separate namespace.
+The zero-ID failure marks the run fatal and retains its fetch_add effect. -/
+def reserveAllocId (state : MemoryState Prov Extra MachineKind) :
+    MemoryState Prov Extra MachineKind × Except AllocationIdError AllocId := Id.run do
+  let some run := state.activeInitialCompilerRun | return reserveBaseAllocId state
+  if state.sourceAllocIdWorldActive || state.idSupplyExhausted then return (state,.error .exhausted)
+  let some supply := state.initialCompilerRuns.find? (fun row => row.token == run)
+    | return (state,.error .exhausted)
+  if supply.exhausted then return (state,.error .exhausted)
+  let raw := supply.next
+  let advanced := {state with initialCompilerRuns := state.initialCompilerRuns.map (fun row => if row.token == run then {row with next := raw+1,exhausted := raw == 0} else row)}
+  if raw == 0 then return (advanced,.error .exhausted)
+  let (reserved,result) := reserveBaseAllocId advanced
+  match result with
+  | .error error => return (reserved,.error error)
+  | .ok runtime =>
+    return ({reserved with initialCompilerBindings := reserved.initialCompilerBindings.push ⟨run,raw,runtime⟩},.ok runtime)
 
 def sourceAllocIdForRuntime? (state : MemoryState Prov Extra MachineKind) (id : AllocId) : Option UInt64 :=
   (state.sourceAllocIdByRuntimeTable.find? id.value).map Prod.snd
@@ -488,7 +555,7 @@ private theorem highWater_absent {V : Type} {keyFn : V → UInt64}
 
 /-- Raw high-water data and nonzero supplies suffice for the actual allocator
 reservation. No future allocation/byte/choice operation succeeds by assumption. -/
-theorem reserve_of_highWater (state : MemoryState Prov Extra MachineKind)
+private theorem reserveBase_of_highWater (state : MemoryState Prov Extra MachineKind)
     (available : state.idSupplyExhausted = false) (nonzero : state.nextAllocId ≠ 0)
     (sourceAvailable : state.sourceAllocIdWorldActive = true → state.sourceAllocIdExhausted = false)
     (sourceNonzero : state.sourceAllocIdWorldActive = true → state.sourceAllocIdNext ≠ 0)
@@ -496,7 +563,7 @@ theorem reserve_of_highWater (state : MemoryState Prov Extra MachineKind)
     (live : ∀ row ∈ state.live, row.1.value.toNat < state.nextAllocId.toNat)
     (global : ∀ row ∈ state.globals, row.allocId.value.toNat < state.nextAllocId.toNat)
     (dead : ∀ row ∈ state.dead, row.allocId.value.toNat < state.nextAllocId.toNat) :
-    ∃ after, state.reserveAllocId = (after,.ok ⟨state.nextAllocId,nonzero⟩) := by
+    ∃ after, state.reserveBaseAllocId = (after,.ok ⟨state.nextAllocId,nonzero⟩) := by
   have issuedAbsent : state.issuedIdTable.contains state.nextAllocId = false :=
     highWater_absent _ _ (by simpa only [issuedIds] using issued)
   have globalAbsent : state.globalTable.contains state.nextAllocId = false :=
@@ -519,11 +586,48 @@ theorem reserve_of_highWater (state : MemoryState Prov Extra MachineKind)
     simp only [containsId,issuedAbsent,globalAbsent,liveAbsent,deadAbsent,Bool.false_or]
   cases active : state.sourceAllocIdWorldActive with
   | false =>
-    simp [reserveAllocId,available,active,AllocId.ofUInt64,nonzero,absent,Id.run,pure,Pure.pure]
+    simp [reserveBaseAllocId,available,active,AllocId.ofUInt64,nonzero,absent,Id.run,pure,Pure.pure]
   | true =>
     have source := sourceAvailable active
     have sourceNZ := sourceNonzero active
-    simp [reserveAllocId,available,active,source,sourceNZ,AllocId.ofUInt64,nonzero,absent,Id.run,pure,Pure.pure]
+    simp [reserveBaseAllocId,available,active,source,sourceNZ,AllocId.ofUInt64,nonzero,absent,Id.run,pure,Pure.pure]
+
+/-- Availability is raw source state, not an assumption of future operation
+success. An active initial run must have a matching nonfatal, nonzero supply. -/
+def InitialCompilerSourceAvailable (state : MemoryState Prov Extra MachineKind) : Prop :=
+  match state.activeInitialCompilerRun with
+  | none => True
+  | some run => state.sourceAllocIdWorldActive = false ∧
+    ∃ supply, state.initialCompilerRuns.find? (fun row => row.token == run) = some supply ∧
+      supply.exhausted = false ∧ supply.next ≠ 0
+
+theorem reserve_of_highWater (state : MemoryState Prov Extra MachineKind)
+    (available : state.idSupplyExhausted = false) (nonzero : state.nextAllocId ≠ 0)
+    (sourceAvailable : state.sourceAllocIdWorldActive = true → state.sourceAllocIdExhausted = false)
+    (sourceNonzero : state.sourceAllocIdWorldActive = true → state.sourceAllocIdNext ≠ 0)
+    (issued : ∀ id ∈ state.issuedIds, id.value.toNat < state.nextAllocId.toNat)
+    (live : ∀ row ∈ state.live, row.1.value.toNat < state.nextAllocId.toNat)
+    (global : ∀ row ∈ state.globals, row.allocId.value.toNat < state.nextAllocId.toNat)
+    (dead : ∀ row ∈ state.dead, row.allocId.value.toNat < state.nextAllocId.toNat)
+    (initialAvailable : InitialCompilerSourceAvailable state) :
+    ∃ after, state.reserveAllocId = (after,.ok ⟨state.nextAllocId,nonzero⟩) := by
+  cases active : state.activeInitialCompilerRun with
+  | none =>
+    simpa [reserveAllocId,active] using reserveBase_of_highWater state available nonzero
+      sourceAvailable sourceNonzero issued live global dead
+  | some run =>
+    rw [InitialCompilerSourceAvailable,active] at initialAvailable
+    obtain ⟨oldMode,supply,present,notFatal,rawNonzero⟩ := initialAvailable
+    let advanced : MemoryState Prov Extra MachineKind := {state with
+      initialCompilerRuns := state.initialCompilerRuns.map (fun row =>
+        if row.token == run then {row with next := supply.next+1,exhausted := supply.next == 0} else row)}
+    obtain ⟨after,reserved⟩ := reserveBase_of_highWater advanced available nonzero
+      (by simp [advanced,oldMode]) (by simp [advanced,oldMode]) issued live global dead
+    refine ⟨{after with initialCompilerBindings := after.initialCompilerBindings.push ⟨run,supply.next,⟨state.nextAllocId,nonzero⟩⟩},?_⟩
+    have exactReserved := reserved
+    simp [advanced,active,oldMode,available] at exactReserved
+    simp [reserveAllocId,active,available,oldMode,present,notFatal,rawNonzero,
+      Id.run,pure,Pure.pure,exactReserved]
 
 end MemoryState
 

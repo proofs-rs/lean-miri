@@ -30,7 +30,7 @@ def prepareSymbols (providers : CompilerProviders.Prepared) :
 def sourceSymbols (providers : CompilerProviders.Prepared)
     (prepared : CompilerForeignSymbols.Prepared) :
     EvalForeignConstruction.Symbols (State Os R P H D O Aff B Host) :=
-  CompilerForeignSymbols.hooks prepared providers.lifecycle.calls
+  CompilerForeignSymbols.hooks prepared providers.lifecycle.calls EvalProjectionMachine.arrays
 
 def sourceOptions (prepared : CompilerForeignSymbols.Prepared)
     (options : EvalForeignConstruction.Options) : EvalForeignConstruction.Options :=
@@ -57,9 +57,10 @@ def backtraceCore [DecidableEq MiriMemoryKind]
     Backtrace.CoreHooks Provenance (State Os R P H D O Aff B Host)
       (RuntimePlace Provenance) (RuntimePlace Provenance) LoadedBody CallInstance
       MachineHooks.FrameExtra CompilerBacktraceSource.Position :=
-  let functionPointers := CompilerFunctionPointers.hooks providers.pointers image functionPointers
-  let source := CompilerBacktraceSource.source providers.lifecycle.backtrace hostUsizeMax
-    (lift (CompilerBacktraceFacts.unitPointerLayout providers.lifecycle.calls))
+  let functionPointers := CompilerFunctionPointers.hooks providers.pointers EvalProjectionMachine.arrays image functionPointers
+  let source := CompilerBacktraceSource.source providers.lifecycle.backtrace EvalProjectionMachine.arrays hostUsizeMax
+    (RuntimeArrayQueries.perform EvalProjectionMachine.arrays
+      (CompilerBacktraceFacts.unitPointerLayout providers.lifecycle.calls))
     (PointerPlaceMachine.misalignmentWith access PointerPlaceMachine.controlledAlignment)
     (fun callee => do
       let pointer ← FunctionPointers.functionPointer functionPointers (.Instance callee)
@@ -90,7 +91,8 @@ def bindBacktrace [DecidableEq MiriMemoryKind]
     projection choice hostUsizeMax foreign.toCore
   {foreign with otherPortable := fun name abi args destination => do
     if let some result ← Backtrace.Source.emulate backtrace
-        (CompilerBacktraceFacts.reprCHook providers.lifecycle.calls) name abi args destination then
+        (CompilerBacktraceFacts.reprCHook providers.lifecycle.calls EvalProjectionMachine.arrays)
+        name abi args destination then
       return some result
     foreign.otherPortable name abi args destination}
 
@@ -127,23 +129,25 @@ def portableOther [DecidableEq MiriMemoryKind]
     String → FnAbi TyId → Array (OpTy Provenance) → RuntimePlace Provenance →
       M Os R P H D O Aff B Host (Option ForeignItems.EmulateItemResult) := by
   let exactForeign : EvalForeignConstruction.Symbols (State Os R P H D O Aff B Host) :=
-    CompilerForeignSymbols.hooks symbols providers.lifecycle.calls
+    CompilerForeignSymbols.hooks symbols providers.lifecycle.calls EvalProjectionMachine.arrays
   let sourceForeign := {foreign with
     noAllocShimSymbol := symbols.noAllocShimSymbol
     allocatorSymbol := exactForeign.allocatorSymbol
     lookupFunction := exactForeign.lookupFunction
     checkSymbolClash := exactForeign.checkSymbolClash }
-  let functionPointers := CompilerFunctionPointers.hooks providers.pointers image functionPointers
+  let functionPointers := CompilerFunctionPointers.hooks providers.pointers EvalProjectionMachine.arrays image functionPointers
   exact EvalPortableForeignConstruction.portableOtherFromSource sourceForeign machine choice
     thread unitLayout reuseClock effects access arithmetic projection providers.lifecycle.backtrace
-    hostUsizeMax (lift (CompilerBacktraceFacts.unitPointerLayout providers.lifecycle.calls))
+    hostUsizeMax (RuntimeArrayQueries.perform EvalProjectionMachine.arrays
+      (CompilerBacktraceFacts.unitPointerLayout providers.lifecycle.calls))
     (PointerPlaceMachine.misalignmentWith access PointerPlaceMachine.controlledAlignment)
     (fun callee => do
       let pointer ← FunctionPointers.functionPointer functionPointers (.Instance callee)
       return pointer.withOptionalProvenance)
     (FunctionPointers.allocation functionPointers)
     (FunctionPointers.globalFunction functionPointers)
-    (fun ty => lift (CompilerBacktraceFacts.adtReprC providers.lifecycle.calls ty))
+    (fun ty => RuntimeArrayQueries.perform EvalProjectionMachine.arrays
+      (CompilerBacktraceFacts.adtReprC providers.lifecycle.calls ty))
     memory stringBudget
 
 end Miri.Input.EvalPortableForeignRuntime

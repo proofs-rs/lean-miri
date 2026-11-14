@@ -96,6 +96,7 @@ def makeWithSourceConnection
   let leaves : EvalConfigurationCore.Leaves Os R EvalSyncPayload.Payload H D
       (Other Raw Listener TcpStream Error) CpuAffinity.Mask B
       (Host Poll Instant System H D Raw Listener TcpStream Error Native Profiler) C Instant := {
+    constQueries := sourceLeaves.constQueries
     pointerSource := sourcePointer
     sync := EvalSyncObjectAccess.onAccess
     storage := sourceLeaves.storage

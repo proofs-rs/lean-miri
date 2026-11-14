@@ -79,7 +79,7 @@ fn digest_output(output: std::process::Output) -> Result<String, String> {
     }
     Ok(digest.to_ascii_lowercase())
 }
-fn hash_file(path: &Path) -> Result<(String, u64), String> {
+pub(super) fn hash_file(path: &Path) -> Result<(String, u64), String> {
     let file = fs::File::open(path).map_err(|e| e.to_string())?;
     let before = file.metadata().map_err(|e| e.to_string())?;
     let after_file = file.try_clone().map_err(|e| e.to_string())?;

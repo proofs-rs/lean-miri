@@ -15,7 +15,7 @@ def miriStart (compiler : CompilerProviders.Prepared) :
     candidate.crateIndex == 0 && candidate.explicitSymbol && candidate.symbol == "miri_start"
   let #[candidate] := candidates | throw "missing or ambiguous local exported miri_start"
   let some fnInstance := candidate.fnInstance | throw "miri_start export is not a function"
-  let .Item definition ← CompilerInstance.kindOf compiler.program.input.instances fnInstance
+  let .Item definition ← CompilerInstance.Material.kindOf compiler.program.input.instances fnInstance
     | throw "miri_start export is not a monomorphic item"
   let some entry := compiler.main.entries.find? (·.definition == definition)
     | throw "miri_start lacks exact compiler entry signature queries"

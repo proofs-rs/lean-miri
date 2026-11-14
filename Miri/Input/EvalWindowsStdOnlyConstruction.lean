@@ -33,7 +33,7 @@ def fromSource
   let target ← p.externStatics.targetFacts |>.mapError StepError.unsupported
   unless target.os == "windows" && foreign.family == .windows && foreign.os == target.os do
     throw (.invalidProgram "Windows std-only source target mismatch")
-  let frames := CompilerFrameMetadata.hooks p.lifecycle.frames userRelevantCrates
+  let frames := CompilerFrameMetadata.hooks p.lifecycle.frames EvalProjectionMachine.outerArrays userRelevantCrates
   let writeScalar := fun (value : Scalar Provenance) (destination : MPlaceTy Provenance) =>
     writePlaceImmediate place choice (.scalar value)
       ⟨.memory destination.mplace,destination.layout⟩

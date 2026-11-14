@@ -284,7 +284,7 @@ def fromSourceWithLifecycle [DecidableEq MiriMemoryKind]
     permissionDenied := errors.hostFromKind .PermissionDenied
     hostUsizeBits }
   let symbols ← p.foreignSymbols |>.mapError StepError.unsupported
-  let callCompiler := CompilerCallConstruction.compiler p compatibilityBudget
+  let callCompiler := CompilerCallConstruction.compiler p EvalProjectionMachine.arrays compatibilityBudget
   let transmuteProjection := place.projection choice
   let transmute := fun operand target => do
     let projection ← transmuteProjection

@@ -13,8 +13,8 @@ fn parent<'tcx>(
     // returns `u8` even though `str`'s layout has zero ordinary fields. Keep
     // that exact query result available to the importer without inventing a
     // field count or enumerating a synthetic array.
-    let query_count = if matches!(layout.ty.kind(), ty::Str) {
-        1
+    let query_count = if matches!(layout.ty.kind(), ty::Str | ty::Slice(..) | ty::Array(..)) {
+        layout.fields.count().max(1)
     } else {
         layout.fields.count()
     };
@@ -24,7 +24,7 @@ fn parent<'tcx>(
             Ok(pool_type::ProjectionField {
                 index,
                 ty: type_json(context, tcx, field.ty)?,
-                layout: layout_value_json(context, tcx, field),
+                layout: layout_value_json(context,tcx,field),
             })
         })
         .collect::<Result<_, String>>()?;
@@ -47,6 +47,9 @@ pub(super) fn export<'tcx>(
             | ty::RawPtr(..)
             | ty::Ref(..)
             | ty::Adt(..)
+            | ty::Tuple(..)
+            | ty::Array(..)
+            | ty::Slice(..)
             | ty::Pat(..)
             | ty::Str
     ) {
@@ -63,6 +66,7 @@ pub(super) fn export<'tcx>(
         );
     }
     let env = ty::TypingEnv::fully_monomorphized();
+    layout_query_trace("projection-parent",input,true);
     let layout = match tcx.layout_of(env.as_query_input(input)) {
         Ok(layout) => layout,
         Err(error) => {

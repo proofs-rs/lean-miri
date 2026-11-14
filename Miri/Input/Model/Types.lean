@@ -1,8 +1,17 @@
+import Miri.Input.CompilerBodyRole
+import Miri.Input.SourceEnvironment.Material
+import Miri.Input.AliasMaterial
+import Miri.Input.DefinitionPath
+import Miri.Input.AdtDeclaration
 import Lean
 import Miri.Memory.CtfeProvenance
 import Miri.MIR.Operators
 import Miri.ABI.ExternAbi
+import Miri.ABI.FnAbi
+import Miri.ABI.SignatureSeeds
+import Miri.Input.MirTemplate
 import Miri.Interpreter.Instance
+import Miri.Input.GenericSubstitution
 
 /-!
 Typed data model for the pinned rustc MIR export.  These structures describe
@@ -49,16 +58,8 @@ inductive FieldShapeKind where
   | primitive | union | array | arbitrary
   deriving Repr, DecidableEq
 
-inductive IntegerTypeTag where
-  | known (kind : Miri.MIR.IntegerKind)
-  deriving Repr, DecidableEq
-
 inductive FloatTypeTag where
   | f16 | f16b | f32 | f64 | f128 | ppcf128
-  deriving Repr, DecidableEq
-
-inductive AdtKind where
-  | structKind | unionKind | enumKind
   deriving Repr, DecidableEq
 
 structure TypeShapeMetadata where
@@ -78,6 +79,7 @@ inductive ScalarShapeKind where
 
 
 inductive PassModeKind where
+  | initial | scalarRust | scalarSysvArgument | scalarSysvReturn
   | ignore | direct | pair | cast | indirect | indirectUnsized
   deriving Repr, DecidableEq
 
@@ -120,11 +122,34 @@ structure SourceInfo where
   scope : Nat
   deriving Repr, DecidableEq
 
+inductive OptimizationLevel where
+  | no | less | more | aggressive | size | sizeMin
+  deriving Repr, DecidableEq
+
+inductive PanicStrategy where
+  | unwind | abort | immediateAbort
+  deriving Repr, DecidableEq
+
+/-- Canonical compiler session configuration, shared by Item and FnPtr ABI.
+These are source options, never inferred function/pointee/attribute answers. -/
+structure AbiSessionMaterial where
+  panic : PanicStrategy
+  panicInDrop : PanicStrategy
+  optimization : OptimizationLevel
+  llvmWritable : Bool
+  boxNoalias : Bool
+  incrementalEnabled : Bool
+  sanitizers : Array String
+  deriving Repr, DecidableEq
+
 structure Producer where
   miriCommit : String
   rustcCommit : String
   rustcVersion : String
   targetTriple : String
+  abiSession : Option AbiSessionMaterial := none
+  /-- Required raw lang-item presence, not membership in the sliced trait catalogue. -/
+  freezeLangItem : Option DefinitionRef := none
   deriving Repr, DecidableEq
 
 structure TaggedNode where
@@ -234,6 +259,16 @@ structure Layout where
   backendReprKind : Option BackendReprKind
   variants : Option TaggedNode
   backendRepr : Option TaggedNode
+  primitiveRecipe : Option String := none
+  tupleType : Option TypeId := none
+  patternType : Option TypeId := none
+  sequenceType : Option TypeId := none
+  pointerType : Option TypeId := none
+  pointerDataType : Option TypeId := none
+  enumTagType : Option TypeId := none
+  structType : Option TypeId := none
+  enumType : Option TypeId := none
+  unionType : Option TypeId := none
 
 inductive ArmCallKind where
   | aapcs | cmseNonSecureCall | cmseNonSecureEntry
@@ -265,50 +300,14 @@ structure FunctionSignature where
   safety : Miri.MIR.Safety
   abi : Miri.ABI.ExternAbi
   cVariadic : Bool
+  /-- Present only when the raw rustc FnSig splatted header was serialized. -/
+  rawSplatted : Option (Option Nat) := none
 
 
 inductive CompilerPattern where
   | range (start finish : TypeConstantId)
   | or (patterns : Array CompilerPattern)
   | notNull
-
-inductive ReprInteger where
-  | pointerSized (signed : Bool)
-  | fixed (kind : IntegerTypeTag) (sizeBits : Nat) (signed : Bool)
-  deriving Repr, DecidableEq
-
-inductive ScalableElement where
-  | elementCount (count : Nat)
-  | container
-  deriving Repr, DecidableEq
-
-structure ReprOptions where
-  integer : Option ReprInteger
-  alignBytes : Option Nat
-  packBytes : Option Nat
-  flagsBits : Nat
-  scalableElement : Option ScalableElement
-  fieldShuffleSeed : Nat
-  deriving Repr, DecidableEq
-
-namespace ReprOptions
-
--- Pinned rustc_abi::ReprOptions keeps these properties in flags, int and pack.
-def c (repr : ReprOptions) : Bool := repr.flagsBits &&& 1 != 0
-def simd (repr : ReprOptions) : Bool := repr.flagsBits &&& 2 != 0
-def transparent (repr : ReprOptions) : Bool := repr.flagsBits &&& 4 != 0
-def linear (repr : ReprOptions) : Bool := repr.flagsBits &&& 8 != 0
-def scalable (repr : ReprOptions) : Bool := repr.flagsBits &&& 64 != 0
-def rust (repr : ReprOptions) : Bool := !repr.c && !repr.simd && !repr.scalable && !repr.transparent
-def packed (repr : ReprOptions) : Bool := repr.packBytes.isSome
-def inhibitEnumLayoutOptimization (repr : ReprOptions) : Bool := repr.c || repr.integer.isSome
-def inhibitNewtypeAbiOptimization (repr : ReprOptions) : Bool := repr.c || repr.simd
-def inhibitStructFieldReordering (repr : ReprOptions) : Bool :=
-  repr.c || repr.simd || repr.scalable || repr.linear || repr.integer.isSome
-def canRandomizeTypeLayout (repr : ReprOptions) : Bool :=
-  !repr.inhibitStructFieldReordering && repr.flagsBits &&& 16 != 0
-
-end ReprOptions
 
 structure AdtField where
   index : Nat
@@ -354,6 +353,7 @@ inductive TypeShape where
   | reference (pointee : TypeId) (mutability : Miri.MIR.Mutability) (region : Miri.MIR.Region)
   | functionDefinition (definition : DefinitionRef) (args : Array Miri.MIR.GenericArg)
       (signature : FunctionSignature) (boundVariables : Array Miri.MIR.BoundVariableKind)
+      (argumentBoundVariables : Array Miri.MIR.BoundVariableKind)
   | functionPointer (signature : FunctionSignature) (boundVariables : Array Miri.MIR.BoundVariableKind)
   | unsafeBinder (inner : TypeId) (boundVariables : Array Miri.MIR.BoundVariableKind)
   | dynamicTraitObject (predicates : Array PredicateId) (principal : Option PredicateId) (region : Miri.MIR.Region)
@@ -362,7 +362,7 @@ inductive TypeShape where
   | coroutine (definition : DefinitionRef) (args : Array Miri.MIR.GenericArg)
   | never
   | tuple (elements : Array TypeId)
-  | alias (kind : AliasTypeKind) (definition : DefinitionRef) (args : Array Miri.MIR.GenericArg)
+  | alias (kind : AliasTypeKind) (rigid : Bool) (definition : DefinitionRef) (args : Array Miri.MIR.GenericArg)
 
 namespace TypeShape
 
@@ -383,7 +383,7 @@ def metadata (shape : TypeShape) : TypeShapeMetadata := {
   adtKind := match shape with | .adt data => some data.kind | _ => none }
 
 def signature : TypeShape → Option FunctionSignature
-  | .functionDefinition _ _ signature _ | .functionPointer signature _ => some signature
+  | .functionDefinition _ _ signature _ _ | .functionPointer signature _ => some signature
   | _ => none
 
 def pattern : TypeShape → Option CompilerPattern
@@ -568,18 +568,57 @@ structure AbiArgument where
   mode : AbiPassMode
   deriving BEq
 
+structure AbiSignatureSeed where
+  signature : Miri.ABI.SignatureSeed TypeId
+  extraArgumentTypes : Array TypeId
+  callerLocation : Option TypeId
+  deriving BEq, Repr, DecidableEq
+
 structure FunctionAbi where
   arguments : Array AbiArgument
   returnValue : AbiArgument
   callingConvention : CanonicalAbi
-  canUnwind : Bool
+  unwindSeed : Miri.ABI.UnwindSeed
   cVariadic : Bool
-  fixedCount : Nat
+  residualFixedCount : Option Nat
+  signatureSeed : Option AbiSignatureSeed := none
   deriving BEq
+
+/-- Raw ADT definition identity/impl material for synchronous drop. -/
+structure AdtDropMaterial where
+  manuallyDrop : Bool
+  destructor : Option DefinitionRef
+  deriving Repr, DecidableEq
+
+/-- Definition-local codegen attributes before FnAbi construction. -/
+structure FunctionAbiMaterial where
+  neverUnwind : Bool
+  foreignItem : Bool
+  dropGlue : Bool
+  rustcNoWritable : Bool
+  alwaysComptime : Bool
+  deriving Repr, DecidableEq
+
+/-- Raw callable header. Optional absence is unresolved source material. -/
+structure CallableSource where
+  hasSelf : Bool
+  definitionKind : String
+  container : Option String
+  traitItem : Option GenericSubstitution.DefinitionIdentity
+  deriving Repr, DecidableEq
 
 structure DefinitionId where
   crateIndex : Nat
   index : Nat
+  bodyTrackCaller : Option Bool := none
+  callableSource : Option CallableSource := none
+  adtDrop : Option AdtDropMaterial := none
+  genericTemplate : Option GenericSubstitution.DefinitionTemplate := none
+  aliasDeclaration : Option AliasMaterial.Declaration := none
+  adtDeclaration : Option AdtDeclaration.Material := none
+  rawPath : Option DefinitionPath.Material := none
+  sourceEnvironment : Option SourceEnvironment.Material := none
+  functionAbiMaterial : Option FunctionAbiMaterial := none
   deriving Repr, DecidableEq
 
 inductive VtableEntryKind where
@@ -615,13 +654,18 @@ structure StaticAllocation where
   initializer : Option AllocationMemory
   deriving BEq
 
+inductive PredicateProjectionTerm where
+  | type (id : TypeId)
+  | constant (id : TypeConstantId)
+  deriving Repr, DecidableEq, BEq
+
 structure VtablePredicate where
   kind : VtablePredicateKind
   definitionId : DefinitionRef
   definitionPath : Option String
   genericArgs : Array Miri.MIR.GenericArg
   boundVariables : Array Miri.MIR.BoundVariableKind
-  projectionTerm : Option TypeId
+  projectionTerm : Option PredicateProjectionTerm
   deriving BEq
 
 structure VtableEntry where
@@ -717,6 +761,8 @@ inductive CallResolutionKind where
 /-- Only the compiler's LLVM intrinsic dispatch has no ordinary FnAbi. -/
 inductive CallAbiEvidence where
   | normal (id : FunctionAbiId)
+  /-- Raw-signature demand, independent of any physical ABI table index. -/
+  | sourceSignature
   | llvmIntrinsic
   deriving Repr, DecidableEq
 
@@ -788,15 +834,13 @@ structure NodeFacts where
   threadLocals : Array ThreadLocalEvidence := #[]
   dynamicUpcasts : Array DynamicUpcastEvidence := #[]
 
-structure BodyCore where
-  mir : Miri.MIR.Body
+structure BodyMetadata where
   definitionId : Option DefinitionRef
   defPath : String
   sourcePath : String
   spanId : SpanId
   preambleDefSpanId : SpanId
   injectionPhase : Option Miri.MIR.MirPhase
-  instanceId : InstanceId
   localSources : Array SourceInfo
   sourceScopes : Array SourceScope
   backtraceSpans : Array BacktraceSpan
@@ -804,8 +848,16 @@ structure BodyCore where
   nodeFacts : Array (Array NodeFacts)
   requiredConsts : Array Miri.MIR.ConstOperand
 
-def BodyCore.threadLocals (body : BodyCore) : Array ThreadLocalEvidence :=
+structure BodyCore extends BodyMetadata where
+  sourceRole : CompilerBodyRole
+  mir : Miri.MIR.Body
+  instanceId : InstanceId
+
+def BodyMetadata.threadLocals (body : BodyMetadata) : Array ThreadLocalEvidence :=
   (body.nodeFacts.map fun block => (block.map (·.threadLocals)).flatten).flatten
+
+def BodyCore.threadLocals (body : BodyCore) : Array ThreadLocalEvidence :=
+  body.toBodyMetadata.threadLocals
 
 structure PromotedBody where
   index : Nat
@@ -813,6 +865,63 @@ structure PromotedBody where
 
 structure Body extends BodyCore where
   promotedBodies : Array PromotedBody
+
+/-- Generic source metadata contains no fabricated generic instance identity. -/
+structure CopyTemplateSource where
+  template : MirTemplate.Template
+  definitionId : DefinitionRef
+  defPath : String
+  spanId : SpanId
+  preambleDefSpanId : SpanId
+  injectionPhase : Option Miri.MIR.MirPhase
+  localSources : Array SourceInfo
+  sourceScopes : Array SourceScope
+  backtraceSpans : Array BacktraceSpan
+  sourcePromoted : Option Nat
+  sourceRole : CompilerBodyRole
+
+structure CopyTemplateRef where
+  templateId : Nat
+  instanceId : InstanceId
+  genericArgs : Array Miri.MIR.GenericArg
+  promotedBodies : Array PromotedBody
+
+/-- Exact no-op DropGlue source location. Its signature and complete arguments
+are source material reached through the existing instance/definition identity. -/
+structure NoopDropRef where
+  instanceId : InstanceId
+  sourceSpan : BacktraceSpan
+
+/-- Raw source method location and physical lang-item identities used by
+FnPtr conversion shim construction. No local type or executable body is stored. -/
+structure FnPointerShimRef where
+  instanceId : InstanceId
+  sourceSpan : BacktraceSpan
+  nonNullDefinition : DefinitionRef
+  codeDefinition : DefinitionRef
+  deriving Repr, DecidableEq
+
+/-- A selected source category has no monomorphic fallback. -/
+inductive BodySeed where
+  | material (body : Body)
+  | copyTemplate (reference : CopyTemplateRef)
+  | noopDrop (reference : NoopDropRef)
+  | fnPointerShim (reference : FnPointerShimRef)
+
+def BodySeed.instanceId : BodySeed → InstanceId
+  | .material body => body.instanceId
+  | .copyTemplate reference => reference.instanceId
+  | .noopDrop reference => reference.instanceId
+  | .fnPointerShim reference => reference.instanceId
+
+def BodySeed.promotedBodies : BodySeed → Array PromotedBody
+  | .material body => body.promotedBodies
+  | .copyTemplate reference => reference.promotedBodies
+  | .noopDrop _ | .fnPointerShim _ => #[]
+
+def BodySeed.materialBody? : BodySeed → Option Body
+  | .material body => some body
+  | .copyTemplate _ | .noopDrop _ | .fnPointerShim _ => none
 
 structure BodyRoot where
   bodyId : BodyId

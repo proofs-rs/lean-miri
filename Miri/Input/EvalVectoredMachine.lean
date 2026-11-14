@@ -28,8 +28,7 @@ def hooks (runtime : RuntimeMetadata)
     (lift (CompilerPrimitiveFacts.unitLayout runtime))
     (CompilerNamedFields.iovecArrayLayout runtime EvalProjectionMachine.arrays)
     (fun parent name => do
-      match CompilerNamedFields.fieldIndex runtime parent name with
-      | .ok index => pure index | .error error => throw error)
+      CompilerNamedFields.fieldIndex EvalProjectionMachine.arrays parent name)
     (fun pointer => EvalAllocationMachine.deallocate spans pointers extras deallocation pointer none .stack)
     base
 end Miri.Input.EvalVectoredMachine

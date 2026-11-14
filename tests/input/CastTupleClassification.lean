@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.EvalPreparation
 
 open Miri Miri.Input Miri.Interpreter
@@ -7,7 +8,7 @@ private def must (result : Except String α) : IO α :=
 
 def main (args : List String) : IO Unit := do
   let [path] := args | throw (IO.userError "expected genuine tuple-unsizing export")
-  let decoded ← must (decodeJson (← IO.FS.readFile path))
+  let decoded ← must (decodeFixture (← IO.FS.readFile path))
   let program ← must (lowerProgram decoded.document)
   let prepared ← must (EvalPreparation.prepare program).outcome
   let facts := prepared.compiler.lifecycle.calls.symbols.facts

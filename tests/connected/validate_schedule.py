@@ -16,7 +16,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
-from mir_json import load_mir_inspection_document as load_mir_document, pool_entry
+from mir_json import pool_entry
+from legacy_fixture_schema import load_fixture_inspection_document as load_mir_document
 
 
 def need(ok, message):

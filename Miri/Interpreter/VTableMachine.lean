@@ -92,11 +92,17 @@ structure Hooks (K User Other : Type) where
   putRegistry : User → Registry → User
   target : RuntimeTargetDataLayout
   importedVTable : AllocId → M K User (Option (MIR.TyId × PredicateList))
+  /-- Actual initial-run typed reserve capability; absent is Unsupported before registry lookup. -/
+  initialReserve : Option (MIR.TyId → PredicateList → Fin 32 → M K User AllocId) := none
 
 /-- Source reserve_and_set_vtable_alloc key includes salt and both erased
 compiler identities. Metadata uses source pointer alignment and size zero. -/
 def reserve (h : Hooks K User Other) (ty : MIR.TyId) (dynType : PredicateList) (salt : Fin 32) : M K User AllocId := do
   let state ← get
+  if state.machine.memory.activeInitialCompilerRun.isSome then
+    match h.initialReserve with
+    | some reserve => return ← reserve ty dynType salt
+    | none => throw (.unsupported "complete initial vtable key provider is not installed")
   let registry := h.registry state.machine.user
   if let some entry := registry.entries.find? (fun e => e.typeId == ty && e.dynamicType == dynType && e.salt == salt) then
     return entry.allocation

@@ -1,6 +1,7 @@
 """Fresh compiler-boundary regressions; missing setup is an error, never a skip."""
 
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -10,6 +11,28 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 from mir_json import load_mir_inspection_document as load_mir_document, pool_entry
+
+
+def raw_body_source(document, body):
+    """Inspect the encoded source in its own role; never instantiate its MIR."""
+    assert body["body_kind"] == "copy_template"
+    assert set(body) == {"body_kind", "template_id", "instance_id", "generic_args", "promoted_bodies"}
+    instance = pool_entry(document, "instances", body["instance_id"])
+    assert instance["instance_kind"] == {"kind": "item", "def_id": instance["def_id"]}
+    assert pool_entry(document, "bodies", instance["body"]) == body
+    assert body["generic_args"] == instance["generic_args"] and body["promoted_bodies"] == []
+    source = document["mir_templates"][body["template_id"]]
+    assert source["source_def_id"] == instance["def_id"] and source["def_path"] == instance["def_path"]
+    assert source["source_role"] == "runtime" and source["source_promoted"] is None
+    assert source["injection_phase"] is None
+    template = json.loads(source["template"])
+    assert template["parameters"] == [{"type": "type", "const": "constant", "lifetime": "region"}[a["kind"]]
+                                      for a in body["generic_args"]]
+    skeleton = template["skeleton"]
+    assert skeleton["phase"] == "runtime_optimized"
+    assert len(source["local_sources"]) == len(skeleton["locals"])
+    assert all(type(slot) is int and 0 <= slot < len(template["types"]) for slot in skeleton["locals"])
+    return source, template
 
 
 class FailClosedExportTests(unittest.TestCase):
@@ -44,8 +67,12 @@ class FailClosedExportTests(unittest.TestCase):
             cwd=ROOT, env=environment or self.environment, capture_output=True, text=True,
         )
 
-    def accepted(self, fixture, root="identity", crate_type="lib"):
-        result = self.export(fixture, root, crate_type=crate_type)
+    def accepted(self, fixture, root="identity", crate_type="lib", abi_trace=False):
+        environment = dict(self.environment)
+        if abi_trace:
+            environment["LEAN_MIRI_TRACE_ABI_CALLS"] = "1"
+        result = self.export(fixture, root, environment=environment, crate_type=crate_type)
+        self.last_abi_trace = result.stderr.splitlines()
         self.assertEqual(result.returncode, 0, result.stderr)
         document = load_mir_document(self.output)
         self.assertNotIn("completeness", document)
@@ -88,7 +115,7 @@ class FailClosedExportTests(unittest.TestCase):
     def test_source_llvm_abi_keeps_signature_without_synthetic_normal_abi(self):
         for fixture in ("llvm_source_abi", "llvm_stdarch_abi"):
             with self.subTest(fixture=fixture):
-                document = self.accepted(fixture)
+                document = self.accepted(fixture, abi_trace=True)
                 facts = document["compiler_function_facts"]
                 llvm = [row for row in facts["types"]
                         if row["signature_query"]["abi"]["kind"] == "llvm_intrinsic"]
@@ -97,10 +124,24 @@ class FailClosedExportTests(unittest.TestCase):
                 self.assertFalse(any(row["signature"]["abi"]["kind"] == "llvm_intrinsic" for row in helpers))
                 for row in llvm:
                     signature = row["signature_query"]
-                    self.assertTrue(any(helper["signature"]["abi"]["kind"] == "rust"
-                                        and helper["signature"]["inputs"] == signature["inputs"]
-                                        and helper["signature"]["output"] == signature["output"]
-                                        for helper in helpers), "valid Rust helper candidate was dropped")
+                    exact = [helper for helper in helpers
+                             if helper["signature"]["abi"]["kind"] == "rust"
+                             and helper["signature"]["inputs"] == signature["inputs"]
+                             and helper["signature"]["output"] == signature["output"]]
+                    if fixture == "llvm_source_abi":
+                        self.assertEqual(signature["inputs"], [])
+                        output = pool_entry(document, "types", signature["output"])
+                        self.assertEqual(output["shape"], {"kind": "tuple", "elements": []})
+                        self.assertEqual(exact, [], "covered empty Rust helper retained an ABI answer")
+                        key = "signature=Binder { value: fn(), bound_vars: [] } extra=[]"
+                        traces = [line for line in self.last_abi_trace
+                                  if line.startswith("lean_miri_fn_pointer_abi_call ") and line.endswith(key)]
+                        self.assertTrue(any("route=helper-source queried=false " in line for line in traces),
+                                        "valid Rust helper constructor never reached source admission")
+                        self.assertFalse(any("queried=true " in line for line in traces))
+                        self.assertEqual(document["producer"]["abi_session"]["optimization"], "no")
+                    else:
+                        self.assertTrue(exact, "unsupported SIMD Rust helper lost its exact residual ABI")
 
     def test_uncalled_llvm_pointer_preserves_metadata_without_undefined_abi(self):
         document = self.accepted("llvm_pointer_metadata")
@@ -143,16 +184,26 @@ class FailClosedExportTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('did not resolve to a local MIR body', result.stderr)
 
-    def test_foreign_repr_c_transfer_records_exact_false_covariance(self):
+    def test_foreign_repr_c_transfer_uses_raw_nominal_covariance(self):
         document = self.accepted("foreign_repr_c_transfer", crate_type="bin")
         types = {row['display']: row['type_id'] for row in document['types']}
         source, target = types['CallerType'], types['implementation::CalleeType']
         rows = [row for row in document['compiler_covariance_queries']
                 if row['source_type'] == source and row['target_type'] == target]
-        self.assertEqual(len(rows), 1)
-        self.assertIs(rows[0]['value'], False)
+        self.assertEqual(rows, [], "covered nominal relation retained an eager answer")
+        source_shape, target_shape = document['types'][source]['shape'], document['types'][target]['shape']
+        self.assertEqual(source_shape['kind'], 'adt')
+        self.assertEqual(target_shape['kind'], 'adt')
+        self.assertNotEqual(source_shape['def_id'], target_shape['def_id'],
+                            "fixture lost its distinct nominal source identities")
+        trace = self.export("foreign_repr_c_transfer", crate_type="bin",
+                            environment=self.environment | {"LEAN_MIRI_TRACE_COVARIANCE_CALLS": "1"})
+        self.assertEqual(trace.returncode, 0, trace.stderr)
+        traced_types = {row['display']: row['type_id'] for row in load_mir_document(self.output)['types']}
+        source, target = traced_types['CallerType'], traced_types['implementation::CalleeType']
+        self.assertIn(f"queried=false source_id={source} target_id={target} ", trace.stderr)
 
-    def test_shared_reborrow_records_exact_false_covariance(self):
+    def test_shared_reborrow_uses_raw_nominal_covariance(self):
         document = self.accepted("shared_reborrow")
         reborrows = []
         def visit(value):
@@ -171,8 +222,21 @@ class FailClosedExportTests(unittest.TestCase):
             self.assertNotEqual(source, target)
             rows = [row for row in document["compiler_covariance_queries"]
                     if row["source_type"] == source and row["target_type"] == target]
-            self.assertEqual(len(rows), 1)
-            self.assertIs(rows[0]["value"], False, "same layout must not fabricate subtyping")
+            self.assertEqual(rows, [], "covered reborrow retained an eager covariance answer")
+            source_shape, target_shape = document['types'][source]['shape'], document['types'][target]['shape']
+            self.assertEqual(source_shape['kind'], 'adt')
+            self.assertEqual(target_shape['kind'], 'adt')
+            self.assertNotEqual(source_shape['def_id'], target_shape['def_id'],
+                                "same layout must not erase nominal identity")
+        trace = self.export("shared_reborrow", environment=self.environment | {
+            "LEAN_MIRI_TRACE_COVARIANCE_CALLS": "1"})
+        self.assertEqual(trace.returncode, 0, trace.stderr)
+        reborrows.clear()
+        visit(load_mir_document(self.output)["bodies"])
+        self.assertTrue(reborrows)
+        for value in reborrows:
+            source, target = value["place"]["type"], value["type"]
+            self.assertIn(f"queried=false source_id={source} target_id={target} ", trace.stderr)
 
     def test_no_std_keeps_negative_and_optional_query_answers(self):
         document = self.accepted("no_std")
@@ -181,10 +245,11 @@ class FailClosedExportTests(unittest.TestCase):
         unsigned = next(node for node in document["types"]
                         if node["shape"].get("unsigned_kind") == "u32")
         facts = unsigned["compiler_facts"]
-        self.assertEqual(facts["boolean_queries"]["is_dynamic"],
-                         False)
-        self.assertEqual(facts["type_queries"]["boxed_type"],
-                         None)
+        self.assertNotIn("is_dynamic", facts["boolean_queries"])
+        self.assertNotIn("is_too_generic", facts["boolean_queries"])
+        self.assertNotIn("boxed_type", facts["type_queries"])
+        self.assertNotIn("builtin_deref_explicit", facts["type_queries"])
+        self.assertNotIn("builtin_deref_implicit", facts["type_queries"])
 
     def test_no_main_binary_exports_startup_facts(self):
         result = subprocess.run(
@@ -240,7 +305,7 @@ class FailClosedExportTests(unittest.TestCase):
             self.assertIn("Box", boxed["shape"]["def_path"])
 
     def test_result_main_has_exact_bootstrap_caller_signature(self):
-        document = self.accepted("start_result", "main", "bin")
+        document = self.accepted("start_result", "main", "bin", abi_trace=True)
         main = next(row for row in document["compiler_main_queries"]["entries"]
                     if row["signature_query"]["compiler_selected_entry"])
         primitive = document["compiler_runtime_primitives"]
@@ -259,8 +324,26 @@ class FailClosedExportTests(unittest.TestCase):
                  and row["signature"]["abi"]["kind"] == "rust"
                  and row["signature"]["safety"]["kind"] == "safe"
                  and not row["signature"]["c_variadic"]]
-        self.assertTrue(exact, "source call_main dummy signature was not queried")
+        self.assertTrue(exact, "nested dyn bootstrap helper lost its exact material ABI residual")
         self.assertTrue(all(isinstance(row["abi_query"], int) for row in exact))
+        pointer = types[expected[0]]["shape"]
+        self.assertEqual(pointer["kind"], "function_pointer")
+        self.assertEqual(pointer["signature"]["inputs"], [])
+        self.assertEqual(pointer["signature"]["abi"]["kind"], "rust")
+        self.assertFalse(pointer["signature"]["c_variadic"])
+        self.assertEqual(document["producer"]["abi_session"], {
+            "panic": "unwind", "panic_in_drop": "unwind", "optimization": "no",
+            "llvm_writable": False, "box_noalias": True,
+            "incremental_enabled": False, "sanitizers": [],
+        })
+        traces = [line for line in self.last_abi_trace
+                  if line.startswith("lean_miri_fn_pointer_abi_call ")
+                  and "signature=Binder { value: fn(Binder { value: fn() -> " in line
+                  and ", isize, *const *const u8, u8) -> isize, bound_vars: [] } extra=[]" in line]
+        self.assertTrue(any("route=helper-residual queried=true " in line for line in traces),
+                        "exact nested dyn bootstrap caller did not retain its physical ABI query")
+        self.assertFalse(any("queried=false " in line for line in traces),
+                         "nested dyn bootstrap was incorrectly admitted by the lossless-key provider")
 
     def test_weak_static_function_demands_retain_exact_named_queries(self):
         for fixture, name, args, ret in [
@@ -318,7 +401,7 @@ class FailClosedExportTests(unittest.TestCase):
 
     def test_coroutine_metadata_retains_exact_coverage_and_runtime_abi(self):
         document = self.accepted("coroutine", "root")
-        self.assertEqual(document["schema_version"], 12)
+        self.assertEqual(document["schema_version"], 13)
         coverage = document["compiler_coroutine_coverage"]
         self.assertTrue(coverage["coroutines"])
         self.assertEqual(len(coverage["body_coroutines"]), len(document["bodies"]))
@@ -384,13 +467,44 @@ class FailClosedExportTests(unittest.TestCase):
         returned = pool_entry(document, "types", abi["return"]["type"])
         self.assertEqual(returned["shape"]["kind"], "coroutine")
         root = pool_entry(document, "bodies", document["body_roots"][0]["body"])
-        calls = [block["terminator"]["kind"] for block in root["basic_blocks"]
-                 if block["terminator"]["kind"].get("variant") == "Call"]
-        calls = [call for call in calls
-                 if call["resolution"].get("instance_id") == instance["instance_id"]]
-        self.assertTrue(calls, "fixture must call the concrete async constructor")
-        self.assertTrue(all(call["resolution"]["fn_abi"] == queries[0]["abi_query"]
-                            for call in calls))
+        self.assertEqual(abi["calling_convention"], {"kind": "rust"})
+        self.assertEqual((abi["arguments"], abi["fixed_count"], abi["c_variadic"]), ([], 0, False))
+        self.assertEqual(abi["unwind_seed"], {
+            "abi": {"kind": "rust", "unwind": None},
+            "definition": {"never_unwind": False, "foreign_item": False, "drop_glue": False},
+            "panic_unwinds": True, "panic_in_drop_unwinds": True})
+        returned_layout = pool_entry(document, "layouts", abi["return"]["layout"])
+        self.assertEqual(returned_layout["size_bytes"], 1)
+        self.assertEqual(returned_layout["abi_align_bytes"], 1)
+        self.assertEqual(returned_layout["backend_repr"], {"kind": "memory", "sized": True})
+        self.assertFalse(returned_layout["uninhabited"])
+        self.assertEqual(abi["return"]["mode"], {
+            "kind": "Cast", "pad_i32_count": 0,
+            "target": {"prefix_registers": [], "rest_offset_bytes": None,
+                       "rest_register": {"kind": {"kind": "integer"}, "size_bits": 8},
+                       "rest_total_bytes": 1, "rest_is_consecutive": False,
+                       "attributes": {"regular_bits": 0, "arg_extension": {"kind": "none"},
+                                      "pointee_size_bytes": 0, "pointee_align_bytes": None}}})
+        if root["body_kind"] == "material":
+            calls = [block["terminator"]["kind"] for block in root["basic_blocks"]
+                     if block["terminator"]["kind"].get("variant") == "Call"]
+            calls = [call for call in calls
+                     if call["resolution"].get("instance_id") == instance["instance_id"]]
+            self.assertTrue(calls, "fixture must call the concrete async constructor")
+            self.assertTrue(all(call["resolution"]["fn_abi"] == queries[0]["abi_query"] for call in calls))
+        else:
+            _, template = raw_body_source(document, root)
+            definition = pool_entry(document, "definitions", instance["def_id"])
+            identity = {"crate": definition["crate"], "index": definition["index"]}
+            calls = [block["terminator"]["kind"] for block in template["skeleton"]["blocks"]
+                     if block["terminator"]["kind"].get("kind") == "source_call"]
+            callees = [template["types"][call["function"]] for call in calls]
+            matches = [callee for callee in callees if callee.get("tag") == "function_definition"
+                       and callee["definition"] == identity]
+            self.assertEqual(len(matches), 1, "raw root must call the exact async constructor")
+            self.assertEqual(matches[0]["children"], [{"kind": "binder", "variables": [],
+                "value": {"kind": "node", "sort": "aggregate", "tag": "arguments", "payload": "", "children": []}}])
+            self.assertEqual(instance["generic_args"], [])
 
     def test_nested_signature_regions_keep_source_identity_and_closed_query_view(self):
         document = self.accepted("higher_ranked_variadic", "root")
@@ -437,16 +551,42 @@ class FailClosedExportTests(unittest.TestCase):
         self.assertEqual(extra["shape"], {"kind": "int", "signed_kind": "i32"})
         callee_abi = pool_entry(document, "fn_abis", rows[0]["abi_query"])
         self.assertTrue(callee_abi["c_variadic"])
-        self.assertEqual(callee_abi["fixed_count"], 1)
-        self.assertEqual(len(callee_abi["arguments"]), 2)
+        self.assertNotIn("fixed_count", callee_abi)
+        callee_seed = callee_abi["signature_seed"]
+        callee_signature = callee_seed["signature"]
+        self.assertEqual(callee_signature["abi"], {"kind": "c", "unwind": False})
+        self.assertTrue(callee_signature["c_variadic"])
+        self.assertEqual(callee_signature["inputs"], [extra["type_id"]])
+        self.assertEqual(callee_seed["extra_argument_types"], rows[0]["extra_argument_types"])
+        self.assertIsNone(callee_seed["caller_location"])
+        self.assertEqual([argument["type"] for argument in callee_abi["arguments"]],
+                         callee_signature["inputs"] + callee_seed["extra_argument_types"])
         caller_rows = [row for row in document["compiler_function_facts"]["pointer_abis"]
                        if row["extra_argument_types"] == rows[0]["extra_argument_types"]]
         caller_abis = [pool_entry(document, "fn_abis", row["abi_query"]) for row in caller_rows]
-        self.assertTrue(any(abi["c_variadic"] and abi["fixed_count"] == 0
-                            and len(abi["arguments"]) == 1 for abi in caller_abis),
+        mismatched_callers = [abi for abi in caller_abis
+                              if abi.get("signature_seed", {}).get("signature", {}).get("inputs") == []]
+        self.assertTrue(mismatched_callers,
                         "the actual caller/callee fixed-count mismatch must remain visible")
+        for caller_abi in mismatched_callers:
+            self.assertNotIn("fixed_count", caller_abi)
+            caller_seed = caller_abi["signature_seed"]
+            caller_signature = caller_seed["signature"]
+            self.assertTrue(caller_abi["c_variadic"])
+            self.assertTrue(caller_signature["c_variadic"])
+            self.assertEqual(caller_signature["abi"], callee_signature["abi"])
+            self.assertEqual(caller_seed["extra_argument_types"], callee_seed["extra_argument_types"])
+            self.assertIsNone(caller_seed["caller_location"])
+            self.assertEqual([argument["type"] for argument in caller_abi["arguments"]],
+                             caller_seed["extra_argument_types"])
+            self.assertEqual(caller_signature["output"], callee_signature["output"])
+            self.assertEqual(caller_abi["calling_convention"], callee_abi["calling_convention"])
+            # C signatures do not splat arguments. Their distinct raw input
+            # counts reconstruct fixed_count=0 vs 1, despite identical extras.
+            self.assertEqual(len(caller_signature["inputs"]), 0)
+            self.assertEqual(len(callee_signature["inputs"]), 1)
 
-    def test_resolved_generic_has_one_body_and_no_source_constant_payload(self):
+    def test_resolved_generic_has_one_body_and_typed_constant_categories(self):
         document = self.accepted("resolved_generic", "root")
         bodies = document["bodies"]
         self.assertEqual(len({body["instance_id"] for body in bodies}), len(bodies))
@@ -462,8 +602,13 @@ class FailClosedExportTests(unittest.TestCase):
             if isinstance(value, dict):
                 self.assertNotIn("constant_query_context", value)
                 self.assertNotIn("source_body_is_polymorphic", value)
-                if value.get("kind") == "evaluated_const":
+                if value.get("kind") in ("evaluated_const", "literal_const"):
                     self.assertEqual(set(value), {"kind", "value"})
+                elif value.get("kind") == "type_constant":
+                    self.assertEqual(set(value), {"kind", "type_constant"})
+                    self.assertIs(type(value["type_constant"]), int)
+                    source = pool_entry(document, "type_constants", value["type_constant"])
+                    self.assertEqual(source["kind"], "value")
                 for child in value.values():
                     inspect(child)
             elif isinstance(value, list):
@@ -476,13 +621,30 @@ class FailClosedExportTests(unittest.TestCase):
         document = self.accepted("resolved_generic", "root")
         removed = {"source_instance_kind", "source_promoted", "pass_count", "tainted_by_errors",
                    "var_debug_info", "mentioned_items", "user_type_annotations", "coroutine_info"}
+        material_count = source_count = 0
         for body in document["bodies"]:
             self.assertFalse(removed & body.keys())
-            self.assertIn("required_consts", body)
-            for local in body["locals"]:
+            if body["body_kind"] == "material":
+                material_count += 1
+                self.assertIn("required_consts", body)
+                self.assertIsInstance(body["required_consts"], list)
+                locals_, scopes = body["locals"], body["source_scopes"]
+            else:
+                source_count += 1
+                source, template = raw_body_source(document, body)
+                # Raw copy templates admit only an explicit empty required-const
+                # preamble (generic_mir::capture_mode); they do not serialize a
+                # closed-body field. Keep checking that category on material MIR.
+                self.assertNotIn("required_consts", body)
+                self.assertNotIn("required_consts", template["skeleton"])
+                self.assertFalse((removed - {"source_promoted"}) & source.keys())
+                locals_, scopes = source["local_sources"], source["source_scopes"]
+            for local in locals_:
                 self.assertFalse({"local_info", "mutability", "layout"} & local.keys())
-            for scope in body["source_scopes"]:
+            for scope in scopes:
                 self.assertNotIn("local_data", scope)
+        self.assertGreater(material_count, 0, "required-constant material category must remain exercised")
+        self.assertGreater(source_count, 0, "raw source metadata category must be exercised")
 
     def test_typecheck_errors_abort_without_export_output(self):
         result = self.export("typeck_error")

@@ -288,7 +288,7 @@ private def prepareRun (prepared : Input.EvalPreparation.Prepared)
   let some (definition, .rustcMain sigpipe) := selectedEntry
     | throw "compiler did not select an rustc_main entry"
   let bytes ← (Input.CompilerGlobalBytes.prepare compiler.program compiler.runtime initialMemory).mapError toString
-  let arrays ← compiler.initialArrays
+  let arrays ← compiler.initialTypes
   let (hostPid,cwd,home,temp) := hostData
   let targetBits := compiler.runtime.target.base.pointerWidth.bits.toNat
   let arch ← (Input.EvalArchitectureMachine.targetArch compiler.intrinsics).mapError toString

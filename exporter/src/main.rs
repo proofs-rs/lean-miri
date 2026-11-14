@@ -1,6 +1,18 @@
 #![feature(rustc_private)]
+mod ctfe_body_source;
+mod ctfe_scalar_source;
+mod ctfe_type_const_source;
+mod ctfe_calls_source;
+mod ctfe_scalar_catalog;
+mod initial_profile_config;
+#[cfg(feature="ctfe-initial-global-snapshot")] mod initial_profile;
+#[cfg(feature="ctfe-initial-global-snapshot")] mod initial_query_cache;
+#[cfg(feature="ctfe-initial-global-snapshot")] mod compiler_initial_snapshot;
+#[cfg(feature="ctfe-initial-global-snapshot")] mod ctfe_initial_global_payload;
+#[cfg(feature="ctfe-initial-global-snapshot")] mod ctfe_initial_global_symbols;
 
 mod incremental;
+mod raw_valtree_material;
 mod cast_queries;
 mod allocator_world;
 mod covariance_queries;
@@ -18,6 +30,19 @@ mod native_signature_queries;
 mod typed_pool;
 mod shared_json;
 mod pool_type;
+mod generic_material;
+mod definition_path;
+mod generic_mir;
+mod noop_drop;
+mod fn_pointer_shim;
+mod generic_mir_call;
+mod source_runtime_default;
+mod alias_rules;
+mod adt_material;
+mod type_hash_material;
+mod trait_material;
+mod source_environment;
+mod instance_abi_material;
 mod pool_layout;
 mod pool_instance;
 mod pool_values;
@@ -68,6 +93,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use rustc_driver::{Callbacks, Compilation};
+use rustc_hir::def_id::DefId;
+use serde_json::Value;
 use rustc_hir::def_id::LocalDefId;
 use rustc_interface::interface;
 use rustc_middle::mir::interpret::{AllocId, CTFE_ALLOC_SALT, GlobalAlloc};
@@ -81,7 +108,7 @@ fn export_failure<T>(context: &str, details: impl std::fmt::Display) -> Result<T
 
 const EXPECTED_RUSTC_COMMIT: &str = "8144389c895da997dbdecaa635e41d6a50be6ffd";
 const MIRI_COMMIT: &str = "7fa591d7d4dd9af8154becbc8332f8096f8323b1";
-const ROOT_SCHEMA_VERSION: u64 = 12;
+const ROOT_SCHEMA_VERSION: u64 = 13;
 
 struct Options {
     output: PathBuf,
@@ -95,7 +122,17 @@ struct Producer {
     rustc_commit: &'static str,
     rustc_version: String,
     target_triple: String,
+    freeze_lang_item: Option<u64>,
     input_settings: producer::Evidence,
+    abi_session: pool_values::AbiSessionMaterial,
+}
+#[derive(serde::Serialize)]
+struct TypePrintOptions {
+    type_length_limit: usize,
+    verbose_internals: bool,
+    identify_regions: bool,
+    trim_diagnostic_paths: bool,
+    trimmed_def_paths: bool,
 }
 #[derive(serde::Serialize)]
 struct SessionQueries {
@@ -104,6 +141,7 @@ struct SessionQueries {
     target_arch: String,
     root_span: u64,
     runtime_checks: [pool_body::RuntimeCheck; 3],
+    print_options: TypePrintOptions,
 }
 #[derive(serde::Serialize)]
 struct RuntimeQueries {
@@ -152,6 +190,15 @@ impl MirBodyRole {
 
 /// Owned, closed export graph. Pending reference types cannot inhabit this snapshot.
 #[derive(serde::Serialize)]
+struct TypeConstResult {
+    alias_kind: &'static str,
+    rigidity: &'static str,
+    def_id: u64,
+    generic_args: Vec<pool_values::GenericArgument>,
+    value_const_id: u64,
+}
+
+#[derive(serde::Serialize)]
 struct ExportDocument {
     schema: &'static str,
     schema_version: u64,
@@ -165,7 +212,6 @@ struct ExportDocument {
     compiler_instance_abis: Vec<InstanceAbi>,
     compiler_function_facts: FunctionFacts,
     compiler_cast_queries: Vec<cast_queries::Query>,
-    compiler_type_name_constants: Vec<intrinsic_value_queries::TypeName>,
     compiler_panic_queries: Vec<panic_queries::Query>,
     compiler_native_signature_queries: Vec<native_signature_queries::Query>,
     compiler_retag_queries: Vec<retag_queries::Query>,
@@ -176,13 +222,17 @@ struct ExportDocument {
     compiler_runtime_primitives: RuntimePrimitives,
     compiler_vtable_queries: Vec<query_values::VtableQuery>,
     compiler_predicate_queries: Vec<query_values::PredicateQuery>,
+    compiler_trait_program: serde_json::Value,
     #[serde(flatten)]
     runtime_catalogs: RuntimeCatalogs,
     body_roots: Vec<BodyRoot>,
-    bodies: Vec<pool_body::Body<u64, Vec<u64>>>,
+    mir_templates: Vec<pool_body::CopyTemplateSource>,
+    ctfe_scalar_sources: Vec<Value>,
+    bodies: Vec<pool_body::BodySeed<u64, Vec<u64>>>,
     compiler_coroutine_coverage: coroutine_coverage::Catalog<pool_body::Body<u64, Vec<u64>>>,
     definitions: Vec<pool_values::Definition>,
     type_constants: Vec<pool_values::TypeConstant>,
+    compiler_type_const_results: Vec<TypeConstResult>,
     files: Vec<String>,
     spans: Vec<pool_values::Span>,
     layouts: Vec<shared_json::Shared<pool_layout::Layout>>,
@@ -196,6 +246,10 @@ struct ExportDocument {
     predicates: Vec<allocation_values::Predicate>,
     #[serde(skip_serializing_if = "Option::is_none")]
     compiler_alloc_id_world: Option<allocator_world::World>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compiler_initial_global_snapshot: Option<Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    compiler_initial_selected_query_cache: Vec<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     selected_scope: Option<SelectedScope>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -256,6 +310,7 @@ struct ExportCallbacks {
 /// payloads refer to them by `type_id`.
 #[derive(Default)]
 struct ExportContext<'tcx> {
+    raw_initial_unevaluated: bool,
     reachable_instance_cursor: usize,
     backtrace_event_cursor: usize,
     backtrace_frame_cursor: usize,
@@ -275,15 +330,19 @@ struct ExportContext<'tcx> {
     vtable_state: incremental::Vtables,
     virtual_state: incremental::Virtuals<'tcx>,
     vtable_diagnostics: vtable_diagnostics::Trace<'tcx>,
-    bodies: Pool<BodyKey<'tcx>, pool_body::Body>,
+    mir_templates: Pool<ctfe_body_source::TemplateKey, pool_body::CopyTemplateSource>,
+    ctfe_scalar_sources: ctfe_scalar_catalog::Catalog,
+    bodies: Pool<BodyKey<'tcx>, pool_body::BodySeed>,
     coroutine_coverage: coroutine_coverage::Catalog,
     constant_eval_role: Option<MirBodyRole>,
     definitions: Pool<rustc_hir::def_id::DefId, pool_values::Definition>,
     type_constants: Pool<ty::Const<'tcx>, pool_values::TypeConstant>,
+    type_const_result_sources: HashSet<ty::Const<'tcx>>,
+    type_const_results: Vec<TypeConstResult>,
     files: pool_values::Files,
     spans: Pool<rustc_span::Span, pool_values::Span>,
-    layouts: Pool<rustc_abi::TyAndLayout<'tcx, ty::Ty<'tcx>>, pool_layout::Layout>,
-    fn_abis: Pool<rustc_target::callconv::FnAbi<'tcx, ty::Ty<'tcx>>, pool_layout::FnAbi>,
+    layouts: Pool<pool_layout::LayoutKey<'tcx>, pool_layout::Layout>,
+    fn_abis: Pool<(rustc_target::callconv::FnAbi<'tcx, ty::Ty<'tcx>>, bool), pool_layout::FnAbi>,
     type_ids: Pool<rustc_middle::ty::Ty<'tcx>, pool_type::Type>,
     /// Types demanded by serialized source MIR/signatures/metadata. Compiler
     /// query constructors can create type nodes without adding them here.
@@ -392,11 +451,7 @@ struct RuntimeCallbackTransferRequest<'tcx> {
     request: CallTransferRequest<'tcx>,
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
-struct BodyKey<'tcx> {
-    instance: ty::Instance<'tcx>,
-    promoted: Option<rustc_middle::mir::Promoted>,
-}
+type BodyKey<'tcx> = ctfe_body_source::Key<'tcx>;
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 enum IdentityMembershipSet {
@@ -588,6 +643,8 @@ fn loaded_rustc_driver_is_pinned() -> Result<(), String> {
         let maps = fs::read_to_string("/proc/self/maps")
             .map_err(|error| format!("cannot inspect loaded rustc driver libraries: {error}"))?;
         let mut saw_driver = false;
+        #[cfg(feature="ctfe-initial-global-snapshot")]
+        let mut audited_driver_hashed=false;
         for line in maps.lines() {
             let Some(path) = line.split_whitespace().last() else {
                 continue;
@@ -599,6 +656,22 @@ fn loaded_rustc_driver_is_pinned() -> Result<(), String> {
                 format!("cannot canonicalize loaded compiler library {path}: {error}")
             })?;
             saw_driver = true;
+            #[cfg(feature="ctfe-initial-global-snapshot")]
+            {
+                let audited=Path::new(env!("LEAN_MIRI_INITIAL_SNAPSHOT_DRIVER"));
+                if path != audited {
+                    return Err(format!("snapshot feature loaded an unaudited compiler driver: {}",path.display()));
+                }
+                if !audited_driver_hashed {
+                    let (digest,_)=producer::hash_file(&path)?;
+                    if digest != env!("LEAN_MIRI_INITIAL_SNAPSHOT_DRIVER_SHA256") {
+                        return Err("audited snapshot compiler driver SHA256 mismatch".into());
+                    }
+                    audited_driver_hashed=true;
+                }
+                continue;
+            }
+            #[cfg(not(feature="ctfe-initial-global-snapshot"))]
             if !path.starts_with(&expected) {
                 return Err(format!(
                     "loaded rustc driver library {} is outside pinned sysroot {}",
@@ -829,6 +902,22 @@ fn is_required_trait_method<'tcx>(tcx: TyCtxt<'tcx>, def_id: rustc_hir::def_id::
 /// constructor bodies and always-const function bodies in the CTFE MIR table;
 /// `instance_mir` routes those exact kinds to `mir_for_ctfe` instead of
 /// `optimized_mir`.
+/// Const/static roots have MIR for CTFE but are not callable runtime frames.
+/// Pinned fn_sig_for_fn_abi (rustc_ty_utils/abi.rs:36–225) accepts callable
+/// source types, not the scalar type_of a static initializer. Backtrace source
+/// keys must therefore exclude those roots without changing their MIR data.
+fn callable_runtime_instance(tcx: TyCtxt<'_>, instance: ty::Instance<'_>) -> bool {
+    match instance.def {
+        ty::InstanceKind::Item(def) => matches!(tcx.def_kind(def),
+            rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn |
+            rustc_hir::def::DefKind::Ctor(_, rustc_hir::def::CtorKind::Fn) |
+            rustc_hir::def::DefKind::Closure | rustc_hir::def::DefKind::SyntheticCoroutineBody),
+        // Compiler shims/intrinsics have their own source signature rules,
+        // including ThreadLocal, whose definition itself is a static item.
+        _ => true,
+    }
+}
+
 fn has_instance_mir_source<'tcx>(tcx: TyCtxt<'tcx>, def_id: rustc_hir::def_id::DefId) -> bool {
     if tcx.is_mir_available(def_id) {
         return true;
@@ -1267,7 +1356,6 @@ struct RuntimePrimitives {
     unit_pointer_mut: u64,
     imm_u8_pointer: u64,
     imm_u8_pointer_pointer: u64,
-    type_name_result_type: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     caller_location_type: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1275,7 +1363,9 @@ struct RuntimePrimitives {
 }
 
 impl ExportCallbacks {
-    fn export_document<'tcx>(&mut self, tcx: TyCtxt<'tcx>) -> Result<Compilation, String> {
+    fn export_document<'tcx>(&mut self, tcx: TyCtxt<'tcx>,
+        #[cfg(feature="ctfe-initial-global-snapshot")] initial_profile:Option<initial_profile::FrozenProfile<'tcx>>,
+    ) -> Result<Compilation, String> {
         #[cfg(feature = "miri-reference")]
         let reference_entry = if self.miri_reference {
             if !self.prepared_allocator_world {
@@ -1313,6 +1403,8 @@ impl ExportCallbacks {
             .map(|def_id| def_id.to_def_id())
             .collect::<HashSet<_>>();
         let mut export_context = ExportContext::default();
+        #[cfg(feature="ctfe-initial-global-snapshot")]
+        {export_context.raw_initial_unevaluated=initial_profile.is_some();}
         let main_query_roots = local_definitions
             .iter()
             .copied()
@@ -1329,7 +1421,7 @@ impl ExportCallbacks {
             .map(|def| def.to_def_id())
             .collect::<Vec<_>>();
         let bodies = local_definitions
-            .into_iter()
+            .iter().copied()
             .filter(|def_id| {
                 if is_scoped {
                     root_ids.contains(&def_id.to_def_id())
@@ -1385,17 +1477,18 @@ impl ExportCallbacks {
                 tcx,
                 ty::Ty::new_imm_ptr(tcx, ty::Ty::new_imm_ptr(tcx, tcx.types.u8)),
             )?,
-            // Seed the intrinsic's actual result before the finite runtime
-            // query domain is captured; late ConstValue export must not leave
-            // its &str layout without the corresponding compiler leaves.
-            type_name_result_type: type_json(
-                &mut export_context,
-                tcx,
-                ty::Ty::new_imm_ref(tcx, tcx.lifetimes.re_erased, tcx.types.str_),
-            )?,
             caller_location_type: None,
             ordering_enum: None,
         };
+        // The runner's empty environment, one argv entry and first thread
+        // record use these exact pointer-array layouts before guest main.
+        // Capture rustc's concrete answers with the MIR material types.
+        for element in [ty::Ty::new_imm_ptr(tcx, tcx.types.u8),
+            ty::Ty::new_mut_ptr(tcx, tcx.types.unit)] {
+            for count in [0u64, 1] {
+                type_json(&mut export_context, tcx, ty::Ty::new_array(tcx, element, count))?;
+            }
+        }
         if tcx
             .lang_items()
             .get(rustc_attr_ir::LangItem::PanicLocation)
@@ -1422,7 +1515,6 @@ impl ExportCallbacks {
             panic_queries::register_termination_helpers(tcx, &mut export_context)?;
         }
         let mut native_state = native_signature_queries::State::default();
-        let mut type_name_state = intrinsic_value_queries::TypeNames::default();
         let mut retag_state = retag_queries::State::default();
         let mut global_byte_state = global_byte_queries::State::default();
         let mut identity_state = IdentityDiscovery::default();
@@ -1433,8 +1525,6 @@ impl ExportCallbacks {
         let _ = native_signature_queries::discover(tcx, &mut export_context, &mut native_state)?;
         let _ = cast_queries::discover(tcx, &mut export_context)?;
         instances.extend(export_reachable_instances(tcx, &mut export_context)?);
-        let _intrinsic_type_names_seed =
-            intrinsic_value_queries::discover_type_names(tcx, &mut export_context, &mut type_name_state)?;
         let _caller_location_constants_seed =
             intrinsic_value_queries::discover_caller_locations(tcx, &mut export_context)?;
         let _ = compiler_vtable_queries_json(tcx, &mut export_context)?;
@@ -1529,7 +1619,6 @@ impl ExportCallbacks {
             compiler_predicate_queries_json(tcx, &mut export_context, &mut predicate_facts)?;
             native_signature_queries::discover(tcx, &mut export_context, &mut native_state)?;
             retag_queries::discover(&mut export_context, &mut retag_state);
-            intrinsic_value_queries::discover_type_names(tcx, &mut export_context, &mut type_name_state)?;
             intrinsic_value_queries::discover_caller_locations(tcx, &mut export_context)?;
             instances.extend(export_reachable_instances(tcx, &mut export_context)?);
             if self.prepared_allocator_world {
@@ -1600,7 +1689,6 @@ impl ExportCallbacks {
         let predicate_queries = finish_predicate_queries(tcx, &export_context, predicate_facts);
         let native_signature_queries = native_signature_queries::finish(native_state, &export_context);
         let retag_queries = retag_queries::finish(tcx, &export_context);
-        let intrinsic_type_names = intrinsic_value_queries::finish_type_names(type_name_state);
         let caller_location_constants = intrinsic_value_queries::finish_caller_locations(tcx, &export_context);
         let runtime_type_queries = runtime_type_facts.into_iter().map(RuntimeTypeFact::finish).collect();
         let mut instances = instances.into_iter().map(InstanceFact::finish).collect::<Vec<_>>();
@@ -1627,6 +1715,33 @@ impl ExportCallbacks {
             rustc_commit: EXPECTED_RUSTC_COMMIT,
             rustc_version: self.rustc_version.clone(),
             target_triple: tcx.sess.opts.target_triple.to_string(),
+            freeze_lang_item: tcx.lang_items().freeze_trait().map(|definition| def_json(&mut export_context, definition)),
+            abi_session: pool_values::AbiSessionMaterial {
+                panic: match tcx.sess.panic_strategy() {
+                    rustc_target::spec::PanicStrategy::Unwind => "unwind",
+                    rustc_target::spec::PanicStrategy::Abort => "abort",
+                    rustc_target::spec::PanicStrategy::ImmediateAbort => "immediate-abort",
+                },
+                panic_in_drop: match tcx.sess.opts.unstable_opts.panic_in_drop {
+                    rustc_target::spec::PanicStrategy::Unwind => "unwind",
+                    rustc_target::spec::PanicStrategy::Abort => "abort",
+                    rustc_target::spec::PanicStrategy::ImmediateAbort => "immediate-abort",
+                },
+                optimization: match tcx.sess.opts.optimize {
+                    rustc_session::config::OptLevel::No => "no",
+                    rustc_session::config::OptLevel::Less => "less",
+                    rustc_session::config::OptLevel::More => "more",
+                    rustc_session::config::OptLevel::Aggressive => "aggressive",
+                    rustc_session::config::OptLevel::Size => "size",
+                    rustc_session::config::OptLevel::SizeMin => "size_min",
+                },
+                llvm_writable: tcx.sess.opts.unstable_opts.llvm_writable,
+                box_noalias: tcx.sess.opts.unstable_opts.box_noalias,
+                incremental_enabled: tcx.sess.opts.incremental.is_some(),
+                sanitizers: tcx.sess.opts.unstable_opts.sanitizer.into_iter().map(|flag|
+                    flag.as_str().map(str::to_owned).ok_or("raw sanitizer flag has no source spelling".to_owned()))
+                    .collect::<Result<Vec<_>,_>>()?,
+            },
             input_settings: producer::evidence(
                 tcx,
                 self.invocation
@@ -1644,6 +1759,13 @@ impl ExportCallbacks {
             runtime_check_json(tcx, rustc_middle::mir::RuntimeChecks::OverflowChecks),
         ];
         let session_queries = SessionQueries {
+            print_options: TypePrintOptions {
+                type_length_limit: tcx.type_length_limit().0,
+                verbose_internals: tcx.sess.verbose_internals(),
+                identify_regions: tcx.sess.opts.unstable_opts.identify_regions,
+                trim_diagnostic_paths: tcx.sess.opts.unstable_opts.trim_diagnostic_paths,
+                trimmed_def_paths: tcx.sess.opts.trimmed_def_paths,
+            },
             internal_target_features,
             is_like_wasm: tcx.sess.target.is_like_wasm,
             target_arch: tcx.sess.target.arch.to_string(),
@@ -1669,6 +1791,191 @@ impl ExportCallbacks {
         for (id, instance) in instances.into_iter().enumerate() {
             export_context.instance_ids.define(id, instance);
         }
+        // Definition attributes are material shared by all monomorphizations.
+        // InstanceKind::requires_caller_location is evaluated by Lean on demand.
+        let mut body_track_caller = HashMap::new();
+        for instance in export_context.instance_ids.keys() {
+            let definition = match instance.def {
+                ty::InstanceKind::Item(definition)
+                | ty::InstanceKind::Virtual(definition, _)
+                | ty::InstanceKind::Shim(ty::ShimKind::VTable(definition)) => definition,
+                _ => continue,
+            };
+            body_track_caller.entry(export_context.definitions[&definition] as usize)
+                .or_insert_with(|| tcx.body_codegen_attrs(definition).flags.contains(
+                    rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags::TRACK_CALLER));
+        }
+        // Drop semantics consume raw definition identity and destructor impl
+        // material. Capture it before the prepared AllocId-world boundary.
+        let mut adts = export_context.type_ids.keys().filter_map(|input| match input.kind() {
+            ty::Adt(definition, _) => Some(*definition), _ => None,
+        }).collect::<Vec<_>>();
+        adts.sort_by_key(|definition| export_context.definitions[&definition.did()]);
+        adts.dedup();
+        let mut adt_drop_material = HashMap::new();
+        for definition in adts {
+            let destructor = definition.destructor(tcx)
+                .map(|destructor| def_json(&mut export_context, destructor.did));
+            let id = def_json(&mut export_context, definition.did());
+            adt_drop_material.insert(id as usize, pool_values::AdtDropMaterial {
+                manually_drop: definition.is_manually_drop(), destructor,
+            });
+        }
+
+        #[cfg(feature="ctfe-initial-global-snapshot")]
+        let initial_snapshot=initial_profile.as_ref().map(|frozen|
+            frozen.source_snapshot(tcx,&mut export_context)).transpose()?;
+        #[cfg(not(feature="ctfe-initial-global-snapshot"))]
+        let initial_snapshot:Option<Value>=None;
+        // Source templates are shared across all instances. Close only their
+        // definition references: never instantiate a generic type to discover
+        // a concrete query-result domain here.
+        let mut generic_templates = HashMap::new();
+        let mut alias_declarations = HashMap::new();
+        let mut adt_declarations = HashMap::new();
+        let mut source_environments = HashMap::new();
+        let mut function_abi_material = HashMap::new();
+        let mut callable_sources = HashMap::new();
+        let mut trait_material_state = trait_material::State::seed(tcx);
+        for definition in &local_definitions {
+            trait_material_state.register_definition(tcx, definition.to_def_id())?;
+        }
+        // Canonical identity references are not requests for method signatures.
+        // Only the original program and dependencies of retained source expressions
+        // demand templates. Trait catalog headers must never amplify this set.
+        let mut material_queue = export_context.definitions.keys().copied().collect::<Vec<_>>();
+        let mut material_demand = material_queue.iter().copied().collect::<HashSet<_>>();
+        let mut generic_definition_cursor = 0;
+        let mut discovery_boundary = 0;
+        while generic_definition_cursor < material_queue.len() {
+            let definition = material_queue[generic_definition_cursor];
+            let definition_index = def_json(&mut export_context, definition) as usize;
+            trait_material_state.register_definition(tcx, definition)?;
+            // Close catalog dependencies once per worklist batch. Repeating
+            // the full impl catalog for every raw scope has no semantic role.
+            if generic_definition_cursor == discovery_boundary {
+                trait_material_state.update_constructors(tcx, &material_demand);
+                for reference in trait_material_state.discover(tcx)? {
+                    def_json(&mut export_context, reference);
+                }
+                discovery_boundary = material_queue.len();
+            }
+            if let Some(material) = generic_material::definition_template(tcx, definition)
+                .map_err(|error| format!("generic source material for {}: {error}", tcx.def_path_str(definition)))?
+            {
+                let material: Value = serde_json::from_str(&material)
+                    .map_err(|error| format!("invalid internal generic material JSON: {error}"))?;
+                let mut references = Vec::new();
+                generic_definition_references(&material, &mut references)?;
+                for reference in references {
+                    def_json(&mut export_context, reference);
+                    if material_demand.insert(reference) { material_queue.push(reference); }
+                }
+                use rustc_hir::def::DefKind as D;
+                if matches!(tcx.def_kind(definition), D::Fn | D::AssocFn) {
+                    let associated = tcx.opt_associated_item(definition);
+                    let container = associated.map(|item| match item.container {
+                        ty::AssocContainer::Trait => "trait",
+                        ty::AssocContainer::TraitImpl(_) => "trait_impl",
+                        ty::AssocContainer::InherentImpl => "inherent_impl",
+                    });
+                    callable_sources.insert(definition_index, serde_json::json!({
+                        "has_self": tcx.generics_of(definition).has_self,
+                        "definition_kind": if matches!(tcx.def_kind(definition), D::AssocFn) { "associated_function" } else { "function" },
+                        "container": container,
+                        "trait_item": associated.and_then(|item| item.trait_item_def_id()).map(trait_material::identity),
+                    }));
+                    function_abi_material.insert(definition_index, pool_values::FunctionAbiMaterial {
+                        always_comptime: matches!(tcx.constness(definition), rustc_hir::Constness::Const { always: true }),
+                        never_unwind: tcx.codegen_fn_attrs(definition).flags.contains(
+                            rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags::NEVER_UNWIND),
+                        foreign_item: tcx.is_foreign_item(definition),
+                        drop_glue: tcx.is_lang_item(definition, rustc_attr_ir::lang_items::LangItem::DropGlue),
+                        rustc_no_writable: rustc_attr_ir::find_attr!(tcx, definition, RustcNoWritable),
+                    });
+                    body_track_caller.entry(definition_index).or_insert_with(||
+                        tcx.body_codegen_attrs(definition).flags.contains(
+                            rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags::TRACK_CALLER));
+                }
+                if matches!(tcx.def_kind(definition), D::Struct | D::Enum | D::Union) {
+                    let adt = tcx.adt_def(definition);
+                    let destructor = adt.destructor(tcx)
+                        .map(|destructor| def_json(&mut export_context, destructor.did));
+                    adt_drop_material.entry(definition_index).or_insert(
+                        pool_values::AdtDropMaterial { manually_drop: adt.is_manually_drop(), destructor });
+                    let declaration = adt_material::declaration(tcx, definition)?
+                        .ok_or_else(|| "source ADT declaration classification changed".to_owned())?;
+                    let mut references = Vec::new();
+                    generic_definition_references(&declaration, &mut references)?;
+                    for reference in references {
+                        def_json(&mut export_context, reference);
+                        if material_demand.insert(reference) { material_queue.push(reference); }
+                    }
+                    adt_declarations.insert(definition_index, declaration);
+                }
+                generic_templates.insert(definition_index, material);
+            }
+            if let Some(declaration) = alias_rules::declaration(tcx, definition)
+                .map_err(|error| format!("source alias declaration for {}: {error}", tcx.def_path_str(definition)))?
+            {
+                let mut references = Vec::new();
+                generic_definition_references(&declaration, &mut references)?;
+                // Parent and implemented trait-item identities are declaration
+                // links, not generic term nodes. Close those links explicitly.
+                for key in ["parent", "trait_item"] {
+                    if let Some(identity) = declaration.get(key) {
+                        generic_definition_references(
+                            &serde_json::json!({"definition":identity}), &mut references)?;
+                    }
+                }
+                for reference in references {
+                    def_json(&mut export_context, reference);
+                    if material_demand.insert(reference) { material_queue.push(reference); }
+                }
+                alias_declarations.insert(definition_index, declaration);
+            }
+            // Scope-only catalog headers do not request generic RHS/signatures
+            // and must not repeat the main material/catalog discovery pass.
+            let mut scopes = Vec::new();
+            use rustc_hir::def::DefKind as ScopeKind;
+            if matches!(tcx.def_kind(definition), ScopeKind::Fn | ScopeKind::AssocFn | ScopeKind::TyAlias |
+                ScopeKind::AssocTy | ScopeKind::Struct | ScopeKind::Enum | ScopeKind::Union |
+                ScopeKind::Const | ScopeKind::AssocConst | ScopeKind::AnonConst | ScopeKind::Static { .. } |
+                ScopeKind::Trait | ScopeKind::TraitAlias | ScopeKind::Impl { .. }) {
+                scopes.push(definition);
+            }
+            if generic_definition_cursor + 1 == discovery_boundary {
+                // Include trait declarations registered anywhere in this batch.
+                trait_material_state.update_constructors(tcx, &material_demand);
+                for reference in trait_material_state.discover(tcx)? {
+                    def_json(&mut export_context, reference);
+                }
+                for reference in trait_material_state.rhs_demands(tcx, &material_demand, &mut scopes)? {
+                    def_json(&mut export_context, reference);
+                    if material_demand.insert(reference) { material_queue.push(reference); }
+                }
+            }
+            // Capture declaration scopes independently of instantiated ParamEnv answers.
+            while let Some(scope) = scopes.pop() {
+                let scope_id = def_json(&mut export_context, scope) as usize;
+                if source_environments.contains_key(&scope_id) { continue; }
+                let environment = source_environment::declaration(tcx, scope,
+                    |clause| trait_material::clause(tcx, clause))
+                    .map_err(|error| format!("source predicate scope for {}: {error}", tcx.def_path_str(scope)))?;
+                for parent in [tcx.generics_of(scope).parent, tcx.explicit_clauses_of(scope).parent].into_iter().flatten() {
+                    scopes.push(parent);
+                }
+                let mut references = Vec::new();
+                generic_definition_references(&environment["own_predicates"], &mut references)?;
+                for reference in references {
+                    def_json(&mut export_context, reference);
+                    if material_demand.insert(reference) { material_queue.push(reference); }
+                }
+                source_environments.insert(scope_id, environment);
+            }
+            generic_definition_cursor += 1;
+        }
+        let compiler_trait_program = trait_material_state.finish(tcx, &material_demand)?;
         let body_roots = bodies;
         let allocator_world = if self.prepared_allocator_world {
             Some(allocator_world::capture(
@@ -1697,6 +2004,13 @@ impl ExportCallbacks {
         let candidates = query_values::virtual_candidates(&runtime_queries.virtual_queries);
         let compiler_coroutine_coverage = std::mem::take(&mut export_context.coroutine_coverage)
             .finish(&vtable_query_ids, &candidates)?;
+        #[cfg(feature="ctfe-initial-global-snapshot")]
+        let initial_query_tables=match &initial_profile {
+            Some(frozen)=>frozen.selected_tables(tcx,&export_context)?,
+            None=>Vec::new(),
+        };
+        #[cfg(not(feature="ctfe-initial-global-snapshot"))]
+        let initial_query_tables=Vec::new();
         let bodies = export_context
             .bodies
             .finish("body")?
@@ -1706,7 +2020,12 @@ impl ExportCallbacks {
         if compiler_coroutine_coverage.body_coroutines.len() != bodies.len() {
             return export_failure("coroutine coverage", "body marker table is incomplete");
         }
+
         let mut document = ExportDocument {
+            compiler_initial_global_snapshot: initial_snapshot,
+            compiler_initial_selected_query_cache: initial_query_tables,
+            mir_templates: export_context.mir_templates.finish("mir_template")?,
+            ctfe_scalar_sources: export_context.ctfe_scalar_sources.finish(),
             schema: "lean-miri-rustc-mir",
             schema_version: ROOT_SCHEMA_VERSION,
             mir_query: "TyCtxt::instance_mir(InstanceKind::Item(def_id)); ordinary runtime function bodies use optimized_mir",
@@ -1719,7 +2038,6 @@ impl ExportCallbacks {
             compiler_instance_abis: instance_abis,
             compiler_function_facts: function_facts,
             compiler_cast_queries: cast_queries,
-            compiler_type_name_constants: intrinsic_type_names,
             compiler_panic_queries: panic_query_catalog,
             compiler_native_signature_queries: native_signature_queries,
             compiler_retag_queries: retag_queries,
@@ -1730,12 +2048,28 @@ impl ExportCallbacks {
             compiler_runtime_primitives: runtime_primitives,
             compiler_vtable_queries: vtable_queries,
             compiler_predicate_queries: predicate_queries,
+            compiler_trait_program,
             runtime_catalogs: runtime_catalogs.unwrap_or_default().finish(),
             body_roots,
             bodies,
             compiler_coroutine_coverage,
-            definitions: export_context.definitions.finish("definition")?,
+            definitions: export_context.definitions.finish("definition")?.into_iter().enumerate()
+                .map(|(id, mut definition)| {
+                    definition.raw_path = definition_path::material(tcx, DefId {
+                        krate: rustc_hir::def_id::CrateNum::from_u32(definition.crate_index),
+                        index: rustc_hir::def_id::DefIndex::from_u32(definition.index) });
+                    definition.body_track_caller = body_track_caller.get(&id).copied();
+                    definition.callable_source = callable_sources.remove(&id);
+                    definition.adt_drop = adt_drop_material.get(&id).cloned();
+                    definition.generic_template = generic_templates.remove(&id);
+                    definition.alias_declaration = alias_declarations.remove(&id);
+                    definition.adt_declaration = adt_declarations.remove(&id);
+                    definition.source_environment = source_environments.remove(&id);
+                    definition.function_abi_material = function_abi_material.remove(&id);
+                    definition
+                }).collect(),
             type_constants: export_context.type_constants.finish("type_constant")?,
+            compiler_type_const_results: export_context.type_const_results,
             files: export_context.files.finish(),
             spans: export_context.spans.finish("span_id")?,
             layouts: export_context.layouts.finish("layout_id")?.into_iter().map(Into::into).collect(),
@@ -1751,6 +2085,8 @@ impl ExportCallbacks {
             invocation: self.invocation.take(),
         };
         shared_json::freeze(&mut document)?;
+        #[cfg(feature="ctfe-initial-global-snapshot")]
+        if let Some(frozen)=&initial_profile {frozen.observe_after_export(tcx)?;}
         #[cfg(feature = "miri-reference")]
         let miri_reference_frontier = document
             .compiler_alloc_id_world
@@ -1840,7 +2176,18 @@ impl Callbacks for ExportCallbacks {
         tcx.dcx().emit_stashed_diagnostics();
         tcx.dcx().abort_if_errors();
         tcx.dcx().flush_delayed();
-        match self.export_document(tcx) {
+
+        // No ordinary exporter or raw source acquisition precedes this capture.
+        let configuration=initial_profile_config::Config::read(self.prepared_allocator_world);
+        #[cfg(feature="ctfe-initial-global-snapshot")]
+        let outcome=configuration.and_then(|config|initial_profile::capture(tcx,config))
+            .and_then(|profile|self.export_document(tcx,profile));
+        #[cfg(not(feature="ctfe-initial-global-snapshot"))]
+        let outcome=configuration.and_then(|config| {
+            if config.enabled {return Err("complete initial profile requires the audited ctfe-initial-global-snapshot feature".into())}
+            self.export_document(tcx)
+        });
+        match outcome {
             Ok(outcome) => outcome,
             Err(error) => {
                 self.export_error = Some(error);
@@ -2324,7 +2671,7 @@ fn export_reachable_instances<'tcx>(
             let fn_abi = match tcx.fn_abi_of_instance(
                 ty::TypingEnv::fully_monomorphized().as_query_input((instance, ty::List::empty())),
             ) {
-                Ok(abi) => fn_abi_json(context, tcx, abi)?,
+                Ok(abi) => instance_fn_abi_json(context, tcx, abi, instance, ty::List::empty())?,
                 Err(error) => export_failure(
                     "main::export_reachable_instances",
                     format!(
@@ -2346,8 +2693,21 @@ fn export_reachable_instances<'tcx>(
             )?);
             continue;
         }
+        if noop_drop::eligible(tcx,instance) {
+            context.runtime_mir_frame_instances.insert(instance);
+            let body=source_noop_drop_json(tcx,instance,context)?;
+            let instance_kind=instance_kind_json(context,tcx,instance.def)?;
+            let definition=def_json(context,def_id);
+            let def_path=tcx.def_path_str(def_id);
+            let generic_args=generic_args_json(context,tcx,instance.args)?;
+            records.push(InstanceFact {instance_id,instance_kind,def_id:definition,def_path,generic_args,
+                data:pool_instance::InstanceData::InstanceMir {body,promoted_bodies:Vec::new()}});
+            continue;
+        }
         let template = checked_instance_mir(tcx, instance.def)?;
-        context.runtime_mir_frame_instances.insert(instance);
+        if callable_runtime_instance(tcx, instance) {
+            context.runtime_mir_frame_instances.insert(instance);
+        }
         let body_json = resolved_mir_body_json(tcx, template, instance, context)?;
         // Local HIR bodies own a promoted table even when empty. Imported or
         // compiler-generated MIR can lack that optional table; query it only
@@ -2447,6 +2807,39 @@ fn checked_instance_mir<'tcx>(
     Ok(body)
 }
 
+// Signature/location material only: never construct a no-op shim body here.
+fn source_noop_drop_json<'tcx>(tcx:TyCtxt<'tcx>,instance:ty::Instance<'tcx>,
+    context:&mut ExportContext<'tcx>)->Result<u64,String> {
+    if !noop_drop::eligible(tcx,instance) {
+        return export_failure("no-op drop source","outside selected shim category");
+    }
+    let (id,fresh)=context.bodies.reserve(BodyKey {instance,promoted:None,role:ctfe_body_source::Role::Runtime});
+    if !fresh {return Ok(id as u64)}
+    // These exact source-generated shim families cannot own coroutine state.
+    // Record the raw body's marker even when it is the final body in the pool.
+    if context.coroutine_coverage.body_coroutines.len() <= id {
+        context.coroutine_coverage.body_coroutines.resize(id + 1,false);
+    }
+    let definition=instance.def.def_id();
+    def_json(context,definition); // raw generic signature declaration demand
+    let span=tcx.def_span(definition);
+    let source_span=backtrace_span_json(context,tcx,span,span);
+    let instance_id=context.register_metadata_instance(instance);
+    context.bodies.define(id,pool_body::BodySeed::NoopDrop{instance_id,source_span});
+    Ok(id as u64)
+}
+
+fn source_mir_template_category<'tcx>(_context:&ExportContext<'tcx>,_tcx:TyCtxt<'tcx>,
+    _body:&rustc_middle::mir::Body<'tcx>,_instance:ty::Instance<'tcx>)->Option<generic_mir::Category> {
+    // Executable instances carry rustc's concrete MIR and evaluated operands.
+    // A source template would leave constant evaluation to the Lean runtime.
+    None
+}
+fn has_source_mir_template<'tcx>(context:&ExportContext<'tcx>,tcx:TyCtxt<'tcx>,
+    body:&rustc_middle::mir::Body<'tcx>,instance:ty::Instance<'tcx>)->bool {
+    source_mir_template_category(context,tcx,body,instance).is_some()
+}
+
 // Each concrete instance owns one executable body. Normalize only its template:
 // rebinding a substituted body can capture caller parameters incorrectly.
 fn resolved_mir_body_json<'tcx>(
@@ -2466,10 +2859,70 @@ fn resolved_mir_body_json<'tcx>(
     let (id, fresh) = context.bodies.reserve(BodyKey {
         instance,
         promoted: template.source.promoted,
+        role:ctfe_body_source::Role::Runtime,
     });
     if !fresh {
         return Ok(id as u64);
     }
+    if let Some(category)=source_mir_template_category(context,tcx,template,instance) {
+        generic_mir::source_query_trace(match category {generic_mir::Category::Copy=>"runtime-copy",generic_mir::Category::Extended=>"runtime-extended"},false,instance);
+        // Retain only the remaining complete-instance/type/ABI dependencies.
+        // No enclosing/target executable MIR is instantiated for source calls.
+        for dependency in generic_mir_call::dependencies(tcx,template,instance.args)? {
+            type_json(context,tcx,dependency.function_type)?;
+            if let ty::FnDef(definition,_) = dependency.function_type.kind() {
+                source_runtime_default::capture(context,tcx,*definition)?;
+            }
+            if let Some(instance)=dependency.instance {
+                context.register_instance(instance);
+                context.instance_abi_requests.insert((instance,ty::List::empty()));
+            }
+        }
+        // This source category is selected before any monomorphic-body query.
+        // Failures after selection propagate; no concrete body is retained.
+        let key = ctfe_body_source::TemplateKey {definition:template.source.def_id(),promoted:template.source.promoted,role:ctfe_body_source::Role::Runtime};
+        let (template_id, fresh) = context.mir_templates.reserve(key);
+        if fresh {
+            let raw=if context.raw_initial_unevaluated {
+                generic_mir::capture_category_raw(tcx,template,category,|span|span_json(context,tcx,span))?
+            } else {generic_mir::capture_category(tcx,template,category,|span|span_json(context,tcx,span))?};
+            // Nominal types can occur only in a source local, without any
+            // concrete caller type seeding their definitions. Capture their
+            // declaration closure, never an instantiated type/body answer.
+            let source_material:Value=serde_json::from_str(&raw)
+                .map_err(|error|format!("source MIR material decoding failed: {error}"))?;
+            let mut references=Vec::new();
+            generic_definition_references(&source_material,&mut references)?;
+            for definition in references { def_json(context,definition); }
+            let source = pool_body::CopyTemplateSource {
+                source_promoted:template.source.promoted.map(|index|index.as_u32()),
+                source_role:ctfe_body_source::Role::Runtime.wire(),
+                template: raw,
+                source_def_id: def_json(context,template.source.def_id()),
+                def_path: tcx.def_path_str(template.source.def_id()),
+                span: span_json(context,tcx,template.span),
+                preamble_def_span: span_json(context,tcx,tcx.def_span(template.source.def_id())),
+                injection_phase: template.injection_phase.map(mir_phase_json),
+                local_sources: template.local_decls.iter().map(|local|
+                    source_info_json(context,tcx,local.source_info)).collect(),
+                source_scopes: template.source_scopes.iter_enumerated().map(|(scope,value)|pool_body::SourceScope {
+                    scope:scope.as_u32(),parent:value.parent_scope.map(|parent|parent.as_u32()),
+                    span:span_json(context,tcx,value.span),inlined:None,
+                    inlined_parent_scope:value.inlined_parent_scope.map(|parent|parent.as_u32()),
+                }).collect(),
+                backtrace_spans:backtrace_spans_json(context,tcx,template),
+            };
+            context.mir_templates.define(template_id,source);
+        }
+        coroutine_coverage::capture(tcx,context,template,instance,id as u64)?;
+        let instance_id=context.register_metadata_instance(instance);
+        let generic_args=generic_args_json(context,tcx,instance.args)?;
+        context.bodies.define(id,pool_body::BodySeed::CopyTemplate {
+            template_id:template_id as u64,instance_id,generic_args,promoted_bodies:Vec::new(),
+        });
+        return Ok(id as u64);
+    }
+    generic_mir::source_query_trace("runtime-residual",true,instance);
     let body = instance.try_instantiate_mir_and_normalize_erasing_regions(
         tcx, template.typing_env(tcx), ty::EarlyBinder::bind(tcx, template.clone()),
     ).map_err(|error| format!("resolved MIR: instantiation or normalization failed: {error:?}"))?;
@@ -2488,7 +2941,7 @@ fn resolved_mir_body_json<'tcx>(
                 format!("{:?}", body.source.instance).chars().take(1200).collect::<String>(), body.phase)
         } else { error }
     })?;
-    context.bodies.define(id, definition);
+    context.bodies.define(id, pool_body::BodySeed::Material {body:definition});
     Ok(id as u64)
 }
 
@@ -2511,7 +2964,9 @@ fn export_body<'tcx>(
         );
     }
     let instance = ty::Instance::mono(tcx, def_id);
-    context.runtime_mir_frame_instances.insert(instance);
+    if callable_runtime_instance(tcx, instance) {
+        context.runtime_mir_frame_instances.insert(instance);
+    }
     let entry_instance = context.register_instance(instance);
     let body_id = resolved_mir_body_json(tcx, body, instance, context)?;
     Ok(BodyRoot { body:body_id,
@@ -2547,7 +3002,7 @@ fn mir_body_json<'tcx>(
         None
     };
     if body.coroutine.is_some() {
-        let (owner, _) = context.bodies.reserve(BodyKey { instance, promoted: body.source.promoted });
+        let (owner, _) = context.bodies.reserve(BodyKey { instance, promoted: body.source.promoted,role:ctfe_body_source::Role::Runtime });
         if !context.coroutine_coverage.coroutines.iter().any(|row| row.owner_body == owner as u64) {
             export_failure::<()>("MIR", "coroutine body lacks validated compiler coverage")?;
         }
@@ -2558,6 +3013,7 @@ fn mir_body_json<'tcx>(
     // Keep that discovery even though the decoder does not consume the kind.
     let _ = instance_kind_json(context, tcx, body.source.instance)?;
     let result = pool_body::Body {
+        source_role:ctfe_body_source::Role::Runtime.wire(),
         instance_id,
         preamble_def_span: span_json(context, tcx, tcx.def_span(body.source.def_id())),
         backtrace_spans: backtrace_spans_json(context, tcx, body).into(),
@@ -2712,8 +3168,8 @@ fn pattern_json<'tcx>(
 }
 
 /// Guard the private fast path in pinned rustc_middle/ty/util.rs::is_trivially_unpin.
-/// The answers still come from rustc's public is_unpin/is_unsafe_unpin methods;
-/// these shapes ensure neither method requires a missing trait language item.
+/// These rules are shared by is_trivially_freeze on serializable TyKinds.
+/// Only nontrivial cases need exported trait-solver results.
 fn unpin_query_needs_no_lang_item(input: ty::Ty<'_>) -> bool {
     match input.kind() {
         ty::Int(_)
@@ -2733,6 +3189,76 @@ fn unpin_query_needs_no_lang_item(input: ty::Ty<'_>) -> bool {
             unpin_query_needs_no_lang_item(*input)
         }
         _ => false,
+    }
+}
+
+// Same bounded identity-normalization recognizer as StructuralNormalization.lean.
+// Complex forms retain residual compiler normalization material until their
+// full region/alias fold is ported; this is not a trait solver.
+fn structural_identity_normalization(input: ty::Ty<'_>, fuel: usize) -> bool {
+    if fuel == 0 { return false; }
+    match input.kind() {
+        ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_)
+        | ty::Str | ty::Never | ty::Foreign(_) => true,
+        ty::Slice(child) | ty::RawPtr(child, _) => structural_identity_normalization(*child, fuel - 1),
+        ty::Ref(region, child, _) if matches!(region.kind(), ty::RegionKind::ReErased) => structural_identity_normalization(*child, fuel - 1),
+        ty::Tuple(children) => children.iter().all(|child| structural_identity_normalization(child, fuel - 1)),
+        _ => false,
+    }
+}
+
+// Coverage recognizer only: actual needs_drop results for this domain are
+// computed by Lean from material. No compiler needs_drop query is performed.
+fn structural_needs_drop_supported<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>, fuel: usize) -> bool {
+    fn visit<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>, fuel: usize,
+        memo: &mut HashMap<(ty::Ty<'tcx>, usize), bool>) -> bool {
+        if fuel == 0 { return false; }
+        let env = ty::TypingEnv::fully_monomorphized();
+        let Ok(input) = tcx.try_normalize_erasing_regions(env, ty::Unnormalized::new_wip(input)) else { return false; };
+        let key = (input, fuel);
+        if let Some(result) = memo.get(&key) { return *result; }
+        let mut recurse = |child| visit(tcx, child, fuel - 1, memo);
+        let result = match input.kind() {
+            ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Str | ty::Never
+            | ty::Ref(..) | ty::RawPtr(..) | ty::FnDef(..) | ty::FnPtr(..) | ty::Foreign(_)
+            | ty::Dynamic(..) | ty::Coroutine(..) => true,
+            ty::Tuple(fields) => fields.iter().all(recurse),
+            ty::Pat(inner, _) | ty::Slice(inner) => recurse(*inner),
+            ty::Array(inner, count) => match count.try_to_target_usize(tcx) {
+                Some(0) => true, Some(_) => recurse(*inner), None => false,
+            },
+            ty::Adt(definition, args) => definition.is_manually_drop()
+                || definition.destructor(tcx).is_some() || definition.is_union()
+                || definition.all_fields().all(|field| recurse(
+                    tcx.type_of(field.did).instantiate(tcx, args).skip_norm_wip())),
+            ty::Closure(_, args) => args.as_closure().upvar_tys().iter().all(recurse),
+            ty::CoroutineClosure(_, args) => args.as_coroutine_closure().upvar_tys().iter().all(recurse),
+            _ => false,
+        };
+        memo.insert(key, result);
+        result
+    }
+    // Query-local coverage cache only; no compiler result or state survives
+    // this call, and shared type DAGs are never recursively expanded as trees.
+    visit(tcx, input, fuel, &mut HashMap::new())
+}
+
+// Closed type-shape coverage for StructuralSized; no Sized query results are
+// serialized for this domain. Struct/tuple constraints follow only the tail.
+fn structural_sized_supported<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>, fuel: usize) -> bool {
+    if fuel == 0 { return false; }
+    let Ok(input) = tcx.try_normalize_erasing_regions(ty::TypingEnv::fully_monomorphized(),
+        ty::Unnormalized::new_wip(input)) else { return false; };
+    match input.kind() {
+        ty::Alias(..) | ty::Param(..) | ty::Bound(..) | ty::Placeholder(..) | ty::Infer(..) => false,
+        ty::Tuple(fields) => fields.last().is_none_or(|tail| structural_sized_supported(tcx, *tail, fuel - 1)),
+        ty::Adt(definition, args) if definition.is_struct() => {
+            definition.non_enum_variant().fields.iter().last().is_none_or(|field| {
+                structural_sized_supported(tcx,
+                    tcx.type_of(field.did).instantiate(tcx, args).skip_norm_wip(), fuel - 1)
+            })
+        },
+        _ => true,
     }
 }
 
@@ -2758,35 +3284,27 @@ fn type_compiler_facts_json<'tcx>(
         .try_normalize_erasing_regions(env, ty::Unnormalized::new_wip(input))
         .map_err(|e| format!("type normalization failed: {e:?}"))?;
     let missing = || "required compiler trait language item is missing".to_owned();
-    let is_freeze = if normalized.is_trivially_freeze()
-        || tcx
-            .lang_items()
-            .get(rustc_attr_ir::LangItem::Freeze)
-            .is_some()
-    {
-        normalized.is_freeze(tcx, env)
-    } else {
-        return Err(missing());
+    // is_trivially_freeze and is_trivially_unpin have identical structural
+    // rules on serializable TyKinds in the pinned compiler. Lean executes that
+    // fast path; only unresolved trait obligations retain solver answers.
+    let trivial_auto_trait = unpin_query_needs_no_lang_item(normalized);
+    let is_freeze = if trivial_auto_trait { None } else {
+        if tcx.lang_items().get(rustc_attr_ir::LangItem::Freeze).is_none() {
+            return Err(missing());
+        }
+        Some(normalized.is_freeze(tcx, env))
     };
-    let is_unpin = if unpin_query_needs_no_lang_item(normalized)
-        || tcx
-            .lang_items()
-            .get(rustc_attr_ir::LangItem::Unpin)
-            .is_some()
-    {
-        normalized.is_unpin(tcx, env)
-    } else {
-        return Err(missing());
+    let is_unpin = if trivial_auto_trait { None } else {
+        if tcx.lang_items().get(rustc_attr_ir::LangItem::Unpin).is_none() {
+            return Err(missing());
+        }
+        Some(normalized.is_unpin(tcx, env))
     };
-    let is_unsafe_unpin = if unpin_query_needs_no_lang_item(normalized)
-        || tcx
-            .lang_items()
-            .get(rustc_attr_ir::LangItem::UnsafeUnpin)
-            .is_some()
-    {
-        normalized.is_unsafe_unpin(tcx, env)
-    } else {
-        return Err(missing());
+    let is_unsafe_unpin = if trivial_auto_trait { None } else {
+        if tcx.lang_items().get(rustc_attr_ir::LangItem::UnsafeUnpin).is_none() {
+            return Err(missing());
+        }
+        Some(normalized.is_unsafe_unpin(tcx, env))
     };
     let boolean_queries = BooleanQueries {
         is_unsafe_cell: matches!(input.kind(),ty::Adt(d,_) if d.is_unsafe_cell()),
@@ -2795,40 +3313,18 @@ fn type_compiler_facts_json<'tcx>(
         is_simd: input.is_simd(),
         is_box: input.is_box(),
         is_global_box: input.is_box_global(tcx),
-        is_dynamic: matches!(input.kind(), ty::Dynamic(..)),
-        is_too_generic: matches!(
-            input.kind(),
-            ty::Param(..)
-                | ty::Alias(..)
-                | ty::Bound(..)
-                | ty::Placeholder(..)
-                | ty::Infer(..)
-                | ty::Error(..)
-        ),
         is_monomorphic: closed,
         is_monomorphic_enough: !input.has_param(),
         is_like_maybe_dangling: input.is_like_maybe_dangling(),
         is_freeze,
         is_unpin,
         is_unsafe_unpin,
-        needs_drop: normalized.needs_drop(tcx, env),
+        needs_drop: if structural_needs_drop_supported(tcx, normalized, 256) { None }
+            else { Some(normalized.needs_drop(tcx, env)) },
         opsem_inhabited: normalized.is_opsem_inhabited(tcx, env),
-        is_sized: normalized.is_sized(tcx, env),
+        is_sized: if structural_sized_supported(tcx, normalized, 256) { None }
+            else { Some(normalized.is_sized(tcx, env)) },
     };
-    let discriminant_type = discriminant_type_fact_json(context, tcx, normalized)?;
-    let normalized_id = type_json(context, tcx, normalized)?;
-    let builtin_deref_explicit = input
-        .builtin_deref(true)
-        .map(|t| type_json(context, tcx, t))
-        .transpose()?;
-    let builtin_deref_implicit = input
-        .builtin_deref(false)
-        .map(|t| type_json(context, tcx, t))
-        .transpose()?;
-    let boxed_type = input
-        .boxed_ty()
-        .map(|t| type_json(context, tcx, t))
-        .transpose()?;
     let unsafe_binder_erased = match input.kind() {
         ty::UnsafeBinder(b) => Some(type_json(
             context,
@@ -2844,18 +3340,23 @@ fn type_compiler_facts_json<'tcx>(
             "rustc ptr_metadata_ty_or_tail does not implement UnsafeBinder",
         );
     }
-    let metadata = normalized
-        .ptr_metadata_ty_or_tail(tcx, |t| tcx.normalize_erasing_regions(env, t))
-        .map_err(|_| "rustc could not determine pointer metadata type".to_owned())?;
+    // The execution World constructs DynMetadata<tail> from this raw lang-item
+    // declaration and its generic field source. Retain no queried metadata Ty.
+    if matches!(normalized.kind(), ty::Dynamic(..)) {
+        let definition = tcx.require_lang_item(rustc_attr_ir::LangItem::DynMetadata, rustc_span::DUMMY_SP);
+        def_json(context, definition);
+    } else if matches!(tail.kind(), ty::Alias(..) | ty::Param(_)) {
+        return export_failure("pointer metadata", "rustc could not determine pointer metadata type");
+    }
+    let pointer_metadata_type = None;
     let type_queries = TypeQueries {
-        discriminant_type,
-        normalized: normalized_id,
-        builtin_deref_explicit,
-        builtin_deref_implicit,
-        boxed_type,
+        normalized: if structural_identity_normalization(input, 1024)
+            || matches!(input.kind(), ty::Alias(ty::IsRigid::No, alias)
+                if matches!(alias.kind, ty::AliasTyKind::Free { .. } | ty::AliasTyKind::Projection { .. })) {
+            None
+        } else { Some(type_json(context, tcx, normalized)?) },
         unsafe_binder_erased,
-        metadata_tail: type_json(context, tcx, tail)?,
-        pointer_metadata_type: type_json(context, tcx, metadata)?,
+        pointer_metadata_type,
     };
     let capture_names = match input.kind() {
         ty::Closure(def, _) | ty::CoroutineClosure(def, _) | ty::Coroutine(def, _) => Some(
@@ -2913,7 +3414,7 @@ fn type_compiler_facts_json<'tcx>(
         adt,
         capture_names,
         simd_size_and_type,
-        discriminants: discriminant_facts_json(context, tcx, normalized)?.into(),
+        discriminants: discriminant_facts_json(context, tcx, normalized, true)?.map(Into::into),
         projection_queries: projection_queries::export(tcx, context, input)?,
         definition: match input.kind() {
             ty::Adt(def, _) => Some(def_json(context, def.did())),
@@ -2923,7 +3424,7 @@ fn type_compiler_facts_json<'tcx>(
             | ty::Coroutine(d, _) => Some(def_json(context, *d)),
             _ => None,
         },
-        type_id_hash: if input.has_erasable_regions() {
+        type_id_hash: if input.has_erasable_regions() || type_hash_material::eligible(input) {
             None
         } else {
             Some(tcx.type_id_hash(input).as_u128().to_string())
@@ -3044,6 +3545,8 @@ fn type_json_inner<'tcx>(
                 def_id: def_json(context, def),
                 def_path: tcx.def_path_str(def),
                 generic_args: generic_args_json_inner(context, tcx, args.skip_binder())?,
+                generic_args_bound_variables: args.bound_vars().iter()
+                    .map(|bound| bound_variable_json(context, tcx, bound)).collect(),
                 signature: fn_sig_json_with_query(
                     context,
                     tcx,
@@ -3114,10 +3617,16 @@ fn type_json_inner<'tcx>(
             def_path: tcx.def_path_str(def),
             generic_args: generic_args_json_inner(context, tcx, args)?,
         },
-        ty::Coroutine(def, args) => Shape::Coroutine {
-            def_id: def_json(context, def),
-            def_path: tcx.def_path_str(def),
-            generic_args: generic_args_json_inner(context, tcx, args)?,
+        ty::Coroutine(def, args) => {
+            // Layout/frame demands can occur without a resume-body demand.
+            // Retain raw physical declarations when their type is encountered;
+            // this is not a callable-body or layout-answer acquisition.
+            coroutine_coverage::capture_generic_source(tcx,context,def)?;
+            Shape::Coroutine {
+                def_id: def_json(context, def),
+                def_path: tcx.def_path_str(def),
+                generic_args: generic_args_json_inner(context, tcx, args)?,
+            }
         },
         ty::CoroutineWitness(def, args) => {
             return export_failure(
@@ -3132,7 +3641,8 @@ fn type_json_inner<'tcx>(
                 .map(|t| type_json(context, tcx, t))
                 .collect::<Result<_, _>>()?,
         },
-        ty::Alias(_, alias) => Shape::Alias {
+        ty::Alias(rigidity, alias) => Shape::Alias {
+            rigid: rigidity == ty::IsRigid::Yes,
             alias_payload: alias_payload_json(context, tcx, alias.kind),
             def_id: alias_def_id_json(context, alias.kind),
             generic_args: generic_args_json_inner(context, tcx, alias.args)?,
@@ -3229,8 +3739,65 @@ fn generic_args_json_inner<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<
 }
 
 fn const_type_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, value: ty::Const<'tcx>) -> Result<u64, String> {
+    // Type-level aliases in instantiated MIR are executable constants. Evaluate
+    // them with rustc before assigning a pool identity so two aliases with the
+    // same typed value share one canonical row. Generic declarations retain
+    // their symbolic aliases until a concrete instantiation is exported.
+    let source = value;
+    let value = match value.kind() {
+        ty::ConstKind::Alias(_, alias)
+            if !value.has_non_region_param()
+                && !value.has_escaping_bound_vars() =>
+        {
+            if matches!(alias.kind, ty::AliasConstKind::InherentSelf { .. }) {
+                return export_failure("type constant evaluation", format!("unresolved inherent self alias: {value:?}"));
+            }
+            let valtree = match tcx.const_eval_resolve_for_typeck(
+                ty::TypingEnv::fully_monomorphized(), alias, rustc_span::DUMMY_SP,
+            ) {
+                Ok(Ok(value)) => value,
+                Ok(Err(ty)) => return export_failure("type constant valtree", format!("{value:?}: incompatible value type {ty:?}")),
+                Err(error) => return export_failure("type constant evaluation", format!("{value:?}: {error:?}")),
+            };
+            let ty = tcx.try_normalize_erasing_regions(
+                ty::TypingEnv::fully_monomorphized(), alias.type_of(tcx),
+            ).map_err(|error| format!("type constant result type {value:?}: {error:?}"))?;
+            ty::Const::new_value(tcx, valtree, ty)
+        }
+        ty::ConstKind::Expr(_) if !value.has_non_region_param() && !value.has_escaping_bound_vars() => {
+            let normalized = tcx.try_normalize_erasing_regions(
+                ty::TypingEnv::fully_monomorphized(), ty::Unnormalized::new_wip(value),
+            ).map_err(|error| format!("type constant expression evaluation {value:?}: {error:?}"))?;
+            if !matches!(normalized.kind(), ty::ConstKind::Value(_)) {
+                return export_failure("type constant expression evaluation", format!("rustc did not produce a value for {value:?}: {normalized:?}"));
+            }
+            normalized
+        }
+        _ => value,
+    };
     let (id,fresh)=context.type_constants.reserve(value);
     if fresh { let definition=const_type_definition_json(context,tcx,value)?; context.type_constants.define(id,definition); }
+    if let ty::ConstKind::Alias(rigidity, alias) = source.kind()
+        && source != value
+        && context.type_const_result_sources.insert(source)
+    {
+        let (alias_kind, def) = match alias.kind {
+            ty::AliasConstKind::Projection { def_id } => ("projection", def_id),
+            ty::AliasConstKind::InherentSelf { def_id } => ("inherent_self", def_id),
+            ty::AliasConstKind::InherentImpl { def_id } => ("inherent_impl", def_id),
+            ty::AliasConstKind::Free { def_id } => ("free", def_id),
+            ty::AliasConstKind::Anon { def_id } => ("anonymous", def_id),
+        };
+        let def_id = def_json(context, def);
+        let generic_args = generic_args_json_inner(context, tcx, alias.args)?;
+        context.type_const_results.push(TypeConstResult {
+            alias_kind,
+            rigidity: match rigidity { ty::IsRigid::Yes => "rigid", ty::IsRigid::No => "not_rigid" },
+            def_id,
+            generic_args,
+            value_const_id: id as u64,
+        });
+    }
     Ok(id as u64)
 }
 fn const_type_definition_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, value: ty::Const<'tcx>) -> Result<pool_values::TypeConstant,String> {
@@ -3326,6 +3893,7 @@ fn fn_sig_json_with_query<'tcx>(
         safety: safety_json(sig.safety()),
         abi: extern_abi_json(sig.abi()),
         c_variadic: sig.c_variadic(),
+        splatted: sig.splatted(),
     })
 }
 
@@ -3360,11 +3928,127 @@ fn layout_json<'tcx>(
             ),
         )?);
     }
+    layout_query_trace("canonical",ty,true);
     let typing_env = rustc_middle::ty::TypingEnv::fully_monomorphized();
     Ok::<_, String>(match tcx.layout_of(typing_env.as_query_input(ty)) {
         Ok(layout) => layout_value_json(context, tcx, layout),
         Err(error) => export_failure("layout query", format!("{ty:?}: {error:?}"))?,
     })
+}
+
+// Diagnostic instrumentation reports explicit exporter call sites only. It
+// makes no assertion about rustc-internal transitive query execution.
+fn layout_query_trace(route: &str, input: ty::Ty<'_>, queried: bool) {
+    if std::env::var_os("LEAN_MIRI_LAYOUT_QUERY_TRACE").is_some() {
+        eprintln!("lean_miri_layout_call route={route} queried={queried} type={input:?}");
+    }
+}
+
+
+fn canonical_layout_recipe_eligible<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>) -> bool {
+    match *input.kind() {
+        ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_)
+        | ty::FnPtr(..) | ty::Never | ty::Tuple(_) | ty::Str | ty::Slice(_) => true,
+        ty::Pat(_,pattern) => match *pattern.0 {
+            ty::PatternKind::NotNull => true,
+            ty::PatternKind::Range { start, end } => matches!(start.kind(), ty::ConstKind::Value(..)) && matches!(end.kind(), ty::ConstKind::Value(..)),
+            ty::PatternKind::Or(patterns) => patterns.iter().all(|pattern| match *pattern.0 {
+                ty::PatternKind::Range { start, end } => matches!(start.kind(), ty::ConstKind::Value(..)) && matches!(end.kind(), ty::ConstKind::Value(..)),
+                _ => false,
+            }),
+        },
+        ty::Array(_,count) => count.try_to_target_usize(tcx).is_some(),
+        ty::Adt(def,_) if def.is_union() => true,
+        ty::Adt(def,_) if def.is_enum() => enum_layout_source_capable(tcx,input,256),
+        ty::RawPtr(pointee,_) | ty::Ref(_,pointee,_) => pointer_recipe_eligible(tcx,pointee),
+        _ => struct_recipe_eligible(tcx,input),
+    }
+}
+
+fn layout_type_syntax_supported(input: ty::Ty<'_>) -> bool {
+    if generic_mir::supported_type(input) { return true; }
+    match *input.kind() {
+        ty::Dynamic(..) => type_hash_material::eligible(input),
+        ty::RawPtr(inner,_) | ty::Ref(_,inner,_) => layout_type_syntax_supported(inner),
+        _ => false,
+    }
+}
+
+fn enum_layout_source_capable<'tcx>(tcx: TyCtxt<'tcx>, input: ty::Ty<'tcx>, fuel: usize) -> bool {
+    if fuel == 0 || !layout_type_syntax_supported(input) { return false; }
+    match *input.kind() {
+        ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never
+            | ty::FnPtr(..) => true,
+        ty::RawPtr(pointee,_) | ty::Ref(_,pointee,_) => pointer_recipe_eligible(tcx,pointee),
+        ty::Tuple(fields) => fields.iter().all(|field| enum_layout_source_capable(tcx,field,fuel-1)),
+        ty::Array(element,count) => count.try_to_target_usize(tcx).is_some() &&
+            enum_layout_source_capable(tcx,element,fuel-1),
+        ty::Adt(def,args) => {
+            if def.repr().simd() || def.repr().scalable() || def.repr().pack.is_some() { return false; }
+            if def.is_enum() {
+                // Explicit discriminants require source CTFE only on tagged
+                // paths; a repr(Rust) singleton never consults their values.
+                if (def.variants().len() > 1 || def.repr().inhibit_enum_layout_opt()) &&
+                    def.variants().iter().any(|variant| matches!(variant.discr,ty::VariantDiscr::Explicit(_))) {
+                    return false;
+                }
+            } else if def.is_struct() {
+                if !struct_recipe_eligible(tcx,input) { return false; }
+            } else if !def.is_union() { return false; }
+            if !generic_mir::supported_arguments(args) { return false; }
+            def.all_fields().all(|field|
+                layout_type_syntax_supported(tcx.type_of(field.did).instantiate_identity().skip_norm_wip()) &&
+                enum_layout_source_capable(tcx,field.ty(tcx,args).skip_norm_wip(),fuel-1))
+        }
+        _ => false,
+    }
+}
+
+// Source-constructor eligibility only: this deliberately never calls is_sized.
+// Unknown generic/nominal/alias tails remain explicit material-layout residuals.
+fn struct_recipe_eligible<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> bool {
+    fn guaranteed_sized<'tcx>(tcx:TyCtxt<'tcx>,ty: ty::Ty<'tcx>,fuel:usize) -> bool {
+        if fuel==0 {return false;}
+        match ty.kind() {
+            ty::Bool | ty::Char | ty::Never | ty::Int(_) | ty::Uint(_) | ty::Float(_)
+            | ty::Ref(..) | ty::RawPtr(..) | ty::FnDef(..) | ty::FnPtr(..)
+            | ty::UnsafeBinder(..) | ty::Array(..) | ty::Pat(..) | ty::Closure(..)
+            | ty::CoroutineClosure(..) | ty::Coroutine(..) | ty::CoroutineWitness(..) => true,
+            ty::Tuple(elements) => elements.last().is_none_or(|tail| guaranteed_sized(tcx,*tail,fuel-1)),
+            // Raw lang-item flag proves PhantomData<T> sized for all T,
+            // without using a layout/Sized answer. Includes PanicLocation's tail.
+            ty::Adt(def,_) if def.is_phantom_data() => true,
+            ty::Adt(def,_) if def.is_struct() && def.repr().transparent() &&
+                def.non_enum_variant().fields.len()==1 => {
+                let field=def.non_enum_variant().fields.iter().next().unwrap();
+                guaranteed_sized(tcx,tcx.type_of(field.did).instantiate_identity().skip_norm_wip(),fuel-1)
+            },
+            _ => false,
+        }
+    }
+    let ty::Adt(def, _) = ty.kind() else { return false; };
+    if !def.is_struct() || def.repr().simd() || def.repr().scalable() { return false; }
+    if tcx.is_lang_item(def.did(), rustc_attr_ir::LangItem::F16B)
+        || tcx.is_lang_item(def.did(), rustc_attr_ir::LangItem::PpcF128) {
+        return false;
+    }
+    def.non_enum_variant().fields.iter().last().is_none_or(|field|
+        guaranteed_sized(tcx,tcx.type_of(field.did).instantiate_identity().skip_norm_wip(),256))
+}
+
+// Structural source eligibility only. Covered Dynamic syntax uses the raw
+// DynMetadata declaration; unresolved aliases and unsupported binders stay residual.
+fn pointer_recipe_eligible<'tcx>(tcx: TyCtxt<'tcx>, pointee: ty::Ty<'tcx>) -> bool {
+    match *pointee.kind() {
+        ty::Alias(..) | ty::Param(..) | ty::Bound(..) | ty::Placeholder(..)
+        | ty::Infer(..) | ty::Error(..) => false,
+        ty::Dynamic(..) => tcx.lang_items().get(rustc_attr_ir::LangItem::DynMetadata).is_some()
+            && type_hash_material::eligible(pointee),
+        ty::Tuple(elements) => elements.last().is_none_or(|tail| pointer_recipe_eligible(tcx,*tail)),
+        ty::Adt(def,args) if def.is_struct() => def.non_enum_variant().fields.iter().last()
+            .is_none_or(|field| pointer_recipe_eligible(tcx,field.ty(tcx,args).skip_norm_wip())),
+        _ => true,
+    }
 }
 
 // Preserve queried TyAndLayout, including field-specific and uninhabited
@@ -3374,12 +4058,8 @@ fn layout_value_json<'tcx>(
     tcx: TyCtxt<'tcx>,
     layout: rustc_abi::TyAndLayout<'tcx, ty::Ty<'tcx>>,
 ) -> u64 {
-    let (id, fresh) = context.layouts.reserve(layout);
-    if !fresh {
-        return id as u64;
-    }
-    let value = pool_layout::Layout::new(tcx, layout);
-    context.layouts.define(id, value);
+    let (id,fresh) = context.layouts.reserve(pool_layout::LayoutKey::Computed(layout));
+    if fresh { context.layouts.define(id,pool_layout::Layout::new(tcx,layout)); }
     id as u64
 }
 
@@ -4260,9 +4940,34 @@ fn unwind_json(unwind: rustc_middle::mir::UnwindAction) -> pool_body::Unwind {
     }
 }
 
+/// Recover only explicit physical definition references in our internal raw
+/// template schema. Names, debug text and runtime type IDs are never consulted.
+fn generic_definition_references(value: &Value, out: &mut Vec<DefId>) -> Result<(), String> {
+    match value {
+        Value::Object(fields) => {
+            for key in ["definition", "associated", "trait_associated_definition", "implementation_definition"] {
+              if let Some(identity) = fields.get(key) {
+                let crate_index = identity.get("crate").and_then(Value::as_u64)
+                    .and_then(|n| u32::try_from(n).ok())
+                    .ok_or_else(|| "generic definition crate identity absent/invalid".to_owned())?;
+                let index = identity.get("index").and_then(Value::as_u64)
+                    .and_then(|n| u32::try_from(n).ok())
+                    .ok_or_else(|| "generic definition index identity absent/invalid".to_owned())?;
+                out.push(DefId { krate: rustc_hir::def_id::CrateNum::from_u32(crate_index),
+                    index: rustc_hir::def_id::DefIndex::from_u32(index) });
+            }
+            }
+            for child in fields.values() { generic_definition_references(child, out)?; }
+        }
+        Value::Array(children) => for child in children { generic_definition_references(child, out)?; },
+        _ => {}
+    }
+    Ok(())
+}
+
 fn def_json(context: &mut ExportContext<'_>, def: rustc_hir::def_id::DefId) -> u64 {
     let (id,fresh)=context.definitions.reserve(def);
-    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32() }); }
+    if fresh { context.definitions.define(id,pool_values::Definition { crate_index:def.krate.as_u32(),index:def.index.as_u32(),body_track_caller:None,callable_source:None,adt_drop:None,generic_template:None,alias_declaration:None,adt_declaration:None,source_environment:None,function_abi_material:None,raw_path:None }); }
     id as u64
 }
 
@@ -4349,6 +5054,20 @@ fn register_call_transfer_for_target<'tcx>(
     virtual_receiver: Option<ty::Ty<'tcx>>,
     indirect_function_pointer: bool,
 ) -> Result<(), String> {
+    if let Some(signature) = instance_abi_material::signature(tcx, instance, request.extra_types) {
+        instance_abi_material::trace("transfer-source", false, instance);
+        // Additional candidates do not assert that a transfer takes place.
+        // Miri's count, convention and layout checks still run in Lean first.
+        for (source, target) in request.caller_args.iter().copied().zip(signature.inputs().iter().copied()) {
+            record_covariance_transfer(context, source, target);
+        }
+        record_covariance_transfer(context, signature.output(), request.return_destination);
+        return Ok(());
+    }
+    // This is only covariance-evidence discovery, not runtime target
+    // selection. A non-callable data winner has no FnAbi/MIR transfer; runtime
+    // symbol/allocation validation still rejects calling it as a function.
+    if !callable_runtime_instance(tcx, instance) { return Ok(()); }
     if matches!(instance.def, ty::InstanceKind::Item(_)) && tcx.is_foreign_item(instance.def_id()) {
         let key = (instance, request.clone(), indirect_function_pointer);
         if context.foreign_call_transfer_keys.insert(key) {
@@ -4480,15 +5199,29 @@ fn register_call_transfer_for_target<'tcx>(
     // Use the same substituted body that the source interpreter enters. ABI
     // argument types are validation metadata; the actual copy destination is
     // the instantiated MIR local (or spread tuple field).
-    let template = checked_instance_mir(tcx, instance.def)?;
-    let callee_body = match instance.try_instantiate_mir_and_normalize_erasing_regions(
-        tcx,
-        template.typing_env(tcx),
-        ty::EarlyBinder::bind(tcx, template.clone()),
-    ) {
-        Ok(body) => body,
-        Err(error) => return Err(format!("callee MIR instantiation failed: {error:?}")),
-    };
+    let (callee_arg_count,callee_spread_arg,callee_argument_types,callee_return_type) =
+        if noop_drop::eligible(tcx,instance) {
+            let interface=noop_drop::interface(tcx,instance)?;
+            (interface.argument_count,interface.spread_argument,interface.arguments,interface.return_type)
+        } else if fn_pointer_shim::eligible(tcx,instance) {
+            let interface=fn_pointer_shim::interface(tcx,instance)?;
+            (interface.argument_count,interface.spread_argument,interface.arguments,interface.return_type)
+        } else {
+        let template = checked_instance_mir(tcx, instance.def)?;
+        if has_source_mir_template(context,tcx,template,instance) {
+            generic_mir::source_query_trace("covariance-interface",false,instance);
+            // Only interface type dependencies are needed by this residual
+            // covariance catalog. Never instantiate a selected executable body.
+            let interface=generic_mir::interface(tcx,template,instance.args)?;
+            (interface.argument_count,interface.spread_argument,interface.arguments,interface.return_type)
+        } else {
+            generic_mir::source_query_trace("covariance-residual",true,instance);
+            let body=instance.try_instantiate_mir_and_normalize_erasing_regions(
+                tcx,template.typing_env(tcx),ty::EarlyBinder::bind(tcx,template.clone()))
+                .map_err(|error|format!("callee MIR instantiation failed: {error:?}"))?;
+            let arguments=body.args_iter().map(|local|(local,body.local_decls[local].ty)).collect();
+            (body.arg_count,body.spread_arg,arguments,body.local_decls[rustc_middle::mir::RETURN_PLACE].ty)
+        }};
     let caller_args = if caller_location {
         caller_abi
             .args
@@ -4529,20 +5262,19 @@ fn register_call_transfer_for_target<'tcx>(
     let caller_has_closure_receiver =
         closure_receiver && caller_abi.args.len() == callee_abi.args.len();
     let mut target_local_types = Vec::new();
-    for local in callee_body.args_iter() {
-        let local_ty = callee_body.local_decls[local].ty;
+    for (local,local_ty) in callee_argument_types {
         if closure_receiver && local == rustc_middle::mir::Local::arg(0) {
             continue;
         }
         if callee_abi.c_variadic
-            && local == rustc_middle::mir::Local::from_usize(callee_body.arg_count)
+            && local == rustc_middle::mir::Local::from_usize(callee_arg_count)
         {
             // Miri packages extras into this synthetic VaList. They are
             // checked/initialized by allocate_varargs, not copied into this
             // local through copy_op_allow_transmute.
             break;
         }
-        if Some(local) == callee_body.spread_arg {
+        if Some(local) == callee_spread_arg {
             let ty::Tuple(fields) = local_ty.kind() else {
                 return Ok(());
             };
@@ -4596,7 +5328,7 @@ fn register_call_transfer_for_target<'tcx>(
     Ok::<_, String>(if caller_abi.ret.eq_abi(&callee_abi.ret) {
         record_covariance_transfer(
             context,
-            callee_body.local_decls[rustc_middle::mir::RETURN_PLACE].ty,
+            callee_return_type,
             request.return_destination,
         );
     })
@@ -4615,6 +5347,7 @@ fn instance_fn_abi_with_extras<'tcx>(
     extra_types: &'tcx ty::List<ty::Ty<'tcx>>,
 ) -> Result<Option<&'tcx rustc_target::callconv::FnAbi<'tcx, ty::Ty<'tcx>>>, String> {
     let empty = ty::List::empty();
+    instance_abi_material::trace("transfer-residual", true, instance);
     let baseline = tcx
         .fn_abi_of_instance(env.as_query_input((instance, empty)))
         .map_err(|error| format!("baseline ABI query failed: {error:?}"))?;
@@ -5104,7 +5837,7 @@ fn resolve_callee_json<'tcx>(
                             } else { None };
                             let dispatch_slot = virtual_resolution.as_ref().map(|resolution| resolution.dispatch_slot);
                             let function_type = type_json(context,tcx,func_ty)?;
-                            let fn_abi = fn_abi_json(context,tcx,abi)?;
+                            let fn_abi = instance_fn_abi_json(context,tcx,abi, instance, ty::List::empty())?;
                             if virtual_resolution.is_some() {
                                 Callee::VirtualDispatch { function_type, instance_id, dispatch_slot, fn_abi, virtual_resolution }
                             } else {
@@ -5182,7 +5915,7 @@ fn resolve_callee_json<'tcx>(
                                     Callee::IndirectFunctionPointer {
                                         function_type:type_json(context,tcx,func_ty)?, signature:fn_sig_json_inner(context,tcx,signature)?,
                                         extra_argument_types:extra.iter().map(|ty|type_json(context,tcx,ty)).collect::<Result<Vec<_>,String>>()?,
-                                        fn_abi:fn_abi_json(context,tcx,abi)?,
+                                        fn_abi:pointer_fn_abi_json(context,tcx,abi, signature, extra)?,
                                     }
                                 }
                                 Err(error) => export_failure(
@@ -5214,18 +5947,52 @@ fn resolve_callee_json<'tcx>(
     })
 }
 
-fn fn_abi_json<'tcx>(
+fn instance_fn_abi_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>,
+    abi: &rustc_target::callconv::FnAbi<'tcx, ty::Ty<'tcx>>, instance: ty::Instance<'tcx>,
+    extra: &'tcx ty::List<ty::Ty<'tcx>>) -> Result<u64, String> {
+    let seed = if matches!(instance.def, ty::InstanceKind::Item(_)) {
+        let ty = instance.ty(tcx, ty::TypingEnv::fully_monomorphized());
+        if matches!(ty.kind(), ty::FnDef(..)) {
+            pool_layout::SignatureSeed::new(context, tcx, ty.fn_sig(tcx).skip_binder(), extra,
+                instance.def.requires_caller_location(tcx).then(|| tcx.caller_location_ty()))?
+        } else { None }
+    } else { None };
+    store_fn_abi(context, tcx, abi, pool_layout::UnwindSeed::for_instance(tcx, instance)?, seed,
+        matches!(instance.def,ty::InstanceKind::Virtual(..)))
+}
+fn pointer_fn_abi_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>,
+    abi: &rustc_target::callconv::FnAbi<'tcx, ty::Ty<'tcx>>, signature: ty::FnSig<'tcx>,
+    extra: &'tcx ty::List<ty::Ty<'tcx>>) -> Result<u64, String> {
+    let seed = pool_layout::SignatureSeed::new(context, tcx, signature, extra, None)?;
+    store_fn_abi(context, tcx, abi, pool_layout::UnwindSeed::new(tcx, signature.abi(), None), seed, false)
+}
+
+fn store_fn_abi<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     abi: &rustc_target::callconv::FnAbi<'tcx, rustc_middle::ty::Ty<'tcx>>,
+    unwind_seed: pool_layout::UnwindSeed,
+    signature_seed: Option<pool_layout::SignatureSeed>,
+    virtual_receiver: bool,
 ) -> Result<u64, String> {
-    let (id, fresh) = context.fn_abis.reserve(abi.clone());
+    let (id, fresh) = context.fn_abis.reserve((abi.clone(),virtual_receiver));
     if !fresh {
         return Ok(id as u64);
     }
-    let value = pool_layout::FnAbi::new(context, tcx, abi)?;
+    let value = pool_layout::FnAbi::new(context, tcx, abi, unwind_seed, signature_seed, virtual_receiver)?;
     context.fn_abis.define(id, value);
     Ok(id as u64)
+}
+
+fn trace_mir_constant(route: &str, queried: bool, value: &rustc_middle::mir::Const<'_>) {
+    if std::env::var_os("LEAN_MIRI_TRACE_CONST_EVAL").is_some() {
+        let category = match value {
+            rustc_middle::mir::Const::Ty(..) => "ty",
+            rustc_middle::mir::Const::Unevaluated(..) => "unevaluated",
+            rustc_middle::mir::Const::Val(..) => "val",
+        };
+        eprintln!("lean_miri_const_call route={route} queried={queried} category={category} value={value:?}");
+    }
 }
 
 fn const_operand_json<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,body:&rustc_middle::mir::Body<'tcx>,operand:&rustc_middle::mir::ConstOperand<'tcx>)->Result<pool_constant::Operand,String>{
@@ -5244,6 +6011,14 @@ fn const_operand_json<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,bo
         Some(MirBodyRole::CoroutineAuxiliary) => body.typing_env(tcx),
         _ => return export_failure("MIR constant", "missing or invalid serialization role/phase"),
     };
+    if let rustc_middle::mir::Const::Val(value, _) = operand.const_ {
+        trace_mir_constant("literal", false, &operand.const_);
+        return Ok(Operand {ty:type_json(context,tcx,ty)?,
+            user_type_annotation:operand.user_ty.map(|a|Annotation::AnnotationRef {index:a.as_u32()}),
+            constant:Constant::LiteralConst {value:const_value_json(context,tcx,ty,value)?},
+            span:span_json(context,tcx,operand.span)});
+    }
+    trace_mir_constant("mir_eval", true, &operand.const_);
     let evaluated=operand.const_.eval(tcx,env,operand.span).map_err(|e|format!("main::const_operand_json: const_evaluation_error; {e:?}; const={} env={:?}",
         format!("{:?}", operand.const_).chars().take(1600).collect::<String>(), env))?;
     let value=const_value_json(context,tcx,ty,evaluated)?;
@@ -5257,7 +6032,7 @@ fn const_value_json<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,ty:t
             // Preserve Scalar::Ptr independently of the enclosing type: niche
             // ADTs can carry provenance and must not be converted to integer bits.
             if matches!(*ty.kind(),ty::RawPtr(..)|ty::Ref(..)|ty::FnPtr(..)) || scalar.try_to_scalar_int().is_err() {scalar_pointer_json(context,tcx,ty,scalar)?}
-            else {let layout=tcx.layout_of(ty::TypingEnv::fully_monomorphized().as_query_input(ty)).map_err(|_|"main::const_value_json: scalar_layout_unavailable".to_owned())?;let bits=scalar.to_bits(layout.size).report_err().map_err(|e|format!("main::const_value_json: scalar_with_provenance_or_invalid_bits; {e:?}"))?;O::Scalar {ty:type_json(context,tcx,ty)?,bits_unsigned:bits.to_string(),size_bytes:layout.size.bytes()}}
+            else {let integer=scalar.try_to_scalar_int().map_err(|e|format!("main::const_value_json: scalar_with_provenance_or_invalid_bits; {e:?}"))?;O::Scalar {ty:type_json(context,tcx,ty)?,bits_unsigned:integer.to_bits_unchecked().to_string(),size_bytes:integer.size().bytes()}}
         },
         C::Slice {alloc_id,meta}=>{let allocation=allocation_ref(context,tcx,alloc_id)?; O::SliceAllocation {ty:type_json(context,tcx,ty)?,allocation,metadata_length:meta}},
         C::Indirect {alloc_id,offset}=>{let allocation=allocation_ref(context,tcx,alloc_id)?; O::IndirectAllocation {ty:type_json(context,tcx,ty)?,allocation,offset_bytes:offset.bytes()}},
@@ -5525,7 +6300,7 @@ fn existential_predicate_payload_json<'tcx>(
         ty::ExistentialPredicate::Projection(projection) => {
             let term = match projection.term.kind() {
                 ty::TermKind::Ty(value) => ProjectionTerm::Type(type_json(context,tcx,value)?),
-                ty::TermKind::Const(value) => return export_failure("existential projection", format!("constant projection is not implemented: {value:?}")),
+                ty::TermKind::Const(value) => ProjectionTerm::Const(const_type_json(context,tcx,value)?),
             };
             P::Projection { def_id: def_json(context, projection.def_id), def_path: tcx.def_path_str(projection.def_id),
                 generic_args: generic_args_json(context,tcx,projection.args)?, term }
@@ -5593,15 +6368,12 @@ fn bytes_hex(bytes: &[u8]) -> String {
 // Newly reached drop-glue MIR can add more demands for a later finite wave.
 struct RuntimeTypeFact {
     input_type_id: u64,
-    mut_pointer_type: u64,
-    mut_reference_type: u64,
     drop_glue: Option<u64>,
 }
 impl RuntimeTypeFact {
     fn finish(self) -> query_values::RuntimeTypeQuery {
         query_values::RuntimeTypeQuery { input_type_id: self.input_type_id,
-            typing_env: "fully_monomorphized", mut_pointer_type: self.mut_pointer_type,
-            mut_reference_type: self.mut_reference_type, drop_glue: self.drop_glue }
+            typing_env: "fully_monomorphized", drop_glue: self.drop_glue }
     }
 }
 fn compiler_runtime_type_queries_json<'tcx>(
@@ -5656,10 +6428,9 @@ fn compiler_runtime_type_queries_json<'tcx>(
             }
             _=>unavailable_compiler_fact("drop glue requires normalized monomorphic type and drop_in_place lang item")?,
         }) };
-        Ok::<_, String>(RuntimeTypeFact { input_type_id:id,
-            mut_pointer_type:query_generated_type_json(context,tcx,ty::Ty::new_mut_ptr(tcx,input))?,
-            mut_reference_type:query_generated_type_json(context,tcx,ty::Ty::new_mut_ref(tcx,tcx.lifetimes.re_erased,input))?,
-            drop_glue: drop })
+        // Mutable pointer/reference constructor nodes and layouts are created
+        // by the consumer's input-relative lazy type arena on actual demand.
+        Ok::<_, String>(RuntimeTypeFact { input_type_id:id, drop_glue: drop })
     } }).collect::<Result<Vec<_>, String>>()?;
     Ok(records)
 }
@@ -5669,7 +6440,7 @@ struct VirtualFact {
     method_definition: u64,
     parent_trait: u64,
     concrete_type: u64,
-    rebased_args: Vec<pool_values::GenericArgument>,
+    parent_generic_count: usize,
     resolved: u64,
     vtable_query: query_values::PendingVtableRef,
 }
@@ -5680,7 +6451,7 @@ impl VirtualFact {
         Ok(query_values::RuntimeVirtualQuery { typing_env: "fully_monomorphized",
             original_instance_id: self.original_instance_id,
             method_definition: self.method_definition, parent_trait: self.parent_trait,
-            concrete_type: self.concrete_type, rebased_args: self.rebased_args,
+            concrete_type: self.concrete_type, parent_generic_count: self.parent_generic_count,
             resolved: self.resolved, vtable_query: self.vtable_query.finish(ids)? })
     }
 }
@@ -5847,7 +6618,7 @@ fn compiler_runtime_virtual_queries_json<'tcx>(
             };
             state.rows.push(VirtualFact {
                 original_instance_id, method_definition:def_json(context,def), parent_trait:def_json(context,parent),
-                concrete_type:input_type, rebased_args:generic_args_json(context,tcx,rebound)?, resolved,
+                concrete_type:input_type, parent_generic_count:tcx.generics_of(parent).count(), resolved,
                 vtable_query:query_values::PendingVtableRef { input_type:type_json(context,tcx,concrete)?,
                     input_predicates, key:(input_type_id,input_predicate_ids) } });
         }
@@ -5913,7 +6684,6 @@ fn vtable_predicates_match<'tcx>(
 #[derive(serde::Serialize)]
 struct CallerInstance {
     instance_id: u64,
-    requires_caller_location: bool,
     display: String,
     inline_never: bool,
     target_features: Vec<TargetFeature>,
@@ -5959,7 +6729,6 @@ fn compiler_caller_location_queries_json<'tcx>(
     for (id, instance) in instances {
         let mut row = CallerInstance {
             instance_id: id,
-            requires_caller_location: instance.def.requires_caller_location(tcx),
             display: instance.to_string(),
             inline_never: matches!(
                 tcx.codegen_instance_attrs(instance.def).inline,
@@ -6114,7 +6883,8 @@ fn compiler_instance_abis_json<'tcx>(
     }
     state.events = event_end;
     let requests = requests.into_iter().filter(|key| state.completed.insert(*key)).collect::<Vec<_>>();
-    let records=requests.into_iter().map(|(instance,extra)|{ {
+    let requests = requests.into_iter();
+    let records=requests.map(|(instance,extra)|{ {
         let closed=!instance.args.has_non_region_param() && !instance.args.has_escaping_bound_vars()
             && !instance.args.has_infer() && !instance.args.has_placeholders()
             && !extra.has_non_region_param() && !extra.has_escaping_bound_vars()
@@ -6125,7 +6895,7 @@ fn compiler_instance_abis_json<'tcx>(
         }else if !closed || !function {
             unavailable_compiler_fact("FnAbi instance query requires a complete monomorphic function instance and extra argument vector")?
         }else{match tcx.fn_abi_of_instance(ty::TypingEnv::fully_monomorphized().as_query_input((instance,extra))){
-                Ok(abi)=>compiler_fact(fn_abi_json(context,tcx,abi)?),
+                Ok(abi)=>compiler_fact(instance_fn_abi_json(context,tcx,abi, instance, extra)?),
             Err(error)=>export_failure("main::compiler_instance_abis_json", format!("{}; {}", "rustc fn_abi_of_instance failed", format!("{error:?}")))?,
         }};
         let record=InstanceAbiFact { instance_id:context.register_metadata_instance(instance), extra_argument_types:extra.iter().map(|ty| type_json(context,tcx,ty)).collect::<Result<Vec<_>, String>>()?, abi_query:abi };
@@ -6139,6 +6909,19 @@ fn compiler_instance_abis_json<'tcx>(
 // backtrace.rs::handle_miri_get_backtrace and resolve_frame_pointer. The table
 // covers compiler-produced frame positions only. Forged/unseen byte positions
 // require additional source-map evidence; consumers must never guess a line.
+fn backtrace_span_json<'tcx>(context:&mut ExportContext<'tcx>,tcx:TyCtxt<'tcx>,
+    span:rustc_span::Span,body_span:rustc_span::Span)->pool_body::BacktraceSpan {
+    let collapsed=rustc_span::hygiene::walk_chain_collapsed(span,body_span);
+    let position=tcx.sess.source_map().lookup_char_pos(collapsed.lo());
+    pool_body::BacktraceSpan {
+        span:span_json(context,tcx,span),
+        source_position:pool_body::SourcePosition {
+            byte_position:collapsed.lo().0,line:position.line,zero_based_char_column:position.col.0,
+            filename:context.files.intern(position.file.name.prefer_remapped_unconditionally().to_string()),
+        },
+    }
+}
+
 fn backtrace_spans_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tcx>, body: &rustc_middle::mir::Body<'tcx>) -> Vec<pool_body::BacktraceSpan> {
     let mut spans = vec![body.span, tcx.def_span(body.source.def_id())];
     for local in body.local_decls.iter() {
@@ -6156,18 +6939,7 @@ fn backtrace_spans_json<'tcx>(context: &mut ExportContext<'tcx>, tcx: TyCtxt<'tc
     let records = spans
         .into_iter()
         .filter(|span| seen.insert(*span))
-        .map(|span| {
-            let collapsed = rustc_span::hygiene::walk_chain_collapsed(span, body.span);
-            let position = tcx.sess.source_map().lookup_char_pos(collapsed.lo());
-            pool_body::BacktraceSpan {
-                span: span_json(context, tcx, span),
-                source_position: pool_body::SourcePosition {
-                    byte_position: collapsed.lo().0, line: position.line,
-                    zero_based_char_column: position.col.0,
-                    filename: context.files.intern(position.file.name.prefer_remapped_unconditionally().to_string()),
-                },
-            }
-        })
+        .map(|span|backtrace_span_json(context,tcx,span,body.span))
         .collect::<Vec<_>>();
     records
 }
@@ -6177,11 +6949,26 @@ fn discriminant_facts_json<'tcx>(
     context: &mut ExportContext<'tcx>,
     tcx: TyCtxt<'tcx>,
     input: ty::Ty<'tcx>,
-) -> Result<pool_type::Discriminants, String> {
+    allow_raw_default_enum: bool,
+) -> Result<Option<pool_type::Discriminants>, String> {
     use rustc_middle::ty::CoroutineArgsExt;
+    // Raw default declarations suffice even when their physical layout remains
+    // residual. Never acquire/copy a computed discriminant catalog for them.
+    if let ty::Adt(def, _) = input.kind() {
+        if allow_raw_default_enum && def.is_enum() && def.variants().iter().all(|variant|
+            matches!(variant.discr, ty::VariantDiscr::Relative(_))) {
+            if std::env::var_os("LEAN_MIRI_DISCRIMINANT_QUERY_TRACE").is_some() {
+                eprintln!("lean_miri_discriminant_call queried=false type={input:?}");
+            }
+            return Ok(None);
+        }
+    }
     let (values, count) = match input.kind() {
         ty::Adt(def, _) => {
             let values = if def.is_enum() {
+                if std::env::var_os("LEAN_MIRI_DISCRIMINANT_QUERY_TRACE").is_some() {
+                    eprintln!("lean_miri_discriminant_call queried=true type={input:?}");
+                }
                 Some(def.discriminants(tcx).collect::<Vec<_>>())
             } else {
                 None
@@ -6209,11 +6996,12 @@ fn discriminant_facts_json<'tcx>(
                 context,
                 tcx,
                 tcx.instantiate_bound_regions_with_erased((*bound).into()),
+                false, // Binder erasure remains an explicit material residual.
             );
         }
         _ => (None, None),
     };
-    Ok(pool_type::Discriminants {
+    Ok(Some(pool_type::Discriminants {
         has_discriminants: values.is_some(),
         adt_variant_count: count,
         values: values
@@ -6227,28 +7015,7 @@ fn discriminant_facts_json<'tcx>(
                 })
             })
             .collect::<Result<_, String>>()?,
-    })
-}
-
-fn discriminant_type_fact_json<'tcx>(
-    context: &mut ExportContext<'tcx>,
-    tcx: TyCtxt<'tcx>,
-    input: ty::Ty<'tcx>,
-) -> Result<u64, String> {
-    Ok::<_, String>(match input.kind() {
-        ty::UnsafeBinder(bound) => {
-            let inner = tcx.instantiate_bound_regions_with_erased((*bound).into());
-            if inner.has_escaping_bound_vars() || inner.has_non_region_param() {
-                return export_failure(
-                    "discriminant type",
-                    "unsafe-binder discriminant query retains bound type/const variables",
-                );
-            }
-            discriminant_type_fact_json(context, tcx, inner)?
-        }
-        ty::Pat(base, _) => discriminant_type_fact_json(context, tcx, *base)?,
-        _ => type_json(context, tcx, input.discriminant_ty(tcx))?,
-    })
+    }))
 }
 
 // interpret/traits.rs::get_vtable_ptr, before source salt/reservation effects.
@@ -6509,7 +7276,7 @@ struct FunctionTypeFact {
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum FunctionKind {
     FunctionPointer,
-    FunctionDefinition { instance_id: u64 },
+    FunctionDefinition { instance_id: Option<u64> },
 }
 #[derive(serde::Serialize)]
 struct PointerAbi {
@@ -6532,7 +7299,7 @@ struct FunctionDiscovery<'tcx> {
     type_cursor: usize,
     request_cursor: usize,
     helper_cursor: usize,
-    types: BTreeMap<u64, (Option<u64>, pool_type::FunctionSignature)>,
+    types: BTreeMap<u64, (FunctionKind, pool_type::FunctionSignature)>,
     completed_abis: HashSet<(ty::Ty<'tcx>, &'tcx ty::List<ty::Ty<'tcx>>)>,
     abis: Vec<(u64, Vec<u64>, u64)>,
     helper_signatures: HashSet<ty::FnSig<'tcx>>,
@@ -6541,12 +7308,9 @@ struct FunctionDiscovery<'tcx> {
 impl FunctionDiscovery<'_> {
     fn finish(self) -> FunctionFacts {
         FunctionFacts {
-            types: self.types.into_iter().map(|(type_id, (instance, signature))| FunctionTypeFact {
+            types: self.types.into_iter().map(|(type_id, (function_kind, signature))| FunctionTypeFact {
                 type_id, typing_env: "fully_monomorphized",
-                function_kind: match instance {
-                    Some(instance_id) => FunctionKind::FunctionDefinition { instance_id },
-                    None => FunctionKind::FunctionPointer,
-                },
+                function_kind,
                 signature_query: signature,
             }).collect(),
             pointer_abis: self.abis.into_iter().map(|(type_id, extra_argument_types, abi_query)| PointerAbi {
@@ -6579,7 +7343,7 @@ fn record_helper_signature<'tcx>(
     require_normal_fn_pointer_abi(signature.abi())?;
     let abi = match tcx.fn_abi_of_fn_ptr(ty::TypingEnv::fully_monomorphized()
         .as_query_input((ty::Binder::dummy(signature), ty::List::empty()))) {
-        Ok(abi) => fn_abi_json(context, tcx, abi)?,
+        Ok(abi) => pointer_fn_abi_json(context, tcx, abi, signature, ty::List::empty())?,
         Err(error) => export_failure("main::compiler_function_facts_json",
             format!("helper dummy signature ABI query failed; {error:?}"))?,
     };
@@ -6653,12 +7417,15 @@ fn compiler_function_facts_json<'tcx>(
                 }
             };
             let kind = match *input.kind() {
-                ty::FnPtr(..) => None,
-                ty::FnDef(def, args) => Some( context.register_metadata_instance(ty::Instance {
+                ty::FnPtr(..) => FunctionKind::FunctionPointer,
+                // A trait FnDef has a rustc signature even when no Item target
+                // has been selected. Keep the physical selection separate.
+                ty::FnDef(def, args) if tcx.trait_of_assoc(def).is_none() =>
+                    FunctionKind::FunctionDefinition { instance_id: Some(context.register_metadata_instance(ty::Instance {
                         def: ty::InstanceKind::Item(def),
                         args: args.skip_binder(),
-                    }),
-                ),
+                    })) },
+                ty::FnDef(..) => FunctionKind::FunctionDefinition { instance_id: None },
                 _ => unreachable!(),
             };
             state.types.insert(id, (kind, signature));
@@ -6669,7 +7436,7 @@ fn compiler_function_facts_json<'tcx>(
         let abi=if !closed {unavailable_compiler_fact("FnPtr ABI requires a complete monomorphic function type and extra argument vector")?}
         else{require_normal_fn_pointer_abi(input.fn_sig(tcx).skip_binder().abi())?;
         match tcx.fn_abi_of_fn_ptr(ty::TypingEnv::fully_monomorphized().as_query_input((input.fn_sig(tcx),extra))){
-            Ok(abi)=>compiler_fact(fn_abi_json(context,tcx,abi)?),
+            Ok(abi)=>compiler_fact(pointer_fn_abi_json(context,tcx,abi, input.fn_sig(tcx).skip_binder(), extra)?),
             Err(error)=>export_failure("main::compiler_function_facts_json", format!("{}; {}", "rustc fn_abi_of_fn_ptr failed", format!("{error:?}")))?,
         }};
         Ok::<_, String>((context.type_id(input), extra.iter().map(|ty| type_json(context,tcx,ty)).collect::<Result<Vec<_>, String>>()?, abi))
@@ -6733,7 +7500,7 @@ fn compiler_function_facts_json<'tcx>(
                         ty::TypingEnv::fully_monomorphized()
                             .as_query_input((ty::Binder::dummy(signature), ty::List::empty())),
                     ) {
-                        Ok(abi) => compiler_fact(fn_abi_json(context, tcx, abi)?),
+                        Ok(abi) => compiler_fact(pointer_fn_abi_json(context, tcx, abi, signature, ty::List::empty())?),
                         Err(error) => export_failure(
                             "main::compiler_function_facts_json",
                             format!(
@@ -6901,7 +7668,7 @@ mod tainted_mir_tests {
                     let mut body = template.clone();
                     body.tainted_by_errors = Some(error);
                     // A previously reserved key must not bypass the check.
-                    context.bodies.reserve(BodyKey { instance, promoted: body.source.promoted });
+                    context.bodies.reserve(BodyKey { instance, promoted: body.source.promoted,role:ctfe_body_source::Role::Runtime });
                     let result = resolved_mir_body_json(tcx, &body, instance, &mut context);
                     assert!(result.unwrap_err().contains("MIR body is tainted by compiler errors"));
                 }

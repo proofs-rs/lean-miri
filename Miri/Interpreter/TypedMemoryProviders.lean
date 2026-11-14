@@ -68,11 +68,12 @@ def bindLifecycle (pointers : PointerMachine.Hooks K (ValidityMachine.Control U)
 Read/write field operations are canonical source projections and typed memory;
 source invalid-tag/niche/order logic remains the existing Discriminant driver. -/
 def discriminant [DecidableEq K] (facts : CompilerFacts.Context)
+    (types : RuntimeArrayQueries.Access (State K U))
     (access : ValidityMachine.Access K U)
     (projection : PlaceProjectionHooks Provenance (State K U) C MachineHooks.FrameExtra)
     (base : DiscriminantHooks Provenance (State K U) C (RuntimePlace Provenance)) :
     DiscriminantHooks Provenance (State K U) C (RuntimePlace Provenance) :=
-  {CompilerDiscriminantFacts.hooks facts base with
+  {CompilerDiscriminantFacts.hooks facts types base with
     runtimeTarget := access.runtime
     projectRead := fun c source field => do
       let cx ← projection.place.projection c

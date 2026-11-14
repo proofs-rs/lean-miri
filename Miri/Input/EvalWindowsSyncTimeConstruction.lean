@@ -200,7 +200,7 @@ def syncFromSource
       unless abi.args.size == request.args.size do
         throw (.unsupported s!"compiler Windows sync ABI for `{name}` has an unexpected arity")
       pure abi
-    argumentCompat := (CompilerCallConstruction.compiler p compatibilityBudget).checkArgumentCompat choice
+    argumentCompat := (CompilerCallConstruction.compiler p EvalProjectionMachine.outerArrays compatibilityBudget).checkArgumentCompat choice
     checkSymbolClash := fun name =>
       match CompilerForeignSymbols.checkSymbolClash symbols name with
       | .ok () => pure ()

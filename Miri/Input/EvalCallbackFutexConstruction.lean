@@ -38,9 +38,7 @@ def readTimespecFromSource
     EStateM StepError (State Os R H D O Aff B Poll Instant System Native Profiler)
       (Option Clock.Duration) := do
   let field := fun name => do
-    let index ← match CompilerNamedFields.fieldIndex runtime place.layout name with
-      | .ok value => pure value
-      | .error error => throw error
+    let index ← CompilerNamedFields.fieldIndex EvalProjectionMachine.arrays place.layout name
     let projected ← PlaceDynamic.field projection choice
       ⟨.memory place.mplace,place.layout⟩ index
     match projected.ref with

@@ -46,7 +46,7 @@ structure Config (K User C Other Extern Host : Type) where
   calls : ExecutionCallLeaves.Hooks (State K User) C Other Extern
   virtual : ExecutionCallLeaves.Virtual K User C
   helpers : ExecutionCallLeaves.Helpers (State K User) C Extern
-  control : ExecutionLeaves.Control Provenance LocalLayout FrameExtra
+  control : ExecutionLeaves.Control (State K User) Provenance LocalLayout FrameExtra
   panic : Panic.Hooks K User C Other
   unwindTerminateFunction : C → UnwindTerminateReason → M K User CallInstance
   ignoreOptionalOverflowChecks : Bool

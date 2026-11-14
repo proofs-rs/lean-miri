@@ -131,7 +131,7 @@ def objectHooksFromSource [DecidableEq MiriMemoryKind]
   allocation
   compiler
   pointers
-  pointerCompiler := CompilerExecutionProviders.pointerCompiler prepared
+  pointerCompiler := CompilerExecutionProviders.pointerCompiler prepared EvalProjectionMachine.arrays
   dynamic
   vtable
   dynamicFuel
@@ -192,7 +192,7 @@ def futexHooksWithReader [DecidableEq MiriMemoryKind]
     allocation
     compiler
     pointers
-    pointerCompiler := CompilerExecutionProviders.pointerCompiler prepared
+    pointerCompiler := CompilerExecutionProviders.pointerCompiler prepared EvalProjectionMachine.arrays
     dynamic
     vtable
     dynamicFuel

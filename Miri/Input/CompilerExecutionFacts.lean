@@ -10,9 +10,10 @@ private def lift (result : Except String A) : MachineHooks.M K User A :=
   | .ok value => pure value
   | .error error => throw (.unsupported s!"compiler execution query: {error}")
 
-def hooks (p : CompilerIntrinsicFacts.Prepared) (base : ExecutionMachine.Config K User C Other Extern Host) :
+def hooks (p : CompilerIntrinsicFacts.Prepared)
+    (access : RuntimeArrayQueries.Access (MachineHooks.State K User)) (base : ExecutionMachine.Config K User C Other Extern Host) :
     ExecutionMachine.Config K User C Other Extern Host :=
-  {CompilerIntrinsicConstants.hooks p base with
+  {CompilerIntrinsicConstants.hooks access base with
     operands := {base.operands with runtimeChecks := fun _ kind => lift (CompilerIntrinsicFacts.runtimeChecks p kind)}
     intrinsicName := fun callee => lift (CompilerIntrinsicFacts.itemName p callee)
     intrinsicMustOverride := fun callee => lift (CompilerIntrinsicFacts.mustOverride p callee)

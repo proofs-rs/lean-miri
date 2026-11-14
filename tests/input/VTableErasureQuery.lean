@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.EvalPreparation
 
 /-! Check genuine compiler query identities, separately from guest execution.
@@ -57,7 +58,7 @@ def main (args : List String) : IO Unit := do
   check (mode == "identity" || mode == "nonidentity") "unknown erasure expectation"
   check (extra.all fun flag => flag == "predicate-contrast" || flag == "trait-vptr" || flag == "trace-map")
     "unknown query coverage expectation"
-  let decoded ← must (decodeJson (← IO.FS.readFile path))
+  let decoded ← must (decodeFixture (← IO.FS.readFile path))
   let program ← must (lowerProgram decoded.document)
   let attempt := EvalPreparation.prepare program
   let prepared ← must attempt.outcome

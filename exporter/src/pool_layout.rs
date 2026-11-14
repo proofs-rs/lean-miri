@@ -3,8 +3,20 @@ use rustc_index::Idx;
 use rustc_middle::ty::TyCtxt;
 use serde::Serialize;
 
+// Raw contextual query identities must never alias canonical requests merely
+// because rustc happened to produce equal physical layout values.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum LayoutKey<'tcx> {
+    Computed(rustc_abi::TyAndLayout<'tcx, rustc_middle::ty::Ty<'tcx>>),
+}
+
 #[derive(Serialize)]
-pub(super) struct Layout {
+#[serde(untagged)]
+pub(super) enum Layout {
+    Material(FullLayout),
+}
+#[derive(Serialize)]
+pub(super) struct FullLayout {
     pub size_bytes: u64,
     pub abi_align_bytes: u64,
     pub unadjusted_abi_align_bytes: u64,
@@ -315,7 +327,7 @@ impl Layout {
                     .collect(),
             },
         };
-        Self {
+        Self::Material(FullLayout {
             size_bytes: layout.size.bytes(),
             abi_align_bytes: layout.align.abi.bytes(),
             unadjusted_abi_align_bytes: layout.unadjusted_abi_align.bytes(),
@@ -328,7 +340,7 @@ impl Layout {
             backend_repr: BackendRepr::new(tcx, layout.backend_repr),
             largest_niche: layout.largest_niche.map(|n| Niche::new(tcx, n)),
             randomization_seed: layout.randomization_seed.as_u64(),
-        }
+        })
     }
 }
 
@@ -547,11 +559,99 @@ pub(super) struct ArgAbi {
     pub mode: PassMode,
 }
 #[derive(Serialize)]
+pub(super) struct UnwindDefinition {
+    never_unwind: bool,
+    foreign_item: bool,
+    drop_glue: bool,
+}
+#[derive(Serialize)]
+pub(super) struct UnwindSeed {
+    abi: super::pool_type::ExternAbi,
+    definition: Option<UnwindDefinition>,
+    panic_unwinds: bool,
+    panic_in_drop_unwinds: bool,
+    #[serde(skip)]
+    reference_can_unwind: bool,
+}
+impl UnwindSeed {
+    pub(super) fn new<'tcx>(tcx: TyCtxt<'tcx>, abi: rustc_abi::ExternAbi,
+        instance: Option<rustc_middle::ty::Instance<'tcx>>) -> Self {
+        use rustc_middle::ty::{InstanceKind, ShimKind};
+        let definition_id = instance.and_then(|instance| match instance.def {
+            InstanceKind::Item(did) | InstanceKind::Intrinsic(did)
+            | InstanceKind::Shim(ShimKind::DropGlue(did, _)) => Some(did),
+            _ => None,
+        });
+        let definition = definition_id.map(|did| UnwindDefinition {
+            never_unwind: tcx.codegen_fn_attrs(did).flags.contains(
+                rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags::NEVER_UNWIND),
+            foreign_item: tcx.is_foreign_item(did),
+            drop_glue: tcx.is_lang_item(did, rustc_attr_ir::lang_items::LangItem::DropGlue),
+        });
+        Self { abi: super::extern_abi_json(abi), definition,
+            panic_unwinds: tcx.sess.panic_strategy().unwinds(),
+            panic_in_drop_unwinds: tcx.sess.opts.unstable_opts.panic_in_drop.unwinds(),
+            reference_can_unwind: rustc_middle::ty::layout::fn_can_unwind(tcx, definition_id, abi) }
+    }
+    pub(super) fn for_instance<'tcx>(tcx: TyCtxt<'tcx>,
+        instance: rustc_middle::ty::Instance<'tcx>) -> Result<Self, String> {
+        use rustc_middle::ty::{self, InstanceKind, ShimKind};
+        let abi = if matches!(instance.def, InstanceKind::Shim(ShimKind::ThreadLocal(..))) {
+            rustc_abi::ExternAbi::Rust
+        } else {
+            let ty = instance.ty(tcx, ty::TypingEnv::fully_monomorphized());
+            match ty.kind() {
+                ty::FnDef(..) => ty.fn_sig(tcx).skip_binder().abi(),
+                ty::Closure(_, args) => args.as_closure().sig().skip_binder().abi(),
+                ty::CoroutineClosure(_, args) => args.as_coroutine_closure()
+                    .coroutine_closure_sig().skip_binder().fn_sig_kind.abi(),
+                ty::Coroutine(..) => rustc_abi::ExternAbi::Rust,
+                _ => return Err("FnAbi unwind material requires callable source signature".into()),
+            }
+        };
+        Ok(Self::new(tcx, abi, Some(instance)))
+    }
+}
+#[derive(Serialize)]
+pub(super) struct SignatureSeed {
+    signature: super::pool_type::FunctionSignature,
+    extra_argument_types: Vec<u64>,
+    caller_location: Option<u64>,
+}
+impl SignatureSeed {
+    pub(super) fn new<'tcx>(context: &mut super::ExportContext<'tcx>, tcx: TyCtxt<'tcx>,
+        signature: rustc_middle::ty::FnSig<'tcx>,
+        extra: &'tcx rustc_middle::ty::List<rustc_middle::ty::Ty<'tcx>>,
+        caller: Option<rustc_middle::ty::Ty<'tcx>>) -> Result<Option<Self>, String> {
+        // Only raw, already concrete primitive/tuple signatures are admitted.
+        // Generic, bound-region and instance signature rewrites remain residual.
+        fn material(ty: rustc_middle::ty::Ty<'_>) -> bool {
+            use rustc_middle::ty;
+            match ty.kind() {
+                ty::Bool | ty::Char | ty::Int(_) | ty::Uint(_) | ty::Float(_) | ty::Never => true,
+                ty::Tuple(fields) => fields.iter().all(material),
+                _ => false,
+            }
+        }
+        if !signature.inputs_and_output.iter().all(material) || !extra.iter().all(material) {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            signature: super::fn_sig_json_inner(context, tcx, signature)?,
+            extra_argument_types: extra.iter().map(|ty| super::type_json(context, tcx, ty)).collect::<Result<_,_>>()?,
+            caller_location: caller.map(|ty| super::type_json(context, tcx, ty)).transpose()?,
+        }))
+    }
+}
+#[derive(Serialize)]
 pub(super) struct FnAbi {
     calling_convention: CanonAbi,
     c_variadic: bool,
-    fixed_count: u32,
-    can_unwind: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fixed_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signature_seed: Option<SignatureSeed>,
+    unwind_seed: UnwindSeed,
     #[serde(rename = "return")]
     pub ret: super::shared_json::Shared<ArgAbi>,
     pub arguments: Vec<super::shared_json::Shared<ArgAbi>>,
@@ -561,11 +661,28 @@ impl FnAbi {
         context: &mut super::ExportContext<'tcx>,
         tcx: TyCtxt<'tcx>,
         abi: &rustc_target::callconv::FnAbi<'tcx, rustc_middle::ty::Ty<'tcx>>,
+        unwind_seed: UnwindSeed,
+        signature_seed: Option<SignatureSeed>,
+        _virtual_receiver: bool,
     ) -> Result<Self, String> {
+        if unwind_seed.reference_can_unwind != abi.can_unwind {
+            return Err("FnAbi unwind material source signature disagrees with rustc final ABI".into());
+        }
+        if let Some(seed) = &signature_seed {
+            let fixed = seed.signature.inputs.len().checked_sub(
+                usize::from(seed.signature.abi.kind == "rust_call"));
+            if fixed != Some(abi.fixed_count as usize)
+                || seed.signature.c_variadic != abi.c_variadic {
+                return Err("source signature construction disagrees with rustc fixed-count/variadic result".into());
+            }
+        }
         fn arg<'tcx>(
             context: &mut super::ExportContext<'tcx>,
             tcx: TyCtxt<'tcx>,
             a: &rustc_target::callconv::ArgAbi<'tcx, rustc_middle::ty::Ty<'tcx>>,
+            _conv: rustc_abi::CanonAbi,
+            _is_return: bool,
+            _virtual_receiver: bool,
         ) -> Result<super::shared_json::Shared<ArgAbi>, String> {
             let ty = super::type_json(context, tcx, a.layout.ty)?;
             let layout = super::layout_value_json(context, tcx, a.layout) as usize;
@@ -578,13 +695,14 @@ impl FnAbi {
         Ok(Self {
             calling_convention: CanonAbi::new(abi.conv),
             c_variadic: abi.c_variadic,
-            fixed_count: abi.fixed_count,
-            can_unwind: abi.can_unwind,
-            ret: arg(context, tcx, &abi.ret)?,
+            fixed_count: Some(abi.fixed_count),
+            signature_seed: None,
+            unwind_seed,
+            ret: arg(context, tcx, &abi.ret, abi.conv, true, false)?,
             arguments: abi
                 .args
-                .iter()
-                .map(|a| arg(context, tcx, a))
+                .iter().enumerate()
+                .map(|(index,a)| arg(context, tcx, a, abi.conv, false, _virtual_receiver && index==0))
                 .collect::<Result<_, _>>()?,
         })
     }

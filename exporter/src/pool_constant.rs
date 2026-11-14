@@ -1,4 +1,4 @@
-//! Typed compiler-evaluated MIR constants, preserving pointer provenance.
+//! Raw MIR constant sources and literal values, preserving pointer provenance.
 use serde::Serialize;
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -11,7 +11,7 @@ pub(crate) enum Value {
         #[serde(rename = "type")]
         ty: u64,
         bits_unsigned: String,
-        // The exact layout size passed to rustc Scalar::to_bits.
+        // ScalarInt's own exact storage width, independent of eager layout queries.
         size_bytes: u64,
     },
     SliceAllocation {
@@ -49,6 +49,9 @@ pub(crate) enum Annotation {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum Constant {
+    LiteralConst { value: Value },
+    TypeConstant { type_constant: u64 },
+    UnevaluatedConst { definition:u64, arguments:Vec<super::pool_values::GenericArgument>, promoted:Option<u32> },
     EvaluatedConst { value: Value },
 }
 #[derive(Clone, Debug, Serialize)]

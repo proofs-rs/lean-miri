@@ -32,17 +32,49 @@ than limiting MIR execution or returning an invented sizedness result. -/
 def veryTriviallySized (runtime : RuntimeMetadata) (ty : TyId) : Except StepError Bool :=
   trivial runtime (runtime.source.types.size + 1) ty
 
+private def trivialInWorld (world : TypeArena.World) : Nat → TyId → Except StepError Bool
+  | 0, _ => .error (.invalidProgram "cyclic compiler type in storage sizedness traversal")
+  | fuel + 1, ty => do
+    let view ← (world.lookupType ty).mapError StepError.unsupported
+    match view with
+    | .material node => match node.shape with
+      | .tuple elements =>
+        match elements.back? with
+        | none => pure true
+        | some tail => trivialInWorld world fuel tail
+      | .patternType inner _ | .unsafeBinder inner _ => trivialInWorld world fuel inner
+      | .str | .slice _ | .dynamicTraitObject .. | .foreign _ | .adt _ | .alias .. => pure false
+      | .int _ | .uint _ | .bool | .float _ | .functionDefinition .. | .functionPointer ..
+      | .rawPointer .. | .char | .reference .. | .coroutine .. | .array ..
+      | .closure .. | .coroutineClosure .. | .never => pure true
+    | .constructed constructor => match constructor with
+      -- Pinned stack.rs TyKind::Pat follows the original base type.
+      | .patternType base _ => trivialInWorld world fuel base
+      | .tuple elements =>
+        match elements.back? with
+        | none => pure true
+        | some tail => trivialInWorld world fuel tail
+      | .str | .slice _ | .foreign _ | .adt .. | .alias .. | .dynamic .. => pure false
+      | .bool | .char | .never | .integer .. | .float .. | .rawPointer .. | .reference ..
+      | .functionDefinition .. | .functionPointer .. | .closure .. | .coroutineClosure .. | .coroutine ..
+      | .array .. => pure true
+
 /-- Actual source storage dictionary. The only allocation input is the real
 stack allocator, and dynamic size/alignment queries execute before reserving
 an allocation ID. Deallocation is the actual allocation-lifecycle operation. -/
 def hooks [DecidableEq K] (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K U))
     (allocation : PlaceMachine.AllocationConfig K U)
     (dynamic : DynamicLayoutHooks Provenance (MachineHooks.State K U) C)
     (dynamicBudget : Nat) (choice : C)
     (deallocateStack : Pointer (Option Provenance) → MachineHooks.M K U Unit) :
     MachineHooks.StorageHooks K U where
-  veryTriviallySized := veryTriviallySized p.runtime
-  layout := CompilerFrameContext.computeLocalLayout p
+  veryTriviallySized := fun ty => do
+    let world ← RuntimeArrayQueries.snapshot types
+    match trivialInWorld world (world.typeCount + 1) ty with
+    | .ok value => pure value
+    | .error error => throw error
+  layout := CompilerFrameContext.computeLocalLayout p types
   allocateDyn := fun layout metadataValue => do
     let some (size,align) ← DynamicLayout.sizeAndAlignFromMeta dynamic choice dynamicBudget metadataValue layout
       | throw (.invalidProgram "cannot allocate space for extern type with unknown size")

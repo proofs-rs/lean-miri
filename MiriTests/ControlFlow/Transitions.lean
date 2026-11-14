@@ -7,7 +7,7 @@ abbrev H := TerminatorHooks Unit Unit Unit (List Nat) Unit Unit Nat
 
 def log (n : Nat) (s : S) : S := { s with machine := s.machine ++ [n] }
 def hooks (action : ReturnAction := .normal) : H where
-  bodySpan := fun _ => .ok ⟨123⟩
+  bodySpan := fun _ state => (state,.ok ⟨123⟩)
   returnOperand := fun _ s => (log 1 s, .ok ())
   popFrame := fun _ s => match s.stack.popFrame with
     | .error e => (log 2 s, .error (.stack e))

@@ -86,6 +86,15 @@ impl Values {
     }
 }
 
+fn freeze_generic_sources(pools: &mut Values, sources: &mut [crate::coroutine_coverage::GenericSource]) -> Result<(), String> {
+    for row in sources {
+        for field in &mut row.layout.field_tys {
+            pools.source_infos.share(&mut field.source_info)?;
+        }
+    }
+    Ok(())
+}
+
 /// Called once, after all semantic references have been resolved. In particular,
 /// relocation targets and statement query IDs participate in exact equality.
 pub(super) fn freeze(document: &mut crate::ExportDocument) -> Result<(), String> {
@@ -103,9 +112,9 @@ pub(super) fn freeze(document: &mut crate::ExportDocument) -> Result<(), String>
         pools
             .boolean_queries
             .share(&mut ty.compiler_facts.boolean_queries)?;
-        pools
-            .discriminants
-            .share(&mut ty.compiler_facts.discriminants)?;
+        if let Some(discriminants) = &mut ty.compiler_facts.discriminants {
+            pools.discriminants.share(discriminants)?;
+        }
     }
     for entry in &mut document.allocations {
         if let crate::allocation_values::Entry::Single(allocation) = entry {
@@ -125,7 +134,11 @@ pub(super) fn freeze(document: &mut crate::ExportDocument) -> Result<(), String>
             pools.source_infos.share(&mut field.source_info)?;
         }
     }
-    for body in document.bodies.iter_mut().chain(document.compiler_coroutine_coverage.auxiliary_bodies.iter_mut().map(|row| &mut row.body)) {
+    freeze_generic_sources(pools, &mut document.compiler_coroutine_coverage.generic_sources)?;
+    for body in document.bodies.iter_mut().filter_map(|seed|match seed {
+        crate::pool_body::BodySeed::Material{body}=>Some(body),
+        crate::pool_body::BodySeed::CopyTemplate{..}|crate::pool_body::BodySeed::NoopDrop{..}=>None,
+    }).chain(document.compiler_coroutine_coverage.auxiliary_bodies.iter_mut().map(|row| &mut row.body)) {
         pools.backtrace_spans.share(&mut body.backtrace_spans)?;
         for local in &mut body.locals {
             pools.source_infos.share(&mut local.source_info)?;
@@ -203,6 +216,39 @@ mod tests {
 #[cfg(test)]
 mod semantic_tests {
     use super::*;
+    #[test]
+    fn raw_coroutine_generic_sources_freeze_source_info_references() {
+        use crate::coroutine_coverage::{GenericSource, Layout, SavedField};
+        let identity = serde_json::json!({"crate":0,"index":7});
+        let unit = serde_json::json!({"kind":"node","sort":"type","tag":"tuple","payload":"","children":[]});
+        let fields = [1,1,2].into_iter().map(|scope| SavedField {
+            r#type:unit.clone(), source_info:Shared::Value(crate::pool_body::SourceInfo {span:7,scope}),
+            ignore_for_traits:false, debuginfo_name:None,
+        }).collect();
+        let mut catalog: crate::coroutine_coverage::Catalog<crate::pool_body::Body<u64,Vec<u64>>> = Default::default();
+        catalog.generic_sources.push(GenericSource {
+            owner:identity.clone(),physical_owner:identity.clone(),typeck_owner:identity,
+            parent_count:0,parameters:vec!["type";5],witness_parameters:vec![],
+            type_expression:serde_json::json!({"kind":"definition","sort":"type","tag":"coroutine","definition":{"crate":0,"index":7},"children":vec![unit.clone();5]}),identity_kind:unit,by_move_owner:None,
+            layout:Layout {field_tys:fields,variant_fields:vec![vec![];3],variant_source_info:(0..3).map(|_|crate::pool_body::SourceInfo {span:7,scope:0}).collect(),storage_conflicts:vec![vec![];3]},
+        });
+        let mut pools = Values::default();
+        freeze_generic_sources(&mut pools,&mut catalog.generic_sources).unwrap();
+        let output = serde_json::to_value(&catalog).unwrap();
+        let fields = output["generic_sources"][0]["layout"]["field_tys"].as_array().unwrap();
+        assert_eq!(fields.iter().map(|field|field["source_info"].clone()).collect::<Vec<_>>(), vec![serde_json::json!(0),serde_json::json!(0),serde_json::json!(1)]);
+        assert_eq!(serde_json::to_value(&pools).unwrap()["source_infos"],serde_json::json!([{"span":7,"scope":1},{"span":7,"scope":2}]));
+        assert_eq!(fields[0]["ignore_for_traits"],false);
+        assert!(fields[0]["debuginfo_name"].is_null());
+        assert_eq!(fields[0]["type"],serde_json::json!({"kind":"node","sort":"type","tag":"tuple","payload":"","children":[]}));
+        assert!(freeze_generic_sources(&mut pools,&mut catalog.generic_sources).is_err());
+        catalog.generic_sources[0].layout.field_tys.clear();
+        freeze_generic_sources(&mut pools,&mut catalog.generic_sources).unwrap();
+        assert_eq!(serde_json::to_value(&catalog).unwrap()["generic_sources"][0]["layout"]["field_tys"],serde_json::json!([]));
+        assert_eq!(pools.source_infos.values.len(),2);
+    }
+
+
     use crate::allocation_values::Relocation;
 
     #[test]
@@ -252,9 +298,9 @@ mod semantic_tests {
 
     #[test]
     fn complete_layout_equality_preserves_every_original_layout_slot() {
-        use crate::pool_layout::{BackendRepr, FieldOffsets, Fields, Layout, Variants};
+        use crate::pool_layout::{BackendRepr, FieldOffsets, Fields, FullLayout, Layout, Variants};
         let layout = |seed| {
-            Shared::from(Layout {
+            Shared::from(Layout::Material(FullLayout {
                 size_bytes: 0,
                 abi_align_bytes: 1,
                 unadjusted_abi_align_bytes: 1,
@@ -267,7 +313,7 @@ mod semantic_tests {
                 backend_repr: BackendRepr::Memory { sized: true },
                 largest_niche: None,
                 randomization_seed: seed,
-            })
+            }))
         };
         let mut slots = vec![layout(7), layout(7), layout(8)];
         let mut pool = Payloads::default();

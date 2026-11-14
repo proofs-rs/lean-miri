@@ -23,7 +23,17 @@
       "always_encode_mir": false,
       "deduplicate_diagnostics": false,
       "qualification": "synthetic decoder-only fixture; not compiler or execution evidence"
-    }
+    },
+    "abi_session": {
+      "panic": "unwind",
+      "panic_in_drop": "unwind",
+      "optimization": "no",
+      "llvm_writable": false,
+      "box_noalias": true,
+      "incremental_enabled": false,
+      "sanitizers": []
+    },
+    "freeze_lang_item": null
   },
   "types": [
     {
@@ -310,7 +320,8 @@
         }
       ],
       "instance_id": 0,
-      "required_consts": []
+      "required_consts": [],
+      "source_role": "runtime"
     }
   ],
   "layouts": [
@@ -360,6 +371,7 @@
     }
   ],
   "type_constants": [],
+  "compiler_type_const_results": [],
   "body_roots": [
     {
       "body": 0,
@@ -1015,5 +1027,6 @@
       "scope": 0
     }
   ],
+  "ctfe_scalar_sources": [],
   "abi_arguments": []
 }

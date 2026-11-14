@@ -30,7 +30,9 @@ and terminal-check examples are in [connected tests](../tests/connected/README.m
 `--root` specifies an exact nongeneric local def-path. Without it, closed local
 bodies are roots. Generic definitions enter the graph through their actual
 monomorphic instances; unsubstituted templates are not exported as executable
-bodies. Selecting a generic definition directly is an error.
+bodies. Covered generic instances instead reference shared typed source templates
+that Lean instantiates when the body is requested. Selecting a generic definition
+directly is an error.
 
 Every requested semantic query must succeed. Missing MIR, failed normalization,
 layout or ABI queries, unavailable initializers and incomplete producer evidence
@@ -71,9 +73,39 @@ separate tables with document-local, dense, zero-based IDs:
 | `type_constants` | Compiler `Const`, including its type and constructor |
 | `predicates` | Full bound existential predicate; comparison rank is separate |
 | `bodies` | Instance, promoted index and source/query mode |
+| `mir_templates` | Generic definition and promoted index, within the supported source-body category |
+| `ctfe_scalar_sources` | Physical definition, promoted index and CTFE source role, within the bounded scalar frame policy |
 
 ABI rows store `return` and each `arguments` entry as an index into
-`abi_arguments`. Each payload contains the complete type, layout and passing mode;
+`abi_arguments`. The explicit `Initial` passing-mode recipe reconstructs
+`ArgAbi::new` from the physical layout with empty scalar attributes in Lean.
+The producer selects this recipe only when the complete final rustc mode equals
+that initial constructor; target-adjusted modes retain their explicit payload.
+For primitive nonpointer scalar layouts on 64-bit x86_64, `ScalarRust`,
+`ScalarSysvArgument` and `ScalarSysvReturn` instead derive scalar `NoUndef`
+attributes and integer extensions in Lean. The SysV recipes cover canonical C
+on targets that are neither Windows nor Darwin; ordinary Rust uses its boolean
+extension rule. The producer checks the reconstructed mode against rustc and
+fails export on disagreement. Pointer attributes, aggregates, other target
+classifiers and complete FnAbi query resolution remain compiler results.
+These rules follow pinned [`arg_attrs_for_rust_scalar`](https://github.com/rust-lang/rust/blob/8144389c895da997dbdecaa635e41d6a50be6ffd/compiler/rustc_ty_utils/src/abi.rs#L318)
+and the checked-in `rustc_target::callconv` sources.
+`FnAbi` rows also require `unwind_seed`: the original external ABI, optional
+source-definition `NEVER_UNWIND`/foreign-item/drop-glue flags, and the effective
+panic and panic-in-drop policies. Lean evaluates pinned `fn_can_unwind` from
+these materials. The old `can_unwind` result field is rejected. Coroutine,
+closure and thread-local shim signatures follow the source instance signature
+rules; per-row producer checks compare the material's source decision with the
+queried rustc ABI. This seed does not replace the remaining FnAbi query.
+Already concrete primitive/tuple signatures for ordinary item instances and
+function pointers carry `signature_seed` with original input/output types,
+ordered variadic extras and optional caller-location type. Such rows omit
+`fixed_count`: Lean plans argument construction and derives that count, then
+checks the physical argument vector. Signature type normalization remains an
+explicit dependency (structural identity or a residual normalization leaf).
+Rows requiring other instance signature rewrites retain a residual `fixed_count`;
+exactly one construction representation is required.
+Each payload contains the complete type and layout;
 sharing requires equality of all three, including all mode attributes.
 
 The Rust collector uses one `Pool<K, D>` implementation for the ten compiler identity tables. The additional `files` and `byte_images` tables intern exact strings and byte vectors.
@@ -92,7 +124,7 @@ Prepared-world `raw_pool` positions imply source ID `index + 1`: null slots join
 their unique serialized allocation, while opaque and dangling globals retain
 explicit exceptional rows. Dedup salt arrays carry graph IDs in salt order;
 source IDs and byte keys come from those allocations. All 32 outcomes remain
-required for function, vtable and byte keys. The reader accepts strict schema 11 and schema 12 inputs.
+required for function, vtable and byte keys. The reader accepts only schema 13 inputs.
 
 Schema 12 requires `compiler_coroutine_coverage`, including an explicit Boolean
 marker for every executable body. A marked body owns one complete, normalized
@@ -168,7 +200,7 @@ of those values. Type compiler facts use the owning `type_id` and optional
 This preserves a distinct region-erased query input when one exists.
 Backtrace `source_position.byte_position` is the body-specific collapsed position;
 it can differ from the global span's position for an inlined body.
-The reader accepts schemas 11 and 12. Explicit array offsets retain their count,
+The reader accepts only the current producer schema. Explicit array offsets retain their count,
 width and per-field equality checks. The producer stores array offsets as an
 exact stride/count formula, and represents a resolved LLVM intrinsic call with
 `kind: "llvm_intrinsic"`, `function_type` and `instance_id`, without `fn_abi`.
@@ -184,15 +216,36 @@ versions must be regenerated with the current producer.
 
 Generic arguments remain in their owning records, with type and type-constant
 references into the corresponding tables. `body_roots` records root metadata and
-body IDs. Each concrete instance and promoted index identifies one executable
-body, with generic arguments substituted, types normalized and constants
-evaluated before export. Roots and instance records reference that same body.
-Generic templates are not executable inputs; normalization or constant-evaluation
-failures abort export, including unused required constants. Diagnostic spans and
-scopes remain attached to the resolved instructions.
-This is a breaking wire-format change: earlier source/normalization-body
-snapshots must be regenerated. The reader requires each body's concrete
-`instance_id` and evaluated constants; it does not support the earlier shape.
+body IDs. Each body row has an explicit `body_kind`. A `material` row contains
+the compiler's instantiated executable MIR and evaluated constants. A
+`copy_template` row contains only `template_id`, `instance_id`, generic arguments
+and promoted-body references. Its shared `mir_templates` source contains a typed
+instruction skeleton, local type-expression slots and diagnostic source metadata.
+It contains no monomorphic fallback body. Metadata preparation inspects these
+seeds without instantiating executable MIR; `SourceMir.resolveBody` substitutes
+arguments, erases free regions in its supported binder-free domain and resolves
+exact type identities on demand. Missing source capabilities fail that demand.
+The pure resolver keeps no body-answer cache across executions.
+
+The required `ctfe_scalar_sources` array contains complete raw CTFE frames
+accepted by the `scalar_u32` policy, using `mir_for_ctfe` for Items and the
+compiler promoted-MIR table for promoted bodies. The collector follows raw Unevaluated
+operands and direct const-function dependencies without resolving implementations
+or evaluating constants. Unsupported bodies are omitted, with reasons available
+through `LEAN_MIRI_TRACE_CTFE_SOURCE=1`; a missing source remains an error at
+lookup. This bounded table does not establish whole-query closure: call/root
+setup, required-constant preambles, compiler allocation, validation and recursive
+interning remain separate capabilities. Existing evaluated runtime constants
+retain their residual producer path.
+
+The source-template category currently covers ordinary generic item bodies with
+unprojected local copy/move operations, tuple/array aggregates, storage markers,
+goto/switch/return/unreachable terminators and supported binder-free source type
+constructors. Calls, drops, constant operands, compiler shims and unsupported
+actual argument constructors retain the explicit `material` category. Category
+selection happens before instantiation; failure after selecting a template is
+an error. Diagnostic spans and scopes remain attached to resolved instructions.
+This is a breaking wire-format change: earlier snapshots must be regenerated.
 [Decoder](../Miri/Input/Decoder.lean) validates typed-table and query contracts.
 Successful query results are serialized directly: booleans remain booleans,
 optional results use JSON null, and structured results carry their semantic
@@ -201,9 +254,10 @@ required fields, semantic tags and references before returning an execution inpu
 An ID is reserved before its definition is traversed, so mutually recursive
 references do not require a table ordering. Export fails if a reserved definition
 is unfinished. Lean indexes source ranges, decodes compiler pools, and constructs interpreter
-MIR directly while reading bodies. It retains typed query records, checks
-reference bounds and keeps IDs through execution; it does not retain a generic
-JSON tree or an intermediate MIR value tree. Runtime lookups return checked errors.
+MIR directly while reading material bodies, and retains typed source templates
+for lazy body resolution. It retains typed query records, checks reference bounds
+and keeps IDs through execution; it does not retain a generic JSON tree.
+Runtime lookups return checked errors.
 Malformed table definitions are reported before downstream scope validation.
 
 Covariance collection has two phases. During source-demand closure, explicit

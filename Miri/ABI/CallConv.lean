@@ -73,6 +73,85 @@ structure ArgAbi (Ty : Type) where
   deriving DecidableEq, Repr
 namespace ArgAbi
 
+/-- Pinned `rustc_target::callconv::ArgAbi::new` and `indirect_pass_mode`
+(mod.rs:409–446). Scalar attributes are an explicit caller-supplied dependency;
+this constructor does not implement target ABI adjustment or infer attributes. -/
+def new (layout : TyAndLayout Ty)
+    (scalarAttrs : Scalar → Size → ArgAttributes) : ArgAbi Ty :=
+  let data := layout.layout
+  let indirectAttrs : ArgAttributes :=
+    { ArgAttributes.new with
+      -- CapturesAddress | NoAlias | NonNull | NoUndef | NoFree.
+      regular := 670
+      pointeeSize := data.size
+      pointeeAlign := some data.align.abi }
+  let mode := if data.isZst then PassMode.Ignore else
+    match data.backendRepr with
+    | .Scalar scalar => .Direct (scalarAttrs scalar Size.ZERO)
+    | .ScalarPair (a := a) (b := b) (bOffset := offset) =>
+      .Pair (scalarAttrs a Size.ZERO) (scalarAttrs b offset)
+    | .SimdVector .. | .SimdScalableVector .. => .Direct ArgAttributes.new
+    | .Memory (sized := sized) =>
+      if sized then .Indirect indirectAttrs none .Pointer
+      else .IndirectUnsized indirectAttrs ArgAttributes.new
+  ⟨layout, mode⟩
+
+/-- Pinned `ArgAbi::extend_integer_width_to` (mod.rs:544–559).
+Boolean scalars extend even when their primitive representation is already wide
+ enough; pointer and float primitives do not carry integer extensions. -/
+def extendIntegerWidthTo (arg : ArgAbi Ty) (bits : UInt64) : ArgAbi Ty :=
+  match arg.layout.layout.backendRepr, arg.mode with
+  | .Scalar scalar, .Direct attrs =>
+    match scalar.primitive with
+    | .Int integer signed =>
+      if integer.size.bytes * 8 < bits || scalar.isBool then
+        { arg with mode := .Direct { attrs with argExt := if signed then .Sext else .Zext } }
+      else arg
+    | _ => arg
+  | _, _ => arg
+
+/-- Nonpointer scalar branch of pinned rustc_ty_utils `arg_attrs_for_rust_scalar`
+(abi.rs:318–334). Pointer attributes require pointee/type/instance analysis and
+are deliberately outside this constructor. -/
+def nonPointerScalar (layout : TyAndLayout Ty) (extensionBits : UInt64) :
+    Except String (ArgAbi Ty) := do
+  let .Scalar scalar := layout.layout.backendRepr
+    | throw "scalar ABI recipe requires scalar physical layout"
+  match scalar.primitive with
+  | .Pointer _ => throw "scalar ABI recipe cannot infer pointer attributes"
+  | _ => pure ()
+  let result := new layout fun scalar _ =>
+    { ArgAttributes.new with regular := if scalar.isUninitValid then 0 else 128 }
+  pure (extendIntegerWidthTo result extensionBits)
+
+/-- Pinned `arg_attrs_for_rust_scalar` for a top-level raw pointer or FnPtr.
+`pointee_info_at` at offset zero returns safe=None, size=0, align=1 for these
+two source constructors (rustc_middle/ty/layout.rs:1062). Their type identity
+must be checked by the caller; references and pointer-containing ADTs cannot
+use this rule merely because they share a scalar physical layout. -/
+def conservativePointerScalar (layout : TyAndLayout Ty) : Except String (ArgAbi Ty) := do
+  let .Scalar (.Initialized (value := .Pointer _) (validRange := range)) := layout.layout.backendRepr
+    | throw "raw/FnPtr ABI requires an initialized scalar pointer layout"
+  pure (new layout fun _ _ =>
+    { ArgAttributes.new with regular := 128 ||| (if range.contains 0 then 0 else 16) })
+
+/-- Initial ABI with empty scalar attributes. A transport recipe may use this
+only when rustc's final adjusted argument equals this entire initial argument. -/
+def initial (layout : TyAndLayout Ty) : ArgAbi Ty :=
+  new layout (fun _ _ => ArgAttributes.new)
+
+/-- Pinned sized `make_indirect` adjustment, including fresh indirect attributes. -/
+def makeIndirect (arg : ArgAbi Ty) : Except String (ArgAbi Ty) := do
+  match arg.mode with
+  | .Direct _ | .Pair .. =>
+    unless arg.layout.layout.isSized do throw "sized indirect adjustment requires sized layout"
+    let attrs : ArgAttributes := {ArgAttributes.new with
+      regular := 670, pointeeSize := arg.layout.layout.size,
+      pointeeAlign := some arg.layout.layout.align.abi}
+    pure {arg with mode := .Indirect attrs none .Pointer}
+  | .Indirect _ _ .Pointer | .IndirectUnsized .. => pure arg
+  | _ => throw "invalid indirect ABI adjustment"
+
 def eqAbi [DecidableEq Ty] (left right : ArgAbi Ty) : Bool :=
   left.layout.layout.eqAbi right.layout.layout && left.mode.eqAbi right.mode &&
   (if left.mode.isDirect then

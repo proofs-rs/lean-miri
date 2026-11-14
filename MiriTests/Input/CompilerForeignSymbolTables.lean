@@ -18,17 +18,24 @@ private def unusedPrimitives : Catalog.Primitives := {
   i8 := 0, i16 := 0, i32 := 0, i64 := 0, i128 := 0, bool := 0
   pointerTagInteger := 0, usize := 0, isize := 0, unit := 0
   unitPointerConst := 0, unitPointerMut := 0, immU8Pointer := 0, immU8PointerPointer := 0
-  typeNameResultType := 0, callerLocationType := none, orderingEnum := none }
+  callerLocationType := none, orderingEnum := none }
 
 private def document (symbols : Catalog.ForeignSymbols) : ImportDocument := {
-  producer := ⟨"miri", "rustc", "version", "target"⟩
+  producer := {
+    miriCommit := "miri"
+    rustcCommit := "rustc"
+    rustcVersion := "version"
+    targetTriple := "target"
+    abiSession := none }
   types := #[], allocations := #[], instances := #[], selectedScope := none
   functionAbis := #[], bodies := #[], producerSettings := unusedSettings
   queries := {
-    session := ⟨#[], false, "test", 0, #[]⟩
+    session := {
+      internalTargetFeatures := #[], isLikeWasm := false, targetArch := "test"
+      rootSpan := 0, runtimeChecks := #[], printOptions := none }
     runtime := ⟨none, #[], #[], #[], symbols⟩
     frameMetadata := ⟨0, #[]⟩, instanceAbis := #[]
-    functionFacts := ⟨#[], #[], #[]⟩, casts := #[], typeNames := #[], panic := #[]
+    functionFacts := ⟨#[], #[], #[]⟩, casts := #[], panic := #[]
     nativeSignatures := #[], retag := #[], covariance := #[]
     globalBytes := ⟨0, 0, #[], #[]⟩, callerLocations := #[]
     main := ⟨none, none, none, #[], none⟩, primitives := unusedPrimitives
@@ -60,8 +67,23 @@ private def prepare (symbols : Catalog.ForeignSymbols) (definitions : Array Defi
     base with
     definitions, instances := #[instanceNode 0, instanceNode 1], files := #["test.rs"]
     spans := #[{ lo := 0, hi := 1, start := ⟨1,0⟩, «end» := ⟨1,1⟩, context := "root", file := 0 }] }
-  let program : LoweredProgram := ⟨⟨#[], #[], definitions, #[]⟩, #[], #[], #[], source⟩
-  let runtime : RuntimeMetadata := { source, target }
+  let program : LoweredProgram := {
+    bundle := {spans := #[], definitions, typeConstants := #[]}
+    roots := #[], instances := #[], promoted := #[], input := source }
+  -- This fixture has an explicit target, no type/constant/layout tables, no
+  -- alias declarations, and no generic templates. Build that exact raw context;
+  -- foreign symbol preparation never asks it to synthesize a compiler answer.
+  let aliases ← AliasMaterial.program #[]
+  let normalizationContext : AliasRuntime.Context := {
+    generic := {
+      types := source.types, definitions, constants := source.typeConstants,
+      pointerBytes := target.pointerSize.bytes.toNat }
+    aliases, traits := source.traitProgram }
+  let checked ← TypeArena.CheckedMaterial.create source.types source.typeConstants definitions source.predicates
+    target.pointerSize.bytes.toNat
+  let runtime : RuntimeMetadata := {
+    source, target, normalizationContext, materialLayoutFuel := definitions.size + 1,
+    checkedMaterial := some checked, denseTypes := some checked.density }
   let context : CompilerFacts.Context := { runtime, program }
   let facts : CompilerFactAdapters.Prepared := { context, patterns := #[], castTypes := #[], obligations := #[] }
   CompilerForeignSymbolTables.prepare ⟨facts, #[]⟩
@@ -103,7 +125,8 @@ private def callableCandidate (iteration definition : Nat) : Catalog.ForeignCand
   symbol := s!"callable{iteration}", explicitSymbol := true
   crateIndex := 1, crateName := "test", weak := false, compilerBuiltins := false }
 
-private def callableDefinitions : Array DefinitionId := #[⟨1,7⟩, ⟨1,8⟩]
+private def callableDefinitions : Array DefinitionId := #[
+  {crateIndex := 1, index := 7}, {crateIndex := 1, index := 8}]
 
 -- Two callable identities share the lowering context while retaining distinct
 -- dense definitions and the original finalized-table validation.

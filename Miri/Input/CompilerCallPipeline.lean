@@ -1,5 +1,7 @@
 import Miri.Input.CompilerVTableRuntime
 import Miri.Input.CallResolution
+import Miri.Input.RuntimeArrayQueries
+import Miri.Input.WorldVirtualHooks
 
 /-! Shared preparation and actual compiler-leaf wiring for virtual/drop/caller
 calls. All adapters retain one final compilation-local identity table; none
@@ -32,8 +34,9 @@ def prepareProfiled (profile : Lean.Options) (program : LoweredProgram) : Result
   let calls ← profileit "preparation.call.resolution" profile fun _ =>
     CallResolution.prepareWithRuntimeProfiled profile metadata symbols.facts.context.program
   profileit "preparation.call.inline_attribute_validation" profile fun _ => do
-    for (callee,trackCaller) in runtime.callerLocation do
+    for callee in [:runtime.program.input.instances.size] do
       if let some inlineAttribute := CompilerVirtualFacts.inlineAttribute scopes callee then
+        let trackCaller ← CompilerRuntimeQueries.materialRequiresCallerLocation runtime callee
         unless inlineAttribute == trackCaller do throw "inlined/global full-instance caller attributes conflict"
   let program := calls.program
   let context := symbols.facts.context.withProgram program
@@ -48,35 +51,38 @@ private def lift (result : Result A) : EStateM StepError S A :=
   | .ok value => pure value
   | .error error => throw (.unsupported s!"compiler call pipeline: {error}")
 
-def compilerHooks (prepared : Prepared) (base : VirtualCalls.CompilerHooks S C) :
+def compilerHooks (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
+    (base : VirtualCalls.CompilerHooks S C) :
     VirtualCalls.CompilerHooks S C :=
-  CompilerVirtualFacts.scopeHooks prepared.scopes
-    (CompilerRuntimeQueries.hooks prepared.runtime
-      (CompilerVirtualFacts.compilerHooks prepared.symbols.facts base))
+  WorldVirtualHooks.hooks types <| CompilerVirtualFacts.scopeHooks prepared.scopes types
+    (CompilerRuntimeQueries.hooks prepared.runtime types
+      (CompilerVirtualFacts.compilerHooks prepared.symbols.facts types base))
 
-def vtableHooks (prepared : Prepared) (image : AllocationImage.Imported)
+def vtableHooks (prepared : Prepared) (types : RuntimeArrayQueries.Access S) (image : AllocationImage.Imported)
     (memory : S → MemoryState P E K) (base : VTableHooks P S C CallInstance (FnAbi MIR.TyId)) :
     VTableHooks P S C CallInstance (FnAbi MIR.TyId) :=
-  CompilerVTableFacts.hooks prepared.symbols.facts
-    (CompilerVTableRuntime.hooks prepared.symbols image memory base)
+  WorldVirtualHooks.vtableHooks types <| CompilerVTableFacts.hooks prepared.symbols.facts
+    (CompilerVTableRuntime.hooks prepared.symbols types image memory base)
 
 /-- Runtime reads/projections/pointer alignment remain actual machine actions.
 Every replaced compiler/symbolic leaf uses the exact imported query evidence. -/
-def runtimeHooks (prepared : Prepared) (image : AllocationImage.Imported)
+def runtimeHooks (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
+    (image : AllocationImage.Imported)
     (memory : S → MemoryState P Extra K) (base : VirtualCalls.Hooks P S C E) :
     VirtualCalls.Hooks P S C E :=
   { base with
-    compiler := compilerHooks prepared base.compiler
-    vtable := vtableHooks prepared image memory base.vtable }
+    compiler := compilerHooks prepared types base.compiler
+    vtable := vtableHooks prepared types image memory base.vtable }
 
 /-- Source load_mir returns the exact body-table key with executable MIR. Missing
 or ambiguous instance bodies, failed substitutions and templates are errors. -/
-def loadMir (prepared : Prepared) (fnInstance : CallInstance) : EStateM StepError S LoadedBody :=
-  lift (CallResolution.loadedBodyOfInstance prepared.calls fnInstance)
+def loadMir (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
+    (fnInstance : CallInstance) : EStateM StepError S LoadedBody :=
+  RuntimeArrayQueries.performCompiler types (CallResolution.loadedBodyOfInstance prepared.calls fnInstance)
 
-def bindFunctionCalls (prepared : Prepared)
+def bindFunctionCalls (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
     (base : FunctionCalls.Hooks P S C E Other Extern FnABI ArgABI) :
     FunctionCalls.Hooks P S C E Other Extern FnABI ArgABI :=
-  { base with loadMir := fun _ fnInstance => loadMir prepared fnInstance }
+  { base with loadMir := fun _ fnInstance => loadMir prepared types fnInstance }
 
 end Miri.Input.CompilerCallPipeline

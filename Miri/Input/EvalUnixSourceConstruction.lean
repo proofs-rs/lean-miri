@@ -1,3 +1,4 @@
+import Miri.Input.CompilerInitialAllocationByteMachine
 import Miri.Input.EvalUnixConstruction
 import Miri.Input.EvalUnixFdConstruction
 import Miri.Input.EvalUnixIoConstruction
@@ -337,7 +338,7 @@ def stdOnlyFromRuntime {MirBody : Type} [DecidableEq MiriMemoryKind]
       (State Os R P H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error)
       Place (MPlaceTy Provenance) MirBody I) := do
   let target ← p.externStatics.targetFacts |>.mapError StepError.unsupported
-  let frame := CompilerFrameMetadata.hooks p.lifecycle.frames userRelevantCrates
+  let frame := CompilerFrameMetadata.hooks p.lifecycle.frames EvalProjectionMachine.arrays userRelevantCrates
   let place := PlaceMachine.placeHooks accessConfig allocationConfig compilerConfig
   let writeScalar : Scalar Provenance → MPlaceTy Provenance →
       EStateM StepError
@@ -364,9 +365,7 @@ def stdOnlyFromRuntime {MirBody : Type} [DecidableEq MiriMemoryKind]
       EStateM StepError
         (State Os R P H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error)
         (MPlaceTy Provenance) := fun parent name => do
-    let index ← match CompilerNamedFields.fieldIndex p.runtime parent.layout name with
-      | .ok index => pure index
-      | .error error => throw error
+    let index ← CompilerNamedFields.fieldIndex EvalProjectionMachine.arrays parent.layout name
     let projected ← PlaceDynamic.field projection choice
       (RuntimePlace.mk (.memory parent.mplace) parent.layout) index
     match projected.ref with
@@ -427,7 +426,7 @@ def stdOnlyFromRuntime {MirBody : Type} [DecidableEq MiriMemoryKind]
       | .error reason => throw (StepError.unsupported reason)
     writeScalar
     allocateStringDedup := fun value => do
-      let place ← GlobalByteMachine.string functions access
+      let place ← CompilerInitialAllocation.ByteMachine.stringCurrent EvalWorld.initialCompilerStoreInnerAccess p.runtime.target.base functions access
         (CompilerGlobalBytes.strLayout p.runtime globalBytes) value
       pure place.mplace.ptr
     windowsAbi := fun name => CompilerNamedShimAbi.query p.namedAbi name

@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 
 /-! Constructed mutations of fresh compiler evidence must fail decoding, before
@@ -5,7 +6,7 @@ MIR execution. Resource/process failures are failures of this check, not rejecti
 proofs. The runner must enforce its ordinary process and memory limits. -/
 def main (args : List String) : IO Unit := do
   let path :: expected :: _ := args | throw (IO.userError "input and expected decoder diagnostic required")
-  match Miri.Input.decodeJson (← IO.FS.readFile path) with
+  match Miri.Input.decodeFixture (← IO.FS.readFile path) with
   | .ok _ => throw (IO.userError "malformed coroutine evidence was accepted")
   | .error error =>
     unless (error.splitOn expected).length > 1 do

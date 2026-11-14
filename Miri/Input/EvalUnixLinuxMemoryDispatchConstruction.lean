@@ -21,6 +21,7 @@ structure Components (S : Type) where
 
 def fromSource [DecidableEq MiriMemoryKind]
     (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (RuntimeState U))
     (userRelevantCrates : Array Nat)
     (environment : UnixEnvironmentDispatch.Hooks (RuntimeState U) Os E EnvVars.Kind)
     (access : PlaceMachine.AccessConfig MiriMemoryKind (PointerMachine.User U))
@@ -42,19 +43,18 @@ def fromSource [DecidableEq MiriMemoryKind]
     otherPortable := fun name _ _ _ => throw (.unsupported s!"isolated Unix memory source context reached portable shim `{name}`") }
   let signatures : ShimSignatures.Hooks Provenance (RuntimeState U) Miri.MIR.Place
       (MPlaceTy Provenance) (Pointer (Option Provenance)) LoadedBody CallInstance :=
-    CompilerShimSignatures.hooks compilerFacts {
+    CompilerShimSignatures.hooks compilerFacts types {
       foreign
-      types := CompilerFacts.compatibilityQueries compilerFacts
-      isCVoid := fun ty => match CompilerFacts.boolean compilerFacts ty "is_c_void" with
-        | .ok value => pure value
-        | .error reason => throw (.unsupported s!"compiler c_void query: {reason}")
+      types := CompilerWorldCompatibility.queries compilerFacts types
+      isCVoid := fun ty => RuntimeArrayQueries.perform types
+                (CompilerFacts.booleanInWorld compilerFacts ty "is_c_void")
       readScalar := fun operand => do
         let immediate ← PlaceMachine.readImmediate access operand
         match immediate.imm.toScalar with
         | .ok scalar => pure scalar
         | .error error => throw (ScalarOps.immediateError error)
       hostUsizeBits }
-  let linuxMemory ← EvalUnixMemoryConstruction.fromSource p userRelevantCrates environment
+  let linuxMemory ← EvalUnixMemoryConstruction.fromSource p types userRelevantCrates environment
     signatures memory extras spans place choice pageSize
   let target ← p.externStatics.targetFacts |>.mapError StepError.unsupported
   let signature := CompilerNamedShimAbi.query p.namedAbi

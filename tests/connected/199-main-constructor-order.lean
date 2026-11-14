@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.EvalSourceRunFinalization
 import Miri.Input.ExecutionChoicePolicy
 import Miri.Input.NativeMathHost
@@ -268,7 +269,7 @@ private def raceStateInfo (state : OuterState) : String := Id.run do
 
 private def runGlobalCtorPure (contents : String) (pageSize : UInt64)
     (numCpus hostPid : UInt32) : Except String String := do
-  let decoded ← must (Input.decodeJson contents)
+  let decoded ← must (Input.decodeFixture contents)
   let program ← must (Input.lowerProgram decoded.document)
   let attempt := Input.EvalPreparation.prepare program
   let prepared ← must attempt.outcome
@@ -312,7 +313,7 @@ private def runGlobalCtorPure (contents : String) (pageSize : UInt64)
     fixedScheduling := false, trackOutdatedLoads := false, weakMemory := true
     backend := .vclocks, trackedTags := some #[], validation := .Shallow
     alignment := .Int, affinity := none, muteOutput := true, hostUsizeBits := 64 }
-  let arrays ← must compiler.initialArrays
+  let arrays ← must compiler.initialTypes
   let tape := choiceTape none #[]
   let creation : EStateM.Result StepError InitTrace OuterState :=
     (Input.MachineConstruction.create rawInitHooks sourceLeaves.hostConfiguration

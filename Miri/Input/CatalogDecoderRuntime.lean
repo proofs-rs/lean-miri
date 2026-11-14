@@ -137,12 +137,33 @@ private def runtimeCheck : Parser (Miri.MIR.RuntimeChecks × Bool) := do
     | _ => fail "unknown compiler runtime-check kind"
   return (check, enabled)
 
+private structure printOptionsFields where
+  typeLengthLimit : Option Nat := none
+  verboseInternals : Option Bool := none
+  identifyRegions : Option Bool := none
+  trimDiagnosticPaths : Option Bool := none
+  trimmedDefPaths : Option Bool := none
+private def printOptions : Parser PrintOptions := do
+  let fields ← object ({} : printOptionsFields) fun fields key => do
+    match key with
+    | "type_length_limit" => pure {fields with typeLengthLimit := some (← natural)}
+    | "verbose_internals" => pure {fields with verboseInternals := some (← boolean)}
+    | "trim_diagnostic_paths" => pure {fields with trimDiagnosticPaths := some (← boolean)}
+    | "trimmed_def_paths" => pure {fields with trimmedDefPaths := some (← boolean)}
+    | "identify_regions" => pure {fields with identifyRegions := some (← boolean)}
+    | _ => fail s!"unknown compiler print option: {key}"
+  pure ⟨← need fields.typeLengthLimit "type_length_limit",
+    ← need fields.verboseInternals "verbose_internals", ← need fields.identifyRegions "identify_regions",
+    ← need fields.trimDiagnosticPaths "trim_diagnostic_paths",
+    ← need fields.trimmedDefPaths "trimmed_def_paths"⟩
+
 private structure sessionFields where
   internalTargetFeatures : Option (Array (String)) := none
   isLikeWasm : Option (Bool) := none
   targetArch : Option (String) := none
   rootSpan : Option (Nat) := none
   runtimeChecks : Option (Array (Miri.MIR.RuntimeChecks × Bool)) := none
+  printOptions : Option PrintOptions := none
 
 def session : Parser (Session) := do
   let fields ← object ({} : sessionFields) fun fields key => do
@@ -152,6 +173,7 @@ def session : Parser (Session) := do
     | "target_arch" => return { fields with targetArch := some (← string) }
     | "root_span" => return { fields with rootSpan := some (← natural) }
     | "runtime_checks" => return { fields with runtimeChecks := some (← array (runtimeCheck)) }
+    | "print_options" => return {fields with printOptions := some (← printOptions)}
     | _ => skipValue; pure fields
   let internalTargetFeatures ← need fields.internalTargetFeatures "internal_target_features"
   let isLikeWasm ← need fields.isLikeWasm "is_like_wasm"
@@ -163,7 +185,8 @@ def session : Parser (Session) := do
     if seen.contains kind then fail "duplicate compiler runtime-check query"
     seen := seen.push kind
   return {
-    internalTargetFeatures, isLikeWasm, targetArch, rootSpan, runtimeChecks }
+    internalTargetFeatures, isLikeWasm, targetArch, rootSpan, runtimeChecks,
+    printOptions := fields.printOptions }
 
 private structure intrinsicFields where
   mustOverride : Option (Bool) := none
@@ -197,7 +220,6 @@ private def targetFeature : Parser (TargetFeature) := do
 
 private structure runtimeInstanceFields where
   instanceId : Option (Nat) := none
-  requiresCallerLocation : Option (Bool) := none
   display : Option (String) := none
   inlineNever : Option (Bool) := none
   targetFeatures : Option (Array (TargetFeature)) := none
@@ -212,7 +234,6 @@ private def runtimeInstance : Parser (RuntimeInstance) := do
   let fields ← object ({} : runtimeInstanceFields) fun fields key => do
     match key with
     | "instance_id" => return { fields with instanceId := some (← natural) }
-    | "requires_caller_location" => return { fields with requiresCallerLocation := some (← boolean) }
     | "display" => return { fields with display := some (← string) }
     | "inline_never" => return { fields with inlineNever := some (← boolean) }
     | "target_features" => return { fields with targetFeatures := some (← array (targetFeature)) }
@@ -224,7 +245,6 @@ private def runtimeInstance : Parser (RuntimeInstance) := do
     | "symbol_name" => return { fields with symbolName := some (← string) }
     | _ => skipValue; pure fields
   let instanceId ← need fields.instanceId "instance_id"
-  let requiresCallerLocation ← need fields.requiresCallerLocation "requires_caller_location"
   let display ← need fields.display "display"
   let inlineNever ← need fields.inlineNever "inline_never"
   let targetFeatures ← need fields.targetFeatures "target_features"
@@ -235,13 +255,11 @@ private def runtimeInstance : Parser (RuntimeInstance) := do
   let codegenSymbolName := fields.codegenSymbolName
   let symbolName := fields.symbolName
   return {
-    instanceId, requiresCallerLocation, display, inlineNever, targetFeatures, isForeignItem, isClosureLike, intrinsicMetadata, itemName, codegenSymbolName, symbolName }
+    instanceId, display, inlineNever, targetFeatures, isForeignItem, isClosureLike, intrinsicMetadata, itemName, codegenSymbolName, symbolName }
 
 private structure runtimeTypeFields where
   _environment : Option (String) := none
   inputType : Option (Nat) := none
-  mutPointerType : Option (Nat) := none
-  mutReferenceType : Option (Nat) := none
   dropGlue : Option (Nat) := none
 
 private def runtimeType : Parser (RuntimeType) := do
@@ -249,17 +267,13 @@ private def runtimeType : Parser (RuntimeType) := do
     match key with
     | "typing_env" => return { fields with _environment := some (← expectedString "fully_monomorphized") }
     | "input_type_id" => return { fields with inputType := some (← natural) }
-    | "mut_pointer_type" => return { fields with mutPointerType := some (← natural) }
-    | "mut_reference_type" => return { fields with mutReferenceType := some (← natural) }
     | "drop_glue" => return { fields with dropGlue := some (← natural) }
     | _ => skipValue; pure fields
   let _environment ← need fields._environment "typing_env"
   let inputType ← need fields.inputType "input_type_id"
-  let mutPointerType ← need fields.mutPointerType "mut_pointer_type"
-  let mutReferenceType ← need fields.mutReferenceType "mut_reference_type"
   let dropGlue := fields.dropGlue
   return {
-    inputType, mutPointerType, mutReferenceType, dropGlue }
+    inputType, dropGlue }
 
 private structure vtableRefFields where
   inputType : Option (Nat) := none
@@ -285,7 +299,7 @@ private structure runtimeVirtualFields where
   methodDefinition : Option (Nat) := none
   parentTrait : Option (Nat) := none
   concreteType : Option (Nat) := none
-  rebasedArgs : Option (Array Miri.MIR.GenericArg) := none
+  parentGenericCount : Option Nat := none
   resolved : Option (Nat) := none
   vtableQuery : Option (VtableRef) := none
 
@@ -297,7 +311,7 @@ private def runtimeVirtual : Parser (RuntimeVirtual) := do
     | "method_definition" => return { fields with methodDefinition := some (← natural) }
     | "parent_trait" => return { fields with parentTrait := some (← natural) }
     | "concrete_type" => return { fields with concreteType := some (← natural) }
-    | "rebased_args" => return { fields with rebasedArgs := some (← GenericArgsCodec.decode) }
+    | "parent_generic_count" => return { fields with parentGenericCount := some (← natural) }
     | "resolved" => return { fields with resolved := some (← natural) }
     | "vtable_query" => return { fields with vtableQuery := some (← vtableRef) }
     | _ => skipValue; pure fields
@@ -306,11 +320,11 @@ private def runtimeVirtual : Parser (RuntimeVirtual) := do
   let methodDefinition ← need fields.methodDefinition "method_definition"
   let parentTrait ← need fields.parentTrait "parent_trait"
   let concreteType ← need fields.concreteType "concrete_type"
-  let rebasedArgs ← need fields.rebasedArgs "rebased_args"
+  let parentGenericCount ← need fields.parentGenericCount "parent_generic_count"
   let resolved ← need fields.resolved "resolved"
   let vtableQuery ← need fields.vtableQuery "vtable_query"
   return {
-    originalInstance, methodDefinition, parentTrait, concreteType, rebasedArgs, resolved, vtableQuery }
+    originalInstance, methodDefinition, parentTrait, concreteType, parentGenericCount, resolved, vtableQuery }
 
 private structure escapeDefaultFields where
   definition : Option (Nat) := none

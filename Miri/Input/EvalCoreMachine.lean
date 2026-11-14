@@ -57,7 +57,7 @@ def config
   let access := EvalBackendMachine.access
     (MemoryExtras.bindAccess extra (TypedMemoryProviders.bindAccess pointers base.access))
   let allocation := EvalAllocationMachine.allocation pointers extra base.allocation
-  let pointerCompiler := CompilerExecutionProviders.pointerCompiler prepared
+  let pointerCompiler := CompilerExecutionProviders.pointerCompiler prepared EvalProjectionMachine.arrays
   let vtable := ExecutionChoiceBindings.vtableHooks tape base.validity.vtable
   let projection := EvalProjectionMachine.bindProjection prepared base.projection
   let dynamic := PlaceDynamic.withVTable projection.dynamic vtable
@@ -67,14 +67,14 @@ def config
   let projection := {projection with dynamic,place := ValidityMachine.placeHooks access allocation compiler}
   let validityBase := {base.validity with projection,vtable}
   let retag := RuntimeArrayFacts.retagHooks EvalProjectionMachine.arrays prepared.context
-    (TypedValidityProviders.retagHooks prepared runtime access projection vtable pointers choice base.retag)
+    (TypedValidityProviders.retagHooks prepared runtime EvalProjectionMachine.arrays access projection vtable pointers choice base.retag)
   let validity := RuntimeArrayQueries.validityHooks EvalProjectionMachine.arrays
-    (TypedValidityProviders.visitor prepared runtime access allocation compiler pointers retag limits.retag validityBase)
+    (TypedValidityProviders.visitor prepared runtime EvalProjectionMachine.arrays access allocation compiler pointers retag limits.retag validityBase)
   let (compiler,copy) := ValidityMachine.bindValidation compiler base.copy validity limits.validation
-  let floats := ExecutionChoiceBindings.floatHooks tape (CompilerExecutionProviders.floatHooks prepared.context base.floats)
-  let scalar := CompilerExecutionProviders.machineScalarHooks prepared access pointers dynamic vtable
+  let floats := ExecutionChoiceBindings.floatHooks tape (CompilerExecutionProviders.floatHooks prepared.context EvalProjectionMachine.arrays base.floats)
+  let scalar := CompilerExecutionProviders.machineScalarHooks prepared EvalProjectionMachine.arrays access pointers dynamic vtable
     projection.dynamicFuel floats (ExecutionMachine.scalarHooks base)
-  let discr := TypedMemoryProviders.discriminant prepared.context access projection (ExecutionMachine.discriminantHooks base)
+  let discr := TypedMemoryProviders.discriminant prepared.context EvalProjectionMachine.arrays access projection (ExecutionMachine.discriminantHooks base)
   let deallocation := { deallocation with
     extras := extra
     resolvePointer := TypedMemoryProviders.lifecycleResolver pointers }

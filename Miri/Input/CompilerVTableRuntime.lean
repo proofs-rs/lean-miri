@@ -16,8 +16,8 @@ structure Prepared where
 second identity table or semantic instance graph. -/
 def prepare (facts : CompilerFactAdapters.Prepared) : Prepared := ⟨facts,#[]⟩
 
-def functionInstance (prepared : Prepared) (id : InstanceId) : Result CallInstance := do
-  let _ ← CompilerInstance.source prepared.facts.context.loweringContext.instances id
+def functionInstance (_prepared : Prepared) (world : RuntimeArrayTypes.World) (id : InstanceId) : Result CallInstance := do
+  let _ ← CompilerInstance.source world id
   pure id
 
 /-- None means a known non-symbolic-function/vtable allocation. Missing image
@@ -31,13 +31,22 @@ private def sourceNode (image : AllocationImage.Imported) (memory : MemoryState 
     throw "symbolic allocation has no imported compiler identity"
   return none
 
-def globalFunction (prepared : Prepared)
+def importedGlobalFunction (prepared : Prepared)
     (image : AllocationImage.Imported)
     (memory : MemoryState P E K) (id : AllocId) : Result (Option CallInstance) := do
   let some node ← sourceNode image memory id | return none
   let some (.function source) := node.data | return none
-  let fnInstance ← functionInstance prepared source.instanceId
-  return some fnInstance
+  unless source.instanceId < prepared.facts.context.program.input.instances.size do
+    throw "imported function allocation lies outside its source instance prefix"
+  return some source.instanceId
+
+/-- Imported allocation syntax identifies a source-prefix instance; its actual
+current identity is validated through this execution's instance store. -/
+def globalFunction (prepared : Prepared) (world : RuntimeArrayTypes.World)
+    (image : AllocationImage.Imported) (memory : MemoryState P E K) (id : AllocId) :
+    Result (Option CallInstance) := do
+  let some callee ← importedGlobalFunction prepared image memory id | return none
+  pure (some (← functionInstance prepared world callee))
 
 def globalVTable (prepared : Prepared) (image : AllocationImage.Imported)
     (memory : MemoryState P E K) (id : AllocId) : Result (Option (MIR.TyId × PredicateList)) := do
@@ -116,13 +125,13 @@ def supertraitPrincipal (prepared : Prepared) (sourceType : MIR.TyId)
     queryTargetPrincipal prepared.facts prepared.facts.context.program.input.queries.vtables sourceType sourceId
   | _, _ => throw "supertrait allocation is neither a compiler vtable nor its memory image"
 
-private def methodInstance (prepared : Prepared)
+private def methodInstance (prepared : Prepared) (world : RuntimeArrayTypes.World)
     (entry : Input.VtableEntry) : Result CallInstance := do
   let some id := entry.instanceId | throw "vtable method complete instance ID missing"
-  let fnInstance ← functionInstance prepared id
+  let fnInstance ← functionInstance prepared world id
   return fnInstance
 
-private def entryValue (prepared : Prepared)
+private def entryValue (prepared : Prepared) (world : RuntimeArrayTypes.World)
     (sourceType : MIR.TyId)
     (entry : Input.VtableEntry) : Result (Interpreter.VTableEntry CallInstance) := do
   match entry.kind with
@@ -130,7 +139,7 @@ private def entryValue (prepared : Prepared)
   | .sizeBytes => return .size
   | .alignBytes => return .align
   | .vacant => return .vacant
-  | .method => return .method (← methodInstance prepared entry)
+  | .method => return .method (← methodInstance prepared world entry)
   | .supertraitVtablePointer =>
     let token ← supertraitPrincipal prepared sourceType entry
     return .traitVPtr token
@@ -138,7 +147,7 @@ private def entryValue (prepared : Prepared)
 /-- Actual compiler vtable_entries result keyed by its concrete type and exact
 compiler principal. Repeated symbolic allocations must provide identical query
 results; allocation-ID coincidence and type-size inference are never keys. -/
-def entries (prepared : Prepared)
+def entries (prepared : Prepared) (world : RuntimeArrayTypes.World)
     (expectedPrincipal : Option Nat) (ty : MIR.TyId) :
     Result (Array (Interpreter.VTableEntry CallInstance)) := do
   let mut found : Option (Array Input.VtableEntry) := none
@@ -161,7 +170,7 @@ def entries (prepared : Prepared)
       unless previous == metadata.entries do throw "conflicting source compiler vtable_entries query metadata"
     else found := some metadata.entries
   let some source := found | throw "exact compiler principal/type vtable_entries query missing"
-  source.mapM (entryValue prepared ty)
+  source.mapM (entryValue prepared world ty)
 
 private def lift (value : Result A) : EStateM StepError S A :=
   match value with
@@ -171,12 +180,12 @@ private def lift (value : Result A) : EStateM StepError S A :=
 /-- Install imported symbolic allocation queries with canonical machine memory.
 Address resolution and vtable-entry/principal queries remain required leaves;
 this does not manufacture them from the selected pointer's bytes. -/
-def hooks (prepared : Prepared) (image : AllocationImage.Imported)
+def hooks (prepared : Prepared) (types : RuntimeArrayQueries.Access S) (image : AllocationImage.Imported)
     (memory : S → MemoryState P E K) (base : VTableHooks P S C CallInstance Abi) :
     VTableHooks P S C CallInstance Abi :=
   { base with
-    entries := fun _ principal ty => lift (entries prepared principal ty)
-    globalFunction := fun _ id => do lift (globalFunction prepared image (memory (← get)) id)
+    entries := fun _ principal ty => do lift (entries prepared (← RuntimeArrayQueries.compilerSnapshot types) principal ty)
+    globalFunction := fun _ id => do lift (globalFunction prepared (← RuntimeArrayQueries.compilerSnapshot types) image (memory (← get)) id)
     globalVTable := fun _ id => do lift (globalVTable prepared image (memory (← get)) id) }
 
 end Miri.Input.CompilerVTableRuntime

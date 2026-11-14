@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.EvalSourceRunFinalization
 import Miri.Input.ExecutionChoicePolicy
 import Miri.Input.NativeMathHost
@@ -271,6 +272,7 @@ private def stateInfo (state : OuterState) : String := Id.run do
 private def checkFailurePrefix (compiler : Input.CompilerProviders.Prepared)
     (state : OuterState) : Except String String := do
   let some frame := state.stack.currentFrame? | throw "expected callback UB to retain the failing MIR frame"
+  let typeArena := state.machine.user.user.payload.payload.types.arena
   let callResolution := compiler.lifecycle.calls.calls
   let mut callbackFrame : Option (Nat × FrameLocation) := none
   for stackFrame in state.stack.frames do
@@ -280,7 +282,9 @@ private def checkFailurePrefix (compiler : Input.CompilerProviders.Prepared)
       let some sourceInstance := compiler.program.input.instances.find? (·.id == candidate.sourceInstanceId)
         | throw "compiler body record has no source instance record"
       if sourceInstance.defPath == some "destructor_a" then
-        let loaded ← must (Input.CallResolution.loadedBodyOfInstance callResolution stackFrame.functionInstance)
+        let (loaded,retained) ← must ((Input.CallResolution.loadedBodyOfInstance callResolution stackFrame.functionInstance).run typeArena)
+        unless retained.typeCount == typeArena.typeCount && retained.constantCount == typeArena.constantCount do
+          throw "readonly callback diagnostic attempted to create new type identities"
         unless loaded.identity == stackFrame.bodyIdentity && loaded.body == stackFrame.body &&
             candidate.bodyIndex == stackFrame.bodyIdentity.index do
           throw "destructor_a stack frame does not match its compiler-resolved source body"
@@ -290,8 +294,9 @@ private def checkFailurePrefix (compiler : Input.CompilerProviders.Prepared)
     | throw "active callback stack has no compiler-resolved destructor_a frame"
   let .mir callbackLocation := callbackFrameLocation
     | throw "destructor_a callback frame is not at a MIR location"
-  let some callbackBody := compiler.program.bundle.bodies[callbackBodyIndex]?
-    | throw "canonical destructor_a body is absent"
+  let (callbackBody,retained) ← (compiler.program.resolveBody callbackBodyIndex).run typeArena
+  unless retained.typeCount == typeArena.typeCount && retained.constantCount == typeArena.constantCount do
+    throw "readonly callback diagnostic attempted to create new type identities"
   let some callbackBlock := callbackBody.body.basicBlocks[callbackLocation.block]?
     | throw "destructor_a callback block is absent"
   unless callbackLocation.statementIndex == callbackBlock.statements.size do
@@ -358,7 +363,7 @@ private def checkFailurePrefix (compiler : Input.CompilerProviders.Prepared)
 
 private def runTlsDrainPure (contents : String) (pageSize : UInt64)
     (numCpus hostPid : UInt32) : Except String String := do
-  let decoded ← must (Input.decodeJson contents)
+  let decoded ← must (Input.decodeFixture contents)
   let program ← must (Input.lowerProgram decoded.document)
   let attempt := Input.EvalPreparation.prepare program
   let prepared ← must attempt.outcome
@@ -402,7 +407,7 @@ private def runTlsDrainPure (contents : String) (pageSize : UInt64)
     fixedScheduling := false, trackOutdatedLoads := false, weakMemory := true
     backend := .vclocks, trackedTags := some #[], validation := .Shallow
     alignment := .Int, affinity := none, muteOutput := true, hostUsizeBits := 64 }
-  let arrays ← must compiler.initialArrays
+  let arrays ← must compiler.initialTypes
   let tape := choiceTape none #[]
   let creation : EStateM.Result StepError InitTrace OuterState :=
     (Input.MachineConstruction.create rawInitHooks sourceLeaves.hostConfiguration

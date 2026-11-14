@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import MiriTests.FunctionPointers.AllocationDiagnostics
 import MiriTests.ABI.ABIPrimitives
 import MiriTests.ABI.RuntimeLayout
@@ -21,6 +22,10 @@ import MiriTests.Connected.Proofs.SelectorProof195
 import MiriTests.ControlFlow.Transitions
 import MiriTests.FloatOps.Typed
 import MiriTests.Input.JsonFixtures
+import MiriTests.Input.StructuralDeref
+import MiriTests.Input.StructuralTail
+import MiriTests.Input.GenericRebase
+import MiriTests.Input.InstanceArenaSupport
 import MiriTests.Input.CompilerForeignSymbolTables
 import MiriTests.Input.DecoderProfile2026
 import MiriTests.Input.DefinitionLookup2026

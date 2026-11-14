@@ -1,5 +1,9 @@
+import Miri.Input.CompilerGlobals
+import Miri.Input.LowerMIR
 import Miri.Input.CompilerInstance
+import Miri.Input.RuntimeArrayQueries
 import Miri.Input.CallCompatibility
+import Miri.Input.CompilerWorldCompatibility
 import Miri.ABI.FnAbi
 import Miri.Interpreter.Call
 
@@ -38,13 +42,16 @@ def convention (source : CanonicalAbi) : Result CanonAbi := do
 def functionAbi (runtime : RuntimeMetadata) (source : FunctionAbi) : Result (FnAbi TypeId) := do
   let args ← source.arguments.mapM fun argument => (CallCompatibility.argument runtime argument).mapError toString
   let ret ← (CallCompatibility.argument runtime source.returnValue).mapError toString
-  if source.fixedCount >= 2^32 then throw "FnAbi.fixed_count exceeds u32"
-  if source.fixedCount > args.size then throw "FnAbi.fixed_count exceeds actual arguments"
+  if source.signatureSeed.isSome then throw "legacy source ABI signature seed is not a rustc result"
+  let some fixedCount := source.residualFixedCount
+    | throw "rustc FnAbi fixed_count result is absent"
+  if fixedCount >= 2^32 then throw "FnAbi.fixed_count exceeds u32"
+  if fixedCount > args.size then throw "FnAbi.fixed_count exceeds actual arguments"
   -- rustc's physical `FnAbi.args` can include the compiler-injected caller
   -- location while `fixed_count` counts only explicit source arguments.
   -- Preserve both exact facts here; demanded call initialization validates
   -- their relationship against the exact `requires_caller_location` query.
-  return ⟨args,ret,source.cVariadic,UInt32.ofNat source.fixedCount,← convention source.callingConvention,source.canUnwind⟩
+  return ⟨args,ret,source.cVariadic,UInt32.ofNat fixedCount,← convention source.callingConvention,source.unwindSeed.canUnwind⟩
 
 /-- The input carries only an ABI table reference. Conversion to the semantic
 ABI happens when an operation requests it; input graphs are never expanded. -/
@@ -74,7 +81,7 @@ structure Indirect where
   site : Site
   function : MIR.Operand
   functionType : MIR.TyId
-  abi : Nat
+  abi : Option Nat
   source : CallResolutionEvidence
 structure Prepared where
   program : LoweredProgram
@@ -89,7 +96,7 @@ private def decodeResolution (instances : Array InstanceNode)
   let virtual := source.kind == .virtualDispatch
   unless source.kind == .direct || source.kind == .llvmIntrinsic || virtual do throw "callee is not a compiler instance dispatch"
   let callee ← require source.instanceId "missing compiler call instance ID"
-  let calleeKind ← CompilerInstance.kindOf instances callee
+  let calleeKind ← CompilerInstance.Material.kindOf instances callee
   let isLlvm := match calleeKind with | .LlvmIntrinsic _ => true | _ => false
   unless (source.kind == .llvmIntrinsic) == isLlvm do
     throw "LLVM call tag/canonical instance mismatch"
@@ -102,7 +109,10 @@ private def decodeResolution (instances : Array InstanceNode)
     unless source.dispatchSlot == some slot do throw "virtual dispatch slot/instance mismatch"
   | _ => unless !virtual do throw "virtual dispatch query did not return a Virtual instance"
   unless source.kind == .llvmIntrinsic do
-    let .normal _ := source.abi | throw "ordinary call lacks compiler ABI evidence"
+    match source.abi with
+    | .normal _ => pure ()
+    | .sourceSignature => throw "legacy source ABI call evidence is not a rustc result"
+    | .llvmIntrinsic => throw "ordinary call lacks ABI evidence"
   pure ⟨callee,callee,function,source.abi,source⟩
 
 /-- Resolution reads decoded canonical identities; existing IDs never move.
@@ -114,24 +124,24 @@ private def prepareUsingRuntime (profile : Lean.Options) (program : LoweredProgr
   let mut bodies := #[]
   let mut obligations := #[]
   for (sourceId,index) in program.instances do
-    match CompilerInstance.source instances sourceId with
+    match CompilerInstance.Material.source instances sourceId with
     | .error message => obligations := obligations.push ⟨s!"instance[{sourceId}]",message⟩
     | .ok _ => bodies := bodies.push ⟨sourceId,sourceId,index⟩
   let mut entries := #[]
   let mut indirect := #[]
-  for (body,index) in program.bundle.bodies.toList.zipIdx do
-    for (block,blockIndex) in body.body.basicBlocks.toList.zipIdx do
-      let function ← match block.terminator.kind with
-        | .Call function .. | .TailCall function .. => pure (some function)
-        | _ => pure none
-      if let some function := function then
-        let sourceResolution ← require (body.input.callEvidence[blockIndex]?).join "missing compiler call resolution"
+  for index in [:program.bodyCount] do
+    let metadata ← program.bodyMetadata index
+    for (blockIndex,function) in metadata.callSites do
+        let sourceResolution ← require (metadata.callEvidence[blockIndex]?).join "missing compiler call resolution"
         if sourceResolution.kind == .indirect then
-          let result : Result (TypeId × FunctionAbiId) := do
+          let result : Result (TypeId × Option FunctionAbiId) := do
             let typeId ← require sourceResolution.functionType "indirect function type is missing"
             let sourceType ← require program.input.types[typeId]? "indirect function type is missing"
             unless sourceType.shapeKind == TypeShapeKind.functionPointer do throw "indirect dispatch metadata is not a function-pointer type"
-            let .normal abi := sourceResolution.abi | throw "indirect call is missing its ordinary ABI"
+            let abi ← match sourceResolution.abi with
+              | .normal abi => pure (some abi)
+              | .sourceSignature => throw "legacy source FnPtr ABI evidence is not a rustc result"
+              | .llvmIntrinsic => throw "indirect call cannot use LLVM no-ABI dispatch"
             pure (typeId,abi)
           match result with
           | .error message =>
@@ -169,19 +179,44 @@ def prepare (program : LoweredProgram) : Result Prepared := do
   let runtime ← (RuntimeMetadata.ofDocument program.input).mapError toString
   prepareUsingRuntime {} program runtime
 
-def atSite (prepared : Prepared) (site : Site) : Result Resolution := do
-  let matching := prepared.entries.filter (·.site == site)
-  if matching.size != 1 then throw "missing or ambiguous compiler call site"
-  (← require matching[0]? "missing compiler call site").outcome
+private def liftWorld (result : Result A) : RuntimeArrayTypes.CompilerM A :=
+  match result with | .ok value => pure value | .error message => throw message
+
+/-- Residual body/ABI/site records belong to the original source prefix.
+Constructed IDs must never alias a numeric row from an unrelated/truncated store. -/
+private def sourcePrefixInstance (document : ImportDocument) (world : RuntimeArrayTypes.World)
+    (callee : CallInstance) : Result Unit := do
+  let .material actual ← world.instances.lookup callee
+    | throw "source instance capability does not cover a constructed instance"
+  let some source := document.instances[callee]?
+    | throw "source instance capability identity is absent"
+  let expected ← InstanceArena.Key.ofSource world.arena source.instanceKind source.genericArgs
+  unless actual == expected do throw "source instance capability identity disagrees with current world"
+
+def atSite (prepared : Prepared) (site : Site) : RuntimeArrayTypes.CompilerM Resolution := do
+  let world ← get
+  let view ← liftWorld (world.bodies.lookup site.bodyIndex)
+  let matching : Array Entry := match view with
+    | .material _ => prepared.entries.filter (·.site == site)
+    | .constructed _ => #[]
+  if !matching.isEmpty then
+    unless matching.size == 1 do throw "missing or ambiguous compiler call site"
+    let entry ← liftWorld (require matching[0]? "missing compiler call site")
+    let resolution ← liftWorld entry.outcome
+    liftWorld (sourcePrefixInstance prepared.program.input (← get) resolution.callee)
+    return resolution
+  throw "missing exact rustc call-site instance resolution"
 
 /-- Function operand identity is checked in addition to body and block.
 Source sites are compiler-table indices, never diagnostic span matches. -/
-def resolveAt (prepared : Prepared) (site : Site) (function : MIR.Operand) : Result CallInstance := do
+def resolveAt (prepared : Prepared) (site : Site) (function : MIR.Operand) : RuntimeArrayTypes.CompilerM CallInstance := do
   let found ← atSite prepared site
   if found.function != function then throw "call-site function operand mismatch"
   return found.callee
 
-def abiOfInstance (prepared : Prepared) (fnInstance : CallInstance) (extraArgs : Array TypeId) : Result (FnAbi TypeId) := do
+def abiOfInstance (prepared : Prepared) (world : RuntimeArrayTypes.World)
+    (fnInstance : CallInstance) (extraArgs : Array TypeId) : Result (FnAbi TypeId) := do
+  sourcePrefixInstance prepared.program.input world fnInstance
   -- The exporter records fn_abi_of_instance(..., List::empty()). Extra-vararg
   -- queries require additional compiler evidence, even if an ABI looks similar.
   if !extraArgs.isEmpty then throw "missing compiler FnAbi query for extra arguments"
@@ -198,22 +233,30 @@ def abiOfInstance (prepared : Prepared) (fnInstance : CallInstance) (extraArgs :
 
 /-- A loaded body carries the exact source table key. Equal MIR syntax does
 not make distinct root/template/promoted/instance body identities interchangeable. -/
-def loadedBodyOfInstance (prepared : Prepared) (fnInstance : CallInstance) : Result LoadedBody := do
-  let matching := prepared.bodies.filter (·.fnInstance == fnInstance)
-  unless matching.size == 1 do
-    throw s!"missing or ambiguous canonical instance body identity: requested={reprStr fnInstance}, matches={matching.size}"
-  let some candidate := matching[0]? | throw "compiler instance body is unavailable"
-  let source ← require prepared.program.input.instances[candidate.sourceInstanceId]?
-    "canonical source instance record is missing"
-  unless source.kind == .instanceMir do throw "compiler body is not a substituted executable instance"
-  let body ← require prepared.program.bundle.bodies[candidate.bodyIndex]? "instance body index is absent"
-  unless body.input.instanceId == candidate.sourceInstanceId do throw "instance/body identity mismatch"
+def loadedBodyOfInstance (prepared : Prepared) (fnInstance : CallInstance) : RuntimeArrayTypes.CompilerM LoadedBody := do
+  let world ← get
+  let view ← liftWorld (world.instances.lookup fnInstance)
+  let bodyIndex ← match view with
+    | .material _ => do
+      liftWorld (sourcePrefixInstance prepared.program.input world fnInstance)
+      let matching := prepared.bodies.filter (·.fnInstance == fnInstance)
+      unless matching.size == 1 do
+        throw s!"missing or ambiguous canonical instance body identity: requested={reprStr fnInstance}, matches={matching.size}"
+      let some candidate := matching[0]? | throw "compiler instance body is unavailable"
+      let source ← liftWorld (require prepared.program.input.instances[candidate.sourceInstanceId]?
+        "canonical source instance record is missing")
+      unless source.kind == .instanceMir do throw "compiler body is not a substituted executable instance"
+      pure candidate.bodyIndex
+    | .constructed _ => throw "constructed instance has no exact rustc body result"
+  let identity := BodyIdentity.ofCanonicalIndex bodyIndex
+  let body ← prepared.program.resolveBodyIdentity identity
+  unless body.input.instanceId == fnInstance do throw "instance/body identity mismatch"
   unless body.obligations.isEmpty do throw "lowered instance body has unresolved obligations"
-  return ⟨.ofCanonicalIndex candidate.bodyIndex, body.body⟩
+  return ⟨identity, body.body⟩
 
 /-- Compatibility syntax-only view of the exact loaded body. It retains the
 same unique-key and body ownership checks; equal bodies are not merged. -/
-def bodyOfInstance (prepared : Prepared) (fnInstance : CallInstance) : Result MIR.Body := do
+def bodyOfInstance (prepared : Prepared) (fnInstance : CallInstance) : RuntimeArrayTypes.CompilerM MIR.Body := do
   return (← loadedBodyOfInstance prepared fnInstance).body
 
 private def lift (result : Result A) : CallM S A :=
@@ -222,18 +265,17 @@ private def lift (result : Result A) : CallM S A :=
 /-- Replace only ABI leaves with complete compiler records and source layout
 compatibility. Machine dispatch, target features, caller locations, pointer
 resolution and actual body interception remain required in the supplied hooks. -/
-def bindAbi (prepared : Prepared) (compatibility : CallCompatibility.Evidence S)
+def bindAbi (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
+    (_compatibility : CallCompatibility.Evidence S)
     (budget : Nat)
     (base : CallHooks P S C E Other Extern (FnAbi TypeId) (ArgAbi TypeId)) :
     CallHooks P S C E Other Extern (FnAbi TypeId) (ArgAbi TypeId) := {
   base with
-  instanceKind := fun inst => lift (CompilerInstance.kindOf
-    prepared.program.input.instances inst)
-  instanceArgs := fun inst => lift (CompilerInstance.argsOf
-    prepared.program.input.instances inst)
-  itemInstance := fun definition args => lift (CompilerInstance.item
-    prepared.program.input.instances definition args)
-  fnAbiOfInstance := fun _ fnInstance extra => lift (abiOfInstance prepared fnInstance extra)
+  instanceKind := fun inst => do lift (CompilerInstance.kindOf (← RuntimeArrayQueries.compilerSnapshot types) inst)
+  instanceArgs := fun inst => do lift (CompilerInstance.argsOf (← RuntimeArrayQueries.compilerSnapshot types) inst)
+  itemInstance := fun definition args => lift
+    (CompilerInstance.Material.item prepared.program.input.instances definition args)
+  fnAbiOfInstance := fun _ fnInstance extra => do lift (abiOfInstance prepared (← RuntimeArrayQueries.compilerSnapshot types) fnInstance extra)
   abiCanUnwind := FnAbi.canUnwind
   abiVariadic := FnAbi.cVariadic
   abiFixedCount := fun abi => abi.fixedCount.toNat
@@ -244,7 +286,7 @@ def bindAbi (prepared : Prepared) (compatibility : CallCompatibility.Evidence S)
   argIsIgnore := ArgAbi.isIgnore
   isOneZst := fun layout => layout.layout.is1zst
   checkArgumentCompat := fun _ caller callee =>
-    LayoutCompat.checkArgumentCompat (CallCompatibility.queries prepared.runtime compatibility)
+    LayoutCompat.checkArgumentCompat (CompilerWorldCompatibility.queries ⟨prepared.runtime,prepared.program,none⟩ types)
       budget caller callee }
 
 end Miri.Input.CallResolution

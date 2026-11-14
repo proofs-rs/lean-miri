@@ -6,13 +6,14 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools'))
 from mir_json import decode_mir_document, inspection_document, pool_entry
+from legacy_fixture_schema import adapt_legacy_fixture
 from connected_large_inputs import validate_reference
 
 
 def validate(snapshot, log):
     raw = Path(snapshot).read_bytes()
     validate_reference('large-tb', snapshot)
-    doc = inspection_document(decode_mir_document(json.loads(raw)))
+    doc = inspection_document(decode_mir_document(adapt_legacy_fixture(json.loads(raw))))
     roots = [root for root in doc['body_roots'] if root['def_path'] == 'miri_start']
     assert len(roots) == 1
     root = roots[0]

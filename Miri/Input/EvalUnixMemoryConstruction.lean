@@ -133,6 +133,7 @@ the prepared compiler. The supplied memory bundle is the one used by MIR, so
 pointer-output writes and remap allocation retain the live execution state. -/
 def fromSource [DecidableEq MiriMemoryKind]
     (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (RuntimeState U))
     (userRelevantCrates : Array Nat)
     (environment : UnixEnvironmentDispatch.Hooks (RuntimeState U) Os E EnvVars.Kind)
     (signatures : ShimSignatures.Hooks Provenance (RuntimeState U) Place
@@ -152,7 +153,7 @@ def fromSource [DecidableEq MiriMemoryKind]
     |>.mapError StepError.unsupported
   let targetIsizeMax ← isize.layout.size.signedIntMax |>.mapError
     (fun error => StepError.unsupported s!"target isize max: {error}")
-  let frame := CompilerFrameMetadata.hooks p.lifecycle.frames userRelevantCrates
+  let frame := CompilerFrameMetadata.hooks p.lifecycle.frames types userRelevantCrates
   let access := MemoryExtras.bindAccess extras memory.access
   let arithmetic := memory.pointers.arithmetic
   let abi := CompilerNamedShimAbi.query p.namedAbi

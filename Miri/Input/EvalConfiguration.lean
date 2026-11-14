@@ -18,7 +18,9 @@ private def lift (value : Except String A) : MachineHooks.M K U A :=
 
 /-- Exact source machine option; Always short-circuits inline_never just as
 FunctionPointers.globalSalt does. No inline classification is inferred. -/
-def functions (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
+def functions (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State MiriMemoryKind (User Os R P H D O Aff B Host)))
+    (image : AllocationImage.Imported)
     (crossCrateInlineAlways : Bool)
     (pointers : PointerMachine.Hooks MiriMemoryKind
       (ValidityMachine.Control (Stored Os R P H D O Aff B Host))) :
@@ -27,7 +29,7 @@ def functions (p : CompilerProviders.Prepared) (image : AllocationImage.Imported
     registry := fun user => user.payload.payload.user.functions
     putRegistry := fun user functions => {user with payload := {user.payload with payload :=
       {user.payload.payload with user := {user.payload.payload.user with functions}}}}
-    instanceArgs := fun inst => lift (CompilerInstance.argsOf p.loweringContext.instances inst)
+    instanceArgs := fun inst => do lift (CompilerInstance.argsOf (← RuntimeArrayQueries.compilerSnapshot types) inst)
     crossCrateInlineAlways := crossCrateInlineAlways
     inlineNever := fun callee => lift do
       let some never := CompilerFunctionPointers.inlineNeverUsing p.pointers.inlineLookup callee
@@ -42,7 +44,7 @@ def functions (p : CompilerProviders.Prepared) (image : AllocationImage.Imported
       let address ← ExecutionAddressChoices.addrFromAllocId EvalCoreMachine.tape pointers id (some .other)
       pure (Pointer.new (Provenance.concrete id tag) (Size.ofBytes address))
     importedFunction := fun id => do
-      lift (CompilerVTableRuntime.globalFunction p.lifecycle.calls.symbols image (← get).machine.memory id)
+      lift (CompilerVTableRuntime.globalFunction p.lifecycle.calls.symbols (← RuntimeArrayQueries.compilerSnapshot types) image (← get).machine.memory id)
   }
 
 /-- Real symbolic memory maps, distinct from function/vtable registries. Empty

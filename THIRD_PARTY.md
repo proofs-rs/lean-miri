@@ -28,3 +28,18 @@ license text is retained in `third_party/licenses/chrono-tz-0.10.4/LICENSE`.
 The IANA tzdb files included in that generated table are public domain as
 stated by chrono-tz's license. Exact source hashes and the offline generator
 are documented in [chrono-tz translation](docs/chrono-tz-source-port.md).
+
+The layout-randomization port translates selected algorithms from rand 0.9.3,
+rand_core 0.9.3 and rand_xoshiro 0.7.0, the versions selected by the pinned
+rustc Cargo.lock. Credit belongs to the Rust Random project contributors.
+Selected original sources and their MIT and Apache-2.0 license texts are retained
+under `upstream/crates/`; exact package checksums and VCS revisions are recorded
+in `upstream/source-lock.json`. These are reference dependencies for the port,
+not an assertion that the complete crates or compiler layout algorithm are ported.
+
+The TypeId hash port translates the SipHash128-1-3 implementation from
+[rustc-stable-hash](https://github.com/rust-lang/rustc-stable-hash)0.1.2,
+selected by the pinned rustc Cargo.lock. Credit belongs to its contributors.
+Selected sources and the MIT and Apache-2.0 license texts are retained under
+`upstream/crates/rustc-stable-hash-0.1.2`; exact archive and source hashes
+and the VCS revision are recorded in `upstream/source-lock.json`.

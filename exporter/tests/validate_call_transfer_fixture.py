@@ -71,6 +71,16 @@ def require_transfer(source_ref, target_ref, label):
     require(source_ref is not None and target_ref is not None,
             f"{label}: source/destination type ID is missing")
     if type_id(source_ref) != type_id(target_ref):
+        source_shape = types[source_ref]["shape"]
+        target_shape = types[target_ref]["shape"]
+        if (source_shape.get("kind") == target_shape.get("kind") == "raw_pointer"
+                and source_shape.get("mutability") != target_shape.get("mutability")):
+            # Pinned structurally_relate_tys rejects unequal pointer mutability
+            # before inspecting pointees. Lean owns this constructor rule;
+            # the independent covariance matrix checks its actual answer.
+            require(not relation_ids(source_ref, target_ref),
+                    f"{label}: migrated pointer-mutability relation retained an eager answer")
+            return
         require(relation_ids(source_ref, target_ref),
                 f"{label}: exact source/destination covariance query is absent")
 
@@ -102,8 +112,49 @@ def operand_type_ref(operand):
     return constant.get("type")
 
 
+def raw_type_matches(term, material_id):
+    """Fixture-only exact raw syntax join; never constructs a closed type."""
+    if term.get("sort") != "type":
+        return False
+    shape = types[material_id]["shape"]
+    if term == {"kind": "atom", "sort": "type", "tag": "uint", "payload": "u8"}:
+        return shape == {"kind": "uint", "unsigned_kind": "u8"}
+    if term.get("kind") == "definition" and term.get("tag") == "adt":
+        if shape.get("kind") != "adt" or term.get("children") != [] or shape.get("generic_args") != []:
+            return False
+        physical = document["definitions"][shape["def_id"]]
+        return term["definition"] == {key: physical[key] for key in ("crate", "index")}
+    if term.get("kind") == "node" and term.get("tag") in ("raw_pointer", "reference"):
+        if shape.get("kind") != term["tag"] or shape.get("mutability", {}).get("kind") != term["payload"]:
+            return False
+        children = term["children"]
+        if term["tag"] == "reference":
+            if (len(children) != 2 or children[0] != {"kind": "atom", "sort": "region", "tag": "erased", "payload": ""}
+                    or shape.get("region") != {"kind": "erased"}):
+                return False
+            children = children[1:]
+        return len(children) == 1 and raw_type_matches(children[0], shape["pointee"])
+    return False
+
+
 def local_type_ref(body, local):
-    for item in body_payload(body).get("locals", []):
+    payload = body_payload(body)
+    if payload.get("body_kind") == "copy_template":
+        source = document["mir_templates"][payload["template_id"]]
+        template = json.loads(source["template"])
+        require(source["source_role"] == "runtime" and source["source_promoted"] is None,
+                "transfer candidate lost its exact runtime source role")
+        require(source["source_def_id"] == body["def_id"]
+                and payload["instance_id"] == body["instance_id"],
+                "transfer candidate physical source/instance identity differs")
+        require(template["parameters"] == [] and payload["generic_args"] == [],
+                "transfer fixture raw local join requires an actual parameter-free source")
+        term = template["types"][template["skeleton"]["locals"][local]]
+        matches = [type_id for type_id in types if raw_type_matches(term, type_id)]
+        require(len(matches) == 1,
+                "raw candidate local has no unique exact captured type-pool correspondence")
+        return matches[0]
+    for item in payload.get("locals", []):
         if item.get("local") == local:
             return item.get("type")
     return None
@@ -123,7 +174,7 @@ indirect_call = next(
         (body, call)
         for body in indirect_bodies
         for call in calls_in(body)
-        if call.get("resolution", {}).get("kind") == "indirect_function_pointer"
+        if call.get("resolution", {}).get("kind") == "source_function_pointer"
         and "*mut u8" in display(call["resolution"].get("function_type"))
         and "*const u8" in display(call["resolution"].get("function_type"))
     ),
@@ -131,6 +182,16 @@ indirect_call = next(
 )
 require(indirect_call, "typed indirect FnPtr callsite was not exported")
 call_body, call = indirect_call
+resolution = call["resolution"]
+require("fn_abi" not in resolution and resolution["extra_argument_types"] == [],
+        "covered Rust FnPtr call retained a physical ABI answer or unexpected extras")
+raw_pointer_type = types[resolution["function_type"]]
+require(raw_pointer_type["shape"]["kind"] == "function_pointer"
+        and raw_pointer_type["shape"]["signature"]["abi"]["kind"] == "rust"
+        and not raw_pointer_type["shape"]["signature"]["c_variadic"],
+        "source FnPtr call lost its exact raw Rust signature")
+require(isinstance(document["producer"]["abi_session"]["llvm_writable"], bool),
+        "source FnPtr call lost canonical ABI session configuration")
 pointer_target_rows = [row for row in instance_rows if row.get("def_path", "").endswith("pointer_target")]
 require(pointer_target_rows, "pointer_target candidate instance/body is absent")
 pointer_target_body = next(
@@ -176,17 +237,72 @@ require(
 )
 virtual_bodies = body_by_path("virtual_call")
 require(virtual_bodies, "virtual_call body is absent")
-virtual_callsite = next(
-    (
-        call
-        for body in virtual_bodies
-        for call in calls_in(body)
-        if call.get("resolution", {}).get("kind") == "virtual_dispatch"
-    ),
-    None,
-)
-require(virtual_callsite, "trait-object virtual callsite is absent")
-virtual_target = fixture_virtual_targets[0]
+def virtual_request(call):
+    resolution = call.get("resolution", {})
+    instance = instance_by_id.get(resolution.get("instance_id"), {})
+    return (resolution.get("kind") in ("source_instance", "virtual_dispatch")
+            and instance.get("instance_kind", {}).get("kind") == "virtual")
+
+
+virtual_callsite = next((call for body in virtual_bodies for call in calls_in(body)
+                         if virtual_request(call)), None)
+require(virtual_callsite, "trait-object Virtual source request is absent")
+virtual_resolution = virtual_callsite["resolution"]
+virtual_instance = instance_by_id[virtual_resolution["instance_id"]]
+virtual_kind = virtual_instance["instance_kind"]
+virtual_function = types[virtual_resolution["function_type"]]["shape"]
+require(virtual_function.get("kind") == "function_definition"
+        and virtual_function["def_id"] == virtual_kind["def_id"] == virtual_instance["def_id"]
+        and virtual_function["generic_args"] == virtual_instance["generic_args"],
+        "Virtual source request lost exact FnDef physical identity/full arguments")
+method = document["definitions"][virtual_kind["def_id"]]
+require(method["callable_source"]["definition_kind"] == "associated_function"
+        and method["callable_source"]["container"] == "trait"
+        and method["callable_source"]["has_self"],
+        "Virtual source request does not name a trait method")
+require(method["raw_path"]["components"][-2:]
+        == [{"kind": "type", "name": "TransferObject", "disambiguator": 0},
+            {"kind": "value", "name": "get", "disambiguator": 0}],
+        "Virtual source method is not the exact fixture trait declaration")
+require(len(virtual_instance["generic_args"]) == 1
+        and virtual_instance["generic_args"][0]["kind"] == "type",
+        "Virtual source request lost its complete Self argument")
+self_type = virtual_instance["generic_args"][0]["value"]
+require(types[self_type]["shape"]["kind"] == "dynamic_trait_object",
+        "Virtual source Self is not the actual dynamic receiver")
+require(virtual_kind["dispatch_slot"] == 3,
+        "single own method must retain pinned first-method slot after three metadata entries")
+if virtual_resolution["kind"] == "source_instance":
+    require(set(virtual_resolution) == {"kind", "function_type", "instance_id"},
+            "Virtual source request retained an eager ABI/dispatch result")
+    require(virtual_instance["kind"] == "identity_only"
+            and "virtual_identity" not in virtual_instance and "body" not in virtual_instance,
+            "covered Virtual instance retained an eager identity ABI or executable body")
+    require(not any(row["instance_id"] == virtual_instance["instance_id"]
+                    for row in document["compiler_instance_abis"]),
+            "covered Virtual source identity retained an eager FnAbi result row")
+else:
+    require(method["body_track_caller"] is True,
+            "material Virtual dispatch is only valid here for an unported caller-location residual")
+
+dynamic = types[self_type]["shape"]
+principal = pool_entry(document, "predicates", dynamic["principal_predicate"])
+parent = method["source_environment"]["generic_parent"]
+principal_definition = document["definitions"][principal["def_id"]]
+require(principal["kind"] == "trait" and principal["generic_args"] == []
+        and principal["bound_variables"] == [] and parent["parameter_count"] == 1
+        and parent["definition"] == {key: principal_definition[key] for key in ("crate", "index")},
+        "Virtual Self principal is not the physical owner trait with exact own arguments")
+selected_virtual_rows = [row for row in resolved_virtual
+                         if row["original_instance_id"] == virtual_instance["instance_id"]
+                         and row["method_definition"] == virtual_kind["def_id"]
+                         and row["parent_trait"] == principal["def_id"]
+                         and row["vtable_query"]["input_predicates"] == dynamic["predicates"]]
+require(len(selected_virtual_rows) == 1,
+        "Virtual source identity does not join one exact concrete vtable source owner")
+selected_virtual_row = selected_virtual_rows[0]
+virtual_target = instance_by_id[selected_virtual_row["resolved"]]
+require(virtual_target in fixture_virtual_targets, "Virtual source request resolved to an unrelated concrete method")
 virtual_target_body = next(
     (row for row in instance_rows
      if row.get("instance_id") == virtual_target.get("instance_id") and "body" in row),

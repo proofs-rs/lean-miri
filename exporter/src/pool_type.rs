@@ -63,6 +63,7 @@ pub(super) enum Shape {
         def_id: u64,
         def_path: String,
         generic_args: Vec<GenericArgument>,
+        generic_args_bound_variables: Vec<BoundVariable>,
         signature: FunctionSignature,
         signature_bound_variables: Vec<BoundVariable>,
     },
@@ -100,6 +101,7 @@ pub(super) enum Shape {
         elements: Vec<u64>,
     },
     Alias {
+        rigid: bool,
         alias_payload: Alias,
         def_id: u64,
         generic_args: Vec<GenericArgument>,
@@ -154,6 +156,7 @@ pub(super) struct FunctionSignature {
     pub safety: Safety,
     pub abi: ExternAbi,
     pub c_variadic: bool,
+    pub splatted: Option<u8>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct Alias {
@@ -196,7 +199,7 @@ pub(super) struct CompilerFacts {
     pub adt: Option<AdtFacts>,
     pub capture_names: Option<Vec<Option<String>>>,
     pub simd_size_and_type: Option<Simd>,
-    pub discriminants: Shared<Discriminants>,
+    pub discriminants: Option<Shared<Discriminants>>,
     pub projection_queries: Option<ProjectionQueries>,
     pub definition: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -210,28 +213,28 @@ pub(super) struct BooleanQueries {
     pub is_simd: bool,
     pub is_box: bool,
     pub is_global_box: bool,
-    pub is_dynamic: bool,
-    pub is_too_generic: bool,
     pub is_monomorphic: bool,
     pub is_monomorphic_enough: bool,
     pub is_like_maybe_dangling: bool,
-    pub is_freeze: bool,
-    pub is_unpin: bool,
-    pub is_unsafe_unpin: bool,
-    pub needs_drop: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_freeze: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_unpin: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_unsafe_unpin: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub needs_drop: Option<bool>,
     pub opsem_inhabited: bool,
-    pub is_sized: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_sized: Option<bool>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct TypeQueries {
-    pub discriminant_type: u64,
-    pub normalized: u64,
-    pub builtin_deref_explicit: Option<u64>,
-    pub builtin_deref_implicit: Option<u64>,
-    pub boxed_type: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub normalized: Option<u64>,
     pub unsafe_binder_erased: Option<u64>,
-    pub metadata_tail: u64,
-    pub pointer_metadata_type: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pointer_metadata_type: Option<u64>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct AdtFacts {

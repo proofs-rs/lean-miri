@@ -28,7 +28,6 @@ impl PairFrontier {
 
 #[derive(Default)]
 pub(super) struct Casts<'tcx> {
-    pub types: usize,
     pub inputs: usize,
     pub pairs: usize,
     pub boxes: usize,

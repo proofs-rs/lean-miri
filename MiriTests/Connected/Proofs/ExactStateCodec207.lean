@@ -202,6 +202,21 @@ deriving instance DecidableEq for Miri.Interpreter.DeadlineMachine.Registry
 deriving instance DecidableEq for Miri.Interpreter.ReadinessMachine.Registry
 deriving instance DecidableEq for Miri.Input.HostRuntime.Storage
 deriving instance DecidableEq for Miri.Interpreter.RaceMode.Selection
+-- Exact runtime-state equality includes the complete typed allocation store
+-- and every memo entry. Private entry equality is derived in its owning module;
+-- no answer, source capability or allocation identity is projected away here.
+deriving instance DecidableEq for Miri.Input.CompilerInitialAllocation.GlobalKey
+deriving instance DecidableEq for Miri.Input.CompilerInitialAllocation.TypedDedup
+deriving instance DecidableEq for Miri.Input.CompilerInitialAllocation.Store
+deriving instance DecidableEq for Miri.Input.CompilerInitialCtfeFreshGuard.Fresh
+deriving instance DecidableEq for Miri.Input.CompilerInitialCtfeRootSource.Registered
+deriving instance DecidableEq for Miri.Input.CompilerInitialCtfeQueryStore.Memo
+deriving instance DecidableEq for Miri.Input.CompilerInitialSelectedMemo.Registered
+deriving instance DecidableEq for Miri.Input.CompilerInitialSelectedMemo.Memo
+deriving instance DecidableEq for Miri.Input.CompilerInitialSelectedMemo.Registry
+deriving instance DecidableEq for Miri.Input.RuntimeCtfeQueryMachine.Memo
+deriving instance DecidableEq for Miri.Input.CompilerSourceVTableMaterializer.MemoEntry
+deriving instance DecidableEq for Miri.Input.CompilerSourceVTableMaterializer.Memo
 deriving instance DecidableEq for Miri.Input.EvalWorld.World
 
 #synth DecidableEq (KeyedArray UInt64 AllocId (fun (id : AllocId) => id.value))

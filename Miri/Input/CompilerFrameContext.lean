@@ -14,34 +14,36 @@ private def lift (query : Except String A) : MachineHooks.M K User A :=
 /-- Resolve by canonical identity and validate the complete instance/body pair.
 Structural equality is an assertion, not a body-selection algorithm. -/
 def bodyOfFrame (p : CompilerProviders.Prepared) (frame : ActualFrame) :
-    Except String LoweredBody := do
-  let some body := p.program.bundle.bodies[frame.bodyIdentity.index]?
-    | throw "canonical body identity is absent"
+    RuntimeArrayTypes.CompilerM LoweredBody := do
+  let body ← p.program.resolveBodyIdentity frame.bodyIdentity
   unless body.body == frame.body do throw "canonical body/content mismatch"
   let loaded ← CallResolution.loadedBodyOfInstance p.lifecycle.calls.calls frame.functionInstance
   unless loaded.identity == frame.bodyIdentity do throw "full-instance/canonical body identity mismatch"
   pure body
 
-def currentBody (p : CompilerProviders.Prepared) : MachineHooks.M K User LoweredBody := do
-  lift (bodyOfFrame p (← MachineHooks.currentFrame))
+def currentBody (p : CompilerProviders.Prepared) (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) : MachineHooks.M K User LoweredBody := do
+  RuntimeArrayQueries.performCompiler types (bodyOfFrame p (← MachineHooks.currentFrame))
 
 /-- Local types already belong to the concrete executable body. -/
 def localType (p : CompilerProviders.Prepared) (frame : ActualFrame)
-    (id : MIR.LocalId) : Except String MIR.TyId := do
+    (id : MIR.LocalId) : RuntimeArrayTypes.CompilerM MIR.TyId := do
   let body ← bodyOfFrame p frame
   let some ty := body.body.locals[id]? | throw "local is absent"
   pure ty
 
 /-- The uncached compiler leaf used by the canonical local-layout cache. -/
-def computeLocalLayout (p : CompilerProviders.Prepared) (id : MIR.LocalId) :
+def computeLocalLayout (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (id : MIR.LocalId) :
     MachineHooks.M K User LocalLayout := do
   let frame ← MachineHooks.currentFrame
-  let ty ← lift (localType p frame id)
-  lift ((p.runtime.lookup ty).mapError toString)
+  RuntimeArrayQueries.performCompiler types do
+    let ty ← localType p frame id
+    RuntimeArrayTypes.liftType (RuntimeMetadata.layoutInWorld p.runtime ty)
 
 /-- Complete source layout_of_local for the actual current frame: a cached
 layout bypasses lookup; debug compatibility runs before cache mutation. -/
-def layoutOfLocal (p : CompilerProviders.Prepared) (debugAssertions : Bool)
+def layoutOfLocal (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (debugAssertions : Bool)
     (compatible : LocalLayout → LocalLayout → Except StepError Bool)
     (id : MIR.LocalId) (known : Option LocalLayout) : MachineHooks.M K User LocalLayout := do
   let frame ← MachineHooks.currentFrame
@@ -50,10 +52,10 @@ def layoutOfLocal (p : CompilerProviders.Prepared) (debugAssertions : Bool)
     | .error error => throw (.stack error)
   if let some cached := slot.layout then return cached
   let layout ← match known with
-    | none => computeLocalLayout p id
+    | none => computeLocalLayout p types id
     | some known => do
       if debugAssertions then
-        let computed ← computeLocalLayout p id
+        let computed ← computeLocalLayout p types id
         let same ← match compatible computed known with
           | .ok same => pure same
           | .error error => throw error
@@ -67,21 +69,23 @@ def layoutOfLocal (p : CompilerProviders.Prepared) (debugAssertions : Bool)
   pure layout
 
 /-- The passed body is checked against the current identity, never searched. -/
-def localSpan (p : CompilerProviders.Prepared) (supplied : MIR.Body) (id : MIR.LocalId) :
+def localSpan (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (supplied : MIR.Body) (id : MIR.LocalId) :
     MachineHooks.M K User MIR.SpanRef := do
   let frame ← MachineHooks.currentFrame
   unless supplied == frame.body do throw (.invalidProgram "local span body differs from active frame")
-  let body ← lift (bodyOfFrame p frame)
+  let body ← RuntimeArrayQueries.performCompiler types (bodyOfFrame p frame)
   let some decl := body.input.localSources[id]? | throw (.invalidProgram "local source span index is absent")
   if decl.spanId < p.program.bundle.spans.size then
     pure ⟨decl.spanId⟩
   else throw (.unsupported "exact local source span is absent from canonical span table")
 
 /-- Return the actual existing MIR node; no second executable instruction IR. -/
-def instruction (p : CompilerProviders.Prepared) :
+def instruction (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) :
     MachineHooks.M K User (Option (Sum MIR.Statement MIR.Terminator)) := do
   let frame ← MachineHooks.currentFrame
-  let _ ← lift (bodyOfFrame p frame)
+  let _ ← RuntimeArrayQueries.performCompiler types (bodyOfFrame p frame)
   match frame.location with
   | .unwinding _ => pure none
   | .mir location =>
@@ -91,25 +95,28 @@ def instruction (p : CompilerProviders.Prepared) :
     if location.statementIndex == block.statements.size then return some (.inr block.terminator)
     throw (.stack (.invalidLocation location))
 
-def sourceInfo (p : CompilerProviders.Prepared) : MachineHooks.M K User (Option MIR.SourceInfo) := do
-  match ← instruction p with
+def sourceInfo (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) : MachineHooks.M K User (Option MIR.SourceInfo) := do
+  match ← instruction p types with
   | none => pure none
   | some (.inl statement) => pure (some statement.sourceInfo)
   | some (.inr terminator) => pure (some terminator.sourceInfo)
 
-def currentSpan (p : CompilerProviders.Prepared) : MachineHooks.M K User MIR.SpanRef := do
+def currentSpan (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) : MachineHooks.M K User MIR.SpanRef := do
   let frame ← MachineHooks.currentFrame
-  let _ ← lift (bodyOfFrame p frame)
+  let _ ← RuntimeArrayQueries.performCompiler types (bodyOfFrame p frame)
   match AllocationDriver.frameSpan frame with
   | .ok span => pure span
   | .error error => throw error
 
 /-- Source InterpCx::cur_span retains the actual enclosing compiler span for
 an empty stack. The caller supplies that source context; no dummy is invented. -/
-def curSpan (p : CompilerProviders.Prepared) (contextSpan : MIR.SpanRef) :
+def curSpan (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (contextSpan : MIR.SpanRef) :
     MachineHooks.M K User MIR.SpanRef := do
   if (← get).stack.frames.isEmpty then return contextSpan
-  currentSpan p
+  currentSpan p types
 
 /-- Remaining capabilities after source-owned local layout/span queries are
 removed. These concern typed operations, validation and compiler predicates. -/
@@ -125,11 +132,12 @@ structure CompilerLeaves (K User C : Type) where
   validate : C → RuntimePlace Provenance → MachineHooks.M K User Unit
   willValidateMemory : MemoryOperandLayout → Bool
 
-def compilerFromLeaves (p : CompilerProviders.Prepared) (h : CompilerLeaves K User C) :
+def compilerFromLeaves (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (h : CompilerLeaves K User C) :
     PlaceMachine.CompilerHooks K User C :=
   {debugAssertions := h.debugAssertions
-   layout := fun _ id => computeLocalLayout p id
-   localSpan := localSpan p
+   layout := fun _ id => computeLocalLayout p types id
+   localSpan := localSpan p types
    validationInProgress := h.validationInProgress
    projection := h.projection
    deref := h.deref
@@ -140,9 +148,10 @@ def compilerFromLeaves (p : CompilerProviders.Prepared) (h : CompilerLeaves K Us
    validate := h.validate
    willValidateMemory := h.willValidateMemory}
 
-def compilerHooks (p : CompilerProviders.Prepared) (base : PlaceMachine.CompilerHooks K User C) :
+def compilerHooks (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (base : PlaceMachine.CompilerHooks K User C) :
     PlaceMachine.CompilerHooks K User C :=
-  {base with layout := fun _ id => computeLocalLayout p id, localSpan := localSpan p}
+  {base with layout := fun _ id => computeLocalLayout p types id, localSpan := localSpan p types}
 
 /-- Only TLS resolution remains a capability of the rvalue leaf record. -/
 def rvalueLeaves (_p : CompilerProviders.Prepared)
@@ -153,30 +162,28 @@ def rvalueLeaves (_p : CompilerProviders.Prepared)
 /-- Close canonical frame access and local compiler leaves in the same config.
 The existing operational dictionaries retain physical/validation capabilities. -/
 def executionHooks (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K User))
     (base : ExecutionMachine.Config K User C Other Extern Host) :
     ExecutionMachine.Config K User C Other Extern Host :=
   {base with
-    compiler := compilerHooks p base.compiler}
+    compiler := compilerHooks p types base.compiler}
 end Miri.Input.CompilerFrameContext
 
 namespace Miri.Input.CompilerFrameContext
 open Miri Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
 set_option autoImplicit false
 variable {K U : Type}
- theorem localSpan_known (p : CompilerProviders.Prepared) (body : LoadedBody) (actual : LoweredBody)
-    (fnInstance : CallInstance) (decl : SourceInfo) (span : SpanRef)
-    (row : p.program.bundle.bodies[body.identity.index]? = some actual)
-    (contents : actual.body = body.body)
-    (loader : CallResolution.loadedBodyOfInstance p.lifecycle.calls.calls fnInstance = .ok body)
+ theorem localSpan_known (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K U))
+    (frame : ActualFrame) (actual : LoweredBody) (decl : SourceInfo) (span : SpanRef)
+    (queried : (RuntimeArrayQueries.performCompiler types (bodyOfFrame p frame) : MachineHooks.M K U LoweredBody) = pure actual)
     (declaration : actual.input.localSources[0]? = some decl)
     (indexed : decl.spanId = span.id)
     (bounded : span.id < p.program.bundle.spans.size)
-    (frames : Array ActualFrame) (frame : ActualFrame) (machine : MachineHooks.MachineState K U)
-    (identity : frame.bodyIdentity = body.identity) (function : frame.functionInstance = fnInstance)
-    (frameBody : frame.body = body.body) :
-    localSpan p body.body 0 (⟨⟨frames.push frame⟩,machine⟩ : MachineHooks.State K U) =
+    (frames : Array ActualFrame) (machine : MachineHooks.MachineState K U) :
+    localSpan p types frame.body 0 (⟨⟨frames.push frame⟩,machine⟩ : MachineHooks.State K U) =
       .ok span ⟨⟨frames.push frame⟩,machine⟩ := by
-  simp [localSpan,MachineHooks.currentFrame,Stack.currentFrame?,bodyOfFrame,lift,
-    row,contents,loader,declaration,indexed,bounded,identity,function,frameBody,
-    get,getThe,MonadStateOf.get,EStateM.get,bind,EStateM.bind,pure,EStateM.pure,Except.bind,Except.pure]
+  simp [localSpan, MachineHooks.currentFrame, Stack.currentFrame?, queried,
+    declaration, indexed, bounded, get, getThe, MonadStateOf.get, EStateM.get,
+    bind, EStateM.bind, pure, EStateM.pure]
 end Miri.Input.CompilerFrameContext

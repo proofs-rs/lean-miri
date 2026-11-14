@@ -123,9 +123,7 @@ def fromSource [DecidableEq MiriMemoryKind]
       |>.mapError ScalarOps.scalarError)
     writeScalar scalar destination
   let field := fun parent name => do
-    let index ← match CompilerNamedFields.fieldIndex p.runtime parent.layout name with
-      | .ok index => pure index
-      | .error error => throw error
+    let index ← CompilerNamedFields.fieldIndex memory.arrays parent.layout name
     let projected ← PlaceDynamic.field placeProjection memory.choice
       ⟨.memory parent.mplace,parent.layout⟩ index
     match projected.ref with

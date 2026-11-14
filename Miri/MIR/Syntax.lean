@@ -358,9 +358,22 @@ inductive TypeConst where
   | Expr (kind : ConstExpressionKind) (arguments : Array GenericArg)
   deriving Repr, DecidableEq
 
+/-- Source `mir::UnevaluatedConst`; promoted identity is separate from the
+definition's ordinary body. Arguments belong to the current compiler World. -/
+structure UnevaluatedConst where
+  definition : DefId
+  arguments : Array GenericArg
+  promoted : Option Nat
+  deriving Repr, DecidableEq
+
 inductive MirConst where
+  | Ty (declaredType : TyId) (constant : TypeConstId)
+  | Unevaluated (key : UnevaluatedConst) (ty : TyId)
   | Val (value : ConstValue) (ty : TyId)
   deriving Repr, DecidableEq
+
+def MirConst.declaredType : MirConst → TyId
+  | .Ty ty _ | .Unevaluated _ ty | .Val _ ty => ty
 
 structure ConstOperand where
   span : SpanRef

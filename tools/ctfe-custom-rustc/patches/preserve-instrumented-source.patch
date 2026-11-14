@@ -1,0 +1,17 @@
+--- a/src/bootstrap/src/core/build_steps/compile.rs
++++ b/src/bootstrap/src/core/build_steps/compile.rs
+@@ -811,7 +811,13 @@
+                 let _ = fs::remove_dir_all(sysroot.join("lib/rustlib/src/rust"));
+             }
+ 
+-            builder.cp_link_r(&builder.initial_sysroot.join("lib"), &sysroot.join("lib"));
++            // The custom stage0 can include rustc-src. Never copy it through
++            // this sysroot's rustc-src symlink back into the patched source tree.
++            builder.cp_link_filtered(
++                &builder.initial_sysroot.join("lib"),
++                &sysroot.join("lib"),
++                &|relative| !relative.starts_with("rustlib/rustc-src"),
++            );
+         } else {
+             if builder.download_rustc() {
+                 // Ensure there are no CI-rustc std artifacts.

@@ -46,7 +46,7 @@ def initial : IO (MachineHooks.State Unit (List String)) := do
     #[(allocId, VClockAlloc.newAllocation (ByteSize.ofU64 1 (by decide)) (← timestamp 9) idx)], #[], []⟩⟩
 def blocked (message : String) : MachineHooks.M Unit (List String) A := throw (.unsupported message)
 def storage : MachineHooks.StorageHooks Unit (List String) := {
-  veryTriviallySized := fun _ => .ok true
+  veryTriviallySized := fun _ => pure true
   layout := fun _ => blocked "unused layout query"
   allocateDyn := fun _ _ => blocked "unused dynamic allocation"
   deallocateStack := fun _ => blocked "unused local deallocation" }

@@ -1,6 +1,7 @@
 import Miri.Input.JsonReader
 import Miri.Input.MIRParser
 import Miri.Input.MIRLeaves
+import Miri.Input.MirTemplateCodec
 import Miri.Input.DecoderValues
 
 namespace Miri.Input.DecodeMIR
@@ -84,27 +85,73 @@ def parseEvaluatedField (s : ParseEvaluatedFields) (key : String) : JsonReader.P
   | "value" => return {s with value := some (← parseConstValue)}
   | _ => skipValue; pure s
 def finishParseEvaluatedFields (s : ParseEvaluatedFields) : JsonReader.Parser (MIR.ConstValue) := do
-  unless (← required s.kind "kind") == "evaluated_const" do reject "unknown constant evaluation record"
+  unless ["evaluated_const", "literal_const"].contains (← required s.kind "kind") do
+    reject "unknown constant value record"
   required s.value "value"
 def parseEvaluated : JsonReader.Parser (MIR.ConstValue) := do
   finishParseEvaluatedFields (← object {} parseEvaluatedField)
 open MIRParser
 
+inductive SourceConstant where
+  | value (value : MIR.ConstValue)
+  | typeConstant (id : Nat)
+  | unevaluated (definition : Nat) (arguments : Array MIR.GenericArg) (promoted : Option Nat)
+
+private structure SourceConstantFields where
+  kind : Option String := none
+  value : Option MIR.ConstValue := none
+  typeConstant : Option Nat := none
+  definition : Option Nat := none
+  arguments : Option (Array MIR.GenericArg) := none
+  promoted : Option (Option Nat) := none
+
+private def sourceConstant : JsonReader.Parser SourceConstant := do
+  let s ← object ({} : SourceConstantFields) fun s key => do
+    match key with
+    | "kind" => return {s with kind := some (← string)}
+    | "value" => return {s with value := some (← parseConstValue)}
+    | "type_constant" => return {s with typeConstant := some (← natural)}
+    | "definition" => return {s with definition := some (← natural)}
+    | "arguments" => return {s with arguments := some (← GenericArgsCodec.decode)}
+    | "promoted" => return {s with promoted := some (← nullable natural)}
+    | _ => skipValue; pure s
+  match ← required s.kind "kind" with
+  | "evaluated_const" | "literal_const" =>
+    unless s.typeConstant.isNone && s.definition.isNone && s.arguments.isNone && s.promoted.isNone do
+      reject "evaluated MIR constant contains raw source material"
+    return .value (← required s.value "value")
+  | "type_constant" =>
+    reject "raw MIR type constant has no rustc evaluated operand result"
+  | "unevaluated_const" =>
+    reject "raw MIR Unevaluated has no rustc evaluated operand result"
+  | _ => reject "unknown MIR constant source category"
+
+private def makeSourceConstant (ty : Nat) (span : MIR.SpanRef) (userType : Option Nat) :
+    SourceConstant → MIRParser.Parser MIR.ConstOperand
+  | .value value => makeConstant ty span userType value
+  | .typeConstant id => makeTypeConstant ty span userType id
+  | .unevaluated definition arguments promoted => do
+    recordType ty
+    recordSpan span.id
+    recordDef definition
+    recordArgs arguments
+    pure ⟨span,userType,.Unevaluated ⟨definition,arguments,promoted⟩ ty⟩
+
 structure ParseConstOperandFields where
   type : Option (Nat) := none
   span : Option (Nat) := none
   user_type_annotation : Option (Option Nat) := none
-  constant : Option (MIR.ConstValue) := none
+  constant : Option SourceConstant := none
 
 def parseConstOperandField (s : ParseConstOperandFields) (key : String) : MIRParser.Parser (ParseConstOperandFields) := do
   match key with
   | "type" => return {s with type := some (← (do let id ← natural; recordType id; pure id))}
   | "span" => return {s with span := some (← (do let id ← natural; recordSpan id; pure id))}
   | "user_type_annotation" => return {s with user_type_annotation := some (← MIRParser.nullable annotation)}
-  | "constant" => return {s with constant := some (← parseEvaluated)}
+  | "constant" => return {s with constant := some (← sourceConstant)}
   | _ => skipValue; pure s
 def finishParseConstOperandFields (s : ParseConstOperandFields) : MIRParser.Parser MIR.ConstOperand := do
-  makeConstant (← required s.type "type") ⟨(← required s.span "span")⟩
+  makeSourceConstant (← required s.type "type") ⟨(← required s.span "span")⟩
     (← required s.user_type_annotation "user_type_annotation") (← required s.constant "constant")
 def parseConstOperand : MIRParser.Parser MIR.ConstOperand := do
   finishParseConstOperandFields (← MIRParser.object {} parseConstOperandField)
@@ -479,7 +526,8 @@ private def sharedStatement : MIRParser.Parser MIR.StatementKind := do
         definitions := mergeBound state.references.definitions entry.references.definitions
         typeConstants := mergeBound state.references.typeConstants entry.references.typeConstants
         spans := mergeBound state.references.spans entry.references.spans
-        scalarWidths := state.references.scalarWidths ++ entry.references.scalarWidths }
+        scalarWidths := state.references.scalarWidths ++ entry.references.scalarWidths
+        mirTypeConstants := state.references.mirTypeConstants ++ entry.references.mirTypeConstants }
       facts := {
         places := state.facts.places ++ entry.facts.places
         constantAllocations := state.facts.constantAllocations ++ entry.facts.constantAllocations
@@ -587,7 +635,7 @@ private structure AsmConstantFields where
   type : Option Nat := none
   span : Option Nat := none
   user_type_annotation : Option (Option Nat) := none
-  constant : Option (MIR.ConstValue) := none
+  constant : Option SourceConstant := none
 
 private def asmConstant : MIRParser.Parser ((Sum (MIR.ConstValue) MIR.ConstOperand)) := do
   let s ← MIRParser.object ({} : AsmConstantFields) fun s key => do
@@ -597,14 +645,14 @@ private def asmConstant : MIRParser.Parser ((Sum (MIR.ConstValue) MIR.ConstOpera
     | "type" => return {s with type := some (← (do let id ← natural; recordType id; pure id))}
     | "span" => return {s with span := some (← (do let id ← natural; recordSpan id; pure id))}
     | "user_type_annotation" => return {s with user_type_annotation := some (← MIRParser.nullable annotation)}
-    | "constant" => return {s with constant := some (← parseEvaluated)}
+    | "constant" => return {s with constant := some (← sourceConstant)}
     | _ => skipValue; pure s
   match s.kind with
-  | some "evaluated_const" =>
+  | some "evaluated_const" | some "literal_const" =>
     return .inl (← required s.value "value")
   | none =>
     let c ← required s.constant "constant"
-    return .inr (← makeConstant (← required s.type "type") ⟨(← required s.span "span")⟩
+    return .inr (← makeSourceConstant (← required s.type "type") ⟨(← required s.span "span")⟩
       (← required s.user_type_annotation "user_type_annotation") c)
   | _ => reject "unknown assembly constant record"
 
@@ -949,7 +997,14 @@ def finishPromotedBodyFields (path : String) (s : PromotedBodyFields) : MIRParse
   return ⟨index, bodyId⟩
 def promotedBody (path : String) : MIRParser.Parser (PromotedBody) := do
   finishPromotedBodyFields path (← MIRParser.object {} promotedBodyField)
+def compilerBodyRole : JsonReader.Parser CompilerBodyRole := do
+  match ← string with
+  | "runtime" => pure .runtime
+  | "ctfe" => pure .ctfe
+  | value => JsonReader.fail s!"unknown compiler body source role `{value}`"
+
 structure ParseBodyFields where
+  sourceRole : Option CompilerBodyRole := none
   phase : Option (MIR.MirPhase) := none
   arg_count : Option (Nat) := none
   spread_arg : Option (Option Nat) := none
@@ -969,6 +1024,7 @@ structure ParseBodyFields where
 
 def parseBodyField (sourcePath : String) (s : ParseBodyFields) (key : String) : MIRParser.Parser (ParseBodyFields) := do
   match key with
+  | "source_role" => return {s with sourceRole := some (← compilerBodyRole)}
   | "phase" => return {s with phase := some (← phase)}
   | "arg_count" => return {s with arg_count := some (← natural)}
   | "spread_arg" => return {s with spread_arg := some (← MIRParser.nullable natural)}
@@ -1026,6 +1082,7 @@ def finishParseBodyFields (sourcePath : String) (s : ParseBodyFields) : MIRParse
   recordSpan preambleDefSpanId
   validateLocalBounds locals.size blocks.size scopes.size
   return {
+    sourceRole := (← required s.sourceRole "source_role"),
     mir := ⟨(← required s.phase "phase"), argumentCount, spreadArgument, locals.map (·.typeId), blocks.map (·.2.value)⟩,
     definitionId, defPath := s.def_path.join.getD sourcePath, sourcePath,
     spanId, preambleDefSpanId, injectionPhase := s.injection_phase.join,
@@ -1035,6 +1092,98 @@ def finishParseBodyFields (sourcePath : String) (s : ParseBodyFields) : MIRParse
     promotedBodies := s.promoted_bodies.getD #[] }
 def parseBodyRaw (sourcePath : String) : MIRParser.Parser Body := do
   finishParseBodyFields sourcePath (← MIRParser.object {} (parseBodyField sourcePath))
+
+structure ParsedBodySeed where
+  value : BodySeed
+  references : References
+
+private structure BodySeedFields where
+  kind : Option String := none
+  material : ParseBodyFields := {}
+  templateId : Option Nat := none
+  genericArgs : Option (Array Miri.MIR.GenericArg) := none
+  materialFields : Bool := false
+  noopSpan : Option BacktraceSpan := none
+  nonNullDefinition : Option Nat := none
+  codeDefinition : Option Nat := none
+
+private def parseBodySeedRaw (path : String) : MIRParser.Parser BodySeed := do
+  let fields ← MIRParser.object ({} : BodySeedFields) fun fields key => do
+    match key with
+    | "body_kind" => pure { fields with kind := some (← string) }
+    | "template_id" => pure { fields with templateId := some (← natural) }
+    | "source_span" => pure {fields with noopSpan := some (← backtrace s!"{path}.source_span")}
+    | "non_null_definition" =>
+      let id ← natural
+      recordDef id
+      pure {fields with nonNullDefinition := some id}
+    | "code_definition" =>
+      let id ← natural
+      recordDef id
+      pure {fields with codeDefinition := some id}
+    | "generic_args" =>
+      let args ← GenericArgsCodec.decode
+      recordArgs args
+      pure { fields with genericArgs := some args }
+    | "instance_id" | "promoted_bodies" =>
+      pure { fields with material := ← parseBodyField path fields.material key }
+    | _ => pure { fields with material := ← parseBodyField path fields.material key, materialFields := true }
+  match ← required fields.kind "body_kind" with
+  | "material" =>
+    unless fields.templateId.isNone && fields.genericArgs.isNone && fields.noopSpan.isNone &&
+        fields.nonNullDefinition.isNone && fields.codeDefinition.isNone do
+      reject "material body cannot carry a generic template reference"
+    return .material (← finishParseBodyFields path fields.material)
+  | "noop_drop" =>
+    unless !fields.materialFields && fields.templateId.isNone && fields.genericArgs.isNone &&
+        fields.material.promoted_bodies.isNone && fields.nonNullDefinition.isNone && fields.codeDefinition.isNone do
+      reject "no-op drop source cannot carry a monomorphic body or template reference"
+    return .noopDrop ⟨← required fields.material.instance_id "instance_id",
+      ← required fields.noopSpan "source_span"⟩
+  | "fn_pointer_shim" =>
+    reject "source FnPtr shim body is not a rustc MIR result"
+  | "copy_template" =>
+    reject "source MIR template body has no exact rustc executable result"
+  | _ => reject "unknown body seed kind"
+
+def parseBodySeed (path : String) (pools : Option MIRParser.SharedPools := none) : JsonReader.Parser ParsedBodySeed := do
+  let (value,state) ← (parseBodySeedRaw path).run {pools}
+  pure ⟨value,state.references⟩
+
+private structure CopyTemplateFields where
+  sourceRole : Option CompilerBodyRole := none
+  template : Option MirTemplate.Template := none
+  definitionId : Option Nat := none
+  defPath : Option String := none
+  spanId : Option Nat := none
+  preambleDefSpanId : Option Nat := none
+  injectionPhase : Option (Option Miri.MIR.MirPhase) := none
+  localSources : Option (Array Input.SourceInfo) := none
+  sourceScopes : Option (Array SourceScope) := none
+  backtraces : Option (Array BacktraceSpan) := none
+  sourcePromoted : Option (Option Nat) := none
+
+def parseCopyTemplate (path : String) : JsonReader.Parser CopyTemplateSource := do
+  let fields ← JsonReader.object ({} : CopyTemplateFields) fun fields key => do
+    match key with
+    | "source_role" => pure {fields with sourceRole := some (← compilerBodyRole)}
+    | "template" => pure {fields with template := some (← liftExcept (MirTemplateCodec.decode (← string)))}
+    | "source_def_id" => pure {fields with definitionId := some (← natural)}
+    | "source_promoted" => pure {fields with sourcePromoted := some (← JsonReader.nullable natural)}
+    | "def_path" => pure {fields with defPath := some (← string)}
+    | "span" => pure {fields with spanId := some (← natural)}
+    | "preamble_def_span" => pure {fields with preambleDefSpanId := some (← natural)}
+    | "injection_phase" => pure {fields with injectionPhase := some (← JsonReader.nullable phase)}
+    | "local_sources" => pure {fields with localSources := some (← JsonReader.array sourceInfo)}
+    | "source_scopes" => pure {fields with sourceScopes := some (← JsonReader.array scope)}
+    | "backtrace_spans" => pure {fields with backtraces := some (← JsonReader.arrayIndexed (fun i => backtrace s!"{path}.backtrace_spans[{i}]"))}
+    | _ => JsonReader.fail s!"{path}: unknown generic MIR template field `{key}`"
+  pure ⟨← required fields.template "template",← required fields.definitionId "source_def_id",
+    ← required fields.defPath "def_path",← required fields.spanId "span",
+    ← required fields.preambleDefSpanId "preamble_def_span",← required fields.injectionPhase "injection_phase",
+    ← required fields.localSources "local_sources",← required fields.sourceScopes "source_scopes",
+    ← required fields.backtraces "backtrace_spans",← required fields.sourcePromoted "source_promoted",
+    ← required fields.sourceRole "source_role"⟩
 
 def parseSharedStatement (pools : MIRParser.SharedPools) : JsonReader.Parser MIRParser.SharedStatement := do
   let (value, state) ← statementKind.run {pools := some pools}

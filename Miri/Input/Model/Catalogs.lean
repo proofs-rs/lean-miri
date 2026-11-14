@@ -41,12 +41,22 @@ structure ProducerSettings where
   qualification : String
   deriving Repr, DecidableEq
 
+/-- Raw compiler/session print configuration, not a per-type formatting result. -/
+structure PrintOptions where
+  typeLengthLimit : Nat
+  verboseInternals : Bool
+  identifyRegions : Bool
+  trimDiagnosticPaths : Bool := false
+  trimmedDefPaths : Bool := false
+  deriving Repr, DecidableEq
+
 structure Session where
   internalTargetFeatures : Array String
   isLikeWasm : Bool
   targetArch : String
   rootSpan : SpanId
   runtimeChecks : Array (Miri.MIR.RuntimeChecks × Bool)
+  printOptions : Option PrintOptions := none
   deriving Repr, DecidableEq
 
 structure IntrinsicMetadata where
@@ -61,7 +71,6 @@ structure TargetFeature where
 
 structure RuntimeInstance where
   instanceId : InstanceId
-  requiresCallerLocation : Bool
   display : String
   inlineNever : Bool
   targetFeatures : Array TargetFeature
@@ -75,8 +84,6 @@ structure RuntimeInstance where
 
 structure RuntimeType where
   inputType : TypeId
-  mutPointerType : TypeId
-  mutReferenceType : TypeId
   dropGlue : Option InstanceId
   deriving Repr, DecidableEq
 
@@ -91,7 +98,7 @@ structure RuntimeVirtual where
   methodDefinition : DefinitionRef
   parentTrait : DefinitionRef
   concreteType : TypeId
-  rebasedArgs : Array Miri.MIR.GenericArg
+  parentGenericCount : Nat
   resolved : InstanceId
   vtableQuery : VtableRef
   deriving Repr, DecidableEq
@@ -214,12 +221,6 @@ inductive CastQuery where
   | boxType (input output : TypeId)
   deriving Repr, DecidableEq
 
-structure TypeName where
-  inputType : TypeId
-  resultType : TypeId
-  value : Miri.MIR.ConstValue
-  deriving Repr, DecidableEq
-
 structure CallerLocation where
   span : SpanId
   resultType : Option TypeId
@@ -325,7 +326,6 @@ structure Primitives where
   unitPointerMut : TypeId
   immU8Pointer : TypeId
   immU8PointerPointer : TypeId
-  typeNameResultType : TypeId
   callerLocationType : Option TypeId
   orderingEnum : Option TypeId
   deriving Repr, DecidableEq
@@ -393,7 +393,6 @@ structure Queries where
   instanceAbis : Array InstanceAbi
   functionFacts : FunctionFacts
   casts : Array CastQuery
-  typeNames : Array TypeName
   panic : Array PanicQuery
   nativeSignatures : Array NativeSignature
   retag : Array RetagQuery

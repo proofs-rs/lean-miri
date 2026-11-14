@@ -53,7 +53,7 @@ def require_external_constant(document, name, compiler_mir):
             continue
         body = pool_entry(document, 'bodies', root['body'])
         for constant in walk(body['basic_blocks']):
-            if constant.get('kind') != 'evaluated_const':
+            if constant.get('kind') not in {'evaluated_const', 'literal_const'}:
                 continue
             value = constant.get('value', {})
             if value.get('kind') != 'indirect_allocation':

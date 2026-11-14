@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 import Miri.Input.LowerMIR
 
@@ -14,18 +15,18 @@ private def set (value : Json) (key : String) (child : Json) : Except String Jso
   pure (Json.mkObj ((key, child) :: fields.toList.filter (fun item => item.1 != key)))
 
 private def reject (input : Json) (label : String) : IO Unit := do
-  check (!(decodeJson input.compress).isOk) s!"{label}: importer accepted invalid input"
+  check (!(decodeFixture input.compress).isOk) s!"{label}: importer accepted invalid input"
 
 def main : IO Unit := do
   let source ← must (Json.parse (← IO.FS.readFile "tests/input/fixtures/strict-unit.json"))
-  let input ← must (decodeJson source.compress)
+  let input ← must (decodeFixture source.compress)
   let some firstType := input.document.types[0]? | throw (IO.userError "missing first type")
   let some firstInstance := input.document.instances[0]? | throw (IO.userError "missing first instance")
   check (firstType.layoutId == 0 && firstInstance.id == 0)
     "different pool spaces did not preserve index zero"
   let recursive ← must (Json.parse "{\"kind\":\"expression\",\"expression_kind\":\"function_call\",\"arguments\":[{\"kind\":\"const\",\"value\":0}]}")
   let recursiveInput ← must (set source "type_constants" (.arr #[recursive]))
-  let recursiveDecoded ← must (decodeJson recursiveInput.compress)
+  let recursiveDecoded ← must (decodeFixture recursiveInput.compress)
   check (decide (recursiveDecoded.document.typeConstants[0]? = some (.Expr .FunctionCall #[.Const 0])))
     "recursive constant ID was expanded or rewritten"
   reject (← must (set source "type_constants" (.arr #[recursive, recursive]))) "duplicate canonical constant definitions"
@@ -33,7 +34,7 @@ def main : IO Unit := do
   reject (← must (set source "definitions" (.arr (definitions.push definitions[0]!)))) "duplicate compiler definition identities"
   let layouts ← must ((source.getObjVal? "layouts").bind Json.getArr?)
   let equalLayouts ← must (set source "layouts" (.arr (layouts.push layouts[0]!)))
-  let equalLayouts ← must (decodeJson equalLayouts.compress)
+  let equalLayouts ← must (decodeFixture equalLayouts.compress)
   check (equalLayouts.document.layouts.size == layouts.size + 1) "equal physical payloads collapsed distinct layout IDs"
   let dangling ← must (Json.parse "{\"kind\":\"alias\",\"rigidity\":\"rigid\",\"alias_kind\":\"free\",\"def_id\":0,\"generic_args\":[{\"kind\":\"const\",\"value\":42}]}")
   reject (← must (set source "type_constants" (.arr #[dangling]))) "unused out of bounds constant definition"
@@ -61,7 +62,7 @@ def main : IO Unit := do
   let second ← must (set allocations[0]! "allocation_id" (toJson (1 : Nat)))
   let second ← must (set second "source_alloc_id" (toJson (2 : Nat)))
   let duplicated ← must (set source "allocations" (.arr (allocations.push second)))
-  let imported ← must (decodeJson duplicated.compress)
+  let imported ← must (decodeFixture duplicated.compress)
   let some secondAllocation := imported.document.allocations[1]? | throw (IO.userError "missing second allocation")
   check (imported.document.allocations.size == 2 && secondAllocation.id == 1)
     "equal bytes collapsed distinct allocations"
@@ -77,7 +78,7 @@ def main : IO Unit := do
   let files := #[Json.str "strict.rs", Json.str "other.rs"]
   let shared ← must (set source "files" (.arr files))
   let shared ← must (set shared "spans" (.arr #[firstSpan, secondSpan, firstSpan]))
-  let shared ← must (decodeJson shared.compress)
+  let shared ← must (decodeFixture shared.compress)
   check (shared.document.files == #["strict.rs", "other.rs"] &&
     shared.document.spans.map (·.file) == #[0, 1, 0])
     "global filename table was expanded or span filename IDs changed"
@@ -92,8 +93,8 @@ def main : IO Unit := do
   let validBody ← must (set bodies[0]! "backtrace_spans" (toJson (0 : Nat)))
   let validBacktrace ← must (set source "bodies" (.arr (bodies.set! 0 validBody)))
   let validBacktrace ← must (set validBacktrace "backtrace_spans" (.arr #[.arr #[backtrace]]))
-  let validBacktrace ← must (decodeJson validBacktrace.compress)
-  let some validBody := validBacktrace.document.bodies[0]? | throw (IO.userError "missing decoded body")
+  let validBacktrace ← must (decodeFixture validBacktrace.compress)
+  let validBody ← must (SourceMir.metadata validBacktrace.document 0)
   let some validRow := validBody.backtraceSpans[0]? | throw (IO.userError "missing decoded backtrace")
   check (validRow.position.filename == 0)
     "backtrace filename reference was eagerly expanded"

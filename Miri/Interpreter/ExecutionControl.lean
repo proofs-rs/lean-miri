@@ -8,7 +8,7 @@ open Miri.Memory Miri.ABI Miri.MIR
 open MachineHooks (M State FrameExtra)
 
 def hooks [DecidableEq K]
-    (bodySpan : Frame Provenance LocalLayout FrameExtra → Except StepError SpanRef)
+    (bodySpan : Frame Provenance LocalLayout FrameExtra → M K U SpanRef)
     (lifecycle : CallMachine.Lifecycle K U C)
     (access : PlaceMachine.AccessConfig K U)
     (place : PlaceHooks Provenance (State K U) C FrameExtra)
@@ -18,7 +18,7 @@ def hooks [DecidableEq K]
     (unwindTerminateFunction : C → UnwindTerminateReason → M K U CallInstance) :
     ControlHooks Provenance LocalLayout FrameExtra (MachineHooks.MachineState K U) C (OpTy Provenance) :=
   let retag := TypedMachineBindings.retagHooks access queries
-  {bodySpan := bodySpan
+  {bodySpan := fun frame state => MachineHooks.run (bodySpan frame) state
    returnOperand := fun c state => MachineHooks.run (place.localToOp c 0) state
    popFrame := fun _ state => MachineHooks.run (TypedMachineBindings.popRaw retag) state
    copyReturn := fun c value view state => MachineHooks.run

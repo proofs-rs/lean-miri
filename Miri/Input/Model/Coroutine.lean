@@ -1,4 +1,5 @@
 import Miri.Input.Model.Types
+import Miri.Input.CoroutineBodyDispatch
 
 namespace Miri.Input
 
@@ -7,17 +8,19 @@ inductive CoroutineAuxiliaryRole where
   | sync | async | proxyAsync
   deriving Repr, DecidableEq
 
-structure CoroutineSavedField where
-  typeId : TypeId
+structure CoroutineSavedField (Child : Type := TypeId) where
+  typeId : Child
   sourceInfo : SourceInfo
   ignoreForTraits : Bool
   debuginfoName : Option String
+  deriving DecidableEq
 
-structure CoroutineLayoutEvidence where
-  fields : Array CoroutineSavedField
+structure CoroutineLayoutEvidence (Child : Type := TypeId) where
+  fields : Array (CoroutineSavedField Child)
   variants : Array (Array Nat)
   variantSources : Array SourceInfo
   storageConflicts : Array (Array Nat)
+  deriving DecidableEq
 
 structure CoroutineEvidence where
   ownerBody : BodyId
@@ -38,9 +41,25 @@ structure CoroutineAuxiliaryBody where
   role-qualified auxiliary identity is separate from executable body IDs. -/
   body : Body
 
+/-- Raw generic declaration selected by a physical MIR owner. Layout evidence
+contains source field terms and raw relations, never physical layout answers. -/
+structure CoroutineGenericSource where
+  owner : GenericSubstitution.DefinitionIdentity
+  physicalOwner : GenericSubstitution.DefinitionIdentity
+  typeckOwner : GenericSubstitution.DefinitionIdentity
+  parentCount : Nat
+  parameters : Array GenericSubstitution.ArgSort
+  witnessParameters : Array GenericSubstitution.ArgSort
+  typeExpression : GenericSubstitution.Term
+  identityKind : GenericSubstitution.Term
+  byMoveOwner : Option GenericSubstitution.DefinitionIdentity
+  layout : CoroutineLayoutEvidence GenericSubstitution.Term
+  deriving DecidableEq
+
 structure CoroutineCoverage where
   bodyCoroutines : Array Bool
   coroutines : Array CoroutineEvidence
   auxiliaryBodies : Array CoroutineAuxiliaryBody
+  genericSources : Array CoroutineGenericSource := #[]
 
 end Miri.Input

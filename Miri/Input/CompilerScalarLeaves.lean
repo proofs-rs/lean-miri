@@ -21,23 +21,29 @@ def runtimeChecks (p : CompilerProviders.Prepared) (_ : C) (kind : MIR.RuntimeCh
     EStateM StepError S Bool :=
   lift (CompilerIntrinsicFacts.runtimeChecks p.intrinsics kind)
 
-def scalar (p : CompilerProviders.Prepared) : ExecutionScalar.Leaves S C :=
+def scalar (p : CompilerProviders.Prepared) (types : RuntimeArrayQueries.Access S) : ExecutionScalar.Leaves S C :=
   let context := p.lifecycle.calls.symbols.facts.context
-  { classify := fun _ ty => physical (CompilerExecutionProviders.scalarClass context ty)
-    boolLayout := fun _ => lift (context.primitiveLayout "bool")
+  { classify := fun _ ty => CompilerExecutionProviders.worldClass types context ty
+    boolLayout := fun _ => CompilerExecutionProviders.worldBool types context
     orderingLayout := fun _ => lift context.orderingLayout
-    overflowLayout := fun _ element => lift (context.runtime.overflowTupleLayout element |>.mapError toString)
-    metadataLayout := fun _ ty => physical (CompilerExecutionProviders.metadataLayout context ty)
-    unitLayout := fun _ => lift (CompilerFacts.unitLayout context) }
+    overflowLayout := fun _ element => RuntimeArrayQueries.perform types do
+      let boolean ← TypeArena.World.internType .bool
+      let tuple ← TypeArena.World.internType (.tuple #[element.ty,boolean])
+      RuntimeMetadata.layoutInWorld context.runtime tuple
+    metadataLayout := fun _ ty => RuntimeArrayQueries.perform types do
+      let pointee ← CompilerFacts.requiredTypeInWorld context ty "builtin_deref_explicit"
+      let metadata ← CompilerFacts.requiredTypeInWorld context pointee "pointer_metadata_type"
+      RuntimeMetadata.layoutInWorld context.runtime metadata
+    unitLayout := fun _ => RuntimeArrayQueries.perform types (CompilerFacts.unitLayoutInWorld context) }
 
-def discriminant (p : CompilerProviders.Prepared)
+def discriminant (p : CompilerProviders.Prepared) (types : RuntimeArrayQueries.Access S)
     (scalarMayBeNull : C → Scalar Provenance → RvalueM S Bool) :
     ExecutionLeaves.Discriminant S C :=
   let context := p.lifecycle.calls.symbols.facts.context
-  { discriminantLayout := fun _ ty => lift (CompilerDiscriminantFacts.discriminantLayout context ty)
-    tagLayout := fun _ tag => lift (CompilerDiscriminantFacts.tagLayout context tag)
-    discriminantValue := fun _ ty index => lift (CompilerDiscriminantFacts.discriminantValue context ty index)
-    variantForDiscriminant := fun _ ty bits => lift (CompilerDiscriminantFacts.variantForDiscriminant context ty bits)
-    adtVariantCount := fun _ ty => lift (CompilerDiscriminantFacts.adtVariantCount context ty)
+  { discriminantLayout := fun _ ty => RuntimeArrayQueries.perform types (CompilerDiscriminantFacts.discriminantLayout context ty)
+    tagLayout := fun _ tag => RuntimeArrayQueries.perform types (CompilerDiscriminantFacts.tagLayout context tag)
+    discriminantValue := fun _ ty index => RuntimeArrayQueries.perform types (CompilerDiscriminantFacts.discriminantValue context ty index)
+    variantForDiscriminant := fun _ ty bits => RuntimeArrayQueries.perform types (CompilerDiscriminantFacts.variantForDiscriminant context ty bits)
+    adtVariantCount := fun _ ty => RuntimeArrayQueries.perform types (CompilerDiscriminantFacts.adtVariantCount context ty)
     scalarMayBeNull := scalarMayBeNull }
 end Miri.Input.CompilerScalarLeaves

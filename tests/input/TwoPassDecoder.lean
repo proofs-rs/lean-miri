@@ -1,5 +1,7 @@
+import MiriTests.Input.LegacyFixture
 import MiriTests.Input.JsonFixtures
 import Miri.Input.Decoder
+import Miri.Input.RuntimeMetadata
 
 open Lean Miri.Input
 
@@ -35,10 +37,12 @@ private partial def permuted (value : Json) : String :=
 private def replaceBody (source : String) (change : String → Except String String) : Except String String := do
   let bodies ← items (← get source "bodies")
   let some body := bodies[0]? | throw "missing fixture body"
+  let _ ← get body "basic_blocks"
+  let body ← set body "body_kind" (Json.renderString "material")
   set source "bodies" (arr (bodies.set! 0 (← change body)))
 
 private def reject (source label : String) : IO Unit :=
-  check (!(decodeJson source).isOk) s!"accepted invalid {label}"
+  check (!(decodeFixture source).isOk) s!"accepted invalid {label}"
 
 private def constant (bits : String) : String :=
   "{\"constant\":{\"value\":{\"bits_unsigned\":" ++ Json.renderString bits ++
@@ -107,27 +111,45 @@ def main : IO Unit := do
   checkCallEvidence
   let fixture ← IO.FS.readFile "tests/input/fixtures/strict-unit.json"
   checkPlaceFactsOrder fixture
-  let baseline ← must (decodeJson fixture)
+  let baseline ← must (decodeFixture fixture)
   let withConstant ← must (replaceBody fixture fun body => set body "required_consts" (arr #[constant "255"]))
-  let expected ← must (decodeJson withConstant)
+  let expected ← must (decodeFixture withConstant)
   let reordered ← must (forwardOrder (permuted (← must (Json.parse withConstant))))
-  let decoded ← must (decodeJson reordered)
+  let decoded ← must (decodeFixture reordered)
   check (decoded.document.types.size == baseline.document.types.size) "field permutation changed type table"
-  check (decoded.document.bodies.map (·.mir) == expected.document.bodies.map (·.mir))
-    "recursive field permutation changed final MIR"
-  let some body := decoded.document.bodies[0]? | throw (IO.userError "missing decoded body")
+  check (decoded.document.bodies.size == expected.document.bodies.size)
+    "recursive field permutation changed body indexing"
+  -- This parser-only fixture deliberately has no target data layout. Its
+  -- material bodies are already typed MIR; comparing them needs no invented
+  -- execution target or temporary constructor universe.
+  for index in [:decoded.document.bodies.size] do
+    let some (.material actual) := decoded.document.bodies[index]?
+      | throw (IO.userError "minimal parser fixture unexpectedly contains a source template")
+    let some (.material reference) := expected.document.bodies[index]?
+      | throw (IO.userError "minimal parser reference unexpectedly contains a source template")
+    check (actual.mir == reference.mir) "recursive field permutation changed final MIR"
+  let body ← must (SourceMir.metadata decoded.document 0)
   let cs := body.requiredConsts
   let some c := cs[0]? | throw (IO.userError "missing required constant")
   match c.value with
   | .Val (.Scalar (.Int bits width)) ty =>
     check (bits == 255 && width == 1 && ty == 1) "explicit scalar width changed across forward tables"
   | _ => throw (IO.userError "wrong resolved scalar constant")
+  -- This synthetic raw-layout parser fixture intentionally has no target.
+  -- Recipes require real target material; never invent it for this adapter.
+  let scalarSize : Nat → Option Nat ← if baseline.document.runtimeTargetDataLayout.isSome then do
+    let runtime ← must ((RuntimeMetadata.ofDocument baseline.document).mapError toString)
+    pure (fun id => (runtime.lookup id).toOption.map (·.layout.size.bytes.toNat))
+  else pure (fun id => do
+    let node ← baseline.document.types[id]?
+    let input ← baseline.document.layouts[node.layoutId]?
+    unless input.primitiveRecipe.isNone && input.tupleType.isNone && input.unionType.isNone && input.structType.isNone && input.enumType.isNone do none
+    input.sizeBytes)
   let asmContext : DecodeMIR.Context := {
     typeCount := baseline.document.types.size, allocationCount := baseline.document.allocations.size,
     definitionCount := baseline.document.definitions.size, typeConstantCount := baseline.document.typeConstants.size,
     spanCount := baseline.document.spans.size,
-    scalarSize := fun id => (baseline.document.types[id]?).bind fun ty =>
-      (baseline.document.layouts[ty.layoutId]?).bind (·.sizeBytes) }
+    scalarSize }
   let asmRegister := "{\"name\":\"reg\",\"arch\":\"X86_64\",\"kind\":\"register_class\"}"
   let asmInput := obj #[("value", obj #[("constant", constant "255"), ("kind", "\"Constant\"")]),
     ("register", asmRegister), ("kind", "\"in\"")]
@@ -150,7 +172,7 @@ def main : IO Unit := do
   let fs ← must (fields fixture)
   reject (obj (#[("schema", "\"lean-miri-rustc-mir\"")] ++ fs)) "root duplicate"
   let unknown ← must (set reordered "future_metadata" "{\"rows\":[null,true,-2.5e3,{\"escaped\":\"\\uD83D\\uDE03\"}]}")
-  let _ ← must (decodeJson unknown)
+  let _ ← must (decodeFixture unknown)
   reject (← must (set fixture "future_metadata" "{\"x\":1,\"x\":2}")) "duplicate unknown member"
   reject (← must (set fixture "future_metadata" "{\"rows\":[1,]}")) "malformed unknown payload"
   reject (← must (replaceBody fixture fun body => set body "phase" "{\"kind\":\"built\",\"phase\":null}")) "invalid union payload"

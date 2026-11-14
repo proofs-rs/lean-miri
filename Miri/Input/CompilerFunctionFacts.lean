@@ -1,3 +1,4 @@
+import Miri.Input.LowerMIR
 import Miri.Input.CompilerInstanceAbi
 import Miri.Input.CompilerExternAbi
 
@@ -7,6 +8,7 @@ The ExternAbi remains the exact compiler payload; its interpretation is explicit
 No indirect runtime target is converted into a fabricated static instance. -/
 namespace Miri.Input.CompilerFunctionFacts
 open Lean Miri.ABI Miri.Interpreter
+
 structure Function where
   ty : MIR.TyId
   instanceId : Option CallInstance
@@ -20,6 +22,27 @@ structure Prepared where
   program : LoweredProgram
   functions : Array Function
   pointerAbis : Array PointerAbi
+private def liftWorld (value : Except String A) : TypeArena.WorldM A :=
+  match value with | .ok result => pure result | .error message => throw message
+
+private def kindAt (world : TypeArena.World) (ty : MIR.TyId) : Except String CallFunctionKind := do
+  match ← world.lookupType ty with
+  | .material node => match node.shape with
+    | .functionDefinition definition arguments _ _ variables =>
+      unless variables.isEmpty do throw "FnDef call arguments retain a nonempty binder"
+      pure (.FnDef definition arguments)
+    | .functionPointer .. => pure .FnPtr
+    | _ => throw "call function type is neither FnDef nor FnPtr"
+  | .constructed (.functionPointer _) => pure .FnPtr
+  | .constructed (.functionDefinition definition arguments variables) =>
+    unless variables.isEmpty do throw "FnDef call arguments retain a nonempty binder"
+    pure (.FnDef (← world.definitionRef definition) arguments)
+  | .constructed _ => throw "call function type is neither FnDef nor FnPtr"
+
+/-- `step.rs` distinguishes nominal FnDef identity from FnPtr directly from
+TyKind. Signature metadata and a prior instance-resolution answer are not keys. -/
+def kindInWorld (_prepared : Prepared) (ty : MIR.TyId) : TypeArena.WorldM CallFunctionKind := do
+  liftWorld (kindAt (← get) ty)
 private def knownType (ctx : LowerContext) (id : Nat) : Except String Nat := do
   unless ctx.containsTypeId id do throw "function query references missing compiler type"
   pure id
@@ -32,7 +55,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except Stri
     let ty ← knownType ctx record.typeId
     if functions.any (fun f => f.ty == ty) then throw "duplicate compiler function type query"
     let inst ← record.instanceId.mapM fun id => do
-      let _ ← CompilerInstance.source ctx.instances id
+      let _ ← CompilerInstance.Material.source ctx.instances id
       pure id
     let signature := do
       for input in record.signature.inputs do
@@ -53,38 +76,70 @@ def signature (prepared : Prepared) (ty : MIR.TyId) : Except String (Nat × ABI.
   let some entry := prepared.functions.find? (fun f => f.ty == ty) | throw "missing normalized original function signature"
   entry.signature
 
-def kind (prepared : Prepared) (ty : MIR.TyId) : Except String CallFunctionKind := do
-  let some entry := prepared.functions.find? (fun f => f.ty == ty) | throw "missing exact compiler function-kind query"
-  match entry.instanceId with
-  | none => pure .FnPtr
-  | some inst =>
-    let instances := prepared.program.input.instances
-    let kind ← CompilerInstance.kindOf instances inst
-    match kind with
-    | .Item definition => return .FnDef definition (← CompilerInstance.argsOf instances inst)
-    | _ => throw "FnDef compiler type did not contain its exact Item definition"
+/-- Structural function kind in the current execution type universe. -/
+def kind (_prepared : Prepared) (world : RuntimeArrayTypes.World) (ty : MIR.TyId) : Except String CallFunctionKind :=
+  kindAt world.arena ty
 
 def pointerAbi (prepared : Prepared) (ty : MIR.TyId) (extra : Array MIR.TyId) : Except String (FnAbi MIR.TyId) := do
   let some entry := prepared.pointerAbis.find? (fun e => e.ty == ty && e.extra == extra)
     | throw "missing exact function-pointer/extra-argument FnAbi query"
   CallResolution.functionAbiId prepared.runtime (← entry.result)
 
-def hooks (prepared : Prepared) (extern : ABI.ExternAbi → Except String Extern)
+/-- The normalized signature is the rustc result for the unchanged material
+function type. Locally constructed function types need a compiler answer. -/
+def signatureInWorld (prepared : Prepared) (ty : MIR.TyId) :
+    RuntimeArrayTypes.CompilerM (Nat × ABI.ExternAbi) := do
+  let world ← get
+  let .material source ← world.arena.lookupType ty
+    | throw "constructed function type has no rustc signature result"
+  let some original := prepared.runtime.source.types[ty]?
+    | throw "function type material source absent"
+  unless source.id == ty && (← world.arena.materialKey source) == (← world.arena.materialKey original) do
+    throw "function type material source differs from execution World"
+  match signature prepared ty with
+  | .ok result => pure result
+  | .error error => throw error
+
+/-- The exact rustc FnPtr ABI answer is valid only for unchanged material
+identities. Runtime constructed keys require a separate compiler result. -/
+def pointerAbiInWorld (prepared : Prepared) (ty : MIR.TyId) (extra : Array MIR.TyId) :
+    RuntimeArrayTypes.CompilerM (FnAbi MIR.TyId) := do
+  let world ← get
+  let .material source ← world.arena.lookupType ty
+    | throw "constructed FnPtr has no rustc ABI result"
+  let some original := prepared.runtime.source.types[ty]?
+    | throw "FnPtr material source absent"
+  unless source.id == ty && (← world.arena.materialKey source) == (← world.arena.materialKey original) do
+    throw "FnPtr material source differs from execution World"
+  for id in extra do
+    let .material source ← world.arena.lookupType id
+      | throw "constructed extra type has no rustc FnPtr ABI result"
+    let some original := prepared.runtime.source.types[id]?
+      | throw "FnPtr extra material source absent"
+    unless source.id == id && (← world.arena.materialKey source) == (← world.arena.materialKey original) do
+      throw "FnPtr extra material source differs from execution World"
+  match pointerAbi prepared ty extra with
+  | .ok abi => pure abi
+  | .error error => throw error
+
+def hooks (prepared : Prepared) (types : RuntimeArrayQueries.Access S) (extern : ABI.ExternAbi → Except String Extern)
     (base : CallHooks P S C E Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId)) :
     CallHooks P S C E Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId) :=
   { base with
-    functionSignature := fun _ layout =>
-      match signature prepared layout.ty >>= fun (count,abi) => return (count,← extern abi) with
+    functionSignature := fun _ layout => do
+      let (count,abi) ← RuntimeArrayQueries.performCompiler types (signatureInWorld prepared layout.ty)
+      match extern abi with
+      | .ok abi => pure (count,abi) | .error error => throw (.unsupported error)
+    functionKind := fun ty => do
+      match kind prepared (← RuntimeArrayQueries.compilerSnapshot types) ty with
       | .ok value => pure value | .error error => throw (.unsupported error)
-    functionKind := fun ty => match kind prepared ty with
-      | .ok value => pure value | .error error => throw (.unsupported error)
-    fnAbiOfFnPtr := fun _ layout extra => match pointerAbi prepared layout.ty extra with
-      | .ok value => pure value | .error error => throw (.unsupported error) }
+    fnAbiOfFnPtr := fun _ layout extra =>
+      RuntimeArrayQueries.performCompiler types (pointerAbiInWorld prepared layout.ty extra) }
 /-- Production ExternAbi identity retains every pinned source variant/unwind
 field, independently of the target canonical calling convention. -/
-def concreteHooks (prepared : Prepared)
+def concreteHooks (prepared : Prepared) (types : RuntimeArrayQueries.Access S)
     (base : CallHooks P S C E Other ABI.ExternAbi (FnAbi MIR.TyId) (ArgAbi MIR.TyId)) :
     CallHooks P S C E Other ABI.ExternAbi (FnAbi MIR.TyId) (ArgAbi MIR.TyId) :=
-  hooks prepared Except.ok base
+  hooks prepared types Except.ok base
 
 end Miri.Input.CompilerFunctionFacts

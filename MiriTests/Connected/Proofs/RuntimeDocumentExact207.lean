@@ -54,6 +54,7 @@ deriving instance DecidableEq for ThreadLocalEvidence
 deriving instance DecidableEq for PlaceFact
 deriving instance DecidableEq for DynamicUpcastEvidence
 deriving instance DecidableEq for NodeFacts
+deriving instance DecidableEq for BodyMetadata
 deriving instance DecidableEq for BodyCore
 deriving instance DecidableEq for PromotedBody
 deriving instance DecidableEq for Body
@@ -69,9 +70,27 @@ deriving instance DecidableEq for CoroutineLayoutEvidence
 deriving instance DecidableEq for CoroutineEvidence
 deriving instance DecidableEq for CoroutineAuxiliaryBody
 deriving instance DecidableEq for CoroutineCoverage
+deriving instance DecidableEq for MirTemplate.Template
+deriving instance DecidableEq for CopyTemplateSource
+deriving instance DecidableEq for CopyTemplateRef
+deriving instance DecidableEq for NoopDropRef
+deriving instance DecidableEq for BodySeed
 deriving instance DecidableEq for ImportDocument
+-- Density evidence contains only a proof about this exact document's type
+-- table. Proof irrelevance decides its lifted carrier; source equality above
+-- still compares every declaration, template, and body seed structurally.
+local instance {proposition : Prop} : DecidableEq (PLift proposition) :=
+  fun _ _ => .isTrue (Subsingleton.elim _ _)
+deriving instance DecidableEq for GenericInstantiation.Context
+deriving instance DecidableEq for AliasNormalization.Rule
+deriving instance DecidableEq for AliasNormalization.AssociatedDeclaration
+deriving instance DecidableEq for AliasNormalization.Program
+deriving instance DecidableEq for AliasRuntime.Context
+-- ExactMap212 compares the complete definition-index representation, including
+-- bucket capacity and order. Only certificate proof fields are irrelevant.
+deriving instance DecidableEq for TypeArena.CheckedMaterial
+deriving instance DecidableEq for TypeArena.World
 deriving instance DecidableEq for RuntimeMetadata
-deriving instance DecidableEq for RuntimeArrayTypes.Entry
 deriving instance DecidableEq for RuntimeArrayTypes.World
 
 def documentDecidableEq : DecidableEq ImportDocument := inferInstance

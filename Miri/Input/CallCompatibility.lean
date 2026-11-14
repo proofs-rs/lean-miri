@@ -42,12 +42,14 @@ def castTarget (source : AbiCastTarget) : Result CastTarget := do
 
 def passMode (source : AbiPassMode) : Result PassMode := do
   let expected ← match source.kind with
-    | .ignore | .cast => pure 0
+    | .initial | .scalarRust | .scalarSysvArgument | .scalarSysvReturn | .ignore | .cast => pure 0
     | .direct | .indirect => pure 1
     | .pair | .indirectUnsized => pure 2
   if source.attributes.size != expected then throw (invalid "pass attributes" "arity mismatch")
   let attrsAt (index : Nat) := do attributes (← require source.attributes[index]? s!"pass attributes {index}")
   match source.kind with
+  | .initial | .scalarRust | .scalarSysvArgument | .scalarSysvReturn =>
+    throw (invalid "pass mode" "ABI recipe requires its physical layout")
   | .ignore => pure .Ignore
   | .direct => return .Direct (← attrsAt 0)
   | .pair => return .Pair (← attrsAt 0) (← attrsAt 1)
@@ -67,6 +69,23 @@ def passMode (source : AbiPassMode) : Result PassMode := do
 def argument (runtime : RuntimeMetadata) (source : AbiArgument) : Result (ArgAbi TypeId) := do
   let _ ← runtime.node source.typeId
   let layout ← runtime.layoutById source.layoutId
+  let recipe := match source.mode.kind with
+    | .initial | .scalarRust | .scalarSysvArgument | .scalarSysvReturn => true
+    | _ => false
+  if recipe then
+    unless source.mode.attributes.isEmpty && source.mode.castTarget.isNone &&
+        source.mode.padI32Count.isNone && source.mode.addressSpace.isNone &&
+        source.mode.indirectMode.isNone do
+      throw (invalid "initial ABI recipe" "unexpected adjustment fields")
+    match source.mode.kind with
+    | .initial => return ArgAbi.initial ⟨source.typeId,layout⟩
+    | .scalarRust =>
+      return ← (ArgAbi.nonPointerScalar ⟨source.typeId,layout⟩ 0).mapError (invalid "Rust scalar ABI recipe")
+    | .scalarSysvArgument =>
+      return ← (ArgAbi.nonPointerScalar ⟨source.typeId,layout⟩ 32).mapError (invalid "SysV scalar argument ABI recipe")
+    | .scalarSysvReturn =>
+      return ← (ArgAbi.nonPointerScalar ⟨source.typeId,layout⟩ 8).mapError (invalid "SysV scalar return ABI recipe")
+    | _ => throw (invalid "ABI recipe" "recipe dispatch invariant")
   return ⟨⟨source.typeId,layout⟩,← passMode source.mode⟩
 
 /-- These source compiler queries are absent or only partially represented by

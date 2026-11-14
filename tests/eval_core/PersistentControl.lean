@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.CompilerProviders
 import Miri.Input.CompilerGlobals
 import Miri.Input.CompilerAllocIdWorld
@@ -25,14 +26,15 @@ private def success (result : EStateM.Result StepError S Unit) : IO S :=
 
 def main (args : List String) : IO Unit := do
   let some path := args.head? | throw (IO.userError "actual compiler root JSON required")
-  let decoded ← must (Input.decodeJson (← IO.FS.readFile path))
+  let decoded ← must (Input.decodeFixture (← IO.FS.readFile path))
   let program ← must (Input.lowerProgram decoded.document)
   let prepared ← must (Input.CompilerProviders.prepare program)
   let dummySpan ← must (Input.CompilerContextSpan.rootSpan prepared.program)
   let definition ← must (prepared.program.rootDefinitionId 0)
   let rootInstance ← must (Input.CompilerInstance.item prepared.loweringContext.instances definition #[])
-  let _ ← must (Input.CallResolution.loadedBodyOfInstance prepared.lifecycle.calls.calls rootInstance)
-  let arrays ← must prepared.initialArrays
+  let initialTypes ← must prepared.initialTypes
+  let (_,arrays) ← must ((Input.RuntimeArrayTypes.perform initialTypes
+    (Input.CallResolution.loadedBodyOfInstance prepared.lifecycle.calls.calls rootInstance)).mapError reprStr)
   let imported := Input.CompilerGlobals.importGraph prepared.runtime.target prepared.program
     (MemoryState.empty : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind)
   let _ ← must imported.outcome

@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.EvalSourceRunFinalization
 import Miri.Input.NativeMathHost
 
@@ -258,7 +259,7 @@ private def raceStateInfo (state : OuterState) : String := Id.run do
 universe-0 boundary. Only file/profile/PID acquisition and final printing use IO. -/
 private def runDstProviderPure (contents : String) (pageSize : UInt64)
     (numCpus hostPid : UInt32) : Except String String := do
-  let decoded ← Input.decodeJson contents
+  let decoded ← Input.decodeFixture contents
   let program ← Input.lowerProgram decoded.document
   let attempt := Input.EvalPreparation.prepare program
   let prepared ← attempt.outcome
@@ -302,7 +303,7 @@ private def runDstProviderPure (contents : String) (pageSize : UInt64)
     fixedScheduling := true, trackOutdatedLoads := false, weakMemory := true
     backend := .vclocks, trackedTags := some #[], validation := .Shallow
     alignment := .Int, affinity := none, muteOutput := true, hostUsizeBits := 64 }
-  let arrays ← compiler.initialArrays
+  let arrays ← compiler.initialTypes
   let tape : ExecutionChoices.Tape := { inputs := #[], policy := .boundedDiagnostic 10000 4096 }
   let creation : EStateM.Result StepError InitTrace (Input.EvalWorld.State Os R Payload H D Other Aff B Host) :=
     (Input.MachineConstruction.create rawInitHooks sourceLeaves.hostConfiguration

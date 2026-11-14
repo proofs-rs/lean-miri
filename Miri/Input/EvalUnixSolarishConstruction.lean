@@ -108,9 +108,7 @@ def fromSource [DecidableEq MiriMemoryKind]
     writePlaceImmediate place choice (.scalar scalar)
       ⟨.memory destination.mplace,destination.layout⟩
   let projectNamed := fun (parent : MPlaceTy Provenance) (name : String) => do
-    let index ← match CompilerNamedFields.fieldIndex p.runtime parent.layout name with
-      | .ok index => pure index
-      | .error error => throw error
+    let index ← CompilerNamedFields.fieldIndex EvalProjectionMachine.arrays parent.layout name
     let projected ← PlaceDynamic.field projection choice
       ⟨.memory parent.mplace,parent.layout⟩ index
     match projected.ref with

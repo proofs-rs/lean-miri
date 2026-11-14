@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 import Miri.Input.AllocationImage
 import Miri.Interpreter.Constant
@@ -43,7 +44,7 @@ private def constantQueries (_program : LoweredProgram) : ConstantValueQueries C
 
 def main (args : List String) : IO Unit := do
   let path ← match args with | path :: _ => pure path | [] => throw (IO.userError "expected mir_features compiler export")
-  let decoded ← must (decodeJson (← IO.FS.readFile path))
+  let decoded ← must (decodeFixture (← IO.FS.readFile path))
   let runtime ← must ((RuntimeMetadata.ofDocument decoded.document).mapError toString)
   let program ← must (lowerProgram decoded.document)
   let initial : MemoryState CtfeProvenance Unit Unit := { MemoryState.empty with nextAllocId := 100 }
@@ -74,7 +75,7 @@ def main (args : List String) : IO Unit := do
   let second := MemoryLifecycle.getAllocRaw first.memory first.hooks id (some ()) (globals image)
   let _ ← must (second.outcome.mapError (fun e => reprStr e))
   check (second.hooks == first.hooks) "cached owned global repeated initializer/hooks"
-  let some primitive := decoded.document.types.find? (fun ty => ty.shapeKind == .uint && ((decoded.document.layouts[ty.layoutId]?).bind (·.sizeBytes)) == some 4)
+  let some primitive := decoded.document.types.find? (fun ty => ty.shapeKind == .uint && (runtime.lookup ty.id).toOption.map (·.layout.size.bytes.toNat) == some 4)
     | throw (IO.userError "fixture lacks u32 layout")
   let state : ConstantState CtfeProvenance Unit Unit (Array String) :=
     ⟨imported.memory, #[]⟩
@@ -89,8 +90,8 @@ def main (args : List String) : IO Unit := do
     | _ => throw (IO.userError "indirect constant became immediate")
   let some staticRefRoot := program.input.bodyRoots.find? (fun body => body.defPath == "STATIC_REF")
     | throw (IO.userError "missing actual STATIC_REF root")
-  let some staticRefBody := program.bundle.bodies[staticRefRoot.bodyId]?
-    | throw (IO.userError "missing actual STATIC_REF body")
+  let initialTypes ← must (TypeArena.World.ofDocument program.input)
+  let (staticRefBody,typeArena) ← must ((program.resolveBody staticRefRoot.bodyId).run initialTypes)
   let actualConstant := staticRefBody.body.basicBlocks.foldl (fun found block =>
     block.statements.foldl (fun found statement => match found, statement.kind with
       | some value, _ => some value

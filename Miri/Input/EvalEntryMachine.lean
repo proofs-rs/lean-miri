@@ -1,5 +1,6 @@
 import Miri.Input.CompilerLinkSections
 import Miri.Input.EvalCompilerMachine
+import Miri.Input.EvalProjectionMachine
 import Miri.Interpreter.ExecutionMemoryTransport
 import Miri.Interpreter.ExecutionCallTransport
 import Miri.Interpreter.ExecutionMachine
@@ -134,12 +135,13 @@ def main (p : CompilerProviders.Prepared) (physical : Physical Os R P H D O Aff 
     format
     cNoUnwind := .C false
     lookupLinkSection := CompilerLinkSections.lookup p.main memory
-    itemInstance := fun definition args => lift (CompilerInstance.item p.loweringContext.instances definition args)
+    itemInstance := fun definition args => lift
+      (CompilerInstance.Material.item p.program.input.instances definition args)
     genericParameters := fun id => lift do return (← exactEntry p.main id).parameters
     entrySignature := fun id => lift do (← exactEntry p.main id).signature
     startLangItem := pure p.main.start
     resolveInstance := fun id args => lift (CompilerMain.resolve p.main id args)
-    layoutOf := fun ty => lift (p.runtime.lookup ty |>.mapError toString)
+    layoutOf := fun ty => action (RuntimeArrayQueries.layoutOf EvalProjectionMachine.arrays ty)
     }
 
 /-- Standard startup assembly from the same fixed interpreter Config. Compiler

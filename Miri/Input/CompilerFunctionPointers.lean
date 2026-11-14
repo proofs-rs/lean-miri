@@ -56,7 +56,7 @@ def prepare (calls : CompilerCallPipeline.Prepared) : Except String Prepared := 
   let mut indexed : InlineIndex := {}
   for record in records do
     let callee := record.instanceId
-    let _ ← CompilerInstance.source ctx.instances callee
+    let _ ← CompilerInstance.Material.source ctx.instances callee
     let never := record.inlineNever
     let key := callee
     let bucket := (indexed[key]?).getD #[]
@@ -73,17 +73,16 @@ private def lift (result : Except String A) : MachineHooks.M K User A :=
   | .ok value => pure value
   | .error error => throw (.unsupported s!"compiler function pointers: {error}")
 
-def hooks (p : Prepared) (image : AllocationImage.Imported)
+def hooks (p : Prepared) (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (image : AllocationImage.Imported)
     (base : FunctionPointers.Hooks K User Other) : FunctionPointers.Hooks K User Other :=
   {base with
-    instanceArgs := fun inst => lift (CompilerInstance.argsOf
-      p.calls.calls.program.input.instances inst)
+    instanceArgs := fun inst => do lift (CompilerInstance.argsOf (← RuntimeArrayQueries.compilerSnapshot types) inst)
     inlineNever := fun callee => lift do
       let some never := inlineNeverUsing p.inlineLookup callee
         | throw "exact full-instance inline attribute absent"
       pure never
     importedFunction := fun id => do
-      lift (CompilerVTableRuntime.globalFunction p.calls.symbols image (← get).machine.memory id)}
+      lift (CompilerVTableRuntime.globalFunction p.calls.symbols (← RuntimeArrayQueries.compilerSnapshot types) image (← get).machine.memory id)}
 
 /-- Seed actual compiler-image function reservations before execution. Reject
 conflicting salt-zero identities rather than pick an arbitrary matching body. -/
@@ -102,7 +101,7 @@ private def seedImportedImpl (p : Prepared) (image : AllocationImage.Imported)
       throw "prepared function catalog allocation image differs from its owning program"
   else
     for (_,id) in memory.importedGlobalIds do
-      if let some callee ← CompilerVTableRuntime.globalFunction p.calls.symbols image memory id then
+      if let some callee ← CompilerVTableRuntime.importedGlobalFunction p.calls.symbols image memory id then
         if let some old := findFunctionKey registry.functions keys callee 0 then
           unless old.allocation == id do throw "conflicting imported salt-zero function allocations"
         else
@@ -115,14 +114,14 @@ private def seedImportedImpl (p : Prepared) (image : AllocationImage.Imported)
     for row in world.dedupCatalog do
       if row.keyKind == .function then
         let keyRuntime ← AllocationImage.runtimeId memory row.keyAllocationId
-        let some keyCallee ← CompilerVTableRuntime.globalFunction p.calls.symbols image memory keyRuntime
+        let some keyCallee ← CompilerVTableRuntime.importedGlobalFunction p.calls.symbols image memory keyRuntime
           | throw "prepared function key witness is not a symbolic function"
         for result in row.salts do
           if saltBound : result.salt < 32 then
             let resultRuntime ← AllocationImage.runtimeId memory result.allocationId
             unless memory.sourceAllocIdForRuntime? resultRuntime == some result.sourceAllocId do
               throw "prepared function result raw AllocId does not match the active memory world"
-            let some resultCallee ← CompilerVTableRuntime.globalFunction p.calls.symbols image memory resultRuntime
+            let some resultCallee ← CompilerVTableRuntime.importedGlobalFunction p.calls.symbols image memory resultRuntime
               | throw "prepared function salt result is not a symbolic function"
             unless resultCallee == keyCallee do
               throw "prepared function salt result does not match its exact compiler Instance key"
@@ -172,10 +171,10 @@ theorem attach_profile_identity (p : Prepared) (image : AllocationImage.Imported
 
 /-- Fully bind actual address operations and compiler function metadata under
 one lawful concrete user-state embedding. Choices are explicit semantic inputs. -/
-def runtimeHooks (p : Prepared) (image : AllocationImage.Imported)
+def runtimeHooks (p : Prepared) (types : RuntimeArrayQueries.Access (MachineHooks.State K User)) (image : AllocationImage.Imported)
     (lens : FunctionPointers.AddressLens User Payload)
     (pointer : PointerMachine.Hooks K Payload)
     (choices : AllocId → AllocAddresses.AddressRandomChoices)
     (base : FunctionPointers.Hooks K User Other) : FunctionPointers.Hooks K User Other :=
-  FunctionPointers.pointerMachineVia lens pointer choices (hooks p image base)
+  FunctionPointers.pointerMachineVia lens pointer choices (hooks p types image base)
 end Miri.Input.CompilerFunctionPointers

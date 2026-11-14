@@ -34,7 +34,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except Stri
   let mut buckets : Std.HashMap Nat (Array Nat) := {}
   for record in records do
     let callee := record.instanceId
-    if let .LlvmIntrinsic _ := (← CompilerInstance.source ctx.instances callee).instanceKind then
+    if let .LlvmIntrinsic _ := (← CompilerInstance.Material.source ctx.instances callee).instanceKind then
       throw "LLVM intrinsic has no ordinary FnAbi query"
     let extra := record.extraArgumentTypes
     for id in extra do
@@ -53,8 +53,15 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except Stri
       buckets := buckets.insert callee ((buckets.getD callee #[]).push index)
   pure ⟨runtime,program.withCompilerTables tables,entries,buckets⟩
 
-def abiOfInstance (prepared : Prepared) (callee : CallInstance) (extra : Array MIR.TyId) :
+private def importedAbiOfInstance (prepared : Prepared) (world : RuntimeArrayTypes.World) (callee : CallInstance) (extra : Array MIR.TyId) :
     Except String (FnAbi MIR.TyId) := do
+  let .material actual ← world.instances.lookup callee
+    | throw "constructed instance has no imported FnAbi query"
+  let expected ← CompilerInstance.Material.source prepared.program.input.instances callee
+  let expected ← InstanceArena.Key.ofSource world.arena expected.instanceKind expected.genericArgs
+  unless actual == expected do throw "instance ABI source material differs from execution instance store"
+  for typeId in extra do
+    let _ ← world.arena.lookupType typeId
   let found := matchingIndex prepared.entries
     (prepared.index.getD callee #[]) callee extra
   let some entryIndex := found
@@ -63,11 +70,28 @@ def abiOfInstance (prepared : Prepared) (callee : CallInstance) (extra : Array M
     | throw "instance ABI bucket index invariant"
   CallResolution.functionAbiId prepared.runtime (← entry.result)
 
-def hooks (prepared : Prepared)
+/-- ABI results are owned by rustc and keyed by the complete material instance
+and ordered extra argument types. A runtime constructed instance has no rustc
+answer in this immutable export and therefore fails at the demand. -/
+def abiOfInstanceInWorld (prepared : Prepared) (callee : CallInstance) (extra : Array MIR.TyId) :
+    RuntimeArrayTypes.CompilerM (FnAbi MIR.TyId) := do
+  let world ← get
+  match importedAbiOfInstance prepared world callee extra with
+  | .ok abi => pure abi
+  | .error error => throw error
+
+/-- Read-only callers must not discard newly appended type identities. -/
+def abiOfInstance (prepared : Prepared) (world : RuntimeArrayTypes.World)
+    (callee : CallInstance) (extra : Array MIR.TyId) : Except String (FnAbi MIR.TyId) := do
+  let (abi,after) ← (abiOfInstanceInWorld prepared callee extra).run world
+  unless after.arena.constructedTypes == world.arena.constructedTypes &&
+      after.arena.constructedConstants == world.arena.constructedConstants do
+    throw "instance ABI query constructs types and requires the stateful compiler hook"
+  pure abi
+
+def hooks (prepared : Prepared) (access : RuntimeArrayQueries.Access S)
     (base : CallHooks P S C E Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId)) :
     CallHooks P S C E Other Extern (FnAbi MIR.TyId) (ArgAbi MIR.TyId) :=
-  { base with fnAbiOfInstance := fun _ callee extra =>
-      match abiOfInstance prepared callee extra with
-      | .ok abi => pure abi
-      | .error error => throw (.invalidProgram error) }
+  { base with fnAbiOfInstance := fun _ callee extra => do
+      RuntimeArrayQueries.performCompiler access (abiOfInstanceInWorld prepared callee extra) }
 end Miri.Input.CompilerInstanceAbi

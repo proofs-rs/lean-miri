@@ -8,6 +8,10 @@ open ExactStateCodec207
 
 local instance jsonDecEq : DecidableEq Json := ExactJson213.jsonDecidableEq
 local instance patternDecEq : DecidableEq Input.CompilerPattern := ExactStateCodec207.compilerPatternDecidableEq
+-- RuntimeMetadata's input-bound density certificate carries only a proof.
+-- Its source document still uses the exact structural comparator below.
+local instance {proposition : Prop} : DecidableEq (PLift proposition) :=
+  fun _ _ => .isTrue (Subsingleton.elim _ _)
 
 def importDocumentCorePointerDecEq : DecidableEq Input.ImportDocument :=
   fun left right => withPtrEqDecEq left right (fun _ =>
@@ -20,7 +24,7 @@ private def runtimeMetadataStructuralDecEq : DecidableEq Input.RuntimeMetadata :
 def runtimeMetadataPointerDecEq : DecidableEq Input.RuntimeMetadata :=
   fun left right => withPtrEqDecEq left right (fun _ => runtimeMetadataStructuralDecEq left right)
 
-attribute [-instance] Miri.Verification.RuntimeDocumentExact207.instDecidableEqWorld_miriTests
+attribute [-instance] Miri.Verification.RuntimeDocumentExact207.instDecidableEqWorld_miriTests_1
 local instance runtimeMetadataFast : DecidableEq Input.RuntimeMetadata := runtimeMetadataPointerDecEq
 deriving instance DecidableEq for Input.RuntimeArrayTypes.World
 private def runtimeArrayWorldStructuralDecEq : DecidableEq Input.RuntimeArrayTypes.World := inferInstance

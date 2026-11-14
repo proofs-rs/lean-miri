@@ -71,6 +71,8 @@ private def reserve (h : Hooks K User Other) (value : FnVal Other) : M K User Al
   match value with
   | .Instance callee =>
     let salt ← globalSalt h callee
+    if (← get).machine.memory.activeInitialCompilerRun.isSome then
+      throw (.unsupported "complete initial function key provider is not installed")
     let entries ← registry h
     if let some existing := entries.functions.find? (fun e => e.callee == callee && e.salt == salt) then
       return existing.allocation

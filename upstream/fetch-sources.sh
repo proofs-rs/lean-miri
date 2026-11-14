@@ -88,6 +88,27 @@ fetch_archive "$AES_ARCHIVE" "https://static.crates.io/crates/aes/aes-0.9.3.crat
 mkdir -p "$ROOT/crates"
 extract_full aes "$AES_ARCHIVE" "$ROOT/crates/aes-0.9.3" "$AES_COMMIT" src/hazmat.rs
 
+# Exact selected layout-randomization dependencies from pinned rustc Cargo.lock.
+fetch_selected_crate() {
+  local component="$1" name="$2" version="$3" digest="$4" commit="$5"
+  shift 5
+  local archive="$ROOT/$name-$version.crate" file
+  local selected=()
+  fetch_archive "$archive" "https://static.crates.io/crates/$name/$name-$version.crate" "$digest"
+  for file in "$@"; do selected+=("$name-$version/$file"); done
+  mkdir -p "$ROOT/crates/$name-$version"
+  tar --extract --gzip --file "$archive" --directory "$ROOT/crates/$name-$version" \
+    --strip-components=1 --no-same-owner --no-same-permissions "${selected[@]}"
+  printf '%s\n' "$commit" > "$PINS/$component.commit"
+}
+
+fetch_selected_crate rustc_rand rand 0.9.3 7ec095654a25171c2124e9e3393a930bddbffdc939556c914957a4c3e0a87166 1aeee9f4c506f9f737c6c37c169ccdc365bfbabf src/seq/slice.rs src/seq/increasing_uniform.rs src/distr/uniform_int.rs Cargo.toml .cargo_vcs_info.json LICENSE-MIT LICENSE-APACHE
+fetch_selected_crate rustc_rand_core rand_core 0.9.3 99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38 340849e53b71da0f15af448d10511c2e62e50ba1 src/lib.rs src/impls.rs src/le.rs Cargo.toml .cargo_vcs_info.json LICENSE-MIT LICENSE-APACHE
+fetch_selected_crate rustc_rand_xoshiro rand_xoshiro 0.7.0 f703f4665700daf5512dcca5f43afa6af89f09db47fb56be587f80636bda2d41 242e4bdaf8d43a59d84c5511f427026026ea4c97 src/common.rs src/splitmix64.rs src/xoshiro128starstar.rs Cargo.toml .cargo_vcs_info.json LICENSE-MIT LICENSE-APACHE
+
+# Exact TypeId hash dependency selected by pinned rustc Cargo.lock.
+fetch_selected_crate rustc_stable_hash rustc-stable-hash 0.1.2 781442f29170c5c93b7185ad559492601acdc71d5bb0706f5868094f45cfcd08 bda19e8681a381715fc3f32ee95aa5fda0a7f5d0 src/lib.rs src/int_overflow.rs src/sip128.rs src/stable_hasher.rs src/sip128/tests.rs src/stable_hasher/tests.rs Cargo.toml .cargo_vcs_info.json LICENSE-MIT LICENSE-APACHE
+
 if [[ "$(tr -d '\r\n' < "$ROOT/miri-source/rust-version")" != "$RUSTC_COMMIT" ]]; then
   printf 'Miri rust-version does not match the pinned rustc commit\n' >&2
   exit 1

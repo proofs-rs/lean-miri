@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.EvalPreparation
 import Miri.Input.CompilerGlobalBytes
 import Miri.Input.CompilerFunctionPointers
@@ -182,7 +183,7 @@ private def vtableHooks (prepared : EvalPreparation.Prepared)
 }
 
 private def runSelected (path : String) : IO Unit := do
-  let decoded ← must (decodeJson (← IO.FS.readFile path))
+  let decoded ← must (decodeFixture (← IO.FS.readFile path))
   let program ← must (lowerProgram decoded.document)
   let attempt := EvalPreparation.prepare program
   let prepared ← must attempt.outcome

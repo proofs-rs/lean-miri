@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 
 open Lean Miri.Input
@@ -8,13 +9,13 @@ private def must (result : Except String α) : IO α :=
 def main (args : List String) : IO Unit := do
   let [legacyPath, compactPath] := args | throw (IO.userError "expected current dense-offset and compact-offset pooled inputs")
   let legacyText ← IO.FS.readFile legacyPath
-  let legacy ← must (decodeJson legacyText)
+  let legacy ← must (decodeFixture legacyText)
   for layout in legacy.document.layouts do
     match layout.fieldOffsetsBytes with
     | .explicit _ => pure ()
     | .arrayFormula .. => throw (IO.userError "legacy fixture no longer has its original dense offsets")
   let compactText ← IO.FS.readFile compactPath
-  let compact ← must (decodeJson compactText)
+  let compact ← must (decodeFixture compactText)
   unless compact.document.layouts.any (fun layout => match layout.fieldOffsetsBytes with
       | .arrayFormula _ _ => true | _ => false) do
     throw (IO.userError "fresh fixture has no compact array layout")
@@ -24,7 +25,7 @@ def main (args : List String) : IO Unit := do
   unless references.size == compact.document.layouts.size && references.all (· < payloads.size) do
     throw (IO.userError "compact layout payload pool changed LayoutId identities")
   for version in #[8, 9, 10] do
-    match decodeJson (json.setObjVal! "schema_version" (toJson version)).compress with
+    match decodeFixture (json.setObjVal! "schema_version" (toJson version)).compress with
     | .error error =>
       unless (error.splitOn "unsupported schema version").length > 1 do
         throw (IO.userError s!"wrong obsolete-version rejection: {error}")

@@ -16,6 +16,28 @@ case described below. Self-contained connected proofs are included through
 `MiriTests`; the separate connected-proof command additionally typechecks the
 retained projection and input-dependent graph harnesses.
 
+Historical schema-11/12 inputs use explicit test-only adapters
+[`LegacyFixture.lean`](../MiriTests/Input/LegacyFixture.lean) and
+[`legacy_fixture_schema.py`](../tools/legacy_fixture_schema.py); production
+readers accept only schema 13. These adapters preserve retained fixture bytes on
+disk. Their unwind, drop-definition and generic-prefix seeds are hypothetical representatives
+preserving historical answers, not recovered rustc material. Such replay is
+component regression evidence, with no new producer, ABI, drop or generic-rebase
+correspondence claim. Tests asserting actual raw materials require fresh exports;
+the genuine differential drivers use category parsers or independently fresh
+baseline and candidate exports.
+
+Source compiler-query comparisons also have dedicated drivers in `tools/`:
+`check-dynamic-type-hash.sh`, `check-pattern-type-hash.sh`,
+`check-vtable-method-slots.sh`, `check-vtable-final-instances.sh` and
+`check-fn-pointer-hrtb-shims.sh`. They compare fresh exports with independent
+pinned-rustc queries and exercise their stated malformed-source controls.
+Use an exporter built from the same source revision and the pinned environment;
+the FnPtr driver requires its immutable path in `EXPORTER_BIN`. These finite
+comparisons do not establish general query equivalence. Run their build stages
+before starting other fixture readers; `*_SKIP_BUILD=1` is appropriate only after
+a coordinated complete rebuild of changed schemas and their dependents.
+
 ## Self-contained Lean checks: MiriTests
 
 Self-contained theorem examples and assertions live in [`MiriTests/`](../MiriTests/),
@@ -296,6 +318,10 @@ when changing it.
 
 | Check / invocation | What it adds |
 | --- | --- |
+| `bash tools/check-fn-trait-output.sh` | Independent pinned Fn/FnMut/FnOnce candidate and Output normalization comparisons, including genuine standard-library closure material selected by `FN_TRAIT_STD_SOURCE`. Requires the pinned exporter, source sysroot and coherent Lean build; it does not establish general trait selection. |
+| `bash tools/check-fn-trait-boundaries.sh` | Genuine nested-FnPtr tuple comparisons retain all signature fields despite JSON key order; unsafe-inner-signature controls reject. An actual async closure's successful compiler FnOnce candidate must remain explicitly Unsupported in the bounded Lean provider. |
+| `bash tools/check-iterator-conditional.sh STD_FIXTURE.json` | Compare the genuine IntoIterator signature and three Iterator goals with the pinned compiler, including the exact selected physical impl and a corrupted-impl oracle. Known non-coroutine heads exclude only compiler coroutine candidates; unresolved/dynamic/coroutine goals remain unsupported. |
+| `bash tools/check-initial-profile-rejection.sh VALID_DOCUMENT.json` | Four malformed/present-field controls added to an independently accepted current document require the legacy public decoder to reject the separate initial-allocation/CTFE profile explicitly. Requires a built decoder; it does not validate the dedicated initial-profile execution path. |
 | `lake env lean --run tests/run_loop/HostStdioReplay.lean` | Pure typed stdio replay checks: exact requests, response bounds, first-pending cleanup retention, missing-state rejection and unchanged choice/RNG state. Included in structural regressions; it supplies no host IO capability. |
 | `lake env lean --run tests/run_loop/NativeStdioProtocol.lean` | Pure control-option and JSON framing checks, including escaped spoofed output. Included in structural regressions after the runner module build. |
 | `flock /tmp/lean-miri-ci-guest.lock python3 tests/stdio/check.py --output scratch/stdio-new` | Fresh pinned-reference/guest comparison for explicit stdio: repeated writes, binary bytes, spoofed result lines and preserved muted ordinary descriptors. Requires coherent reference exporter/native runner; unsupported and timeout outcomes fail. |
@@ -382,3 +408,85 @@ whole-machine claim.
 `bash tools/check-lowering-reader.sh [INPUT.json ...]` checks source paths and
 compiler pool IDs across lowering for root, instance and promoted bodies.
 The default input is the fixed empty-function fixture.
+
+`tools/check-extended-source-mir.py --exporter EXPORTER --oracle ORACLE
+--sysroot SYSROOT --output scratch/extended-source-mir [--lake LAKE]` exports
+fresh extended-source and no-resume inputs with the pinned producer. Compile
+`tools/extended-source-mir-oracle.rs` with the pinned exporter rustc to obtain
+ORACLE. The runner replays the fresh document's exact `input_settings.rustc_args`
+through that independent oracle, including `-Zmir-preserve-ub`, and records the
+command and selection indices in `oracle-scope-manifest.json`.
+
+The full oracle covers 42 complete normalized MIR bodies, 35 raw-source rejection
+controls and four FnDef interface controls. The World comparison covers the 41
+unchanged oracle rows whose physical definitions the producer retains, including
+12 persistent call callbacks and missing/ambiguous-source rejection. The remaining
+`raw_pointer` row must reject for an absent physical definition; it is expected
+Unsupported, not a successful World comparison. `--lake` runs these focused Lean
+checks and the two no-resume layout controls without building artifacts. Run only
+after primary writers release their barrier; export/oracle capture alone does not
+establish any Lean comparison result.
+
+`tools/check-annotated-source-mir.py --exporter EXPORTER --oracle ORACLE
+--sysroot SYSROOT --output scratch/annotated-source-mir [--lake LAKE]` uses an
+ORACLE compiled from `tools/annotated-source-mir-oracle.rs`. It replays exact
+producer flags and captures eight complete normalized bodies with preserved
+annotation indices and spans, eight raw-source rejection controls, and five
+malformed annotation decoder controls. Runtime annotations explicitly retain the
+post-borrowck cleared-table marker; stale indices are not dereferenced into that
+empty table. FnDef-to-FnPtr reification remains unsupported in this source grammar.
+
+`tools/check-source-trait-call.py --exporter EXPORTER --oracle ORACLE
+--sysroot SYSROOT --output scratch/source-trait-call [--lake LAKE]
+[--runner NATIVE_RUNNER]` uses an ORACLE compiled from
+`tools/source-trait-call-oracle.rs`. It preserves a genuine method-syntax
+associated FnDef declaration and compares its selected physical impl with pinned
+rustc. Default export retains the nongeneric impl as an independent actual root;
+root-only export deliberately tests missing impl source. This is not general
+source impl-body discovery. Annotated UFCS call operands remain unsupported.
+Optional Lean checks compare the complete caller body and resolve its selected
+raw impl body; the optional existing runner must report finalized exit zero.
+Neither option builds primary artifacts.
+
+
+## Virtual ABI source queries
+
+After building the current Lean library, run the finite pinned comparisons with
+an explicit sealed default exporter and its separately built FullLayout oracle:
+
+```sh
+python3 tools/check-virtual-abi.py \
+  --exporter "$MIRI_SEALED_EXPORTER" \
+  --manifest "$MIRI_SEALED_EXPORTER_MANIFEST" \
+  --oracle-exporter "$VIRTUAL_ABI_ORACLE" \
+  --oracle-manifest "$VIRTUAL_ABI_ORACLE_MANIFEST" \
+  --output scratch/virtual-abi-unique-run
+```
+
+The oracle seal must identify its actual receiver FullLayout adapter. The
+checker invokes both producers with the same Rust flags, records input/binary
+hashes, audits direct/catalog/identity query traces, and compares complete FnAbi
+values for 51 distinct method/policy cases. Separate pinned rustc drivers observe
+receiver lowering and field size/alignment independently. The checker does not
+build the primary Lean tree.
+
+The query worlds remove imported FnAbi catalogs and instance/body stores. They
+also remove projection, boolean and ADT fact rows and poison cached closed ADT
+field TypeIds while retaining raw definition field expressions. This checks that
+logical field substitution and layout demands use the source providers.
+
+`WorldVirtualInstanceAbi` now includes the tracked method: its source
+PanicLocation argument is appended after ordinary arguments without increasing
+fixedCount. `WorldVirtualReceiverAbi` covers by-value dyn and one/two transparent
+raw-pointer wrappers. `WorldTrackedVirtualAbi` checks missing/wrong caller type,
+session and extras. Novel and positive-auto checkers retain their independent
+oracle comparisons with the same cache removal. Caller source guards reject a
+primitive recipe assigned to the Location ADT, a missing raw field and a missing
+raw lang-item identity. Wrong logical receivers, non-null/alias attributes,
+caller lifetimes and fixedCount must fail complete comparisons.
+
+Three wrappers remain an explicit artificial capability limit; the rustc oracle
+still supports that receiver. Other newtypes, source upcasts and unsupported
+caller-layout dependencies remain residual. These are finite x86_64/AS0 API
+comparisons; they do not establish universal ABI correctness, raw dynamic MIR
+admission, new-receiver guest execution or whole-machine UB freedom.

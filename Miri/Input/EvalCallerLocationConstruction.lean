@@ -1,6 +1,7 @@
 import Miri.Input.CompilerValueConstants
 import Miri.Interpreter.FunctionPointers
 import Miri.Input.AllocationImage
+import Miri.Input.RuntimeArrayQueries
 
 /-! Miri's caller-location intrinsic interns the compiler ConstValue, but
 Miri imports the resulting global afresh on each intrinsic evaluation.  This
@@ -11,6 +12,7 @@ namespace Miri.Input.EvalCallerLocationConstruction
 open Lean Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
 
 def hook (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K User))
     (functions : FunctionPointers.Hooks K User Other)
     (currentLocation : MachineHooks.M K User SpanRef)
     (pointee : TyId → Except String (Option TyId))
@@ -66,15 +68,13 @@ def hook (p : CompilerProviders.Prepared)
     | .ok (some id) => pure id
     | .ok none => throw (.invalidProgram "caller-location result is not a pointer type")
     | .error reason => throw (.unsupported reason)
-  let pointeeLayout ← match p.runtime.lookup pointeeTy with
-    | .ok layout => pure layout
-    | .error error => throw (.unsupported (toString error))
+  let pointeeLayout ← RuntimeArrayQueries.perform types
+    (RuntimeMetadata.layoutInWorld p.runtime pointeeTy)
   unless template.size == pointeeLayout.layout.size &&
       template.align.pow2 == pointeeLayout.layout.align.abi.pow2 do
     throw (.unsupported "caller-location CTFE root layout does not match compiler Location layout")
-  let computed ← match p.runtime.lookup ty with
-    | .ok layout => pure layout
-    | .error error => throw (classifyError (.metadata (toString error)))
+  let computed ← RuntimeArrayQueries.perform types
+    (RuntimeMetadata.layoutInWorld p.runtime ty)
   unless ← checkKnown ⟨computed.ty,computed.layout⟩ destination do
     throw (.invalidProgram "known constant layout differs from compiler layout")
   let pointer ← FunctionPointers.rootPointer functions freshId

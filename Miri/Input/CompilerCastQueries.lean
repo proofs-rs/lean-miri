@@ -37,15 +37,19 @@ def resolveFunction (p : CompilerProviders.Prepared) (definition : DefId)
     (args : Array GenericArg) : Result (Option CallInstance) := do
   let .resolveFnPtr _ _ result ← resolutionRecord p false definition args
     | throw "function resolution query kind mismatch"
+  -- This ID is a reference inside the matched immutable query row, not an
+  -- arbitrary runtime instance lookup. An absent exact input query still fails;
+  -- no source-row search is used to resolve a new runtime instance.
   if let some id := result then
-    let _ ← CompilerInstance.source p.loweringContext.instances id
+    let _ ← CompilerInstance.Material.source p.program.input.instances id
   pure result
 
 def resolveClosureFnOnce (p : CompilerProviders.Prepared) (definition : DefId)
     (args : Array GenericArg) : Result CallInstance := do
   let .resolveClosureFnOnce _ _ result ← resolutionRecord p true definition args
     | throw "closure resolution query kind mismatch"
-  let _ ← CompilerInstance.source p.loweringContext.instances result
+  -- Validate the output reference of the exact immutable query row only.
+  let _ ← CompilerInstance.Material.source p.program.input.instances result
   pure result
 
 def noBoundVars (p : CompilerProviders.Prepared) (args : Array GenericArg) : Result Bool := do

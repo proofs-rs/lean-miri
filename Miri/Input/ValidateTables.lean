@@ -1,4 +1,5 @@
 import Miri.Input.LocalValidation
+import Miri.Input.SourceMir
 
 namespace Miri.Input
 
@@ -78,9 +79,10 @@ private def typeShape (b : ReferenceBounds) (path : String) : TypeShape → Exce
   | .reference pointee _ lifetime => do
     checkId b.types pointee s!"{path}.pointee" "type"
     region b s!"{path}.region" lifetime
-  | .functionDefinition definition args sig variables => do
+  | .functionDefinition definition args sig variables argumentVariables => do
     checkId b.definitions definition s!"{path}.def_id" "definition"
     genericArgs b s!"{path}.generic_args" args
+    boundVariables b s!"{path}.generic_args_bound_variables" argumentVariables
     signature b s!"{path}.signature" sig
     boundVariables b s!"{path}.bound_variables" variables
   | .functionPointer sig variables => do
@@ -95,7 +97,7 @@ private def typeShape (b : ReferenceBounds) (path : String) : TypeShape → Exce
     if let some id := principal then checkId b.predicates id s!"{path}.principal_predicate" "predicate"
     region b s!"{path}.region" lifetime
   | .closure definition args _ | .coroutineClosure definition args
-  | .coroutine definition args | .alias _ definition args => do
+  | .coroutine definition args | .alias _ _ definition args => do
     checkId b.definitions definition s!"{path}.def_id" "definition"
     genericArgs b s!"{path}.generic_args" args
   | .tuple elements => do
@@ -207,8 +209,7 @@ private def catalogs (b : ReferenceBounds) (q : Catalog.Queries) : Except String
     if let some (id, _) := startup.coreEscapeDefault then
       checkId b.definitions id "$.compiler_runtime_queries.startup.core_escape_default" "definition"
   for row in q.runtime.types do
-    for id in #[row.inputType, row.mutPointerType, row.mutReferenceType] do
-      checkId b.types id "$.compiler_runtime_queries.types" "type"
+    checkId b.types row.inputType "$.compiler_runtime_queries.types" "type"
     if let some id := row.dropGlue then checkId b.instances id "$.compiler_runtime_queries.types.drop_glue" "instance"
   for row in q.runtime.instances do
     checkId b.instances row.instanceId "$.compiler_runtime_queries.instances" "instance"
@@ -217,7 +218,6 @@ private def catalogs (b : ReferenceBounds) (q : Catalog.Queries) : Except String
     for id in #[row.originalInstance, row.resolved] do checkId b.instances id path "instance"
     for id in #[row.methodDefinition, row.parentTrait] do checkId b.definitions id path "definition"
     checkId b.types row.concreteType path "type"
-    genericArgs b path row.rebasedArgs
     checkId b.types row.vtableQuery.inputType path "type"
     for id in row.vtableQuery.inputPredicates do checkId b.predicates id path "predicate"
     unless q.vtables.any (fun table => table.queryId == row.vtableQuery.queryId &&
@@ -277,8 +277,6 @@ private def catalogs (b : ReferenceBounds) (q : Catalog.Queries) : Except String
       checkId b.types target path "type"
     | .lockstepTails source target sourceTail targetTail =>
       for id in #[source, target, sourceTail, targetTail] do checkId b.types id path "type"
-  for row in q.typeNames do
-    for id in #[row.inputType, row.resultType] do checkId b.types id "$.compiler_type_name_constants" "type"
   for row in q.callerLocations do
     checkId b.spans row.span "$.compiler_caller_location_constants" "span"
     if let some id := row.resultType then checkId b.types id "$.compiler_caller_location_constants" "type"
@@ -317,7 +315,7 @@ private def catalogs (b : ReferenceBounds) (q : Catalog.Queries) : Except String
   let p := q.primitives
   for id in #[p.u8,p.u16,p.u32,p.u64,p.u128,p.i8,p.i16,p.i32,p.i64,p.i128,p.bool,
       p.pointerTagInteger,p.usize,p.isize,p.unit,p.unitPointerConst,p.unitPointerMut,
-      p.immU8Pointer,p.immU8PointerPointer,p.typeNameResultType] do
+      p.immU8Pointer,p.immU8PointerPointer] do
     checkId b.types id "$.compiler_primitive_types" "type"
   for id in #[p.callerLocationType,p.orderingEnum] do
     if let some id := id then checkId b.types id "$.compiler_primitive_types" "type"
@@ -402,10 +400,11 @@ private def validateRequiredExecution (document : ImportDocument) : Except Strin
       if visited.contains (kind,id) then continue
       visited := visited.insert (kind,id)
       if kind == 0 then
-        let some body := document.bodies[id]? | throw "required body is absent"
+        let body ← SourceMir.metadata document id
         for constant in body.requiredConsts do
-          let .Val value _ := constant.value
-          pending := pending ++ (valueAllocations value).map (2, ·)
+          match constant.value with
+          | .Val value _ => pending := pending ++ (valueAllocations value).map (2, ·)
+          | .Ty .. | .Unevaluated .. => pure ()
         for call in body.callEvidence do
           if let some call := call then
             if let some inst := call.instanceId then pending := pending.push (1, inst)
@@ -422,7 +421,9 @@ private def validateRequiredExecution (document : ImportDocument) : Except Strin
       else if kind == 1 then
         let some inst := document.instances[id]? | throw "required instance is absent"
         if inst.kind == .identityOnly then
-          throw s!"$.instances[{id}].kind: selected execution depends on a symbol identity that has no imported MIR body"
+          match inst.instanceKind with
+          | .Virtual .. => pure () -- Runtime vtable dispatch selects a concrete body; this identity has none.
+          | _ => throw s!"$.instances[{id}].kind: selected execution depends on a symbol identity that has no imported MIR body"
         if let some body := inst.bodyId then pending := pending.push (0, body)
       else
         let some allocation := document.allocations[id]? | throw "required allocation is absent"
@@ -458,11 +459,34 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
     constants := document.typeConstants.size
     bodies := document.bodies.size
     predicates := document.predicates.size }
+  if let some reference := document.producer.freezeLangItem then
+    checkId b.definitions reference "$.producer.freeze_lang_item" "definition"
   let auxiliary := (document.coroutineCoverage.map (·.auxiliaryBodies)).getD #[]
   for (value, index) in auxiliary.toList.zipIdx do
     LocalValidation.validateBody value.body s!"$.compiler_coroutine_coverage.auxiliary_bodies[{index}].body"
     instanceKind b s!"$.compiler_coroutine_coverage.auxiliary_bodies[{index}].source_kind" value.sourceKind
-  let bodyEntries := document.bodies.mapIdx (fun index value => (value, s!"$.bodies[{index}]")) ++
+  for source in document.mirTemplates do SourceMir.validateTemplate document source
+  for (seed,index) in document.bodies.zipIdx do
+    if let .noopDrop reference := seed then
+      checkId b.instances reference.instanceId s!"$.bodies[{index}]" "instance"
+      let _ ← SourceMir.metadata document index
+    if let .fnPointerShim reference := seed then
+      checkId b.instances reference.instanceId s!"$.bodies[{index}]" "instance"
+      checkId b.definitions reference.nonNullDefinition s!"$.bodies[{index}]" "NonNull definition"
+      checkId b.definitions reference.codeDefinition s!"$.bodies[{index}]" "Code definition"
+      let _ ← SourceMir.metadata document index
+    if let .copyTemplate reference := seed then
+      let path := s!"$.bodies[{index}]"
+      checkId b.instances reference.instanceId path "instance"
+      genericArgs b s!"{path}.generic_args" reference.genericArgs
+      let _ ← SourceMir.metadata document index
+      promoted b s!"{path}.promoted_bodies" reference.promotedBodies
+      for entry in reference.promotedBodies do
+        if let some childId := entry.bodyId then
+          let some child := document.bodies[childId]? | throw s!"{path}: promoted body is absent"
+          unless child.instanceId == reference.instanceId do throw s!"{path}: promoted body instance mismatch"
+  let bodyEntries := document.bodies.zipIdx.filterMap (fun (seed,index) =>
+    seed.materialBody?.map (fun body => (body,s!"$.bodies[{index}]"))) ++
     auxiliary.mapIdx (fun index value => (value.body, s!"$.compiler_coroutine_coverage.auxiliary_bodies[{index}].body"))
   for (span, index) in document.spans.toList.zipIdx do
     checkId document.files.size span.file s!"$.spans[{index}].file" "file"
@@ -473,6 +497,54 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
       checkId b.types id s!"{path}.layout_query_input_type" "type"
     typeShape b s!"{path}.shape" node.shape
     if let some facts := node.compilerFacts then compilerFacts b s!"{path}.compiler_facts" facts
+  for (value, index) in document.layouts.toList.zipIdx do
+    if let some id := value.patternType then
+      checkId b.types id s!"$.layouts[{index}].pattern_type" "type"
+      let some node := document.types[id]? | throw "pattern recipe type ID invariant"
+      let .patternType .. := node.shape | throw s!"$.layouts[{index}].pattern_type: source is not a pattern"
+    if let some id := value.sequenceType then
+      checkId b.types id s!"$.layouts[{index}].sequence_type" "type"
+      let some node := document.types[id]? | throw "sequence recipe type ID invariant"
+      unless [.array,.slice,.str].contains node.shapeKind do throw s!"$.layouts[{index}].sequence_type: source is not a sequence"
+    if let some id := value.enumTagType then
+      checkId b.types id s!"$.layouts[{index}].enum_tag_type" "type"
+      let some node := document.types[id]? | throw "tag recipe type ID invariant"
+      let isTagParent : Bool := match node.shape with
+        | .adt data => data.kind == .enumKind
+        | .coroutine .. => true
+        | _ => false
+      unless isTagParent do
+        throw s!"$.layouts[{index}].enum_tag_type: source is not an enum/coroutine"
+    if let some id := value.pointerDataType then
+      checkId b.types id s!"$.layouts[{index}].pointer_data_type" "type"
+      let some node := document.types[id]? | throw "pointer data recipe type ID invariant"
+      unless [.rawPointer,.reference].contains node.shapeKind do throw s!"$.layouts[{index}].pointer_data_type: source is not a pointer"
+    if let some id := value.pointerType then
+      checkId b.types id s!"$.layouts[{index}].pointer_type" "type"
+      let some node := document.types[id]? | throw "pointer recipe type ID invariant"
+      unless [.rawPointer,.reference].contains node.shapeKind do throw s!"$.layouts[{index}].pointer_type: source is not a pointer"
+    if let some id := value.structType then
+      checkId b.types id s!"$.layouts[{index}].struct_type" "type"
+      let some node := document.types[id]? | throw "struct recipe type ID invariant"
+      let .adt data := node.shape | throw s!"$.layouts[{index}].struct_type: source type is not an ADT"
+      unless data.kind == .structKind do throw s!"$.layouts[{index}].struct_type: source type is not a struct"
+    if let some id := value.enumType then
+      checkId b.types id s!"$.layouts[{index}].enum_type" "type"
+      let some node := document.types[id]? | throw "enum recipe type ID invariant"
+      let .adt data := node.shape | throw s!"$.layouts[{index}].enum_type: source type is not an ADT"
+      unless data.kind == .enumKind do throw s!"$.layouts[{index}].enum_type: source type is not an enum"
+      unless data.representation.flagsBits &&& (2 + 64) == 0 &&
+          data.representation.packBytes.isNone do
+        throw s!"$.layouts[{index}].enum_type: unsupported enum representation"
+    if let some id := value.unionType then
+      checkId b.types id s!"$.layouts[{index}].union_type" "type"
+      let some node := document.types[id]? | throw "union recipe type ID invariant"
+      let .adt data := node.shape | throw s!"$.layouts[{index}].union_type: source type is not an ADT"
+      unless data.kind == .unionKind do throw s!"$.layouts[{index}].union_type: source type is not a union"
+    if let some id := value.tupleType then
+      checkId b.types id s!"$.layouts[{index}].tuple_type" "type"
+      let some node := document.types[id]? | throw "tuple recipe type ID invariant"
+      unless node.shapeKind == .tuple do throw s!"$.layouts[{index}].tuple_type: source type is not a tuple"
   for (value, index) in document.typeConstants.toList.zipIdx do
     typeConstant b s!"$.type_constants[{index}]" value
   for (value, index) in document.predicates.toList.zipIdx do
@@ -480,7 +552,10 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
     checkId b.definitions value.definitionId s!"{path}.def_id" "definition"
     genericArgs b s!"{path}.generic_args" value.genericArgs
     boundVariables b s!"{path}.bound_variables" value.boundVariables
-    if let some id := value.projectionTerm then checkId b.types id s!"{path}.term" "type"
+    if let some term := value.projectionTerm then
+      match term with
+      | .type id => checkId b.types id s!"{path}.term" "type"
+      | .constant id => checkId b.constants id s!"{path}.term" "type constant"
   for (value, index) in document.instances.toList.zipIdx do
     let path := s!"$.instances[{index}]"
     instanceKind b s!"{path}.instance_kind" value.instanceKind
@@ -537,6 +612,63 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
           | some node => match node.instanceKind with | .LlvmIntrinsic _ => true | _ => false
           | none => false
         match resolution.abi with
+        | .sourceSignature =>
+          unless resolution.dispatchSlot.isNone do throw s!"{path}: source ABI cannot carry a dispatch slot"
+          if resolution.kind == .indirect then
+            unless resolution.instanceId.isNone && document.producer.abiSession.isSome do
+              throw s!"{path}: raw FnPtr ABI has invalid instance/session evidence"
+            let some source := resolution.functionType.bind (document.types[·]?)
+              | throw s!"{path}: raw FnPtr ABI source type absent"
+            unless source.shapeKind == .functionPointer do throw s!"{path}: raw FnPtr ABI source is not a FnPtr"
+          else
+            unless resolution.kind == .direct && resolution.dispatchSlot.isNone do
+              throw s!"{path}: raw source ABI requires an ordinary direct instance"
+            let some instanceNode := resolution.instanceId.bind (document.instances[·]?)
+              | throw s!"{path}: raw source ABI instance is absent"
+            let (definition,isVirtual) ← match instanceNode.instanceKind with
+              | .Item definition => pure (definition,false)
+              | .Virtual definition _ => pure (definition,true)
+              | _ => throw s!"{path}: raw source ABI requires an Item or Virtual instance"
+            let some source := document.definitions[definition]?
+              | throw s!"{path}: raw source ABI definition is absent"
+            unless source.genericTemplate.isSome &&
+                (if isVirtual then source.bodyTrackCaller.isSome else source.bodyTrackCaller == some false) &&
+                (isVirtual || source.functionAbiMaterial.isSome) do
+              throw s!"{path}: raw source ABI declaration material is incomplete"
+            if isVirtual then
+              unless instanceNode.bodyId.isNone && document.producer.abiSession.isSome do
+                throw s!"{path}: source Virtual ABI requires a bodyless identity and canonical session"
+              let some callable := source.callableSource
+                | throw s!"{path}: source Virtual callable header absent"
+              unless callable.hasSelf && callable.definitionKind == "associated_function" && callable.container == some "trait" do
+                throw s!"{path}: source Virtual is not a trait method"
+              let some functionType := resolution.functionType
+                | throw s!"{path}: source Virtual function type absent"
+              let some sourceType := document.types[functionType]?
+                | throw s!"{path}: source Virtual function type definition absent"
+              let .functionDefinition sourceDefinition sourceArgs _ _ _ := sourceType.shape
+                | throw s!"{path}: source Virtual function type is not FnDef"
+              unless sourceDefinition == definition && sourceArgs == instanceNode.genericArgs do
+                throw s!"{path}: source Virtual FnDef differs from its complete canonical instance"
+              let some block := value.mir.basicBlocks[blockIndex]?
+                | throw s!"{path}: source Virtual has no source block"
+              let operand ← match block.terminator.kind with
+                | .Call operand .. | .TailCall operand .. => pure operand
+                | _ => throw s!"{path}: source Virtual evidence does not belong to a call"
+              let operandType ← match operand with
+                | .Constant constant => pure constant.value.declaredType
+                | .Copy place | .Move place => do
+                  let some facts := (value.nodeFacts[blockIndex]?).bind (·.back?)
+                    | throw s!"{path}: source Virtual callee place has no terminator facts"
+                  let matching := facts.places.filter (·.place == place)
+                  let some first := matching[0]?
+                    | throw s!"{path}: source Virtual callee place type absent"
+                  unless matching.all (·.typeId == first.typeId) do
+                    throw s!"{path}: conflicting source Virtual callee place types"
+                  pure first.typeId
+                | .RuntimeChecks _ => throw s!"{path}: invalid source Virtual callee operand"
+              unless operandType == functionType do
+                throw s!"{path}: source Virtual FnDef differs from its actual MIR function operand"
         | .normal id =>
           unless resolution.kind != .llvmIntrinsic && !isLlvm do
             throw s!"{path}: LLVM intrinsic cannot carry an ordinary ABI"
@@ -552,7 +684,7 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
             throw s!"{path}: missing LLVM source function type"
           let some sourceType := document.types[functionType]? |
             throw s!"{path}: missing LLVM function type definition"
-          let .functionDefinition sourceDefinition sourceArgs _ _ := sourceType.shape |
+          let .functionDefinition sourceDefinition sourceArgs _ _ _ := sourceType.shape |
             throw s!"{path}: LLVM source function type is not FnDef"
           unless sourceDefinition == definition && sourceArgs == llvmInstance.genericArgs do
             throw s!"{path}: LLVM function type differs from its canonical instance"
@@ -563,8 +695,7 @@ def validateParsedTables (document : ImportDocument) : Except String Unit := do
             | _ => throw s!"{path}: LLVM evidence does not belong to a call"
           let operandType ← match operand with
             | .Constant constant =>
-              let .Val _ ty := constant.value
-              pure ty
+              pure constant.value.declaredType
             | .Copy place | .Move place => do
               let some facts := (value.nodeFacts[blockIndex]?).bind (·.back?) |
                 throw s!"{path}: LLVM callee place has no terminator facts"

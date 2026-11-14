@@ -48,11 +48,10 @@ private def namedLayout (p : CompilerProviders.Prepared) (name : String) : M S L
   | .error reason => throw (.unsupported s!"compiler Windows layout `{name}`: {reason}")
 
 private def field (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access S)
     (projection : PlaceProjectionHooks Provenance S C MachineHooks.FrameExtra)
     (choice : C) (parent : MPlaceTy Provenance) (name : String) : M S (MPlaceTy Provenance) := do
-  let index ← match CompilerNamedFields.fieldIndex p.runtime parent.layout name with
-    | .ok index => pure index
-    | .error error => throw error
+  let index ← CompilerNamedFields.fieldIndex types parent.layout name
   let projected ← PlaceDynamic.field projection choice
     ⟨.memory parent.mplace,parent.layout⟩ index
   match projected.ref with
@@ -117,7 +116,7 @@ def fromSource [DecidableEq MiriMemoryKind]
     throw (.invalidProgram "Windows platform environment has a mismatched target family")
   let symbols ← p.foreignSymbols
     |>.mapError StepError.unsupported
-  let calls := CompilerCallConstruction.compiler p compatibilityBudget
+  let calls := CompilerCallConstruction.compiler p EvalProjectionMachine.outerArrays compatibilityBudget
   let access := main.access
   let readScalar := fun (operand : OpTy Provenance) => do
     let immediate ← PlaceMachine.readImmediate access operand
@@ -197,7 +196,7 @@ def fromSource [DecidableEq MiriMemoryKind]
       let _ ← PointerPlaceMachine.misalignmentWith access alignment pointer
         operand.layout.layout.align.abi
       pure ()
-    projectNamed := fun parent name => field p projection choice parent name
+    projectNamed := fun parent name => field p EvalProjectionMachine.outerArrays projection choice parent name
     zeroBytes := fun pointer count => ExecutionStateTransport.action
       (RawMemoryMachine.writeRepeatedByte memory.access memory.pointers.arithmetic pointer 0 count)
     writeInt

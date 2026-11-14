@@ -81,8 +81,8 @@ def lookup (p : CompilerMain.Prepared) (h : Memory K U Other) (includeName : Str
   pure values
 /-- Main's linker-section compiler query executes actual imported global reads;
 all MainMachine scheduler/callback/termination effects remain unchanged. -/
-def hooks (p : CompilerMain.Prepared) (memory : Memory MiriMemoryKind (ThreadStacks.Storage U) O)
+def hooks (p : CompilerMain.Prepared) (types : RuntimeArrayQueries.Access (MainMachine.State U)) (memory : Memory MiriMemoryKind (ThreadStacks.Storage U) O)
     (base : MainMachine.Hooks U C O ABI.ExternAbi F A Aff P) :
     MainMachine.Hooks U C O ABI.ExternAbi F A Aff P :=
-  {CompilerMain.hooks p base with lookupLinkSection := lookup p memory}
+  {CompilerMain.hooks p types base with lookupLinkSection := lookup p memory}
 end Miri.Input.CompilerLinkSections

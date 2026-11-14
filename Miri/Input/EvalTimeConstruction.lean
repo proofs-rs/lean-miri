@@ -1,3 +1,4 @@
+import Miri.Input.CompilerInitialAllocationByteMachine
 import Miri.Input.CompilerProviders
 import Miri.Input.CompilerLibcTypeLayouts
 import Miri.Input.CompilerNamedFields
@@ -115,7 +116,7 @@ def fromSource [DecidableEq MiriMemoryKind] [DecidableEq Os]
       Instant System TZ Timestamp) := do
   let target ← p.externStatics.targetFacts |>.mapError StepError.unsupported
   let runtime := TypedSyncNat.runtime EvalTypedSyncMachine.views syncEffects
-  let pointerCompiler := CompilerExecutionProviders.pointerCompiler p.lifecycle.calls.symbols.facts
+  let pointerCompiler := CompilerExecutionProviders.pointerCompiler p.lifecycle.calls.symbols.facts EvalProjectionMachine.arrays
   let M := EStateM StepError (State Os R P H D O Aff B Poll Instant System Native Profiler)
   let readScalar : OpTy Provenance → M (Scalar Provenance) := fun operand => do
     let immediate ← ValidityMachine.readImmediate access operand
@@ -150,9 +151,7 @@ def fromSource [DecidableEq MiriMemoryKind] [DecidableEq Os]
     let scalar ← readScalar operand
     lift (scalar.toPointer access.runtime.base |>.mapError ScalarOps.scalarError)
   let projectNamed := fun (parent : MPlaceTy Provenance) (name : String) => do
-    let index ← match CompilerNamedFields.fieldIndex p.runtime parent.layout name with
-      | .ok index => pure index
-      | .error error => throw error
+    let index ← CompilerNamedFields.fieldIndex EvalProjectionMachine.arrays parent.layout name
     fieldPlace projection choice parent index
   let writeFields := fun (values : Array Int) (parent : MPlaceTy Provenance) => do
     for (value,index) in values.toList.zipIdx do
@@ -216,7 +215,7 @@ def fromSource [DecidableEq MiriMemoryKind] [DecidableEq Os]
       lift ((← readPlace place).toInt place.layout.layout.size |>.mapError ScalarOps.scalarError)
     writeFields, writeNamed, writeInt, writePointer
     dedupBytes := fun bytes => do
-      return (← GlobalByteMachine.bytes functions bytes.data).withOptionalProvenance
+      return (← CompilerInitialAllocation.ByteMachine.bytesCurrent EvalWorld.initialCompilerStoreInnerAccess p.runtime.target.base functions bytes.data).withOptionalProvenance
     setEinvalAndReturnNeg1 := IoError.setErrnoAndReturnNeg1I32 errors (.libc "EINVAL")
     utcTimestamp := host.utcTimestamp
     getTimezoneEnv

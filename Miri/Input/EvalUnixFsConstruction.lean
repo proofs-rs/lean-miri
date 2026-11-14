@@ -125,6 +125,7 @@ private def namedTargetPointerPlace [DecidableEq MiriMemoryKind]
 layouts/constants and FD lookups from the existing source descriptor table. -/
 def metadataFromSource [DecidableEq MiriMemoryKind]
     (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (ValidityMachine.State MiriMemoryKind U))
     (access : ValidityMachine.Access MiriMemoryKind U)
     (projection : PlaceProjectionHooks Provenance
       (MachineHooks.State MiriMemoryKind (ValidityMachine.UserState U)) C MachineHooks.FrameExtra)
@@ -145,7 +146,7 @@ def metadataFromSource [DecidableEq MiriMemoryKind]
     Except StepError (UnixFsMetadata.Hooks
       (MachineHooks.State MiriMemoryKind (ValidityMachine.UserState U))
       (Files.Ref (Files.Description H D O)) D Path HM Time E) := do
-  let pointerCompiler := CompilerExecutionProviders.pointerCompiler p.lifecycle.calls.symbols.facts
+  let pointerCompiler := CompilerExecutionProviders.pointerCompiler p.lifecycle.calls.symbols.facts types
   let errors := {errors with family := ForeignItems.Family.unix, os}
   let readScalar : OpTy Provenance → M
       (MachineHooks.State MiriMemoryKind (ValidityMachine.UserState U))
@@ -182,9 +183,7 @@ def metadataFromSource [DecidableEq MiriMemoryKind]
     | .memory memory => pure (MPlaceTy.mk memory place.layout)
     | .local .. => throw (.invalidProgram "filesystem field projection became local")
   let field := fun (parent : MPlaceTy Provenance) (name : String) => do
-    let index ← match CompilerNamedFields.fieldIndex p.runtime parent.layout name with
-      | .ok value => pure value
-      | .error error => throw error
+    let index ← CompilerNamedFields.fieldIndex types parent.layout name
     project parent index
   let result : UnixFsMetadata.Hooks
       (MachineHooks.State MiriMemoryKind (ValidityMachine.UserState U))
@@ -441,9 +440,7 @@ def timesFromSource [DecidableEq MiriMemoryKind]
     | .ok value => pure value
     | .error error => throw (ScalarOps.scalarError error)
   let field := fun (parent : MPlaceTy Provenance) (name : String) => do
-    let index ← match CompilerNamedFields.fieldIndex p.runtime parent.layout name with
-      | .ok value => pure value
-      | .error error => throw error
+    let index ← CompilerNamedFields.fieldIndex memory.arrays parent.layout name
     indexedField parent index
   let layout : M stateType LocalLayout := do
     match CompilerPrimitiveFacts.namedLayout p.runtime "libc_timespec" with

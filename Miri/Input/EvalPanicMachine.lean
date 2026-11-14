@@ -13,10 +13,10 @@ private def query (value : Except String A) : MachineHooks.M K U A :=
 def queries (program : LoweredProgram) (runtime : RuntimeMetadata)
     (bytes : CompilerGlobalBytes.Prepared)
     (functions : FunctionPointers.Hooks K (ValidityMachine.UserState U) O)
-    (access : ValidityMachine.Access K U) [DecidableEq K] :
+    (access : ValidityMachine.Access K U)
+    (allocateString : String → ValidityMachine.M K U (MPlaceTy Provenance)) [DecidableEq K] :
     EvalCallRuntime.PanicQueries K (ValidityMachine.UserState U) C where
-  allocateStringDedup := fun _ text => GlobalByteMachine.string functions access
-    (CompilerGlobalBytes.strLayout runtime bytes) text
+  allocateStringDedup := fun _ text => allocateString text
   langItem := fun _ item => query (CompilerPanicFacts.langItem program item)
   genericParameters := fun _ id => query (CompilerPanicFacts.genericParameters program id)
 end Miri.Input.EvalPanicMachine

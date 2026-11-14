@@ -6,20 +6,24 @@ The catalog records the actual compiler query after full-instance substitution
 and bound-region erasure, with no normalization or FnAbi reconstruction. -/
 namespace Miri.Input.CompilerNativeSignatures
 open Lean Miri.ABI Miri.Memory Miri.MIR Miri.Interpreter
-private def typeRef (p : CompilerProviders.Prepared) (id : TyId) : Except String TyId := do
-  let _ ← p.runtime.node id |>.mapError toString
+private def typeRef (world : RuntimeArrayTypes.World) (id : TyId) : Except String TyId := do
+  let _ ← world.arena.lookupType id
   pure id
 
-def query (p : CompilerProviders.Prepared) (callee : CallInstance) : Except String (Array TyId × TyId) := do
-  let _ ← CompilerInstance.source p.loweringContext.instances callee
+def query (p : CompilerProviders.Prepared) (world : RuntimeArrayTypes.World) (callee : CallInstance) : Except String (Array TyId × TyId) := do
+  let .material actual ← world.instances.lookup callee
+    | throw "constructed instance has no imported native signature query"
+  let expected ← CompilerInstance.Material.source p.program.input.instances callee
+  let expected ← InstanceArena.Key.ofSource world.arena expected.instanceKind expected.genericArgs
+  unless actual == expected do throw "native signature source material differs from execution instance store"
   let mut found : Option (Array TyId × TyId) := none
   for entry in p.program.input.queries.nativeSignatures do
     if entry.instanceId == callee then
       unless entry.query == "instantiate_bound_regions_with_erased(fn_sig(instance.def_id()).instantiate(instance.args))" &&
           entry.normalization == "none" && entry.boundRegions == "erased" do
         throw "native signature query operation/region-erasure evidence mismatch"
-      let inputs ← entry.signature.inputs.mapM (typeRef p)
-      let output ← typeRef p entry.signature.output
+      let inputs ← entry.signature.inputs.mapM (typeRef world)
+      let output ← typeRef world entry.signature.output
       let result := (inputs, output)
       if let some old := found then
         unless old == result do throw "conflicting native signature queries for exact full instance"
@@ -43,7 +47,7 @@ def make (p : CompilerProviders.Prepared)
   functionSignature := fun _ id => do
     let machine ← get
     let callee ← if machine.memory.hasImportedRuntimeId id then do
-      let some callee ← lift (CompilerVTableRuntime.globalFunction p.lifecycle.calls.symbols image machine.memory id)
+      let some callee ← lift (CompilerVTableRuntime.globalFunction p.lifecycle.calls.symbols (arrays.get machine) image machine.memory id)
         | throw (.invalidProgram "native compiler function has non-function imported identity")
       pure callee
     else do
@@ -51,7 +55,7 @@ def make (p : CompilerProviders.Prepared)
       unless entries.size == 1 do throw (.unsupported "native function lacks unique canonical full-instance reservation")
       let some entry := entries[0]? | throw (.invalidProgram "native function reservation vanished")
       pure entry.callee
-    lift (query p callee)
+    lift (query p (arrays.get machine) callee)
 /-- Remaining native capabilities are actual allocator/libffi effects plus
 source build configuration and a finite compiler traversal budget. -/
 structure Host (K U C : Type) where

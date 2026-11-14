@@ -20,32 +20,50 @@ structure Attempt where
   memory : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind
   outcome : Except String Prepared
 
-/-- Compiler table preparation precedes allocation registration. All consumers
-share its final identity tables; graph definitions may not be appended only to
-an isolated image view. Primitive layouts and the persistent runtime type world
-are required evidence, never inferred from storage sizes. -/
-def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Attempt := Id.run do
-  let empty : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind := .empty
+structure CompilerPrefix where
+  compiler : CompilerProviders.Prepared
+  types : RuntimeArrayTypes.World
+  layouts : EvalEntryMachine.Layouts
+  dummySpan : Miri.MIR.SpanRef
+
+/-- Shared source metadata setup; allocation-profile dispatch follows this phase. -/
+def prepareCompilerProfiled (profile : Lean.Options) (input : LoweredProgram) :
+    Except String CompilerPrefix := do
   let preparedInput := profileit "preparation.eval.compiler_globals" profile fun _ =>
     CompilerGlobals.prepareProgram input
   let compilerResult := profileit "preparation.eval.providers" profile fun _ =>
     CompilerProviders.prepareProfiled profile preparedInput
   let compiler ← match compilerResult with
     | .ok value => pure value
-    | .error error => return ⟨empty,.error error⟩
+    | .error error => throw error
   let dummySpanResult := profileit "preparation.eval.root_span" profile fun _ =>
     CompilerContextSpan.rootSpan compiler.program
   let dummySpan ← match dummySpanResult with
     | .ok value => pure value
-    | .error error => return ⟨empty,.error error⟩
+    | .error error => throw error
   let layoutsResult := profileit "preparation.eval.layouts" profile fun _ =>
     EvalEntryMachine.layouts compiler
   let layouts ← match layoutsResult with
     | .ok value => pure value
-    | .error error => return ⟨empty,.error error⟩
-  let types ← match profileit "preparation.eval.initial_arrays" profile fun _ => compiler.initialArrays with
+    | .error error => throw error
+  let types ← match profileit "preparation.eval.initial_types" profile fun _ => compiler.initialTypes with
+    | .ok value => pure value
+    | .error error => throw error
+  pure ⟨compiler,types,layouts,dummySpan⟩
+
+/-- Compiler table preparation precedes allocation registration. All consumers
+share its final identity tables; graph definitions may not be appended only to
+an isolated image view. Primitive layouts and the persistent runtime type world
+are required evidence, never inferred from storage sizes. -/
+def prepareProfiled (profile : Lean.Options) (input : LoweredProgram) : Attempt := Id.run do
+  let empty : MemoryState Provenance Miri.TreeBorrows.BorrowTree MiriMemoryKind := .empty
+  let setup ← match prepareCompilerProfiled profile input with
     | .ok value => pure value
     | .error error => return ⟨empty,.error error⟩
+  let compiler := setup.compiler
+  let types := setup.types
+  let layouts := setup.layouts
+  let dummySpan := setup.dummySpan
   let importNodes := match compiler.program.input.compilerAllocIdWorld with
     | none => compiler.program.input.allocations
     | some _ => compiler.program.input.allocations

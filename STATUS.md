@@ -11,14 +11,885 @@ and exit, threads, synchronization, atomics, weak memory and data races. Finite
 QA and general whole-machine proofs are separate goals. Overall completion and
 the ability to verify arbitrary Rust are not claimed.
 
+## Compiler material migration (in progress)
+
+The current draft changes the compiler boundary: executable concrete constants,
+layout, ABI and instance selection require the exact rustc result exported for
+the requested identity. Lean still computes local type syntax, but it does not
+evaluate an executable constant or synthesize a missing compiler answer. The
+older source-algorithm results described below are historical component
+comparisons and no longer define the runtime fallback policy. The immutable
+export cannot answer a new type or instance constructed only after export;
+such a demand currently fails explicitly. A fresh `main` export with 3,149
+material bodies, 6,614 rustc layouts and 20 concrete type-constant result rows
+decodes and runs through the former type-constant, projection and covariance
+failures. The current fresh export completes `main` with `finalized_exit code=0`
+and an upstream `exit 0` result at choice cursor 1348. This is one concrete
+guest, not a general demand-closure result. Broader execution coverage remains
+validation work for this migration; final fixed-CPU performance measurements
+are recorded below.
+The initial compiler profile and execution query memos are scoped to one
+execution; there is no cross-execution mutable answer cache.
+
+Final fresh-guest measurement used the 102,376,624-byte export of the concrete
+`main` input, pinned Lean runner, one Lean thread and CPU 2, with three full
+executions of commit `be11ca46`. All three reached `finalized_exit code=0`.
+Wall times were 202.823, 202.465 and 204.055 seconds (median 202.823);
+process CPU times were 201.558, 201.202 and 202.859 seconds (median 201.558).
+Selected CPU steal was 4.94, 5.11 and 5.15 seconds; cgroup throttling was zero
+in every interval. Raw logs and counters are in
+`scratch/performance/pivot-final/rustc-boundary-main-final-*`
+in the working tree. This shared-host run supplies no reliable small-speedup
+comparison against an earlier implementation.
+
+The exporter supplies concrete Item and demanded FnPtr conversion shim bodies
+in its reachable-instance closure through rustc's instantiated MIR query;
+concrete shim ABI rows are also exported. A fresh shim fixture contains eight
+material rustc bodies with exact ABI results and no source shim bodies. A novel
+instance first interned during execution remains outside that closure and
+fails with an explicit missing rustc body result. The older raw template/shim
+body constructor and wire form are not execution fallbacks. Source trait/impl
+selection helpers remain in the tree for component tests but have no production
+caller.
+
+FnPtr/closure cast resolution now follows actual MIR cast requests, including
+requests discovered after their type was registered. Non-demanded FnDef result
+enumeration is removed. Plain/KCFI vtable fixtures retain zero such query rows;
+late-demand physical joins and valid source KCFI casts pass. A pinned compiler
+failure for direct impl-DefId KCFI queries remains an explicit residual.
+
+Required raw scalar CTFE source catalogues now survive producer capture, strict
+decoding and Lean import. A real two-source arithmetic dependency closure and
+four malformed/missing/duplicate/dangling controls pass; the captured arithmetic
+body executes in the local scalar machine with matching counters and value.
+The separate scalar_u32_calls_v1 source policy now executes typed calls,
+cleanup/unwind and ordered required-constant preambles through the execution
+World. Seven complete compiler traces cover success, limits and overflow; eighteen
+fresh strict source documents also cover generic required constants and malformed
+callee/physical-source metadata. This does not admit general CTFE query roots:
+allocation/interner semantics and unsupported raw MIR remain unresolved.
+The scalar_u32_const_args_v1 policy binds typed primitive constant arguments
+from the current execution World's actual constant nodes. Eight complete compiler
+allocation/value references agree with two demanded sources at four inputs;
+strict type/width/index/header and catalogue corruption controls reject. Mixed
+parameter families and broader constants remain unsupported. The allocated-root
+finish adapter preserves callback World state and intern/validation/error order;
+it requires an actual allocated-root callback. Component proofs use no axioms.
+This does not supply missing allocator semantics or admit general query roots.
+
+External raw u64 constants have a separate strict source policy. It retains
+physical references, ordered preambles, UnaryNot and canonical type/definition/
+span/scope metadata. Three genuine frames and seventeen malformed controls pass.
+CTFE metadata availability accounts for trivial constants having no MIR body;
+this check neither evaluates them nor manufactures a body. Trivial constants
+still need a distinct provider path. The public cold-u64 engine executes a
+nongeneric external UnaryNot leaf before runtime starts. Its two real steps,
+eight-byte immutable root, full allocation key/identity/frontier, dedup state and
+ValTree match an independent compiler query. This bounded component does not
+install general runtime CTFE or type-level normalization.
+
+Runtime body providers now resolve exact identities through the execution-owned
+BodyArena. Constructed Item instances select a unique ordinary raw MIR template
+by physical definition and complete arguments; local layouts, frames, source
+scopes and backtraces consume that identity. The obsolete lifecycle, scope and
+backtrace result indexes are removed. FnPtr AsPtr/FromPtr shims retain raw
+binder-free method signatures, lang-item identities and source spans; Self can
+retain region-only higher-ranked binders. Lean constructs their MIR, including
+novel type/instance/body identities. Sixteen complete higher-ranked production
+and prefix-external bodies match actual rustc queries at normalized Self keys;
+raw alias-key comparisons and corruption/non-region-binder controls also pass.
+Promoted bodies, general compiler shims and constructed shim ABI remain unresolved.
+Novel-body controls exercise actual provider demand, dense identity reuse and
+missing/ambiguous-source rejection. Runtime retag/validity hooks use that same
+World for constructed types. Validation retains the actual root type identity,
+as pinned validity.rs does, without eagerly printing a successful value's type.
+Projection diagnostics and explicit type-name query boundaries are preserved.
+Intrinsic pointee/integer/variant/normalization/drop callbacks and dynamic
+projection classification also consume the execution World. Source variantCount
+uses raw declarations, including one-layer Pattern handling and the pinned
+alias/nested-Pattern errors. Eight material and eight constructed ADTs, Pattern
+and invalid-kind controls pass without layout answers. Checked Dynamic source
+transport and validity classification intern and reuse predicate/principal
+handles in the same execution World; nine empty-prefix source trees and actual
+runtime callbacks pass against fresh pinned compiler input. Source declaration
+headers, binder ownership and missing/malformed declarations remain checked.
+Dynamic pointer metadata-field projections derive the pinned vtable array
+reference from raw trait declarations and eligible supertrait methods, deduplicated
+by physical definition. Nine material and nine empty-prefix constructed pointers
+match independent compiler field types, including final lifetime erasure, and
+complete physical layouts. Diamond, generic, region-binder and no-principal
+cases pass; wrong-count/full-layout oracles, field bounds, malformed constructors,
+duplicate declarations, corrupt headers and exhausted source fuel reject. These
+are finite component checks; the independent compiler vectors also agree with
+trait-vptr allocation disabled.
+Call, varargs and shim structural-compatibility dictionaries now use source
+World queries, including raw instantiated fields and the required raw nonnull
+attribute. Eight ADTs match compiler fields, representation, item names and
+nonnull attributes (two true); missing/non-boolean attributes reject. A raw
+associated field alias stays unnormalized in ADT info and separately normalizes
+at the actual structural-comparison site; distinct physical C records compare
+identical with empty prefixes. These are finite component/callback checks;
+complete varargs guest coverage remains unverified. Constructed dynamic-child
+and closure/coroutine diagnostic names, raw retag frame-attribute migration,
+named shim ABI acquisition and additional runtime leaves remain unresolved.
+
+Raw source environments retain explicit clauses, physical generic/predicate
+parents, parameter sorts and trait identity. Lean assembles inherited obligations
+after matching an impl head and for selected associated values; fully monomorphized
+queries retain the empty ParamEnv. ADT Sized declaration entailment uses these
+scopes. Legacy copied predicates are removed from producer, codecs and material
+models. Fresh selection controls consume the canonical source scope and reject
+its absence or the obsolete wire fields. Checked-alias, projection-bound and GAT
+controls match independent rustc results. Region-only quantified obligations now
+use query-local fresh universes, typed inference, scoped normalization and a
+directional region-leak check in actual runtime selection. Eight complete rustc
+comparisons distinguish four proven and four definite-no-solution results,
+including static-only and repeated-region negatives. Missing-source, malformed
+owner and mutated-oracle controls reject. Closed source type aliases now normalize
+inside the active quantified universe; seven genuine alias-bearing goals agree
+with rustc, including nested forall obligations. Raw RHS/own-clause placeholders,
+missing source and a mutated static-only oracle reject. Type aliases also accept
+already-opened, query-owned placeholder arguments: four fresh compiler goals
+cover identity, checked bounds, nested forall own clauses and a static-only
+negative. Thirteen kernel controls check ownership and malformed arguments;
+mutating a source own clause to an unsatisfied trait is rejected. Lexically bound
+alias arguments still require binder opening and reabstraction. Quantified
+type/constant assumptions, inferred outlives, general builtin candidates,
+specialization and coinductive quantified goals remain unresolved.
+
+Source providers now derive covered vtable own-method eligibility from raw
+associated-item flags, signatures and canonical predicate scopes. Ten actual
+compiler declarations distinguish five entries and five exclusions, including
+indirect Self:Sized, auto-trait and outlives cases. Receiver dispatch is proved
+from raw DispatchFromDyn implementations and scoped caller bounds; five kernel
+controls check scoped entailment and malformed source ownership. Ordered raw
+supertraits and these own methods feed World segment traversal: 32 complete
+compiler arrangements cover both explicit no-trait-vptr policies and distinct
+generic supertrait instances. Both query consumers remove compiler predicate
+normalization and vtable answer rows before execution. Missing signatures,
+scopes, receiver impl material and lang items, source placeholders, required
+member flags and mismatched oracle/policy controls reject. Real runtime vtable
+allocation/upcasting and final method-instance/shim resolution remain separate work.
+An independent World provider now resolves twelve raw own-method slots from
+source signatures, predicates and arguments with all instance, allocation, ABI
+and vtable answer rows removed. Vacant and by-value-shim selections retain their
+physical declaration identities; missing source controls reject. Declaration-local
+callable metadata now drives thirty source-selected final-slot comparisons and
+ten Virtual postprocessing comparisons across ordinary/KCFI policies. Selected
+Item, by-value VTable shim and track-caller Reify identities are interned in the
+shared World with answer catalogs removed; missing/forged source, policy and
+oracle controls reject. Both production compiler hook assemblies now connect
+parent-trait, virtual-argument rebasing and expected vtable resolution through
+these source providers. Twenty canonical hook demands and twenty independent
+raw-resolution comparisons per ordinary/KCFI policy preserve early by-value
+arguments and reject malformed metadata and wrong oracles. Actual dynamicData
+callbacks now intern complete checked predicates in an execution-owned dense
+suffix; material predicate/principal identities remain unchanged. Four policies
+each check 35 material views, nine constructed roundtrips, 18 callbacks and 42
+final-assembly guards. Missing object candidates reject 26 demands, while two
+quantified demands stop at unsupported binder normalization. Source declaration
+negatives and mutated compiler oracles also reject. Ground direct-principal
+object candidates now confirm canonical scopes, full arguments, MetaSized
+obligations and own-method eligibility before selecting Virtual/Reify identities.
+Four-policy comparisons cover four SourceMirCall API Virtual selections and four
+runtime-hook Reify selections each. Missing Self, overlapping/unknown impl heads,
+specialization and unsupported obligations reject. Proven ground impl heads
+disjoint from Dynamic no longer block the object candidate; actual manual-impl
+catalogues select two Virtual and two Reify identities with malformed/overlap
+controls. Concrete Self uses the separate bounded ordinary-impl provider.
+The older dynamic hook suite
+now selects six Reify identities per policy, retaining twenty object and two
+binder residuals. Upcasts, projection/higher-ranked confirmation,
+nonempty own predicates, specialized leaves and real allocation remain unresolved.
+Generic receiver alias normalization, abstract-constant expansion and raw crate
+feature/session policy material remain unresolved; unavailable semantics error
+instead of silently omitting entries.
+
+Covered Virtual methods now construct complete FnAbi from raw signatures and
+source receiver attributes, preserving logical reference types while using the
+pinned nullable thin physical receiver. Fifty-one independent complete ABI
+comparisons cover ordinary, optimized and panic policies, by-value dyn Self,
+up to two one-field transparent raw-pointer wrappers and tracked caller Location.
+All comparisons remove answer catalogues and poison closed ADT field types;
+raw field substitution supplies both material and constructed prefixes. Exact
+source recipe ownership, missing Location material, wrong ABI fields and the
+three-wrapper bound reject. A real mutable-dyn method-call guest finalizes exit
+zero in Lean and same-prepared-TyCtxt Miri. General wrapper/marker layouts,
+other targets and new receiver native execution remain separate work.
+Original FnDef signatures
+instantiate their raw declaration, erase the outer binder and normalize each
+input/output in the same World. Ground closure/FnPtr Fn-family candidates and
+FnOnce Output reduce from source signatures with real nested obligations;
+FnDef target-feature material, async closures and higher-ranked candidate
+confirmation remain explicit unsupported domains.
+
+Runtime field queries no longer prioritize copied projection rows or closed ADT
+field types. Raw declaration templates and checked closure capture tuples supply
+the execution-owned World; field-projection and layout demands apply source normalization.
+Scalar MIR wire-width checks separately derive Pattern storage geometry from its
+base and transparent raw fields, without evaluating range endpoints or inventing
+niche validity. Full Pattern layout can still require CTFE. Legacy context-free
+field consumers and their unused projection wire catalogues remain to migrate.
+Conditional Iterator/Future/coroutine builtin candidates now distinguish checked
+non-coroutine heads from unported coroutine confirmation. The actual IntoIterator
+signature and reference/slice/IterMut goals match rustc, including the exact impl;
+unknown, dynamic and unresolved cases remain explicit errors.
+
+Genuine binder-free, type-only method-syntax trait calls now retain their raw
+associated FnDef declaration and resolve in the execution-owned World. No Item
+instance or instance-bearing function catalogue row is fabricated for the trait
+declaration. One actual default export retains the nongeneric impl as an
+independent root: its complete caller and selected impl World bodies match
+independently normalized compiler MIR, with persistent callback and physical
+selection checks. A root-only export compares the caller and rejects the absent
+impl body source; general raw impl-body discovery remains unresolved. Annotated
+UFCS callee operands remain unsupported because their user-type metadata is not
+represented by this call constructor. The full seeded guest has not completed:
+the current native runner passes the earlier std::rt::lang_start ABI, dynamic
+pointer metadata, original FnOnce signature and enum variant boundaries. Source
+for_variant now selects the Single layout instead of looping through its parent;
+38 material/constructed complete variants agree with independent compiler data.
+The current guest stops at choice cursor 267 in NonZero<u64>::new because source
+constant-alias normalization needs CTFE. Its raw chain is external anonymous
+const core(2,69102), RangePattern::MAX<u64>, selected impl const core(2,54220),
+then inherent u64::MAX core(2,38452), whose actual MIR computes Not(0).
+These raw external bodies, associated-const selection and u64/ValTree evaluation
+are not connected; closed normalized constants are not substituted for them.
+Process exit zero for this Unsupported result is not successful guest execution.
+
+Binder-free Item signatures can construct x86_64 Rust scalar/ZST FnAbi in the
+same World from raw signatures and codegen/panic flags. Twenty complete compiler
+comparisons cover abort/unwind policies, including constructed instances with
+empty ABI catalogs. Covered direct-call, catalog and covariance collectors no
+longer acquire FnAbi answers: ten complete keys each lose four explicit calls.
+Unused unsupported generic arguments retain an exact residual domain. Thin
+references additionally match forty complete rustc ABIs across optimization and
+panic settings; each covered key eliminates four explicit FnAbi acquisitions.
+Twenty additional complete ABIs exercise source-derived Freeze/Unpin branches
+for ADT, array and tuple pointees, with the same four-call elimination per key.
+An independent empty-catalog World constructs a novel array reference at both
+optimization settings. Raw ABI session absence and unsupported fat
+references reject. Thin Box ABI additionally derives pointee/allocator attributes
+from raw owned-box/global-allocator identities and source Unpin/UnsafeUnpin
+proofs. Forty complete compiler comparisons cover optimization and box-noalias
+settings, global/custom allocators and pinned/interior-mutable pointees. An
+independent source base constructs a novel array, Box and instance with no ABI
+answer catalogs; both allocator cases agree. Ten covered keys eliminate four
+explicit calls each. Source boolean controls distinguish eight global from three
+custom allocator cases. Fat Boxes and nonempty/overaligned allocators remain
+exact residuals; constructed collisions and wrong targets reject. Aggregate,
+foreign/other-target ABI and eager enumeration remain unresolved. Thin raw-pointer and binder-free FnPtr scalars additionally pass
+twenty complete rustc comparisons; all forty scalar/pointer comparisons also
+cover constructed instances without result catalogs. A separate base world
+constructs a new array, pointer and instance outside the source prefixes and
+matches the complete compiler ABI.
+Raw panic/drop-panic/optimization/codegen settings now live in one canonical
+ABI session object, while declaration-local flags remain on definitions.
+Independent FnPtr ABI uses the same execution World and preserves the compiler's
+`instance = None` attribute rules. Seventy-two complete compiler comparisons
+cover nested region binders and optimization/panic combinations; a fresh base
+constructs new array/reference/FnPtr identities without result catalogs.
+Covered dummy-signature helper ABI also runs on demand: 264 complete comparisons
+agree, all sixty-six observed helper keys eliminate their one explicit call,
+and eighteen pointer keys eliminate one or two calls. The old hundred complete
+Item/scalar/reference comparisons still pass. Foreign pointer ABI remains an
+exact material residual; constructed/colliding identities reject. General fat/nontrivial-allocator Box, aggregate, foreign/variadic and other-target
+ABI remain unresolved.
+
+Primitive non-pointer two-field tuples now derive complete scalar-pair ABI in
+World: 32 Item, 36 FnPtr and 136 helper comparisons cover optimization and panic
+settings, with empty-catalog and novel-instance controls. Twelve traced Item keys
+eliminate four explicit ABI calls each. Thin raw-pointer pairs now derive exact
+scalar attributes and source field offsets for two-field tuples of at most 16
+bytes, with other fields restricted to raw pointers or small primitive scalars.
+Twelve signatures agree for Item/FnPtr/helper across four sessions; query traces
+cover twelve Item, twelve FnPtr and 48 helper keys per session. Novel identities
+and five malformed physical layouts are checked. Reference/FnPtr/fat-pointer
+fields and large companions remain explicit residuals. Fat raw pointers to slice
+and str now derive the complete source pointer layout and exact two-component
+attributes on the covered 64-bit AS0 target. Four sessions compare twelve Item,
+thirteen FnPtr and fifty helper signatures; novel array/slice/pointer identities,
+five malformed layouts and borrowed/fat-tuple residual controls pass. Query traces
+confirm the covered acquisitions are omitted. Fat references and broader
+aggregate ABI remain unresolved. Small byte-storage Memory ABI additionally
+matches 48 Item, 52 FnPtr and 200 helper comparisons, including target-aligned
+cast storage and NoUndef distinctions. Forty-eight constructed repetitions and
+a novel six-byte array/instance agree without ABI catalogs. Twelve Item keys
+eliminate four explicit calls each; 13 FnPtr and 50 helper keys are audited.
+Byte storage through 32 bytes and large primitive-pair returns now use indirect
+transport with source-derived parameter attributes. The raw optimized-MIR visitor
+tracks mutation, capture and projected drops, respecting optimization, incremental,
+spread and Freeze policy. Current bounded-access readers compare 24 Item, 13 FnPtr
+and 46 helper ABIs with eight query-trace audits; earlier broader comparisons
+cover optimization/panic combinations. Unknown Drop/ADT dependencies, missing raw
+templates, target/width/collision and constructed variadic boundaries retain exact
+residuals. Cross-crate indirect deduction requires the defining crate policy and stays
+residual: actual opt0/opt3 consumer checks retain three indirect answers and
+preserve three direct omission domains per context, with twelve complete ABI
+matches. Constructed external indirect requests reject before current-session
+optimization guards. General aggregate ABI remains unresolved.
+
+The execution World now interns complete Pattern base/Range/Or/NotNull syntax
+and retains endpoint constant identities. Novel/material roundtrip, ambiguity,
+collision, missing-constant, flags and malformed/fuel controls pass. Runtime
+layout uses the same checked source algorithm for material and constructed
+patterns. Seven complete actual Pattern type/component hashes now agree from
+material and empty-prefix Worlds, with endpoint, malformed syntax, missing-source,
+fuel and oracle controls. Constructed Pattern name printing remains unsupported;
+non-Value endpoints still require CTFE.
+
+Pattern Range, NotNull and signed Or layouts now
+use raw recipes; six complete compiler comparisons and malformed controls pass,
+with covered explicit canonical layout acquisition omitted. Raw enum declarations
+and field syntax now drive the pinned present-variant, tagged and niche layout
+calculators. Twenty-six complete compiler layouts match (nine niche and seventeen
+tagged), including explicit-repr calculator inputs; twenty-three runtime source
+recipes omit canonical layout queries. A generic array enum is constructed
+outside both type and constant prefixes. Missing declarations/field templates,
+physical residuals, conflicting recipes and constructed residual ID collisions
+reject. Three explicit discriminant cases retain exact material layouts until
+source CTFE supplies their values; the calculator comparison assumes those
+values as inputs. The earlier empty/single-variant fixture still matches fourteen
+raw layouts and three residuals. Independent source calculators match fourteen
+complete coroutine layouts, eight MaybeUninit wrappers, ten selected coroutine
+bodies and eight generic body instantiations; 96 finite dispatch cases also pass.
+Covered transformed coroutine MIR, layouts and field/variant projections now
+connect to the execution World and BodyArena: four complete actual bodies, eight
+generic layouts and 24 saved/upvar projections agree with rustc. Four instances
+without exact templates reject explicitly. This remains a bounded raw MIR subset;
+general coroutine layout/body generation remains unresolved. Extended source
+MIR now supports typed projections, casts, references, raw pointers and direct
+calls, including monomorphic declarations. Annotated scalar/ZST constants retain
+raw user-type indices, spans and explicit post-borrowck cleared-table provenance;
+indices are not incorrectly checked against that deliberately cleared table.
+Eight complete annotation bodies, eight raw-source negatives and five decoder
+controls pass. Four annotated function-item bodies also enter the World comparison.
+Replaying the exact producer flags (including mir-preserve-ub) gives 42 complete
+normalized MIR comparisons and 41 complete World bodies with twelve persistent
+callbacks. One oracle-only physical
+definition is absent from the producer universe and explicitly rejects; it is
+not counted as a successful World body. Type-only coroutine demands retain raw
+source declarations without fabricating resume or auxiliary executable bodies.
+Annotated callee operands, function reification, indirect source calls and broader MIR remain unresolved.
+Required nested generic source
+catalogues now preserve two raw owners/eight instantiations and ten physical
+body sources, including three generated by-move bodies. Fresh strict decoder
+checks, zero-prefix substitution and ten malformed header/pool controls pass.
+Saved source metadata is pooled explicitly; a serialization regression checks
+reference reuse, scope independence, empty fields and double-pooling rejection.
+Non-Value pattern endpoints still require CTFE. Structural pointer/reference/tuple/array/slice
+covariance runs on World syntax: an independent 16-by-16 rustc matrix passes
+with an empty answer catalog. Raw declaration constraints now infer fifteen
+complete ADT/function variance arrays, matching the sixteen pinned variance
+composition pairs. An independent 16-by-16 nominal relation matrix reconstructs
+all endpoint types outside material prefixes and uses no answer catalog; missing
+source, malformed arity and fuel controls reject. Static/erased regions follow
+the pinned ignoring-regions relation, including eight actual baseline relations.
+Nine observed covariance query sites are omitted in the source fixture.
+Alias normalization, bound/parameter regions and richer relations remain.
+
+Scalar const-generic names and complete binder-free FnPtr syntax now enter the
+runtime constructor, layout, normalization and printer paths. Nine fresh material
+FnPtr identities normalize without result rows and agree with complete compiler
+layouts. Raw default expressions drive trailing-default elision; five novel
+default cases and missing-material controls pass. Backtrace names for local Items
+use execution-owned keys, including three novel instances checked against rustc.
+Region-only higher-ranked FnPtr construction now preserves whole binders through
+normalization, flag traversal and printing. Nine novel types match 27 compiler
+flags, 36 raw/normalized strings and complete pointer layouts. Eight actual
+splatted-index boundary cases validate all header entry points. Unsupported
+material child families retain their exact residual rows; constructed instances
+cannot borrow a numerically colliding row. Type/constant binders, bound aliases,
+verbose bound names, implementation/external paths and display fallbacks remain.
+
+Structural type hashes now use the pinned StableHasher protocol over World
+syntax, with covered eager hash acquisition omitted. Independent comparisons
+cover 265 hasher vectors, 28 types and novel constructed types; missing-ID, fuel
+and missing-residual controls reject. Full raw DefPathData, atomic StableCrateId
+and optional typed generic headers replace partial paths and default markers.
+Lean reconstructs DefPathHash; eighteen compiler comparisons include lifetime
+namespaces, with exact bidirectional crate-identity join controls. Foreign types,
+pointers and pairs match four typed compiler hashes, including novel identities
+without material type rows. Raw ADT/variant/field identities, flags, representation,
+constructors, discriminant declarations and visibility now determine ADT stable
+hashes. Twenty-eight complete rustc type-hash comparisons cover nominal ADT and
+FnDef syntax, arrays and recursive Value constants, including empty-prefix
+reconstruction and malformed/missing-source controls. Twelve closed FnPtr and
+region-only bound FnDef compiler hashes additionally match whole-root
+anonymization and empty-prefix reconstruction, with malformed binders/headers
+and mutated-oracle controls. Seven complete escaping-region compiler hashes cover
+two open FnPtr subterms, Anon, physical Named, UTF-8 NamedForPrinting, ClosureEnv
+and Canonical identities in material and empty-prefix Worlds. The producer raw
+eligibility predicate covers this domain; local binders still validate their
+owned variables and closed normalization still rejects escaping regions.
+Dynamic World syntax now owns ordered typed existential predicates, including
+Type/Const projection terms and region binders, behind a checked physical-reference
+pool certificate. Eight complete compiler root/component hashes, 24 novel flags
+and eight normalized trees agree with type/constant/predicate prefixes removed
+while retaining raw definitions. Exact reuse,
+roundtrip and malformed/duplicate/binder/region/fuel/oracle controls pass.
+Constructed Dynamic is unsized. Raw DynMetadata declarations now derive metadata
+layout in World: three fat-pointer comparisons share one unique DynMetadata key,
+and two complete dynamic enum layouts agree with rustc after removing all layout
+answers and type/constant/predicate prefixes. Canonical query tracing confirms
+the covered omissions. Missing/malformed declarations reject. The typed virtual
+predicate runtime bridge is connected, while object confirmation, predicate
+normalization/comparison and vtable allocation for new predicate handles remain
+explicit residuals.
+Closure hashes now use raw definition/generic headers and complete synthetic
+kind, RustCall signature and capture arguments. Nine complete compiler hashes
+and components agree, including novel identities and whole-root binders;
+missing/malformed headers, kind/arity, fuel and wrong-oracle controls reject.
+Non-region binders, unsupported alias children, coroutine and non-Value constant
+hashes, full validity and allocation
+identity/dedup reconstruction remain unresolved. These comparisons do
+not establish whole-compiler equivalence, query closure or all-choice guest safety.
+
+Raw MIR constants distinguish Ty, Unevaluated and Val. Covered primitive
+Ty(Value) operands and required constants are evaluated in the execution World
+without exporter Const::eval/ValTree queries; five genuine compiler constants
+each eliminate two explicit calls and match complete evaluated values. Required
+TooGeneric constants fail before the first instruction and preserve the tested
+frame/local/allocation state. Closed, argument-free FnDef values have a separate
+ZST rule; generic/bound FnDef cases reject. Raw aggregate ValTrees additionally
+evaluate six ZST and four uniquely scalar tuple/struct values in the same World,
+matching complete compiler values/types/instances and removing two explicit
+evaluation calls per value. Malformed roots, missing nodes/fields and fuel
+exhaustion reject; allocation-bearing pair/reprC values remain exact residuals.
+Compiler source-body roles now participate in both producer pool keys and the
+execution-owned BodyArena key. Required `source_role` fields distinguish runtime
+and CTFE material/templates; missing/unknown roles reject. Fresh producer tests
+keep the same full instance/promoted identity distinct across roles, reject
+forged role/source pairs, and prevent CTFE material/template bodies from entering
+runtime source resolution or lifecycle hooks. The independent pinned source
+loader selects promoted MIR, Item `mir_for_ctfe`, and non-Item `instance_mir`
+exactly; direct actual-source comparisons pass. These checks establish the source
+and identity boundary, not CTFE interpretation.
+
+CompilerTypingEnv retains ordered caller bounds and all pinned typing-mode
+payloads, with query-free empty Codegen construction and exact PostAnalysis retry
+bounds. Existing source-explicit declaration scopes remain recipes rather than
+normalized ParamEnv answers; general elaboration/normalization is unresolved.
+Unevaluated, allocation-bearing ValTrees and general CTFE/interning remain
+unresolved; no successful no-op stands in for their evaluation. The prepared
+allocator identity accessor patch passes applicability checks. Complete pinned
+compiler sources, vendor dependencies and verified CI LLVM are now prepared;
+a baseline stage1 build succeeded, but the first strict metadata probe exposed a
+stage0/stage1 version distinction. Bootstrap copying also replaced instrumentation
+through a rustc-src symlink; source detachment, a narrow copy filter and continuous
+hash audits now protect repaired instrumentation. The instrumented stage1 rebuild
+succeeded. An actual fresh-driver probe verified complete allocation snapshots,
+snapshot nonmutation, a fresh generic-constant query root and distinct
+dedup/non-dedup membership. The terminal empty-stack PC bug was repaired and
+rebuilt; a fresh-driver traced probe now emits two real positions and completes
+without fabricating a terminal event. These checks do not
+connect the private allocation map to production World execution. Archived
+vendor source remains recoverable offline, and no production allocation admission
+is inferred from a compiler build or an isolated accessor probe.
+
+A private snapshot/export and Lean integration path now evaluates one fresh,
+nontrivial `u32` associated-constant root from raw role-tagged CTFE MIR. Five real
+interpreter steps and root interning match an independent rustc evaluation's
+complete allocation key, source allocation ID and counter frontier. This bounded
+path is not connected to the public importer and does not admit general CTFE.
+Initial typed query memoization is a separate required input: an actual frontend-
+evaluated root returns from Codegen/PostAnalysis caches with zero evaluation
+steps and no allocation changes, whereas a fresh root evaluates once and its
+repeat also hits the cache. Global allocations and deduplication keys cannot
+recover those query keys/results. The private fresh-only slice therefore checks
+absence in all four relevant typed value/allocation caches at its frozen
+boundary, with incremental and on-disk query caching disabled; cached selected
+roots reject. The selected-u32 memo importer reads exact frozen
+VALUE/ALLOC keys and results, validates their source-allocation joins, and matches
+the real cached runtime fixture: PostAnalysis entries complete Codegen queries
+without steps or allocations. Compatible bytes never identify a missing result.
+The Native runner now admits the checked initial-snapshot profile separately from
+the legacy prepared profile. Its initial typed memo is run-owned data, not a saved
+execution World. Raw Unevaluated operands and required-constant preambles call
+the runtime query adapter using the current memory, type arena and memo; the
+Native capability is cached-only, so a missing query remains Unsupported. The
+complete initial allocation prefix and later runtime allocations share the
+MemoryState counter and raw/runtime identity map. Byte access reattaches that
+current state rather than restoring a prepared heap or counter. An actual raw
+u32 assignment returns 17 through this path; wrong-width, promoted and cold
+controls reject while preserving a live allocation prefix. These are finite
+checks, not general CTFE equivalence.
+
+The standard exporter has an opt-in `ctfe-initial-global-snapshot` feature using
+an audited matching custom compiler, private metadata and target std. Public
+build tooling verifies those artifact/source pins. The profile freezes complete
+allocations and all three constant-query caches after analysis, before export
+queries. Requested u32 tables serialize from that frozen cache, never late
+lookups. Six maintained profile controls and the real Lean runtime consumers
+pass. Export work can advance the compiler's allocation/cache state afterward;
+those observations are reported separately and never merged into the initial
+World. The default compiler path cannot supply the private snapshot accessor.
+
+Cast layout normalization now suspends at the source constant demand in an
+execution-owned monad. Its default provider remains explicitly unavailable.
+Provider errors preserve their exact StepError and updated state; source errors
+are separate. Two full std-document controls confirm this behavior. Other
+field/projection hooks, the actual runtime constant provider, parent VALUE
+preambles and arbitrary guest-live CTFE still need integration. A separate
+pre-runtime parent-chain component matches six real steps, three allocation
+roots, all eighteen typed cache slots and Codegen retry behavior; it is not yet
+installed in the Native runner.
+
+The source vtable planner and real allocation factory preserve the distinct
+full-predicate/salt symbolic key and principal-only allocation-query key. Active
+initial runs select the source reserve capability and keep successor memory and
+memo effects. Ground-u32 slot/byte/provenance/counter and MachineHooks controls
+match independent compiler observations, including open-source rejection.
+Typed initial vtable-cache import, issued Function/VTable prefix metadata and
+native allocation/function conversion remain incomplete. Unknown runtime query
+prefixes do not fall back to legacy tables. General initial memo families,
+symbolic type IDs and full CTFE/interner dependency closure remain unresolved.
+
+The exact `DropGlue(_, None)` shim family now retains only instance identity and
+raw source position; its raw declaration signature supplies types. Lean builds
+the one-Return body on demand and retains the execution World. Five independent
+pinned rustc body/interface comparisons pass, including tuple/reference cases;
+a fresh source-demand test also rejects nontrivial drop glue and mixed material
+fallback fields. The 834,375-byte no-op drop guest exits zero in Lean (cursor 316)
+and same-prepared-TyCtxt Miri. Miri skips the no-op frame, so the guest alone does
+not validate body construction; the separate demand/oracle tests do. Its body
+row shrinks from 519 to 161 compact JSON bytes, while the whole artifact grows
+from 534,788 bytes with added source material/schema. Evidence is recorded in
+`scratch/abi-port/noop-drop-start-world.manifest.json`. Nontrivial drops and other
+shim families remain separate work.
+
+Ordinary binder-free, type-only generic source calls now execute from shared raw
+MIR templates and resolve their symbolic callee in the same execution-owned
+World. A fresh `generic-mir-call-start.rs` guest has four selected body references
+to two templates (825,563 bytes); Lean finalized with exit 0 (choice cursor 320)
+and same-prepared-TyCtxt Miri also exited zero. Removing its leaf instance ABI
+row produces Unsupported at the actual call (cursor 54). The existing Item
+instance graph and complete ABI query catalog remain explicit residuals; novel
+instance/body/ABI graph construction is not implemented by this call slice.
+Evidence: `scratch/abi-port/generic-mir-call-start-world.manifest.json` and
+adjacent native/reference logs. These are finite examples, not a general proof.
+
+The exporter-to-Lean compiler migration is incomplete. Lean now implements
+structural `boxed_ty`, `builtin_deref`, `struct_tail_raw`, selected region-erased
+alias-free normalization, trivial Freeze/Unpin/UnsafeUnpin rules, virtual generic
+argument prefix rebasing, and the instance-kind caller-location rule from raw
+definition attributes. The earlier algebraic ID scheme has been removed.
+Current runtime providers use one execution-owned type/constant World with dense
+appended IDs and structural constructor interning; generic MIR, field projection,
+arrays, pointer/reference construction and queries share that universe. It stores
+constructor syntax, not layouts or normalized query answers, and shares no cache
+with another execution. The exporter no longer seeds mutable pointer/reference
+result nodes. Current World integration passes the two novel-type native guests
+below; its full build/audit gate is still being rerun.
+Primitive scalar/never and tuple layouts are reconstructed from TyKind/raw tuple
+recipes and the target; the tuple resolver uses the pinned univariant layout
+algorithm. ADT needs-drop rules execute against raw definition-level destructor
+and ManuallyDrop identity material, with covered answers omitted by the exporter.
+Initial ArgAbi construction, covered x86_64 nonpointer scalar passing modes,
+`fn_can_unwind`, and covered source-signature argument ordering/fixed counts run
+in Lean from explicit material recipes/seeds. Rewritten or unsupported FnAbi
+signatures still carry explicit residual counts and physical ABI query results.
+
+Fresh finite comparisons with pinned rustc passed 3,559 structural/auto-trait
+queries across 541 types, 23 caller-location decisions (both outcomes), four
+virtual generic-rebase prefixes, 22 complete primitive and four complete array
+layouts. Another 316 complete pointer/reference layouts matched the pinned
+rustc oracle, including sized, str, slice and dynamic pointees. Source-extracted
+component comparisons passed 54 initial/scalar ABI and 252 unwind decisions.
+Mutated structural/caller/rebase oracle controls were rejected. These are finite
+component checks, not a compiler equivalence proof. The full native runner and ImportMIR build passed 1,200 jobs after fixing old
+provider references, recipe-width validation and an exhausted build filesystem.
+One fresh 844,898-byte no_std guest passed same-prepared-TyCtxt Miri exit-zero and
+Lean finalized exit-zero with choice cursor 348, including mutable references,
+raw-pointer reads, tuples, array-to-slice coercion and a tracked helper. Its
+nested novel type/array layout and identity checks also passed. A separate
+81,231,642-byte std guest also passed frozen checkpoint `67e70f76` Lean execution:
+finalized exit-zero, cursor 2038, no active frame, and completed leak checking,
+matching its same-prepared-TyCtxt Miri exit-zero reference. One CPU-2 trial with
+one Lean thread measured 5.182 s wall / 5.134 s child CPU, 540,640 KiB peak RSS,
+0.14 s same-CPU steal, zero cgroup throttling and unchanged memory-event counters.
+Frozen binary/input/source hashes remained unchanged. This single shared-host
+trial is not a speedup claim; raw manifests and profiles are in ignored
+`scratch/material-large-trial/`.
+A fresh 875,896-byte `expected_ub` control reached Tree Borrows forbidden-read UB
+at source line 18 in both same-TyCtxt Miri and the frozen Lean runner (cursor 69).
+The exporter returned failure because Miri reported the expected UB, while Lean's
+process exited zero with an explicit `undefined_behavior` terminal; neither is
+counted as safe execution. The new strict production input is schema 13.
+
+The tuple/needs-drop/signature integration passed a further full native and
+ImportMIR build (1,205 jobs). Fresh material and destructor guests matched
+same-TyCtxt Miri exit-zero with Lean exit-zero/cursors 348 and 418. The destructor
+control checks four observable destructor effects plus ManuallyDrop, MaybeUninit
+and zero-length suppression. Its `mem::needs_drop` values can fold at compile
+time and are not counted as runtime query-hook evidence. Independent fresh
+query comparisons passed 417 needs-drop answers (13 true/404 false, no residual
+answers in that fixture), with all 188 candidate type rows omitting the covered
+eager field; missing raw material and invalid destructor IDs were rejected.
+Eight tuple layouts matched complete rustc layouts in ordinary and three
+randomized-layout configurations. Signature planning validated 72 fresh ABI rows
+(14 seeded/58 residual), ten malformed requests and two explicit residual-domain
+controls. A material-only decoder fixture retains exact raw widths without
+inventing a default target; recipes require actual target data. Five updated
+input/constant harnesses and the primitive-range/metadata-pool regressions pass.
+
+Generic substitution/template codecs, general univariant/shuffle, union layout,
+structural Sized and pointer-metadata algorithms also have independent component
+implementations/tests. Some remain unconnected to production queries; their
+presence does not eliminate the corresponding residual catalogs. Full trait
+selection, alias/projection normalization and generic MIR construction are being
+implemented separately and are not yet available as complete runtime providers.
+
+Raw canonical declaration templates now enter the production definition table
+with typed physical definition/binder identities; the nested streaming decoder
+is exercised against all 305 templates in a real fresh control export. Source
+primitive/tuple/ADT field substitution has 30 pinned-rustc comparisons, but
+instantiated-tree-to-runtime conversion still rejects unsupported constructor
+families. This is not full generic runtime normalization.
+Pointer-metadata types and Sized answers now derive from normalized structural
+tails/source kinds rather than covered eager result fields; dynamic DynMetadata
+construction remains residual. Union layouts use raw union type recipes and the
+source-aware calculator. The repaired third integration passed native/ImportMIR
+1,217 jobs and fresh ordinary, Drop and five-union-field-read guests against
+same-TyCtxt Miri exit-zero. Complete union differential coverage includes eight
+layouts and malformed/conflicting/missing material controls. Full Python
+132 tests and semantic-source lint passed after generating audit inventories;
+source-inventory review and full Lean/component regression remain unfinished.
+
+Source MIR now has a strict material/copy-template sum: selected generic bodies
+retain typed source skeletons and are instantiated on demand. Executable body
+metadata scans do not instantiate MIR. The selected family covers local generic
+substitution, references, arrays, tuples and control flow; unsupported calls,
+drops, constants, shims and binder families remain explicit material residuals.
+An independent source-MIR test constructs a nominal-element array type absent
+from the exported type seeds. Component tests pass for both a small source-only
+input and a full std input. A fresh 681,725-byte no_std executable also passes
+same-TyCtxt Miri and the latest Lean runner finalized exit-zero. Its source MIR
+creates an array absent from the material seeds. Shared source rules supply
+array/pointer/reference discriminant types and non-enum facts, rather than
+requiring a preexisting compiler-facts row for the new type.
+
+Raw trait program extraction is bounded by source constructor demand. Goals
+outside that declared constructor scope are Unsupported, never noSolution.
+For the unchanged generic-MIR fixture and invocation, scoped material reduced
+21,634,424 bytes to 111,874 bytes (95 to five traits, 7,608 to 19 impls), while
+runtime type/body/template counts stayed unchanged. This measures the seed
+closure repair, not final migration performance. Closed ordinary impl selection,
+where-clause fulfillment and selected free/projection alias reduction execute
+from declarations in Lean; specialization, universe/HRTB and other solver rules
+are incomplete. Production normalization routes every nonrigid free/projection
+alias through the source-rule engine and omits its eager normalized result;
+unsupported providers fail explicitly without an answer-catalog fallback.
+
+Covered non-specialized trait-default methods retain the original trait and
+method arguments, rather than rebasing them onto impl parameters. Source demand
+captures the actual default runtime templates and their direct default-body
+dependencies. Two fresh compiler selections, both complete BodyArena identities,
+eight rejection controls and a wrong-physical-oracle control pass without instance,
+ABI or body-answer catalogs. Broader defaults, predicates and specialization
+remain bounded by the ordinary source solver.
+Five fresh canonical-main/current export pairs passed rebuilt Lean query checks:
+ordinary generic projection, GAT substitution/own clauses, checked free alias,
+checked alias with an associated-type equality clause, and an explicit unsupported
+specialization boundary. The four supported controls match independent rustc
+normalization, including actual `CompilerFacts` dispatch after all candidate
+normalization rows are removed. Missing `Gate<u32>`, missing GAT-own `Leaf<u32>`
+and a changed associated equality produce definite no-solution; the GAT-own
+negative also fails pinned rustc with E0277. The genuine specialization fixture
+normalizes successfully in rustc and is explicitly rejected by Lean as ambiguous;
+this boundary check is not solver equivalence. Candidate sizes are 113,448,
+113,211, 107,832, 112,841 and 112,079 bytes respectively. The run commands,
+scoped results and source/exporter/Lean artifact hashes are recorded in
+`scratch/projection-production/{results,source-manifest}.json`. These checks
+exercise production query providers, not a completed guest execution or the
+remaining rigid, opaque, inherent, binder and specialization families.
+
+Canonical ADT declarations now retain source kind, lang-item identity, variant
+and field-safety domains, and own clauses alongside the original generic field
+templates; no computed Sized constraint is exported. Production Sized/MetaSized
+trait providers inspect these expressions before runtime type lookup. Eighteen
+answers over nine concrete type expressions match an independent pinned-rustc
+oracle under the exact fresh compiler invocation, including six expressions
+absent from the material type IDs. The cases include nested `Tail<str>`, a slice
+tail, a raw-pointer field with unsized pointee, and an unsized tuple tail; three
+Sized goals and all nine MetaSized goals hold. Removing canonical ADT material
+produces explicit Unsupported for every ADT query, and a corrupted oracle is
+rejected. The 177,871-byte input and source/exporter/Lean artifact hashes are in
+`scratch/term-sized/{candidate,manifest,results}.json`. Fourteen independent
+kernel component checks also pass. Binder/inference families remain explicitly
+unsupported; these query comparisons are not a generic guest-execution claim.
+
+The exporter no longer emits `discriminant_type` answers. Production derives
+ordinary types as u8, coroutine state types as u32, enum discriminant types from
+source representation options, and pattern/alias cases recursively. Six fresh
+enum cases match an independent canonical-main rustc oracle through the actual
+compiler provider after every candidate answer row is removed. This includes
+`repr(C)`'s public isize discriminant type, independently of its physical tag.
+All 42 type-facts rows in the 169,222-byte control omit the field (the canonical
+input is 192,706 bytes). A corrupted oracle and a mislabeled primitive identity
+anchor are rejected, and nine kernel recursion/error controls pass. Evidence
+and source/exporter/Lean hashes are in
+`scratch/discriminant-types/{candidate,manifest,results}.json`. UnsafeBinder
+still requires explicit residual binder-erasure material; enum/coroutine
+value enumerations remain separate residual compiler results. This is a
+completed query-type port, not a general discriminant constant evaluator.
+
+Current-artifact World component checks pass for a 64-level shared tuple DAG,
+region-parameter/static erasure flags, and a genuinely new nominal-element array:
+normalization, Sized, inhabitedness, needs-drop, public auto-trait queries and
+discriminant types all read the same universe. Query-local fold memos prevent
+repeated DAG visits and are discarded after the query. A second independent
+execution deliberately reuses type number 64 for different syntax and receives
+its own correct normalization result. Ten structural diagnostic type names match
+an independent pinned-rustc Display oracle, including nine newly constructed
+types. Raw session print limits and verbose/region flags are captured exactly;
+a real limit-zero/verbose/identify-regions compiler invocation confirms those
+configuration seeds. Missing print options, contextual truncation, unsupported
+verbose references and a corrupt name oracle fail explicitly. Structural printing
+supports scalar/pointer/reference/tuple/array/slice forms and local named ADTs
+from raw DefKey namespace/symbol chains. Twelve newly constructed named/structural
+types match independent rustc Display; missing raw paths fail closed. Raw session
+trimming flags are captured, with active trimming, external visible paths, generic
+default elision, const arguments and impl scopes still explicitly unsupported.
+Local Rust-ABI FnDef diagnostics now instantiate raw signature templates and
+print the exact source HIR safety/target-feature prefix and value path. Five
+genuinely novel function items match ten independent diagnostic/intrinsic rustc
+strings, including unsafe, target-feature, unit-return and nested-module cases.
+Intrinsic type_name has a separate printer: it includes crate paths and ignores
+diagnostic settings. Twelve additional novel nominal/structural intrinsic names
+match rustc, including a missing-diagnostic-options control. Other ABI spellings,
+nonempty binders, dynamic types and additional path families remain explicit
+boundaries. The exporter type_name result enumeration, result schema and unused
+result-type anchor are deleted; current native intrinsic allocation validation
+is recorded separately from these string comparisons. Canonical field/variant names now enter ADT declarations as source
+symbols. A second independent rustc oracle agrees on 36 Sized/needs-drop/inhabitedness
+answers across twelve genuinely novel types, including generic never fields,
+destructors, enum alternatives, unions, recursive references and zero-length
+array suppression; a corrupted inhabitedness answer is rejected. The permanent
+World component script passes; logs and artifact hashes
+are in `scratch/world-types-check.log` and `scratch/world-types/`. Current World native execution passes the novel-array and tuple/Wrapper no-std
+guests (approximately 701 KB inputs). The current type/instance Store wave passes
+1,437 build jobs and the axiom audit covers 81,164 Miri declarations using only
+the three permitted axioms. All 133 Python tests and 47 self-contained runtime
+checks pass. Earlier checkpoint `d23c9e6f` stopped at covariance ThreadId-to-u64;
+the bounded rigid-constructor mismatch rule now derives that false result from
+source syntax, including novel types in the same World. A fresh std generic
+input now passes same-prepared-TyCtxt Miri and Lean exit-zero, cursor 1430 and no
+active frame. General same-constructor variance and alias/binder relations remain
+residual. Artifact hashes are in `scratch/wave7-fullstd/manifest.json`.
+
+The eager intrinsic type_name answer category and result-type anchor are removed.
+Its runtime path computes the string in Lean, reserves CTFE bytes with salt zero,
+checks the destination layout and adjusts a runtime allocation root before making
+the slice operand; runtime IDs never enter the exported allocation-graph namespace.
+A fresh three-name guest passes Miri and Lean exit-zero at cursor 437. The stable
+core::any wrapper contains an anonymous const: current const_operand_json still
+CTFE-evaluates it before capture. An independent pinned driver measures zero
+allocations for MIR acquisition/instantiation and two at that constant evaluation.
+Consequently this guest validates category removal and ordinary constant operands;
+it does not establish execution of the new intrinsic adapter or a fresh-allocation
+miss. Unevaluated constant seeds/Lean CTFE and raw allocator-map capture remain
+necessary. See the frozen
+`scratch/type-name-runtime-v2/manifest.json`.
+
+Contextual layout operations preserve their source provenance separately from
+canonical type layouts. Wide-pointer data fields and enum tag fields have distinct
+operation keys even when their physical layout equals an ordinary type layout.
+Seventy-two complete field contexts agree with the independent pinned compiler,
+including signed wrapping tag ranges, niches, uninhabited variants, transparent
+wrappers and unions. Three runtime Access regressions preserve selected-variant
+u64/bool/u16 field layouts. Malformed parent, mixed recipe/eager payload and
+canonical/contextual identity-conflict controls are rejected. These finite checks
+do not port general enum/niche layout construction.
+
+A default-root exporter ICE also reproduced on canonical c8daa215: a static
+u32 body was incorrectly treated as a callable backtrace-frame candidate.
+Callable-definition guards preserve the static body while preventing the invalid
+fn ABI query. The corrected full fixture exports and its same-TyCtxt Miri run
+exits zero. Long earlier Lean runs were terminated and are INCOMPLETE/NOTPASS.
+The certified runtime subsequently completed the same 89,269,768-byte full
+fixture: Lean finalized exit-zero, cursor 1675, no active frame, matching its
+hash-bound same-TyCtxt Miri exit-zero reference. This is one finite guest pass;
+no performance ratio is claimed. The latest complete library/test build passes
+1,368 jobs including native runner, frontend and tests, and the axiom audit
+covers 78,993 declarations using only allowed axioms; all 132 Python tests and
+semantic-source lint pass. All 47 self-contained runtime checks also pass.
+This does not imply that the full multi-stage regression entry point has passed.
+On-demand body lowering now uses a minimal context with a kernel equality proof;
+a document-local density certificate removes repeated full type-pool validation,
+with kernel parity proofs. A microprobe over 8,963 types resolves exact identities
+in 53–55 ms; its uncertified control exceeded ten seconds. This is a focused
+algorithm diagnostic, not a full guest pass or comparative architecture benchmark.
+
+Raw ADT declaration material now includes original kind, canonical language-item
+identity, own predicates and field safety, validated against its canonical source
+template. Strict FnDef material distinguishes the generic-argument binder from
+the function-signature binder; three fresh rustc canonical-tree comparisons pass,
+including a nonempty signature binder with an empty argument binder. Bounded
+struct layouts now execute through the same source-aware resolver: ten struct
+recipe type nodes and eight tuples match complete rustc layouts in ordinary and
+three randomized configurations. A fresh executable checks five actual struct
+field-read families against same-TyCtxt Miri and Lean exit-zero. Unsupported
+parameter/alias/nominal declaration tails, SIMD/scalable and special float structs
+retain explicit material layouts; new nominal type construction is not provided
+by this bounded recipe.
+
+The integrated strict input also passes a fresh 88,887,012-byte full generic std
+guest: same-TyCtxt Miri and Lean exit-zero, cursor 1675, no active frame. One
+CPU-pinned, single-thread diagnostic measured 6.678 s wall, 6.568 s child CPU,
+564,240 KiB peak RSS, 31 same-CPU steal ticks and zero cgroup throttling/memory
+event changes; binary/input/source hashes are fixed in its raw manifest. This
+is not a before/after performance comparison. Checkpoint `28243a8c` passed 1,378
+jobs and the axiom audit covers 79,286 declarations with allowed axioms only;
+all 133 Python tests, 47 self-contained runtime checks and semantic-source lint
+pass. The full multi-stage regression entry point is still unfinished. These build and
+audit counts precede the current execution-owned World integration.
+
+The same minimal generic invocation remains bounded after raw ADT integration:
+111,335 bytes, 33 runtime types, 63 definitions, 38 templates, five traits,
+19 impls and one MIR template/two body seeds. Ordinary source-call substitution
+and effect-parametric identity resolution have actual compiler comparisons, but
+covered call-containing source bodies are now selected by the producer and their
+fresh same-TyCtxt Miri reference passes; current native execution is still being
+validated. The existing instance/body/ABI demand graph remains residual. Sequence layouts and general
+discriminant-type rules have independent components; their eager catalogs have
+not yet been removed. A comparison harness freezes binaries and records
+alternating CPU-pinned one-thread trials with exact child CPU/RSS and host
+counters; its four identical-runner smoke checks and timeout rejection control
+validate the harness only, not migration speedup.
+
+The remaining migration includes general generic template export/substitution,
+alias/projection normalization, trait selection and fulfillment (including negative,
+coinductive and specialization rules), associated-item and instance resolution,
+ADT/aggregate/niche layouts, target ABI adjustment, MIR generic bodies and shim
+construction, constant evaluation, vtable construction/upcasting, covariance,
+validity, type hashes/names, and the other compiler-owned intrinsic/platform facts.
+Existing catalogs for those categories still contain rustc query results. The
+exporter still closes a finite query demand graph and monomorphizes MIR. Full
+migration, elimination of query closure, and rustc semantic equivalence are not
+claimed. Some queries on novel arena types remain explicitly unsupported.
+
+Historical fixtures are adapted only in test code. Where original material
+cannot be recovered (old unwind answers and virtual generic counts), those
+adapters use explicitly synthetic seed representatives preserving the old
+component result. Such replay is not evidence that a new producer exported the
+right material, nor independent ABI/rebasing correspondence. Genuine compiler
+comparisons use fresh exports or focused category readers over immutable rustc
+oracle data. Production readers reject schema 11/12 and eager unwind results.
+The complete existing Lean harness suite and full regression entry points have
+not yet passed on this migration; earlier successes elsewhere in this file do
+not cover it.
+
 ## Exported input coverage
 
-Each concrete instance and promoted index has one executable MIR body. The
-exporter substitutes generic arguments, normalizes types, and evaluates MIR
-constants, including unused required constants, before emitting that body.
-Runtime storage, pointer and layout queries use the resolved types. Unbound
-generic templates are rejected as executable roots; diagnostic spans and scopes
-remain attached to the resolved instructions.
+Each concrete instance and promoted index has one body seed. Covered generic
+bodies reference typed source MIR templates; Lean substitutes their local types
+on demand and can create previously absent pointer/reference/array identities.
+Other bodies remain explicit material MIR: the exporter still substitutes,
+normalizes and evaluates constants for these residual families. Raw templates
+cannot execute directly; resolution validates their closed instantiated form.
+Runtime storage, pointer and layout queries use the resolved types, and source
+spans/scopes remain attached to resolved instructions.
 The exporter aborts when requested semantic compiler data is unavailable; the
 Lean input API no longer retains failed exporter payloads as execution inputs.
 Successful values are serialized without success-status wrappers or a
@@ -832,3 +1703,33 @@ tracking modes are disabled tracking and the Miri vector-clock backend.
   do not resolve them. Existing finite comparisons use a separate reference
   TyCtxt with isolation disabled and a retained Linux host trace; unobserved
   host demands remain Unsupported.
+
+Alias rigidity remains a compiler syntax/state boundary: the exported boolean is
+read from TyKind::Alias(IsRigid,...) rather than a dedicated query. Pinned
+rustc_type_ir/ty_kind.rs documents that the new solver sets this state after
+normalization and that changes to typing mode/ParamEnv invalidate it. Removing
+this seed requires source alias provenance and Lean normalization/rigidification;
+classifying rigidity from the alias family alone would lose semantics.
+
+FunctionTypePrinter is now routed for local Rust-ABI FnDef diagnostics; five
+additional executable signature controls cover safe/unsafe, unit output,
+variadic/splat syntax and unsupported ABI rejection. JSON parsing is not kernel
+reducible; these controls are executable checks, not kernel proofs.
+
+CompilerInstanceAbi and native signature adapters now validate runtime instance
+IDs against the execution-owned instance store. Their existing result catalogs
+remain explicit residual domains; a new syntax identity does not create an ABI
+answer. Intrinsic generic-constant operations instead read the same execution's
+argument and constant nodes directly. A fresh const-generic fixture constructs
+constant77 and its full instance outside both material prefixes; const_at/Value
+works without a catalog row, while branch and non-Value invariants fail closed.
+
+The new intrinsic string can be allocated with fixed CTFE salt0 before layout
+checking and root adjustment; it must never be cast from runtime AllocId into
+an exporter-graph ConstValue ID. The prepared allocator byte-key catalog remains
+a separate migration residual: it currently probes32 salts per existing byte
+image. Raw payloads alone cannot recover dedup membership because equal memory
+can also receive distinct non-deduplicated IDs. Minimal exact continuation needs
+actual AllocMap counter/map/dedup state access, currently private to rustc, or an
+explicitly retained prepared catalog boundary. See the source-study artifact in
+scratch/function-type-printer/ALLOCATION-STUDY.md.

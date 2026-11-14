@@ -1,4 +1,8 @@
+import Miri.Input.SourceEnvironmentCodec
+import Miri.Input.AliasMaterialCodec
+import Miri.Input.AdtDeclarationCodec
 import Miri.Input.TableCore
+import Miri.Input.GenericMaterialCodec
 
 namespace Miri.Input.DecoderValues
 open JsonReader
@@ -69,6 +73,10 @@ def parseSourceAllocIdDedupKind (value path : String) : Except String SourceAllo
 
 def passModeKind (tag : String) : Except String PassModeKind :=
   match tag with
+  | "Initial" => pure (.initial)
+  | "ScalarRust" => pure (.scalarRust)
+  | "ScalarSysvArgument" => pure (.scalarSysvArgument)
+  | "ScalarSysvReturn" => pure (.scalarSysvReturn)
   | "Ignore" => pure (.ignore)
   | "Direct" => pure (.direct)
   | "Pair" => pure (.pair)
@@ -252,19 +260,119 @@ def parseAllocationMemoryInline (path : String) : Parser AllocationMemory :=
     (array (parseInitRange (path ++ ".initialization_ranges")))
     (array (parseRelocation (path ++ ".relocations")))
 
+private def parseAdtDropMaterial (path : String) : Parser AdtDropMaterial := do
+  let (manuallyDrop, destructor) ← object (none, none) fun (manual, dtor) key => do
+    match key with
+    | "manually_drop" => pure (some (← boolean), dtor)
+    | "destructor" => pure (manual, some (← nullable natural))
+    | _ => fail s!"{path}: unknown ADT drop material field `{key}`"
+  return ⟨← required manuallyDrop (path ++ ".manually_drop"),
+    ← required destructor (path ++ ".destructor")⟩
+
+private def parseFunctionAbiMaterial (path : String) : Parser FunctionAbiMaterial := do
+  let (neverUnwind,foreignItem,dropGlue,noWritable,alwaysComptime) ← object (none,none,none,none,none)
+      fun (neverUnwind,foreignItem,dropGlue,noWritable,alwaysComptime) key => do
+    match key with
+    | "never_unwind" => pure (some (← boolean),foreignItem,dropGlue,noWritable,alwaysComptime)
+    | "foreign_item" => pure (neverUnwind,some (← boolean),dropGlue,noWritable,alwaysComptime)
+    | "drop_glue" => pure (neverUnwind,foreignItem,some (← boolean),noWritable,alwaysComptime)
+    | "rustc_no_writable" => pure (neverUnwind,foreignItem,dropGlue,some (← boolean),alwaysComptime)
+    | "always_comptime" => pure (neverUnwind,foreignItem,dropGlue,noWritable,some (← boolean))
+    | _ => fail s!"{path}: unknown definition ABI attribute `{key}`"
+  pure ⟨← required neverUnwind (path ++ ".never_unwind"),
+    ← required foreignItem (path ++ ".foreign_item"),
+    ← required dropGlue (path ++ ".drop_glue"),
+    ← required noWritable (path ++ ".rustc_no_writable"),
+    ← required alwaysComptime (path ++ ".always_comptime")⟩
+
+private def parseCallableSource (path : String) : Parser CallableSource := do
+  let raw ← Lean.Json.Parser.anyCore
+  liftExcept do
+    for (key,_) in (← raw.getObj?).toArray do
+      unless ["has_self","definition_kind","container","trait_item"].contains key do
+        throw s!"{path}: unknown callable source field {key}"
+    let hasSelf ← (← raw.getObjVal? "has_self").getBool?
+    let definitionKind ← (← raw.getObjVal? "definition_kind").getStr?
+    let containerRaw ← raw.getObjVal? "container"
+    let container ← if containerRaw == .null then pure none else some <$> containerRaw.getStr?
+    let traitRaw ← raw.getObjVal? "trait_item"
+    let traitItem ← if traitRaw == .null then pure none else some <$> GenericMaterialCodec.readDefinition traitRaw
+    unless definitionKind == "function" || definitionKind == "associated_function" do
+      throw "callable source definition kind unsupported"
+    if definitionKind == "function" then
+      unless container.isNone && traitItem.isNone && !hasSelf do
+        throw "ordinary callable source has associated header"
+    else
+      unless container == some "trait" || container == some "trait_impl" || container == some "inherent_impl" do
+        throw "associated callable source container unsupported"
+      unless (container == some "trait_impl") == traitItem.isSome do
+        throw "callable source trait mapping and container disagree"
+    pure ⟨hasSelf,definitionKind,container,traitItem⟩
+
 private structure ParseDefinitionIdFields where
   crate : Option (Nat) := none
   index : Option (Nat) := none
+  bodyTrackCaller : Option Bool := none
+  callableSource : Option CallableSource := none
+  adtDrop : Option AdtDropMaterial := none
+  genericTemplate : Option GenericSubstitution.DefinitionTemplate := none
+  aliasDeclaration : Option AliasMaterial.Declaration := none
+  adtDeclaration : Option Lean.Json := none
+  rawPath : Option DefinitionPath.Material := none
+  sourceEnvironment : Option SourceEnvironment.Material := none
+  functionAbiMaterial : Option FunctionAbiMaterial := none
 
 def parseDefinitionId (path : String) : Parser (DefinitionId) := do
-  let s ← object (ParseDefinitionIdFields.mk none none) fun s key => do
+  let s ← object ({} : ParseDefinitionIdFields) fun s key => do
     match key with
     | "crate" => return { s with crate := some (← natural) }
     | "index" => return { s with index := some (← natural) }
+    | "function_abi_material" => return { s with functionAbiMaterial := some (← parseFunctionAbiMaterial (path ++ ".function_abi_material")) }
+    | "callable_source" => return { s with callableSource := some (← parseCallableSource (path ++ ".callable_source")) }
+    | "body_track_caller" => return { s with bodyTrackCaller := some (← boolean) }
+    | "adt_drop" => return { s with adtDrop := some (← parseAdtDropMaterial (path ++ ".adt_drop")) }
+    | "source_environment" => return { s with sourceEnvironment := some (← liftExcept (SourceEnvironmentCodec.read (← Lean.Json.Parser.anyCore))) }
+    | "raw_path" => return { s with rawPath := some (← DefinitionPath.decode) }
+    | "generic_template" => return { s with genericTemplate := some (← GenericMaterialCodec.decodeTemplate) }
+    | "alias_declaration" => return { s with aliasDeclaration := some (← AliasMaterialCodec.decodeDeclaration) }
+    | "adt_declaration" => return { s with adtDeclaration := some (← Lean.Json.Parser.anyCore) }
     | _ => skipValue; pure s
   let crate ← required s.crate (path ++ ".crate")
   let index ← required s.index (path ++ ".index")
-  return ⟨crate, index⟩
+  if let some declaration := s.aliasDeclaration then
+    unless declaration.definition == (⟨crate,index⟩ : GenericSubstitution.DefinitionIdentity) do
+      fail s!"{path}: source alias declaration identity mismatch"
+    unless declaration.hasValue == s.genericTemplate.isSome do
+      fail s!"{path}: source alias RHS availability disagrees with shared template"
+  let adtDeclaration ← match s.adtDeclaration with
+    | none => pure none
+    | some raw => do
+      let some template := s.genericTemplate
+        | fail s!"{path}: raw ADT declaration requires its source template"
+      let .definition .type "adt" identity _ := template.typeExpression
+        | fail s!"{path}: raw ADT declaration has no nominal source type"
+      unless identity == (⟨crate,index⟩ : GenericSubstitution.DefinitionIdentity) do
+        fail s!"{path}: raw ADT source identity mismatch"
+      pure (some (← liftExcept (AdtDeclarationCodec.read template raw)))
+  if let some template := s.genericTemplate then
+    if let some environment := s.sourceEnvironment then
+      unless environment.parameters == template.parameters do
+        fail s!"{path}: source environment and declaration template parameter scopes disagree"
+    if let .definition .type "adt" identity _ := template.typeExpression then
+      if identity == (⟨crate,index⟩ : GenericSubstitution.DefinitionIdentity) && adtDeclaration.isNone then
+        fail s!"{path}: nominal ADT source template requires raw declaration attributes"
+  return {
+    crateIndex := crate
+    index := index
+    bodyTrackCaller := s.bodyTrackCaller
+    callableSource := s.callableSource
+    adtDrop := s.adtDrop
+    genericTemplate := s.genericTemplate
+    aliasDeclaration := s.aliasDeclaration
+    adtDeclaration := adtDeclaration
+    rawPath := s.rawPath
+    sourceEnvironment := s.sourceEnvironment
+    functionAbiMaterial := s.functionAbiMaterial }
 
 def parseDefinitionRef (_path : String) : Parser DefinitionRef := natural
 
@@ -305,7 +413,7 @@ private structure ParseProjectionTermFields where
   kind : Option (String) := none
   value : Option (Nat) := none
 
-private def parseProjectionTerm (path : String) : Parser (Nat) := do
+private def parseProjectionTerm (path : String) : Parser PredicateProjectionTerm := do
   let s ← object (ParseProjectionTermFields.mk none none) fun s key => do
     match key with
     | "kind" => return { s with kind := some (← string) }
@@ -313,8 +421,10 @@ private def parseProjectionTerm (path : String) : Parser (Nat) := do
     | _ => skipValue; pure s
   let kind ← required s.kind (path ++ ".kind")
   let value ← required s.value (path ++ ".value")
-  unless kind == "type" do fail s!"{path}: unsupported predicate projection term"
-  pure value
+  match kind with
+  | "type" => pure (.type value)
+  | "const" => pure (.constant value)
+  | _ => fail s!"{path}: unsupported predicate projection term"
 
 private structure ParseVtablePredicateFields where
   kind : Option (String) := none
@@ -322,7 +432,7 @@ private structure ParseVtablePredicateFields where
   def_path : Option (Option String) := none
   generic_args : Option (Array Miri.MIR.GenericArg) := none
   bound_variables : Option (Array Miri.MIR.BoundVariableKind) := none
-  term : Option (Option Nat) := none
+  term : Option (Option PredicateProjectionTerm) := none
 
 def parseVtablePredicate (path : String) : Parser (VtablePredicate) := do
   let s ← object (ParseVtablePredicateFields.mk none none none none none none) fun s key => do
@@ -1053,7 +1163,7 @@ def parseAbiPassMode (path : String) : Parser (AbiPassMode) := do
   let address_space ← pure (s.address_space.getD none)
   let kind ← liftExcept (passModeKind kind)
   let allowed : List String := match kind with
-    | .ignore => []
+    | .initial | .scalarRust | .scalarSysvArgument | .scalarSysvReturn | .ignore => []
     | .direct => ["attributes"]
     | .pair => ["first", "second"]
     | .cast => ["target", "pad_i32_count"]
@@ -1095,13 +1205,36 @@ def parseAbiArgument (path : String) : Parser (AbiArgument) := do
   let mode ← required s.mode (path ++ ".mode")
   return ⟨type, layout, mode⟩
 
+private def parseUnwindDefinition (path : String) : Parser Miri.ABI.UnwindDefinition := do
+  let (never, foreign, drop) ← object (none, none, none) fun (never, foreign, drop) key => do
+    match key with
+    | "never_unwind" => pure (some (← boolean), foreign, drop)
+    | "foreign_item" => pure (never, some (← boolean), drop)
+    | "drop_glue" => pure (never, foreign, some (← boolean))
+    | _ => fail s!"{path}: unknown unwind definition field `{key}`"
+  return ⟨← required never (path ++ ".never_unwind"),
+    ← required foreign (path ++ ".foreign_item"), ← required drop (path ++ ".drop_glue")⟩
+
+private def parseUnwindSeed (path : String) : Parser Miri.ABI.UnwindSeed := do
+  let (abi, definition, panic, drop) ← object (none, none, none, none)
+      fun (abi, definition, panic, drop) key => do
+    match key with
+    | "abi" => pure (some (← CompilerExternAbi.decode), definition, panic, drop)
+    | "definition" => pure (abi, some (← nullable (parseUnwindDefinition (path ++ ".definition"))), panic, drop)
+    | "panic_unwinds" => pure (abi, definition, some (← boolean), drop)
+    | "panic_in_drop_unwinds" => pure (abi, definition, panic, some (← boolean))
+    | _ => fail s!"{path}: unknown unwind seed field `{key}`"
+  return ⟨← required abi (path ++ ".abi"), ← required definition (path ++ ".definition"),
+    ← required panic (path ++ ".panic_unwinds"), ← required drop (path ++ ".panic_in_drop_unwinds")⟩
+
 private structure ParseFunctionAbiFields where
   arguments : Option (Array AbiArgument) := none
   returnValue : Option (AbiArgument) := none
   calling_convention : Option (CanonicalAbi) := none
-  can_unwind : Option (Bool) := none
+  unwind_seed : Option (Miri.ABI.UnwindSeed) := none
   c_variadic : Option (Bool) := none
   fixed_count : Option (Nat) := none
+  signature_seed : Option AbiSignatureSeed := none
 
 def parseFunctionAbi (path : String) (argumentPool : Option (Array AbiArgument) := none) : Parser (FunctionAbi) := do
   let argument (path : String) : Parser AbiArgument := do
@@ -1111,22 +1244,25 @@ def parseFunctionAbi (path : String) (argumentPool : Option (Array AbiArgument) 
       let id ← natural
       let some value := pool[id]? | fail s!"{path}: unresolved ABI argument {id}"
       pure value
-  let s ← object (ParseFunctionAbiFields.mk none none none none none none) fun s key => do
+  let s ← object (ParseFunctionAbiFields.mk none none none none none none none) fun s key => do
     match key with
     | "arguments" => return { s with arguments := some (← arrayIndexed (fun i => argument s!"{path}.arguments[{i}]")) }
     | "return" => return { s with returnValue := some (← argument (path ++ ".return")) }
     | "calling_convention" => return { s with calling_convention := some (← parseCanonicalAbi (path ++ ".calling_convention")) }
-    | "can_unwind" => return { s with can_unwind := some (← boolean) }
+    | "unwind_seed" => return { s with unwind_seed := some (← parseUnwindSeed (path ++ ".unwind_seed")) }
+    | "can_unwind" => fail s!"{path}: eager unwind result is not a material seed"
     | "c_variadic" => return { s with c_variadic := some (← boolean) }
     | "fixed_count" => return { s with fixed_count := some (← natural) }
+    | "signature_seed" => fail s!"{path}: legacy source ABI signature seed is not a rustc result"
     | _ => skipValue; pure s
   let arguments ← required s.arguments (path ++ ".arguments")
   let returnValue ← required s.returnValue (path ++ ".returnValue")
   let calling_convention ← required s.calling_convention (path ++ ".calling_convention")
-  let can_unwind ← required s.can_unwind (path ++ ".can_unwind")
+  let unwind_seed ← required s.unwind_seed (path ++ ".unwind_seed")
   let c_variadic ← required s.c_variadic (path ++ ".c_variadic")
-  let fixed_count ← required s.fixed_count (path ++ ".fixed_count")
-  return ⟨arguments, returnValue, calling_convention, can_unwind, c_variadic, fixed_count⟩
+  unless s.fixed_count.isSome do
+    fail s!"{path}: rustc fixed_count result is absent"
+  return ⟨arguments, returnValue, calling_convention, unwind_seed, c_variadic, s.fixed_count, s.signature_seed⟩
 
 def decodeCompilerLayout : Parser Layout := parseLayout "$.compiler_projection_layout"
 def decodeCompilerFunctionAbi : Parser FunctionAbi := parseFunctionAbi "$.compiler_fn_abi"

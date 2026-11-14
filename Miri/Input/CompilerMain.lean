@@ -1,4 +1,6 @@
 import Miri.Input.CompilerInstance
+import Miri.Input.RuntimeArrayQueries
+import Miri.Input.LowerMIR
 import Miri.Input.CompilerExternAbi
 import Miri.Interpreter.MainMachine
 
@@ -75,7 +77,7 @@ def prepare (runtime : RuntimeMetadata) (program : LoweredProgram) : Except Stri
       unless record.signature.compilerSelectedEntry do
         throw "lang_start query not requested for a non-compiler-selected entry"
       record.signature.startResolution.mapM fun value => do
-        let _ ← CompilerInstance.source ctx.instances value.instanceId
+        let _ ← CompilerInstance.Material.source ctx.instances value.instanceId
         pure value.instanceId
     entries := entries.push ⟨id, parameters, signature, outcome⟩
   let sectionsResult : Except String (Array SectionQuery) := do
@@ -109,10 +111,11 @@ def sourceCompilerEntry (p : Prepared) : Except String (Option (MIR.DefId × Mai
 private def lift (value : Except String A) : MainMachine.M U A :=
   match value with | .ok value => pure value | .error error => throw (.unsupported error)
 
-def hooks (p : Prepared) (base : MainMachine.Hooks U C O ABI.ExternAbi F A Aff P) :
+def hooks (p : Prepared) (types : RuntimeArrayQueries.Access (MainMachine.State U)) (base : MainMachine.Hooks U C O ABI.ExternAbi F A Aff P) :
     MainMachine.Hooks U C O ABI.ExternAbi F A Aff P :=
   {base with
-    itemInstance := fun definition args => lift (CompilerInstance.item p.program.input.instances definition args)
+    itemInstance := fun definition args => lift
+      (CompilerInstance.Material.item p.program.input.instances definition args)
     cNoUnwind := .C false
     genericParameters := fun id => lift do return (← entry p id).parameters
     entrySignature := fun id => lift do (← entry p id).signature

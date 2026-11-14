@@ -25,7 +25,13 @@ def _walk(value, transform):
         return value
     result = {}
     for key, child in value.items():
-        if key in FIELD_POOLS:
+        if key in ("mir_templates", "ctfe_scalar_sources"):
+            # These are raw immutable declaration/frame material. In particular,
+            # CTFE statements have inline kind objects, not statement_kinds pool
+            # references. Neither source format participates in execution-body
+            # payload pooling; preserve its complete subtree in both directions.
+            result[key] = copy.deepcopy(child)
+        elif key in FIELD_POOLS:
             result[key] = None if key == "discriminants" and child is None else transform(FIELD_POOLS[key], child)
         elif key == "fn_abis" and isinstance(child, list):
             result[key] = [{**_walk({field: item for field, item in abi.items()
@@ -63,7 +69,7 @@ def project_unused_metadata(document):
 
 
 def pool_document(document):
-    """Project expanded schema 8 to 11, checking the retained payloads exactly."""
+    """Test-only schema-8 pooling followed by explicit schema-13 adaptation."""
     if document.get("schema_version") != 8:
         raise ValueError("fixture pooling requires schema 8")
     document = project_unused_metadata(document)
@@ -84,7 +90,11 @@ def pool_document(document):
     result.update(pools)
     result["schema_version"] = 11
     assert expand_document(result, schema_version=8) == document, "pool projection changed payloads"
-    return result
+    try:
+        from .legacy_fixture_schema import adapt_legacy_fixture
+    except ImportError:
+        from legacy_fixture_schema import adapt_legacy_fixture
+    return adapt_legacy_fixture(result)
 
 
 def expand_document(document, *, schema_version=None):

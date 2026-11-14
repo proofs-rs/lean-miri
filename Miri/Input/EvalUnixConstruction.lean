@@ -219,9 +219,7 @@ private def bindEnvironmentMemory
         | .error reason => throw (.unsupported s!"compiler pointer-cell layout: {reason}")
       pointerPlace operand layout
     projectNamed := fun parent name => do
-      let index ← match CompilerNamedFields.fieldIndex p.runtime parent.layout name with
-        | .ok index => pure index
-        | .error error => throw error
+      let index ← CompilerNamedFields.fieldIndex EvalProjectionMachine.arrays parent.layout name
       let projected ← PlaceDynamic.field projection choice
         ⟨.memory parent.mplace,parent.layout⟩ index
       match projected.ref with
@@ -282,8 +280,8 @@ private def environment
     StepError.unsupported s!"compiler target architecture for Unix environment shims: {reason}"
   let symbols ← p.foreignSymbols |>.mapError fun reason =>
     StepError.unsupported s!"compiler foreign-symbol table for Unix environment shims: {reason}"
-  let frame := CompilerFrameMetadata.hooks p.lifecycle.frames userRelevantCrates
-  let callCompiler := CompilerCallConstruction.compiler p compatibilityBudget
+  let frame := CompilerFrameMetadata.hooks p.lifecycle.frames EvalProjectionMachine.arrays userRelevantCrates
+  let callCompiler := CompilerCallConstruction.compiler p EvalProjectionMachine.arrays compatibilityBudget
   let u32Layout ← match p.primitiveLayout "u32" with
     | .ok value => pure ⟨value.ty,value.layout⟩
     | .error reason => throw (.unsupported s!"compiler u32 layout for errno: {reason}")
@@ -496,9 +494,7 @@ def environmentFromRuntime [DecidableEq MiriMemoryKind]
         | .error reason => throw (.unsupported s!"compiler pointer-cell layout: {reason}")
       pointerPlace operand layout
     projectNamed := fun parent name => do
-      let index ← match CompilerNamedFields.fieldIndex p.runtime parent.layout name with
-        | .ok index => pure index
-        | .error error => throw error
+      let index ← CompilerNamedFields.fieldIndex EvalProjectionMachine.arrays parent.layout name
       let projected ← PlaceDynamic.field memory.projection choice
         ⟨.memory parent.mplace,parent.layout⟩ index
       match projected.ref with

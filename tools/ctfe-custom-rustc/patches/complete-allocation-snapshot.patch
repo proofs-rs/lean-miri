@@ -1,0 +1,34 @@
+--- a/compiler/rustc_middle/src/mir/interpret/mod.rs
++++ b/compiler/rustc_middle/src/mir/interpret/mod.rs
+@@ -449,6 +449,31 @@
+ }
+ 
+ impl<'tcx> TyCtxt<'tcx> {
++    /// Read the complete allocation identity state without reserving an AllocId.
++    /// The caller must provide a serial boundary with no allocation writers:
++    /// dedup's lock alone does not block reserve_alloc_id or non-dedup inserts.
++    /// No compiler query or allocation-ID-producing API may run while copying.
++    /// Map entries are unordered; callers must compare them as sets. This is
++    /// observation-only state and never contributes to a compiler query result.
++    #[allow(rustc::potential_query_instability)]
++    pub fn lean_miri_complete_allocation_identity_snapshot(
++        self,
++    ) -> (
++        u64,
++        Vec<(AllocId, GlobalAlloc<'tcx>)>,
++        Vec<(GlobalAlloc<'tcx>, usize, AllocId)>,
++    ) {
++        // Pinned AllocMap lock order: dedup before any to_alloc shard.
++        let dedup = self.alloc_map.dedup.lock();
++        let mut globals = Vec::new();
++        for shard in self.alloc_map.to_alloc.lock_shards() {
++            globals.extend(shard.iter().map(|(id, alloc)| (*id, alloc.clone())));
++        }
++        let entries = dedup.iter().map(|((alloc, salt), &id)| (alloc.clone(), *salt, id)).collect();
++        let frontier = self.alloc_map.next_id.load(std::sync::atomic::Ordering::Relaxed);
++        (frontier, globals, entries)
++    }
++
+     /// Obtains a new allocation ID that can be referenced but does not
+     /// yet have an allocation backing it.
+     ///

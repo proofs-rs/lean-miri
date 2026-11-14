@@ -50,8 +50,13 @@ inductive PathElem where
   | vtable
   deriving DecidableEq, Repr
 
+/-- Caller-owned type identity. Runtime callers supply their execution World TyId;
+the memory layer does not import MIR or interpret this identity. Pinned
+validity.rs `Path::new` retains `Ty`, without querying its printed name. -/
+abbrev ValidationTypeId := Nat
+
 structure ValidationPath where
-  originalType : String
+  originalType : ValidationTypeId
   projections : Array PathElem := #[]
   deriving DecidableEq, Repr
 
@@ -915,7 +920,7 @@ tracking, and under `may_dangle`, as in `validate_place`. -/
 def validatePlace {Place Key MachineError HookState : Type}
     [DecidableEq Key]
     (hooks : ValidatePlaceHooks Place Key MachineError HookState)
-    (root : Place) (originalType : String)
+    (root : Place) (originalType : ValidationTypeId)
     (resetProvenanceAndPadding : Bool) (ctfeMode : Option CtfeMode)
     (initialTracking : Option (RefTracking Key ValidationPath))
     (drainTracking : Bool) :

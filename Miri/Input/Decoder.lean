@@ -1,3 +1,4 @@
+import Miri.Input.TraitSelection.Codec
 import Miri.Input.Model
 import Miri.Input.DecoderValues
 import Miri.Input.ValidateTables
@@ -6,11 +7,14 @@ import Miri.Input.DecodeMIR
 import Miri.Input.CatalogDecoder
 import Miri.Input.SharedPools
 import Miri.Input.CoroutineCoverage
+import Miri.Input.RuntimeMetadata
+import Miri.Input.SourceMir
+import Miri.Input.CtfeMirSourceCodec
 
 namespace Miri.Input
 open Lean DecoderValues
 
-private def validateSelectedScope (scope : SelectedScope) (_bodies : Array Body)
+private def validateSelectedScope (scope : SelectedScope) (_bodies : Array BodySeed)
     (instances : Array InstanceNode) (bodyRoots : Array BodyRoot) : Except String Unit := do
   if scope.kind != "rooted_structural_closure" then
     throw ("$.selected_scope.kind" ++ ": " ++ s!"unrecognized selected-scope kind `{scope.kind}`")
@@ -26,12 +30,54 @@ private def validateSelectedScope (scope : SelectedScope) (_bodies : Array Body)
       throw (s!"$.selected_scope.roots[{index}]" ++ ": " ++ "selected DefId and path do not resolve to an emitted body or instance")
   return ()
 
+private structure AbiSessionFields where
+  panic : Option PanicStrategy := none
+  panicInDrop : Option PanicStrategy := none
+  optimization : Option OptimizationLevel := none
+  llvmWritable : Option Bool := none
+  boxNoalias : Option Bool := none
+  incrementalEnabled : Option Bool := none
+  sanitizers : Option (Array String) := none
+
+private def parsePanicStrategy : JsonReader.Parser PanicStrategy := do
+  match ← JsonReader.string with
+  | "unwind" => pure .unwind | "abort" => pure .abort
+  | "immediate-abort" => pure .immediateAbort
+  | value => JsonReader.fail s!"unknown raw ABI panic strategy {value}"
+
+private def parseAbiSession : JsonReader.Parser AbiSessionMaterial := do
+  let p ← JsonReader.object ({} : AbiSessionFields) fun p key => do
+    match key with
+    | "panic" => return {p with panic := some (← parsePanicStrategy)}
+    | "panic_in_drop" => return {p with panicInDrop := some (← parsePanicStrategy)}
+    | "optimization" =>
+      let level ← match ← JsonReader.string with
+        | "no" => pure OptimizationLevel.no | "less" => pure .less
+        | "more" => pure .more | "aggressive" => pure .aggressive
+        | "size" => pure .size | "size_min" => pure .sizeMin
+        | value => JsonReader.fail s!"unknown raw ABI optimization level {value}"
+      return {p with optimization := some level}
+    | "llvm_writable" => return {p with llvmWritable := some (← JsonReader.boolean)}
+    | "box_noalias" => return {p with boxNoalias := some (← JsonReader.boolean)}
+    | "incremental_enabled" => return {p with incrementalEnabled := some (← JsonReader.boolean)}
+    | "sanitizers" => return {p with sanitizers := some (← JsonReader.array JsonReader.string)}
+    | _ => JsonReader.fail s!"unknown raw ABI session field {key}"
+  pure ⟨← JsonReader.required p.panic "abi_session.panic",
+    ← JsonReader.required p.panicInDrop "abi_session.panic_in_drop",
+    ← JsonReader.required p.optimization "abi_session.optimization",
+    ← JsonReader.required p.llvmWritable "abi_session.llvm_writable",
+    ← JsonReader.required p.boxNoalias "abi_session.box_noalias",
+    ← JsonReader.required p.incrementalEnabled "abi_session.incremental_enabled",
+    ← JsonReader.required p.sanitizers "abi_session.sanitizers"⟩
+
 private structure ProducerFields where
   miriCommit : Option String := none
   rustcCommit : Option String := none
   rustcVersion : Option String := none
   targetTriple : Option String := none
   settings : Option Catalog.ProducerSettings := none
+  abiSession : Option AbiSessionMaterial := none
+  freezeLangItem : Option (Option DefinitionRef) := none
 
 private def parseProducer : JsonReader.Parser (Producer × Catalog.ProducerSettings) := do
   let p ← JsonReader.object ({} : ProducerFields) fun p key => do
@@ -40,6 +86,8 @@ private def parseProducer : JsonReader.Parser (Producer × Catalog.ProducerSetti
     | "rustc_commit" => return {p with rustcCommit := some (← JsonReader.string)}
     | "rustc_version" => return {p with rustcVersion := some (← JsonReader.string)}
     | "target_triple" => return {p with targetTriple := some (← JsonReader.string)}
+    | "abi_session" => return {p with abiSession := some (← parseAbiSession)}
+    | "freeze_lang_item" => return {p with freezeLangItem := some (← JsonReader.nullable JsonReader.natural)}
     | "input_settings" => return {p with settings := some (← CatalogDecoder.producerSettings)}
     | _ => JsonReader.skipValue; return p
   let producer : Producer := {
@@ -47,12 +95,17 @@ private def parseProducer : JsonReader.Parser (Producer × Catalog.ProducerSetti
     rustcCommit := ← JsonReader.required p.rustcCommit "rustc_commit"
     rustcVersion := ← JsonReader.required p.rustcVersion "rustc_version"
     targetTriple := ← JsonReader.required p.targetTriple "target_triple"
+    abiSession := some (← JsonReader.required p.abiSession "abi_session")
+    freezeLangItem := ← JsonReader.required p.freezeLangItem "freeze_lang_item"
   }
   return (producer, ← JsonReader.required p.settings "input_settings")
 
 /-- The completed import plus numeric reference bounds that require all tables.
 MIR and catalogs already have their final representation. -/
 private structure ParsedDocument where
+  initialSnapshot : Option Json := none
+  initialCtfeRoots : Option (Array Json) := none
+  initialSelectedCache : Option (Array Json) := none
   value : ImportDocument
   schema : String
   schemaVersion : Nat
@@ -87,6 +140,33 @@ private def parseConstants : JsonReader.Parser (Array MIR.TypeConst) :=
     let value ← TypeConstCodec.decode s!"$.type_constants[{index}]"
     if seen.contains value then JsonReader.fail s!"$.type_constants[{index}]: duplicate compiler type-constant identity"
     pure (value, seen.push value)
+
+private structure TypeConstResultFields where
+  aliasKind : Option String := none
+  rigidity : Option String := none
+  definition : Option Nat := none
+  genericArgs : Option (Array MIR.GenericArg) := none
+  valueConstId : Option Nat := none
+
+private def parseTypeConstResult : JsonReader.Parser CompilerTypeConstResult := do
+  let fields ← JsonReader.object ({} : TypeConstResultFields) fun fields key => do
+    match key with
+    | "alias_kind" => return {fields with aliasKind := some (← JsonReader.string)}
+    | "rigidity" => return {fields with rigidity := some (← JsonReader.string)}
+    | "def_id" => return {fields with definition := some (← JsonReader.natural)}
+    | "generic_args" => return {fields with genericArgs := some (← GenericArgsCodec.decode)}
+    | "value_const_id" => return {fields with valueConstId := some (← JsonReader.natural)}
+    | _ => JsonReader.skipValue; return fields
+  let aliasKind ← JsonReader.required fields.aliasKind "alias_kind"
+  unless #["projection", "inherent_self", "inherent_impl", "free", "anonymous"].contains aliasKind do
+    JsonReader.fail "compiler type constant result: unknown alias kind"
+  let rigid ← match ← JsonReader.required fields.rigidity "rigidity" with
+    | "rigid" => pure true
+    | "not_rigid" => pure false
+    | _ => JsonReader.fail "compiler type constant result: unknown rigidity"
+  return ⟨aliasKind, rigid, ← JsonReader.required fields.definition "def_id",
+    ← JsonReader.required fields.genericArgs "generic_args",
+    ← JsonReader.required fields.valueConstId "value_const_id"⟩
 
 private def parseInstances : JsonReader.Parser (Array InstanceNode) :=
   JsonReader.arrayWithState ({} : Std.HashMap Nat (Array InstanceNode)) fun seen index => do
@@ -192,6 +272,10 @@ private def finishWorld (nodes : Array AllocationNode) (hexByGraph : Array (Opti
     rawPool, dedupCatalog, pending.completeKeyFamilies, pending.nonExhaustiveKeyFamilies⟩
 
 private structure DocumentFields where
+  initialSnapshot : Option Json := none
+  initialCtfeRoots : Option (Array Json) := none
+  initialSelectedCache : Option (Array Json) := none
+  traitProgram : Option Json := none
   schema : Option (String) := none
   schemaVersion : Option (Nat) := none
   producer : Option (Producer × Catalog.ProducerSettings) := none
@@ -199,6 +283,7 @@ private structure DocumentFields where
   compilerPredicates : Option (Array CompilerPredicateEvidence) := none
   definitions : Option (Array DefinitionId) := none
   typeConstants : Option (Array MIR.TypeConst) := none
+  compilerTypeConstResults : Option (Array CompilerTypeConstResult) := none
   files : Option (Array String) := none
   spans : Option (Array SourceSpanData) := none
   layouts : Option (Array Layout) := none
@@ -208,7 +293,9 @@ private structure DocumentFields where
   allocations : Option (Array (Array AllocationNode)) := none
   instances : Option (Array InstanceNode) := none
   compilerAbiLayoutSchema : Option (String) := none
-  bodies : Option (Array Body) := none
+  bodies : Option (Array BodySeed) := none
+  mirTemplates : Option (Array CopyTemplateSource) := none
+  ctfeScalarSources : Option (Array CtfeMirSource.Source) := none
   bodyReferences : Array DecodeMIR.References := #[]
   coroutineCoverage : Option CoroutineCoverageCodec.Parsed := none
   bodyRoots : Option (Array BodyRoot) := none
@@ -217,16 +304,44 @@ private structure DocumentFields where
   runtimeTargetDataLayout : Option TargetDataLayoutEvidence := none
   queries : CatalogDecoder.QueryFields := {}
 
-private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser ParsedDocument := do
+private inductive ProfileFields where
+  | reject
+  | initial
+
+private def parseDocumentFields (pools : SharedPools) (policy : ProfileFields) : JsonReader.Parser ParsedDocument := do
   let d ← JsonReader.object ({} : DocumentFields) fun d key => do
     match key with
+    | "compiler_initial_global_snapshot" =>
+      match policy with
+      | .reject => JsonReader.fail "initial compiler allocation/CTFE profiles require the dedicated initial-profile decoder; legacy decoding is unsupported"
+      | .initial => do
+        let snapshot ← Lean.Json.Parser.anyCore
+        let _ ← JsonReader.liftExcept snapshot.getObj?
+        return {d with initialSnapshot := some snapshot}
+    | "compiler_initial_ctfe_roots" =>
+      match policy with
+      | .reject => JsonReader.fail "initial compiler allocation/CTFE profiles require the dedicated initial-profile decoder; legacy decoding is unsupported"
+      | .initial => return {d with initialCtfeRoots := some (← JsonReader.array Lean.Json.Parser.anyCore)}
+    | "compiler_initial_selected_query_cache" =>
+      match policy with
+      | .reject => JsonReader.fail "initial compiler query memo requires the dedicated cache-aware profile decoder; legacy decoding is unsupported"
+      | .initial => return {d with initialSelectedCache := some (← JsonReader.array Lean.Json.Parser.anyCore)}
     | "schema" => return {d with schema := some (← JsonReader.string)}
-    | "schema_version" => return {d with schemaVersion := some (← JsonReader.natural)}
+    | "schema_version" => do
+      let version ← JsonReader.natural
+      -- Reject a known obsolete header before interpreting later body fields
+      -- under the BodySeed contract. Earlier malformed fields still take
+      -- precedence; valid current inputs retain arbitrary root-field order.
+      unless version == expectedSchemaVersion do
+        JsonReader.fail "$.schema_version: unsupported schema version"
+      return {d with schemaVersion := some version}
+    | "compiler_trait_program" => return {d with traitProgram := some (← Lean.Json.Parser.anyCore)}
     | "producer" => return {d with producer := some (← parseProducer)}
     | "predicates" => return {d with predicates := some (← parsePredicates)}
     | "compiler_predicate_queries" => return {d with compilerPredicates := some (← JsonReader.array decodeCompilerPredicateEvidence)}
     | "definitions" => return {d with definitions := some (← parseDefinitions)}
     | "type_constants" => return {d with typeConstants := some (← parseConstants)}
+    | "compiler_type_const_results" => return {d with compilerTypeConstResults := some (← JsonReader.array parseTypeConstResult)}
     | "files" => return {d with files := some (← parseFiles)}
     | "spans" => return {d with spans := some (← JsonReader.arrayIndexed (fun index => parseSourceSpan s!"$.spans[{index}]"))}
     | "layouts" =>
@@ -242,11 +357,25 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
     | "instances" => return {d with instances := some (← parseInstances)}
     | "compiler_abi_layout_schema" => return {d with compilerAbiLayoutSchema := some (← JsonReader.string)}
     | "bodies" =>
-      let bodies ← JsonReader.arrayIndexed (fun index => DecodeMIR.parseBody s!"$.bodies[{index}]" (some pools.mir))
+      let bodies ← JsonReader.arrayIndexed (fun index => DecodeMIR.parseBodySeed s!"$.bodies[{index}]" (some pools.mir))
       return {d with bodies := some (bodies.map (·.value)), bodyReferences := bodies.map (·.references)}
+    | "ctfe_scalar_sources" =>
+      let sources ← JsonReader.arrayIndexed (fun _ => do JsonReader.liftExcept (CtfeMirSourceCodec.read (← Lean.Json.Parser.anyCore)))
+      unless sources.isEmpty do JsonReader.fail "ctfe_scalar_sources: source constant evaluator is not a rustc result"
+      return {d with ctfeScalarSources := some sources}
+    | "mir_templates" =>
+      let sources ← JsonReader.arrayIndexed (fun index => DecodeMIR.parseCopyTemplate s!"$.mir_templates[{index}]")
+      unless sources.isEmpty do JsonReader.fail "mir_templates: source executable body is not a rustc result"
+      return {d with mirTemplates := some sources}
     | "compiler_coroutine_coverage" => return {d with coroutineCoverage := some (← CoroutineCoverageCodec.parse pools.mir)}
     | "body_roots" => return {d with bodyRoots := some (← JsonReader.arrayIndexed (fun index => parseBodyRoot s!"$.body_roots[{index}]"))}
-    | "compiler_alloc_id_world" => return {d with compilerAllocIdWorld := ← JsonReader.nullable (parseCompilerAllocIdWorld)}
+    | "compiler_alloc_id_world" =>
+      match policy with
+      | .reject => return {d with compilerAllocIdWorld := ← JsonReader.nullable (parseCompilerAllocIdWorld)}
+      | .initial => do
+        let legacy ← JsonReader.nullable Lean.Json.Parser.anyCore
+        if legacy.isSome then JsonReader.fail "initial and prepared compiler allocator profiles cannot coexist"
+        return d
     | "selected_scope" => return {d with selectedScope := ← JsonReader.nullable (parseSelectedScope "$.selected_scope")}
     | "runtime_target_data_layout" => return {d with runtimeTargetDataLayout := ← JsonReader.nullable (CatalogDecoder.targetDataLayout)}
     | _ =>
@@ -271,7 +400,14 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
     | _ => pure none
   let images := byteImages.map (·.1)
   let allocations ← JsonReader.liftExcept (finishAllocations images groups pendingNodes)
-  let bodies ← JsonReader.liftExcept (finishBodies images (← JsonReader.required d.bodies "bodies"))
+  let seeds ← JsonReader.required d.bodies "bodies"
+  let bodies ← seeds.mapM fun seed => do
+    match seed with
+    | .copyTemplate _ | .noopDrop _ | .fnPointerShim _ => pure seed
+    | .material body =>
+      let values ← JsonReader.liftExcept (finishBodies images #[body])
+      let some value := values[0]? | JsonReader.fail "material body disappeared during allocation resolution"
+      pure (BodySeed.material value)
   let compilerAllocIdWorld ← JsonReader.liftExcept (d.compilerAllocIdWorld.mapM (finishWorld allocations hexByGraph))
   let coroutineCoverage ← d.coroutineCoverage.mapM fun parsed => do
     let auxiliaryBodies ← parsed.value.auxiliaryBodies.mapM fun row => do
@@ -279,12 +415,27 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
       let some body := resolved[0]? | JsonReader.fail "coroutine auxiliary body disappeared during allocation resolution"
       pure {row with body}
     pure {parsed.value with auxiliaryBodies}
+  let definitions ← JsonReader.required d.definitions "definitions"
+  let rawTraitProgram ← JsonReader.required d.traitProgram "compiler_trait_program"
+  -- Invocation-local source identity index; catalog size must not multiply
+  -- canonical definition lookup work. This is never shared across executions.
+  let mut sourceTemplates : Std.HashMap (Nat × Nat) (Option GenericSubstitution.DefinitionTemplate) := {}
+  for definition in definitions do
+    let key := (definition.crateIndex, definition.index)
+    if sourceTemplates.contains key then
+      JsonReader.fail "trait RHS source definition reference ambiguous"
+    sourceTemplates := sourceTemplates.insert key definition.genericTemplate
+  let traitProgram ← JsonReader.liftExcept (TraitSelection.Codec.readProgram (fun identity => do
+    let some expression := sourceTemplates[(identity.crateIndex, identity.index)]?
+      | throw "trait RHS source definition reference missing"
+    pure expression) rawTraitProgram)
   let value : ImportDocument := {
-    producer, producerSettings
+    producer, producerSettings, traitProgram
     predicates := ← JsonReader.required d.predicates "predicates"
     compilerPredicates := ← JsonReader.required d.compilerPredicates "compiler_predicate_queries"
-    definitions := ← JsonReader.required d.definitions "definitions"
+    definitions := definitions
     typeConstants := ← JsonReader.required d.typeConstants "type_constants"
+    compilerTypeConstResults := ← JsonReader.required d.compilerTypeConstResults "compiler_type_const_results"
     files := ← JsonReader.required d.files "files"
     spans := ← JsonReader.required d.spans "spans"
     layouts := ← JsonReader.required d.layouts "layouts"
@@ -294,6 +445,8 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
     instances := ← JsonReader.required d.instances "instances"
     compilerAbiLayoutSchema := some compilerAbiLayoutSchema
     bodies := bodies
+    mirTemplates := ← JsonReader.required d.mirTemplates "mir_templates"
+    ctfeScalarSources := ← JsonReader.required d.ctfeScalarSources "ctfe_scalar_sources"
     coroutineCoverage := coroutineCoverage
     bodyRoots := ← JsonReader.required d.bodyRoots "body_roots"
     compilerAllocIdWorld := compilerAllocIdWorld
@@ -301,8 +454,16 @@ private def parseDocumentFields (pools : SharedPools) : JsonReader.Parser Parsed
     runtimeTargetDataLayout := d.runtimeTargetDataLayout
     queries := ← CatalogDecoder.finish d.queries
   }
-  return ⟨value, schema, schemaVersion,
-    d.bodyReferences ++ (d.coroutineCoverage.map (·.references)).getD #[], pools.abiArguments⟩
+  return {
+    value := value
+    schema := schema
+    schemaVersion := schemaVersion
+    bodyReferences := d.bodyReferences ++ (d.coroutineCoverage.map (·.references)).getD #[]
+    abiArguments := pools.abiArguments
+    initialSnapshot := d.initialSnapshot
+    initialCtfeRoots := d.initialCtfeRoots
+    initialSelectedCache := d.initialSelectedCache
+  }
 
 private def validateParsedDocument (parsed : ParsedDocument) (profile : Options) : Except String ImportDocument := do
   let d := parsed.value
@@ -324,19 +485,48 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
   let compilerAllocIdWorld := d.compilerAllocIdWorld
   let selectedScope := d.selectedScope
   if schema != expectedSchema then throw s!"$.schema: expected `{expectedSchema}`"
-  unless schemaVersion == 11 || schemaVersion == expectedSchemaVersion do
+  unless schemaVersion == expectedSchemaVersion do
     throw "$.schema_version: unsupported schema version"
-  match schemaVersion, d.coroutineCoverage with
-  | 11, some _ => throw "schema 11 forbids compiler_coroutine_coverage"
-  | 12, none => throw "schema 12 requires compiler_coroutine_coverage"
-  | 12, some coverage => CoroutineCoverageCodec.validate d coverage
-  | _, _ => pure ()
+  match d.coroutineCoverage with
+  | none => throw "schema 13 requires compiler_coroutine_coverage"
+  | some coverage => CoroutineCoverageCodec.validate d coverage
   if producer.miriCommit != expectedMiriCommit then throw "$.producer.miri_commit: input is from the wrong pinned Miri revision"
   if producer.rustcCommit != expectedRustcCommit then throw "$.producer.rustc_commit: input is from the wrong pinned rustc revision"
   unless compilerAbiLayoutSchema == some expectedCompilerAbiLayoutSchema do
     throw s!"$.compiler_abi_layout_schema: unsupported schema `{compilerAbiLayoutSchema}`"
+  let mut crateIdentities : Std.HashMap Nat UInt64 := {}
+  let mut identityCrates : Std.HashMap Nat Nat := {}
+  for definition in definitions do
+    if let some path := definition.rawPath then
+      if let some previous := crateIdentities[definition.crateIndex]? then
+        unless previous == path.stableCrateId do
+          throw "$.definitions: physical crate has conflicting stable crate identities"
+      if let some previous := identityCrates[path.stableCrateId.toNat]? then
+        unless previous == definition.crateIndex do
+          throw "$.definitions: stable crate identity belongs to multiple physical crates"
+      crateIdentities := crateIdentities.insert definition.crateIndex path.stableCrateId
+      identityCrates := identityCrates.insert path.stableCrateId.toNat definition.crateIndex
+    if let some material := definition.adtDrop then
+      if let some destructor := material.destructor then
+        unless destructor < definitions.size do
+          throw "$.definitions: ADT destructor definition identity out of bounds"
   if types.isEmpty then throw "$.types: input has no type graph; refusing an empty import"
   if bodies.isEmpty then throw "$.bodies: input has no MIR bodies; refusing an empty import"
+  let mut typeConstKeys : Array (String × Bool × Nat × Array MIR.GenericArg) := #[]
+  for (row, index) in d.compilerTypeConstResults.toList.zipIdx do
+    unless row.definition < definitions.size do
+      throw s!"$.compiler_type_const_results[{index}]: definition reference out of bounds"
+    unless row.valueConstId < typeConstants.size do
+      throw s!"$.compiler_type_const_results[{index}]: value reference out of bounds"
+    let some result := typeConstants[row.valueConstId]?
+      | throw s!"$.compiler_type_const_results[{index}]: value reference out of bounds"
+    match result with
+    | MIR.TypeConst.Value .. => pure ()
+    | _ => throw s!"$.compiler_type_const_results[{index}]: rustc result is not a value"
+    let key := (row.aliasKind, row.rigid, row.definition, row.genericArgs)
+    if typeConstKeys.contains key then
+      throw s!"$.compiler_type_const_results[{index}]: duplicate rustc query key"
+    typeConstKeys := typeConstKeys.push key
   profileit "decoder.validate_predicate_queries" profile fun _ => do
     unless compilerPredicates.size == predicates.size do
       throw "$.compiler_predicate_queries: predicate query and definition tables differ in size"
@@ -351,11 +541,28 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
           throw s!"$.compiler_predicate_queries[{index}]: dangling normalized predicate reference {normalized}"
   profileit "decoder.validate_alloc_id_world" profile fun _ => do
     if let some world := compilerAllocIdWorld then validateCompilerAllocIdWorld allocations world
+  -- Scalar wire width is storage geometry, not a Pattern-validity query.
+  -- Range endpoints/niches remain a separate full-layout/CTFE obligation.
+  let target : RuntimeMetadata.Result Miri.ABI.RuntimeTargetDataLayout := do
+    let evidence ← RuntimeMetadata.require d.runtimeTargetDataLayout "runtime_target_data_layout"
+    RuntimeMetadata.importTarget evidence
+  let scalarQuery : RuntimeMetadata.Result (Nat → RuntimeMetadata.Result Nat) := do
+    RuntimeMetadata.scalarStorageQuery (← target) types layouts definitions typeConstants predicates
+  let scalarSize := fun id => match scalarQuery with
+    | .error _ => none
+    | .ok query => match query id with
+      | .ok bytes => some bytes
+      | .error _ => none
   let bodyContext : DecodeMIR.Context := {
     typeCount := types.size, allocationCount := allocations.size,
     definitionCount := definitions.size, typeConstantCount := typeConstants.size,
     spanCount := spans.size,
-    scalarSize := fun id => (types[id]?).bind fun ty => (layouts[ty.layoutId]?).bind (·.sizeBytes) }
+    scalarSize
+    typeConstantType := fun id => do
+      match ← typeConstants[id]? with
+      | .Value ty _ => some ty
+      | .Param _ _ ty => ty
+      | _ => none }
   profileit "decoder.validate_body_references" profile fun _ =>
     parsed.bodyReferences.forM (DecodeMIR.validateReferences bodyContext)
   match selectedScope with
@@ -364,6 +571,8 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
   | none => pure ()
   profileit "decoder.validate_catalog_queries" profile fun _ =>
     CatalogDecoder.validateQueries bodyContext d.queries
+  CtfeMirSource.validateCatalogue spans.size (fun identity => definitions.any fun definition =>
+    definition.crateIndex == identity.crateIndex && definition.index == identity.index) d.ctfeScalarSources
   let core := d
   profileit "decoder.validate_cross_table_references" profile fun _ => validateParsedTables core
   for (argument, index) in parsed.abiArguments.toList.zipIdx do
@@ -377,13 +586,36 @@ private def validateParsedDocument (parsed : ParsedDocument) (profile : Options)
 before returning the final import. Completion bookkeeping stays internal. -/
 def parseDocument (profile : Options := {}) : JsonReader.Parser ImportDocument := do
   let pools ← readSharedPools
-  let parsed ← parseDocumentFields pools
+  let parsed ← parseDocumentFields pools .reject
   JsonReader.liftExcept (profileit "decoder.validate_forward_references" profile fun _ =>
     validateParsedDocument parsed profile)
 
 def decodeJsonProfiled (text : String) (profile : Options) : Except String ExecutionInput := do
   let document ← profileit "decoder.parse" profile fun _ => JsonReader.run (parseDocument profile) text
   pure ⟨document⟩
+
+/-- Dedicated profile decoder: shares the typed streaming base parser, captures
+only owned initial descriptors, and never permits a missing/mixed profile. -/
+def decodeInitialQueryProfiled (text : String) (profile : Options) :
+    Except String (ExecutionInput × Json × Array Json × Option (Array Json)) := do
+  let parsed ← JsonReader.run (do
+    let pools ← readSharedPools
+    parseDocumentFields pools .initial) text
+  let some snapshot := parsed.initialSnapshot
+    | throw "initial CTFE roots require an explicit complete initial allocation snapshot"
+  let _ ← snapshot.getObj?
+  if parsed.value.compilerAllocIdWorld.isSome then
+    throw "initial and prepared compiler allocator profiles cannot coexist"
+  let document ← profileit "decoder.validate_forward_references" profile fun _ =>
+    validateParsedDocument parsed profile
+  pure (⟨document⟩,snapshot,parsed.initialCtfeRoots.getD #[],parsed.initialSelectedCache)
+
+/-- The allocation-only API never silently drops a query-memo capability. -/
+def decodeInitialProfiled (text : String) (profile : Options) :
+    Except String (ExecutionInput × Json × Array Json) := do
+  let (input,snapshot,roots,selected) ← decodeInitialQueryProfiled text profile
+  if selected.isSome then throw "selected initial compiler query memo requires the cache-aware decoder"
+  pure (input,snapshot,roots)
 
 def decodeJson (text : String) : Except String ExecutionInput := decodeJsonProfiled text {}
 

@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input
 import Miri.Input.CompilerNativeSignatures
 import Miri.Input.CompilerThreadLocal
@@ -11,7 +12,7 @@ private def must (value : Except String A) : IO A :=
 private def check (condition : Bool) (message : String) : IO Unit :=
   unless condition do throw (IO.userError message)
 private def read (dir file : String) : IO ExecutionInput := do
-  must (decodeJson (← IO.FS.readFile (dir ++ "/" ++ file)))
+  must (decodeFixture (← IO.FS.readFile (dir ++ "/" ++ file)))
 private def arr (value : Json) (key : String) : Except String (Array Json) :=
   (value.getObjVal? key).bind Json.getArr?
 private def getAt (values : Array A) (index : Nat) : Except String A :=
@@ -25,7 +26,7 @@ def main (args : List String) : IO Unit := do
     let name ← must (row.getObjValAs? String "file")
     let source ← IO.FS.readFile (dir ++ "/" ++ name)
     let ready ← must (row.getObjValAs? Bool "ready")
-    let full := decodeJson source
+    let full := decodeFixture source
     check (full.isOk == ready) s!"decoder readiness differs: {name}"
     if ready then
       let provider ← must (row.getObjValAs? String "provider")
@@ -38,16 +39,18 @@ def main (args : List String) : IO Unit := do
         match provider with
         | "native" =>
           let entry ← must (getAt baseline.document.queries.nativeSignatures (← must (row.getObjValAs? Nat "index")))
+          let world ← must ((RuntimeArrayTypes.create prepared.runtime).mapError reprStr)
+          let changedWorld ← must ((RuntimeArrayTypes.create mutated.runtime).mapError reprStr)
           let callee := entry.instanceId
-          discard <| must (CompilerNativeSignatures.query prepared callee)
+          discard <| must (CompilerNativeSignatures.query prepared world callee)
           let invalidId := prepared.program.input.instances.size
           let queries := prepared.program.input.queries
           let invalidQueries := {queries with nativeSignatures := #[{entry with instanceId := invalidId}]}
           let invalidProgram := {prepared.program with input := {prepared.program.input with queries := invalidQueries}}
           let invalid := {prepared with program := invalidProgram}
-          check (!(CompilerNativeSignatures.query invalid invalidId).isOk)
+          check (!(CompilerNativeSignatures.query invalid world invalidId).isOk)
             "native query accepted out-of-bounds full-instance identity"
-          discard <| must (CompilerNativeSignatures.query mutated callee)
+          discard <| must (CompilerNativeSignatures.query mutated changedWorld callee)
         | "tls" =>
           let definition ← must (row.getObjValAs? Nat "definition")
           discard <| must (CompilerThreadLocal.forDefinition prepared.program definition)

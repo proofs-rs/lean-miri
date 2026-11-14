@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 import Miri.Input.RuntimeMetadata
 import Miri.Input.CompilerPrimitiveFacts
@@ -9,7 +10,7 @@ private def check (condition : Bool) (message : String) : IO Unit :=
 
 #eval do
   let text ← IO.FS.readFile "scratch/regression-inputs/u32.checked.json"
-  let .ok decoded := decodeJson text | throw (IO.userError "root_u32 decode failed")
+  let .ok decoded := decodeFixture text | throw (IO.userError "root_u32 decode failed")
   let .ok runtime := RuntimeMetadata.ofDocument decoded.document | throw (IO.userError "root_u32 metadata failed")
   for node in decoded.document.types do
     let .ok selected := runtime.node node.id | throw (IO.userError "type ID lookup failed")

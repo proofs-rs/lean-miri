@@ -6,6 +6,47 @@ pub(crate) struct Definition {
     #[serde(rename = "crate")]
     pub crate_index: u32,
     pub index: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body_track_caller: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callable_source: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adt_drop: Option<AdtDropMaterial>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generic_template: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias_declaration: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adt_declaration: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_path: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_environment: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function_abi_material: Option<FunctionAbiMaterial>,
+}
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct FunctionAbiMaterial {
+    pub never_unwind: bool,
+    pub foreign_item: bool,
+    pub drop_glue: bool,
+    pub rustc_no_writable: bool,
+    pub always_comptime: bool,
+}
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct AbiSessionMaterial {
+    pub panic: &'static str,
+    pub panic_in_drop: &'static str,
+    pub optimization: &'static str,
+    pub llvm_writable: bool,
+    pub box_noalias: bool,
+    pub incremental_enabled: bool,
+    pub sanitizers: Vec<String>,
+}
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct AdtDropMaterial {
+    pub manually_drop: bool,
+    pub destructor: Option<u64>,
 }
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct Position {

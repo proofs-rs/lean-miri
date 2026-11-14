@@ -1,4 +1,5 @@
 import Miri.Input.LocalValidation
+import Miri.Input.ReprMaterialCodec
 import Miri.Input.ValidateAllocIdWorld
 import Miri.Input.Model.Types
 import Miri.Input.Model.Catalogs
@@ -6,6 +7,7 @@ import Miri.Input.JsonReader
 import Miri.Input.CompilerExternAbi
 import Miri.Input.InstanceKindCodec
 import Miri.Input.GenericArgsCodec
+import Miri.Input.RawFunctionSignature
 
 namespace Miri.Input.DecoderValues
 open JsonReader
@@ -15,7 +17,7 @@ open Lean
 def expectedMiriCommit : String := "7fa591d7d4dd9af8154becbc8332f8096f8323b1"
 def expectedRustcCommit : String := "8144389c895da997dbdecaa635e41d6a50be6ffd"
 def expectedSchema : String := "lean-miri-rustc-mir"
-def expectedSchemaVersion : Nat := 12
+def expectedSchemaVersion : Nat := 13
 def expectedCompilerAbiLayoutSchema : String := "physical_ty_and_layout_v1"
 
 def escapePathKey (key : String) : String :=
@@ -528,6 +530,16 @@ def parseLayoutFieldOffsets : Parser LayoutFieldOffsets := do
   return .arrayFormula (← required fields.stride "stride_bytes") (← required fields.count "field_count")
 
 private structure parseLayoutFields where
+  patternType : Option Nat := none
+  sequenceType : Option Nat := none
+  pointerType : Option Nat := none
+  pointerDataType : Option Nat := none
+  enumTagType : Option Nat := none
+  structType : Option Nat := none
+  enumType : Option Nat := none
+  unionType : Option Nat := none
+  tupleType : Option Nat := none
+  primitiveRecipe : Option String := none
   «kind» : Option (String) := none
   «field_offsets_bytes» : Option LayoutFieldOffsets := none
   «fields» : Option (Option (FieldShape)) := none
@@ -543,8 +555,18 @@ private structure parseLayoutFields where
   «randomization_seed» : Option (Nat) := none
 
 def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
-  let s ← object (parseLayoutFields.mk none none none none none none none none none none none none none) fun s key => do
+  let s ← object ({} : parseLayoutFields) fun s key => do
     match key with
+    | "pattern_type" => return {s with patternType := some (← natural)}
+    | "sequence_type" => return {s with sequenceType := some (← natural)}
+    | "enum_tag_type" => return {s with enumTagType := some (← natural)}
+    | "pointer_data_type" => return {s with pointerDataType := some (← natural)}
+    | "pointer_type" => return {s with pointerType := some (← natural)}
+    | "struct_type" => return {s with structType := some (← natural)}
+    | "enum_type" => return {s with enumType := some (← natural)}
+    | "union_type" => return {s with unionType := some (← natural)}
+    | "tuple_type" => return {s with tupleType := some (← natural)}
+    | "primitive_recipe" => return {s with primitiveRecipe := some (← string)}
     | "kind" => return { s with «kind» := some (← string) }
     | "field_offsets_bytes" => return { s with «field_offsets_bytes» := some (← parseLayoutFieldOffsets) }
     | "fields" => return { s with «fields» := some (← nullable (parseFieldShape)) }
@@ -559,6 +581,30 @@ def parseLayout (path : String := "$parseLayout") : Parser (Layout) := do
     | "largest_niche" => return { s with «largest_niche» := some (← parseNicheLayout) }
     | "randomization_seed" => return { s with «randomization_seed» := some (← natural) }
     | _ => skipValue; pure s
+  let constructors := #[s.primitiveRecipe.isSome, s.tupleType.isSome, s.unionType.isSome,
+    s.structType.isSome, s.enumType.isSome, s.patternType.isSome, s.sequenceType.isSome, s.pointerType.isSome, s.pointerDataType.isSome, s.enumTagType.isSome].filter (fun enabled => enabled)
+  if !constructors.isEmpty then
+    unless constructors.size == 1 do fail s!"{path}: conflicting layout recipe constructors"
+    unless s.kind.isNone && s.field_offsets_bytes.isNone && s.fields.isNone &&
+        s.variants.isNone && s.backend_repr.isNone && s.size_bytes.isNone &&
+        s.abi_align_bytes.isNone && s.unadjusted_abi_align_bytes.isNone &&
+        s.max_repr_align_bytes.isNone && s.repr_c.isNone && s.uninhabited.isNone &&
+        s.largest_niche.isNone && s.randomization_seed.isNone do
+      fail s!"{path}: primitive recipe cannot contain eager layout results"
+    if let some recipe := s.primitiveRecipe then
+      unless ["bool", "char", "i8", "i16", "i32", "i64", "i128", "isize",
+        "u8", "u16", "u32", "u64", "u128", "usize", "f16", "f32", "f64", "f128",
+          "fn_pointer", "raw_pointer", "never"].contains recipe do
+        fail s!"{path}: unknown primitive layout recipe"
+    return {
+      primitiveRecipe := s.primitiveRecipe, tupleType := s.tupleType, unionType := s.unionType, structType := s.structType, enumType := s.enumType, patternType := s.patternType, sequenceType := s.sequenceType,
+      pointerType := s.pointerType, pointerDataType := s.pointerDataType, enumTagType := s.enumTagType, kind := .layout,
+      maxReprAlignBytes := none, reprC := false, uninhabited := false,
+      largestNiche := none, randomizationSeed := 0, sizeBytes := none,
+      abiAlignBytes := none, unadjustedAbiAlignBytes := none,
+      fieldOffsetsBytes := .explicit #[], fields := none, variantsLayout := none,
+      backendRepresentation := none, variantsKind := none, backendReprKind := none,
+      variants := none, backendRepr := none }
   unless s.kind.isNone || s.kind == some "layout" do fail s!"{path}: unrecognized LayoutKind"
   let offsets := (← required s.«field_offsets_bytes» "field_offsets_bytes")
   let fields := s.fields.join
@@ -593,22 +639,29 @@ private structure parseFunctionSignatureFields where
   «safety» : Option (TaggedNode) := none
   «abi» : Option (Miri.ABI.ExternAbi) := none
   «c_variadic» : Option (Bool) := none
+  splatted : Option (Option Nat) := none
 
 def parseFunctionSignature (path : String := "$parseFunctionSignature") : Parser (FunctionSignature) := do
-  let s ← object (parseFunctionSignatureFields.mk none none none none none) fun s key => do
+  let s ← object (parseFunctionSignatureFields.mk none none none none none none) fun s key => do
     match key with
     | "inputs" => return { s with «inputs» := some (← array (natural)) }
     | "output" => return { s with «output» := some (← natural) }
     | "safety" => return { s with «safety» := some (← parseAbiTag) }
     | "abi" => return { s with «abi» := some (← CompilerExternAbi.decode) }
     | "c_variadic" => return { s with «c_variadic» := some (← boolean) }
+    | "splatted" => return { s with splatted := some (← nullable natural) }
     | _ => skipValue; pure s
   let safety ← match (← required s.«safety» "safety").tag with
     | "safe" => pure Miri.MIR.Safety.Safe
     | "unsafe" => pure .Unsafe
     | _ => fail s!"{path}: unknown function signature safety"
+  let inputs ← required s.«inputs» "inputs"
+  if let some splatted := s.splatted then
+    match RawFunctionSignature.validateSplatted inputs.size splatted with
+    | .ok () => pure ()
+    | .error error => fail s!"{path}: {error}"
   return {
-    inputs := (← required s.«inputs» "inputs"), output := (← required s.«output» "output"), safety, abi := (← required s.«abi» "abi"), cVariadic := (← required s.«c_variadic» "c_variadic") }
+    inputs, output := (← required s.«output» "output"), safety, abi := (← required s.«abi» "abi"), cVariadic := (← required s.«c_variadic» "c_variadic"), rawSplatted := s.splatted }
 
 private structure decodeCompilerPredicateEvidenceFields where
   «predicate_id» : Option (Nat) := none
@@ -814,67 +867,8 @@ def decodeTypeCompilerFacts (path : String := "$decodeTypeCompilerFacts")
     simdSizeAndType := (← required s.«simd_size_and_type» "simd_size_and_type"), discriminants := (← required s.«discriminants» "discriminants"),
     typeIdHash, definitionId := s.definition.join }
 
-private structure reprIntegerFields where
-  «kind» : Option (String) := none
-  «signed» : Option (Bool) := none
-  «integer_kind» : Option (String) := none
-  «size_bits» : Option (Nat) := none
-
-private def reprInteger  : Parser (ReprInteger) := do
-  let s ← object (reprIntegerFields.mk none none none none) fun s key => do
-    match key with
-    | "kind" => return { s with «kind» := some (← string) }
-    | "signed" => return { s with «signed» := some (← boolean) }
-    | "integer_kind" => return { s with «integer_kind» := some (← string) }
-    | "size_bits" => return { s with «size_bits» := some (← natural) }
-    | _ => skipValue; pure s
-  let variant ← required s.«kind» "kind"
-  if s.«integer_kind».isSome && !(variant == "fixed") then fail s!"incompatible field `integer_kind` for variant `{variant}`"
-  if s.«size_bits».isSome && !(variant == "fixed") then fail s!"incompatible field `size_bits` for variant `{variant}`"
-  match (← required s.«kind» "kind") with
-  | "pointer_sized" => return .pointerSized (← required s.«signed» "signed")
-  | "fixed" => return .fixed (← liftExcept (integerTypeTag (← required s.«integer_kind» "integer_kind"))) (← required s.«size_bits» "size_bits") (← required s.«signed» "signed")
-  | _ => fail "unknown representation integer"
-
-private structure scalableElementFields where
-  «kind» : Option (String) := none
-  «count» : Option (Nat) := none
-
-private def scalableElement  : Parser (ScalableElement) := do
-  let s ← object (scalableElementFields.mk none none) fun s key => do
-    match key with
-    | "kind" => return { s with «kind» := some (← string) }
-    | "count" => return { s with «count» := some (← natural) }
-    | _ => skipValue; pure s
-  let variant ← required s.«kind» "kind"
-  if s.«count».isSome && !(variant == "element_count") then fail s!"incompatible field `count` for variant `{variant}`"
-  match (← required s.«kind» "kind") with
-  | "element_count" => return .elementCount (← required s.«count» "count")
-  | "container" => pure .container
-  | _ => fail "unknown scalable representation"
-
-private structure parseReprOptionsFields where
-  «integer» : Option (Option (ReprInteger)) := none
-  «align_bytes» : Option (Option (Nat)) := none
-  «pack_bytes» : Option (Option (Nat)) := none
-  «scalable_element» : Option (Option (ScalableElement)) := none
-  «flags_bits» : Option (Nat) := none
-  «field_shuffle_seed» : Option (Nat) := none
-
-private def parseReprOptions (_path : String := "$parseReprOptions") : Parser (ReprOptions) := do
-  let s ← object (parseReprOptionsFields.mk none none none none none none) fun s key => do
-    match key with
-    | "integer" => return { s with «integer» := some (← nullable (reprInteger)) }
-    | "align_bytes" => return { s with «align_bytes» := some (← nullable (natural)) }
-    | "pack_bytes" => return { s with «pack_bytes» := some (← nullable (natural)) }
-    | "scalable_element" => return { s with «scalable_element» := some (← nullable (scalableElement)) }
-    | "flags_bits" => return { s with «flags_bits» := some (← natural) }
-    | "field_shuffle_seed" => return { s with «field_shuffle_seed» := some (← natural) }
-    | _ => skipValue; pure s
-  return {
-    integer := (← required s.«integer» "integer"), alignBytes := (← required s.«align_bytes» "align_bytes"), packBytes := (← required s.«pack_bytes» "pack_bytes"),
-    scalableElement := (← required s.«scalable_element» "scalable_element"),
-    flagsBits := (← required s.«flags_bits» "flags_bits"), fieldShuffleSeed := (← required s.«field_shuffle_seed» "field_shuffle_seed") }
+private def parseReprOptions (_path : String := "$parseReprOptions") : Parser ReprOptions := do
+  liftExcept (ReprMaterialCodec.read (← Lean.Json.Parser.anyCore))
 
 private structure adtFieldFields where
   «index» : Option (Nat) := none
@@ -959,6 +953,7 @@ private structure parseTypeShapeFields where
   «generic_args» : Option (Array Miri.MIR.GenericArg) := none
   «signature» : Option (FunctionSignature) := none
   «signature_bound_variables» : Option (Array (Miri.MIR.BoundVariableKind)) := none
+  «generic_args_bound_variables» : Option (Array Miri.MIR.BoundVariableKind) := none
   «region» : Option (Miri.MIR.Region) := none
   «mutability» : Option (Miri.MIR.Mutability) := none
   «element» : Option (Nat) := none
@@ -974,12 +969,13 @@ private structure parseTypeShapeFields where
   «upvar_count» : Option (Nat) := none
   «elements» : Option (Array (Nat)) := none
   «alias_payload» : Option (Nat × AliasTypeKind) := none
+  rigid : Option Bool := none
   «adt_kind» : Option (String) := none
   «representation» : Option (ReprOptions) := none
   «variants» : Option (Array (AdtVariant)) := none
 
 private def parseTypeShape (path : String := "$parseTypeShape") : Parser (TypeShape) := do
-  let s ← object (parseTypeShapeFields.mk none none none none none none none none none none none none none none none none none none none none none none none none none none) fun s key => do
+  let s ← object ({} : parseTypeShapeFields) fun s key => do
     match key with
     | "kind" => return { s with «kind» := some (← string) }
     | "signed_kind" => return { s with «signed_kind» := some (← string) }
@@ -989,6 +985,7 @@ private def parseTypeShape (path : String := "$parseTypeShape") : Parser (TypeSh
     | "generic_args" => return { s with «generic_args» := some (← GenericArgsCodec.decode) }
     | "signature" => return { s with «signature» := some (← parseFunctionSignature) }
     | "signature_bound_variables" => return { s with «signature_bound_variables» := some (← array (GenericArgsCodec.boundVariable)) }
+    | "generic_args_bound_variables" => return {s with «generic_args_bound_variables» := some (← array GenericArgsCodec.boundVariable)}
     | "region" => return { s with «region» := some (← GenericArgsCodec.region) }
     | "mutability" => return { s with «mutability» := some (← parseShapeMutability) }
     | "element" => return { s with «element» := some (← natural) }
@@ -1004,11 +1001,13 @@ private def parseTypeShape (path : String := "$parseTypeShape") : Parser (TypeSh
     | "upvar_count" => return { s with «upvar_count» := some (← natural) }
     | "elements" => return { s with «elements» := some (← array (natural)) }
     | "alias_payload" => return { s with «alias_payload» := some (← aliasPayload) }
+    | "rigid" => return { s with rigid := some (← boolean) }
     | "adt_kind" => return { s with «adt_kind» := some (← string) }
     | "representation" => return { s with «representation» := some (← parseReprOptions) }
     | "variants" => return { s with «variants» := some (← array (adtVariant)) }
     | _ => skipValue; pure s
   let variant ← required s.«kind» "kind"
+  if s.rigid.isSome && variant != "alias" then fail "rigidity material on a non-alias type"
   if s.«signed_kind».isSome && !(variant == "int") then fail s!"incompatible field `signed_kind` for variant `{variant}`"
   if s.«unsigned_kind».isSome && !(variant == "uint") then fail s!"incompatible field `unsigned_kind` for variant `{variant}`"
   if s.«float_kind».isSome && !(variant == "float") then fail s!"incompatible field `float_kind` for variant `{variant}`"
@@ -1016,6 +1015,7 @@ private def parseTypeShape (path : String := "$parseTypeShape") : Parser (TypeSh
   if s.«generic_args».isSome && !(variant == "adt" || variant == "function_definition" || variant == "closure" || variant == "coroutine_closure" || variant == "coroutine" || variant == "alias") then fail s!"incompatible field `generic_args` for variant `{variant}`"
   if s.«signature».isSome && !(variant == "function_definition" || variant == "function_pointer") then fail s!"incompatible field `signature` for variant `{variant}`"
   if s.«signature_bound_variables».isSome && !(variant == "function_definition" || variant == "function_pointer") then fail s!"incompatible field `signature_bound_variables` for variant `{variant}`"
+  if s.«generic_args_bound_variables».isSome && variant != "function_definition" then fail "generic argument binder on a non-function-definition type"
   if s.«region».isSome && !(variant == "reference" || variant == "dynamic_trait_object") then fail s!"incompatible field `region` for variant `{variant}`"
   if s.«mutability».isSome && !(variant == "reference" || variant == "raw_pointer") then fail s!"incompatible field `mutability` for variant `{variant}`"
   if s.«element».isSome && !(variant == "array" || variant == "slice") then fail s!"incompatible field `element` for variant `{variant}`"
@@ -1060,7 +1060,7 @@ private def parseTypeShape (path : String := "$parseTypeShape") : Parser (TypeSh
   | "slice" => return .slice (← required s.«element» "element")
   | "raw_pointer" => return .rawPointer (← required s.«pointee» "pointee") (← required s.«mutability» "mutability")
   | "reference" => return .reference (← required s.«pointee» "pointee") (← required s.«mutability» "mutability") (← required s.«region» "region")
-  | "function_definition" => return .functionDefinition (← required s.«def_id» "def_id") (← required s.«generic_args» "generic_args") (← required s.«signature» "signature") (← required s.«signature_bound_variables» "signature_bound_variables")
+  | "function_definition" => return .functionDefinition (← required s.«def_id» "def_id") (← required s.«generic_args» "generic_args") (← required s.«signature» "signature") (← required s.«signature_bound_variables» "signature_bound_variables") (← required s.«generic_args_bound_variables» "generic_args_bound_variables")
   | "function_pointer" => return .functionPointer (← required s.«signature» "signature") (← required s.«signature_bound_variables» "signature_bound_variables")
   | "unsafe_binder" => return .unsafeBinder (← required s.«inner» "inner") (← required s.«bound_variables» "bound_variables")
   | "dynamic_trait_object" => return .dynamicTraitObject (← required s.«predicates» "predicates") (← required s.«principal_predicate» "principal_predicate") (← required s.«region» "region")
@@ -1073,7 +1073,7 @@ private def parseTypeShape (path : String := "$parseTypeShape") : Parser (TypeSh
     let payload := (← required s.«alias_payload» "alias_payload")
     let definition := (← required s.«def_id» "def_id")
     unless payload.1 == definition do fail s!"{path}: alias definition mismatch"
-    return .alias payload.2 definition (← required s.«generic_args» "generic_args")
+    return .alias payload.2 (← required s.rigid "rigid") definition (← required s.«generic_args» "generic_args")
   | tag => fail s!"{path}: unrecognized type shape `{tag}`"
 
 private structure parseTypeNodeFields where

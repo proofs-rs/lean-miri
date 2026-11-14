@@ -10,15 +10,17 @@ open Miri.ABI Miri.Interpreter Miri.Memory
 private def lift (value : Except String A) : EStateM StepError S A :=
   match value with | .ok value => pure value | .error e => throw (.unsupported e)
 
-def make (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
+def make (p : CompilerProviders.Prepared)
+    (types : RuntimeArrayQueries.Access (MachineHooks.State K U)) (image : AllocationImage.Imported)
     (engine : VTableMachine.Hooks K U Other)
     (memoryOffset : C → MemPlace Provenance → Size → OffsetMode → MemPlaceMeta Provenance →
       MachineHooks.M K U (MemPlace Provenance)) :
     VTableHooks Provenance (MachineHooks.State K U) C CallInstance (FnAbi MIR.TyId) :=
   let facts := p.lifecycle.calls.symbols.facts
   let engine := CompilerVTableMachine.hooks p.vtables image engine
-  { target := p.runtime.target.base
-    isDynamic := fun _ ty => lift (CompilerFacts.boolean facts.context ty "is_dynamic")
+  WorldVirtualHooks.vtableHooks types {
+    target := p.runtime.target.base
+    isDynamic := fun _ ty => RuntimeArrayQueries.perform types (CompilerFacts.booleanInWorld facts.context ty "is_dynamic")
     memoryOffset := memoryOffset
     resolvePointer := fun _ pointer => do
       match pointer.intoPointerOrAddr with
@@ -35,7 +37,7 @@ def make (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
       FunctionPointers.globalFunction engine.functions id
     predicates := fun _ token => lift (CompilerVTableFacts.predicates facts token)
     normalizePredicate := fun _ predicate => lift (CompilerVTableFacts.normalizePredicate facts predicate)
-    layoutOf := fun _ ty => lift (CompilerFacts.layoutOf facts.context ty)
+    layoutOf := fun _ ty => RuntimeArrayQueries.perform types (RuntimeMetadata.layoutInWorld facts.context.runtime ty)
     eraseAndAnonymize := fun _ ty token => lift (CompilerVTableQueries.eraseAndAnonymize p.vtables.queries ty token)
     ensureMonomorphicType := fun _ ty => lift (CompilerVTableQueries.ensureMonomorphicType p.vtables.queries ty)
     ensureMonomorphicDyn := fun _ token => lift (CompilerVTableQueries.ensureMonomorphicDyn p.vtables.queries token)
@@ -44,7 +46,8 @@ def make (p : CompilerProviders.Prepared) (image : AllocationImage.Imported)
       if bound : salt < 32 then VTableMachine.reserve engine ty token ⟨salt,bound⟩
       else throw (.invalidProgram "vtable source salt outside 0..32")
     globalRootPointer := fun _ id => return (← FunctionPointers.rootPointer engine.functions id).withOptionalProvenance
-    entries := fun _ principal ty => lift
-      (CompilerVTableRuntime.entries p.lifecycle.calls.symbols principal ty)
-    assertVirtualInstanceMatches := VirtualCalls.assertConcrete (CompilerVirtualLeaves.make p.lifecycle.calls) }
+    entries := fun _ principal ty => do
+      let world ← RuntimeArrayQueries.compilerSnapshot types
+      lift (CompilerVTableRuntime.entries p.lifecycle.calls.symbols world principal ty)
+    assertVirtualInstanceMatches := VirtualCalls.assertConcrete (CompilerVirtualLeaves.make p.lifecycle.calls types) }
 end Miri.Input.CompilerVTableLeaves

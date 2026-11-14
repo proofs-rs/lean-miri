@@ -1,4 +1,5 @@
 import Miri.Input.CompilerInstance
+import Miri.Input.LowerMIR
 import Miri.Interpreter.OperandMachine
 
 /-! Source intrinsics/mod.rs fallback policy and machine.rs runtime_checks.
@@ -24,7 +25,7 @@ def prepare (program : LoweredProgram) : Except String Prepared := do
   let mut entries := #[]
   for record in program.input.queries.runtime.instances do
     let callee := record.instanceId
-    let _ ← CompilerInstance.source ctx.instances callee
+    let _ ← CompilerInstance.Material.source ctx.instances callee
     unless !(entries.any (·.callee == callee)) do throw "duplicate full-instance intrinsic metadata key"
     let name := match record.itemName with | some value => .ok value | none => .error "compiler item name absent"
     let intrinsic := do

@@ -1,3 +1,4 @@
+import MiriTests.Input.LegacyFixture
 import Miri.Input.Decoder
 
 open Lean Miri.Input
@@ -8,7 +9,7 @@ private def must (value : Except String α) : IO α :=
   | .error error => throw (IO.userError error)
 
 private def reject (label expected : String) (json : Json) : IO Unit :=
-  match decodeJson json.compress with
+  match decodeFixture json.compress with
   | .error error => unless (error.splitOn expected).length > 1 do
       throw (IO.userError s!"{label}: expected {expected}, got {error}")
   | .ok _ => throw (IO.userError s!"{label}: malformed JSON was accepted")
@@ -25,7 +26,7 @@ def main (args : List String) : IO Unit := do
     | path :: _ => pure path
     | [] => throw (IO.userError "expected exported compiler input")
   let text ← IO.FS.readFile path
-  let imported ← must (decodeJson text)
+  let imported ← must (decodeFixture text)
   let json ← must (Json.parse text)
   let document := imported.document
   let types ← must ((← must (json.getObjVal? "types")).getArr?)
@@ -73,7 +74,7 @@ def main (args : List String) : IO Unit := do
   let function := obj [("kind", str "function"), ("instance_id", nat instanceId),
     ("identities", arr #[arr #[nat graphId, nat sourceId]])]
   let withFunction (row : Json) := json.setObjVal! "allocations" (arr (allocations.push row))
-  let _ ← must (decodeJson (withFunction function).compress)
+  let _ ← must (decodeFixture (withFunction function).compress)
   reject "legacy function identity" "function identities belong in the identity list"
     (withFunction (obj [("allocation_id", nat graphId), ("source_alloc_id", nat sourceId),
       ("kind", str "function"), ("instance_id", nat instanceId)]))

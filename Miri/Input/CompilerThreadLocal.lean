@@ -26,8 +26,15 @@ private def ofRows (program : LoweredProgram) (rows : Array ThreadLocalEvidence)
     else entries := entries.push ⟨definition, value.info, value.initializer⟩
   pure entries
 
-def ofProgram (program : LoweredProgram) : Except String (Array Entry) :=
-  ofRows program ((program.input.bodies.map fun body => body.toBodyCore.threadLocals).flatten)
+private def sourceRows (program : LoweredProgram) : Except String (Array ThreadLocalEvidence) := do
+  let mut rows := #[]
+  for index in [:program.bodyCount] do
+    let metadata ← program.bodyMetadata index
+    rows := rows ++ metadata.toBodyMetadata.threadLocals
+  pure rows
+
+def ofProgram (program : LoweredProgram) : Except String (Array Entry) := do
+  ofRows program (← sourceRows program)
 
 private def find (entries : Array Entry) (definition : MIR.DefId) : Except String Entry :=
   match entries.find? (·.definition == definition) with
@@ -37,8 +44,7 @@ private def find (entries : Array Entry) (definition : MIR.DefId) : Except Strin
 def forDefinition (program : LoweredProgram) (definition : MIR.DefId) : Except String Entry := do
   let some _ := program.bundle.definitions[definition]?
     | throw "TLS definition absent from canonical compiler table"
-  let rows := ((program.input.bodies.map fun body => body.toBodyCore.threadLocals).flatten).filter
-    (·.definition == definition)
+  let rows := (← sourceRows program).filter (·.definition == definition)
   unless !rows.isEmpty do throw "missing exact compiler TLS declaration/initializer evidence"
   find (← ofRows program rows) definition
 

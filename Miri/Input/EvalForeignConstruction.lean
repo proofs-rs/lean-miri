@@ -127,21 +127,22 @@ def common (p : CompilerProviders.Prepared) (options : Options)
         match state.stack.currentFrame? with
         | none => (state,.error (.stack .emptyStack))
         | some frame =>
-          match CompilerBodySpan.get p frame with
-          | .error error => (state,.error error)
-          | .ok span => ControlFlow.setLocation state (.unwinding span)
+          match CompilerBodySpan.get p EvalProjectionMachine.arrays frame state with
+          | .error error after => (after,.error error)
+          | .ok span after => ControlFlow.setLocation after (.unwinding span)
     let (state,result) := source state
     match result with
     | .error error => .error error state
     | .ok () => match target with
       | .Terminate reason => (do
-        let callee ← lift (CompilerPanicFacts.unwindTerminate p.program reason)
+        let (definition,arguments) ← lift (CompilerPanicFacts.unwindTerminateSeed p.program reason)
+        let callee ← query (CompilerInstance.Material.item p.program.input.instances definition arguments)
         callFunction choice callee #[] (.goto none .Unreachable)) state
       | _ => .ok () state
   pure {
     options,maximumSize := allocation.maximumObjectSize.bytes,symbols,native := host
     expectedAbi := fun signature => query (CompilerShimAbi.expectedAbi abi signature)
-    argumentCompat := (CompilerCallConstruction.compiler p options.compatibilityBudget).checkArgumentCompat choice
+    argumentCompat := (CompilerCallConstruction.compiler p EvalProjectionMachine.arrays options.compatibilityBudget).checkArgumentCompat choice
     forceAllocation := fun dest => do
       let memory ← Miri.Interpreter.forceAllocation place choice dest
       pure ⟨.memory memory.mplace,memory.layout⟩

@@ -16,4 +16,5 @@ miri = { path = "../upstream/miri-source", default-features = false, optional = 
 
 [features]
 default = []
+ctfe-initial-global-snapshot = []
 miri-reference = ["dep:miri"]

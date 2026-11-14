@@ -1,3 +1,5 @@
+import Miri.Input.RuntimeCtfeQueryMachine
+import Miri.Input.CompilerInitialAllocationByteMachine
 import Miri.Input.EvalConfiguration
 import Miri.Interpreter.NativeAllocationLifecycle
 import Miri.Interpreter.MemoryErrors
@@ -19,6 +21,7 @@ import Miri.Input.EvalArchitectureMachine
 import Miri.Input.CompilerCastQueries
 import Miri.Input.CompilerScalarLeaves
 import Miri.Input.CompilerPlaceTypes
+import Miri.Input.CompilerMirConstants
 import Miri.Input.CompilerValidityLeaves
 import Miri.Input.CompilerVTableLeaves
 import Miri.Input.CompilerSignatureAbi
@@ -88,6 +91,8 @@ structure Options where
 local storage, retagging, calls/returns and every ordinary MIR operation are
 constructed below, rather than independently chosen callbacks. -/
 structure Leaves (Os R P H D O Aff B Host C ClockHost : Type) where
+  typeConstants : RuntimeEffectfulLayout.Provider (State Os R P H D O Aff B Host) := RuntimeEffectfulLayout.unavailable
+  constQueries : RuntimeCtfeQueryMachine.Capability
   pointerSource : EvalPointerSource.Leaves Os R P H D O Aff B Host C
   sync : P → Miri.Concurrency.SyncObject.AccessKind → PlaceMachine.MachineM MiriMemoryKind (User Os R P H D O Aff B Host) Unit
   storage : Size → Align → Option (Array UInt8)
@@ -124,6 +129,7 @@ The dimensions match EvalWorld's canonical Unix Other/Host payload exactly. -/
 structure SourceLeaves
     (Os R P H D Aff B Poll Instant System Native Profiler Raw Listener TcpStream Error ErrorHost
       Meta Path Place C ClockHost I AddrIter : Type) where
+  constQueries : RuntimeCtfeQueryMachine.Capability
   /-- The actual runtime configuration selected by the source runner.  Foreign
   callback and scheduler bindings project communication/host limits from this
   value; they do not choose an independent mode. -/
@@ -405,12 +411,11 @@ def makeWithForeignContext {Assembly : Type}
     let facts := p.lifecycle.calls.symbols.facts
     let context := facts.context
     let compatibility := CompilerCovariance.compatible p options.place.debugAssertions
-    let covariance := CompilerCovariance.hook p options.place.debugAssertions
-    let intrinsicQueries : CompilerCoreIntrinsic.Queries (State Os R P H D O Aff B Host) C := CompilerCoreIntrinsic.make p
+    let covariance := CompilerCovariance.hook p EvalProjectionMachine.arrays options.place.debugAssertions
     let extra := EvalCoreMachine.extras leaves.sync ConcurrencyErrors.storeBuffer
     let source := EvalPointerSource.make p image extra leaves.pointerSource choice
     let pointers := source.pointers
-    let functions := EvalConfiguration.functions p image options.crossCrateInlineAlways pointers
+    let functions := EvalConfiguration.functions p EvalProjectionMachine.arrays image options.crossCrateInlineAlways pointers
     let nativeBacking := leaves.pointerSource.nativeHost.map (·.backing)
     -- M::extern_static_pointer is a compiler-owned query over the shared
     -- declaration/export tables and the actual runtime ExternStatic registry.
@@ -435,9 +440,8 @@ def makeWithForeignContext {Assembly : Type}
     let allocation := {allocation with
       allocationBacktrace := if options.collectLeakBacktraces then some (fun id kind => do
         unless LeakCheck.mayLeak kind do
-          let trace ← match CompilerAllocationBacktrace.collect p (← get).stack.frames with
-            | .ok trace => pure trace
-            | .error reason => throw (.unsupported s!"compiler allocation backtrace: {reason}")
+          let trace ← RuntimeArrayQueries.performCompiler EvalProjectionMachine.arrays
+            (CompilerAllocationBacktrace.collect p (← get).stack.frames)
           let state ← get
           match MemoryExtras.recordBacktrace extra id trace state.machine with
           | .ok () machine => set {state with machine}
@@ -457,7 +461,7 @@ def makeWithForeignContext {Assembly : Type}
       match EvalProjectionMachine.memoryOffset pointers (← get) place amount mode metadataValue with
       | .ok value => pure value
       | .error error => throw (IntrinsicVectorMachine.projectionError error)
-    let table := CompilerVTableLeaves.make p image engine memoryOffset
+    let table := CompilerVTableLeaves.make p EvalProjectionMachine.arrays image engine memoryOffset
     let nested : Unit → Except StepError (ExecutionMachine.Config MiriMemoryKind (User Os R P H D O Aff B Host) C O ABI.ExternAbi ClockHost) := fun _ =>
       (makeWithForeignContext p image bytes options leaves choice sourceHostConfiguration foreignBuilder remaining).map Prod.fst
     let validate := fun c place => do
@@ -465,54 +469,57 @@ def makeWithForeignContext {Assembly : Type}
       | .error error => throw error
       | .ok config => ValidityMachine.validateRuntime config.validity c options.limits.validation place true
     let compiler := EvalPlaceConstruction.compiler p placeOptions access pointers table
-      (CompilerPlaceTypes.place p options.place.debugAssertions covariance) validate
-    let projection := EvalPlaceConstruction.projection p placeOptions access allocation compiler table
-    let pointerCompiler := CompilerExecutionProviders.pointerCompiler facts
+      (CompilerPlaceTypes.place p EvalProjectionMachine.arrays options.place.debugAssertions covariance) validate leaves.typeConstants
+    let projection := EvalPlaceConstruction.projection p placeOptions access allocation compiler table leaves.typeConstants
+    let pointerCompiler := CompilerExecutionProviders.pointerCompiler facts EvalProjectionMachine.arrays
     let dereference := PointerPlaceMachine.dereference access pointerCompiler projection.dynamic table projection.dynamicFuel
     let operands : OperandMachine.Hooks MiriMemoryKind (User Os R P H D O Aff B Host) C := {
       compiler,projection
       layoutCompatible := compatibility
-      checkPlaceType := CompilerPlaceTypes.operand p options.place.debugAssertions covariance
+      checkPlaceType := CompilerPlaceTypes.operand p EvalProjectionMachine.arrays options.place.debugAssertions covariance
       dereference
       runtimeChecks := CompilerScalarLeaves.runtimeChecks p
       boolLayout := CompilerScalarLeaves.boolLayout p
-      constant := fun _ constant known =>
-        ConstantMachine.evalOperandWithLayout p.runtime functions pointers.arithmetic
-          externStatic MemoryErrors.constant constant known
-          (if options.place.debugAssertions then some (fun computed expected => physical (compatibility computed expected)) else none) }
+      constant := fun _ constant known => do
+        let checkKnown := if options.place.debugAssertions then
+          some (fun computed expected => physical (compatibility computed expected)) else none
+        CompilerMirConstants.hook p.runtime EvalProjectionMachine.arrays functions pointers.arithmetic
+          externStatic MemoryErrors.constant constant known checkKnown }
     let callBackend : CallDispatchMachine.Backend (State Os R P H D O Aff B Host) := {
       selection := fun state => do
         match ← EvalBackendMachine.handler state.machine with
         | .none => pure .none
         | .vclocks _ => pure .vclocks }
-    let retag := EvalRetagMachine.hooks facts p.lifecycle.calls.runtime (CompilerRetagOptions.make p options.retag) access projection table pointers choice
-    let scalarQueries := CompilerScalarLeaves.scalar p
+    let retag := EvalRetagMachine.hooks facts p.lifecycle.calls.runtime EvalProjectionMachine.arrays (CompilerRetagOptions.make p options.retag) access projection table pointers choice
+    let scalarQueries := CompilerScalarLeaves.scalar p EvalProjectionMachine.arrays
     let floats : FloatOpsHooks Provenance (State Os R P H D O Aff B Host) C := {
-      integerKindOf := fun _ ty => physical (CompilerExecutionProviders.integerKind context ty)
-      formatOf := fun _ ty => physical (CompilerExecutionProviders.format context ty)
+      integerKindOf := fun _ ty => CompilerExecutionProviders.worldInteger EvalProjectionMachine.arrays context ty
+      formatOf := fun _ ty => CompilerExecutionProviders.worldFormat EvalProjectionMachine.arrays context ty
       boolLayout := scalarQueries.boolLayout
       floatNondeterministic := options.floatNondeterministic
       chooseNaN := fun _ => ExecutionChoiceBindings.nanChoice EvalCoreMachine.tape }
     let isRaw := fun (_ : C) ty => do
-      let node ← query (p.runtime.node ty |>.mapError toString)
-      pure (node.shapeKind == .rawPointer)
+      let kind ← RuntimeArrayQueries.perform EvalProjectionMachine.arrays
+        (RuntimeMetadata.shapeKindInWorld p.runtime ty)
+      pure (kind == .rawPointer)
     let usize := fun (_ : C) => query (p.primitiveLayout "usize")
     let pointeeLayout := fun (_ : C) ty => do
-      let some pointee ← query (CompilerFacts.builtinDeref context ty true)
+      let some pointee ← RuntimeArrayQueries.perform EvalProjectionMachine.arrays
+          (CompilerFacts.optionalTypeInWorld context ty "builtin_deref_explicit")
         | throw (.invalidProgram "pointee layout requested for a non-pointer type")
-      query (CompilerFacts.layoutOf context pointee)
+      RuntimeArrayQueries.layoutOf EvalProjectionMachine.arrays pointee
     let scalar := ExecutionScalar.hooks scalarQueries access pointers.arithmetic isRaw usize pointeeLayout dereference floats
-    let discrQueries := CompilerScalarLeaves.discriminant p (fun _ => ValidityMachine.scalarMayBeNull)
+    let discrQueries := CompilerScalarLeaves.discriminant p EvalProjectionMachine.arrays (fun _ => ValidityMachine.scalarMayBeNull)
     let discr := discriminant discrQueries access operands
-    let validity := EvalValidityMachine.hooks facts p.lifecycle.calls.runtime
+    let validity := EvalValidityMachine.hooks facts p.lifecycle.calls.runtime EvalProjectionMachine.arrays
       (CompilerValidityLeaves.make p image EvalProjectionMachine.arrays projection pointers)
       access allocation compiler projection (FunctionPointerConsumers.vtable functions table) discr pointers retag options.limits.retag
-    let copy := CompilerCopy.hooks p.runtime options.place.debugAssertions compatibility access
+    let copy := CompilerCopy.hooks p.runtime EvalProjectionMachine.arrays options.place.debugAssertions compatibility access
       PointerMachine.User.addresses pointers.arithmetic validity options.limits.validation
-    let castQueries := CompilerCastLeaves.make p (CompilerCastQueries.required p) table
+    let castQueries := CompilerCastLeaves.make p EvalProjectionMachine.arrays (CompilerCastQueries.required p) table
       (fun _ provenance => PointerMachine.exposeProvenance pointers provenance)
       (fun _ address => PointerMachine.pointerFromExposedAddress pointers address)
-      (fun value layout => EvalProjectionMachine.assertAbi p.runtime.target value layout |>.mapError IntrinsicVectorMachine.projectionError)
+      (fun value layout => EvalProjectionMachine.assertAbi p.runtime.target value layout |>.mapError IntrinsicVectorMachine.projectionError) leaves.typeConstants
     let casts := ExecutionCast.hooks castQueries access allocation compiler projection copy retag validity functions floats
       dereference (OperandMachine.field operands) (fun _ _ => ValidityMachine.enforceValidityRecursively)
       options.limits.retag options.limits.validation
@@ -528,9 +535,15 @@ def makeWithForeignContext {Assembly : Type}
         let helper := ExecutionCalls.helpers config.helpers (ExecutionMachine.callHooks config options.limits)
         FunctionCalls.callFunction helper c callee ABI.ExternAbi.Rust args none continuation
     let unwind := EvalCallRuntime.unwind access projection functions options.panicUnwinds callFunction
-    let lifecycle := CompilerCallConstruction.lifecycle p options.userRelevantCrates
-      (CompilerStorage.hooks p allocation projection.dynamic projection.dynamicFuel choice deallocateStack)
+    let lifecycle := CompilerCallConstruction.lifecycle p EvalProjectionMachine.arrays options.userRelevantCrates
+      (CompilerStorage.hooks p EvalProjectionMachine.arrays allocation projection.dynamic projection.dynamicFuel choice deallocateStack)
       EvalConfiguration.identity unwind
+    let lifecycle := {lifecycle with requiredConstants :=
+      CompilerLifecycle.requiredConstantsWith p.lifecycle.lifecycle EvalProjectionMachine.arrays (fun constant => do
+        match constant.value with
+        | .Val .. => pure ()
+        | .Ty .. | .Unevaluated .. =>
+          throw (.unsupported "required constant lacks a rustc evaluated value"))}
     let ⟨math⟩ ← liftConstruction (EvalMathMachine.hooks p (EvalMathMachine.optionalHost leaves.math) leaves.mathError none access projection.place scalar floats returnToBlock)
     let atomics := ExecutionIntrinsic.Atomic.access {
       loadChoiceRank := fun _ count => ExecutionChoices.index EvalCoreMachine.tape .atomicStale count
@@ -587,14 +600,14 @@ def makeWithForeignContext {Assembly : Type}
     let fuse := fun (_ : C) => do
       if !options.floatNondeterministic then return false
       ExecutionChoices.boolean EvalCoreMachine.tape .floatFuse
-    let varArgs := IntrinsicSymbolsMachine.varArgs (CompilerVarArgsLeaves.make p options.compatibilityBudget)
+    let varArgs := IntrinsicSymbolsMachine.varArgs (CompilerVarArgsLeaves.make p EvalProjectionMachine.arrays options.compatibilityBudget leaves.typeConstants)
       EvalConfiguration.symbols access pointers.arithmetic functions operands copy
-    let typeId := IntrinsicSymbolsMachine.typeId (CompilerIntrinsicSymbols.typeIdLeaves p image)
+    let typeId := IntrinsicSymbolsMachine.typeId (CompilerIntrinsicSymbols.typeIdLeaves p image EvalProjectionMachine.arrays)
       EvalConfiguration.symbols access functions operands copy
     let intrinsics := fun callee =>
       let atomic := ExecutionIntrinsic.Atomic.dispatcher atomics
-        (fun _ index => physical (CompilerIntrinsicConstants.ordering p.intrinsics callee index))
-        (fun _ index => physical (CompilerIntrinsicConstants.volatile p.intrinsics callee index))
+        (fun _ index => do physical (CompilerIntrinsicConstants.ordering (← RuntimeArrayQueries.compilerSnapshot EvalProjectionMachine.arrays) callee index))
+        (fun _ index => do physical (CompilerIntrinsicConstants.volatile (← RuntimeArrayQueries.compilerSnapshot EvalProjectionMachine.arrays) callee index))
         (fun c op => do let place ← dereference c op; pure ⟨.memory place.mplace,place.layout⟩)
         access projection.place returnToBlock
       let simd := ExecutionIntrinsic.Simd.make {
@@ -602,8 +615,8 @@ def makeWithForeignContext {Assembly : Type}
         u8Ty := u8Ty.ty
         isSimd := fun _ ty => query (CompilerArchitectureFacts.isSimd context ty)
         simdSizeAndType := fun _ ty => query (CompilerArchitectureFacts.simdSizeAndType context ty)
-        shuffleConst := fun _ index => physical (CompilerIntrinsicConstants.shuffle p.intrinsics callee index)
-        alignmentConst := fun _ index => physical (CompilerIntrinsicConstants.alignment p.intrinsics callee index)
+        shuffleConst := fun _ index => do physical (CompilerIntrinsicConstants.shuffle (← RuntimeArrayQueries.compilerSnapshot EvalProjectionMachine.arrays) callee index)
+        alignmentConst := fun _ index => do physical (CompilerIntrinsicConstants.alignment (← RuntimeArrayQueries.compilerSnapshot EvalProjectionMachine.arrays) callee index)
         chooseEqualFloatRight := equalRight
         fuseMulAdd := fuse
         mathLane := Math.simdMathLane math }
@@ -613,27 +626,34 @@ def makeWithForeignContext {Assembly : Type}
         maxSizeOfVal := maximum
         layoutOf := fun _ ty => RuntimeArrayQueries.layoutOf EvalProjectionMachine.arrays ty
         pointeeType := fun _ ty => do
-          let some pointee ← query (CompilerFacts.builtinDeref context ty true)
+          let some pointee ← RuntimeArrayQueries.perform EvalProjectionMachine.arrays
+              (CompilerFacts.builtinDerefInWorld context ty true)
             | throw (.invalidProgram "intrinsic requires a pointer type")
           pure pointee
-        integerKind := fun _ ty => physical (CompilerExecutionProviders.integerKind context ty)
+        integerKind := fun _ ty => CompilerExecutionProviders.worldInteger EvalProjectionMachine.arrays context ty
         usizeLayout := usize
         isizeLayout := fun _ => query (p.primitiveLayout "isize")
         applyFloatNondeterminism := fun c value => Math.floatFastError math c value 4
         chooseEqualFloatRight := equalRight
         fuseMulAdd := fuse
         floatFastError := Math.floatFastError math
-        variantLayout := fun _ layout index => query (p.runtime.forVariant layout index |>.mapError toString)
+        variantLayout := fun _ layout index => RuntimeArrayQueries.perform EvalProjectionMachine.arrays
+          (RuntimeMetadata.variantLayoutInWorld p.runtime layout index)
         ensureMonomorphic := fun _ ty => do
-          unless ← query (CompilerFacts.boolean context ty "is_monomorphic_enough") do
+          unless ← RuntimeArrayQueries.perform EvalProjectionMachine.arrays
+              (CompilerFacts.booleanInWorld context ty "is_monomorphic_enough") do
             throw (.invalidProgram "intrinsic type still requires instantiation")
-        typeNameConstant := CompilerValueConstants.typeNameHook p functions pointers.arithmetic
-          externStatic MemoryErrors.constant (fun a b => physical (compatibility a b))
-        needsDrop := intrinsicQueries.needsDrop
-        variantCount := intrinsicQueries.variantCount
-        callerLocationConstant := EvalCallerLocationConstruction.hook p functions
+        typeNameConstant := CompilerValueConstants.typeNameHook p EvalProjectionMachine.arrays functions
+          (CompilerInitialAllocation.ByteMachine.reserveCurrent EvalWorld.initialCompilerStoreInnerAccess p.runtime.target.base)
+          (fun a b => physical (compatibility a b))
+        needsDrop := fun _ ty => RuntimeArrayQueries.perform EvalProjectionMachine.arrays
+          (CompilerFacts.booleanInWorld context ty "needs_drop")
+        variantCount := fun _ ty => do
+          let world ← RuntimeArrayQueries.snapshot EvalProjectionMachine.arrays
+          physical (CompilerCoreIntrinsic.variantCountInWorld p world ty)
+        callerLocationConstant := EvalCallerLocationConstruction.hook p EvalProjectionMachine.arrays functions
           (VirtualCalls.callerLocation (ExecutionCalls.virtualHooks
-            (CompilerCallConstruction.virtual p table PointerPlaceMachine.controlledAlignment)
+            (CompilerCallConstruction.virtual p EvalProjectionMachine.arrays table PointerPlaceMachine.controlledAlignment)
             access operands options.place.debugAssertions)
             options.limits.callDispatch)
           (fun ty => CompilerFacts.builtinDeref context ty true)
@@ -650,19 +670,24 @@ def makeWithForeignContext {Assembly : Type}
     let llvm := fun callee => query (EvalArchitectureMachine.compilerDispatcher context p.intrinsics pointers
       leaves.checkLlvmSymbolClash math access projection (intrinsics callee).simdHooks (fun name os => .unsupported s!"unsupported foreign item {name} on {os}"))
     let ⟨rootSpan⟩ ← liftConstruction (pureQuery (CompilerContextSpan.rootSpan p.program))
-    let ⟨helpers⟩ ← liftConstruction (pureQuery (CompilerCallConstruction.helpers p rootSpan (CompilerSignatureAbi.hook p)))
+    let ⟨helpers⟩ ← liftConstruction (pureQuery (CompilerCallConstruction.helpers p EvalProjectionMachine.arrays rootSpan (CompilerSignatureAbi.hook p EvalProjectionMachine.arrays)))
     let config : ExecutionMachine.Config MiriMemoryKind (User Os R P H D O Aff B Host) C O ABI.ExternAbi ClockHost := {
       access,allocation,compiler,projection,copy,retag,validity,lifecycle,functions,atomics,varArgs,intrinsics,floats
       operands := ⟨operands.checkPlaceType,operands.dereference,operands.runtimeChecks,operands.boolLayout,operands.constant⟩
       validationRecursive := fun _ _ => ValidityMachine.enforceValidityRecursively
-      calls := CompilerCallConstruction.leaves p options.compatibilityBudget
+      calls := CompilerCallConstruction.leaves p EvalProjectionMachine.arrays options.compatibilityBudget
         (foreignOverride.orElse fun _ => leaves.foreign.map pure) callBackend leaves.dynSymName llvm
-      virtual := CompilerCallConstruction.virtual p table PointerPlaceMachine.controlledAlignment
+      virtual := CompilerCallConstruction.virtual p EvalProjectionMachine.arrays table PointerPlaceMachine.controlledAlignment
       helpers := helpers
-      control := ⟨CompilerBodySpan.get p⟩
+      control := ⟨CompilerBodySpan.get p EvalProjectionMachine.arrays⟩
       panic := EvalCallRuntime.panic p
-        (EvalPanicMachine.queries p.program p.runtime bytes functions access) access.runtime.base unwind operands
-      unwindTerminateFunction := fun _ reason => physical (CompilerPanicFacts.unwindTerminate p.program reason)
+        (EvalPanicMachine.queries p.program p.runtime bytes functions access
+          (CompilerInitialAllocation.ByteMachine.stringCurrent EvalWorld.initialCompilerStoreInnerAccess
+            p.runtime.target.base functions access (CompilerGlobalBytes.strLayout p.runtime bytes)))
+        EvalProjectionMachine.arrays access.runtime.base unwind operands
+      unwindTerminateFunction := fun _ reason => do
+        let (definition,arguments) ← physical (CompilerPanicFacts.unwindTerminateSeed p.program reason)
+        query (CompilerInstance.Material.item p.program.input.instances definition arguments)
       ignoreOptionalOverflowChecks := options.ignoreOptionalOverflowChecks
       rvalues := CompilerFrameContext.rvalueLeaves p (EvalThreadLocalSource.hook p maximum extra leaves.pointerSource source)
       discriminant := discrQueries
@@ -984,6 +1009,8 @@ def makeFromSourcePackage [DecidableEq Os]
         nativeHost := sourceLeaves.nativeHost
          }
       let leaves : Leaves Os R EvalSyncObjectAccess.Payload H D other CpuAffinity.Mask B sourceHost C ClockHost := {
+        typeConstants := RuntimeEffectfulLayout.compilerResults EvalProjectionMachine.arrays p.runtime
+        constQueries := sourceLeaves.constQueries
         pointerSource := sourcePointer
         sync := EvalSyncObjectAccess.onAccess
         storage := sourceLeaves.storage
@@ -1133,7 +1160,7 @@ def makeFromSourcePackage [DecidableEq Os]
             callbacks.io.event (some socketFiles)
             sourceLeaves.foreignSource.fileReferenceBudget errorFromKind
           let baseCore := assembly.foreign.toCore
-          let pthreadHooks ← EvalUnixPthreadConstruction.fromSource p
+          let pthreadHooks ← EvalUnixPthreadConstruction.fromSource p EvalProjectionMachine.arrays
             options.compatibilityBudget {
               objects := callbackProduct.objects
               access := context.validityAccess
@@ -1160,7 +1187,7 @@ def makeFromSourcePackage [DecidableEq Os]
             virtual := callbacks.socket.virtual.source
             expectedAbi := fun name => CompilerNamedShimAbi.query p.namedAbi name
             argumentCompat := fun caller callee =>
-              (CompilerCallConstruction.compiler p options.compatibilityBudget).checkArgumentCompat
+              (CompilerCallConstruction.compiler p EvalProjectionMachine.arrays options.compatibilityBudget).checkArgumentCompat
                 selectedChoice caller callee
             checkSymbolClash := baseCore.checkSymbolClash
             transmute := fun operand target => do
@@ -1188,7 +1215,7 @@ def makeFromSourcePackage [DecidableEq Os]
             pollAndUnblockZero
             pollAbi := CompilerNamedShimAbi.query p.namedAbi "poll"
             argumentCompat := fun caller callee =>
-              (CompilerCallConstruction.compiler p options.compatibilityBudget).checkArgumentCompat
+              (CompilerCallConstruction.compiler p EvalProjectionMachine.arrays options.compatibilityBudget).checkArgumentCompat
                 selectedChoice caller callee
             checkSymbolClash := baseCore.checkSymbolClash
             transmute := fun operand target => do
@@ -1360,7 +1387,7 @@ def makeFromSourcePackage [DecidableEq Os]
                 expectedAbi := fun name _signature => CompilerNamedShimAbi.query p.namedAbi name
                 systemConvention := pure .C
                 argumentCompat := fun caller callee =>
-                  (CompilerCallConstruction.compiler p options.compatibilityBudget).checkArgumentCompat
+                  (CompilerCallConstruction.compiler p EvalProjectionMachine.arrays options.compatibilityBudget).checkArgumentCompat
                     selectedChoice caller callee
                 checkSymbolClash := baseCore.checkSymbolClash
                 transmute := fun operand target => do
@@ -1376,12 +1403,11 @@ def makeFromSourcePackage [DecidableEq Os]
                 System Native Profiler Raw Listener TcpStream Error)
               (RuntimePlace Provenance) (RuntimePlace Provenance)
               (Pointer (Option Provenance)) LoadedBody CallInstance :=
-            CompilerShimSignatures.hooks compilerFacts {
+            CompilerShimSignatures.hooks compilerFacts EvalProjectionMachine.arrays {
               foreign := assembly.foreign
-              types := CompilerFacts.compatibilityQueries compilerFacts
-              isCVoid := fun ty => match CompilerFacts.boolean compilerFacts ty "is_c_void" with
-                | .ok value => pure value
-                | .error reason => throw (.unsupported s!"compiler c_void query: {reason}")
+              types := CompilerWorldCompatibility.queries compilerFacts EvalProjectionMachine.arrays
+              isCVoid := fun ty => RuntimeArrayQueries.perform EvalProjectionMachine.arrays
+                (CompilerFacts.booleanInWorld compilerFacts ty "is_c_void")
               readScalar := fun operand => do
                 let immediate ← ValidityMachine.readImmediate memory.access operand
                 match immediate.imm.toScalar with
@@ -1535,7 +1561,7 @@ def makeFromSourcePackage [DecidableEq Os]
                     (SourceOther Raw Listener TcpStream Error) Native Profiler)
                 let strings := EvalUnixFsConstruction.osStringsFromSource
                   sourceLeaves.foreignSource.host.os fsMemory
-                let metadata ← match EvalUnixFsConstruction.metadataFromSource p
+                let metadata ← match EvalUnixFsConstruction.metadataFromSource p EvalProjectionMachine.arrays
                     context.validityAccess context.projection selectedChoice strings
                     fsCapability.pathFromOs seed.errors seed.registry.readiness files
                     (fun other => do return .inl (← files.hostMetadata (.other other)))
@@ -1615,7 +1641,7 @@ def makeFromSourcePackage [DecidableEq Os]
                   directories, times, temporary
                   expectedAbi := fun symbol _signature => CompilerNamedShimAbi.query p.namedAbi symbol
                   argumentCompat := fun caller callee =>
-                    (CompilerCallConstruction.compiler p options.compatibilityBudget).checkArgumentCompat
+                    (CompilerCallConstruction.compiler p EvalProjectionMachine.arrays options.compatibilityBudget).checkArgumentCompat
                       selectedChoice caller callee
                   checkSymbolClash := assembly.foreign.toCore.checkSymbolClash
                   transmute := fun operand target => do
